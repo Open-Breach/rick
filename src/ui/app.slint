@@ -1,0 +1,23 @@
+import { Button, VerticalBox } from "std-widgets.slint";
+
+export component App inherits Window {
+    title: "Slint + Rust";
+    width: 360px;
+    height: 200px;
+
+    VerticalBox {
+        padding: 16px;
+        spacing: 12px;
+
+        Text { text: "Hello from Slint!"; }
+
+        in-out property <int> counter: 0;
+
+        Text { text: "Counter: " + counter; }
+
+        Button {
+            text: "Increment";
+            clicked => { counter += 1; }
+        }
+    }
+}
