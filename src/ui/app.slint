@@ -1,9 +1,16 @@
-import { Button, VerticalBox } from "std-widgets.slint";
+import { Button, VerticalBox, ListView, CheckBox } from "std-widgets.slint";
+
+ export struct UiFileItem {
+     name: string,
+     size: int,
+ }
 
 export component App inherits Window {
+    in property <[UiFileItem]> files;
+
     title: "Slint + Rust";
-    width: 360px;
-    height: 200px;
+    width: 800px;
+    height: 600px;
 
     VerticalBox {
         padding: 16px;
@@ -13,8 +20,19 @@ export component App inherits Window {
 
         in-out property <int> counter: 0;
 
+        ListView {
+            for f in root.files:
+                Text {
+                    text: f.name;
+                }
+        }
+
         Text { text: "Counter: " + counter; }
 
+
+        CheckBox {
+            text: "CheckBox";
+        }
         Button {
             text: "Increment";
             clicked => { counter += 1; }
