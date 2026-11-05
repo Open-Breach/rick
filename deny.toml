@@ -1,0 +1,7 @@
+[licenses]
+allow = ["Apache-2.0", "MIT", "BSD-2-Clause", "BSD-3-Clause", "ISC", "Unicode-3.0", "Zlib"]
+
+[bans]
+multiple-versions = "warn"
+# Layer order: add a [[bans.deny]] entry per forbidden upward edge as crates appear,
+# e.g. { crate = "ui-egui", wrappers = [] } denied from "types", "vfs", "model".
