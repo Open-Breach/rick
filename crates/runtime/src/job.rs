@@ -194,7 +194,7 @@ mod tests {
         crate::block_on(async {
             let handle = runner.spawn(|_ctx| async { Ok::<_, Error>(41 + 1) });
             assert!(matches!(handle.result.await, Ok(Ok(42))));
-            assert!(runner.running().is_empty());
+            assert_eq!(runner.running(), [] as [JobId; 0]);
         });
     }
 
@@ -221,7 +221,7 @@ mod tests {
             assert_eq!(runner.running(), vec![handle.id]);
             assert!(runner.cancel(handle.id));
             assert!(matches!(handle.result.await, Ok(Err(Error::Cancelled))));
-            assert!(runner.running().is_empty());
+            assert_eq!(runner.running(), [] as [JobId; 0]);
             assert!(!runner.cancel(handle.id));
             assert!(handle.cancel.is_cancelled());
         });
@@ -293,7 +293,7 @@ mod tests {
                 Ok::<(), Error>(())
             });
             assert!(handle.result.await.is_err());
-            assert!(runner.running().is_empty());
+            assert_eq!(runner.running(), [] as [JobId; 0]);
         });
     }
 }

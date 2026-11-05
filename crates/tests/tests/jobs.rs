@@ -1,7 +1,7 @@
 //! Acceptance: 1 000 jobs, half cancelled, every outcome as promised.
 
 use runtime::{JobRunner, watch};
-use types::Error;
+use types::{Error, JobId};
 
 #[test]
 fn cancelled_jobs_end_with_cancelled_and_the_rest_complete() {
@@ -52,6 +52,6 @@ fn cancelled_jobs_end_with_cancelled_and_the_rest_complete() {
                 assert!(matches!(result, Ok(v) if v == n), "job {n}: {result:?}");
             }
         }
-        assert!(runner.running().is_empty());
+        assert_eq!(runner.running(), [] as [JobId; 0]);
     });
 }

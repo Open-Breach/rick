@@ -57,8 +57,9 @@ impl SizeDistribution {
                 // Pick a bit length between those of min+1 and max+1, then a
                 // value with that bit length, clamped into range. Integer
                 // only, so every platform draws the same sizes.
-                let low_bits = u64::BITS - (min + 1).leading_zeros();
-                let high_bits = u64::BITS - (max + 1).leading_zeros();
+                let bit_width = |value: u64| value.checked_ilog2().map_or(0, |log| log + 1);
+                let low_bits = bit_width(min.saturating_add(1));
+                let high_bits = bit_width(max.saturating_add(1));
                 let bits = low_bits
                     + u32::try_from(rng.below(u64::from(high_bits - low_bits) + 1)).unwrap_or(0);
                 let floor = 1u64 << (bits - 1);
@@ -402,7 +403,7 @@ mod tests {
             max_depth: 0,
             ..Config::default()
         });
-        assert!(plan.dirs.is_empty());
+        assert_eq!(plan.dirs, [] as [PathBuf; 0]);
         assert_eq!(plan.files.len(), 500);
         assert!(plan.files.iter().all(|f| f.path.components().count() == 1));
     }
