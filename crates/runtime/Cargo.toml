@@ -1,0 +1,16 @@
+[package]
+name = "runtime"
+version = "0.1.0"
+description = "Rick job system: the single tokio runtime, the JobRunner and the rayon compute pool."
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+types = { workspace = true }
+rayon = { workspace = true }
+tokio = { workspace = true, features = ["rt-multi-thread", "sync", "macros", "time"] }
+tracing = { workspace = true }
+
+[lints]
+workspace = true
