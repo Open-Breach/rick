@@ -22,6 +22,7 @@
 
 pub mod dock;
 pub mod format;
+pub mod frame;
 pub mod host;
 pub mod icons;
 pub mod inspector;
@@ -44,6 +45,7 @@ use app::App;
 
 pub use host::{Ask, EguiHost};
 pub use keys::{Intent, KeyMap};
+pub use pane::toolbar_height;
 pub use shell::{Dispatched, Request, RickUi, TabUi};
 
 /// Opens the window and runs until it closes.
@@ -61,13 +63,15 @@ pub fn run(title: &str, app: App, host: Arc<EguiHost>) -> eframe::Result {
         .with_title(title)
         .with_inner_size([1100.0, 720.0])
         .with_min_inner_size([480.0, 320.0]);
+    // Without decorations Rick draws the frame itself (`frame`): the window
+    // is transparent so the margin around the content shows the shadow.
     viewport = if chrome.native_controls {
         viewport
             .with_titlebar_shown(false)
             .with_title_shown(false)
             .with_fullsize_content_view(true)
     } else {
-        viewport.with_decorations(false)
+        viewport.with_decorations(false).with_transparent(true)
     };
     let options = eframe::NativeOptions {
         viewport,

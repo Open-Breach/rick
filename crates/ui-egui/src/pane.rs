@@ -37,47 +37,64 @@ const ICON_BUTTON: f32 = 28.0;
 /// The toolbar: a fixed group of navigation icons on the left, a fixed group
 /// of view controls on the right, and the breadcrumb flexing in between,
 /// never overlapping either.
+/// The toolbar row's height for a density: room for the icon buttons plus
+/// padding above and below them, the density being the single knob.
+#[must_use]
+pub fn toolbar_height(density: model::Density) -> f32 {
+    ICON_BUTTON
+        + match density {
+            model::Density::Compact => 6.0,
+            model::Density::Normal => 10.0,
+            model::Density::Comfortable => 16.0,
+        }
+}
+
+/// The toolbar: a fixed group of navigation icons on the left, a fixed group
+/// of view controls on the right, and the breadcrumb flexing in between,
+/// never overlapping either.
 fn toolbar(ui: &mut egui::Ui, cx: &mut PaneCx<'_>) {
     cx.tab_ui.toolbar_rects.clear();
-    ui.horizontal(|ui| {
-        let row = ui.max_rect();
-        // Left group, fixed.
-        let mut left = ui.new_child(
-            egui::UiBuilder::new()
-                .max_rect(row)
-                .layout(egui::Layout::left_to_right(Align::Center)),
-        );
-        left_group(&mut left, cx);
-        let left_edge = left.min_rect().right();
-        // Right group, fixed.
-        let mut right = ui.new_child(
-            egui::UiBuilder::new()
-                .max_rect(row)
-                .layout(egui::Layout::right_to_left(Align::Center)),
-        );
-        right_group(&mut right, cx);
-        let right_edge = right.min_rect().left();
-        // The breadcrumb gets what is left, clipped to it.
-        let gap = ui.spacing().item_spacing.x;
-        let middle = egui::Rect::from_min_max(
-            egui::pos2(left_edge + gap, row.top()),
-            egui::pos2((right_edge - gap).max(left_edge + gap), row.bottom()),
-        );
-        let mut centre = ui.new_child(
-            egui::UiBuilder::new()
-                .max_rect(middle)
-                .layout(egui::Layout::left_to_right(Align::Center)),
-        );
-        centre.set_clip_rect(middle.intersect(centre.clip_rect()));
-        path_bar(&mut centre, cx, middle);
-        ui.allocate_rect(row, egui::Sense::hover());
-    });
+    let height = toolbar_height(cx.app.model().settings.density);
+    let (row, _) = ui.allocate_exact_size(
+        egui::vec2(ui.available_width(), height),
+        egui::Sense::hover(),
+    );
+    cx.tab_ui.toolbar_row = Some(row);
+    // Left group, fixed.
+    let mut left = ui.new_child(
+        egui::UiBuilder::new()
+            .max_rect(row)
+            .layout(egui::Layout::left_to_right(Align::Center)),
+    );
+    left_group(&mut left, cx);
+    let left_edge = left.min_rect().right();
+    // Right group, fixed.
+    let mut right = ui.new_child(
+        egui::UiBuilder::new()
+            .max_rect(row)
+            .layout(egui::Layout::right_to_left(Align::Center)),
+    );
+    right_group(&mut right, cx);
+    let right_edge = right.min_rect().left();
+    // The breadcrumb gets what is left, clipped to it.
+    let gap = ui.spacing().item_spacing.x;
+    let middle = egui::Rect::from_min_max(
+        egui::pos2(left_edge + gap, row.top()),
+        egui::pos2((right_edge - gap).max(left_edge + gap), row.bottom()),
+    );
+    let mut centre = ui.new_child(
+        egui::UiBuilder::new()
+            .max_rect(middle)
+            .layout(egui::Layout::left_to_right(Align::Center)),
+    );
+    centre.set_clip_rect(middle.intersect(centre.clip_rect()));
+    path_bar(&mut centre, cx, middle);
 }
 
 fn icon_button(ui: &mut egui::Ui, glyph: &str, enabled: bool) -> egui::Response {
     ui.add_enabled(
         enabled,
-        egui::Button::new(glyph).min_size(egui::vec2(ICON_BUTTON, ICON_BUTTON - 4.0)),
+        egui::Button::new(glyph).min_size(egui::vec2(ICON_BUTTON, ICON_BUTTON)),
     )
 }
 
@@ -125,7 +142,7 @@ fn right_group(ui: &mut egui::Ui, cx: &mut PaneCx<'_>) {
         .add(
             egui::Button::new(hidden_glyph)
                 .selected(cx.tab.show_hidden)
-                .min_size(egui::vec2(ICON_BUTTON, ICON_BUTTON - 4.0)),
+                .min_size(egui::vec2(ICON_BUTTON, ICON_BUTTON)),
         )
         .on_hover_text(if cx.tab.show_hidden {
             "Hide hidden files"
@@ -171,6 +188,7 @@ pub fn view_mode_icon(mode: ViewMode) -> &'static str {
 fn view_mode_dropdown(ui: &mut egui::Ui, cx: &mut PaneCx<'_>) {
     let current = cx.tab.view;
     let label = format!("{} {}", view_mode_icon(current), icons::DROPDOWN);
+    ui.style_mut().spacing.interact_size.y = ICON_BUTTON;
     let response = ui.menu_button(label, |ui| {
         for (label, mode, available) in view_modes() {
             let marked = if mode == current {

@@ -148,50 +148,36 @@ fn a_tab_dragged_onto_another_panes_strip_moves_there() {
     fs::create_dir(&left).unwrap_or_else(|e| panic!("{e}"));
     fs::create_dir(&right).unwrap_or_else(|e| panic!("{e}"));
     let mut harness = harness(&left, egui::vec2(1400.0, 800.0));
-    let pane_a = harness.state().app().model().focused;
-
-    // A second pane to the right, showing right-pane.
-    harness.state_mut().app_mut().handle(
-        app::Command::Split {
-            pane: pane_a,
-            dir: model::SplitDir::Right,
-        },
-        &mut Vec::new(),
-    );
-    settle(&mut harness);
-    let pane_b = harness
-        .state()
-        .app()
-        .model()
-        .panes()
-        .map(|(p, _)| p)
-        .find(|p| *p != pane_a)
-        .unwrap_or_else(|| panic!("no second pane"));
-    harness.state_mut().app_mut().handle(
-        app::Command::Navigate {
-            pane: pane_b,
-            to: local(&right),
-        },
-        &mut Vec::new(),
-    );
-    settle(&mut harness);
+    let (pane_a, pane_b) = two_panes(&mut harness, &right);
     let (tab_b, home_b) = tab_of(&harness, "right-pane");
     assert_eq!(home_b, pane_b);
 
     // Drag right-pane's tab onto the strip of pane A, to the right of its
-    // tab, in small steps so egui_dock sees a drag. Tab titles are painted,
-    // not widgets, so the strips are found from the pane rectangles: each
-    // strip is the top row of its pane and its first tab starts at the left.
-    let rects = harness.state().pane_rects();
-    let rect_of = |pane| {
-        rects
-            .iter()
-            .find(|(p, _)| *p == pane)
-            .map_or_else(|| panic!("no rect for {pane:?}"), |(_, r)| *r)
-    };
-    let (rect_a, rect_b) = (rect_of(pane_a), rect_of(pane_b));
+    // tab. Tab titles are painted, not widgets, so the strips are found from
+    // the pane rectangles: each strip is the top row of its pane and its
+    // first tab starts at the left.
+    let (rect_a, rect_b) = (rect_of(&harness, pane_a), rect_of(&harness, pane_b));
     let from = egui::pos2(rect_b.left() + 50.0, rect_b.top() + 14.0);
     let to = egui::pos2(rect_a.left() + 220.0, rect_a.top() + 14.0);
+    drag(&mut harness, from, to);
+
+    let model = harness.state().app().model();
+    assert_eq!(
+        model.pane_of(tab_b),
+        Some(pane_a),
+        "the tab moved into pane A"
+    );
+    assert_eq!(
+        model.pane(pane_a).map(|p| p.tabs().len()),
+        Some(2),
+        "pane A holds both tabs"
+    );
+    assert!(model.pane(pane_b).is_none(), "the emptied pane is gone");
+}
+
+/// Presses the primary button at `from`, moves to `to` in small steps so
+/// `egui_dock` sees a drag, releases, and lets the app settle.
+fn drag(harness: &mut Harness<'_, RickUi>, from: egui::Pos2, to: egui::Pos2) {
     harness.event(egui::Event::PointerMoved(from));
     harness.step();
     harness.event(egui::Event::PointerButton {
@@ -215,20 +201,191 @@ fn a_tab_dragged_onto_another_panes_strip_moves_there() {
     });
     harness.step();
     harness.step();
-    settle(&mut harness);
+    settle(harness);
+}
 
+/// Two panes side by side, the second showing `right`; returns their ids.
+fn two_panes(harness: &mut Harness<'_, RickUi>, right: &Path) -> (model::PaneId, model::PaneId) {
+    let pane_a = harness.state().app().model().focused;
+    harness.state_mut().app_mut().handle(
+        app::Command::Split {
+            pane: pane_a,
+            dir: model::SplitDir::Right,
+        },
+        &mut Vec::new(),
+    );
+    settle(harness);
+    let pane_b = harness
+        .state()
+        .app()
+        .model()
+        .panes()
+        .map(|(p, _)| p)
+        .find(|p| *p != pane_a)
+        .unwrap_or_else(|| panic!("no second pane"));
+    harness.state_mut().app_mut().handle(
+        app::Command::Navigate {
+            pane: pane_b,
+            to: local(right),
+        },
+        &mut Vec::new(),
+    );
+    settle(harness);
+    (pane_a, pane_b)
+}
+
+/// The rectangle of `pane` in the last frame.
+fn rect_of(harness: &Harness<'_, RickUi>, pane: model::PaneId) -> egui::Rect {
+    harness
+        .state()
+        .pane_rects()
+        .iter()
+        .find(|(p, _)| *p == pane)
+        .map_or_else(|| panic!("no rect for {pane:?}"), |(_, r)| *r)
+}
+
+/// Dragging the only tab of the right pane onto the left pane's "left" drop
+/// zone puts its pane left of the other; onto the "below" zone, under it.
+/// Before the fix the tree snapped back because no tab changed pane.
+#[test]
+fn a_tab_dragged_onto_another_panes_edge_moves_its_pane_there() {
+    let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+    let left = dir.path().join("left-pane");
+    let right = dir.path().join("right-pane");
+    fs::create_dir(&left).unwrap_or_else(|e| panic!("{e}"));
+    fs::create_dir(&right).unwrap_or_else(|e| panic!("{e}"));
+    let mut harness = harness(&left, egui::vec2(1400.0, 800.0));
+    let (pane_a, pane_b) = two_panes(&mut harness, &right);
+    let (tab_b, _) = tab_of(&harness, "right-pane");
+
+    // egui_dock's drop zones are five buttons around the centre of the
+    // hovered pane body, each a square of a third of the body's shorter
+    // side at most 100 px, 10 px apart. The strip takes the top 30 px.
+    let zone = |rect: egui::Rect, dx: f32, dy: f32| {
+        let body = egui::Rect::from_min_max(egui::pos2(rect.left(), rect.top() + 30.0), rect.max)
+            .shrink(10.0);
+        let side = ((body.width() - 20.0) / 3.0)
+            .min((body.height() - 20.0) / 3.0)
+            .min(100.0);
+        body.center() + egui::vec2(dx, dy) * (side + 10.0)
+    };
+
+    // Left zone of pane A: B's pane goes to the left of A.
+    let rect_a = rect_of(&harness, pane_a);
+    let rect_b = rect_of(&harness, pane_b);
+    let from = egui::pos2(rect_b.left() + 50.0, rect_b.top() + 14.0);
+    drag(&mut harness, from, zone(rect_a, -1.0, 0.0));
     let model = harness.state().app().model();
+    let home = model.pane_of(tab_b).unwrap_or_else(|| panic!("tab b lost"));
+    assert_ne!(home, pane_a, "tab B keeps its own pane");
     assert_eq!(
-        model.pane_of(tab_b),
-        Some(pane_a),
-        "the tab moved into pane A"
+        model.dock,
+        model::Dock::Split {
+            dir: model::SplitDir::Right,
+            first: Box::new(model::Dock::Pane(home)),
+            second: Box::new(model::Dock::Pane(pane_a)),
+        },
+        "B's pane is left of A"
     );
+
+    // Below zone of pane A: B's pane goes under A.
+    let rect_a = rect_of(&harness, pane_a);
+    let rect_b = rect_of(&harness, home);
+    let from = egui::pos2(rect_b.left() + 50.0, rect_b.top() + 14.0);
+    drag(&mut harness, from, zone(rect_a, 0.0, 1.0));
+    let model = harness.state().app().model();
+    let home = model.pane_of(tab_b).unwrap_or_else(|| panic!("tab b lost"));
     assert_eq!(
-        model.pane(pane_a).map(|p| p.tabs().len()),
-        Some(2),
-        "pane A holds both tabs"
+        model.dock,
+        model::Dock::Split {
+            dir: model::SplitDir::Down,
+            first: Box::new(model::Dock::Pane(pane_a)),
+            second: Box::new(model::Dock::Pane(home)),
+        },
+        "B's pane is under A"
     );
-    assert!(model.pane(pane_b).is_none(), "the emptied pane is gone");
+    assert_eq!(model.panes().count(), 2, "still two panes");
+}
+
+/// Where the system draws no chrome Rick frames the window itself: the
+/// content sits inside the margin, and the edge resizes the window through
+/// the backend, with the matching cursor while hovered.
+#[test]
+fn the_window_frame_resizes_from_its_edges() {
+    let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+    let mut harness = harness(dir.path(), egui::vec2(900.0, 600.0));
+    let content = harness
+        .state()
+        .framed_content()
+        .unwrap_or_else(|| panic!("the fake platform has no native chrome, so Rick frames"));
+    let inset = ui_egui::frame::MARGIN + 1.0;
+    assert!((content.left() - inset).abs() < 0.5, "{content:?}");
+    assert!((content.top() - inset).abs() < 0.5, "{content:?}");
+    assert!(
+        (content.right() - (900.0 - inset)).abs() < 0.5,
+        "{content:?}"
+    );
+    assert!(
+        (content.bottom() - (600.0 - inset)).abs() < 0.5,
+        "{content:?}"
+    );
+    let pane = harness.state().app().model().focused;
+    let pane_rect = rect_of(&harness, pane);
+    assert!(
+        pane_rect.left() >= inset - 0.5,
+        "{pane_rect:?} inside the frame"
+    );
+
+    // Hover the left edge: the resize cursor.
+    let edge = egui::pos2(4.0, 300.0);
+    harness.event(egui::Event::PointerMoved(edge));
+    harness.step();
+    harness.step();
+    assert_eq!(
+        harness.output().platform_output.cursor_icon,
+        egui::CursorIcon::ResizeWest
+    );
+
+    // Press and pull: the backend is asked to resize westwards. Each step
+    // runs one frame per queued event and keeps the last frame's output, so
+    // the press gets a step of its own.
+    harness.event(egui::Event::PointerButton {
+        pos: edge,
+        button: egui::PointerButton::Primary,
+        pressed: true,
+        modifiers: egui::Modifiers::default(),
+    });
+    harness.step();
+    let mut commands = root_commands(&harness);
+    for dx in [-3.0, -8.0] {
+        harness.event(egui::Event::PointerMoved(edge + egui::vec2(dx, 0.0)));
+        harness.step();
+        commands.extend(root_commands(&harness));
+    }
+    assert!(
+        commands.iter().any(|c| matches!(
+            c,
+            egui::ViewportCommand::BeginResize(egui::viewport::ResizeDirection::West)
+        )),
+        "{commands:?}"
+    );
+    harness.event(egui::Event::PointerButton {
+        pos: edge,
+        button: egui::PointerButton::Primary,
+        pressed: false,
+        modifiers: egui::Modifiers::default(),
+    });
+    harness.step();
+}
+
+/// The viewport commands the last frame sent to the backend.
+fn root_commands(harness: &Harness<'_, RickUi>) -> Vec<egui::ViewportCommand> {
+    harness
+        .output()
+        .viewport_output
+        .get(&egui::ViewportId::ROOT)
+        .map(|out| out.commands.clone())
+        .unwrap_or_default()
 }
 
 /// The toolbar at three widths with a twelve-segment path: no widget
@@ -262,6 +419,22 @@ fn the_toolbar_groups_never_overlap_and_the_right_group_keeps_its_width() {
             .unwrap_or_else(|| panic!("tab"));
         let rects = harness.state().toolbar_rects(tab);
         assert!(rects.len() >= 7, "{width}: {rects:?}");
+        // The row is as high as the density says and holds every widget.
+        let row = harness
+            .state()
+            .toolbar_row(tab)
+            .unwrap_or_else(|| panic!("{width}: no toolbar row"));
+        let density = harness.state().app().model().settings.density;
+        assert!(
+            (row.height() - ui_egui::toolbar_height(density)).abs() < 0.5,
+            "{width}: row {row:?} for {density:?}"
+        );
+        for (g, r) in &rects {
+            assert!(
+                row.expand(0.5).contains_rect(*r),
+                "{width}: {g} {r:?} sticks out of the row {row:?}"
+            );
+        }
         for (i, (ga, a)) in rects.iter().enumerate() {
             for (gb, b) in rects.iter().skip(i + 1) {
                 let overlap = a.shrink(0.5).intersects(b.shrink(0.5));

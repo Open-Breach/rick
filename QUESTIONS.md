@@ -446,3 +446,13 @@ Once answered, an entry keeps its number and gains a `Decided (date):` line.
     the selection selects that row first.
     Assumed: a right-click on empty space clears the selection as well, so
     the menu and the list agree about what the actions would act on.
+
+52. (GUI chrome) The spec turns the platform's title bar off and has Rick draw
+    the chrome, but says nothing about the window's border, shadow or how it
+    is resized once the system's decorations are gone with the title bar.
+    Assumed, as asked for after the first cut: on platforms without native
+    controls the window is transparent and Rick draws a 10-point margin
+    holding a light shadow, a one-point border in the theme's window stroke
+    colour, and invisible grips along the edges and corners that resize the
+    window through the backend; a maximised or fullscreen window has no
+    frame, and macOS keeps the system's border and resize handles.
