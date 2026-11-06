@@ -156,7 +156,7 @@ fn pins_survive_a_restart_and_unpin_removes_them() {
     harness.step();
     settle(&mut harness);
     assert_eq!(location(&harness), fake.home_dir());
-    harness.get_by_label(icons::CLOSE).click();
+    harness.get_by_label(icons::UNPIN).click();
     harness.step();
     harness.step();
     assert!(

@@ -122,7 +122,7 @@ fn body(
                     );
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         if ui
-                            .small_button(crate::icons::CLOSE)
+                            .small_button(crate::icons::UNPIN)
                             .on_hover_text("Unpin")
                             .clicked()
                         {

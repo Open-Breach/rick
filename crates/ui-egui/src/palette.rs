@@ -1,5 +1,5 @@
-//! The command palette: every action and UI intent, fuzzy-matched, recently
-//! used first.
+//! The command list behind the search box's command mode: every action and
+//! UI intent, fuzzy-matched, recently used first.
 
 use std::sync::Arc;
 
@@ -8,19 +8,6 @@ use ext::{Action, Availability, Invocation};
 use model::PaneId;
 
 use crate::keys::{Intent, KeyMap, UI_INTENTS};
-
-/// The palette's state.
-#[derive(Debug, Default)]
-pub struct Palette {
-    /// Whether it is shown.
-    pub open: bool,
-    /// The search text.
-    pub query: String,
-    /// The highlighted row.
-    pub selected: usize,
-    /// Focus the search box on the next frame.
-    focus: bool,
-}
 
 /// One row of the palette.
 #[derive(Debug, Clone)]
@@ -37,173 +24,66 @@ pub struct Item {
     pub recency: Option<usize>,
 }
 
-impl Palette {
-    /// Opens with an empty query.
-    pub fn open(&mut self) {
-        self.open = true;
-        self.query.clear();
-        self.selected = 0;
-        self.focus = true;
-    }
-
-    /// Everything the palette offers for `pane`, unsorted.
-    #[must_use]
-    pub fn items(app: &App, keys: &KeyMap, pane: PaneId, recents: &[Intent]) -> Vec<Item> {
-        let ctx = app.action_ctx(pane, Invocation::Palette);
-        let recency = |intent: Intent| recents.iter().position(|r| *r == intent);
-        let mut items: Vec<Item> = app
-            .registry()
-            .actions()
-            .iter()
-            .filter_map(|action: &Arc<dyn Action>| {
-                let intent = Intent::Action(action.id());
-                let disabled = match ctx.as_ref().map(|c| action.availability(c)) {
-                    Some(Availability::Enabled) => None,
-                    Some(Availability::Disabled(why)) => Some(why),
-                    Some(Availability::Hidden) | None => return None,
-                };
-                Some(Item {
-                    intent,
-                    label: action.label().to_owned(),
-                    shortcut: keys.text_for(intent),
-                    disabled,
-                    recency: recency(intent),
-                })
+/// Everything the command mode offers for `pane`, unsorted.
+#[must_use]
+pub fn items(app: &App, keys: &KeyMap, pane: PaneId, recents: &[Intent]) -> Vec<Item> {
+    let ctx = app.action_ctx(pane, Invocation::Palette);
+    let recency = |intent: Intent| recents.iter().position(|r| *r == intent);
+    let mut items: Vec<Item> = app
+        .registry()
+        .actions()
+        .iter()
+        .filter_map(|action: &Arc<dyn Action>| {
+            let intent = Intent::Action(action.id());
+            let disabled = match ctx.as_ref().map(|c| action.availability(c)) {
+                Some(Availability::Enabled) => None,
+                Some(Availability::Disabled(why)) => Some(why),
+                Some(Availability::Hidden) | None => return None,
+            };
+            Some(Item {
+                intent,
+                label: action.label().to_owned(),
+                shortcut: keys.text_for(intent),
+                disabled,
+                recency: recency(intent),
             })
-            .collect();
-        items.extend(
-            UI_INTENTS
-                .iter()
-                .filter(|spec| spec.group != "List")
-                .map(|spec| Item {
-                    intent: spec.intent,
-                    label: spec.label.to_owned(),
-                    shortcut: keys.text_for(spec.intent),
-                    disabled: None,
-                    recency: recency(spec.intent),
-                }),
-        );
-        items
-    }
+        })
+        .collect();
+    items.extend(
+        UI_INTENTS
+            .iter()
+            .filter(|spec| spec.group != "List")
+            .map(|spec| Item {
+                intent: spec.intent,
+                label: spec.label.to_owned(),
+                shortcut: keys.text_for(spec.intent),
+                disabled: None,
+                recency: recency(spec.intent),
+            }),
+    );
+    items
+}
 
-    /// The rows matching the query, best first: by score, then recency,
-    /// then label.
-    #[must_use]
-    pub fn ranked(&self, mut items: Vec<Item>) -> Vec<Item> {
-        let query = self.query.trim().to_lowercase();
-        let mut scored: Vec<(u32, Item)> = items
-            .drain(..)
-            .filter_map(|item| score(&query, &item.label).map(|s| (s, item)))
-            .collect();
-        scored.sort_by(|(sa, a), (sb, b)| {
-            sb.cmp(sa)
-                .then_with(|| match (a.recency, b.recency) {
-                    (Some(x), Some(y)) => x.cmp(&y),
-                    (Some(_), None) => std::cmp::Ordering::Less,
-                    (None, Some(_)) => std::cmp::Ordering::Greater,
-                    (None, None) => std::cmp::Ordering::Equal,
-                })
-                .then_with(|| a.label.cmp(&b.label))
-        });
-        scored.into_iter().map(|(_, item)| item).collect()
-    }
-
-    /// Draws the palette; returns the intent to run when the user picked one.
-    pub fn show(&mut self, ctx: &egui::Context, rows: &[Item]) -> Option<Intent> {
-        if !self.open {
-            return None;
-        }
-        let mut picked = None;
-        let (up, down, enter, escape) = ctx.input_mut(|i| {
-            (
-                i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowUp),
-                i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowDown),
-                i.consume_key(egui::Modifiers::NONE, egui::Key::Enter),
-                i.consume_key(egui::Modifiers::NONE, egui::Key::Escape),
-            )
-        });
-        if escape {
-            self.open = false;
-            return None;
-        }
-        if up {
-            self.selected = self.selected.saturating_sub(1);
-        }
-        if down && self.selected + 1 < rows.len() {
-            self.selected += 1;
-        }
-        self.selected = self.selected.min(rows.len().saturating_sub(1));
-        if enter
-            && let Some(item) = rows.get(self.selected)
-            && item.disabled.is_none()
-        {
-            picked = Some(item.intent);
-            self.open = false;
-        }
-
-        let modal = egui::Modal::new(egui::Id::new("command-palette")).show(ctx, |ui| {
-            ui.set_width(480.0);
-            let edit = egui::TextEdit::singleline(&mut self.query)
-                .hint_text("Type a command")
-                .desired_width(f32::INFINITY)
-                .show(ui);
-            if self.focus {
-                edit.response.request_focus();
-                self.focus = false;
-            }
-            if edit.response.changed() {
-                self.selected = 0;
-            }
-            ui.separator();
-            egui::ScrollArea::vertical()
-                .max_height(360.0)
-                .show(ui, |ui| {
-                    if rows.is_empty() {
-                        ui.weak("No matching command");
-                    }
-                    for (i, item) in rows.iter().enumerate() {
-                        let selected = i == self.selected;
-                        let text = egui::RichText::new(&item.label);
-                        let text = if item.disabled.is_some() {
-                            text.weak()
-                        } else {
-                            text
-                        };
-                        let response = ui
-                            .horizontal(|ui| {
-                                let r = ui.selectable_label(selected, text);
-                                ui.with_layout(
-                                    egui::Layout::right_to_left(egui::Align::Center),
-                                    |ui| {
-                                        if let Some(shortcut) = &item.shortcut {
-                                            ui.weak(shortcut);
-                                        }
-                                    },
-                                );
-                                r
-                            })
-                            .inner;
-                        if selected {
-                            response.scroll_to_me(None);
-                        }
-                        if let Some(why) = item.disabled {
-                            response.clone().on_hover_text(why);
-                        }
-                        if response.clicked() && item.disabled.is_none() {
-                            picked = Some(item.intent);
-                            self.open = false;
-                        }
-                        if response.hovered() {
-                            self.selected = i;
-                        }
-                    }
-                });
-        });
-        if modal.should_close() {
-            self.open = false;
-        }
-        picked
-    }
+/// The rows matching `query`, best first: by score, then recency, then
+/// label.
+#[must_use]
+pub fn ranked(query: &str, mut items: Vec<Item>) -> Vec<Item> {
+    let query = query.trim().to_lowercase();
+    let mut scored: Vec<(u32, Item)> = items
+        .drain(..)
+        .filter_map(|item| score(&query, &item.label).map(|s| (s, item)))
+        .collect();
+    scored.sort_by(|(sa, a), (sb, b)| {
+        sb.cmp(sa)
+            .then_with(|| match (a.recency, b.recency) {
+                (Some(x), Some(y)) => x.cmp(&y),
+                (Some(_), None) => std::cmp::Ordering::Less,
+                (None, Some(_)) => std::cmp::Ordering::Greater,
+                (None, None) => std::cmp::Ordering::Equal,
+            })
+            .then_with(|| a.label.cmp(&b.label))
+    });
+    scored.into_iter().map(|(_, item)| item).collect()
 }
 
 /// How well `query` matches `label` as a case-insensitive subsequence;
@@ -255,7 +135,6 @@ mod tests {
 
     #[test]
     fn ranking_puts_recent_items_first_when_the_query_is_empty() {
-        let mut palette = Palette::default();
         let item = |label: &str, recency| Item {
             intent: Intent::Refresh,
             label: label.to_owned(),
@@ -263,16 +142,18 @@ mod tests {
             disabled: None,
             recency,
         };
-        let ranked = palette.ranked(vec![
-            item("Zed", None),
-            item("Alpha", Some(1)),
-            item("Beta", Some(0)),
-        ]);
-        let labels: Vec<&str> = ranked.iter().map(|i| i.label.as_str()).collect();
+        let by_recency = ranked(
+            "",
+            vec![
+                item("Zed", None),
+                item("Alpha", Some(1)),
+                item("Beta", Some(0)),
+            ],
+        );
+        let labels: Vec<&str> = by_recency.iter().map(|i| i.label.as_str()).collect();
         assert_eq!(labels, ["Beta", "Alpha", "Zed"]);
-        palette.query = "ze".into();
-        let ranked = palette.ranked(vec![item("Zed", None), item("Alpha", Some(1))]);
-        assert_eq!(ranked.len(), 1);
-        assert_eq!(ranked[0].label, "Zed");
+        let by_query = ranked("ze", vec![item("Zed", None), item("Alpha", Some(1))]);
+        assert_eq!(by_query.len(), 1);
+        assert_eq!(by_query[0].label, "Zed");
     }
 }

@@ -61,6 +61,8 @@ pub const VIEW_ICONS: &str = ph::SQUARES_FOUR;
 pub const HOME: &str = ph::HOUSE;
 /// Pinned.
 pub const PIN: &str = ph::PUSH_PIN;
+/// Unpin.
+pub const UNPIN: &str = ph::PUSH_PIN_SLASH;
 /// Recent.
 pub const RECENT: &str = ph::CLOCK_COUNTER_CLOCKWISE;
 /// Network.
@@ -80,8 +82,18 @@ pub const FAILED: &str = ph::WARNING;
 pub fn install(ctx: &egui::Context) {
     let mut fonts = egui::FontDefinitions::default();
     egui_phosphor::add_to_fonts(&mut fonts, egui_phosphor::Variant::Regular);
+    // The fill weight marks an active toggle; it is its own family so a
+    // glyph can ask for it.
+    egui_phosphor::add_font_bytes_as_family(
+        &mut fonts,
+        FILL_FAMILY,
+        egui_phosphor::Variant::Fill.font_bytes(),
+    );
     ctx.set_fonts(fonts);
 }
+
+/// The font family of the fill weight, for active toggles.
+pub const FILL_FAMILY: &str = "phosphor-fill";
 
 /// The file-type icon of an entry: by kind, then by extension.
 #[must_use]
@@ -163,6 +175,7 @@ mod tests {
         VIEW_ICONS,
         HOME,
         PIN,
+        UNPIN,
         RECENT,
         NETWORK,
         TRASH,

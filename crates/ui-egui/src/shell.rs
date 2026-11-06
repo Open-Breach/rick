@@ -12,14 +12,14 @@ use model::{
     Column, Density, JobState, PaneId, PanelSide, SelectionChange, SettingsChange, SortDir, Tab,
     TabId, Theme, ViewMode,
 };
-use platform::PropertiesOutcome;
+use platform::{ControlsSide, PropertiesOutcome};
 use types::{EntryId, EntryKind, Location, Progress};
 
 use crate::dock::DockSync;
 use crate::host::{Ask, EguiHost};
 use crate::keys::{Direction, Intent, KeyMap};
-use crate::palette::Palette;
 use crate::preview::Previews;
+use crate::search::{Pick, SearchBox};
 use crate::settings_ui::ShortcutsScreen;
 use crate::{icons, inspector, menus, pane, paths, settings_ui, side_panel};
 
@@ -143,7 +143,7 @@ pub struct RickUi {
     requests: Vec<Request>,
     dispatched: VecDeque<Dispatched>,
     toasts: Vec<Toast>,
-    palette: Palette,
+    search: SearchBox,
     dialog: Option<Dialog>,
     settings_open: bool,
     shortcuts: ShortcutsScreen,
@@ -162,6 +162,18 @@ pub struct RickUi {
 
 /// How many dispatched intents are remembered.
 const RECENTS: usize = 64;
+/// The title row's height in points: that of a tab.
+const TITLE_ROW_HEIGHT: f32 = 30.0;
+
+/// An icon-only toggle; the fill weight marks it active.
+fn toggle_icon(glyph: &str, on: bool) -> egui::Button<'static> {
+    let text = if on {
+        egui::RichText::new(glyph).family(egui::FontFamily::Name("phosphor-fill".into()))
+    } else {
+        egui::RichText::new(glyph)
+    };
+    egui::Button::new(text).frame(false).selected(on)
+}
 /// How long a notification stays.
 const TOAST_FOR: Duration = Duration::from_secs(5);
 /// How long a finished job stays listed before it is dismissed.
@@ -187,7 +199,7 @@ impl RickUi {
             requests: Vec::new(),
             dispatched: VecDeque::new(),
             toasts: Vec::new(),
-            palette: Palette::default(),
+            search: SearchBox::default(),
             dialog: None,
             settings_open: false,
             shortcuts: ShortcutsScreen::default(),
@@ -238,10 +250,16 @@ impl RickUi {
         self.inspector_open
     }
 
-    /// Whether the command palette is open.
+    /// Whether the title row's search box has the keyboard.
     #[must_use]
-    pub fn palette_open(&self) -> bool {
-        self.palette.open
+    pub fn search_active(&self) -> bool {
+        self.search.active()
+    }
+
+    /// The search box's text.
+    #[must_use]
+    pub fn search_text(&self) -> &str {
+        &self.search.text
     }
 
     /// Whether the Settings screen is open.
@@ -410,7 +428,8 @@ impl RickUi {
             return;
         }
         // An open menu owns the keyboard: Escape closes it, nothing else.
-        if self.palette.open || ctx.egui_wants_keyboard_input() || egui::Popup::is_any_open(ctx) {
+        if self.search.active() || ctx.egui_wants_keyboard_input() || egui::Popup::is_any_open(ctx)
+        {
             return;
         }
         let filter_text = self
@@ -580,7 +599,7 @@ impl RickUi {
                     tab_ui.focus_path = true;
                 }
             }
-            Intent::Palette => self.palette.open(),
+            Intent::Palette => self.search.focus_with(">"),
             Intent::SelectAll => self.handle(Command::Select {
                 pane,
                 change: SelectionChange::All,
@@ -758,8 +777,8 @@ impl RickUi {
             Intent::ExtendPageDown => self.move_cursor(pane, self.page(pane), true),
             Intent::ExtendHome => self.move_cursor(pane, isize::MIN, true),
             Intent::ExtendEnd => self.move_cursor(pane, isize::MAX, true),
-            Intent::QuickOpen
-            | Intent::SelectByPattern
+            Intent::QuickOpen => self.search.focus_with(""),
+            Intent::SelectByPattern
             | Intent::PasteAsLink
             | Intent::BulkRename
             | Intent::OpenWith
@@ -917,65 +936,55 @@ impl RickUi {
         self.handle(Command::Select { pane, change });
     }
 
-    fn top_bar(&mut self, ui: &mut egui::Ui, focused: PaneId) {
-        egui::Panel::top(egui::Id::new("top")).show(ui, |ui| {
-            ui.horizontal(|ui| {
-                menus::burger(ui, &mut self.requests, focused);
-                ui.separator();
-                let undo = self.app.undo_label();
-                if ui
-                    .add_enabled(undo.is_some(), egui::Button::new(icons::UNDO))
-                    .on_hover_text(undo.map_or_else(|| "Undo".to_owned(), |l| format!("Undo {l}")))
-                    .clicked()
-                {
-                    self.requests.push(Request::Intent {
-                        intent: Intent::Undo,
-                        pane: focused,
-                    });
+    /// The title row: burger menu, the search box, the layout toggles and
+    /// the window controls. An empty part of it drags the window and a
+    /// double click maximises or restores it.
+    fn title_row(&mut self, ui: &mut egui::Ui, ctx: &egui::Context, focused: PaneId) {
+        let chrome = self.app.platform().window_chrome();
+        let height = TITLE_ROW_HEIGHT;
+        egui::Panel::top(egui::Id::new("title"))
+            .exact_size(height)
+            .show_separator_line(true)
+            .show(ui, |ui| {
+                let rect = ui.max_rect();
+                // The background first, so every widget drawn after it wins
+                // the pointer where they overlap.
+                let background = ui.interact(
+                    rect,
+                    egui::Id::new("title-drag"),
+                    egui::Sense::click_and_drag(),
+                );
+                if background.drag_started() {
+                    ctx.send_viewport_cmd(egui::ViewportCommand::StartDrag);
                 }
-                let redo = self.app.redo_label();
-                if ui
-                    .add_enabled(redo.is_some(), egui::Button::new(icons::REDO))
-                    .on_hover_text(redo.map_or_else(|| "Redo".to_owned(), |l| format!("Redo {l}")))
-                    .clicked()
-                {
-                    self.requests.push(Request::Intent {
-                        intent: Intent::Redo,
-                        pane: focused,
-                    });
+                if background.double_clicked() {
+                    let maximized = ctx.input(|i| i.viewport().maximized.unwrap_or(false));
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(!maximized));
                 }
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if ui
-                        .selectable_label(self.inspector_open, "Inspector")
-                        .clicked()
-                    {
-                        self.inspector_open = !self.inspector_open;
-                    }
-                    let side_visible = self.app.model().settings.side_panel.visible;
-                    if ui
-                        .selectable_label(side_visible, "Panel")
-                        .on_hover_text("Toggle side panel")
-                        .clicked()
-                    {
-                        self.requests.push(Request::Intent {
-                            intent: Intent::ToggleSidePanel,
-                            pane: focused,
-                        });
-                    }
-                    let running = self
-                        .app
-                        .model()
-                        .jobs
-                        .values()
-                        .filter(|j| matches!(j.state, JobState::Running(_)))
-                        .count();
-                    if running > 0 {
-                        ui.spinner();
-                        ui.weak(format!("{running} running"));
-                    }
-                });
+
+                // Left: room for the native controls, then the burger.
+                let mut left = ui.new_child(
+                    egui::UiBuilder::new()
+                        .max_rect(rect)
+                        .layout(egui::Layout::left_to_right(egui::Align::Center)),
+                );
+                if chrome.native_controls && chrome.controls == ControlsSide::Left {
+                    left.add_space(chrome.native_controls_width);
+                }
+                menus::burger(&mut left, &mut self.requests, focused);
+                let left_edge = left.min_rect().right();
+
+                // Right: window controls, then the toggles.
+                let mut right = ui.new_child(
+                    egui::UiBuilder::new()
+                        .max_rect(rect)
+                        .layout(egui::Layout::right_to_left(egui::Align::Center)),
+                );
+                self.title_right(&mut right, ctx, chrome, focused);
+                let right_edge = right.min_rect().left();
+
+                self.title_search(ui, rect, left_edge, right_edge, focused);
             });
-        });
     }
 
     /// The side panel on its side with the operations area at its foot, or
@@ -1019,6 +1028,123 @@ impl RickUi {
             self.requests.push(Request::Command(Command::Settings(
                 SettingsChange::SidePanelWidth(width),
             )));
+        }
+    }
+
+    /// Window controls and the layout toggles, right to left.
+    fn title_right(
+        &mut self,
+        right: &mut egui::Ui,
+        ctx: &egui::Context,
+        chrome: platform::WindowChrome,
+        focused: PaneId,
+    ) {
+        if !chrome.native_controls {
+            if right
+                .add(egui::Button::new(icons::CLOSE).frame(false))
+                .on_hover_text("Close")
+                .clicked()
+            {
+                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            }
+            let maximized = ctx.input(|i| i.viewport().maximized.unwrap_or(false));
+            let glyph = if maximized {
+                icons::RESTORE
+            } else {
+                icons::MAXIMISE
+            };
+            if right
+                .add(egui::Button::new(glyph).frame(false))
+                .on_hover_text(if maximized { "Restore" } else { "Maximise" })
+                .clicked()
+            {
+                ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(!maximized));
+            }
+            if right
+                .add(egui::Button::new(icons::MINIMISE).frame(false))
+                .on_hover_text("Minimise")
+                .clicked()
+            {
+                ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true));
+            }
+            right.separator();
+        }
+        if right
+            .add(toggle_icon(icons::INSPECTOR, self.inspector_open))
+            .on_hover_text("Toggle inspector")
+            .clicked()
+        {
+            self.inspector_open = !self.inspector_open;
+        }
+        let side_visible = self.app.model().settings.side_panel.visible;
+        if right
+            .add(toggle_icon(icons::SIDE_PANEL, side_visible))
+            .on_hover_text("Toggle side panel")
+            .clicked()
+        {
+            self.requests.push(Request::Intent {
+                intent: Intent::ToggleSidePanel,
+                pane: focused,
+            });
+        }
+        let running = self
+            .app
+            .model()
+            .jobs
+            .values()
+            .filter(|j| matches!(j.state, JobState::Running(_)))
+            .count();
+        if running > 0 {
+            right.spinner();
+            right.weak(format!("{running} running"));
+        }
+    }
+
+    /// The search box between the burger and the right-hand group, as wide
+    /// as the room allows.
+    fn title_search(
+        &mut self,
+        ui: &mut egui::Ui,
+        rect: egui::Rect,
+        left_edge: f32,
+        right_edge: f32,
+        focused: PaneId,
+    ) {
+        let room = (right_edge - left_edge - 24.0).max(0.0);
+        let width = (rect.width() * 0.4).clamp(160.0, 560.0).min(room);
+        if width < 120.0 {
+            return;
+        }
+        let centre = f32::midpoint(left_edge, right_edge).clamp(
+            left_edge + width / 2.0 + 12.0,
+            right_edge - width / 2.0 - 12.0,
+        );
+        let search_rect = egui::Rect::from_center_size(
+            egui::pos2(centre, rect.center().y),
+            egui::vec2(width, (rect.height() - 6.0).max(16.0)),
+        );
+        let recents: Vec<Intent> = self.dispatched.iter().rev().map(|d| d.intent).collect();
+        let pick = self
+            .search
+            .show(ui, search_rect, &self.app, &self.keys, focused, &recents);
+        match pick {
+            Some(Pick::Intent(intent)) => self.requests.push(Request::Intent {
+                intent,
+                pane: focused,
+            }),
+            Some(Pick::Entry { index, id }) => {
+                if let Some((tab_id, _)) = self.app.model().active_tab(focused) {
+                    let tab_ui = self.tabs.entry(tab_id).or_default();
+                    tab_ui.scroll_to = Some(index);
+                    tab_ui.cursor = Some(id);
+                    tab_ui.anchor = Some(id);
+                }
+                self.requests.push(Request::Command(Command::Select {
+                    pane: focused,
+                    change: SelectionChange::Set(vec![id]),
+                }));
+            }
+            None => {}
         }
     }
 
@@ -1289,7 +1415,8 @@ impl eframe::App for RickUi {
         self.apply_requests(ctx);
 
         let focused = self.app.model().focused;
-        self.top_bar(ui, focused);
+        self.title_row(ui, ctx, focused);
+        self.apply_requests(ctx);
 
         self.side_panel(ui, ctx, focused);
 
@@ -1324,13 +1451,6 @@ impl eframe::App for RickUi {
         self.apply_requests(ctx);
 
         self.show_dialog(ctx);
-        let pane = self.app.model().focused;
-        let recents: Vec<Intent> = self.dispatched.iter().rev().map(|d| d.intent).collect();
-        let items = Palette::items(&self.app, &self.keys, pane, &recents);
-        let rows = self.palette.ranked(items);
-        if let Some(intent) = self.palette.show(ctx, &rows) {
-            self.requests.push(Request::Intent { intent, pane });
-        }
         settings_ui::settings_window(
             ctx,
             &mut self.settings_open,

@@ -312,10 +312,11 @@ fn the_shell_shows_the_listing_and_navigates() {
         egui::Key::P,
     );
     harness.step();
-    assert!(harness.state().palette_open());
+    assert!(harness.state().search_active());
+    assert_eq!(harness.state().search_text(), ">");
     harness.key_press(egui::Key::Escape);
     harness.step();
-    assert!(!harness.state().palette_open());
+    assert!(!harness.state().search_active());
 }
 
 /// A click anywhere on a row selects it, the name included. The name is a
