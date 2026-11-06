@@ -29,12 +29,18 @@ jobs:
             Windows-X64) asset=pdfium-win-x64 ;;
             *) echo "no pdfium build for ${{ runner.os }}-${{ runner.arch }}"; exit 1 ;;
           esac
-          mkdir -p "$RUNNER_TEMP/pdfium"
-          curl -sSL "https://github.com/bblanchon/pdfium-binaries/releases/latest/download/$asset.tgz" | tar xz -C "$RUNNER_TEMP/pdfium"
+          # Git Bash's tar reads a Windows path's drive colon as a host, so
+          # work in POSIX form there and hand Rust the Windows form.
+          dest="$RUNNER_TEMP/pdfium"
           if [ "${{ runner.os }}" = "Windows" ]; then
-            echo "RICK_PDFIUM_DIR=$RUNNER_TEMP\\pdfium\\bin" >> "$GITHUB_ENV"
+            dest="$(cygpath -u "$RUNNER_TEMP")/pdfium"
+          fi
+          mkdir -p "$dest"
+          curl -sSL "https://github.com/bblanchon/pdfium-binaries/releases/latest/download/$asset.tgz" | tar xz -C "$dest"
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            echo "RICK_PDFIUM_DIR=$(cygpath -w "$dest/bin")" >> "$GITHUB_ENV"
           else
-            echo "RICK_PDFIUM_DIR=$RUNNER_TEMP/pdfium/lib" >> "$GITHUB_ENV"
+            echo "RICK_PDFIUM_DIR=$dest/lib" >> "$GITHUB_ENV"
           fi
           echo "RICK_REQUIRE_PDFIUM=1" >> "$GITHUB_ENV"
       - run: cargo fmt --check
