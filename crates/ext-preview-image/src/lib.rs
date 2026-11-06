@@ -290,6 +290,25 @@ fn decode(
                 .ok_or_else(|| invalid("JPEG size mismatch".into()))?;
             Ok((vec![image], full))
         }
+        ImageFormat::Bmp
+            if bmp_header(bytes)
+                .is_some_and(|h| h.width > 2 * want_w.max(1) || h.height > 2 * want_h.max(1)) =>
+        {
+            // Uncompressed pixels: sample every n-th one straight from the
+            // file, so a 50 MB bitmap shows in a few milliseconds; a larger
+            // request decodes it whole.
+            let header = bmp_header(bytes).ok_or_else(|| invalid("BMP header".into()))?;
+            let step = (header.width / want_w.max(1))
+                .max(header.height / want_h.max(1))
+                .max(2);
+            if let Some(image) = bmp_subsampled(bytes, &header, step) {
+                Ok((vec![image], false))
+            } else {
+                let image = image::load_from_memory_with_format(bytes, format)
+                    .map_err(|e| invalid(e.to_string()))?;
+                Ok((vec![image.into_rgba8()], true))
+            }
+        }
         ImageFormat::Gif => {
             let decoder = image::codecs::gif::GifDecoder::new(Cursor::new(bytes))
                 .map_err(|e| invalid(e.to_string()))?;
@@ -311,6 +330,76 @@ fn decode(
             Ok((vec![image.into_rgba8()], true))
         }
     }
+}
+
+/// The header of an uncompressed 24- or 32-bit BMP.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct BmpHeader {
+    width: u32,
+    height: u32,
+    top_down: bool,
+    bytes_per_pixel: usize,
+    offset: usize,
+    stride: usize,
+}
+
+/// Parses the header when the file is a BMP this fast path handles:
+/// `BI_RGB`, 24 or 32 bits per pixel, any DIB header size from 40 up.
+fn bmp_header(bytes: &[u8]) -> Option<BmpHeader> {
+    if bytes.len() < 54 || &bytes[..2] != b"BM" {
+        return None;
+    }
+    let le32 =
+        |at: usize| u32::from_le_bytes([bytes[at], bytes[at + 1], bytes[at + 2], bytes[at + 3]]);
+    let le16 = |at: usize| u16::from_le_bytes([bytes[at], bytes[at + 1]]);
+    let offset = le32(10) as usize;
+    if le32(14) < 40 {
+        return None;
+    }
+    let width = i32::from_le_bytes([bytes[18], bytes[19], bytes[20], bytes[21]]);
+    let height = i32::from_le_bytes([bytes[22], bytes[23], bytes[24], bytes[25]]);
+    let bpp = le16(28);
+    if le32(30) != 0 || !(bpp == 24 || bpp == 32) || width <= 0 || height == 0 {
+        return None;
+    }
+    let bytes_per_pixel = usize::from(bpp / 8);
+    let width = width.unsigned_abs();
+    let stride = (width as usize * bytes_per_pixel).div_ceil(4) * 4;
+    Some(BmpHeader {
+        width,
+        height: height.unsigned_abs(),
+        top_down: height < 0,
+        bytes_per_pixel,
+        offset,
+        stride,
+    })
+}
+
+/// Every `step`-th pixel of every `step`-th row of an uncompressed BMP, as
+/// RGBA. `None` when the file is shorter than its header claims.
+fn bmp_subsampled(bytes: &[u8], header: &BmpHeader, step: u32) -> Option<RgbaImage> {
+    let step = step.max(1);
+    let out_w = header.width.div_ceil(step);
+    let out_h = header.height.div_ceil(step);
+    let mut data = Vec::with_capacity(out_w as usize * out_h as usize * 4);
+    for oy in 0..out_h {
+        let sy = oy * step;
+        let row = if header.top_down {
+            sy
+        } else {
+            header.height - 1 - sy
+        };
+        let base = header.offset + row as usize * header.stride;
+        let end = base + header.width as usize * header.bytes_per_pixel;
+        if end > bytes.len() {
+            return None;
+        }
+        for ox in 0..out_w {
+            let p = base + (ox * step) as usize * header.bytes_per_pixel;
+            data.extend_from_slice(&[bytes[p + 2], bytes[p + 1], bytes[p], 255]);
+        }
+    }
+    RgbaImage::from_raw(out_w, out_h, data)
 }
 
 /// Expands jpeg-decoder's pixel formats to RGBA8.
@@ -660,6 +749,49 @@ mod tests {
             panic!("not pixels")
         };
         assert_eq!(width, 640);
+        assert!(doc.full);
+    }
+
+    #[test]
+    fn big_bitmaps_are_sampled_from_the_file_first() {
+        let big = RgbaImage::from_fn(400, 300, |x, _| {
+            if x < 200 {
+                Rgba([255, 0, 0, 255])
+            } else {
+                Rgba([0, 0, 255, 255])
+            }
+        });
+        let rgb = DynamicImage::ImageRgba8(big).into_rgb8();
+        let mut out = Cursor::new(Vec::new());
+        rgb.write_to(&mut out, ImageFormat::Bmp)
+            .unwrap_or_else(|e| panic!("{e}"));
+        let bytes = out.into_inner();
+        let header = bmp_header(&bytes).unwrap_or_else(|| panic!("header"));
+        assert_eq!(
+            (header.width, header.height, header.bytes_per_pixel),
+            (400, 300, 3)
+        );
+        let mut doc = ImageDoc::new(bytes).unwrap_or_else(|e| panic!("{e}"));
+        let Frame::Rgba {
+            width,
+            height,
+            data,
+        } = doc.render(0, req(50, 50)).unwrap_or_else(|e| panic!("{e}"))
+        else {
+            panic!("not pixels")
+        };
+        assert!(!doc.full, "sampled, not decoded");
+        assert_eq!((width, height), (50, 38), "{width}x{height}");
+        assert!(data[0] > 200 && data[2] < 60, "{:?}", &data[..4]);
+        let last = &data[data.len() - 4..];
+        assert!(last[2] > 200 && last[0] < 60, "{last:?}");
+        let Frame::Rgba { width, .. } = doc
+            .render(0, req(400, 300))
+            .unwrap_or_else(|e| panic!("{e}"))
+        else {
+            panic!("not pixels")
+        };
+        assert_eq!(width, 400);
         assert!(doc.full);
     }
 
