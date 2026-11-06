@@ -23,14 +23,20 @@ pub(crate) fn stream(loc: &Location, opts: ListOptions, cancel: CancelToken) -> 
     let root_vpath = loc.path.clone();
     let (tx, rx) = mpsc::channel::<Result<Vec<Entry>, Error>>(CHANNEL_DEPTH);
 
+    let walker_cancel = cancel.clone();
     runtime::handle().spawn_blocking(move || {
         let span = tracing::info_span!("vfs_local.list", path = %root.display());
         let _enter = span.enter();
-        walk(root, root_vpath, opts, &cancel, &tx);
+        walk(root, root_vpath, opts, &walker_cancel, &tx);
     });
 
-    stream::unfold(rx, |mut rx| async move {
-        rx.recv().await.map(|item| (item, rx))
+    // Batches already buffered in the channel are dropped once cancelled, so
+    // the consumer sees at most the batch it was awaiting.
+    stream::unfold((rx, cancel), |(mut rx, cancel)| async move {
+        if cancel.is_cancelled() {
+            return None;
+        }
+        rx.recv().await.map(|item| (item, (rx, cancel)))
     })
     .boxed()
 }

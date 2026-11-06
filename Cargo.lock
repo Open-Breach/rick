@@ -1046,12 +1046,17 @@ dependencies = [
 name = "tests"
 version = "0.1.0"
 dependencies = [
+ "ext",
+ "futures",
+ "platform",
  "runtime",
  "tempfile",
  "thiserror",
  "tokio",
  "tracing",
  "types",
+ "vfs",
+ "vfs-local",
 ]
 
 [[package]]

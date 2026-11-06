@@ -10,9 +10,14 @@ publish = false
 [dependencies]
 types = { workspace = true }
 runtime = { workspace = true }
+platform = { workspace = true }
+ext = { workspace = true }
+vfs = { workspace = true }
+vfs-local = { workspace = true }
+futures = { workspace = true }
 tempfile = { workspace = true }
 thiserror = { workspace = true }
-tokio = { workspace = true, features = ["rt"] }
+tokio = { workspace = true, features = ["rt", "time"] }
 tracing = { workspace = true }
 
 [lints]
