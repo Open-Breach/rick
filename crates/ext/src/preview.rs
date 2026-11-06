@@ -4,25 +4,35 @@
 //! first 4 KiB of content; the highest score wins. `open` produces a
 //! [`PreviewDoc`] with pages, a `render` that yields frames the UI uploads as
 //! textures (or a text block it lays out itself), a text layer for find,
-//! metadata rows, and a transport for media.
+//! metadata in [`InfoSection`]s for the pane's info badges, one-line facts
+//! for its status bar, the previewer's own toolbar [`PreviewControl`]s, and a
+//! transport for media. The pane builds its toolbar from the kind of document
+//! (text layer, pages, raster) plus those controls; a previewer never draws.
 //!
 //! # Worked example
 //!
-//! A previewer for files whose name ends in `.txt`, rendering a text block.
-//! Reading the content would go through the provider's `open_read`; this one
-//! shows the entry's name to keep the example short.
+//! A previewer for files whose name ends in `.txt`, rendering a text block
+//! with one control of its own: an "Upper case" toggle. Reading the content
+//! would go through the provider's `open_read`; this one shows the entry's
+//! name to keep the example short.
 //!
 //! ```
 //! use std::sync::Arc;
 //!
-//! use ext::{Frame, PreviewDoc, Previewer, Provider, RenderRequest, TextBlock, TextLayer, Transport, async_trait};
+//! use ext::{
+//!     ControlId, ControlValue, Frame, Icon, InfoSection, PreviewControl, PreviewDoc, Previewer,
+//!     Provider, RenderRequest, TextBlock, TextLayer, Transport, async_trait,
+//! };
 //! use types::{Attrs, CancelToken, Entry, EntryId, EntryKind, Error, ExtId, Location, ProviderId};
 //!
 //! struct PlainText;
 //!
+//! const UPPER: ControlId = ControlId("text.upper");
+//!
 //! struct TextDoc {
 //!     body: String,
 //!     layer: TextLayer,
+//!     upper: bool,
 //! }
 //!
 //! impl PreviewDoc for TextDoc {
@@ -30,13 +40,34 @@
 //!         None
 //!     }
 //!     fn render(&mut self, _page: usize, _req: RenderRequest) -> Result<Frame, Error> {
-//!         Ok(Frame::Text(TextBlock { text: self.body.clone(), language: None, spans: Vec::new() }))
+//!         let text = if self.upper { self.body.to_uppercase() } else { self.body.clone() };
+//!         Ok(Frame::Text(TextBlock { text, language: None, spans: Vec::new() }))
 //!     }
 //!     fn text_layer(&self) -> Option<&TextLayer> {
 //!         Some(&self.layer)
 //!     }
-//!     fn info(&self) -> Vec<(String, String)> {
-//!         vec![("Characters".into(), self.body.chars().count().to_string())]
+//!     fn sections(&self) -> Vec<InfoSection> {
+//!         vec![InfoSection {
+//!             id: "file",
+//!             title: "File info",
+//!             icon: Icon::Info,
+//!             rows: vec![("Characters".into(), self.body.chars().count().to_string())],
+//!         }]
+//!     }
+//!     fn status(&self) -> Vec<String> {
+//!         vec!["Plain text".into(), format!("{} lines", self.body.lines().count())]
+//!     }
+//!     fn controls(&self) -> Vec<PreviewControl> {
+//!         vec![PreviewControl::Toggle { id: UPPER, icon: Icon::TextCase, label: "Upper case", on: self.upper }]
+//!     }
+//!     fn set_control(&mut self, id: ControlId, value: ControlValue) -> Result<(), Error> {
+//!         match (id, value) {
+//!             (UPPER, ControlValue::Bool(on)) => {
+//!                 self.upper = on;
+//!                 Ok(())
+//!             }
+//!             _ => Err(Error::Unsupported("no such control")),
+//!         }
 //!     }
 //!     fn transport(&mut self) -> Option<&mut dyn Transport> {
 //!         None
@@ -66,7 +97,7 @@
 //!         _cancel: CancelToken,
 //!     ) -> Result<Box<dyn PreviewDoc>, Error> {
 //!         let body = loc.path.to_string_lossy().into_owned();
-//!         Ok(Box::new(TextDoc { layer: TextLayer { pages: vec![body.clone()] }, body }))
+//!         Ok(Box::new(TextDoc { layer: TextLayer { pages: vec![body.clone()] }, body, upper: false }))
 //!     }
 //! }
 //!
@@ -84,6 +115,13 @@
 //! };
 //! assert_eq!(PlainText.score(&entry, b"hello"), 200);
 //! assert_eq!(PlainText.score(&Entry { name: "a.bin".into(), ..entry.clone() }, b"\x00\x01"), 0);
+//!
+//! let mut doc = TextDoc { body: "hi".into(), layer: TextLayer::default(), upper: false };
+//! assert_eq!(doc.sections()[0].title, "File info");
+//! assert!(matches!(doc.controls()[0], PreviewControl::Toggle { on: false, .. }));
+//! doc.set_control(UPPER, ControlValue::Bool(true)).unwrap();
+//! let req = RenderRequest { width: 10, height: 10, scale: 1.0, dark: false };
+//! assert!(matches!(doc.render(0, req), Ok(Frame::Text(block)) if block.text == "HI"));
 //! ```
 
 use std::sync::Arc;
@@ -179,7 +217,101 @@ pub trait Transport {
     fn playing(&self) -> bool;
 }
 
-/// An opened document the inspector or viewer shows.
+/// A glyph the pane draws for a section badge or a control. The pane maps
+/// each to its icon set; extensions name the meaning, never the font.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum Icon {
+    /// General information about the file.
+    Info,
+    /// Camera metadata: EXIF, IPTC, XMP.
+    Camera,
+    /// Version control.
+    Branch,
+    /// Audio or video stream details.
+    Film,
+    /// A tag or label list.
+    Tag,
+    /// Pretty print: reformat structured text.
+    PrettyPrint,
+    /// Letter case.
+    TextCase,
+    /// Line numbers.
+    LineNumbers,
+    /// Word wrap.
+    Wrap,
+    /// Fit to the pane.
+    Fit,
+    /// Actual pixels.
+    ActualSize,
+    /// A step backwards or to the previous item.
+    Previous,
+    /// A step forwards or to the next item.
+    Next,
+    /// Rotate.
+    Rotate,
+    /// Zoom in.
+    ZoomIn,
+    /// Zoom out.
+    ZoomOut,
+}
+
+/// A group of metadata rows behind one info badge.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InfoSection {
+    /// Stable id, unique within the document: `"file"`, `"exif"`. The pane
+    /// remembers which id is pinned per content kind.
+    pub id: &'static str,
+    /// The badge's tooltip and the panel's heading.
+    pub title: &'static str,
+    /// The badge's glyph.
+    pub icon: Icon,
+    /// Key and value rows, in display order.
+    pub rows: Vec<(String, String)>,
+}
+
+/// Identity of a previewer's toolbar control: `"code.pretty"`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct ControlId(pub &'static str);
+
+/// What a control was set to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ControlValue {
+    /// A toggle's new state.
+    Bool(bool),
+    /// A button was pressed.
+    Pressed,
+}
+
+/// A toolbar control a previewer adds to the pane's standard ones. Icons
+/// only; the label is the tooltip.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PreviewControl {
+    /// On or off, drawn highlighted when on.
+    Toggle {
+        /// The control's id, passed back to [`PreviewDoc::set_control`].
+        id: ControlId,
+        /// The glyph.
+        icon: Icon,
+        /// The tooltip.
+        label: &'static str,
+        /// Current state.
+        on: bool,
+    },
+    /// A one-shot action.
+    Button {
+        /// The control's id, passed back to [`PreviewDoc::set_control`].
+        id: ControlId,
+        /// The glyph.
+        icon: Icon,
+        /// The tooltip.
+        label: &'static str,
+        /// Greyed out when `false`.
+        enabled: bool,
+    },
+}
+
+/// An opened document the preview pane or viewer shows.
 pub trait PreviewDoc: Send {
     /// Number of pages; `None` for a single surface.
     fn pages(&self) -> Option<usize>;
@@ -196,8 +328,26 @@ pub trait PreviewDoc: Send {
     /// Text for find, when the document has any.
     fn text_layer(&self) -> Option<&TextLayer>;
 
-    /// Metadata rows for the info panel.
-    fn info(&self) -> Vec<(String, String)>;
+    /// Metadata, grouped for the pane's info badges. The first section is
+    /// "File info"; others (EXIF, stream details) appear only when they
+    /// apply.
+    fn sections(&self) -> Vec<InfoSection>;
+
+    /// One-line facts for the pane's status bar, in display order.
+    fn status(&self) -> Vec<String>;
+
+    /// The previewer's own toolbar controls (pretty print, say); the
+    /// standard ones (line numbers, wrap, pager, fit and 1:1) come from the
+    /// kind of document.
+    fn controls(&self) -> Vec<PreviewControl>;
+
+    /// A toolbar control was used; the next `render` reflects it.
+    ///
+    /// # Errors
+    ///
+    /// `Error::Unsupported` for an id this document has no control for, or
+    /// a value of the wrong kind.
+    fn set_control(&mut self, id: ControlId, value: ControlValue) -> Result<(), Error>;
 
     /// Playback control; media only.
     fn transport(&mut self) -> Option<&mut dyn Transport>;

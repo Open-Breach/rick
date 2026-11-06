@@ -82,6 +82,70 @@ pub const DONE: &str = ph::CHECK;
 /// Failed.
 pub const FAILED: &str = ph::WARNING;
 
+/// Line numbers in a text preview.
+pub const LINE_NUMBERS: &str = ph::LIST_NUMBERS;
+/// Word wrap in a text preview.
+pub const WRAP: &str = ph::ARROW_U_DOWN_LEFT;
+/// Pretty print structured text.
+pub const PRETTY_PRINT: &str = ph::BRACKETS_CURLY;
+/// Fit a raster to the pane.
+pub const FIT: &str = ph::ARROWS_IN;
+/// A raster at actual pixels.
+pub const ACTUAL_SIZE: &str = ph::FRAME_CORNERS;
+/// The File info badge.
+pub const INFO: &str = ph::INFO;
+/// The EXIF badge.
+pub const CAMERA: &str = ph::CAMERA;
+/// The Git badge.
+pub const BRANCH: &str = ph::GIT_BRANCH;
+/// The media stream badge.
+pub const FILM: &str = ph::FILM_STRIP;
+/// A tag list badge.
+pub const TAG: &str = ph::TAG;
+/// Letter case.
+pub const TEXT_CASE: &str = ph::TEXT_AA;
+/// Rotate.
+pub const ROTATE: &str = ph::ARROWS_CLOCKWISE;
+/// Zoom in.
+pub const ZOOM_IN: &str = ph::MAGNIFYING_GLASS_PLUS;
+/// Zoom out.
+pub const ZOOM_OUT: &str = ph::MAGNIFYING_GLASS_MINUS;
+/// A wrapped line's continuation mark in the gutter.
+pub const CONTINUATION: &str = ph::ARROW_ELBOW_DOWN_RIGHT;
+
+/// The glyph for an extension's icon name.
+#[must_use]
+pub fn for_icon(icon: ext::Icon) -> &'static str {
+    match icon {
+        ext::Icon::Info => INFO,
+        ext::Icon::Camera => CAMERA,
+        ext::Icon::Branch => BRANCH,
+        ext::Icon::Film => FILM,
+        ext::Icon::PrettyPrint => PRETTY_PRINT,
+        ext::Icon::TextCase => TEXT_CASE,
+        ext::Icon::LineNumbers => LINE_NUMBERS,
+        ext::Icon::Wrap => WRAP,
+        ext::Icon::Fit => FIT,
+        ext::Icon::ActualSize => ACTUAL_SIZE,
+        ext::Icon::Previous => BACK,
+        ext::Icon::Next => FORWARD,
+        ext::Icon::Rotate => ROTATE,
+        ext::Icon::ZoomIn => ZOOM_IN,
+        ext::Icon::ZoomOut => ZOOM_OUT,
+        // `Tag`, and whatever later versions add.
+        _ => TAG,
+    }
+}
+
+/// The badge glyph for a decorator's panel section, by the extension's id.
+#[must_use]
+pub fn for_decorator(id: &str) -> &'static str {
+    match id {
+        "git" => BRANCH,
+        _ => TAG,
+    }
+}
+
 /// Registers the Phosphor font with egui's defaults; call once per context.
 pub fn install(ctx: &egui::Context) {
     let mut fonts = egui::FontDefinitions::default();
@@ -187,6 +251,21 @@ mod tests {
         FOLDER,
         PROVIDER,
         LINK,
+        LINE_NUMBERS,
+        WRAP,
+        PRETTY_PRINT,
+        FIT,
+        ACTUAL_SIZE,
+        INFO,
+        CAMERA,
+        BRANCH,
+        FILM,
+        TAG,
+        TEXT_CASE,
+        ROTATE,
+        ZOOM_IN,
+        ZOOM_OUT,
+        CONTINUATION,
         DONE,
         FAILED,
     ];

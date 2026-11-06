@@ -456,3 +456,37 @@ Once answered, an entry keeps its number and gains a `Decided (date):` line.
     colour, and invisible grips along the edges and corners that resize the
     window through the backend; a maximised or fullscreen window has no
     frame, and macOS keeps the system's border and resize handles.
+
+53. (Preview pane) The spec remembers the pinned info section "per content
+    kind (image, text, PDF, …)" without naming the kinds.
+    Assumed: three kinds derived from the document itself — `pages` when
+    `pages()` is `Some` (PDF, animated GIF), `text` when it has a text layer
+    and no pages, `image` otherwise — plus `other` for a file no previewer
+    opens but a decorator describes. Stored as
+    `[preview.pinned] text = "file"` in `rick.toml`.
+
+54. (Preview pane) The spec's Pretty print covers "JSON, XML, YAML and
+    minified HTML, CSS or JavaScript".
+    Assumed: JSON (through `serde_json`, key order kept) and XML and HTML
+    (a tag-per-line indenter) get the toggle; YAML, CSS and JavaScript do
+    not yet, since each needs a formatter of its own, so their files show
+    no Pretty print control rather than one that does nothing.
+
+55. (Preview pane) The spec names `kamadak-exif` and `rexiv2` for "every
+    EXIF, IPTC and XMP tag".
+    Assumed: `rexiv2` binds the system's gexiv2 library and was not a
+    dependency, so the EXIF section lists what `kamadak-exif` reads (every
+    EXIF tag, thumbnail IFD included); IPTC and XMP wait for a reader.
+
+56. (Preview pane) The spec says the pane needs no heading because "the
+    dock tab's label is enough", but the pane is still a side panel, not a
+    dock tab (the preview-as-tab is a later issue).
+    Assumed: the heading goes now; the panel has no label at all until it
+    becomes a tab. The title row's toggle reads "Toggle preview pane".
+
+57. (Preview pane) The spec says wrapped lines "break at the pane width"
+    and asks for only the visible lines to be laid out.
+    Assumed: lines break at any character, not at word boundaries, so a
+    monospace line's row count follows from its length and the pane can
+    place 200 000 lines without laying them out; a line whose real row
+    count differs (tabs, wide glyphs) corrects the index on the next frame.

@@ -10,6 +10,7 @@ repository.workspace = true
 types = { workspace = true }
 ext = { workspace = true }
 encoding_rs = { workspace = true }
+serde_json = { workspace = true }
 syntect = { workspace = true }
 tracing = { workspace = true }
 

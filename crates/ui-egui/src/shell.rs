@@ -157,6 +157,12 @@ pub struct RickUi {
     shortcuts: ShortcutsScreen,
     about_open: bool,
     inspector_open: bool,
+    /// The preview pane's own state: pinned-panel search, what it drew.
+    inspector_state: inspector::PaneState,
+    /// The preview pane's width when it first opens.
+    inspector_width: f32,
+    /// Where the preview pane was in the last frame, if open.
+    inspector_rect: Option<egui::Rect>,
     properties: Option<(String, Vec<(String, String)>)>,
     /// Read-only texts actions asked to show, each in its own window.
     texts: Vec<TextWindow>,
@@ -253,6 +259,9 @@ impl RickUi {
             shortcuts: ShortcutsScreen::default(),
             about_open: false,
             inspector_open: false,
+            inspector_state: inspector::PaneState::default(),
+            inspector_width: 260.0,
+            inspector_rect: None,
             properties: None,
             texts: Vec::new(),
             next_text: 0,
@@ -296,10 +305,45 @@ impl RickUi {
         self.dispatched.clear();
     }
 
-    /// Whether the inspector pane is shown.
+    /// Whether the preview pane is shown.
     #[must_use]
     pub fn inspector_open(&self) -> bool {
         self.inspector_open
+    }
+
+    /// The width the preview pane opens at; for tests, before it opens.
+    pub fn set_inspector_width(&mut self, width: f32) {
+        self.inspector_width = width;
+    }
+
+    /// Where the preview pane was in the last frame, if open.
+    #[must_use]
+    pub fn inspector_rect(&self) -> Option<egui::Rect> {
+        self.inspector_rect
+    }
+
+    /// Where the preview pane's parts were in the last frame, for tests.
+    #[must_use]
+    pub fn preview_rects(&self) -> inspector::PaneRects {
+        self.inspector_state.rects
+    }
+
+    /// The preview pane's toolbar controls of the last frame, for tests.
+    #[must_use]
+    pub fn preview_toolbar(&self) -> &[inspector::ToolbarItem] {
+        &self.inspector_state.toolbar
+    }
+
+    /// The preview pane's badges of the last frame, for tests.
+    #[must_use]
+    pub fn preview_badges(&self) -> &[inspector::BadgeItem] {
+        &self.inspector_state.badges
+    }
+
+    /// The preview pane's status bar text of the last frame, for tests.
+    #[must_use]
+    pub fn preview_status(&self) -> &str {
+        &self.inspector_state.status
     }
 
     /// Whether the title row's search box has the keyboard.
@@ -1190,7 +1234,7 @@ impl RickUi {
         }
         if right
             .add(toggle_icon(icons::INSPECTOR, self.inspector_open))
-            .on_hover_text("Toggle inspector")
+            .on_hover_text("Toggle preview pane")
             .clicked()
         {
             self.inspector_open = !self.inspector_open;
@@ -1554,12 +1598,27 @@ impl RickUi {
 
         self.side_panel(ui, ctx, focused);
 
+        self.inspector_rect = None;
         if self.inspector_open {
-            egui::Panel::right(egui::Id::new("inspector"))
-                .default_size(260.0)
+            // The pane's width is the dock's and the user's; its content
+            // fits itself in and never asks for more.
+            let response = egui::Panel::right(egui::Id::new("inspector"))
+                .default_size(self.inspector_width)
+                .size_range(inspector::MIN_WIDTH..=f32::INFINITY)
                 .show(ui, |ui| {
-                    inspector::show(ui, &self.app, focused, self.now, &mut self.previews);
+                    inspector::show(
+                        ui,
+                        &self.app,
+                        focused,
+                        &mut self.previews,
+                        &mut self.inspector_state,
+                        &mut self.requests,
+                    )
                 });
+            self.inspector_rect = Some(response.response.rect);
+            if response.inner {
+                self.inspector_open = false;
+            }
         }
 
         egui::CentralPanel::no_frame().show(ui, |ui| {

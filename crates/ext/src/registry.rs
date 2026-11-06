@@ -105,7 +105,10 @@ use crate::search::SearchIndex;
 
 /// Version of the extension contract: the traits in this crate and the
 /// manifest format. Any breaking change bumps it.
-pub const API_VERSION: u32 = 1;
+///
+/// History: 1 the first contract; 2 `PreviewDoc::info` became `sections`,
+/// with `status`, `controls` and `set_control` added.
+pub const API_VERSION: u32 = 2;
 
 /// What an extension declares about itself.
 #[derive(Debug, Clone, PartialEq, Eq)]

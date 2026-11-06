@@ -1,4 +1,4 @@
-//! The preview area of the inspector: one slot per pane holding the opened
+//! The preview pane's content: one slot per pane holding the opened
 //! document, the texture it rendered to, and the render in flight.
 //!
 //! Rendering decodes pixels, so it never runs on the UI thread: the slot
@@ -6,17 +6,32 @@
 //! with the frame through a channel it polls each frame, showing the last
 //! frame or a placeholder meanwhile. Textures are cached per pane and
 //! replaced only when the page, the size or the theme changes.
+//!
+//! Text frames are laid out here, only the visible lines of them: with wrap
+//! off each line is one row and the view scrolls both ways; with wrap on
+//! lines break at the pane width (anywhere, so a monospace line's row count
+//! follows from its length and the whole file never needs laying out), the
+//! continuation rows start at the text column and the gutter marks them.
+//!
+//! The content never sets the pane's width: frames are asked for at the
+//! pane's width and scaled down to fit, text scrolls inside a clipped area,
+//! and nothing here asks for more than the width it was given.
 
 use std::collections::HashMap;
 use std::ops::Range;
 use std::time::Duration;
 
 use egui::text::{LayoutJob, TextFormat};
-use egui::{Color32, FontId, TextStyle, TextureHandle, TextureOptions};
-use ext::{Frame, PreviewDoc, RenderRequest, TextBlock};
-use model::PaneId;
+use egui::{Align2, Color32, FontId, Rect, TextStyle, TextureHandle, TextureOptions, pos2, vec2};
+use ext::{
+    ControlId, ControlValue, Frame, InfoSection, PreviewControl, PreviewDoc, RenderRequest,
+    TextBlock,
+};
+use model::{PaneId, TextPreview};
 use runtime::oneshot;
 use types::{EntryId, Error};
+
+use crate::icons;
 
 type Rendered = (Box<dyn PreviewDoc>, Result<Frame, Error>);
 
@@ -24,10 +39,131 @@ type Rendered = (Box<dyn PreviewDoc>, Result<Frame, Error>);
 /// re-render on every frame.
 const QUANTUM: f32 = 64.0;
 
-/// A text frame prepared for drawing: the block plus its line ranges.
+/// The largest frame asked for at actual size, per axis, within what GPUs
+/// take as one texture.
+const MAX_ACTUAL: u32 = 8192;
+
+/// A tab counts as this many columns.
+const TAB_COLUMNS: u32 = 4;
+
+/// Content kind of a text document, for the pinned section setting.
+pub const KIND_TEXT: &str = "text";
+/// Content kind of a single raster, for the pinned section setting.
+pub const KIND_IMAGE: &str = "image";
+/// Content kind of a paged document, for the pinned section setting.
+pub const KIND_PAGES: &str = "pages";
+
+/// Wrapped row counts per line at one column width, with prefix sums so a
+/// scroll offset maps to a line by binary search.
+struct WrapIndex {
+    cols: u32,
+    rows: Vec<u32>,
+    /// `starts[i]` is the first row of line `i`; one more entry holds the
+    /// total.
+    starts: Vec<u32>,
+    dirty: bool,
+}
+
+impl WrapIndex {
+    fn new(cells: &[u32], cols: u32) -> Self {
+        let rows: Vec<u32> = cells.iter().map(|c| c.div_ceil(cols).max(1)).collect();
+        let mut index = Self {
+            cols,
+            rows,
+            starts: Vec::new(),
+            dirty: true,
+        };
+        index.rebuild();
+        index
+    }
+
+    fn rebuild(&mut self) {
+        let mut starts = Vec::with_capacity(self.rows.len() + 1);
+        let mut total = 0u32;
+        for rows in &self.rows {
+            starts.push(total);
+            total = total.saturating_add(*rows);
+        }
+        starts.push(total);
+        self.starts = starts;
+        self.dirty = false;
+    }
+
+    fn total(&self) -> u32 {
+        self.starts.last().copied().unwrap_or(0)
+    }
+
+    /// The line holding `row`.
+    fn line_at(&self, row: u32) -> usize {
+        self.starts.partition_point(|s| *s <= row).saturating_sub(1)
+    }
+}
+
+/// A text frame prepared for drawing: the block, its line ranges, the
+/// column count of each line, and the wrap index of the last width.
 struct TextView {
     block: TextBlock,
     lines: Vec<Range<usize>>,
+    cells: Vec<u32>,
+    max_cells: u32,
+    wrap: Option<WrapIndex>,
+}
+
+impl TextView {
+    fn new(block: TextBlock) -> Self {
+        let lines = line_ranges(&block.text);
+        let cells: Vec<u32> = lines
+            .iter()
+            .map(|range| columns(&block.text[range.clone()]))
+            .collect();
+        let max_cells = cells.iter().copied().max().unwrap_or(0);
+        Self {
+            block,
+            lines,
+            cells,
+            max_cells,
+            wrap: None,
+        }
+    }
+
+    /// The wrap index for `cols` columns, built or rebuilt as needed.
+    fn wrap_index(&mut self, cols: u32) -> &mut WrapIndex {
+        let stale = self.wrap.as_ref().is_none_or(|w| w.cols != cols);
+        if stale {
+            self.wrap = Some(WrapIndex::new(&self.cells, cols));
+        }
+        let index = self
+            .wrap
+            .as_mut()
+            .unwrap_or_else(|| unreachable!("just set"));
+        if index.dirty {
+            index.rebuild();
+        }
+        index
+    }
+}
+
+/// How many columns `line` takes: a tab is [`TAB_COLUMNS`], anything else
+/// one.
+fn columns(line: &str) -> u32 {
+    line.chars()
+        .map(|c| if c == '\t' { TAB_COLUMNS } else { 1 })
+        .sum()
+}
+
+/// What one line of text looked like when it was last drawn, for tests.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct DrawnLine {
+    /// Zero-based line number.
+    pub line: usize,
+    /// Rows the line took.
+    pub rows: usize,
+    /// Width of the laid-out text in points.
+    pub width: f32,
+    /// Where the text starts, in points from the left of the content.
+    pub x: f32,
+    /// Where the gutter starts: the content's left edge.
+    pub gutter_x: f32,
 }
 
 /// One pane's preview.
@@ -43,12 +179,18 @@ pub struct Slot {
     /// The page shown, zero-based.
     pub page: usize,
     pages: Option<usize>,
-    info: Vec<(String, String)>,
+    has_text_layer: bool,
+    sections: Vec<InfoSection>,
+    status: Vec<String>,
+    controls: Vec<PreviewControl>,
     error: Option<String>,
-    /// Wrap long lines of text previews.
-    pub wrap: bool,
-    /// Show line numbers in text previews.
-    pub numbers: bool,
+    /// Control changes made while the document was out rendering.
+    queued: Vec<(ControlId, ControlValue)>,
+    /// Rasters at actual pixels instead of fitted to the pane.
+    pub actual_size: bool,
+    drawn: Vec<DrawnLine>,
+    h_scroll: bool,
+    frame_rect: Option<Rect>,
 }
 
 impl std::fmt::Debug for Slot {
@@ -66,18 +208,23 @@ impl std::fmt::Debug for Slot {
 
 impl Slot {
     fn reset(&mut self, entry: Option<EntryId>) {
-        let (wrap, numbers) = (self.wrap, self.numbers);
         *self = Self {
             entry,
-            wrap,
-            numbers,
             ..Self::default()
         };
     }
 
+    fn take_facts(&mut self, doc: &dyn PreviewDoc) {
+        self.pages = doc.pages().or(self.pages);
+        self.has_text_layer = doc.text_layer().is_some();
+        self.sections = doc.sections();
+        self.status = doc.status();
+        self.controls = doc.controls();
+    }
+
     fn set_doc(&mut self, doc: Box<dyn PreviewDoc>) {
-        self.pages = doc.pages();
-        self.info = doc.info();
+        self.pages = None;
+        self.take_facts(&*doc);
         self.page = 0;
         self.rendered_for = None;
         self.error = None;
@@ -98,16 +245,119 @@ impl Slot {
         self.texture.is_some() || self.text.is_some()
     }
 
+    /// Whether a document is open or on its way.
+    #[must_use]
+    pub fn has_doc(&self) -> bool {
+        self.doc.is_some() || self.pending.is_some()
+    }
+
+    /// The document's page count, when it has pages.
+    #[must_use]
+    pub fn pages(&self) -> Option<usize> {
+        self.pages
+    }
+
+    /// The content kind for the pinned-section setting, once a document is
+    /// known: paged, text, or image.
+    #[must_use]
+    pub fn kind(&self) -> Option<&'static str> {
+        if !self.has_doc() {
+            return None;
+        }
+        Some(match (self.pages, self.has_text_layer) {
+            (Some(_), _) => KIND_PAGES,
+            (None, true) => KIND_TEXT,
+            (None, false) => KIND_IMAGE,
+        })
+    }
+
+    /// Whether the content is text the pane lays out.
+    #[must_use]
+    pub fn is_text(&self) -> bool {
+        self.kind() == Some(KIND_TEXT)
+    }
+
+    /// Whether the content is a raster without pages.
+    #[must_use]
+    pub fn is_raster(&self) -> bool {
+        self.kind() == Some(KIND_IMAGE)
+    }
+
+    /// The document's info sections.
+    #[must_use]
+    pub fn sections(&self) -> &[InfoSection] {
+        &self.sections
+    }
+
+    /// The document's status facts.
+    #[must_use]
+    pub fn status(&self) -> &[String] {
+        &self.status
+    }
+
+    /// The previewer's own controls.
+    #[must_use]
+    pub fn controls(&self) -> &[PreviewControl] {
+        &self.controls
+    }
+
+    /// What went wrong, if anything.
+    #[must_use]
+    pub fn error(&self) -> Option<&str> {
+        self.error.as_deref()
+    }
+
+    /// The text lines drawn in the last frame.
+    #[must_use]
+    pub fn drawn_lines(&self) -> &[DrawnLine] {
+        &self.drawn
+    }
+
+    /// Whether the last frame needed a horizontal scrollbar.
+    #[must_use]
+    pub fn h_scrollbar(&self) -> bool {
+        self.h_scroll
+    }
+
+    /// Where the frame was drawn in the last frame.
+    #[must_use]
+    pub fn frame_rect(&self) -> Option<Rect> {
+        self.frame_rect
+    }
+
+    /// Sets one of the previewer's controls; the next render reflects it.
+    /// While the document is out rendering the change waits for it.
+    pub fn set_control(&mut self, id: ControlId, value: ControlValue) {
+        match self.doc.as_mut() {
+            Some(doc) => {
+                if let Err(error) = doc.set_control(id, value) {
+                    tracing::warn!(%error, control = id.0, "control not set");
+                }
+                self.controls = doc.controls();
+                self.sections = doc.sections();
+                self.rendered_for = None;
+            }
+            None if self.pending.is_some() => self.queued.push((id, value)),
+            None => {}
+        }
+    }
+
     /// Takes a finished render back, if any.
     fn poll(&mut self, ctx: &egui::Context, pane: PaneId) {
         let Some(rx) = self.pending.as_mut() else {
             return;
         };
         match rx.try_recv() {
-            Ok((doc, result)) => {
+            Ok((mut doc, result)) => {
                 self.pending = None;
-                self.pages = doc.pages().or(self.pages);
-                self.info = doc.info();
+                let queued = std::mem::take(&mut self.queued);
+                for (id, value) in queued {
+                    if let Err(error) = doc.set_control(id, value) {
+                        tracing::warn!(%error, control = id.0, "control not set");
+                    }
+                    self.rendered_for = None;
+                }
+                self.take_facts(&*doc);
                 self.doc = Some(doc);
                 match result {
                     Ok(Frame::Rgba {
@@ -129,8 +379,7 @@ impl Slot {
                         self.error = None;
                     }
                     Ok(Frame::Text(block)) => {
-                        let lines = line_ranges(&block.text);
-                        self.text = Some(TextView { block, lines });
+                        self.text = Some(TextView::new(block));
                         self.texture = None;
                         self.error = None;
                     }
@@ -219,6 +468,11 @@ impl Previews {
         self.slots.get(&pane)
     }
 
+    /// The pane's slot, for the pane's controls.
+    pub fn get_mut(&mut self, pane: PaneId) -> &mut Slot {
+        self.slot(pane)
+    }
+
     /// A document arrived for `pane`, about `entry`.
     pub fn ready(&mut self, pane: PaneId, doc: Box<dyn PreviewDoc>, entry: Option<EntryId>) {
         let slot = self.slot(pane);
@@ -237,161 +491,295 @@ impl Previews {
         slot.error = Some(error.to_string());
     }
 
-    /// Draws `pane`'s preview for the entry the app is following; clears the
-    /// slot when that changed.
-    pub fn show(&mut self, ui: &mut egui::Ui, pane: PaneId, target: Option<EntryId>) {
+    /// Brings `pane`'s slot up to date with the entry the app is following:
+    /// clears it when that changed and takes back a finished render.
+    pub fn sync(&mut self, ctx: &egui::Context, pane: PaneId, target: Option<EntryId>) -> &Slot {
         let slot = self.slot(pane);
         if slot.entry != target {
             slot.reset(target);
         }
+        slot.poll(ctx, pane);
+        slot
+    }
+
+    /// Draws `pane`'s content into the space the caller allocated: the
+    /// frame fitted to it, text scrolling inside it, or a placeholder.
+    pub fn content(
+        &mut self,
+        ui: &mut egui::Ui,
+        pane: PaneId,
+        target: Option<EntryId>,
+        text_settings: TextPreview,
+    ) {
+        let slot = self.slot(pane);
         let ctx = ui.ctx().clone();
-        slot.poll(&ctx, pane);
-
-        if let Some(pages) = slot.pages
-            && pages > 1
-        {
-            ui.horizontal(|ui| {
-                if ui
-                    .add_enabled(slot.page > 0, egui::Button::new(crate::icons::BACK))
-                    .clicked()
-                {
-                    slot.page -= 1;
-                }
-                ui.label(format!("{} / {pages}", slot.page + 1));
-                if ui
-                    .add_enabled(
-                        slot.page + 1 < pages,
-                        egui::Button::new(crate::icons::FORWARD),
-                    )
-                    .clicked()
-                {
-                    slot.page += 1;
-                }
-            });
-        }
-        if slot.text.is_some() || slot.doc.as_ref().is_some_and(|d| d.text_layer().is_some()) {
-            ui.horizontal(|ui| {
-                ui.checkbox(&mut slot.wrap, "Wrap");
-                ui.checkbox(&mut slot.numbers, "Line numbers");
-            });
-        }
-
-        let avail = ui.available_size();
-        let info_height =
-            (slot.info.len() as f32 + 1.0) * ui.text_style_height(&TextStyle::Body) * 1.4;
-        let frame_height = (avail.y - info_height).max(120.0);
+        let body = ui.available_rect_before_wrap();
         let ppp = ctx.pixels_per_point();
         let quantise =
             |points: f32| ((points * ppp / QUANTUM).ceil() * QUANTUM).max(QUANTUM) as u32;
+        let (width, height) = if slot.actual_size && slot.is_raster() {
+            (MAX_ACTUAL, MAX_ACTUAL)
+        } else {
+            (quantise(body.width()), quantise(body.height()))
+        };
         let req = RenderRequest {
-            width: quantise(avail.x),
-            height: quantise(frame_height),
+            width,
+            height,
             scale: ppp,
             dark: ui.visuals().dark_mode,
         };
         slot.request(&ctx, req);
 
-        let body = egui::vec2(avail.x, frame_height);
-        ui.allocate_ui(body, |ui| {
-            ui.set_min_size(body);
-            if let Some(texture) = &slot.texture {
-                let (w, h) = slot.texture_size;
-                let native = egui::vec2(w as f32 / ppp, h as f32 / ppp);
-                let scale = (body.x / native.x).min(body.y / native.y).min(1.0);
-                let size = native * scale;
-                ui.vertical_centered(|ui| {
-                    ui.add(egui::Image::from_texture(texture).fit_to_exact_size(size));
-                });
-            } else if let Some(view) = &slot.text {
-                draw_text(ui, view, slot.wrap, slot.numbers);
-            } else if let Some(error) = &slot.error {
-                ui.colored_label(ui.visuals().warn_fg_color, format!("No preview: {error}"));
-            } else if target.is_some() {
-                ui.horizontal(|ui| {
-                    ui.spinner();
-                    ui.weak(if slot.doc.is_some() || slot.pending.is_some() {
-                        "Rendering…"
-                    } else {
-                        "Opening…"
+        slot.drawn.clear();
+        slot.h_scroll = false;
+        slot.frame_rect = None;
+        ui.set_clip_rect(body.intersect(ui.clip_rect()));
+        if let Some(texture) = &slot.texture {
+            let (w, h) = slot.texture_size;
+            let native = vec2(w as f32 / ppp, h as f32 / ppp);
+            if slot.actual_size && slot.is_raster() {
+                let output = egui::ScrollArea::both()
+                    .auto_shrink([false, false])
+                    .show(ui, |ui| {
+                        ui.add(egui::Image::from_texture(texture).fit_to_exact_size(native))
                     });
-                });
+                slot.frame_rect = Some(output.inner.rect.intersect(output.inner_rect));
             } else {
-                ui.weak("Select a file to preview it");
+                let scale = (body.width() / native.x)
+                    .min(body.height() / native.y)
+                    .min(1.0);
+                let size = native * scale;
+                let rect =
+                    Rect::from_center_size(pos2(body.center().x, body.top() + size.y / 2.0), size);
+                let response = ui.put(
+                    rect,
+                    egui::Image::from_texture(texture).fit_to_exact_size(size),
+                );
+                slot.frame_rect = Some(response.rect);
             }
-        });
-        if slot.pending.is_some() {
+        } else if let Some(view) = slot.text.as_mut() {
+            let (drawn, h_scroll) =
+                draw_text(ui, view, text_settings.wrap, text_settings.line_numbers);
+            slot.drawn = drawn;
+            slot.h_scroll = h_scroll;
+            slot.frame_rect = Some(body);
+        } else if let Some(error) = &slot.error {
+            ui.add(
+                egui::Label::new(
+                    egui::RichText::new(format!("No preview: {error}"))
+                        .color(ui.visuals().warn_fg_color),
+                )
+                .wrap(),
+            );
+        } else if target.is_some() {
             ui.horizontal(|ui| {
                 ui.spinner();
-                ui.weak("Rendering…");
-            });
-        }
-        if !slot.info.is_empty() {
-            ui.separator();
-            egui::Grid::new(("preview-info", pane.0))
-                .num_columns(2)
-                .show(ui, |ui| {
-                    for (key, value) in &slot.info {
-                        ui.weak(key);
-                        ui.label(value);
-                        ui.end_row();
-                    }
+                ui.weak(if slot.has_doc() {
+                    "Rendering…"
+                } else {
+                    "Opening…"
                 });
+            });
+        } else {
+            ui.weak("Select a file to preview it");
         }
     }
 }
 
-/// Draws a text frame: one virtualised row per line, or one wrapped block.
-fn draw_text(ui: &mut egui::Ui, view: &TextView, wrap: bool, numbers: bool) {
-    let font = TextStyle::Monospace.resolve(ui.style());
-    let default = ui.visuals().text_color();
-    let gutter = ui.visuals().weak_text_color();
-    let width = if numbers {
-        view.lines.len().to_string().len()
-    } else {
-        0
-    };
-    if wrap {
-        egui::ScrollArea::vertical()
-            .auto_shrink([false, false])
-            .show(ui, |ui| {
-                let mut job = LayoutJob::default();
-                job.wrap.max_width = ui.available_width();
-                for (i, line) in view.lines.iter().enumerate() {
-                    if numbers {
-                        job.append(
-                            &format!("{:>width$} ", i + 1),
-                            0.0,
-                            format(&font, gutter, false),
-                        );
-                    }
-                    append_line(&mut job, view, line, &font, default);
-                    job.append("\n", 0.0, format(&font, default, false));
-                }
-                ui.label(job);
-            });
-        return;
+/// The gutter's width in characters for `lines` lines: at least two digits
+/// and a space.
+fn gutter_chars(lines: usize) -> usize {
+    lines.to_string().len().max(2) + 1
+}
+
+/// The measurements one text frame is drawn with.
+struct Metrics {
+    font: FontId,
+    row_h: f32,
+    char_w: f32,
+    gutter_w: f32,
+    text_color: Color32,
+    gutter_color: Color32,
+}
+
+impl Metrics {
+    fn new(ui: &mut egui::Ui, lines: usize, numbers: bool) -> Self {
+        let font = TextStyle::Monospace.resolve(ui.style());
+        let (row_h, char_w) = ui.fonts_mut(|f| (f.row_height(&font), f.glyph_width(&font, '0')));
+        let char_w = char_w.max(1.0);
+        Self {
+            gutter_w: if numbers {
+                gutter_chars(lines) as f32 * char_w
+            } else {
+                0.0
+            },
+            font,
+            row_h: row_h.max(1.0),
+            char_w,
+            text_color: ui.visuals().text_color(),
+            gutter_color: ui.visuals().weak_text_color(),
+        }
     }
-    let row_height = ui.fonts_mut(|f| f.row_height(&font));
-    egui::ScrollArea::both()
+
+    /// Paints `text` right-aligned in the gutter of the row at `y`.
+    fn gutter(&self, painter: &egui::Painter, left: f32, y: f32, text: &str) {
+        painter.text(
+            pos2(left + self.gutter_w - self.char_w, y),
+            Align2::RIGHT_TOP,
+            text,
+            self.font.clone(),
+            self.gutter_color,
+        );
+    }
+}
+
+/// Draws a text frame into the Ui's available rect, only the visible lines
+/// of it. Returns what was drawn and whether a horizontal scrollbar showed.
+fn draw_text(
+    ui: &mut egui::Ui,
+    view: &mut TextView,
+    wrap: bool,
+    numbers: bool,
+) -> (Vec<DrawnLine>, bool) {
+    let metrics = Metrics::new(ui, view.lines.len(), numbers);
+    if wrap {
+        (draw_wrapped(ui, view, &metrics, numbers), false)
+    } else {
+        draw_unwrapped(ui, view, &metrics, numbers)
+    }
+}
+
+/// Wrap on: lines break anywhere at the text width, the wrap index says
+/// which rows each line takes, and only the lines in the viewport are laid
+/// out. Continuation rows start at the text column with a mark in the
+/// gutter. A line whose real row count differs from the estimate corrects
+/// the index for the next frame.
+fn draw_wrapped(
+    ui: &mut egui::Ui,
+    view: &mut TextView,
+    m: &Metrics,
+    numbers: bool,
+) -> Vec<DrawnLine> {
+    let avail = ui.available_rect_before_wrap();
+    let text_w = (avail.width() - m.gutter_w).max(m.char_w);
+    let cols = ((text_w / m.char_w).floor() as u32).max(1);
+    let total_h = view.wrap_index(cols).total() as f32 * m.row_h;
+    let mut drawn = Vec::new();
+    egui::ScrollArea::vertical()
         .auto_shrink([false, false])
-        .show_rows(ui, row_height, view.lines.len(), |ui, range| {
-            for i in range {
-                let Some(line) = view.lines.get(i) else {
+        .show_viewport(ui, |ui, viewport| {
+            let width = ui.available_width();
+            let (rect, _) = ui.allocate_exact_size(
+                vec2(width, total_h.max(viewport.height())),
+                egui::Sense::hover(),
+            );
+            let painter = ui.painter_at(ui.clip_rect());
+            let first_row = (viewport.min.y / m.row_h).floor().max(0.0) as u32;
+            let mut line = view.wrap_index(cols).line_at(first_row);
+            let mut fixes = Vec::new();
+            while line < view.lines.len() {
+                let start_row = view.wrap_index(cols).starts[line];
+                let y = rect.top() + start_row as f32 * m.row_h;
+                if y > rect.top() + viewport.max.y {
                     break;
-                };
-                let mut job = LayoutJob::default();
-                job.wrap.max_width = f32::INFINITY;
-                if numbers {
-                    job.append(
-                        &format!("{:>width$} ", i + 1),
-                        0.0,
-                        format(&font, gutter, false),
-                    );
                 }
-                append_line(&mut job, view, line, &font, default);
-                ui.label(job);
+                let mut job = LayoutJob::default();
+                job.wrap.max_width = text_w;
+                job.wrap.break_anywhere = true;
+                append_line(
+                    &mut job,
+                    &view.block,
+                    &view.lines[line],
+                    &m.font,
+                    m.text_color,
+                );
+                let galley = ui.fonts_mut(|f| f.layout_job(job));
+                let rows = galley.rows.len().max(1);
+                let x = rect.left() + m.gutter_w;
+                painter.galley(pos2(x, y), galley.clone(), m.text_color);
+                if numbers {
+                    m.gutter(&painter, rect.left(), y, &(line + 1).to_string());
+                    for row in 1..rows {
+                        let row_y = y + row as f32 * m.row_h;
+                        m.gutter(&painter, rect.left(), row_y, icons::CONTINUATION);
+                    }
+                }
+                drawn.push(DrawnLine {
+                    line,
+                    rows,
+                    width: galley.rect.width(),
+                    x,
+                    gutter_x: rect.left(),
+                });
+                if view.wrap_index(cols).rows[line] as usize != rows {
+                    fixes.push((line, rows as u32));
+                }
+                line += 1;
+            }
+            if !fixes.is_empty() {
+                let index = view.wrap_index(cols);
+                for (line, rows) in fixes {
+                    index.rows[line] = rows;
+                }
+                index.dirty = true;
+                ui.ctx().request_repaint();
             }
         });
+    drawn
+}
+
+/// Wrap off: one row per line, the content as wide as the longest line, a
+/// scrollbar each way, only the lines in the viewport laid out.
+fn draw_unwrapped(
+    ui: &mut egui::Ui,
+    view: &mut TextView,
+    m: &Metrics,
+    numbers: bool,
+) -> (Vec<DrawnLine>, bool) {
+    let total_h = view.lines.len() as f32 * m.row_h;
+    let content_w = m.gutter_w + (view.max_cells as f32 + 1.0) * m.char_w;
+    let mut drawn = Vec::new();
+    let output = egui::ScrollArea::both()
+        .auto_shrink([false, false])
+        .show_viewport(ui, |ui, viewport| {
+            let (rect, _) = ui.allocate_exact_size(
+                vec2(
+                    content_w.max(viewport.width()),
+                    total_h.max(viewport.height()),
+                ),
+                egui::Sense::hover(),
+            );
+            let painter = ui.painter_at(ui.clip_rect());
+            let first = (viewport.min.y / m.row_h).floor().max(0.0) as usize;
+            let last = ((viewport.max.y / m.row_h).ceil().max(0.0) as usize).min(view.lines.len());
+            for line in first..last {
+                let y = rect.top() + line as f32 * m.row_h;
+                let mut job = LayoutJob::default();
+                job.wrap.max_width = f32::INFINITY;
+                append_line(
+                    &mut job,
+                    &view.block,
+                    &view.lines[line],
+                    &m.font,
+                    m.text_color,
+                );
+                let galley = ui.fonts_mut(|f| f.layout_job(job));
+                let x = rect.left() + m.gutter_w;
+                painter.galley(pos2(x, y), galley.clone(), m.text_color);
+                if numbers {
+                    m.gutter(&painter, rect.left(), y, &(line + 1).to_string());
+                }
+                drawn.push(DrawnLine {
+                    line,
+                    rows: galley.rows.len().max(1),
+                    width: galley.rect.width(),
+                    x,
+                    gutter_x: rect.left(),
+                });
+            }
+        });
+    let h_scroll = output.content_size.x > output.inner_rect.width() + 0.5;
+    (drawn, h_scroll)
 }
 
 fn format(font: &FontId, color: Color32, italics: bool) -> TextFormat {
@@ -407,16 +795,16 @@ fn format(font: &FontId, color: Color32, italics: bool) -> TextFormat {
 /// colour.
 fn append_line(
     job: &mut LayoutJob,
-    view: &TextView,
+    block: &TextBlock,
     line: &Range<usize>,
     font: &FontId,
     default: Color32,
 ) {
-    let text = &view.block.text;
+    let text = &block.text;
     let mut cursor = line.start;
     // Spans are sorted; find the first that may touch this line.
-    let first = view.block.spans.partition_point(|s| s.end <= line.start);
-    for span in &view.block.spans[first..] {
+    let first = block.spans.partition_point(|s| s.end <= line.start);
+    for span in &block.spans[first..] {
         if span.start >= line.end {
             break;
         }
@@ -451,5 +839,27 @@ mod tests {
         assert_eq!((empty.len(), empty[0].clone()), (1, 0..0));
         let one = line_ranges("x");
         assert_eq!((one.len(), one[0].clone()), (1, 0..1));
+    }
+
+    #[test]
+    fn the_wrap_index_counts_rows_per_line_and_finds_lines_by_row() {
+        let view = TextView::new(TextBlock {
+            text: "short\n0123456789abcdef\n\n\tx\n".to_owned(),
+            language: None,
+            spans: Vec::new(),
+        });
+        assert_eq!(view.cells, [5, 16, 0, TAB_COLUMNS + 1]);
+        assert_eq!(view.max_cells, 16);
+        let index = WrapIndex::new(&view.cells, 6);
+        assert_eq!(index.rows, [1, 3, 1, 1]);
+        assert_eq!(index.starts, [0, 1, 4, 5, 6]);
+        assert_eq!(index.total(), 6);
+        assert_eq!(index.line_at(0), 0);
+        assert_eq!(index.line_at(1), 1);
+        assert_eq!(index.line_at(3), 1);
+        assert_eq!(index.line_at(4), 2);
+        assert_eq!(index.line_at(5), 3);
+        assert_eq!(gutter_chars(7), 3);
+        assert_eq!(gutter_chars(200_000), 7);
     }
 }

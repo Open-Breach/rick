@@ -19,7 +19,9 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 pub use ext::PaneId;
 use ext::{CellValue, Decoration, FsChange};
 pub use listing::{Column, Group, IconSize, Listing, Sort, SortDir, ViewMode, ViewSpec, type_of};
-pub use settings::{Density, PanelSide, Section, Settings, SettingsChange, SidePanel, Theme};
+pub use settings::{
+    Density, PanelSide, Preview, Section, Settings, SettingsChange, SidePanel, TextPreview, Theme,
+};
 use types::{Entry, EntryId, JobId, Location, Progress};
 
 /// Identity of a tab, unique within one model.
