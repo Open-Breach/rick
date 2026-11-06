@@ -10,9 +10,12 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use egui_kittest::Harness;
+use egui_kittest::kittest::Queryable as _;
+use model::SelectionChange;
 use platform::{ConfigDir, Fake};
-use tests::local;
-use ui_egui::{EguiHost, RickUi};
+use tests::{local, media};
+use ui_egui::keys::Intent;
+use ui_egui::{EguiHost, RickUi, icons};
 
 fn shell(start: &Path, size: egui::Vec2) -> Harness<'static, RickUi> {
     let fake = Arc::new(Fake::new().unwrap_or_else(|e| panic!("{e}")));
@@ -21,6 +24,8 @@ fn shell(start: &Path, size: egui::Vec2) -> Harness<'static, RickUi> {
         platform: fake.clone(),
         ui: host.clone(),
         extensions: vec![
+            Arc::new(ext_preview_text::TextPreview::new()),
+            Arc::new(ext_preview_code::CodePreview::new()),
             Arc::new(ext_preview_image::ImagePreview::new()),
             Arc::new(ext_preview_pdf::PdfPreview::new()),
         ],
@@ -106,6 +111,66 @@ fn sample_tree() -> (tempfile::TempDir, PathBuf) {
     (dir, deep)
 }
 
+/// Opens the preview pane and selects `name`, waiting for its frame.
+fn preview(harness: &mut Harness<'_, RickUi>, name: &str) {
+    let pane = harness.state().app().model().focused;
+    if !harness.state().inspector_open() {
+        harness.state_mut().queue(Intent::ToggleInspector, pane);
+        harness.step();
+    }
+    let id = harness
+        .state()
+        .app()
+        .model()
+        .active_tab(pane)
+        .and_then(|(_, t)| t.listing.rows().find(|e| e.name == name).map(|e| e.id))
+        .unwrap_or_else(|| panic!("no entry {name}"));
+    harness.state_mut().app_mut().handle(
+        app::Command::Select {
+            pane,
+            change: SelectionChange::Set(vec![id]),
+        },
+        &mut Vec::new(),
+    );
+    let deadline = Instant::now() + Duration::from_secs(20);
+    while !harness
+        .state()
+        .previews()
+        .get(pane)
+        .is_some_and(|s| s.has_frame() || s.error().is_some())
+    {
+        harness.step();
+        std::thread::sleep(Duration::from_millis(5));
+        assert!(Instant::now() < deadline, "{name}: no frame");
+    }
+    harness.step();
+    harness.step();
+}
+
+/// A folder for the preview pane shots: prose, JSON, a photo, an A3 page.
+fn preview_tree() -> (tempfile::TempDir, PathBuf) {
+    let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+    let root = dir.path().join("preview");
+    fs::create_dir_all(&root).unwrap_or_else(|e| panic!("{e}"));
+    let sentence = "The quick brown fox jumps over the lazy dog, and then it keeps running along the river bank until the long line finally ends here.\n";
+    let mut prose = String::new();
+    for i in 1..=40u32 {
+        prose.push_str(&i.to_string());
+        prose.push_str("  ");
+        prose.push_str(sentence);
+    }
+    fs::write(root.join("journal.txt"), prose).unwrap_or_else(|e| panic!("{e}"));
+    fs::write(
+        root.join("trip.json"),
+        r#"{"trip":"holiday-2026","days":[{"day":1,"place":"Lisbon","photos":9},{"day":2,"place":"Sintra","photos":14}],"budget":{"currency":"EUR","total":1840.5}}"#,
+    )
+    .unwrap_or_else(|e| panic!("{e}"));
+    fs::write(root.join("IMG_1200.jpg"), media::photo_jpeg(640, 480))
+        .unwrap_or_else(|e| panic!("{e}"));
+    fs::write(root.join("map-a3.pdf"), media::pdf(1, 1190, 842)).unwrap_or_else(|e| panic!("{e}"));
+    (dir, root)
+}
+
 #[test]
 #[ignore = "needs a wgpu adapter; CI runs it and uploads the images"]
 fn screenshots_of_the_chrome() {
@@ -171,4 +236,38 @@ fn screenshots_of_the_chrome() {
     harness.step();
     harness.step();
     shoot(&mut harness, "narrow-collapsed-breadcrumb");
+}
+
+#[test]
+#[ignore = "needs a wgpu adapter; CI runs it and uploads the images"]
+fn screenshots_of_the_preview_pane() {
+    let (_dir, root) = preview_tree();
+
+    // Text with wrap off, then on.
+    let mut harness = shell(&root, egui::vec2(1280.0, 800.0));
+    preview(&mut harness, "journal.txt");
+    shoot(&mut harness, "preview-text-wrap-off");
+    harness.get_by_label(icons::WRAP).click();
+    settle(&mut harness);
+    shoot(&mut harness, "preview-text-wrap-on");
+    harness.get_by_label(icons::WRAP).click();
+    settle(&mut harness);
+
+    // JSON pretty-printed.
+    preview(&mut harness, "trip.json");
+    harness.get_by_label(icons::PRETTY_PRINT).click();
+    settle(&mut harness);
+    shoot(&mut harness, "preview-json-pretty");
+
+    // A photo with its EXIF section pinned.
+    preview(&mut harness, "IMG_1200.jpg");
+    harness.get_by_label(icons::CAMERA).click();
+    settle(&mut harness);
+    shoot(&mut harness, "preview-image-exif-pinned");
+
+    // An A3 page in a narrow pane.
+    let mut harness = shell(&root, egui::vec2(1100.0, 760.0));
+    harness.state_mut().set_inspector_width(300.0);
+    preview(&mut harness, "map-a3.pdf");
+    shoot(&mut harness, "preview-pdf-narrow-pane");
 }

@@ -88,6 +88,11 @@ jobs:
       - run: cargo test -p tests --release --test chrome -- --ignored --nocapture
         continue-on-error: ${{ runner.os != 'Linux' }}
         env: { TMP: "${{ runner.temp }}", TEMP: "${{ runner.temp }}", TMPDIR: "${{ runner.temp }}" }
+      # Acceptance (preview pane): 200 000 wrapped lines, every frame under
+      # 16.6 ms. Linux asserts; the others print.
+      - run: cargo test -p tests --release --test preview_pane -- --ignored --nocapture
+        continue-on-error: ${{ runner.os != 'Linux' }}
+        env: { TMP: "${{ runner.temp }}", TEMP: "${{ runner.temp }}", TMPDIR: "${{ runner.temp }}" }
       # Screenshots of the chrome for the pull request, through wgpu on the
       # runner's software adapter; best effort on every OS.
       - run: |
