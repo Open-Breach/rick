@@ -83,6 +83,35 @@ pub struct Config {
     pub start: Location,
 }
 
+/// Called whenever a background task has left a message for the loop, so a
+/// UI can ask for a repaint instead of polling.
+pub type Waker = Arc<dyn Fn() + Send + Sync>;
+
+/// The loop's inbox: the channel plus the waker rung after every send.
+#[derive(Clone)]
+struct Mailbox {
+    tx: mpsc::UnboundedSender<Msg>,
+    waker: Arc<std::sync::Mutex<Option<Waker>>>,
+}
+
+impl Mailbox {
+    /// Delivers `msg` and rings the waker; `false` once the loop is gone.
+    fn send(&self, msg: Msg) -> bool {
+        if self.tx.send(msg).is_err() {
+            return false;
+        }
+        let waker = self
+            .waker
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
+        if let Some(wake) = waker {
+            wake();
+        }
+        true
+    }
+}
+
 /// A message from a background task to the loop.
 enum Msg {
     Batch {
@@ -126,10 +155,11 @@ pub struct App {
     model: Model,
     mounts: Arc<Mounts>,
     registry: Registry,
+    platform: Arc<dyn Platform>,
     ui: Arc<dyn UiHost>,
     jobs: JobRunner,
     job_events: mpsc::UnboundedReceiver<JobEvent>,
-    tx: mpsc::UnboundedSender<Msg>,
+    mailbox: Mailbox,
     rx: mpsc::UnboundedReceiver<Msg>,
     live: BTreeMap<PaneId, Live>,
     /// Listing jobs, kept out of the job table.
@@ -200,10 +230,14 @@ impl App {
             model: Model::new(settings, start),
             mounts,
             registry,
+            platform,
             ui,
             jobs,
             job_events,
-            tx,
+            mailbox: Mailbox {
+                tx,
+                waker: Arc::new(std::sync::Mutex::new(None)),
+            },
             rx,
             live: BTreeMap::new(),
             internal: BTreeSet::new(),
@@ -237,6 +271,23 @@ impl App {
     #[must_use]
     pub fn mounts(&self) -> &Arc<Mounts> {
         &self.mounts
+    }
+
+    /// The platform services the application was built with.
+    #[must_use]
+    pub fn platform(&self) -> &Arc<dyn Platform> {
+        &self.platform
+    }
+
+    /// Sets the function called when a listing, watch or settings message
+    /// arrives, so a UI can request a repaint instead of polling. Job events
+    /// are not announced this way; poll while [`is_busy`](Self::is_busy).
+    pub fn set_waker(&self, waker: Waker) {
+        *self
+            .mailbox
+            .waker
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(waker);
     }
 
     /// The runner every operation runs on.
@@ -602,7 +653,7 @@ impl App {
                 return;
             }
         };
-        let tx = self.tx.clone();
+        let tx = self.mailbox.clone();
         let location = key.location.clone();
         let opts = key.opts;
         let handle = self
@@ -621,7 +672,7 @@ impl App {
                                     next = changes.next() => match next {
                                         Some(change) => {
                                             let msg = Msg::Change { pane, generation, change };
-                                            if tx.send(msg).is_err() {
+                                            if !tx.send(msg) {
                                                 break;
                                             }
                                         }
@@ -648,14 +699,14 @@ impl App {
                             generation,
                             batch,
                         };
-                        if tx.send(msg).is_err() {
+                        if !tx.send(msg) {
                             break;
                         }
                     }
                     Ok(())
                 }
                 .await;
-                let _ = tx.send(Msg::ListDone {
+                tx.send(Msg::ListDone {
                     pane,
                     generation,
                     result: result.as_ref().copied().map_err(Error::replicate),
@@ -864,7 +915,7 @@ impl App {
             }
         };
         let path = self.settings_path.clone();
-        let tx = self.tx.clone();
+        let tx = self.mailbox.clone();
         let cancel = self.settings_watch.clone();
         runtime::handle().spawn(async move {
             loop {
@@ -888,7 +939,7 @@ impl App {
                     .spawn_blocking(move || settings::load(&path))
                     .await
                     .unwrap_or_else(|join| Err(Error::Io(std::io::Error::other(join))));
-                if tx.send(Msg::Settings(result)).is_err() {
+                if !tx.send(Msg::Settings(result)) {
                     break;
                 }
             }
