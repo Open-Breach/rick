@@ -132,14 +132,19 @@ fn preview(harness: &mut Harness<'_, RickUi>, name: &str) {
         },
         &mut Vec::new(),
     );
+    // Step before looking: until the pane has run a frame the slot still
+    // holds the previous file's frame.
     let deadline = Instant::now() + Duration::from_secs(20);
-    while !harness
-        .state()
-        .previews()
-        .get(pane)
-        .is_some_and(|s| s.has_frame() || s.error().is_some())
-    {
+    loop {
         harness.step();
+        if harness
+            .state()
+            .previews()
+            .get(pane)
+            .is_some_and(|s| s.has_frame() || s.error().is_some())
+        {
+            break;
+        }
         std::thread::sleep(Duration::from_millis(5));
         assert!(Instant::now() < deadline, "{name}: no frame");
     }
