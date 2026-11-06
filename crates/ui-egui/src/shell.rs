@@ -19,6 +19,7 @@ use crate::dock::DockSync;
 use crate::host::{Ask, EguiHost};
 use crate::keys::{Direction, Intent, KeyMap};
 use crate::palette::Palette;
+use crate::preview::Previews;
 use crate::settings_ui::ShortcutsScreen;
 use crate::{inspector, menus, pane, paths, settings_ui};
 
@@ -142,6 +143,7 @@ pub struct RickUi {
     about_open: bool,
     inspector_open: bool,
     properties: Option<(String, Vec<(String, String)>)>,
+    previews: Previews,
     closed_tabs: Vec<Location>,
     job_done_at: HashMap<types::JobId, Instant>,
     applied: Option<(Theme, u8, Density, Option<String>)>,
@@ -181,6 +183,7 @@ impl RickUi {
             about_open: false,
             inspector_open: false,
             properties: None,
+            previews: Previews::default(),
             closed_tabs: Vec::new(),
             job_done_at: HashMap::new(),
             applied: None,
@@ -276,10 +279,33 @@ impl RickUi {
 
     fn absorb(&mut self, events: Vec<Event>) {
         for event in events {
-            if let Event::Notify { level, text } = event {
-                self.toast(level, text);
+            match event {
+                Event::Notify { level, text } => self.toast(level, text),
+                Event::PreviewReady { pane, doc } => {
+                    let entry = self.preview_entry(pane);
+                    self.previews.ready(pane, doc, entry);
+                }
+                Event::PreviewFailed { pane, error } => {
+                    let entry = self.preview_entry(pane);
+                    self.previews.failed(pane, &error, entry);
+                }
+                _ => {}
             }
         }
+    }
+
+    /// The entry the app is previewing in `pane`, if any.
+    fn preview_entry(&self, pane: PaneId) -> Option<EntryId> {
+        self.app
+            .preview_target()
+            .filter(|(p, _)| *p == pane)
+            .map(|(_, id)| id)
+    }
+
+    /// The previews, for tests.
+    #[must_use]
+    pub fn previews(&self) -> &Previews {
+        &self.previews
     }
 
     fn handle(&mut self, command: Command) {
@@ -1155,7 +1181,9 @@ impl eframe::App for RickUi {
         if self.inspector_open {
             egui::Panel::right(egui::Id::new("inspector"))
                 .default_size(260.0)
-                .show(ui, |ui| inspector::show(ui, &self.app, focused, self.now));
+                .show(ui, |ui| {
+                    inspector::show(ui, &self.app, focused, self.now, &mut self.previews);
+                });
         }
 
         egui::CentralPanel::no_frame().show(ui, |ui| {

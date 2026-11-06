@@ -168,6 +168,14 @@ pub enum Event {
         /// The document.
         doc: Box<dyn PreviewDoc>,
     },
+    /// No preview could be opened for the pane's selection: no previewer
+    /// claimed the file, or opening it failed.
+    PreviewFailed {
+        /// The pane.
+        pane: PaneId,
+        /// Why.
+        error: Error,
+    },
     /// Something to show the user.
     Notify {
         /// How serious.
@@ -215,6 +223,11 @@ impl fmt::Debug for Event {
                 .debug_struct("PreviewReady")
                 .field("pane", pane)
                 .finish_non_exhaustive(),
+            Self::PreviewFailed { pane, error } => f
+                .debug_struct("PreviewFailed")
+                .field("pane", pane)
+                .field("error", error)
+                .finish(),
             Self::Notify { level, text } => f
                 .debug_struct("Notify")
                 .field("level", level)

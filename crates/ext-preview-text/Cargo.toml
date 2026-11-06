@@ -1,0 +1,22 @@
+[package]
+name = "ext-preview-text"
+version = "0.1.0"
+description = "Rick preview extension for plain text: encoding detection, a bounded window into large files, and a text layer for find."
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+types = { workspace = true }
+ext = { workspace = true }
+encoding_rs = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+runtime = { workspace = true }
+vfs-local = { workspace = true }
+platform = { workspace = true }
+tempfile = { workspace = true }
+
+[lints]
+workspace = true

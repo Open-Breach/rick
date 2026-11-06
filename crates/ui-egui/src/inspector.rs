@@ -10,7 +10,13 @@ use types::EntryKind;
 use crate::format;
 
 /// Draws the inspector for `pane`'s selection.
-pub fn show(ui: &mut egui::Ui, app: &App, pane: PaneId, now: SystemTime) {
+pub fn show(
+    ui: &mut egui::Ui,
+    app: &App,
+    pane: PaneId,
+    now: SystemTime,
+    previews: &mut crate::preview::Previews,
+) {
     ui.heading("Inspector");
     ui.separator();
     let Some((_, tab)) = app.model().active_tab(pane) else {
@@ -63,12 +69,11 @@ pub fn show(ui: &mut egui::Ui, app: &App, pane: PaneId, now: SystemTime) {
                     ui.end_row();
                 });
             ui.add_space(12.0);
-            egui::Frame::group(ui.style()).show(ui, |ui| {
-                ui.set_min_height(120.0);
-                ui.centered_and_justified(|ui| {
-                    ui.weak("Preview comes with the preview extensions")
-                });
-            });
+            let target = app
+                .preview_target()
+                .filter(|(p, _)| *p == pane)
+                .map(|(_, id)| id);
+            previews.show(ui, pane, target);
         }
         many => {
             let bytes: u64 = many.iter().map(|e| e.size.unwrap_or(0)).sum();

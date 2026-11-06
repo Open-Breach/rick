@@ -1,14 +1,30 @@
 //! Rick, a god-like file manager: the binary.
 //!
-//! Wires the native platform, the local provider and the built-in
-//! operations into the `app`, and runs the egui shell. Optional extensions
-//! are Cargo features of this crate; none exist yet.
+//! Wires the native platform, the local provider, the built-in operations
+//! and the previewers compiled in as features into the `app`, and runs the
+//! egui shell.
 
 use std::path::PathBuf;
 use std::sync::Arc;
 
 use anyhow::Context as _;
 use types::Location;
+
+/// The extensions compiled in, one per enabled feature.
+// Each push sits behind its feature, which `vec![]` cannot express.
+#[allow(clippy::vec_init_then_push)]
+fn built_ins() -> Vec<Arc<dyn ext::Extension>> {
+    let mut extensions: Vec<Arc<dyn ext::Extension>> = Vec::new();
+    #[cfg(feature = "preview-text")]
+    extensions.push(Arc::new(ext_preview_text::TextPreview::new()));
+    #[cfg(feature = "preview-code")]
+    extensions.push(Arc::new(ext_preview_code::CodePreview::new()));
+    #[cfg(feature = "preview-image")]
+    extensions.push(Arc::new(ext_preview_image::ImagePreview::new()));
+    #[cfg(feature = "preview-pdf")]
+    extensions.push(Arc::new(ext_preview_pdf::PdfPreview::new()));
+    extensions
+}
 
 fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt()
@@ -30,7 +46,7 @@ fn main() -> anyhow::Result<()> {
     let app = app::App::new(app::Config {
         platform,
         ui: host.clone(),
-        extensions: Vec::new(),
+        extensions: built_ins(),
         config_dir: None,
         start: Location::new(vfs_local::PROVIDER_ID, platform::paths::from_path(&start)),
     });

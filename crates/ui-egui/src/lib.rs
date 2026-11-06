@@ -30,6 +30,7 @@ pub mod menus;
 pub mod palette;
 pub mod pane;
 pub mod paths;
+pub mod preview;
 pub mod settings_ui;
 pub mod shell;
 pub mod views;

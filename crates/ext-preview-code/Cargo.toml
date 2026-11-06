@@ -1,0 +1,23 @@
+[package]
+name = "ext-preview-code"
+version = "0.1.0"
+description = "Rick preview extension for source code: syntax highlighting with syntect on top of the text previewer's window."
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+types = { workspace = true }
+ext = { workspace = true }
+encoding_rs = { workspace = true }
+syntect = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+runtime = { workspace = true }
+vfs-local = { workspace = true }
+platform = { workspace = true }
+tempfile = { workspace = true }
+
+[lints]
+workspace = true
