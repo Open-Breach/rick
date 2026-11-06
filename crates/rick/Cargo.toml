@@ -1,0 +1,24 @@
+[package]
+name = "rick"
+version = "0.1.0"
+description = "Rick, a god-like file manager: the binary that wires the kernel, the built-in extensions and the egui user interface."
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "rick"
+path = "src/main.rs"
+
+[dependencies]
+types = { workspace = true }
+platform = { workspace = true }
+vfs-local = { workspace = true }
+app = { workspace = true }
+ui-egui = { workspace = true }
+anyhow = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+
+[lints]
+workspace = true
