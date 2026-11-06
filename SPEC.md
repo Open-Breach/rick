@@ -198,7 +198,7 @@ Columns sort on click, resize, reorder and can be hidden; further columns may be
 | Extensions | Git actions, archive actions, and anything a plugin registers |
 | Info | Properties |
 
-Entries that do not apply are hidden rather than greyed: each Action's `availability` decides, so with no selection the menu holds only what works on the folder itself — New folder, New file, Paste, Paste as link, Open in terminal here, Open in system file manager, Select all, Refresh, the view, sort and group entries, and the folder's Properties — and nothing that needs an item. The same Actions are reachable from the search box in command mode (Mod+Shift+P) and from keyboard shortcuts.
+Entries that do not apply are hidden rather than greyed: each Action's `availability` decides, so with no selection the menu holds only what works on the folder itself — New folder, New file, Paste, Paste as link, Open in terminal here, Open in system file manager, Select all, Refresh, the view, sort and group entries, and the folder's Properties — and nothing that needs an item. `Hidden` and `Disabled` entries are both absent from the context menu; the search box in command mode (Mod+Shift+P), which lists everything, shows `Disabled` ones greyed with their reason as a tooltip. The same Actions are reachable from keyboard shortcuts.
 
 ### Preview
 
@@ -327,7 +327,7 @@ The viewer never writes to the file; editing is the job of an external applicati
 - **Toggle file extensions.** Show or hide file extensions in the name column.
 - **Toggle system files.** Show or hide system files.
 - **Open in new tab.** Open the selected folder in a new tab, leaving the current one in place.
-- **Copy.** Put the selection on the clipboard for copying.
+- **Copy.** Put the selection on the clipboard for copying. Rick's file clipboard is its own, in memory (entries plus a copy-or-move mode; Paste after Cut empties it, Paste after Copy keeps it); only the Copy name / path / path and name actions write the system clipboard. Exchanging file lists with other applications through the system clipboard is later.
 - **Cut.** Put the selection on the clipboard for moving.
 - **Paste.** Copy or move the clipboard contents into the current location, running as a job with the usual conflict handling.
 - **Create link.** Make a link to the selected file or folder at another location. On Linux and macOS this is a symbolic link; on Windows the user picks between a symbolic link, a directory junction and a classic .lnk shortcut. 0.1 offers symbolic and hard links only (`LinkKind::{Symbolic, Hard}`); junctions and .lnk shortcuts come in a later issue. Also offered as a drag modifier (Alt) and as a paste variant ("Paste as link").
@@ -379,39 +379,7 @@ The viewer never writes to the file; editing is the job of an external applicati
 
 ### Keyboard shortcuts
 
-All shortcuts are remappable in Settings; the defaults follow the common desktop conventions. On macOS, Cmd replaces Ctrl.
-
-| Shortcut | Action |
-| --- | --- |
-| Ctrl+T / Ctrl+W | New tab / close tab |
-| Ctrl+Tab, Ctrl+Shift+Tab | Next / previous tab |
-| Ctrl+N | New window |
-| Alt+Left / Alt+Right | Back / forward |
-| Alt+Up, Backspace | Parent directory |
-| Enter | Open |
-| Space | Toggle preview |
-| Ctrl+L | Edit path |
-| Ctrl+Shift+C | Copy path and name |
-| Ctrl+Alt+C / Ctrl+Alt+Shift+C | Copy name / copy path |
-| Ctrl+F | Filter in list |
-| Ctrl+Shift+F | Search subdirectories |
-| Ctrl+P / Ctrl+Shift+P | Search box / search box in command mode |
-| Ctrl+A | Select all |
-| Shift+arrows, Shift+click | Range select |
-| Ctrl+click | Toggle entry in selection |
-| Ctrl+C / Ctrl+X / Ctrl+V | Copy / cut / paste |
-| Ctrl+Z / Ctrl+Shift+Z | Undo / redo |
-| F2 | Rename |
-| Delete | Move to trash |
-| Shift+Delete | Delete permanently |
-| Ctrl+Shift+N | New folder |
-| Alt+Enter | Properties |
-| Ctrl+H | Toggle hidden files |
-| Ctrl+B | Toggle side panel |
-| F5 | Refresh |
-| F11 | Full screen |
-| Ctrl+, | Settings |
-| Ctrl+Q | Quit |
+All shortcuts are remappable in Settings → Keyboard shortcuts. The binding tables live under "Keyboard shortcuts" at the end of this document; that table is the single source of defaults.
 
 ## Architecture
 
@@ -709,6 +677,12 @@ pub trait Decorator: Send + Sync + 'static {
     fn decorate(&self, entries: &[Entry], ctx: &DecorateCtx) -> Vec<(EntryId, Decoration)>;
     /// Optional section for the info panel.
     fn panel(&self, entry: &Entry) -> Option<PanelSection>;
+    /// Locations whose changes stale this decorator's cache for `loc` (the
+    /// `.git` directory of a work tree); the kernel watches them for the pane.
+    fn invalidates_on(&self, loc: &Location) -> Vec<Location>;
+    /// One of those locations changed: drop the cache; the kernel decorates
+    /// the listing again.
+    fn invalidate(&self, loc: &Location);
 }
 
 pub struct Decoration {
@@ -787,6 +761,10 @@ pub enum PreviewControl {
 }
 
 pub enum Frame { Rgba { width: u32, height: u32, data: Arc<[u8]> }, Text(TextBlock), External(TextureId) }
+
+/// Text the UI lays out itself. `spans` are coloured byte ranges the previewer
+/// computed (syntax highlighting); `RenderRequest.dark` tells it which theme.
+pub struct TextBlock { pub text: String, pub spans: Vec<(Range<usize>, Color)> }
 ```
 
 The pane's toolbar is built from these plus the document kind, and the pane itself never asks a previewer to draw: a Decorator's `panel()` and a previewer's `sections()` both feed the same info badges.
@@ -855,6 +833,7 @@ pub enum Event {
     JobProgress { id: JobId, progress: Progress }, JobDone { id: JobId, result: Result<(), Error> },
     SelectionChanged { pane: PaneId, ids: Vec<EntryId> },
     PreviewReady { pane: PaneId, doc: Box<dyn PreviewDoc> },
+    PreviewFailed { pane: PaneId, error: Error },   // no previewer claims the file, or open failed
     Notify { level: Level, text: String },
 }
 ```
@@ -995,15 +974,13 @@ The smallest Rick worth using every day. Everything in this list ships; nothing 
 - The WASM and native plugin hosts and the Extensions screen; extensions are compiled in.
 - Localisation beyond English.
 
-**Close-out (status 2026-11-06).** Issues 1–6 and the GUI chrome round are merged. What remains before 0.1 is tagged, each already specified above:
+**Close-out (status 2026-11-06, evening).** Issues 1–6, the GUI chrome round, the preview pane layout and drag and drop with Pin are merged. What remains before 0.1 is tagged, each already specified above, lands in three issues — A: side panel and list; B: session, layouts and windows; C: release:
 
-- The preview pane layout (Preview section) — in progress.
-- Drag and drop and Pin to side panel (Functions, Operations) — specified, not started.
 - Side panel: the Recent, Network (local mounted volumes only in 0.1) and Trash sections, and the operations area with its job rows.
 - Tree view (View mode control; today it falls back to Details).
 - Inline rename, new file and new folder edited in place in the list (Further GUI elements, Operations).
 - Paste conflicts: skip, overwrite, rename, apply-to-all (Drag and drop, Execution; the same dialogue serves Paste).
-- Type-to-filter while the list has focus, and Search in subdirectories (Main area).
+- Search in subdirectories (Main area).
 - Open containing folder (Operations).
 - Session restore and Saved layouts; New window and tear-out to a new window (General behaviour).
 - Release (issue 7): `BENCHMARKS.md` with measured numbers on all three OSes and the macOS and Windows gates turned on; `CHANGELOG.md`; a release workflow producing a binary per OS.
