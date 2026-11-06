@@ -445,7 +445,7 @@ Naming rule: a crate that contributes to one extension point carries that point 
 
 ### Build order
 
-types → runtime → vfs-local with the two-pass listing → model → ext with a fake Decorator → ui-egui showing a list with badges → ext-git → previews.
+types → runtime → vfs-local with the streamed listing → model → ext with a fake Decorator → ui-egui showing a list with badges → ext-git → previews.
 
 ## Non-goals & open questions
 

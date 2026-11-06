@@ -93,6 +93,9 @@ Once answered, an entry keeps its number and gains a `Decided (date):` line.
    release on four cores: first batch 1.7 ms, complete 213 ms, against the
    50 ms and 400 ms targets. A names-first pass can be added if a slower
    machine needs it.
+   Decided (2026-11-06): one pass; the build order now says "streamed
+   listing". A names-first pass stays an option for a provider whose
+   per-entry metadata is slow, such as a network share, once measured.
 
 10. (issue 2) `Provider::copy` is described as the same-provider fast path
     but not whether it walks directories.
