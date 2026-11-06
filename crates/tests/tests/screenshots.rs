@@ -14,7 +14,7 @@ use platform::{ConfigDir, Fake};
 use tests::local;
 use ui_egui::{EguiHost, RickUi};
 
-fn harness(start: &Path, size: egui::Vec2) -> Harness<'static, RickUi> {
+fn shell(start: &Path, size: egui::Vec2) -> Harness<'static, RickUi> {
     let fake = Arc::new(Fake::new().unwrap_or_else(|e| panic!("{e}")));
     let host = Arc::new(EguiHost::new());
     let app = app::App::new(app::Config {
@@ -112,7 +112,7 @@ fn screenshots_of_the_chrome() {
     let (_dir, deep) = sample_tree();
 
     // Title row and details view, side panel on.
-    let mut harness = harness(&deep, egui::vec2(1280.0, 800.0));
+    let mut harness = shell(&deep, egui::vec2(1280.0, 800.0));
     shoot(&mut harness, "title-row-and-details");
 
     // Two panes, each with its tab strip.
@@ -148,7 +148,7 @@ fn screenshots_of_the_chrome() {
     shoot(&mut harness, "two-panes-tab-strips");
 
     // Extra-large icon view with thumbnails.
-    let mut harness = harness(&deep, egui::vec2(1280.0, 800.0));
+    let mut harness = shell(&deep, egui::vec2(1280.0, 800.0));
     let pane = harness.state().app().model().focused;
     harness.state_mut().app_mut().handle(
         app::Command::SetView {
@@ -166,7 +166,7 @@ fn screenshots_of_the_chrome() {
     shoot(&mut harness, "icons-extra-large");
 
     // Narrow window: the breadcrumb collapses.
-    let mut harness = harness(&deep, egui::vec2(520.0, 600.0));
+    let mut harness = shell(&deep, egui::vec2(520.0, 600.0));
     harness.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::B);
     harness.step();
     harness.step();

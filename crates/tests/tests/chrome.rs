@@ -187,8 +187,7 @@ fn a_tab_dragged_onto_another_panes_strip_moves_there() {
         rects
             .iter()
             .find(|(p, _)| *p == pane)
-            .map(|(_, r)| *r)
-            .unwrap_or_else(|| panic!("no rect for {pane:?}"))
+            .map_or_else(|| panic!("no rect for {pane:?}"), |(_, r)| *r)
     };
     let (rect_a, rect_b) = (rect_of(pane_a), rect_of(pane_b));
     let from = egui::pos2(rect_b.left() + 50.0, rect_b.top() + 14.0);
@@ -202,8 +201,8 @@ fn a_tab_dragged_onto_another_panes_strip_moves_there() {
         modifiers: egui::Modifiers::default(),
     });
     harness.step();
-    for i in 1..=12 {
-        let t = i as f32 / 12.0;
+    for i in 1..=12u8 {
+        let t = f32::from(i) / 12.0;
         let pos = from + (to - from) * t;
         harness.event(egui::Event::PointerMoved(pos));
         harness.step();
@@ -323,9 +322,11 @@ fn harness_with(
 /// previewer can draw.
 fn picture_fixtures(dir: &Path, n: usize) -> usize {
     for i in 0..n {
+        let seed = u32::try_from(i).unwrap_or(0);
+        let shade = u8::try_from(i % 256).unwrap_or(0).wrapping_mul(40);
         let image = image::RgbaImage::from_fn(96, 64, |x, y| {
-            let c = ((x + y + i as u32 * 7) % 255) as u8;
-            image::Rgba([c, 255 - c, (i as u8).wrapping_mul(40), 255])
+            let c = u8::try_from((x + y + seed * 7) % 255).unwrap_or(0);
+            image::Rgba([c, 255 - c, shade, 255])
         });
         let mut bytes = std::io::Cursor::new(Vec::new());
         image
@@ -360,8 +361,7 @@ fn right_click_on_empty_space_opens_the_folder_menu() {
         .pane_rects()
         .into_iter()
         .find(|(p, _)| *p == pane)
-        .map(|(_, r)| r)
-        .unwrap_or_else(|| panic!("pane rect"));
+        .map_or_else(|| panic!("pane rect"), |(_, r)| r);
     // Well below the single row, above the foot.
     let pos = egui::pos2(rect.center().x, rect.bottom() - 80.0);
     harness.event(egui::Event::PointerMoved(pos));
