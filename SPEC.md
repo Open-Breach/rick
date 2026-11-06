@@ -209,6 +209,22 @@ The preview is its own tab, not part of any explorer tab. It docks and moves lik
 - A file shows its contents through the Previewer registered for its type (see Supported scope); a folder, or an archive such as a zip, 7z or tar, shows its contents as a read-only file list in the same columns as the explorer, with a stats line; subfolders expand in place, so a user can look inside without navigating or extracting.
 - Rendering is asynchronous and cancellable: a quick selection sweep never blocks the list, and a preview that takes longer shows a placeholder first.
 
+**Pane layout.** The content is the point of the pane; everything else is one row. Top to bottom: the toolbar, the pinned info panel when one is pinned, the content, and a one-line status bar. The pane shows no heading of its own — the dock tab's label is enough — and the word "Inspector" appears nowhere in it.
+
+**Toolbar.** One row, tab-height, three parts:
+
+- **Left:** the file-type icon of the current entry (Phosphor), and nothing else — no file name.
+- **Middle:** the active previewer's controls, so the row changes with the content. Text and code: line numbers, word wrap, and pretty print when the format supports it. Images: Fit and 1:1. Paged documents: previous page, `n / N`, next page. Media: the transport. Controls come from two sources — the kind of document (text layer, pages, raster) supplies the standard ones, and the previewer's `controls()` adds its own, such as pretty print.
+- **Right:** one **info badge** per section available for this file — File info, EXIF, Git, media stream details, whatever applies — then the close button. A section that does not apply has no badge. Sections come from the previewer's `sections()` and from the Decorators' `panel()` contributions (Git's branch and last commit, for example).
+
+**Info badges.** Hovering a badge shows its section as an overlay card over the content, like a tooltip; moving away closes it. Clicking a badge pins it: the section becomes a panel between the toolbar and the content, pushing the content down, and the badge stays highlighted until it is clicked again. One section is pinned at a time; pinning another replaces it. The pin is remembered per content kind (image, text, PDF, …) and persists across files and restarts, so a pinned EXIF stays pinned while arrowing through photos. Each section is a key–value list, searchable when long, with copy on every row.
+
+**Text defaults.** Text and code open with line numbers on and word wrap off. Toggling either in the toolbar changes the current view and saves the new value as the default, so the choice holds for every later file and across restarts. Pretty print is the exception: it is off for every newly shown file, must be pressed each time, and is never remembered.
+
+**Width.** The content never sets the pane's width. The pane is sized by the dock layout and the user's divider alone; the previewer is asked to render at the pane's width, a page or image wider than that is scaled down to fit (keeping its aspect ratio, never enlarged above 100%), and long text lines scroll sideways inside the pane. Nothing drawn in the pane may request a minimum width beyond a small fixed floor, so a wide PDF page shrinks rather than pushing the divider.
+
+**Status bar.** The bottom of the pane is a single line of small text with the previewer's `status()` facts, separated by `·`: language, encoding and line count for text and code; dimensions, format and file size for an image; page count and file size for a PDF; duration and codec for media. It never wraps; when the pane is too narrow it truncates with an ellipsis.
+
 ### Menu
 
 There is no menu bar; the burger menu at the left of the title row holds the global entries.
@@ -240,13 +256,13 @@ The remaining menu entries will be specified later.
 
 **Windows.** New window is one click (menu, Ctrl+N, or the + on the tab strip with Shift) and opens with the start layout. Dragging a tab out of the tab strip and dropping it outside the window creates a new window holding that tab; dropping a tab onto another window's strip moves it there. Every window has the full side panel and shares the operations queue, the preview follows focus across windows.
 
-**Text files.** The preview shows the file's text in a monospace view with two toggles in its small toolbar: word wrap (off = lines keep their real length and the view scrolls sideways; on = long lines break at the pane width, a wrapped continuation marked in the gutter) and line numbers. Both settings persist. Large files are never loaded whole: the previewer memory-maps the file (or reads windows of it) and renders only the visible lines, so a 500 MB log shows its top immediately and scrolls through the rest; line starts are indexed in the background for exact line numbers and scrollbar position, with a byte-offset estimate until that finishes, and highlighting and pretty print work on the visible window only. Memory use is bounded by the window, not the file size, and encoding is detected. Structured and code formats get syntax highlighting: JSON, YAML, XML, HTML, Markdown and every language in the preview list, detected by extension and, failing that, by content; the highlighter is syntect with the theme following the app theme, and the format name shows in the preview toolbar.
+**Text files.** The preview shows the file's text in a monospace view with two toggles in the pane's toolbar: word wrap (off = lines keep their real length and the view scrolls sideways; on = long lines break at the pane width, a wrapped continuation marked in the gutter) and line numbers. The defaults are line numbers on and wrap off; changing either saves the new default (see Preview, Text defaults). Large files are never loaded whole: the previewer memory-maps the file (or reads windows of it) and renders only the visible lines, so a 500 MB log shows its top immediately and scrolls through the rest; line starts are indexed in the background for exact line numbers and scrollbar position, with a byte-offset estimate until that finishes, and highlighting and pretty print work on the visible window only. Memory use is bounded by the window, not the file size, and encoding is detected. Structured and code formats get syntax highlighting: JSON, YAML, XML, HTML, Markdown and every language in the preview list, detected by extension and, failing that, by content; the highlighter is syntect with the theme following the app theme, and the format name shows in the pane's status bar.
 
-**Pretty print.** For JSON, XML, YAML and minified HTML, CSS or JavaScript, a Pretty-print toggle in the preview toolbar reformats the text with consistent indentation and one element per line; it is a view transformation only, the file is never modified, and the raw view is one click away. Invalid input shows the raw text with the parse error highlighted.
+**Pretty print.** For JSON, XML, YAML and minified HTML, CSS or JavaScript, a Pretty-print toggle in the pane's toolbar reformats the text with consistent indentation and one element per line; it is a view transformation only, the file is never modified, and the raw view is one click away. It is off for every newly shown file and is never remembered. Invalid input shows the raw text with the parse error highlighted.
 
 **Images.** By default the image is scaled to fit the available pane, keeping its aspect ratio and never upscaled beyond 100%. A 1:1 button (or double-click) switches to actual pixels, where the image can be panned by dragging or with the scroll wheel, and Ctrl+wheel zooms in steps around the cursor; Fit returns to the scaled view. EXIF orientation is applied. Large images decode a downscaled version first for an instant fit view, with the full-resolution decode following for 1:1.
 
-**Media info bar.** Image, audio and video previews carry a small status bar with the basics: dimensions or duration, file size, format, colour depth or codec, and for photos the camera, date taken and exposure. An expander on that bar opens the full metadata panel: every EXIF, IPTC and XMP tag for images (via the `kamadak-exif` and `rexiv2` crates), ID3 or Vorbis tags for audio, and stream details for video, as a searchable key-value list with copy. The panel's open state persists.
+**Media metadata.** Image, audio and video previews put the basics in the pane's status bar — dimensions or duration, file size, format, colour depth or codec — and the rest behind info badges: a File info section with the camera, date taken and exposure for photos, an EXIF section with every EXIF, IPTC and XMP tag (via the `kamadak-exif` and `rexiv2` crates), ID3 or Vorbis tags for audio, and stream details for video. Each is a searchable key-value list with copy, shown on hover and pinned on click as the Preview section describes.
 
 **Audio and video.** Media files play inside the preview: play/pause (Space while the preview has focus), a seek bar with elapsed and total time, volume, and for video the frames drawn into the pane with a fit/1:1 toggle like images. Audio shows a waveform and cover art when present. Playback starts on demand, not on selection, stops when the selection changes, and decoding runs through GStreamer on every platform, one code path, with the runtime bundled on macOS and Windows.
 
@@ -711,12 +727,30 @@ pub trait PreviewDoc: Send {
     /// to a texture. Text documents return `Frame::Text` and let the UI lay out.
     fn render(&mut self, page: usize, req: RenderRequest) -> Result<Frame, Error>;
     fn text_layer(&self) -> Option<&TextLayer>;             // for find
-    fn info(&self) -> Vec<(String, String)>;                // metadata rows
+    /// Metadata, grouped for the pane's info badges. The first section is
+    /// "File info"; others (EXIF, stream details) appear only when they apply.
+    fn sections(&self) -> Vec<InfoSection>;
+    /// One-line facts for the pane's status bar, in display order.
+    fn status(&self) -> Vec<String>;
+    /// The previewer's own toolbar controls (e.g. pretty print); the standard
+    /// ones (line numbers, wrap, pager, fit/1:1) come from the kind of document.
+    fn controls(&self) -> Vec<PreviewControl>;
+    /// A toolbar control was used; the next `render` reflects it.
+    fn set_control(&mut self, id: ControlId, value: ControlValue) -> Result<(), Error>;
     fn transport(&mut self) -> Option<&mut dyn Transport>;  // media only: play/pause/seek
+}
+
+pub struct InfoSection { pub id: &'static str, pub title: &'static str, pub icon: Icon, pub rows: Vec<(String, String)> }
+
+pub enum PreviewControl {
+    Toggle { id: ControlId, icon: Icon, label: &'static str, on: bool },
+    Button { id: ControlId, icon: Icon, label: &'static str, enabled: bool },
 }
 
 pub enum Frame { Rgba { width: u32, height: u32, data: Arc<[u8]> }, Text(TextBlock), External(TextureId) }
 ```
+
+The pane's toolbar is built from these plus the document kind, and the pane itself never asks a previewer to draw: a Decorator's `panel()` and a previewer's `sections()` both feed the same info badges.
 
 **SearchIndex** — a query backend:
 
