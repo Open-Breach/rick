@@ -112,6 +112,17 @@ pub enum Command {
     Redo,
     /// Change one setting and save the settings file.
     Settings(SettingsChange),
+    /// Render a thumbnail of an entry of the pane's listing at `size`
+    /// pixels square, through the previewer that claims it; answered by
+    /// [`Event::Thumbnail`].
+    Thumbnail {
+        /// The pane whose listing holds the entry.
+        pane: PaneId,
+        /// The entry.
+        id: EntryId,
+        /// Width and height in pixels.
+        size: u32,
+    },
 }
 
 /// What the application tells the UI happened. The model already reflects
@@ -176,6 +187,16 @@ pub enum Event {
         /// Why.
         error: Error,
     },
+    /// A thumbnail finished: the frame, or `None` when no previewer claims
+    /// the entry or the render failed.
+    Thumbnail {
+        /// The entry.
+        id: EntryId,
+        /// The size that was asked for.
+        size: u32,
+        /// The pixels, when there are any.
+        frame: Option<ext::Frame>,
+    },
     /// Something to show the user.
     Notify {
         /// How serious.
@@ -223,6 +244,12 @@ impl fmt::Debug for Event {
                 .debug_struct("PreviewReady")
                 .field("pane", pane)
                 .finish_non_exhaustive(),
+            Self::Thumbnail { id, size, frame } => f
+                .debug_struct("Thumbnail")
+                .field("id", id)
+                .field("size", size)
+                .field("frame", &frame.is_some())
+                .finish(),
             Self::PreviewFailed { pane, error } => f
                 .debug_struct("PreviewFailed")
                 .field("pane", pane)

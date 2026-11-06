@@ -148,6 +148,12 @@ enum Msg {
         pane: PaneId,
         generation: u64,
     },
+    /// A thumbnail render finished.
+    Thumbnail {
+        id: EntryId,
+        size: u32,
+        frame: Option<ext::Frame>,
+    },
 }
 
 /// How long changes are collected before the decorators run again.
@@ -218,6 +224,8 @@ pub struct App {
     settings_path: PathBuf,
     settings_watch: CancelToken,
     preview: PreviewState,
+    /// Thumbnails being rendered, so a cell asked for twice renders once.
+    thumbnails: BTreeSet<(EntryId, u32)>,
     /// Events from start-up, delivered on the first poll.
     pending: Vec<Event>,
 }
@@ -295,6 +303,7 @@ impl App {
             settings_path,
             settings_watch: CancelToken::new(),
             preview: PreviewState::default(),
+            thumbnails: BTreeSet::new(),
             pending,
         };
         app.watch_settings();
@@ -469,6 +478,7 @@ impl App {
             Command::Undo => self.undo(events),
             Command::Redo => self.redo(events),
             Command::Settings(change) => self.change_settings(change),
+            Command::Thumbnail { pane, id, size } => self.thumbnail(pane, id, size),
         }
         self.sync_panes(events);
         self.sync_preview();
@@ -1013,6 +1023,10 @@ impl App {
                     self.decorated(pane, items, events);
                 }
             }
+            Msg::Thumbnail { id, size, frame } => {
+                self.thumbnails.remove(&(id, size));
+                events.push(Event::Thumbnail { id, size, frame });
+            }
             Msg::Invalidate { pane, generation } => {
                 if self
                     .live
@@ -1028,6 +1042,71 @@ impl App {
     /// Points the preview at the focused pane's single selected file,
     /// opening it through the best-scoring previewer as a job, and cancels
     /// the previous one when the target changes.
+    /// Renders a thumbnail of `id` at `size` pixels through the previewer
+    /// that claims it, as an internal job; the answer is
+    /// [`Event::Thumbnail`], `None` when nothing can draw it.
+    fn thumbnail(&mut self, pane: PaneId, id: EntryId, size: u32) {
+        if !self.thumbnails.insert((id, size)) {
+            return;
+        }
+        let entry = self
+            .model
+            .active_tab(pane)
+            .and_then(|(_, tab)| tab.listing.get(id))
+            .cloned();
+        let loc = entry
+            .as_ref()
+            .map(|e| Location::new(id.provider, e.path.clone()));
+        let provider = loc.as_ref().and_then(|l| self.mounts.resolve(l).ok());
+        let (Some(entry), Some(loc), Some(provider)) = (entry, loc, provider) else {
+            self.thumbnails.remove(&(id, size));
+            self.pending.push(Event::Thumbnail {
+                id,
+                size,
+                frame: None,
+            });
+            return;
+        };
+        let previewers: Vec<Arc<dyn Previewer>> = self.registry.previewers().to_vec();
+        let dark = self.model.settings.theme != model::Theme::Light;
+        let tx = self.mailbox.clone();
+        let handle =
+            self.jobs
+                .spawn_named(format!("Thumbnail {}", entry.name), move |job| async move {
+                    let frame = async {
+                        let sniff =
+                            ext::read_bytes(&*provider, &loc, Some(4096), &job.cancel).await?;
+                        let best = previewers
+                            .iter()
+                            .map(|p| (p.score(&entry, &sniff), p))
+                            .filter(|(score, _)| *score > 0)
+                            .max_by_key(|(score, _)| *score)
+                            .map(|(_, p)| Arc::clone(p))
+                            .ok_or(Error::Unsupported("no previewer"))?;
+                        let mut doc = best.open(&loc, provider, job.cancel.clone()).await?;
+                        let req = ext::RenderRequest {
+                            width: size,
+                            height: size,
+                            scale: 1.0,
+                            dark,
+                        };
+                        ext::blocking(move || doc.render(0, req)).await
+                    }
+                    .await;
+                    let frame = match frame {
+                        Ok(frame @ ext::Frame::Rgba { .. }) => Some(frame),
+                        Ok(_) => None,
+                        Err(error) => {
+                            debug!(%error, "no thumbnail");
+                            None
+                        }
+                    };
+                    tx.send(Msg::Thumbnail { id, size, frame });
+                    Ok(())
+                });
+        self.internal.insert(handle.id);
+    }
+
     fn sync_preview(&mut self) {
         let focused = self.model.focused;
         let want = self.model.active_tab(focused).and_then(|(_, tab)| {
