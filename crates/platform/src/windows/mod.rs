@@ -152,6 +152,15 @@ fn recycle_bin_items() -> Result<Vec<TrashedItem>, Error> {
                 })
                 .unwrap_or(SystemTime::UNIX_EPOCH);
             if let Some(name) = name {
+                // The shell keeps the display name of a recycled item, which
+                // hides a known extension; the `$R` payload keeps the real one.
+                let name = match (
+                    Path::new(&name).extension(),
+                    Path::new(&trashed).extension(),
+                ) {
+                    (None, Some(ext)) => format!("{name}.{}", ext.to_string_lossy()),
+                    _ => name,
+                };
                 out.push(TrashedItem {
                     original: PathBuf::from(deleted_from).join(name),
                     trashed: PathBuf::from(trashed),
