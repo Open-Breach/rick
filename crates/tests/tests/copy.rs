@@ -4,7 +4,7 @@ use std::fs;
 use std::io::{Seek, SeekFrom, Write};
 use std::path::Path;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use ext::{CopyOptions, Provider};
 use platform::fs::{CopyMethod, allocated_size, copy_file, shared_extents};
@@ -65,7 +65,7 @@ fn copying_a_1gib_sparse_file_uses_the_fast_path() {
             total: Some(GIB)
         }
     );
-    assert!(elapsed < Duration::from_secs(10), "copy took {elapsed:?}");
+    tests::bench::record("copy-sparse", elapsed);
     // Writing 1 GiB of zeros would take seconds and allocate a gigabyte; the
     // fast path copies the two data segments and leaves the hole.
     let hole_preserved = allocated <= source_allocated + (64 << 20);

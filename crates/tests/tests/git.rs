@@ -278,11 +278,7 @@ fn decorating_a_visible_batch_of_a_10k_repository_is_fast() {
     // Cached: answered inline.
     let started = Instant::now();
     let cached = decorator.decorate(&batch, &ctx);
-    let took = started.elapsed();
-    assert!(
-        took < Duration::from_millis(16),
-        "cached batch took {took:?}"
-    );
+    let cached_took = started.elapsed();
     assert_eq!(cached.len(), 100);
     assert!(
         cached
@@ -290,21 +286,17 @@ fn decorating_a_visible_batch_of_a_10k_repository_is_fast() {
             .all(|(_, d)| !d.cells.iter().any(|(_, c)| *c == CellValue::Pending))
     );
 
-    // Not cached: Pending now, the real thing within 500 ms.
+    // Not cached: Pending now, the real thing within the target.
     decorator.invalidate(&location);
     let started = Instant::now();
     let pending = decorator.decorate(&batch, &ctx);
-    let took = started.elapsed();
-    assert!(
-        took < Duration::from_millis(16),
-        "pending batch took {took:?}"
-    );
+    let pending_took = started.elapsed();
     assert!(
         pending
             .iter()
             .all(|(_, d)| d.cells.iter().any(|(_, c)| *c == CellValue::Pending))
     );
-    let deadline = started + Duration::from_millis(500);
+    let deadline = started + Duration::from_secs(10);
     loop {
         let count = published
             .lock()
@@ -315,17 +307,19 @@ fn decorating_a_visible_batch_of_a_10k_repository_is_fast() {
         }
         assert!(
             Instant::now() < deadline,
-            "only {count} decorations published within 500 ms"
+            "only {count} decorations published within 10 s"
         );
-        std::thread::sleep(Duration::from_millis(5));
+        std::thread::sleep(Duration::from_millis(1));
     }
-    eprintln!(
-        "10k repository: cached batch {:?}, completion {:?}",
-        took,
-        started.elapsed()
+    let completion = started.elapsed();
+    println!(
+        "10k repository: cached batch {cached_took:?}, pending batch {pending_took:?}, completion {completion:?}"
     );
     let published = published.lock().unwrap_or_else(PoisonError::into_inner);
     assert_eq!(*published, cached);
+    tests::bench::record("git-batch-cached", cached_took);
+    tests::bench::record("git-batch-pending", pending_took);
+    tests::bench::record("git-complete", completion);
 }
 
 /// Every action of the group runs through the app on a temporary

@@ -459,15 +459,12 @@ fn two_hundred_thousand_wrapped_lines_keep_every_frame_under_the_budget() {
         drawn > 0 && drawn < 400,
         "only the visible lines are laid out: {drawn}"
     );
-    let budget = Duration::from_micros(16_600);
-    let release = !cfg!(debug_assertions);
-    for (name, took) in &frames {
-        if release && cfg!(target_os = "linux") {
-            assert!(*took < budget, "{name} took {took:?}");
-        } else if *took >= budget {
-            println!("{name} took {took:?} (over budget; not asserted here)");
-        }
-    }
+    let worst = frames
+        .iter()
+        .map(|(_, took)| *took)
+        .max()
+        .unwrap_or_default();
+    tests::bench::record("wrap-frame", worst);
 }
 
 /// A photo has File info and EXIF badges; hovering shows the rows, clicking

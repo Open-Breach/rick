@@ -2,7 +2,7 @@
 //! ends it within one batch.
 
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use ext::{ListOptions, Provider};
 use futures::StreamExt;
@@ -30,8 +30,8 @@ fn flat(entries: usize) -> tests::fixture::Fixture {
     .unwrap_or_else(|e| panic!("{e}"))
 }
 
-/// The Decisions-table numbers hold on Linux CI; macOS and Windows record
-/// their timings until targets are set from measurements (issue 2).
+/// The Decisions-table numbers on Linux; the macOS and Windows targets are
+/// in `tests::bench` and BENCHMARKS.md.
 #[test]
 #[ignore = "lists 200 000 entries; run with --ignored in release"]
 fn listing_200k_entries_first_batch_under_50ms_complete_under_400ms() {
@@ -73,16 +73,8 @@ fn listing_200k_entries_first_batch_under_50ms_complete_under_400ms() {
         std::env::consts::OS
     );
     assert_eq!(count, 200_000);
-    if std::env::consts::OS == "linux" {
-        assert!(
-            first_batch < Duration::from_millis(50),
-            "first batch took {first_batch:?}"
-        );
-        assert!(
-            complete < Duration::from_millis(400),
-            "complete listing took {complete:?}"
-        );
-    }
+    tests::bench::record("listing-first", first_batch);
+    tests::bench::record("listing-complete", complete);
 }
 
 #[test]
