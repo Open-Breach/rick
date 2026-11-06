@@ -33,6 +33,17 @@ pub struct JobHandle<T> {
 pub struct ProgressSink(watch::Sender<Progress>);
 
 impl ProgressSink {
+    /// A sink with its receiver, for code that drives a sub-operation and
+    /// forwards its progress into a job's own sink.
+    #[must_use]
+    pub fn channel() -> (Self, watch::Receiver<Progress>) {
+        let (tx, rx) = watch::channel(Progress::Items {
+            done: 0,
+            total: None,
+        });
+        (Self(tx), rx)
+    }
+
     /// Publishes a report, replacing the previous one. Never fails: a job
     /// nobody watches still runs.
     pub fn report(&self, progress: Progress) {
@@ -187,6 +198,22 @@ impl fmt::Debug for JobRunner {
 mod tests {
     use super::*;
     use std::time::Duration;
+
+    #[test]
+    fn a_standalone_sink_feeds_its_receiver() {
+        let (sink, rx) = ProgressSink::channel();
+        sink.report(Progress::Bytes {
+            done: 1,
+            total: None,
+        });
+        assert_eq!(
+            *rx.borrow(),
+            Progress::Bytes {
+                done: 1,
+                total: None
+            }
+        );
+    }
 
     #[test]
     fn a_job_completes_with_its_value_and_leaves_the_list() {
