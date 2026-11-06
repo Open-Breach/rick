@@ -966,7 +966,10 @@ mod tests {
         model.select(pane, SelectionChange::Set(vec![picked]));
 
         assert_eq!(model.spring_load(pane, loc("/a/sub"), true), Some(TabId(1)));
-        assert_eq!(model.spring_load(pane, loc("/a/sub/deeper"), false), Some(TabId(1)));
+        assert_eq!(
+            model.spring_load(pane, loc("/a/sub/deeper"), false),
+            Some(TabId(1))
+        );
         let tab = active(&model, pane);
         assert_eq!(tab.location, loc("/a/sub/deeper"));
         assert_eq!(tab.history.back.len(), 1, "one step for the whole drag");

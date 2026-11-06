@@ -131,7 +131,10 @@ mod pinned_toml {
         deserializer: D,
     ) -> Result<Vec<Location>, D::Error> {
         let texts: Vec<String> = Vec::deserialize(deserializer)?;
-        Ok(texts.iter().map(|text| super::parse_location(text)).collect())
+        Ok(texts
+            .iter()
+            .map(|text| super::parse_location(text))
+            .collect())
     }
 }
 

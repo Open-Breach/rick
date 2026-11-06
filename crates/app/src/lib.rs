@@ -50,12 +50,12 @@
 mod command;
 mod settings;
 
-pub use command::{Command, Event};
+pub use command::{Command, Event, TransferMode};
 pub use settings::SETTINGS_FILE;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, PoisonError, RwLock};
 use std::time::Duration;
 
 use ext::{
@@ -63,7 +63,8 @@ use ext::{
     FsChange, Invocation, Level, ListOptions, PreviewDoc, Previewer, Registry, UiHost, UndoCommand,
 };
 use futures::StreamExt;
-use model::{JobState, Model, PaneId, Settings, TabId};
+use model::{JobState, Model, PaneId, Settings, SettingsChange, TabId};
+use ops::PinStore;
 use platform::Platform;
 use runtime::{JobEvent, JobRunner, mpsc};
 use tracing::{debug, warn};
@@ -159,6 +160,70 @@ enum Msg {
 /// How long changes are collected before the decorators run again.
 const REDECORATE_AFTER: Duration = Duration::from_millis(150);
 
+/// The pinned list as the pin actions see it. The list itself lives in the
+/// model's settings, which `App` owns; the bridge keeps a copy for the
+/// actions to read and queues the changes they ask for, which `App` applies
+/// to the settings and writes to the file right after the action returns.
+/// Shared state across the `ops` boundary, justified: an action runs with
+/// nothing but the job runner and the UI host in hand, and the undo log
+/// replays it later with the same.
+#[derive(Default)]
+struct PinBridge {
+    pinned: RwLock<Vec<Location>>,
+    pending: Mutex<Vec<SettingsChange>>,
+}
+
+impl PinBridge {
+    /// Replaces the copy with the settings' list.
+    fn sync(&self, pinned: &[Location]) {
+        pinned.clone_into(&mut self.pinned.write().unwrap_or_else(PoisonError::into_inner));
+    }
+
+    /// The changes asked for since the last call.
+    fn take(&self) -> Vec<SettingsChange> {
+        std::mem::take(&mut self.pending.lock().unwrap_or_else(PoisonError::into_inner))
+    }
+}
+
+impl PinStore for PinBridge {
+    fn pinned(&self) -> Vec<Location> {
+        self.pinned
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+    }
+
+    fn pin(&self, items: Vec<Location>, at: Option<usize>) {
+        {
+            // The copy follows at once, so a second pin in the same action
+            // sees the first.
+            let mut pinned = self.pinned.write().unwrap_or_else(PoisonError::into_inner);
+            let mut index = at.map_or(pinned.len(), |at| at.min(pinned.len()));
+            for item in &items {
+                if !pinned.contains(item) {
+                    pinned.insert(index, item.clone());
+                    index += 1;
+                }
+            }
+        }
+        self.pending
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push(SettingsChange::Pin { items, at });
+    }
+
+    fn unpin(&self, item: &Location) {
+        self.pinned
+            .write()
+            .unwrap_or_else(PoisonError::into_inner)
+            .retain(|p| p != item);
+        self.pending
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push(SettingsChange::Unpin(item.clone()));
+    }
+}
+
 /// Which selection the preview follows and the job opening it.
 struct PreviewState {
     /// The focused pane and its single selected file, when there is one.
@@ -206,6 +271,7 @@ pub struct App {
     registry: Registry,
     platform: Arc<dyn Platform>,
     ui: Arc<dyn UiHost>,
+    pins: Arc<PinBridge>,
     jobs: JobRunner,
     job_events: mpsc::UnboundedReceiver<JobEvent>,
     /// Where decorators run their lookups: part of listing, so kept out of
@@ -249,7 +315,12 @@ impl App {
         let mounts = Arc::new(Mounts::new());
         let trash: Arc<dyn platform::Trash> = Arc::clone(&platform) as Arc<dyn platform::Trash>;
         mounts.mount(Arc::new(LocalProvider::new(trash)));
-        let core = ops::Core::new(Arc::clone(&mounts), Arc::clone(&platform));
+        let pins = Arc::new(PinBridge::default());
+        let core = ops::Core::new(
+            Arc::clone(&mounts),
+            Arc::clone(&platform),
+            Arc::clone(&pins) as Arc<dyn PinStore>,
+        );
         for ext in std::iter::once(&core as &dyn Extension).chain(extensions.iter().map(|e| &**e)) {
             if let Err(error) = registry.load(ext) {
                 let id = ext.manifest().id;
@@ -278,6 +349,7 @@ impl App {
                 Settings::default()
             }
         };
+        pins.sync(&settings.pinned);
 
         let (jobs, job_events) = JobRunner::with_events();
         let (tx, rx) = mpsc::unbounded_channel();
@@ -287,6 +359,7 @@ impl App {
             registry,
             platform,
             ui,
+            pins,
             jobs,
             job_events,
             decor_jobs: JobRunner::new(),
@@ -404,6 +477,14 @@ impl App {
     /// through [`poll`](Self::poll) and [`tick`](Self::tick).
     pub fn handle(&mut self, command: Command, events: &mut Vec<Event>) {
         debug!(?command, "command");
+        self.dispatch(command, events);
+        self.sync_panes(events);
+        self.sync_preview();
+    }
+
+    // One arm per command: the enum is the table.
+    #[allow(clippy::too_many_lines)]
+    fn dispatch(&mut self, command: Command, events: &mut Vec<Event>) {
         match command {
             Command::Navigate { pane, to } => {
                 let before = self.selection_len(pane);
@@ -412,16 +493,53 @@ impl App {
                 }
             }
             Command::Back(pane) => {
-                let before = self.selection_len(pane);
+                let before = self.selected_ids(pane);
                 if self.model.back(pane).is_some() {
-                    Self::selection_cleared(pane, before, events);
+                    self.selection_restored(pane, &before, events);
                 }
             }
             Command::Forward(pane) => {
-                let before = self.selection_len(pane);
+                let before = self.selected_ids(pane);
                 if self.model.forward(pane).is_some() {
+                    self.selection_restored(pane, &before, events);
+                }
+            }
+            Command::SpringLoad { pane, to, first } => {
+                let before = self.selection_len(pane);
+                if self.model.spring_load(pane, to, first).is_some() {
                     Self::selection_cleared(pane, before, events);
                 }
+            }
+            Command::Transfer {
+                items,
+                from,
+                to,
+                mode,
+            } => {
+                let sources: Vec<Location> = self
+                    .model
+                    .active_tab(from)
+                    .map(|(_, tab)| {
+                        items
+                            .iter()
+                            .filter_map(|id| tab.listing.get(*id))
+                            .map(|entry| Location::new(entry.id.provider, entry.path.clone()))
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                self.transfer(sources, &to, mode, from, events);
+            }
+            Command::Receive { items, to, mode } => {
+                let pane = self.model.focused;
+                self.transfer(items, &to, mode, pane, events);
+            }
+            Command::Pin { items, at } => {
+                let command = ops::pin_command(self.pin_store(), items, at);
+                self.apply_undoable(command, events);
+            }
+            Command::Unpin(item) => {
+                let command = ops::unpin_command(self.pin_store(), item);
+                self.apply_undoable(command, events);
             }
             Command::Refresh(pane) => self.refresh(pane),
             Command::Select { pane, change } => {
@@ -535,6 +653,7 @@ impl App {
                 text: format!("Undo {}: {error}", command.label()),
             }),
         }
+        self.drain_pins();
         self.attribute(self.model.focused, events);
     }
 
@@ -549,13 +668,106 @@ impl App {
                 text: format!("Redo {}: {error}", command.label()),
             }),
         }
+        self.drain_pins();
         self.attribute(self.model.focused, events);
+    }
+
+    /// The pinned list as the pin actions and commands see it.
+    fn pin_store(&self) -> Arc<dyn PinStore> {
+        Arc::clone(&self.pins) as Arc<dyn PinStore>
+    }
+
+    /// Applies the pin changes an action or an undo asked for to the
+    /// settings, and writes the file.
+    fn drain_pins(&mut self) {
+        for change in self.pins.take() {
+            self.change_settings(change);
+        }
+        let pinned = self.model.settings.pinned.clone();
+        self.pins.sync(&pinned);
+    }
+
+    /// Runs a freshly built undoable command and puts it on the undo log.
+    fn apply_undoable(&mut self, command: Box<dyn UndoCommand>, events: &mut Vec<Event>) {
+        match command.redo(&self.jobs) {
+            Ok(()) => {
+                self.undo.push(command);
+                self.redo.clear();
+            }
+            Err(error) => events.push(Event::Notify {
+                level: Level::Error,
+                text: format!("{}: {error}", command.label()),
+            }),
+        }
+        self.drain_pins();
+        self.attribute(self.model.focused, events);
+    }
+
+    /// Moves or copies `sources` into `to` as one job, booked to `pane` for
+    /// the refresh when it ends. Drops that would change nothing (an item
+    /// into its own folder, a folder into itself or its subtree) are
+    /// skipped without a word, as the spec asks; `Ask` is the UI's to
+    /// answer and is reported when it gets this far.
+    fn transfer(
+        &mut self,
+        sources: Vec<Location>,
+        to: &Location,
+        mode: TransferMode,
+        pane: PaneId,
+        events: &mut Vec<Event>,
+    ) {
+        let sources: Vec<Location> = sources
+            .into_iter()
+            .filter(|source| !transfer_is_noop(source, to))
+            .collect();
+        if sources.is_empty() {
+            debug!(%to, "transfer with nothing to do");
+            return;
+        }
+        let kind = match mode {
+            TransferMode::Move => ops::TransferKind::Move,
+            TransferMode::Copy => ops::TransferKind::Copy,
+            TransferMode::Ask => {
+                events.push(Event::Notify {
+                    level: Level::Warning,
+                    text: "Move or copy? The drop was not answered; nothing was done.".to_owned(),
+                });
+                return;
+            }
+        };
+        match ops::transfer(&self.jobs, Arc::clone(&self.mounts), &sources, to, kind) {
+            Ok(ActionOutcome::Undoable(command)) => {
+                self.undo.push(command);
+                self.redo.clear();
+            }
+            Ok(ActionOutcome::Started(id)) => {
+                self.pane_jobs.insert(id, pane);
+                let what = match sources.as_slice() {
+                    [one] => one.path.file_name().map_or_else(
+                        || one.path.to_string(),
+                        |n| String::from_utf8_lossy(n).into_owned(),
+                    ),
+                    many => format!("{} items", many.len()),
+                };
+                events.push(Event::Notify {
+                    level: Level::Info,
+                    text: format!("Copying {what}; a copy cannot be undone"),
+                });
+            }
+            Ok(ActionOutcome::Done) => {}
+            Err(error) => events.push(Event::Notify {
+                level: Level::Error,
+                text: format!("Transfer: {error}"),
+            }),
+        }
+        self.attribute(pane, events);
     }
 
     /// Applies one change and writes the file off the loop's thread.
     fn change_settings(&mut self, change: model::SettingsChange) {
         let mut settings = self.model.settings.clone();
         settings.apply(change);
+        self.pins.sync(&settings.pinned);
         self.model.apply_settings(settings.clone());
         let path = self.settings_path.clone();
         runtime::handle().spawn_blocking(move || {
@@ -577,6 +789,20 @@ impl App {
                 pane,
                 ids: Vec::new(),
             });
+        }
+    }
+
+    /// Announces the selection a history step brought back, if it differs
+    /// from what was selected before. The listing is empty at this point,
+    /// so the ids are the step's own; the rows show up as they stream in.
+    fn selection_restored(&self, pane: PaneId, before: &[EntryId], events: &mut Vec<Event>) {
+        let after: Vec<EntryId> = self
+            .model
+            .active_tab(pane)
+            .map(|(_, tab)| tab.selection.iter().copied().collect())
+            .unwrap_or_default();
+        if after != before {
+            events.push(Event::SelectionChanged { pane, ids: after });
         }
     }
 
@@ -620,6 +846,7 @@ impl App {
                 text: format!("{}: {error}", action.label()),
             }),
         }
+        self.drain_pins();
         self.attribute(pane, events);
     }
 
@@ -984,6 +1211,7 @@ impl App {
             Msg::Settings(Ok(settings)) => {
                 if settings != self.model.settings {
                     debug!("settings file changed");
+                    self.pins.sync(&settings.pinned);
                     self.model.apply_settings(settings);
                     self.sync_panes(events);
                 }
@@ -1339,6 +1567,16 @@ impl App {
             }
         });
     }
+}
+
+/// Whether moving or copying `source` into `to` would change nothing: the
+/// item is in `to` already, or `to` is the item itself or lies under it.
+#[must_use]
+pub fn transfer_is_noop(source: &Location, to: &Location) -> bool {
+    if source.provider != to.provider {
+        return false;
+    }
+    source.path.parent().as_ref() == Some(&to.path) || to.path.is_inside(&source.path)
 }
 
 impl Drop for App {
