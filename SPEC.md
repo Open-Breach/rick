@@ -105,6 +105,22 @@ A side panel on the left gives one-click access to the places that matter; the m
 
 Default layout: the side panel is collapsible and can dock right; the explorer tabs and the Preview tab are all dockable, so the preview can sit below or in its own window; the status line and type-to-filter share the explorer's foot.
 
+### Window chrome
+
+Rick draws its own window chrome; the platform's title bar is turned off. The top of every window is one compact **title row**, the height of a tab, laid out like Visual Studio Code's:
+
+- **Left:** the burger menu.
+- **Centre:** the search box, which is also the command palette (below).
+- **Right:** a small group of layout toggles, then the window controls (minimise, maximise, close) drawn by Rick. Which toggles sit there is still to be decided; the candidates are side panel, inspector and split. On macOS the traffic lights keep their place on the left and the burger menu moves right of them.
+
+Dragging an empty part of the title row moves the window; double-clicking it maximises or restores. Tabs do not live in the title row: each pane keeps its own tab strip directly below it, as VS Code's editor groups do, so a window with two panes shows two strips and the title row never changes when focus moves between panes.
+
+**Search box.** One box serves search and commands. Plain text searches by name — the current location first, the platform index when a `SearchIndex` is available — and results drop down below the box; a leading `>` switches the box to commands, listing every registered Action fuzzy-matched as you type, each with its shortcut, Enter running the chosen one on the current selection and recently used commands floating to the top. Mod+P focuses the box empty, Mod+Shift+P focuses it with `>` already typed. Escape clears it and returns focus to the list.
+
+**Spacing.** No wasted space, but room to breathe: controls and rows get VS Code-like padding rather than touching, and the row-density setting (compact, normal, comfortable) is the single knob that scales it.
+
+**Icons.** Phosphor is the icon set, through the `egui-phosphor` crate, regular weight by default and fill weight for an active toggle. Every glyph in the application comes from it — toolbar buttons, tab icons, file-type icons, badges, menu entries — and no Unicode symbol character is ever used as an icon, so no glyph can fall back to a box. The navigation buttons are `ARROW_LEFT`, `ARROW_RIGHT` and `ARROW_UP`; refresh is `ARROW_CLOCKWISE`; copy is `COPY`.
+
 ### Side panel
 
 Docked on the left by default; the user can move it to the right side, and collapse it to a narrow icon strip or hide it entirely, with a shortcut to toggle it back. Its entries, top to bottom:
@@ -125,19 +141,27 @@ Each entry is a section that folds and expands independently, so a user short on
 
 The main area is the explorer view: each tab shows one location's files, with a toolbar above the file list.
 
-**Toolbar.** A bar of icons per tab, left to right:
+**Toolbar.** One row per tab, made of three groups that never overlap: a fixed group of navigation icons on the left, the breadcrumb filling the middle, and a fixed group of view controls on the right. Only the breadcrumb flexes; the two icon groups keep their width whatever the window size.
 
-| Control | Action | Shortcut |
-| --- | --- | --- |
-| Back | Previous location in this tab's history | Alt+Left, mouse button 4 |
-| Forward | Next location in history | Alt+Right, mouse button 5 |
-| Up | Parent directory | Alt+Up, Backspace |
+| Group | Control | Action | Shortcut |
+| --- | --- | --- | --- |
+| Left | Back (`ARROW_LEFT`) | Previous location in this tab's history | Alt+Left, mouse button 4 |
+| Left | Forward (`ARROW_RIGHT`) | Next location in history | Alt+Right, mouse button 5 |
+| Left | Up (`ARROW_UP`) | Parent directory | Alt+Up, Backspace |
+| Centre | Breadcrumb | The current path; see Path bar | Mod+L to edit |
+| Right | View mode | A dropdown; see View mode control | Mod+Shift+1 … 4 |
+| Right | Hidden files | Toggle | Mod+H |
+| Right | Refresh (`ARROW_CLOCKWISE`) | Re-read the location | F5 |
 
-Other toolbar controls can be added later; the toolbar is an extension point for Actions with toolbar placement.
+Other controls can be added to the right group later; the toolbar is an extension point for Actions with toolbar placement.
 
-**Path bar.** Next to the toolbar, the current path is always visible as clickable segments (breadcrumbs); clicking a segment jumps there, clicking the empty area or pressing Ctrl+L turns it into an editable text field. A Copy-path button beside it copies the full path to the clipboard with one click.
+**Path bar.** The breadcrumb shows the current path as clickable segments; clicking a segment jumps there, clicking the empty area or pressing Mod+L turns it into an editable text field, Escape leaves edit mode. It never overlaps its neighbours: when the path is wider than the space between the two icon groups, segments collapse from the left into a single chevron (`CARET_DOUBLE_LEFT`, or `DOTS_THREE` with a chevron) that drops down the hidden ancestors, the rightmost segments stay visible, and if even the last segment does not fit it truncates with an ellipsis. A copy button (`COPY`) sits at the right end of the breadcrumb, inside it, and copies the folder's path — the Copy path action below.
 
-**Tabs and panes.** Any number of tabs, each an explorer view with its own toolbar, path and history (Ctrl+T new, Ctrl+W close, Ctrl+Tab cycle; middle-click a folder opens it in a new tab). Tabs are not only stacked: a tab can be picked up and dropped to the left, right, top or bottom of the current one, splitting the area into side-by-side or stacked panes, as in an IDE. Drop targets appear while dragging; splits nest, so two-pane, three-pane and grid layouts are all possible; dividers drag to resize; a tab dragged outside the window opens a new window. The layout, tabs and their paths are restored on the next start. This is egui\_dock's tree of tabs and splits.
+**View mode control.** One dropdown in the toolbar's right group. Its icon shows the current mode (`LIST` for List, `LIST_DASHES` for Details, `TREE_STRUCTURE` for Tree, `SQUARES_FOUR` for Icons); the menu lists List, Details, Tree, and Icons in small, medium, large and extra large, with the current entry marked. The icon sizes show thumbnails where a previewer can supply one, so the large sizes work as an image browser.
+
+**Tabs and panes.** Any number of tabs, each an explorer view with its own toolbar, path and history (Mod+T new, Mod+W close, Mod+Tab cycle; middle-click a folder opens it in a new tab). Tabs are not only stacked: a tab can be picked up and dropped to the left, right, top or bottom of the current one, splitting the area into side-by-side or stacked panes, as in an IDE. Drop targets appear while dragging; splits nest, so two-pane, three-pane and grid layouts are all possible; dividers drag to resize. Dropping a tab on another pane's tab strip moves it into that pane at the drop position; dropping it on a pane's edge zone splits; dropping it outside the window opens a new window. The layout, tabs and their paths are restored on the next start. This is egui\_dock's tree of tabs and splits.
+
+**Tab strip.** Each pane's strip sits at the top of the pane, below the title row. A tab shows an icon, then its name: the folder icon for a local folder, the provider's icon otherwise (archive, trash, remote), so tabs read differently at a glance. The close button (`X`) appears only on the active tab and on the hovered tab; a middle click closes any tab. Tabs have VS Code-like padding inside and between them and slightly rounded top corners (about 4 px); the new-tab button (`PLUS`) sits directly after the last tab, not at the right edge of the strip. When tabs outgrow the strip, the strip scrolls horizontally and the plus button stays reachable at the end of the row.
 
 **File list.** A details list, one row per entry, folders first. Default columns in order:
 
@@ -148,7 +172,7 @@ Other toolbar controls can be added later; the toolbar is an extension point for
 | Date modified | Last modification time, relative for recent entries, full on hover |
 | Size | Human-readable; folders show nothing until a size is requested |
 
-Columns sort on click, resize, reorder and can be hidden; further columns may be added later, and extensions can add columns through Decorators (for example a Git status column). An optional setting alternates the row background colour (zebra striping) for easier reading of wide rows.
+Columns sort on click, resize, reorder and can be hidden; further columns may be added later, and extensions can add columns through Decorators (for example a Git status column). The body of the list draws no grid lines: no vertical column separators and no horizontal row lines, rows are set apart by their padding alone, which follows the row-density setting. The only vertical separators are in the header row, between column titles, where they double as the resize handles. An optional setting alternates the row background colour (zebra striping) for easier reading of wide rows; it is off by default.
 
 **Type filter.** A filter control on the toolbar lists only the file types actually present in the current directory, with a count per type; ticking one or more shows just those entries. The filter is per tab, clears on navigation unless pinned, and a text filter (name contains) sits beside it.
 
@@ -162,7 +186,7 @@ Columns sort on click, resize, reorder and can be hidden; further columns may be
 
 **Indexed search.** If the platform has a search index, a search box appears on the toolbar: it queries Windows Search, Spotlight or, on Linux, Tracker or Baloo through a search-index extension, and shows results in the list with their paths. Without an index the box is absent, not greyed out; detection happens at start and when the index service appears or disappears. Each index connection is its own plugin (search-windows, search-spotlight, search-tracker, search-baloo) against one \`SearchIndex\` trait in \`ext\`, so a connector can be replaced, and a future Rick-owned index would be just another plugin implementing the same trait.
 
-**Context menu.** Right-clicking a file, folder or selection opens a full operations menu, built from the Action registry so extensions add entries in their own group. Default groups:
+**Context menu.** Right-clicking a file, folder or selection opens a full operations menu, built from the Action registry so extensions add entries in their own group. Right-clicking the empty area of the list — below the last row, or anywhere in an empty folder — opens the same menu for the current folder with no selection. Default groups:
 
 | Group | Entries |
 | --- | --- |
@@ -170,11 +194,11 @@ Columns sort on click, resize, reorder and can be hidden; further columns may be
 | Edit | Cut, Copy, Paste, Duplicate, Rename, Move to, Copy to |
 | Delete | Move to trash, Delete permanently |
 | Create | New folder, New file (from templates) |
-| Share | Copy path, Copy as link, Compress to archive, Extract here |
+| Share | Copy name, Copy path, Copy path and name, Copy as link, Compress to archive, Extract here |
 | Extensions | Git actions, archive actions, and anything a plugin registers |
 | Info | Properties |
 
-Entries that do not apply to the selection are hidden rather than greyed; the same Actions are reachable from a command palette (Ctrl+Shift+P) and from keyboard shortcuts.
+Entries that do not apply are hidden rather than greyed: each Action's `availability` decides, so with no selection the menu holds only what works on the folder itself — New folder, New file, Paste, Paste as link, Open in terminal here, Open in system file manager, Select all, Refresh, the view, sort and group entries, and the folder's Properties — and nothing that needs an item. The same Actions are reachable from the search box in command mode (Mod+Shift+P) and from keyboard shortcuts.
 
 ### Preview
 
@@ -187,10 +211,10 @@ The preview is its own tab, not part of any explorer tab. It docks and moves lik
 
 ### Menu
 
-There is no menu bar; a burger menu at the top of the window holds the global entries.
+There is no menu bar; the burger menu at the left of the title row holds the global entries.
 
-- **Commands** opens the command palette (also Ctrl+Shift+P): a searchable list of every registered Action, fuzzy-matched as you type, each with its shortcut shown; Enter runs it on the current selection, and recently used commands float to the top.
-- Further entries: New window, Settings, Extensions, Keyboard shortcuts, About.
+- The command palette has no menu entry: it is the title row's search box in command mode (Mod+Shift+P, or type `>`), always visible.
+- Entries: New window, Settings, Extensions, Keyboard shortcuts, About.
 
 The remaining menu entries will be specified later.
 
@@ -202,7 +226,7 @@ The remaining menu entries will be specified later.
 
 **Hidden files, symlinks and mounts.** A toggle (Ctrl+H) shows dot-files and files with the hidden attribute. Symlinks show a link badge on the icon and their target in the Type column; a broken link is marked. Mount points show a volume badge, and the side panel's Network and Pinned sections list mounted volumes.
 
-**Icon and thumbnail view.** Besides the details list, a grid view with large icons or thumbnails for images, videos and PDFs, with an adjustable cell size; thumbnails come from the freedesktop thumbnail cache on Linux and are generated in the background elsewhere.
+**Icon and thumbnail view.** Besides the details list, a grid view with large icons or thumbnails for images, PDFs and videos, in four cell sizes (small, medium, large, extra large). A thumbnail is rendered by the Previewer registered for the entry's type, at the cell size, off the UI thread, and cached per entry and size; while it renders, or when no previewer claims the file, the cell shows the file-type icon. The freedesktop thumbnail cache on Linux may seed that cache later. This view ships in 0.1 (see the definition of done).
 
 **Dual pane.** One command (F6) lays out two explorer tabs side by side, the classic commander layout; a second press returns to a single pane.
 
@@ -277,7 +301,9 @@ The viewer never writes to the file; editing is the job of an external applicati
 - **Duplicate.** Make a copy of the selection in the same folder with a derived name, such as "name (copy)".
 - **Inspect.** Open the system properties for the selection: the Windows Properties dialogue, the macOS Get Info window, and on Linux Rick's own properties dialogue (size, dates, owner, permissions, mime type), since there is no desktop-wide one.
 - **Restore.** Put a trashed item back at its original location; available when browsing Trash. In 0.1 macOS can restore only items Rick trashed in the same session, because the system keeps the original paths of trashed items in a private store; and an original path that is taken again is reported, not resolved (QUESTIONS.md 11, to revisit with the Trash location).
-- **Copy path.** Copy the full path of the selection to the clipboard, one per line for multiple items; a variant copies the name only.
+- **Copy name.** Copy the file name of each selected item to the clipboard (`report.pdf`), one per line for multiple items (Mod+Alt+C).
+- **Copy path.** Copy the folder path of each selected item, without the name (`/home/serge/docs`), one per line, duplicates removed (Mod+Alt+Shift+C). With nothing selected, and from the breadcrumb's copy button, this is the current folder's path.
+- **Copy path and name.** Copy the full path of each selected item (`/home/serge/docs/report.pdf`), one per line (Mod+Shift+C). The three sit together in the Share group of the context menu.
 - **New file.** Create an empty file in the current location with its name in inline edit; extensions can add templates (text, markdown, and so on).
 - **New folder.** Create a folder in the current location with its name in inline edit; with a selection, a variant moves the selected items into the new folder.
 - **Open containing folder.** Navigate the current pane to the folder that holds the selected item and select it there; useful from search results, the flattened view and Recent.
@@ -330,10 +356,11 @@ All shortcuts are remappable in Settings; the defaults follow the common desktop
 | Enter | Open |
 | Space | Toggle preview |
 | Ctrl+L | Edit path |
-| Ctrl+Shift+C | Copy path |
+| Ctrl+Shift+C | Copy path and name |
+| Ctrl+Alt+C / Ctrl+Alt+Shift+C | Copy name / copy path |
 | Ctrl+F | Filter in list |
 | Ctrl+Shift+F | Search subdirectories |
-| Ctrl+Shift+P | Command palette |
+| Ctrl+P / Ctrl+Shift+P | Search box / search box in command mode |
 | Ctrl+A | Select all |
 | Shift+arrows, Shift+click | Range select |
 | Ctrl+click | Toggle entry in selection |
@@ -766,8 +793,8 @@ The default `default_shortcut` of every built-in Action. **Mod** is Ctrl on Linu
 | Mod+Shift+Home | Go to root |
 | Mod+L | Focus the path bar |
 | F5, Mod+R | Refresh |
-| Mod+Shift+P | Command palette |
-| Mod+P | Quick open (search by name) |
+| Mod+Shift+P | Focus the search box in command mode (`>` typed) |
+| Mod+P | Focus the search box (search by name) |
 
 **Selection**
 
@@ -795,7 +822,9 @@ The default `default_shortcut` of every built-in Action. **Mod** is Ctrl on Linu
 | Mod+F2 | Bulk rename |
 | Mod+N | New file |
 | Mod+Shift+N | New folder |
-| Mod+Shift+C | Copy path |
+| Mod+Shift+C | Copy path and name |
+| Mod+Alt+C | Copy name |
+| Mod+Alt+Shift+C | Copy path |
 | Mod+I, Alt+Enter | Inspect |
 | Mod+Z | Undo |
 | Mod+Shift+Z, Mod+Y | Redo |
@@ -864,9 +893,10 @@ The smallest Rick worth using every day. Everything in this list ships; nothing 
 
 - All three platforms from the first release: Linux, macOS and Windows, built and tested in CI, with the `platform` crate implementing trash, open-with, file properties and the config directory on each.
 - Local filesystem provider only.
-- Tabs, docking and split panes (right and down), list and details views, column sizing, sort by every column, filter, hidden-files toggle.
-- Core operations: copy, cut, paste, duplicate, move to trash, delete permanently, rename (single), new file, new folder, open with the system default, open containing folder, copy path, back and forward, go to root, refresh.
-- Keyboard navigation for all of the above and the command palette.
+- Tabs, docking and split panes (right and down), list, details and icon views (the icon view with thumbnails from the previewers), column sizing, sort by every column, filter, hidden-files toggle.
+- The window chrome of the GUI section: custom title row with the search box, Phosphor icons throughout, the three-group toolbar with a collapsing breadcrumb, the tab strip rules and the line-free details view.
+- Core operations: copy, cut, paste, duplicate, move to trash, delete permanently, rename (single), new file, new folder, open with the system default, open containing folder, copy name, copy path, copy path and name, back and forward, go to root, refresh.
+- Keyboard navigation for all of the above and the search box in command mode.
 - Settings in TOML with a minimal Settings screen.
 - Previews for text, code (syntect), images and PDF (pdfium-render, first page plus page navigation) in the inspector pane.
 - `ext-git`: status badges and branch via gix, and the Git action group (Commit, Stash, Stash pop, Pull, Push, Checkout branch, Discard changes, Show log, Blame) in the context menu and palette inside a repository.
@@ -888,3 +918,4 @@ The smallest Rick worth using every day. Everything in this list ships; nothing 
 - Testing strategy for the performance targets: a generated 200k-entry fixture and a benchmark harness in CI.
 - Accessibility: egui's AccessKit support is young; screen-reader support is a known weakness to state and track.
 - Distribution: packaging still to choose — Flatpak, Homebrew, winget, or plain binaries.
+- Title row toggles: which layout toggles sit right of the search box (candidates: side panel, inspector, split), and whether the current path belongs in the title row at all.
