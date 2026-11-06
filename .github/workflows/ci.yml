@@ -1,54 +1,31 @@
-name: CI
-
-on:
-  push:
-    branches: [main]
-  pull_request:
-
-env:
-  CARGO_TERM_COLOR: always
-  RUSTFLAGS: -D warnings
-  RUSTDOCFLAGS: -D warnings
-
+name: ci
+on: [push, pull_request]
 jobs:
   check:
-    name: ${{ matrix.os }}
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 30
     strategy:
-      fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: rustfmt, clippy
+        with: { components: "rustfmt, clippy" }
       - uses: Swatinem/rust-cache@v2
-      - name: Format
-        run: cargo fmt --check
-      - name: Clippy
-        run: cargo clippy --workspace --all-targets -- -D warnings
-      - name: Test
-        run: cargo test --workspace
-      - name: Acceptance (200k-entry fixture under 30 s)
-        # The runner's temp disk is faster than the system drive on Windows.
-        # The 30 s budget is not enforced on Windows for now (QUESTIONS.md 5):
-        # the step still runs and logs its time, but cannot fail the job.
+      - run: cargo fmt --check
+      - run: cargo clippy --all-targets -- -D warnings
+      - run: cargo test --workspace
+      # Acceptance (issue 1): the 200k-entry fixture generates in under 30 s.
+      # Written on the runner's temp disk, the fast local drive on Windows.
+      # The 30 s budget is not enforced on Windows for now (QUESTIONS.md 5):
+      # the step still runs and logs its time, but cannot fail the job.
+      - run: cargo test -p tests --test fixture -- --ignored
         continue-on-error: ${{ runner.os == 'Windows' }}
-        env:
-          TMP: ${{ runner.temp }}
-          TEMP: ${{ runner.temp }}
-          TMPDIR: ${{ runner.temp }}
-        run: cargo test -p tests --test fixture -- --ignored
-      - name: Docs
-        run: cargo doc --workspace --no-deps
-
+        env: { TMP: "${{ runner.temp }}", TEMP: "${{ runner.temp }}", TMPDIR: "${{ runner.temp }}" }
+      - run: cargo doc --no-deps
+        env: { RUSTDOCFLAGS: "-D warnings" }
   deny:
-    name: cargo-deny
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: EmbarkStudios/cargo-deny-action@v2
-        with:
-          command: check
