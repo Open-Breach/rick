@@ -32,3 +32,13 @@ Entry format:
    `CancelToken` must still stop when cancelled. Assumed: yes; `JobRunner`
    races the job's future against the token and drops the future, so every
    cancelled job ends with `Error::Cancelled` at its next await point.
+5. (issue 1) The acceptance criterion "`fixture::generate(200_000, seed)`
+   runs in under 30 s on CI" is met on the Linux and macOS runners but not
+   on the GitHub-hosted Windows runner, where file creation is bound by NTFS
+   and Defender's real-time scanning (297 s with four writers on the system
+   drive). Answered by the maintainer (2026-11-06): the 30 s budget is an
+   exception on Windows for now. The test keeps its 30 s assertion and still
+   runs on Windows in CI, but with `continue-on-error`, so it reports its
+   time without failing the job. To revisit when the Windows runner can be
+   made faster (Defender exclusion for the temp disk) or the target is
+   confirmed as Linux-only.
