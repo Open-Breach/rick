@@ -253,8 +253,14 @@ impl DockSync {
 
     /// Turns the user's changes to the tree into commands: closed tabs,
     /// tabs moved into other panes or into new splits, a changed active
-    /// tab, a changed focus. Then rebuilds the tree from the model.
-    pub fn reconcile(&mut self, app: &mut App, events: &mut Vec<Event>) {
+    /// tab, a changed focus. Then rebuilds the tree from the model. `pointer`
+    /// is where the pointer is, to tell which pane a drop moved.
+    pub fn reconcile(
+        &mut self,
+        app: &mut App,
+        events: &mut Vec<Event>,
+        pointer: Option<egui::Pos2>,
+    ) {
         let leaves: Vec<(NodeIndex, Vec<TabId>, Option<TabId>)> = {
             let tree = self.state.main_surface();
             (0..tree.len())
@@ -358,6 +364,8 @@ impl DockSync {
             }
         }
 
+        self.place_panes(app, events, pointer);
+
         // Focus.
         if let Some(pane) = self.focused_pane(app.model())
             && pane != app.model().focused
@@ -370,6 +378,76 @@ impl DockSync {
 
     /// The pane of the sibling subtree of `node` and which side of it `node`
     /// sits on.
+    /// Panes moved as a whole: a tab dropped on another pane's edge zone
+    /// splits there, and when it was its pane's only tab the tree now has
+    /// that pane somewhere else than the model does. Each round moves the
+    /// first leaf whose place disagrees beside its sibling in the tree, as a
+    /// new pane, until the two agree.
+    fn place_panes(&mut self, app: &mut App, events: &mut Vec<Event>, pointer: Option<egui::Pos2>) {
+        let leaf_count = self.state.main_surface().num_tabs();
+        for _ in 0..=leaf_count {
+            let homes: Vec<(NodeIndex, Option<PaneId>)> = {
+                let tree = self.state.main_surface();
+                (0..tree.len())
+                    .map(NodeIndex)
+                    .filter_map(|node| {
+                        let leaf = tree[node].get_leaf()?;
+                        Some((node, home_of(app.model(), &leaf.tabs)))
+                    })
+                    .collect()
+            };
+            let Some(tree_panes) = pane_shape(self.state.main_surface(), &homes) else {
+                return;
+            };
+            let Some(misplaced) = misplaced_leaf(
+                self.state.main_surface(),
+                &homes,
+                &tree_panes,
+                &model_pane_shape(app.model()),
+                pointer,
+            ) else {
+                return;
+            };
+            let Some(&(node, _)) = homes.iter().find(|(_, home)| *home == Some(misplaced)) else {
+                return;
+            };
+            let Some(tabs) = self.state.main_surface()[node]
+                .tabs()
+                .map(<[TabId]>::to_vec)
+            else {
+                return;
+            };
+            let Some((neighbour, side)) = self.neighbour_of(node, &homes, app.model()) else {
+                return;
+            };
+            let Some((first, rest)) = tabs.split_first() else {
+                return;
+            };
+            app.handle(
+                Command::MoveTab {
+                    tab: *first,
+                    to: DockTarget::Beside {
+                        pane: neighbour,
+                        side,
+                    },
+                },
+                events,
+            );
+            let Some(new_pane) = app.model().pane_of(*first) else {
+                return;
+            };
+            for tab in rest {
+                app.handle(
+                    Command::MoveTab {
+                        tab: *tab,
+                        to: DockTarget::Into(new_pane),
+                    },
+                    events,
+                );
+            }
+        }
+    }
+
     fn neighbour_of(
         &self,
         node: NodeIndex,
@@ -403,6 +481,165 @@ impl DockSync {
             .flatten()
             .or_else(|| model.pane_of(first))?;
         Some((pane, side))
+    }
+}
+
+/// A dock structure over pane ids, to compare where the tree and the model
+/// put each pane.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum PaneShape {
+    Leaf(PaneId),
+    Split {
+        horizontal: bool,
+        first: Box<PaneShape>,
+        second: Box<PaneShape>,
+    },
+}
+
+impl PaneShape {
+    fn first_leaf(&self) -> PaneId {
+        match self {
+            Self::Leaf(pane) => *pane,
+            Self::Split { first, .. } => first.first_leaf(),
+        }
+    }
+
+    fn leaves(&self) -> Vec<PaneId> {
+        match self {
+            Self::Leaf(pane) => vec![*pane],
+            Self::Split { first, second, .. } => {
+                let mut leaves = first.leaves();
+                leaves.extend(second.leaves());
+                leaves
+            }
+        }
+    }
+
+    /// The shape without `pane`, its split collapsed; `None` when nothing is
+    /// left.
+    fn without(&self, pane: PaneId) -> Option<Self> {
+        match self {
+            Self::Leaf(p) => (*p != pane).then(|| self.clone()),
+            Self::Split {
+                horizontal,
+                first,
+                second,
+            } => match (first.without(pane), second.without(pane)) {
+                (Some(first), Some(second)) => Some(Self::Split {
+                    horizontal: *horizontal,
+                    first: Box::new(first),
+                    second: Box::new(second),
+                }),
+                (one, None) | (None, one) => one,
+            },
+        }
+    }
+}
+
+/// The pane to move so that the tree and the model agree, or `None` when
+/// they do. A dropped pane is one whose removal makes the two shapes equal;
+/// when several qualify (two panes that swapped sides, say) the one under
+/// the pointer is the dropped one, since `egui_dock`'s drop zones lie on the
+/// side the new leaf then takes. Failing both, the first pane where the
+/// shapes differ.
+fn misplaced_leaf(
+    tree: &Tree<TabId>,
+    homes: &[(NodeIndex, Option<PaneId>)],
+    tree_panes: &PaneShape,
+    model_panes: &PaneShape,
+    pointer: Option<egui::Pos2>,
+) -> Option<PaneId> {
+    if tree_panes == model_panes {
+        return None;
+    }
+    let candidates: Vec<PaneId> = tree_panes
+        .leaves()
+        .into_iter()
+        .filter(|pane| tree_panes.without(*pane) == model_panes.without(*pane))
+        .collect();
+    let under_pointer = pointer.and_then(|pos| {
+        candidates.iter().copied().find(|pane| {
+            homes.iter().any(|(node, home)| {
+                *home == Some(*pane) && tree[*node].rect().is_some_and(|r| r.contains(pos))
+            })
+        })
+    });
+    under_pointer
+        .or_else(|| candidates.first().copied())
+        .or_else(|| divergent_leaf(tree_panes, model_panes))
+}
+
+/// The tree's structure with each leaf replaced by its home pane; `None`
+/// when the tree holds no pane. A leaf without a home has no tabs the model
+/// knows and counts as empty.
+fn pane_shape(tree: &Tree<TabId>, homes: &[(NodeIndex, Option<PaneId>)]) -> Option<PaneShape> {
+    fn walk(
+        tree: &Tree<TabId>,
+        node: NodeIndex,
+        homes: &[(NodeIndex, Option<PaneId>)],
+    ) -> Option<PaneShape> {
+        if node.0 >= tree.len() {
+            return None;
+        }
+        match &tree[node] {
+            Node::Empty => None,
+            Node::Leaf(_) => {
+                let home = homes.iter().find(|(n, _)| *n == node)?.1?;
+                Some(PaneShape::Leaf(home))
+            }
+            Node::Horizontal(_) | Node::Vertical(_) => {
+                let horizontal = matches!(&tree[node], Node::Horizontal(_));
+                match (
+                    walk(tree, node.left(), homes),
+                    walk(tree, node.right(), homes),
+                ) {
+                    (Some(first), Some(second)) => Some(PaneShape::Split {
+                        horizontal,
+                        first: Box::new(first),
+                        second: Box::new(second),
+                    }),
+                    (one, None) | (None, one) => one,
+                }
+            }
+        }
+    }
+    walk(tree, NodeIndex::root(), homes)
+}
+
+/// The model's dock as pane ids.
+fn model_pane_shape(model: &Model) -> PaneShape {
+    fn walk(dock: &Dock) -> PaneShape {
+        match dock {
+            Dock::Pane(pane) => PaneShape::Leaf(*pane),
+            Dock::Split { dir, first, second } => PaneShape::Split {
+                horizontal: *dir == model::SplitDir::Right,
+                first: Box::new(walk(first)),
+                second: Box::new(walk(second)),
+            },
+        }
+    }
+    walk(&model.dock)
+}
+
+/// The first pane the tree puts somewhere else than the model, in tree
+/// order; `None` when both agree.
+fn divergent_leaf(tree: &PaneShape, model: &PaneShape) -> Option<PaneId> {
+    match (tree, model) {
+        (PaneShape::Leaf(a), PaneShape::Leaf(b)) => (a != b).then_some(*a),
+        (
+            PaneShape::Split {
+                horizontal: h1,
+                first: f1,
+                second: s1,
+            },
+            PaneShape::Split {
+                horizontal: h2,
+                first: f2,
+                second: s2,
+            },
+        ) if h1 == h2 => divergent_leaf(f1, f2).or_else(|| divergent_leaf(s1, s2)),
+        (split @ PaneShape::Split { .. }, _) => Some(split.first_leaf()),
+        (PaneShape::Leaf(a), PaneShape::Split { .. }) => Some(*a),
     }
 }
 

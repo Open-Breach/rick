@@ -1594,7 +1594,8 @@ impl eframe::App for RickUi {
                 .show_inside(ui, &mut viewer);
         });
         let mut events = Vec::new();
-        self.dock.reconcile(&mut self.app, &mut events);
+        self.dock
+            .reconcile(&mut self.app, &mut events, ctx.pointer_latest_pos());
         self.absorb(events);
         self.apply_requests(ctx);
 
