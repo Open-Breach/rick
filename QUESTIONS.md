@@ -16,7 +16,9 @@ Entry format:
    engineering guidelines require `thiserror` in library crates. Assumed:
    `types` may depend on `bitflags` and `thiserror` (macro-only crates, no
    I/O) and on nothing else; `CancelToken` is implemented on `std` alone so
-   `types` stays free of `tokio`.
+   `types` stays free of `tokio`. Answered by the maintainer (2026-11-06):
+   `types` may carry the dependencies it needs; SPEC.md "Package layout" now
+   says so, keeping the no-I/O, no-runtime, no-Rick-crate limits.
 2. (issue 1) `Error::Extension { ext: ExtId, .. }` and `Entry { mime:
    Option<Mime>, .. }` use `ExtId` and `Mime`, which the "Value types" block
    does not define. Assumed: both live in `types`; `ExtId(pub &'static str)`

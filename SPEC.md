@@ -388,7 +388,7 @@ One Cargo workspace, one crate per concern, grouped by layer. Kernel crates carr
 
 **Kernel**
 
-- `types` — paths, entries, mime, errors, capability flags; no dependencies beyond std.
+- `types` — paths, entries, mime, errors, capability flags; no I/O, no async runtime and no dependency on any other Rick crate. It may use the small ecosystem crates it needs (`bitflags`, `thiserror`), nothing heavier.
 - `runtime` — job system, cancellation, progress, thread pools, event bus.
 - `platform` — per-OS code behind one trait set: trash, links and junctions, elevation, system properties dialogue, file associations, mounts.
 - `vfs` — the Provider trait and the mount table that routes a path to a provider.
