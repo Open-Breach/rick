@@ -9,6 +9,7 @@ dependencies = [
  "ext",
  "futures",
  "model",
+ "ops",
  "platform",
  "runtime",
  "serde",
@@ -1216,8 +1217,11 @@ dependencies = [
 name = "tests"
 version = "0.1.0"
 dependencies = [
+ "app",
  "ext",
  "futures",
+ "model",
+ "ops",
  "platform",
  "runtime",
  "tempfile",
