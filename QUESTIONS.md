@@ -306,3 +306,57 @@ Once answered, an entry keeps its number and gains a `Decided (date):` line.
     Assumed: both are toggles on the preview, kept for the session, not
     written to `rick.toml`; CSV grids, Markdown and HTML rendering and the
     pretty-print toggle are not in this issue.
+
+37. (issue 6) The issue asks for status, branch and ahead/behind "via gix"
+    and for actions that gix does not implement (stash, push with
+    credentials, pull with merge, blame).
+    Assumed: the decorator and the info panel read through gix; the nine
+    actions run the `git` command line as jobs through `ext::blocking`,
+    with `GIT_TERMINAL_PROMPT=0` so a missing credential fails instead of
+    hanging. Show log and Blame run synchronously and open their text
+    through `UiHost::show`, a method added for them (a read-only text
+    window; the spec's `UiHost` had notify, confirm and prompt only).
+
+38. (issue 6) The spec's `Decorator` has no way to say what stales its
+    cache or to be told when it did, yet the issue asks for a cache
+    "invalidated by watch on .git".
+    Assumed: `Decorator` gains `invalidates_on(&Location) -> Vec<Location>`
+    (locations the kernel watches for the pane; `.git` of the work tree
+    here) and `invalidate(&Location)`. The app calls `invalidate` and
+    decorates the whole listing again, debounced by 150 ms, when a watched
+    location or the listed directory changes, and on an explicit refresh.
+    Navigating within the same work tree keeps the cache.
+
+39. (issue 6) The spec says every long operation is a `Job`, and the
+    decorator's status read is one, but the listing jobs are deliberately
+    kept out of the job table.
+    Assumed: the `DecorateCtx` runner is a separate `JobRunner` without an
+    event sink, so status reads do not flash in the operations area; they
+    are cancelled with the pane's listing through the context's token.
+    The Git actions themselves run on the app's runner and are listed.
+
+40. (issue 6) `Decoration` has one badge and one tint, but several
+    decorators may decorate the same entry.
+    Assumed: `Model::decorate` merges: a later decoration replaces the
+    badge, the tint and the cells of the columns it names and keeps the
+    other cells; a decoration that is still `Pending` only adds what was
+    missing, so badges do not blink while a decorator looks again. Which
+    badge wins between two decorators is the later one's; the spec would
+    need a priority to do better.
+
+41. (issue 6) The context menu's extension groups show only `Enabled`
+    actions, and the issue says the group is "available only when
+    ActionCtx.location is inside a work tree".
+    Assumed: every Git action is `Hidden` outside a work tree and `Enabled`
+    inside; Discard changes and Blame are `Disabled` with a reason inside
+    when the selection does not fit (nothing selected; not exactly one
+    file), so they are absent from the context menu but explained in the
+    palette.
+
+42. (issue 6) The local provider's watch is not recursive, so a watch on
+    `.git` sees the index, HEAD, ORIG_HEAD and packed-refs change but not
+    a loose ref under `.git/refs/`.
+    Assumed: `.git` alone is watched, which covers commits, stashes,
+    checkouts and staging done outside Rick; a fetch or push from outside
+    that only writes a loose remote ref is picked up on the next change
+    or refresh. Rick's own Git actions drop the cache themselves.
