@@ -2,8 +2,11 @@
 //! crate, EXIF orientation applied, downscaled to the request.
 //!
 //! `open` reads the file and only its header: dimensions, format and EXIF
-//! come back at once, so the inspector can show them while the pixels are
-//! still being decoded. `render` decodes off the UI thread (the caller runs
+//! come back at once, so the pane can show them while the pixels are still
+//! being decoded. The File info section carries the basics and the camera,
+//! date taken and exposure when present; an EXIF section lists every tag
+//! `kamadak-exif` reads (IPTC and XMP wait for a reader). `render` decodes
+//! off the UI thread (the caller runs
 //! it in a blocking task), picks the smallest JPEG DCT scale that still
 //! covers the request, applies the orientation and downscales to fit, never
 //! upscaling. GIF frames are pages.
@@ -14,8 +17,9 @@ use std::io::Cursor;
 use std::sync::Arc;
 
 use ext::{
-    API_VERSION, Capabilities, Extension, Frame, Manifest, PreviewDoc, Previewer, Provider,
-    Registry, RenderRequest, TextLayer, Transport, Version, async_trait,
+    API_VERSION, Capabilities, ControlId, ControlValue, Extension, Frame, Icon, InfoSection,
+    Manifest, PreviewControl, PreviewDoc, Previewer, Provider, Registry, RenderRequest, TextLayer,
+    Transport, Version, async_trait,
 };
 use image::{AnimationDecoder as _, DynamicImage, ImageFormat, RgbaImage};
 use types::{CancelToken, Entry, Error, ExtId, Location};
@@ -122,8 +126,10 @@ pub struct Header {
     pub stored: (u32, u32),
     /// The EXIF orientation, 1 when absent.
     pub orientation: Orientation,
-    /// EXIF rows worth showing.
+    /// The photo basics for File info: camera, date taken, exposure.
     pub exif: Vec<(String, String)>,
+    /// Every EXIF tag, for the EXIF section; empty without an EXIF block.
+    pub exif_all: Vec<(String, String)>,
 }
 
 impl Header {
@@ -141,12 +147,13 @@ impl Header {
         let stored = image::ImageReader::with_format(Cursor::new(bytes), format)
             .into_dimensions()
             .map_err(|e| Error::Io(std::io::Error::new(std::io::ErrorKind::InvalidData, e)))?;
-        let (orientation, exif) = read_exif(bytes);
+        let (orientation, exif, exif_all) = read_exif(bytes);
         Ok(Self {
             format,
             stored,
             orientation,
             exif,
+            exif_all,
         })
     }
 
@@ -161,10 +168,15 @@ impl Header {
     }
 }
 
-/// The orientation and the display rows of the EXIF block, if any.
-fn read_exif(bytes: &[u8]) -> (Orientation, Vec<(String, String)>) {
+/// A value longer than this is cut with an ellipsis in the EXIF section.
+const MAX_VALUE: usize = 200;
+
+/// The orientation, the File info photo rows and every tag of the EXIF
+/// block, if any.
+#[allow(clippy::type_complexity)]
+fn read_exif(bytes: &[u8]) -> (Orientation, Vec<(String, String)>, Vec<(String, String)>) {
     let Ok(exif) = exif::Reader::new().read_from_container(&mut Cursor::new(bytes)) else {
-        return (Orientation(1), Vec::new());
+        return (Orientation(1), Vec::new(), Vec::new());
     };
     let orientation = exif
         .get_field(exif::Tag::Orientation, exif::In::PRIMARY)
@@ -183,11 +195,38 @@ fn read_exif(bytes: &[u8]) -> (Orientation, Vec<(String, String)>) {
     .into_iter()
     .filter_map(|(label, tag)| {
         let field = exif.get_field(tag, exif::In::PRIMARY)?;
-        let value = field.display_value().with_unit(&exif).to_string();
-        (!value.trim().is_empty()).then(|| (label.to_owned(), value.trim().to_owned()))
+        let value = shown_value(field, &exif);
+        (!value.is_empty()).then(|| (label.to_owned(), value))
     })
     .collect();
-    (orientation, rows)
+    let all = exif
+        .fields()
+        .map(|field| {
+            let name = if field.ifd_num == exif::In::PRIMARY {
+                field.tag.to_string()
+            } else {
+                format!("{} ({})", field.tag, field.ifd_num)
+            };
+            let mut value = shown_value(field, &exif);
+            if value.chars().count() > MAX_VALUE {
+                value = value.chars().take(MAX_VALUE).collect::<String>() + "…";
+            }
+            (name, value)
+        })
+        .collect();
+    (orientation, rows, all)
+}
+
+/// A field's value as text: with its unit, trimmed, and without the quotes
+/// `kamadak-exif` puts around ASCII strings.
+fn shown_value(field: &exif::Field, exif: &exif::Exif) -> String {
+    let text = field.display_value().with_unit(exif).to_string();
+    let text = text.trim();
+    let unquoted = text
+        .strip_prefix('"')
+        .and_then(|t| t.strip_suffix('"'))
+        .unwrap_or(text);
+    unquoted.trim().to_owned()
 }
 
 /// An opened image.
@@ -477,18 +516,12 @@ impl PreviewDoc for ImageDoc {
         None
     }
 
-    fn info(&self) -> Vec<(String, String)> {
+    fn sections(&self) -> Vec<InfoSection> {
         let (w, h) = self.header.shown();
         let mut rows = vec![
-            (
-                "Format".to_owned(),
-                format!("{:?}", self.header.format).to_uppercase(),
-            ),
+            ("Format".to_owned(), self.format_name()),
             ("Dimensions".to_owned(), format!("{w} × {h}")),
-            (
-                "Size".to_owned(),
-                format!("{} KiB", self.bytes.len() / 1024),
-            ),
+            ("Size".to_owned(), format_size(self.bytes.len() as u64)),
         ];
         if self.header.orientation.0 != 1 {
             rows.push((
@@ -502,11 +535,66 @@ impl PreviewDoc for ImageDoc {
             rows.push(("Frames".to_owned(), frames.len().to_string()));
         }
         rows.extend(self.header.exif.iter().cloned());
-        rows
+        let mut sections = vec![InfoSection {
+            id: "file",
+            title: "File info",
+            icon: Icon::Info,
+            rows,
+        }];
+        if !self.header.exif_all.is_empty() {
+            sections.push(InfoSection {
+                id: "exif",
+                title: "EXIF",
+                icon: Icon::Camera,
+                rows: self.header.exif_all.clone(),
+            });
+        }
+        sections
+    }
+
+    fn status(&self) -> Vec<String> {
+        let (w, h) = self.header.shown();
+        vec![
+            format!("{w} × {h}"),
+            self.format_name(),
+            format_size(self.bytes.len() as u64),
+        ]
+    }
+
+    fn controls(&self) -> Vec<PreviewControl> {
+        Vec::new()
+    }
+
+    fn set_control(&mut self, _id: ControlId, _value: ControlValue) -> Result<(), Error> {
+        Err(Error::Unsupported("images have no controls of their own"))
     }
 
     fn transport(&mut self) -> Option<&mut dyn Transport> {
         None
+    }
+}
+
+impl ImageDoc {
+    /// The format's name in capitals: `JPEG`, `PNG`.
+    fn format_name(&self) -> String {
+        format!("{:?}", self.header.format).to_uppercase()
+    }
+}
+
+/// A byte count as `n B`, `n.n KiB` or `n.n MiB`.
+fn format_size(bytes: u64) -> String {
+    const KIB: f64 = 1024.0;
+    // Sizes shown to one decimal; the precision loss is immaterial.
+    #[allow(clippy::cast_precision_loss)]
+    let value = bytes as f64;
+    if bytes < 1024 {
+        format!("{bytes} B")
+    } else if value < KIB * KIB {
+        format!("{:.1} KiB", value / KIB)
+    } else if value < KIB * KIB * KIB {
+        format!("{:.1} MiB", value / (KIB * KIB))
+    } else {
+        format!("{:.2} GiB", value / (KIB * KIB * KIB))
     }
 }
 
@@ -702,9 +790,15 @@ mod tests {
         assert_eq!(doc.header().orientation, Orientation(6));
         assert_eq!(doc.header().shown(), (20, 40), "rotated 90°");
         assert!(
-            doc.info()
+            doc.sections()[0]
+                .rows
                 .iter()
                 .any(|(k, v)| k == "Orientation" && v == "6")
+        );
+        assert_eq!(
+            doc.sections()[1].id,
+            "exif",
+            "an EXIF block gives a section"
         );
         let Frame::Rgba {
             width,
@@ -833,11 +927,126 @@ mod tests {
         let doc = runtime::block_on(ImagePreviewer.open(&loc, provider, CancelToken::new()))
             .unwrap_or_else(|e| panic!("{e}"));
         assert!(
-            doc.info()
+            doc.sections()[0]
+                .rows
                 .iter()
                 .any(|(k, v)| k == "Dimensions" && v == "40 × 20"),
             "{:?}",
-            doc.info()
+            doc.sections()
         );
+    }
+
+    /// A JPEG whose EXIF block has a camera, a date and an exposure, as a
+    /// photo would.
+    fn photo_jpeg() -> Vec<u8> {
+        let rgb = DynamicImage::ImageRgba8(sample()).into_rgb8();
+        let mut out = Cursor::new(Vec::new());
+        image::codecs::jpeg::JpegEncoder::new_with_quality(&mut out, 90)
+            .write_image(
+                rgb.as_raw(),
+                rgb.width(),
+                rgb.height(),
+                image::ExtendedColorType::Rgb8,
+            )
+            .unwrap_or_else(|e| panic!("{e}"));
+        let jpeg = out.into_inner();
+        let mut with_exif = jpeg[..2].to_vec();
+        let payload = exif_payload();
+        let length = u16::try_from(payload.len() + 2).unwrap_or_else(|e| panic!("{e}"));
+        with_exif.extend_from_slice(&[0xFF, 0xE1]);
+        with_exif.extend_from_slice(&length.to_be_bytes());
+        with_exif.extend_from_slice(&payload);
+        with_exif.extend_from_slice(&jpeg[2..]);
+        with_exif
+    }
+
+    /// `Exif\0\0` + a little-endian TIFF with IFD0 (`Make`, `Model`, Exif
+    /// pointer) and an Exif IFD (`DateTimeOriginal`, `ExposureTime`,
+    /// `FNumber`).
+    fn exif_payload() -> Vec<u8> {
+        let len = |bytes: &[u8]| u32::try_from(bytes.len()).unwrap_or_else(|e| panic!("{e}"));
+        let mut tiff = vec![b'I', b'I', 42, 0, 8, 0, 0, 0];
+        // IFD0 at 8: 3 entries of 12 bytes + the next pointer = 42 → ends at 50.
+        let make = b"Rick Cameras\0";
+        let model = b"RC-1\0";
+        let date = b"2026:11:06 12:34:56\0";
+        let make_at: u32 = 50;
+        let model_at = make_at + len(make);
+        let exif_ifd_at = model_at + len(model);
+        // Exif IFD: 3 entries + the next pointer = 42.
+        let date_at = exif_ifd_at + 42;
+        let exposure_at = date_at + len(date);
+        let fnumber_at = exposure_at + 8;
+        let entry = |tiff: &mut Vec<u8>, tag: u16, kind: u16, count: u32, value: [u8; 4]| {
+            tiff.extend_from_slice(&tag.to_le_bytes());
+            tiff.extend_from_slice(&kind.to_le_bytes());
+            tiff.extend_from_slice(&count.to_le_bytes());
+            tiff.extend_from_slice(&value);
+        };
+        tiff.extend_from_slice(&3u16.to_le_bytes());
+        entry(&mut tiff, 0x010F, 2, len(make), make_at.to_le_bytes());
+        entry(&mut tiff, 0x0110, 2, len(model), model_at.to_le_bytes());
+        entry(&mut tiff, 0x8769, 4, 1, exif_ifd_at.to_le_bytes());
+        tiff.extend_from_slice(&0u32.to_le_bytes());
+        assert_eq!(tiff.len(), 50);
+        tiff.extend_from_slice(make);
+        tiff.extend_from_slice(model);
+        assert_eq!(len(&tiff), exif_ifd_at);
+        tiff.extend_from_slice(&3u16.to_le_bytes());
+        entry(&mut tiff, 0x9003, 2, len(date), date_at.to_le_bytes());
+        entry(&mut tiff, 0x829A, 5, 1, exposure_at.to_le_bytes());
+        entry(&mut tiff, 0x829D, 5, 1, fnumber_at.to_le_bytes());
+        tiff.extend_from_slice(&0u32.to_le_bytes());
+        tiff.extend_from_slice(date);
+        tiff.extend_from_slice(&1u32.to_le_bytes());
+        tiff.extend_from_slice(&250u32.to_le_bytes());
+        tiff.extend_from_slice(&28u32.to_le_bytes());
+        tiff.extend_from_slice(&10u32.to_le_bytes());
+        let mut payload = b"Exif\0\0".to_vec();
+        payload.extend_from_slice(&tiff);
+        payload
+    }
+
+    #[test]
+    fn a_photo_has_file_info_with_the_camera_and_an_exif_section_with_every_tag() {
+        let doc = ImageDoc::new(photo_jpeg()).unwrap_or_else(|e| panic!("{e}"));
+        let sections = doc.sections();
+        assert_eq!(sections.len(), 2, "{sections:?}");
+        let file = &sections[0];
+        assert_eq!(
+            (file.id, file.title, file.icon),
+            ("file", "File info", Icon::Info)
+        );
+        let row = |rows: &[(String, String)], key: &str| {
+            rows.iter()
+                .find(|(k, _)| k == key)
+                .map_or_else(|| panic!("no row {key}: {rows:?}"), |(_, v)| v.clone())
+        };
+        assert_eq!(row(&file.rows, "Format"), "JPEG");
+        assert_eq!(row(&file.rows, "Dimensions"), "40 × 20");
+        assert_eq!(row(&file.rows, "Camera"), "Rick Cameras");
+        assert_eq!(row(&file.rows, "Model"), "RC-1");
+        assert_eq!(row(&file.rows, "Taken"), "2026-11-06 12:34:56");
+        assert_eq!(row(&file.rows, "Exposure"), "1/250 s");
+        assert_eq!(row(&file.rows, "Aperture"), "f/2.8");
+        let exif = &sections[1];
+        assert_eq!(
+            (exif.id, exif.title, exif.icon),
+            ("exif", "EXIF", Icon::Camera)
+        );
+        assert_eq!(exif.rows.len(), 5, "every tag: {:?}", exif.rows);
+        assert_eq!(row(&exif.rows, "Make"), "Rick Cameras");
+        assert_eq!(row(&exif.rows, "DateTimeOriginal"), "2026-11-06 12:34:56");
+        assert_eq!(row(&exif.rows, "FNumber"), "f/2.8");
+        assert_eq!(doc.status()[0], "40 × 20");
+        assert_eq!(doc.status()[1], "JPEG");
+        assert!(doc.status()[2].ends_with("KiB") || doc.status()[2].ends_with('B'));
+        assert_eq!(doc.controls().len(), 0);
+
+        // No EXIF block: one section only.
+        let plain =
+            ImageDoc::new(encode(&sample(), ImageFormat::Png)).unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(plain.sections().len(), 1);
+        assert!(!plain.sections()[0].rows.iter().any(|(k, _)| k == "Camera"));
     }
 }

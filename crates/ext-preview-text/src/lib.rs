@@ -12,8 +12,9 @@
 use std::sync::Arc;
 
 use ext::{
-    API_VERSION, Capabilities, Extension, Frame, Manifest, PreviewDoc, Previewer, Provider,
-    Registry, RenderRequest, TextBlock, TextLayer, Transport, Version, async_trait,
+    API_VERSION, Capabilities, ControlId, ControlValue, Extension, Frame, Icon, InfoSection,
+    Manifest, PreviewControl, PreviewDoc, Previewer, Provider, Registry, RenderRequest, TextBlock,
+    TextLayer, Transport, Version, async_trait,
 };
 use types::{CancelToken, Entry, Error, ExtId, Location};
 
@@ -142,12 +143,19 @@ fn has_utf16_bom(bytes: &[u8]) -> bool {
 /// Returns the text and the encoding's name.
 #[must_use]
 pub fn decode(bytes: &[u8], truncated: bool) -> (String, &'static str) {
+    let (text, encoding, _) = decode_with_bom(bytes, truncated);
+    (text, encoding)
+}
+
+/// [`decode`], also saying whether a byte order mark led the bytes.
+#[must_use]
+pub fn decode_with_bom(bytes: &[u8], truncated: bool) -> (String, &'static str, bool) {
     if let Some((encoding, bom_len)) = encoding_rs::Encoding::for_bom(bytes) {
         let (text, _, _) = encoding.decode(&bytes[bom_len..]);
-        return (text.into_owned(), encoding.name());
+        return (text.into_owned(), encoding.name(), true);
     }
     match std::str::from_utf8(bytes) {
-        Ok(text) => (text.to_owned(), "UTF-8"),
+        Ok(text) => (text.to_owned(), "UTF-8", false),
         Err(error)
             if truncated
                 && bytes.len() - error.valid_up_to() <= 3
@@ -155,12 +163,129 @@ pub fn decode(bytes: &[u8], truncated: bool) -> (String, &'static str) {
         {
             // A multi-byte sequence cut by the window.
             let (text, _) = bytes.split_at(error.valid_up_to());
-            (String::from_utf8_lossy(text).into_owned(), "UTF-8")
+            (String::from_utf8_lossy(text).into_owned(), "UTF-8", false)
         }
         Err(_) => {
             let (text, _, _) = encoding_rs::WINDOWS_1252.decode(bytes);
-            (text.into_owned(), "windows-1252")
+            (text.into_owned(), "windows-1252", false)
         }
+    }
+}
+
+/// The line ending convention of `text`: `LF`, `CRLF`, `CR`, `Mixed`, or
+/// `None` for a single line.
+#[must_use]
+pub fn line_ending(text: &str) -> &'static str {
+    let crlf = text.matches("\r\n").count();
+    let lf = text.matches('\n').count() - crlf;
+    let cr = text.matches('\r').count() - crlf;
+    match (crlf > 0, lf > 0, cr > 0) {
+        (false, false, false) => "None",
+        (true, false, false) => "CRLF",
+        (false, true, false) => "LF",
+        (false, false, true) => "CR",
+        _ => "Mixed",
+    }
+}
+
+/// What the text previewers know about a file, for the pane's File info
+/// section and status bar: shared by the text and code previewers.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FileFacts {
+    /// The encoding's name.
+    pub encoding: &'static str,
+    /// A byte order mark led the file.
+    pub bom: bool,
+    /// The line ending convention.
+    pub line_ending: &'static str,
+    /// Lines in the shown text.
+    pub lines: usize,
+    /// Bytes read into the window.
+    pub bytes_read: usize,
+    /// The file's size, when the provider said.
+    pub size: Option<u64>,
+    /// The window cut the file short.
+    pub truncated: bool,
+}
+
+impl FileFacts {
+    /// The facts of decoded `text` read from `bytes_read` bytes.
+    #[must_use]
+    pub fn new(
+        text: &str,
+        encoding: &'static str,
+        bom: bool,
+        bytes_read: usize,
+        size: Option<u64>,
+        truncated: bool,
+    ) -> Self {
+        Self {
+            encoding,
+            bom,
+            line_ending: line_ending(text),
+            lines: text.lines().count(),
+            bytes_read,
+            size,
+            truncated,
+        }
+    }
+
+    /// The File info rows: size, encoding, line ending, BOM, and the window
+    /// when the file was cut.
+    #[must_use]
+    pub fn rows(&self) -> Vec<(String, String)> {
+        let size = match self.size {
+            Some(size) => format_size(size),
+            None => format_size(self.bytes_read as u64),
+        };
+        let mut rows = vec![
+            ("Size".to_owned(), size),
+            ("Encoding".to_owned(), self.encoding.to_owned()),
+            ("Line ending".to_owned(), self.line_ending.to_owned()),
+            (
+                "BOM".to_owned(),
+                if self.bom { "Yes" } else { "No" }.to_owned(),
+            ),
+            ("Lines".to_owned(), self.lines.to_string()),
+        ];
+        if self.truncated {
+            rows.push((
+                "Shown".to_owned(),
+                format!("first {} KiB", self.bytes_read / 1024),
+            ));
+        }
+        rows
+    }
+
+    /// The status bar facts after the language: encoding and line count.
+    #[must_use]
+    pub fn status(&self) -> Vec<String> {
+        vec![
+            self.encoding.to_owned(),
+            format!(
+                "{}{} lines",
+                self.lines,
+                if self.truncated { "+" } else { "" }
+            ),
+        ]
+    }
+}
+
+/// A byte count as `n B`, `n.n KiB` or `n.n MiB`.
+#[must_use]
+pub fn format_size(bytes: u64) -> String {
+    const KIB: f64 = 1024.0;
+    // Sizes shown to one decimal; the precision loss is immaterial.
+    #[allow(clippy::cast_precision_loss)]
+    let value = bytes as f64;
+    if bytes < 1024 {
+        format!("{bytes} B")
+    } else if value < KIB * KIB {
+        format!("{:.1} KiB", value / KIB)
+    } else if value < KIB * KIB * KIB {
+        format!("{:.1} MiB", value / (KIB * KIB))
+    } else {
+        format!("{:.2} GiB", value / (KIB * KIB * KIB))
     }
 }
 
@@ -169,28 +294,22 @@ pub fn decode(bytes: &[u8], truncated: bool) -> (String, &'static str) {
 pub struct TextDoc {
     text: String,
     layer: TextLayer,
-    encoding: &'static str,
-    bytes_read: usize,
-    truncated: bool,
-    lines: usize,
+    facts: FileFacts,
 }
 
 impl TextDoc {
     /// Builds the document from the bytes read, noting whether the window
-    /// cut the file short.
+    /// cut the file short; `size` is the file's size when known.
     #[must_use]
-    pub fn new(bytes: &[u8], truncated: bool) -> Self {
-        let (text, encoding) = decode(bytes, truncated);
-        let lines = text.lines().count();
+    pub fn new(bytes: &[u8], truncated: bool, size: Option<u64>) -> Self {
+        let (text, encoding, bom) = decode_with_bom(bytes, truncated);
+        let facts = FileFacts::new(&text, encoding, bom, bytes.len(), size, truncated);
         Self {
             layer: TextLayer {
                 pages: vec![text.clone()],
             },
             text,
-            encoding,
-            bytes_read: bytes.len(),
-            truncated,
-            lines,
+            facts,
         }
     }
 
@@ -198,6 +317,12 @@ impl TextDoc {
     #[must_use]
     pub fn text(&self) -> &str {
         &self.text
+    }
+
+    /// What is known about the file.
+    #[must_use]
+    pub fn facts(&self) -> &FileFacts {
+        &self.facts
     }
 }
 
@@ -221,18 +346,27 @@ impl PreviewDoc for TextDoc {
         Some(&self.layer)
     }
 
-    fn info(&self) -> Vec<(String, String)> {
-        let mut rows = vec![
-            ("Encoding".to_owned(), self.encoding.to_owned()),
-            ("Lines".to_owned(), self.lines.to_string()),
-        ];
-        if self.truncated {
-            rows.push((
-                "Shown".to_owned(),
-                format!("first {} KiB", self.bytes_read / 1024),
-            ));
-        }
-        rows
+    fn sections(&self) -> Vec<InfoSection> {
+        vec![InfoSection {
+            id: "file",
+            title: "File info",
+            icon: Icon::Info,
+            rows: self.facts.rows(),
+        }]
+    }
+
+    fn status(&self) -> Vec<String> {
+        let mut status = vec!["Plain text".to_owned()];
+        status.extend(self.facts.status());
+        status
+    }
+
+    fn controls(&self) -> Vec<PreviewControl> {
+        Vec::new()
+    }
+
+    fn set_control(&mut self, _id: ControlId, _value: ControlValue) -> Result<(), Error> {
+        Err(Error::Unsupported("plain text has no controls of its own"))
     }
 
     fn transport(&mut self) -> Option<&mut dyn Transport> {
@@ -268,10 +402,11 @@ impl Previewer for TextPreviewer {
         provider: Arc<dyn Provider>,
         cancel: CancelToken,
     ) -> Result<Box<dyn PreviewDoc>, Error> {
+        let size = provider.stat(loc).await.ok().and_then(|e| e.size);
         let bytes = ext::read_bytes(&*provider, loc, Some(WINDOW + 1), &cancel).await?;
         let truncated = bytes.len() > WINDOW;
         let shown = &bytes[..bytes.len().min(WINDOW)];
-        Ok(Box::new(TextDoc::new(shown, truncated)))
+        Ok(Box::new(TextDoc::new(shown, truncated, size)))
     }
 }
 
@@ -338,7 +473,7 @@ mod tests {
 
     #[test]
     fn the_doc_renders_text_and_reports_truncation() {
-        let mut doc = TextDoc::new(b"one\ntwo\n", true);
+        let mut doc = TextDoc::new(b"one\ntwo\n", true, None);
         assert_eq!(doc.pages(), None);
         let frame = doc
             .render(
@@ -355,7 +490,10 @@ mod tests {
             matches!(frame, Frame::Text(TextBlock { text, language: None, spans }) if text == "one\ntwo\n" && spans.is_empty())
         );
         assert_eq!(doc.text_layer().map(|l| l.pages.len()), Some(1));
-        let info = doc.info();
+        let sections = doc.sections();
+        assert_eq!(sections.len(), 1);
+        assert_eq!((sections[0].id, sections[0].title), ("file", "File info"));
+        let info = &sections[0].rows;
         assert!(info.iter().any(|(k, v)| k == "Lines" && v == "2"));
         assert!(info.iter().any(|(k, _)| k == "Shown"));
         assert!(
@@ -384,12 +522,46 @@ mod tests {
         let loc = Location::new(vfs_local::PROVIDER_ID, platform::paths::from_path(&big));
         let doc = runtime::block_on(TextPreviewer.open(&loc, provider, CancelToken::new()))
             .unwrap_or_else(|e| panic!("{e}"));
+        let rows = doc.sections().remove(0).rows;
+        assert!(rows.iter().any(|(k, _)| k == "Shown"), "{rows:?}");
+        let whole_file = format_size(body.len() as u64);
         assert!(
-            doc.info().iter().any(|(k, _)| k == "Shown"),
-            "{:?}",
-            doc.info()
+            rows.iter().any(|(k, v)| k == "Size" && *v == whole_file),
+            "the size is the file's ({whole_file}), not the window's: {rows:?}"
         );
         let text_len = doc.text_layer().map_or(0, |l| l.pages[0].len());
         assert!(text_len <= WINDOW && text_len > WINDOW - 64, "{text_len}");
+        assert!(doc.status()[2].ends_with("+ lines"), "{:?}", doc.status());
+    }
+
+    #[test]
+    fn sections_status_and_controls_describe_the_file() {
+        let mut doc = TextDoc::new(b"\xEF\xBB\xBFone\r\ntwo\r\n", false, Some(13));
+        let section = doc.sections().remove(0);
+        assert_eq!(section.icon, Icon::Info);
+        let row = |key: &str| {
+            section.rows.iter().find(|(k, _)| k == key).map_or_else(
+                || panic!("no row {key}: {:?}", section.rows),
+                |(_, v)| v.clone(),
+            )
+        };
+        assert_eq!(row("Size"), "13 B");
+        assert_eq!(row("Encoding"), "UTF-8");
+        assert_eq!(row("Line ending"), "CRLF");
+        assert_eq!(row("BOM"), "Yes");
+        assert_eq!(row("Lines"), "2");
+        assert!(!section.rows.iter().any(|(k, _)| k == "Shown"));
+        assert_eq!(doc.status(), ["Plain text", "UTF-8", "2 lines"]);
+        assert_eq!(doc.controls().len(), 0);
+        assert!(
+            doc.set_control(ControlId("x"), ControlValue::Pressed)
+                .is_err()
+        );
+        assert_eq!(line_ending("a\nb\r\nc"), "Mixed");
+        assert_eq!(line_ending("a\rb"), "CR");
+        assert_eq!(line_ending("one line"), "None");
+        assert_eq!(format_size(512), "512 B");
+        assert_eq!(format_size(1536), "1.5 KiB");
+        assert_eq!(format_size(3 * 1024 * 1024), "3.0 MiB");
     }
 }
