@@ -490,7 +490,7 @@ These govern how the crates fit together. They are the decisions an implementer 
 
 ### Core types and extension traits
 
-First cut of the contract between the kernel and the extensions. Names and shapes are binding; signatures may gain parameters as the implementation learns, but only through a spec change. Everything here is `Send + Sync`; async methods use `async fn` in traits on Rust 2024, with `BoxStream` from `futures` for streamed results.
+First cut of the contract between the kernel and the extensions. Names and shapes are binding; signatures may gain parameters as the implementation learns, but only through a spec change. Everything here is `Send + Sync`; async methods are written with the `async_trait` attribute so the traits stay usable as `dyn` objects (`Arc<dyn Provider>`), to be replaced by native `async fn` once `dyn`-compatible async traits are stable; streamed results use `BoxStream` from `futures`.
 
 **Value types** (crate `types`, no I/O):
 

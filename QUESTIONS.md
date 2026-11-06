@@ -61,6 +61,8 @@ Once answered, an entry keeps its number and gains a `Decided (date):` line.
    Assumed: the five traits use the `async_trait` attribute (boxed futures)
    so they work as `dyn` objects; to be replaced by native `async fn` when
    `dyn` dispatch for it stabilises.
+   Decided (2026-11-06): as assumed; the spec's extension-traits preamble
+   now says so.
 
 7. (issue 2) "Package layout" lists `ext` after `ops`, but the Provider
    trait lives in `ext` and `vfs` and `vfs-local` implement it, so they must
