@@ -158,13 +158,31 @@ pub trait Chrome: Send + Sync {
     fn window_chrome(&self) -> WindowChrome;
 }
 
+/// Starting a drag the rest of the desktop can receive: the half of
+/// drag-and-drop the windowing backend does not do for Rick. Receiving a
+/// drop is the backend's (`winit` hands egui the hovered and dropped files
+/// on every platform); starting one is this trait's.
+pub trait DragSource: Send + Sync {
+    /// Starts a platform drag carrying `paths` as `file://` URIs, so another
+    /// application or another Rick process can take them when the cursor
+    /// leaves the window. Returns once the drag has been handed to the
+    /// platform; the drop itself is the receiver's business.
+    ///
+    /// # Errors
+    ///
+    /// `Error::Unsupported`, with the reason, where the platform gives Rick no
+    /// way to start one from the window it has (see QUESTIONS.md); the UI
+    /// then keeps the drag inside the window.
+    fn start_drag(&self, paths: &[PathBuf]) -> Result<(), Error>;
+}
+
 /// All platform services behind one object.
 pub trait Platform:
-    Trash + OpenWith + Properties + ConfigDir + NativeDialogs + Clipboard + Chrome
+    Trash + OpenWith + Properties + ConfigDir + NativeDialogs + Clipboard + Chrome + DragSource
 {
 }
 
-impl<T: Trash + OpenWith + Properties + ConfigDir + NativeDialogs + Clipboard + Chrome> Platform
-    for T
+impl<T: Trash + OpenWith + Properties + ConfigDir + NativeDialogs + Clipboard + Chrome + DragSource>
+    Platform for T
 {
 }

@@ -25,8 +25,8 @@ use windows::core::{GUID, Interface, PCWSTR, PWSTR, w};
 use crate::Native;
 use crate::fs::windows::{filetime, io_error, wide};
 use crate::traits::{
-    Chrome, ConfigDir, ControlsSide, OpenWith, Properties, PropertiesOutcome, Trash, TrashedItem,
-    WindowChrome,
+    Chrome, ConfigDir, ControlsSide, DragSource, OpenWith, Properties, PropertiesOutcome, Trash,
+    TrashedItem, WindowChrome,
 };
 
 /// `System.Recycle.DeletedFrom`: the folder a recycled item came from.
@@ -344,5 +344,19 @@ impl Chrome for Native {
             native_controls: false,
             native_controls_width: 0.0,
         }
+    }
+}
+
+impl DragSource for Native {
+    /// Not available yet: OLE's `DoDragDrop` must run on the thread that owns
+    /// the window and pumps its messages while the drag lasts, with an
+    /// `IDropSource` of Rick's own; `eframe` 0.36 owns that loop and gives
+    /// Rick no hook into it, exposing drop reception only (QUESTIONS.md).
+    fn start_drag(&self, paths: &[PathBuf]) -> Result<(), Error> {
+        let uris: Vec<String> = paths.iter().map(|p| crate::paths::file_uri(p)).collect();
+        tracing::debug!(?uris, "platform drag not started");
+        Err(Error::Unsupported(
+            "starting a drag needs OLE's DoDragDrop on the window's message loop, which eframe owns",
+        ))
     }
 }
