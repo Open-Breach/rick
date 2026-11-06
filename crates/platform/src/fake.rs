@@ -11,8 +11,8 @@ use tempfile::TempDir;
 use types::Error;
 
 use crate::traits::{
-    ConfigDir, DialogFilter, NativeDialogs, OpenWith, Properties, PropertiesOutcome, Trash,
-    TrashedItem,
+    Clipboard, ConfigDir, DialogFilter, NativeDialogs, OpenWith, Properties, PropertiesOutcome,
+    Trash, TrashedItem,
 };
 
 /// A platform that touches nothing outside its own temporary directory.
@@ -26,6 +26,7 @@ pub struct Fake {
     items: Mutex<Vec<TrashedItem>>,
     opened: Mutex<Vec<PathBuf>>,
     revealed: Mutex<Vec<PathBuf>>,
+    clipboard: Mutex<Option<String>>,
     answers: Mutex<Answers>,
 }
 
@@ -58,6 +59,7 @@ impl Fake {
             items: Mutex::new(Vec::new()),
             opened: Mutex::new(Vec::new()),
             revealed: Mutex::new(Vec::new()),
+            clipboard: Mutex::new(None),
             answers: Mutex::new(Answers::default()),
         })
     }
@@ -72,6 +74,12 @@ impl Fake {
     #[must_use]
     pub fn revealed(&self) -> Vec<PathBuf> {
         lock(&self.revealed).clone()
+    }
+
+    /// The text last put on the clipboard, if any.
+    #[must_use]
+    pub fn clipboard_text(&self) -> Option<String> {
+        lock(&self.clipboard).clone()
     }
 
     /// What `pick_folder` answers from now on.
@@ -153,6 +161,13 @@ impl Properties for Fake {
     }
 }
 
+impl Clipboard for Fake {
+    fn set_text(&self, text: &str) -> Result<(), Error> {
+        *lock(&self.clipboard) = Some(text.to_owned());
+        Ok(())
+    }
+}
+
 impl ConfigDir for Fake {
     fn config_dir(&self) -> PathBuf {
         self.dir.path().join("config")
@@ -226,6 +241,8 @@ mod tests {
         let picked = runtime::block_on(fake.pick_folder("Choose"));
         assert_eq!(picked, Some(PathBuf::from("/picked")));
         assert!(fake.config_dir().starts_with(fake.dir.path()));
+        fake.set_text("/a\n/b").unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(fake.clipboard_text().as_deref(), Some("/a\n/b"));
         assert!(matches!(
             fake.show(fake.dir.path()),
             Ok(PropertiesOutcome::Rows(rows)) if rows[0].0 == "Name"

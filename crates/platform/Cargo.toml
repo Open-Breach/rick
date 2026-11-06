@@ -9,6 +9,7 @@ repository.workspace = true
 [dependencies]
 types = { workspace = true }
 runtime = { workspace = true }
+arboard = { workspace = true }
 async-trait = { workspace = true }
 rayon = { workspace = true }
 rfd = { workspace = true, features = ["xdg-portal", "tokio"] }

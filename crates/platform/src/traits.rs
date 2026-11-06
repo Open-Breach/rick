@@ -113,7 +113,18 @@ pub trait NativeDialogs: Send + Sync {
     async fn save_file(&self, title: &str, suggested: &str) -> Option<PathBuf>;
 }
 
-/// All five platform services behind one object.
-pub trait Platform: Trash + OpenWith + Properties + ConfigDir + NativeDialogs {}
+/// The system clipboard, as far as Rick needs it: text.
+pub trait Clipboard: Send + Sync {
+    /// Replaces the clipboard's contents with `text`.
+    ///
+    /// # Errors
+    ///
+    /// `Error::Unsupported` when no clipboard is reachable (no display
+    /// server); otherwise the platform error.
+    fn set_text(&self, text: &str) -> Result<(), Error>;
+}
 
-impl<T: Trash + OpenWith + Properties + ConfigDir + NativeDialogs> Platform for T {}
+/// All platform services behind one object.
+pub trait Platform: Trash + OpenWith + Properties + ConfigDir + NativeDialogs + Clipboard {}
+
+impl<T: Trash + OpenWith + Properties + ConfigDir + NativeDialogs + Clipboard> Platform for T {}
