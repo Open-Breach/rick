@@ -1,5 +1,9 @@
 [licenses]
-allow = ["Apache-2.0", "BSL-1.0", "MIT", "BSD-2-Clause", "BSD-3-Clause", "CC0-1.0", "ISC", "Unicode-3.0", "Zlib"]
+# OFL-1.1 and Ubuntu-font-1.0 cover the fonts egui bundles (epaint_default_fonts).
+allow = [
+    "Apache-2.0", "BSL-1.0", "MIT", "BSD-2-Clause", "BSD-3-Clause", "CC0-1.0", "ISC",
+    "Unicode-3.0", "Zlib", "OFL-1.1", "Ubuntu-font-1.0",
+]
 
 [bans]
 multiple-versions = "warn"
@@ -10,16 +14,17 @@ multiple-versions = "warn"
 # edge and fails the check. `types` may be used by everyone and needs no
 # entry. Add an entry per crate as crates appear.
 deny = [
-    { crate = "runtime", wrappers = ["platform", "ext", "vfs", "vfs-local", "model", "ops", "app", "tests"] },
-    { crate = "platform", wrappers = ["vfs", "vfs-local", "ops", "app", "tests"] },
-    { crate = "ext", wrappers = ["vfs", "vfs-local", "model", "ops", "app", "tests"] },
-    { crate = "vfs", wrappers = ["vfs-local", "ops", "app", "tests"] },
-    { crate = "vfs-local", wrappers = ["ops", "app", "tests"] },
+    { crate = "runtime", wrappers = ["platform", "ext", "vfs", "vfs-local", "model", "ops", "app", "ui-egui", "rick", "tests"] },
+    { crate = "platform", wrappers = ["vfs", "vfs-local", "ops", "app", "ui-egui", "rick", "tests"] },
+    { crate = "ext", wrappers = ["vfs", "vfs-local", "model", "ops", "app", "ui-egui", "rick", "tests"] },
+    { crate = "vfs", wrappers = ["vfs-local", "ops", "app", "ui-egui", "rick", "tests"] },
+    { crate = "vfs-local", wrappers = ["ops", "app", "ui-egui", "rick", "tests"] },
     # `ops` may use `model` by the layer order but does not today; listing
     # it would only draw an unused-wrapper warning. Add it back when needed.
-    { crate = "model", wrappers = ["app", "tests"] },
-    { crate = "ops", wrappers = ["app", "tests"] },
-    { crate = "app", wrappers = ["tests"] },
+    { crate = "model", wrappers = ["app", "ui-egui", "rick", "tests"] },
+    { crate = "ops", wrappers = ["app", "rick", "tests"] },
+    { crate = "app", wrappers = ["ui-egui", "rick", "tests"] },
+    { crate = "ui-egui", wrappers = ["rick", "tests"] },
 ]
 
 [advisories]
@@ -27,8 +32,14 @@ deny = [
 # crates were merged into zbus 6 and declared unmaintained as standalone crates
 # (RUSTSEC-2026-0370..0372). Nothing to fix on our side until ashpd moves to
 # zbus 6; revisit when rfd/ashpd release against it.
+# `paste` is a proc macro egui_dock 0.21 uses at build time; `ttf-parser` is
+# read by winit's Wayland decorations (sctk-adwaita → ab_glyph). Both are
+# "unmaintained" notices, not vulnerabilities; revisit when egui_dock and
+# winit move on.
 ignore = [
     { id = "RUSTSEC-2026-0370", reason = "zvariant merged into zbus 6; transitive via rfd → ashpd" },
     { id = "RUSTSEC-2026-0371", reason = "zbus_names merged into zbus 6; transitive via rfd → ashpd" },
     { id = "RUSTSEC-2026-0372", reason = "zvariant_derive merged into zbus 6; transitive via rfd → ashpd" },
+    { id = "RUSTSEC-2024-0436", reason = "paste is a build-time proc macro; transitive via egui_dock" },
+    { id = "RUSTSEC-2026-0192", reason = "ttf-parser reads font tables; transitive via winit → sctk-adwaita → ab_glyph" },
 ]

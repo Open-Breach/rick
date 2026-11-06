@@ -174,3 +174,81 @@ Once answered, an entry keeps its number and gains a `Decided (date):` line.
     that exists fails that item's job with `AlreadyExists`, reported in the
     job table and as a notification. Copy path's "name only" variant and
     New folder's "move the selection into it" variant are not in 0.1.
+
+21. (issue 4) The spec has two shortcut tables that disagree: the first
+    ("Keyboard shortcuts" under Functions) binds Backspace to Parent
+    directory, Space to Toggle preview, Ctrl+N to New window and
+    Ctrl+Shift+F to Search subdirectories; the second ("Keyboard
+    shortcuts" under Architecture, "the source for defaults") binds
+    Backspace to Back, Space to Toggle selection, Mod+N to New file and
+    Mod+Shift+F to Toggle flatten subfolders.
+    Assumed: the second table is the source of defaults, as it says. Rows
+    of the first table that do not conflict are bound too: F11 Full screen,
+    Mod+Q Quit, Mod+B Toggle side panel, Mod+, Settings, Alt+Enter
+    Properties. New window and Search subdirectories are not bound.
+
+22. (issue 4) The GUI section says type-to-filter "replaces the classic
+    jump to first entry starting with the letter behaviour", while the
+    Selection table lists "Type-ahead: jump to the first entry starting
+    with the typed letters".
+    Assumed: type-to-filter. Typing while the list has the keyboard appends
+    to the tab's filter, shown in the bar at the foot of the list; Backspace
+    edits it, Escape clears it and Enter opens the first match.
+
+23. (issue 4) Several rows of the shortcut tables name operations outside
+    the 0.1 scope: Quick open, Select by pattern, Paste as link, Bulk
+    rename, Open with…, Open console, Tree and Icons views, icon size, the
+    side panel. The acceptance test wants every row to trigger its action.
+    Assumed: every row is bound and dispatches a named intent; the intents
+    of operations outside 0.1 show a notification saying so, so the binding
+    is live and visible and the implementation slots in later. The Viewer
+    table is not bound: the viewer is an explicit 0.1 non-goal.
+
+24. (issue 4) "60 fps on the CI runner's software renderer" names a
+    renderer the headless test harness does not have: `egui_kittest` runs
+    the UI without a GPU and only renders pixels with a wgpu adapter, which
+    the runners lack.
+    Assumed: the frame time measured is egui's whole frame on the CPU
+    (input, layout of the visible rows, tessellation), which is everything
+    the UI code influences; the GPU upload of a few thousand triangles is
+    not part of it. The test asserts the 95th percentile under 16.6 ms over
+    240 scrolling frames of the 200k fixture, in release, on every runner.
+
+25. (issue 4) The GUI section says context-menu entries "that do not apply
+    to the selection are hidden rather than greyed", while
+    `Availability::Disabled` carries a reason meant for a tooltip.
+    Assumed: the context menu hides both `Hidden` and `Disabled` entries,
+    as the GUI section says; the command palette shows `Disabled` entries
+    greyed with the reason as tooltip, which is what the variant is for.
+
+26. (issue 4) Rename, New file and New folder are specified with "inline
+    edit", and Delete permanently with a confirmation; actions ask through
+    `UiHost::prompt` and `UiHost::confirm`, which block, and an immediate
+    mode UI cannot block inside a frame.
+    Assumed: the egui host answers in two passes. An action that asks
+    without an answer queued gets `None` or `false` and its question is
+    recorded; the shell shows a modal dialogue and, when the user answers,
+    queues the answer and runs the action again. Inline editing in the list
+    can replace the dialogue later without touching the actions.
+
+27. (issue 4) `egui_dock` 0.21 builds against egui 0.36 while eframe,
+    `egui_extras` and `egui_kittest` are at 0.37.
+    Assumed: the whole egui stack is pinned to 0.36 until `egui_dock`
+    moves; the dock is the spec's choice and must share egui's types.
+
+28. (issue 4) The model's `Pane` keeps its tabs in a `Vec`, and the spec's
+    `Command` set has no way to reorder tabs within a pane, yet dragging a
+    tab along the strip and "Move tab left / right" do exactly that.
+    Assumed: tab order within a pane is display state the UI keeps in the
+    `egui_dock` tree; the model's order is only the initial placement. Drag
+    and drop between panes and into splits is translated into `MoveTab`,
+    `CloseTab`, `ActivateTab` and `FocusPane` commands after each frame.
+
+29. (issue 4) Several GUI items are specified but not in this issue's task
+    list or the 0.1 definition of done: the side panel with its sections,
+    the Preview tab, the type filter with per-type counts, session restore,
+    saved layouts, new windows and tab tear-out, column reorder and hide,
+    dual pane (F6), the Extensions screen.
+    Assumed: left for later issues. The inspector pane stands in for the
+    Preview tab with a placeholder, as the issue asks; tabs cannot be torn
+    out into windows yet.
