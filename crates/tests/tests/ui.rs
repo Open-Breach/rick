@@ -318,6 +318,48 @@ fn the_shell_shows_the_listing_and_navigates() {
     assert!(!harness.state().palette_open());
 }
 
+/// A click anywhere on a row selects it, the name included. The name is a
+/// label, and egui's text-selectable labels would otherwise take the click
+/// before the row saw it.
+#[test]
+fn clicking_a_name_in_details_view_selects_the_row() {
+    let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+    std::fs::write(dir.path().join("a.txt"), "a").unwrap_or_else(|e| panic!("{e}"));
+    std::fs::write(dir.path().join("b.txt"), "b").unwrap_or_else(|e| panic!("{e}"));
+    let _guard = guard(
+        "clicking_a_name_in_details_view_selects_the_row",
+        Duration::from_mins(5),
+    );
+    let mut harness = harness(dir.path());
+    let pane = harness.state().app().model().focused;
+    let selected = |harness: &Harness<'_, RickUi>| -> Vec<String> {
+        harness
+            .state()
+            .app()
+            .model()
+            .active_tab(pane)
+            .map(|(_, t)| {
+                t.listing
+                    .rows()
+                    .filter(|e| t.selection.contains(&e.id))
+                    .map(|e| e.name.clone())
+                    .collect()
+            })
+            .unwrap_or_default()
+    };
+    assert!(selected(&harness).is_empty());
+
+    harness.get_by_label("b.txt").click();
+    harness.step();
+    settle(&mut harness);
+    assert_eq!(selected(&harness), ["b.txt"]);
+
+    harness.get_by_label("a.txt").click();
+    harness.step();
+    settle(&mut harness);
+    assert_eq!(selected(&harness), ["a.txt"]);
+}
+
 /// The Decisions table asks for 60 fps while scrolling 200k entries; the
 /// frame here is egui's whole frame (input, layout, tessellation) on the
 /// CPU, which is all the UI code influences (QUESTIONS.md 24).
