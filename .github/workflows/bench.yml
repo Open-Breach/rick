@@ -21,9 +21,6 @@ jobs:
     env:
       # Measure only: a run over a target is recorded, not failed.
       RICK_BENCH_RECORD: "1"
-      TMP: ${{ runner.temp }}
-      TEMP: ${{ runner.temp }}
-      TMPDIR: ${{ runner.temp }}
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -77,6 +74,8 @@ jobs:
         run: cargo test -p tests --release --no-run
       - name: measure
         shell: bash
+        # The fixtures on the runner's temp disk, as ci.yml puts them.
+        env: { TMP: "${{ runner.temp }}", TEMP: "${{ runner.temp }}", TMPDIR: "${{ runner.temp }}" }
         run: |
           set -o pipefail
           for i in $(seq 1 "${{ inputs.runs }}"); do
