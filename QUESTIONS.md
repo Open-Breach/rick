@@ -69,6 +69,8 @@ Once answered, an entry keeps its number and gains a `Decided (date):` line.
    depend on `ext`.
    Assumed: the layer order is types → runtime → platform → ext → vfs →
    vfs-local → model → ops → app → ui-egui → rick; deny.toml encodes it.
+   Decided (2026-11-06): as assumed; the spec's Kernel list is now in
+   that order and says cargo-deny enforces it.
 
 8. (issue 2) The trait signatures name types the spec never defines:
    `ListOptions`, `WriteOptions`, `RemoveMode`, `LinkKind`, `CopyOptions`,

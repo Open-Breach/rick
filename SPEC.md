@@ -386,16 +386,16 @@ A packaged feature implements `Extension`: a manifest (id, version, settings sch
 
 One Cargo workspace, one crate per concern, grouped by layer. Kernel crates carry no feature code; everything a user would call a feature is an `ext-*` crate that registers through `ext`. Official extensions compile into the binary behind Cargo features, so a lean build is a matter of turning features off.
 
-**Kernel**
+**Kernel**, in dependency order: each crate may depend only on the crates above it, and cargo-deny enforces the order. `ext` sits below `vfs` because `vfs` and `vfs-local` implement the `Provider` trait it defines.
 
 - `types` — paths, entries, mime, errors, capability flags; no I/O, no async runtime and no dependency on any other Rick crate. It may use the small ecosystem crates it needs (`bitflags`, `thiserror`), nothing heavier.
 - `runtime` — job system, cancellation, progress, thread pools, event bus.
 - `platform` — per-OS code behind one trait set: trash, links and junctions, elevation, system properties dialogue, file associations, mounts.
+- `ext` — the five extension traits, the registry, manifests and the extension context.
 - `vfs` — the Provider trait and the mount table that routes a path to a provider.
 - `vfs-local` — the local filesystem provider: listing, statx, watching, copy and reflink.
 - `model` — the directory model: cached listings, sort, filter, group, selection, history.
 - `ops` — the file operations as jobs: copy, move, trash, delete, rename, link, undo stack, conflict policy.
-- `ext` — the five extension traits, the registry, manifests and the extension context.
 - `app` — the application state: windows, panes, tabs, layouts, session persistence, settings, the command palette.
 - `ui-egui` — all egui widgets and the dock layout; depends on `app`, never the other way round.
 - `rick` — the binary: feature flags, wiring, startup.
