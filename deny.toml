@@ -16,7 +16,7 @@ multiple-versions = "warn"
 deny = [
     { crate = "runtime", wrappers = ["platform", "ext", "vfs", "vfs-local", "model", "ops", "app", "ui-egui", "rick", "tests"] },
     { crate = "platform", wrappers = ["vfs", "vfs-local", "ops", "app", "ui-egui", "rick", "tests"] },
-    { crate = "ext", wrappers = ["vfs", "vfs-local", "model", "ops", "app", "ui-egui", "rick", "tests"] },
+    { crate = "ext", wrappers = ["vfs", "vfs-local", "model", "ops", "app", "ui-egui", "rick", "tests", "ext-preview-text", "ext-preview-code", "ext-preview-image", "ext-preview-pdf"] },
     { crate = "vfs", wrappers = ["vfs-local", "ops", "app", "ui-egui", "rick", "tests"] },
     { crate = "vfs-local", wrappers = ["ops", "app", "ui-egui", "rick", "tests"] },
     # `ops` may use `model` by the layer order but does not today; listing
@@ -25,6 +25,11 @@ deny = [
     { crate = "ops", wrappers = ["app", "rick", "tests"] },
     { crate = "app", wrappers = ["ui-egui", "rick", "tests"] },
     { crate = "ui-egui", wrappers = ["rick", "tests"] },
+    # Extensions see `ext` and `types` only; only the binary and the tests load them.
+    { crate = "ext-preview-text", wrappers = ["rick", "tests"] },
+    { crate = "ext-preview-code", wrappers = ["rick", "tests"] },
+    { crate = "ext-preview-image", wrappers = ["rick", "tests"] },
+    { crate = "ext-preview-pdf", wrappers = ["rick", "tests"] },
 ]
 
 [advisories]

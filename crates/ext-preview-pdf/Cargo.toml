@@ -1,0 +1,22 @@
+[package]
+name = "ext-preview-pdf"
+version = "0.1.0"
+description = "Rick preview extension for PDF: pdfium-render pages, page navigation and a text layer."
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+types = { workspace = true }
+ext = { workspace = true }
+pdfium-render = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+runtime = { workspace = true }
+vfs-local = { workspace = true }
+platform = { workspace = true }
+tempfile = { workspace = true }
+
+[lints]
+workspace = true
