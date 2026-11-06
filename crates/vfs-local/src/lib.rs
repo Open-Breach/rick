@@ -113,8 +113,14 @@ pub(crate) fn entry_from_raw(dir: &Path, dir_vpath: &VPath, raw: RawEntry) -> En
     }
 }
 
-/// The entry at `path`, named by the location path `vpath`.
-pub(crate) fn entry_at(path: &Path, vpath: &VPath) -> io::Result<Entry> {
+/// The entry at `path`, named by the location path `vpath`, without going
+/// through a provider: what the application uses to bring persisted paths
+/// (the Recent list) back as entries with current ids and times.
+///
+/// # Errors
+///
+/// The I/O error from examining the path.
+pub fn entry_at(path: &Path, vpath: &VPath) -> io::Result<Entry> {
     let raw = platform::fs::stat(path)?;
     let parent = path.parent().unwrap_or(path);
     let mut entry = entry_from_raw(parent, &VPath::new(), raw);

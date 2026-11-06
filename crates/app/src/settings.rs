@@ -64,10 +64,32 @@ pub fn saver(path: PathBuf) -> mpsc::UnboundedSender<Settings> {
 pub fn save(path: &Path, settings: &Settings) -> Result<(), Error> {
     let text = toml::to_string_pretty(settings)
         .map_err(|error| Error::Io(std::io::Error::other(error.to_string())))?;
-    if let Some(dir) = path.parent() {
-        std::fs::create_dir_all(dir).map_err(Error::from_io)?;
+    write_atomically(path, &text)
+}
+
+/// Writes `text` to `path` through a temporary file in the same directory
+/// and one rename, so a watcher that reloads the file never reads a
+/// half-written one. Creates the directory.
+///
+/// # Errors
+///
+/// The I/O error.
+pub fn write_atomically(path: &Path, text: &str) -> Result<(), Error> {
+    let dir = path.parent().unwrap_or_else(|| Path::new("."));
+    std::fs::create_dir_all(dir).map_err(Error::from_io)?;
+    let name = path
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "file".to_owned());
+    let temp = dir.join(format!(".{name}.{}.tmp", std::process::id()));
+    std::fs::write(&temp, text).map_err(Error::from_io)?;
+    match std::fs::rename(&temp, path) {
+        Ok(()) => Ok(()),
+        Err(error) => {
+            let _ = std::fs::remove_file(&temp);
+            Err(Error::from_io(error))
+        }
     }
-    std::fs::write(path, text).map_err(Error::from_io)
 }
 
 #[cfg(test)]
