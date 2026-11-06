@@ -30,10 +30,6 @@ fn trash_and_restore_round_trip_with_the_native_platform() {
         panic!("trash: {e}")
     });
     assert!(!file.exists(), "the file is gone from its folder");
-    assert_eq!(
-        item.original,
-        std::path::absolute(&file).unwrap_or_else(|e| panic!("{e}"))
-    );
     assert!(
         item.trashed.exists(),
         "the trash holds it at {}",
@@ -44,6 +40,12 @@ fn trash_and_restore_round_trip_with_the_native_platform() {
         .restore(&item)
         .unwrap_or_else(|e| panic!("restore: {e}"));
     assert_eq!(fs::read(&file).ok(), Some(b"keep me".to_vec()));
+    // The platform may report the original in long form where the test's
+    // temp path uses 8.3 short names; both must name the same file.
+    assert_eq!(
+        fs::canonicalize(&item.original).ok(),
+        fs::canonicalize(&file).ok()
+    );
     assert!(matches!(native.restore(&item), Err(Error::NotFound)));
 }
 
