@@ -1,0 +1,24 @@
+[package]
+name = "ext-git"
+version = "0.1.0"
+description = "Rick's Git extension: status badges, branch and ahead/behind as a Decorator through gix, the Git action group, and an info panel section."
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+types = { workspace = true }
+ext = { workspace = true }
+gix = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+runtime = { workspace = true }
+tokio = { workspace = true, features = ["sync"] }
+vfs-local = { workspace = true }
+platform = { workspace = true }
+tempfile = { workspace = true }
+
+[lints]
+workspace = true
