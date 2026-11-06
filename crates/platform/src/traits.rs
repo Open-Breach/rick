@@ -129,7 +129,42 @@ pub trait Clipboard: Send + Sync {
     fn set_text(&self, text: &str) -> Result<(), Error>;
 }
 
-/// All platform services behind one object.
-pub trait Platform: Trash + OpenWith + Properties + ConfigDir + NativeDialogs + Clipboard {}
+/// Which side of the title row the window controls sit on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ControlsSide {
+    /// Minimise, maximise and close on the left, as on macOS.
+    Left,
+    /// On the right, as on Windows and most Linux desktops.
+    Right,
+}
 
-impl<T: Trash + OpenWith + Properties + ConfigDir + NativeDialogs + Clipboard> Platform for T {}
+/// How the window's chrome is drawn when Rick draws its own title row.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct WindowChrome {
+    /// Where the window controls are.
+    pub controls: ControlsSide,
+    /// The system keeps drawing its own controls (the macOS traffic lights)
+    /// and Rick leaves room for them; otherwise Rick draws minimise,
+    /// maximise and close itself.
+    pub native_controls: bool,
+    /// Width in logical points to leave free for the native controls.
+    pub native_controls_width: f32,
+}
+
+/// Window chrome placement, per platform.
+pub trait Chrome: Send + Sync {
+    /// How this platform's windows are decorated when the title bar is
+    /// Rick's own.
+    fn window_chrome(&self) -> WindowChrome;
+}
+
+/// All platform services behind one object.
+pub trait Platform:
+    Trash + OpenWith + Properties + ConfigDir + NativeDialogs + Clipboard + Chrome
+{
+}
+
+impl<T: Trash + OpenWith + Properties + ConfigDir + NativeDialogs + Clipboard + Chrome> Platform
+    for T
+{
+}

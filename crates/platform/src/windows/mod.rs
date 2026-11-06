@@ -24,7 +24,10 @@ use windows::core::{GUID, Interface, PCWSTR, PWSTR, w};
 
 use crate::Native;
 use crate::fs::windows::{filetime, io_error, wide};
-use crate::traits::{ConfigDir, OpenWith, Properties, PropertiesOutcome, Trash, TrashedItem};
+use crate::traits::{
+    Chrome, ConfigDir, ControlsSide, OpenWith, Properties, PropertiesOutcome, Trash, TrashedItem,
+    WindowChrome,
+};
 
 /// `System.Recycle.DeletedFrom`: the folder a recycled item came from.
 const PKEY_RECYCLE_DELETED_FROM: PROPERTYKEY = PROPERTYKEY {
@@ -331,5 +334,15 @@ impl ConfigDir for Native {
         std::env::var_os("USERPROFILE")
             .filter(|v| !v.is_empty())
             .map_or_else(|| PathBuf::from("."), PathBuf::from)
+    }
+}
+
+impl Chrome for Native {
+    fn window_chrome(&self) -> WindowChrome {
+        WindowChrome {
+            controls: ControlsSide::Right,
+            native_controls: false,
+            native_controls_width: 0.0,
+        }
     }
 }

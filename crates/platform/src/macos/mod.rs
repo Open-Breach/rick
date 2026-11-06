@@ -11,7 +11,10 @@ use objc2_foundation::{NSFileManager, NSString, NSURL};
 use types::Error;
 
 use crate::Native;
-use crate::traits::{ConfigDir, OpenWith, Properties, PropertiesOutcome, Trash, TrashedItem};
+use crate::traits::{
+    Chrome, ConfigDir, ControlsSide, OpenWith, Properties, PropertiesOutcome, Trash, TrashedItem,
+    WindowChrome,
+};
 
 fn utf8(path: &Path) -> Result<&str, Error> {
     path.to_str()
@@ -128,5 +131,16 @@ impl ConfigDir for Native {
         std::env::var_os("HOME")
             .filter(|v| !v.is_empty())
             .map_or_else(|| PathBuf::from("."), PathBuf::from)
+    }
+}
+
+impl Chrome for Native {
+    fn window_chrome(&self) -> WindowChrome {
+        // The traffic lights stay where macOS puts them.
+        WindowChrome {
+            controls: ControlsSide::Left,
+            native_controls: true,
+            native_controls_width: 78.0,
+        }
     }
 }

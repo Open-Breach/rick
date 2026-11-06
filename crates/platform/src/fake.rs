@@ -11,8 +11,8 @@ use tempfile::TempDir;
 use types::Error;
 
 use crate::traits::{
-    Clipboard, ConfigDir, DialogFilter, NativeDialogs, OpenWith, Properties, PropertiesOutcome,
-    Trash, TrashedItem,
+    Chrome, Clipboard, ConfigDir, ControlsSide, DialogFilter, NativeDialogs, OpenWith, Properties,
+    PropertiesOutcome, Trash, TrashedItem, WindowChrome,
 };
 
 /// A platform that touches nothing outside its own temporary directory.
@@ -176,6 +176,16 @@ impl ConfigDir for Fake {
 
     fn home_dir(&self) -> PathBuf {
         self.dir.path().join("home")
+    }
+}
+
+impl Chrome for Fake {
+    fn window_chrome(&self) -> WindowChrome {
+        WindowChrome {
+            controls: ControlsSide::Right,
+            native_controls: false,
+            native_controls_width: 0.0,
+        }
     }
 }
 
