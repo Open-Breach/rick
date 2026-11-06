@@ -501,8 +501,14 @@ fn the_context_menu_shows_the_git_group_only_inside_the_repository() {
         0,
         "no Git group outside"
     );
+    // Escape closes the menu instead of reaching the shell's shortcut.
     harness.key_press(egui::Key::Escape);
     harness.step();
+    harness.step();
+    assert!(
+        harness.query_by_label_contains("Properties").is_none(),
+        "the menu closes on Escape"
+    );
 
     let pane = harness.state().app().model().focused;
     harness.state_mut().app_mut().handle(

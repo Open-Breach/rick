@@ -408,7 +408,8 @@ impl RickUi {
         if self.dialog.is_some() || self.shortcuts.rebinding.is_some() {
             return;
         }
-        if self.palette.open || ctx.egui_wants_keyboard_input() {
+        // An open menu owns the keyboard: Escape closes it, nothing else.
+        if self.palette.open || ctx.egui_wants_keyboard_input() || egui::Popup::is_any_open(ctx) {
             return;
         }
         let filter_text = self
