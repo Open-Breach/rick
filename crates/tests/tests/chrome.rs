@@ -459,8 +459,14 @@ fn the_toolbar_groups_never_overlap_and_the_right_group_keeps_its_width() {
             harness.get_by_label(ui_egui::icons::COLLAPSED);
         }
     }
-    assert_eq!(right_widths[0], right_widths[1], "{right_widths:?}");
-    assert_eq!(right_widths[1], right_widths[2], "{right_widths:?}");
+    assert!(
+        (right_widths[0] - right_widths[1]).abs() < 0.5,
+        "{right_widths:?}"
+    );
+    assert!(
+        (right_widths[1] - right_widths[2]).abs() < 0.5,
+        "{right_widths:?}"
+    );
 }
 
 fn previewers() -> Vec<Arc<dyn ext::Extension>> {

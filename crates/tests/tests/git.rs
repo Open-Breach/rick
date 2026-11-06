@@ -146,7 +146,7 @@ impl Driver {
 
     /// Waits until nothing has arrived for a while and nothing runs.
     fn settle(&mut self) {
-        let deadline = Instant::now() + Duration::from_secs(60);
+        let deadline = Instant::now() + Duration::from_mins(1);
         runtime::block_on(async {
             loop {
                 let quiet = tokio::time::timeout(
