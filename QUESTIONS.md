@@ -383,3 +383,31 @@ Once answered, an entry keeps its number and gains a `Decided (date):` line.
     checkouts and staging done outside Rick; a fetch or push from outside
     that only writes a loose remote ref is picked up on the next change
     or refresh. Rick's own Git actions drop the cache themselves.
+
+43. (side panel) The GUI section specifies a side panel with Home, Recent,
+    Network, Trash and Pinned, but the 0.1 definition of done does not list
+    it and names "pin to side panel" a non-goal.
+    Assumed: a first cut ships now: Home, Pinned and the operations area,
+    with Recent, Network and Trash as sections that say what they will hold
+    until the change feed, the network providers and the trash location
+    exist. Pinning is done from a button in the Pinned section's header for
+    the focused pane's folder, and unpinning from the entry; the context
+    menu action stays out.
+
+44. (side panel) The spec says the folded state and width persist across
+    sessions, and session restore is a later issue.
+    Assumed: visibility, side, width and the folded sections, and the pinned
+    locations, are settings in `rick.toml` (`[side_panel]` and `pinned`),
+    written like every other setting, so they survive a restart today and
+    can move into the session file when it exists.
+
+45. (side panel) The spec puts the operations area at the bottom of the
+    side panel; it does not say where it goes when the panel is hidden.
+    Assumed: at the bottom of the window, as before, so a running job is
+    never invisible.
+
+46. (side panel) The spec lets the panel "collapse to a narrow icon strip or
+    hide entirely".
+    Assumed: hide entirely (Mod+B, the Panel toggle in the top bar, the
+    Settings screen); the icon strip comes with the Recent and Network
+    sections, which would give it more than two icons.
