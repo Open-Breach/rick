@@ -8,7 +8,9 @@ lines look like
 
     BENCH listing-first linux 23456 23.456ms (target 50ms)
 
-and the first four fields are what is read: key, OS, microseconds.
+and the first four fields are what is read: key, OS, microseconds. A test
+that prints nothing else lands its line after the harness's `test name ...`
+prefix, so the marker is searched for anywhere in the line.
 """
 
 import glob
@@ -17,7 +19,7 @@ import statistics
 import sys
 from collections import defaultdict
 
-LINE = re.compile(r"^BENCH (\S+) (\S+) (\d+)")
+LINE = re.compile(r"\bBENCH (\S+) (\S+) (\d+)")
 
 
 def pretty(micros: float) -> str:
@@ -35,7 +37,7 @@ def main(paths: list[str]) -> int:
         for path in sorted(glob.glob(pattern)):
             with open(path, encoding="utf-8", errors="replace") as handle:
                 for line in handle:
-                    match = LINE.match(line.strip())
+                    match = LINE.search(line)
                     if match:
                         key, os_name, micros = match.groups()
                         runs[(key, os_name)].append(int(micros))

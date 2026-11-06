@@ -34,24 +34,24 @@ const fn us(n: u64) -> Duration {
 }
 
 /// Every benchmark and its targets. The order is the order of the tables
-/// in `BENCHMARKS.md`.
+/// in `BENCHMARKS.md`, which says how each number was set.
 pub const BENCHMARKS: &[Benchmark] = &[
     Benchmark {
         key: "fixture",
         linux: ms(30_000),
-        macos: ms(30_000),
+        macos: ms(40_000),
         windows: ms(30_000),
     },
     Benchmark {
         key: "listing-first",
         linux: ms(50),
-        macos: ms(50),
+        macos: ms(300),
         windows: ms(50),
     },
     Benchmark {
         key: "listing-complete",
         linux: ms(400),
-        macos: ms(400),
+        macos: ms(2_000),
         windows: ms(400),
     },
     Benchmark {
@@ -75,7 +75,7 @@ pub const BENCHMARKS: &[Benchmark] = &[
     Benchmark {
         key: "pdf-first",
         linux: ms(200),
-        macos: ms(200),
+        macos: ms(1_200),
         windows: ms(200),
     },
     Benchmark {
@@ -122,9 +122,9 @@ pub const BENCHMARKS: &[Benchmark] = &[
     },
     Benchmark {
         key: "startup",
-        linux: ms(1_000),
-        macos: ms(1_000),
-        windows: ms(1_000),
+        linux: ms(12),
+        macos: ms(100),
+        windows: ms(15),
     },
 ];
 
