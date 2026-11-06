@@ -36,6 +36,29 @@ const PKEY_RECYCLE_DATE_DELETED: PROPERTYKEY = PROPERTYKEY {
     fmtid: GUID::from_u128(0x9B17_4B33_40FF_11D2_A27E_00C0_4FC3_0871),
     pid: 3,
 };
+/// `System.ItemNameDisplay`: the full name, extension included, unlike
+/// `SIGDN_NORMALDISPLAY`, which honours the "hide extensions" setting.
+const PKEY_ITEM_NAME_DISPLAY: PROPERTYKEY = PROPERTYKEY {
+    fmtid: GUID::from_u128(0xB725_F130_47EF_101A_A5F1_0260_8C9E_EBAC),
+    pid: 10,
+};
+
+/// The absolute path with 8.3 short names expanded and no `\\?\` prefix, as
+/// the shell reports paths.
+fn long_path(path: &Path) -> PathBuf {
+    let absolute = std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf());
+    let Ok(canonical) = fs::canonicalize(&absolute) else {
+        return absolute;
+    };
+    let text = canonical.to_string_lossy();
+    if let Some(unc) = text.strip_prefix("\\\\?\\UNC\\") {
+        PathBuf::from(format!("\\\\{unc}"))
+    } else if let Some(plain) = text.strip_prefix("\\\\?\\") {
+        PathBuf::from(plain)
+    } else {
+        canonical
+    }
+}
 
 /// Initialises COM for the current thread and uninitialises it on drop.
 struct Com {
@@ -102,18 +125,25 @@ fn recycle_bin_items() -> Result<Vec<TrashedItem>, Error> {
             let Ok(item2) = item.cast::<IShellItem2>() else {
                 continue;
             };
-            let name = item
-                .GetDisplayName(SIGDN_NORMALDISPLAY)
+            let name = item2
+                .GetString(&PKEY_ITEM_NAME_DISPLAY)
                 .ok()
-                .and_then(take_string);
+                .and_then(take_string)
+                .or_else(|| {
+                    item.GetDisplayName(SIGDN_NORMALDISPLAY)
+                        .ok()
+                        .and_then(take_string)
+                });
             let deleted_from = item2
                 .GetString(&PKEY_RECYCLE_DELETED_FROM)
                 .ok()
-                .and_then(take_string);
+                .and_then(take_string)
+                .unwrap_or_default();
             let trashed = item
                 .GetDisplayName(SIGDN_FILESYSPATH)
                 .ok()
-                .and_then(take_string);
+                .and_then(take_string)
+                .unwrap_or_default();
             let deleted_at = item2
                 .GetFileTime(&PKEY_RECYCLE_DATE_DELETED)
                 .ok()
@@ -121,9 +151,9 @@ fn recycle_bin_items() -> Result<Vec<TrashedItem>, Error> {
                     filetime((i64::from(ft.dwHighDateTime) << 32) | i64::from(ft.dwLowDateTime))
                 })
                 .unwrap_or(SystemTime::UNIX_EPOCH);
-            if let (Some(name), Some(from), Some(trashed)) = (name, deleted_from, trashed) {
+            if let Some(name) = name {
                 out.push(TrashedItem {
-                    original: PathBuf::from(from).join(name),
+                    original: PathBuf::from(deleted_from).join(name),
                     trashed: PathBuf::from(trashed),
                     deleted_at,
                 });
@@ -135,13 +165,23 @@ fn recycle_bin_items() -> Result<Vec<TrashedItem>, Error> {
 
 fn same_path(a: &Path, b: &Path) -> bool {
     let (a, b) = (a.to_string_lossy(), b.to_string_lossy());
-    a.eq_ignore_ascii_case(&b)
+    a.trim_end_matches('\\')
+        .eq_ignore_ascii_case(b.trim_end_matches('\\'))
+}
+
+fn same_name(a: &Path, b: &Path) -> bool {
+    match (a.file_name(), b.file_name()) {
+        (Some(a), Some(b)) => a
+            .to_string_lossy()
+            .eq_ignore_ascii_case(&b.to_string_lossy()),
+        _ => false,
+    }
 }
 
 impl Trash for Native {
     fn trash(&self, path: &Path) -> Result<TrashedItem, Error> {
-        let original = std::path::absolute(path).map_err(Error::from_io)?;
-        fs::symlink_metadata(&original).map_err(Error::from_io)?;
+        fs::symlink_metadata(path).map_err(Error::from_io)?;
+        let original = long_path(path);
         let started = SystemTime::now();
         {
             let _com = Com::new()?;
@@ -170,16 +210,22 @@ impl Trash for Native {
         if fs::symlink_metadata(&original).is_ok() {
             return Err(Error::Unsupported("the shell did not recycle the item"));
         }
+        // Find what the shell made of it: by original path, or failing that
+        // by name among the items recycled since we started.
+        let recent = started - std::time::Duration::from_secs(120);
         let mut candidates: Vec<TrashedItem> = recycle_bin_items()?
             .into_iter()
-            .filter(|item| same_path(&item.original, &original))
+            .filter(|item| {
+                same_path(&item.original, &original)
+                    || (same_name(&item.original, &original) && item.deleted_at >= recent)
+            })
             .collect();
         candidates.sort_by_key(|item| item.deleted_at);
-        candidates
+        let mut found = candidates
             .pop()
-            .filter(|item| item.deleted_at + std::time::Duration::from_secs(120) >= started)
-            .or_else(|| candidates.pop())
-            .ok_or(Error::Unsupported("the volume has no Recycle Bin"))
+            .ok_or(Error::Unsupported("the volume has no Recycle Bin"))?;
+        found.original = original;
+        Ok(found)
     }
 
     fn restore(&self, item: &TrashedItem) -> Result<(), Error> {

@@ -23,7 +23,12 @@ fn trash_and_restore_round_trip_with_the_native_platform() {
     fs::write(&file, b"keep me").unwrap_or_else(|e| panic!("{e}"));
     let native = Native::new();
 
-    let item = native.trash(&file).unwrap_or_else(|e| panic!("trash: {e}"));
+    let item = native.trash(&file).unwrap_or_else(|e| {
+        // Show what the platform's trash holds, so a mismatch can be read
+        // from the CI log.
+        println!("trash contents after the failure: {:#?}", native.list());
+        panic!("trash: {e}")
+    });
     assert!(!file.exists(), "the file is gone from its folder");
     assert_eq!(
         item.original,
