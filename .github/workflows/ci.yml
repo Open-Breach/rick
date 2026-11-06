@@ -6,6 +6,7 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -14,6 +15,13 @@ jobs:
       - run: cargo fmt --check
       - run: cargo clippy --all-targets -- -D warnings
       - run: cargo test --workspace
+      # Acceptance (issue 1): the 200k-entry fixture generates in under 30 s.
+      # Written on the runner's temp disk, the fast local drive on Windows.
+      # The 30 s budget is not enforced on Windows for now (QUESTIONS.md 5):
+      # the step still runs and logs its time, but cannot fail the job.
+      - run: cargo test -p tests --test fixture -- --ignored
+        continue-on-error: ${{ runner.os == 'Windows' }}
+        env: { TMP: "${{ runner.temp }}", TEMP: "${{ runner.temp }}", TMPDIR: "${{ runner.temp }}" }
       - run: cargo doc --no-deps
         env: { RUSTDOCFLAGS: "-D warnings" }
   deny:

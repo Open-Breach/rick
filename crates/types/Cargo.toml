@@ -1,0 +1,14 @@
+[package]
+name = "types"
+version = "0.1.0"
+description = "Rick kernel value types: identities, paths, entries, cancellation, progress and the kernel error."
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+bitflags = { workspace = true }
+thiserror = { workspace = true }
+
+[lints]
+workspace = true

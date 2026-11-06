@@ -7,6 +7,19 @@ edition = "2024"
 license = "Apache-2.0"
 repository = "https://github.com/Open-Breach/rick"
 
+[workspace.dependencies]
+# Kernel crates.
+types = { path = "crates/types" }
+runtime = { path = "crates/runtime" }
+
+# Third-party.
+bitflags = "2"
+rayon = "1"
+tempfile = "3"
+thiserror = "2"
+tokio = { version = "1", default-features = false }
+tracing = "0.1"
+
 [workspace.lints.clippy]
 pedantic = { level = "warn", priority = -1 }
 unwrap_used = "warn"
