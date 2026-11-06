@@ -411,3 +411,38 @@ Once answered, an entry keeps its number and gains a `Decided (date):` line.
     Assumed: hide entirely (Mod+B, the Panel toggle in the top bar, the
     Settings screen); the icon strip comes with the Recent and Network
     sections, which would give it more than two icons.
+
+47. (GUI chrome) The spec's title row has no undo and redo buttons, which
+    the old top bar had, and the burger menu lists New window, Settings,
+    Extensions, Keyboard shortcuts and About only.
+    Assumed: undo and redo stay reachable through their shortcuts and the
+    search box's command mode; no button or menu entry is added until the
+    spec names one.
+
+48. (GUI chrome) The spec says Rick draws its own chrome and on macOS "the
+    traffic lights keep their place".
+    Assumed: on Linux and Windows the window has no decorations and Rick
+    draws minimise, maximise and close; on macOS the title bar is hidden
+    with the content view at full size, so the system's buttons stay, and
+    the title row leaves 78 points free for them. Which platform does what
+    comes from `platform::Chrome`, not from `cfg(target_os)` in the UI.
+
+49. (GUI chrome) The search box's name search is specified as "the current
+    location first, the platform index when a SearchIndex is available".
+    Assumed: the current location only, as the issue scopes it; a hit is
+    selected and scrolled into view on Enter. The index path comes with the
+    first search-index extension.
+
+50. (GUI chrome) Thumbnails are specified "at the cell size, off the UI
+    thread, cached per entry and size".
+    Assumed: the UI asks the app with `Command::Thumbnail`, the app renders
+    through the previewer that scores the entry highest as an internal job
+    (not in the operations area, like listings) and answers with
+    `Event::Thumbnail`; the UI keeps the textures per entry id and pixel
+    size, up to 2048, and starts over past that. Folders never ask for one.
+
+51. (GUI chrome) The right-click on empty space is specified to open the
+    folder's menu "with no selection", while a right-click on a row outside
+    the selection selects that row first.
+    Assumed: a right-click on empty space clears the selection as well, so
+    the menu and the list agree about what the actions would act on.

@@ -4,7 +4,7 @@
 use egui::{Align, Sense};
 use egui_extras::{Column as TableColumn, TableBuilder};
 use ext::{Badge, CellValue, ColumnDef, Decoration};
-use model::{Column, SelectionChange, SortDir, ViewMode};
+use model::{Column, IconSize, SelectionChange, SortDir, ViewMode};
 use types::{Entry, EntryKind};
 
 use crate::format;
@@ -41,12 +41,202 @@ pub fn row_height(ui: &egui::Ui, density: model::Density) -> f32 {
     }
 }
 
-/// Draws the active view of `cx`.
+/// Draws the active view of `cx`. A right click on empty space, below the
+/// last row or anywhere in an empty folder, opens the context menu for the
+/// folder itself with nothing selected.
 pub fn show(ui: &mut egui::Ui, cx: &mut PaneCx<'_>) {
+    // Registered first, so every row drawn after it wins the pointer.
+    let area = ui.available_rect_before_wrap();
+    let background = ui.interact(
+        area,
+        ui.id().with(("empty-space", cx.tab_id)),
+        egui::Sense::click(),
+    );
     match cx.tab.view {
         ViewMode::List => list(ui, cx),
-        ViewMode::Details | ViewMode::Tree | ViewMode::Icons(_) => details(ui, cx),
+        ViewMode::Details | ViewMode::Tree => details(ui, cx),
+        ViewMode::Icons(size) => icons(ui, cx, size),
     }
+    if background.secondary_clicked() && !cx.tab.selection.is_empty() {
+        cx.requests.push(Request::Command(app::Command::Select {
+            pane: cx.pane,
+            change: SelectionChange::Clear,
+        }));
+    }
+    if background.secondary_clicked() || background.context_menu_opened() {
+        if !cx.focused {
+            cx.requests.push(Request::FocusPane(cx.pane));
+        }
+        let action_ctx = ext::ActionCtx {
+            pane: cx.pane,
+            location: cx.tab.location.clone(),
+            selection: Vec::new(),
+            invoked_from: ext::Invocation::ContextMenu,
+        };
+        background.context_menu(|ui| menus::context_menu(ui, cx, &action_ctx, None));
+    }
+}
+
+/// Cell width and thumbnail edge, in points, of an icon size.
+#[must_use]
+pub fn icon_cell(size: IconSize) -> (f32, f32) {
+    match size {
+        IconSize::Small => (80.0, 48.0),
+        IconSize::Medium => (120.0, 80.0),
+        IconSize::Large => (176.0, 128.0),
+        IconSize::ExtraLarge => (264.0, 208.0),
+    }
+}
+
+/// The icon view: a grid of thumbnails, or file-type icons until a
+/// thumbnail arrives or when no previewer draws the file, with the name
+/// below each.
+pub fn icons(ui: &mut egui::Ui, cx: &mut PaneCx<'_>, size: IconSize) {
+    let (cell_w, thumb) = icon_cell(size);
+    let spacing = ui.spacing().item_spacing;
+    let label_h = 2.0 * ui.text_style_height(&egui::TextStyle::Body) + 4.0;
+    let cell_h = thumb + label_h + 12.0;
+    let columns = ((ui.available_width() + spacing.x) / (cell_w + spacing.x))
+        .floor()
+        .max(1.0) as usize;
+    let count = cx.tab.listing.row_count();
+    let rows = count.div_ceil(columns);
+    cx.tab_ui.visible_rows =
+        ((ui.available_height() / (cell_h + spacing.y)) as usize).max(1) * columns;
+    let show_extensions = cx.app.model().settings.show_extensions;
+    let mut area = egui::ScrollArea::vertical()
+        .id_salt(("icons", cx.tab_id))
+        .auto_shrink([false, false]);
+    if let Some(index) = cx.tab_ui.scroll_to.take() {
+        let row = index / columns;
+        area = area.vertical_scroll_offset(row as f32 * (cell_h + spacing.y));
+    }
+    let mut clicked: Vec<(usize, egui::Response)> = Vec::new();
+    area.show_rows(ui, cell_h, rows, |ui, range| {
+        for row in range {
+            ui.horizontal(|ui| {
+                for column in 0..columns {
+                    let index = row * columns + column;
+                    let Some(entry) = cx.tab.listing.row(index) else {
+                        break;
+                    };
+                    let response =
+                        icon_cell_ui(ui, cx, entry, cell_w, cell_h, thumb, show_extensions);
+                    if response.clicked()
+                        || response.double_clicked()
+                        || response.secondary_clicked()
+                        || response.middle_clicked()
+                        || response.context_menu_opened()
+                    {
+                        clicked.push((index, response));
+                    }
+                }
+            });
+        }
+    });
+    for (index, response) in clicked {
+        interact(ui, cx, index, &response);
+    }
+}
+
+/// One cell of the icon view.
+fn icon_cell_ui(
+    ui: &mut egui::Ui,
+    cx: &mut PaneCx<'_>,
+    entry: &Entry,
+    cell_w: f32,
+    cell_h: f32,
+    thumb: f32,
+    show_extensions: bool,
+) -> egui::Response {
+    let (rect, response) = ui.allocate_exact_size(egui::vec2(cell_w, cell_h), egui::Sense::click());
+    let name = display_name(entry, show_extensions).to_owned();
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, &name));
+    if !ui.is_rect_visible(rect) {
+        return response;
+    }
+    let selected = cx.tab.selection.contains(&entry.id);
+    let visuals = ui.visuals();
+    if selected {
+        ui.painter()
+            .rect_filled(rect, 6.0, visuals.selection.bg_fill);
+    } else if response.hovered() {
+        ui.painter()
+            .rect_filled(rect, 6.0, visuals.widgets.hovered.weak_bg_fill);
+    }
+    let image_rect = egui::Rect::from_center_size(
+        egui::pos2(rect.center().x, rect.top() + 6.0 + thumb / 2.0),
+        egui::vec2(thumb, thumb),
+    );
+    // Pixels are points here: thumbnails are rendered at logical size.
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    let px = (thumb * ui.ctx().pixels_per_point()).round().max(1.0) as u32;
+    let wants_thumbnail = entry.kind == EntryKind::File;
+    let drawn = match cx.thumbnails.get(entry.id, px) {
+        crate::thumbs::Thumb::Ready(texture) => {
+            let size = texture.size_vec2();
+            let scale = (thumb / size.x)
+                .min(thumb / size.y)
+                .min(1.0_f32.max(thumb / size.x.max(size.y)));
+            let fitted = egui::Rect::from_center_size(image_rect.center(), size * scale);
+            egui::Image::new((texture.id(), fitted.size())).paint_at(ui, fitted);
+            true
+        }
+        crate::thumbs::Thumb::Missing if wants_thumbnail => {
+            cx.thumbnails.requested(entry.id, px);
+            cx.requests.push(Request::Command(app::Command::Thumbnail {
+                pane: cx.pane,
+                id: entry.id,
+                size: px,
+            }));
+            false
+        }
+        _ => false,
+    };
+    if !drawn {
+        let color = if selected {
+            visuals.selection.stroke.color
+        } else {
+            visuals.text_color()
+        };
+        ui.painter().text(
+            image_rect.center(),
+            egui::Align2::CENTER_CENTER,
+            icon(entry),
+            egui::FontId::proportional(thumb * 0.6),
+            color,
+        );
+    }
+    let decoration = cx.tab.decorations.get(&entry.id);
+    if let Some(badge) = decoration.and_then(|d| d.badge) {
+        ui.painter().text(
+            image_rect.right_bottom(),
+            egui::Align2::RIGHT_BOTTOM,
+            badge.glyph,
+            egui::FontId::proportional(14.0),
+            color(badge.color),
+        );
+    }
+    let text_color = decoration
+        .and_then(|d| d.tint)
+        .map_or_else(|| ui.visuals().text_color(), color);
+    let mut job = egui::text::LayoutJob::simple(
+        name,
+        egui::TextStyle::Body.resolve(ui.style()),
+        text_color,
+        cell_w - 8.0,
+    );
+    job.wrap.max_rows = 2;
+    job.wrap.break_anywhere = true;
+    job.wrap.overflow_character = Some('…');
+    job.halign = egui::Align::Center;
+    let galley = ui.fonts_mut(|f| f.layout_job(job));
+    ui.painter().galley(
+        egui::pos2(rect.center().x, image_rect.bottom() + 4.0),
+        galley,
+        text_color,
+    );
+    response
 }
 
 /// The details table: icon and name, type, date modified, size.

@@ -21,6 +21,7 @@ use crate::keys::{Direction, Intent, KeyMap};
 use crate::preview::Previews;
 use crate::search::{Pick, SearchBox};
 use crate::settings_ui::ShortcutsScreen;
+use crate::thumbs::Thumbnails;
 use crate::{icons, inspector, menus, pane, paths, settings_ui, side_panel};
 
 /// Per-tab view state that is the UI's business, not the model's.
@@ -103,6 +104,8 @@ pub struct PaneCx<'a> {
     pub now: SystemTime,
     /// Whether the pane has the focus.
     pub focused: bool,
+    /// The icon view's thumbnails.
+    pub thumbnails: &'a mut Thumbnails,
 }
 
 /// One dispatched intent, for the palette's recents and for tests.
@@ -158,6 +161,10 @@ pub struct RickUi {
     next_text: u64,
     /// The tab the pointer was over in the frame being drawn.
     hovered_tab: Option<TabId>,
+    /// The icon view's thumbnails.
+    thumbnails: Thumbnails,
+    /// The egui context, for uploading textures outside a frame callback.
+    ctx: egui::Context,
     previews: Previews,
     closed_tabs: Vec<Location>,
     job_done_at: HashMap<types::JobId, Instant>,
@@ -245,6 +252,8 @@ impl RickUi {
             texts: Vec::new(),
             next_text: 0,
             hovered_tab: None,
+            thumbnails: Thumbnails::default(),
+            ctx: ctx.clone(),
             previews: Previews::default(),
             closed_tabs: Vec::new(),
             job_done_at: HashMap::new(),
@@ -348,6 +357,9 @@ impl RickUi {
     fn absorb(&mut self, events: Vec<Event>) {
         for event in events {
             match event {
+                Event::Thumbnail { id, size, frame } => {
+                    self.thumbnails.arrived(&self.ctx, id, size, frame);
+                }
                 Event::Notify { level, text } => self.toast(level, text),
                 Event::PreviewReady { pane, doc } => {
                     let entry = self.preview_entry(pane);
@@ -383,6 +395,12 @@ impl RickUi {
                 });
             open
         });
+    }
+
+    /// The icon view's thumbnail cache, for tests.
+    #[must_use]
+    pub fn thumbnails(&self) -> &Thumbnails {
+        &self.thumbnails
     }
 
     /// The toolbar rectangles of a tab in the last frame, by group, for
@@ -1414,6 +1432,7 @@ struct Viewer<'a> {
     hovered_last: Option<TabId>,
     /// The tab the pointer is over this frame.
     hovered_now: &'a mut Option<TabId>,
+    thumbnails: &'a mut Thumbnails,
 }
 
 impl TabViewer for Viewer<'_> {
@@ -1478,6 +1497,7 @@ impl TabViewer for Viewer<'_> {
             keys: self.keys,
             now: self.now,
             focused: model.focused == pane,
+            thumbnails: self.thumbnails,
         };
         pane::show(ui, &mut cx);
     }
@@ -1554,6 +1574,7 @@ impl eframe::App for RickUi {
                 now: self.now,
                 hovered_last,
                 hovered_now: &mut self.hovered_tab,
+                thumbnails: &mut self.thumbnails,
             };
             DockArea::new(&mut self.dock.state)
                 .id(egui::Id::new("dock"))

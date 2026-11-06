@@ -8,6 +8,7 @@ repository.workspace = true
 publish = false
 
 [dependencies]
+egui_kittest = { workspace = true }
 types = { workspace = true }
 runtime = { workspace = true }
 platform = { workspace = true }
@@ -25,7 +26,6 @@ ext-preview-pdf = { workspace = true }
 ext-git = { workspace = true }
 image = { workspace = true }
 egui = { workspace = true }
-egui_kittest = { workspace = true }
 futures = { workspace = true }
 tempfile = { workspace = true }
 thiserror = { workspace = true }
@@ -34,3 +34,7 @@ tracing = { workspace = true }
 
 [lints]
 workspace = true
+
+[features]
+# Screenshots through wgpu, for the CI job that renders them.
+screenshots = ["egui_kittest/wgpu"]

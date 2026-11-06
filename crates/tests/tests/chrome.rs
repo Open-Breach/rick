@@ -290,3 +290,195 @@ fn the_toolbar_groups_never_overlap_and_the_right_group_keeps_its_width() {
     assert_eq!(right_widths[0], right_widths[1], "{right_widths:?}");
     assert_eq!(right_widths[1], right_widths[2], "{right_widths:?}");
 }
+
+fn previewers() -> Vec<Arc<dyn ext::Extension>> {
+    vec![
+        Arc::new(ext_preview_image::ImagePreview::new()),
+        Arc::new(ext_preview_pdf::PdfPreview::new()),
+    ]
+}
+
+fn harness_with(
+    start: &Path,
+    size: egui::Vec2,
+    extensions: Vec<Arc<dyn ext::Extension>>,
+) -> Harness<'static, RickUi> {
+    let fake = Arc::new(Fake::new().unwrap_or_else(|e| panic!("{e}")));
+    let host = Arc::new(EguiHost::new());
+    let app = app::App::new(app::Config {
+        platform: fake.clone(),
+        ui: host.clone(),
+        extensions,
+        config_dir: Some(fake.config_dir()),
+        start: local(start),
+    });
+    let mut harness = Harness::builder()
+        .with_size(size)
+        .build_eframe(move |cc| RickUi::new(app, host, &cc.egui_ctx));
+    settle(&mut harness);
+    harness
+}
+
+/// Writes `n` small PNGs and one PDF into `dir`; returns how many files a
+/// previewer can draw.
+fn picture_fixtures(dir: &Path, n: usize) -> usize {
+    for i in 0..n {
+        let image = image::RgbaImage::from_fn(96, 64, |x, y| {
+            let c = ((x + y + i as u32 * 7) % 255) as u8;
+            image::Rgba([c, 255 - c, (i as u8).wrapping_mul(40), 255])
+        });
+        let mut bytes = std::io::Cursor::new(Vec::new());
+        image
+            .write_to(&mut bytes, image::ImageFormat::Png)
+            .unwrap_or_else(|e| panic!("{e}"));
+        fs::write(dir.join(format!("picture-{i:03}.png")), bytes.into_inner())
+            .unwrap_or_else(|e| panic!("{e}"));
+    }
+    fs::write(dir.join("paper.pdf"), ext_preview_pdf::sample_pdf(1))
+        .unwrap_or_else(|e| panic!("{e}"));
+    fs::write(dir.join("notes.txt"), "no thumbnail for text").unwrap_or_else(|e| panic!("{e}"));
+    n + 1
+}
+
+/// Right-clicking below the last row opens the folder's menu: New folder
+/// and Paste are there, Rename and Move to trash are not.
+#[test]
+fn right_click_on_empty_space_opens_the_folder_menu() {
+    let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+    fs::write(dir.path().join("only.txt"), "x").unwrap_or_else(|e| panic!("{e}"));
+    let mut harness = harness(dir.path(), egui::vec2(1100.0, 720.0));
+    // Something on the clipboard, so Paste applies.
+    harness.key_press(egui::Key::ArrowDown);
+    harness.step();
+    harness.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::C);
+    harness.step();
+    assert_eq!(selection_len(&harness), 1);
+
+    let pane = harness.state().app().model().focused;
+    let rect = harness
+        .state()
+        .pane_rects()
+        .into_iter()
+        .find(|(p, _)| *p == pane)
+        .map(|(_, r)| r)
+        .unwrap_or_else(|| panic!("pane rect"));
+    // Well below the single row, above the foot.
+    let pos = egui::pos2(rect.center().x, rect.bottom() - 80.0);
+    harness.event(egui::Event::PointerMoved(pos));
+    harness.step();
+    harness.event(egui::Event::PointerButton {
+        pos,
+        button: egui::PointerButton::Secondary,
+        pressed: true,
+        modifiers: egui::Modifiers::default(),
+    });
+    harness.step();
+    harness.event(egui::Event::PointerButton {
+        pos,
+        button: egui::PointerButton::Secondary,
+        pressed: false,
+        modifiers: egui::Modifiers::default(),
+    });
+    harness.step();
+    harness.step();
+    harness.get_by_label_contains("New folder");
+    harness.get_by_label_contains("Paste");
+    assert!(
+        harness.query_by_label_contains("Rename").is_none(),
+        "needs an item"
+    );
+    assert!(
+        harness.query_by_label_contains("Move to trash").is_none(),
+        "needs an item"
+    );
+    assert_eq!(
+        selection_len(&harness),
+        0,
+        "the folder menu has no selection"
+    );
+}
+
+/// The icon view shows a cell per entry, with thumbnails arriving for the
+/// pictures and the PDF and the file-type icon staying for the rest.
+#[test]
+fn the_icon_view_shows_thumbnails_for_pictures() {
+    let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+    let drawable = picture_fixtures(dir.path(), 3);
+    let mut harness = harness_with(dir.path(), egui::vec2(1100.0, 720.0), previewers());
+    harness.key_press_modifiers(
+        egui::Modifiers::COMMAND | egui::Modifiers::SHIFT,
+        egui::Key::Num4,
+    );
+    harness.step();
+    let pane = harness.state().app().model().focused;
+    assert!(matches!(
+        harness
+            .state()
+            .app()
+            .model()
+            .active_tab(pane)
+            .map(|(_, t)| t.view),
+        Some(model::ViewMode::Icons(_))
+    ));
+    harness.get_by_label("picture-000.png");
+    harness.get_by_label("notes.txt");
+    // The PDF needs pdfium; without it the pictures alone must arrive.
+    let pdfium = std::env::var_os("RICK_REQUIRE_PDFIUM").is_some();
+    let expected = if pdfium { drawable } else { drawable - 1 };
+    let deadline = Instant::now() + Duration::from_secs(20);
+    while harness.state().thumbnails().ready() < expected {
+        assert!(Instant::now() < deadline, "thumbnails never arrived");
+        harness.step();
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    assert!(harness.state().thumbnails().ready() <= drawable);
+}
+
+/// Icons view on a folder of pictures and a PDF: every thumbnail within
+/// 500 ms, no frame over 16.6 ms while they arrive (release; Linux asserts,
+/// the others print).
+#[test]
+#[ignore = "timing; run with --ignored in release"]
+fn the_icon_view_thumbnails_arrive_within_500_ms_without_long_frames() {
+    let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+    let drawable = picture_fixtures(dir.path(), 40);
+    let mut harness = harness_with(dir.path(), egui::vec2(1400.0, 900.0), previewers());
+    harness.key_press_modifiers(
+        egui::Modifiers::COMMAND | egui::Modifiers::SHIFT,
+        egui::Key::Num4,
+    );
+    harness.step();
+    let pane = harness.state().app().model().focused;
+    harness.state_mut().app_mut().handle(
+        app::Command::SetView {
+            pane,
+            mode: model::ViewMode::Icons(model::IconSize::ExtraLarge),
+        },
+        &mut Vec::new(),
+    );
+    let pdfium = std::env::var_os("RICK_REQUIRE_PDFIUM").is_some();
+    let drawable = if pdfium { drawable } else { drawable - 1 };
+    let started = Instant::now();
+    let mut frames = Vec::new();
+    while harness.state().thumbnails().ready() < drawable {
+        assert!(
+            started.elapsed() < Duration::from_secs(10),
+            "only {} of {drawable} thumbnails",
+            harness.state().thumbnails().ready()
+        );
+        let frame = Instant::now();
+        harness.step();
+        frames.push(frame.elapsed());
+        std::thread::sleep(Duration::from_millis(2));
+    }
+    let took = started.elapsed();
+    let longest = frames.iter().copied().max().unwrap_or_default();
+    eprintln!(
+        "icon view: {drawable} thumbnails in {took:?}, {} frames, longest {longest:?}",
+        frames.len()
+    );
+    if cfg!(target_os = "linux") {
+        assert!(took <= Duration::from_millis(500), "{took:?}");
+        assert!(longest <= Duration::from_micros(16_600), "{longest:?}");
+    }
+}
