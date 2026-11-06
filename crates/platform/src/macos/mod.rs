@@ -1,5 +1,6 @@
 //! macOS: `NSFileManager` trash, `open`, Finder's Get Info window,
-//! `~/Library/Application Support/Rick`.
+//! `~/Library/Application Support/Rick`, and the mounted volumes from
+//! `NSFileManager.mountedVolumeURLs`.
 
 use std::fs;
 use std::io;
@@ -7,13 +8,13 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::SystemTime;
 
-use objc2_foundation::{NSFileManager, NSString, NSURL};
+use objc2_foundation::{NSFileManager, NSString, NSURL, NSVolumeEnumerationOptions};
 use types::Error;
 
 use crate::Native;
 use crate::traits::{
     Chrome, ConfigDir, ControlsSide, DragSource, OpenWith, Properties, PropertiesOutcome, Trash,
-    TrashedItem, WindowChrome,
+    TrashedItem, Volume, VolumeKind, Volumes, WindowChrome,
 };
 
 fn utf8(path: &Path) -> Result<&str, Error> {
@@ -69,6 +70,114 @@ impl Trash for Native {
         Err(Error::Unsupported(
             "macOS does not expose the original paths of trashed items",
         ))
+    }
+
+    fn remove(&self, item: &TrashedItem) -> Result<(), Error> {
+        let meta = fs::symlink_metadata(&item.trashed).map_err(|_| Error::NotFound)?;
+        if meta.is_dir() {
+            fs::remove_dir_all(&item.trashed)
+        } else {
+            fs::remove_file(&item.trashed)
+        }
+        .map_err(Error::from_io)
+    }
+
+    /// Empties the user's own trash, `~/.Trash`, which holds what Rick and
+    /// the Finder trashed from the system volume; volume trashes
+    /// (`/Volumes/<name>/.Trashes/<uid>`) belong to the trash location issue.
+    fn empty(&self) -> Result<(), Error> {
+        let trash = self.home_dir().join(".Trash");
+        let entries = match fs::read_dir(&trash) {
+            Ok(entries) => entries,
+            Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(()),
+            Err(e) => return Err(Error::from_io(e)),
+        };
+        for entry in entries {
+            let entry = entry.map_err(Error::from_io)?;
+            let path = entry.path();
+            if path.file_name().is_some_and(|n| n == ".DS_Store") {
+                continue;
+            }
+            let meta = fs::symlink_metadata(&path).map_err(Error::from_io)?;
+            if meta.is_dir() {
+                fs::remove_dir_all(&path)
+            } else {
+                fs::remove_file(&path)
+            }
+            .map_err(Error::from_io)?;
+        }
+        Ok(())
+    }
+}
+
+impl Volumes for Native {
+    /// `mountedVolumeURLs` without hidden volumes, less the system volume
+    /// (`/`), with `statvfs` for the space. Everything under `/Volumes` that
+    /// is not an internal disk counts as removable; network mounts are told
+    /// by their file system type from `statfs`.
+    fn volumes(&self) -> Result<Vec<Volume>, Error> {
+        let manager = NSFileManager::defaultManager();
+        let urls = manager
+            .mountedVolumeURLsIncludingResourceValuesForKeys_options(
+                None,
+                NSVolumeEnumerationOptions::SkipHiddenVolumes,
+            )
+            .ok_or(Error::Unsupported("the volume list is unavailable"))?;
+        let mut out = Vec::new();
+        for url in urls.to_vec() {
+            let Some(path) = url.path() else { continue };
+            let mount_point = PathBuf::from(path.to_string());
+            if mount_point == Path::new("/") {
+                continue;
+            }
+            let name = mount_point
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_else(|| mount_point.display().to_string());
+            let kind = volume_kind(&mount_point);
+            let (total, free) = crate::volumes::space(&mount_point)
+                .map_or((None, None), |(t, f)| (Some(t), Some(f)));
+            out.push(Volume {
+                name,
+                mount_point,
+                kind,
+                total,
+                free,
+            });
+        }
+        out.sort_by(|a, b| a.mount_point.cmp(&b.mount_point));
+        Ok(out)
+    }
+}
+
+/// Network file systems by the name `statfs` reports.
+const NETWORK_FS: &[&str] = &[
+    "nfs", "smbfs", "afpfs", "webdav", "cifs", "fuse", "osxfuse", "macfuse",
+];
+
+/// The kind of a mounted volume: network by file system type, optical by
+/// type, removable for anything else under `/Volumes`.
+fn volume_kind(mount_point: &Path) -> VolumeKind {
+    let fs_type = rustix::fs::statfs(mount_point)
+        .ok()
+        .map(|stat| {
+            let bytes: Vec<u8> = stat
+                .f_fstypename
+                .iter()
+                .take_while(|&&c| c != 0)
+                .map(|c| c.to_ne_bytes()[0])
+                .collect();
+            String::from_utf8_lossy(&bytes).into_owned()
+        })
+        .unwrap_or_default();
+    if NETWORK_FS.iter().any(|n| fs_type.starts_with(n)) {
+        VolumeKind::Network
+    } else if matches!(fs_type.as_str(), "cd9660" | "udf") {
+        VolumeKind::Optical
+    } else if mount_point.starts_with("/Volumes") {
+        VolumeKind::Removable
+    } else {
+        VolumeKind::Fixed
     }
 }
 

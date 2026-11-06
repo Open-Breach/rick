@@ -2,8 +2,8 @@
 //!
 //! Other crates program against the traits here and never against an
 //! operating system: [`Trash`], [`OpenWith`], [`Properties`], [`ConfigDir`],
-//! [`NativeDialogs`], [`Clipboard`], [`Chrome`] and [`DragSource`], bundled
-//! as [`Platform`]. [`Native`] is the real
+//! [`NativeDialogs`], [`Clipboard`], [`Chrome`], [`DragSource`] and
+//! [`Volumes`], bundled as [`Platform`]. [`Native`] is the real
 //! implementation for the OS the binary runs on; [`Fake`] is the one tests
 //! use, with a private trash directory and recorded calls.
 //!
@@ -28,6 +28,8 @@ pub mod paths;
 #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 mod time;
 mod traits;
+#[cfg(unix)]
+mod volumes;
 
 #[cfg(target_os = "linux")]
 mod linux;
@@ -43,7 +45,8 @@ pub use async_trait::async_trait;
 pub use fake::Fake;
 pub use traits::{
     Chrome, Clipboard, ConfigDir, ControlsSide, DialogFilter, DragSource, NativeDialogs, OpenWith,
-    Platform, Properties, PropertiesOutcome, Trash, TrashedItem, WindowChrome,
+    Platform, Properties, PropertiesOutcome, Trash, TrashedItem, Volume, VolumeKind, Volumes,
+    WindowChrome,
 };
 
 /// The platform the binary runs on.

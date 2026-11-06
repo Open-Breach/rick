@@ -12,7 +12,7 @@ use types::Error;
 
 use crate::traits::{
     Chrome, Clipboard, ConfigDir, ControlsSide, DialogFilter, DragSource, NativeDialogs, OpenWith,
-    Properties, PropertiesOutcome, Trash, TrashedItem, WindowChrome,
+    Properties, PropertiesOutcome, Trash, TrashedItem, Volume, Volumes, WindowChrome,
 };
 
 /// A platform that touches nothing outside its own temporary directory.
@@ -29,6 +29,7 @@ pub struct Fake {
     clipboard: Mutex<Option<String>>,
     dragged: Mutex<Vec<Vec<String>>>,
     answers: Mutex<Answers>,
+    volumes: Mutex<Vec<Volume>>,
 }
 
 #[derive(Debug, Default)]
@@ -64,6 +65,7 @@ impl Fake {
             clipboard: Mutex::new(None),
             dragged: Mutex::new(Vec::new()),
             answers: Mutex::new(Answers::default()),
+            volumes: Mutex::new(Vec::new()),
         })
     }
 
@@ -106,6 +108,23 @@ impl Fake {
     pub fn answer_save(&self, path: Option<PathBuf>) {
         lock(&self.answers).save = path;
     }
+
+    /// Adds a volume [`Volumes::volumes`] lists from now on; the test's
+    /// stand-in for a mount.
+    pub fn add_volume(&self, volume: Volume) {
+        lock(&self.volumes).push(volume);
+    }
+
+    /// Forgets a volume by its mount point; the stand-in for an unmount.
+    pub fn remove_volume(&self, mount_point: &Path) {
+        lock(&self.volumes).retain(|v| v.mount_point != mount_point);
+    }
+}
+
+impl Volumes for Fake {
+    fn volumes(&self) -> Result<Vec<Volume>, Error> {
+        Ok(lock(&self.volumes).clone())
+    }
 }
 
 impl Trash for Fake {
@@ -146,6 +165,39 @@ impl Trash for Fake {
 
     fn list(&self) -> Result<Vec<TrashedItem>, Error> {
         Ok(lock(&self.items).clone())
+    }
+
+    fn remove(&self, item: &TrashedItem) -> Result<(), Error> {
+        let mut items = lock(&self.items);
+        let index = items
+            .iter()
+            .position(|i| i.trashed == item.trashed)
+            .ok_or(Error::NotFound)?;
+        remove_path(&item.trashed)?;
+        items.remove(index);
+        Ok(())
+    }
+
+    fn empty(&self) -> Result<(), Error> {
+        let mut items = lock(&self.items);
+        for item in items.drain(..) {
+            remove_path(&item.trashed)?;
+        }
+        Ok(())
+    }
+}
+
+/// Deletes a file or a whole directory.
+fn remove_path(path: &Path) -> Result<(), Error> {
+    let meta = match fs::symlink_metadata(path) {
+        Ok(meta) => meta,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(e) => return Err(Error::from_io(e)),
+    };
+    if meta.is_dir() {
+        fs::remove_dir_all(path).map_err(Error::from_io)
+    } else {
+        fs::remove_file(path).map_err(Error::from_io)
     }
 }
 
@@ -240,6 +292,21 @@ mod tests {
         assert_eq!(fs::read(&file).ok(), Some(b"bye".to_vec()));
         assert_eq!(fake.list().map(|l| l.len()).ok(), Some(0));
         assert!(matches!(fake.restore(&item), Err(Error::NotFound)));
+
+        // Remove one for good, empty the rest.
+        let gone = fake.trash(&file).unwrap_or_else(|e| panic!("{e}"));
+        let other = work.path().join("other");
+        fs::create_dir(&other).unwrap_or_else(|e| panic!("{e}"));
+        fs::write(other.join("x"), b"x").unwrap_or_else(|e| panic!("{e}"));
+        let trashed_dir = fake.trash(&other).unwrap_or_else(|e| panic!("{e}"));
+        fake.remove(&gone).unwrap_or_else(|e| panic!("{e}"));
+        assert!(!gone.trashed.exists());
+        assert!(matches!(fake.remove(&gone), Err(Error::NotFound)));
+        assert_eq!(fake.list().map(|l| l.len()).ok(), Some(1));
+        fake.empty().unwrap_or_else(|e| panic!("{e}"));
+        assert!(!trashed_dir.trashed.exists());
+        assert_eq!(fake.list().map(|l| l.len()).ok(), Some(0));
+        assert!(!file.exists());
         assert!(matches!(
             fake.trash(&work.path().join("nope")),
             Err(Error::NotFound)
@@ -283,5 +350,21 @@ mod tests {
             fake.show(fake.dir.path()),
             Ok(PropertiesOutcome::Rows(rows)) if rows[0].0 == "Name"
         ));
+        assert_eq!(fake.volumes().map(|v| v.len()).ok(), Some(0));
+        fake.add_volume(Volume {
+            name: "USB".into(),
+            mount_point: PathBuf::from("/media/usb"),
+            kind: crate::VolumeKind::Removable,
+            total: Some(10),
+            free: Some(5),
+        });
+        assert_eq!(
+            fake.volumes()
+                .ok()
+                .and_then(|v| v.first().map(|v| v.name.clone())),
+            Some("USB".to_owned())
+        );
+        fake.remove_volume(Path::new("/media/usb"));
+        assert_eq!(fake.volumes().map(|v| v.len()).ok(), Some(0));
     }
 }
