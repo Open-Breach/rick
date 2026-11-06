@@ -61,6 +61,10 @@ pub fn details(ui: &mut egui::Ui, cx: &mut PaneCx<'_>) {
     let count = listing.row_count();
     cx.tab_ui.visible_rows =
         ((ui.available_height() / (height + ui.spacing().item_spacing.y)) as usize).max(1);
+    // egui's labels select text by default, and a text-selectable label takes
+    // the click before the row under it sees it. A click on a name selects
+    // the row, so the cells' labels only hover.
+    ui.style_mut().interaction.selectable_labels = false;
 
     let extra = extra_columns(cx);
     let mut builder = TableBuilder::new(ui)
