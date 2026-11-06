@@ -4,7 +4,7 @@
 
 Rick is a lens into your files. Point it at a folder and you see what's what: what every file is, what's inside it, what changed, what's where. Then you move things, rename things, sort things out, without ever leaving the window. One tool, written in Rust, identical on Linux, macOS and Windows, and built from modules so it only carries what *you* need.
 
-> Status: 0.1 is being built right now. The spec is finished, the first crates are landing, and the first release ships on all three platforms at once. Star the repo, watch it, and come along for the ride.
+> Status: 0.1, the first release, ships on all three platforms at once as plain archives from the [Releases page](https://github.com/Open-Breach/rick/releases). Star the repo, watch it, and come along for the ride.
 
 > **Use with caution.** Rick is written largely by an AI coding agent working from [SPEC.md](SPEC.md), with human review, a strict test gate and CI on all three platforms. That makes it fast to build and easy to audit, but it is still young software whose entire purpose is to move, rename and delete your files. Until 1.0, run it on data you have backed up, prefer *Move to trash* over *Delete permanently*, and treat every release as a preview. If it does something surprising, that's a bug: please report it.
 
@@ -71,7 +71,28 @@ The full story, from supported file systems to the trait signatures, lives in [S
 
 ## Try it
 
-There are no binaries yet; that changes with 0.1, which ships local files, tabs and panes, the core operations, previews for text, code, images and PDF, and the Git module. Archives, ISO, media and Office follow as modules. Until then, build from source:
+Release archives for Linux (x64 and arm64), macOS (Apple silicon) and Windows (x64) are on the [Releases page](https://github.com/Open-Breach/rick/releases). Each archive holds the `rick` binary, the pdfium library it needs for PDF previews beside it, the license, this README, the changelog and the third-party licenses; `SHA256SUMS.txt` has the checksums. Unpack it anywhere and run it from the unpacked folder:
+
+```bash
+# Linux
+tar xzf rick-0.1.0-linux-x64.tar.gz && ./rick-0.1.0-linux-x64/rick
+```
+
+```bash
+# macOS
+tar xzf rick-0.1.0-macos-arm64.tar.gz && ./rick-0.1.0-macos-arm64/rick
+```
+
+```powershell
+# Windows
+Expand-Archive rick-0.1.0-windows-x64.zip -DestinationPath . ; .\rick-0.1.0-windows-x64\rick.exe
+```
+
+`rick --version` prints the version and the git hash it was built from; `rick <folder>` starts in that folder. The archives are not signed or notarised yet (0.2 at the earliest): macOS may refuse a binary downloaded through a browser until you allow it under System Settings → Privacy & Security, or clear the quarantine flag with `xattr -dr com.apple.quarantine rick-0.1.0-macos-arm64`; Windows SmartScreen may warn the first time. The Linux builds need glibc 2.39 or later (Ubuntu 24.04). Intel Macs are not covered yet.
+
+0.1 ships local files, tabs and panes, the core operations, previews for text, code, images and PDF, and the Git module. Archives, ISO, media and Office follow as modules in 0.2. The numbers the release was measured against are in [BENCHMARKS.md](BENCHMARKS.md), the changes in [CHANGELOG.md](CHANGELOG.md).
+
+To build from source instead:
 
 ```bash
 git clone https://github.com/Open-Breach/rick.git
@@ -79,7 +100,7 @@ cd rick
 cargo run
 ```
 
-You need the stable Rust toolchain (`rust-toolchain.toml` pins it) and, on Linux, the usual Wayland/X11 development packages for an egui app.
+You need the stable Rust toolchain (`rust-toolchain.toml` pins it) and, on Linux, the usual Wayland/X11 development packages for an egui app. PDF previews need pdfium beside the binary or in `RICK_PDFIUM_DIR`: a development build finds it there, a release archive brings it along.
 
 ## Join in
 
