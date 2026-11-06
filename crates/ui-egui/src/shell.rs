@@ -9,8 +9,8 @@ use app::{App, Command, Event};
 use egui_dock::{DockArea, NodePath, TabViewer};
 use ext::{ActionCtx, ActionId, Invocation, Level};
 use model::{
-    Column, Density, JobState, PaneId, SelectionChange, SettingsChange, SortDir, Tab, TabId, Theme,
-    ViewMode,
+    Column, Density, JobState, PaneId, PanelSide, SelectionChange, SettingsChange, SortDir, Tab,
+    TabId, Theme, ViewMode,
 };
 use platform::PropertiesOutcome;
 use types::{EntryId, EntryKind, Location, Progress};
@@ -21,7 +21,7 @@ use crate::keys::{Direction, Intent, KeyMap};
 use crate::palette::Palette;
 use crate::preview::Previews;
 use crate::settings_ui::ShortcutsScreen;
-use crate::{inspector, menus, pane, paths, settings_ui};
+use crate::{inspector, menus, pane, paths, settings_ui, side_panel};
 
 /// Per-tab view state that is the UI's business, not the model's.
 #[derive(Debug, Default)]
@@ -766,10 +766,15 @@ impl RickUi {
             | Intent::ViewTree
             | Intent::ViewIcons
             | Intent::IconSizeUp
-            | Intent::IconSizeDown
-            | Intent::ToggleSidePanel => {
+            | Intent::IconSizeDown => {
                 let label = intent.spec().map_or("This", |s| s.label);
                 self.unavailable(label);
+            }
+            Intent::ToggleSidePanel => {
+                let visible = self.app.model().settings.side_panel.visible;
+                self.handle(Command::Settings(SettingsChange::SidePanelVisible(
+                    !visible,
+                )));
             }
         }
     }
@@ -945,6 +950,17 @@ impl RickUi {
                     {
                         self.inspector_open = !self.inspector_open;
                     }
+                    let side_visible = self.app.model().settings.side_panel.visible;
+                    if ui
+                        .selectable_label(side_visible, "Panel")
+                        .on_hover_text("Toggle side panel")
+                        .clicked()
+                    {
+                        self.requests.push(Request::Intent {
+                            intent: Intent::ToggleSidePanel,
+                            pane: focused,
+                        });
+                    }
                     let running = self
                         .app
                         .model()
@@ -959,6 +975,50 @@ impl RickUi {
                 });
             });
         });
+    }
+
+    /// The side panel on its side with the operations area at its foot, or
+    /// the operations area along the window's foot when the panel is hidden.
+    fn side_panel(&mut self, ui: &mut egui::Ui, ctx: &egui::Context, focused: PaneId) {
+        let side = self.app.model().settings.side_panel.clone();
+        if !side.visible {
+            if !self.app.model().jobs.is_empty() {
+                egui::Panel::bottom(egui::Id::new("operations"))
+                    .show(ui, |ui| self.operations_area(ui));
+            }
+            return;
+        }
+        let panel = match side.side {
+            PanelSide::Left => egui::Panel::left(egui::Id::new("side")),
+            PanelSide::Right => egui::Panel::right(egui::Id::new("side")),
+        };
+        let shown = panel
+            .resizable(true)
+            .default_size(f32::from(side.width))
+            .size_range(120.0..=600.0)
+            .show(ui, |ui| {
+                if !self.app.model().jobs.is_empty() {
+                    egui::Panel::bottom(egui::Id::new("operations"))
+                        .show(ui, |ui| self.operations_area(ui));
+                }
+                side_panel::show(ui, &self.app, focused, &mut self.requests);
+            });
+        // The outer width is what egui restores from `default_size`, so it
+        // is what persists; only once the pointer is up, so a drag writes
+        // the file once.
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let width = shown
+            .response
+            .rect
+            .width()
+            .round()
+            .clamp(0.0, f32::from(u16::MAX)) as u16;
+        let pointer_down = ctx.input(|i| i.pointer.any_down());
+        if !pointer_down && width > 0 && width != side.width {
+            self.requests.push(Request::Command(Command::Settings(
+                SettingsChange::SidePanelWidth(width),
+            )));
+        }
     }
 
     fn operations_area(&mut self, ui: &mut egui::Ui) {
@@ -1226,10 +1286,7 @@ impl eframe::App for RickUi {
         let focused = self.app.model().focused;
         self.top_bar(ui, focused);
 
-        if !self.app.model().jobs.is_empty() {
-            egui::Panel::bottom(egui::Id::new("operations"))
-                .show(ui, |ui| self.operations_area(ui));
-        }
+        self.side_panel(ui, ctx, focused);
 
         if self.inspector_open {
             egui::Panel::right(egui::Id::new("inspector"))

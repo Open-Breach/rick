@@ -2,7 +2,7 @@
 
 use app::Command;
 use ext::{Registry, Shortcut};
-use model::{Column, Density, Settings, SettingsChange, SortDir, Theme};
+use model::{Column, Density, PanelSide, Settings, SettingsChange, SortDir, Theme};
 
 use crate::keys::{Intent, KeyMap, UI_INTENTS, from_egui_key, from_egui_modifiers};
 use crate::shell::Request;
@@ -90,6 +90,28 @@ pub fn settings_window(
                             });
                         if by != settings.sort_by || dir != settings.sort_dir {
                             change(SettingsChange::Sort(by, dir));
+                        }
+                    });
+                    ui.end_row();
+
+                    ui.label("Side panel");
+                    ui.horizontal(|ui| {
+                        let mut visible = settings.side_panel.visible;
+                        if ui.checkbox(&mut visible, "Show").changed() {
+                            change(SettingsChange::SidePanelVisible(visible));
+                        }
+                        let mut side = settings.side_panel.side;
+                        egui::ComboBox::from_id_salt("side-panel-side")
+                            .selected_text(match side {
+                                PanelSide::Left => "Left",
+                                PanelSide::Right => "Right",
+                            })
+                            .show_ui(ui, |ui| {
+                                ui.selectable_value(&mut side, PanelSide::Left, "Left");
+                                ui.selectable_value(&mut side, PanelSide::Right, "Right");
+                            });
+                        if side != settings.side_panel.side {
+                            change(SettingsChange::SidePanelSide(side));
                         }
                     });
                     ui.end_row();
