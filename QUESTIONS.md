@@ -24,7 +24,10 @@ Entry format:
    does not define. Assumed: both live in `types`; `ExtId(pub &'static str)`
    mirrors `ProviderId`, and `Mime` is an unvalidated `type/subtype` string
    with `type_()` / `subtype()` accessors, to be replaced only through a spec
-   change.
+   change. Answered by the maintainer (2026-11-06): keep both in `types` as
+   implemented; both are now defined in the spec's "Value types" block. The
+   `mime` crate is to be reconsidered when a previewer needs parameter
+   parsing.
 3. (issue 1) `JobHandle<T>` is listed under "Value types (crate `types`, no
    I/O)" but is documented as "what `runtime` hands back" and is made of
    `tokio` channel ends. Assumed: `JobHandle`, `JobCtx` and `ProgressSink`

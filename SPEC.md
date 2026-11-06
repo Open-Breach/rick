@@ -498,6 +498,9 @@ First cut of the contract between the kernel and the extensions. Names and shape
 /// Which extension provides a tree. "local", "archive", "sftp", "s3", "trash".
 pub struct ProviderId(pub &'static str);
 
+/// Identity of an extension, as declared in its manifest. "git", "preview-pdf".
+pub struct ExtId(pub &'static str);
+
 /// Stable identity of an entry inside one provider. Local uses (device, inode);
 /// other providers choose their own 128-bit key. Never a path string.
 pub struct EntryId { pub provider: ProviderId, pub key: u128 }
@@ -509,6 +512,10 @@ pub struct VPath(Vec<u8>);
 pub struct Location { pub provider: ProviderId, pub path: VPath }
 
 pub enum EntryKind { File, Dir, Symlink { target: VPath, broken: bool }, Other }
+
+/// Media type as `type/subtype` without parameters, not validated. Filled
+/// lazily by sniffing, so most entries carry `None` until something asks.
+pub struct Mime(Box<str>);
 
 pub struct Entry {
     pub id: EntryId,
