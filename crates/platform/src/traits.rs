@@ -88,6 +88,11 @@ pub trait ConfigDir: Send + Sync {
     /// `$XDG_CONFIG_HOME/rick` on Linux, `~/Library/Application Support/Rick`
     /// on macOS, `%APPDATA%\Rick` on Windows. Not created.
     fn config_dir(&self) -> PathBuf;
+
+    /// The user's home directory: `$HOME` on Linux and macOS, the profile
+    /// directory (`%USERPROFILE%`) on Windows; the current directory when
+    /// neither is set.
+    fn home_dir(&self) -> PathBuf;
 }
 
 /// A file-type filter for a file dialogue.

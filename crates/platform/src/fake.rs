@@ -54,6 +54,7 @@ impl Fake {
             .tempdir()
             .map_err(Error::from_io)?;
         fs::create_dir_all(dir.path().join("trash")).map_err(Error::from_io)?;
+        fs::create_dir_all(dir.path().join("home")).map_err(Error::from_io)?;
         Ok(Self {
             dir,
             items: Mutex::new(Vec::new()),
@@ -171,6 +172,10 @@ impl Clipboard for Fake {
 impl ConfigDir for Fake {
     fn config_dir(&self) -> PathBuf {
         self.dir.path().join("config")
+    }
+
+    fn home_dir(&self) -> PathBuf {
+        self.dir.path().join("home")
     }
 }
 
