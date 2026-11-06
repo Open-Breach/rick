@@ -14,6 +14,7 @@ ext = { workspace = true }
 vfs = { workspace = true }
 vfs-local = { workspace = true }
 model = { workspace = true }
+ops = { workspace = true }
 futures = { workspace = true }
 serde = { workspace = true }
 tokio = { workspace = true, features = ["sync", "time", "macros"] }
