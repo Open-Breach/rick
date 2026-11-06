@@ -10,6 +10,7 @@ repository.workspace = true
 types = { workspace = true }
 runtime = { workspace = true }
 async-trait = { workspace = true }
+rayon = { workspace = true }
 rfd = { workspace = true, features = ["xdg-portal", "tokio"] }
 tempfile = { workspace = true }
 thiserror = { workspace = true }
@@ -28,8 +29,10 @@ rustix = { workspace = true, features = ["fs", "process", "std"] }
 [target.'cfg(windows)'.dependencies]
 windows = { workspace = true, features = [
     "Win32_Foundation",
+    "Win32_Security",
     "Win32_Storage_FileSystem",
     "Win32_System_Com",
+    "Win32_System_Registry",
     "Win32_UI_Shell",
     "Win32_UI_Shell_Common",
     "Win32_UI_Shell_PropertiesSystem",

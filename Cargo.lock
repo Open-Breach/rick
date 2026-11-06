@@ -720,6 +720,7 @@ dependencies = [
  "libc",
  "objc2",
  "objc2-foundation",
+ "rayon",
  "rfd",
  "runtime",
  "rustix",
