@@ -262,6 +262,22 @@ fn the_toolbar_groups_never_overlap_and_the_right_group_keeps_its_width() {
             .unwrap_or_else(|| panic!("tab"));
         let rects = harness.state().toolbar_rects(tab);
         assert!(rects.len() >= 7, "{width}: {rects:?}");
+        // The row is as high as the density says and holds every widget.
+        let row = harness
+            .state()
+            .toolbar_row(tab)
+            .unwrap_or_else(|| panic!("{width}: no toolbar row"));
+        let density = harness.state().app().model().settings.density;
+        assert!(
+            (row.height() - ui_egui::toolbar_height(density)).abs() < 0.5,
+            "{width}: row {row:?} for {density:?}"
+        );
+        for (g, r) in &rects {
+            assert!(
+                row.expand(0.5).contains_rect(*r),
+                "{width}: {g} {r:?} sticks out of the row {row:?}"
+            );
+        }
         for (i, (ga, a)) in rects.iter().enumerate() {
             for (gb, b) in rects.iter().skip(i + 1) {
                 let overlap = a.shrink(0.5).intersects(b.shrink(0.5));

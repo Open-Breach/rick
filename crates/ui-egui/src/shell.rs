@@ -42,6 +42,8 @@ pub struct TabUi {
     /// The toolbar's widget rectangles of the last frame by group ("left",
     /// "middle", "right"), for tests that check the layout.
     pub toolbar_rects: Vec<(&'static str, egui::Rect)>,
+    /// The toolbar row itself in the last frame, `None` before the first.
+    pub toolbar_row: Option<egui::Rect>,
     /// Forget the column widths on the next frame.
     pub reset_columns: bool,
     /// How many rows the last frame could show, for Page Up and Down.
@@ -411,6 +413,12 @@ impl RickUi {
             .get(&tab)
             .map(|t| t.toolbar_rects.clone())
             .unwrap_or_default()
+    }
+
+    /// The toolbar row of a tab in the last frame, for tests.
+    #[must_use]
+    pub fn toolbar_row(&self, tab: TabId) -> Option<egui::Rect> {
+        self.tabs.get(&tab).and_then(|t| t.toolbar_row)
     }
 
     /// Each pane's rectangle in the last frame, for tests that drag tabs.

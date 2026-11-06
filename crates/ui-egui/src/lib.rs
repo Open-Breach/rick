@@ -44,6 +44,7 @@ use app::App;
 
 pub use host::{Ask, EguiHost};
 pub use keys::{Intent, KeyMap};
+pub use pane::toolbar_height;
 pub use shell::{Dispatched, Request, RickUi, TabUi};
 
 /// Opens the window and runs until it closes.
