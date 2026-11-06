@@ -15,6 +15,44 @@ use tests::local;
 use ui_egui::keys::{Direction, Intent, UI_INTENTS, to_egui_key, to_egui_modifiers};
 use ui_egui::{EguiHost, RickUi};
 
+/// Writes straight to the process's stderr, past libtest's capture, so CI
+/// logs show progress and panics as they happen.
+fn trace(text: &str) {
+    use std::io::Write as _;
+    let _ = writeln!(std::io::stderr(), "[ui test] {text}");
+}
+
+/// Reports panics as they happen and aborts a test that runs past `limit`,
+/// so a stuck frame fails the job quickly with the last progress line
+/// instead of waiting for the job timeout.
+fn guard(name: &'static str, limit: Duration) -> impl Drop {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    struct Disarm(Arc<AtomicBool>);
+    impl Drop for Disarm {
+        fn drop(&mut self) {
+            self.0.store(false, Ordering::SeqCst);
+        }
+    }
+    static HOOK: std::sync::Once = std::sync::Once::new();
+    HOOK.call_once(|| {
+        let previous = std::panic::take_hook();
+        std::panic::set_hook(Box::new(move |info| {
+            trace(&format!("panic: {info}"));
+            previous(info);
+        }));
+    });
+    let armed = Arc::new(AtomicBool::new(true));
+    let flag = Arc::clone(&armed);
+    std::thread::spawn(move || {
+        std::thread::sleep(limit);
+        if flag.load(Ordering::SeqCst) {
+            trace(&format!("{name}: still running after {limit:?}; aborting"));
+            std::process::abort();
+        }
+    });
+    Disarm(armed)
+}
+
 fn harness(start: &Path) -> Harness<'static, RickUi> {
     let fake = Arc::new(Fake::new().unwrap_or_else(|e| panic!("{e}")));
     let host = Arc::new(EguiHost::new());
@@ -35,8 +73,15 @@ fn harness(start: &Path) -> Harness<'static, RickUi> {
 /// Runs frames until the app has nothing in flight and a quiet moment
 /// passed, so listings and jobs have landed in the model.
 fn settle(harness: &mut Harness<'_, RickUi>) {
-    let deadline = Instant::now() + Duration::from_secs(30);
+    let started = Instant::now();
+    let deadline = started + Duration::from_secs(30);
+    let mut reported = 0;
     loop {
+        let waited = started.elapsed().as_secs();
+        if waited >= reported + 5 {
+            reported = waited;
+            trace(&format!("settling for {waited} s: {:?}", harness.state()));
+        }
         for _ in 0..3 {
             harness.step();
         }
@@ -149,8 +194,11 @@ fn every_shortcut_in_the_spec_table_reaches_its_intent() {
     let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
     std::fs::write(dir.path().join("a.txt"), "a").unwrap_or_else(|e| panic!("{e}"));
     std::fs::create_dir(dir.path().join("sub")).unwrap_or_else(|e| panic!("{e}"));
+    let _guard = guard(
+        "every_shortcut_in_the_spec_table_reaches_its_intent",
+        Duration::from_mins(10),
+    );
     let mut harness = harness(dir.path());
-    let pane = harness.state().app().model().focused;
 
     // Every intent in the UI table has a label and an id; nothing is lost.
     assert!(
@@ -161,18 +209,30 @@ fn every_shortcut_in_the_spec_table_reaches_its_intent() {
 
     let mut missed = Vec::new();
     for (text, expected) in spec_rows() {
+        trace(&format!("shortcut {text}"));
         let shortcut: ext::Shortcut = text.parse().unwrap_or_else(|e| panic!("{text}: {e}"));
         let key = to_egui_key(shortcut.key).unwrap_or_else(|| panic!("{text}: no egui key"));
         let modifiers = to_egui_modifiers(shortcut.modifiers);
         harness.state_mut().clear_dispatched();
-        // A fresh frame with nothing focused, so the list has the keyboard.
+        // Back in the sandbox with nothing selected and nothing focused, so
+        // every row starts from the same place and the list has the keyboard.
+        let pane = harness.state().app().model().focused;
+        let mut events = Vec::new();
+        harness.state_mut().app_mut().handle(
+            app::Command::Navigate {
+                pane,
+                to: local(dir.path()),
+            },
+            &mut events,
+        );
         harness.state_mut().app_mut().handle(
             app::Command::Select {
                 pane,
                 change: model::SelectionChange::Clear,
             },
-            &mut Vec::new(),
+            &mut events,
         );
+        settle(&mut harness);
         harness.key_press_modifiers(modifiers, key);
         harness.step();
         harness.step();
@@ -199,6 +259,10 @@ fn the_shell_shows_the_listing_and_navigates() {
     std::fs::write(dir.path().join("a.txt"), "a").unwrap_or_else(|e| panic!("{e}"));
     std::fs::create_dir(dir.path().join("sub")).unwrap_or_else(|e| panic!("{e}"));
     std::fs::write(dir.path().join("sub/inner.txt"), "i").unwrap_or_else(|e| panic!("{e}"));
+    let _guard = guard(
+        "the_shell_shows_the_listing_and_navigates",
+        Duration::from_mins(5),
+    );
     let mut harness = harness(dir.path());
     let pane = harness.state().app().model().focused;
     assert_eq!(
@@ -234,8 +298,8 @@ fn the_shell_shows_the_listing_and_navigates() {
         .app()
         .model()
         .active_tab(pane)
-        .map(|(_, t)| t.location.clone());
-    assert_eq!(location, Some(local(&dir.path().join("sub"))));
+        .and_then(|(_, t)| platform::paths::to_path(&t.location.path).ok());
+    assert_eq!(location, Some(dir.path().join("sub")));
     harness.get_by_label("inner.txt");
 
     // Backspace goes back; the palette opens on its shortcut.
@@ -268,6 +332,10 @@ fn scrolling_the_200k_fixture_in_details_view_holds_60_fps() {
     }
     .generate()
     .unwrap_or_else(|e| panic!("{e}"));
+    let _guard = guard(
+        "scrolling_the_200k_fixture_in_details_view_holds_60_fps",
+        Duration::from_mins(15),
+    );
     let mut harness = harness(fixture.root());
     let pane = harness.state().app().model().focused;
     assert_eq!(

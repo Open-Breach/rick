@@ -93,16 +93,18 @@ impl VPath {
         matches!(self.0.last(), Some(b'/' | b'\\'))
     }
 
-    /// The path with `name` appended as one more component, separated by `/`.
-    /// Providers treat `/` as the separator; the local provider on Windows
-    /// accepts it next to `\`.
+    /// The path with `name` appended as one more component. The separator is
+    /// the one the path already uses: `\` for a path written with
+    /// backslashes only (a Windows path), `/` otherwise. Providers treat `/`
+    /// as the separator; the local provider on Windows accepts both.
     #[must_use]
     pub fn join(&self, name: impl AsRef<[u8]>) -> Self {
         let name = name.as_ref();
         let mut bytes = Vec::with_capacity(self.0.len() + name.len() + 1);
         bytes.extend_from_slice(&self.0);
         if !self.0.is_empty() && !self.ends_with_separator() {
-            bytes.push(b'/');
+            let backslashes = self.0.contains(&b'\\') && !self.0.contains(&b'/');
+            bytes.push(if backslashes { b'\\' } else { b'/' });
         }
         bytes.extend_from_slice(name);
         Self(bytes)
@@ -411,7 +413,8 @@ mod tests {
         assert_eq!(VPath::from("/a/b/").join("c").to_string(), "/a/b/c");
         assert_eq!(VPath::from("").join("c").to_string(), "c");
         assert_eq!(VPath::from("C:\\x\\").join("c").to_string(), "C:\\x\\c");
-        assert_eq!(VPath::from("C:\\x").join("c").to_string(), "C:\\x/c");
+        assert_eq!(VPath::from("C:\\x").join("c").to_string(), "C:\\x\\c");
+        assert_eq!(VPath::from("C:\\x/y").join("c").to_string(), "C:\\x/y/c");
         assert_eq!(VPath::from("/a/b/c.txt").file_name(), Some(&b"c.txt"[..]));
         assert_eq!(VPath::from("/a/b/").file_name(), Some(&b"b"[..]));
         assert_eq!(VPath::from("C:\\x\\y").file_name(), Some(&b"y"[..]));
