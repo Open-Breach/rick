@@ -22,6 +22,11 @@ jobs:
       - run: cargo test -p tests --test fixture -- --ignored
         continue-on-error: ${{ runner.os == 'Windows' }}
         env: { TMP: "${{ runner.temp }}", TEMP: "${{ runner.temp }}", TMPDIR: "${{ runner.temp }}" }
+      # Acceptance (issue 2): listing the 200k fixture and the 1 GiB sparse
+      # copy, in release so the timings mean something. The Linux numbers are
+      # asserted; macOS and Windows print theirs until targets are set.
+      - run: cargo test -p tests --release --test listing --test copy -- --ignored --nocapture
+        env: { TMP: "${{ runner.temp }}", TEMP: "${{ runner.temp }}", TMPDIR: "${{ runner.temp }}" }
       - run: cargo doc --no-deps
         env: { RUSTDOCFLAGS: "-D warnings" }
   deny:
