@@ -1,0 +1,24 @@
+[package]
+name = "ops"
+version = "0.1.0"
+description = "Rick file operations: the 0.1 operations as Actions, each long one a Job, each reversible one undoable."
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+types = { workspace = true }
+runtime = { workspace = true }
+platform = { workspace = true }
+ext = { workspace = true }
+vfs = { workspace = true }
+vfs-local = { workspace = true }
+tokio = { workspace = true, features = ["io-util"] }
+tracing = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+futures = { workspace = true }
+
+[lints]
+workspace = true
