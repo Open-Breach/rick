@@ -78,17 +78,19 @@ impl UndoCommand for TrashCommand {
                 guard.drain(..).rev().collect()
             };
             let total = items.len() as u64;
-            for (done, item) in items.into_iter().enumerate() {
+            for (done, item) in items.iter().enumerate() {
                 job.progress.report(Progress::Items {
                     done: done as u64,
                     total: Some(total),
                 });
                 let platform = Arc::clone(&state.platform);
+                let item = item.clone();
                 runtime::handle()
                     .spawn_blocking(move || platform.restore(&item))
                     .await
                     .map_err(|join| Error::Io(std::io::Error::other(join)))??;
             }
+            state.trash.forget(&items);
             Ok(())
         });
         Ok(())
@@ -117,6 +119,7 @@ impl UndoCommand for TrashCommand {
                             .spawn_blocking(move || platform.trash(&path))
                             .await
                             .map_err(|join| Error::Io(std::io::Error::other(join)))??;
+                        state.trash.record(std::slice::from_ref(&item));
                         trashed
                             .lock()
                             .unwrap_or_else(PoisonError::into_inner)

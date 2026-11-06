@@ -24,6 +24,9 @@ use crate::traits::{
 pub struct Fake {
     dir: TempDir,
     items: Mutex<Vec<TrashedItem>>,
+    /// Trashed paths are numbered from here, never reused, so an item
+    /// trashed after a restore does not land on another item's path.
+    trashed_count: Mutex<u64>,
     opened: Mutex<Vec<PathBuf>>,
     revealed: Mutex<Vec<PathBuf>>,
     clipboard: Mutex<Option<String>>,
@@ -60,6 +63,7 @@ impl Fake {
         Ok(Self {
             dir,
             items: Mutex::new(Vec::new()),
+            trashed_count: Mutex::new(0),
             opened: Mutex::new(Vec::new()),
             revealed: Mutex::new(Vec::new()),
             clipboard: Mutex::new(None),
@@ -132,11 +136,12 @@ impl Trash for Fake {
         let original = std::path::absolute(path).map_err(Error::from_io)?;
         fs::symlink_metadata(&original).map_err(Error::from_io)?;
         let mut items = lock(&self.items);
-        let trashed = self
-            .dir
-            .path()
-            .join("trash")
-            .join(format!("{}", items.len()));
+        let number = {
+            let mut count = lock(&self.trashed_count);
+            *count += 1;
+            *count
+        };
+        let trashed = self.dir.path().join("trash").join(number.to_string());
         fs::rename(&original, &trashed).map_err(Error::from_io)?;
         let item = TrashedItem {
             original,
