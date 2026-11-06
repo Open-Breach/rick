@@ -39,7 +39,7 @@ pub mod search;
 
 pub use action::{
     Action, ActionCtx, ActionGroup, ActionId, ActionOutcome, Availability, Invocation, Key, Level,
-    Modifiers, PaneId, Shortcut, UiHost, UndoCommand,
+    Modifiers, PaneId, Shortcut, ShortcutParseError, UiHost, UndoCommand,
 };
 pub use async_trait::async_trait;
 pub use decorator::{

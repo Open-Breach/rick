@@ -225,6 +225,139 @@ pub struct Shortcut {
     pub key: Key,
 }
 
+impl Shortcut {
+    /// The spec's text form, e.g. `Mod+Shift+C`, `F2`, `Alt+Left`, `Mod+,`.
+    /// Letters are upper case; `+` and `-` are written `Plus` and `Minus`.
+    #[must_use]
+    pub fn text(&self) -> String {
+        self.to_string()
+    }
+}
+
+impl fmt::Display for Shortcut {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if self.modifiers.contains(Modifiers::MOD) {
+            f.write_str("Mod+")?;
+        }
+        if self.modifiers.contains(Modifiers::SHIFT) {
+            f.write_str("Shift+")?;
+        }
+        if self.modifiers.contains(Modifiers::ALT) {
+            f.write_str("Alt+")?;
+        }
+        match self.key {
+            Key::Char('+') => f.write_str("Plus"),
+            Key::Char('-') => f.write_str("Minus"),
+            Key::Char(c) => write!(f, "{}", c.to_ascii_uppercase()),
+            Key::F(n) => write!(f, "F{n}"),
+            Key::Enter => f.write_str("Enter"),
+            Key::Escape => f.write_str("Escape"),
+            Key::Tab => f.write_str("Tab"),
+            Key::Backspace => f.write_str("Backspace"),
+            Key::Delete => f.write_str("Delete"),
+            Key::Insert => f.write_str("Insert"),
+            Key::Home => f.write_str("Home"),
+            Key::End => f.write_str("End"),
+            Key::PageUp => f.write_str("PageUp"),
+            Key::PageDown => f.write_str("PageDown"),
+            Key::Up => f.write_str("Up"),
+            Key::Down => f.write_str("Down"),
+            Key::Left => f.write_str("Left"),
+            Key::Right => f.write_str("Right"),
+            Key::Space => f.write_str("Space"),
+        }
+    }
+}
+
+/// Why a shortcut text did not parse.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum ShortcutParseError {
+    /// The text has no key, e.g. `Mod+`.
+    #[error("no key in shortcut")]
+    NoKey,
+    /// A part is neither a modifier nor a key.
+    #[error("unknown key or modifier `{0}`")]
+    Unknown(String),
+}
+
+impl std::str::FromStr for Shortcut {
+    type Err = ShortcutParseError;
+
+    /// Parses the text form. `Ctrl` and `Cmd` are accepted for `Mod`,
+    /// `Option` for `Alt`; key names are matched ignoring case; a single
+    /// character stands for itself, so `Mod+,` and `Mod+Comma` are the same.
+    fn from_str(text: &str) -> Result<Self, Self::Err> {
+        let mut modifiers = Modifiers::empty();
+        let mut key = None;
+        // A trailing `+` is the key itself ("Mod++").
+        let body = text.trim();
+        let parts: Vec<&str> = if let Some(stem) = body.strip_suffix("++") {
+            stem.split('+').chain(std::iter::once("+")).collect()
+        } else {
+            body.split('+').collect()
+        };
+        for part in parts {
+            let part = part.trim();
+            if part.is_empty() {
+                continue;
+            }
+            match part.to_ascii_lowercase().as_str() {
+                "mod" | "ctrl" | "cmd" | "control" | "command" => modifiers |= Modifiers::MOD,
+                "shift" => modifiers |= Modifiers::SHIFT,
+                "alt" | "option" => modifiers |= Modifiers::ALT,
+                lower => {
+                    if key.is_some() {
+                        return Err(ShortcutParseError::Unknown(part.to_owned()));
+                    }
+                    key = Some(parse_key(lower, part)?);
+                }
+            }
+        }
+        key.map(|key| Shortcut { modifiers, key })
+            .ok_or(ShortcutParseError::NoKey)
+    }
+}
+
+fn parse_key(lower: &str, original: &str) -> Result<Key, ShortcutParseError> {
+    Ok(match lower {
+        "enter" | "return" => Key::Enter,
+        "escape" | "esc" => Key::Escape,
+        "tab" => Key::Tab,
+        "backspace" => Key::Backspace,
+        "delete" | "del" => Key::Delete,
+        "insert" | "ins" => Key::Insert,
+        "home" => Key::Home,
+        "end" => Key::End,
+        "pageup" | "pgup" => Key::PageUp,
+        "pagedown" | "pgdn" => Key::PageDown,
+        "up" => Key::Up,
+        "down" => Key::Down,
+        "left" => Key::Left,
+        "right" => Key::Right,
+        "space" => Key::Space,
+        "plus" => Key::Char('+'),
+        "minus" => Key::Char('-'),
+        "comma" => Key::Char(','),
+        "period" => Key::Char('.'),
+        "backslash" => Key::Char('\\'),
+        "slash" => Key::Char('/'),
+        "backtick" | "grave" => Key::Char('`'),
+        _ => {
+            if let Some(n) = lower.strip_prefix('f')
+                && let Ok(n) = n.parse::<u8>()
+                && (1..=24).contains(&n)
+            {
+                return Ok(Key::F(n));
+            }
+            let mut chars = original.chars();
+            match (chars.next(), chars.next()) {
+                (Some(c), None) if !c.is_whitespace() => Key::Char(c.to_ascii_lowercase()),
+                _ => return Err(ShortcutParseError::Unknown(original.to_owned())),
+            }
+        }
+    })
+}
+
 /// Severity of a notification.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum Level {
@@ -298,4 +431,74 @@ pub trait UndoCommand: Send {
 
     /// Text for the Undo and Redo menu items.
     fn label(&self) -> String;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn sc(modifiers: Modifiers, key: Key) -> Shortcut {
+        Shortcut { modifiers, key }
+    }
+
+    #[test]
+    fn shortcut_text_round_trips() {
+        let cases = [
+            (
+                "Mod+Shift+C",
+                sc(Modifiers::MOD | Modifiers::SHIFT, Key::Char('c')),
+            ),
+            ("F2", sc(Modifiers::empty(), Key::F(2))),
+            ("Alt+Left", sc(Modifiers::ALT, Key::Left)),
+            ("Mod+,", sc(Modifiers::MOD, Key::Char(','))),
+            ("Mod+Plus", sc(Modifiers::MOD, Key::Char('+'))),
+            ("Mod+Minus", sc(Modifiers::MOD, Key::Char('-'))),
+            ("Mod+\\", sc(Modifiers::MOD, Key::Char('\\'))),
+            ("Mod+`", sc(Modifiers::MOD, Key::Char('`'))),
+            (
+                "Mod+Shift+Home",
+                sc(Modifiers::MOD | Modifiers::SHIFT, Key::Home),
+            ),
+            ("Delete", sc(Modifiers::empty(), Key::Delete)),
+            ("Mod+1", sc(Modifiers::MOD, Key::Char('1'))),
+            ("Space", sc(Modifiers::empty(), Key::Space)),
+        ];
+        for (text, shortcut) in cases {
+            assert_eq!(text.parse::<Shortcut>().ok(), Some(shortcut), "{text}");
+            assert_eq!(shortcut.text(), text, "{text}");
+        }
+    }
+
+    #[test]
+    fn shortcut_parsing_accepts_aliases_and_rejects_nonsense() {
+        assert_eq!(
+            "ctrl+shift+n".parse::<Shortcut>().ok(),
+            Some(sc(Modifiers::MOD | Modifiers::SHIFT, Key::Char('n')))
+        );
+        assert_eq!(
+            "Cmd+Option+Up".parse::<Shortcut>().ok(),
+            Some(sc(Modifiers::MOD | Modifiers::ALT, Key::Up))
+        );
+        assert_eq!(
+            "Mod+Comma".parse::<Shortcut>().ok(),
+            Some(sc(Modifiers::MOD, Key::Char(',')))
+        );
+        assert_eq!(
+            "Mod++".parse::<Shortcut>().ok(),
+            Some(sc(Modifiers::MOD, Key::Char('+')))
+        );
+        assert_eq!("Mod+".parse::<Shortcut>(), Err(ShortcutParseError::NoKey));
+        assert_eq!(
+            "Mod+Bogus".parse::<Shortcut>(),
+            Err(ShortcutParseError::Unknown("Bogus".to_owned()))
+        );
+        assert_eq!(
+            "Mod+A+B".parse::<Shortcut>(),
+            Err(ShortcutParseError::Unknown("B".to_owned()))
+        );
+        assert_eq!(
+            "F25".parse::<Shortcut>(),
+            Err(ShortcutParseError::Unknown("F25".to_owned()))
+        );
+    }
 }
