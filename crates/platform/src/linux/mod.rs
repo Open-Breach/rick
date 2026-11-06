@@ -183,6 +183,12 @@ impl ConfigDir for Native {
             .unwrap_or_else(|| PathBuf::from(".config"))
             .join("rick")
     }
+
+    fn home_dir(&self) -> PathBuf {
+        std::env::var_os("HOME")
+            .filter(|v| !v.is_empty())
+            .map_or_else(|| PathBuf::from("."), PathBuf::from)
+    }
 }
 
 #[cfg(test)]

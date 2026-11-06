@@ -138,7 +138,7 @@ pub enum Intent {
     Fullscreen,
     /// Quit.
     Quit,
-    /// The side panel (not in 0.1).
+    /// Show or hide the side panel.
     ToggleSidePanel,
     /// Move the list cursor one row up.
     CursorUp,

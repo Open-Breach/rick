@@ -3,7 +3,8 @@
 //! Only settings the specification names appear here. The TOML file itself
 //! is read and written by `app`; the model only carries the values.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
+use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
@@ -67,6 +68,86 @@ pub struct Settings {
     /// Rebound shortcuts: action id to shortcut text, e.g. `"core.copy" =
     /// "Mod+C"`. Actions not listed keep their default.
     pub shortcuts: BTreeMap<String, String>,
+    /// The side panel: shown or hidden, which side, its width and which of
+    /// its sections are folded.
+    pub side_panel: SidePanel,
+    /// Locations pinned to the side panel, in display order.
+    pub pinned: Vec<PathBuf>,
+}
+
+/// Which edge of the window the side panel docks to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum PanelSide {
+    /// The left edge, the default.
+    #[default]
+    Left,
+    /// The right edge.
+    Right,
+}
+
+/// The side panel's sections, top to bottom.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Section {
+    /// The user's home directory.
+    Home,
+    /// Recently changed files and folders.
+    Recent,
+    /// Shares, hosts and mounted network file systems.
+    Network,
+    /// The platform trash.
+    Trash,
+    /// Locations the user pinned.
+    Pinned,
+}
+
+impl Section {
+    /// Every section in display order.
+    pub const ALL: [Self; 5] = [
+        Self::Home,
+        Self::Recent,
+        Self::Network,
+        Self::Trash,
+        Self::Pinned,
+    ];
+
+    /// The section's title.
+    #[must_use]
+    pub fn title(self) -> &'static str {
+        match self {
+            Self::Home => "Home",
+            Self::Recent => "Recent",
+            Self::Network => "Network",
+            Self::Trash => "Trash",
+            Self::Pinned => "Pinned",
+        }
+    }
+}
+
+/// The side panel's persisted state.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct SidePanel {
+    /// Shown at all.
+    pub visible: bool,
+    /// Left or right.
+    pub side: PanelSide,
+    /// Width in logical points.
+    pub width: u16,
+    /// Sections folded shut.
+    pub folded: BTreeSet<Section>,
+}
+
+impl Default for SidePanel {
+    fn default() -> Self {
+        Self {
+            visible: true,
+            side: PanelSide::Left,
+            width: 220,
+            folded: BTreeSet::new(),
+        }
+    }
 }
 
 impl Default for Settings {
@@ -84,6 +165,8 @@ impl Default for Settings {
             density: Density::Normal,
             accent: None,
             shortcuts: BTreeMap::new(),
+            side_panel: SidePanel::default(),
+            pinned: Vec::new(),
         }
     }
 }
@@ -118,6 +201,24 @@ pub enum SettingsChange {
         /// The new binding as text, or `None`.
         binding: Option<String>,
     },
+    /// Show or hide the side panel.
+    SidePanelVisible(bool),
+    /// Dock the side panel left or right.
+    SidePanelSide(PanelSide),
+    /// The side panel's width in logical points.
+    SidePanelWidth(u16),
+    /// Fold or unfold one section of the side panel.
+    SidePanelFold {
+        /// Which section.
+        section: Section,
+        /// Folded shut, or open.
+        folded: bool,
+    },
+    /// Pin a location to the side panel; a location already pinned stays
+    /// where it is.
+    Pin(PathBuf),
+    /// Unpin a location.
+    Unpin(PathBuf),
 }
 
 impl Settings {
@@ -145,6 +246,22 @@ impl Settings {
                     self.shortcuts.remove(&action);
                 }
             },
+            SettingsChange::SidePanelVisible(v) => self.side_panel.visible = v,
+            SettingsChange::SidePanelSide(v) => self.side_panel.side = v,
+            SettingsChange::SidePanelWidth(v) => self.side_panel.width = v,
+            SettingsChange::SidePanelFold { section, folded } => {
+                if folded {
+                    self.side_panel.folded.insert(section);
+                } else {
+                    self.side_panel.folded.remove(&section);
+                }
+            }
+            SettingsChange::Pin(path) => {
+                if !self.pinned.contains(&path) {
+                    self.pinned.push(path);
+                }
+            }
+            SettingsChange::Unpin(path) => self.pinned.retain(|p| *p != path),
         }
     }
 }
@@ -173,6 +290,29 @@ mod tests {
         });
         assert!(!s.folders_first);
         assert_eq!((s.sort_by, s.sort_dir), (Column::Size, SortDir::Descending));
+        let home = PathBuf::from("/home/me");
+        s.apply(SettingsChange::Pin(home.clone()));
+        s.apply(SettingsChange::Pin(home.clone()));
+        s.apply(SettingsChange::Pin(PathBuf::from("/srv")));
+        assert_eq!(s.pinned, [home.clone(), PathBuf::from("/srv")]);
+        s.apply(SettingsChange::Unpin(home));
+        assert_eq!(s.pinned, [PathBuf::from("/srv")]);
+        s.apply(SettingsChange::SidePanelFold {
+            section: Section::Recent,
+            folded: true,
+        });
+        s.apply(SettingsChange::SidePanelSide(PanelSide::Right));
+        s.apply(SettingsChange::SidePanelWidth(300));
+        s.apply(SettingsChange::SidePanelVisible(false));
+        assert!(s.side_panel.folded.contains(&Section::Recent));
+        assert_eq!(s.side_panel.side, PanelSide::Right);
+        assert_eq!(s.side_panel.width, 300);
+        assert!(!s.side_panel.visible);
+        s.apply(SettingsChange::SidePanelFold {
+            section: Section::Recent,
+            folded: false,
+        });
+        assert!(s.side_panel.folded.is_empty());
         assert_eq!(
             s.shortcuts.get("core.copy").map(String::as_str),
             Some("Mod+Shift+C")

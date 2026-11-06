@@ -55,13 +55,17 @@ mod tests {
         let path = dir.path().join("sub").join(SETTINGS_FILE);
         assert_eq!(load(&path).ok(), Some(Settings::default()));
 
-        let settings = Settings {
+        let mut settings = Settings {
             show_hidden: true,
             sort_by: Column::Size,
             sort_dir: SortDir::Descending,
             theme: Theme::Dark,
+            pinned: vec![dir.path().join("pinned here")],
             ..Settings::default()
         };
+        settings.side_panel.side = model::PanelSide::Right;
+        settings.side_panel.width = 300;
+        settings.side_panel.folded.insert(model::Section::Network);
         save(&path, &settings).unwrap_or_else(|e| panic!("{e}"));
         assert_eq!(load(&path).ok(), Some(settings));
     }

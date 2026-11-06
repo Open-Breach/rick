@@ -33,6 +33,7 @@ pub mod paths;
 pub mod preview;
 pub mod settings_ui;
 pub mod shell;
+pub mod side_panel;
 pub mod views;
 
 use std::sync::Arc;

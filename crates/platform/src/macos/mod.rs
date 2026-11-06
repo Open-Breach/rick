@@ -123,4 +123,10 @@ impl ConfigDir for Native {
             .map_or_else(|| PathBuf::from("."), PathBuf::from)
             .join("Library/Application Support/Rick")
     }
+
+    fn home_dir(&self) -> PathBuf {
+        std::env::var_os("HOME")
+            .filter(|v| !v.is_empty())
+            .map_or_else(|| PathBuf::from("."), PathBuf::from)
+    }
 }
