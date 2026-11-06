@@ -67,6 +67,9 @@
 //!     fn prompt(&self, _title: &str, default: &str) -> Option<String> {
 //!         Some(default.to_owned())
 //!     }
+//!     fn show(&self, title: &str, _text: &str) {
+//!         self.0.borrow_mut().push(title.to_owned());
+//!     }
 //! }
 //!
 //! let ctx = ActionCtx {
