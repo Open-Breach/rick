@@ -231,3 +231,62 @@ fn a_tab_dragged_onto_another_panes_strip_moves_there() {
     );
     assert!(model.pane(pane_b).is_none(), "the emptied pane is gone");
 }
+
+/// The toolbar at three widths with a twelve-segment path: no widget
+/// overlaps another, the right group keeps its width, the breadcrumb
+/// collapses into a chevron when it must and always shows the last segment.
+#[test]
+fn the_toolbar_groups_never_overlap_and_the_right_group_keeps_its_width() {
+    let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+    let mut deep = dir.path().to_path_buf();
+    for name in [
+        "alpha", "bravo", "charlie", "delta", "echo", "foxtrot", "golf", "hotel", "india",
+        "juliet", "kilo", "lima",
+    ] {
+        deep.push(name);
+    }
+    fs::create_dir_all(&deep).unwrap_or_else(|e| panic!("{e}"));
+    let mut right_widths = Vec::new();
+    for width in [480.0, 800.0, 1600.0] {
+        let mut harness = harness(&deep, egui::vec2(width, 600.0));
+        // Pane A takes the whole window: the side panel off keeps the
+        // toolbar as wide as the window.
+        harness.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::B);
+        harness.step();
+        harness.step();
+        let pane = harness.state().app().model().focused;
+        let (tab, _) = harness
+            .state()
+            .app()
+            .model()
+            .active_tab(pane)
+            .unwrap_or_else(|| panic!("tab"));
+        let rects = harness.state().toolbar_rects(tab);
+        assert!(rects.len() >= 7, "{width}: {rects:?}");
+        for (i, (ga, a)) in rects.iter().enumerate() {
+            for (gb, b) in rects.iter().skip(i + 1) {
+                let overlap = a.shrink(0.5).intersects(b.shrink(0.5));
+                assert!(!overlap, "{width}: {ga} {a:?} overlaps {gb} {b:?}");
+            }
+            assert!(
+                a.left() >= -0.5 && a.right() <= width + 0.5,
+                "{width}: {ga} {a:?}"
+            );
+        }
+        let right: Vec<&egui::Rect> = rects
+            .iter()
+            .filter(|(g, _)| *g == "right")
+            .map(|(_, r)| r)
+            .collect();
+        let right_width = right.iter().map(|r| r.right()).fold(0.0, f32::max)
+            - right.iter().map(|r| r.left()).fold(f32::INFINITY, f32::min);
+        right_widths.push(right_width.round());
+        // The last segment is always there; at 480 the ancestors fold.
+        harness.get_by_label_contains("lima");
+        if width < 500.0 {
+            harness.get_by_label(ui_egui::icons::COLLAPSED);
+        }
+    }
+    assert_eq!(right_widths[0], right_widths[1], "{right_widths:?}");
+    assert_eq!(right_widths[1], right_widths[2], "{right_widths:?}");
+}

@@ -63,6 +63,10 @@ pub fn details(ui: &mut egui::Ui, cx: &mut PaneCx<'_>) {
     ui.style_mut().interaction.selectable_labels = false;
 
     let extra = extra_columns(cx);
+    // No grid lines in the body: the table paints its column boundaries
+    // with the non-interactive stroke, which goes; the resize handles still
+    // show when hovered or dragged, and the header draws its own separators.
+    ui.visuals_mut().widgets.noninteractive.bg_stroke = egui::Stroke::NONE;
     let mut builder = TableBuilder::new(ui)
         .id_salt(("details", cx.tab_id))
         .striped(settings.zebra_stripes)
@@ -98,11 +102,13 @@ pub fn details(ui: &mut egui::Ui, cx: &mut PaneCx<'_>) {
                 if sort_header(ui, label, column, sort) {
                     sort_request = Some(column);
                 }
+                header_separator(ui);
             });
         }
         for def in &extra {
             row.col(|ui| {
                 ui.strong(def.label);
+                header_separator(ui);
             });
         }
     });
@@ -235,6 +241,16 @@ pub fn badge_text(badge: Badge) -> egui::RichText {
     egui::RichText::new(badge.glyph)
         .color(color(badge.color))
         .strong()
+}
+
+/// The vertical line between column titles, at the right edge of a header
+/// cell, where the resize handle is.
+fn header_separator(ui: &mut egui::Ui) {
+    let rect = ui.max_rect();
+    let x = rect.right() + ui.spacing().item_spacing.x / 2.0;
+    let stroke = ui.visuals().widgets.noninteractive.fg_stroke;
+    let stroke = egui::Stroke::new(1.0, stroke.color.gamma_multiply(0.4));
+    ui.painter().vline(x, rect.y_range().shrink(3.0), stroke);
 }
 
 /// A column header that shows the sort marker; `true` when clicked.

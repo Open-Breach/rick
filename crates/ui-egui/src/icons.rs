@@ -43,6 +43,8 @@ pub const MAXIMISE: &str = ph::SQUARE;
 pub const RESTORE: &str = ph::CORNERS_OUT;
 /// Collapsed breadcrumb ancestors.
 pub const COLLAPSED: &str = ph::CARET_DOUBLE_LEFT;
+/// Between breadcrumb segments.
+pub const SEGMENT: &str = ph::CARET_RIGHT;
 /// Dropdown marker.
 pub const DROPDOWN: &str = ph::CARET_DOWN;
 /// Sorted ascending.
@@ -168,6 +170,7 @@ mod tests {
         MAXIMISE,
         RESTORE,
         COLLAPSED,
+        SEGMENT,
         DROPDOWN,
         SORT_ASC,
         SORT_DESC,

@@ -9,8 +9,8 @@ use app::{App, Command, Event};
 use egui_dock::{DockArea, NodePath, TabViewer};
 use ext::{ActionCtx, ActionId, Invocation, Level};
 use model::{
-    Column, Density, JobState, PaneId, PanelSide, SelectionChange, SettingsChange, SortDir, Tab,
-    TabId, Theme, ViewMode,
+    Column, Density, IconSize, JobState, PaneId, PanelSide, SelectionChange, SettingsChange,
+    SortDir, Tab, TabId, Theme, ViewMode,
 };
 use platform::{ControlsSide, PropertiesOutcome};
 use types::{EntryId, EntryKind, Location, Progress};
@@ -38,6 +38,9 @@ pub struct TabUi {
     pub focus_filter: bool,
     /// Scroll this row into view on the next frame.
     pub scroll_to: Option<usize>,
+    /// The toolbar's widget rectangles of the last frame by group ("left",
+    /// "middle", "right"), for tests that check the layout.
+    pub toolbar_rects: Vec<(&'static str, egui::Rect)>,
     /// Forget the column widths on the next frame.
     pub reset_columns: bool,
     /// How many rows the last frame could show, for Page Up and Down.
@@ -380,6 +383,16 @@ impl RickUi {
                 });
             open
         });
+    }
+
+    /// The toolbar rectangles of a tab in the last frame, by group, for
+    /// tests that check the layout.
+    #[must_use]
+    pub fn toolbar_rects(&self, tab: TabId) -> Vec<(&'static str, egui::Rect)> {
+        self.tabs
+            .get(&tab)
+            .map(|t| t.toolbar_rects.clone())
+            .unwrap_or_default()
     }
 
     /// Each pane's rectangle in the last frame, for tests that drag tabs.
@@ -818,15 +831,44 @@ impl RickUi {
             Intent::ExtendHome => self.move_cursor(pane, isize::MIN, true),
             Intent::ExtendEnd => self.move_cursor(pane, isize::MAX, true),
             Intent::QuickOpen => self.search.focus_with(""),
+            Intent::ViewIcons => {
+                let size = match self.app.model().active_tab(pane).map(|(_, t)| t.view) {
+                    Some(ViewMode::Icons(size)) => size,
+                    _ => IconSize::Medium,
+                };
+                self.handle(Command::SetView {
+                    pane,
+                    mode: ViewMode::Icons(size),
+                });
+            }
+            Intent::IconSizeUp | Intent::IconSizeDown => {
+                let current = match self.app.model().active_tab(pane).map(|(_, t)| t.view) {
+                    Some(ViewMode::Icons(size)) => size,
+                    _ => IconSize::Medium,
+                };
+                let order = [
+                    IconSize::Small,
+                    IconSize::Medium,
+                    IconSize::Large,
+                    IconSize::ExtraLarge,
+                ];
+                let at = order.iter().position(|s| *s == current).unwrap_or(1);
+                let next = if intent == Intent::IconSizeUp {
+                    (at + 1).min(order.len() - 1)
+                } else {
+                    at.saturating_sub(1)
+                };
+                self.handle(Command::SetView {
+                    pane,
+                    mode: ViewMode::Icons(order[next]),
+                });
+            }
             Intent::SelectByPattern
             | Intent::PasteAsLink
             | Intent::BulkRename
             | Intent::OpenWith
             | Intent::Console
-            | Intent::ViewTree
-            | Intent::ViewIcons
-            | Intent::IconSizeUp
-            | Intent::IconSizeDown => {
+            | Intent::ViewTree => {
                 let label = intent.spec().map_or("This", |s| s.label);
                 self.unavailable(label);
             }
