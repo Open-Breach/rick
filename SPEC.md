@@ -271,7 +271,7 @@ The viewer never writes to the file; editing is the job of an external applicati
 - **Copy.** Put the selection on the clipboard for copying.
 - **Cut.** Put the selection on the clipboard for moving.
 - **Paste.** Copy or move the clipboard contents into the current location, running as a job with the usual conflict handling.
-- **Create link.** Make a link to the selected file or folder at another location. On Linux and macOS this is a symbolic link; on Windows the user picks between a symbolic link, a directory junction and a classic .lnk shortcut. Also offered as a drag modifier (Alt) and as a paste variant ("Paste as link").
+- **Create link.** Make a link to the selected file or folder at another location. On Linux and macOS this is a symbolic link; on Windows the user picks between a symbolic link, a directory junction and a classic .lnk shortcut. 0.1 offers symbolic and hard links only (`LinkKind::{Symbolic, Hard}`); junctions and .lnk shortcuts come in a later issue. Also offered as a drag modifier (Alt) and as a paste variant ("Paste as link").
 - **Move to trash.** Send the selection to the platform trash (Delete key), restorable from the Trash entry in the side panel.
 - **Delete permanently.** Remove the selection without going through the trash (Shift+Delete), after confirmation.
 - **Duplicate.** Make a copy of the selection in the same folder with a derived name, such as "name (copy)".
@@ -392,7 +392,7 @@ One Cargo workspace, one crate per concern, grouped by layer. Kernel crates carr
 - `runtime` — job system, cancellation, progress, thread pools, event bus.
 - `platform` — per-OS code behind one trait set: trash, links and junctions, elevation, system properties dialogue, file associations, mounts.
 - `ext` — the five extension traits, the registry, manifests and the extension context.
-- `vfs` — the Provider trait and the mount table that routes a path to a provider.
+- `vfs` — the mount table that routes a path to its `Provider`, and cross-provider copy and move.
 - `vfs-local` — the local filesystem provider: listing, statx, watching, copy and reflink.
 - `model` — the directory model: cached listings, sort, filter, group, selection, history.
 - `ops` — the file operations as jobs: copy, move, trash, delete, rename, link, undo stack, conflict policy.
@@ -491,6 +491,8 @@ These govern how the crates fit together. They are the decisions an implementer 
 ### Core types and extension traits
 
 First cut of the contract between the kernel and the extensions. Names and shapes are binding; signatures may gain parameters as the implementation learns, but only through a spec change. Everything here is `Send + Sync`; async methods are written with the `async_trait` attribute so the traits stay usable as `dyn` objects (`Arc<dyn Provider>`), to be replaced by native `async fn` once `dyn`-compatible async traits are stable; streamed results use `BoxStream` from `futures`.
+
+The supporting types the signatures name without defining them here (`ListOptions`, `WriteOptions`, `RemoveMode`, `LinkKind`, `CopyOptions`, `Badge`, `Color`, `ColumnDef`, `ColumnId`, `CellValue`, `PanelSection`, `DecorateCtx`, `PaneId`, `Invocation`, `Shortcut`, `UiHost`, `RenderRequest`, `TextLayer`, `TextBlock`, `TextureId`, `Transport`, `SearchScope`, `QueryKind`, `Filter`, `SearchHit`, `SettingsSchema`, `Version`) are defined and documented in crate `ext`, with the smallest shape that makes the trait usable. Their shapes are binding as implemented; a change to one goes through a numbered question like a change to a signature.
 
 **Value types** (crate `types`, no I/O):
 

@@ -82,6 +82,9 @@ Once answered, an entry keeps its number and gains a `Decided (date):` line.
    Assumed: the smallest shapes that make the traits usable, as defined in
    `ext`. `LinkKind` has only `Symbolic` and `Hard`; junctions and `.lnk`
    shortcuts are not in 0.1.
+   Decided (2026-11-06): as assumed; the spec now points at `ext` for the
+   supporting types and notes that junctions and `.lnk` shortcuts are not
+   in 0.1.
 
 9. (issue 2) The build order mentions "vfs-local with the two-pass
    listing", which nothing else describes.
