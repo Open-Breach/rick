@@ -260,3 +260,20 @@ pub async fn read_bytes(
     }
     Ok(out)
 }
+
+/// Runs `work` on the runtime's blocking pool and awaits it, for extensions
+/// that call into synchronous libraries or programs from a job.
+///
+/// # Errors
+///
+/// `work`'s error, or `Error::Io` when the blocking task panicked.
+pub async fn blocking<T, F>(work: F) -> Result<T, Error>
+where
+    T: Send + 'static,
+    F: FnOnce() -> Result<T, Error> + Send + 'static,
+{
+    runtime::handle()
+        .spawn_blocking(work)
+        .await
+        .map_err(|join| Error::Io(std::io::Error::other(join)))?
+}

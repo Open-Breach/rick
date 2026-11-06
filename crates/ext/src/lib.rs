@@ -48,7 +48,7 @@ pub use decorator::{
 pub use futures::stream::BoxStream;
 pub use preview::{
     Frame, PreviewDoc, Previewer, RenderRequest, TextBlock, TextLayer, TextSpan, TextureId,
-    Transport, read_bytes,
+    Transport, blocking, read_bytes,
 };
 pub use provider::{
     Capabilities, ChangeStream, CopyOptions, Depth, EntryStream, FsChange, LinkKind, ListOptions,
@@ -57,5 +57,6 @@ pub use provider::{
 pub use registry::{
     API_VERSION, Extension, Manifest, Registry, SettingField, SettingKind, SettingsSchema,
 };
+pub use runtime::JobRunner;
 pub use search::{Filter, Query, QueryKind, SearchHit, SearchIndex, SearchScope};
 pub use semver::Version;

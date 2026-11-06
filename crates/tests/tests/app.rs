@@ -38,6 +38,7 @@ impl UiHost for Scripted {
             .unwrap_or_else(PoisonError::into_inner)
             .clone()
     }
+    fn show(&self, _title: &str, _text: &str) {}
 }
 
 struct Driver {

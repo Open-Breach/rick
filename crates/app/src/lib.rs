@@ -27,6 +27,7 @@
 //!     fn notify(&self, _: Level, _: &str) {}
 //!     fn confirm(&self, _: &str, _: &str) -> bool { true }
 //!     fn prompt(&self, _: &str, default: &str) -> Option<String> { Some(default.to_owned()) }
+//!     fn show(&self, _: &str, _: &str) {}
 //! }
 //!
 //! let platform = Arc::new(platform::Native::new());

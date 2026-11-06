@@ -312,6 +312,7 @@ impl UiHost for Quiet {
     fn prompt(&self, _: &str, _: &str) -> Option<String> {
         None
     }
+    fn show(&self, _title: &str, _text: &str) {}
 }
 
 /// The app follows the focused pane's single selected file.

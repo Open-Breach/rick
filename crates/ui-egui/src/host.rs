@@ -38,6 +38,7 @@ struct Inner {
     confirm_answer: Option<bool>,
     asked: Option<Ask>,
     notices: Vec<(Level, String)>,
+    shown: Vec<(String, String)>,
 }
 
 /// The shell's [`UiHost`].
@@ -84,6 +85,12 @@ impl EguiHost {
     pub fn take_notices(&self) -> Vec<(Level, String)> {
         std::mem::take(&mut self.lock().notices)
     }
+
+    /// The texts actions asked to show since the last call, as (title,
+    /// text).
+    pub fn take_shown(&self) -> Vec<(String, String)> {
+        std::mem::take(&mut self.lock().shown)
+    }
 }
 
 impl std::fmt::Debug for EguiHost {
@@ -123,6 +130,10 @@ impl UiHost for EguiHost {
             default: default.to_owned(),
         });
         None
+    }
+
+    fn show(&self, title: &str, text: &str) {
+        self.lock().shown.push((title.to_owned(), text.to_owned()));
     }
 }
 

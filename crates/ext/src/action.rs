@@ -379,6 +379,10 @@ pub trait UiHost {
 
     /// Asks for a line of text and blocks for it; `None` when dismissed.
     fn prompt(&self, title: &str, default: &str) -> Option<String>;
+
+    /// Shows a read-only text, such as a log, under `title`; returns at
+    /// once.
+    fn show(&self, title: &str, text: &str);
 }
 
 /// A command the user can invoke.

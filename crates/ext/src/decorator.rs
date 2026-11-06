@@ -59,6 +59,12 @@
 //!             rows: vec![("Flavour".into(), "CommonMark".into())],
 //!         })
 //!     }
+//!
+//!     fn invalidates_on(&self, _loc: &Location) -> Vec<Location> {
+//!         Vec::new()
+//!     }
+//!
+//!     fn invalidate(&self, _loc: &Location) {}
 //! }
 //!
 //! let provider = ProviderId("local");
@@ -235,4 +241,14 @@ pub trait Decorator: Send + Sync + 'static {
 
     /// Optional section for the info panel.
     fn panel(&self, entry: &Entry) -> Option<PanelSection>;
+
+    /// Locations whose changes make this decorator's answers for `loc`
+    /// stale, besides `loc` itself: a Git decorator names the `.git`
+    /// directory. The kernel watches them and calls [`invalidate`](Self::invalidate).
+    fn invalidates_on(&self, loc: &Location) -> Vec<Location>;
+
+    /// The kernel saw a change at `loc` or at one of the locations named by
+    /// [`invalidates_on`](Self::invalidates_on); cached answers for `loc` are
+    /// stale and the next `decorate` must look again.
+    fn invalidate(&self, loc: &Location);
 }

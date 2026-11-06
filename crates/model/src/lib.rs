@@ -13,10 +13,10 @@
 mod listing;
 mod settings;
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
-use ext::FsChange;
 pub use ext::PaneId;
+use ext::{Decoration, FsChange};
 pub use listing::{Column, Group, IconSize, Listing, Sort, SortDir, ViewMode, ViewSpec, type_of};
 pub use settings::{Density, Settings, SettingsChange, Theme};
 use types::{Entry, EntryId, JobId, Location, Progress};
@@ -214,6 +214,8 @@ pub struct Tab {
     pub listing: Listing,
     /// Selected entry ids.
     pub selection: BTreeSet<EntryId>,
+    /// What decorators said about the entries: badges, tints, cells.
+    pub decorations: HashMap<EntryId, Decoration>,
 }
 
 impl Tab {
@@ -232,6 +234,7 @@ impl Tab {
             flatten: false,
             listing: Listing::new(),
             selection: BTreeSet::new(),
+            decorations: HashMap::new(),
         }
     }
 
@@ -406,6 +409,7 @@ impl Model {
         tab.filter.clear();
         tab.listing.clear();
         tab.selection.clear();
+        tab.decorations.clear();
         Some(id)
     }
 
@@ -418,6 +422,7 @@ impl Model {
         tab.filter.clear();
         tab.listing.clear();
         tab.selection.clear();
+        tab.decorations.clear();
         Some(to)
     }
 
@@ -431,6 +436,7 @@ impl Model {
         tab.filter.clear();
         tab.listing.clear();
         tab.selection.clear();
+        tab.decorations.clear();
         Some(to)
     }
 
@@ -702,6 +708,20 @@ impl Model {
         let listing = &tab.listing;
         tab.selection.retain(|id| listing.get(*id).is_some());
         true
+    }
+
+    /// Records what a decorator said about entries of the pane's active tab.
+    /// Returns whether a tab took it.
+    pub fn decorate(&mut self, pane: PaneId, items: Vec<(EntryId, Decoration)>) -> bool {
+        match self.active_tab_mut(pane) {
+            Some((_, tab)) => {
+                for (id, decoration) in items {
+                    tab.decorations.insert(id, decoration);
+                }
+                true
+            }
+            None => false,
+        }
     }
 
     /// Marks the pane's active tab's listing complete.
