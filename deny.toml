@@ -15,7 +15,9 @@ deny = [
     { crate = "ext", wrappers = ["vfs", "vfs-local", "model", "ops", "app", "tests"] },
     { crate = "vfs", wrappers = ["vfs-local", "ops", "app", "tests"] },
     { crate = "vfs-local", wrappers = ["ops", "app", "tests"] },
-    { crate = "model", wrappers = ["ops", "app", "tests"] },
+    # `ops` may use `model` by the layer order but does not today; listing
+    # it would only draw an unused-wrapper warning. Add it back when needed.
+    { crate = "model", wrappers = ["app", "tests"] },
     { crate = "ops", wrappers = ["app", "tests"] },
     { crate = "app", wrappers = ["tests"] },
 ]
