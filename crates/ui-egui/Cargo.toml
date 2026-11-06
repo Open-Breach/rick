@@ -1,0 +1,28 @@
+[package]
+name = "ui-egui"
+version = "0.1.0"
+description = "Rick's egui user interface: the eframe shell, the egui_dock layout of tabs and panes, the file views, menus, palette and settings screens."
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+types = { workspace = true }
+runtime = { workspace = true }
+platform = { workspace = true }
+ext = { workspace = true }
+model = { workspace = true }
+app = { workspace = true }
+chrono = { workspace = true }
+eframe = { workspace = true }
+egui = { workspace = true }
+egui_dock = { workspace = true }
+egui_extras = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+egui_kittest = { workspace = true }
+tempfile = { workspace = true }
+
+[lints]
+workspace = true
