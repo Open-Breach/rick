@@ -19,7 +19,10 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 pub use ext::PaneId;
 use ext::{CellValue, Decoration, FsChange};
 pub use listing::{Column, Group, IconSize, Listing, Sort, SortDir, ViewMode, ViewSpec, type_of};
-pub use settings::{Density, PanelSide, Section, Settings, SettingsChange, SidePanel, Theme};
+pub use settings::{
+    AfterDrag, Density, Drag, PanelSide, Section, Settings, SettingsChange, SidePanel, Theme,
+    parse_location,
+};
 use types::{Entry, EntryId, JobId, Location, Progress};
 
 /// Identity of a tab, unique within one model.
@@ -183,13 +186,41 @@ impl Pane {
     }
 }
 
+/// One step of a tab's history: where it was, and what Back or Forward
+/// restores there.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HistoryEntry {
+    /// Where the tab was.
+    pub location: Location,
+    /// The selection to restore on return; empty for a plain navigation,
+    /// the selection at the start of a drag for a spring-loaded one.
+    pub selection: Vec<EntryId>,
+}
+
+impl HistoryEntry {
+    /// A step that restores nothing but the location.
+    #[must_use]
+    pub fn at(location: Location) -> Self {
+        Self {
+            location,
+            selection: Vec::new(),
+        }
+    }
+}
+
+impl PartialEq<Location> for HistoryEntry {
+    fn eq(&self, other: &Location) -> bool {
+        self.location == *other
+    }
+}
+
 /// Where a tab has been.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct History {
-    /// Locations behind the current one, oldest first.
-    pub back: Vec<Location>,
-    /// Locations ahead, nearest last.
-    pub forward: Vec<Location>,
+    /// Steps behind the current one, oldest first.
+    pub back: Vec<HistoryEntry>,
+    /// Steps ahead, nearest last.
+    pub forward: Vec<HistoryEntry>,
 }
 
 /// One explorer view: a location and everything shown for it.
@@ -404,7 +435,7 @@ impl Model {
         let (id, tab) = self.active_tab_mut(pane)?;
         if tab.location != to {
             let from = std::mem::replace(&mut tab.location, to);
-            tab.history.back.push(from);
+            tab.history.back.push(HistoryEntry::at(from));
             tab.history.forward.clear();
         }
         tab.filter.clear();
@@ -414,17 +445,48 @@ impl Model {
         Some(id)
     }
 
-    /// Goes back one step in the pane's active tab. Returns the new location.
-    pub fn back(&mut self, pane: PaneId) -> Option<Location> {
-        let (_, tab) = self.active_tab_mut(pane)?;
-        let to = tab.history.back.pop()?;
-        let from = std::mem::replace(&mut tab.location, to.clone());
-        tab.history.forward.push(from);
+    /// A spring-loading step of a drag: like [`navigate`](Self::navigate),
+    /// but the back stack grows only on the first step, with the selection
+    /// of the starting location, so one Back returns there with it. The
+    /// later steps replace the location without a trace. Returns the tab.
+    pub fn spring_load(&mut self, pane: PaneId, to: Location, first: bool) -> Option<TabId> {
+        let (id, tab) = self.active_tab_mut(pane)?;
+        if tab.location == to {
+            return Some(id);
+        }
+        let from = std::mem::replace(&mut tab.location, to);
+        if first {
+            let selection = tab
+                .listing
+                .row_ids()
+                .into_iter()
+                .filter(|id| tab.selection.contains(id))
+                .collect();
+            tab.history.back.push(HistoryEntry {
+                location: from,
+                selection,
+            });
+            tab.history.forward.clear();
+        }
         tab.filter.clear();
         tab.listing.clear();
         tab.selection.clear();
         tab.decorations.clear();
-        Some(to)
+        Some(id)
+    }
+
+    /// Goes back one step in the pane's active tab, restoring the selection
+    /// the step recorded. Returns the new location.
+    pub fn back(&mut self, pane: PaneId) -> Option<Location> {
+        let (_, tab) = self.active_tab_mut(pane)?;
+        let to = tab.history.back.pop()?;
+        let from = std::mem::replace(&mut tab.location, to.location.clone());
+        tab.history.forward.push(HistoryEntry::at(from));
+        tab.filter.clear();
+        tab.listing.clear();
+        tab.selection = to.selection.into_iter().collect();
+        tab.decorations.clear();
+        Some(to.location)
     }
 
     /// Goes forward one step in the pane's active tab. Returns the new
@@ -432,13 +494,13 @@ impl Model {
     pub fn forward(&mut self, pane: PaneId) -> Option<Location> {
         let (_, tab) = self.active_tab_mut(pane)?;
         let to = tab.history.forward.pop()?;
-        let from = std::mem::replace(&mut tab.location, to.clone());
-        tab.history.back.push(from);
+        let from = std::mem::replace(&mut tab.location, to.location.clone());
+        tab.history.back.push(HistoryEntry::at(from));
         tab.filter.clear();
         tab.listing.clear();
-        tab.selection.clear();
+        tab.selection = to.selection.into_iter().collect();
         tab.decorations.clear();
-        Some(to)
+        Some(to.location)
     }
 
     /// Changes the sort of the pane's active tab and re-sorts its view.
@@ -893,6 +955,31 @@ mod tests {
         assert_eq!(model.forward(pane), None, "navigating clears forward");
         let tab = active(&model, pane);
         assert_eq!(tab.history.back, [loc("/a"), loc("/b")]);
+    }
+
+    #[test]
+    fn spring_loading_records_one_step_and_back_restores_the_selection() {
+        let mut model = Model::new(Settings::default(), loc("/a"));
+        let pane = model.focused;
+        model.listing_batch(pane, vec![entry(1, "x"), entry(2, "y")]);
+        let picked = EntryId::new(ProviderId("t"), 2);
+        model.select(pane, SelectionChange::Set(vec![picked]));
+
+        assert_eq!(model.spring_load(pane, loc("/a/sub"), true), Some(TabId(1)));
+        assert_eq!(model.spring_load(pane, loc("/a/sub/deeper"), false), Some(TabId(1)));
+        let tab = active(&model, pane);
+        assert_eq!(tab.location, loc("/a/sub/deeper"));
+        assert_eq!(tab.history.back.len(), 1, "one step for the whole drag");
+        assert_eq!(tab.history.back[0].location, loc("/a"));
+        assert_eq!(tab.history.back[0].selection, [picked]);
+        assert!(tab.selection.is_empty());
+
+        assert_eq!(model.back(pane), Some(loc("/a")));
+        let tab = active(&model, pane);
+        assert!(tab.selection.contains(&picked), "the selection is back");
+        assert_eq!(tab.history.forward, [loc("/a/sub/deeper")]);
+        assert_eq!(model.forward(pane), Some(loc("/a/sub/deeper")));
+        assert!(active(&model, pane).selection.is_empty());
     }
 
     #[test]

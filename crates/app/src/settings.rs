@@ -60,7 +60,10 @@ mod tests {
             sort_by: Column::Size,
             sort_dir: SortDir::Descending,
             theme: Theme::Dark,
-            pinned: vec![dir.path().join("pinned here")],
+            pinned: vec![types::Location::new(
+                vfs_local::PROVIDER_ID,
+                platform::paths::from_path(&dir.path().join("pinned here")),
+            )],
             ..Settings::default()
         };
         settings.side_panel.side = model::PanelSide::Right;

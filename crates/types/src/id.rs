@@ -1,11 +1,30 @@
 //! Identities: providers, extensions, entries and jobs.
 
 use std::fmt;
+use std::sync::{Mutex, PoisonError};
 
 /// Which extension provides a tree: `"local"`, `"archive"`, `"sftp"`, `"s3"`,
 /// `"trash"`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct ProviderId(pub &'static str);
+
+impl ProviderId {
+    /// The id for a provider name read at run time, from a settings file
+    /// say. The name is interned: the first call for a name leaks one copy
+    /// of it, every later call returns that copy, so the set of leaked
+    /// strings is the set of distinct provider names ever read.
+    #[must_use]
+    pub fn intern(name: &str) -> Self {
+        static NAMES: Mutex<Vec<&'static str>> = Mutex::new(Vec::new());
+        let mut names = NAMES.lock().unwrap_or_else(PoisonError::into_inner);
+        if let Some(existing) = names.iter().find(|n| **n == name) {
+            return Self(existing);
+        }
+        let leaked: &'static str = Box::leak(name.to_owned().into_boxed_str());
+        names.push(leaked);
+        Self(leaked)
+    }
+}
 
 impl fmt::Display for ProviderId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -81,6 +100,16 @@ mod tests {
         assert_eq!(id.key >> 64, 0xDEAD);
         assert_eq!(id.key & u128::from(u64::MAX), 0xBEEF);
         assert_eq!(id.to_string(), "local:000000000000dead000000000000beef");
+    }
+
+    #[test]
+    fn interned_names_compare_equal_to_literals() {
+        assert_eq!(ProviderId::intern("local"), ProviderId("local"));
+        let a = ProviderId::intern("made-up");
+        let b = ProviderId::intern("made-up");
+        assert_eq!(a, b);
+        assert!(std::ptr::eq(a.0, b.0), "one copy per name");
+        assert_ne!(a, ProviderId("local"));
     }
 
     #[test]
