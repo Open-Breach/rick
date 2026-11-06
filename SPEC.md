@@ -276,7 +276,7 @@ The viewer never writes to the file; editing is the job of an external applicati
 - **Delete permanently.** Remove the selection without going through the trash (Shift+Delete), after confirmation.
 - **Duplicate.** Make a copy of the selection in the same folder with a derived name, such as "name (copy)".
 - **Inspect.** Open the system properties for the selection: the Windows Properties dialogue, the macOS Get Info window, and on Linux Rick's own properties dialogue (size, dates, owner, permissions, mime type), since there is no desktop-wide one.
-- **Restore.** Put a trashed item back at its original location; available when browsing Trash.
+- **Restore.** Put a trashed item back at its original location; available when browsing Trash. In 0.1 macOS can restore only items Rick trashed in the same session, because the system keeps the original paths of trashed items in a private store; and an original path that is taken again is reported, not resolved (QUESTIONS.md 11, to revisit with the Trash location).
 - **Copy path.** Copy the full path of the selection to the clipboard, one per line for multiple items; a variant copies the name only.
 - **New file.** Create an empty file in the current location with its name in inline edit; extensions can add templates (text, markdown, and so on).
 - **New folder.** Create a folder in the current location with its name in inline edit; with a selection, a variant moves the selected items into the new folder.

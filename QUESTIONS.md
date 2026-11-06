@@ -114,6 +114,11 @@ Once answered, an entry keeps its number and gains a `Decided (date):` line.
     restore needs the `TrashedItem` the trash call returned. Restoring into
     an original path that is taken again fails with `AlreadyExists`; `ops`
     decides later whether to suffix.
+    Decided (2026-11-06), to revisit: as assumed for 0.1, noted in the
+    spec's Restore entry. Open for the Trash location issue: a way to read
+    original paths on macOS (private Finder store, `.DS_Store` of the
+    Trash, or Rick's own record of what it trashed), and whether a taken
+    original path gets a numbered suffix or a prompt.
 
 12. (issue 2) The platform traits are named but not shaped.
     Assumed: `OpenWith` has `open` (default application) and `reveal`
