@@ -57,14 +57,13 @@ NFS v3/v4, SMB/CIFS, CephFS, GlusterFS, SSHFS (FUSE) and 9p are mounted by the O
 
 ### Object storage
 
-| Service | Provider | Notes |
+| Service | Plugin | Notes |
 | --- | --- | --- |
-| AWS S3 | `object_store` crate | Flat keys shown as folders by prefix |
-| Cloudflare R2 | `object_store` (S3 API) | Same provider as S3 |
-| Azure Blob | `object_store` | Containers as top-level folders |
-| Google Cloud Storage | `object_store` | Buckets as top-level folders |
+| AWS S3, Cloudflare R2, MinIO and other S3-compatible stores | `ext-vfs-s3` | One plugin with an endpoint setting; flat keys shown as folders by prefix |
+| Azure Blob | `ext-vfs-azure` | Containers as top-level folders |
+| Google Cloud Storage | `ext-vfs-gcs` | Buckets as top-level folders |
 
-Object stores have no rename (copy then delete) and no change notifications (polling).
+Each cloud is its own plugin implementing `Provider` directly, so a user installs only the clouds they use; there is no shared object-storage crate — the overlap (prefix-to-folder mapping, chunked upload, credential storage) is small, and a shared crate may be extracted later if the second plugin shows real duplication. Object stores have no change notifications (polling). Download and upload are ordinary cross-provider copies to and from the local provider, streamed through the machine. **Transfers inside one account never pass through the machine:** a copy or move between two locations of the same provider instance — within a bucket, or across two buckets or containers of the same account — is submitted to the service as a server-side operation (S3 `CopyObject`, Azure's asynchronous Copy Blob, GCS `Rewrite`; move adds a delete), and Rick's job only tracks its progress, polling where the service reports it and cancelling where the service allows. This is the `NATIVE_TRANSFER` capability of the Provider contract, not cloud-specific code: SFTP gets its server-side rename through the same hook.
 
 ### Archives and compression
 
@@ -466,7 +465,9 @@ One Cargo workspace, one crate per concern, grouped by layer. Kernel crates carr
 **Providers** (`ext-vfs-*`)
 
 - `ext-vfs-archive` — zip, tar family, 7z, RAR read-only, single-file codecs.
-- `ext-vfs-object` — S3, R2, Azure Blob, GCS through `object_store`.
+- `ext-vfs-s3` — S3, R2, MinIO and other S3-compatible stores, one endpoint setting.
+- `ext-vfs-azure` — Azure Blob.
+- `ext-vfs-gcs` — Google Cloud Storage.
 - `ext-vfs-sftp` — SSH and SFTP.
 - `ext-vfs-trash` — the trash as a browsable location with restore.
 
@@ -646,6 +647,10 @@ impl JobRunner {
 bitflags! { pub struct Capabilities: u32 {
     const WRITE = 1; const TRASH = 2; const RENAME = 4; const SYMLINK = 8;
     const REFLINK = 16; const WATCH = 32; const SEEK = 64; const PERMISSIONS = 128;
+    /// Copy and move between two locations of this provider instance happen
+    /// on the provider's side (server-side copy, remote rename); nothing
+    /// streams through the machine and the job only tracks progress.
+    const NATIVE_TRANSFER = 256;
 } }
 
 pub trait Provider: Send + Sync + 'static {
@@ -672,6 +677,16 @@ pub trait Provider: Send + Sync + 'static {
     /// owns recursion, progress totals and cancellation.
     async fn copy(&self, from: &Location, to: &Location, opts: CopyOptions,
                   progress: ProgressSink, cancel: CancelToken) -> Result<(), Error>;
+
+    /// Moves or copies a whole selection within this provider instance on the
+    /// provider's side, if NATIVE_TRANSFER is set: the object store's copy
+    /// API across buckets of one account, SFTP's remote rename. The provider
+    /// submits the operation, reports progress as the service exposes it and
+    /// honours `cancel` where the service allows. `ops` calls this first when
+    /// source and target share a provider instance and falls back to
+    /// `rename`, `copy` and the streamed path otherwise.
+    async fn transfer(&self, items: &[Location], to: &Location, mode: TransferMode, // Move | Copy
+                      progress: ProgressSink, cancel: CancelToken) -> Result<(), Error>;
 
     /// Change notifications for one location, if WATCH is set.
     fn watch(&self, loc: &Location) -> Result<BoxStream<'static, FsChange>, Error>;
@@ -1001,7 +1016,7 @@ The smallest Rick worth using every day. Everything in this list ships; nothing 
 1. **Plugin host and the split.** `plugins-native` loads plugins from the plugins directory at start: each plugin is one native dynamic library beside a manifest file, discovered by scanning the directory, loaded through one `extern "C"` entry point that receives the `Registry`. The manifest (TOML) carries id, name, version, `api_version`, the extension points filled, the platforms supported, and the toolchain the library was built with; the host refuses a plugin whose `api_version` or toolchain does not match and says so in the Extensions screen. Plugins are built from this workspace as `cdylib` crates with the same toolchain, so a workspace build produces the binary plus every plugin in the plugins directory with nothing to install by hand; the mechanism that lets a plugin and the host share one copy of `ext`, `types` and `runtime` (dynamic linking of the kernel crates, or a C-ABI vtable) is the implementer's call, recorded in `QUESTIONS.md`. **Compiled in:** the local provider, the text, code, image and PDF previewers, and `ext-action-core`. **Plugins:** everything else, starting with `ext-git`, which moves out of the binary in this milestone to prove the host. The **Extensions screen** lists the plugins found, with name, version, the points they fill, and enable/disable (a disabled plugin stays on disk and is not loaded on the next start); no store, no download, no update. The plugins directory sits beside the binary and in the per-user config directory; per-user wins on an id clash. Distribution and signing stay open.
 2. **Viewer.** The full-size viewer of the GUI section: Enter opens previewable files in a viewer tab, F11 fullscreen, folder navigation as a slideshow, pages, zoom, find, media transport, info panel, the Action registry inside the viewer, hex fallback. Compiled in, since it is a frame for the previewers rather than a feature of its own.
 3. **Previewers as plugins:** `ext-preview-office` (LibreOffice when installed), `ext-preview-media` (GStreamer, bundled runtime on macOS and Windows), `ext-preview-archive` (listing without mounting), `ext-preview-csv` (virtualised grid), rendered Markdown and HTML in `ext-preview-code`, `ext-preview-hex`, and `ext-preview-3d` (below).
-4. **Providers as plugins:** `ext-vfs-archive` (zip, tar family, 7z, RAR read-only, single-file codecs) with ISO images browsed the same way, `ext-vfs-trash` (the Trash side-panel section becomes a browsable location with restore and empty), `ext-vfs-sftp`, `ext-vfs-object` (S3, R2, Azure Blob, GCS). The Network side-panel section gains discovered shares, connect, mount and unmount.
+4. **Providers as plugins:** `ext-vfs-archive` (zip, tar family, 7z, RAR read-only, single-file codecs) with ISO images browsed the same way, `ext-vfs-trash` (the Trash side-panel section becomes a browsable location with restore and empty), `ext-vfs-sftp`, and one plugin per cloud — `ext-vfs-s3` (S3, R2 and S3-compatibles), `ext-vfs-azure`, `ext-vfs-gcs` — each with `NATIVE_TRANSFER` so moves and copies inside an account run on the service. The Network side-panel section gains discovered shares, connect, mount and unmount.
 5. **Search and decorators as plugins:** `ext-search-walk` behind the subtree search, then `ext-search-windows`, `ext-search-spotlight`, `ext-search-tracker` and `ext-search-baloo` feeding the title-row search box; `ext-svn` beside `ext-git`.
 6. **Actions as plugins:** `ext-action-compress` (compress, extract here, extract to), `ext-action-compare` (file and folder diff), `ext-action-terminal` (open console, with an embedded console pane), `ext-action-rename` (bulk rename with pattern, numbering, find and replace, preview), plus Open with… chooser, Paste as link and Select by pattern in `ext-action-core`.
 7. **Permission management** in Properties (owner, group, mode bits, ACLs, recursive apply, elevation through the platform), and **localisation**: the `t!` lookup gains translation files and a language setting, English remains the fallback.
