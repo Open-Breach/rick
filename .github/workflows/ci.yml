@@ -31,6 +31,13 @@ jobs:
       # asserted; macOS and Windows print theirs until targets are set.
       - run: cargo test -p tests --release --test listing --test copy -- --ignored --nocapture
         env: { TMP: "${{ runner.temp }}", TEMP: "${{ runner.temp }}", TMPDIR: "${{ runner.temp }}" }
+      # Acceptance (issue 4): scrolling the 200k fixture in details view
+      # stays under the 60 fps frame budget, measured on egui's CPU frame
+      # (QUESTIONS.md 24). The budget is enforced on Linux; macOS and Windows
+      # print their numbers until targets are set from measurements.
+      - run: cargo test -p tests --release --test ui -- --ignored --nocapture
+        continue-on-error: ${{ runner.os != 'Linux' }}
+        env: { TMP: "${{ runner.temp }}", TEMP: "${{ runner.temp }}", TMPDIR: "${{ runner.temp }}" }
       - run: cargo doc --no-deps
         env: { RUSTDOCFLAGS: "-D warnings" }
   deny:
