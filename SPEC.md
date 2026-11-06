@@ -450,7 +450,7 @@ One Cargo workspace, one crate per concern, grouped by layer. Kernel crates carr
 - `ext-preview-text` — plain text, encodings, huge-file windowing, pretty print.
 - `ext-preview-code` — syntax highlighting via syntect, on top of text.
 - `ext-preview-image` — raster and SVG decode, EXIF, IPTC, XMP.
-- `ext-preview-pdf` — pdfium-render.
+- `ext-preview-pdf` — pdfium-render; pdfium is a dynamic library that every build and release places beside the binary (`RICK_PDFIUM_DIR` overrides for development).
 - `ext-preview-office` — LibreOffice headless to PDF, then the PDF path.
 - `ext-preview-media` — audio and video via GStreamer, ID3 and stream info.
 - `ext-preview-archive` — listing of an archive's contents without mounting it.
@@ -866,7 +866,7 @@ The default `default_shortcut` of every built-in Action. **Mod** is Ctrl on Linu
 | Mod+Shift+S | Select by pattern |
 | Space | Toggle selection of the focused entry |
 | Escape | Clear selection / close filter |
-| Type-ahead | Jump to the first entry starting with the typed letters |
+| Typing | Type-to-filter: the typed text filters the list (Main area); there is no jump-to-letter |
 
 **File operations**
 
@@ -1007,5 +1007,5 @@ The smallest Rick worth using every day. Everything in this list ships; nothing 
 - Extension security model: what a WASM plugin may touch (capabilities per extension point), and whether native plugins need signing.
 - Testing strategy for the performance targets: a generated 200k-entry fixture and a benchmark harness in CI.
 - Accessibility: egui's AccessKit support is young; screen-reader support is a known weakness to state and track.
-- Distribution: packaging still to choose — Flatpak, Homebrew, winget, or plain binaries.
+- Distribution: 0.1 ships plain archives per OS from the release workflow (binary, pdfium, licenses); Flatpak, Homebrew, winget and installers are still to choose.
 - Title row toggles: which layout toggles sit right of the search box (candidates: side panel, inspector, split), and whether the current path belongs in the title row at all.
