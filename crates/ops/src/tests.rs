@@ -356,7 +356,14 @@ fn copy_path_open_and_reveal_go_to_the_platform() {
     h.run("core.open_default", h.ctx(&dir, &refs));
     assert_eq!(h.fake.opened().len(), 2);
     h.run("core.reveal", h.ctx(&dir, &refs));
-    assert_eq!(h.fake.revealed().len(), 1);
+    assert_eq!(h.fake.revealed(), [dir.join("a.txt")]);
+    h.run("core.reveal", h.ctx(&dir, &[]));
+    assert_eq!(
+        h.fake.opened().len(),
+        3,
+        "without a selection the location opens"
+    );
+    assert_eq!(h.fake.opened()[2], dir);
 }
 
 #[test]
@@ -368,6 +375,13 @@ fn every_action_has_an_id_label_and_core_group() {
         assert_ne!(action.label(), "");
         assert_eq!(action.group(), ext::ActionGroup::Core);
         assert!(action.default_shortcut().is_some(), "{}", action.id().0);
+    }
+    for always in ["core.new_file", "core.new_folder", "core.reveal"] {
+        assert_eq!(
+            h.action(always).availability(&h.ctx(h.dir.path(), &[])),
+            Availability::Enabled,
+            "{always}"
+        );
     }
     let core = Core::new(Arc::clone(&h.mounts), h.fake.clone());
     assert_eq!(core.manifest().id, types::ExtId("core"));

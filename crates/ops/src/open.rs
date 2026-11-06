@@ -99,7 +99,8 @@ impl Action for OpenDefault {
     }
 }
 
-/// Shows the first selected entry in the system file manager.
+/// Shows the current location in the system file manager, with the first
+/// selected entry selected when there is one.
 pub(crate) struct Reveal(pub(crate) Arc<State>);
 
 impl Action for Reveal {
@@ -118,8 +119,8 @@ impl Action for Reveal {
             key: Key::Char('o'),
         })
     }
-    fn availability(&self, ctx: &ActionCtx) -> Availability {
-        needs_selection(ctx)
+    fn availability(&self, _ctx: &ActionCtx) -> Availability {
+        Availability::Enabled
     }
     fn run(
         &self,
@@ -127,11 +128,10 @@ impl Action for Reveal {
         _jobs: &JobRunner,
         _ui: &dyn UiHost,
     ) -> Result<ActionOutcome, Error> {
-        let Some(entry) = ctx.selection.first() else {
-            return Ok(ActionOutcome::Done);
-        };
-        let path = local_path(&location_of(entry))?;
-        self.0.platform.reveal(&path)?;
+        match ctx.selection.first() {
+            Some(entry) => self.0.platform.reveal(&local_path(&location_of(entry))?)?,
+            None => self.0.platform.open(&local_path(&ctx.location)?)?,
+        }
         Ok(ActionOutcome::Done)
     }
 }
