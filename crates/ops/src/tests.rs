@@ -349,10 +349,31 @@ fn copy_path_open_and_reveal_go_to_the_platform() {
     let both = [dir.join("a.txt"), dir.join("b.txt")];
     let refs: Vec<&Path> = both.iter().map(Path::new).collect();
 
+    // Copy name: the names, one per line.
+    h.run("core.copy_name", h.ctx(&dir, &refs));
+    assert_eq!(h.fake.clipboard_text().unwrap_or_default(), "a.txt\nb.txt");
+    // Copy path: the folders, duplicates removed; the location itself when
+    // nothing is selected.
     h.run("core.copy_path", h.ctx(&dir, &refs));
-    let text = h.fake.clipboard_text().unwrap_or_default();
-    assert_eq!(text.lines().count(), 2);
-    assert!(text.lines().all(|l| l.contains(".txt")), "{text}");
+    assert_eq!(
+        h.fake.clipboard_text().unwrap_or_default(),
+        dir.display().to_string()
+    );
+    h.run("core.copy_path", h.ctx(&dir, &[]));
+    assert_eq!(
+        h.fake.clipboard_text().unwrap_or_default(),
+        dir.display().to_string()
+    );
+    // Copy path and name: the full paths.
+    h.run("core.copy_path_and_name", h.ctx(&dir, &refs));
+    assert_eq!(
+        h.fake.clipboard_text().unwrap_or_default(),
+        format!("{}\n{}", both[0].display(), both[1].display())
+    );
+    assert_eq!(
+        h.action("core.copy_name").availability(&h.ctx(&dir, &[])),
+        Availability::Disabled("select something first")
+    );
 
     h.run("core.open_default", h.ctx(&dir, &refs));
     assert_eq!(h.fake.opened().len(), 2);
@@ -370,7 +391,7 @@ fn copy_path_open_and_reveal_go_to_the_platform() {
 #[test]
 fn every_action_has_an_id_label_and_core_group() {
     let h = harness();
-    assert_eq!(h.registry.actions().len(), 12);
+    assert_eq!(h.registry.actions().len(), 14);
     for action in h.registry.actions() {
         assert!(action.id().0.starts_with("core."), "{}", action.id().0);
         assert_ne!(action.label(), "");
