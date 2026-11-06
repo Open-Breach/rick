@@ -54,7 +54,7 @@ fn harness() -> Harness {
         ui: ui.clone(),
         extensions: Vec::new(),
         config_dir: Some(fake.config_dir()),
-        start: local(root.path()),
+        start: Some(local(root.path())),
     });
     Harness {
         root,
@@ -209,8 +209,8 @@ fn tabs_and_splits_keep_their_listings_live() {
         dir: model::SplitDir::Right,
     });
     h.settle();
-    assert_eq!(h.app.model().dock.panes().len(), 2);
-    let new_pane = h.app.model().dock.panes()[1];
+    assert_eq!(h.app.model().dock().panes().len(), 2);
+    let new_pane = h.app.model().dock().panes()[1];
     let (_, tab) = h
         .app
         .model()

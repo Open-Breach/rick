@@ -21,7 +21,7 @@ fn harness(start: &Path, size: egui::Vec2) -> Harness<'static, RickUi> {
         ui: host.clone(),
         extensions: Vec::new(),
         config_dir: Some(fake.config_dir()),
-        start: local(start),
+        start: Some(local(start)),
     });
     let mut harness = Harness::builder()
         .with_size(size)
@@ -96,14 +96,11 @@ fn the_search_box_searches_names_and_runs_commands() {
     harness.event(egui::Event::Text("toggle side".to_owned()));
     harness.step();
     harness.get_by_label_contains("Toggle side panel");
-    assert!(harness.state().app().model().settings.side_panel.visible);
+    assert!(side_panel_visible(&harness));
     harness.key_press(egui::Key::Enter);
     harness.step();
     harness.step();
-    assert!(
-        !harness.state().app().model().settings.side_panel.visible,
-        "Enter ran Toggle side panel"
-    );
+    assert!(!side_panel_visible(&harness), "Enter ran Toggle side panel");
     assert!(!harness.state().search_active());
 
     // Escape clears and hands the keyboard back: ArrowDown moves the list.
@@ -279,12 +276,12 @@ fn a_tab_dragged_onto_another_panes_edge_moves_its_pane_there() {
     let home = model.pane_of(tab_b).unwrap_or_else(|| panic!("tab b lost"));
     assert_ne!(home, pane_a, "tab B keeps its own pane");
     assert_eq!(
-        model.dock,
-        model::Dock::Split {
-            dir: model::SplitDir::Right,
-            first: Box::new(model::Dock::Pane(home)),
-            second: Box::new(model::Dock::Pane(pane_a)),
-        },
+        *model.dock(),
+        model::Dock::split_of(
+            model::SplitDir::Right,
+            model::Dock::Pane(home),
+            model::Dock::Pane(pane_a),
+        ),
         "B's pane is left of A"
     );
 
@@ -296,12 +293,12 @@ fn a_tab_dragged_onto_another_panes_edge_moves_its_pane_there() {
     let model = harness.state().app().model();
     let home = model.pane_of(tab_b).unwrap_or_else(|| panic!("tab b lost"));
     assert_eq!(
-        model.dock,
-        model::Dock::Split {
-            dir: model::SplitDir::Down,
-            first: Box::new(model::Dock::Pane(pane_a)),
-            second: Box::new(model::Dock::Pane(home)),
-        },
+        *model.dock(),
+        model::Dock::split_of(
+            model::SplitDir::Down,
+            model::Dock::Pane(pane_a),
+            model::Dock::Pane(home),
+        ),
         "B's pane is under A"
     );
     assert_eq!(model.panes().count(), 2, "still two panes");
@@ -488,7 +485,7 @@ fn harness_with(
         ui: host.clone(),
         extensions,
         config_dir: Some(fake.config_dir()),
-        start: local(start),
+        start: Some(local(start)),
     });
     let mut harness = Harness::builder()
         .with_size(size)
@@ -660,4 +657,12 @@ fn the_icon_view_thumbnails_arrive_within_500_ms_without_long_frames() {
         assert!(took <= Duration::from_millis(500), "{took:?}");
         assert!(longest <= Duration::from_micros(16_600), "{longest:?}");
     }
+}
+
+/// Whether the focused window's side panel is shown.
+fn side_panel_visible(harness: &Harness<'_, RickUi>) -> bool {
+    let model = harness.state().app().model();
+    model
+        .window(model.focused_window)
+        .is_some_and(|w| w.side_panel.visible)
 }

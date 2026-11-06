@@ -480,5 +480,8 @@ fn status_line(cx: &PaneCx<'_>) -> String {
     if !listing.complete {
         text.push_str(" · listing…");
     }
+    if let Some(note) = &cx.tab.note {
+        let _ = write!(text, " · {note}");
+    }
     text
 }

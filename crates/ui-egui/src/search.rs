@@ -63,7 +63,8 @@ impl SearchBox {
     }
 
     /// Draws the box in `rect` and its dropdown below; returns what the user
-    /// picked, if anything.
+    /// picked, if anything. `salt` tells one window's box from another's.
+    #[allow(clippy::too_many_arguments)]
     pub fn show(
         &mut self,
         ui: &mut egui::Ui,
@@ -72,8 +73,9 @@ impl SearchBox {
         keys: &KeyMap,
         pane: PaneId,
         recents: &[Intent],
+        salt: u64,
     ) -> Option<Pick> {
-        let id = egui::Id::new("title-search");
+        let id = egui::Id::new(("title-search", salt));
         let hint = format!("{}  Search, or > for commands", crate::icons::SEARCH);
         let edit = egui::TextEdit::singleline(&mut self.text)
             .id(id)

@@ -92,9 +92,7 @@ mod tests {
             )],
             ..Settings::default()
         };
-        settings.side_panel.side = model::PanelSide::Right;
-        settings.side_panel.width = 300;
-        settings.side_panel.folded.insert(model::Section::Network);
+        settings.session.start = "Review".to_owned();
         settings.preview.text.wrap = true;
         settings.preview.text.line_numbers = false;
         settings
@@ -107,6 +105,8 @@ mod tests {
         assert!(text.contains("wrap = true"), "{text}");
         assert!(text.contains("line_numbers = false"), "{text}");
         assert!(text.contains("[preview.pinned]"), "{text}");
+        assert!(text.contains("[session]"), "{text}");
+        assert!(text.contains("start = \"Review\""), "{text}");
         assert_eq!(load(&path).ok(), Some(settings));
     }
 

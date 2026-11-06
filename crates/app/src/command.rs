@@ -4,7 +4,8 @@ use std::fmt;
 
 use ext::{ActionCtx, ActionId, Decoration, FsChange, Level, PreviewDoc};
 use model::{
-    Column, DockTarget, PaneId, SelectionChange, SettingsChange, SortDir, SplitDir, TabId, ViewMode,
+    Column, Dock, DockTarget, Geometry, PaneId, SelectionChange, SettingsChange, SidePanelChange,
+    SortDir, SplitDir, TabId, ViewMode, WindowId,
 };
 use types::{Entry, EntryId, Error, JobId, Location, Progress};
 
@@ -181,6 +182,64 @@ pub enum Command {
     },
     /// Unpin from the side panel, undoable.
     Unpin(Location),
+    /// The strip order of a pane's tabs, as the dock shows them; display
+    /// state the session keeps.
+    TabOrder {
+        /// The pane.
+        pane: PaneId,
+        /// Its tabs, left to right.
+        order: Vec<TabId>,
+    },
+    /// A window's split fractions, as the dock shows them: `dock` has the
+    /// window's panes in the window's splits.
+    Layout {
+        /// The window.
+        window: WindowId,
+        /// The tree with its fractions.
+        dock: Dock,
+    },
+    /// A tab's list scroll offset, as the UI shows it.
+    Scroll {
+        /// The tab.
+        tab: TabId,
+        /// The vertical offset in logical points.
+        offset: f32,
+    },
+    /// Where a window is on the screen.
+    WindowGeometry {
+        /// The window.
+        window: WindowId,
+        /// Its position, size and maximised state.
+        geometry: Geometry,
+    },
+    /// Change a window's side panel.
+    SidePanel {
+        /// The window.
+        window: WindowId,
+        /// The change.
+        change: SidePanelChange,
+    },
+    /// Give a window the focus, as the system did.
+    FocusWindow(WindowId),
+    /// Open a window with the start layout.
+    NewWindow,
+    /// Close a window; closing the last one asks the application to exit
+    /// ([`App::exit_requested`](crate::App::exit_requested)).
+    CloseWindow(WindowId),
+    /// Store the current session as the layout of this name.
+    SaveLayout(String),
+    /// Replace every window and tab with a saved layout, or with the last
+    /// session for `None` ("Continue where I left off").
+    SwitchLayout(Option<String>),
+    /// Delete a saved layout.
+    DeleteLayout(String),
+    /// Rename a saved layout.
+    RenameLayout {
+        /// The current name.
+        from: String,
+        /// The new name.
+        to: String,
+    },
 }
 
 /// What the application tells the UI happened. The model already reflects

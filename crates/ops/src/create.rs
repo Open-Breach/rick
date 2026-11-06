@@ -200,11 +200,10 @@ impl Action for NewFile {
     fn group(&self) -> ActionGroup {
         ActionGroup::Core
     }
+    // Mod+N opens a new window (SPEC.md "Windows"; QUESTIONS.md 66), so New
+    // file has no default binding until the spec names one.
     fn default_shortcut(&self) -> Option<Shortcut> {
-        Some(Shortcut {
-            modifiers: Modifiers::MOD,
-            key: Key::Char('n'),
-        })
+        None
     }
     fn availability(&self, _ctx: &ActionCtx) -> Availability {
         Availability::Enabled
