@@ -17,11 +17,11 @@ use windows::Win32::Storage::FileSystem::{
     COPY_FILE_FAIL_IF_EXISTS, COPYFILE_FLAGS, COPYPROGRESSROUTINE_PROGRESS, CopyFileExW,
     CreateFileW, FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_HIDDEN, FILE_ATTRIBUTE_READONLY,
     FILE_ATTRIBUTE_REPARSE_POINT, FILE_ATTRIBUTE_SYSTEM, FILE_FLAG_BACKUP_SEMANTICS,
-    FILE_ID_BOTH_DIR_INFO, FILE_LIST_DIRECTORY, FILE_SHARE_DELETE, FILE_SHARE_READ,
-    FILE_SHARE_WRITE, FileIdBothDirectoryInfo, FileIdBothDirectoryRestartInfo,
-    GetCompressedFileSizeW, GetFileInformationByHandleEx, GetVolumeInformationByHandleW,
-    INVALID_FILE_SIZE, LPPROGRESS_ROUTINE_CALLBACK_REASON, OPEN_EXISTING, PROGRESS_CANCEL,
-    PROGRESS_CONTINUE,
+    FILE_FLAG_OPEN_REPARSE_POINT, FILE_ID_BOTH_DIR_INFO, FILE_ID_INFO, FILE_LIST_DIRECTORY,
+    FILE_READ_ATTRIBUTES, FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE,
+    FileIdBothDirectoryInfo, FileIdBothDirectoryRestartInfo, FileIdInfo, GetCompressedFileSizeW,
+    GetFileInformationByHandleEx, GetVolumeInformationByHandleW, INVALID_FILE_SIZE,
+    LPPROGRESS_ROUTINE_CALLBACK_REASON, OPEN_EXISTING, PROGRESS_CANCEL, PROGRESS_CONTINUE,
 };
 use windows::core::PCWSTR;
 
@@ -297,6 +297,98 @@ pub(super) fn copy_file(
             Err(io::Error::from(io::ErrorKind::AlreadyExists))
         }
         Err(error) => Err(io_error(error)),
+    }
+}
+
+/// Volume serial and the low 64 bits of the file id, as the directory
+/// reader reports them, through a handle that does not follow links.
+fn identity(path: &Path) -> io::Result<(u32, u64)> {
+    let wide = wide(path);
+    // SAFETY: `wide` is NUL-terminated and outlives the call; flags are plain.
+    let raw = unsafe {
+        CreateFileW(
+            PCWSTR(wide.as_ptr()),
+            FILE_READ_ATTRIBUTES.0,
+            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+            None,
+            OPEN_EXISTING,
+            FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT,
+            None,
+        )
+    }
+    .map_err(io_error)?;
+    // SAFETY: `raw` is a valid handle we own and nobody else closes.
+    let _handle = unsafe { OwnedHandle::from_raw_handle(raw.0) };
+    let mut serial = 0u32;
+    let mut info = FILE_ID_INFO::default();
+    // SAFETY: `raw` stays open for the scope of `_handle`; both out-pointers
+    // are valid and `info` is exactly `size_of::<FILE_ID_INFO>()` bytes.
+    unsafe {
+        GetVolumeInformationByHandleW(raw, None, Some(&raw mut serial), None, None, None)
+            .map_err(io_error)?;
+        GetFileInformationByHandleEx(
+            raw,
+            FileIdInfo,
+            (&raw mut info).cast::<c_void>(),
+            u32::try_from(std::mem::size_of::<FILE_ID_INFO>()).unwrap_or(u32::MAX),
+        )
+        .map_err(io_error)?;
+    }
+    let low = u64::from_le_bytes(info.FileId.Identifier[..8].try_into().unwrap_or([0; 8]));
+    Ok((serial, low))
+}
+
+pub(super) fn stat(path: &Path) -> io::Result<RawEntry> {
+    use std::os::windows::fs::MetadataExt as _;
+    let meta = std::fs::symlink_metadata(path)?;
+    let name: OsString = path.file_name().map(ToOwned::to_owned).unwrap_or_default();
+    let attributes = meta.file_attributes();
+    let kind = if meta.file_type().is_symlink() {
+        RawKind::Symlink
+    } else if attributes & FILE_ATTRIBUTE_REPARSE_POINT.0 != 0 {
+        RawKind::Other
+    } else if attributes & FILE_ATTRIBUTE_DIRECTORY.0 != 0 {
+        RawKind::Dir
+    } else {
+        RawKind::File
+    };
+    let (serial, file_id) = identity(path)?;
+    let mut attrs = Attrs::empty();
+    if attributes & FILE_ATTRIBUTE_HIDDEN.0 != 0 {
+        attrs |= Attrs::HIDDEN;
+    }
+    if attributes & FILE_ATTRIBUTE_SYSTEM.0 != 0 {
+        attrs |= Attrs::SYSTEM;
+    }
+    if attributes & FILE_ATTRIBUTE_READONLY.0 != 0 {
+        attrs |= Attrs::READONLY;
+    }
+    if kind == RawKind::File && is_executable(&name) {
+        attrs |= Attrs::EXECUTABLE;
+    }
+    let time = |value: u64| filetime(i64::try_from(value).unwrap_or(0));
+    Ok(RawEntry {
+        id: (u128::from(serial) << 64) | u128::from(file_id),
+        kind,
+        size: (kind == RawKind::File).then_some(meta.len()),
+        created: time(meta.creation_time()),
+        modified: time(meta.last_write_time()),
+        accessed: time(meta.last_access_time()),
+        attrs,
+        name,
+    })
+}
+
+pub(super) fn symlink(target: &Path, at: &Path) -> io::Result<()> {
+    let resolved = if target.is_absolute() {
+        target.to_path_buf()
+    } else {
+        at.parent().unwrap_or(Path::new("")).join(target)
+    };
+    if resolved.is_dir() {
+        std::os::windows::fs::symlink_dir(target, at)
+    } else {
+        std::os::windows::fs::symlink_file(target, at)
     }
 }
 

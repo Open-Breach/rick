@@ -1265,6 +1265,7 @@ dependencies = [
  "notify",
  "platform",
  "runtime",
+ "tempfile",
  "tokio",
  "tracing",
  "types",

@@ -1,6 +1,6 @@
 //! Pieces shared by the Linux and macOS filesystem code.
 
-use std::ffi::OsStr;
+use std::ffi::{OsStr, OsString};
 use std::fs::File;
 use std::io;
 use std::os::unix::fs::{FileExt, MetadataExt};
@@ -10,7 +10,7 @@ use std::time::{Duration, SystemTime};
 use rustix::fs::SeekFrom;
 use types::Attrs;
 
-use super::RawKind;
+use super::{RawEntry, RawKind};
 
 /// A `timespec`-like pair as a `SystemTime`; `None` for times before 1970.
 pub(super) fn timestamp(secs: i64, nanos: i64) -> Option<SystemTime> {
@@ -33,6 +33,51 @@ pub(super) fn attrs(name: &OsStr, mode: u32, kind: RawKind, extra: Attrs) -> Att
         attrs |= Attrs::EXECUTABLE;
     }
     attrs
+}
+
+pub(super) fn stat(path: &Path) -> io::Result<RawEntry> {
+    let meta = std::fs::symlink_metadata(path)?;
+    let name: OsString = path.file_name().map(ToOwned::to_owned).unwrap_or_default();
+    let file_type = meta.file_type();
+    let kind = if file_type.is_symlink() {
+        RawKind::Symlink
+    } else if file_type.is_dir() {
+        RawKind::Dir
+    } else if file_type.is_file() {
+        RawKind::File
+    } else {
+        RawKind::Other
+    };
+    Ok(RawEntry {
+        id: (u128::from(meta.dev()) << 64) | u128::from(meta.ino()),
+        kind,
+        size: matches!(kind, RawKind::File | RawKind::Symlink).then_some(meta.len()),
+        created: meta.created().ok(),
+        modified: meta.modified().ok(),
+        accessed: meta.accessed().ok(),
+        attrs: attrs(&name, meta.mode(), kind, platform_flags(&meta)),
+        name,
+    })
+}
+
+#[cfg(target_os = "macos")]
+fn platform_flags(meta: &std::fs::Metadata) -> Attrs {
+    use std::os::macos::fs::MetadataExt as _;
+    const UF_HIDDEN: u32 = 0x8000;
+    if meta.st_flags() & UF_HIDDEN != 0 {
+        Attrs::HIDDEN
+    } else {
+        Attrs::empty()
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn platform_flags(_meta: &std::fs::Metadata) -> Attrs {
+    Attrs::empty()
+}
+
+pub(super) fn symlink(target: &Path, at: &Path) -> io::Result<()> {
+    std::os::unix::fs::symlink(target, at)
 }
 
 pub(super) fn allocated_size(path: &Path) -> io::Result<u64> {

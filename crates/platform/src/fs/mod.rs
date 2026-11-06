@@ -102,6 +102,27 @@ impl fmt::Debug for DirReader {
     }
 }
 
+/// The entry at `path` itself, without following a final link, with the
+/// same identity and attributes [`DirReader`] would report for it.
+///
+/// # Errors
+///
+/// The I/O error from examining the entry.
+pub fn stat(path: &Path) -> io::Result<RawEntry> {
+    imp::stat(path)
+}
+
+/// Creates a symbolic link at `at` pointing to `target`. On Windows the link
+/// is a directory link when `target` is a directory.
+///
+/// # Errors
+///
+/// The I/O error from creating the link, including `PermissionDenied` on
+/// Windows without developer mode or elevation.
+pub fn symlink(target: &Path, at: &Path) -> io::Result<()> {
+    imp::symlink(target, at)
+}
+
 /// Which path [`copy_file`] took.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CopyMethod {
@@ -193,6 +214,34 @@ mod tests {
         assert_eq!(all[1].id, all[1].id);
         let ids: std::collections::HashSet<u128> = all.iter().map(|e| e.id).collect();
         assert_eq!(ids.len(), 3);
+    }
+
+    #[test]
+    fn stat_matches_the_reader_and_links_are_links() {
+        let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+        let file = dir.path().join("f.txt");
+        fs::write(&file, b"data").unwrap_or_else(|e| panic!("{e}"));
+        let link = dir.path().join("l");
+        if let Err(e) = symlink(&file, &link) {
+            // Windows without developer mode cannot create links; that is the
+            // platform's answer, not a bug.
+            assert_eq!(e.kind(), io::ErrorKind::PermissionDenied, "{e}");
+            return;
+        }
+
+        let mut reader = DirReader::open(dir.path()).unwrap_or_else(|e| panic!("{e}"));
+        let listed = reader.next_batch(10).unwrap_or_else(|e| panic!("{e}"));
+        let from_reader = listed
+            .iter()
+            .find(|e| e.name == "f.txt")
+            .unwrap_or_else(|| panic!("f.txt"));
+        let direct = stat(&file).unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(direct.id, from_reader.id);
+        assert_eq!(direct.kind, RawKind::File);
+        assert_eq!(direct.size, Some(4));
+        assert_eq!(direct.name, "f.txt");
+        assert_eq!(stat(&link).map(|e| e.kind).ok(), Some(RawKind::Symlink));
+        assert_eq!(stat(dir.path()).map(|e| e.kind).ok(), Some(RawKind::Dir));
     }
 
     #[test]

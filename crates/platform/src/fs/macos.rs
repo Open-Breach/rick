@@ -321,6 +321,14 @@ pub(super) fn copy_file(
     unix::finish(result, &src, to)
 }
 
+pub(super) fn stat(path: &Path) -> io::Result<RawEntry> {
+    unix::stat(path)
+}
+
+pub(super) fn symlink(target: &Path, at: &Path) -> io::Result<()> {
+    unix::symlink(target, at)
+}
+
 pub(super) fn allocated_size(path: &Path) -> io::Result<u64> {
     unix::allocated_size(path)
 }
