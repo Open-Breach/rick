@@ -160,6 +160,8 @@ Once answered, an entry keeps its number and gains a `Decided (date):` line.
     keeps them out of the model's job table; their output is the
     `Event::Listed` stream. The watch on a pane's location is a cancellable
     runtime task tied to the listing's cancel token, not a job.
+    Decided (2026-11-06): as assumed; the spec's Job rule now says which
+    jobs the operations area lists.
 
 17. (issue 3) The spec relies on change notifications for the list to follow
     the filesystem, and offers Refresh "for providers without change
