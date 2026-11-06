@@ -599,9 +599,10 @@ pub trait Provider: Send + Sync + 'static {
     async fn remove(&self, loc: &Location, mode: RemoveMode) -> Result<(), Error>;   // Trash | Permanent
     async fn link(&self, target: &Location, at: &Location, kind: LinkKind) -> Result<Entry, Error>;
 
-    /// Same-provider copy with the native fast path (copy_file_range, reflink,
-    /// server-side copy). Cross-provider copies are composed by `ops` from
-    /// `open_read` and `open_write`.
+    /// Copies one regular file with the native fast path (copy_file_range,
+    /// reflink, server-side copy). `vfs::copy` composes directory trees from
+    /// it and cross-provider copies from `open_read` and `open_write`; it
+    /// owns recursion, progress totals and cancellation.
     async fn copy(&self, from: &Location, to: &Location, opts: CopyOptions,
                   progress: ProgressSink, cancel: CancelToken) -> Result<(), Error>;
 

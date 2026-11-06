@@ -102,6 +102,8 @@ Once answered, an entry keeps its number and gains a `Decided (date):` line.
     Assumed: it copies one regular file; `vfs::copy` walks the tree, creates
     directories and calls it once per file, so one place owns recursion,
     progress totals and cancellation.
+    Decided (2026-11-06): as assumed; the spec's doc comment on `copy` now
+    says so and names `vfs::copy`, not `ops`, as the composer.
 
 11. (issue 2) Restoring from the trash is not specified beyond "Restore".
     Assumed: Windows restores by moving the `$R` payload out of the Recycle
