@@ -13,10 +13,11 @@
 mod listing;
 mod settings;
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::hash_map::Entry as Slot;
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
-use ext::FsChange;
 pub use ext::PaneId;
+use ext::{CellValue, Decoration, FsChange};
 pub use listing::{Column, Group, IconSize, Listing, Sort, SortDir, ViewMode, ViewSpec, type_of};
 pub use settings::{Density, Settings, SettingsChange, Theme};
 use types::{Entry, EntryId, JobId, Location, Progress};
@@ -214,6 +215,8 @@ pub struct Tab {
     pub listing: Listing,
     /// Selected entry ids.
     pub selection: BTreeSet<EntryId>,
+    /// What decorators said about the entries: badges, tints, cells.
+    pub decorations: HashMap<EntryId, Decoration>,
 }
 
 impl Tab {
@@ -232,6 +235,7 @@ impl Tab {
             flatten: false,
             listing: Listing::new(),
             selection: BTreeSet::new(),
+            decorations: HashMap::new(),
         }
     }
 
@@ -406,6 +410,7 @@ impl Model {
         tab.filter.clear();
         tab.listing.clear();
         tab.selection.clear();
+        tab.decorations.clear();
         Some(id)
     }
 
@@ -418,6 +423,7 @@ impl Model {
         tab.filter.clear();
         tab.listing.clear();
         tab.selection.clear();
+        tab.decorations.clear();
         Some(to)
     }
 
@@ -431,6 +437,7 @@ impl Model {
         tab.filter.clear();
         tab.listing.clear();
         tab.selection.clear();
+        tab.decorations.clear();
         Some(to)
     }
 
@@ -704,6 +711,30 @@ impl Model {
         true
     }
 
+    /// Records what a decorator said about entries of the pane's active tab.
+    /// Returns whether a tab took it.
+    ///
+    /// A later decoration replaces the badge, the tint and the cells of the
+    /// columns it names; cells of other columns stay. A decoration that is
+    /// still [`CellValue::Pending`] only adds what was not there, so the
+    /// badges do not blink while a decorator looks again.
+    pub fn decorate(&mut self, pane: PaneId, items: Vec<(EntryId, Decoration)>) -> bool {
+        match self.active_tab_mut(pane) {
+            Some((_, tab)) => {
+                for (id, decoration) in items {
+                    match tab.decorations.entry(id) {
+                        Slot::Vacant(slot) => {
+                            slot.insert(decoration);
+                        }
+                        Slot::Occupied(mut slot) => merge(slot.get_mut(), decoration),
+                    }
+                }
+                true
+            }
+            None => false,
+        }
+    }
+
     /// Marks the pane's active tab's listing complete.
     pub fn listing_done(&mut self, pane: PaneId) -> bool {
         match self.active_tab_mut(pane) {
@@ -736,6 +767,7 @@ impl Model {
             FsChange::Removed(id) => {
                 tab.listing.remove(id);
                 tab.selection.remove(&id);
+                tab.decorations.remove(&id);
             }
             FsChange::Renamed { from, to } => {
                 tab.listing.remove(from);
@@ -786,6 +818,28 @@ impl Model {
     /// Forgets a finished job.
     pub fn job_dismiss(&mut self, id: JobId) -> bool {
         self.jobs.remove(&id).is_some()
+    }
+}
+
+/// Folds `new` into `old`; see [`Model::decorate`].
+fn merge(old: &mut Decoration, new: Decoration) {
+    let pending = new
+        .cells
+        .iter()
+        .any(|(_, value)| matches!(value, CellValue::Pending));
+    if !pending {
+        old.badge = new.badge;
+        old.tint = new.tint;
+    }
+    for (column, value) in new.cells {
+        match old.cells.iter_mut().find(|(c, _)| *c == column) {
+            Some(slot) => {
+                if !matches!(value, CellValue::Pending) {
+                    slot.1 = value;
+                }
+            }
+            None => old.cells.push((column, value)),
+        }
     }
 }
 

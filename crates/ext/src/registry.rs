@@ -32,6 +32,8 @@
 //!     fn columns(&self) -> &[ColumnDef] { &[] }
 //!     fn decorate(&self, _entries: &[Entry], _ctx: &DecorateCtx) -> Vec<(EntryId, Decoration)> { Vec::new() }
 //!     fn panel(&self, _entry: &Entry) -> Option<PanelSection> { None }
+//!     fn invalidates_on(&self, _loc: &Location) -> Vec<Location> { Vec::new() }
+//!     fn invalidate(&self, _loc: &Location) {}
 //! }
 //!
 //! struct Hello;

@@ -271,12 +271,12 @@ The viewer never writes to the file; editing is the job of an external applicati
 - **Copy.** Put the selection on the clipboard for copying.
 - **Cut.** Put the selection on the clipboard for moving.
 - **Paste.** Copy or move the clipboard contents into the current location, running as a job with the usual conflict handling.
-- **Create link.** Make a link to the selected file or folder at another location. On Linux and macOS this is a symbolic link; on Windows the user picks between a symbolic link, a directory junction and a classic .lnk shortcut. Also offered as a drag modifier (Alt) and as a paste variant ("Paste as link").
+- **Create link.** Make a link to the selected file or folder at another location. On Linux and macOS this is a symbolic link; on Windows the user picks between a symbolic link, a directory junction and a classic .lnk shortcut. 0.1 offers symbolic and hard links only (`LinkKind::{Symbolic, Hard}`); junctions and .lnk shortcuts come in a later issue. Also offered as a drag modifier (Alt) and as a paste variant ("Paste as link").
 - **Move to trash.** Send the selection to the platform trash (Delete key), restorable from the Trash entry in the side panel.
 - **Delete permanently.** Remove the selection without going through the trash (Shift+Delete), after confirmation.
 - **Duplicate.** Make a copy of the selection in the same folder with a derived name, such as "name (copy)".
 - **Inspect.** Open the system properties for the selection: the Windows Properties dialogue, the macOS Get Info window, and on Linux Rick's own properties dialogue (size, dates, owner, permissions, mime type), since there is no desktop-wide one.
-- **Restore.** Put a trashed item back at its original location; available when browsing Trash.
+- **Restore.** Put a trashed item back at its original location; available when browsing Trash. In 0.1 macOS can restore only items Rick trashed in the same session, because the system keeps the original paths of trashed items in a private store; and an original path that is taken again is reported, not resolved (QUESTIONS.md 11, to revisit with the Trash location).
 - **Copy path.** Copy the full path of the selection to the clipboard, one per line for multiple items; a variant copies the name only.
 - **New file.** Create an empty file in the current location with its name in inline edit; extensions can add templates (text, markdown, and so on).
 - **New folder.** Create a folder in the current location with its name in inline edit; with a selection, a variant moves the selected items into the new folder.
@@ -386,16 +386,16 @@ A packaged feature implements `Extension`: a manifest (id, version, settings sch
 
 One Cargo workspace, one crate per concern, grouped by layer. Kernel crates carry no feature code; everything a user would call a feature is an `ext-*` crate that registers through `ext`. Official extensions compile into the binary behind Cargo features, so a lean build is a matter of turning features off.
 
-**Kernel**
+**Kernel**, in dependency order: each crate may depend only on the crates above it, and cargo-deny enforces the order. `ext` sits below `vfs` because `vfs` and `vfs-local` implement the `Provider` trait it defines.
 
 - `types` — paths, entries, mime, errors, capability flags; no I/O, no async runtime and no dependency on any other Rick crate. It may use the small ecosystem crates it needs (`bitflags`, `thiserror`), nothing heavier.
 - `runtime` — job system, cancellation, progress, thread pools, event bus.
-- `platform` — per-OS code behind one trait set: trash, links and junctions, elevation, system properties dialogue, file associations, mounts.
-- `vfs` — the Provider trait and the mount table that routes a path to a provider.
+- `platform` — per-OS code behind one trait set: trash, links and junctions, elevation, system properties dialogue, file associations, mounts. In 0.1 the set is `Trash` (trash, list, restore, empty), `OpenWith` (`open` with the default application, `reveal` in the system file manager), `Properties` (the native dialogue on Windows and macOS, label/value rows on Linux), `NativeDialogs` (async, through `rfd`, the XDG portal on Linux), `Clipboard` and `ConfigDir`; elevation, file associations and mounts come later. The three RustSec "unmaintained" notices on `rfd`'s D-Bus dependencies are accepted in deny.toml with the reason recorded, to be dropped when `rfd` moves on.
+- `ext` — the five extension traits, the registry, manifests and the extension context.
+- `vfs` — the mount table that routes a path to its `Provider`, and cross-provider copy and move.
 - `vfs-local` — the local filesystem provider: listing, statx, watching, copy and reflink.
 - `model` — the directory model: cached listings, sort, filter, group, selection, history.
 - `ops` — the file operations as jobs: copy, move, trash, delete, rename, link, undo stack, conflict policy.
-- `ext` — the five extension traits, the registry, manifests and the extension context.
 - `app` — the application state: windows, panes, tabs, layouts, session persistence, settings, the command palette.
 - `ui-egui` — all egui widgets and the dock layout; depends on `app`, never the other way round.
 - `rick` — the binary: feature flags, wiring, startup.
@@ -445,7 +445,7 @@ Naming rule: a crate that contributes to one extension point carries that point 
 
 ### Build order
 
-types → runtime → vfs-local with the two-pass listing → model → ext with a fake Decorator → ui-egui showing a list with badges → ext-git → previews.
+types → runtime → vfs-local with the streamed listing → model → ext with a fake Decorator → ui-egui showing a list with badges → ext-git → previews.
 
 ## Non-goals & open questions
 
@@ -480,7 +480,7 @@ This spec is written to be implemented by an AI coding agent as well as by peopl
 These govern how the crates fit together. They are the decisions an implementer must not re-make.
 
 - **Unidirectional state flow.** The UI never mutates the model directly. It emits `Command` values; `app` handles them, updates the model and publishes `Event`s; the UI re-renders from the model. The model is the single source of truth for everything the window shows. Undo/redo is a log of reversible commands kept in `app`.
-- **Every long operation is a Job.** A directory listing, a copy, a search, a preview decode: each runs as a `Job` with a cancellation token, a progress channel and a result. Listings stream entries in batches so the UI shows the first screen before the walk finishes; switching away from a location cancels its jobs. Cancelling drops the job's future, so a job that never polls its token still stops at its next await point and its handle resolves with `Error::Cancelled`. A job that leaves partial state behind, such as a half-written copy target, must check the token before each irreversible step or hold a guard whose `Drop` undoes or finishes that step, because being dropped is its only notice. Long synchronous work on the compute pool cannot be dropped mid-call and checks `is_cancelled()` between chunks.
+- **Every long operation is a Job.** A directory listing, a copy, a search, a preview decode: each runs as a `Job` with a cancellation token, a progress channel and a result. Listings stream entries in batches so the UI shows the first screen before the walk finishes; switching away from a location cancels its jobs. Cancelling drops the job's future, so a job that never polls its token still stops at its next await point and its handle resolves with `Error::Cancelled`. A job that leaves partial state behind, such as a half-written copy target, must check the token before each irreversible step or hold a guard whose `Drop` undoes or finishes that step, because being dropped is its only notice. Long synchronous work on the compute pool cannot be dropped mid-call and checks `is_cancelled()` between chunks. Listings, their change watches and decorator lookups are jobs for cancellation and progress but are not listed in the operations area, which shows the jobs an action, an undo or a redo started; their output is the event stream.
 - **Platform code lives in `platform` only.** No `cfg(target_os)` anywhere else. Other crates program against the `platform` traits (trash, open-with, file properties, config dir, native dialogs) and the tests run with a fake implementation.
 - **The extension traits are a versioned contract.** The traits in `ext` and the manifest format carry a version. Any breaking change bumps it; the plugin host refuses manifests it does not understand and says so in the Extensions screen.
 - **Optional extensions are Cargo features.** `rick` builds with the kernel alone; each `ext-*` crate is a feature on the binary, default-on for built-ins, so a minimal build and a full build come from the same workspace.
@@ -490,7 +490,9 @@ These govern how the crates fit together. They are the decisions an implementer 
 
 ### Core types and extension traits
 
-First cut of the contract between the kernel and the extensions. Names and shapes are binding; signatures may gain parameters as the implementation learns, but only through a spec change. Everything here is `Send + Sync`; async methods use `async fn` in traits on Rust 2024, with `BoxStream` from `futures` for streamed results.
+First cut of the contract between the kernel and the extensions. Names and shapes are binding; signatures may gain parameters as the implementation learns, but only through a spec change. Everything here is `Send + Sync`; async methods are written with the `async_trait` attribute so the traits stay usable as `dyn` objects (`Arc<dyn Provider>`), to be replaced by native `async fn` once `dyn`-compatible async traits are stable; streamed results use `BoxStream` from `futures`.
+
+The supporting types the signatures name without defining them here (`ListOptions`, `WriteOptions`, `RemoveMode`, `LinkKind`, `CopyOptions`, `Badge`, `Color`, `ColumnDef`, `ColumnId`, `CellValue`, `PanelSection`, `DecorateCtx`, `PaneId`, `Invocation`, `Shortcut`, `UiHost`, `RenderRequest`, `TextLayer`, `TextBlock`, `TextureId`, `Transport`, `SearchScope`, `QueryKind`, `Filter`, `SearchHit`, `SettingsSchema`, `Version`) are defined and documented in crate `ext`, with the smallest shape that makes the trait usable. Their shapes are binding as implemented; a change to one goes through a numbered question like a change to a signature.
 
 **Value types** (crate `types`, no I/O):
 
@@ -597,9 +599,10 @@ pub trait Provider: Send + Sync + 'static {
     async fn remove(&self, loc: &Location, mode: RemoveMode) -> Result<(), Error>;   // Trash | Permanent
     async fn link(&self, target: &Location, at: &Location, kind: LinkKind) -> Result<Entry, Error>;
 
-    /// Same-provider copy with the native fast path (copy_file_range, reflink,
-    /// server-side copy). Cross-provider copies are composed by `ops` from
-    /// `open_read` and `open_write`.
+    /// Copies one regular file with the native fast path (copy_file_range,
+    /// reflink, server-side copy). `vfs::copy` composes directory trees from
+    /// it and cross-provider copies from `open_read` and `open_write`; it
+    /// owns recursion, progress totals and cancellation.
     async fn copy(&self, from: &Location, to: &Location, opts: CopyOptions,
                   progress: ProgressSink, cancel: CancelToken) -> Result<(), Error>;
 
@@ -730,8 +733,9 @@ pub enum Command {
     SetView { pane: PaneId, mode: ViewMode }, Sort { pane: PaneId, by: Column, dir: SortDir }, GroupBy { pane: PaneId, by: Option<Column> },
     Filter { pane: PaneId, text: String }, ToggleHidden(PaneId), Flatten { pane: PaneId, on: bool },
     Run { action: ActionId, ctx: ActionCtx },
-    NewTab(Location), CloseTab(TabId), Split { pane: PaneId, dir: SplitDir }, MoveTab { tab: TabId, to: DockTarget },
-    CancelJob(JobId), Undo, Redo,
+    NewTab(Location), CloseTab(TabId), ActivateTab(TabId), FocusPane(PaneId),
+    Split { pane: PaneId, dir: SplitDir }, MoveTab { tab: TabId, to: DockTarget },
+    CancelJob(JobId), DismissJob(JobId), Undo, Redo,
     Settings(SettingsChange),
 }
 

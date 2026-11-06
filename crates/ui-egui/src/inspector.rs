@@ -68,6 +68,22 @@ pub fn show(
                     ui.label(entry.path.to_string_lossy());
                     ui.end_row();
                 });
+            for decorator in app.registry().decorators() {
+                let Some(section) = decorator.panel(entry) else {
+                    continue;
+                };
+                ui.add_space(8.0);
+                ui.strong(&section.title);
+                egui::Grid::new(("inspector-section", decorator.id().0))
+                    .num_columns(2)
+                    .show(ui, |ui| {
+                        for (key, value) in &section.rows {
+                            ui.weak(key);
+                            ui.label(value);
+                            ui.end_row();
+                        }
+                    });
+            }
             ui.add_space(12.0);
             let target = app
                 .preview_target()

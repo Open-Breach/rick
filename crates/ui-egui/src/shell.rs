@@ -117,6 +117,13 @@ struct Toast {
     until: Instant,
 }
 
+/// A text an action asked the host to show.
+struct TextWindow {
+    serial: u64,
+    title: String,
+    text: String,
+}
+
 struct Dialog {
     ask: Ask,
     action: ActionId,
@@ -143,6 +150,9 @@ pub struct RickUi {
     about_open: bool,
     inspector_open: bool,
     properties: Option<(String, Vec<(String, String)>)>,
+    /// Read-only texts actions asked to show, each in its own window.
+    texts: Vec<TextWindow>,
+    next_text: u64,
     previews: Previews,
     closed_tabs: Vec<Location>,
     job_done_at: HashMap<types::JobId, Instant>,
@@ -183,6 +193,8 @@ impl RickUi {
             about_open: false,
             inspector_open: false,
             properties: None,
+            texts: Vec::new(),
+            next_text: 0,
             previews: Previews::default(),
             closed_tabs: Vec::new(),
             job_done_at: HashMap::new(),
@@ -294,6 +306,38 @@ impl RickUi {
         }
     }
 
+    /// Draws the text windows and drops the closed ones.
+    fn show_texts(&mut self, ctx: &egui::Context) {
+        self.texts.retain(|window| {
+            let mut open = true;
+            egui::Window::new(&window.title)
+                .id(egui::Id::new(("text", window.serial)))
+                .open(&mut open)
+                .default_size([640.0, 420.0])
+                .show(ctx, |ui| {
+                    egui::ScrollArea::both()
+                        .auto_shrink([false, false])
+                        .show(ui, |ui| {
+                            ui.add(
+                                egui::Label::new(egui::RichText::new(&window.text).monospace())
+                                    .wrap_mode(egui::TextWrapMode::Extend)
+                                    .selectable(true),
+                            );
+                        });
+                });
+            open
+        });
+    }
+
+    /// The texts shown right now, as (title, text), for tests.
+    #[must_use]
+    pub fn shown_texts(&self) -> Vec<(String, String)> {
+        self.texts
+            .iter()
+            .map(|w| (w.title.clone(), w.text.clone()))
+            .collect()
+    }
+
     /// The entry the app is previewing in `pane`, if any.
     fn preview_entry(&self, pane: PaneId) -> Option<EntryId> {
         self.app
@@ -364,7 +408,8 @@ impl RickUi {
         if self.dialog.is_some() || self.shortcuts.rebinding.is_some() {
             return;
         }
-        if self.palette.open || ctx.egui_wants_keyboard_input() {
+        // An open menu owns the keyboard: Escape closes it, nothing else.
+        if self.palette.open || ctx.egui_wants_keyboard_input() || egui::Popup::is_any_open(ctx) {
             return;
         }
         let filter_text = self
@@ -1166,6 +1211,14 @@ impl eframe::App for RickUi {
         for (level, text) in self.host.take_notices() {
             self.toast(level, text);
         }
+        for (title, text) in self.host.take_shown() {
+            self.next_text += 1;
+            self.texts.push(TextWindow {
+                serial: self.next_text,
+                title,
+                text,
+            });
+        }
         self.apply_settings(ctx);
         self.handle_keys(ctx);
         self.apply_requests(ctx);
@@ -1226,6 +1279,7 @@ impl eframe::App for RickUi {
             .show(ctx, &self.keys, self.app.registry(), &mut self.requests);
         settings_ui::about_window(ctx, &mut self.about_open);
         settings_ui::properties_window(ctx, &mut self.properties);
+        self.show_texts(ctx);
         self.show_toasts(ctx);
         self.apply_requests(ctx);
 

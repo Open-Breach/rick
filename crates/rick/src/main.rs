@@ -23,6 +23,8 @@ fn built_ins() -> Vec<Arc<dyn ext::Extension>> {
     extensions.push(Arc::new(ext_preview_image::ImagePreview::new()));
     #[cfg(feature = "preview-pdf")]
     extensions.push(Arc::new(ext_preview_pdf::PdfPreview::new()));
+    #[cfg(feature = "git")]
+    extensions.push(Arc::new(ext_git::GitExtension::new()));
     extensions
 }
 

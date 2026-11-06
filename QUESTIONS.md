@@ -61,12 +61,16 @@ Once answered, an entry keeps its number and gains a `Decided (date):` line.
    Assumed: the five traits use the `async_trait` attribute (boxed futures)
    so they work as `dyn` objects; to be replaced by native `async fn` when
    `dyn` dispatch for it stabilises.
+   Decided (2026-11-06): as assumed; the spec's extension-traits preamble
+   now says so.
 
 7. (issue 2) "Package layout" lists `ext` after `ops`, but the Provider
    trait lives in `ext` and `vfs` and `vfs-local` implement it, so they must
    depend on `ext`.
    Assumed: the layer order is types → runtime → platform → ext → vfs →
    vfs-local → model → ops → app → ui-egui → rick; deny.toml encodes it.
+   Decided (2026-11-06): as assumed; the spec's Kernel list is now in
+   that order and says cargo-deny enforces it.
 
 8. (issue 2) The trait signatures name types the spec never defines:
    `ListOptions`, `WriteOptions`, `RemoveMode`, `LinkKind`, `CopyOptions`,
@@ -78,6 +82,9 @@ Once answered, an entry keeps its number and gains a `Decided (date):` line.
    Assumed: the smallest shapes that make the traits usable, as defined in
    `ext`. `LinkKind` has only `Symbolic` and `Hard`; junctions and `.lnk`
    shortcuts are not in 0.1.
+   Decided (2026-11-06): as assumed; the spec now points at `ext` for the
+   supporting types and notes that junctions and `.lnk` shortcuts are not
+   in 0.1.
 
 9. (issue 2) The build order mentions "vfs-local with the two-pass
    listing", which nothing else describes.
@@ -86,12 +93,17 @@ Once answered, an entry keeps its number and gains a `Decided (date):` line.
    release on four cores: first batch 1.7 ms, complete 213 ms, against the
    50 ms and 400 ms targets. A names-first pass can be added if a slower
    machine needs it.
+   Decided (2026-11-06): one pass; the build order now says "streamed
+   listing". A names-first pass stays an option for a provider whose
+   per-entry metadata is slow, such as a network share, once measured.
 
 10. (issue 2) `Provider::copy` is described as the same-provider fast path
     but not whether it walks directories.
     Assumed: it copies one regular file; `vfs::copy` walks the tree, creates
     directories and calls it once per file, so one place owns recursion,
     progress totals and cancellation.
+    Decided (2026-11-06): as assumed; the spec's doc comment on `copy` now
+    says so and names `vfs::copy`, not `ops`, as the composer.
 
 11. (issue 2) Restoring from the trash is not specified beyond "Restore".
     Assumed: Windows restores by moving the `$R` payload out of the Recycle
@@ -102,6 +114,11 @@ Once answered, an entry keeps its number and gains a `Decided (date):` line.
     restore needs the `TrashedItem` the trash call returned. Restoring into
     an original path that is taken again fails with `AlreadyExists`; `ops`
     decides later whether to suffix.
+    Decided (2026-11-06), to revisit: as assumed for 0.1, noted in the
+    spec's Restore entry. Open for the Trash location issue: a way to read
+    original paths on macOS (private Finder store, `.DS_Store` of the
+    Trash, or Rick's own record of what it trashed), and whether a taken
+    original path gets a numbered suffix or a prompt.
 
 12. (issue 2) The platform traits are named but not shaped.
     Assumed: `OpenWith` has `open` (default application) and `reveal`
@@ -110,6 +127,8 @@ Once answered, an entry keeps its number and gains a `Decided (date):` line.
     rows on Linux; `NativeDialogs` is async and implemented with `rfd`
     (XDG portal on Linux), whose D-Bus dependencies carry three RustSEC
     "unmaintained" notices that deny.toml ignores with the reason recorded.
+    Decided (2026-11-06): as assumed; the spec's `platform` bullet now
+    lists the 0.1 trait set and the accepted advisories.
 
 13. (issue 3) The `Command` enum in "Commands and events" has no way to make
     a tab active, to focus a pane or to clear a finished job from the job
@@ -117,6 +136,8 @@ Once answered, an entry keeps its number and gains a `Decided (date):` line.
     Assumed: three commands are added, `ActivateTab(TabId)`,
     `FocusPane(PaneId)` and `DismissJob(JobId)`, with the smallest meaning;
     nothing else beyond the spec's list.
+    Decided (2026-11-06): as assumed; the three are in the spec's
+    `Command` enum.
 
 14. (issue 3) The spec does not say who holds the copy/cut clipboard between
     Copy and Paste, nor whether it is the system clipboard.
@@ -139,6 +160,8 @@ Once answered, an entry keeps its number and gains a `Decided (date):` line.
     keeps them out of the model's job table; their output is the
     `Event::Listed` stream. The watch on a pane's location is a cancellable
     runtime task tied to the listing's cancel token, not a job.
+    Decided (2026-11-06): as assumed; the spec's Job rule now says which
+    jobs the operations area lists.
 
 17. (issue 3) The spec relies on change notifications for the list to follow
     the filesystem, and offers Refresh "for providers without change
@@ -306,3 +329,57 @@ Once answered, an entry keeps its number and gains a `Decided (date):` line.
     Assumed: both are toggles on the preview, kept for the session, not
     written to `rick.toml`; CSV grids, Markdown and HTML rendering and the
     pretty-print toggle are not in this issue.
+
+37. (issue 6) The issue asks for status, branch and ahead/behind "via gix"
+    and for actions that gix does not implement (stash, push with
+    credentials, pull with merge, blame).
+    Assumed: the decorator and the info panel read through gix; the nine
+    actions run the `git` command line as jobs through `ext::blocking`,
+    with `GIT_TERMINAL_PROMPT=0` so a missing credential fails instead of
+    hanging. Show log and Blame run synchronously and open their text
+    through `UiHost::show`, a method added for them (a read-only text
+    window; the spec's `UiHost` had notify, confirm and prompt only).
+
+38. (issue 6) The spec's `Decorator` has no way to say what stales its
+    cache or to be told when it did, yet the issue asks for a cache
+    "invalidated by watch on .git".
+    Assumed: `Decorator` gains `invalidates_on(&Location) -> Vec<Location>`
+    (locations the kernel watches for the pane; `.git` of the work tree
+    here) and `invalidate(&Location)`. The app calls `invalidate` and
+    decorates the whole listing again, debounced by 150 ms, when a watched
+    location or the listed directory changes, and on an explicit refresh.
+    Navigating within the same work tree keeps the cache.
+
+39. (issue 6) The spec says every long operation is a `Job`, and the
+    decorator's status read is one, but the listing jobs are deliberately
+    kept out of the job table.
+    Assumed: the `DecorateCtx` runner is a separate `JobRunner` without an
+    event sink, so status reads do not flash in the operations area; they
+    are cancelled with the pane's listing through the context's token.
+    The Git actions themselves run on the app's runner and are listed.
+
+40. (issue 6) `Decoration` has one badge and one tint, but several
+    decorators may decorate the same entry.
+    Assumed: `Model::decorate` merges: a later decoration replaces the
+    badge, the tint and the cells of the columns it names and keeps the
+    other cells; a decoration that is still `Pending` only adds what was
+    missing, so badges do not blink while a decorator looks again. Which
+    badge wins between two decorators is the later one's; the spec would
+    need a priority to do better.
+
+41. (issue 6) The context menu's extension groups show only `Enabled`
+    actions, and the issue says the group is "available only when
+    ActionCtx.location is inside a work tree".
+    Assumed: every Git action is `Hidden` outside a work tree and `Enabled`
+    inside; Discard changes and Blame are `Disabled` with a reason inside
+    when the selection does not fit (nothing selected; not exactly one
+    file), so they are absent from the context menu but explained in the
+    palette.
+
+42. (issue 6) The local provider's watch is not recursive, so a watch on
+    `.git` sees the index, HEAD, ORIG_HEAD and packed-refs change but not
+    a loose ref under `.git/refs/`.
+    Assumed: `.git` alone is watched, which covers commits, stashes,
+    checkouts and staging done outside Rick; a fetch or push from outside
+    that only writes a loose remote ref is picked up on the next change
+    or refresh. Rick's own Git actions drop the cache themselves.

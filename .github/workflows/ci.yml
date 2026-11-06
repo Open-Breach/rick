@@ -72,6 +72,12 @@ jobs:
       - run: cargo test -p tests --release --test preview -- --ignored --nocapture
         continue-on-error: ${{ runner.os != 'Linux' }}
         env: { TMP: "${{ runner.temp }}", TEMP: "${{ runner.temp }}", TMPDIR: "${{ runner.temp }}" }
+      # Acceptance (issue 6): decorating a visible batch of a generated
+      # 10 000-file repository returns within 16 ms and completes within
+      # 500 ms. Linux asserts; the others print.
+      - run: cargo test -p tests --release --test git -- --ignored --nocapture
+        continue-on-error: ${{ runner.os != 'Linux' }}
+        env: { TMP: "${{ runner.temp }}", TEMP: "${{ runner.temp }}", TMPDIR: "${{ runner.temp }}" }
       - run: cargo doc --no-deps
         env: { RUSTDOCFLAGS: "-D warnings" }
   deny:

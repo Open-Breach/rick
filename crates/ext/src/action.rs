@@ -67,6 +67,9 @@
 //!     fn prompt(&self, _title: &str, default: &str) -> Option<String> {
 //!         Some(default.to_owned())
 //!     }
+//!     fn show(&self, title: &str, _text: &str) {
+//!         self.0.borrow_mut().push(title.to_owned());
+//!     }
 //! }
 //!
 //! let ctx = ActionCtx {
@@ -379,6 +382,10 @@ pub trait UiHost {
 
     /// Asks for a line of text and blocks for it; `None` when dismissed.
     fn prompt(&self, title: &str, default: &str) -> Option<String>;
+
+    /// Shows a read-only text, such as a log, under `title`; returns at
+    /// once.
+    fn show(&self, title: &str, text: &str);
 }
 
 /// A command the user can invoke.
