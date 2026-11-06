@@ -110,3 +110,67 @@ Once answered, an entry keeps its number and gains a `Decided (date):` line.
     rows on Linux; `NativeDialogs` is async and implemented with `rfd`
     (XDG portal on Linux), whose D-Bus dependencies carry three RustSEC
     "unmaintained" notices that deny.toml ignores with the reason recorded.
+
+13. (issue 3) The `Command` enum in "Commands and events" has no way to make
+    a tab active, to focus a pane or to clear a finished job from the job
+    table, yet tabs, panes and the operations area all need them.
+    Assumed: three commands are added, `ActivateTab(TabId)`,
+    `FocusPane(PaneId)` and `DismissJob(JobId)`, with the smallest meaning;
+    nothing else beyond the spec's list.
+
+14. (issue 3) The spec does not say who holds the copy/cut clipboard between
+    Copy and Paste, nor whether it is the system clipboard.
+    Assumed: the built-in `ops::Core` extension holds it in memory as
+    entries plus a copy-or-move mode; Paste after Cut empties it; Paste after
+    Copy keeps it. Only Copy path writes to the system clipboard. Sharing
+    file lists with other applications is left for a later issue.
+
+15. (issue 3) `Provider::remove(loc, RemoveMode::Trash)` returns `()`, so
+    an undo of Move to trash has nothing to restore from, while
+    `platform::Trash::trash` returns the `TrashedItem` that `restore` needs.
+    Assumed: Move to trash on a local location goes through the platform
+    directly and keeps the items for undo; on any other provider it goes
+    through the provider and cannot be undone. Only local exists in 0.1.
+
+16. (issue 3) "Every long operation is a Job" names directory listings, and
+    the job table shows jobs. A listing per navigation would flood the
+    operations area, and a change watch never ends.
+    Assumed: listings run as jobs (cancel token, progress, result) but `app`
+    keeps them out of the model's job table; their output is the
+    `Event::Listed` stream. The watch on a pane's location is a cancellable
+    runtime task tied to the listing's cancel token, not a job.
+
+17. (issue 3) The spec relies on change notifications for the list to follow
+    the filesystem, and offers Refresh "for providers without change
+    notifications or when in doubt".
+    Assumed: when a job that an action, an undo or a redo started finishes,
+    `app` also relists the pane the command came from, swapping the result
+    in without an empty intermediate state, so the model is right even where
+    the watcher lags or is unsupported. Watch events still apply as they
+    arrive.
+
+18. (issue 3) "Settings in TOML" names no file, location or behaviour on a
+    bad file.
+    Assumed: `rick.toml` in the `ConfigDir` directory, which `app` creates
+    if missing so it can be watched. Keys not present take their defaults; a
+    file that does not parse is reported as a warning and the last good
+    settings stay. Every `Command::Settings` writes the whole file.
+
+19. (issue 3) Some entries of the 0.1 operations list need the UI rather
+    than an `Action`: "Open containing folder" navigates the pane and selects
+    an entry, which `ActionOutcome` cannot express; "back and forward", "go
+    to root" and "refresh" are navigation; Rename and New file/folder ask
+    for a name "in inline edit".
+    Assumed: navigation is `Command`s (`Navigate`, `Back`, `Forward`,
+    `Refresh`), Open containing folder is `Navigate` plus `Select` issued by
+    the UI, and the name for Rename, New file and New folder comes through
+    `UiHost::prompt`, which the UI may implement as inline editing. The
+    shortcut table's navigation and selection rows are therefore bound by the
+    UI's key map, not by registered actions.
+
+20. (issue 3) The Paste conflict handling ("asks once with skip, overwrite,
+    rename or apply-to-all") needs a dialogue the UI issue brings.
+    Assumed: Paste, Duplicate and the undo of a move never overwrite; a name
+    that exists fails that item's job with `AlreadyExists`, reported in the
+    job table and as a notification. Copy path's "name only" variant and
+    New folder's "move the selection into it" variant are not in 0.1.

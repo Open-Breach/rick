@@ -1,0 +1,28 @@
+[package]
+name = "app"
+version = "0.1.0"
+description = "Rick application state: the command loop that turns Commands into model changes and Events, the undo log, the extension registry and the TOML settings."
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+types = { workspace = true }
+runtime = { workspace = true }
+platform = { workspace = true }
+ext = { workspace = true }
+vfs = { workspace = true }
+vfs-local = { workspace = true }
+model = { workspace = true }
+ops = { workspace = true }
+futures = { workspace = true }
+serde = { workspace = true }
+tokio = { workspace = true, features = ["sync", "time", "macros"] }
+toml = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+
+[lints]
+workspace = true

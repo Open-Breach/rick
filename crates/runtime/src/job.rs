@@ -6,9 +6,38 @@ use std::future::Future;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
-use tokio::sync::{oneshot, watch};
+use tokio::sync::{mpsc, oneshot, watch};
 use tracing::Instrument;
 use types::{CancelToken, Error, JobId, Progress};
+
+/// What a runner tells its event sink about every job it runs, so the
+/// application can follow jobs it did not spawn itself, such as those an
+/// action started.
+#[derive(Debug)]
+pub enum JobEvent {
+    /// A job was spawned.
+    Started {
+        /// The new job.
+        id: JobId,
+        /// Its name, empty for jobs spawned with [`JobRunner::spawn`].
+        name: String,
+    },
+    /// A job published progress.
+    Progress {
+        /// The job.
+        id: JobId,
+        /// Its latest report.
+        progress: Progress,
+    },
+    /// A job ended. The handle's receiver gets the value; this carries a
+    /// [replica](Error::replicate) of the error.
+    Finished {
+        /// The job.
+        id: JobId,
+        /// How it ended.
+        result: Result<(), Error>,
+    },
+}
 
 /// What `runtime` hands back for every long operation.
 ///
@@ -75,12 +104,20 @@ pub struct JobRunner {
 struct Inner {
     next_id: AtomicU64,
     running: Mutex<BTreeMap<JobId, CancelToken>>,
+    events: Option<mpsc::UnboundedSender<JobEvent>>,
 }
 
 impl Inner {
     fn running(&self) -> MutexGuard<'_, BTreeMap<JobId, CancelToken>> {
         // The map holds plain tokens; a panic elsewhere cannot corrupt it.
         self.running.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    fn publish(&self, event: JobEvent) {
+        if let Some(events) = &self.events {
+            // A dropped receiver means nobody follows jobs any more.
+            let _ = events.send(event);
+        }
     }
 }
 
@@ -97,10 +134,25 @@ impl Drop for Deregister {
 }
 
 impl JobRunner {
-    /// A runner with no jobs.
+    /// A runner with no jobs and no event sink.
     #[must_use]
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// A runner that reports every job's start, progress and end on the
+    /// returned receiver, whoever spawned the job.
+    #[must_use]
+    pub fn with_events() -> (Self, mpsc::UnboundedReceiver<JobEvent>) {
+        let (tx, rx) = mpsc::unbounded_channel();
+        let runner = Self {
+            inner: Arc::new(Inner {
+                next_id: AtomicU64::new(0),
+                running: Mutex::new(BTreeMap::new()),
+                events: Some(tx),
+            }),
+        };
+        (runner, rx)
     }
 
     /// Starts `job` as a task on the runtime and returns its handle.
@@ -116,6 +168,17 @@ impl JobRunner {
         F: FnOnce(JobCtx) -> Fut,
         Fut: Future<Output = Result<T, Error>> + Send + 'static,
     {
+        self.spawn_named("", job)
+    }
+
+    /// [`spawn`](Self::spawn) with a name for the job list and the event
+    /// sink.
+    pub fn spawn_named<T, F, Fut>(&self, name: impl Into<String>, job: F) -> JobHandle<T>
+    where
+        T: Send + 'static,
+        F: FnOnce(JobCtx) -> Fut,
+        Fut: Future<Output = Result<T, Error>> + Send + 'static,
+    {
         let id = JobId(self.inner.next_id.fetch_add(1, Ordering::Relaxed) + 1);
         let cancel = CancelToken::new();
         let (progress_tx, progress_rx) = watch::channel(Progress::Items {
@@ -125,6 +188,10 @@ impl JobRunner {
         let (result_tx, result_rx) = oneshot::channel();
 
         self.inner.running().insert(id, cancel.clone());
+        self.inner.publish(JobEvent::Started {
+            id,
+            name: name.into(),
+        });
         let deregister = Deregister {
             inner: Arc::clone(&self.inner),
             id,
@@ -137,18 +204,60 @@ impl JobRunner {
         });
         let cancelled = cancel.cancelled();
         let span = tracing::debug_span!("job", %id);
+        let inner = Arc::clone(&self.inner);
+        // Progress is forwarded from the job's own task, so the sink sees
+        // every report before `Finished`.
+        let mut progress = inner.events.as_ref().map(|_| progress_rx.clone());
 
         crate::handle().spawn(
             async move {
-                let result = tokio::select! {
-                    biased;
-                    () = cancelled => Err(Error::Cancelled),
-                    result = future => result,
+                let mut future = Box::pin(future);
+                let mut cancelled = Box::pin(cancelled);
+                let result = loop {
+                    tokio::select! {
+                        biased;
+                        () = &mut cancelled => break Err(Error::Cancelled),
+                        result = &mut future => break result,
+                        changed = async {
+                            match progress.as_mut() {
+                                Some(rx) => rx.changed().await.is_ok(),
+                                None => std::future::pending().await,
+                            }
+                        } => {
+                            if changed {
+                                let latest = progress
+                                    .as_mut()
+                                    .map(|rx| rx.borrow_and_update().clone());
+                                if let Some(latest) = latest {
+                                    inner.publish(JobEvent::Progress { id, progress: latest });
+                                }
+                            } else {
+                                // The job dropped its sink; nothing more to forward.
+                                progress = None;
+                            }
+                        }
+                    }
                 };
+                // A report the job made just before returning is still
+                // unseen; the sender being gone does not matter.
+                let last = progress.as_mut().and_then(|rx| {
+                    let value = rx.borrow_and_update();
+                    value.has_changed().then(|| value.clone())
+                });
+                if let Some(latest) = last {
+                    inner.publish(JobEvent::Progress {
+                        id,
+                        progress: latest,
+                    });
+                }
                 tracing::debug!(ok = result.is_ok(), "job finished");
                 // Leave the running list before the caller can observe the
                 // result, so `running()` right after `result.await` is exact.
                 drop(deregister);
+                inner.publish(JobEvent::Finished {
+                    id,
+                    result: result.as_ref().map(|_| ()).map_err(Error::replicate),
+                });
                 // The caller may have dropped its handle; the job is done
                 // regardless.
                 let _ = result_tx.send(result);
@@ -213,6 +322,55 @@ mod tests {
                 total: None
             }
         );
+    }
+
+    #[test]
+    fn the_event_sink_sees_start_progress_and_end() {
+        let (runner, mut events) = JobRunner::with_events();
+        crate::block_on(async {
+            let handle = runner.spawn_named("copy", |ctx| async move {
+                ctx.progress.report(Progress::Bytes {
+                    done: 5,
+                    total: Some(5),
+                });
+                Err::<(), Error>(Error::NotFound)
+            });
+            assert!(matches!(handle.result.await, Ok(Err(Error::NotFound))));
+
+            let mut seen = Vec::new();
+            while let Ok(event) =
+                tokio::time::timeout(std::time::Duration::from_millis(200), events.recv()).await
+            {
+                match event {
+                    Some(event) => seen.push(event),
+                    None => break,
+                }
+            }
+            assert!(
+                matches!(seen.first(), Some(JobEvent::Started { name, .. }) if name == "copy"),
+                "{seen:?}"
+            );
+            assert!(
+                seen.iter().any(|e| matches!(
+                    e,
+                    JobEvent::Progress {
+                        progress: Progress::Bytes { done: 5, .. },
+                        ..
+                    }
+                )),
+                "{seen:?}"
+            );
+            assert!(
+                matches!(
+                    seen.last(),
+                    Some(JobEvent::Finished {
+                        result: Err(Error::NotFound),
+                        ..
+                    })
+                ),
+                "{seen:?}"
+            );
+        });
     }
 
     #[test]

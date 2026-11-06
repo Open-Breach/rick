@@ -12,11 +12,13 @@
 //! [`VPath`](types::VPath) and [`std::path::Path`].
 //!
 //! This is the only crate allowed `unsafe` and `cfg(target_os)`. Every
-//! `unsafe` block carries a `// SAFETY:` comment.
+//! `unsafe` block carries a `// SAFETY:` comment. The [`Clipboard`] is text
+//! only and goes through `arboard` on all three platforms.
 
 // The point of this crate: FFI to the OS lives here and nowhere else.
 #![allow(unsafe_code)]
 
+mod clipboard;
 mod dialogs;
 mod fake;
 pub mod fs;
@@ -39,8 +41,8 @@ compile_error!("Rick supports Linux, macOS and Windows");
 pub use async_trait::async_trait;
 pub use fake::Fake;
 pub use traits::{
-    ConfigDir, DialogFilter, NativeDialogs, OpenWith, Platform, Properties, PropertiesOutcome,
-    Trash, TrashedItem,
+    Clipboard, ConfigDir, DialogFilter, NativeDialogs, OpenWith, Platform, Properties,
+    PropertiesOutcome, Trash, TrashedItem,
 };
 
 /// The platform the binary runs on.

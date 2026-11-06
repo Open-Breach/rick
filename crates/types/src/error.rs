@@ -42,6 +42,24 @@ impl Error {
             _ => Self::Io(error),
         }
     }
+
+    /// A second copy of this error for another receiver. `Error` cannot be
+    /// `Clone` because `std::io::Error` is not; the copy keeps the variant,
+    /// the I/O error kind and the message, and drops any wrapped payload.
+    #[must_use]
+    pub fn replicate(&self) -> Self {
+        match self {
+            Self::NotFound => Self::NotFound,
+            Self::PermissionDenied => Self::PermissionDenied,
+            Self::Cancelled => Self::Cancelled,
+            Self::Unsupported(what) => Self::Unsupported(what),
+            Self::Io(io) => Self::Io(std::io::Error::new(io.kind(), io.to_string())),
+            Self::Extension { ext, source } => Self::Extension {
+                ext: *ext,
+                source: source.to_string().into(),
+            },
+        }
+    }
 }
 
 #[cfg(test)]
@@ -65,6 +83,26 @@ mod tests {
         let err: Error = io.into();
         assert!(matches!(err, Error::Io(_)));
         assert_eq!(err.to_string(), "I/O error: boom");
+    }
+
+    #[test]
+    fn replicate_keeps_variant_kind_and_message() {
+        let io = Error::Io(std::io::Error::new(
+            std::io::ErrorKind::AlreadyExists,
+            "taken",
+        ));
+        let copy = io.replicate();
+        assert!(matches!(&copy, Error::Io(e) if e.kind() == std::io::ErrorKind::AlreadyExists));
+        assert_eq!(copy.to_string(), io.to_string());
+        assert!(matches!(
+            Error::Unsupported("x").replicate(),
+            Error::Unsupported("x")
+        ));
+        let ext = Error::Extension {
+            ext: ExtId("git"),
+            source: "locked".into(),
+        };
+        assert_eq!(ext.replicate().to_string(), ext.to_string());
     }
 
     #[test]

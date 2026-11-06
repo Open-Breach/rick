@@ -1,5 +1,5 @@
 [licenses]
-allow = ["Apache-2.0", "MIT", "BSD-2-Clause", "BSD-3-Clause", "CC0-1.0", "ISC", "Unicode-3.0", "Zlib"]
+allow = ["Apache-2.0", "BSL-1.0", "MIT", "BSD-2-Clause", "BSD-3-Clause", "CC0-1.0", "ISC", "Unicode-3.0", "Zlib"]
 
 [bans]
 multiple-versions = "warn"
@@ -10,11 +10,16 @@ multiple-versions = "warn"
 # edge and fails the check. `types` may be used by everyone and needs no
 # entry. Add an entry per crate as crates appear.
 deny = [
-    { crate = "runtime", wrappers = ["platform", "ext", "vfs", "vfs-local", "tests"] },
-    { crate = "platform", wrappers = ["vfs", "vfs-local", "tests"] },
-    { crate = "ext", wrappers = ["vfs", "vfs-local", "tests"] },
-    { crate = "vfs", wrappers = ["vfs-local", "tests"] },
-    { crate = "vfs-local", wrappers = ["tests"] },
+    { crate = "runtime", wrappers = ["platform", "ext", "vfs", "vfs-local", "model", "ops", "app", "tests"] },
+    { crate = "platform", wrappers = ["vfs", "vfs-local", "ops", "app", "tests"] },
+    { crate = "ext", wrappers = ["vfs", "vfs-local", "model", "ops", "app", "tests"] },
+    { crate = "vfs", wrappers = ["vfs-local", "ops", "app", "tests"] },
+    { crate = "vfs-local", wrappers = ["ops", "app", "tests"] },
+    # `ops` may use `model` by the layer order but does not today; listing
+    # it would only draw an unused-wrapper warning. Add it back when needed.
+    { crate = "model", wrappers = ["app", "tests"] },
+    { crate = "ops", wrappers = ["app", "tests"] },
+    { crate = "app", wrappers = ["tests"] },
 ]
 
 [advisories]
