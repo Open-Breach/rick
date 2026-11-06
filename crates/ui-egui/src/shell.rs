@@ -22,7 +22,7 @@ use crate::preview::Previews;
 use crate::search::{Pick, SearchBox};
 use crate::settings_ui::ShortcutsScreen;
 use crate::thumbs::Thumbnails;
-use crate::{icons, inspector, menus, pane, paths, settings_ui, side_panel};
+use crate::{frame, icons, inspector, menus, pane, paths, settings_ui, side_panel};
 
 /// Per-tab view state that is the UI's business, not the model's.
 #[derive(Debug, Default)]
@@ -172,6 +172,9 @@ pub struct RickUi {
     job_done_at: HashMap<types::JobId, Instant>,
     applied: Option<(Theme, u8, Density, Option<String>)>,
     now: SystemTime,
+    /// Rick's own window frame as the last frame drew it, if it did; the
+    /// window is then cleared to transparent around it.
+    window_frame: Option<frame::Frame>,
 }
 
 /// How many dispatched intents are remembered.
@@ -261,6 +264,7 @@ impl RickUi {
             job_done_at: HashMap::new(),
             applied: None,
             now: SystemTime::now(),
+            window_frame: None,
         }
     }
 
@@ -419,6 +423,13 @@ impl RickUi {
     #[must_use]
     pub fn toolbar_row(&self, tab: TabId) -> Option<egui::Rect> {
         self.tabs.get(&tab).and_then(|t| t.toolbar_row)
+    }
+
+    /// The content area inside Rick's own window frame in the last frame,
+    /// `None` when the system draws the frame or the window is maximised.
+    #[must_use]
+    pub fn framed_content(&self) -> Option<egui::Rect> {
+        self.window_frame.map(|f| f.content())
     }
 
     /// Each pane's rectangle in the last frame, for tests that drag tabs.
@@ -1534,29 +1545,9 @@ impl TabViewer for Viewer<'_> {
     }
 }
 
-impl eframe::App for RickUi {
-    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
-        let ctx = ui.ctx().clone();
-        let ctx = &ctx;
-        self.now = SystemTime::now();
-        let mut events = Vec::new();
-        self.app.poll(&mut events);
-        self.absorb(events);
-        for (level, text) in self.host.take_notices() {
-            self.toast(level, text);
-        }
-        for (title, text) in self.host.take_shown() {
-            self.next_text += 1;
-            self.texts.push(TextWindow {
-                serial: self.next_text,
-                title,
-                text,
-            });
-        }
-        self.apply_settings(ctx);
-        self.handle_keys(ctx);
-        self.apply_requests(ctx);
-
+impl RickUi {
+    /// The window's panels: title row, side panel, inspector and the dock.
+    fn panels(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
         let focused = self.app.model().focused;
         self.title_row(ui, ctx, focused);
         self.apply_requests(ctx);
@@ -1598,6 +1589,54 @@ impl eframe::App for RickUi {
             .reconcile(&mut self.app, &mut events, ctx.pointer_latest_pos());
         self.absorb(events);
         self.apply_requests(ctx);
+    }
+}
+
+impl eframe::App for RickUi {
+    /// Transparent around Rick's own frame, so its shadow shows the desktop
+    /// through the margin; the panel colour otherwise.
+    fn clear_color(&self, visuals: &egui::Visuals) -> [f32; 4] {
+        if self.window_frame.is_some() {
+            [0.0; 4]
+        } else {
+            visuals.panel_fill.to_normalized_gamma_f32()
+        }
+    }
+
+    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        let ctx = ui.ctx().clone();
+        let ctx = &ctx;
+        self.now = SystemTime::now();
+        let mut events = Vec::new();
+        self.app.poll(&mut events);
+        self.absorb(events);
+        for (level, text) in self.host.take_notices() {
+            self.toast(level, text);
+        }
+        for (title, text) in self.host.take_shown() {
+            self.next_text += 1;
+            self.texts.push(TextWindow {
+                serial: self.next_text,
+                title,
+                text,
+            });
+        }
+        self.apply_settings(ctx);
+        self.handle_keys(ctx);
+        self.apply_requests(ctx);
+
+        // Rick's own window frame where the system draws none; the panels
+        // go inside it.
+        let chrome = self.app.platform().window_chrome();
+        self.window_frame =
+            frame::wanted(ctx, chrome).then(|| frame::Frame::paint(ui, ui.max_rect()));
+        let window_frame = self.window_frame;
+        let content = window_frame.map_or(ui.max_rect(), |f| f.content());
+        let mut inside = ui.new_child(egui::UiBuilder::new().max_rect(content));
+        self.panels(&mut inside, ctx);
+        if let Some(window_frame) = window_frame {
+            window_frame.grips(ui);
+        }
 
         self.show_dialog(ctx);
         settings_ui::settings_window(

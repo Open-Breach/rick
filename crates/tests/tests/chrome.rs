@@ -307,6 +307,87 @@ fn a_tab_dragged_onto_another_panes_edge_moves_its_pane_there() {
     assert_eq!(model.panes().count(), 2, "still two panes");
 }
 
+/// Where the system draws no chrome Rick frames the window itself: the
+/// content sits inside the margin, and the edge resizes the window through
+/// the backend, with the matching cursor while hovered.
+#[test]
+fn the_window_frame_resizes_from_its_edges() {
+    let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+    let mut harness = harness(dir.path(), egui::vec2(900.0, 600.0));
+    let content = harness
+        .state()
+        .framed_content()
+        .unwrap_or_else(|| panic!("the fake platform has no native chrome, so Rick frames"));
+    let inset = ui_egui::frame::MARGIN + 1.0;
+    assert!((content.left() - inset).abs() < 0.5, "{content:?}");
+    assert!((content.top() - inset).abs() < 0.5, "{content:?}");
+    assert!(
+        (content.right() - (900.0 - inset)).abs() < 0.5,
+        "{content:?}"
+    );
+    assert!(
+        (content.bottom() - (600.0 - inset)).abs() < 0.5,
+        "{content:?}"
+    );
+    let pane = harness.state().app().model().focused;
+    let pane_rect = rect_of(&harness, pane);
+    assert!(
+        pane_rect.left() >= inset - 0.5,
+        "{pane_rect:?} inside the frame"
+    );
+
+    // Hover the left edge: the resize cursor.
+    let edge = egui::pos2(4.0, 300.0);
+    harness.event(egui::Event::PointerMoved(edge));
+    harness.step();
+    harness.step();
+    assert_eq!(
+        harness.output().platform_output.cursor_icon,
+        egui::CursorIcon::ResizeWest
+    );
+
+    // Press and pull: the backend is asked to resize westwards. Each step
+    // runs one frame per queued event and keeps the last frame's output, so
+    // the press gets a step of its own.
+    harness.event(egui::Event::PointerButton {
+        pos: edge,
+        button: egui::PointerButton::Primary,
+        pressed: true,
+        modifiers: egui::Modifiers::default(),
+    });
+    harness.step();
+    let mut commands = root_commands(&harness);
+    for dx in [-3.0, -8.0] {
+        harness.event(egui::Event::PointerMoved(edge + egui::vec2(dx, 0.0)));
+        harness.step();
+        commands.extend(root_commands(&harness));
+    }
+    assert!(
+        commands.iter().any(|c| matches!(
+            c,
+            egui::ViewportCommand::BeginResize(egui::viewport::ResizeDirection::West)
+        )),
+        "{commands:?}"
+    );
+    harness.event(egui::Event::PointerButton {
+        pos: edge,
+        button: egui::PointerButton::Primary,
+        pressed: false,
+        modifiers: egui::Modifiers::default(),
+    });
+    harness.step();
+}
+
+/// The viewport commands the last frame sent to the backend.
+fn root_commands(harness: &Harness<'_, RickUi>) -> Vec<egui::ViewportCommand> {
+    harness
+        .output()
+        .viewport_output
+        .get(&egui::ViewportId::ROOT)
+        .map(|out| out.commands.clone())
+        .unwrap_or_default()
+}
+
 /// The toolbar at three widths with a twelve-segment path: no widget
 /// overlaps another, the right group keeps its width, the breadcrumb
 /// collapses into a chevron when it must and always shows the last segment.

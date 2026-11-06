@@ -1,7 +1,8 @@
 # ui-egui
 
 `ui-egui` is the only crate that knows egui. It renders the window from the
-`model` the `app` owns: the burger menu, the `egui_dock` tree of tabs and
+`model` the `app` owns: the window frame with its shadow and resize grips
+where the system draws none, the title row with the burger menu, the `egui_dock` tree of tabs and
 split panes, each tab's toolbar, path bar, file list (details or list view,
 only the visible rows laid out) and status line, the inspector pane, the
 operations area, the context menu and command palette built from the action
