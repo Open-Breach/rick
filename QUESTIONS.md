@@ -567,3 +567,72 @@ Once answered, an entry keeps its number and gains a `Decided (date):` line.
     settings and the actions reach it through a `PinStore` the app provides.
     Spring-loading into a tab header switches the pane to that tab and
     "return" switches back; a drop on a header never switches.
+
+66. (session) The spec's shortcut table binds Mod+N to New file, the
+    Windows paragraph of General behaviour opens a new window with Ctrl+N,
+    and the issue asks for Mod+N to open a window.
+    Assumed: Mod+N opens a new window, as the issue and the Windows
+    paragraph say; `core.new_file` has no default shortcut until the spec
+    names one (it stays in the menu and the palette and is rebindable in
+    Settings → Keyboard shortcuts).
+
+67. (session) The issue wants "egui_dock's serialised tree" in the session,
+    and `model` may not depend on `egui_dock` (only `ui-egui` knows egui).
+    Assumed: the model keeps a mirror of what that tree holds that matters
+    across a start, the splits with their fractions (`Dock::Split` gained
+    `fraction`) and each pane's tabs in strip order with the active one, and
+    the UI reports the tree's changes to it after every frame
+    (`Command::TabOrder`, `Command::Layout`). Question 28 is thereby
+    narrowed: tab order is still the dock's display state, but it is
+    reported to the model and is part of the session. Leaf rectangles and
+    scroll positions of the strips are not kept.
+
+68. (session) The issue names `show_viewport_deferred` as the mechanism for
+    further windows. A deferred viewport's callback must be `Send + Sync +
+    'static`, so the whole UI state would live behind a lock, which the
+    test harness's `&App` accessors cannot give.
+    Assumed: `ViewportBuilder` per window as specified, shown with
+    `show_viewport_immediate`, so every window draws from the one `RickUi`
+    in the parent's frame; the windows share one app, one job table and
+    one undo log either way. eframe's root viewport cannot close while its
+    children stay, so closing the first window with others open moves the
+    root viewport to the next window (position, size and state follow);
+    the window that closes is the model's.
+
+69. (session) "Continue where I left off" names the last session, and the
+    session file is overwritten continuously, so after starting with a
+    layout the file no longer holds where the user left off.
+    Assumed: the session file as read at start is kept in memory for the
+    run and is what the entry switches to; at the next start it is the
+    file. New window "opens with the start layout": with a named start
+    layout it is that layout's focused window; with `start = "last"` it is
+    one tab at the focused tab's location, since the last session is the
+    whole set of windows already on screen. A path on the command line
+    opens in a new tab of the restored session's focused pane rather than
+    replacing the session. The issue's "window-qualified `DockTarget`" is
+    `DockTarget::Into(pane)` as before, since pane ids are unique across
+    windows, plus `DockTarget::NewWindow` for a tear-out.
+
+70. (session) The spec's `Command` list has nothing for sessions, layouts
+    and windows, and question 44 put the side panel's state in `rick.toml`.
+    Assumed, as the issue asks: the side panel's side, width, collapsed
+    state and folded sections move from the settings to each window's
+    session state (`Command::SidePanel`; an old `[side_panel]` table in
+    `rick.toml` is ignored), the Settings screen's side panel row changes
+    the window it is open in, and the commands `TabOrder`, `Layout`,
+    `Scroll`, `WindowGeometry`, `SidePanel`, `FocusWindow`, `NewWindow`,
+    `CloseWindow`, `SaveLayout`, `SwitchLayout`, `DeleteLayout` and
+    `RenameLayout` join the list, to be added to the spec. Settings gained
+    `[session] start = "last" | "<layout name>"` as the issue names it; a
+    layout cannot be called `last`.
+
+71. (session) The issue says a tab whose location no longer exists "opens
+    at the nearest existing ancestor and says so in the status line", and
+    the spec's status line holds counts only.
+    Assumed: `Tab` carries a `note` the status line appends after the
+    counts, cleared by the next navigation; the check at start is a
+    synchronous `std::fs` look at the local path and its ancestors (the
+    only provider in 0.1), locations of a provider that is not mounted open
+    at Home with a note, and locations of any other mounted provider are
+    taken as they are.
+

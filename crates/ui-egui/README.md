@@ -1,9 +1,12 @@
 # ui-egui
 
-`ui-egui` is the only crate that knows egui. It renders the window from the
-`model` the `app` owns: the window frame with its shadow and resize grips
-where the system draws none, the title row with the burger menu, the `egui_dock` tree of tabs and
-split panes, each tab's toolbar, path bar, file list (details or list view,
+`ui-egui` is the only crate that knows egui. It renders every window from
+the `model` the `app` owns, the first as eframe's root viewport and the
+others as viewports of their own drawn in the same frame: the window frame
+with its shadow and resize grips where the system draws none, the title row
+with the burger menu (New window, the Layouts submenu), the `egui_dock` tree
+of tabs and split panes, whose tab order and divider positions it reports
+back for the session, a tab dragged outside every window opening a new one, each tab's toolbar, path bar, file list (details or list view,
 only the visible rows laid out) and status line, the preview pane (toolbar,
 info badges, content, status bar), the
 operations area, the context menu and command palette built from the action
