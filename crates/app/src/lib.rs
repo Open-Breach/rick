@@ -53,7 +53,7 @@ mod settings;
 pub use command::{Command, Event, TransferMode};
 pub use settings::SETTINGS_FILE;
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, PoisonError, RwLock};
 use std::time::Duration;
@@ -159,6 +159,9 @@ enum Msg {
 
 /// How long changes are collected before the decorators run again.
 const REDECORATE_AFTER: Duration = Duration::from_millis(150);
+/// How many of this process's own settings writes are remembered, so the
+/// watcher's report of each is told from an edit.
+const RECENT_SAVES: usize = 16;
 
 /// The pinned list as the pin actions see it. The list itself lives in the
 /// model's settings, which `App` owns; the bridge keeps a copy for the
@@ -289,6 +292,11 @@ pub struct App {
     redo: Vec<Box<dyn UndoCommand>>,
     settings_path: PathBuf,
     settings_watch: CancelToken,
+    /// Writes the settings file in order, one at a time.
+    settings_saver: mpsc::UnboundedSender<Settings>,
+    /// What this process wrote lately: a reload that matches one is the
+    /// watcher reporting our own write, not an edit to pick up.
+    recent_saves: VecDeque<Settings>,
     preview: PreviewState,
     /// Thumbnails being rendered, so a cell asked for twice renders once.
     thumbnails: BTreeSet<(EntryId, u32)>,
@@ -353,6 +361,7 @@ impl App {
 
         let (jobs, job_events) = JobRunner::with_events();
         let (tx, rx) = mpsc::unbounded_channel();
+        let settings_saver = settings::saver(settings_path.clone());
         let mut app = Self {
             model: Model::new(settings, start),
             mounts,
@@ -375,6 +384,8 @@ impl App {
             redo: Vec::new(),
             settings_path,
             settings_watch: CancelToken::new(),
+            settings_saver,
+            recent_saves: VecDeque::new(),
             preview: PreviewState::default(),
             thumbnails: BTreeSet::new(),
             pending,
@@ -516,17 +527,10 @@ impl App {
                 to,
                 mode,
             } => {
-                let sources: Vec<Location> = self
-                    .model
-                    .active_tab(from)
-                    .map(|(_, tab)| {
-                        items
-                            .iter()
-                            .filter_map(|id| tab.listing.get(*id))
-                            .map(|entry| Location::new(entry.id.provider, entry.path.clone()))
-                            .collect()
-                    })
-                    .unwrap_or_default();
+                let sources: Vec<Location> = items
+                    .iter()
+                    .filter_map(|id| self.locate(from, *id))
+                    .collect();
                 self.transfer(sources, &to, mode, from, events);
             }
             Command::Receive { items, to, mode } => {
@@ -672,6 +676,33 @@ impl App {
         self.attribute(self.model.focused, events);
     }
 
+    /// Where the entry `id` dragged out of `from` is: in that pane's
+    /// listing, in any other tab's, or in the selection a spring-loading
+    /// step of that pane recorded before it moved on.
+    fn locate(&self, from: PaneId, id: EntryId) -> Option<Location> {
+        let location = |entry: &Entry| Location::new(entry.id.provider, entry.path.clone());
+        if let Some((_, tab)) = self.model.active_tab(from)
+            && let Some(entry) = tab.listing.get(id)
+        {
+            return Some(location(entry));
+        }
+        for (pane, _) in self.model.panes() {
+            if let Some((_, tab)) = self.model.active_tab(pane)
+                && let Some(entry) = tab.listing.get(id)
+            {
+                return Some(location(entry));
+            }
+        }
+        let (_, tab) = self.model.active_tab(from)?;
+        tab.history
+            .back
+            .iter()
+            .rev()
+            .flat_map(|step| step.selection.iter())
+            .find(|entry| entry.id == id)
+            .map(location)
+    }
+
     /// The pinned list as the pin actions and commands see it.
     fn pin_store(&self) -> Arc<dyn PinStore> {
         Arc::clone(&self.pins) as Arc<dyn PinStore>
@@ -763,18 +794,20 @@ impl App {
         self.attribute(pane, events);
     }
 
-    /// Applies one change and writes the file off the loop's thread.
+    /// Applies one change and writes the file off the loop's thread; the
+    /// writes land in order.
     fn change_settings(&mut self, change: model::SettingsChange) {
         let mut settings = self.model.settings.clone();
         settings.apply(change);
         self.pins.sync(&settings.pinned);
         self.model.apply_settings(settings.clone());
-        let path = self.settings_path.clone();
-        runtime::handle().spawn_blocking(move || {
-            if let Err(error) = settings::save(&path, &settings) {
-                warn!(%error, path = %path.display(), "settings not saved");
-            }
-        });
+        self.recent_saves.push_back(settings.clone());
+        while self.recent_saves.len() > RECENT_SAVES {
+            self.recent_saves.pop_front();
+        }
+        // The saver lives as long as the runtime; a closed channel means
+        // the process is going down.
+        let _ = self.settings_saver.send(settings);
     }
 
     fn selection_len(&self, pane: PaneId) -> usize {
@@ -1209,6 +1242,12 @@ impl App {
                 change,
             } => self.change(pane, generation, change, events),
             Msg::Settings(Ok(settings)) => {
+                if self.recent_saves.contains(&settings) {
+                    // Our own write coming back through the watcher; an
+                    // earlier one may have been written over by a later
+                    // change already.
+                    return;
+                }
                 if settings != self.model.settings {
                     debug!("settings file changed");
                     self.pins.sync(&settings.pinned);

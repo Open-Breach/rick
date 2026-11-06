@@ -192,9 +192,10 @@ impl Pane {
 pub struct HistoryEntry {
     /// Where the tab was.
     pub location: Location,
-    /// The selection to restore on return; empty for a plain navigation,
-    /// the selection at the start of a drag for a spring-loaded one.
-    pub selection: Vec<EntryId>,
+    /// The entries to select again on return; empty for a plain navigation,
+    /// the selection at the start of a drag for a spring-loaded one. Whole
+    /// entries, so a drag can still name them once the pane has moved on.
+    pub selection: Vec<Entry>,
 }
 
 impl HistoryEntry {
@@ -456,12 +457,7 @@ impl Model {
         }
         let from = std::mem::replace(&mut tab.location, to);
         if first {
-            let selection = tab
-                .listing
-                .row_ids()
-                .into_iter()
-                .filter(|id| tab.selection.contains(id))
-                .collect();
+            let selection = tab.selected().cloned().collect();
             tab.history.back.push(HistoryEntry {
                 location: from,
                 selection,
@@ -484,7 +480,7 @@ impl Model {
         tab.history.forward.push(HistoryEntry::at(from));
         tab.filter.clear();
         tab.listing.clear();
-        tab.selection = to.selection.into_iter().collect();
+        tab.selection = to.selection.iter().map(|e| e.id).collect();
         tab.decorations.clear();
         Some(to.location)
     }
@@ -498,7 +494,7 @@ impl Model {
         tab.history.back.push(HistoryEntry::at(from));
         tab.filter.clear();
         tab.listing.clear();
-        tab.selection = to.selection.into_iter().collect();
+        tab.selection = to.selection.iter().map(|e| e.id).collect();
         tab.decorations.clear();
         Some(to.location)
     }
@@ -974,7 +970,7 @@ mod tests {
         assert_eq!(tab.location, loc("/a/sub/deeper"));
         assert_eq!(tab.history.back.len(), 1, "one step for the whole drag");
         assert_eq!(tab.history.back[0].location, loc("/a"));
-        assert_eq!(tab.history.back[0].selection, [picked]);
+        assert_eq!(tab.history.back[0].selection, [entry(2, "y")]);
         assert!(tab.selection.is_empty());
 
         assert_eq!(model.back(pane), Some(loc("/a")));
