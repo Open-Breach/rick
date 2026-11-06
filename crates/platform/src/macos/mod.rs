@@ -146,7 +146,7 @@ impl Chrome for Native {
 }
 
 impl DragSource for Native {
-    /// Not available yet: an AppKit drag starts from the `NSView` with the
+    /// Not available yet: an `AppKit` drag starts from the `NSView` with the
     /// `NSEvent` of the press (`beginDraggingSessionWithItems:event:source:`),
     /// and `winit` 0.30 behind `eframe` 0.36 hands neither out; it exposes
     /// drop reception only (QUESTIONS.md).

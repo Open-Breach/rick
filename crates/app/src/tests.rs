@@ -526,7 +526,7 @@ fn spring_loading_pushes_one_step_and_back_restores_the_selection() {
         .active_tab(pane)
         .map_or_else(|| panic!("tab"), |(_, t)| t.clone());
     assert!(tab.selection.contains(&a), "the selection came back");
-    assert!(tab.history.back.is_empty());
+    assert_eq!(tab.history.back, [] as [model::HistoryEntry; 0]);
     assert!(h.take_events().iter().any(|e| matches!(
         e,
         Event::SelectionChanged { ids, .. } if ids == &[a]

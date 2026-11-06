@@ -625,7 +625,10 @@ fn the_ghost_counts_the_items_and_the_indicator_follows_target_and_keys() {
         harness.state().dispatched()
     );
     release(&mut harness, pinned, egui::PointerButton::Primary);
-    assert!(harness.state().app().model().settings.pinned.is_empty());
+    assert_eq!(
+        harness.state().app().model().settings.pinned,
+        [] as [types::Location; 0]
+    );
     assert!(dir.path().join("a.txt").exists());
     assert_eq!(
         selected_names(&harness, pane).len(),
@@ -772,7 +775,10 @@ fn with_return_the_pane_is_back_at_the_start_after_the_drop() {
     release(&mut harness, to, egui::PointerButton::Primary);
     assert!(dir.path().join("sub/a.txt").exists());
     assert_eq!(location(&harness, pane), dir.path(), "returned");
-    assert!(tab(&harness, pane).1.history.back.is_empty());
+    assert_eq!(
+        tab(&harness, pane).1.history.back,
+        [] as [model::HistoryEntry; 0]
+    );
 }
 
 /// A file dropped from outside the process, as the backend reports it.
