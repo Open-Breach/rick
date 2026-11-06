@@ -30,7 +30,7 @@
 //!         None
 //!     }
 //!     fn render(&mut self, _page: usize, _req: RenderRequest) -> Result<Frame, Error> {
-//!         Ok(Frame::Text(TextBlock { text: self.body.clone(), language: None }))
+//!         Ok(Frame::Text(TextBlock { text: self.body.clone(), language: None, spans: Vec::new() }))
 //!     }
 //!     fn text_layer(&self) -> Option<&TextLayer> {
 //!         Some(&self.layer)
@@ -103,6 +103,8 @@ pub struct RenderRequest {
     pub height: u32,
     /// Display scale factor, 1.0 for 96 dpi.
     pub scale: f32,
+    /// Whether the UI shows a dark theme, for previewers that colour text.
+    pub dark: bool,
 }
 
 /// A GPU texture the UI already holds, for previewers that upload themselves.
@@ -116,6 +118,24 @@ pub struct TextBlock {
     pub text: String,
     /// Syntax to highlight with, e.g. `"rust"`, when known.
     pub language: Option<String>,
+    /// Coloured runs over `text`, in order and non-overlapping; empty for
+    /// plain text in the UI's default colour.
+    pub spans: Vec<TextSpan>,
+}
+
+/// One coloured run of a [`TextBlock`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TextSpan {
+    /// Byte offset of the first character.
+    pub start: usize,
+    /// Byte offset past the last character.
+    pub end: usize,
+    /// Foreground colour, RGBA.
+    pub color: [u8; 4],
+    /// Bold weight.
+    pub bold: bool,
+    /// Italic style.
+    pub italic: bool,
 }
 
 /// Searchable text of a document, one string per page.
@@ -200,4 +220,43 @@ pub trait Previewer: Send + Sync + 'static {
         provider: Arc<dyn Provider>,
         cancel: CancelToken,
     ) -> Result<Box<dyn PreviewDoc>, Error>;
+}
+
+/// Reads an entry's content through its provider, at most `limit` bytes when
+/// given, stopping with `Error::Cancelled` when the token fires. Previewers
+/// use it for the file and the kernel for the 4 KiB sniff.
+///
+/// # Errors
+///
+/// The provider's error, or `Error::Cancelled`.
+pub async fn read_bytes(
+    provider: &dyn Provider,
+    loc: &Location,
+    limit: Option<usize>,
+    cancel: &CancelToken,
+) -> Result<Vec<u8>, Error> {
+    use tokio::io::AsyncReadExt as _;
+
+    let mut reader = provider.open_read(loc).await?;
+    let mut out = Vec::new();
+    let mut buffer = vec![0u8; 64 * 1024];
+    loop {
+        if cancel.is_cancelled() {
+            return Err(Error::Cancelled);
+        }
+        let wanted = match limit {
+            Some(limit) if out.len() >= limit => break,
+            Some(limit) => buffer.len().min(limit - out.len()),
+            None => buffer.len(),
+        };
+        let read = reader
+            .read(&mut buffer[..wanted])
+            .await
+            .map_err(Error::from_io)?;
+        if read == 0 {
+            break;
+        }
+        out.extend_from_slice(&buffer[..read]);
+    }
+    Ok(out)
 }
