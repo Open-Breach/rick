@@ -42,6 +42,9 @@ fn repo() -> (tempfile::TempDir, std::path::PathBuf) {
     git(&work, &["config", "user.name", "Rick Test"]);
     git(&work, &["config", "user.email", "rick@example.com"]);
     git(&work, &["config", "commit.gpgsign", "false"]);
+    // Line endings as written, so the tests read back what they wrote on
+    // Windows too.
+    git(&work, &["config", "core.autocrlf", "false"]);
     fs::write(work.join("tracked.txt"), "one\n").unwrap_or_else(|e| panic!("{e}"));
     fs::create_dir(work.join("sub")).unwrap_or_else(|e| panic!("{e}"));
     fs::write(work.join("sub/inner.txt"), "inner\n").unwrap_or_else(|e| panic!("{e}"));
