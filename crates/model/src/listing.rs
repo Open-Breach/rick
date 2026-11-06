@@ -171,6 +171,12 @@ impl Listing {
         self.view.iter().map(|&i| &self.entries[i])
     }
 
+    /// The visible row at `index` in view order.
+    #[must_use]
+    pub fn row(&self, index: usize) -> Option<&Entry> {
+        self.view.get(index).map(|&i| &self.entries[i])
+    }
+
     /// Ids of the visible entries in view order.
     #[must_use]
     pub fn row_ids(&self) -> Vec<EntryId> {
