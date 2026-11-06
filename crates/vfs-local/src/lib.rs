@@ -7,7 +7,8 @@
 //! before the walk finishes. Copies take the native fast path through
 //! [`platform::fs::copy_file`]. Trash goes through the platform's [`Trash`].
 //! Change notification comes from the `notify` crate, translated into
-//! [`FsChange`](ext::FsChange) with stable entry ids.
+//! [`FsChange`](ext::FsChange) with stable entry ids. [`search`] is the
+//! subtree search: the `ignore` crate's parallel walker streaming matches.
 //!
 //! Entry ids are the device and inode on Unix and the volume serial and file
 //! id on Windows, so a renamed entry keeps its id.
@@ -15,6 +16,7 @@
 #![forbid(unsafe_code)]
 
 mod list;
+pub mod search;
 mod watch;
 
 use std::fmt;
