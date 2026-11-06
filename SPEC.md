@@ -390,7 +390,7 @@ One Cargo workspace, one crate per concern, grouped by layer. Kernel crates carr
 
 - `types` — paths, entries, mime, errors, capability flags; no I/O, no async runtime and no dependency on any other Rick crate. It may use the small ecosystem crates it needs (`bitflags`, `thiserror`), nothing heavier.
 - `runtime` — job system, cancellation, progress, thread pools, event bus.
-- `platform` — per-OS code behind one trait set: trash, links and junctions, elevation, system properties dialogue, file associations, mounts.
+- `platform` — per-OS code behind one trait set: trash, links and junctions, elevation, system properties dialogue, file associations, mounts. In 0.1 the set is `Trash` (trash, list, restore, empty), `OpenWith` (`open` with the default application, `reveal` in the system file manager), `Properties` (the native dialogue on Windows and macOS, label/value rows on Linux), `NativeDialogs` (async, through `rfd`, the XDG portal on Linux), `Clipboard` and `ConfigDir`; elevation, file associations and mounts come later. The three RustSec "unmaintained" notices on `rfd`'s D-Bus dependencies are accepted in deny.toml with the reason recorded, to be dropped when `rfd` moves on.
 - `ext` — the five extension traits, the registry, manifests and the extension context.
 - `vfs` — the mount table that routes a path to its `Provider`, and cross-provider copy and move.
 - `vfs-local` — the local filesystem provider: listing, statx, watching, copy and reflink.

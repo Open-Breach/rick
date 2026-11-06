@@ -127,6 +127,8 @@ Once answered, an entry keeps its number and gains a `Decided (date):` line.
     rows on Linux; `NativeDialogs` is async and implemented with `rfd`
     (XDG portal on Linux), whose D-Bus dependencies carry three RustSEC
     "unmaintained" notices that deny.toml ignores with the reason recorded.
+    Decided (2026-11-06): as assumed; the spec's `platform` bullet now
+    lists the 0.1 trait set and the accepted advisories.
 
 13. (issue 3) The `Command` enum in "Commands and events" has no way to make
     a tab active, to focus a pane or to clear a finished job from the job
