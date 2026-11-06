@@ -256,10 +256,12 @@ fn settings_changes_are_saved_and_disk_edits_are_picked_up() {
     assert_eq!(h.app.model().settings.sort_by, Column::Size);
 
     fs::write(&path, "show_system = true\nfont_size = 15\n").unwrap_or_else(|e| panic!("{e}"));
+    // The watcher's latency is the platform's, and a loaded CI runner on
+    // Windows has taken over half a second to report the write.
     let started = Instant::now();
     while h.app.model().settings.font_size != 15 {
         assert!(
-            started.elapsed() < Duration::from_millis(500),
+            started.elapsed() < Duration::from_secs(10),
             "settings not reloaded"
         );
         runtime::block_on(async {
