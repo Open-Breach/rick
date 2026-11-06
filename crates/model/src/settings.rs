@@ -73,6 +73,39 @@ pub struct Settings {
     pub side_panel: SidePanel,
     /// Locations pinned to the side panel, in display order.
     pub pinned: Vec<PathBuf>,
+    /// The preview pane: text defaults and the pinned info section per
+    /// content kind.
+    pub preview: Preview,
+}
+
+/// The preview pane's persisted state.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(default)]
+pub struct Preview {
+    /// Text and code defaults.
+    pub text: TextPreview,
+    /// The pinned info section's id by content kind (`"text"`, `"image"`,
+    /// `"pages"`); a kind without an entry has nothing pinned.
+    pub pinned: BTreeMap<String, String>,
+}
+
+/// How text and code open in the preview pane.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct TextPreview {
+    /// Line numbers in the gutter.
+    pub line_numbers: bool,
+    /// Long lines break at the pane width.
+    pub wrap: bool,
+}
+
+impl Default for TextPreview {
+    fn default() -> Self {
+        Self {
+            line_numbers: true,
+            wrap: false,
+        }
+    }
 }
 
 /// Which edge of the window the side panel docks to.
@@ -167,6 +200,7 @@ impl Default for Settings {
             shortcuts: BTreeMap::new(),
             side_panel: SidePanel::default(),
             pinned: Vec::new(),
+            preview: Preview::default(),
         }
     }
 }
@@ -219,6 +253,17 @@ pub enum SettingsChange {
     Pin(PathBuf),
     /// Unpin a location.
     Unpin(PathBuf),
+    /// Line numbers in text previews, the new default.
+    PreviewLineNumbers(bool),
+    /// Word wrap in text previews, the new default.
+    PreviewWrap(bool),
+    /// Pin an info section for a content kind, or unpin with `None`.
+    PreviewPin {
+        /// The content kind: `"text"`, `"image"`, `"pages"`.
+        kind: String,
+        /// The section id to pin, or nothing.
+        section: Option<String>,
+    },
 }
 
 impl Settings {
@@ -262,6 +307,16 @@ impl Settings {
                 }
             }
             SettingsChange::Unpin(path) => self.pinned.retain(|p| *p != path),
+            SettingsChange::PreviewLineNumbers(v) => self.preview.text.line_numbers = v,
+            SettingsChange::PreviewWrap(v) => self.preview.text.wrap = v,
+            SettingsChange::PreviewPin { kind, section } => match section {
+                Some(section) => {
+                    self.preview.pinned.insert(kind, section);
+                }
+                None => {
+                    self.preview.pinned.remove(&kind);
+                }
+            },
         }
     }
 }
@@ -277,6 +332,47 @@ mod tests {
         assert!(!s.show_hidden);
         assert_eq!(s.sort_by, Column::Name);
         assert_eq!(s.theme, Theme::System);
+        assert!(s.preview.text.line_numbers, "line numbers on");
+        assert!(!s.preview.text.wrap, "wrap off");
+        assert!(s.preview.pinned.is_empty());
+    }
+
+    #[test]
+    fn preview_changes_apply_and_pins_are_per_kind() {
+        let mut s = Settings::default();
+        s.apply(SettingsChange::PreviewWrap(true));
+        s.apply(SettingsChange::PreviewLineNumbers(false));
+        assert!(s.preview.text.wrap);
+        assert!(!s.preview.text.line_numbers);
+        s.apply(SettingsChange::PreviewPin {
+            kind: "image".into(),
+            section: Some("exif".into()),
+        });
+        s.apply(SettingsChange::PreviewPin {
+            kind: "text".into(),
+            section: Some("file".into()),
+        });
+        assert_eq!(
+            s.preview.pinned.get("image").map(String::as_str),
+            Some("exif")
+        );
+        s.apply(SettingsChange::PreviewPin {
+            kind: "image".into(),
+            section: Some("file".into()),
+        });
+        assert_eq!(
+            s.preview.pinned.get("image").map(String::as_str),
+            Some("file")
+        );
+        s.apply(SettingsChange::PreviewPin {
+            kind: "image".into(),
+            section: None,
+        });
+        assert_eq!(s.preview.pinned.get("image"), None);
+        assert_eq!(
+            s.preview.pinned.get("text").map(String::as_str),
+            Some("file")
+        );
     }
 
     #[test]
