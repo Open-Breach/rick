@@ -49,57 +49,45 @@ jobs:
         if: runner.os == 'Linux'
       - run: cargo clippy --all-targets -- -D warnings
       - run: cargo test --workspace
-      # Acceptance (issue 1): the 200k-entry fixture generates in under 30 s.
-      # Written on the runner's temp disk, the fast local drive on Windows.
-      # The 30 s budget is enforced on Linux only for now (QUESTIONS.md 5):
-      # on Windows and macOS the step still runs and logs its time, but
-      # cannot fail the job.
-      - run: cargo test -p tests --test fixture -- --ignored
-        continue-on-error: ${{ runner.os != 'Linux' }}
+      # The acceptance benchmarks, each asserting the target of the runner's
+      # OS from crates/tests/src/bench.rs (BENCHMARKS.md has the numbers):
+      # all three OSes assert, nothing is soft.
+      # Issue 1: the 200k-entry fixture, written on the runner's temp disk,
+      # the fast local drive on Windows (QUESTIONS.md 5 for its target).
+      - run: cargo test -p tests --release --test fixture -- --ignored --nocapture
         env: { TMP: "${{ runner.temp }}", TEMP: "${{ runner.temp }}", TMPDIR: "${{ runner.temp }}" }
-      # Acceptance (issue 2): listing the 200k fixture and the 1 GiB sparse
-      # copy, in release so the timings mean something. The Linux numbers are
-      # asserted; macOS and Windows print theirs until targets are set.
+      # Issue 2: listing the 200k fixture and the 1 GiB sparse copy.
       - run: cargo test -p tests --release --test listing --test copy -- --ignored --nocapture
         env: { TMP: "${{ runner.temp }}", TEMP: "${{ runner.temp }}", TMPDIR: "${{ runner.temp }}" }
-      # Acceptance (issue 4): scrolling the 200k fixture in details view
-      # stays under the 60 fps frame budget, measured on egui's CPU frame
-      # (QUESTIONS.md 24). The budget is enforced on Linux; macOS and Windows
-      # print their numbers until targets are set from measurements.
+      # Issue 4: scrolling the 200k fixture in details view, on egui's CPU
+      # frame (QUESTIONS.md 24).
       - run: cargo test -p tests --release --test ui -- --ignored --nocapture
-        continue-on-error: ${{ runner.os != 'Linux' }}
         env: { TMP: "${{ runner.temp }}", TEMP: "${{ runner.temp }}", TMPDIR: "${{ runner.temp }}" }
-      # Acceptance (issue 5): a 48 MB bitmap and a 300-page PDF show their
-      # first frame within 200 ms and no UI frame goes over 16.6 ms while
-      # they decode (QUESTIONS.md 30). Linux asserts; the others print.
+      # Issue 5: the 48 MB bitmap's and the 300-page PDF's first frame, and
+      # the UI frames while they decode (QUESTIONS.md 30).
       - run: cargo test -p tests --release --test preview -- --ignored --nocapture
-        continue-on-error: ${{ runner.os != 'Linux' }}
         env: { TMP: "${{ runner.temp }}", TEMP: "${{ runner.temp }}", TMPDIR: "${{ runner.temp }}" }
-      # Acceptance (issue 6): decorating a visible batch of a generated
-      # 10 000-file repository returns within 16 ms and completes within
-      # 500 ms. Linux asserts; the others print.
+      # Issue 6: decorating a visible batch of a generated 10 000-file
+      # repository, cached and pending, and the completion of the status read.
       - run: cargo test -p tests --release --test git -- --ignored --nocapture
-        continue-on-error: ${{ runner.os != 'Linux' }}
         env: { TMP: "${{ runner.temp }}", TEMP: "${{ runner.temp }}", TMPDIR: "${{ runner.temp }}" }
       - run: cargo doc --no-deps
         env: { RUSTDOCFLAGS: "-D warnings" }
-      # Acceptance (GUI chrome): the icon view's thumbnails within 500 ms
-      # and no long frame while they arrive. Linux asserts; the others print.
+      # GUI chrome: the icon view's thumbnails and the frames while they arrive.
       - run: cargo test -p tests --release --test chrome -- --ignored --nocapture
-        continue-on-error: ${{ runner.os != 'Linux' }}
         env: { TMP: "${{ runner.temp }}", TEMP: "${{ runner.temp }}", TMPDIR: "${{ runner.temp }}" }
-      # Acceptance (preview pane): 200 000 wrapped lines, every frame under
-      # 16.6 ms. Linux asserts; the others print.
+      # Preview pane: 200 000 wrapped lines, the worst frame.
       - run: cargo test -p tests --release --test preview_pane -- --ignored --nocapture
-        continue-on-error: ${{ runner.os != 'Linux' }}
+        env: { TMP: "${{ runner.temp }}", TEMP: "${{ runner.temp }}", TMPDIR: "${{ runner.temp }}" }
+      # Release: startup to the first frame.
+      - run: cargo test -p tests --release --test startup -- --ignored --nocapture
         env: { TMP: "${{ runner.temp }}", TEMP: "${{ runner.temp }}", TMPDIR: "${{ runner.temp }}" }
       # Screenshots of the chrome for the pull request, through wgpu on the
-      # runner's software adapter; best effort on every OS.
+      # runner's software adapter.
       - run: |
           if [ "$RUNNER_OS" = "Linux" ]; then sudo apt-get install -y mesa-vulkan-drivers; fi
           cargo test -p tests --release --features screenshots --test screenshots -- --ignored --nocapture
         shell: bash
-        continue-on-error: true
         env: { TMP: "${{ runner.temp }}", TEMP: "${{ runner.temp }}", TMPDIR: "${{ runner.temp }}", WGPU_BACKEND: "${{ runner.os == 'Windows' && 'dx12' || runner.os == 'macOS' && 'metal' || 'vulkan' }}" }
       - uses: actions/upload-artifact@v4
         if: always()
