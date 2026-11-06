@@ -56,10 +56,11 @@ pub use settings::SETTINGS_FILE;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::Duration;
 
 use ext::{
-    ActionCtx, ActionOutcome, Availability, Depth, Extension, FsChange, Invocation, Level,
-    ListOptions, PreviewDoc, Previewer, Registry, UiHost, UndoCommand,
+    ActionCtx, ActionOutcome, Availability, DecorateCtx, Decoration, Decorator, Depth, Extension,
+    FsChange, Invocation, Level, ListOptions, PreviewDoc, Previewer, Registry, UiHost, UndoCommand,
 };
 use futures::StreamExt;
 use model::{JobState, Model, PaneId, Settings, TabId};
@@ -136,7 +137,21 @@ enum Msg {
         generation: u64,
         result: Result<Box<dyn PreviewDoc>, Error>,
     },
+    /// A decorator finished a batch late.
+    Decorated {
+        pane: PaneId,
+        generation: u64,
+        items: Vec<(EntryId, Decoration)>,
+    },
+    /// Something a pane's decorators depend on changed; decorate again.
+    Invalidate {
+        pane: PaneId,
+        generation: u64,
+    },
 }
+
+/// How long changes are collected before the decorators run again.
+const REDECORATE_AFTER: Duration = Duration::from_millis(150);
 
 /// Which selection the preview follows and the job opening it.
 struct PreviewState {
@@ -172,6 +187,10 @@ struct Live {
     complete: bool,
     /// Set while a refresh collects the whole listing to swap it in at once.
     buffer: Option<Vec<Entry>>,
+    /// The decorators that apply to the location.
+    decorators: Vec<Arc<dyn Decorator>>,
+    /// A re-decoration is scheduled after the debounce.
+    redecorate_scheduled: bool,
 }
 
 /// The application: model, registry, jobs, undo log and settings.
@@ -183,6 +202,9 @@ pub struct App {
     ui: Arc<dyn UiHost>,
     jobs: JobRunner,
     job_events: mpsc::UnboundedReceiver<JobEvent>,
+    /// Where decorators run their lookups: part of listing, so kept out of
+    /// the job table like the listing jobs themselves.
+    decor_jobs: JobRunner,
     mailbox: Mailbox,
     rx: mpsc::UnboundedReceiver<Msg>,
     live: BTreeMap<PaneId, Live>,
@@ -259,6 +281,7 @@ impl App {
             ui,
             jobs,
             job_events,
+            decor_jobs: JobRunner::new(),
             mailbox: Mailbox {
                 tx,
                 waker: Arc::new(std::sync::Mutex::new(None)),
@@ -663,6 +686,12 @@ impl App {
     /// complete.
     fn refresh(&mut self, pane: PaneId) {
         if let Some(key) = self.list_key(pane) {
+            // A refresh re-reads everything, what the decorators cached too.
+            if let Some(live) = self.live.get(&pane) {
+                for decorator in &live.decorators {
+                    decorator.invalidate(&live.key.location);
+                }
+            }
             let stale = self
                 .model
                 .active_tab(pane)
@@ -753,6 +782,18 @@ impl App {
                 result
             });
         self.internal.insert(handle.id);
+        let decorators: Vec<Arc<dyn Decorator>> = self
+            .registry
+            .decorators()
+            .iter()
+            .filter(|d| d.applies_to(&key.location))
+            .cloned()
+            .collect();
+        for decorator in &decorators {
+            for watched in decorator.invalidates_on(&key.location) {
+                self.watch_invalidation(pane, generation, handle.cancel.clone(), &watched);
+            }
+        }
         self.live.insert(
             pane,
             Live {
@@ -761,8 +802,138 @@ impl App {
                 cancel: handle.cancel,
                 complete: false,
                 buffer: reconcile.then(Vec::new),
+                decorators,
+                redecorate_scheduled: false,
             },
         );
+    }
+
+    /// Watches `location` for a pane's decorators and asks for a
+    /// re-decoration, debounced, when it changes; stops with `cancel`.
+    fn watch_invalidation(
+        &self,
+        pane: PaneId,
+        generation: u64,
+        cancel: CancelToken,
+        location: &Location,
+    ) {
+        let Ok(provider) = self.mounts.resolve(location) else {
+            return;
+        };
+        let mut changes = match provider.watch(location) {
+            Ok(changes) => changes,
+            Err(error) => {
+                debug!(%location, %error, "no invalidation watch");
+                return;
+            }
+        };
+        let tx = self.mailbox.clone();
+        runtime::handle().spawn(async move {
+            loop {
+                tokio::select! {
+                    () = cancel.cancelled() => break,
+                    next = changes.next() => {
+                        if next.is_none() {
+                            break;
+                        }
+                        // Collect what follows within the window.
+                        let window = tokio::time::sleep(REDECORATE_AFTER);
+                        tokio::pin!(window);
+                        loop {
+                            tokio::select! {
+                                () = cancel.cancelled() => return,
+                                () = &mut window => break,
+                                more = changes.next() => {
+                                    if more.is_none() {
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                        if !tx.send(Msg::Invalidate { pane, generation }) {
+                            break;
+                        }
+                    }
+                }
+            }
+        });
+    }
+
+    /// Runs the pane's decorators over `entries`, records what they answer at
+    /// once and routes what they publish later through the mailbox.
+    fn decorate(&mut self, pane: PaneId, entries: &[Entry], events: &mut Vec<Event>) {
+        let Some(live) = self.live.get(&pane) else {
+            return;
+        };
+        if live.decorators.is_empty() || entries.is_empty() {
+            return;
+        }
+        let generation = live.generation;
+        let mut items = Vec::new();
+        for decorator in &live.decorators {
+            let tx = self.mailbox.clone();
+            let ctx = DecorateCtx::new(
+                live.key.location.clone(),
+                live.cancel.clone(),
+                self.decor_jobs.clone(),
+                move |late| {
+                    tx.send(Msg::Decorated {
+                        pane,
+                        generation,
+                        items: late,
+                    });
+                },
+            );
+            items.extend(decorator.decorate(entries, &ctx));
+        }
+        self.decorated(pane, items, events);
+    }
+
+    /// Records decorations in the model and tells the UI.
+    fn decorated(
+        &mut self,
+        pane: PaneId,
+        items: Vec<(EntryId, Decoration)>,
+        events: &mut Vec<Event>,
+    ) {
+        if !items.is_empty() && self.model.decorate(pane, items.clone()) {
+            events.push(Event::Decorated { pane, items });
+        }
+    }
+
+    /// Asks for the pane to be decorated again once changes settle.
+    fn schedule_redecorate(&mut self, pane: PaneId) {
+        let Some(live) = self.live.get_mut(&pane) else {
+            return;
+        };
+        if live.decorators.is_empty() || live.redecorate_scheduled {
+            return;
+        }
+        live.redecorate_scheduled = true;
+        let generation = live.generation;
+        let tx = self.mailbox.clone();
+        runtime::handle().spawn(async move {
+            tokio::time::sleep(REDECORATE_AFTER).await;
+            tx.send(Msg::Invalidate { pane, generation });
+        });
+    }
+
+    /// Drops what the pane's decorators cached and decorates the whole
+    /// listing again.
+    fn redecorate(&mut self, pane: PaneId, events: &mut Vec<Event>) {
+        let Some(live) = self.live.get_mut(&pane) else {
+            return;
+        };
+        live.redecorate_scheduled = false;
+        for decorator in &live.decorators {
+            decorator.invalidate(&live.key.location);
+        }
+        let entries: Vec<Entry> = self
+            .model
+            .active_tab(pane)
+            .map(|(_, tab)| tab.listing.entries().to_vec())
+            .unwrap_or_default();
+        self.decorate(pane, &entries, events);
     }
 
     fn on_msg(&mut self, msg: Msg, events: &mut Vec<Event>) {
@@ -783,6 +954,7 @@ impl App {
                     return;
                 }
                 self.model.listing_batch(pane, batch.clone());
+                self.decorate(pane, &batch, events);
                 events.push(Event::Listed {
                     pane,
                     batch,
@@ -827,6 +999,28 @@ impl App {
                     Ok(doc) => Event::PreviewReady { pane, doc },
                     Err(error) => Event::PreviewFailed { pane, error },
                 });
+            }
+            Msg::Decorated {
+                pane,
+                generation,
+                items,
+            } => {
+                if self
+                    .live
+                    .get(&pane)
+                    .is_some_and(|l| l.generation == generation)
+                {
+                    self.decorated(pane, items, events);
+                }
+            }
+            Msg::Invalidate { pane, generation } => {
+                if self
+                    .live
+                    .get(&pane)
+                    .is_some_and(|l| l.generation == generation)
+                {
+                    self.redecorate(pane, events);
+                }
             }
         }
     }
@@ -926,6 +1120,7 @@ impl App {
                 if before != after {
                     events.push(Event::SelectionChanged { pane, ids: after });
                 }
+                self.decorate(pane, &entries, events);
                 entries
             }
             _ => {
@@ -954,6 +1149,7 @@ impl App {
                 events.push(Event::SelectionChanged { pane, ids: after });
             }
             events.push(Event::Changed { pane, change });
+            self.schedule_redecorate(pane);
         } else {
             debug!(?pane, "rescan");
             self.refresh(pane);
