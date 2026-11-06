@@ -49,6 +49,17 @@ pub fn load(path: &Path) -> Result<Session, Error> {
 pub fn save(path: &Path, session: &Session) -> Result<(), Error> {
     let text = toml::to_string_pretty(session)
         .map_err(|error| Error::Io(std::io::Error::other(error.to_string())))?;
+    write_atomically(path, &text)
+}
+
+/// Writes `text` to `path` through a temporary file beside it renamed over
+/// it, creating the directory, so a reader never sees a half file: the one
+/// before or the one after.
+///
+/// # Errors
+///
+/// The I/O error.
+pub(crate) fn write_atomically(path: &Path, text: &str) -> Result<(), Error> {
     let dir = path.parent().map(Path::to_path_buf).unwrap_or_default();
     if !dir.as_os_str().is_empty() {
         std::fs::create_dir_all(&dir).map_err(Error::from_io)?;
