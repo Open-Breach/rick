@@ -3,6 +3,7 @@
 
 use egui::{Align, Sense};
 use egui_extras::{Column as TableColumn, TableBuilder};
+use ext::{Badge, CellValue, ColumnDef, Decoration};
 use model::{Column, SelectionChange, SortDir, ViewMode};
 use types::{Entry, EntryKind};
 
@@ -61,6 +62,7 @@ pub fn details(ui: &mut egui::Ui, cx: &mut PaneCx<'_>) {
     cx.tab_ui.visible_rows =
         ((ui.available_height() / (height + ui.spacing().item_spacing.y)) as usize).max(1);
 
+    let extra = extra_columns(cx);
     let mut builder = TableBuilder::new(ui)
         .id_salt(("details", cx.tab_id))
         .striped(settings.zebra_stripes)
@@ -72,6 +74,9 @@ pub fn details(ui: &mut egui::Ui, cx: &mut PaneCx<'_>) {
         .column(TableColumn::initial(120.0).at_least(60.0).clip(true))
         .column(TableColumn::initial(130.0).at_least(60.0).clip(true))
         .column(TableColumn::initial(80.0).at_least(50.0));
+    for _ in &extra {
+        builder = builder.column(TableColumn::initial(90.0).at_least(40.0).clip(true));
+    }
     if cx.tab_ui.reset_columns {
         builder.reset();
         cx.tab_ui.reset_columns = false;
@@ -95,6 +100,11 @@ pub fn details(ui: &mut egui::Ui, cx: &mut PaneCx<'_>) {
                 }
             });
         }
+        for def in &extra {
+            row.col(|ui| {
+                ui.strong(def.label);
+            });
+        }
     });
     let show_extensions = settings.show_extensions;
     let now = cx.now;
@@ -105,25 +115,7 @@ pub fn details(ui: &mut egui::Ui, cx: &mut PaneCx<'_>) {
             let Some(entry) = listing.row(index) else {
                 return;
             };
-            row.set_selected(cx.tab.selection.contains(&entry.id));
-            row.col(|ui| {
-                ui.label(icon(entry));
-                ui.label(display_name(entry, show_extensions));
-            });
-            row.col(|ui| {
-                ui.label(model::type_of(entry));
-            });
-            row.col(|ui| {
-                let (brief, full) = format::date(entry.modified, now);
-                ui.label(brief).on_hover_text(full);
-            });
-            row.col(|ui| {
-                ui.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
-                    if entry.kind != EntryKind::Dir {
-                        ui.label(format::size(entry.size));
-                    }
-                });
-            });
+            details_row(&mut row, cx.tab, entry, &extra, show_extensions, now);
             let response = row.response();
             if response.clicked()
                 || response.double_clicked()
@@ -153,6 +145,96 @@ pub fn details(ui: &mut egui::Ui, cx: &mut PaneCx<'_>) {
     for (index, response) in clicked {
         interact(ui, cx, index, &response);
     }
+}
+
+/// One row of the details table: icon, badge, name, type, date, size and
+/// the decorators' columns.
+fn details_row(
+    row: &mut egui_extras::TableRow<'_, '_>,
+    tab: &model::Tab,
+    entry: &Entry,
+    extra: &[ColumnDef],
+    show_extensions: bool,
+    now: std::time::SystemTime,
+) {
+    row.set_selected(tab.selection.contains(&entry.id));
+    let decoration = tab.decorations.get(&entry.id);
+    row.col(|ui| {
+        cell(ui, icon(entry));
+        if let Some(badge) = decoration.and_then(|d| d.badge) {
+            cell(ui, badge_text(badge));
+        }
+        let mut name = egui::RichText::new(display_name(entry, show_extensions));
+        if let Some(tint) = decoration.and_then(|d| d.tint) {
+            name = name.color(color(tint));
+        }
+        cell(ui, name);
+    });
+    row.col(|ui| {
+        cell(ui, model::type_of(entry));
+    });
+    row.col(|ui| {
+        let (brief, full) = format::date(entry.modified, now);
+        cell(ui, brief).on_hover_text(full);
+    });
+    row.col(|ui| {
+        ui.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
+            if entry.kind != EntryKind::Dir {
+                cell(ui, format::size(entry.size));
+            }
+        });
+    });
+    for def in extra {
+        row.col(|ui| {
+            let value = decoration
+                .and_then(|d| d.cells.iter().find(|(id, _)| *id == def.id).map(|(_, v)| v));
+            match value {
+                Some(CellValue::Text(text)) => {
+                    cell(ui, text);
+                }
+                Some(CellValue::Number(n)) => {
+                    ui.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
+                        cell(ui, n.to_string());
+                    });
+                }
+                Some(CellValue::Pending) => {
+                    cell(ui, egui::RichText::new("…").weak());
+                }
+                None => {}
+            }
+        });
+    }
+}
+
+/// A label in a row that leaves clicks to the row, so a click on the text
+/// selects and a right-click opens the menu.
+fn cell(ui: &mut egui::Ui, text: impl Into<egui::WidgetText>) -> egui::Response {
+    ui.add(egui::Label::new(text).selectable(false))
+}
+
+/// The columns the decorators that apply to the tab's location add.
+fn extra_columns(cx: &PaneCx<'_>) -> Vec<ColumnDef> {
+    cx.app
+        .registry()
+        .decorators()
+        .iter()
+        .filter(|d| d.applies_to(&cx.tab.location))
+        .flat_map(|d| d.columns().iter().copied())
+        .collect()
+}
+
+/// An `ext` colour as egui sees it.
+#[must_use]
+pub fn color(color: ext::Color) -> egui::Color32 {
+    egui::Color32::from_rgba_unmultiplied(color.r, color.g, color.b, color.a)
+}
+
+/// A badge as a coloured, bold glyph.
+#[must_use]
+pub fn badge_text(badge: Badge) -> egui::RichText {
+    egui::RichText::new(badge.glyph)
+        .color(color(badge.color))
+        .strong()
 }
 
 /// A column header that shows the sort marker; `true` when clicked.
@@ -198,7 +280,13 @@ pub fn list(ui: &mut egui::Ui, cx: &mut PaneCx<'_>) {
                         break;
                     };
                     let selected = cx.tab.selection.contains(&entry.id);
-                    let text = format!("{} {}", icon(entry), display_name(entry, show_extensions));
+                    let decoration = cx.tab.decorations.get(&entry.id);
+                    let text = cell_text(
+                        ui,
+                        icon(entry),
+                        display_name(entry, show_extensions),
+                        decoration,
+                    );
                     let response = ui.add_sized(
                         [cell_width - ui.spacing().item_spacing.x, height],
                         egui::Button::selectable(selected, text),
@@ -218,6 +306,30 @@ pub fn list(ui: &mut egui::Ui, cx: &mut PaneCx<'_>) {
     for (index, response) in clicked {
         interact(ui, cx, index, &response);
     }
+}
+
+/// Icon, badge and name of a list cell, the badge in its colour and the
+/// name in its tint.
+fn cell_text(
+    ui: &egui::Ui,
+    icon: &str,
+    name: &str,
+    decoration: Option<&Decoration>,
+) -> egui::WidgetText {
+    let font = egui::TextStyle::Button.resolve(ui.style());
+    let plain = ui.visuals().text_color();
+    let mut job = egui::text::LayoutJob::default();
+    job.append(icon, 0.0, egui::TextFormat::simple(font.clone(), plain));
+    if let Some(badge) = decoration.and_then(|d| d.badge) {
+        job.append(
+            badge.glyph,
+            4.0,
+            egui::TextFormat::simple(font.clone(), color(badge.color)),
+        );
+    }
+    let tint = decoration.and_then(|d| d.tint).map_or(plain, color);
+    job.append(name, 4.0, egui::TextFormat::simple(font, tint));
+    job.into()
 }
 
 /// Clicks on a row: select, extend, toggle, open, new tab, context menu.
