@@ -457,7 +457,40 @@ Once answered, an entry keeps its number and gains a `Decided (date):` line.
     window through the backend; a maximised or fullscreen window has no
     frame, and macOS keeps the system's border and resize handles.
 
-53. (drag and drop) The spec's `Transfer` carries `EntryId`s and the source
+53. (Preview pane) The spec remembers the pinned info section "per content
+    kind (image, text, PDF, …)" without naming the kinds.
+    Assumed: three kinds derived from the document itself — `pages` when
+    `pages()` is `Some` (PDF, animated GIF), `text` when it has a text layer
+    and no pages, `image` otherwise — plus `other` for a file no previewer
+    opens but a decorator describes. Stored as
+    `[preview.pinned] text = "file"` in `rick.toml`.
+
+54. (Preview pane) The spec's Pretty print covers "JSON, XML, YAML and
+    minified HTML, CSS or JavaScript".
+    Assumed: JSON (through `serde_json`, key order kept) and XML and HTML
+    (a tag-per-line indenter) get the toggle; YAML, CSS and JavaScript do
+    not yet, since each needs a formatter of its own, so their files show
+    no Pretty print control rather than one that does nothing.
+
+55. (Preview pane) The spec names `kamadak-exif` and `rexiv2` for "every
+    EXIF, IPTC and XMP tag".
+    Assumed: `rexiv2` binds the system's gexiv2 library and was not a
+    dependency, so the EXIF section lists what `kamadak-exif` reads (every
+    EXIF tag, thumbnail IFD included); IPTC and XMP wait for a reader.
+
+56. (Preview pane) The spec says the pane needs no heading because "the
+    dock tab's label is enough", but the pane is still a side panel, not a
+    dock tab (the preview-as-tab is a later issue).
+    Assumed: the heading goes now; the panel has no label at all until it
+    becomes a tab. The title row's toggle reads "Toggle preview pane".
+
+57. (Preview pane) The spec says wrapped lines "break at the pane width"
+    and asks for only the visible lines to be laid out.
+    Assumed: lines break at any character, not at word boundaries, so a
+    monospace line's row count follows from its length and the pane can
+    place 200 000 lines without laying them out; a line whose real row
+    count differs (tabs, wide glyphs) corrects the index on the next frame.
+58. (drag and drop) The spec's `Transfer` carries `EntryId`s and the source
     pane; items dropped from another application or another Rick process
     have neither, since they are in no pane's listing.
     Assumed: a `Command::Receive { items: Vec<Location>, to, mode }` next to
@@ -465,7 +498,7 @@ Once answered, an entry keeps its number and gains a `Decided (date):` line.
     Shift) already applied by the UI. No other shape of the spec's enum is
     touched.
 
-54. (drag and drop) `TransferMode::Ask` "opens the move/copy prompt first",
+59. (drag and drop) `TransferMode::Ask` "opens the move/copy prompt first",
     but `UiHost` offers yes/no and a text line only, and the prompt sits at
     the drop point, which only the UI knows.
     Assumed: the UI shows the prompt and sends `Move` or `Copy` in its
@@ -473,7 +506,7 @@ Once answered, an entry keeps its number and gains a `Decided (date):` line.
     does nothing. The prompt is Move, Copy and Cancel at the cursor;
     Escape cancels it.
 
-55. (drag and drop) The spec says a conflict on an existing name "asks once
+60. (drag and drop) The spec says a conflict on an existing name "asks once
     with skip, overwrite, rename or apply-to-all", and the operations area
     has "pause". Neither exists today: Paste fails on the first existing
     name and the job runner has no pause.
@@ -482,7 +515,7 @@ Once answered, an entry keeps its number and gains a `Decided (date):` line.
     only, as before. The conflict prompt and pause are their own issue; the
     transfer job is written so a conflict policy drops into the pair loop.
 
-56. (drag and drop) "Same volume moves, across volumes copies" needs the
+61. (drag and drop) "Same volume moves, across volumes copies" needs the
     volume of the target folder; a `Location` has none.
     Assumed: the device half of the local `EntryId`s decides: the dragged
     items' device against the device of the target folder's entry (a
@@ -493,7 +526,7 @@ Once answered, an entry keeps its number and gains a `Decided (date):` line.
     inside the job when the device differs, so the outcome is the same and
     only the undo entry is missing.
 
-57. (drag and drop) `egui` 0.36 over `winit` 0.30 receives hovered and
+62. (drag and drop) `egui` 0.36 over `winit` 0.30 receives hovered and
     dropped files on Linux (Wayland and X11), macOS and Windows but
     reports no cursor position with them, and offers no way to start a
     drag: a Wayland source needs the `wl_data_device` and the press serial,
@@ -510,7 +543,7 @@ Once answered, an entry keeps its number and gains a `Decided (date):` line.
     branch), and the drag then stays inside the window. The fake platform
     records the URIs, which is what the acceptance test checks.
 
-58. (drag and drop) A pinned entry is a `Location`; the spec wants a pinned
+63. (drag and drop) A pinned entry is a `Location`; the spec wants a pinned
     folder to open in the pane and a pinned file to open its folder with
     the file selected, and the UI has no way to tell the two apart without
     looking at the file system.
@@ -520,12 +553,12 @@ Once answered, an entry keeps its number and gains a `Decided (date):` line.
     written as `provider:path` strings; a bare path in an older file is
     read as local.
 
-59. (drag and drop) The spec's targets include "a mounted volume under
+64. (drag and drop) The spec's targets include "a mounted volume under
     Network", and the Network section holds nothing yet.
     Assumed: Home is the one side-panel folder target today; volumes join
     it when the Network section is filled.
 
-60. (drag and drop) The spec has `Pin to side panel` in the context menu's
+65. (drag and drop) The spec has `Pin to side panel` in the context menu's
     Open group "of every entry"; actions carry a fixed label, and the flip
     to `Unpin` depends on the selection.
     Assumed: two actions, `core.pin` and `core.unpin`, each hidden when the

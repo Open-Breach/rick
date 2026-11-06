@@ -57,14 +57,13 @@ NFS v3/v4, SMB/CIFS, CephFS, GlusterFS, SSHFS (FUSE) and 9p are mounted by the O
 
 ### Object storage
 
-| Service | Provider | Notes |
+| Service | Plugin | Notes |
 | --- | --- | --- |
-| AWS S3 | `object_store` crate | Flat keys shown as folders by prefix |
-| Cloudflare R2 | `object_store` (S3 API) | Same provider as S3 |
-| Azure Blob | `object_store` | Containers as top-level folders |
-| Google Cloud Storage | `object_store` | Buckets as top-level folders |
+| AWS S3, Cloudflare R2, MinIO and other S3-compatible stores | `ext-vfs-s3` | One plugin with an endpoint setting; flat keys shown as folders by prefix |
+| Azure Blob | `ext-vfs-azure` | Containers as top-level folders |
+| Google Cloud Storage | `ext-vfs-gcs` | Buckets as top-level folders |
 
-Object stores have no rename (copy then delete) and no change notifications (polling).
+Each cloud is its own plugin implementing `Provider` directly, so a user installs only the clouds they use; there is no shared object-storage crate — the overlap (prefix-to-folder mapping, chunked upload, credential storage) is small, and a shared crate may be extracted later if the second plugin shows real duplication. Object stores have no change notifications (polling). Download and upload are ordinary cross-provider copies to and from the local provider, streamed through the machine. **Transfers inside one account never pass through the machine:** a copy or move between two locations of the same provider instance — within a bucket, or across two buckets or containers of the same account — is submitted to the service as a server-side operation (S3 `CopyObject`, Azure's asynchronous Copy Blob, GCS `Rewrite`; move adds a delete), and Rick's job only tracks its progress, polling where the service reports it and cancelling where the service allows. This is the `NATIVE_TRANSFER` capability of the Provider contract, not cloud-specific code: SFTP gets its server-side rename through the same hook.
 
 ### Archives and compression
 
@@ -88,6 +87,7 @@ Object stores have no rename (copy then delete) and no change notifications (pol
 | Images | JPEG, PNG, WebP, BMP, GIF (animated) | `image` crate, downscaled to the pane, EXIF shown |
 | Audio | MP3, WAV | Waveform and playback |
 | Video | MP4, AVI | GStreamer on all platforms, hardware-decoded where available, frames to texture |
+| 3D models | STL, OBJ, 3MF | Parsed natively, shaded mesh rendered through wgpu; orbit, zoom; triangle count and bounding box (0.2) |
 
 ### Source code repositories
 
@@ -270,9 +270,9 @@ The remaining menu entries will be specified later.
 
 Proposed modules: preview-text (core), preview-code (highlighting, pretty print), preview-pdf, preview-office, preview-image, preview-media (audio, video), preview-archive (folder and archive listing).
 
-**Extensions as installable packages.** Modules are not only switchable, they are physically separate: each is a package in a known extensions directory that can be removed from the disk or simply never loaded, and the core binary carries only the text previewer and the local file system. A package holds a manifest (id, version, the extension points it fills, the platforms it supports) plus its code as a WASM module or a native dynamic library; the loader reads the manifest at start and loads code only when a matching file or action is first needed.
+**Extensions as installable packages.** Modules are not only switchable, they are physically separate: each is a package in a known plugins directory that can be removed from the disk or simply never loaded, and the core binary carries only the local file system, the text, code, image and PDF previewers and the core actions (see Package layout). A package holds a manifest (id, version, API version, the extension points it fills, the platforms it supports, the toolchain it was built with) plus its code as a native dynamic library — a WASM module later; the loader reads the manifests at start, registers each plugin's contributions, and defers heavy initialisation until a matching file or action is first needed. The Extensions screen (0.2) lists what was found with enable and disable.
 
-**Extension store.** An Extensions screen in the menu lists installed packages with enable, disable, update and remove, and browses a store of available ones: a signed index hosted by the project, with official modules (the preview set above, Git, archives, object storage) and third-party ones. Install downloads the package for the current platform, verifies its signature and hash, and activates it without a restart. Store entries declare the permissions they need (file system scope, network, process spawn); the user sees them before installing.
+**Extension store.** Later. The Extensions screen grows update and remove, and browses a store of available packages: a signed index hosted by the project, with official modules (the preview set above, Git, archives, object storage) and third-party ones. Install downloads the package for the current platform, verifies its signature and hash, and activates it without a restart. Store entries declare the permissions they need (file system scope, network, process spawn); the user sees them before installing.
 
 **Viewer.** The full-size counterpart of the preview pane. Enter or a double-click on a file of a previewable type opens it in the viewer rather than in an external application (a setting flips that default per type); Ctrl+Enter forces the external application. The viewer opens as a tab in the current pane, so it can be split, docked or torn out into its own window like any other tab, and a window-mode viewer fills the screen with F11. It uses the same previewer modules as the preview pane, with the full feature set unlocked:
 
@@ -465,7 +465,9 @@ One Cargo workspace, one crate per concern, grouped by layer. Kernel crates carr
 **Providers** (`ext-vfs-*`)
 
 - `ext-vfs-archive` — zip, tar family, 7z, RAR read-only, single-file codecs.
-- `ext-vfs-object` — S3, R2, Azure Blob, GCS through `object_store`.
+- `ext-vfs-s3` — S3, R2, MinIO and other S3-compatible stores, one endpoint setting.
+- `ext-vfs-azure` — Azure Blob.
+- `ext-vfs-gcs` — Google Cloud Storage.
 - `ext-vfs-sftp` — SSH and SFTP.
 - `ext-vfs-trash` — the trash as a browsable location with restore.
 
@@ -484,6 +486,8 @@ One Cargo workspace, one crate per concern, grouped by layer. Kernel crates carr
 - `ext-preview-office` — LibreOffice headless to PDF, then the PDF path.
 - `ext-preview-media` — audio and video via GStreamer, ID3 and stream info.
 - `ext-preview-archive` — listing of an archive's contents without mounting it.
+- `ext-preview-csv` — CSV and TSV as a virtualised grid.
+- `ext-preview-3d` — STL, OBJ and 3MF meshes rendered through wgpu.
 - `ext-preview-hex` — the fallback hex view.
 
 **Actions** (`ext-action-*`)
@@ -500,8 +504,10 @@ One Cargo workspace, one crate per concern, grouped by layer. Kernel crates carr
 
 **Plugin host**
 
-- `plugins-wasm` — the WASM runtime and the adapters that expose the five traits to guest modules.
-- `plugins-native` — loading of signed native libraries for heavy decoders that WASM cannot carry.
+- `plugins-native` — discovery, manifest checks and loading of native plugin libraries from the plugins directory; the host for every `ext-*` crate that is not compiled in (0.2).
+- `plugins-wasm` — later: the WASM runtime and the adapters that expose the five traits to guest modules.
+
+Compiled into the binary: `vfs-local`, `ext-preview-text`, `ext-preview-code`, `ext-preview-image`, `ext-preview-pdf` and `ext-action-core`. Every other `ext-*` crate builds as a plugin library into the plugins directory; the Cargo features on the binary remain for a build that compiles a plugin in instead.
 
 Naming rule: a crate that contributes to one extension point carries that point as its prefix (ext-preview-pdf). A crate that is a feature in the user's eyes and contributes to several points, like Git, carries only the feature name (ext-git) and registers a Decorator, an Action group, a Previewer or whatever it needs from one manifest; the user installs, enables and disables it as one thing.
 
@@ -641,6 +647,10 @@ impl JobRunner {
 bitflags! { pub struct Capabilities: u32 {
     const WRITE = 1; const TRASH = 2; const RENAME = 4; const SYMLINK = 8;
     const REFLINK = 16; const WATCH = 32; const SEEK = 64; const PERMISSIONS = 128;
+    /// Copy and move between two locations of this provider instance happen
+    /// on the provider's side (server-side copy, remote rename); nothing
+    /// streams through the machine and the job only tracks progress.
+    const NATIVE_TRANSFER = 256;
 } }
 
 pub trait Provider: Send + Sync + 'static {
@@ -667,6 +677,16 @@ pub trait Provider: Send + Sync + 'static {
     /// owns recursion, progress totals and cancellation.
     async fn copy(&self, from: &Location, to: &Location, opts: CopyOptions,
                   progress: ProgressSink, cancel: CancelToken) -> Result<(), Error>;
+
+    /// Moves or copies a whole selection within this provider instance on the
+    /// provider's side, if NATIVE_TRANSFER is set: the object store's copy
+    /// API across buckets of one account, SFTP's remote rename. The provider
+    /// submits the operation, reports progress as the service exposes it and
+    /// honours `cancel` where the service allows. `ops` calls this first when
+    /// source and target share a provider instance and falls back to
+    /// `rename`, `copy` and the streamed path otherwise.
+    async fn transfer(&self, items: &[Location], to: &Location, mode: TransferMode, // Move | Copy
+                      progress: ProgressSink, cancel: CancelToken) -> Result<(), Error>;
 
     /// Change notifications for one location, if WATCH is set.
     fn watch(&self, loc: &Location) -> Result<BoxStream<'static, FsChange>, Error>;
@@ -974,6 +994,36 @@ The smallest Rick worth using every day. Everything in this list ships; nothing 
 - Bulk rename, compare, compress and extract, console.
 - The WASM and native plugin hosts and the Extensions screen; extensions are compiled in.
 - Localisation beyond English.
+
+**Close-out (status 2026-11-06).** Issues 1–6 and the GUI chrome round are merged. What remains before 0.1 is tagged, each already specified above:
+
+- The preview pane layout (Preview section) — in progress.
+- Drag and drop and Pin to side panel (Functions, Operations) — specified, not started.
+- Side panel: the Recent, Network (local mounted volumes only in 0.1) and Trash sections, and the operations area with its job rows.
+- Tree view (View mode control; today it falls back to Details).
+- Inline rename, new file and new folder edited in place in the list (Further GUI elements, Operations).
+- Paste conflicts: skip, overwrite, rename, apply-to-all (Drag and drop, Execution; the same dialogue serves Paste).
+- Type-to-filter while the list has focus, and Search in subdirectories (Main area).
+- Open containing folder (Operations).
+- Session restore and Saved layouts; New window and tear-out to a new window (General behaviour).
+- Release (issue 7): `BENCHMARKS.md` with measured numbers on all three OSes and the macOS and Windows gates turned on; `CHANGELOG.md`; a release workflow producing a binary per OS.
+- A decision pass over `QUESTIONS.md`: every entry without a `Decided` line gets one, and the spec is corrected where the assumption stands.
+
+### Version 0.2 — scope
+
+0.2 turns the architecture outward: everything that is not essential becomes a plugin file, and the bulk of the specified-but-unbuilt features arrive as plugins. The order below is the build order; the plugin host comes first because every later item lands as a plugin, and each milestone ships as its own issue.
+
+1. **Plugin host and the split.** `plugins-native` loads plugins from the plugins directory at start: each plugin is one native dynamic library beside a manifest file, discovered by scanning the directory, loaded through one `extern "C"` entry point that receives the `Registry`. The manifest (TOML) carries id, name, version, `api_version`, the extension points filled, the platforms supported, and the toolchain the library was built with; the host refuses a plugin whose `api_version` or toolchain does not match and says so in the Extensions screen. Plugins are built from this workspace as `cdylib` crates with the same toolchain, so a workspace build produces the binary plus every plugin in the plugins directory with nothing to install by hand; the mechanism that lets a plugin and the host share one copy of `ext`, `types` and `runtime` (dynamic linking of the kernel crates, or a C-ABI vtable) is the implementer's call, recorded in `QUESTIONS.md`. **Compiled in:** the local provider, the text, code, image and PDF previewers, and `ext-action-core`. **Plugins:** everything else, starting with `ext-git`, which moves out of the binary in this milestone to prove the host. The **Extensions screen** lists the plugins found, with name, version, the points they fill, and enable/disable (a disabled plugin stays on disk and is not loaded on the next start); no store, no download, no update. The plugins directory sits beside the binary and in the per-user config directory; per-user wins on an id clash. Distribution and signing stay open.
+2. **Viewer.** The full-size viewer of the GUI section: Enter opens previewable files in a viewer tab, F11 fullscreen, folder navigation as a slideshow, pages, zoom, find, media transport, info panel, the Action registry inside the viewer, hex fallback. Compiled in, since it is a frame for the previewers rather than a feature of its own.
+3. **Previewers as plugins:** `ext-preview-office` (LibreOffice when installed), `ext-preview-media` (GStreamer, bundled runtime on macOS and Windows), `ext-preview-archive` (listing without mounting), `ext-preview-csv` (virtualised grid), rendered Markdown and HTML in `ext-preview-code`, `ext-preview-hex`, and `ext-preview-3d` (below).
+4. **Providers as plugins:** `ext-vfs-archive` (zip, tar family, 7z, RAR read-only, single-file codecs) with ISO images browsed the same way, `ext-vfs-trash` (the Trash side-panel section becomes a browsable location with restore and empty), `ext-vfs-sftp`, and one plugin per cloud — `ext-vfs-s3` (S3, R2 and S3-compatibles), `ext-vfs-azure`, `ext-vfs-gcs` — each with `NATIVE_TRANSFER` so moves and copies inside an account run on the service. The Network side-panel section gains discovered shares, connect, mount and unmount.
+5. **Search and decorators as plugins:** `ext-search-walk` behind the subtree search, then `ext-search-windows`, `ext-search-spotlight`, `ext-search-tracker` and `ext-search-baloo` feeding the title-row search box; `ext-svn` beside `ext-git`.
+6. **Actions as plugins:** `ext-action-compress` (compress, extract here, extract to), `ext-action-compare` (file and folder diff), `ext-action-terminal` (open console, with an embedded console pane), `ext-action-rename` (bulk rename with pattern, numbering, find and replace, preview), plus Open with… chooser, Paste as link and Select by pattern in `ext-action-core`.
+7. **Permission management** in Properties (owner, group, mode bits, ACLs, recursive apply, elevation through the platform), and **localisation**: the `t!` lookup gains translation files and a language setting, English remains the fallback.
+
+**Not in 0.2:** the WASM host, the extension store and downloads, plugin signing, `ext-deco-fs`, TFVC.
+
+**3D models.** A previewer for STL, OBJ and 3MF, for people who print. The mesh is parsed natively (`stl_io`, `tobj`, a small 3MF reader over its zip and XML) and rendered through wgpu into the preview frame as a shaded solid with a neutral material and a ground grid; drag orbits, wheel zooms, double-click resets the view, and the view is remembered per file while it stays open. The status bar shows triangle count, bounding box in millimetres and, for OBJ, the number of objects; the File info section adds the units declared by 3MF. Models beyond a configurable triangle budget decimate for the preview and say so. Ships as `ext-preview-3d`, a plugin.
 
 ### Still open
 

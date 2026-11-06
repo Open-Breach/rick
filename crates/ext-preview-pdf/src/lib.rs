@@ -17,8 +17,9 @@ use std::path::PathBuf;
 use std::sync::{Arc, OnceLock};
 
 use ext::{
-    API_VERSION, Capabilities, Extension, Frame, Manifest, PreviewDoc, Previewer, Provider,
-    Registry, RenderRequest, TextLayer, Transport, Version, async_trait,
+    API_VERSION, Capabilities, ControlId, ControlValue, Extension, Frame, Icon, InfoSection,
+    Manifest, PreviewControl, PreviewDoc, Previewer, Provider, Registry, RenderRequest, TextLayer,
+    Transport, Version, async_trait,
 };
 use pdfium_render::prelude::*;
 use types::{CancelToken, Entry, Error, ExtId, Location};
@@ -168,7 +169,7 @@ impl PdfDoc {
             .load_pdf_from_byte_slice(&bytes, None)
             .map_err(pdf_error)?;
         let pages = usize::try_from(document.pages().len()).unwrap_or(0);
-        let mut info = vec![("Pages".to_owned(), pages.to_string())];
+        let mut info = Vec::new();
         for (label, tag) in [
             ("Title", PdfDocumentMetadataTagType::Title),
             ("Author", PdfDocumentMetadataTagType::Author),
@@ -182,6 +183,7 @@ impl PdfDoc {
                 }
             }
         }
+        info.push(("Pages".to_owned(), pages.to_string()));
         if let Ok(first) = document.pages().first() {
             info.push((
                 "Page size".to_owned(),
@@ -192,6 +194,7 @@ impl PdfDoc {
                 ),
             ));
         }
+        info.push(("Size".to_owned(), format_size(bytes.len() as u64)));
         drop(document);
         Ok(Self {
             bytes: bytes.into(),
@@ -253,12 +256,55 @@ impl PreviewDoc for PdfDoc {
         Some(&self.layer)
     }
 
-    fn info(&self) -> Vec<(String, String)> {
-        self.info.clone()
+    fn sections(&self) -> Vec<InfoSection> {
+        vec![InfoSection {
+            id: "file",
+            title: "File info",
+            icon: Icon::Info,
+            rows: self.info.clone(),
+        }]
+    }
+
+    fn status(&self) -> Vec<String> {
+        vec![
+            format!(
+                "{} page{}",
+                self.pages,
+                if self.pages == 1 { "" } else { "s" }
+            ),
+            format_size(self.bytes.len() as u64),
+        ]
+    }
+
+    fn controls(&self) -> Vec<PreviewControl> {
+        Vec::new()
+    }
+
+    fn set_control(&mut self, _id: ControlId, _value: ControlValue) -> Result<(), Error> {
+        Err(Error::Unsupported(
+            "PDF documents have no controls of their own",
+        ))
     }
 
     fn transport(&mut self) -> Option<&mut dyn Transport> {
         None
+    }
+}
+
+/// A byte count as `n B`, `n.n KiB` or `n.n MiB`.
+fn format_size(bytes: u64) -> String {
+    const KIB: f64 = 1024.0;
+    // Sizes shown to one decimal; the precision loss is immaterial.
+    #[allow(clippy::cast_precision_loss)]
+    let value = bytes as f64;
+    if bytes < 1024 {
+        format!("{bytes} B")
+    } else if value < KIB * KIB {
+        format!("{:.1} KiB", value / KIB)
+    } else if value < KIB * KIB * KIB {
+        format!("{:.1} MiB", value / (KIB * KIB))
+    } else {
+        format!("{:.2} GiB", value / (KIB * KIB * KIB))
     }
 }
 
@@ -412,12 +458,26 @@ mod tests {
         }
         let mut doc = PdfDoc::new(sample_pdf(5)).unwrap_or_else(|e| panic!("{e}"));
         assert_eq!(doc.pages(), Some(5));
+        let sections = doc.sections();
+        assert_eq!(sections.len(), 1);
+        assert_eq!((sections[0].id, sections[0].title), ("file", "File info"));
+        let rows = &sections[0].rows;
+        let row = |key: &str| {
+            rows.iter()
+                .find(|(k, _)| k == key)
+                .map_or_else(|| panic!("no row {key}: {rows:?}"), |(_, v)| v.clone())
+        };
+        assert_eq!(row("Title"), "Rick sample");
+        assert_eq!(row("Producer"), "Rick fixture");
+        assert_eq!(row("Pages"), "5");
+        assert_eq!(row("Page size"), "612 × 792 pt");
+        assert!(row("Size").ends_with("KiB") || row("Size").ends_with('B'));
+        assert_eq!(doc.status()[0], "5 pages");
+        assert_eq!(doc.status().len(), 2);
+        assert_eq!(doc.controls().len(), 0);
         assert!(
-            doc.info()
-                .iter()
-                .any(|(k, v)| k == "Title" && v == "Rick sample"),
-            "{:?}",
-            doc.info()
+            doc.set_control(ControlId("x"), ControlValue::Pressed)
+                .is_err()
         );
         let req = RenderRequest {
             width: 306,

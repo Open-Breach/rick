@@ -20,8 +20,8 @@ pub use ext::PaneId;
 use ext::{CellValue, Decoration, FsChange};
 pub use listing::{Column, Group, IconSize, Listing, Sort, SortDir, ViewMode, ViewSpec, type_of};
 pub use settings::{
-    AfterDrag, Density, Drag, PanelSide, Section, Settings, SettingsChange, SidePanel, Theme,
-    parse_location,
+    AfterDrag, Density, Drag, PanelSide, Preview, Section, Settings, SettingsChange, SidePanel,
+    TextPreview, Theme, parse_location,
 };
 use types::{Entry, EntryId, JobId, Location, Progress};
 

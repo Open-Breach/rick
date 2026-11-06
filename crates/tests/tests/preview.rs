@@ -280,7 +280,8 @@ fn the_score_picks_the_right_previewer_by_sniff_and_every_fixture_opens() {
             }
             (kind, other) => panic!("{name}: {kind} produced {other:?}"),
         }
-        assert!(!doc.info().is_empty(), "{name}");
+        assert_eq!(doc.sections()[0].title, "File info", "{name}");
+        assert!(!doc.status().is_empty(), "{name}: status facts");
     }
     // Nothing claims noise.
     let noise: Vec<u8> = (0..4096u32)
@@ -354,7 +355,7 @@ fn the_app_opens_a_preview_for_the_selection() {
         .any(|e| matches!(e, Event::PreviewReady { pane: p, .. } if *p == pane));
     assert!(ready, "{events:?}");
     let doc_info = events.iter().find_map(|e| match e {
-        Event::PreviewReady { doc, .. } => Some(doc.info()),
+        Event::PreviewReady { doc, .. } => Some(doc.sections().remove(0).rows),
         _ => None,
     });
     assert!(doc_info.is_some_and(|i| i.iter().any(|(k, v)| k == "Dimensions" && v == "64 × 32")));

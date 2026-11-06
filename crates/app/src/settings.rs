@@ -95,7 +95,18 @@ mod tests {
         settings.side_panel.side = model::PanelSide::Right;
         settings.side_panel.width = 300;
         settings.side_panel.folded.insert(model::Section::Network);
+        settings.preview.text.wrap = true;
+        settings.preview.text.line_numbers = false;
+        settings
+            .preview
+            .pinned
+            .insert("image".into(), "exif".into());
         save(&path, &settings).unwrap_or_else(|e| panic!("{e}"));
+        let text = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{e}"));
+        assert!(text.contains("[preview.text]"), "{text}");
+        assert!(text.contains("wrap = true"), "{text}");
+        assert!(text.contains("line_numbers = false"), "{text}");
+        assert!(text.contains("[preview.pinned]"), "{text}");
         assert_eq!(load(&path).ok(), Some(settings));
     }
 

@@ -108,7 +108,7 @@ pub enum Intent {
     ToggleExtensions,
     /// Flatten subfolders on or off.
     ToggleFlatten,
-    /// The inspector pane on or off.
+    /// The preview pane on or off.
     ToggleInspector,
     /// A console at the location (not in 0.1).
     Console,
@@ -470,7 +470,7 @@ pub const UI_INTENTS: &[IntentSpec] = &[
     spec(
         Intent::ToggleInspector,
         "view.inspector",
-        "Toggle inspector",
+        "Toggle preview pane",
         VIEW,
         &["Mod+Shift+I"],
     ),

@@ -47,8 +47,8 @@ pub use decorator::{
 };
 pub use futures::stream::BoxStream;
 pub use preview::{
-    Frame, PreviewDoc, Previewer, RenderRequest, TextBlock, TextLayer, TextSpan, TextureId,
-    Transport, blocking, read_bytes,
+    ControlId, ControlValue, Frame, Icon, InfoSection, PreviewControl, PreviewDoc, Previewer,
+    RenderRequest, TextBlock, TextLayer, TextSpan, TextureId, Transport, blocking, read_bytes,
 };
 pub use provider::{
     Capabilities, ChangeStream, CopyOptions, Depth, EntryStream, FsChange, LinkKind, ListOptions,
