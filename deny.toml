@@ -1,14 +1,29 @@
 [licenses]
-allow = ["Apache-2.0", "MIT", "BSD-2-Clause", "BSD-3-Clause", "ISC", "Unicode-3.0", "Zlib"]
+allow = ["Apache-2.0", "MIT", "BSD-2-Clause", "BSD-3-Clause", "CC0-1.0", "ISC", "Unicode-3.0", "Zlib"]
 
 [bans]
 multiple-versions = "warn"
-# Layer order (SPEC.md "Package layout"): types → runtime → platform → vfs →
-# vfs-local → model → ops → ext → app → ui-egui → rick, with `tests` on top.
-# Each workspace crate below lists in `wrappers` the crates that may depend on
-# it; a crate missing from the list is an upward edge and fails the check.
-# `types` may be used by everyone and needs no entry. Add an entry per crate as
-# crates appear, e.g. { crate = "ui-egui", wrappers = ["rick", "tests"] }.
+# Layer order (SPEC.md "Package layout", refined in QUESTIONS.md 7): types →
+# runtime → platform → ext → vfs → vfs-local → model → ops → app → ui-egui →
+# rick, with `tests` on top. Each workspace crate below lists in `wrappers`
+# the crates that may depend on it; a crate missing from the list is an upward
+# edge and fails the check. `types` may be used by everyone and needs no
+# entry. Add an entry per crate as crates appear.
 deny = [
-    { crate = "runtime", wrappers = ["tests"] },
+    { crate = "runtime", wrappers = ["platform", "ext", "vfs", "vfs-local", "tests"] },
+    { crate = "platform", wrappers = ["vfs", "vfs-local", "tests"] },
+    { crate = "ext", wrappers = ["vfs", "vfs-local", "tests"] },
+    { crate = "vfs", wrappers = ["vfs-local", "tests"] },
+    { crate = "vfs-local", wrappers = ["tests"] },
+]
+
+[advisories]
+# rfd's XDG portal backend goes through ashpd 0.14 → zbus 5, whose companion
+# crates were merged into zbus 6 and declared unmaintained as standalone crates
+# (RUSTSEC-2026-0370..0372). Nothing to fix on our side until ashpd moves to
+# zbus 6; revisit when rfd/ashpd release against it.
+ignore = [
+    { id = "RUSTSEC-2026-0370", reason = "zvariant merged into zbus 6; transitive via rfd → ashpd" },
+    { id = "RUSTSEC-2026-0371", reason = "zbus_names merged into zbus 6; transitive via rfd → ashpd" },
+    { id = "RUSTSEC-2026-0372", reason = "zvariant_derive merged into zbus 6; transitive via rfd → ashpd" },
 ]

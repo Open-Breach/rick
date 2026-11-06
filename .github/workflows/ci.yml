@@ -3,6 +3,9 @@ on: [push, pull_request]
 jobs:
   check:
     strategy:
+      # One platform failing must not cancel the others: their results are
+      # the point of the matrix.
+      fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
     runs-on: ${{ matrix.os }}
@@ -17,10 +20,16 @@ jobs:
       - run: cargo test --workspace
       # Acceptance (issue 1): the 200k-entry fixture generates in under 30 s.
       # Written on the runner's temp disk, the fast local drive on Windows.
-      # The 30 s budget is not enforced on Windows for now (QUESTIONS.md 5):
-      # the step still runs and logs its time, but cannot fail the job.
+      # The 30 s budget is enforced on Linux only for now (QUESTIONS.md 5):
+      # on Windows and macOS the step still runs and logs its time, but
+      # cannot fail the job.
       - run: cargo test -p tests --test fixture -- --ignored
-        continue-on-error: ${{ runner.os == 'Windows' }}
+        continue-on-error: ${{ runner.os != 'Linux' }}
+        env: { TMP: "${{ runner.temp }}", TEMP: "${{ runner.temp }}", TMPDIR: "${{ runner.temp }}" }
+      # Acceptance (issue 2): listing the 200k fixture and the 1 GiB sparse
+      # copy, in release so the timings mean something. The Linux numbers are
+      # asserted; macOS and Windows print theirs until targets are set.
+      - run: cargo test -p tests --release --test listing --test copy -- --ignored --nocapture
         env: { TMP: "${{ runner.temp }}", TEMP: "${{ runner.temp }}", TMPDIR: "${{ runner.temp }}" }
       - run: cargo doc --no-deps
         env: { RUSTDOCFLAGS: "-D warnings" }

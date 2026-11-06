@@ -388,7 +388,7 @@ One Cargo workspace, one crate per concern, grouped by layer. Kernel crates carr
 
 **Kernel**
 
-- `types` — paths, entries, mime, errors, capability flags; no dependencies beyond std.
+- `types` — paths, entries, mime, errors, capability flags; no I/O, no async runtime and no dependency on any other Rick crate. It may use the small ecosystem crates it needs (`bitflags`, `thiserror`), nothing heavier.
 - `runtime` — job system, cancellation, progress, thread pools, event bus.
 - `platform` — per-OS code behind one trait set: trash, links and junctions, elevation, system properties dialogue, file associations, mounts.
 - `vfs` — the Provider trait and the mount table that routes a path to a provider.
@@ -480,7 +480,7 @@ This spec is written to be implemented by an AI coding agent as well as by peopl
 These govern how the crates fit together. They are the decisions an implementer must not re-make.
 
 - **Unidirectional state flow.** The UI never mutates the model directly. It emits `Command` values; `app` handles them, updates the model and publishes `Event`s; the UI re-renders from the model. The model is the single source of truth for everything the window shows. Undo/redo is a log of reversible commands kept in `app`.
-- **Every long operation is a Job.** A directory listing, a copy, a search, a preview decode: each runs as a `Job` with a cancellation token, a progress channel and a result. Listings stream entries in batches so the UI shows the first screen before the walk finishes; switching away from a location cancels its jobs.
+- **Every long operation is a Job.** A directory listing, a copy, a search, a preview decode: each runs as a `Job` with a cancellation token, a progress channel and a result. Listings stream entries in batches so the UI shows the first screen before the walk finishes; switching away from a location cancels its jobs. Cancelling drops the job's future, so a job that never polls its token still stops at its next await point and its handle resolves with `Error::Cancelled`. A job that leaves partial state behind, such as a half-written copy target, must check the token before each irreversible step or hold a guard whose `Drop` undoes or finishes that step, because being dropped is its only notice. Long synchronous work on the compute pool cannot be dropped mid-call and checks `is_cancelled()` between chunks.
 - **Platform code lives in `platform` only.** No `cfg(target_os)` anywhere else. Other crates program against the `platform` traits (trash, open-with, file properties, config dir, native dialogs) and the tests run with a fake implementation.
 - **The extension traits are a versioned contract.** The traits in `ext` and the manifest format carry a version. Any breaking change bumps it; the plugin host refuses manifests it does not understand and says so in the Extensions screen.
 - **Optional extensions are Cargo features.** `rick` builds with the kernel alone; each `ext-*` crate is a feature on the binary, default-on for built-ins, so a minimal build and a full build come from the same workspace.
@@ -498,6 +498,9 @@ First cut of the contract between the kernel and the extensions. Names and shape
 /// Which extension provides a tree. "local", "archive", "sftp", "s3", "trash".
 pub struct ProviderId(pub &'static str);
 
+/// Identity of an extension, as declared in its manifest. "git", "preview-pdf".
+pub struct ExtId(pub &'static str);
+
 /// Stable identity of an entry inside one provider. Local uses (device, inode);
 /// other providers choose their own 128-bit key. Never a path string.
 pub struct EntryId { pub provider: ProviderId, pub key: u128 }
@@ -509,6 +512,10 @@ pub struct VPath(Vec<u8>);
 pub struct Location { pub provider: ProviderId, pub path: VPath }
 
 pub enum EntryKind { File, Dir, Symlink { target: VPath, broken: bool }, Other }
+
+/// Media type as `type/subtype` without parameters, not validated. Filled
+/// lazily by sniffing, so most entries carry `None` until something asks.
+pub struct Mime(Box<str>);
 
 pub struct Entry {
     pub id: EntryId,
@@ -533,6 +540,13 @@ pub enum Progress {
     Message(String),
 }
 
+/// One error type for the whole kernel; extensions map their own into it.
+pub enum Error { NotFound, PermissionDenied, Cancelled, Unsupported(&'static str), Io(std::io::Error), Extension { ext: ExtId, source: Box<dyn std::error::Error + Send + Sync> } }
+```
+
+**Job types** (crate `runtime`, which owns the tokio runtime and re-exports `tokio::sync::{watch, oneshot}` so callers need no `tokio` dependency):
+
+```rust
 /// What `runtime` hands back for every long operation.
 pub struct JobHandle<T> {
     pub id: JobId,
@@ -541,8 +555,20 @@ pub struct JobHandle<T> {
     pub result: oneshot::Receiver<Result<T, Error>>,
 }
 
-/// One error type for the whole kernel; extensions map their own into it.
-pub enum Error { NotFound, PermissionDenied, Cancelled, Unsupported(&'static str), Io(std::io::Error), Extension { ext: ExtId, source: Box<dyn std::error::Error + Send + Sync> } }
+/// What a job receives when it starts. Cancelling drops the job's future, so
+/// a job that never looks at the token still stops at its next await point
+/// and its handle resolves with `Error::Cancelled`.
+pub struct JobCtx { pub id: JobId, pub cancel: CancelToken, pub progress: ProgressSink }
+
+/// Where a job publishes progress; `report` replaces the previous value and never fails.
+pub struct ProgressSink(watch::Sender<Progress>);
+
+impl JobRunner {
+    pub fn spawn<T, F, Fut>(&self, job: F) -> JobHandle<T>
+        where F: FnOnce(JobCtx) -> Fut, Fut: Future<Output = Result<T, Error>> + Send + 'static;
+    pub fn running(&self) -> Vec<JobId>;
+    pub fn cancel(&self, id: JobId) -> bool;
+}
 ```
 
 **Provider** — a tree of entries (crate `ext`):

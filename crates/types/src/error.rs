@@ -31,10 +31,33 @@ pub enum Error {
     },
 }
 
+impl Error {
+    /// Maps an I/O error to the kernel error, lifting the two kinds that have
+    /// their own variant and wrapping the rest in [`Error::Io`].
+    #[must_use]
+    pub fn from_io(error: std::io::Error) -> Self {
+        match error.kind() {
+            std::io::ErrorKind::NotFound => Self::NotFound,
+            std::io::ErrorKind::PermissionDenied => Self::PermissionDenied,
+            _ => Self::Io(error),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::error::Error as _;
+
+    #[test]
+    fn from_io_lifts_the_kinds_with_their_own_variant() {
+        let not_found = std::io::Error::from(std::io::ErrorKind::NotFound);
+        assert!(matches!(Error::from_io(not_found), Error::NotFound));
+        let denied = std::io::Error::from(std::io::ErrorKind::PermissionDenied);
+        assert!(matches!(Error::from_io(denied), Error::PermissionDenied));
+        let other = std::io::Error::from(std::io::ErrorKind::AlreadyExists);
+        assert!(matches!(Error::from_io(other), Error::Io(_)));
+    }
 
     #[test]
     fn io_errors_convert() {

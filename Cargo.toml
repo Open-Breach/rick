@@ -11,14 +11,29 @@ repository = "https://github.com/Open-Breach/rick"
 # Kernel crates.
 types = { path = "crates/types" }
 runtime = { path = "crates/runtime" }
+platform = { path = "crates/platform" }
+ext = { path = "crates/ext" }
+vfs = { path = "crates/vfs" }
+vfs-local = { path = "crates/vfs-local" }
 
 # Third-party.
+async-trait = "0.1"
 bitflags = "2"
+futures = "0.3"
+libc = "0.2"
+notify = "8"
+objc2 = "0.6"
+objc2-foundation = { version = "0.3", default-features = false }
 rayon = "1"
+rfd = { version = "0.16", default-features = false }
+rustix = { version = "1", default-features = false }
+semver = "1"
+smallvec = "1"
 tempfile = "3"
 thiserror = "2"
 tokio = { version = "1", default-features = false }
 tracing = "0.1"
+windows = "0.62"
 
 [workspace.lints.clippy]
 pedantic = { level = "warn", priority = -1 }

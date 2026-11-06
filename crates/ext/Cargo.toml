@@ -1,0 +1,23 @@
+[package]
+name = "ext"
+version = "0.1.0"
+description = "Rick extension API: the five extension-point traits, their data types, manifests and the registry."
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+types = { workspace = true }
+runtime = { workspace = true }
+async-trait = { workspace = true }
+bitflags = { workspace = true }
+futures = { workspace = true }
+semver = { workspace = true }
+smallvec = { workspace = true }
+tokio = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["io-util"] }
+
+[lints]
+workspace = true

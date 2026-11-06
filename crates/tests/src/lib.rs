@@ -7,3 +7,9 @@
 #![forbid(unsafe_code)]
 
 pub mod fixture;
+
+/// A local location for an OS path.
+#[must_use]
+pub fn local(path: &std::path::Path) -> types::Location {
+    types::Location::new(vfs_local::PROVIDER_ID, platform::paths::from_path(path))
+}

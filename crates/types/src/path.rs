@@ -88,6 +88,42 @@ impl VPath {
         self.0.is_empty()
     }
 
+    /// `true` when the last byte is a `/` or `\` separator.
+    fn ends_with_separator(&self) -> bool {
+        matches!(self.0.last(), Some(b'/' | b'\\'))
+    }
+
+    /// The path with `name` appended as one more component, separated by `/`.
+    /// Providers treat `/` as the separator; the local provider on Windows
+    /// accepts it next to `\`.
+    #[must_use]
+    pub fn join(&self, name: impl AsRef<[u8]>) -> Self {
+        let name = name.as_ref();
+        let mut bytes = Vec::with_capacity(self.0.len() + name.len() + 1);
+        bytes.extend_from_slice(&self.0);
+        if !self.0.is_empty() && !self.ends_with_separator() {
+            bytes.push(b'/');
+        }
+        bytes.extend_from_slice(name);
+        Self(bytes)
+    }
+
+    /// The last component: the bytes after the last `/` or `\`, ignoring a
+    /// trailing separator. `None` for the empty path and for a bare root.
+    #[must_use]
+    pub fn file_name(&self) -> Option<&[u8]> {
+        let trimmed = match self.0.split_last() {
+            Some((b'/' | b'\\', rest)) => rest,
+            _ => &self.0[..],
+        };
+        let start = trimmed
+            .iter()
+            .rposition(|b| matches!(b, b'/' | b'\\'))
+            .map_or(0, |i| i + 1);
+        let name = &trimmed[start..];
+        (!name.is_empty()).then_some(name)
+    }
+
     /// The path as text. Borrows when the bytes are valid UTF-8; otherwise
     /// every unpaired surrogate (from a Windows name) and every other invalid
     /// sequence becomes one U+FFFD.
@@ -367,6 +403,21 @@ mod tests {
             format!("{:?}", VPath::from_bytes(vec![b'a', 0xFF])),
             "VPath(b\"a\\xff\")"
         );
+    }
+
+    #[test]
+    fn join_and_file_name_follow_slashes_and_backslashes() {
+        assert_eq!(VPath::from("/a/b").join("c").to_string(), "/a/b/c");
+        assert_eq!(VPath::from("/a/b/").join("c").to_string(), "/a/b/c");
+        assert_eq!(VPath::from("").join("c").to_string(), "c");
+        assert_eq!(VPath::from("C:\\x\\").join("c").to_string(), "C:\\x\\c");
+        assert_eq!(VPath::from("C:\\x").join("c").to_string(), "C:\\x/c");
+        assert_eq!(VPath::from("/a/b/c.txt").file_name(), Some(&b"c.txt"[..]));
+        assert_eq!(VPath::from("/a/b/").file_name(), Some(&b"b"[..]));
+        assert_eq!(VPath::from("C:\\x\\y").file_name(), Some(&b"y"[..]));
+        assert_eq!(VPath::from("name").file_name(), Some(&b"name"[..]));
+        assert_eq!(VPath::from("/").file_name(), None);
+        assert_eq!(VPath::new().file_name(), None);
     }
 
     #[test]

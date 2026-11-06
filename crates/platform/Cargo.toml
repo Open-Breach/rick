@@ -1,0 +1,43 @@
+[package]
+name = "platform"
+version = "0.1.0"
+description = "Rick platform layer: trash, open-with, properties, config directory, native dialogs and the per-OS filesystem fast paths."
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+types = { workspace = true }
+runtime = { workspace = true }
+async-trait = { workspace = true }
+rayon = { workspace = true }
+rfd = { workspace = true, features = ["xdg-portal", "tokio"] }
+tempfile = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+libc = { workspace = true }
+rustix = { workspace = true, features = ["fs", "process", "std"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+libc = { workspace = true }
+objc2 = { workspace = true }
+objc2-foundation = { workspace = true, features = ["NSFileManager", "NSURL", "NSError", "NSString"] }
+rustix = { workspace = true, features = ["fs", "process", "std"] }
+
+[target.'cfg(windows)'.dependencies]
+windows = { workspace = true, features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_Storage_FileSystem",
+    "Win32_System_Com",
+    "Win32_System_Registry",
+    "Win32_UI_Shell",
+    "Win32_UI_Shell_Common",
+    "Win32_UI_Shell_PropertiesSystem",
+    "Win32_UI_WindowsAndMessaging",
+] }
+
+[lints]
+workspace = true
