@@ -669,6 +669,41 @@ impl Model {
         true
     }
 
+    /// Empties the pane's active tab's listing before a fresh one streams
+    /// in; the selection and filter stay. Returns whether a tab took it.
+    pub fn clear_listing(&mut self, pane: PaneId) -> bool {
+        match self.active_tab_mut(pane) {
+            Some((_, tab)) => {
+                tab.listing.clear();
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// Replaces the pane's active tab's listing in one step, so a refresh
+    /// never shows an empty list in between. Selected entries that are gone
+    /// leave the selection. Returns whether a tab took it.
+    pub fn replace_listing(&mut self, pane: PaneId, entries: Vec<Entry>) -> bool {
+        let settings = self.settings.clone();
+        let Some((_, tab)) = self.active_tab_mut(pane) else {
+            return false;
+        };
+        let spec = ViewSpec {
+            sort: tab.sort,
+            folders_first: settings.folders_first,
+            filter: &tab.filter,
+            show_hidden: tab.show_hidden,
+            show_system: settings.show_system,
+        };
+        tab.listing.clear();
+        tab.listing.extend(entries, &spec);
+        tab.listing.complete = true;
+        let listing = &tab.listing;
+        tab.selection.retain(|id| listing.get(*id).is_some());
+        true
+    }
+
     /// Marks the pane's active tab's listing complete.
     pub fn listing_done(&mut self, pane: PaneId) -> bool {
         match self.active_tab_mut(pane) {
