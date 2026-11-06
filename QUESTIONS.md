@@ -136,6 +136,8 @@ Once answered, an entry keeps its number and gains a `Decided (date):` line.
     Assumed: three commands are added, `ActivateTab(TabId)`,
     `FocusPane(PaneId)` and `DismissJob(JobId)`, with the smallest meaning;
     nothing else beyond the spec's list.
+    Decided (2026-11-06): as assumed; the three are in the spec's
+    `Command` enum.
 
 14. (issue 3) The spec does not say who holds the copy/cut clipboard between
     Copy and Paste, nor whether it is the system clipboard.

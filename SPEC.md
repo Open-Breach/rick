@@ -733,8 +733,9 @@ pub enum Command {
     SetView { pane: PaneId, mode: ViewMode }, Sort { pane: PaneId, by: Column, dir: SortDir }, GroupBy { pane: PaneId, by: Option<Column> },
     Filter { pane: PaneId, text: String }, ToggleHidden(PaneId), Flatten { pane: PaneId, on: bool },
     Run { action: ActionId, ctx: ActionCtx },
-    NewTab(Location), CloseTab(TabId), Split { pane: PaneId, dir: SplitDir }, MoveTab { tab: TabId, to: DockTarget },
-    CancelJob(JobId), Undo, Redo,
+    NewTab(Location), CloseTab(TabId), ActivateTab(TabId), FocusPane(PaneId),
+    Split { pane: PaneId, dir: SplitDir }, MoveTab { tab: TabId, to: DockTarget },
+    CancelJob(JobId), DismissJob(JobId), Undo, Redo,
     Settings(SettingsChange),
 }
 
