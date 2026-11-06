@@ -633,21 +633,26 @@ fn wide_frames_fit_a_narrow_pane_instead_of_widening_it() {
             frame.width() > content.width() * 0.8,
             "{name}: the frame uses the width: {frame:?} in {content:?}"
         );
-        assert_eq!(
-            toolbar_item(harness, "Fit"),
-            if name == "wide.png" {
-                Some(true)
-            } else {
-                toolbar_item(harness, "Fit")
-            }
-        );
     };
     check(&mut harness, "wide.png");
+    // A raster has Fit and 1:1, with Fit on.
+    assert_eq!(toolbar_item(&harness, "Fit"), Some(true));
     assert_eq!(toolbar_item(&harness, "1:1"), Some(false));
     assert!(harness.state().preview_status().starts_with("6000 × 400"));
     if ext_preview_pdf::available() {
         check(&mut harness, "a3.pdf");
+        // A paged document has the pager instead of Fit and 1:1.
         assert_eq!(toolbar_item(&harness, "Previous page"), None);
+        assert_eq!(toolbar_item(&harness, "Next page"), None);
+        assert!(
+            !harness
+                .state()
+                .preview_toolbar()
+                .iter()
+                .any(|item| item.label == "Fit"),
+            "{:?}",
+            harness.state().preview_toolbar()
+        );
         assert!(harness.state().preview_status().starts_with("1 page"));
     } else {
         assert!(
