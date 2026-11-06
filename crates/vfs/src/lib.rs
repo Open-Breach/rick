@@ -16,7 +16,7 @@ use std::sync::{Arc, RwLock};
 
 use ext::{CopyOptions, Depth, ListOptions, Provider, Registry, RemoveMode, WriteOptions};
 use futures::StreamExt;
-use runtime::ProgressSink;
+use runtime::{PauseGate, ProgressSink};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use types::{CancelToken, Entry, EntryKind, Error, Location, Progress, ProviderId, VPath};
 
@@ -97,7 +97,8 @@ impl std::fmt::Debug for Mounts {
 /// which uses the native fast path. Across providers bytes are streamed
 /// through `open_read` and `open_write`. Progress is reported in bytes over
 /// the whole tree; cancellation ends the copy within one buffer, leaving
-/// what was copied so far in place.
+/// what was copied so far in place; a paused `pause` gate holds the copy
+/// before the next directory, file or streamed buffer.
 ///
 /// # Errors
 ///
@@ -111,6 +112,7 @@ pub async fn copy(
     opts: CopyOptions,
     progress: ProgressSink,
     cancel: CancelToken,
+    pause: &PauseGate,
 ) -> Result<(), Error> {
     let src = mounts.resolve(from)?;
     let dst = mounts.resolve(to)?;
@@ -124,6 +126,7 @@ pub async fn copy(
     });
 
     for dir in &plan.dirs {
+        pause.wait().await;
         check(&cancel)?;
         let target = Location::new(to.provider, relocate(&dir.path, &from.path, &to.path));
         match dst.create_dir(&target).await {
@@ -134,6 +137,7 @@ pub async fn copy(
         }
     }
     for file in &plan.files {
+        pause.wait().await;
         check(&cancel)?;
         let source = Location::new(from.provider, file.path.clone());
         let target = Location::new(to.provider, relocate(&file.path, &from.path, &to.path));
@@ -158,7 +162,8 @@ pub async fn copy(
             }
             _ => {
                 stream_copy(
-                    &src, &dst, &source, &target, opts, &progress, &cancel, done, plan.total,
+                    &src, &dst, &source, &target, opts, &progress, &cancel, pause, done,
+                    plan.total,
                 )
                 .await?;
             }
@@ -188,6 +193,7 @@ pub async fn move_entry(
     opts: CopyOptions,
     progress: ProgressSink,
     cancel: CancelToken,
+    pause: &PauseGate,
 ) -> Result<(), Error> {
     let src = mounts.resolve(from)?;
     if from.provider == to.provider {
@@ -199,7 +205,7 @@ pub async fn move_entry(
             Err(e) => return Err(e),
         }
     }
-    copy(mounts, from, to, opts, progress, cancel.clone()).await?;
+    copy(mounts, from, to, opts, progress, cancel.clone(), pause).await?;
     check(&cancel)?;
     src.remove(from, RemoveMode::Permanent).await
 }
@@ -324,6 +330,7 @@ async fn stream_copy(
     opts: CopyOptions,
     progress: &ProgressSink,
     cancel: &CancelToken,
+    pause: &PauseGate,
     base: u64,
     total: u64,
 ) -> Result<(), Error> {
@@ -339,6 +346,7 @@ async fn stream_copy(
     let mut buffer = vec![0u8; BUFFER];
     let mut done = 0u64;
     loop {
+        pause.wait().await;
         check(cancel)?;
         let read = reader.read(&mut buffer).await.map_err(Error::from_io)?;
         if read == 0 {

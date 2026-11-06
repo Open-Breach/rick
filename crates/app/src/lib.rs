@@ -1511,7 +1511,7 @@ impl App {
 
     fn on_job_event(&mut self, event: JobEvent, events: &mut Vec<Event>) {
         match event {
-            JobEvent::Started { id, name } => {
+            JobEvent::Started { id, name, .. } => {
                 if !self.internal.contains(&id) {
                     self.model.job_started(id, name);
                 }

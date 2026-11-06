@@ -192,6 +192,7 @@ pub(crate) fn spawn_copies(
                 CopyOptions::default(),
                 job.progress.clone(),
                 job.cancel.clone(),
+                &job.pause,
             )
             .await?;
         }
@@ -224,6 +225,7 @@ pub(crate) fn spawn_moves(
                 CopyOptions::default(),
                 job.progress.clone(),
                 job.cancel.clone(),
+                &job.pause,
             )
             .await?;
         }
@@ -340,6 +342,7 @@ impl Action for Duplicate {
                     CopyOptions::default(),
                     job.progress.clone(),
                     job.cancel.clone(),
+                    &job.pause,
                 )
                 .await?;
             }
