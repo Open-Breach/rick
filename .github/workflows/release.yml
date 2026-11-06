@@ -5,14 +5,23 @@ name: release
 # test of every archive; then a GitHub Release with the archives, their
 # SHA-256 sums and the tag's changelog section as its body. A tag with a
 # pre-release suffix (v0.1.0-rc1) makes a draft pre-release; a plain tag
-# publishes. No signing, notarisation or installers in 0.1.
+# publishes. Run by hand from a branch with a tag name, it is a dry run: the
+# same build and smoke test, then a draft release under that name on the
+# branch's commit (the tag itself is only created if the draft is published).
+# No signing, notarisation or installers in 0.1.
 on:
   push:
     tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release as this tag (vX.Y.Z or vX.Y.Z-rcN); a draft is created"
+        required: true
 permissions:
   contents: write
 env:
   CARGO_TERM_COLOR: always
+  TAG: ${{ inputs.tag || github.ref_name }}
 jobs:
   licenses:
     runs-on: ubuntu-latest
@@ -50,10 +59,10 @@ jobs:
       - name: version
         shell: bash
         run: |
-          tag_version="${GITHUB_REF_NAME#v}"
+          tag_version="${TAG#v}"
           crate_version="$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -1)"
           if [ "${tag_version%%-*}" != "$crate_version" ]; then
-            echo "tag $GITHUB_REF_NAME does not match workspace version $crate_version"
+            echo "tag $TAG does not match workspace version $crate_version"
             exit 1
           fi
           echo "VERSION=$tag_version" >> "$GITHUB_ENV"
@@ -147,7 +156,7 @@ jobs:
         run: |
           set -euo pipefail
           unset RICK_PDFIUM_DIR
-          version="${GITHUB_REF_NAME#v}"
+          version="${TAG#v}"
           name="rick-$version-${{ matrix.platform }}"
           exe=""
           if [ "${{ runner.os }}" = "Windows" ]; then exe=".exe"; fi
@@ -191,7 +200,7 @@ jobs:
           rm ./*.sha256
           cat SHA256SUMS.txt
           cd ..
-          python3 .github/scripts/changelog-section.py "$GITHUB_REF_NAME" CHANGELOG.md > body.md
+          python3 .github/scripts/changelog-section.py "$TAG" CHANGELOG.md > body.md
           {
             echo
             echo "Archives: the \`rick\` binary with the pdfium library beside it, LICENSE, README, CHANGELOG and THIRD-PARTY-LICENSES; \`SHA256SUMS.txt\` has the checksums. Not signed or notarised (see README, Try it)."
@@ -199,10 +208,12 @@ jobs:
           cat body.md
       - uses: softprops/action-gh-release@v2
         with:
-          name: Rick ${{ github.ref_name }}
+          tag_name: ${{ env.TAG }}
+          target_commitish: ${{ github.sha }}
+          name: Rick ${{ env.TAG }}
           body_path: body.md
-          draft: ${{ contains(github.ref_name, '-') }}
-          prerelease: ${{ contains(github.ref_name, '-') }}
+          draft: ${{ contains(env.TAG, '-') || github.event_name == 'workflow_dispatch' }}
+          prerelease: ${{ contains(env.TAG, '-') }}
           files: |
             dist/*.tar.gz
             dist/*.zip
