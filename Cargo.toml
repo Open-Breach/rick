@@ -30,7 +30,9 @@ image = { version = "0.25", default-features = false, features = ["bmp", "gif", 
 jpeg-decoder = { version = "0.3", default-features = false }
 kamadak-exif = "0.6"
 pdfium-render = { version = "0.9", default-features = false, features = ["pdfium_latest", "thread_safe"] }
-syntect = { version = "5", default-features = false, features = ["default-fancy"] }
+# Bundled grammars and themes with the pure-Rust regex engine; no YAML or
+# plist loading at run time.
+syntect = { version = "5", default-features = false, features = ["parsing", "default-syntaxes", "default-themes", "regex-fancy"] }
 anyhow = "1"
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 eframe = "0.36"

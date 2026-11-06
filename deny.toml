@@ -5,6 +5,11 @@ allow = [
     "Unicode-3.0", "Zlib", "OFL-1.1", "Ubuntu-font-1.0",
 ]
 
+[graph]
+# The layer bans below are about shipped code; a crate's own tests may use
+# helpers from any layer (the previewers test through the local provider).
+exclude-dev = true
+
 [bans]
 multiple-versions = "warn"
 # Layer order (SPEC.md "Package layout", refined in QUESTIONS.md 7): types →
@@ -47,4 +52,5 @@ ignore = [
     { id = "RUSTSEC-2026-0372", reason = "zvariant_derive merged into zbus 6; transitive via rfd → ashpd" },
     { id = "RUSTSEC-2024-0436", reason = "paste is a build-time proc macro; transitive via egui_dock" },
     { id = "RUSTSEC-2026-0192", reason = "ttf-parser reads font tables; transitive via winit → sctk-adwaita → ab_glyph" },
+    { id = "RUSTSEC-2025-0141", reason = "bincode 1 decodes syntect's bundled grammar and theme dumps; no alternative without repacking them" },
 ]

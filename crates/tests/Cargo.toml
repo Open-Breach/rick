@@ -18,6 +18,11 @@ model = { workspace = true }
 ops = { workspace = true }
 app = { workspace = true }
 ui-egui = { workspace = true }
+ext-preview-text = { workspace = true }
+ext-preview-code = { workspace = true }
+ext-preview-image = { workspace = true }
+ext-preview-pdf = { workspace = true }
+image = { workspace = true }
 egui = { workspace = true }
 egui_kittest = { workspace = true }
 futures = { workspace = true }

@@ -15,6 +15,28 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with: { components: "rustfmt, clippy" }
       - uses: Swatinem/rust-cache@v2
+      # pdfium for the PDF previewer: the release binary for this runner,
+      # bound through RICK_PDFIUM_DIR; RICK_REQUIRE_PDFIUM makes its tests
+      # fail rather than skip when the binding is missing.
+      - name: pdfium
+        shell: bash
+        run: |
+          case "${{ runner.os }}-${{ runner.arch }}" in
+            Linux-X64) asset=pdfium-linux-x64 ;;
+            Linux-ARM64) asset=pdfium-linux-arm64 ;;
+            macOS-ARM64) asset=pdfium-mac-arm64 ;;
+            macOS-X64) asset=pdfium-mac-x64 ;;
+            Windows-X64) asset=pdfium-win-x64 ;;
+            *) echo "no pdfium build for ${{ runner.os }}-${{ runner.arch }}"; exit 1 ;;
+          esac
+          mkdir -p "$RUNNER_TEMP/pdfium"
+          curl -sSL "https://github.com/bblanchon/pdfium-binaries/releases/latest/download/$asset.tgz" | tar xz -C "$RUNNER_TEMP/pdfium"
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            echo "RICK_PDFIUM_DIR=$RUNNER_TEMP\\pdfium\\bin" >> "$GITHUB_ENV"
+          else
+            echo "RICK_PDFIUM_DIR=$RUNNER_TEMP/pdfium/lib" >> "$GITHUB_ENV"
+          fi
+          echo "RICK_REQUIRE_PDFIUM=1" >> "$GITHUB_ENV"
       - run: cargo fmt --check
       - run: cargo clippy --all-targets -- -D warnings
       - run: cargo test --workspace
@@ -36,6 +58,12 @@ jobs:
       # (QUESTIONS.md 24). The budget is enforced on Linux; macOS and Windows
       # print their numbers until targets are set from measurements.
       - run: cargo test -p tests --release --test ui -- --ignored --nocapture
+        continue-on-error: ${{ runner.os != 'Linux' }}
+        env: { TMP: "${{ runner.temp }}", TEMP: "${{ runner.temp }}", TMPDIR: "${{ runner.temp }}" }
+      # Acceptance (issue 5): a 48 MB bitmap and a 300-page PDF show their
+      # first frame within 200 ms and no UI frame goes over 16.6 ms while
+      # they decode (QUESTIONS.md 30). Linux asserts; the others print.
+      - run: cargo test -p tests --release --test preview -- --ignored --nocapture
         continue-on-error: ${{ runner.os != 'Linux' }}
         env: { TMP: "${{ runner.temp }}", TEMP: "${{ runner.temp }}", TMPDIR: "${{ runner.temp }}" }
       - run: cargo doc --no-deps

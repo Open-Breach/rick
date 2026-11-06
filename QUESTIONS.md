@@ -252,3 +252,57 @@ Once answered, an entry keeps its number and gains a `Decided (date):` line.
     Assumed: left for later issues. The inspector pane stands in for the
     Preview tab with a placeholder, as the issue asks; tabs cannot be torn
     out into windows yet.
+
+30. (issue 5) "A 50 MB image … shows its first frame within 200 ms" names a
+    budget no CPU decoder meets for a 50 MB JPEG or PNG: entropy decoding
+    alone reads every byte, and a 200 ms frame needs the whole file in that
+    time.
+    Assumed: the previewer opens with the header (format, dimensions, EXIF)
+    in a few milliseconds so the inspector shows them at once, and the first
+    pixel frame comes as fast as the format allows: an uncompressed BMP is
+    sampled straight from the file, a JPEG is decoded at the smallest DCT
+    scale that covers the pane, every other format is decoded whole and
+    downscaled. The acceptance fixture is a 48 MB BMP, which shows pixels
+    well within 200 ms; a 50 MB JPEG shows its dimensions within 200 ms and
+    its pixels after the decode, which never blocks the UI thread.
+
+31. (issue 5) `Frame::Text(TextBlock)` lets the UI lay text out, but the
+    spec puts syntax highlighting in `ext-preview-code` with syntect, and a
+    plain string cannot carry colours.
+    Assumed: `TextBlock` gains `spans`, coloured byte ranges the previewer
+    computed, and `RenderRequest` gains `dark` so the previewer can pick a
+    theme that follows the UI (base16-ocean.dark, InspiredGitHub). Both
+    types were shaped under question 8; this extends them.
+
+32. (issue 5) The spec's Event list ends at `PreviewReady`; a file no
+    previewer claims, or one whose previewer fails to open it, has no event.
+    Assumed: `Event::PreviewFailed { pane, error }`, so the inspector can say
+    why instead of showing a stale or empty preview. The alternative, a
+    notification per unsupported selection, would be noise.
+
+33. (issue 5) `PreviewDoc` must be `Send`, but pdfium's documents cannot be
+    sent between threads and pdfium itself is single-threaded.
+    Assumed: the PDF document keeps the file bytes and re-parses them on
+    every render, which pdfium does lazily in a few milliseconds, and
+    `pdfium-render`'s `thread_safe` feature serialises all calls. Each
+    page's text is extracted when that page is first rendered, so the text
+    layer fills as the user reads instead of delaying `open` by 300 pages
+    of extraction.
+
+34. (issue 5) pdfium is a dynamic library the crate does not bundle.
+    Assumed: the previewer binds it from `RICK_PDFIUM_DIR`, then from the
+    executable's directory, then from the system, and says which to set
+    when none works; CI downloads the release build for each runner. How
+    the packaged application ships pdfium is a later decision.
+
+35. (issue 5) The spec's code list includes TypeScript, F# and Visual
+    Basic, and TOML is common, but syntect's bundled grammars have none of
+    them.
+    Assumed: TypeScript is highlighted with the JavaScript grammar; F#,
+    Visual Basic and TOML render as plain text until grammars are added.
+
+36. (issue 5) The spec puts word wrap and line numbers on the text preview
+    as persisted toggles, but names no setting for them.
+    Assumed: both are toggles on the preview, kept for the session, not
+    written to `rick.toml`; CSV grids, Markdown and HTML rendering and the
+    pretty-print toggle are not in this issue.
