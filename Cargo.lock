@@ -3367,6 +3367,7 @@ name = "model"
 version = "0.1.0"
 dependencies = [
  "ext",
+ "platform",
  "rayon",
  "runtime",
  "serde",

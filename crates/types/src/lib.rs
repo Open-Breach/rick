@@ -11,11 +11,13 @@
 //! - places: [`VPath`], [`Location`]
 //! - directory entries: [`Entry`], [`EntryKind`], [`Attrs`], [`Mime`]
 //! - long operations: [`CancelToken`], [`Progress`]
+//! - name conflicts a job asks about: [`Conflict`], [`ConflictAnswer`]
 //! - failure: [`Error`]
 
 #![forbid(unsafe_code)]
 
 mod cancel;
+mod conflict;
 mod entry;
 mod error;
 mod id;
@@ -23,6 +25,7 @@ mod path;
 mod progress;
 
 pub use cancel::{CancelToken, Cancelled};
+pub use conflict::{Conflict, ConflictAnswer, ConflictId, Resolution, numbered_name};
 pub use entry::{Attrs, Entry, EntryKind, Mime};
 pub use error::Error;
 pub use id::{EntryId, ExtId, JobId, ProviderId};
@@ -50,6 +53,8 @@ mod assertions {
         assert_send_sync::<CancelToken>();
         assert_send_sync::<Cancelled>();
         assert_send_sync::<Progress>();
+        assert_send_sync::<Conflict>();
+        assert_send_sync::<ConflictAnswer>();
         assert_send_sync::<Error>();
     }
 }

@@ -81,6 +81,25 @@ pub struct Settings {
     /// The preview pane: text defaults and the pinned info section per
     /// content kind.
     pub preview: Preview,
+    /// Search in subdirectories: the names the walk skips.
+    pub search: Search,
+}
+
+/// The `[search]` table.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Search {
+    /// Directory and file names the subtree search never descends into or
+    /// reports.
+    pub ignore: Vec<String>,
+}
+
+impl Default for Search {
+    fn default() -> Self {
+        Self {
+            ignore: vec![".git".into(), "node_modules".into(), "target".into()],
+        }
+    }
 }
 
 /// The `[drag]` table.
@@ -214,16 +233,19 @@ pub enum Section {
     Trash,
     /// Locations the user pinned.
     Pinned,
+    /// The folder tree following the focused pane.
+    Tree,
 }
 
 impl Section {
     /// Every section in display order.
-    pub const ALL: [Self; 5] = [
+    pub const ALL: [Self; 6] = [
         Self::Home,
         Self::Recent,
         Self::Network,
         Self::Trash,
         Self::Pinned,
+        Self::Tree,
     ];
 
     /// The section's title.
@@ -235,6 +257,7 @@ impl Section {
             Self::Network => "Network",
             Self::Trash => "Trash",
             Self::Pinned => "Pinned",
+            Self::Tree => "Tree",
         }
     }
 }
@@ -283,6 +306,7 @@ impl Default for Settings {
             pinned: Vec::new(),
             drag: Drag::default(),
             preview: Preview::default(),
+            search: Search::default(),
         }
     }
 }
@@ -355,6 +379,8 @@ pub enum SettingsChange {
         /// The section id to pin, or nothing.
         section: Option<String>,
     },
+    /// The names the subtree search skips.
+    SearchIgnore(Vec<String>),
 }
 
 impl Settings {
@@ -414,6 +440,7 @@ impl Settings {
                     self.preview.pinned.remove(&kind);
                 }
             },
+            SettingsChange::SearchIgnore(names) => self.search.ignore = names,
         }
     }
 }
@@ -434,6 +461,10 @@ mod tests {
         assert!(s.preview.text.line_numbers, "line numbers on");
         assert!(!s.preview.text.wrap, "wrap off");
         assert!(s.preview.pinned.is_empty());
+        assert_eq!(s.search.ignore, [".git", "node_modules", "target"]);
+        let mut s = s;
+        s.apply(SettingsChange::SearchIgnore(vec!["build".into()]));
+        assert_eq!(s.search.ignore, ["build"]);
     }
 
     #[test]

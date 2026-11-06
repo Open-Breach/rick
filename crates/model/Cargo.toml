@@ -9,6 +9,7 @@ repository.workspace = true
 [dependencies]
 types = { workspace = true }
 runtime = { workspace = true }
+platform = { workspace = true }
 ext = { workspace = true }
 rayon = { workspace = true }
 serde = { workspace = true }
