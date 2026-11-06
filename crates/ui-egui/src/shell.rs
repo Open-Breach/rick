@@ -153,6 +153,8 @@ pub struct RickUi {
     /// Read-only texts actions asked to show, each in its own window.
     texts: Vec<TextWindow>,
     next_text: u64,
+    /// The tab the pointer was over in the frame being drawn.
+    hovered_tab: Option<TabId>,
     previews: Previews,
     closed_tabs: Vec<Location>,
     job_done_at: HashMap<types::JobId, Instant>,
@@ -164,6 +166,37 @@ pub struct RickUi {
 const RECENTS: usize = 64;
 /// The title row's height in points: that of a tab.
 const TITLE_ROW_HEIGHT: f32 = 30.0;
+
+/// The tab strip's look: VS Code-like padding, rounded top corners, the
+/// new-tab button right after the last tab, a scroll bar on overflow.
+fn tab_strip_style(egui_style: &egui::Style) -> egui_dock::Style {
+    let mut style = egui_dock::Style::from_egui(egui_style);
+    style.buttons.add_tab_align = egui_dock::TabAddAlign::Left;
+    style.tab_bar.height = TITLE_ROW_HEIGHT;
+    style.tab_bar.show_scroll_bar_on_overflow = true;
+    style.tab_bar.fill_tab_bar = false;
+    style.tab.spacing = 2.0;
+    style.tab.minimum_width = Some(96.0);
+    style.tab.hline_below_active_tab_name = false;
+    let top = egui::CornerRadius {
+        nw: 4,
+        ne: 4,
+        sw: 0,
+        se: 0,
+    };
+    for interaction in [
+        &mut style.tab.active,
+        &mut style.tab.inactive,
+        &mut style.tab.focused,
+        &mut style.tab.hovered,
+        &mut style.tab.inactive_with_kb_focus,
+        &mut style.tab.active_with_kb_focus,
+        &mut style.tab.focused_with_kb_focus,
+    ] {
+        interaction.corner_radius = top;
+    }
+    style
+}
 
 /// An icon-only toggle; the fill weight marks it active.
 fn toggle_icon(glyph: &str, on: bool) -> egui::Button<'static> {
@@ -208,6 +241,7 @@ impl RickUi {
             properties: None,
             texts: Vec::new(),
             next_text: 0,
+            hovered_tab: None,
             previews: Previews::default(),
             closed_tabs: Vec::new(),
             job_done_at: HashMap::new(),
@@ -346,6 +380,12 @@ impl RickUi {
                 });
             open
         });
+    }
+
+    /// Each pane's rectangle in the last frame, for tests that drag tabs.
+    #[must_use]
+    pub fn pane_rects(&self) -> Vec<(PaneId, egui::Rect)> {
+        self.dock.pane_rects(self.app.model())
     }
 
     /// The texts shown right now, as (title, text), for tests.
@@ -1328,6 +1368,10 @@ struct Viewer<'a> {
     requests: &'a mut Vec<Request>,
     keys: &'a KeyMap,
     now: SystemTime,
+    /// The tab the pointer was over last frame; it shows a close button.
+    hovered_last: Option<TabId>,
+    /// The tab the pointer is over this frame.
+    hovered_now: &'a mut Option<TabId>,
 }
 
 impl TabViewer for Viewer<'_> {
@@ -1338,10 +1382,39 @@ impl TabViewer for Viewer<'_> {
     }
 
     fn title(&mut self, tab: &mut TabId) -> egui::WidgetText {
-        self.app
-            .model()
-            .tab(*tab)
-            .map_or_else(|| "?".into(), |t| paths::title(&t.location.path).into())
+        self.app.model().tab(*tab).map_or_else(
+            || "?".into(),
+            |t| {
+                // A folder icon for local folders, the provider's otherwise.
+                let icon = if t.location.provider.0 == "local" {
+                    icons::FOLDER
+                } else {
+                    icons::PROVIDER
+                };
+                format!("{icon} {}", paths::title(&t.location.path)).into()
+            },
+        )
+    }
+
+    fn on_tab_button(&mut self, tab: &mut TabId, response: &egui::Response) {
+        if response.hovered() {
+            *self.hovered_now = Some(*tab);
+        }
+        if response.middle_clicked() {
+            self.requests
+                .push(Request::Command(Command::CloseTab(*tab)));
+        }
+    }
+
+    fn is_closeable(&self, tab: &TabId) -> bool {
+        // The close button shows on the active tab and the hovered one.
+        let model = self.app.model();
+        let active = model
+            .pane_of(*tab)
+            .and_then(|p| model.pane(p))
+            .and_then(model::Pane::active)
+            == Some(*tab);
+        active || self.hovered_last == Some(*tab)
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, tab: &mut TabId) {
@@ -1430,15 +1503,19 @@ impl eframe::App for RickUi {
 
         egui::CentralPanel::no_frame().show(ui, |ui| {
             self.dock.rebuild(self.app.model());
+            let hovered_last = self.hovered_tab.take();
             let mut viewer = Viewer {
                 app: &self.app,
                 tabs: &mut self.tabs,
                 requests: &mut self.requests,
                 keys: &self.keys,
                 now: self.now,
+                hovered_last,
+                hovered_now: &mut self.hovered_tab,
             };
             DockArea::new(&mut self.dock.state)
                 .id(egui::Id::new("dock"))
+                .style(tab_strip_style(ui.style()))
                 .show_add_buttons(true)
                 .show_close_buttons(true)
                 .show_leaf_close_all_buttons(false)

@@ -71,6 +71,8 @@ pub const NETWORK: &str = ph::NETWORK;
 pub const TRASH: &str = ph::TRASH;
 /// A folder.
 pub const FOLDER: &str = ph::FOLDER;
+/// A location on a provider that is not the local disk.
+pub const PROVIDER: &str = ph::HARD_DRIVES;
 /// A link.
 pub const LINK: &str = ph::LINK_SIMPLE;
 /// Done.
@@ -180,6 +182,7 @@ mod tests {
         NETWORK,
         TRASH,
         FOLDER,
+        PROVIDER,
         LINK,
         DONE,
         FAILED,

@@ -286,15 +286,15 @@ impl DockSync {
             }
         }
 
-        // Each leaf's home pane is the pane of its active tab. A pane claimed
-        // by two leaves has been split: the leaf holding the pane's model
-        // active tab stays, the other gets a new pane beside a neighbour.
+        // Each leaf's home pane is the pane that owns most of its tabs, the
+        // first tab's pane on a tie. Not the active tab's: egui_dock makes a
+        // dropped tab active, and its pane is the one it came from. A pane
+        // claimed by two leaves has been split: the leaf holding the pane's
+        // model active tab stays, the other gets a new pane beside a
+        // neighbour.
         let mut homes: Vec<(NodeIndex, Option<PaneId>)> = leaves
             .iter()
-            .map(|(node, tabs, active)| {
-                let pick = active.or_else(|| tabs.first().copied());
-                (*node, pick.and_then(|t| app.model().pane_of(t)))
-            })
+            .map(|(node, tabs, _)| (*node, home_of(app.model(), tabs)))
             .collect();
         for i in 0..homes.len() {
             let Some(home) = homes[i].1 else {
@@ -404,6 +404,23 @@ impl DockSync {
             .or_else(|| model.pane_of(first))?;
         Some((pane, side))
     }
+}
+
+/// The pane owning most of `tabs`; the first tab's pane on a tie.
+fn home_of(model: &Model, tabs: &[TabId]) -> Option<PaneId> {
+    let mut counts: Vec<(PaneId, usize)> = Vec::new();
+    for tab in tabs {
+        let Some(pane) = model.pane_of(*tab) else {
+            continue;
+        };
+        match counts.iter_mut().find(|(p, _)| *p == pane) {
+            Some((_, n)) => *n += 1,
+            None => counts.push((pane, 1)),
+        }
+    }
+    // `max_by_key` returns the last maximum; the first pane seen wins a tie.
+    let best = counts.iter().map(|(_, n)| *n).max()?;
+    counts.iter().find(|(_, n)| *n == best).map(|(p, _)| *p)
 }
 
 /// Fills `node` of `tree` with `shape`, reading old order and fractions from
