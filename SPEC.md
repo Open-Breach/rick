@@ -540,6 +540,13 @@ pub enum Progress {
     Message(String),
 }
 
+/// One error type for the whole kernel; extensions map their own into it.
+pub enum Error { NotFound, PermissionDenied, Cancelled, Unsupported(&'static str), Io(std::io::Error), Extension { ext: ExtId, source: Box<dyn std::error::Error + Send + Sync> } }
+```
+
+**Job types** (crate `runtime`, which owns the tokio runtime and re-exports `tokio::sync::{watch, oneshot}` so callers need no `tokio` dependency):
+
+```rust
 /// What `runtime` hands back for every long operation.
 pub struct JobHandle<T> {
     pub id: JobId,
@@ -548,8 +555,20 @@ pub struct JobHandle<T> {
     pub result: oneshot::Receiver<Result<T, Error>>,
 }
 
-/// One error type for the whole kernel; extensions map their own into it.
-pub enum Error { NotFound, PermissionDenied, Cancelled, Unsupported(&'static str), Io(std::io::Error), Extension { ext: ExtId, source: Box<dyn std::error::Error + Send + Sync> } }
+/// What a job receives when it starts. Cancelling drops the job's future, so
+/// a job that never looks at the token still stops at its next await point
+/// and its handle resolves with `Error::Cancelled`.
+pub struct JobCtx { pub id: JobId, pub cancel: CancelToken, pub progress: ProgressSink }
+
+/// Where a job publishes progress; `report` replaces the previous value and never fails.
+pub struct ProgressSink(watch::Sender<Progress>);
+
+impl JobRunner {
+    pub fn spawn<T, F, Fut>(&self, job: F) -> JobHandle<T>
+        where F: FnOnce(JobCtx) -> Fut, Fut: Future<Output = Result<T, Error>> + Send + 'static;
+    pub fn running(&self) -> Vec<JobId>;
+    pub fn cancel(&self, id: JobId) -> bool;
+}
 ```
 
 **Provider** — a tree of entries (crate `ext`):

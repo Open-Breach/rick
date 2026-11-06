@@ -32,7 +32,10 @@ Entry format:
    I/O)" but is documented as "what `runtime` hands back" and is made of
    `tokio` channel ends. Assumed: `JobHandle`, `JobCtx` and `ProgressSink`
    live in `runtime`, which re-exports `tokio::sync::{watch, oneshot}` so
-   callers need not depend on `tokio`.
+   callers need not depend on `tokio`. Answered by the maintainer
+   (2026-11-06): they live in `runtime`; the spec now has a "Job types"
+   block for them after the value types, with `JobCtx`, `ProgressSink` and
+   the `JobRunner` methods as implemented.
 4. (issue 1) The spec does not say whether a job that never inspects its
    `CancelToken` must still stop when cancelled. Assumed: yes; `JobRunner`
    races the job's future against the token and drops the future, so every
