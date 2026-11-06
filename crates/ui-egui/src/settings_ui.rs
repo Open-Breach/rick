@@ -2,7 +2,7 @@
 
 use app::Command;
 use ext::{Registry, Shortcut};
-use model::{Column, Density, PanelSide, Settings, SettingsChange, SortDir, Theme};
+use model::{AfterDrag, Column, Density, PanelSide, Settings, SettingsChange, SortDir, Theme};
 
 use crate::keys::{Intent, KeyMap, UI_INTENTS, from_egui_key, from_egui_modifiers};
 use crate::shell::Request;
@@ -116,6 +116,30 @@ pub fn settings_window(
                     });
                     ui.end_row();
 
+                    ui.label("Spring-loading delay");
+                    let mut delay = settings.drag.spring_delay_ms;
+                    if ui
+                        .add(egui::Slider::new(&mut delay, 200..=3000).suffix(" ms"))
+                        .changed()
+                    {
+                        change(SettingsChange::SpringDelay(delay));
+                    }
+                    ui.end_row();
+
+                    ui.label("After a drag");
+                    let mut after = settings.drag.after;
+                    egui::ComboBox::from_id_salt("after-drag")
+                        .selected_text(after_drag_name(after))
+                        .show_ui(ui, |ui| {
+                            for a in [AfterDrag::Stay, AfterDrag::Return] {
+                                ui.selectable_value(&mut after, a, after_drag_name(a));
+                            }
+                        });
+                    if after != settings.drag.after {
+                        change(SettingsChange::AfterDrag(after));
+                    }
+                    ui.end_row();
+
                     ui.label("Theme");
                     let mut theme = settings.theme;
                     egui::ComboBox::from_id_salt("theme")
@@ -195,6 +219,13 @@ fn theme_name(theme: Theme) -> &'static str {
         Theme::System => "System",
         Theme::Light => "Light",
         Theme::Dark => "Dark",
+    }
+}
+
+fn after_drag_name(after: AfterDrag) -> &'static str {
+    match after {
+        AfterDrag::Stay => "Stay in the folder",
+        AfterDrag::Return => "Return to where the drag started",
     }
 }
 

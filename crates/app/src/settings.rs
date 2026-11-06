@@ -1,8 +1,10 @@
 //! The settings file: `rick.toml` in the config directory.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use model::Settings;
+use runtime::mpsc;
+use tracing::warn;
 use types::Error;
 
 /// The file name under the config directory.
@@ -28,6 +30,30 @@ pub fn load(path: &Path) -> Result<Settings, Error> {
             error.to_string(),
         ))
     })
+}
+
+/// A writer that saves every settings snapshot sent to it, in order, off
+/// the caller's thread: two changes in a row can never land reversed.
+pub fn saver(path: PathBuf) -> mpsc::UnboundedSender<Settings> {
+    let (tx, mut rx) = mpsc::unbounded_channel::<Settings>();
+    runtime::handle().spawn(async move {
+        while let Some(mut settings) = rx.recv().await {
+            // Only the latest of a burst needs writing.
+            while let Ok(newer) = rx.try_recv() {
+                settings = newer;
+            }
+            let path = path.clone();
+            let written = runtime::handle()
+                .spawn_blocking(move || save(&path, &settings))
+                .await;
+            match written {
+                Ok(Ok(())) => {}
+                Ok(Err(error)) => warn!(%error, "settings not saved"),
+                Err(error) => warn!(%error, "settings writer stopped"),
+            }
+        }
+    });
+    tx
 }
 
 /// Writes the settings file, creating its directory.
@@ -60,7 +86,10 @@ mod tests {
             sort_by: Column::Size,
             sort_dir: SortDir::Descending,
             theme: Theme::Dark,
-            pinned: vec![dir.path().join("pinned here")],
+            pinned: vec![types::Location::new(
+                vfs_local::PROVIDER_ID,
+                platform::paths::from_path(&dir.path().join("pinned here")),
+            )],
             ..Settings::default()
         };
         settings.side_panel.side = model::PanelSide::Right;

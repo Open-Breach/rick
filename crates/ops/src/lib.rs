@@ -2,9 +2,10 @@
 //!
 //! [`Core`] is the built-in [`Extension`] that registers them: copy, cut and
 //! paste, duplicate, move to trash, delete permanently, rename, new file, new
-//! folder, copy path, open with the system default and open in the system
-//! file manager. Navigation, selection and view commands are `Command`s the
-//! application handles directly.
+//! folder, copy path, open with the system default, open in the system file
+//! manager, pin to side panel and unpin. Navigation, selection and view
+//! commands are `Command`s the application handles directly, as is a drag
+//! and drop's [`transfer`], which is not an action but runs the same jobs.
 //!
 //! Every operation that touches the filesystem runs as a job on the
 //! [`JobRunner`](runtime::JobRunner) the action receives, so `run` returns at
@@ -20,7 +21,9 @@ mod clipboard;
 mod create;
 mod edit;
 mod open;
+mod pin;
 mod remove;
+mod transfer;
 
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
@@ -31,6 +34,8 @@ use types::{Entry, Error, ExtId, Location};
 use vfs::Mounts;
 
 pub use clipboard::{ClipMode, Clipboard};
+pub use pin::{PinStore, pin_command, unpin_command};
+pub use transfer::{TransferKind, transfer};
 
 /// The built-in extension holding the core operations.
 pub struct Core {
@@ -42,6 +47,7 @@ pub struct Core {
 struct State {
     mounts: Arc<Mounts>,
     platform: Arc<dyn Platform>,
+    pins: Arc<dyn PinStore>,
     // Actions run on the app thread one at a time; the lock is for the
     // `Send + Sync` bound, not for contention.
     clipboard: Mutex<Option<Clipboard>>,
@@ -57,9 +63,9 @@ impl State {
 
 impl Core {
     /// The core operations over `mounts`, trashing and opening through
-    /// `platform`.
+    /// `platform`, pinning into `pins`.
     #[must_use]
-    pub fn new(mounts: Arc<Mounts>, platform: Arc<dyn Platform>) -> Self {
+    pub fn new(mounts: Arc<Mounts>, platform: Arc<dyn Platform>, pins: Arc<dyn PinStore>) -> Self {
         Self {
             manifest: Manifest {
                 id: ExtId("core"),
@@ -71,6 +77,7 @@ impl Core {
             state: Arc::new(State {
                 mounts,
                 platform,
+                pins,
                 clipboard: Mutex::new(None),
             }),
         }
@@ -112,6 +119,8 @@ impl Extension for Core {
         reg.action(Arc::new(open::CopyPathAndName(Arc::clone(s))));
         reg.action(Arc::new(open::OpenDefault(Arc::clone(s))));
         reg.action(Arc::new(open::Reveal(Arc::clone(s))));
+        reg.action(Arc::new(pin::Pin(Arc::clone(s))));
+        reg.action(Arc::new(pin::Unpin(Arc::clone(s))));
         Ok(())
     }
 }

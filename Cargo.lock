@@ -5240,6 +5240,7 @@ dependencies = [
  "tempfile",
  "tracing",
  "types",
+ "vfs-local",
 ]
 
 [[package]]

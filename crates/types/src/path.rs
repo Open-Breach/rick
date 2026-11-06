@@ -126,6 +126,47 @@ impl VPath {
         (!name.is_empty()).then_some(name)
     }
 
+    /// The bytes without one trailing separator, unless the path is a bare
+    /// root such as `/`.
+    fn without_trailing_separator(&self) -> &[u8] {
+        match self.0.split_last() {
+            Some((b'/' | b'\\', rest)) if !rest.is_empty() => rest,
+            _ => &self.0[..],
+        }
+    }
+
+    /// The path without its last component: `/a/b` for `/a/b/c`, `/` for
+    /// `/a`, `C:\` for `C:\x`. `None` for the empty path, a bare root and a
+    /// single relative component.
+    #[must_use]
+    pub fn parent(&self) -> Option<Self> {
+        let trimmed = self.without_trailing_separator();
+        let last_sep = trimmed.iter().rposition(|b| matches!(b, b'/' | b'\\'))?;
+        if last_sep + 1 == trimmed.len() {
+            // A bare root such as `/` or `C:\`.
+            return None;
+        }
+        let head = &trimmed[..last_sep];
+        // A root keeps its separator: `/x` -> `/`, `C:\x` -> `C:\`.
+        let end = if head.is_empty() || head.ends_with(b":") {
+            last_sep + 1
+        } else {
+            last_sep
+        };
+        Some(Self(trimmed[..end].to_vec()))
+    }
+
+    /// Whether this path is `dir` itself or lies anywhere under it: `/a/b`
+    /// and `/a/b/c` are inside `/a/b`, `/a/bc` is not.
+    #[must_use]
+    pub fn is_inside(&self, dir: &Self) -> bool {
+        let dir = dir.without_trailing_separator();
+        if matches!(dir, [b'/' | b'\\']) {
+            return self.0.starts_with(dir);
+        }
+        matches!(self.0.strip_prefix(dir), Some([] | [b'/' | b'\\', ..]))
+    }
+
     /// The path as text. Borrows when the bytes are valid UTF-8; otherwise
     /// every unpaired surrogate (from a Windows name) and every other invalid
     /// sequence becomes one U+FFFD.
@@ -421,6 +462,31 @@ mod tests {
         assert_eq!(VPath::from("name").file_name(), Some(&b"name"[..]));
         assert_eq!(VPath::from("/").file_name(), None);
         assert_eq!(VPath::new().file_name(), None);
+    }
+
+    #[test]
+    fn parent_and_is_inside_follow_the_separators() {
+        let parent = |p: &str| VPath::from(p).parent().map(|p| p.to_string());
+        assert_eq!(parent("/a/b/c"), Some("/a/b".into()));
+        assert_eq!(parent("/a/b/"), Some("/a".into()));
+        assert_eq!(parent("/a"), Some("/".into()));
+        assert_eq!(parent("/"), None);
+        assert_eq!(parent(""), None);
+        assert_eq!(parent("name"), None);
+        assert_eq!(parent("C:\\x\\y"), Some("C:\\x".into()));
+        assert_eq!(parent("C:\\x"), Some("C:\\".into()));
+        assert_eq!(parent("C:\\"), None);
+
+        let inside = |a: &str, b: &str| VPath::from(a).is_inside(&VPath::from(b));
+        assert!(inside("/a/b", "/a/b"));
+        assert!(inside("/a/b/c", "/a/b"));
+        assert!(inside("/a/b/c", "/a/b/"));
+        assert!(!inside("/a/bc", "/a/b"));
+        assert!(inside("/a", "/"));
+        assert!(!inside("/", "/a"));
+        assert!(inside("C:\\x\\y", "C:\\x"));
+        assert!(inside("C:\\x", "C:\\"));
+        assert!(!inside("D:\\x", "C:\\"));
     }
 
     #[test]

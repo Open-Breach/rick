@@ -71,7 +71,7 @@ mod tests {
     fn dates_are_relative_when_recent() {
         let now = SystemTime::UNIX_EPOCH + Duration::from_secs(1_700_000_000 + 12 * 3600);
         assert_eq!(date(None, now), (String::new(), String::new()));
-        let (today, full) = date(Some(now - Duration::from_secs(60)), now);
+        let (today, full) = date(Some(now - Duration::from_mins(1)), now);
         assert!(today.starts_with("Today "), "{today}");
         assert_eq!(full.len(), 19);
         let (yesterday, _) = date(Some(now - Duration::from_hours(24)), now);

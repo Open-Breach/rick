@@ -371,3 +371,256 @@ fn actions_run_through_the_registry_and_refresh_the_pane() {
     h.send(Command::DismissJob(id));
     assert_eq!(h.app.model().jobs.len(), 2);
 }
+
+fn id_of(h: &Harness, name: &str) -> types::EntryId {
+    let pane = h.app.model().focused;
+    h.app
+        .model()
+        .active_tab(pane)
+        .and_then(|(_, tab)| tab.listing.rows().find(|e| e.name == name).map(|e| e.id))
+        .unwrap_or_else(|| panic!("no entry {name}"))
+}
+
+#[test]
+fn transfer_moves_with_undo_and_copies_with_a_notice() {
+    let mut h = harness();
+    h.settle();
+    let pane = h.app.model().focused;
+    let sub = h.root.path().join("sub");
+    h.take_events();
+
+    let a = id_of(&h, "a.txt");
+    h.send(Command::Transfer {
+        items: vec![a],
+        from: pane,
+        to: local(&sub),
+        mode: super::TransferMode::Move,
+    });
+    h.settle();
+    assert!(sub.join("a.txt").exists());
+    assert!(!h.root.path().join("a.txt").exists());
+    assert_eq!(h.names(), ["sub", "b.txt", "c.txt"], "the pane refreshed");
+    assert_eq!(h.app.undo_label().as_deref(), Some("Move a.txt to sub"));
+    h.send(Command::Undo);
+    h.settle();
+    assert!(h.root.path().join("a.txt").exists());
+    assert!(!sub.join("a.txt").exists());
+
+    let b = id_of(&h, "b.txt");
+    h.take_events();
+    h.send(Command::Transfer {
+        items: vec![b],
+        from: pane,
+        to: local(&sub),
+        mode: super::TransferMode::Copy,
+    });
+    h.settle();
+    assert!(sub.join("b.txt").exists());
+    assert!(
+        h.root.path().join("b.txt").exists(),
+        "a copy keeps the source"
+    );
+    assert_eq!(h.app.undo_label(), None, "a copy is not undoable");
+    assert_eq!(
+        h.app.redo_label().as_deref(),
+        Some("Move a.txt to sub"),
+        "and does not clear the redo log"
+    );
+    let said_so = h.take_events().into_iter().any(|e| {
+        matches!(e, Event::Notify { level: Level::Info, text } if text.contains("cannot be undone"))
+    });
+    assert!(said_so, "the copy says it is not undoable");
+
+    // No-ops: into its own folder, a folder onto itself, into its own subtree.
+    let c = id_of(&h, "c.txt");
+    let sub_id = id_of(&h, "sub");
+    for (items, to) in [
+        (vec![c], local(h.root.path())),
+        (vec![sub_id], local(&sub)),
+        (vec![sub_id], local(&sub.join("deeper"))),
+    ] {
+        h.take_events();
+        h.send(Command::Transfer {
+            items,
+            from: pane,
+            to,
+            mode: super::TransferMode::Move,
+        });
+        h.settle();
+        assert!(h.take_events().is_empty(), "nothing happens, silently");
+    }
+    assert!(h.root.path().join("c.txt").exists());
+
+    // Ask is the UI's to answer; here it is only reported.
+    h.send(Command::Transfer {
+        items: vec![c],
+        from: pane,
+        to: local(&sub),
+        mode: super::TransferMode::Ask,
+    });
+    assert!(h.take_events().iter().any(|e| matches!(
+        e,
+        Event::Notify {
+            level: Level::Warning,
+            ..
+        }
+    )));
+    assert!(h.root.path().join("c.txt").exists());
+
+    // From outside the process: locations instead of ids.
+    let outside = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+    fs::write(outside.path().join("ext.txt"), "e").unwrap_or_else(|e| panic!("{e}"));
+    h.send(Command::Receive {
+        items: vec![local(&outside.path().join("ext.txt"))],
+        to: local(h.root.path()),
+        mode: super::TransferMode::Copy,
+    });
+    h.settle();
+    assert!(h.root.path().join("ext.txt").exists());
+    assert!(outside.path().join("ext.txt").exists());
+    assert!(h.names().contains(&"ext.txt".to_owned()));
+}
+
+#[test]
+fn spring_loading_pushes_one_step_and_back_restores_the_selection() {
+    let mut h = harness();
+    h.settle();
+    let pane = h.app.model().focused;
+    let sub = h.root.path().join("sub");
+    fs::create_dir(sub.join("deeper")).unwrap_or_else(|e| panic!("{e}"));
+    let a = id_of(&h, "a.txt");
+    h.send(Command::Select {
+        pane,
+        change: SelectionChange::Set(vec![a]),
+    });
+    h.take_events();
+
+    h.send(Command::SpringLoad {
+        pane,
+        to: local(&sub),
+        first: true,
+    });
+    h.settle();
+    assert_eq!(h.names(), ["deeper"]);
+    h.send(Command::SpringLoad {
+        pane,
+        to: local(&sub.join("deeper")),
+        first: false,
+    });
+    h.settle();
+    let tab = h
+        .app
+        .model()
+        .active_tab(pane)
+        .map_or_else(|| panic!("tab"), |(_, t)| t.clone());
+    assert_eq!(tab.location, local(&sub.join("deeper")));
+    assert_eq!(tab.history.back.len(), 1, "one step for the whole drag");
+
+    h.take_events();
+    h.send(Command::Back(pane));
+    h.settle();
+    assert_eq!(h.names(), ["sub", "a.txt", "b.txt", "c.txt"]);
+    let tab = h
+        .app
+        .model()
+        .active_tab(pane)
+        .map_or_else(|| panic!("tab"), |(_, t)| t.clone());
+    assert!(tab.selection.contains(&a), "the selection came back");
+    assert_eq!(tab.history.back, [] as [model::HistoryEntry; 0]);
+    assert!(h.take_events().iter().any(|e| matches!(
+        e,
+        Event::SelectionChanged { ids, .. } if ids == &[a]
+    )));
+}
+
+#[test]
+fn pin_and_unpin_edit_the_settings_and_undo() {
+    let mut h = harness();
+    h.settle();
+    let pane = h.app.model().focused;
+    let (a, sub) = (h.root.path().join("a.txt"), h.root.path().join("sub"));
+
+    // Through the command, at a position.
+    h.send(Command::Pin {
+        items: vec![local(&a)],
+        at: None,
+    });
+    h.send(Command::Pin {
+        items: vec![local(&sub)],
+        at: Some(0),
+    });
+    assert_eq!(h.app.model().settings.pinned, [local(&sub), local(&a)]);
+    assert_eq!(h.app.undo_label().as_deref(), Some("Pin sub"));
+    h.send(Command::Undo);
+    assert_eq!(h.app.model().settings.pinned, [local(&a)]);
+    h.send(Command::Redo);
+    assert_eq!(h.app.model().settings.pinned, [local(&sub), local(&a)]);
+    h.send(Command::Unpin(local(&sub)));
+    assert_eq!(h.app.model().settings.pinned, [local(&a)]);
+    assert_eq!(h.app.undo_label().as_deref(), Some("Unpin sub"));
+    h.send(Command::Undo);
+    assert_eq!(h.app.model().settings.pinned, [local(&sub), local(&a)]);
+    h.settle();
+    let text = fs::read_to_string(h.app.settings_path()).unwrap_or_else(|e| panic!("{e}"));
+    assert!(
+        text.contains("local:"),
+        "pins are saved as locations: {text}"
+    );
+
+    // Through the actions: Unpin shows for a pinned selection, Pin otherwise.
+    h.send(Command::Select {
+        pane,
+        change: SelectionChange::Set(vec![id_of(&h, "a.txt")]),
+    });
+    let ctx = h
+        .app
+        .action_ctx(pane, Invocation::ContextMenu)
+        .unwrap_or_else(|| panic!("ctx"));
+    let availability = |h: &Harness, id: &'static str, ctx: &ext::ActionCtx| {
+        h.app
+            .registry()
+            .actions()
+            .iter()
+            .find(|a| a.id() == ActionId(id))
+            .map(|a| a.availability(ctx))
+    };
+    assert_eq!(
+        availability(&h, "core.unpin", &ctx),
+        Some(ext::Availability::Enabled)
+    );
+    assert_eq!(
+        availability(&h, "core.pin", &ctx),
+        Some(ext::Availability::Hidden)
+    );
+    h.send(Command::Run {
+        action: ActionId("core.unpin"),
+        ctx: ctx.clone(),
+    });
+    assert_eq!(h.app.model().settings.pinned, [local(&sub)]);
+    assert_eq!(
+        availability(&h, "core.pin", &ctx),
+        Some(ext::Availability::Enabled),
+        "the label flips back"
+    );
+    h.send(Command::Run {
+        action: ActionId("core.pin"),
+        ctx,
+    });
+    assert_eq!(h.app.model().settings.pinned, [local(&sub), local(&a)]);
+    h.send(Command::Undo);
+    assert_eq!(h.app.model().settings.pinned, [local(&sub)]);
+}
+
+#[test]
+fn transfer_noops_are_the_spec_cases() {
+    let l = |p: &str| Location::new(vfs_local::PROVIDER_ID, p);
+    assert!(super::transfer_is_noop(&l("/a/b.txt"), &l("/a")));
+    assert!(super::transfer_is_noop(&l("/a/b"), &l("/a/b")));
+    assert!(super::transfer_is_noop(&l("/a/b"), &l("/a/b/c/d")));
+    assert!(!super::transfer_is_noop(&l("/a/b"), &l("/a/bc")));
+    assert!(!super::transfer_is_noop(&l("/a/b.txt"), &l("/x")));
+    assert!(!super::transfer_is_noop(
+        &l("/a/b.txt"),
+        &Location::new(types::ProviderId("other"), "/a")
+    ));
+}

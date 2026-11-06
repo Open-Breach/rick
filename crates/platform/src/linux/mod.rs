@@ -3,7 +3,6 @@
 
 mod trash;
 
-use std::fmt::Write as _;
 use std::fs;
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::path::{Path, PathBuf};
@@ -14,8 +13,8 @@ use types::Error;
 use crate::Native;
 use crate::time::iso8601;
 use crate::traits::{
-    Chrome, ConfigDir, ControlsSide, OpenWith, Properties, PropertiesOutcome, Trash, TrashedItem,
-    WindowChrome,
+    Chrome, ConfigDir, ControlsSide, DragSource, OpenWith, Properties, PropertiesOutcome, Trash,
+    TrashedItem, WindowChrome,
 };
 
 impl Trash for Native {
@@ -80,18 +79,7 @@ impl OpenWith for Native {
     }
 }
 
-/// Percent-encodes everything but the unreserved characters and `/`.
-pub(crate) fn percent_encode(bytes: &[u8]) -> String {
-    let mut out = String::with_capacity(bytes.len());
-    for &b in bytes {
-        if b.is_ascii_alphanumeric() || matches!(b, b'-' | b'.' | b'_' | b'~' | b'/') {
-            out.push(char::from(b));
-        } else {
-            let _ = write!(out, "%{b:02X}");
-        }
-    }
-    out
-}
+pub(crate) use crate::paths::percent_encode;
 
 impl Properties for Native {
     fn show(&self, path: &Path) -> Result<PropertiesOutcome, Error> {
@@ -204,6 +192,21 @@ impl Chrome for Native {
     }
 }
 
+impl DragSource for Native {
+    /// Not available yet: a Wayland drag source needs the window's
+    /// `wl_data_device` and the serial of the press that started the drag,
+    /// an X11 one the XDND handshake on the window; `winit` 0.30 behind
+    /// `eframe` 0.36 keeps both to itself and exposes drop reception only
+    /// (QUESTIONS.md). The URIs are computed so a caller can log them.
+    fn start_drag(&self, paths: &[PathBuf]) -> Result<(), Error> {
+        let uris: Vec<String> = paths.iter().map(|p| crate::paths::file_uri(p)).collect();
+        tracing::debug!(?uris, "platform drag not started");
+        Err(Error::Unsupported(
+            "starting a drag needs the Wayland data device or XDND, which winit does not expose",
+        ))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -242,5 +245,13 @@ mod tests {
     fn percent_encoding_leaves_safe_bytes_alone() {
         assert_eq!(percent_encode(b"/tmp/a b%.txt"), "/tmp/a%20b%25.txt");
         assert_eq!(rwx(0o754), "rwxr-xr--");
+    }
+
+    #[test]
+    fn the_drag_source_says_why_it_cannot_start() {
+        assert!(matches!(
+            Native.start_drag(&[PathBuf::from("/tmp/x")]),
+            Err(Error::Unsupported(_))
+        ));
     }
 }

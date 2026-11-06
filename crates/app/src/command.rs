@@ -8,6 +8,18 @@ use model::{
 };
 use types::{Entry, EntryId, Error, JobId, Location, Progress};
 
+/// Whether a transfer moves or copies, or asks on drop.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TransferMode {
+    /// Move: a rename within one provider, copy and remove across providers.
+    Move,
+    /// Copy through the provider's fast path.
+    Copy,
+    /// Ask with the move/copy/cancel prompt first; the UI answers it and
+    /// sends `Move` or `Copy` in its place.
+    Ask,
+}
+
 /// What the UI asks the application to do. The UI never touches the model;
 /// it sends one of these and re-renders from the model afterwards.
 #[derive(Debug, Clone)]
@@ -123,6 +135,52 @@ pub enum Command {
         /// Width and height in pixels.
         size: u32,
     },
+    /// Drag-and-drop (and later Move to / Copy to): move or copy `items`
+    /// into `to`. `Ask` opens the move/copy prompt first. Runs as one job;
+    /// a move within a provider is a rename, a copy uses the provider's
+    /// fast path.
+    Transfer {
+        /// The entries, from the listing of `from`.
+        items: Vec<EntryId>,
+        /// The pane the entries were dragged out of.
+        from: PaneId,
+        /// The folder they go into.
+        to: Location,
+        /// Move, copy, or ask.
+        mode: TransferMode,
+    },
+    /// A drop from outside the process: the same as [`Command::Transfer`],
+    /// but the items are locations, since they are in no pane's listing.
+    Receive {
+        /// The dropped entries.
+        items: Vec<Location>,
+        /// The folder they go into.
+        to: Location,
+        /// Move or copy; `Ask` is answered by the UI before it gets here.
+        mode: TransferMode,
+    },
+    /// Spring-loading step while a drag is in progress: navigates like
+    /// `Navigate` but records history only on the first step of a drag
+    /// (`first: true`), with the selection of the starting location, so one
+    /// Back returns there.
+    SpringLoad {
+        /// The pane.
+        pane: PaneId,
+        /// The folder to drill into.
+        to: Location,
+        /// Whether this is the drag's first step in the pane.
+        first: bool,
+    },
+    /// Pin to the side panel, undoable; `at` is the position in the Pinned
+    /// list, `None` the end.
+    Pin {
+        /// The folders and files to pin, in order.
+        items: Vec<Location>,
+        /// Where to insert them.
+        at: Option<usize>,
+    },
+    /// Unpin from the side panel, undoable.
+    Unpin(Location),
 }
 
 /// What the application tells the UI happened. The model already reflects

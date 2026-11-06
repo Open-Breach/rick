@@ -13,7 +13,7 @@ use types::{Entry, Location};
 use vfs::Mounts;
 use vfs_local::LocalProvider;
 
-use super::{ClipMode, Core};
+use super::{ClipMode, Core, PinStore, TransferKind};
 
 /// A host whose answers the test scripts.
 #[derive(Default)]
@@ -42,9 +42,39 @@ impl UiHost for Scripted {
     fn show(&self, _title: &str, _text: &str) {}
 }
 
+/// A pinned list in memory.
+#[derive(Default)]
+struct Pins(Mutex<Vec<Location>>);
+
+impl PinStore for Pins {
+    fn pinned(&self) -> Vec<Location> {
+        self.0
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+    }
+    fn pin(&self, items: Vec<Location>, at: Option<usize>) {
+        let mut pinned = self.0.lock().unwrap_or_else(PoisonError::into_inner);
+        let mut index = at.map_or(pinned.len(), |at| at.min(pinned.len()));
+        for item in items {
+            if !pinned.contains(&item) {
+                pinned.insert(index, item);
+                index += 1;
+            }
+        }
+    }
+    fn unpin(&self, item: &Location) {
+        self.0
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .retain(|p| p != item);
+    }
+}
+
 struct Harness {
     dir: tempfile::TempDir,
     fake: Arc<Fake>,
+    pins: Arc<Pins>,
     mounts: Arc<Mounts>,
     registry: Registry,
     core_clipboard: Arc<dyn Fn() -> Option<super::Clipboard> + Send + Sync>,
@@ -57,13 +87,15 @@ fn harness() -> Harness {
     let fake = Arc::new(Fake::new().unwrap_or_else(|e| panic!("{e}")));
     let mounts = Arc::new(Mounts::new());
     mounts.mount(Arc::new(LocalProvider::new(fake.clone())));
-    let core = Arc::new(Core::new(Arc::clone(&mounts), fake.clone()));
+    let pins = Arc::new(Pins::default());
+    let core = Arc::new(Core::new(Arc::clone(&mounts), fake.clone(), pins.clone()));
     let mut registry = Registry::new();
     registry.load(&*core).unwrap_or_else(|e| panic!("{e}"));
     let clip = Arc::clone(&core);
     Harness {
         dir,
         fake,
+        pins,
         mounts,
         registry,
         core_clipboard: Arc::new(move || clip.clipboard()),
@@ -391,12 +423,19 @@ fn copy_path_open_and_reveal_go_to_the_platform() {
 #[test]
 fn every_action_has_an_id_label_and_core_group() {
     let h = harness();
-    assert_eq!(h.registry.actions().len(), 14);
+    assert_eq!(h.registry.actions().len(), 16);
     for action in h.registry.actions() {
         assert!(action.id().0.starts_with("core."), "{}", action.id().0);
         assert_ne!(action.label(), "");
         assert_eq!(action.group(), ext::ActionGroup::Core);
-        assert!(action.default_shortcut().is_some(), "{}", action.id().0);
+        // Pin and Unpin have no shortcut in the spec's tables.
+        let unbound = matches!(action.id().0, "core.pin" | "core.unpin");
+        assert_eq!(
+            action.default_shortcut().is_some(),
+            !unbound,
+            "{}",
+            action.id().0
+        );
     }
     for always in ["core.new_file", "core.new_folder", "core.reveal"] {
         assert_eq!(
@@ -405,7 +444,153 @@ fn every_action_has_an_id_label_and_core_group() {
             "{always}"
         );
     }
-    let core = Core::new(Arc::clone(&h.mounts), h.fake.clone());
+    let core = Core::new(Arc::clone(&h.mounts), h.fake.clone(), h.pins.clone());
     assert_eq!(core.manifest().id, types::ExtId("core"));
     assert!(format!("{core:?}").contains("core"));
+}
+
+#[test]
+fn pin_and_unpin_flip_and_undo() {
+    let h = harness();
+    let (file, folder) = (h.dir.path().join("a.txt"), h.dir.path().join("sub"));
+    write(&file, "A");
+    fs::create_dir(&folder).unwrap_or_else(|e| panic!("{e}"));
+    let ctx = h.ctx(h.dir.path(), &[&file, &folder]);
+    assert_eq!(
+        h.action("core.unpin").availability(&ctx),
+        Availability::Hidden,
+        "nothing pinned yet"
+    );
+
+    let outcome = h.run("core.pin", ctx.clone());
+    let ActionOutcome::Undoable(pin) = outcome else {
+        panic!("{outcome:?}");
+    };
+    assert_eq!(pin.label(), "Pin 2 items");
+    assert_eq!(
+        h.pins.pinned(),
+        [tests_local(&file), tests_local(&folder)],
+        "both pinned, at the end, in order"
+    );
+    assert_eq!(
+        h.action("core.pin").availability(&ctx),
+        Availability::Hidden
+    );
+    assert_eq!(
+        h.action("core.unpin").availability(&ctx),
+        Availability::Enabled,
+        "the label flips once everything is pinned"
+    );
+    // A mixed selection offers Pin again.
+    let mixed = h.ctx(h.dir.path(), &[&file]);
+    write(&h.dir.path().join("b.txt"), "B");
+    let mixed_ctx = h.ctx(h.dir.path(), &[&file, &h.dir.path().join("b.txt")]);
+    assert_eq!(
+        h.action("core.pin").availability(&mixed_ctx),
+        Availability::Enabled
+    );
+    assert_eq!(
+        h.action("core.unpin").availability(&mixed_ctx),
+        Availability::Hidden
+    );
+
+    pin.undo(&h.jobs).unwrap_or_else(|e| panic!("{e}"));
+    assert!(h.pins.pinned().is_empty(), "undo removes what pin added");
+    pin.redo(&h.jobs).unwrap_or_else(|e| panic!("{e}"));
+    assert_eq!(h.pins.pinned().len(), 2);
+
+    let outcome = h.run("core.unpin", mixed);
+    let ActionOutcome::Undoable(unpin) = outcome else {
+        panic!("{outcome:?}");
+    };
+    assert_eq!(unpin.label(), "Unpin a.txt");
+    assert_eq!(h.pins.pinned(), [tests_local(&folder)]);
+    unpin.undo(&h.jobs).unwrap_or_else(|e| panic!("{e}"));
+    assert_eq!(
+        h.pins.pinned(),
+        [tests_local(&file), tests_local(&folder)],
+        "undo puts it back at its old index"
+    );
+}
+
+#[test]
+fn pin_command_inserts_at_a_position_and_skips_what_is_pinned() {
+    let h = harness();
+    let pins: Arc<dyn PinStore> = h.pins.clone();
+    let a = tests_local(&h.dir.path().join("a"));
+    let b = tests_local(&h.dir.path().join("b"));
+    let c = tests_local(&h.dir.path().join("c"));
+    super::pin_command(Arc::clone(&pins), vec![a.clone(), b.clone()], None)
+        .redo(&h.jobs)
+        .unwrap_or_else(|e| panic!("{e}"));
+    let command = super::pin_command(Arc::clone(&pins), vec![c.clone(), a.clone()], Some(1));
+    command.redo(&h.jobs).unwrap_or_else(|e| panic!("{e}"));
+    assert_eq!(h.pins.pinned(), [a.clone(), c.clone(), b.clone()]);
+    assert_eq!(command.label(), "Pin c", "only what was not pinned counts");
+    command.undo(&h.jobs).unwrap_or_else(|e| panic!("{e}"));
+    assert_eq!(h.pins.pinned(), [a.clone(), b.clone()], "a stays pinned");
+    let unpin = super::unpin_command(Arc::clone(&pins), a.clone());
+    unpin.redo(&h.jobs).unwrap_or_else(|e| panic!("{e}"));
+    assert_eq!(h.pins.pinned(), std::slice::from_ref(&b));
+    unpin.undo(&h.jobs).unwrap_or_else(|e| panic!("{e}"));
+    assert_eq!(h.pins.pinned(), [a, b]);
+}
+
+#[test]
+fn transfer_moves_with_undo_and_copies_without() {
+    let h = harness();
+    let (src, dst) = (h.dir.path().join("src"), h.dir.path().join("dst"));
+    fs::create_dir_all(src.join("folder")).unwrap_or_else(|e| panic!("{e}"));
+    fs::create_dir_all(&dst).unwrap_or_else(|e| panic!("{e}"));
+    write(&src.join("a.txt"), "A");
+    write(&src.join("folder/inner.txt"), "I");
+
+    let outcome = super::transfer(
+        &h.jobs,
+        Arc::clone(&h.mounts),
+        &[
+            tests_local(&src.join("a.txt")),
+            tests_local(&src.join("folder")),
+        ],
+        &tests_local(&dst),
+        TransferKind::Move,
+    )
+    .unwrap_or_else(|e| panic!("{e}"));
+    h.settle();
+    let ActionOutcome::Undoable(command) = outcome else {
+        panic!("{outcome:?}");
+    };
+    assert_eq!(command.label(), "Move 2 items to dst");
+    assert!(!src.join("a.txt").exists());
+    assert_eq!(fs::read_to_string(dst.join("a.txt")).ok(), Some("A".into()));
+    assert!(dst.join("folder/inner.txt").exists());
+    command.undo(&h.jobs).unwrap_or_else(|e| panic!("{e}"));
+    h.settle();
+    assert!(src.join("a.txt").exists());
+    assert!(src.join("folder/inner.txt").exists());
+    assert!(!dst.join("a.txt").exists());
+
+    let outcome = super::transfer(
+        &h.jobs,
+        Arc::clone(&h.mounts),
+        &[tests_local(&src.join("a.txt"))],
+        &tests_local(&dst),
+        TransferKind::Copy,
+    )
+    .unwrap_or_else(|e| panic!("{e}"));
+    h.settle();
+    assert!(matches!(outcome, ActionOutcome::Started(_)), "{outcome:?}");
+    assert!(src.join("a.txt").exists(), "a copy leaves the source");
+    assert_eq!(fs::read_to_string(dst.join("a.txt")).ok(), Some("A".into()));
+
+    assert!(matches!(
+        super::transfer(
+            &h.jobs,
+            Arc::clone(&h.mounts),
+            &[],
+            &tests_local(&dst),
+            TransferKind::Copy,
+        ),
+        Err(types::Error::Unsupported(_))
+    ));
 }

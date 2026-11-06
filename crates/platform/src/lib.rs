@@ -1,8 +1,9 @@
 //! Every line of per-OS code in Rick, behind one trait set.
 //!
 //! Other crates program against the traits here and never against an
-//! operating system: [`Trash`], [`OpenWith`], [`Properties`], [`ConfigDir`]
-//! and [`NativeDialogs`], bundled as [`Platform`]. [`Native`] is the real
+//! operating system: [`Trash`], [`OpenWith`], [`Properties`], [`ConfigDir`],
+//! [`NativeDialogs`], [`Clipboard`], [`Chrome`] and [`DragSource`], bundled
+//! as [`Platform`]. [`Native`] is the real
 //! implementation for the OS the binary runs on; [`Fake`] is the one tests
 //! use, with a private trash directory and recorded calls.
 //!
@@ -41,8 +42,8 @@ compile_error!("Rick supports Linux, macOS and Windows");
 pub use async_trait::async_trait;
 pub use fake::Fake;
 pub use traits::{
-    Chrome, Clipboard, ConfigDir, ControlsSide, DialogFilter, NativeDialogs, OpenWith, Platform,
-    Properties, PropertiesOutcome, Trash, TrashedItem, WindowChrome,
+    Chrome, Clipboard, ConfigDir, ControlsSide, DialogFilter, DragSource, NativeDialogs, OpenWith,
+    Platform, Properties, PropertiesOutcome, Trash, TrashedItem, WindowChrome,
 };
 
 /// The platform the binary runs on.

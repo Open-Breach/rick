@@ -490,3 +490,80 @@ Once answered, an entry keeps its number and gains a `Decided (date):` line.
     monospace line's row count follows from its length and the pane can
     place 200 000 lines without laying them out; a line whose real row
     count differs (tabs, wide glyphs) corrects the index on the next frame.
+58. (drag and drop) The spec's `Transfer` carries `EntryId`s and the source
+    pane; items dropped from another application or another Rick process
+    have neither, since they are in no pane's listing.
+    Assumed: a `Command::Receive { items: Vec<Location>, to, mode }` next to
+    `Transfer`, the same job behind it, with the outside rule (copy unless
+    Shift) already applied by the UI. No other shape of the spec's enum is
+    touched.
+
+59. (drag and drop) `TransferMode::Ask` "opens the move/copy prompt first",
+    but `UiHost` offers yes/no and a text line only, and the prompt sits at
+    the drop point, which only the UI knows.
+    Assumed: the UI shows the prompt and sends `Move` or `Copy` in its
+    place; an `Ask` that reaches the app is answered with a warning and
+    does nothing. The prompt is Move, Copy and Cancel at the cursor;
+    Escape cancels it.
+
+60. (drag and drop) The spec says a conflict on an existing name "asks once
+    with skip, overwrite, rename or apply-to-all", and the operations area
+    has "pause". Neither exists today: Paste fails on the first existing
+    name and the job runner has no pause.
+    Assumed: a drop behaves as Paste does (the job fails on the first
+    conflict with the error shown), and the operations area offers cancel
+    only, as before. The conflict prompt and pause are their own issue; the
+    transfer job is written so a conflict policy drops into the pair loop.
+
+61. (drag and drop) "Same volume moves, across volumes copies" needs the
+    volume of the target folder; a `Location` has none.
+    Assumed: the device half of the local `EntryId`s decides: the dragged
+    items' device against the device of the target folder's entry (a
+    folder row) or of the entries listed in the target pane (its space, a
+    breadcrumb segment, a tab header). An empty target listing, the Home
+    entry and a folder row that is a mount point read as the same volume,
+    so the drag moves; the rename then falls back to a copy and remove
+    inside the job when the device differs, so the outcome is the same and
+    only the undo entry is missing.
+
+62. (drag and drop) `egui` 0.36 over `winit` 0.30 receives hovered and
+    dropped files on Linux (Wayland and X11), macOS and Windows but
+    reports no cursor position with them, and offers no way to start a
+    drag: a Wayland source needs the `wl_data_device` and the press serial,
+    X11 the XDND handshake on the window, macOS the `NSView` and the
+    `NSEvent` of the press, Windows `DoDragDrop` on the window's message
+    loop, none of which `eframe` hands out.
+    Assumed: drop reception goes through egui's files on all three
+    platforms; where the backend gives no position the drop lands in the
+    focused pane's folder. The drag source is the `platform::DragSource`
+    hook, called with the items' `file://` URIs when the cursor leaves the
+    window; the three native implementations return `Unsupported` with the
+    reason until the backend exposes what they need (winit's
+    `DragEntered`/`DragMoved` events and a drag-source API are on its main
+    branch), and the drag then stays inside the window. The fake platform
+    records the URIs, which is what the acceptance test checks.
+
+63. (drag and drop) A pinned entry is a `Location`; the spec wants a pinned
+    folder to open in the pane and a pinned file to open its folder with
+    the file selected, and the UI has no way to tell the two apart without
+    looking at the file system.
+    Assumed: the side panel asks the file system for the kind of a local
+    pinned path when it is clicked (one metadata call) and takes a pinned
+    location of any other provider for a folder. Pinned locations are
+    written as `provider:path` strings; a bare path in an older file is
+    read as local.
+
+64. (drag and drop) The spec's targets include "a mounted volume under
+    Network", and the Network section holds nothing yet.
+    Assumed: Home is the one side-panel folder target today; volumes join
+    it when the Network section is filled.
+
+65. (drag and drop) The spec has `Pin to side panel` in the context menu's
+    Open group "of every entry"; actions carry a fixed label, and the flip
+    to `Unpin` depends on the selection.
+    Assumed: two actions, `core.pin` and `core.unpin`, each hidden when the
+    other applies (Pin when everything selected is pinned, Unpin otherwise),
+    so menu and palette show one of them; the pinned list stays in the
+    settings and the actions reach it through a `PinStore` the app provides.
+    Spring-loading into a tab header switches the pane to that tab and
+    "return" switches back; a drop on a header never switches.

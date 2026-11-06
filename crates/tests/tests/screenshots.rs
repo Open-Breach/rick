@@ -243,6 +243,105 @@ fn screenshots_of_the_chrome() {
     shoot(&mut harness, "narrow-collapsed-breadcrumb");
 }
 
+/// Presses on the row labelled `label` and pulls it to `to` in steps, so
+/// egui takes it for a drag; the button stays down.
+fn pull(harness: &mut Harness<'_, RickUi>, label: &str, to: egui::Pos2) {
+    use egui_kittest::kittest::Queryable as _;
+    let from = harness.get_by_label(label).rect().center();
+    harness.event(egui::Event::PointerMoved(from));
+    harness.step();
+    harness.event(egui::Event::PointerButton {
+        pos: from,
+        button: egui::PointerButton::Primary,
+        pressed: true,
+        modifiers: egui::Modifiers::NONE,
+    });
+    harness.step();
+    for i in 1..=8u8 {
+        let t = f32::from(i) / 8.0;
+        harness.event(egui::Event::PointerMoved(from + (to - from) * t));
+        harness.step();
+    }
+    harness.step();
+}
+
+fn drop(harness: &mut Harness<'_, RickUi>, at: egui::Pos2) {
+    harness.event(egui::Event::PointerButton {
+        pos: at,
+        button: egui::PointerButton::Primary,
+        pressed: false,
+        modifiers: egui::Modifiers::NONE,
+    });
+    harness.step();
+    settle(harness);
+}
+
+/// Drag and drop: a drag in progress with its ghost and indicator, the
+/// spring-loaded folder, and a drop onto Pinned. The fourth picture the
+/// issue asks for, a drag from Rick into the system file manager, needs
+/// a desktop and a drag source the backend does not offer (QUESTIONS.md
+/// 62), so it cannot be rendered here.
+#[test]
+#[ignore = "needs a wgpu adapter; CI runs it and uploads the images"]
+fn screenshots_of_drag_and_drop() {
+    use egui_kittest::kittest::Queryable as _;
+    let (_dir, deep) = sample_tree();
+    let mut harness = shell(&deep, egui::vec2(1280.0, 800.0));
+    harness.state_mut().app_mut().handle(
+        app::Command::Settings(model::SettingsChange::SpringDelay(600)),
+        &mut Vec::new(),
+    );
+    settle(&mut harness);
+
+    // Three pictures selected and pulled over the `raw` folder: the ghost
+    // with its count badge and the move indicator.
+    let pane = harness.state().app().model().focused;
+    let ids: Vec<types::EntryId> = harness
+        .state()
+        .app()
+        .model()
+        .active_tab(pane)
+        .map(|(_, t)| {
+            t.listing
+                .rows()
+                .filter(|e| e.name.starts_with("IMG_"))
+                .take(3)
+                .map(|e| e.id)
+                .collect()
+        })
+        .unwrap_or_default();
+    harness.state_mut().app_mut().handle(
+        app::Command::Select {
+            pane,
+            change: model::SelectionChange::Set(ids),
+        },
+        &mut Vec::new(),
+    );
+    settle(&mut harness);
+    let raw = harness.get_by_label("raw").rect().center();
+    pull(&mut harness, "IMG_1200.png", raw);
+    shoot(&mut harness, "dnd-ghost-and-indicator");
+
+    // Held there: the pane spring-loads into `raw`.
+    for _ in 0..4 {
+        harness.step();
+    }
+    settle(&mut harness);
+    shoot(&mut harness, "dnd-spring-loaded-folder");
+    harness.key_press(egui::Key::Escape);
+    harness.step();
+    drop(&mut harness, raw);
+
+    // A drop onto the Pinned header.
+    let mut harness = shell(&deep, egui::vec2(1280.0, 800.0));
+    let pinned = harness.get_by_label("Pinned").rect().center();
+    pull(&mut harness, "notes.md", pinned);
+    shoot(&mut harness, "dnd-over-pinned");
+    drop(&mut harness, pinned);
+    harness.get_by_label(&format!("{} notes.md", ui_egui::icons::PIN));
+    shoot(&mut harness, "dnd-dropped-onto-pinned");
+}
+
 #[test]
 #[ignore = "needs a wgpu adapter; CI runs it and uploads the images"]
 fn screenshots_of_the_preview_pane() {

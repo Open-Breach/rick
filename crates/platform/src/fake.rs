@@ -11,8 +11,8 @@ use tempfile::TempDir;
 use types::Error;
 
 use crate::traits::{
-    Chrome, Clipboard, ConfigDir, ControlsSide, DialogFilter, NativeDialogs, OpenWith, Properties,
-    PropertiesOutcome, Trash, TrashedItem, WindowChrome,
+    Chrome, Clipboard, ConfigDir, ControlsSide, DialogFilter, DragSource, NativeDialogs, OpenWith,
+    Properties, PropertiesOutcome, Trash, TrashedItem, WindowChrome,
 };
 
 /// A platform that touches nothing outside its own temporary directory.
@@ -27,6 +27,7 @@ pub struct Fake {
     opened: Mutex<Vec<PathBuf>>,
     revealed: Mutex<Vec<PathBuf>>,
     clipboard: Mutex<Option<String>>,
+    dragged: Mutex<Vec<Vec<String>>>,
     answers: Mutex<Answers>,
 }
 
@@ -61,6 +62,7 @@ impl Fake {
             opened: Mutex::new(Vec::new()),
             revealed: Mutex::new(Vec::new()),
             clipboard: Mutex::new(None),
+            dragged: Mutex::new(Vec::new()),
             answers: Mutex::new(Answers::default()),
         })
     }
@@ -81,6 +83,13 @@ impl Fake {
     #[must_use]
     pub fn clipboard_text(&self) -> Option<String> {
         lock(&self.clipboard).clone()
+    }
+
+    /// The file URIs of every drag handed to [`DragSource::start_drag`],
+    /// oldest first.
+    #[must_use]
+    pub fn dragged(&self) -> Vec<Vec<String>> {
+        lock(&self.dragged).clone()
     }
 
     /// What `pick_folder` answers from now on.
@@ -165,6 +174,13 @@ impl Properties for Fake {
 impl Clipboard for Fake {
     fn set_text(&self, text: &str) -> Result<(), Error> {
         *lock(&self.clipboard) = Some(text.to_owned());
+        Ok(())
+    }
+}
+
+impl DragSource for Fake {
+    fn start_drag(&self, paths: &[PathBuf]) -> Result<(), Error> {
+        lock(&self.dragged).push(paths.iter().map(|p| crate::paths::file_uri(p)).collect());
         Ok(())
     }
 }
@@ -258,6 +274,11 @@ mod tests {
         assert!(fake.config_dir().starts_with(fake.dir.path()));
         fake.set_text("/a\n/b").unwrap_or_else(|e| panic!("{e}"));
         assert_eq!(fake.clipboard_text().as_deref(), Some("/a\n/b"));
+        fake.start_drag(&[PathBuf::from("/a b")])
+            .unwrap_or_else(|e| panic!("{e}"));
+        let dragged = fake.dragged();
+        assert_eq!(dragged.len(), 1);
+        assert!(dragged[0][0].ends_with("/a%20b"), "{dragged:?}");
         assert!(matches!(
             fake.show(fake.dir.path()),
             Ok(PropertiesOutcome::Rows(rows)) if rows[0].0 == "Name"

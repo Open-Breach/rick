@@ -11,6 +11,7 @@ types = { workspace = true }
 runtime = { workspace = true }
 platform = { workspace = true }
 ext = { workspace = true }
+vfs-local = { workspace = true }
 model = { workspace = true }
 app = { workspace = true }
 chrono = { workspace = true }

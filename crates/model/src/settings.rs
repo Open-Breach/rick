@@ -4,9 +4,9 @@
 //! is read and written by `app`; the model only carries the values.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
+use types::{Location, ProviderId};
 
 use crate::listing::{Column, SortDir};
 
@@ -71,11 +71,92 @@ pub struct Settings {
     /// The side panel: shown or hidden, which side, its width and which of
     /// its sections are folded.
     pub side_panel: SidePanel,
-    /// Locations pinned to the side panel, in display order.
-    pub pinned: Vec<PathBuf>,
+    /// Folders and files pinned to the side panel, in display order.
+    /// Written as `provider:path` strings; a bare path is a local one.
+    #[serde(with = "pinned_toml")]
+    pub pinned: Vec<Location>,
+    /// Drag and drop: the spring-loading delay and where a pane is left
+    /// after a drag.
+    pub drag: Drag,
     /// The preview pane: text defaults and the pinned info section per
     /// content kind.
     pub preview: Preview,
+}
+
+/// The `[drag]` table.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Drag {
+    /// How long a folder row, tab header or breadcrumb segment is hovered
+    /// before the pane spring-loads into it, in milliseconds.
+    pub spring_delay_ms: u64,
+    /// Where a pane that spring-loaded during a drag is left when the drag
+    /// ends.
+    pub after: AfterDrag,
+}
+
+impl Default for Drag {
+    fn default() -> Self {
+        Self {
+            spring_delay_ms: 1000,
+            after: AfterDrag::Stay,
+        }
+    }
+}
+
+/// *After a drag: stay in the folder / return to where the drag started.*
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum AfterDrag {
+    /// The pane stays where it drilled to.
+    #[default]
+    Stay,
+    /// The pane goes back to where the drag started.
+    Return,
+}
+
+/// Pinned locations in the settings file: `"local:/home/me"`. A string
+/// without a provider prefix is read as a local path, which is how older
+/// files wrote them.
+mod pinned_toml {
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+    use types::Location;
+
+    pub(super) fn serialize<S: Serializer>(
+        pinned: &[Location],
+        serializer: S,
+    ) -> Result<S::Ok, S::Error> {
+        let texts: Vec<String> = pinned.iter().map(ToString::to_string).collect();
+        texts.serialize(serializer)
+    }
+
+    pub(super) fn deserialize<'de, D: Deserializer<'de>>(
+        deserializer: D,
+    ) -> Result<Vec<Location>, D::Error> {
+        let texts: Vec<String> = Vec::deserialize(deserializer)?;
+        Ok(texts
+            .iter()
+            .map(|text| super::parse_location(text))
+            .collect())
+    }
+}
+
+/// `provider:path`, or a bare local path. A Windows drive letter is a path,
+/// not a provider: the provider part never has a separator and is never one
+/// letter long.
+#[must_use]
+pub fn parse_location(text: &str) -> Location {
+    match text.split_once(':') {
+        Some((provider, path))
+            if provider.len() > 1
+                && provider
+                    .bytes()
+                    .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-') =>
+        {
+            Location::new(ProviderId::intern(provider), path)
+        }
+        _ => Location::new(ProviderId("local"), text),
+    }
 }
 
 /// The preview pane's persisted state.
@@ -200,6 +281,7 @@ impl Default for Settings {
             shortcuts: BTreeMap::new(),
             side_panel: SidePanel::default(),
             pinned: Vec::new(),
+            drag: Drag::default(),
             preview: Preview::default(),
         }
     }
@@ -248,11 +330,20 @@ pub enum SettingsChange {
         /// Folded shut, or open.
         folded: bool,
     },
-    /// Pin a location to the side panel; a location already pinned stays
-    /// where it is.
-    Pin(PathBuf),
+    /// Pin locations to the side panel at `at`, or at the end; a location
+    /// already pinned stays where it is.
+    Pin {
+        /// What to pin, in order.
+        items: Vec<Location>,
+        /// The index to insert at; `None` appends.
+        at: Option<usize>,
+    },
     /// Unpin a location.
-    Unpin(PathBuf),
+    Unpin(Location),
+    /// The spring-loading delay in milliseconds.
+    SpringDelay(u64),
+    /// Where a pane is left after a drag.
+    AfterDrag(AfterDrag),
     /// Line numbers in text previews, the new default.
     PreviewLineNumbers(bool),
     /// Word wrap in text previews, the new default.
@@ -301,12 +392,18 @@ impl Settings {
                     self.side_panel.folded.remove(&section);
                 }
             }
-            SettingsChange::Pin(path) => {
-                if !self.pinned.contains(&path) {
-                    self.pinned.push(path);
+            SettingsChange::Pin { items, at } => {
+                let mut index = at.map_or(self.pinned.len(), |at| at.min(self.pinned.len()));
+                for item in items {
+                    if !self.pinned.contains(&item) {
+                        self.pinned.insert(index, item);
+                        index += 1;
+                    }
                 }
             }
-            SettingsChange::Unpin(path) => self.pinned.retain(|p| *p != path),
+            SettingsChange::Unpin(item) => self.pinned.retain(|p| *p != item),
+            SettingsChange::SpringDelay(ms) => self.drag.spring_delay_ms = ms,
+            SettingsChange::AfterDrag(after) => self.drag.after = after,
             SettingsChange::PreviewLineNumbers(v) => self.preview.text.line_numbers = v,
             SettingsChange::PreviewWrap(v) => self.preview.text.wrap = v,
             SettingsChange::PreviewPin { kind, section } => match section {
@@ -332,9 +429,33 @@ mod tests {
         assert!(!s.show_hidden);
         assert_eq!(s.sort_by, Column::Name);
         assert_eq!(s.theme, Theme::System);
+        assert_eq!(s.drag.spring_delay_ms, 1000);
+        assert_eq!(s.drag.after, AfterDrag::Stay);
         assert!(s.preview.text.line_numbers, "line numbers on");
         assert!(!s.preview.text.wrap, "wrap off");
         assert!(s.preview.pinned.is_empty());
+    }
+
+    #[test]
+    fn pinned_locations_parse_with_and_without_a_provider() {
+        assert_eq!(
+            parse_location("local:/home/me"),
+            Location::new(ProviderId("local"), "/home/me")
+        );
+        assert_eq!(
+            parse_location("/home/me"),
+            Location::new(ProviderId("local"), "/home/me")
+        );
+        assert_eq!(
+            parse_location("C:\\Users\\me"),
+            Location::new(ProviderId("local"), "C:\\Users\\me")
+        );
+        assert_eq!(
+            parse_location("sftp:/srv"),
+            Location::new(ProviderId::intern("sftp"), "/srv")
+        );
+        let text = Location::new(ProviderId("local"), "C:\\x").to_string();
+        assert_eq!(parse_location(&text).path.to_string(), "C:\\x");
     }
 
     #[test]
@@ -386,13 +507,36 @@ mod tests {
         });
         assert!(!s.folders_first);
         assert_eq!((s.sort_by, s.sort_dir), (Column::Size, SortDir::Descending));
-        let home = PathBuf::from("/home/me");
-        s.apply(SettingsChange::Pin(home.clone()));
-        s.apply(SettingsChange::Pin(home.clone()));
-        s.apply(SettingsChange::Pin(PathBuf::from("/srv")));
-        assert_eq!(s.pinned, [home.clone(), PathBuf::from("/srv")]);
+        let local = |path: &str| Location::new(ProviderId("local"), path);
+        let home = local("/home/me");
+        s.apply(SettingsChange::Pin {
+            items: vec![home.clone()],
+            at: None,
+        });
+        s.apply(SettingsChange::Pin {
+            items: vec![home.clone(), local("/srv")],
+            at: None,
+        });
+        assert_eq!(s.pinned, [home.clone(), local("/srv")]);
+        s.apply(SettingsChange::Pin {
+            items: vec![local("/opt"), local("/var")],
+            at: Some(1),
+        });
+        assert_eq!(
+            s.pinned,
+            [home.clone(), local("/opt"), local("/var"), local("/srv")]
+        );
+        s.apply(SettingsChange::Pin {
+            items: vec![local("/x")],
+            at: Some(99),
+        });
+        assert_eq!(s.pinned.last(), Some(&local("/x")), "a far index appends");
         s.apply(SettingsChange::Unpin(home));
-        assert_eq!(s.pinned, [PathBuf::from("/srv")]);
+        assert_eq!(s.pinned[0], local("/opt"));
+        s.apply(SettingsChange::SpringDelay(250));
+        s.apply(SettingsChange::AfterDrag(AfterDrag::Return));
+        assert_eq!(s.drag.spring_delay_ms, 250);
+        assert_eq!(s.drag.after, AfterDrag::Return);
         s.apply(SettingsChange::SidePanelFold {
             section: Section::Recent,
             folded: true,

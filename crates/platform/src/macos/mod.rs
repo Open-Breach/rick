@@ -12,8 +12,8 @@ use types::Error;
 
 use crate::Native;
 use crate::traits::{
-    Chrome, ConfigDir, ControlsSide, OpenWith, Properties, PropertiesOutcome, Trash, TrashedItem,
-    WindowChrome,
+    Chrome, ConfigDir, ControlsSide, DragSource, OpenWith, Properties, PropertiesOutcome, Trash,
+    TrashedItem, WindowChrome,
 };
 
 fn utf8(path: &Path) -> Result<&str, Error> {
@@ -142,5 +142,19 @@ impl Chrome for Native {
             native_controls: true,
             native_controls_width: 78.0,
         }
+    }
+}
+
+impl DragSource for Native {
+    /// Not available yet: an `AppKit` drag starts from the `NSView` with the
+    /// `NSEvent` of the press (`beginDraggingSessionWithItems:event:source:`),
+    /// and `winit` 0.30 behind `eframe` 0.36 hands neither out; it exposes
+    /// drop reception only (QUESTIONS.md).
+    fn start_drag(&self, paths: &[PathBuf]) -> Result<(), Error> {
+        let uris: Vec<String> = paths.iter().map(|p| crate::paths::file_uri(p)).collect();
+        tracing::debug!(?uris, "platform drag not started");
+        Err(Error::Unsupported(
+            "starting a drag needs the window's NSView and the press event, which winit does not expose",
+        ))
     }
 }

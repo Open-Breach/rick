@@ -141,30 +141,12 @@ impl Action for Paste {
         let what = describe(&clipboard.items);
         match clipboard.mode {
             ClipMode::Copy => {
-                let mounts = Arc::clone(&self.0.mounts);
-                let handle = jobs.spawn_named(format!("Copy {what}"), move |job| async move {
-                    let total = pairs.len() as u64;
-                    for (done, (from, to)) in pairs.iter().enumerate() {
-                        job.progress.report(Progress::Items {
-                            done: done as u64,
-                            total: Some(total),
-                        });
-                        vfs::copy(
-                            &mounts,
-                            from,
-                            to,
-                            CopyOptions::default(),
-                            job.progress.clone(),
-                            job.cancel.clone(),
-                        )
-                        .await?;
-                    }
-                    job.progress.report(Progress::Items {
-                        done: total,
-                        total: Some(total),
-                    });
-                    Ok(())
-                });
+                let handle = spawn_copies(
+                    jobs,
+                    Arc::clone(&self.0.mounts),
+                    format!("Copy {what}"),
+                    pairs,
+                );
                 Ok(ActionOutcome::Started(handle.id))
             }
             ClipMode::Cut => {
@@ -182,10 +164,43 @@ impl Action for Paste {
 }
 
 /// Moves `pairs` forward, or back again.
-struct MoveCommand {
+pub(crate) struct MoveCommand {
+    pub(crate) mounts: Arc<Mounts>,
+    pub(crate) pairs: Vec<(Location, Location)>,
+    pub(crate) label: String,
+}
+
+/// Spawns a job that copies every pair in order, through the provider's
+/// fast path, and returns its handle.
+pub(crate) fn spawn_copies(
+    jobs: &JobRunner,
     mounts: Arc<Mounts>,
+    name: String,
     pairs: Vec<(Location, Location)>,
-    label: String,
+) -> runtime::JobHandle<()> {
+    jobs.spawn_named(name, move |job| async move {
+        let total = pairs.len() as u64;
+        for (done, (from, to)) in pairs.iter().enumerate() {
+            job.progress.report(Progress::Items {
+                done: done as u64,
+                total: Some(total),
+            });
+            vfs::copy(
+                &mounts,
+                from,
+                to,
+                CopyOptions::default(),
+                job.progress.clone(),
+                job.cancel.clone(),
+            )
+            .await?;
+        }
+        job.progress.report(Progress::Items {
+            done: total,
+            total: Some(total),
+        });
+        Ok(())
+    })
 }
 
 /// Spawns a job that moves every pair in order.
