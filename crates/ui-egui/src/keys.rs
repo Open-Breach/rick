@@ -254,14 +254,14 @@ pub const UI_INTENTS: &[IntentSpec] = &[
     spec(
         Intent::Palette,
         "nav.palette",
-        "Command palette",
+        "Search commands",
         NAV,
         &["Mod+Shift+P"],
     ),
     spec(
         Intent::QuickOpen,
         "nav.quick_open",
-        "Quick open",
+        "Search by name",
         NAV,
         &["Mod+P"],
     ),

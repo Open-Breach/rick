@@ -132,7 +132,9 @@ fn spec_rows() -> Vec<(&'static str, Intent)> {
         ("Mod+F2", Intent::BulkRename),
         ("Mod+N", action("core.new_file")),
         ("Mod+Shift+N", action("core.new_folder")),
-        ("Mod+Shift+C", action("core.copy_path")),
+        ("Mod+Shift+C", action("core.copy_path_and_name")),
+        ("Mod+Alt+C", action("core.copy_name")),
+        ("Mod+Alt+Shift+C", action("core.copy_path")),
         ("Mod+I", Intent::Inspect),
         ("Alt+Enter", Intent::Inspect),
         ("Mod+Z", Intent::Undo),
@@ -312,10 +314,11 @@ fn the_shell_shows_the_listing_and_navigates() {
         egui::Key::P,
     );
     harness.step();
-    assert!(harness.state().palette_open());
+    assert!(harness.state().search_active());
+    assert_eq!(harness.state().search_text(), ">");
     harness.key_press(egui::Key::Escape);
     harness.step();
-    assert!(!harness.state().palette_open());
+    assert!(!harness.state().search_active());
 }
 
 /// A click anywhere on a row selects it, the name included. The name is a

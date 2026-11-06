@@ -22,8 +22,8 @@
 
 pub mod dock;
 pub mod format;
-pub mod glyphs;
 pub mod host;
+pub mod icons;
 pub mod inspector;
 pub mod keys;
 pub mod menus;
@@ -31,9 +31,11 @@ pub mod palette;
 pub mod pane;
 pub mod paths;
 pub mod preview;
+pub mod search;
 pub mod settings_ui;
 pub mod shell;
 pub mod side_panel;
+pub mod thumbs;
 pub mod views;
 
 use std::sync::Arc;
@@ -51,11 +53,24 @@ pub use shell::{Dispatched, Request, RickUi, TabUi};
 /// The error eframe reports when the window or its renderer cannot be set
 /// up.
 pub fn run(title: &str, app: App, host: Arc<EguiHost>) -> eframe::Result {
+    // Rick draws its own title row. Where the system keeps its controls
+    // (macOS), the title bar goes but the window keeps its buttons; elsewhere
+    // the decorations go altogether.
+    let chrome = app.platform().window_chrome();
+    let mut viewport = egui::ViewportBuilder::default()
+        .with_title(title)
+        .with_inner_size([1100.0, 720.0])
+        .with_min_inner_size([480.0, 320.0]);
+    viewport = if chrome.native_controls {
+        viewport
+            .with_titlebar_shown(false)
+            .with_title_shown(false)
+            .with_fullsize_content_view(true)
+    } else {
+        viewport.with_decorations(false)
+    };
     let options = eframe::NativeOptions {
-        viewport: egui::ViewportBuilder::default()
-            .with_title(title)
-            .with_inner_size([1100.0, 720.0])
-            .with_min_inner_size([480.0, 320.0]),
+        viewport,
         ..Default::default()
     };
     let mut app = Some(app);

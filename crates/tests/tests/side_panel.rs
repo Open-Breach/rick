@@ -11,7 +11,7 @@ use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable as _;
 use platform::{ConfigDir, Fake};
 use tests::local;
-use ui_egui::{EguiHost, RickUi};
+use ui_egui::{EguiHost, RickUi, icons};
 
 /// A harness whose settings live in `config`, so a second one can start
 /// from what the first one saved.
@@ -112,7 +112,9 @@ fn home_navigates_the_focused_pane() {
     let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
     let (mut harness, fake) = harness(dir.path(), &dir.path().join("config"));
     assert_eq!(location(&harness), dir.path());
-    harness.get_by_label("🏠 Home").click();
+    harness
+        .get_by_label(&format!("{} Home", icons::HOME))
+        .click();
     harness.step();
     settle(&mut harness);
     assert_eq!(location(&harness), fake.home_dir());
@@ -126,30 +128,42 @@ fn pins_survive_a_restart_and_unpin_removes_them() {
     let config = dir.path().join("config");
     {
         let (mut harness, _fake) = harness(&work, &config);
-        assert!(harness.query_by_label("📌 project").is_none());
+        assert!(
+            harness
+                .query_by_label(&format!("{} project", icons::PIN))
+                .is_none()
+        );
         harness.get_by_label("Pin current folder").click();
         harness.step();
         harness.step();
-        harness.get_by_label("📌 project");
+        harness.get_by_label(&format!("{} project", icons::PIN));
         settings_contain(&mut harness, "project");
     }
     // A fresh start from the same settings file has the pin.
     let (mut harness, fake) = harness(dir.path(), &config);
-    harness.get_by_label("📌 project");
+    harness.get_by_label(&format!("{} project", icons::PIN));
     assert_eq!(location(&harness), dir.path());
-    harness.get_by_label("📌 project").click();
+    harness
+        .get_by_label(&format!("{} project", icons::PIN))
+        .click();
     harness.step();
     settle(&mut harness);
     assert_eq!(location(&harness), work);
     // Away from the pinned folder, Home still works and the pin unpins.
-    harness.get_by_label("🏠 Home").click();
+    harness
+        .get_by_label(&format!("{} Home", icons::HOME))
+        .click();
     harness.step();
     settle(&mut harness);
     assert_eq!(location(&harness), fake.home_dir());
-    harness.get_by_label("✕").click();
+    harness.get_by_label(icons::UNPIN).click();
     harness.step();
     harness.step();
-    assert!(harness.query_by_label("📌 project").is_none());
+    assert!(
+        harness
+            .query_by_label(&format!("{} project", icons::PIN))
+            .is_none()
+    );
     let text = settings_contain(&mut harness, "pinned = []");
     assert!(!text.contains("project"), "{text}");
 }
@@ -181,5 +195,5 @@ fn a_folded_section_stays_folded_across_a_restart() {
         "still folded after a restart"
     );
     harness.get_by_label("Home");
-    harness.get_by_label("🏠 Home");
+    harness.get_by_label(&format!("{} Home", icons::HOME));
 }

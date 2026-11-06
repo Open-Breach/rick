@@ -13,7 +13,10 @@ use types::Error;
 
 use crate::Native;
 use crate::time::iso8601;
-use crate::traits::{ConfigDir, OpenWith, Properties, PropertiesOutcome, Trash, TrashedItem};
+use crate::traits::{
+    Chrome, ConfigDir, ControlsSide, OpenWith, Properties, PropertiesOutcome, Trash, TrashedItem,
+    WindowChrome,
+};
 
 impl Trash for Native {
     fn trash(&self, path: &Path) -> Result<TrashedItem, Error> {
@@ -188,6 +191,16 @@ impl ConfigDir for Native {
         std::env::var_os("HOME")
             .filter(|v| !v.is_empty())
             .map_or_else(|| PathBuf::from("."), PathBuf::from)
+    }
+}
+
+impl Chrome for Native {
+    fn window_chrome(&self) -> WindowChrome {
+        WindowChrome {
+            controls: ControlsSide::Right,
+            native_controls: false,
+            native_controls_width: 0.0,
+        }
     }
 }
 

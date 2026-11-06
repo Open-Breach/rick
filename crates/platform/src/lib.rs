@@ -41,8 +41,8 @@ compile_error!("Rick supports Linux, macOS and Windows");
 pub use async_trait::async_trait;
 pub use fake::Fake;
 pub use traits::{
-    Clipboard, ConfigDir, DialogFilter, NativeDialogs, OpenWith, Platform, Properties,
-    PropertiesOutcome, Trash, TrashedItem,
+    Chrome, Clipboard, ConfigDir, ControlsSide, DialogFilter, NativeDialogs, OpenWith, Platform,
+    Properties, PropertiesOutcome, Trash, TrashedItem, WindowChrome,
 };
 
 /// The platform the binary runs on.

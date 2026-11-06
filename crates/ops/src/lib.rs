@@ -107,7 +107,9 @@ impl Extension for Core {
         reg.action(Arc::new(create::Rename(Arc::clone(s))));
         reg.action(Arc::new(create::NewFile(Arc::clone(s))));
         reg.action(Arc::new(create::NewFolder(Arc::clone(s))));
+        reg.action(Arc::new(open::CopyName(Arc::clone(s))));
         reg.action(Arc::new(open::CopyPath(Arc::clone(s))));
+        reg.action(Arc::new(open::CopyPathAndName(Arc::clone(s))));
         reg.action(Arc::new(open::OpenDefault(Arc::clone(s))));
         reg.action(Arc::new(open::Reveal(Arc::clone(s))));
         Ok(())

@@ -1092,6 +1092,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "egui-phosphor"
+version = "0.14.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3f4299551488dddaa8f757727e1eb4ffdaf277ffe6e30b413403468f5ecf4634"
+dependencies = [
+ "egui",
+]
+
+[[package]]
 name = "egui-wgpu"
 version = "0.36.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1181,10 +1190,14 @@ checksum = "5eb3f3effb2726fee23449293e67acbf6cc6ce35525b1722bd5743bb348114d5"
 dependencies = [
  "eframe",
  "egui",
+ "egui-wgpu",
+ "image",
  "kittest",
  "log",
+ "pollster 1.0.1",
  "serde",
  "toml 1.2.0+spec-1.1.0",
+ "wgpu",
 ]
 
 [[package]]
@@ -2047,7 +2060,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7518b930f6aeb75e871d32ce873c2ae46e35cef19b5a0b039d4337f651d897cd"
 dependencies = [
  "bstr",
- "hashbrown 0.16.1",
+ "hashbrown 0.17.1",
 ]
 
 [[package]]
@@ -5200,6 +5213,7 @@ dependencies = [
  "chrono",
  "eframe",
  "egui",
+ "egui-phosphor",
  "egui_dock",
  "egui_extras",
  "egui_kittest",

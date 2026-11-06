@@ -9,19 +9,20 @@ use app::{App, Command, Event};
 use egui_dock::{DockArea, NodePath, TabViewer};
 use ext::{ActionCtx, ActionId, Invocation, Level};
 use model::{
-    Column, Density, JobState, PaneId, PanelSide, SelectionChange, SettingsChange, SortDir, Tab,
-    TabId, Theme, ViewMode,
+    Column, Density, IconSize, JobState, PaneId, PanelSide, SelectionChange, SettingsChange,
+    SortDir, Tab, TabId, Theme, ViewMode,
 };
-use platform::PropertiesOutcome;
+use platform::{ControlsSide, PropertiesOutcome};
 use types::{EntryId, EntryKind, Location, Progress};
 
 use crate::dock::DockSync;
 use crate::host::{Ask, EguiHost};
 use crate::keys::{Direction, Intent, KeyMap};
-use crate::palette::Palette;
 use crate::preview::Previews;
+use crate::search::{Pick, SearchBox};
 use crate::settings_ui::ShortcutsScreen;
-use crate::{inspector, menus, pane, paths, settings_ui, side_panel};
+use crate::thumbs::Thumbnails;
+use crate::{icons, inspector, menus, pane, paths, settings_ui, side_panel};
 
 /// Per-tab view state that is the UI's business, not the model's.
 #[derive(Debug, Default)]
@@ -38,6 +39,9 @@ pub struct TabUi {
     pub focus_filter: bool,
     /// Scroll this row into view on the next frame.
     pub scroll_to: Option<usize>,
+    /// The toolbar's widget rectangles of the last frame by group ("left",
+    /// "middle", "right"), for tests that check the layout.
+    pub toolbar_rects: Vec<(&'static str, egui::Rect)>,
     /// Forget the column widths on the next frame.
     pub reset_columns: bool,
     /// How many rows the last frame could show, for Page Up and Down.
@@ -100,6 +104,8 @@ pub struct PaneCx<'a> {
     pub now: SystemTime,
     /// Whether the pane has the focus.
     pub focused: bool,
+    /// The icon view's thumbnails.
+    pub thumbnails: &'a mut Thumbnails,
 }
 
 /// One dispatched intent, for the palette's recents and for tests.
@@ -143,7 +149,7 @@ pub struct RickUi {
     requests: Vec<Request>,
     dispatched: VecDeque<Dispatched>,
     toasts: Vec<Toast>,
-    palette: Palette,
+    search: SearchBox,
     dialog: Option<Dialog>,
     settings_open: bool,
     shortcuts: ShortcutsScreen,
@@ -153,6 +159,12 @@ pub struct RickUi {
     /// Read-only texts actions asked to show, each in its own window.
     texts: Vec<TextWindow>,
     next_text: u64,
+    /// The tab the pointer was over in the frame being drawn.
+    hovered_tab: Option<TabId>,
+    /// The icon view's thumbnails.
+    thumbnails: Thumbnails,
+    /// The egui context, for uploading textures outside a frame callback.
+    ctx: egui::Context,
     previews: Previews,
     closed_tabs: Vec<Location>,
     job_done_at: HashMap<types::JobId, Instant>,
@@ -162,6 +174,49 @@ pub struct RickUi {
 
 /// How many dispatched intents are remembered.
 const RECENTS: usize = 64;
+/// The title row's height in points: that of a tab.
+const TITLE_ROW_HEIGHT: f32 = 30.0;
+
+/// The tab strip's look: VS Code-like padding, rounded top corners, the
+/// new-tab button right after the last tab, a scroll bar on overflow.
+fn tab_strip_style(egui_style: &egui::Style) -> egui_dock::Style {
+    let mut style = egui_dock::Style::from_egui(egui_style);
+    style.buttons.add_tab_align = egui_dock::TabAddAlign::Left;
+    style.tab_bar.height = TITLE_ROW_HEIGHT;
+    style.tab_bar.show_scroll_bar_on_overflow = true;
+    style.tab_bar.fill_tab_bar = false;
+    style.tab.spacing = 2.0;
+    style.tab.minimum_width = Some(96.0);
+    style.tab.hline_below_active_tab_name = false;
+    let top = egui::CornerRadius {
+        nw: 4,
+        ne: 4,
+        sw: 0,
+        se: 0,
+    };
+    for interaction in [
+        &mut style.tab.active,
+        &mut style.tab.inactive,
+        &mut style.tab.focused,
+        &mut style.tab.hovered,
+        &mut style.tab.inactive_with_kb_focus,
+        &mut style.tab.active_with_kb_focus,
+        &mut style.tab.focused_with_kb_focus,
+    ] {
+        interaction.corner_radius = top;
+    }
+    style
+}
+
+/// An icon-only toggle; the fill weight marks it active.
+fn toggle_icon(glyph: &str, on: bool) -> egui::Button<'static> {
+    let text = if on {
+        egui::RichText::new(glyph).family(egui::FontFamily::Name("phosphor-fill".into()))
+    } else {
+        egui::RichText::new(glyph)
+    };
+    egui::Button::new(text).frame(false).selected(on)
+}
 /// How long a notification stays.
 const TOAST_FOR: Duration = Duration::from_secs(5);
 /// How long a finished job stays listed before it is dismissed.
@@ -171,6 +226,7 @@ impl RickUi {
     /// Wraps `app`; `host` is the `UiHost` the app was built with.
     #[must_use]
     pub fn new(app: App, host: Arc<EguiHost>, ctx: &egui::Context) -> Self {
+        icons::install(ctx);
         let wake = ctx.clone();
         app.set_waker(Arc::new(move || wake.request_repaint()));
         let keys = KeyMap::new(app.registry(), &app.model().settings);
@@ -186,7 +242,7 @@ impl RickUi {
             requests: Vec::new(),
             dispatched: VecDeque::new(),
             toasts: Vec::new(),
-            palette: Palette::default(),
+            search: SearchBox::default(),
             dialog: None,
             settings_open: false,
             shortcuts: ShortcutsScreen::default(),
@@ -195,6 +251,9 @@ impl RickUi {
             properties: None,
             texts: Vec::new(),
             next_text: 0,
+            hovered_tab: None,
+            thumbnails: Thumbnails::default(),
+            ctx: ctx.clone(),
             previews: Previews::default(),
             closed_tabs: Vec::new(),
             job_done_at: HashMap::new(),
@@ -237,10 +296,16 @@ impl RickUi {
         self.inspector_open
     }
 
-    /// Whether the command palette is open.
+    /// Whether the title row's search box has the keyboard.
     #[must_use]
-    pub fn palette_open(&self) -> bool {
-        self.palette.open
+    pub fn search_active(&self) -> bool {
+        self.search.active()
+    }
+
+    /// The search box's text.
+    #[must_use]
+    pub fn search_text(&self) -> &str {
+        &self.search.text
     }
 
     /// Whether the Settings screen is open.
@@ -292,6 +357,9 @@ impl RickUi {
     fn absorb(&mut self, events: Vec<Event>) {
         for event in events {
             match event {
+                Event::Thumbnail { id, size, frame } => {
+                    self.thumbnails.arrived(&self.ctx, id, size, frame);
+                }
                 Event::Notify { level, text } => self.toast(level, text),
                 Event::PreviewReady { pane, doc } => {
                     let entry = self.preview_entry(pane);
@@ -327,6 +395,28 @@ impl RickUi {
                 });
             open
         });
+    }
+
+    /// The icon view's thumbnail cache, for tests.
+    #[must_use]
+    pub fn thumbnails(&self) -> &Thumbnails {
+        &self.thumbnails
+    }
+
+    /// The toolbar rectangles of a tab in the last frame, by group, for
+    /// tests that check the layout.
+    #[must_use]
+    pub fn toolbar_rects(&self, tab: TabId) -> Vec<(&'static str, egui::Rect)> {
+        self.tabs
+            .get(&tab)
+            .map(|t| t.toolbar_rects.clone())
+            .unwrap_or_default()
+    }
+
+    /// Each pane's rectangle in the last frame, for tests that drag tabs.
+    #[must_use]
+    pub fn pane_rects(&self) -> Vec<(PaneId, egui::Rect)> {
+        self.dock.pane_rects(self.app.model())
     }
 
     /// The texts shown right now, as (title, text), for tests.
@@ -409,7 +499,8 @@ impl RickUi {
             return;
         }
         // An open menu owns the keyboard: Escape closes it, nothing else.
-        if self.palette.open || ctx.egui_wants_keyboard_input() || egui::Popup::is_any_open(ctx) {
+        if self.search.active() || ctx.egui_wants_keyboard_input() || egui::Popup::is_any_open(ctx)
+        {
             return;
         }
         let filter_text = self
@@ -579,7 +670,7 @@ impl RickUi {
                     tab_ui.focus_path = true;
                 }
             }
-            Intent::Palette => self.palette.open(),
+            Intent::Palette => self.search.focus_with(">"),
             Intent::SelectAll => self.handle(Command::Select {
                 pane,
                 change: SelectionChange::All,
@@ -757,16 +848,45 @@ impl RickUi {
             Intent::ExtendPageDown => self.move_cursor(pane, self.page(pane), true),
             Intent::ExtendHome => self.move_cursor(pane, isize::MIN, true),
             Intent::ExtendEnd => self.move_cursor(pane, isize::MAX, true),
-            Intent::QuickOpen
-            | Intent::SelectByPattern
+            Intent::QuickOpen => self.search.focus_with(""),
+            Intent::ViewIcons => {
+                let size = match self.app.model().active_tab(pane).map(|(_, t)| t.view) {
+                    Some(ViewMode::Icons(size)) => size,
+                    _ => IconSize::Medium,
+                };
+                self.handle(Command::SetView {
+                    pane,
+                    mode: ViewMode::Icons(size),
+                });
+            }
+            Intent::IconSizeUp | Intent::IconSizeDown => {
+                let current = match self.app.model().active_tab(pane).map(|(_, t)| t.view) {
+                    Some(ViewMode::Icons(size)) => size,
+                    _ => IconSize::Medium,
+                };
+                let order = [
+                    IconSize::Small,
+                    IconSize::Medium,
+                    IconSize::Large,
+                    IconSize::ExtraLarge,
+                ];
+                let at = order.iter().position(|s| *s == current).unwrap_or(1);
+                let next = if intent == Intent::IconSizeUp {
+                    (at + 1).min(order.len() - 1)
+                } else {
+                    at.saturating_sub(1)
+                };
+                self.handle(Command::SetView {
+                    pane,
+                    mode: ViewMode::Icons(order[next]),
+                });
+            }
+            Intent::SelectByPattern
             | Intent::PasteAsLink
             | Intent::BulkRename
             | Intent::OpenWith
             | Intent::Console
-            | Intent::ViewTree
-            | Intent::ViewIcons
-            | Intent::IconSizeUp
-            | Intent::IconSizeDown => {
+            | Intent::ViewTree => {
                 let label = intent.spec().map_or("This", |s| s.label);
                 self.unavailable(label);
             }
@@ -916,65 +1036,55 @@ impl RickUi {
         self.handle(Command::Select { pane, change });
     }
 
-    fn top_bar(&mut self, ui: &mut egui::Ui, focused: PaneId) {
-        egui::Panel::top(egui::Id::new("top")).show(ui, |ui| {
-            ui.horizontal(|ui| {
-                menus::burger(ui, &mut self.requests, focused);
-                ui.separator();
-                let undo = self.app.undo_label();
-                if ui
-                    .add_enabled(undo.is_some(), egui::Button::new("↶"))
-                    .on_hover_text(undo.map_or_else(|| "Undo".to_owned(), |l| format!("Undo {l}")))
-                    .clicked()
-                {
-                    self.requests.push(Request::Intent {
-                        intent: Intent::Undo,
-                        pane: focused,
-                    });
+    /// The title row: burger menu, the search box, the layout toggles and
+    /// the window controls. An empty part of it drags the window and a
+    /// double click maximises or restores it.
+    fn title_row(&mut self, ui: &mut egui::Ui, ctx: &egui::Context, focused: PaneId) {
+        let chrome = self.app.platform().window_chrome();
+        let height = TITLE_ROW_HEIGHT;
+        egui::Panel::top(egui::Id::new("title"))
+            .exact_size(height)
+            .show_separator_line(true)
+            .show(ui, |ui| {
+                let rect = ui.max_rect();
+                // The background first, so every widget drawn after it wins
+                // the pointer where they overlap.
+                let background = ui.interact(
+                    rect,
+                    egui::Id::new("title-drag"),
+                    egui::Sense::click_and_drag(),
+                );
+                if background.drag_started() {
+                    ctx.send_viewport_cmd(egui::ViewportCommand::StartDrag);
                 }
-                let redo = self.app.redo_label();
-                if ui
-                    .add_enabled(redo.is_some(), egui::Button::new("↷"))
-                    .on_hover_text(redo.map_or_else(|| "Redo".to_owned(), |l| format!("Redo {l}")))
-                    .clicked()
-                {
-                    self.requests.push(Request::Intent {
-                        intent: Intent::Redo,
-                        pane: focused,
-                    });
+                if background.double_clicked() {
+                    let maximized = ctx.input(|i| i.viewport().maximized.unwrap_or(false));
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(!maximized));
                 }
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if ui
-                        .selectable_label(self.inspector_open, "Inspector")
-                        .clicked()
-                    {
-                        self.inspector_open = !self.inspector_open;
-                    }
-                    let side_visible = self.app.model().settings.side_panel.visible;
-                    if ui
-                        .selectable_label(side_visible, "Panel")
-                        .on_hover_text("Toggle side panel")
-                        .clicked()
-                    {
-                        self.requests.push(Request::Intent {
-                            intent: Intent::ToggleSidePanel,
-                            pane: focused,
-                        });
-                    }
-                    let running = self
-                        .app
-                        .model()
-                        .jobs
-                        .values()
-                        .filter(|j| matches!(j.state, JobState::Running(_)))
-                        .count();
-                    if running > 0 {
-                        ui.spinner();
-                        ui.weak(format!("{running} running"));
-                    }
-                });
+
+                // Left: room for the native controls, then the burger.
+                let mut left = ui.new_child(
+                    egui::UiBuilder::new()
+                        .max_rect(rect)
+                        .layout(egui::Layout::left_to_right(egui::Align::Center)),
+                );
+                if chrome.native_controls && chrome.controls == ControlsSide::Left {
+                    left.add_space(chrome.native_controls_width);
+                }
+                menus::burger(&mut left, &mut self.requests, focused);
+                let left_edge = left.min_rect().right();
+
+                // Right: window controls, then the toggles.
+                let mut right = ui.new_child(
+                    egui::UiBuilder::new()
+                        .max_rect(rect)
+                        .layout(egui::Layout::right_to_left(egui::Align::Center)),
+                );
+                self.title_right(&mut right, ctx, chrome, focused);
+                let right_edge = right.min_rect().left();
+
+                self.title_search(ui, rect, left_edge, right_edge, focused);
             });
-        });
     }
 
     /// The side panel on its side with the operations area at its foot, or
@@ -1018,6 +1128,123 @@ impl RickUi {
             self.requests.push(Request::Command(Command::Settings(
                 SettingsChange::SidePanelWidth(width),
             )));
+        }
+    }
+
+    /// Window controls and the layout toggles, right to left.
+    fn title_right(
+        &mut self,
+        right: &mut egui::Ui,
+        ctx: &egui::Context,
+        chrome: platform::WindowChrome,
+        focused: PaneId,
+    ) {
+        if !chrome.native_controls {
+            if right
+                .add(egui::Button::new(icons::CLOSE).frame(false))
+                .on_hover_text("Close")
+                .clicked()
+            {
+                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            }
+            let maximized = ctx.input(|i| i.viewport().maximized.unwrap_or(false));
+            let glyph = if maximized {
+                icons::RESTORE
+            } else {
+                icons::MAXIMISE
+            };
+            if right
+                .add(egui::Button::new(glyph).frame(false))
+                .on_hover_text(if maximized { "Restore" } else { "Maximise" })
+                .clicked()
+            {
+                ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(!maximized));
+            }
+            if right
+                .add(egui::Button::new(icons::MINIMISE).frame(false))
+                .on_hover_text("Minimise")
+                .clicked()
+            {
+                ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true));
+            }
+            right.separator();
+        }
+        if right
+            .add(toggle_icon(icons::INSPECTOR, self.inspector_open))
+            .on_hover_text("Toggle inspector")
+            .clicked()
+        {
+            self.inspector_open = !self.inspector_open;
+        }
+        let side_visible = self.app.model().settings.side_panel.visible;
+        if right
+            .add(toggle_icon(icons::SIDE_PANEL, side_visible))
+            .on_hover_text("Toggle side panel")
+            .clicked()
+        {
+            self.requests.push(Request::Intent {
+                intent: Intent::ToggleSidePanel,
+                pane: focused,
+            });
+        }
+        let running = self
+            .app
+            .model()
+            .jobs
+            .values()
+            .filter(|j| matches!(j.state, JobState::Running(_)))
+            .count();
+        if running > 0 {
+            right.spinner();
+            right.weak(format!("{running} running"));
+        }
+    }
+
+    /// The search box between the burger and the right-hand group, as wide
+    /// as the room allows.
+    fn title_search(
+        &mut self,
+        ui: &mut egui::Ui,
+        rect: egui::Rect,
+        left_edge: f32,
+        right_edge: f32,
+        focused: PaneId,
+    ) {
+        let room = (right_edge - left_edge - 24.0).max(0.0);
+        let width = (rect.width() * 0.4).clamp(160.0, 560.0).min(room);
+        if width < 120.0 {
+            return;
+        }
+        let centre = f32::midpoint(left_edge, right_edge).clamp(
+            left_edge + width / 2.0 + 12.0,
+            right_edge - width / 2.0 - 12.0,
+        );
+        let search_rect = egui::Rect::from_center_size(
+            egui::pos2(centre, rect.center().y),
+            egui::vec2(width, (rect.height() - 6.0).max(16.0)),
+        );
+        let recents: Vec<Intent> = self.dispatched.iter().rev().map(|d| d.intent).collect();
+        let pick = self
+            .search
+            .show(ui, search_rect, &self.app, &self.keys, focused, &recents);
+        match pick {
+            Some(Pick::Intent(intent)) => self.requests.push(Request::Intent {
+                intent,
+                pane: focused,
+            }),
+            Some(Pick::Entry { index, id }) => {
+                if let Some((tab_id, _)) = self.app.model().active_tab(focused) {
+                    let tab_ui = self.tabs.entry(tab_id).or_default();
+                    tab_ui.scroll_to = Some(index);
+                    tab_ui.cursor = Some(id);
+                    tab_ui.anchor = Some(id);
+                }
+                self.requests.push(Request::Command(Command::Select {
+                    pane: focused,
+                    change: SelectionChange::Set(vec![id]),
+                }));
+            }
+            None => {}
         }
     }
 
@@ -1065,7 +1292,9 @@ impl RickUi {
                     JobState::Done => {
                         ui.weak("done");
                         let at = *self.job_done_at.entry(id).or_insert(now);
-                        if now.duration_since(at) > DONE_FOR || ui.small_button("✕").clicked() {
+                        if now.duration_since(at) > DONE_FOR
+                            || ui.small_button(icons::CLOSE).clicked()
+                        {
                             self.requests
                                 .push(Request::Command(Command::DismissJob(id)));
                         }
@@ -1073,14 +1302,16 @@ impl RickUi {
                     JobState::Cancelled => {
                         ui.weak("cancelled");
                         let at = *self.job_done_at.entry(id).or_insert(now);
-                        if now.duration_since(at) > DONE_FOR || ui.small_button("✕").clicked() {
+                        if now.duration_since(at) > DONE_FOR
+                            || ui.small_button(icons::CLOSE).clicked()
+                        {
                             self.requests
                                 .push(Request::Command(Command::DismissJob(id)));
                         }
                     }
                     JobState::Failed(error) => {
                         ui.colored_label(ui.visuals().error_fg_color, error);
-                        if ui.small_button("✕").clicked() {
+                        if ui.small_button(icons::CLOSE).clicked() {
                             self.requests
                                 .push(Request::Command(Command::DismissJob(id)));
                         }
@@ -1197,6 +1428,11 @@ struct Viewer<'a> {
     requests: &'a mut Vec<Request>,
     keys: &'a KeyMap,
     now: SystemTime,
+    /// The tab the pointer was over last frame; it shows a close button.
+    hovered_last: Option<TabId>,
+    /// The tab the pointer is over this frame.
+    hovered_now: &'a mut Option<TabId>,
+    thumbnails: &'a mut Thumbnails,
 }
 
 impl TabViewer for Viewer<'_> {
@@ -1207,10 +1443,39 @@ impl TabViewer for Viewer<'_> {
     }
 
     fn title(&mut self, tab: &mut TabId) -> egui::WidgetText {
-        self.app
-            .model()
-            .tab(*tab)
-            .map_or_else(|| "?".into(), |t| paths::title(&t.location.path).into())
+        self.app.model().tab(*tab).map_or_else(
+            || "?".into(),
+            |t| {
+                // A folder icon for local folders, the provider's otherwise.
+                let icon = if t.location.provider.0 == "local" {
+                    icons::FOLDER
+                } else {
+                    icons::PROVIDER
+                };
+                format!("{icon} {}", paths::title(&t.location.path)).into()
+            },
+        )
+    }
+
+    fn on_tab_button(&mut self, tab: &mut TabId, response: &egui::Response) {
+        if response.hovered() {
+            *self.hovered_now = Some(*tab);
+        }
+        if response.middle_clicked() {
+            self.requests
+                .push(Request::Command(Command::CloseTab(*tab)));
+        }
+    }
+
+    fn is_closeable(&self, tab: &TabId) -> bool {
+        // The close button shows on the active tab and the hovered one.
+        let model = self.app.model();
+        let active = model
+            .pane_of(*tab)
+            .and_then(|p| model.pane(p))
+            .and_then(model::Pane::active)
+            == Some(*tab);
+        active || self.hovered_last == Some(*tab)
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, tab: &mut TabId) {
@@ -1232,6 +1497,7 @@ impl TabViewer for Viewer<'_> {
             keys: self.keys,
             now: self.now,
             focused: model.focused == pane,
+            thumbnails: self.thumbnails,
         };
         pane::show(ui, &mut cx);
     }
@@ -1284,7 +1550,8 @@ impl eframe::App for RickUi {
         self.apply_requests(ctx);
 
         let focused = self.app.model().focused;
-        self.top_bar(ui, focused);
+        self.title_row(ui, ctx, focused);
+        self.apply_requests(ctx);
 
         self.side_panel(ui, ctx, focused);
 
@@ -1298,15 +1565,20 @@ impl eframe::App for RickUi {
 
         egui::CentralPanel::no_frame().show(ui, |ui| {
             self.dock.rebuild(self.app.model());
+            let hovered_last = self.hovered_tab.take();
             let mut viewer = Viewer {
                 app: &self.app,
                 tabs: &mut self.tabs,
                 requests: &mut self.requests,
                 keys: &self.keys,
                 now: self.now,
+                hovered_last,
+                hovered_now: &mut self.hovered_tab,
+                thumbnails: &mut self.thumbnails,
             };
             DockArea::new(&mut self.dock.state)
                 .id(egui::Id::new("dock"))
+                .style(tab_strip_style(ui.style()))
                 .show_add_buttons(true)
                 .show_close_buttons(true)
                 .show_leaf_close_all_buttons(false)
@@ -1319,13 +1591,6 @@ impl eframe::App for RickUi {
         self.apply_requests(ctx);
 
         self.show_dialog(ctx);
-        let pane = self.app.model().focused;
-        let recents: Vec<Intent> = self.dispatched.iter().rev().map(|d| d.intent).collect();
-        let items = Palette::items(&self.app, &self.keys, pane, &recents);
-        let rows = self.palette.ranked(items);
-        if let Some(intent) = self.palette.show(ctx, &rows) {
-            self.requests.push(Request::Intent { intent, pane });
-        }
         settings_ui::settings_window(
             ctx,
             &mut self.settings_open,

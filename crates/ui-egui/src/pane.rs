@@ -5,11 +5,12 @@ use std::fmt::Write as _;
 
 use app::Command;
 use egui::Align;
+use model::{IconSize, ViewMode};
 use types::{EntryKind, Location};
 
 use crate::keys::Intent;
 use crate::shell::{PaneCx, Request};
-use crate::{format, paths, views};
+use crate::{format, icons, paths, views};
 
 /// Draws the whole tab.
 pub fn show(ui: &mut egui::Ui, cx: &mut PaneCx<'_>) {
@@ -29,131 +30,337 @@ fn intent(cx: &mut PaneCx<'_>, intent: Intent) {
     });
 }
 
-fn toolbar(ui: &mut egui::Ui, cx: &mut PaneCx<'_>) {
-    ui.horizontal(|ui| {
-        let back = ui
-            .add_enabled(!cx.tab.history.back.is_empty(), egui::Button::new("◀"))
-            .on_hover_text("Back");
-        if back.clicked() {
-            intent(cx, Intent::Back);
-        }
-        let forward = ui
-            .add_enabled(!cx.tab.history.forward.is_empty(), egui::Button::new("▶"))
-            .on_hover_text("Forward");
-        if forward.clicked() {
-            intent(cx, Intent::Forward);
-        }
-        let up = ui
-            .add_enabled(
-                paths::parent(&cx.tab.location.path).is_some(),
-                egui::Button::new("▲"),
-            )
-            .on_hover_text("Parent directory");
-        if up.clicked() {
-            intent(cx, Intent::Parent);
-        }
-        ui.separator();
+/// Width of an icon-only toolbar button, so the two icon groups keep their
+/// width whatever the window size.
+const ICON_BUTTON: f32 = 28.0;
 
-        // Right-aligned controls first, so the path bar gets the rest.
-        ui.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
-            if ui.button("⟳").on_hover_text("Refresh").clicked() {
-                intent(cx, Intent::Refresh);
-            }
-            let details = cx.tab.view != model::ViewMode::List;
-            if ui
-                .selectable_label(details, "☷")
-                .on_hover_text("Details view")
-                .clicked()
-            {
-                intent(cx, Intent::ViewDetails);
-            }
-            if ui
-                .selectable_label(!details, "☰")
-                .on_hover_text("List view")
-                .clicked()
-            {
-                intent(cx, Intent::ViewList);
-            }
-            if ui
-                .selectable_label(cx.tab.show_hidden, "Hidden")
-                .on_hover_text("Show hidden files")
-                .clicked()
-            {
-                intent(cx, Intent::ToggleHidden);
-            }
-            if ui.button("⎘").on_hover_text("Copy path").clicked() {
-                let text = cx.tab.location.path.to_string_lossy().into_owned();
-                if let Err(error) = cx.app.platform().set_text(&text) {
-                    cx.requests.push(Request::Toast(
-                        ext::Level::Error,
-                        format!("Copy path: {error}"),
-                    ));
-                }
-            }
-            ui.separator();
-            ui.with_layout(egui::Layout::left_to_right(Align::Center), |ui| {
-                path_bar(ui, cx);
-            });
-        });
+/// The toolbar: a fixed group of navigation icons on the left, a fixed group
+/// of view controls on the right, and the breadcrumb flexing in between,
+/// never overlapping either.
+fn toolbar(ui: &mut egui::Ui, cx: &mut PaneCx<'_>) {
+    cx.tab_ui.toolbar_rects.clear();
+    ui.horizontal(|ui| {
+        let row = ui.max_rect();
+        // Left group, fixed.
+        let mut left = ui.new_child(
+            egui::UiBuilder::new()
+                .max_rect(row)
+                .layout(egui::Layout::left_to_right(Align::Center)),
+        );
+        left_group(&mut left, cx);
+        let left_edge = left.min_rect().right();
+        // Right group, fixed.
+        let mut right = ui.new_child(
+            egui::UiBuilder::new()
+                .max_rect(row)
+                .layout(egui::Layout::right_to_left(Align::Center)),
+        );
+        right_group(&mut right, cx);
+        let right_edge = right.min_rect().left();
+        // The breadcrumb gets what is left, clipped to it.
+        let gap = ui.spacing().item_spacing.x;
+        let middle = egui::Rect::from_min_max(
+            egui::pos2(left_edge + gap, row.top()),
+            egui::pos2((right_edge - gap).max(left_edge + gap), row.bottom()),
+        );
+        let mut centre = ui.new_child(
+            egui::UiBuilder::new()
+                .max_rect(middle)
+                .layout(egui::Layout::left_to_right(Align::Center)),
+        );
+        centre.set_clip_rect(middle.intersect(centre.clip_rect()));
+        path_bar(&mut centre, cx, middle);
+        ui.allocate_rect(row, egui::Sense::hover());
     });
 }
 
-fn path_bar(ui: &mut egui::Ui, cx: &mut PaneCx<'_>) {
-    if let Some(text) = cx.tab_ui.path_edit.as_mut() {
-        let output = egui::TextEdit::singleline(text)
-            .desired_width(f32::INFINITY)
-            .show(ui);
-        if cx.tab_ui.focus_path {
-            output.response.request_focus();
-            cx.tab_ui.focus_path = false;
-        }
-        let enter = output.response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
-        let escape = ui.input(|i| i.key_pressed(egui::Key::Escape));
-        if enter {
-            let typed = text.trim().to_owned();
-            cx.tab_ui.path_edit = None;
-            if !typed.is_empty() {
-                let location = Location::new(cx.tab.location.provider, typed.as_str());
-                cx.requests.push(Request::Command(Command::Navigate {
+fn icon_button(ui: &mut egui::Ui, glyph: &str, enabled: bool) -> egui::Response {
+    ui.add_enabled(
+        enabled,
+        egui::Button::new(glyph).min_size(egui::vec2(ICON_BUTTON, ICON_BUTTON - 4.0)),
+    )
+}
+
+fn remember(cx: &mut PaneCx<'_>, group: &'static str, rect: egui::Rect) {
+    cx.tab_ui.toolbar_rects.push((group, rect));
+}
+
+fn left_group(ui: &mut egui::Ui, cx: &mut PaneCx<'_>) {
+    let back = icon_button(ui, icons::BACK, !cx.tab.history.back.is_empty()).on_hover_text("Back");
+    remember(cx, "left", back.rect);
+    if back.clicked() {
+        intent(cx, Intent::Back);
+    }
+    let forward = icon_button(ui, icons::FORWARD, !cx.tab.history.forward.is_empty())
+        .on_hover_text("Forward");
+    remember(cx, "left", forward.rect);
+    if forward.clicked() {
+        intent(cx, Intent::Forward);
+    }
+    let up = icon_button(
+        ui,
+        icons::UP,
+        paths::parent(&cx.tab.location.path).is_some(),
+    )
+    .on_hover_text("Parent directory");
+    remember(cx, "left", up.rect);
+    if up.clicked() {
+        intent(cx, Intent::Parent);
+    }
+}
+
+/// View mode dropdown, hidden-files toggle and refresh, right to left.
+fn right_group(ui: &mut egui::Ui, cx: &mut PaneCx<'_>) {
+    let refresh = icon_button(ui, icons::REFRESH, true).on_hover_text("Refresh");
+    remember(cx, "right", refresh.rect);
+    if refresh.clicked() {
+        intent(cx, Intent::Refresh);
+    }
+    let hidden_glyph = if cx.tab.show_hidden {
+        icons::HIDDEN_SHOWN
+    } else {
+        icons::HIDDEN_HIDDEN
+    };
+    let hidden = ui
+        .add(
+            egui::Button::new(hidden_glyph)
+                .selected(cx.tab.show_hidden)
+                .min_size(egui::vec2(ICON_BUTTON, ICON_BUTTON - 4.0)),
+        )
+        .on_hover_text(if cx.tab.show_hidden {
+            "Hide hidden files"
+        } else {
+            "Show hidden files"
+        });
+    remember(cx, "right", hidden.rect);
+    if hidden.clicked() {
+        intent(cx, Intent::ToggleHidden);
+    }
+    view_mode_dropdown(ui, cx);
+}
+
+/// The view modes the dropdown offers, in order: label, mode, available.
+fn view_modes() -> [(&'static str, ViewMode, bool); 7] {
+    [
+        ("List", ViewMode::List, true),
+        ("Details", ViewMode::Details, true),
+        // The tree view is not implemented yet.
+        ("Tree", ViewMode::Tree, false),
+        ("Icons, small", ViewMode::Icons(IconSize::Small), true),
+        ("Icons, medium", ViewMode::Icons(IconSize::Medium), true),
+        ("Icons, large", ViewMode::Icons(IconSize::Large), true),
+        (
+            "Icons, extra large",
+            ViewMode::Icons(IconSize::ExtraLarge),
+            true,
+        ),
+    ]
+}
+
+/// The glyph of a view mode.
+#[must_use]
+pub fn view_mode_icon(mode: ViewMode) -> &'static str {
+    match mode {
+        ViewMode::List => icons::VIEW_LIST,
+        ViewMode::Details => icons::VIEW_DETAILS,
+        ViewMode::Tree => icons::VIEW_TREE,
+        ViewMode::Icons(_) => icons::VIEW_ICONS,
+    }
+}
+
+fn view_mode_dropdown(ui: &mut egui::Ui, cx: &mut PaneCx<'_>) {
+    let current = cx.tab.view;
+    let label = format!("{} {}", view_mode_icon(current), icons::DROPDOWN);
+    let response = ui.menu_button(label, |ui| {
+        for (label, mode, available) in view_modes() {
+            let marked = if mode == current {
+                format!("{} {label}", icons::DONE)
+            } else {
+                format!("   {label}")
+            };
+            let clicked = ui
+                .add_enabled(available, egui::Button::new(marked))
+                .on_disabled_hover_text("Not implemented yet")
+                .clicked();
+            if clicked {
+                cx.requests.push(Request::Command(Command::SetView {
                     pane: cx.pane,
-                    to: location,
+                    mode,
                 }));
+                ui.close();
             }
-        } else if escape || (output.response.lost_focus() && !enter) {
-            cx.tab_ui.path_edit = None;
         }
+    });
+    remember(cx, "right", response.response.rect);
+    response.response.on_hover_text("View mode");
+}
+
+/// The path bar in `rect`: the breadcrumb, or the text field while editing.
+fn path_bar(ui: &mut egui::Ui, cx: &mut PaneCx<'_>, rect: egui::Rect) {
+    if cx.tab_ui.path_edit.is_some() {
+        path_edit(ui, cx, rect);
         return;
     }
-    let segments = paths::segments(&cx.tab.location.path);
-    let last = segments.len().saturating_sub(1);
-    for (i, (label, prefix)) in segments.into_iter().enumerate() {
-        let button = egui::Button::new(if i == last {
-            egui::RichText::new(&label).strong()
-        } else {
-            egui::RichText::new(&label)
-        })
-        .frame(false);
-        if ui.add(button).clicked() && i != last {
-            let location = Location::new(cx.tab.location.provider, prefix);
+    breadcrumb(ui, cx, rect);
+}
+
+/// The breadcrumb as an editable text field.
+fn path_edit(ui: &mut egui::Ui, cx: &mut PaneCx<'_>, rect: egui::Rect) {
+    let Some(text) = cx.tab_ui.path_edit.as_mut() else {
+        return;
+    };
+    let output = egui::TextEdit::singleline(text)
+        .desired_width(rect.width())
+        .show(ui);
+    if cx.tab_ui.focus_path {
+        output.response.request_focus();
+        cx.tab_ui.focus_path = false;
+    }
+    let enter = output.response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+    let escape = ui.input(|i| i.key_pressed(egui::Key::Escape));
+    if enter {
+        let typed = text.trim().to_owned();
+        cx.tab_ui.path_edit = None;
+        if !typed.is_empty() {
+            let location = Location::new(cx.tab.location.provider, typed.as_str());
             cx.requests.push(Request::Command(Command::Navigate {
                 pane: cx.pane,
                 to: location,
             }));
         }
+    } else if escape || (output.response.lost_focus() && !enter) {
+        cx.tab_ui.path_edit = None;
+    }
+}
+
+/// Which segments fit: the index of the first shown segment and the width
+/// they use, from the right, with the chevron reserved as soon as one has
+/// to go. Even the last segment stays, truncated, when nothing fits.
+fn fit_segments(widths: &[f32], separator_w: f32, chevron_w: f32, available: f32) -> (usize, f32) {
+    let last = widths.len().saturating_sub(1);
+    let mut first_shown = widths.len();
+    let mut used = 0.0;
+    for i in (0..widths.len()).rev() {
+        let need = widths[i] + if i < last { separator_w } else { 0.0 };
+        let reserve = if i > 0 { chevron_w } else { 0.0 };
+        if used + need + reserve > available {
+            if i == last {
+                first_shown = last;
+                used += need;
+            }
+            break;
+        }
+        used += need;
+        first_shown = i;
+    }
+    (first_shown, used)
+}
+
+/// The breadcrumb: segments from the right as far as they fit, the rest
+/// folded into a chevron with a dropdown, the last one truncated when even
+/// it does not fit, and the copy button at the right end.
+fn breadcrumb(ui: &mut egui::Ui, cx: &mut PaneCx<'_>, rect: egui::Rect) {
+    let segments = paths::segments(&cx.tab.location.path);
+    let last = segments.len().saturating_sub(1);
+    let spacing = ui.spacing().item_spacing.x;
+    let pad = 2.0 * ui.spacing().button_padding.x;
+    let font = egui::TextStyle::Button.resolve(ui.style());
+    let text_width = |ui: &egui::Ui, text: &str| {
+        ui.fonts_mut(|f| {
+            f.layout_no_wrap(text.to_owned(), font.clone(), egui::Color32::WHITE)
+                .size()
+                .x
+        })
+    };
+    let separator_w = text_width(ui, icons::SEGMENT) + spacing;
+    let copy_w = ICON_BUTTON + spacing;
+    let chevron_w = ICON_BUTTON + separator_w;
+    let widths: Vec<f32> = segments
+        .iter()
+        .map(|(label, _)| text_width(ui, label) + pad)
+        .collect();
+
+    let available = (rect.width() - copy_w).max(0.0);
+    let (first_shown, used) = fit_segments(&widths, separator_w, chevron_w, available);
+    remember(cx, "middle", rect);
+
+    if first_shown > 0 {
+        let hidden: Vec<(String, types::VPath)> = segments[..first_shown].to_vec();
+        let response = ui.menu_button(icons::COLLAPSED, |ui| {
+            for (label, prefix) in hidden {
+                if ui.button(label).clicked() {
+                    cx.requests.push(Request::Command(Command::Navigate {
+                        pane: cx.pane,
+                        to: Location::new(cx.tab.location.provider, prefix),
+                    }));
+                    ui.close();
+                }
+            }
+        });
+        response.response.on_hover_text("Hidden ancestors");
+        ui.weak(icons::SEGMENT);
+    }
+    let room_for_last = (available - (used - widths[last])).max(24.0);
+    for (i, (label, prefix)) in segments.iter().enumerate().skip(first_shown) {
+        let text = if i == last {
+            egui::RichText::new(label).strong()
+        } else {
+            egui::RichText::new(label)
+        };
+        let mut button = egui::Button::new(text).frame(false);
+        if i == last {
+            button = button
+                .wrap_mode(egui::TextWrapMode::Truncate)
+                .min_size(egui::vec2(0.0, 0.0));
+        }
+        let response = if i == last {
+            ui.add_sized(
+                egui::vec2(widths[i].min(room_for_last), ui.spacing().interact_size.y),
+                button,
+            )
+        } else {
+            ui.add(button)
+        };
+        response.clone().on_hover_text(prefix.to_string_lossy());
+        if response.clicked() && i != last {
+            cx.requests.push(Request::Command(Command::Navigate {
+                pane: cx.pane,
+                to: Location::new(cx.tab.location.provider, prefix.clone()),
+            }));
+        }
         if i != last {
-            ui.weak("›");
+            ui.weak(icons::SEGMENT);
         }
     }
-    let rest = ui.available_size_before_wrap();
+
+    // The copy button, inside the breadcrumb at its right end; empty space
+    // before it switches to editing.
+    let copy = ui
+        .add(egui::Button::new(icons::COPY).frame(false))
+        .on_hover_text("Copy path");
+    if copy.clicked() {
+        cx.requests.push(Request::RunAction {
+            action: ext::ActionId("core.copy_path"),
+            ctx: ext::ActionCtx {
+                pane: cx.pane,
+                location: cx.tab.location.clone(),
+                selection: Vec::new(),
+                invoked_from: ext::Invocation::Menu,
+            },
+        });
+    }
+    let remaining = ui.available_size_before_wrap();
     let (_, response) = ui.allocate_exact_size(
-        egui::vec2(rest.x.max(8.0), rest.y.max(ui.spacing().interact_size.y)),
+        egui::vec2(
+            remaining.x.max(8.0),
+            remaining.y.max(ui.spacing().interact_size.y),
+        ),
         egui::Sense::click(),
     );
     if response.clicked() {
         cx.tab_ui.path_edit = Some(cx.tab.location.path.to_string_lossy().into_owned());
         cx.tab_ui.focus_path = true;
     }
-    response.on_hover_text("Click to edit the path");
 }
 
 fn foot(ui: &mut egui::Ui, cx: &mut PaneCx<'_>) {
@@ -161,7 +368,10 @@ fn foot(ui: &mut egui::Ui, cx: &mut PaneCx<'_>) {
         ui.label(status_line(cx));
         ui.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
             if !cx.tab.filter.is_empty()
-                && ui.small_button("✕").on_hover_text("Clear filter").clicked()
+                && ui
+                    .small_button(icons::CLOSE)
+                    .on_hover_text("Clear filter")
+                    .clicked()
             {
                 cx.requests.push(Request::Command(Command::Filter {
                     pane: cx.pane,
