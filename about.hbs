@@ -1,0 +1,26 @@
+# Third-party licenses
+
+Rick is licensed under Apache-2.0 (see LICENSE). The binary in this archive
+links the third-party crates below; each is listed under its license with the
+license text, as `cargo about` collected them for the release.
+
+## Overview
+
+| License | Crates |
+| --- | --- |
+{{#each overview}}
+| {{{name}}} | {{count}} |
+{{/each}}
+
+## Licenses
+
+{{#each licenses}}
+### {{{name}}} ({{id}})
+
+Used by: {{#each used_by}}{{crate.name}} {{crate.version}}{{#unless @last}}, {{/unless}}{{/each}}
+
+```text
+{{{text}}}
+```
+
+{{/each}}
