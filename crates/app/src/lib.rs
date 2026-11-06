@@ -58,7 +58,7 @@ use std::sync::Arc;
 
 use ext::{
     ActionCtx, ActionOutcome, Availability, Depth, Extension, FsChange, Invocation, Level,
-    ListOptions, Registry, UiHost, UndoCommand,
+    ListOptions, PreviewDoc, Previewer, Registry, UiHost, UndoCommand,
 };
 use futures::StreamExt;
 use model::{JobState, Model, PaneId, Settings, TabId};
@@ -130,6 +130,29 @@ enum Msg {
         change: FsChange,
     },
     Settings(Result<Settings, Error>),
+    Preview {
+        pane: PaneId,
+        generation: u64,
+        result: Result<Box<dyn PreviewDoc>, Error>,
+    },
+}
+
+/// Which selection the preview follows and the job opening it.
+struct PreviewState {
+    /// The focused pane and its single selected file, when there is one.
+    target: Option<(PaneId, EntryId)>,
+    generation: u64,
+    cancel: CancelToken,
+}
+
+impl Default for PreviewState {
+    fn default() -> Self {
+        Self {
+            target: None,
+            generation: 0,
+            cancel: CancelToken::new(),
+        }
+    }
 }
 
 /// What a pane's listing was started for; a different key means relist.
@@ -171,6 +194,7 @@ pub struct App {
     redo: Vec<Box<dyn UndoCommand>>,
     settings_path: PathBuf,
     settings_watch: CancelToken,
+    preview: PreviewState,
     /// Events from start-up, delivered on the first poll.
     pending: Vec<Event>,
 }
@@ -246,13 +270,23 @@ impl App {
             redo: Vec::new(),
             settings_path,
             settings_watch: CancelToken::new(),
+            preview: PreviewState::default(),
             pending,
         };
         app.watch_settings();
         let mut events = Vec::new();
         app.sync_panes(&mut events);
+        app.sync_preview();
         app.pending.append(&mut events);
         app
+    }
+
+    /// The entry the preview follows: the focused pane's single selected
+    /// file, if any. The next [`Event::PreviewReady`] or
+    /// [`Event::PreviewFailed`] for that pane is about it.
+    #[must_use]
+    pub fn preview_target(&self) -> Option<(PaneId, EntryId)> {
+        self.preview.target
     }
 
     /// The model the UI renders from.
@@ -413,6 +447,7 @@ impl App {
             Command::Settings(change) => self.change_settings(change),
         }
         self.sync_panes(events);
+        self.sync_preview();
     }
 
     /// Processes everything that has arrived from listings, watches and
@@ -433,6 +468,9 @@ impl App {
             if handled == before {
                 break;
             }
+        }
+        if handled > 0 {
+            self.sync_preview();
         }
         handled
     }
@@ -774,7 +812,87 @@ impl App {
                     text: format!("Settings file not read: {error}"),
                 });
             }
+            Msg::Preview {
+                pane,
+                generation,
+                result,
+            } => {
+                if generation != self.preview.generation
+                    || self.preview.target.map(|(p, _)| p) != Some(pane)
+                {
+                    return;
+                }
+                events.push(match result {
+                    Ok(doc) => Event::PreviewReady { pane, doc },
+                    Err(error) => Event::PreviewFailed { pane, error },
+                });
+            }
         }
+    }
+
+    /// Points the preview at the focused pane's single selected file,
+    /// opening it through the best-scoring previewer as a job, and cancels
+    /// the previous one when the target changes.
+    fn sync_preview(&mut self) {
+        let focused = self.model.focused;
+        let want = self.model.active_tab(focused).and_then(|(_, tab)| {
+            let mut selected = tab.selected();
+            let first = selected.next()?;
+            if selected.next().is_some() || first.kind != types::EntryKind::File {
+                return None;
+            }
+            Some((first.clone(), tab.location.provider))
+        });
+        let target = want.as_ref().map(|(entry, _)| (focused, entry.id));
+        if target == self.preview.target {
+            return;
+        }
+        self.preview.cancel.cancel();
+        self.preview.generation += 1;
+        self.preview.target = target;
+        let Some((entry, provider_id)) = want else {
+            return;
+        };
+        let loc = Location::new(provider_id, entry.path.clone());
+        let provider = match self.mounts.resolve(&loc) {
+            Ok(provider) => provider,
+            Err(error) => {
+                self.pending.push(Event::PreviewFailed {
+                    pane: focused,
+                    error,
+                });
+                return;
+            }
+        };
+        let previewers: Vec<Arc<dyn Previewer>> = self.registry.previewers().to_vec();
+        let tx = self.mailbox.clone();
+        let generation = self.preview.generation;
+        let handle =
+            self.jobs
+                .spawn_named(format!("Preview {}", entry.name), move |job| async move {
+                    let sniff = ext::read_bytes(&*provider, &loc, Some(4096), &job.cancel).await?;
+                    let best = previewers
+                        .iter()
+                        .map(|p| (p.score(&entry, &sniff), p))
+                        .filter(|(score, _)| *score > 0)
+                        .max_by_key(|(score, _)| *score)
+                        .map(|(_, p)| Arc::clone(p));
+                    let result = match best {
+                        Some(previewer) => previewer.open(&loc, provider, job.cancel.clone()).await,
+                        None => Err(Error::Unsupported("no previewer for this file")),
+                    };
+                    if job.cancel.is_cancelled() {
+                        return Err(Error::Cancelled);
+                    }
+                    tx.send(Msg::Preview {
+                        pane: focused,
+                        generation,
+                        result,
+                    });
+                    Ok(())
+                });
+        self.internal.insert(handle.id);
+        self.preview.cancel = handle.cancel;
     }
 
     fn list_done(
