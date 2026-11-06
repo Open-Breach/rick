@@ -21,7 +21,7 @@ use crate::keys::{Direction, Intent, KeyMap};
 use crate::palette::Palette;
 use crate::preview::Previews;
 use crate::settings_ui::ShortcutsScreen;
-use crate::{inspector, menus, pane, paths, settings_ui, side_panel};
+use crate::{icons, inspector, menus, pane, paths, settings_ui, side_panel};
 
 /// Per-tab view state that is the UI's business, not the model's.
 #[derive(Debug, Default)]
@@ -171,6 +171,7 @@ impl RickUi {
     /// Wraps `app`; `host` is the `UiHost` the app was built with.
     #[must_use]
     pub fn new(app: App, host: Arc<EguiHost>, ctx: &egui::Context) -> Self {
+        icons::install(ctx);
         let wake = ctx.clone();
         app.set_waker(Arc::new(move || wake.request_repaint()));
         let keys = KeyMap::new(app.registry(), &app.model().settings);
@@ -923,7 +924,7 @@ impl RickUi {
                 ui.separator();
                 let undo = self.app.undo_label();
                 if ui
-                    .add_enabled(undo.is_some(), egui::Button::new("↶"))
+                    .add_enabled(undo.is_some(), egui::Button::new(icons::UNDO))
                     .on_hover_text(undo.map_or_else(|| "Undo".to_owned(), |l| format!("Undo {l}")))
                     .clicked()
                 {
@@ -934,7 +935,7 @@ impl RickUi {
                 }
                 let redo = self.app.redo_label();
                 if ui
-                    .add_enabled(redo.is_some(), egui::Button::new("↷"))
+                    .add_enabled(redo.is_some(), egui::Button::new(icons::REDO))
                     .on_hover_text(redo.map_or_else(|| "Redo".to_owned(), |l| format!("Redo {l}")))
                     .clicked()
                 {
@@ -1065,7 +1066,9 @@ impl RickUi {
                     JobState::Done => {
                         ui.weak("done");
                         let at = *self.job_done_at.entry(id).or_insert(now);
-                        if now.duration_since(at) > DONE_FOR || ui.small_button("✕").clicked() {
+                        if now.duration_since(at) > DONE_FOR
+                            || ui.small_button(icons::CLOSE).clicked()
+                        {
                             self.requests
                                 .push(Request::Command(Command::DismissJob(id)));
                         }
@@ -1073,14 +1076,16 @@ impl RickUi {
                     JobState::Cancelled => {
                         ui.weak("cancelled");
                         let at = *self.job_done_at.entry(id).or_insert(now);
-                        if now.duration_since(at) > DONE_FOR || ui.small_button("✕").clicked() {
+                        if now.duration_since(at) > DONE_FOR
+                            || ui.small_button(icons::CLOSE).clicked()
+                        {
                             self.requests
                                 .push(Request::Command(Command::DismissJob(id)));
                         }
                     }
                     JobState::Failed(error) => {
                         ui.colored_label(ui.visuals().error_fg_color, error);
-                        if ui.small_button("✕").clicked() {
+                        if ui.small_button(icons::CLOSE).clicked() {
                             self.requests
                                 .push(Request::Command(Command::DismissJob(id)));
                         }

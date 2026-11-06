@@ -22,8 +22,8 @@
 
 pub mod dock;
 pub mod format;
-pub mod glyphs;
 pub mod host;
+pub mod icons;
 pub mod inspector;
 pub mod keys;
 pub mod menus;

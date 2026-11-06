@@ -14,11 +14,7 @@ use crate::shell::{PaneCx, Request};
 /// The glyph in front of a name.
 #[must_use]
 pub fn icon(entry: &Entry) -> &'static str {
-    match entry.kind {
-        EntryKind::Dir => "📁",
-        EntryKind::Symlink { .. } => "🔗",
-        _ => "📄",
-    }
+    crate::icons::for_entry(entry)
 }
 
 /// The name as the list shows it: without the extension when the setting
@@ -245,13 +241,13 @@ pub fn badge_text(badge: Badge) -> egui::RichText {
 fn sort_header(ui: &mut egui::Ui, label: &str, column: Column, sort: model::Sort) -> bool {
     let marker = if sort.by == column {
         match sort.dir {
-            SortDir::Ascending => " ▲",
-            SortDir::Descending => " ▼",
+            SortDir::Ascending => crate::icons::SORT_ASC,
+            SortDir::Descending => crate::icons::SORT_DESC,
         }
     } else {
         ""
     };
-    ui.add(egui::Button::new(format!("{label}{marker}")).frame(false))
+    ui.add(egui::Button::new(format!("{label} {marker}").trim_end().to_owned()).frame(false))
         .clicked()
 }
 

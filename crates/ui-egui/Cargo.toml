@@ -19,6 +19,7 @@ egui = { workspace = true }
 egui_dock = { workspace = true }
 egui_extras = { workspace = true }
 tracing = { workspace = true }
+egui-phosphor = "0.14"
 
 [dev-dependencies]
 egui_kittest = { workspace = true }

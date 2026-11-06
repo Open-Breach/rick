@@ -86,7 +86,15 @@ fn body(
     match section {
         Section::Home => {
             let home = app.platform().home_dir();
-            location_row(ui, "🏠", "Home", &home, focused, current, requests);
+            location_row(
+                ui,
+                crate::icons::HOME,
+                "Home",
+                &home,
+                focused,
+                current,
+                requests,
+            );
         }
         Section::Recent => coming(ui, "Files and folders recently changed anywhere."),
         Section::Network => coming(ui, "Shares, hosts and mounted network file systems."),
@@ -103,9 +111,21 @@ fn body(
                     |n| n.to_string_lossy().into_owned(),
                 );
                 ui.horizontal(|ui| {
-                    location_row(ui, "📌", &name, &path, focused, current, requests);
+                    location_row(
+                        ui,
+                        crate::icons::PIN,
+                        &name,
+                        &path,
+                        focused,
+                        current,
+                        requests,
+                    );
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if ui.small_button("✕").on_hover_text("Unpin").clicked() {
+                        if ui
+                            .small_button(crate::icons::CLOSE)
+                            .on_hover_text("Unpin")
+                            .clicked()
+                        {
                             requests.push(Request::Command(Command::Settings(
                                 SettingsChange::Unpin(path.clone()),
                             )));

@@ -9,7 +9,7 @@ use crate::shell::{PaneCx, Request};
 
 /// The burger menu at the top of the window.
 pub fn burger(ui: &mut egui::Ui, requests: &mut Vec<Request>, pane: model::PaneId) {
-    ui.menu_button("☰", |ui| {
+    ui.menu_button(crate::icons::MENU, |ui| {
         if ui.button("Commands…").clicked() {
             requests.push(Request::Intent {
                 intent: Intent::Palette,

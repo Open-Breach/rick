@@ -9,7 +9,7 @@ use types::{EntryKind, Location};
 
 use crate::keys::Intent;
 use crate::shell::{PaneCx, Request};
-use crate::{format, paths, views};
+use crate::{format, icons, paths, views};
 
 /// Draws the whole tab.
 pub fn show(ui: &mut egui::Ui, cx: &mut PaneCx<'_>) {
@@ -32,13 +32,19 @@ fn intent(cx: &mut PaneCx<'_>, intent: Intent) {
 fn toolbar(ui: &mut egui::Ui, cx: &mut PaneCx<'_>) {
     ui.horizontal(|ui| {
         let back = ui
-            .add_enabled(!cx.tab.history.back.is_empty(), egui::Button::new("◀"))
+            .add_enabled(
+                !cx.tab.history.back.is_empty(),
+                egui::Button::new(icons::BACK),
+            )
             .on_hover_text("Back");
         if back.clicked() {
             intent(cx, Intent::Back);
         }
         let forward = ui
-            .add_enabled(!cx.tab.history.forward.is_empty(), egui::Button::new("▶"))
+            .add_enabled(
+                !cx.tab.history.forward.is_empty(),
+                egui::Button::new(icons::FORWARD),
+            )
             .on_hover_text("Forward");
         if forward.clicked() {
             intent(cx, Intent::Forward);
@@ -46,7 +52,7 @@ fn toolbar(ui: &mut egui::Ui, cx: &mut PaneCx<'_>) {
         let up = ui
             .add_enabled(
                 paths::parent(&cx.tab.location.path).is_some(),
-                egui::Button::new("▲"),
+                egui::Button::new(icons::UP),
             )
             .on_hover_text("Parent directory");
         if up.clicked() {
@@ -56,19 +62,19 @@ fn toolbar(ui: &mut egui::Ui, cx: &mut PaneCx<'_>) {
 
         // Right-aligned controls first, so the path bar gets the rest.
         ui.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
-            if ui.button("⟳").on_hover_text("Refresh").clicked() {
+            if ui.button(icons::REFRESH).on_hover_text("Refresh").clicked() {
                 intent(cx, Intent::Refresh);
             }
             let details = cx.tab.view != model::ViewMode::List;
             if ui
-                .selectable_label(details, "☷")
+                .selectable_label(details, icons::VIEW_DETAILS)
                 .on_hover_text("Details view")
                 .clicked()
             {
                 intent(cx, Intent::ViewDetails);
             }
             if ui
-                .selectable_label(!details, "☰")
+                .selectable_label(!details, icons::VIEW_LIST)
                 .on_hover_text("List view")
                 .clicked()
             {
@@ -81,7 +87,7 @@ fn toolbar(ui: &mut egui::Ui, cx: &mut PaneCx<'_>) {
             {
                 intent(cx, Intent::ToggleHidden);
             }
-            if ui.button("⎘").on_hover_text("Copy path").clicked() {
+            if ui.button(icons::COPY).on_hover_text("Copy path").clicked() {
                 let text = cx.tab.location.path.to_string_lossy().into_owned();
                 if let Err(error) = cx.app.platform().set_text(&text) {
                     cx.requests.push(Request::Toast(
@@ -161,7 +167,10 @@ fn foot(ui: &mut egui::Ui, cx: &mut PaneCx<'_>) {
         ui.label(status_line(cx));
         ui.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
             if !cx.tab.filter.is_empty()
-                && ui.small_button("✕").on_hover_text("Clear filter").clicked()
+                && ui
+                    .small_button(icons::CLOSE)
+                    .on_hover_text("Clear filter")
+                    .clicked()
             {
                 cx.requests.push(Request::Command(Command::Filter {
                     pane: cx.pane,

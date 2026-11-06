@@ -252,14 +252,17 @@ impl Previews {
         {
             ui.horizontal(|ui| {
                 if ui
-                    .add_enabled(slot.page > 0, egui::Button::new("◀"))
+                    .add_enabled(slot.page > 0, egui::Button::new(crate::icons::BACK))
                     .clicked()
                 {
                     slot.page -= 1;
                 }
                 ui.label(format!("{} / {pages}", slot.page + 1));
                 if ui
-                    .add_enabled(slot.page + 1 < pages, egui::Button::new("▶"))
+                    .add_enabled(
+                        slot.page + 1 < pages,
+                        egui::Button::new(crate::icons::FORWARD),
+                    )
                     .clicked()
                 {
                     slot.page += 1;
