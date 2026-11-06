@@ -347,7 +347,7 @@ fn clicking_a_name_in_details_view_selects_the_row() {
             })
             .unwrap_or_default()
     };
-    assert!(selected(&harness).is_empty());
+    assert_eq!(selected(&harness), Vec::<String>::new());
 
     harness.get_by_label("b.txt").click();
     harness.step();
