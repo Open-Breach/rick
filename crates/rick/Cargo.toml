@@ -1,10 +1,12 @@
 [package]
 name = "rick"
-version = "0.1.0"
+version.workspace = true
 description = "Rick, a god-like file manager: the binary that wires the kernel, the built-in extensions and the egui user interface."
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
+
+build = "build.rs"
 
 [[bin]]
 name = "rick"

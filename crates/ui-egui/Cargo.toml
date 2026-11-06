@@ -1,6 +1,6 @@
 [package]
 name = "ui-egui"
-version = "0.1.0"
+version.workspace = true
 description = "Rick's egui user interface: the eframe shell, the egui_dock layout of tabs and panes, the file views, menus, palette and settings screens."
 edition.workspace = true
 license.workspace = true

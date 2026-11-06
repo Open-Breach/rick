@@ -1,6 +1,6 @@
 [package]
 name = "ext-git"
-version = "0.1.0"
+version.workspace = true
 description = "Rick's Git extension: status badges, branch and ahead/behind as a Decorator through gix, the Git action group, and an info panel section."
 edition.workspace = true
 license.workspace = true

@@ -1,6 +1,6 @@
 [package]
 name = "ext"
-version = "0.1.0"
+version.workspace = true
 description = "Rick extension API: the five extension-point traits, their data types, manifests and the registry."
 edition.workspace = true
 license.workspace = true

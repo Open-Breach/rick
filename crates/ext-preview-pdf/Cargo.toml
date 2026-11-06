@@ -1,6 +1,6 @@
 [package]
 name = "ext-preview-pdf"
-version = "0.1.0"
+version.workspace = true
 description = "Rick preview extension for PDF: pdfium-render pages, page navigation and a text layer."
 edition.workspace = true
 license.workspace = true

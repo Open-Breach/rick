@@ -1,6 +1,6 @@
 [package]
 name = "model"
-version = "0.1.0"
+version.workspace = true
 description = "Rick directory model: dock layout, panes, tabs, listings with sort, filter, group and selection, history, jobs and the settings snapshot."
 edition.workspace = true
 license.workspace = true

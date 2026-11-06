@@ -1,6 +1,6 @@
 [package]
 name = "runtime"
-version = "0.1.0"
+version.workspace = true
 description = "Rick job system: the single tokio runtime, the JobRunner and the rayon compute pool."
 edition.workspace = true
 license.workspace = true

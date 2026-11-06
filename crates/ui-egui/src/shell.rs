@@ -188,6 +188,9 @@ pub struct RickUi {
     settings_open: bool,
     shortcuts: ShortcutsScreen,
     about_open: bool,
+    /// What the About window shows as the version: the binary's version
+    /// and git hash, or this crate's version until the binary says.
+    version: String,
     inspector_open: bool,
     /// The preview pane's own state: pinned-panel search, what it drew.
     inspector_state: inspector::PaneState,
@@ -271,6 +274,14 @@ const TOAST_FOR: Duration = Duration::from_secs(5);
 const DONE_FOR: Duration = Duration::from_secs(4);
 
 impl RickUi {
+    /// The version the About window shows, as the binary reports it
+    /// (`rick --version`).
+    #[must_use]
+    pub fn with_version(mut self, version: impl Into<String>) -> Self {
+        self.version = version.into();
+        self
+    }
+
     /// Wraps `app`; `host` is the `UiHost` the app was built with.
     #[must_use]
     pub fn new(app: App, host: Arc<EguiHost>, ctx: &egui::Context) -> Self {
@@ -295,6 +306,7 @@ impl RickUi {
             settings_open: false,
             shortcuts: ShortcutsScreen::default(),
             about_open: false,
+            version: env!("CARGO_PKG_VERSION").to_owned(),
             inspector_open: false,
             inspector_state: inspector::PaneState::default(),
             inspector_width: 260.0,
@@ -1874,7 +1886,7 @@ impl eframe::App for RickUi {
         );
         self.shortcuts
             .show(ctx, &self.keys, self.app.registry(), &mut self.requests);
-        settings_ui::about_window(ctx, &mut self.about_open);
+        settings_ui::about_window(ctx, &mut self.about_open, &self.version);
         settings_ui::properties_window(ctx, &mut self.properties);
         self.show_texts(ctx);
         self.show_toasts(ctx);

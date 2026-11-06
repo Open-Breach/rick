@@ -1,6 +1,6 @@
 [package]
 name = "app"
-version = "0.1.0"
+version.workspace = true
 description = "Rick application state: the command loop that turns Commands into model changes and Events, the undo log, the extension registry and the TOML settings."
 edition.workspace = true
 license.workspace = true

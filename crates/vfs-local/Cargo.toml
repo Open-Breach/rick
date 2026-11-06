@@ -1,6 +1,6 @@
 [package]
 name = "vfs-local"
-version = "0.1.0"
+version.workspace = true
 description = "Rick local filesystem provider: bulk listing, native copy fast paths, change watching and trash through platform."
 edition.workspace = true
 license.workspace = true

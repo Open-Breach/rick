@@ -2,13 +2,19 @@
 //!
 //! Wires the native platform, the local provider, the built-in operations
 //! and the previewers compiled in as features into the `app`, and runs the
-//! egui shell.
+//! egui shell. `rick --version` prints the version and the git hash of the
+//! build and exits; the only other argument is the folder to start in.
 
+use std::io::Write as _;
 use std::path::PathBuf;
 use std::sync::Arc;
 
 use anyhow::Context as _;
 use types::Location;
+
+/// The version and the git hash of this build, as `--version` prints them
+/// and the About window shows them.
+pub const VERSION: &str = concat!(env!("CARGO_PKG_VERSION"), " (", env!("RICK_GIT_HASH"), ")");
 
 /// The extensions compiled in, one per enabled feature.
 // Each push sits behind its feature, which `vec![]` cannot express.
@@ -29,6 +35,14 @@ fn built_ins() -> Vec<Arc<dyn ext::Extension>> {
 }
 
 fn main() -> anyhow::Result<()> {
+    if std::env::args_os()
+        .nth(1)
+        .is_some_and(|arg| arg == "--version" || arg == "-V")
+    {
+        writeln!(std::io::stdout().lock(), "{VERSION}").context("writing the version")?;
+        return Ok(());
+    }
+
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
@@ -52,5 +66,5 @@ fn main() -> anyhow::Result<()> {
         config_dir: None,
         start: Location::new(vfs_local::PROVIDER_ID, platform::paths::from_path(&start)),
     });
-    ui_egui::run("Rick", app, host).context("the window could not be opened")
+    ui_egui::run("Rick", VERSION, app, host).context("the window could not be opened")
 }

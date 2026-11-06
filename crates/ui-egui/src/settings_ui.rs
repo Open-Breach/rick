@@ -422,15 +422,15 @@ pub fn label_of(intent: Intent, registry: &Registry) -> String {
     }
 }
 
-/// The About window.
-pub fn about_window(ctx: &egui::Context, open: &mut bool) {
+/// The About window; `version` is the binary's version and git hash.
+pub fn about_window(ctx: &egui::Context, open: &mut bool, version: &str) {
     egui::Window::new("About Rick")
         .open(open)
         .resizable(false)
         .show(ctx, |ui| {
             ui.heading("Rick");
             ui.label("A god-like file manager.");
-            ui.label(format!("Version {}", env!("CARGO_PKG_VERSION")));
+            ui.label(format!("Version {version}"));
             ui.hyperlink("https://github.com/Open-Breach/rick");
         });
 }
