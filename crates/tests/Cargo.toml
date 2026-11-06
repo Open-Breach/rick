@@ -10,9 +10,9 @@ publish = false
 [dependencies]
 types = { workspace = true }
 runtime = { workspace = true }
-rayon = { workspace = true }
 tempfile = { workspace = true }
 thiserror = { workspace = true }
+tokio = { workspace = true, features = ["rt"] }
 tracing = { workspace = true }
 
 [lints]

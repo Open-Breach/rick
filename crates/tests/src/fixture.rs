@@ -7,6 +7,13 @@
 //! is parallel. Nothing is ever committed: the tree lives as long as the
 //! returned [`Fixture`].
 //!
+//! Creating and removing a file is latency-bound in the kernel and its filter
+//! drivers, not CPU-bound, so the file phases run on the runtime's blocking
+//! pool with [`WORKERS`] workers rather than on the compute pool. Generating or
+//! dropping a fixture from inside the runtime is not supported: [`Config::generate_in`]
+//! panics there, and [`Fixture`]'s drop falls back to the serial removal of
+//! `TempDir`.
+//!
 //! ```no_run
 //! let fixture = tests::fixture::generate(1_000, 42).unwrap();
 //! assert!(fixture.root().join("d00001").is_dir() || fixture.files() > 0);
@@ -15,12 +22,17 @@
 use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
-use rayon::prelude::*;
 use tempfile::TempDir;
 
 /// Number of entries [`generate`] produces unless told otherwise.
 pub const DEFAULT_ENTRIES: usize = 200_000;
+
+/// Blocking-pool workers that create or remove files concurrently. More than
+/// the core count on purpose: each call mostly waits in the kernel.
+pub const WORKERS: usize = 32;
 
 /// How file sizes are drawn.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -137,6 +149,11 @@ impl Config {
     ///
     /// Fails when an entry cannot be created; entries written so far are
     /// left in place.
+    ///
+    /// # Panics
+    ///
+    /// Panics when called from inside the runtime (from a job or another
+    /// `block_on`): the file phase blocks on the runtime to drive its workers.
     pub fn generate_in(&self, root: &Path) -> Result<Stats, FixtureError> {
         let span =
             tracing::info_span!("fixture.generate", entries = self.entries, seed = self.seed);
@@ -148,19 +165,14 @@ impl Config {
             fs::create_dir(&path).map_err(|source| FixtureError::Create { path, source })?;
         }
 
-        runtime::compute::pool().install(|| {
-            plan.files.par_iter().try_for_each(|file| {
-                let path = root.join(&file.path);
-                write_file(&path, file.size, file.seed)
-                    .map_err(|source| FixtureError::Create { path, source })
-            })
-        })?;
-
         let stats = Stats {
             dirs: plan.dirs.len(),
             files: plan.files.len(),
             bytes: plan.files.iter().map(|f| f.size).sum(),
         };
+        for_each_file(plan.files, root, |path, file| {
+            write_file(path, file.size, file.seed)
+        })?;
         tracing::info!(
             dirs = stats.dirs,
             files = stats.files,
@@ -198,6 +210,29 @@ pub struct Fixture {
     dir: TempDir,
     config: Config,
     stats: Stats,
+}
+
+impl Drop for Fixture {
+    fn drop(&mut self) {
+        // `TempDir` removes the tree serially, which takes minutes for 200 000
+        // files on Windows. Remove the files concurrently first, from the same
+        // plan that created them, and leave the directories to `TempDir`.
+        // Inside the runtime the blocking pool cannot be driven from here, so
+        // the serial path is the only one.
+        if tokio::runtime::Handle::try_current().is_ok() {
+            return;
+        }
+        let files = Plan::new(&self.config).files;
+        let removed = for_each_file(files, self.dir.path(), |path, _| {
+            match fs::remove_file(path) {
+                Err(e) if e.kind() != io::ErrorKind::NotFound => Err(e),
+                _ => Ok(()),
+            }
+        });
+        if let Err(error) = removed {
+            tracing::warn!(%error, "parallel fixture removal failed; TempDir finishes it");
+        }
+    }
 }
 
 impl Fixture {
@@ -244,8 +279,8 @@ pub enum FixtureError {
     /// The temporary directory could not be created.
     #[error("cannot create temporary directory: {0}")]
     TempDir(#[source] io::Error),
-    /// An entry could not be created.
-    #[error("cannot create {path}: {source}")]
+    /// An entry could not be created or removed.
+    #[error("cannot create or remove {path}: {source}")]
     Create {
         /// The entry that failed.
         path: PathBuf,
@@ -253,6 +288,9 @@ pub enum FixtureError {
         #[source]
         source: io::Error,
     },
+    /// A worker on the blocking pool ended without reporting a result.
+    #[error("a fixture worker stopped unexpectedly: {0}")]
+    Worker(#[source] io::Error),
 }
 
 const EXTENSIONS: [&str; 12] = [
@@ -312,6 +350,57 @@ impl Plan {
         }
         Self { dirs, files }
     }
+}
+
+/// Applies `work` to every planned file below `root` on the runtime's
+/// blocking pool with [`WORKERS`] workers. Files are claimed one at a time
+/// from a shared counter, so the order of execution varies but the result
+/// does not. Stops handing out files after the first error and returns it.
+fn for_each_file<F>(files: Vec<PlannedFile>, root: &Path, work: F) -> Result<(), FixtureError>
+where
+    F: Fn(&Path, &PlannedFile) -> io::Result<()> + Send + Sync + 'static,
+{
+    let files = Arc::new(files);
+    let root: Arc<Path> = Arc::from(root);
+    let work = Arc::new(work);
+    let next = Arc::new(AtomicUsize::new(0));
+    let failed = Arc::new(AtomicBool::new(false));
+    let handle = runtime::handle();
+
+    runtime::block_on(async {
+        let workers: Vec<_> = (0..WORKERS)
+            .map(|_| {
+                let (files, root, work) =
+                    (Arc::clone(&files), Arc::clone(&root), Arc::clone(&work));
+                let (next, failed) = (Arc::clone(&next), Arc::clone(&failed));
+                handle.spawn_blocking(move || {
+                    while !failed.load(Ordering::Relaxed) {
+                        let Some(file) = files.get(next.fetch_add(1, Ordering::Relaxed)) else {
+                            break;
+                        };
+                        let path = root.join(&file.path);
+                        if let Err(source) = work(&path, file) {
+                            failed.store(true, Ordering::Relaxed);
+                            return Err(FixtureError::Create { path, source });
+                        }
+                    }
+                    Ok(())
+                })
+            })
+            .collect();
+
+        let mut outcome = Ok(());
+        for worker in workers {
+            let result = match worker.await {
+                Ok(result) => result,
+                Err(join) => Err(FixtureError::Worker(io::Error::other(join))),
+            };
+            if outcome.is_ok() {
+                outcome = result;
+            }
+        }
+        outcome
+    })
 }
 
 fn write_file(path: &Path, size: u64, seed: u64) -> io::Result<()> {

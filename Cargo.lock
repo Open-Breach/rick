@@ -202,10 +202,10 @@ dependencies = [
 name = "tests"
 version = "0.1.0"
 dependencies = [
- "rayon",
  "runtime",
  "tempfile",
  "thiserror",
+ "tokio",
  "tracing",
  "types",
 ]
