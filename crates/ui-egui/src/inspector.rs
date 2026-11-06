@@ -2,7 +2,7 @@
 //! row. Top to bottom: a toolbar (the entry's file-type icon, the controls
 //! for this kind of content and the previewer's own, info badges, close), the
 //! pinned info section when one is pinned, the content, and a one-line
-//! status bar. The pane shows no heading: the word "Inspector" appears
+//! status bar in the file list's status size. The pane shows no heading: the word "Inspector" appears
 //! nowhere in it.
 //!
 //! Info badges come from the previewer's sections and from the decorators'
@@ -162,8 +162,9 @@ pub fn show(
         separator(ui, width);
     }
 
-    // Status bar at the foot; the content gets what is left.
-    let status_h = ui.text_style_height(&egui::TextStyle::Small) + 6.0;
+    // Status bar at the foot, in the body size the file list's status line
+    // uses; the content gets what is left.
+    let status_h = ui.text_style_height(&egui::TextStyle::Body) + 6.0;
     let content_h = (ui.available_height() - status_h - 1.0).max(0.0);
     let (content, _) = ui.allocate_exact_size(vec2(width, content_h), egui::Sense::hover());
     state.rects.content = Some(content);
@@ -257,8 +258,9 @@ fn collect<'a>(ui: &egui::Ui, app: &'a App, pane: PaneId, previews: &mut Preview
     }
 }
 
-/// One line of small text: the previewer's facts joined with a dot, or
-/// what is known about the selection without one. Never wraps; truncates.
+/// One line of text, the file list's status size: the previewer's facts
+/// joined with a dot, or what is known about the selection without one.
+/// Never wraps; truncates.
 fn status_bar(ui: &mut egui::Ui, width: f32, height: f32, view: &View<'_>, state: &mut PaneState) {
     let (status, _) = ui.allocate_exact_size(vec2(width, height), egui::Sense::hover());
     state.rects.status = Some(status);
@@ -280,11 +282,7 @@ fn status_bar(ui: &mut egui::Ui, width: f32, height: f32, view: &View<'_>, state
             .layout(egui::Layout::left_to_right(Align::Center)),
     );
     bar.set_clip_rect(status.intersect(ui.clip_rect()));
-    bar.add(
-        egui::Label::new(egui::RichText::new(text).small().weak())
-            .selectable(false)
-            .truncate(),
-    );
+    bar.add(egui::Label::new(text).selectable(false).truncate());
 }
 
 fn separator(ui: &mut egui::Ui, width: f32) {

@@ -188,6 +188,8 @@ pub struct Slot {
     queued: Vec<(ControlId, ControlValue)>,
     /// Rasters at actual pixels instead of fitted to the pane.
     pub actual_size: bool,
+    /// How far the picture is panned at actual size.
+    pan: egui::Vec2,
     drawn: Vec<DrawnLine>,
     h_scroll: bool,
     frame_rect: Option<Rect>,
@@ -323,6 +325,12 @@ impl Slot {
     #[must_use]
     pub fn frame_rect(&self) -> Option<Rect> {
         self.frame_rect
+    }
+
+    /// How far a picture at actual size is panned, in points.
+    #[must_use]
+    pub fn pan_offset(&self) -> egui::Vec2 {
+        self.pan
     }
 
     /// Sets one of the previewer's controls; the next render reflects it.
@@ -538,19 +546,27 @@ impl Previews {
             let (w, h) = slot.texture_size;
             let native = vec2(w as f32 / ppp, h as f32 / ppp);
             if slot.actual_size && slot.is_raster() {
+                // Actual pixels: pan by dragging the picture or with the
+                // wheel, scrollbars either way.
                 let output = egui::ScrollArea::both()
                     .auto_shrink([false, false])
+                    .scroll_source(egui::scroll_area::ScrollSource::ALL)
+                    .on_drag_cursor(egui::CursorIcon::Grabbing)
                     .show(ui, |ui| {
                         ui.add(egui::Image::from_texture(texture).fit_to_exact_size(native))
                     });
+                if output.inner.hovered() && !output.inner.dragged() {
+                    ctx.set_cursor_icon(egui::CursorIcon::Grab);
+                }
+                slot.pan = output.state.offset;
                 slot.frame_rect = Some(output.inner.rect.intersect(output.inner_rect));
             } else {
                 let scale = (body.width() / native.x)
                     .min(body.height() / native.y)
                     .min(1.0);
                 let size = native * scale;
-                let rect =
-                    Rect::from_center_size(pos2(body.center().x, body.top() + size.y / 2.0), size);
+                // Centred in the content both ways.
+                let rect = Rect::from_center_size(body.center(), size);
                 let response = ui.put(
                     rect,
                     egui::Image::from_texture(texture).fit_to_exact_size(size),

@@ -662,6 +662,125 @@ fn wide_frames_fit_a_narrow_pane_instead_of_widening_it() {
     }
 }
 
+/// A fitted picture sits in the middle of the content; at 1:1 it pans by
+/// dragging; the status bar is as high as the file list's status line.
+#[test]
+fn fitted_frames_are_centred_and_actual_size_pans_by_dragging() {
+    let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+    let wide = image::RgbaImage::from_fn(1600, 300, |x, y| {
+        image::Rgba([
+            u8::try_from(x / 7).unwrap_or(255),
+            u8::try_from(y).unwrap_or(255),
+            120,
+            255,
+        ])
+    });
+    let mut bytes = std::io::Cursor::new(Vec::new());
+    wide.write_to(&mut bytes, image::ImageFormat::Png)
+        .unwrap_or_else(|e| panic!("{e}"));
+    fs::write(dir.path().join("wide.png"), bytes.into_inner()).unwrap_or_else(|e| panic!("{e}"));
+    let fake = Arc::new(Fake::new().unwrap_or_else(|e| panic!("{e}")));
+    let mut harness = window(
+        &fake,
+        dir.path(),
+        egui::vec2(1100.0, 700.0),
+        400.0,
+        previewers(),
+    );
+    let pane = harness.state().app().model().focused;
+    select(&mut harness, "wide.png");
+
+    // Fitted: centred both ways in the content.
+    let rects = harness.state().preview_rects();
+    let content = rects.content.unwrap_or_else(|| panic!("content"));
+    let frame = harness
+        .state()
+        .previews()
+        .get(pane)
+        .and_then(ui_egui::preview::Slot::frame_rect)
+        .unwrap_or_else(|| panic!("frame"));
+    assert!(
+        (frame.center() - content.center()).length() < 1.5,
+        "frame {frame:?} centred in {content:?}"
+    );
+    assert!(
+        frame.width() <= content.width() + 0.5 && frame.width() < 1600.0,
+        "fitted into the pane: {frame:?} in {content:?}"
+    );
+
+    // The status bar is a body-text row, like the file list's status line.
+    let status = rects.status.unwrap_or_else(|| panic!("status"));
+    let body = egui::TextStyle::Body
+        .resolve(&harness.ctx.style_of(egui::Theme::Light))
+        .size;
+    assert!(
+        status.height() >= body + 5.0,
+        "status {status:?} for body {body}"
+    );
+
+    // 1:1: the picture is wider than the pane and dragging it pans.
+    click_in_pane(&mut harness, icons::ACTUAL_SIZE);
+    let started = Instant::now();
+    loop {
+        harness.step();
+        let slot = harness.state().previews().get(pane);
+        if slot.is_some_and(|s| s.actual_size && s.has_frame() && !s.rendering()) {
+            break;
+        }
+        assert!(
+            started.elapsed() < Duration::from_secs(10),
+            "no 1:1 frame: {slot:?}"
+        );
+        std::thread::sleep(Duration::from_millis(2));
+    }
+    harness.step();
+    assert_eq!(toolbar_item(&harness, "1:1"), Some(true));
+    let before = harness
+        .state()
+        .previews()
+        .get(pane)
+        .map_or(egui::Vec2::ZERO, ui_egui::preview::Slot::pan_offset);
+    assert_eq!(before, egui::Vec2::ZERO);
+    let from = content.center();
+    drag(&mut harness, from, from - egui::vec2(120.0, 0.0));
+    let after = harness
+        .state()
+        .previews()
+        .get(pane)
+        .map_or(egui::Vec2::ZERO, ui_egui::preview::Slot::pan_offset);
+    assert!(
+        after.x > 60.0 && after.y.abs() < 1.0,
+        "dragging left pans right: {before:?} -> {after:?}"
+    );
+}
+
+/// Presses the primary button at `from`, moves to `to` in small steps and
+/// releases.
+fn drag(harness: &mut Harness<'_, RickUi>, from: egui::Pos2, to: egui::Pos2) {
+    harness.event(egui::Event::PointerMoved(from));
+    harness.step();
+    harness.event(egui::Event::PointerButton {
+        pos: from,
+        button: egui::PointerButton::Primary,
+        pressed: true,
+        modifiers: egui::Modifiers::default(),
+    });
+    harness.step();
+    for i in 1..=8u8 {
+        let pos = from + (to - from) * (f32::from(i) / 8.0);
+        harness.event(egui::Event::PointerMoved(pos));
+        harness.step();
+    }
+    harness.event(egui::Event::PointerButton {
+        pos: to,
+        button: egui::PointerButton::Primary,
+        pressed: false,
+        modifiers: egui::Modifiers::default(),
+    });
+    harness.step();
+    harness.step();
+}
+
 /// Runs `git` in `dir`.
 fn git(dir: &Path, args: &[&str]) {
     let output = std::process::Command::new("git")
