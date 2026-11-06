@@ -40,6 +40,11 @@ Entry format:
    `CancelToken` must still stop when cancelled. Assumed: yes; `JobRunner`
    races the job's future against the token and drops the future, so every
    cancelled job ends with `Error::Cancelled` at its next await point.
+   Answered by the maintainer (2026-11-06): yes, keep the drop semantics.
+   The "Every long operation is a Job" rule in SPEC.md now states it, plus
+   the duty of jobs with partial state to check the token or hold a `Drop`
+   guard before irreversible steps, and of long compute work to check
+   `is_cancelled()` between chunks.
 5. (issue 1) The acceptance criterion "`fixture::generate(200_000, seed)`
    runs in under 30 s on CI" is met on the Linux and macOS runners but not
    on the GitHub-hosted Windows runner, where file creation is bound by NTFS
