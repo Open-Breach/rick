@@ -4,7 +4,10 @@
 //! what listings, watches and jobs delivered, turns key presses into
 //! [`Intent`]s through the [`KeyMap`], draws everything from the model, and
 //! hands the user's requests back to the app as `Command`s. Nothing here
-//! mutates the model.
+//! mutates the model. [`dnd`] carries a drag of entries across the frame:
+//! the rows are drag sources, the folders, panes, breadcrumbs, tab headers
+//! and side-panel entries register as drop zones, and the end of the frame
+//! turns a release into a `Command`.
 //!
 //! [`run`] opens the window; the binary calls it after building the app with
 //! an [`EguiHost`], which is how actions ask the user questions without
@@ -20,6 +23,7 @@
     clippy::cast_possible_wrap
 )]
 
+pub mod dnd;
 pub mod dock;
 pub mod format;
 pub mod frame;

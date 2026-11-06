@@ -8,6 +8,7 @@ use egui::Align;
 use model::{IconSize, ViewMode};
 use types::{EntryKind, Location};
 
+use crate::dnd::{self, Spring, Target, Zone};
 use crate::keys::Intent;
 use crate::shell::{PaneCx, Request};
 use crate::{format, icons, paths, views};
@@ -340,6 +341,7 @@ fn breadcrumb(ui: &mut egui::Ui, cx: &mut PaneCx<'_>, rect: egui::Rect) {
             ui.add(button)
         };
         response.clone().on_hover_text(prefix.to_string_lossy());
+        crumb_zone(ui, cx, i, i != last, prefix, response.rect);
         if response.clicked() && i != last {
             cx.requests.push(Request::Command(Command::Navigate {
                 pane: cx.pane,
@@ -378,6 +380,31 @@ fn breadcrumb(ui: &mut egui::Ui, cx: &mut PaneCx<'_>, rect: egui::Rect) {
     if response.clicked() {
         cx.tab_ui.path_edit = Some(cx.tab.location.path.to_string_lossy().into_owned());
         cx.tab_ui.focus_path = true;
+    }
+}
+
+/// A breadcrumb segment as a drop target: into that ancestor; hovering one
+/// that is not the current folder drills into it.
+fn crumb_zone(
+    ui: &egui::Ui,
+    cx: &mut PaneCx<'_>,
+    index: usize,
+    ancestor: bool,
+    prefix: &types::VPath,
+    rect: egui::Rect,
+) {
+    if cx.dnd.active()
+        && cx.dnd.zone(Zone {
+            key: egui::Id::new(("dnd-crumb", cx.tab_id, index)),
+            rect,
+            target: Target::Folder {
+                to: Location::new(cx.tab.location.provider, prefix.clone()),
+                device: dnd::listing_device(cx.tab),
+                spring: ancestor.then_some(Spring::Pane(cx.pane)),
+            },
+        })
+    {
+        dnd::highlight(ui.painter(), ui.visuals(), rect);
     }
 }
 

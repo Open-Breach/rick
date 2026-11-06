@@ -15,6 +15,7 @@ use model::{
 use platform::{ControlsSide, PropertiesOutcome};
 use types::{EntryId, EntryKind, Location, Progress};
 
+use crate::dnd::{Dnd, DragView, Source, Spring, Target, Zone};
 use crate::dock::DockSync;
 use crate::host::{Ask, EguiHost};
 use crate::keys::{Direction, Intent, KeyMap};
@@ -48,6 +49,17 @@ pub struct TabUi {
     pub reset_columns: bool,
     /// How many rows the last frame could show, for Page Up and Down.
     pub visible_rows: usize,
+    /// The list's vertical scroll offset in the last frame.
+    pub scroll_offset: f32,
+    /// Scroll to this offset on the next frame.
+    pub pending_offset: Option<f32>,
+    /// The scroll offset to restore when the tab is back at this location
+    /// after a drag spring-loaded out of it.
+    pub scroll_restore: Option<(Location, f32)>,
+    /// The location drawn last frame, to notice a change.
+    pub last_location: Option<Location>,
+    /// Select the entry with this name once the listing is complete.
+    pub pending_select: Option<Vec<u8>>,
 }
 
 /// What widgets ask the shell to do; applied after the frame's layout.
@@ -84,6 +96,24 @@ pub enum Request {
     Toast(Level, String),
     /// Show the About window.
     About,
+    /// Rows were dragged past the threshold: start a drag of them.
+    StartDrag {
+        /// The pane.
+        pane: PaneId,
+        /// Its tab.
+        tab: TabId,
+        /// The entries, in view order.
+        items: Vec<EntryId>,
+        /// With the right button, which asks on drop.
+        right_button: bool,
+    },
+    /// Select the entry with this name in the pane once it is listed.
+    SelectNamed {
+        /// The pane.
+        pane: PaneId,
+        /// The entry's file name.
+        name: Vec<u8>,
+    },
 }
 
 /// What a tab's widgets see.
@@ -108,6 +138,8 @@ pub struct PaneCx<'a> {
     pub focused: bool,
     /// The icon view's thumbnails.
     pub thumbnails: &'a mut Thumbnails,
+    /// The drag in progress and its drop zones.
+    pub dnd: &'a mut Dnd,
 }
 
 /// One dispatched intent, for the palette's recents and for tests.
@@ -175,6 +207,11 @@ pub struct RickUi {
     /// Rick's own window frame as the last frame drew it, if it did; the
     /// window is then cleared to transparent around it.
     window_frame: Option<frame::Frame>,
+    /// Drag and drop of entries.
+    dnd: Dnd,
+    /// Each tab's header button in the last frame, for tests that drop on
+    /// one.
+    tab_headers: HashMap<TabId, egui::Rect>,
 }
 
 /// How many dispatched intents are remembered.
@@ -265,6 +302,8 @@ impl RickUi {
             applied: None,
             now: SystemTime::now(),
             window_frame: None,
+            dnd: Dnd::default(),
+            tab_headers: HashMap::new(),
         }
     }
 
@@ -447,6 +486,30 @@ impl RickUi {
             .collect()
     }
 
+    /// The drag in progress, for tests.
+    #[must_use]
+    pub fn drag(&self) -> Option<DragView> {
+        self.dnd.view()
+    }
+
+    /// Whether the move/copy/cancel prompt of a drop is up, for tests.
+    #[must_use]
+    pub fn drop_prompt_open(&self) -> bool {
+        self.dnd.prompt_open()
+    }
+
+    /// A tab's header button in the last frame, for tests.
+    #[must_use]
+    pub fn tab_header_rect(&self, tab: TabId) -> Option<egui::Rect> {
+        self.tab_headers.get(&tab).copied()
+    }
+
+    /// A tab's list scroll offset in the last frame, for tests.
+    #[must_use]
+    pub fn scroll_offset(&self, tab: TabId) -> f32 {
+        self.tabs.get(&tab).map_or(0.0, |t| t.scroll_offset)
+    }
+
     /// The entry the app is previewing in `pane`, if any.
     fn preview_entry(&self, pane: PaneId) -> Option<EntryId> {
         self.app
@@ -594,7 +657,78 @@ impl RickUi {
                     Request::FocusPane(pane) => self.handle(Command::FocusPane(pane)),
                     Request::Toast(level, text) => self.toast(level, text),
                     Request::About => self.about_open = true,
+                    Request::StartDrag {
+                        pane,
+                        tab,
+                        items,
+                        right_button,
+                    } => self.start_drag(pane, tab, &items, right_button),
+                    Request::SelectNamed { pane, name } => {
+                        if let Some((tab_id, _)) = self.app.model().active_tab(pane) {
+                            self.tabs.entry(tab_id).or_default().pending_select = Some(name);
+                        }
+                    }
                 }
+            }
+        }
+    }
+
+    /// Starts a drag of `items` out of `pane`'s tab.
+    fn start_drag(&mut self, pane: PaneId, tab: TabId, items: &[EntryId], right_button: bool) {
+        let Some(state) = self.app.model().tab(tab) else {
+            return;
+        };
+        let entries: Vec<types::Entry> = state
+            .listing
+            .rows()
+            .filter(|e| items.contains(&e.id))
+            .cloned()
+            .collect();
+        self.dnd.start(
+            Source::Internal {
+                from: pane,
+                tab,
+                items: entries,
+            },
+            right_button,
+        );
+    }
+
+    /// Selects the entries a `SelectNamed` asked for once their listing is
+    /// complete: a pinned file's folder was opened, and the file is now in
+    /// the list.
+    fn resolve_pending_selects(&mut self) {
+        let mut found = Vec::new();
+        for (tab_id, tab_ui) in &self.tabs {
+            let Some(name) = &tab_ui.pending_select else {
+                continue;
+            };
+            let Some(tab) = self.app.model().tab(*tab_id) else {
+                continue;
+            };
+            if !tab.listing.complete {
+                continue;
+            }
+            let hit = tab
+                .listing
+                .rows()
+                .position(|e| e.path.file_name() == Some(name.as_slice()))
+                .and_then(|index| tab.listing.row(index).map(|e| (index, e.id)));
+            found.push((*tab_id, self.app.model().pane_of(*tab_id), hit));
+        }
+        for (tab_id, pane, hit) in found {
+            let Some(tab_ui) = self.tabs.get_mut(&tab_id) else {
+                continue;
+            };
+            tab_ui.pending_select = None;
+            if let (Some(pane), Some((index, id))) = (pane, hit) {
+                tab_ui.scroll_to = Some(index);
+                tab_ui.cursor = Some(id);
+                tab_ui.anchor = Some(id);
+                self.requests.push(Request::Command(Command::Select {
+                    pane,
+                    change: SelectionChange::Set(vec![id]),
+                }));
             }
         }
     }
@@ -1130,7 +1264,7 @@ impl RickUi {
                     egui::Panel::bottom(egui::Id::new("operations"))
                         .show(ui, |ui| self.operations_area(ui));
                 }
-                side_panel::show(ui, &self.app, focused, &mut self.requests);
+                side_panel::show(ui, &self.app, focused, &mut self.requests, &mut self.dnd);
             });
         // The outer width is what egui restores from `default_size`, so it
         // is what persists; only once the pointer is up, so a drag writes
@@ -1452,6 +1586,8 @@ struct Viewer<'a> {
     /// The tab the pointer is over this frame.
     hovered_now: &'a mut Option<TabId>,
     thumbnails: &'a mut Thumbnails,
+    dnd: &'a mut Dnd,
+    tab_headers: &'a mut HashMap<TabId, egui::Rect>,
 }
 
 impl TabViewer for Viewer<'_> {
@@ -1477,12 +1613,33 @@ impl TabViewer for Viewer<'_> {
     }
 
     fn on_tab_button(&mut self, tab: &mut TabId, response: &egui::Response) {
+        self.tab_headers.insert(*tab, response.rect);
         if response.hovered() {
             *self.hovered_now = Some(*tab);
         }
         if response.middle_clicked() {
             self.requests
                 .push(Request::Command(Command::CloseTab(*tab)));
+        }
+        // A drop target: into the folder the tab shows; hovering activates
+        // the tab.
+        if self.dnd.active()
+            && let Some(state) = self.app.model().tab(*tab)
+        {
+            let highlight = self.dnd.zone(Zone {
+                key: egui::Id::new(("dnd-tab", tab.0)),
+                rect: response.rect,
+                target: Target::Folder {
+                    to: state.location.clone(),
+                    device: crate::dnd::listing_device(state),
+                    spring: Some(Spring::Tab(*tab)),
+                },
+            });
+            if highlight {
+                let painter = response.ctx.layer_painter(response.layer_id);
+                let style = response.ctx.style_of(response.ctx.theme());
+                crate::dnd::highlight(&painter, &style.visuals, response.rect);
+            }
         }
     }
 
@@ -1517,6 +1674,7 @@ impl TabViewer for Viewer<'_> {
             now: self.now,
             focused: model.focused == pane,
             thumbnails: self.thumbnails,
+            dnd: self.dnd,
         };
         pane::show(ui, &mut cx);
     }
@@ -1574,6 +1732,8 @@ impl RickUi {
                 hovered_last,
                 hovered_now: &mut self.hovered_tab,
                 thumbnails: &mut self.thumbnails,
+                dnd: &mut self.dnd,
+                tab_headers: &mut self.tab_headers,
             };
             DockArea::new(&mut self.dock.state)
                 .id(egui::Id::new("dock"))
@@ -1622,6 +1782,10 @@ impl eframe::App for RickUi {
             });
         }
         self.apply_settings(ctx);
+        let after = self.app.model().settings.drag.after;
+        self.dnd
+            .begin_frame(ctx, after, &mut self.tabs, &mut self.requests);
+        self.resolve_pending_selects();
         self.handle_keys(ctx);
         self.apply_requests(ctx);
 
@@ -1637,6 +1801,10 @@ impl eframe::App for RickUi {
         if let Some(window_frame) = window_frame {
             window_frame.grips(ui);
         }
+        self.dnd
+            .end_frame(ctx, &self.app, &mut self.tabs, &mut self.requests);
+        self.dnd.show_prompt(ctx, &mut self.requests);
+        self.apply_requests(ctx);
 
         self.show_dialog(ctx);
         settings_ui::settings_window(

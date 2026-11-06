@@ -5,8 +5,9 @@ use egui::{Align, Sense};
 use egui_extras::{Column as TableColumn, TableBuilder};
 use ext::{Badge, CellValue, ColumnDef, Decoration};
 use model::{Column, IconSize, SelectionChange, SortDir, ViewMode};
-use types::{Entry, EntryKind};
+use types::{Entry, EntryKind, Location};
 
+use crate::dnd::{self, Spring, Target, Zone};
 use crate::format;
 use crate::menus;
 use crate::shell::{PaneCx, Request};
@@ -52,6 +53,23 @@ pub fn show(ui: &mut egui::Ui, cx: &mut PaneCx<'_>) {
         ui.id().with(("empty-space", cx.tab_id)),
         egui::Sense::click(),
     );
+    if let Some(offset) = restore_scroll(cx) {
+        cx.tab_ui.pending_offset = Some(offset);
+    }
+    // The pane's space is a drop target: into the folder it shows.
+    if cx.dnd.active()
+        && cx.dnd.zone(Zone {
+            key: egui::Id::new(("dnd-pane", cx.tab_id)),
+            rect: area,
+            target: Target::Folder {
+                to: cx.tab.location.clone(),
+                device: dnd::listing_device(cx.tab),
+                spring: None,
+            },
+        })
+    {
+        dnd::highlight(ui.painter(), ui.visuals(), area);
+    }
     match cx.tab.view {
         ViewMode::List => list(ui, cx),
         ViewMode::Details | ViewMode::Tree => details(ui, cx),
@@ -75,6 +93,97 @@ pub fn show(ui: &mut egui::Ui, cx: &mut PaneCx<'_>) {
         };
         background.context_menu(|ui| menus::context_menu(ui, cx, &action_ctx, None));
     }
+}
+
+/// The scroll offset to put back: a drag spring-loaded out of this location
+/// and the tab is back at it with its listing complete. Any other change of
+/// location forgets it.
+fn restore_scroll(cx: &mut PaneCx<'_>) -> Option<f32> {
+    let changed = cx.tab_ui.last_location.as_ref() != Some(&cx.tab.location);
+    if changed {
+        cx.tab_ui.last_location = Some(cx.tab.location.clone());
+    }
+    let (location, offset) = cx.tab_ui.scroll_restore.clone()?;
+    if location != cx.tab.location {
+        if changed {
+            cx.tab_ui.scroll_restore = None;
+        }
+        return None;
+    }
+    if !cx.tab.listing.complete {
+        return None;
+    }
+    cx.tab_ui.scroll_restore = None;
+    Some(offset)
+}
+
+/// Registers a row as a drop zone, a folder row to move into and a file row
+/// as a silent no-op, and paints its highlight.
+fn row_zone(ui: &egui::Ui, cx: &mut PaneCx<'_>, entry: &Entry, rect: egui::Rect) {
+    if !cx.dnd.active() {
+        return;
+    }
+    let target = if entry.kind == EntryKind::Dir {
+        Target::Folder {
+            to: Location::new(cx.tab.location.provider, entry.path.clone()),
+            device: dnd::device_of(entry.id),
+            spring: Some(Spring::Pane(cx.pane)),
+        }
+    } else {
+        Target::NoOp
+    };
+    let zone = Zone {
+        key: egui::Id::new(("dnd-row", cx.tab_id, entry.id)),
+        rect,
+        target,
+    };
+    if cx.dnd.zone(zone) {
+        dnd::highlight(ui.painter(), ui.visuals(), rect);
+    }
+}
+
+/// Starts a drag when a row is pulled past egui's click distance: the whole
+/// selection when the row is in it, the row alone otherwise.
+fn drag_start(cx: &mut PaneCx<'_>, index: usize, response: &egui::Response) {
+    let right_button = if response.drag_started_by(egui::PointerButton::Secondary) {
+        true
+    } else if response.drag_started_by(egui::PointerButton::Primary) {
+        false
+    } else {
+        return;
+    };
+    let Some(entry) = cx.tab.listing.row(index) else {
+        return;
+    };
+    let id = entry.id;
+    let items: Vec<types::EntryId> = if cx.tab.selection.contains(&id) {
+        cx.tab.selected().map(|e| e.id).collect()
+    } else {
+        cx.requests.push(Request::Command(app::Command::Select {
+            pane: cx.pane,
+            change: SelectionChange::Set(vec![id]),
+        }));
+        cx.tab_ui.cursor = Some(id);
+        cx.tab_ui.anchor = Some(id);
+        vec![id]
+    };
+    cx.requests.push(Request::StartDrag {
+        pane: cx.pane,
+        tab: cx.tab_id,
+        items,
+        right_button,
+    });
+}
+
+/// Whether a response is worth a second look after the layout: a click of
+/// any kind, a menu, or the start of a drag.
+fn interacted(response: &egui::Response) -> bool {
+    response.clicked()
+        || response.double_clicked()
+        || response.secondary_clicked()
+        || response.middle_clicked()
+        || response.context_menu_opened()
+        || response.drag_started()
 }
 
 /// Cell width and thumbnail edge, in points, of an icon size.
@@ -111,8 +220,12 @@ pub fn icons(ui: &mut egui::Ui, cx: &mut PaneCx<'_>, size: IconSize) {
         let row = index / columns;
         area = area.vertical_scroll_offset(row as f32 * (cell_h + spacing.y));
     }
+    if let Some(offset) = cx.tab_ui.pending_offset.take() {
+        area = area.vertical_scroll_offset(offset);
+    }
     let mut clicked: Vec<(usize, egui::Response)> = Vec::new();
-    area.show_rows(ui, cell_h, rows, |ui, range| {
+    let mut drawn: Vec<(usize, egui::Rect)> = Vec::new();
+    let out = area.show_rows(ui, cell_h, rows, |ui, range| {
         for row in range {
             ui.horizontal(|ui| {
                 for column in 0..columns {
@@ -122,20 +235,31 @@ pub fn icons(ui: &mut egui::Ui, cx: &mut PaneCx<'_>, size: IconSize) {
                     };
                     let response =
                         icon_cell_ui(ui, cx, entry, cell_w, cell_h, thumb, show_extensions);
-                    if response.clicked()
-                        || response.double_clicked()
-                        || response.secondary_clicked()
-                        || response.middle_clicked()
-                        || response.context_menu_opened()
-                    {
+                    drawn.push((index, response.rect));
+                    if interacted(&response) {
                         clicked.push((index, response));
                     }
                 }
             });
         }
     });
+    cx.tab_ui.scroll_offset = out.state.offset.y;
+    zones_for(ui, cx, &drawn);
     for (index, response) in clicked {
+        drag_start(cx, index, &response);
         interact(ui, cx, index, &response);
+    }
+}
+
+/// Registers the drawn rows as drop zones.
+fn zones_for(ui: &egui::Ui, cx: &mut PaneCx<'_>, drawn: &[(usize, egui::Rect)]) {
+    if !cx.dnd.active() {
+        return;
+    }
+    for (index, rect) in drawn {
+        if let Some(entry) = cx.tab.listing.row(*index).cloned() {
+            row_zone(ui, cx, &entry, *rect);
+        }
     }
 }
 
@@ -149,7 +273,8 @@ fn icon_cell_ui(
     thumb: f32,
     show_extensions: bool,
 ) -> egui::Response {
-    let (rect, response) = ui.allocate_exact_size(egui::vec2(cell_w, cell_h), egui::Sense::click());
+    let (rect, response) =
+        ui.allocate_exact_size(egui::vec2(cell_w, cell_h), egui::Sense::click_and_drag());
     let name = display_name(entry, show_extensions).to_owned();
     response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, &name));
     if !ui.is_rect_visible(rect) {
@@ -261,7 +386,7 @@ pub fn details(ui: &mut egui::Ui, cx: &mut PaneCx<'_>) {
         .id_salt(("details", cx.tab_id))
         .striped(settings.zebra_stripes)
         .resizable(true)
-        .sense(Sense::click())
+        .sense(Sense::click_and_drag())
         .auto_shrink([false, false])
         .cell_layout(egui::Layout::left_to_right(Align::Center))
         .column(TableColumn::remainder().at_least(140.0).clip(true))
@@ -277,6 +402,9 @@ pub fn details(ui: &mut egui::Ui, cx: &mut PaneCx<'_>) {
     }
     if let Some(row) = cx.tab_ui.scroll_to.take() {
         builder = builder.scroll_to_row(row, Some(Align::Center));
+    }
+    if let Some(offset) = cx.tab_ui.pending_offset.take() {
+        builder = builder.vertical_scroll_offset(offset);
     }
 
     let sort = cx.tab.sort;
@@ -305,7 +433,8 @@ pub fn details(ui: &mut egui::Ui, cx: &mut PaneCx<'_>) {
     let show_extensions = settings.show_extensions;
     let now = cx.now;
     let mut clicked: Vec<(usize, egui::Response)> = Vec::new();
-    table.body(|body| {
+    let mut drawn: Vec<(usize, egui::Rect)> = Vec::new();
+    let out = table.body(|body| {
         body.rows(height, count, |mut row| {
             let index = row.index();
             let Some(entry) = listing.row(index) else {
@@ -313,16 +442,14 @@ pub fn details(ui: &mut egui::Ui, cx: &mut PaneCx<'_>) {
             };
             details_row(&mut row, cx.tab, entry, &extra, show_extensions, now);
             let response = row.response();
-            if response.clicked()
-                || response.double_clicked()
-                || response.secondary_clicked()
-                || response.middle_clicked()
-                || response.context_menu_opened()
-            {
+            drawn.push((index, response.rect));
+            if interacted(&response) {
                 clicked.push((index, response));
             }
         });
     });
+    cx.tab_ui.scroll_offset = out.state.offset.y;
+    zones_for(ui, cx, &drawn);
     if let Some(column) = sort_request {
         let dir = if sort.by == column {
             match sort.dir {
@@ -339,6 +466,7 @@ pub fn details(ui: &mut egui::Ui, cx: &mut PaneCx<'_>) {
         }));
     }
     for (index, response) in clicked {
+        drag_start(cx, index, &response);
         interact(ui, cx, index, &response);
     }
 }
@@ -476,8 +604,12 @@ pub fn list(ui: &mut egui::Ui, cx: &mut PaneCx<'_>) {
         let row = index / columns;
         area = area.vertical_scroll_offset(row as f32 * (height + ui.spacing().item_spacing.y));
     }
+    if let Some(offset) = cx.tab_ui.pending_offset.take() {
+        area = area.vertical_scroll_offset(offset);
+    }
     let mut clicked: Vec<(usize, egui::Response)> = Vec::new();
-    area.show_rows(ui, height, rows, |ui, range| {
+    let mut drawn: Vec<(usize, egui::Rect)> = Vec::new();
+    let out = area.show_rows(ui, height, rows, |ui, range| {
         for row in range {
             ui.horizontal(|ui| {
                 for column in 0..columns {
@@ -495,21 +627,20 @@ pub fn list(ui: &mut egui::Ui, cx: &mut PaneCx<'_>) {
                     );
                     let response = ui.add_sized(
                         [cell_width - ui.spacing().item_spacing.x, height],
-                        egui::Button::selectable(selected, text),
+                        egui::Button::selectable(selected, text).sense(Sense::click_and_drag()),
                     );
-                    if response.clicked()
-                        || response.double_clicked()
-                        || response.secondary_clicked()
-                        || response.middle_clicked()
-                        || response.context_menu_opened()
-                    {
+                    drawn.push((index, response.rect));
+                    if interacted(&response) {
                         clicked.push((index, response));
                     }
                 }
             });
         }
     });
+    cx.tab_ui.scroll_offset = out.state.offset.y;
+    zones_for(ui, cx, &drawn);
     for (index, response) in clicked {
+        drag_start(cx, index, &response);
         interact(ui, cx, index, &response);
     }
 }
