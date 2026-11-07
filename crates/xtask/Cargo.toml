@@ -1,0 +1,16 @@
+[package]
+name = "xtask"
+version.workspace = true
+description = "Rick's build tasks: `cargo xtask bundle` lays out the binary, the shared kernel libraries and every plugin in target/<profile>/bundle/."
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+# No kernel crate: the bundler drives a whole-workspace build and the
+# workspace's own `rick-plugin-manifest` helper (QUESTIONS.md 81).
+[dependencies]
+serde_json = { workspace = true }
+
+[lints]
+workspace = true

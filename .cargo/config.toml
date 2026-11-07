@@ -16,3 +16,8 @@ rustflags = ["-C", "prefer-dynamic", "-C", "rpath"]
 
 [target.'cfg(not(target_os = "macos"))']
 rustflags = ["-C", "prefer-dynamic"]
+
+[alias]
+# `cargo xtask bundle [--release]`: the binary, the shared libraries and
+# every plugin laid out in target/<profile>/bundle/ (crates/xtask).
+xtask = "run -p xtask --"
