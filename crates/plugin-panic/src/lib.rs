@@ -1,6 +1,6 @@
 //! A plugin whose entry point panics: the fixture for the host's promise
-//! that a plugin panicking during registration is caught, unloaded and
-//! reported, and never takes the host down.
+//! that a plugin panicking during registration is caught and reported, and
+//! never takes the host down.
 
 #![deny(unsafe_code)]
 

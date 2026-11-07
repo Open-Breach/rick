@@ -917,3 +917,17 @@ Once answered, an entry keeps its number and gains a dated decision line.
     `target/<profile>/bundle/` (the binary, the kernel dylibs and `libstd`,
     pdfium when `RICK_PDFIUM_DIR` names it, `plugins/<id>/` per plugin), and
     the release archives are that directory's contents.
+
+85. (issue 16) The issue says a plugin that panics during registration is
+    "caught, unloaded and reported". Unloading proved unsafe: the first CI
+    run of the pull request loaded the probe plugin, dropped it, loaded it
+    again at the same address, and `tracing` panicked on a callsite it had
+    already registered — the first load's `info!` had put a pointer to the
+    library's static into tracing-core's process-wide callsite list, which
+    `dlclose` left dangling. Thread-local destructors would do the same.
+    Assumed: a library whose entry point ran is never unmapped, whatever
+    became of it; a refused or panicking plugin is caught and reported, its
+    contributions dropped, and its code stays mapped and idle until the
+    process ends (`Loaded` holds the library in a `ManuallyDrop`). Only a
+    file that is no plugin at all (no entry point) is unmapped again. The
+    cost is the memory of a plugin that could not be used.

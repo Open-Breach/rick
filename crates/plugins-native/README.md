@@ -8,8 +8,9 @@ into the binary. At start it scans `<binary dir>/plugins/` and
 the rest with `libloading`, calls the one exported entry point
 `rick_plugin_register` with a registry of its own, and hands each plugin to
 the application as an extension it registers like a built-in. A plugin that
-fails or panics while registering is reported in the plugins table and
-unloaded; it never takes the host down. A plugin shares the kernel crates
+fails or panics while registering is reported in the plugins table and left
+alone, its library kept mapped since code that ran may have registered
+itself with the runtime (QUESTIONS.md 85); it never takes the host down. A plugin shares the kernel crates
 `types`, `runtime` and `ext` with the binary as Rust dylibs (QUESTIONS.md
 81), so its jobs, tracing and contributions land in the host's one runtime,
 subscriber and registry. This is the one crate besides `platform` that uses

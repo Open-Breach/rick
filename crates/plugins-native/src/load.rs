@@ -1,6 +1,7 @@
 //! Opening a plugin library and calling its entry point.
 
 use std::fmt;
+use std::mem::ManuallyDrop;
 use std::path::{Path, PathBuf};
 
 use ext::plugin::{ENTRY_POINT, EntryPoint, Status};
@@ -22,7 +23,8 @@ pub enum LoadError {
     /// failed.
     #[error("{0}")]
     Failed(String),
-    /// The plugin panicked while registering; caught, the library unloaded.
+    /// The plugin panicked while registering; caught, the library kept
+    /// mapped and left alone.
     #[error("{0}")]
     Panicked(String),
     /// The entry point registered several extensions or none; a plugin is
@@ -34,9 +36,11 @@ pub enum LoadError {
 /// A plugin library with its extension registered: what the application
 /// loads like a built-in extension.
 ///
-/// Keeps the library mapped for as long as it lives, because every
-/// contribution in it points into the library's code; the host keeps every
-/// loaded plugin for the process lifetime.
+/// The library stays mapped for the rest of the process, whatever happens
+/// to this value: every contribution points into its code, and code that
+/// ran may have registered itself with the runtime (tracing callsites,
+/// thread-local destructors), so unmapping it is never safe (QUESTIONS.md
+/// 85).
 pub struct Loaded {
     manifest: Manifest,
     /// The plugin's contributions, as the entry point registered them.
@@ -44,7 +48,8 @@ pub struct Loaded {
     /// `Drop` implementations live in is still mapped.
     contributions: Registry,
     path: PathBuf,
-    _library: libloading::Library,
+    /// Never dropped: see the type's documentation.
+    _library: ManuallyDrop<libloading::Library>,
 }
 
 impl Loaded {
@@ -93,7 +98,9 @@ impl fmt::Debug for Loaded {
 ///
 /// The caller has checked the plugin's manifest file first: the toolchain
 /// and the API version are what make the library's entry point safe to
-/// call. On any error the library is unloaded again before returning.
+/// call. A library whose entry point ran stays mapped even when it is
+/// refused, because its code may have registered itself with the runtime;
+/// only a library that is no plugin at all is unmapped again.
 ///
 /// # Errors
 ///
@@ -116,6 +123,10 @@ pub fn load_library(path: &Path) -> Result<Loaded, LoadError> {
         // the registry it is given, which outlives the call.
         unsafe { entry(&mut registry) }
     };
+    // From here on the plugin's code has run: whatever it registered with
+    // the process (tracing callsites, thread-local destructors) points into
+    // the library, so it stays mapped for the rest of the process.
+    let library = ManuallyDrop::new(library);
     let failure = || registry.failure().unwrap_or("no reason given").to_owned();
     let result = match status {
         Status::Registered => match registry.manifests() {
@@ -133,11 +144,10 @@ pub fn load_library(path: &Path) -> Result<Loaded, LoadError> {
             _library: library,
         }),
         Err(error) => {
-            warn!(path = %path.display(), %error, "plugin not loaded");
-            // Everything that points into the library goes before the
-            // library does.
+            warn!(path = %path.display(), %error, "plugin not loaded; its library stays mapped");
+            // The contributions drop while the code they point into is
+            // mapped, which it stays.
             drop(registry);
-            drop(library);
             Err(error)
         }
     }

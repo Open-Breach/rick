@@ -104,9 +104,8 @@ pub enum Status {
 /// refused before anything runs. A panic in `ctor` or in `Extension::register` is caught
 /// here, on the plugin's side of the `extern "C"` boundary, where unwinding
 /// is still allowed, and turned into [`Status::Panicked`] with the message
-/// stored in the registry. The panic payload is dropped before returning,
-/// so nothing of the plugin's survives in the host once it unloads the
-/// library.
+/// stored in the registry as an owned string. The panic payload is dropped
+/// before returning.
 pub fn register(reg: &mut Registry, ctor: impl FnOnce() -> Arc<dyn Extension>) -> Status {
     if !reg.shares_kernel() {
         reg.set_failure(

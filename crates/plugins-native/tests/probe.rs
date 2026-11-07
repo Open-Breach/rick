@@ -1,7 +1,9 @@
 //! The plugin boundary, proven with the fixture plugins (QUESTIONS.md 81):
 //! the probe library registers a previewer whose `open` spawns a job, the
 //! job runs on the host's runtime and its tracing event reaches the host's
-//! subscriber; the panicking library is caught and the host carries on.
+//! subscriber; the panicking library is caught and the host carries on,
+//! and loading the probe a second time in the same process is fine because
+//! a library whose code ran is never unmapped (QUESTIONS.md 85).
 
 use std::io::Write;
 use std::path::PathBuf;
@@ -125,7 +127,7 @@ fn the_probe_registers_and_its_job_runs_on_the_host_runtime() {
 }
 
 #[test]
-fn a_plugin_that_panics_while_registering_is_caught_and_unloaded() {
+fn a_plugin_that_panics_while_registering_is_caught_and_the_host_carries_on() {
     let _ = log();
     let error = match load_library(&fixture("plugin_panic")) {
         Err(error) => error,

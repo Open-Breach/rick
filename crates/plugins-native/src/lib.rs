@@ -16,8 +16,9 @@
 //! library's [`ext::plugin::ENTRY_POINT`] is called with a registry of its
 //! own and the result wrapped as a [`Loaded`] extension that the application
 //! registers like a built-in. A plugin that fails or panics while
-//! registering is reported in its row and unloaded; it never takes the host
-//! down. One tracing span per plugin carries the outcome.
+//! registering is reported in its row and left alone, its library kept
+//! mapped (QUESTIONS.md 85); it never takes the host down. One tracing span
+//! per plugin carries the outcome.
 //!
 //! [`describe`] is the other direction: `cargo xtask bundle` loads a freshly
 //! built library through it to write the plugin's manifest file
@@ -44,8 +45,8 @@ pub const HOST_TOOLCHAIN: &str = env!("RICK_TOOLCHAIN");
 
 /// Loads the library at `path` once, reads the manifest its entry point
 /// registers and returns the `plugin.toml` for it, with this build's
-/// toolchain and the library names cargo gives the crate; the library is
-/// unloaded again. For the bundler, not the running application.
+/// toolchain and the library names cargo gives the crate; the library
+/// stays mapped. For the bundler, not the running application.
 ///
 /// # Errors
 ///
