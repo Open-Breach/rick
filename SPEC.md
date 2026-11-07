@@ -998,17 +998,7 @@ The smallest Rick worth using every day. Everything in this list ships; nothing 
 - The WASM and native plugin hosts and the Extensions screen; extensions are compiled in.
 - Localisation beyond English.
 
-**Close-out (status 2026-11-06, evening).** Issues 1–6, the GUI chrome round, the preview pane layout and drag and drop with Pin are merged. What remains before 0.1 is tagged, each already specified above, lands in three issues — A: side panel and list; B: session, layouts and windows; C: release:
-
-- Side panel: the Recent, Network (local mounted volumes only in 0.1) and Trash sections, and the operations area with its job rows.
-- Tree view (View mode control; today it falls back to Details).
-- Inline rename, new file and new folder edited in place in the list (Further GUI elements, Operations).
-- Paste conflicts: skip, overwrite, rename, apply-to-all (Drag and drop, Execution; the same dialogue serves Paste).
-- Search in subdirectories (Main area).
-- Open containing folder (Operations).
-- Session restore and Saved layouts; New window and tear-out to a new window (General behaviour).
-- Release (issue 7): `BENCHMARKS.md` with measured numbers on all three OSes and the macOS and Windows gates turned on; `CHANGELOG.md`; a release workflow producing a binary per OS.
-- A decision pass over `QUESTIONS.md`: every entry without a `Decided` line gets one, and the spec is corrected where the assumption stands.
+**Released.** 0.1.0 was tagged on 2026-11-06 from `02a03ba` and published for Linux (x64, arm64), macOS (arm64) and Windows (x64) by the release workflow; `BENCHMARKS.md` holds the measured numbers and `CHANGELOG.md` the list of changes. Known gaps carried into 0.2: dragging items out of Rick into another application is not delivered on any platform (the native drag source returns `Unsupported`; QUESTIONS.md 62), a drop from outside lands in the focused pane's folder, and macOS runs four benchmarks against measured targets rather than the spec's numbers (`BENCHMARKS.md`).
 
 ### Version 0.2 — scope
 
@@ -1021,8 +1011,9 @@ The smallest Rick worth using every day. Everything in this list ships; nothing 
 5. **Search and decorators as plugins:** `ext-search-walk` behind the subtree search, then `ext-search-windows`, `ext-search-spotlight`, `ext-search-tracker` and `ext-search-baloo` feeding the title-row search box; `ext-svn` beside `ext-git`.
 6. **Actions as plugins:** `ext-action-compress` (compress, extract here, extract to), `ext-action-compare` (file and folder diff), `ext-action-terminal` (open console, with an embedded console pane), `ext-action-rename` (bulk rename with pattern, numbering, find and replace, preview), plus Open with… chooser, Paste as link and Select by pattern in `ext-action-core`.
 7. **Permission management** in Properties (owner, group, mode bits, ACLs, recursive apply, elevation through the platform), and **localisation**: the `t!` lookup gains translation files and a language setting, English remains the fallback.
+8. **Platform drag source and drop position.** Close 0.1's drag-and-drop gap: a native drag source per platform (an `NSDraggingSession` on macOS, `DoDragDrop` on Windows, a Wayland data source and XDND on Linux) through the `platform::DragSource` hook, and the cursor position of an incoming drop where the backend can give it, so a drop from outside lands where it was dropped. The macOS benchmarks that run against measured targets are re-measured and tightened towards the spec's numbers as the work allows.
 
-**Not in 0.2:** the WASM host, the extension store and downloads, plugin signing, `ext-deco-fs`, TFVC.
+**Not in 0.2:** the WASM host, the extension store and downloads, plugin signing, `ext-deco-fs`, TFVC. During 0.2 the workspace version is `0.2.0-dev`; the milestones merge to `main` behind CI on all three OSes as in 0.1, and 0.2.0 is tagged when milestone 8 is in.
 
 **3D models.** A previewer for STL, OBJ and 3MF, for people who print. The mesh is parsed natively (`stl_io`, `tobj`, a small 3MF reader over its zip and XML) and rendered through wgpu into the preview frame as a shaded solid with a neutral material and a ground grid; drag orbits, wheel zooms, double-click resets the view, and the view is remembered per file while it stays open. The status bar shows triangle count, bounding box in millimetres and, for OBJ, the number of objects; the File info section adds the units declared by 3MF. Models beyond a configurable triangle budget decimate for the preview and say so. Ships as `ext-preview-3d`, a plugin.
 

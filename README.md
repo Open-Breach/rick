@@ -4,7 +4,7 @@
 
 Rick is a lens into your files. Point it at a folder and you see what's what: what every file is, what's inside it, what changed, what's where. Then you move things, rename things, sort things out, without ever leaving the window. One tool, written in Rust, identical on Linux, macOS and Windows, and built from modules so it only carries what *you* need.
 
-> Status: 0.1, the first release, ships on all three platforms at once as plain archives from the [Releases page](https://github.com/Open-Breach/rick/releases). Star the repo, watch it, and come along for the ride.
+> Status: 0.1.0 is out, on all three platforms at once, as plain archives from the [Releases page](https://github.com/Open-Breach/rick/releases). 0.2 is under way: a native plugin host, so every non-essential feature becomes a file you can drop in or remove, then the viewer, more previewers (Office, media, archives, CSV, 3D models), archive, ISO, trash, SFTP and cloud providers, search connectors, and the remaining actions — the plan is in [SPEC.md](SPEC.md) under "Version 0.2 — scope". Star the repo, watch it, and come along for the ride.
 
 > **Use with caution.** Rick is written largely by an AI coding agent working from [SPEC.md](SPEC.md), with human review, a strict test gate and CI on all three platforms. That makes it fast to build and easy to audit, but it is still young software whose entire purpose is to move, rename and delete your files. Until 1.0, run it on data you have backed up, prefer *Move to trash* over *Delete permanently*, and treat every release as a preview. If it does something surprising, that's a bug: please report it.
 
