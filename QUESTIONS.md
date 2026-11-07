@@ -814,3 +814,76 @@ Once answered, an entry keeps its number and gains a dated decision line.
     list the same names.
     Decided (2026-11-06): as assumed; spec unchanged. BENCHMARKS.md says so
     in its Targets paragraph.
+
+81. (issue 16) The spec leaves the plugin ABI to the implementer: "dynamic
+    linking of the kernel crates, or a C-ABI vtable", recorded here.
+    Decided (2026-11-07): **Rust dylibs.** `types`, `runtime` and `ext` are
+    `crate-type = ["dylib"]`, the whole workspace builds with
+    `-C prefer-dynamic` (`.cargo/config.toml`; cargo gives a workspace
+    member's dylib a static std otherwise, which no consumer can link next
+    to the dynamic one), and macOS adds `-C rpath` so the dylibs get an
+    `@rpath/…` install name. The binary carries a run path to its own
+    directory (`rick`'s build script, reading `CARGO_CFG_TARGET_OS`, which
+    is build configuration and not a `cfg(target_os)` in code). A plugin is
+    a `cdylib` + `rlib` crate that exports one `extern "C"` function,
+    `rick_plugin_register(&mut Registry) -> Status`, through `ext::plugin!`;
+    the five traits, `JobRunner`, `Arc<dyn Provider>`, `Box<dyn
+    PreviewDoc>` and the error type cross the boundary as themselves, since
+    both sides run the same code from the same shared libraries, and the
+    plugin's jobs run on the host's tokio runtime, its tracing events reach
+    the host's subscriber and its contributions land in the host's registry
+    with nothing duplicated. A panic during registration is caught on the
+    plugin's side of the `extern "C"` boundary and reported as a status.
+    Constraints: (a) the same toolchain, the exact `rustc -V` line, which
+    the manifest records and the host checks before loading; (b) the same
+    workspace build, since cargo's feature unification and crate metadata
+    fix the symbol names — a plugin built elsewhere fails at `dlopen` with
+    an unresolved symbol, which the host reports as a refusal; (c) the
+    bundle ships `libstd-<hash>`, `libtypes`, `libruntime` and `libext`
+    beside the binary (cargo names workspace dylibs and cdylibs without a
+    hash, only `libstd` keeps one); (d) `RUSTFLAGS` must stay unset, as it
+    replaces the config's flags and the build then fails with "cannot
+    satisfy dependencies so `std` only shows up once"; (e) a crate that
+    both a plugin and the host use but no kernel dylib contains is
+    duplicated, which is harmless unless it holds process-wide state — the
+    kernel dylibs hold tokio, rayon, tracing, futures, thiserror, smallvec,
+    semver and bitflags, so the state that matters is shared, and a plugin
+    must take `tracing`, `tokio` and `rayon` through `ext` and `runtime`
+    rather than depend on a copy of its own; (f) every build is a build of
+    the whole workspace with its dev targets (`cargo test --workspace`,
+    `cargo build --workspace --all-targets`, `cargo xtask bundle`), because
+    cargo names a workspace dylib without the metadata hash and so one file
+    serves every feature set — a `-p` build of a crate below `ext` rewrites
+    the shared libraries for its own, smaller feature set (measured: the
+    `plugins-native` tests alone give another `libruntime` and `libext`),
+    and the next whole-workspace build recompiles them and everything above
+    them; `cargo clean -p types -p runtime -p ext` when the two disagree.
+    For the same reason `xtask` depends on no kernel crate: it drives
+    `cargo build --workspace --examples` and a helper binary from that
+    build, never a kernel dylib of its own.
+    Rejected: a C-ABI vtable layer (`abi_stable` or hand-written). The five
+    traits are async (boxed futures, `BoxStream`, `AsyncRead` handles), the
+    host hands the plugin `Arc<dyn Provider>`, `&JobRunner`, `&DecorateCtx`
+    and `&dyn UiHost`, and the plugin hands back `Box<dyn PreviewDoc>` and
+    `Arc<dyn Decorator>`: every one of these would need an FFI-safe mirror
+    with adapters in both directions, the plugin would still carry its own
+    tokio, tracing and rayon whose statics the host cannot reach, and
+    "one runtime, one subscriber" would mean a forwarding shim for each —
+    the opposite of the issue's "without duplicated statics". A C ABI stays
+    the right tool for plugins built outside the workspace or by another
+    compiler, which 0.2 does not promise.
+    Proven by `crates/plugin-probe` (a Previewer whose `open` spawns a job,
+    plus an Action whose job waits for cancellation) and `crates/plugin-panic`,
+    loaded by `crates/plugins-native/tests/probe.rs` on Linux, macOS and
+    Windows in CI.
+
+82. (issue 16) The spec allows `unsafe` only in `platform`, and the plugin
+    host it asks for must call `libloading` and a symbol it resolved, which
+    is unsafe by nature; a plugin crate must declare its entry point with
+    `#[unsafe(no_mangle)]`, which the `unsafe_code` lint also flags.
+    Assumed: `plugins-native` is the second crate allowed `unsafe`, for the
+    loader calls only, each block with a `// SAFETY:` comment like
+    `platform`'s; the `ext::plugin!` macro carries the `#[allow(unsafe_code)]`
+    for the one attribute, so a plugin crate writes no `unsafe` of its own.
+    A plugin crate uses `#![deny(unsafe_code)]` rather than `forbid`, since a
+    `forbid` would refuse the macro's allowance.
