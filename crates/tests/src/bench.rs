@@ -45,13 +45,13 @@ pub const BENCHMARKS: &[Benchmark] = &[
     Benchmark {
         key: "listing-first",
         linux: ms(50),
-        macos: ms(300),
+        macos: ms(400),
         windows: ms(50),
     },
     Benchmark {
         key: "listing-complete",
         linux: ms(400),
-        macos: ms(2_000),
+        macos: ms(3_000),
         windows: ms(400),
     },
     Benchmark {
@@ -122,9 +122,9 @@ pub const BENCHMARKS: &[Benchmark] = &[
     },
     Benchmark {
         key: "startup",
-        linux: ms(12),
-        macos: ms(100),
-        windows: ms(15),
+        linux: ms(20),
+        macos: ms(150),
+        windows: ms(20),
     },
 ];
 

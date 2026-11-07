@@ -12,7 +12,11 @@ against this file).
 macOS and Windows: the median × 1.5, rounded up to a round number, and never
 below the Linux target, so a faster runner is not held to a tighter budget
 than the spec asks; where that number still sat below the worst run it was
-rounded up past the worst run (macOS `listing-first`). The first run of
+rounded up past the worst run. Two benchmarks then went over their first
+targets in CI runs of the release pull request and were set to what the
+runner does, as the close-out issue provides: the macOS listing (first batch
+400 ms, complete 3 s) and startup (median × 2 on every OS, since its
+millisecond-scale numbers swing more than 1.5 × between runs). The first run of
 `pdf-first` and `preview-frame` on each runner loads pdfium cold (0.8 s on
 Linux, 1.4 s on macOS, 0.2 s on Windows); CI binds pdfium in the unit tests
 before the benchmarks run, so that run is left out of the targets and shown
@@ -70,24 +74,26 @@ Written to the runner's temp disk. macOS misses the spec's 30 s: 26.0 s ×
 Spec target: 50 ms (first rows within 100 ms of opening; the provider's half
 of it, issue 2). Test:
 `listing_200k_entries_first_batch_under_50ms_complete_under_400ms` in
-`listing.rs`. macOS: 154 ms × 1.5 = 231 ms, rounded up past the worst run
-to 300 ms.
+`listing.rs`. macOS: 154 ms × 1.5 = 231 ms; CI runs of the release pull
+request then measured 105 ms and 299 ms, so the target is 400 ms, what the
+runner does.
 
 | OS | Target | Median | Worst |
 | --- | --- | --- | --- |
 | Linux | 50 ms | 1.4 ms | 1.5 ms |
-| macOS | 300 ms | 154 ms | 250 ms |
+| macOS | 400 ms | 154 ms | 250 ms |
 | Windows | 50 ms | 1.3 ms | 1.4 ms |
 
 ### `listing-complete` — complete listing of 200 000 entries
 
 Spec target: 400 ms (issue 2). Same test as `listing-first`. macOS: 1303 ms
-× 1.5 = 1955 ms, target 2 s.
+× 1.5 = 1955 ms; CI runs of the release pull request then measured 950 ms
+and 2469 ms, so the target is 3 s, what the runner does.
 
 | OS | Target | Median | Worst |
 | --- | --- | --- | --- |
 | Linux | 400 ms | 163 ms | 167 ms |
-| macOS | 2 s | 1303 ms | 1356 ms |
+| macOS | 3 s | 1303 ms | 1356 ms |
 | Windows | 400 ms | 122 ms | 169 ms |
 
 ### `copy-sparse` — copying a 1 GiB sparse file
@@ -222,14 +228,16 @@ toggling wrap and three scroll frames. Test:
 
 ### `startup` — startup to the first frame
 
-No spec target; the targets are median × 1.5 on each OS (7.6 → 12 ms, 63.4 →
-100 ms, 9.7 → 15 ms). Headless: the app built with every built-in extension
+No spec target; the targets are median × 2 on each OS (7.6 → 20 ms, 63.4 →
+150 ms, 9.7 → 20 ms): median × 1.5 gave 15 ms on Windows and a CI run of
+the release pull request measured 15.3 ms. Headless: the app built with
+every built-in extension
 on a 100-entry folder, then the shell's frames in the `egui_kittest` harness
 until it is stable; window and GPU creation are not included and the
 platform is the fake. Test: `startup_to_the_first_frame` in `startup.rs`.
 
 | OS | Target | Median | Worst |
 | --- | --- | --- | --- |
-| Linux | 12 ms | 7.6 ms | 7.9 ms |
-| macOS | 100 ms | 63.4 ms | 81.1 ms |
-| Windows | 15 ms | 9.7 ms | 11.9 ms |
+| Linux | 20 ms | 7.6 ms | 7.9 ms |
+| macOS | 150 ms | 63.4 ms | 81.1 ms |
+| Windows | 20 ms | 9.7 ms | 11.9 ms |
