@@ -1,0 +1,41 @@
+[package]
+name = "ext-preview-archive"
+version.workspace = true
+description = "Rick preview plugin for archives: lists zip, tar family, 7z, RAR and ISO contents without extracting."
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+# A plugin: the `cdylib` the host loads from `plugins/preview-archive/`,
+# and an `rlib` for the binary's opt-in `preview-archive` feature and the
+# tests.
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+types = { workspace = true }
+ext = { workspace = true }
+zip = { workspace = true }
+tar = { workspace = true }
+flate2 = { workspace = true }
+zstd = { workspace = true }
+lzma-rust2 = { workspace = true }
+bzip2 = { workspace = true }
+lz4_flex = { workspace = true }
+sevenz-rust2 = { workspace = true }
+unrar = { workspace = true }
+tempfile = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+runtime = { workspace = true }
+vfs-local = { workspace = true }
+platform = { workspace = true }
+# The fixtures the tests write: an AES-encrypted zip entry, a 7z with and
+# without encrypted headers, and xz-compressed tars.
+zip = { workspace = true, features = ["aes-crypto"] }
+sevenz-rust2 = { workspace = true, features = ["compress", "aes256"] }
+lzma-rust2 = { workspace = true, features = ["encoder"] }
+
+[lints]
+workspace = true
