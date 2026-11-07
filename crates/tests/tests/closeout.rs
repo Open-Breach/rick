@@ -457,24 +457,26 @@ fn a_finished_job_leaves_the_operations_area_after_five_seconds() {
     assert!(harness.query_by_label_contains("Copy a.txt").is_none());
 }
 
+/// A 1 GiB file with 4 MiB of data at each end and a hole between.
+fn sparse_gib(path: &Path) {
+    use std::io::{Seek, SeekFrom, Write};
+    let mut file = fs::File::create(path).unwrap_or_else(|e| panic!("{e}"));
+    file.write_all(&vec![0xABu8; 4 << 20])
+        .unwrap_or_else(|e| panic!("{e}"));
+    file.seek(SeekFrom::Start((1 << 30) - (4 << 20)))
+        .unwrap_or_else(|e| panic!("{e}"));
+    file.write_all(&vec![0xCDu8; 4 << 20])
+        .unwrap_or_else(|e| panic!("{e}"));
+    file.set_len(1 << 30).unwrap_or_else(|e| panic!("{e}"));
+}
+
 /// A 1 GiB sparse copy shows its row with progress, pause holds it, cancel
 /// ends it within one batch.
 #[test]
 #[ignore = "writes a 1 GiB sparse file; run with --ignored"]
 fn a_1gib_sparse_copy_shows_progress_pauses_and_cancels() {
-    use std::io::{Seek, SeekFrom, Write};
     let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
-    let source = dir.path().join("sparse.bin");
-    {
-        let mut file = fs::File::create(&source).unwrap_or_else(|e| panic!("{e}"));
-        file.write_all(&vec![0xABu8; 4 << 20])
-            .unwrap_or_else(|e| panic!("{e}"));
-        file.seek(SeekFrom::Start((1 << 30) - (4 << 20)))
-            .unwrap_or_else(|e| panic!("{e}"));
-        file.write_all(&vec![0xCDu8; 4 << 20])
-            .unwrap_or_else(|e| panic!("{e}"));
-        file.set_len(1 << 30).unwrap_or_else(|e| panic!("{e}"));
-    }
+    sparse_gib(&dir.path().join("sparse.bin"));
     // The target folders exist before the window opens, so the listed folder
     // does not change under the test.
     for run_index in 0..tests::bench::runs() {
