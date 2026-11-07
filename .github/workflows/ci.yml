@@ -13,11 +13,36 @@ jobs:
     # more saving the cache, which the shared libraries and the plugin
     # libraries made larger (CI run 168 was cancelled in that save at 30).
     timeout-minutes: 45
+    # Issue 18: the media previewer's playback is built only where the
+    # GStreamer development files are (Linux, from the system packages);
+    # macOS and Windows build it without, and the release workflow bundles
+    # the runtime there. The two variables carry the feature to every cargo
+    # command of the job, so the kernel dylibs are built once per profile
+    # (QUESTIONS.md 81).
+    env:
+      RICK_WS_FEATURES: ${{ matrix.os == 'ubuntu-latest' && '--features ext-preview-media/gstreamer,tests/gstreamer' || '' }}
+      RICK_TESTS_FEATURES: ${{ matrix.os == 'ubuntu-latest' && '--features gstreamer' || '' }}
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
         with: { components: "rustfmt, clippy" }
       - uses: Swatinem/rust-cache@v2
+      # Issue 18: system GStreamer with its development files and the
+      # codec plug-ins for the media previewer, and LibreOffice for the
+      # office previewer; the tests then fail rather than skip when either
+      # is missing. macOS and Windows runners have neither and skip those
+      # tests with a note.
+      - name: gstreamer and libreoffice
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev \
+            gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-plugins-bad \
+            gstreamer1.0-plugins-ugly gstreamer1.0-libav \
+            libreoffice-writer libreoffice-calc libreoffice-impress
+          echo "RICK_REQUIRE_GSTREAMER=1" >> "$GITHUB_ENV"
+          echo "RICK_REQUIRE_LIBREOFFICE=1" >> "$GITHUB_ENV"
       # pdfium for the PDF previewer: the release binary for this runner,
       # bound through RICK_PDFIUM_DIR; RICK_REQUIRE_PDFIUM makes its tests
       # fail rather than skip when the binding is missing.
@@ -50,21 +75,23 @@ jobs:
       # No Unicode symbol character is used as an icon (SPEC.md "Icons").
       - run: "! grep -rnP '(*UTF8)[\\x{2190}-\\x{2BFF}\\x{1F300}-\\x{1FAFF}]' crates/ui-egui/src"
         if: runner.os == 'Linux'
-      - run: cargo clippy --all-targets -- -D warnings
-      - run: cargo test --workspace
+      - run: cargo clippy --workspace --all-targets ${{ env.RICK_WS_FEATURES }} -- -D warnings
+      - run: cargo test --workspace ${{ env.RICK_WS_FEATURES }}
       # Issue 16: the bundle, target/debug/bundle/ with the binary, the kernel
       # dylibs, libstd and plugins/<id>/ per plugin, and the host loading
-      # them from it (issue 20 adds the archive and trash providers).
-      # The same whole-workspace build as the tests: a smaller package set
-      # would rewrite the shared libraries (QUESTIONS.md 81).
-      - run: cargo xtask bundle
+      # them from it (issue 18 adds the four previewers, issue 20 the archive
+      # and trash providers). The same whole-workspace build as the tests: a
+      # smaller package set would rewrite the shared libraries
+      # (QUESTIONS.md 81).
+      - run: cargo xtask bundle ${{ env.RICK_WS_FEATURES }}
+      # Every plugin loads through --list-plugins.
       - name: list plugins
         shell: bash
         run: |
           exe=""
           if [ "$RUNNER_OS" = "Windows" ]; then exe=".exe"; fi
           ls -l target/debug/bundle target/debug/bundle/plugins
-          for id in git vfs-trash vfs-archive; do
+          for id in git vfs-trash vfs-archive preview-archive preview-csv preview-media preview-office; do
             test -f "target/debug/bundle/plugins/$id/plugin.toml" || { echo "no plugin.toml for $id"; exit 1; }
           done
           out="$("./target/debug/bundle/rick$exe" --list-plugins)"
@@ -72,41 +99,52 @@ jobs:
           echo "$out" | grep -E '^git +Git +[^ ]+ +decorator, action +loaded +' || { echo "git plugin not loaded"; exit 1; }
           echo "$out" | grep -E '^vfs-trash +Trash +[^ ]+ +provider, decorator, action +loaded +' || { echo "trash plugin not loaded"; exit 1; }
           echo "$out" | grep -E '^vfs-archive +Archives +[^ ]+ +provider +loaded +' || { echo "archive plugin not loaded"; exit 1; }
+          for id in preview-archive preview-csv preview-media preview-office; do
+            echo "$out" | grep -E "^$id +[^ ].* +previewer +loaded +" || { echo "$id plugin not loaded"; exit 1; }
+          done
       # The acceptance benchmarks, each asserting the target of the runner's
       # OS from crates/tests/src/bench.rs (BENCHMARKS.md has the numbers):
       # all three OSes assert, nothing is soft.
       # Issue 1: the 200k-entry fixture, written on the runner's temp disk,
       # the fast local drive on Windows (QUESTIONS.md 5 for its target).
-      - run: cargo test -p tests --release --test fixture -- --ignored --nocapture
+      - run: cargo test -p tests --release ${{ env.RICK_TESTS_FEATURES }} --test fixture -- --ignored --nocapture
         env: { TMP: "${{ runner.temp }}", TEMP: "${{ runner.temp }}", TMPDIR: "${{ runner.temp }}" }
       # Issue 2: listing the 200k fixture and the 1 GiB sparse copy.
-      - run: cargo test -p tests --release --test listing --test copy -- --ignored --nocapture
+      - run: cargo test -p tests --release ${{ env.RICK_TESTS_FEATURES }} --test listing --test copy -- --ignored --nocapture
         env: { TMP: "${{ runner.temp }}", TEMP: "${{ runner.temp }}", TMPDIR: "${{ runner.temp }}" }
       # Issue 4: scrolling the 200k fixture in details view, on egui's CPU
       # frame (QUESTIONS.md 24).
-      - run: cargo test -p tests --release --test ui -- --ignored --nocapture
+      - run: cargo test -p tests --release ${{ env.RICK_TESTS_FEATURES }} --test ui -- --ignored --nocapture
         env: { TMP: "${{ runner.temp }}", TEMP: "${{ runner.temp }}", TMPDIR: "${{ runner.temp }}" }
       # Issue 5: the 48 MB bitmap's and the 300-page PDF's first frame, and
       # the UI frames while they decode (QUESTIONS.md 30).
-      - run: cargo test -p tests --release --test preview -- --ignored --nocapture
+      - run: cargo test -p tests --release ${{ env.RICK_TESTS_FEATURES }} --test preview -- --ignored --nocapture
         env: { TMP: "${{ runner.temp }}", TEMP: "${{ runner.temp }}", TMPDIR: "${{ runner.temp }}" }
       # Issue 6: decorating a visible batch of a generated 10 000-file
       # repository, cached and pending, and the completion of the status read.
-      - run: cargo test -p tests --release --test git -- --ignored --nocapture
+      - run: cargo test -p tests --release ${{ env.RICK_TESTS_FEATURES }} --test git -- --ignored --nocapture
         env: { TMP: "${{ runner.temp }}", TEMP: "${{ runner.temp }}", TMPDIR: "${{ runner.temp }}" }
-      - run: cargo doc --no-deps
+      - run: cargo doc --no-deps ${{ env.RICK_WS_FEATURES }}
         env: { RUSTDOCFLAGS: "-D warnings" }
+      # Issue 18: the previewer plugins. The office conversion within 5 s
+      # (LibreOffice; macOS and Windows skip with a note), the MP4 playing
+      # and seeking and the 3-minute MP3's waveform within 500 ms
+      # (GStreamer, Linux), the 10 000-entry zip's first screen within
+      # 100 ms, a window of the 1 000 000-row CSV within a frame, and no
+      # UI frame over 16.6 ms while the plugins decode.
+      - run: cargo test -p tests --release ${{ env.RICK_TESTS_FEATURES }} --test previewers -- --ignored --nocapture --test-threads=1
+        env: { TMP: "${{ runner.temp }}", TEMP: "${{ runner.temp }}", TMPDIR: "${{ runner.temp }}" }
       # GUI chrome: the icon view's thumbnails and the frames while they arrive.
-      - run: cargo test -p tests --release --test chrome -- --ignored --nocapture
+      - run: cargo test -p tests --release ${{ env.RICK_TESTS_FEATURES }} --test chrome -- --ignored --nocapture
         env: { TMP: "${{ runner.temp }}", TEMP: "${{ runner.temp }}", TMPDIR: "${{ runner.temp }}" }
       # Preview pane: 200 000 wrapped lines, the worst frame.
-      - run: cargo test -p tests --release --test preview_pane -- --ignored --nocapture
+      - run: cargo test -p tests --release ${{ env.RICK_TESTS_FEATURES }} --test preview_pane -- --ignored --nocapture
         env: { TMP: "${{ runner.temp }}", TEMP: "${{ runner.temp }}", TMPDIR: "${{ runner.temp }}" }
       # Release: startup to the first frame.
-      - run: cargo test -p tests --release --test startup -- --ignored --nocapture
+      - run: cargo test -p tests --release ${{ env.RICK_TESTS_FEATURES }} --test startup -- --ignored --nocapture
         env: { TMP: "${{ runner.temp }}", TEMP: "${{ runner.temp }}", TMPDIR: "${{ runner.temp }}" }
       # Issue 16: loading the Git plugin at start, within 50 ms on Linux.
-      - run: cargo test -p tests --release --test plugins -- --ignored --nocapture
+      - run: cargo test -p tests --release ${{ env.RICK_TESTS_FEATURES }} --test plugins -- --ignored --nocapture
         env: { TMP: "${{ runner.temp }}", TEMP: "${{ runner.temp }}", TMPDIR: "${{ runner.temp }}" }
       # Issue 20: a 10 000-entry zip's first batch within 50 ms on Linux.
       - run: cargo test -p tests --release --test providers -- --ignored --nocapture
@@ -116,12 +154,12 @@ jobs:
       # cancel. Side panel rework (0.2 milestone 2): a job over the 200k
       # fixture reports per entry and the progress events stay at twenty a
       # second.
-      - run: cargo test -p tests --release --test closeout --test side_panel -- --ignored --nocapture --test-threads=1
+      - run: cargo test -p tests --release ${{ env.RICK_TESTS_FEATURES }} --test closeout --test side_panel -- --ignored --nocapture --test-threads=1
         env: { TMP: "${{ runner.temp }}", TEMP: "${{ runner.temp }}", TMPDIR: "${{ runner.temp }}" }
       # Close-out B, the timed test that is not #[ignore]d: a three-window,
       # twenty-tab session starting about as fast as a one-tab one; in
       # release so the targets apply.
-      - run: cargo test -p tests --release --test session -- --nocapture --test-threads=1 a_big_session_starts
+      - run: cargo test -p tests --release ${{ env.RICK_TESTS_FEATURES }} --test session -- --nocapture --test-threads=1 a_big_session_starts
         env: { TMP: "${{ runner.temp }}", TEMP: "${{ runner.temp }}", TMPDIR: "${{ runner.temp }}" }
       # Screenshots of the chrome for the pull request, through wgpu on the
       # runner's software adapter: lavapipe on Linux, Metal on macOS. Not on
@@ -130,7 +168,7 @@ jobs:
       # step that fails by chance would block a release.
       - run: |
           if [ "$RUNNER_OS" = "Linux" ]; then sudo apt-get install -y mesa-vulkan-drivers; fi
-          cargo test -p tests --release --features screenshots --test screenshots -- --ignored --nocapture
+          cargo test -p tests --release ${{ env.RICK_TESTS_FEATURES }} --features screenshots --test screenshots -- --ignored --nocapture
         if: runner.os != 'Windows'
         shell: bash
         env: { TMP: "${{ runner.temp }}", TEMP: "${{ runner.temp }}", TMPDIR: "${{ runner.temp }}", WGPU_BACKEND: "${{ runner.os == 'Windows' && 'dx12' || runner.os == 'macOS' && 'metal' || 'vulkan' }}" }

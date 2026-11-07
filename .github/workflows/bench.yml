@@ -21,10 +21,22 @@ jobs:
     env:
       # Measure only: a run over a target is recorded, not failed.
       RICK_BENCH_RECORD: "1"
+      # Issue 18: media playback is built where GStreamer's development
+      # files are (Linux); the office and media timings run there only.
+      RICK_TESTS_FEATURES: ${{ matrix.os == 'ubuntu-latest' && '--features gstreamer' || '' }}
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
+      - name: gstreamer and libreoffice
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev \
+            gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-plugins-bad \
+            gstreamer1.0-plugins-ugly gstreamer1.0-libav \
+            libreoffice-writer libreoffice-calc libreoffice-impress
       - name: pdfium
         shell: bash
         run: |
@@ -71,7 +83,7 @@ jobs:
             echo
           } | tee -a "$GITHUB_STEP_SUMMARY" hardware.md
       - name: build
-        run: cargo test -p tests --release --no-run
+        run: cargo test -p tests --release ${{ env.RICK_TESTS_FEATURES }} --no-run
       - name: measure
         shell: bash
         # The fixtures on the runner's temp disk, as ci.yml puts them. The
@@ -82,8 +94,8 @@ jobs:
           set -o pipefail
           for i in $(seq 1 "${{ inputs.runs }}"); do
             echo "::group::run $i"
-            cargo test -p tests --release --test fixture --test listing --test copy --test ui --test preview --test git --test chrome --test preview_pane --test startup --test plugins --test providers --test closeout -- --ignored --nocapture --test-threads 1 --skip a_new_text_cancels_the_running_walk 2>&1 | tee "bench-$i.log"
-            cargo test -p tests --release --test session -- --nocapture --test-threads 1 a_big_session_starts 2>&1 | tee -a "bench-$i.log"
+            cargo test -p tests --release ${{ env.RICK_TESTS_FEATURES }} --test fixture --test listing --test copy --test ui --test preview --test git --test chrome --test preview_pane --test startup --test plugins --test providers --test closeout --test previewers -- --ignored --nocapture --test-threads 1 --skip a_new_text_cancels_the_running_walk 2>&1 | tee "bench-$i.log"
+            cargo test -p tests --release ${{ env.RICK_TESTS_FEATURES }} --test session -- --nocapture --test-threads 1 a_big_session_starts 2>&1 | tee -a "bench-$i.log"
             echo "::endgroup::"
           done
       - name: summary

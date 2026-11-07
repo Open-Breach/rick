@@ -1,10 +1,14 @@
 [licenses]
 # OFL-1.1 and Ubuntu-font-1.0 cover the fonts egui bundles (epaint_default_fonts);
 # bzip2-1.0.6 is the BSD-style licence of libbzip2, which the pure-Rust
-# `libbz2-rs-sys` behind the archive provider's bzip2 support keeps.
+# `libbz2-rs-sys` behind the archive provider's and the archive previewer's
+# bzip2 support keeps; Apache-2.0 WITH LLVM-exception is target-lexicon, a
+# build dependency of the GStreamer bindings' system-deps (the media
+# previewer's `gstreamer` feature).
 allow = [
-    "Apache-2.0", "BSL-1.0", "MIT", "BSD-2-Clause", "BSD-3-Clause", "CC0-1.0", "ISC",
-    "Unicode-3.0", "Zlib", "OFL-1.1", "Ubuntu-font-1.0", "bzip2-1.0.6",
+    "Apache-2.0", "Apache-2.0 WITH LLVM-exception", "BSL-1.0", "MIT", "BSD-2-Clause",
+    "BSD-3-Clause", "CC0-1.0", "ISC", "Unicode-3.0", "Zlib", "OFL-1.1", "Ubuntu-font-1.0",
+    "bzip2-1.0.6",
 ]
 
 [graph]
@@ -23,7 +27,7 @@ multiple-versions = "warn"
 deny = [
     { crate = "runtime", wrappers = ["platform", "ext", "vfs", "vfs-local", "vfs-rick", "model", "ops", "app", "ui-egui", "rick", "tests"] },
     { crate = "platform", wrappers = ["ext", "vfs", "vfs-local", "vfs-rick", "model", "ops", "app", "ui-egui", "rick", "tests"] },
-    { crate = "ext", wrappers = ["vfs", "vfs-local", "vfs-rick", "model", "ops", "app", "ui-egui", "rick", "tests", "ext-preview-text", "ext-preview-code", "ext-preview-image", "ext-preview-pdf", "ext-git", "ext-vfs-trash", "ext-vfs-archive", "plugins-native", "plugin-probe", "plugin-panic"] },
+    { crate = "ext", wrappers = ["vfs", "vfs-local", "vfs-rick", "model", "ops", "app", "ui-egui", "rick", "tests", "ext-preview-text", "ext-preview-code", "ext-preview-image", "ext-preview-pdf", "ext-preview-office", "ext-preview-media", "ext-preview-archive", "ext-preview-csv", "ext-git", "ext-vfs-trash", "ext-vfs-archive", "plugins-native", "plugin-probe", "plugin-panic"] },
     { crate = "vfs", wrappers = ["vfs-local", "vfs-rick", "ops", "app", "ui-egui", "rick", "tests"] },
     { crate = "vfs-local", wrappers = ["vfs-rick", "ops", "app", "ui-egui", "rick", "tests"] },
     { crate = "vfs-rick", wrappers = ["ops", "app", "ui-egui", "rick", "tests"] },
@@ -44,6 +48,12 @@ deny = [
     { crate = "ext-git", wrappers = ["rick", "tests"] },
     { crate = "ext-vfs-trash", wrappers = ["rick", "tests"] },
     { crate = "ext-vfs-archive", wrappers = ["rick", "tests"] },
+    # The previewer plugins of issue 18: loaded from `plugins/` by the host;
+    # the binary compiles one in only behind its opt-in feature.
+    { crate = "ext-preview-office", wrappers = ["rick", "tests"] },
+    { crate = "ext-preview-media", wrappers = ["rick", "tests"] },
+    { crate = "ext-preview-archive", wrappers = ["rick", "tests"] },
+    { crate = "ext-preview-csv", wrappers = ["rick", "tests"] },
     # The fixture plugins are test libraries loaded as files; only the
     # integration tests name them, to have them built.
     { crate = "plugin-probe", wrappers = ["tests"] },

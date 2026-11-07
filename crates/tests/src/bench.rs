@@ -162,6 +162,36 @@ pub const BENCHMARKS: &[Benchmark] = &[
         macos: ms(15),
         windows: ms(5),
     },
+    Benchmark {
+        key: "office-convert",
+        linux: ms(5_000),
+        macos: ms(5_000),
+        windows: ms(5_000),
+    },
+    Benchmark {
+        key: "waveform",
+        linux: ms(500),
+        macos: ms(500),
+        windows: ms(500),
+    },
+    Benchmark {
+        key: "zip-first",
+        linux: ms(100),
+        macos: ms(100),
+        windows: ms(100),
+    },
+    Benchmark {
+        key: "csv-window",
+        linux: us(16_600),
+        macos: us(16_600),
+        windows: us(16_600),
+    },
+    Benchmark {
+        key: "previewers-frame",
+        linux: us(16_600),
+        macos: us(16_600),
+        windows: us(16_600),
+    },
 ];
 
 /// The benchmark named `key`.

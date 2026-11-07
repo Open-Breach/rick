@@ -28,6 +28,10 @@ ext-preview-pdf = { path = "crates/ext-preview-pdf" }
 ext-git = { path = "crates/ext-git" }
 ext-vfs-trash = { path = "crates/ext-vfs-trash" }
 ext-vfs-archive = { path = "crates/ext-vfs-archive" }
+ext-preview-office = { path = "crates/ext-preview-office" }
+ext-preview-media = { path = "crates/ext-preview-media" }
+ext-preview-archive = { path = "crates/ext-preview-archive" }
+ext-preview-csv = { path = "crates/ext-preview-csv" }
 plugins-native = { path = "crates/plugins-native" }
 plugin-probe = { path = "crates/plugin-probe" }
 plugin-panic = { path = "crates/plugin-panic" }
@@ -46,12 +50,15 @@ syntect = { version = "5", default-features = false, features = ["parsing", "def
 # DEFLATE from flate2's Rust backend and zstd; the tar family through `tar`
 # and the codec crates; 7z through the pure-Rust `sevenz-rust2`; RAR through
 # the bundled unrar library (read-only); ISO 9660 and UDF images through
-# the hadris readers; brotli and snappy for the single-file codecs.
+# the hadris readers; brotli and snappy for the single-file codecs. The
+# archive previewer (issue 18) lists through the same crates and reads the
+# xz headers of a compressed tar through `lzma-rust2`.
 zip = { version = "9", default-features = false, features = ["deflate-flate2", "zstd"] }
 flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
 tar = "0.4"
 zstd = { version = "0.14", default-features = false }
 liblzma = { version = "0.4", default-features = false, features = ["static"] }
+lzma-rust2 = { version = "0.25", default-features = false, features = ["std", "xz"] }
 bzip2 = "0.6"
 lz4_flex = { version = "0.14", default-features = false, features = ["std", "frame", "safe-encode", "safe-decode"] }
 brotli = { version = "9", default-features = false, features = ["std"] }
@@ -62,6 +69,19 @@ hadris-fs = { version = "3.0.0-rc.3", default-features = false, features = ["std
 hadris-iso = { version = "3.0.0-rc.3", default-features = false, features = ["std", "sync"] }
 hadris-udf = { version = "3.0.0-rc.3", default-features = false, features = ["std", "sync"] }
 hadris-storage = { version = "3.0.0-rc.3", default-features = false, features = ["std", "sync"] }
+# The other previewer plugins of issue 18: Office metadata from the zip's
+# XML, CSV, Markdown and HTML, media tags and GStreamer playback.
+roxmltree = "0.21"
+csv = "1"
+memchr = "2"
+pulldown-cmark = { version = "0.13", default-features = false }
+html-escape = "0.3"
+id3 = { version = "1", default-features = false }
+gstreamer = "0.25"
+gstreamer-app = "0.25"
+gstreamer-audio = "0.25"
+gstreamer-video = "0.25"
+gstreamer-pbutils = "0.25"
 anyhow = "1"
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 eframe = "0.36"

@@ -6,7 +6,11 @@
 //! textures (or a text block it lays out itself), a text layer for find,
 //! metadata in [`InfoSection`]s for the pane's info badges, one-line facts
 //! for its status bar, the previewer's own toolbar [`PreviewControl`]s, and a
-//! transport for media. The pane builds its toolbar from the kind of document
+//! transport for media. A document whose content is neither pixels nor
+//! plain text (an archive's file list, a CSV table, rendered Markdown)
+//! offers it as [`Content`] through [`PreviewDoc::content`], which a pane
+//! that knows the kind lays out itself, while `render` keeps giving a
+//! textual fallback. The pane builds its toolbar from the kind of document
 //! (text layer, pages, raster) plus those controls; a previewer never draws.
 //!
 //! # Worked example
@@ -124,11 +128,12 @@
 //! assert!(matches!(doc.render(0, req), Ok(Frame::Text(block)) if block.text == "HI"));
 //! ```
 
+use std::ops::Range;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 
 use async_trait::async_trait;
-use types::{CancelToken, Entry, Error, ExtId, Location};
+use types::{CancelToken, Entry, EntryKind, Error, ExtId, Location};
 
 use crate::provider::Provider;
 
@@ -202,6 +207,14 @@ pub enum Frame {
 }
 
 /// Playback control for audio and video previews.
+///
+/// The six required methods are the transport every player has; the rest
+/// (volume, speed, frame step, loop) have defaults that do nothing, so a
+/// transport that lacks one of them says so by leaving the default in
+/// place: `volume` stays 1.0, `speed` 1.0 and `looping` false whatever is
+/// set. While `playing` is `true` the UI renders again every frame; the
+/// document's `render` returns the latest video frame (or the waveform
+/// with the position marked) each time.
 pub trait Transport {
     /// Starts or resumes playback.
     fn play(&mut self);
@@ -215,6 +228,29 @@ pub trait Transport {
     fn duration(&self) -> Option<Duration>;
     /// `true` while playing.
     fn playing(&self) -> bool;
+    /// Volume from 0.0 (silent) to 1.0 (full); 1.0 without a volume control.
+    fn volume(&self) -> f32 {
+        1.0
+    }
+    /// Sets the volume, clamped to 0.0 ..= 1.0; ignored without a volume
+    /// control.
+    fn set_volume(&mut self, _volume: f32) {}
+    /// Playback speed as a factor of real time: 1.0 is normal, 0.5 half,
+    /// 2.0 double.
+    fn speed(&self) -> f32 {
+        1.0
+    }
+    /// Sets the playback speed; ignored by transports that cannot change
+    /// it.
+    fn set_speed(&mut self, _speed: f32) {}
+    /// Pauses and advances by one video frame; nothing for audio.
+    fn step(&mut self) {}
+    /// Whether playback starts over at the end instead of stopping.
+    fn looping(&self) -> bool {
+        false
+    }
+    /// Turns looping on or off.
+    fn set_looping(&mut self, _on: bool) {}
 }
 
 /// A glyph the pane draws for a section badge or a control. The pane maps
@@ -254,6 +290,9 @@ pub enum Icon {
     ZoomIn,
     /// Zoom out.
     ZoomOut,
+    /// The rendered view of markup (Markdown, HTML), as opposed to its
+    /// source.
+    Rendered,
 }
 
 /// A group of metadata rows behind one info badge.
@@ -311,6 +350,186 @@ pub enum PreviewControl {
     },
 }
 
+/// Content the UI lays out itself when it knows the kind, beyond pixels
+/// and plain text: an archive's file list, a table, a rendered document.
+/// A pane that does not know a kind shows the textual fallback `render`
+/// returns for the same document.
+#[derive(Clone)]
+pub enum Content {
+    /// A read-only file list in the explorer's columns.
+    Listing(Arc<Listing>),
+    /// A table shown as a virtualised grid with a header row.
+    Grid(Arc<dyn Grid>),
+    /// A document of headings, paragraphs, lists, code, tables and images.
+    Document(Arc<Document>),
+}
+
+impl std::fmt::Debug for Content {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Listing(listing) => f.debug_tuple("Listing").field(listing).finish(),
+            Self::Grid(grid) => f
+                .debug_struct("Grid")
+                .field("header", &grid.header())
+                .field("rows", &grid.rows())
+                .finish(),
+            Self::Document(document) => f.debug_tuple("Document").field(document).finish(),
+        }
+    }
+}
+
+/// A read-only file list, as an archive previewer produces it: the
+/// explorer's columns (name, type, date modified, size) plus the
+/// compressed size, with subfolders the UI expands in place.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct Listing {
+    /// The entries in display order: a directory is followed by its
+    /// contents, each one level deeper, so a pane that hides a collapsed
+    /// directory skips the entries deeper than it until the depth comes
+    /// back.
+    pub entries: Vec<ListingEntry>,
+    /// The stats line under the list: files, folders and sizes.
+    pub stats: String,
+    /// The list was cut short (a huge archive); `stats` says so.
+    pub truncated: bool,
+}
+
+/// One row of a [`Listing`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ListingEntry {
+    /// The display name, the last component of `path`.
+    pub name: String,
+    /// The path inside the archive, `/`-separated, without a leading `/`.
+    pub path: String,
+    /// Nesting depth: 0 at the top of the archive.
+    pub depth: usize,
+    /// File, directory, symbolic link or something else.
+    pub kind: EntryKind,
+    /// Uncompressed size, when known.
+    pub size: Option<u64>,
+    /// Size inside the archive, when the format records it per entry.
+    pub compressed: Option<u64>,
+    /// Modification time, when recorded.
+    pub modified: Option<SystemTime>,
+    /// The entry's content is encrypted; its name is still listed.
+    pub encrypted: bool,
+}
+
+/// A table the UI shows as a virtualised grid: the header row and the
+/// cells of any window of rows, parsed on demand so a million-row file
+/// costs the rows on screen.
+pub trait Grid: Send + Sync {
+    /// The column titles.
+    fn header(&self) -> &[String];
+    /// Number of data rows, the header excluded.
+    fn rows(&self) -> usize;
+    /// The cells of the rows in `range`, in order; a row may have fewer or
+    /// more cells than the header has columns. Must be cheap: the UI calls
+    /// it for the rows on screen while scrolling.
+    fn cells(&self, range: Range<usize>) -> Vec<Vec<String>>;
+}
+
+/// A document the UI lays out with its own fonts and widgets: what a
+/// Markdown or HTML previewer produces.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct Document {
+    /// The blocks, top to bottom.
+    pub blocks: Vec<Block>,
+}
+
+/// One block of a [`Document`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Block {
+    /// A heading, levels 1 (largest) to 6.
+    Heading {
+        /// 1 to 6.
+        level: u8,
+        /// The heading's text.
+        text: Vec<Inline>,
+    },
+    /// A paragraph of inline text.
+    Paragraph(Vec<Inline>),
+    /// A bulleted or numbered list; every item holds blocks, so lists nest.
+    List {
+        /// Numbered rather than bulleted.
+        ordered: bool,
+        /// The first number of an ordered list.
+        start: u64,
+        /// The items.
+        items: Vec<Vec<Block>>,
+    },
+    /// Preformatted code.
+    Code {
+        /// The language named on the fence or the `class`, when any.
+        language: Option<String>,
+        /// The code, lines separated by `\n`.
+        text: String,
+    },
+    /// A quotation of blocks.
+    Quote(Vec<Block>),
+    /// A table.
+    Table {
+        /// The header cells; empty when the table has no header row.
+        header: Vec<Vec<Inline>>,
+        /// The body rows.
+        rows: Vec<Vec<Vec<Inline>>>,
+    },
+    /// A picture on its own.
+    Image(Image),
+    /// A horizontal rule.
+    Rule,
+}
+
+/// A run of inline content inside a block.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Inline {
+    /// Text in one style.
+    Text {
+        /// The text.
+        text: String,
+        /// Bold, italic, code or struck through.
+        style: Style,
+    },
+    /// A link; the UI opens `href` with the system when it is a URL.
+    Link {
+        /// The link's text.
+        text: String,
+        /// The target as written.
+        href: String,
+    },
+    /// A picture inside a line.
+    Image(Image),
+    /// A line break inside a block.
+    Break,
+}
+
+bitflags::bitflags! {
+    /// The style of an [`Inline::Text`]: any combination of the four.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+    pub struct Style: u8 {
+        /// Bold weight.
+        const BOLD = 1;
+        /// Italic.
+        const ITALIC = 2;
+        /// Monospace, inline code.
+        const CODE = 4;
+        /// Struck through.
+        const STRIKETHROUGH = 8;
+    }
+}
+
+/// A picture in a [`Document`]: its bytes when the previewer could read
+/// them (a file next to the document), else only its source and alt text.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Image {
+    /// The alternative text.
+    pub alt: String,
+    /// The source as written: a relative path or a URL.
+    pub source: String,
+    /// The encoded image (PNG, JPEG, …) for the UI to decode, when read.
+    pub data: Option<Arc<[u8]>>,
+}
+
 /// An opened document the preview pane or viewer shows.
 pub trait PreviewDoc: Send {
     /// Number of pages; `None` for a single surface.
@@ -327,6 +546,14 @@ pub trait PreviewDoc: Send {
 
     /// Text for find, when the document has any.
     fn text_layer(&self) -> Option<&TextLayer>;
+
+    /// Content the UI lays out itself when it knows the kind: a file list,
+    /// a grid or a document. `None`, the default, for pixels and text.
+    /// `render` still answers for such a document with a textual fallback
+    /// of the same content, for a pane that knows none of these kinds.
+    fn content(&self) -> Option<Content> {
+        None
+    }
 
     /// Metadata, grouped for the pane's info badges. The first section is
     /// "File info"; others (EXIF, stream details) appear only when they
@@ -426,4 +653,131 @@ where
         .spawn_blocking(work)
         .await
         .map_err(|join| Error::Io(std::io::Error::other(join)))?
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A transport with the six required methods only.
+    struct Bare {
+        playing: bool,
+        at: Duration,
+    }
+
+    impl Transport for Bare {
+        fn play(&mut self) {
+            self.playing = true;
+        }
+        fn pause(&mut self) {
+            self.playing = false;
+        }
+        fn seek(&mut self, to: Duration) {
+            self.at = to;
+        }
+        fn position(&self) -> Duration {
+            self.at
+        }
+        fn duration(&self) -> Option<Duration> {
+            None
+        }
+        fn playing(&self) -> bool {
+            self.playing
+        }
+    }
+
+    #[test]
+    fn the_optional_transport_methods_default_to_doing_nothing() {
+        let mut t = Bare {
+            playing: false,
+            at: Duration::ZERO,
+        };
+        assert!((t.volume() - 1.0).abs() < f32::EPSILON);
+        t.set_volume(0.2);
+        assert!((t.volume() - 1.0).abs() < f32::EPSILON, "no volume control");
+        assert!((t.speed() - 1.0).abs() < f32::EPSILON);
+        t.set_speed(2.0);
+        assert!((t.speed() - 1.0).abs() < f32::EPSILON);
+        assert!(!t.looping());
+        t.set_looping(true);
+        assert!(!t.looping());
+        t.play();
+        t.step();
+        assert!(t.playing(), "step is a no-op by default");
+        t.seek(Duration::from_secs(3));
+        assert_eq!(t.position(), Duration::from_secs(3));
+    }
+
+    struct Two;
+
+    impl Grid for Two {
+        fn header(&self) -> &[String] {
+            static HEADER: std::sync::LazyLock<Vec<String>> =
+                std::sync::LazyLock::new(|| vec!["a".to_owned(), "b".to_owned()]);
+            &HEADER
+        }
+        fn rows(&self) -> usize {
+            2
+        }
+        fn cells(&self, range: Range<usize>) -> Vec<Vec<String>> {
+            range
+                .map(|row| vec![row.to_string(), (row * 10).to_string()])
+                .collect()
+        }
+    }
+
+    #[test]
+    fn content_debug_describes_a_grid_without_its_rows() {
+        let grid = Content::Grid(Arc::new(Two));
+        let text = format!("{grid:?}");
+        assert!(text.contains("header"), "{text}");
+        assert!(text.contains("rows: 2"), "{text}");
+        let Content::Grid(grid) = grid.clone() else {
+            panic!("not a grid");
+        };
+        assert_eq!(
+            grid.cells(1..2),
+            vec![vec!["1".to_owned(), "10".to_owned()]]
+        );
+        let listing = Content::Listing(Arc::new(Listing::default()));
+        assert!(format!("{listing:?}").starts_with("Listing"));
+        let document = Content::Document(Arc::new(Document {
+            blocks: vec![Block::Rule],
+        }));
+        assert!(format!("{document:?}").contains("Rule"));
+    }
+
+    struct Pixels;
+
+    impl PreviewDoc for Pixels {
+        fn pages(&self) -> Option<usize> {
+            None
+        }
+        fn render(&mut self, _page: usize, _req: RenderRequest) -> Result<Frame, Error> {
+            Ok(Frame::External(TextureId(1)))
+        }
+        fn text_layer(&self) -> Option<&TextLayer> {
+            None
+        }
+        fn sections(&self) -> Vec<InfoSection> {
+            Vec::new()
+        }
+        fn status(&self) -> Vec<String> {
+            Vec::new()
+        }
+        fn controls(&self) -> Vec<PreviewControl> {
+            Vec::new()
+        }
+        fn set_control(&mut self, _id: ControlId, _value: ControlValue) -> Result<(), Error> {
+            Err(Error::Unsupported("none"))
+        }
+        fn transport(&mut self) -> Option<&mut dyn Transport> {
+            None
+        }
+    }
+
+    #[test]
+    fn a_document_has_no_content_unless_it_says_so() {
+        assert!(Pixels.content().is_none());
+    }
 }

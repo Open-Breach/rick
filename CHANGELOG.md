@@ -29,6 +29,23 @@ the pull request that brought the change.
 - A location its provider cannot watch (an archive, a trashed folder
   browsed in the Trash view) is polled: every three seconds and right after
   an operation, a change lists it again (#20).
+- Five previewers as plugins, every one in `plugins/` of the archives
+  (#18): `preview-office` converts DOCX, XLSX, PPTX, ODT, ODS and ODP to
+  PDF with an installed LibreOffice, cached by path and modification time,
+  and shows the metadata with a hint to install it otherwise; `preview-
+  media` plays MP3, WAV, MP4 and AVI through GStreamer with play, pause,
+  seek, volume, speed, frame step and loop, a waveform and cover art for
+  audio, tags and stream details, and shows the metadata and what is
+  missing without GStreamer; `preview-archive` lists zip, tar (plain and
+  gzip, zstd, xz, bzip2, lz4), 7z, RAR and ISO 9660 contents without
+  extracting, encrypted entries marked; `preview-csv` shows CSV and TSV as
+  a grid with a sniffed delimiter and a header row, parsing only the rows
+  on screen. The code previewer renders Markdown and HTML as documents
+  behind a Rendered toggle, with images from the file's folder.
+- The release archives bundle the GStreamer runtime on macOS and Windows;
+  Linux uses the system's (#18).
+- `cargo xtask bundle --features <spec>` hands features to the build, and
+  `RICK_GSTREAMER_DIR` makes the bundle carry a GStreamer runtime (#18).
 - The native plugin host: plugins are dynamic libraries beside a
   `plugin.toml` in `plugins/` next to the binary or in the config
   directory (per-user wins on an id clash), checked for their extension API
@@ -67,6 +84,11 @@ the pull request that brought the change.
 
 ### Changed
 
+- The extension API is version 4: a preview document can hand the pane
+  structured content (a file listing, a grid, a document) beside its
+  frames, a transport has volume, speed, frame step and loop, and a plugin
+  library exports its entry point under its own crate's name so that a
+  binary can link several plugin crates (#18).
 - The extension API is version 3: a manifest declares the points it fills
   and the platforms it runs on (#16).
 - The core actions follow the provider's capabilities: Paste, Duplicate,
