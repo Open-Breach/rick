@@ -213,7 +213,10 @@ fn tree() -> tempfile::TempDir {
 fn recent_shows_a_touched_file_first_and_survives_a_restart() {
     let dir = tree();
     let fake = Arc::new(Fake::new().unwrap_or_else(|e| panic!("{e}")));
-    let config = dir.path().join("config");
+    // The config directory is written at start; inside the listed folder it
+    // would be the first recent entry itself.
+    let config_dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+    let config = config_dir.path().join("config");
     let home = fake.home_dir();
     {
         let (mut harness, _) = harness_with(dir.path(), &config, fake.clone());
@@ -896,12 +899,13 @@ fn search_in_subdirectories_streams_matches_and_a_new_text_cancels_the_walk() {
     println!("first search batch after {first_batch:?}");
     settle(&mut harness);
     assert_eq!(row_names(&harness).len(), 12_020);
-    // Rows show their relative path.
+    // Rows show their relative path, in the platform's separator.
+    let deep = format!("l19{}foo19.txt", std::path::MAIN_SEPARATOR);
     assert!(
         tab(&harness)
             .1
             .rows()
-            .any(|e| e.path.to_string_lossy().ends_with("l19/foo19.txt"))
+            .any(|e| e.path.to_string_lossy().ends_with(&deep))
     );
     let _ = tab_id;
 
@@ -948,7 +952,8 @@ fn open_containing_folder_from_a_flattened_view_selects_the_item() {
     command(&mut harness, app::Command::Flatten { pane, on: true });
     let names = row_names(&harness);
     assert!(names.contains(&"leaf.txt".to_owned()), "{names:?}");
-    harness.get_by_label("sub/deeper/leaf.txt");
+    let sep = std::path::MAIN_SEPARATOR;
+    harness.get_by_label(&format!("sub{sep}deeper{sep}leaf.txt"));
     select(&mut harness, "leaf.txt");
     run(&mut harness, "core.open_containing");
     settle(&mut harness);
