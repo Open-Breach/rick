@@ -1131,15 +1131,34 @@ fn the_operations_area_shows_a_bar_per_row_and_stays_responsive_with_many_jobs()
         let mut go = go_rx.clone();
         let handle = jobs.spawn_named(format!("job {n}"), move |ctx| async move {
             let total = 2_000u64;
-            for done in 0..total {
+            let report = |done| {
                 ctx.progress.report(types::Progress::Items {
                     done,
                     total: Some(total),
                 });
-                tokio::time::sleep(Duration::from_millis(1)).await;
-                if done == total / 2 {
-                    let _ = go.wait_for(|open| *open).await;
+            };
+            // Paced by iterations, not by the clock: a 1 ms sleep per item
+            // took the macOS runner, three cores shared by sixteen test
+            // harnesses, past the budget below (CI run 42401751687).
+            for done in 0..total / 2 {
+                report(done);
+                tokio::task::yield_now().await;
+            }
+            // Held at the midpoint while the frames are measured, reporting
+            // the way a running job does.
+            while !*go.borrow_and_update() {
+                tokio::select! {
+                    changed = go.changed() => {
+                        if changed.is_err() {
+                            break;
+                        }
+                    }
+                    () = tokio::time::sleep(Duration::from_millis(5)) => report(total / 2),
                 }
+            }
+            for done in total / 2..total {
+                report(done);
+                tokio::task::yield_now().await;
             }
             Ok::<(), types::Error>(())
         });
