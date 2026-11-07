@@ -33,8 +33,8 @@ gstreamer = [
 types = { workspace = true }
 ext = { workspace = true }
 id3 = { workspace = true }
-mp4 = { workspace = true }
 image = { workspace = true }
+tempfile = { workspace = true }
 tracing = { workspace = true }
 gstreamer = { workspace = true, optional = true }
 gstreamer-app = { workspace = true, optional = true }

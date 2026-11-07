@@ -61,7 +61,6 @@ memchr = "2"
 pulldown-cmark = { version = "0.13", default-features = false }
 html-escape = "0.3"
 id3 = { version = "1", default-features = false }
-mp4 = "0.14"
 gstreamer = "0.25"
 gstreamer-app = "0.25"
 gstreamer-audio = "0.25"
