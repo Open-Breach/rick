@@ -36,6 +36,10 @@ fn built_ins() -> Vec<Arc<dyn ext::Extension>> {
     extensions.push(Arc::new(ext_preview_pdf::PdfPreview::new()));
     #[cfg(feature = "git")]
     extensions.push(Arc::new(ext_git::GitExtension::new()));
+    #[cfg(feature = "vfs-trash")]
+    extensions.push(Arc::new(ext_vfs_trash::TrashExtension::new()));
+    #[cfg(feature = "vfs-archive")]
+    extensions.push(Arc::new(ext_vfs_archive::ArchiveExtension::new()));
     extensions
 }
 
