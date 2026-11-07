@@ -11,8 +11,7 @@ use std::time::SystemTime;
 use types::Error;
 use windows::Win32::Foundation::{HWND, PROPERTYKEY, RPC_E_CHANGED_MODE};
 use windows::Win32::Storage::FileSystem::{
-    DRIVE_CDROM, DRIVE_FIXED, DRIVE_REMOTE, DRIVE_REMOVABLE, GetDiskFreeSpaceExW, GetDriveTypeW,
-    GetLogicalDrives, GetVolumeInformationW,
+    GetDiskFreeSpaceExW, GetDriveTypeW, GetLogicalDrives, GetVolumeInformationW,
 };
 use windows::Win32::System::Com::{
     CLSCTX_ALL, COINIT_APARTMENTTHREADED, COINIT_DISABLE_OLE1DDE, CoCreateInstance, CoInitializeEx,
@@ -306,6 +305,14 @@ impl Trash for Native {
         .map_err(|e| Error::Io(io_error(e)))
     }
 }
+
+/// `GetDriveTypeW` answers, from `winbase.h` (the `windows` crate keeps
+/// them in `Win32::System::WindowsProgramming`, a feature not otherwise
+/// needed).
+const DRIVE_REMOVABLE: u32 = 2;
+const DRIVE_FIXED: u32 = 3;
+const DRIVE_REMOTE: u32 = 4;
+const DRIVE_CDROM: u32 = 5;
 
 /// The drive letter of the Windows directory, upper case.
 fn system_drive() -> Option<char> {

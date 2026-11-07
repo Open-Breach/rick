@@ -130,10 +130,10 @@ impl Volumes for Native {
             if mount_point == Path::new("/") {
                 continue;
             }
-            let name = mount_point
-                .file_name()
-                .map(|n| n.to_string_lossy().into_owned())
-                .unwrap_or_else(|| mount_point.display().to_string());
+            let name = mount_point.file_name().map_or_else(
+                || mount_point.display().to_string(),
+                |n| n.to_string_lossy().into_owned(),
+            );
             let kind = volume_kind(&mount_point);
             let (total, free) = crate::volumes::space(&mount_point)
                 .map_or((None, None), |(t, f)| (Some(t), Some(f)));

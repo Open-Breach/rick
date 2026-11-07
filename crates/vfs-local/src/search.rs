@@ -42,7 +42,7 @@ const CHANNEL_DEPTH: usize = 16;
 
 /// Streams the entries under `loc` whose name contains `opts.text`, in the
 /// order the walk finds them, each with its full path.
-#[must_use]
+#[must_use = "the walk starts, but its matches are lost unless the stream is polled"]
 pub fn search(loc: &Location, opts: SearchOptions, cancel: CancelToken) -> EntryStream {
     let root = match path_of(loc) {
         Ok(root) => root,
