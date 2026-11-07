@@ -383,6 +383,7 @@ impl Tab {
     }
 
     /// The visible rows in display order.
+    #[must_use]
     pub fn rows(&self) -> Box<dyn Iterator<Item = &Entry> + '_> {
         if self.is_tree() {
             Box::new(
