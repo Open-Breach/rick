@@ -41,7 +41,7 @@ fn startup_to_the_first_frame() {
         ui: host.clone(),
         extensions: built_ins(),
         config_dir: Some(config_dir),
-        start: local(fixture.root()),
+        start: Some(local(fixture.root())),
     });
     let harness = Harness::builder()
         .with_size(egui::vec2(1100.0, 720.0))

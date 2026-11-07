@@ -61,7 +61,7 @@ fn harness(start: &Path) -> Harness<'static, RickUi> {
         ui: host.clone(),
         extensions: Vec::new(),
         config_dir: Some(fake.config_dir()),
-        start: local(start),
+        start: Some(local(start)),
     });
     let mut harness = Harness::builder()
         .with_size(egui::vec2(1100.0, 720.0))
@@ -130,7 +130,7 @@ fn spec_rows() -> Vec<(&'static str, Intent)> {
         ("Shift+Delete", action("core.delete")),
         ("F2", action("core.rename")),
         ("Mod+F2", Intent::BulkRename),
-        ("Mod+N", action("core.new_file")),
+        ("Mod+N", Intent::NewWindow),
         ("Mod+Shift+N", action("core.new_folder")),
         ("Mod+Shift+C", action("core.copy_path_and_name")),
         ("Mod+Alt+C", action("core.copy_name")),
@@ -168,7 +168,8 @@ fn spec_rows() -> Vec<(&'static str, Intent)> {
         ("Mod+H", Intent::ToggleHidden),
         ("Mod+Shift+H", Intent::ToggleSystem),
         ("Mod+E", Intent::ToggleExtensions),
-        ("Mod+Shift+F", Intent::ToggleFlatten),
+        // Issue A gives Mod+Shift+F to Search in subdirectories (QUESTIONS.md).
+        ("Mod+Shift+F", Intent::ToggleSubtree),
         ("Mod+Shift+I", Intent::ToggleInspector),
         ("Mod+`", Intent::Console),
         ("Mod+,", Intent::Settings),

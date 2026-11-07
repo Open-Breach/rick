@@ -58,7 +58,7 @@ impl Driver {
             ui: ui.clone(),
             extensions: Vec::new(),
             config_dir: Some(fake.config_dir()),
-            start: local(start),
+            start: Some(local(start)),
         });
         let pane = app.model().focused;
         let mut driver = Self {
@@ -415,7 +415,7 @@ fn a_command_script_drives_the_app_headlessly() {
 
     // Final state: one pane, one tab at the root, every job done, nothing
     // running, and the model agrees with the disk.
-    assert_eq!(d.app.model().dock.panes(), [pane]);
+    assert_eq!(d.app.model().dock().panes(), [pane]);
     assert_eq!(d.location(), root);
     assert_eq!(d.tab().history.back.len(), 3);
     assert_eq!(sorted(d.names()), on_disk(&root));

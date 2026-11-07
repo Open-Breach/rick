@@ -9,8 +9,9 @@ the pull request that brought the change.
 
 ## [0.1.0] - 2026-11-06
 
-The first release: local files, tabs and panes, the core operations, previews
-for text, code, images and PDF, and Git, on Linux, macOS and Windows.
+The first release: local files, tabs, panes and windows with session restore,
+the side panel, the core operations with conflicts and undo, previews for
+text, code, images and PDF, and Git, on Linux, macOS and Windows.
 
 ### Added
 
@@ -59,6 +60,20 @@ for text, code, images and PDF, and Git, on Linux, macOS and Windows.
   and Alt (or a right-button drag) to override; the ghost with its live
   indicator; spring-loading with the stay-or-return setting; drops from
   other applications; Pin to side panel and Unpin (#11).
+- Session restore: every window, tab, split, scroll position and side panel
+  comes back on the next start, written at most once a second and once more
+  on exit; saved layouts (save as, switch, set as start, rename, delete,
+  Continue where I left off); New window with Mod+N, tabs torn out into a
+  window of their own, all windows sharing one job table and one undo log;
+  a folder that vanished opens at its nearest parent with a note (#14).
+- The side panel's Recent, Network and Trash sections (fed by watches, a
+  bounded scan, the system's volumes and the trash, with restore, delete and
+  empty); the operations area with progress, throughput, remaining time,
+  pause, resume and cancel; the tree view with lazily listed children and a
+  Tree section following the focused pane; inline rename, new file and new
+  folder; the paste conflict dialogue (Skip, Overwrite, Rename, Apply to
+  all, Cancel) with the job paused at the first conflict; search in
+  subdirectories as a cancellable job; Open containing folder (#15).
 - The release: archives for Linux (x64 and arm64), macOS (Apple silicon) and
   Windows (x64) with pdfium beside the binary, `rick --version` with the git
   hash, `BENCHMARKS.md` with the measured numbers on all three platforms
@@ -79,6 +94,9 @@ for text, code, images and PDF, and Git, on Linux, macOS and Windows.
   only tab can be dropped on another pane's edge zone (#9).
 - The preview pane's status bar uses the body text size, a fitted picture
   or page is centred, and a picture at actual size pans by dragging (#12).
+- Settings are written through a temporary file and a rename, so a reload
+  in the middle of a write can no longer read a truncated file and lose
+  the pinned folders (#14).
 
 [Unreleased]: https://github.com/Open-Breach/rick/compare/v0.1.0...HEAD
 [0.1.0]: https://github.com/Open-Breach/rick/releases/tag/v0.1.0

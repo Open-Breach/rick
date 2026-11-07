@@ -1,21 +1,24 @@
-//! Keeping `egui_dock`'s tree and the model's dock in step.
+//! Keeping `egui_dock`'s tree and the model's dock in step, one tree per
+//! window.
 //!
 //! The model owns the structure: which panes exist, how they split, which
-//! tabs each holds and which is active. `egui_dock` owns the geometry and the
-//! gestures: split fractions, tab order within a pane, and the drag and drop
-//! that moves tabs around. Before each frame [`DockSync::rebuild`] makes the
-//! `egui_dock` tree match the model where their structures differ; after the
-//! frame [`DockSync::reconcile`] turns what the user did to the tree into
+//! tabs each holds and which is active. `egui_dock` owns the gestures: the
+//! drag and drop that moves tabs around and the divider drags. The display
+//! state they produce, tab order within a pane and split fractions, is
+//! reported back to the model so the session keeps it (QUESTIONS.md 28 and
+//! 67). Before each frame [`DockSync::rebuild`] makes the `egui_dock` tree
+//! match the model where their structures differ; after the frame
+//! [`DockSync::reconcile`] turns what the user did to the tree into
 //! `Command`s, and a second rebuild shows the model's answer.
 
 use std::collections::BTreeSet;
 
 use app::{App, Command, Event};
 use egui_dock::{DockState, Node, NodeIndex, Split, SurfaceIndex, TabIndex, Tree};
-use model::{Dock, DockTarget, Model, PaneId, Side, TabId};
+use model::{Dock, DockTarget, Model, PaneId, Side, TabId, WindowId};
 
 /// The structure of panes and tabs, as either side sees it.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Shape {
     /// A pane: its tabs in order and the active one.
     Leaf {
@@ -28,6 +31,8 @@ pub enum Shape {
     Split {
         /// Left and right, or above and below.
         horizontal: bool,
+        /// How much of the room the first part takes.
+        fraction: f32,
         /// Left or top.
         first: Box<Shape>,
         /// Right or bottom.
@@ -36,8 +41,9 @@ pub enum Shape {
 }
 
 impl Shape {
-    /// The same structure with each leaf's tabs sorted, so two shapes that
-    /// differ only in tab order compare equal.
+    /// The same structure with each leaf's tabs sorted and the fractions
+    /// dropped, so two shapes that differ only in tab order or divider
+    /// positions compare equal.
     fn normalised(&self) -> Self {
         match self {
             Self::Leaf { tabs, active } => {
@@ -52,8 +58,10 @@ impl Shape {
                 horizontal,
                 first,
                 second,
+                ..
             } => Self::Split {
                 horizontal: *horizontal,
+                fraction: 0.0,
                 first: Box::new(first.normalised()),
                 second: Box::new(second.normalised()),
             },
@@ -69,9 +77,10 @@ impl Shape {
     }
 }
 
-/// The model's structure.
+/// The structure of one window of the model; a leaf for a window the
+/// model does not have.
 #[must_use]
-pub fn model_shape(model: &Model) -> Shape {
+pub fn model_shape(model: &Model, window: WindowId) -> Shape {
     fn walk(model: &Model, dock: &Dock) -> Shape {
         match dock {
             Dock::Pane(pane) => {
@@ -81,14 +90,26 @@ pub fn model_shape(model: &Model) -> Shape {
                     active: pane.and_then(model::Pane::active),
                 }
             }
-            Dock::Split { dir, first, second } => Shape::Split {
+            Dock::Split {
+                dir,
+                fraction,
+                first,
+                second,
+            } => Shape::Split {
                 horizontal: *dir == model::SplitDir::Right,
+                fraction: *fraction,
                 first: Box::new(walk(model, first)),
                 second: Box::new(walk(model, second)),
             },
         }
     }
-    walk(model, &model.dock)
+    match model.window(window) {
+        Some(w) => walk(model, &w.dock),
+        None => Shape::Leaf {
+            tabs: Vec::new(),
+            active: None,
+        },
+    }
 }
 
 /// The `egui_dock` tree's structure; `None` for an empty tree.
@@ -107,7 +128,7 @@ fn node_shape(tree: &Tree<TabId>, node: NodeIndex) -> Option<Shape> {
             tabs: leaf.tabs.clone(),
             active: leaf.tabs.get(leaf.active.0).copied(),
         }),
-        Node::Horizontal(_) | Node::Vertical(_) => {
+        Node::Horizontal(split) | Node::Vertical(split) => {
             let horizontal = matches!(&tree[node], Node::Horizontal(_));
             match (
                 node_shape(tree, node.left()),
@@ -115,6 +136,7 @@ fn node_shape(tree: &Tree<TabId>, node: NodeIndex) -> Option<Shape> {
             ) {
                 (Some(first), Some(second)) => Some(Shape::Split {
                     horizontal,
+                    fraction: split.fraction,
                     first: Box::new(first),
                     second: Box::new(second),
                 }),
@@ -124,55 +146,200 @@ fn node_shape(tree: &Tree<TabId>, node: NodeIndex) -> Option<Shape> {
     }
 }
 
-/// The `egui_dock` state and the logic that keeps it true to the model.
+/// The `egui_dock` state of one window and the logic that keeps it true to
+/// the model.
 pub struct DockSync {
     /// What `DockArea` shows.
     pub state: DockState<TabId>,
+    /// The window this tree shows.
+    pub window: WindowId,
 }
 
 impl std::fmt::Debug for DockSync {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("DockSync")
+            .field("window", &self.window)
             .field("shape", &tree_shape(self.state.main_surface()))
             .finish()
     }
 }
 
 impl DockSync {
-    /// A dock showing the model.
+    /// A dock showing `window` of the model.
     #[must_use]
-    pub fn new(model: &Model) -> Self {
+    pub fn new(model: &Model, window: WindowId) -> Self {
         let mut sync = Self {
             state: DockState::new(Vec::new()),
+            window,
         };
         sync.rebuild(model);
         sync
     }
 
-    /// Makes the tree match the model. Where a pane's tab set is unchanged
-    /// its tab order is kept, and split fractions survive where the split
-    /// is still there. Returns whether anything changed.
+    /// Makes the tree match the model's window. Where a pane's tab set is
+    /// unchanged its tab order is kept, the split fractions are the model's,
+    /// and a model with another order (a restored session) wins over the
+    /// tree's. Returns whether the structure changed.
     pub fn rebuild(&mut self, model: &Model) -> bool {
-        let target = model_shape(model);
+        let target = model_shape(model, self.window);
         if tree_shape(self.state.main_surface()).map(|s| s.normalised())
             == Some(target.normalised())
         {
+            self.apply_fractions(&target);
             return false;
         }
         let old = std::mem::replace(&mut self.state, DockState::new(Vec::new()));
         let old_tree = old.main_surface();
         {
             let tree = self.state.main_surface_mut();
-            build(
-                tree,
-                NodeIndex::root(),
-                &target,
-                old_tree,
-                Some(NodeIndex::root()),
-            );
+            build(tree, NodeIndex::root(), &target, old_tree);
         }
-        self.focus_pane(model, model.focused);
+        let focused = model
+            .window(self.window)
+            .map_or(model.focused, |w| w.focused);
+        self.focus_pane(model, focused);
         true
+    }
+
+    /// Puts the model's split fractions into the tree, where the trees have
+    /// the same shape.
+    fn apply_fractions(&mut self, target: &Shape) {
+        fn walk(tree: &mut Tree<TabId>, node: NodeIndex, shape: &Shape) {
+            if node.0 >= tree.len() {
+                return;
+            }
+            if let Shape::Split {
+                fraction,
+                first,
+                second,
+                ..
+            } = shape
+                && let Node::Horizontal(split) | Node::Vertical(split) = &mut tree[node]
+            {
+                if (split.fraction - fraction).abs() > 1e-4 {
+                    split.fraction = *fraction;
+                }
+                walk(tree, node.left(), first);
+                walk(tree, node.right(), second);
+            }
+        }
+        walk(self.state.main_surface_mut(), NodeIndex::root(), target);
+    }
+
+    /// Replaces the tree's tab order with the model's where the sets agree
+    /// (a restored session, a switched layout). Returns whether any changed.
+    pub fn take_order(&mut self, model: &Model) -> bool {
+        let mut changed = false;
+        let tree = self.state.main_surface_mut();
+        for node in 0..tree.len() {
+            let node = NodeIndex(node);
+            let Some(leaf) = tree[node].get_leaf_mut() else {
+                continue;
+            };
+            let Some(pane) = home_of(model, &leaf.tabs) else {
+                continue;
+            };
+            let Some(want) = model.pane(pane).map(|p| p.tabs().to_vec()) else {
+                continue;
+            };
+            if want == leaf.tabs {
+                continue;
+            }
+            let mut have = leaf.tabs.clone();
+            let mut wanted = want.clone();
+            have.sort_unstable();
+            wanted.sort_unstable();
+            if have != wanted {
+                continue;
+            }
+            let active = leaf.tabs.get(leaf.active.0).copied();
+            leaf.tabs = want;
+            if let Some(active) = active
+                && let Some(index) = leaf.tabs.iter().position(|t| *t == active)
+            {
+                leaf.active = TabIndex(index);
+            }
+            changed = true;
+        }
+        changed
+    }
+
+    /// The window's dock as the tree shows it: the model's panes in the
+    /// tree's splits with the tree's fractions; `None` while a leaf holds
+    /// tabs the model does not know.
+    #[must_use]
+    pub fn layout(&self, model: &Model) -> Option<Dock> {
+        fn walk(tree: &Tree<TabId>, node: NodeIndex, model: &Model) -> Option<Dock> {
+            if node.0 >= tree.len() {
+                return None;
+            }
+            match &tree[node] {
+                Node::Empty => None,
+                Node::Leaf(leaf) => home_of(model, &leaf.tabs).map(Dock::Pane),
+                Node::Horizontal(split) | Node::Vertical(split) => {
+                    let horizontal = matches!(&tree[node], Node::Horizontal(_));
+                    match (
+                        walk(tree, node.left(), model),
+                        walk(tree, node.right(), model),
+                    ) {
+                        (Some(first), Some(second)) => Some(Dock::Split {
+                            dir: if horizontal {
+                                model::SplitDir::Right
+                            } else {
+                                model::SplitDir::Down
+                            },
+                            fraction: split.fraction,
+                            first: Box::new(first),
+                            second: Box::new(second),
+                        }),
+                        (one, None) | (None, one) => one,
+                    }
+                }
+            }
+        }
+        walk(self.state.main_surface(), NodeIndex::root(), model)
+    }
+
+    /// The tab a drag out of a tab strip carries right now, if any:
+    /// `egui_dock` marks the dragged tab's button id, which is built from the
+    /// dock area's id.
+    #[must_use]
+    pub fn dragged_tab(&self, ctx: &egui::Context, dock_id: egui::Id) -> Option<TabId> {
+        let dragged = ctx.dragged_id()?;
+        if !ctx.input(|i| i.pointer.is_decidedly_dragging()) {
+            return None;
+        }
+        let tree = self.state.main_surface();
+        for (node, tabs) in tree
+            .iter()
+            .enumerate()
+            .filter_map(|(index, node)| node.tabs().map(|tabs| (index, tabs)))
+        {
+            for (index, tab) in tabs.iter().enumerate() {
+                let id = dock_id
+                    .with((SurfaceIndex::main(), "surface"))
+                    .with((NodeIndex(node), "node"))
+                    .with((index, "tab"));
+                if id == dragged {
+                    return Some(*tab);
+                }
+            }
+        }
+        None
+    }
+
+    /// Each pane's tab strip in the last frame: the top of its leaf.
+    #[must_use]
+    pub fn strips(&self, model: &Model, height: f32) -> Vec<(PaneId, egui::Rect)> {
+        self.pane_rects(model)
+            .into_iter()
+            .map(|(pane, rect)| {
+                (
+                    pane,
+                    egui::Rect::from_min_size(rect.min, egui::vec2(rect.width(), height)),
+                )
+            })
+            .collect()
     }
 
     /// Gives the leaf showing `pane` the dock's focus.
@@ -253,13 +420,18 @@ impl DockSync {
 
     /// Turns the user's changes to the tree into commands: closed tabs,
     /// tabs moved into other panes or into new splits, a changed active
-    /// tab, a changed focus. Then rebuilds the tree from the model. `pointer`
-    /// is where the pointer is, to tell which pane a drop moved.
+    /// tab, a changed focus (only with `may_focus`, when the window has the
+    /// system's focus), a changed tab order and changed fractions. Then
+    /// rebuilds the tree from the model. `pointer` is where the pointer is,
+    /// to tell which pane a drop moved.
+    // One pass per kind of change, in the order they depend on each other.
+    #[allow(clippy::too_many_lines)]
     pub fn reconcile(
         &mut self,
         app: &mut App,
         events: &mut Vec<Event>,
         pointer: Option<egui::Pos2>,
+        may_focus: bool,
     ) {
         let leaves: Vec<(NodeIndex, Vec<TabId>, Option<TabId>)> = {
             let tree = self.state.main_surface();
@@ -280,11 +452,15 @@ impl DockSync {
             .flat_map(|(_, tabs, _)| tabs.iter().copied())
             .collect();
 
-        // Closed tabs.
+        // Closed tabs, among this window's.
         let model_tabs: Vec<TabId> = app
             .model()
-            .panes()
-            .flat_map(|(_, pane)| pane.tabs().to_vec())
+            .window(self.window)
+            .map(|w| w.dock.panes())
+            .unwrap_or_default()
+            .into_iter()
+            .filter_map(|pane| app.model().pane(pane))
+            .flat_map(|pane| pane.tabs().to_vec())
             .collect();
         for tab in model_tabs {
             if !in_tree.contains(&tab) {
@@ -367,10 +543,32 @@ impl DockSync {
         self.place_panes(app, events, pointer);
 
         // Focus.
-        if let Some(pane) = self.focused_pane(app.model())
+        if may_focus
+            && let Some(pane) = self.focused_pane(app.model())
             && pane != app.model().focused
         {
             app.handle(Command::FocusPane(pane), events);
+        }
+
+        // Display state the session keeps: tab order and fractions.
+        let panes = app
+            .model()
+            .window(self.window)
+            .map(|w| w.dock.panes())
+            .unwrap_or_default();
+        for pane in panes {
+            let order = self.tab_order(app.model(), pane);
+            if app.model().pane(pane).is_some_and(|p| p.tabs() != order) {
+                app.handle(Command::TabOrder { pane, order }, events);
+            }
+        }
+        if let Some(dock) = self.layout(app.model())
+            && let Some(window) = app.model().window(self.window)
+            && window.dock.same_shape(&dock)
+            && !same_fractions(&window.dock, &dock)
+        {
+            let window = self.window;
+            app.handle(Command::Layout { window, dock }, events);
         }
 
         self.rebuild(app.model());
@@ -399,11 +597,14 @@ impl DockSync {
             let Some(tree_panes) = pane_shape(self.state.main_surface(), &homes) else {
                 return;
             };
+            let Some(model_panes) = model_pane_shape(app.model(), self.window) else {
+                return;
+            };
             let Some(misplaced) = misplaced_leaf(
                 self.state.main_surface(),
                 &homes,
                 &tree_panes,
-                &model_pane_shape(app.model()),
+                &model_panes,
                 pointer,
             ) else {
                 return;
@@ -606,19 +807,44 @@ fn pane_shape(tree: &Tree<TabId>, homes: &[(NodeIndex, Option<PaneId>)]) -> Opti
     walk(tree, NodeIndex::root(), homes)
 }
 
-/// The model's dock as pane ids.
-fn model_pane_shape(model: &Model) -> PaneShape {
+/// The model's dock of one window as pane ids.
+fn model_pane_shape(model: &Model, window: WindowId) -> Option<PaneShape> {
     fn walk(dock: &Dock) -> PaneShape {
         match dock {
             Dock::Pane(pane) => PaneShape::Leaf(*pane),
-            Dock::Split { dir, first, second } => PaneShape::Split {
+            Dock::Split {
+                dir, first, second, ..
+            } => PaneShape::Split {
                 horizontal: *dir == model::SplitDir::Right,
                 first: Box::new(walk(first)),
                 second: Box::new(walk(second)),
             },
         }
     }
-    walk(&model.dock)
+    model.window(window).map(|w| walk(&w.dock))
+}
+
+/// Whether two docks of the same shape have the same fractions, give or
+/// take a rounding.
+fn same_fractions(a: &Dock, b: &Dock) -> bool {
+    match (a, b) {
+        (Dock::Pane(_), Dock::Pane(_)) => true,
+        (
+            Dock::Split {
+                fraction: fa,
+                first: a1,
+                second: a2,
+                ..
+            },
+            Dock::Split {
+                fraction: fb,
+                first: b1,
+                second: b2,
+                ..
+            },
+        ) => (fa - fb).abs() <= 1e-4 && same_fractions(a1, b1) && same_fractions(a2, b2),
+        _ => false,
+    }
 }
 
 /// The first pane the tree puts somewhere else than the model, in tree
@@ -660,15 +886,9 @@ fn home_of(model: &Model, tabs: &[TabId]) -> Option<PaneId> {
     counts.iter().find(|(_, n)| *n == best).map(|(p, _)| *p)
 }
 
-/// Fills `node` of `tree` with `shape`, reading old order and fractions from
-/// `old` at `old_node` where they still apply.
-fn build(
-    tree: &mut Tree<TabId>,
-    node: NodeIndex,
-    shape: &Shape,
-    old: &Tree<TabId>,
-    old_node: Option<NodeIndex>,
-) {
+/// Fills `node` of `tree` with `shape`, reading the old tab order from `old`
+/// where a leaf's tab set is unchanged; the fractions are the shape's.
+fn build(tree: &mut Tree<TabId>, node: NodeIndex, shape: &Shape, old: &Tree<TabId>) {
     match shape {
         Shape::Leaf { tabs, active } => {
             let ordered = old_order(old, tabs);
@@ -687,16 +907,10 @@ fn build(
         }
         Shape::Split {
             horizontal,
+            fraction,
             first,
             second,
         } => {
-            let fraction = old_node
-                .filter(|n| n.0 < old.len())
-                .and_then(|n| match (&old[n], horizontal) {
-                    (Node::Horizontal(s), true) | (Node::Vertical(s), false) => Some(s.fraction),
-                    _ => None,
-                })
-                .unwrap_or(0.5);
             let placeholder = second.first_tab().or_else(|| first.first_tab());
             let Some(placeholder) = placeholder else {
                 // No tabs at all on one side: show the other side only.
@@ -705,7 +919,7 @@ fn build(
                 } else {
                     second
                 };
-                build(tree, node, side, old, old_node);
+                build(tree, node, side, old);
                 return;
             };
             let split = if *horizontal {
@@ -713,18 +927,14 @@ fn build(
             } else {
                 Split::Below
             };
-            let [a, b] = tree.split(node, split, fraction, Node::leaf(placeholder));
-            let (old_a, old_b) = match old_node {
-                Some(n)
-                    if n.0 < old.len()
-                        && matches!(old[n], Node::Horizontal(_) | Node::Vertical(_)) =>
-                {
-                    (Some(n.left()), Some(n.right()))
-                }
-                _ => (None, None),
+            let fraction = if fraction.is_finite() {
+                fraction.clamp(0.05, 0.95)
+            } else {
+                0.5
             };
-            build(tree, a, first, old, old_a);
-            build(tree, b, second, old, old_b);
+            let [a, b] = tree.split(node, split, fraction, Node::leaf(placeholder));
+            build(tree, a, first, old);
+            build(tree, b, second, old);
         }
     }
 }
@@ -764,7 +974,8 @@ mod tests {
     fn the_tree_follows_splits_and_tabs_in_the_model() {
         let mut model = Model::new(Settings::default(), loc("/a"));
         let pane = model.focused;
-        let mut dock = DockSync::new(&model);
+        let window = model.focused_window;
+        let mut dock = DockSync::new(&model, window);
         assert_eq!(
             tree_shape(dock.state.main_surface()),
             Some(Shape::Leaf {
@@ -783,7 +994,7 @@ mod tests {
         assert!(dock.rebuild(&model));
         assert_eq!(
             tree_shape(dock.state.main_surface()).map(|s| s.normalised()),
-            Some(model_shape(&model).normalised())
+            Some(model_shape(&model, window).normalised())
         );
         assert!(!dock.rebuild(&model), "nothing to do when in step");
         assert_eq!(dock.tab_order(&model, pane), [TabId(1), second]);
@@ -795,5 +1006,24 @@ mod tests {
         assert!(dock.rebuild(&model));
         assert_eq!(dock.tab_order(&model, pane), [second, TabId(1)]);
         assert_eq!(dock.pane_rects(&model).len(), 2);
+
+        // The model's order wins when it changes (a restored session), and
+        // the tree reports its own layout with the model's panes.
+        assert!(model.set_tab_order(pane, vec![TabId(1), second]));
+        assert!(dock.take_order(&model));
+        assert_eq!(dock.tab_order(&model, pane), [TabId(1), second]);
+        assert!(!dock.take_order(&model));
+        let layout = dock.layout(&model).unwrap_or_else(|| panic!("layout"));
+        assert!(layout.same_shape(model.dock()));
+        assert!(same_fractions(&layout, model.dock()));
+        // A fraction set in the model reaches the tree.
+        let mut moved = model.dock().clone();
+        if let Dock::Split { fraction, .. } = &mut moved {
+            *fraction = 0.25;
+        }
+        assert!(model.set_layout(window, moved));
+        assert!(!dock.rebuild(&model), "same structure");
+        let layout = dock.layout(&model).unwrap_or_else(|| panic!("layout"));
+        assert!(same_fractions(&layout, model.dock()));
     }
 }

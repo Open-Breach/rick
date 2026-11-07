@@ -30,7 +30,7 @@ fn shell(start: &Path, size: egui::Vec2) -> Harness<'static, RickUi> {
             Arc::new(ext_preview_pdf::PdfPreview::new()),
         ],
         config_dir: Some(fake.config_dir()),
-        start: local(start),
+        start: Some(local(start)),
     });
     let mut harness = Harness::builder()
         .with_size(size)
@@ -374,4 +374,229 @@ fn screenshots_of_the_preview_pane() {
     harness.state_mut().set_inspector_width(300.0);
     preview(&mut harness, "map-a3.pdf");
     shoot(&mut harness, "preview-pdf-narrow-pane");
+}
+
+/// Steps frames until `done` holds, within `limit`.
+fn step_until(
+    harness: &mut Harness<'_, RickUi>,
+    limit: Duration,
+    mut done: impl FnMut(&Harness<'_, RickUi>) -> bool,
+) {
+    let deadline = Instant::now() + limit;
+    while !done(harness) {
+        assert!(Instant::now() < deadline, "condition not met in time");
+        harness.step();
+        std::thread::sleep(Duration::from_millis(5));
+    }
+}
+
+fn select_named(harness: &mut Harness<'_, RickUi>, name: &str) {
+    let pane = harness.state().app().model().focused;
+    let id = harness
+        .state()
+        .app()
+        .model()
+        .active_tab(pane)
+        .and_then(|(_, t)| t.rows().find(|e| e.name == name).map(|e| e.id))
+        .unwrap_or_else(|| panic!("no entry {name}"));
+    harness.state_mut().app_mut().handle(
+        app::Command::Select {
+            pane,
+            change: SelectionChange::Set(vec![id]),
+        },
+        &mut Vec::new(),
+    );
+    settle(harness);
+}
+
+/// The close-out's side panel and list: Recent, Network, Trash with items,
+/// the operations area mid-copy, tree view expanded, inline rename and the
+/// conflict dialogue.
+#[test]
+#[ignore = "needs a wgpu adapter; CI runs it and uploads the images"]
+fn screenshots_of_the_side_panel_and_list() {
+    use egui_kittest::kittest::Queryable as _;
+    let (_dir, deep) = sample_tree();
+    let fake = Arc::new(Fake::new().unwrap_or_else(|e| panic!("{e}")));
+    let stick = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+    fake.add_volume(platform::Volume {
+        name: "HOLIDAY".into(),
+        mount_point: stick.path().to_path_buf(),
+        kind: platform::VolumeKind::Removable,
+        total: Some(64 << 30),
+        free: Some(21 << 30),
+    });
+    fake.add_volume(platform::Volume {
+        name: "nas".into(),
+        mount_point: stick.path().join("nas"),
+        kind: platform::VolumeKind::Network,
+        total: Some(4 << 40),
+        free: Some(1 << 40),
+    });
+    // Recent: touch a few files under the fake home.
+    let home = fake.home_dir();
+    for name in ["budget.xlsx", "notes.md", "IMG_1207.png"] {
+        fs::write(home.join(name), name).unwrap_or_else(|e| panic!("{e}"));
+    }
+    let host = Arc::new(EguiHost::new());
+    let app = app::App::new(app::Config {
+        platform: fake.clone(),
+        ui: host.clone(),
+        extensions: vec![
+            Arc::new(ext_preview_text::TextPreview::new()),
+            Arc::new(ext_preview_image::ImagePreview::new()),
+        ],
+        config_dir: Some(fake.config_dir()),
+        start: Some(local(&deep)),
+    });
+    let mut harness = Harness::builder()
+        .with_size(egui::vec2(1280.0, 800.0))
+        .with_pixels_per_point(2.0)
+        .with_step_dt(0.05)
+        .build_eframe(move |cc| RickUi::new(app, host, &cc.egui_ctx));
+    settle(&mut harness);
+    step_until(&mut harness, Duration::from_secs(5), |h| {
+        h.state().app().model().recent.entries().len() >= 3
+            && h.state().app().model().volumes.len() == 2
+    });
+    harness.step();
+    shoot(&mut harness, "side-panel-recent-and-network");
+
+    // Trash with items.
+    select_named(&mut harness, "IMG_1203.png");
+    let pane = harness.state().app().model().focused;
+    harness
+        .state_mut()
+        .queue(Intent::Action(ext::ActionId("core.trash")), pane);
+    harness.step();
+    settle(&mut harness);
+    select_named(&mut harness, "notes.md");
+    harness
+        .state_mut()
+        .queue(Intent::Action(ext::ActionId("core.trash")), pane);
+    harness.step();
+    settle(&mut harness);
+    step_until(&mut harness, Duration::from_secs(5), |h| {
+        h.state().app().model().trash.items.len() == 2
+    });
+    harness.step();
+    shoot(&mut harness, "side-panel-trash-with-items");
+
+    // Tree view, `raw` expanded.
+    harness.state_mut().app_mut().handle(
+        app::Command::SetView {
+            pane,
+            mode: model::ViewMode::Tree,
+        },
+        &mut Vec::new(),
+    );
+    settle(&mut harness);
+    fs::write(deep.join("raw/IMG_1300.dng"), "raw").unwrap_or_else(|e| panic!("{e}"));
+    fs::write(deep.join("raw/IMG_1301.dng"), "raw").unwrap_or_else(|e| panic!("{e}"));
+    let raw = harness
+        .state()
+        .app()
+        .model()
+        .active_tab(pane)
+        .and_then(|(_, t)| t.rows().find(|e| e.name == "raw").map(|e| e.id))
+        .unwrap_or_else(|| panic!("raw"));
+    harness
+        .state_mut()
+        .app_mut()
+        .handle(app::Command::TreeExpand { pane, id: raw }, &mut Vec::new());
+    settle(&mut harness);
+    shoot(&mut harness, "tree-view-expanded");
+
+    // Inline rename: F2 on a row.
+    harness.state_mut().app_mut().handle(
+        app::Command::SetView {
+            pane,
+            mode: model::ViewMode::Details,
+        },
+        &mut Vec::new(),
+    );
+    settle(&mut harness);
+    select_named(&mut harness, "IMG_1204.png");
+    harness.key_press(egui::Key::F2);
+    harness.step();
+    harness.step();
+    shoot(&mut harness, "inline-rename");
+    harness.key_press(egui::Key::Escape);
+    harness.step();
+
+    // The conflict dialogue: paste a file over itself in `edited`.
+    fs::write(deep.join("edited/IMG_1205.png"), "older").unwrap_or_else(|e| panic!("{e}"));
+    select_named(&mut harness, "IMG_1205.png");
+    harness
+        .state_mut()
+        .queue(Intent::Action(ext::ActionId("core.copy")), pane);
+    harness.step();
+    harness.state_mut().app_mut().handle(
+        app::Command::Navigate {
+            pane,
+            to: local(&deep.join("edited")),
+        },
+        &mut Vec::new(),
+    );
+    settle(&mut harness);
+    harness
+        .state_mut()
+        .queue(Intent::Action(ext::ActionId("core.paste")), pane);
+    harness.step();
+    step_until(&mut harness, Duration::from_secs(5), |h| {
+        !h.state().app().model().conflicts.is_empty()
+    });
+    harness.step();
+    harness.step();
+    shoot(&mut harness, "conflict-dialogue");
+    harness.get_by_label("Cancel").click();
+    harness.step();
+    settle(&mut harness);
+
+    // The operations area mid-copy: a 1 GiB sparse file through the fast
+    // path shows its row with progress; the picture is taken on the first
+    // frame that shows it running.
+    let big = deep.join("archive.bin");
+    {
+        use std::io::{Seek, SeekFrom, Write};
+        let mut file = fs::File::create(&big).unwrap_or_else(|e| panic!("{e}"));
+        file.write_all(&vec![0x5Au8; 4 << 20])
+            .unwrap_or_else(|e| panic!("{e}"));
+        file.seek(SeekFrom::Start((1 << 30) - (4 << 20)))
+            .unwrap_or_else(|e| panic!("{e}"));
+        file.write_all(&vec![0xA5u8; 4 << 20])
+            .unwrap_or_else(|e| panic!("{e}"));
+        file.set_len(1 << 30).unwrap_or_else(|e| panic!("{e}"));
+    }
+    harness.state_mut().app_mut().handle(
+        app::Command::Navigate {
+            pane,
+            to: local(&deep),
+        },
+        &mut Vec::new(),
+    );
+    settle(&mut harness);
+    select_named(&mut harness, "archive.bin");
+    harness
+        .state_mut()
+        .queue(Intent::Action(ext::ActionId("core.copy")), pane);
+    harness.step();
+    harness.state_mut().app_mut().handle(
+        app::Command::Navigate {
+            pane,
+            to: local(&deep.join("edited")),
+        },
+        &mut Vec::new(),
+    );
+    settle(&mut harness);
+    harness
+        .state_mut()
+        .queue(Intent::Action(ext::ActionId("core.paste")), pane);
+    harness.step();
+    step_until(&mut harness, Duration::from_secs(10), |h| {
+        !h.state().app().model().jobs.is_empty()
+    });
+    harness.step();
+    shoot(&mut harness, "operations-area-mid-copy");
+    settle(&mut harness);
 }

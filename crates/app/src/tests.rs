@@ -54,7 +54,7 @@ fn harness() -> Harness {
         ui: ui.clone(),
         extensions: Vec::new(),
         config_dir: Some(fake.config_dir()),
-        start: local(root.path()),
+        start: Some(local(root.path())),
     });
     Harness {
         root,
@@ -209,8 +209,8 @@ fn tabs_and_splits_keep_their_listings_live() {
         dir: model::SplitDir::Right,
     });
     h.settle();
-    assert_eq!(h.app.model().dock.panes().len(), 2);
-    let new_pane = h.app.model().dock.panes()[1];
+    assert_eq!(h.app.model().dock().panes().len(), 2);
+    let new_pane = h.app.model().dock().panes()[1];
     let (_, tab) = h
         .app
         .model()
@@ -623,4 +623,411 @@ fn transfer_noops_are_the_spec_cases() {
         &l("/a/b.txt"),
         &Location::new(types::ProviderId("other"), "/a")
     ));
+}
+
+/// Runs the loop until `done` holds or `limit` passes; returns whether it
+/// held.
+fn wait_until(h: &mut Harness, limit: Duration, mut done: impl FnMut(&Harness) -> bool) -> bool {
+    let deadline = Instant::now() + limit;
+    runtime::block_on(async {
+        loop {
+            if done(h) {
+                return true;
+            }
+            if Instant::now() >= deadline {
+                return false;
+            }
+            let _ =
+                tokio::time::timeout(Duration::from_millis(20), h.app.tick(&mut h.events)).await;
+        }
+    })
+}
+
+#[test]
+fn tree_view_lists_children_lazily_and_keeps_them_across_a_refresh() {
+    let mut h = harness();
+    h.settle();
+    let pane = h.app.model().focused;
+    let sub = h.root.path().join("sub");
+    fs::write(sub.join("inner.txt"), "i").unwrap_or_else(|e| panic!("{e}"));
+    fs::create_dir(sub.join("deeper")).unwrap_or_else(|e| panic!("{e}"));
+    h.send(Command::SetView {
+        pane,
+        mode: model::ViewMode::Tree,
+    });
+    let rows = |h: &Harness| -> Vec<(String, u16)> {
+        let (_, tab) = h
+            .app
+            .model()
+            .active_tab(pane)
+            .unwrap_or_else(|| panic!("tab"));
+        (0..tab.row_count())
+            .filter_map(|i| tab.row(i).map(|e| (e.name.clone(), tab.depth(i))))
+            .collect()
+    };
+    assert_eq!(rows(&h).len(), 4, "the listing alone");
+    let sub_id = id_of(&h, "sub");
+    h.send(Command::TreeExpand { pane, id: sub_id });
+    h.settle();
+    assert_eq!(
+        rows(&h),
+        [
+            ("sub".to_owned(), 0),
+            ("deeper".to_owned(), 1),
+            ("inner.txt".to_owned(), 1),
+            ("a.txt".to_owned(), 0),
+            ("b.txt".to_owned(), 0),
+            ("c.txt".to_owned(), 0)
+        ]
+    );
+    assert!(
+        h.app.model().jobs.is_empty(),
+        "child listings are not jobs the user sees"
+    );
+
+    // A refresh keeps the expanded folder and its children.
+    fs::write(sub.join("later.txt"), "l").unwrap_or_else(|e| panic!("{e}"));
+    h.send(Command::Refresh(pane));
+    h.settle();
+    let names: Vec<String> = rows(&h).into_iter().map(|(n, _)| n).collect();
+    assert!(names.contains(&"later.txt".to_owned()), "{names:?}");
+    assert!(names.contains(&"inner.txt".to_owned()), "{names:?}");
+    let (_, tab) = h
+        .app
+        .model()
+        .active_tab(pane)
+        .unwrap_or_else(|| panic!("tab"));
+    assert!(tab.tree.expanded.contains(&sub_id));
+
+    h.send(Command::TreeCollapse { pane, id: sub_id });
+    assert_eq!(rows(&h).len(), 4);
+    h.send(Command::Navigate {
+        pane,
+        to: local(&sub),
+    });
+    h.settle();
+    let (_, tab) = h
+        .app
+        .model()
+        .active_tab(pane)
+        .unwrap_or_else(|| panic!("tab"));
+    assert!(tab.tree.expanded.is_empty());
+}
+
+#[test]
+fn subtree_search_streams_matches_as_a_job_and_a_new_text_supersedes_it() {
+    let mut h = harness();
+    h.settle();
+    let pane = h.app.model().focused;
+    let mut dir = h.root.path().join("sub");
+    for level in 0..20 {
+        dir.push(format!("l{level}"));
+        fs::create_dir_all(&dir).unwrap_or_else(|e| panic!("{e}"));
+        fs::write(dir.join(format!("foo{level}.txt")), "x").unwrap_or_else(|e| panic!("{e}"));
+    }
+    h.send(Command::Subtree { pane, on: true });
+    assert_eq!(h.names().len(), 4, "a toggle without text changes nothing");
+    h.send(Command::Filter {
+        pane,
+        text: "foo".into(),
+    });
+    let started = Instant::now();
+    assert!(
+        wait_until(&mut h, Duration::from_secs(5), |h| !h.names().is_empty()),
+        "no match arrived"
+    );
+    let first = started.elapsed();
+    h.settle();
+    let names = h.names();
+    assert_eq!(names.len(), 20, "{names:?}");
+    assert!(names.iter().all(|n| n.starts_with("foo")));
+    let (_, tab) = h
+        .app
+        .model()
+        .active_tab(pane)
+        .unwrap_or_else(|| panic!("tab"));
+    assert!(tab.is_searching());
+    let deep = tab
+        .listing
+        .rows()
+        .find(|e| e.name == "foo19.txt")
+        .unwrap_or_else(|| panic!("deep match"));
+    assert!(deep.path.to_string_lossy().contains("l19"), "full paths");
+    println!("first search batch after {first:?}");
+    let search_jobs: Vec<&model::JobInfo> = h
+        .app
+        .model()
+        .jobs
+        .values()
+        .filter(|j| j.name.starts_with("Search"))
+        .collect();
+    assert_eq!(search_jobs.len(), 1, "the walk is a job the user sees");
+    assert_eq!(search_jobs[0].state, model::JobState::Done);
+
+    // A new text supersedes the walk: the first job is cancelled if it is
+    // still running (the acceptance test shows that on the 200k fixture) or
+    // has finished; either way nothing stays running and only the last
+    // text's matches show.
+    h.send(Command::Filter {
+        pane,
+        text: "fo".into(),
+    });
+    h.send(Command::Filter {
+        pane,
+        text: "foo1".into(),
+    });
+    h.settle();
+    let states: Vec<model::JobState> = h
+        .app
+        .model()
+        .jobs
+        .values()
+        .filter(|j| j.name.starts_with("Search"))
+        .map(|j| j.state.clone())
+        .collect();
+    assert_eq!(states.len(), 3, "{states:?}");
+    assert!(
+        states
+            .iter()
+            .all(|s| matches!(s, model::JobState::Done | model::JobState::Cancelled)),
+        "a superseded walk ends: {states:?}"
+    );
+    let names = h.names();
+    assert!(names.iter().all(|n| n.starts_with("foo1")), "{names:?}");
+    // Off again: the location's own entries are back.
+    h.send(Command::Subtree { pane, on: false });
+    h.settle();
+    assert_eq!(
+        h.names().len(),
+        0,
+        "the plain filter hides what does not match"
+    );
+    h.send(Command::Filter {
+        pane,
+        text: String::new(),
+    });
+    assert_eq!(h.names().len(), 4);
+}
+
+#[test]
+fn paste_conflicts_reach_the_model_and_the_answer_reaches_the_job() {
+    let mut h = harness();
+    h.settle();
+    let pane = h.app.model().focused;
+    let sub = h.root.path().join("sub");
+    fs::write(sub.join("a.txt"), "old").unwrap_or_else(|e| panic!("{e}"));
+    h.send(Command::Select {
+        pane,
+        change: SelectionChange::Set(vec![id_of(&h, "a.txt")]),
+    });
+    let ctx = h
+        .app
+        .action_ctx(pane, Invocation::Shortcut)
+        .unwrap_or_else(|| panic!("ctx"));
+    h.send(Command::Run {
+        action: ActionId("core.copy"),
+        ctx,
+    });
+    h.send(Command::Navigate {
+        pane,
+        to: local(&sub),
+    });
+    h.settle();
+    let ctx = h
+        .app
+        .action_ctx(pane, Invocation::Shortcut)
+        .unwrap_or_else(|| panic!("ctx"));
+    h.send(Command::Run {
+        action: ActionId("core.paste"),
+        ctx,
+    });
+    assert!(
+        wait_until(&mut h, Duration::from_secs(5), |h| !h
+            .app
+            .model()
+            .conflicts
+            .is_empty()),
+        "the conflict reaches the model"
+    );
+    let conflict = h.app.model().conflicts[0].clone();
+    assert_eq!(conflict.proposed, "a (2).txt");
+    assert!(
+        h.take_events()
+            .iter()
+            .any(|e| matches!(e, Event::Conflict(c) if c.id == conflict.id))
+    );
+    assert!(
+        h.app
+            .model()
+            .jobs
+            .get(&conflict.job)
+            .is_some_and(|j| matches!(&j.state, model::JobState::Running(types::Progress::Message(m)) if m.contains("exists")))
+    );
+    h.send(Command::ResolveConflict {
+        id: conflict.id,
+        answer: types::ConflictAnswer::once(types::Resolution::Rename("fresh.txt".into())),
+    });
+    assert_eq!(h.app.model().conflicts.len(), 0, "no conflict is pending");
+    h.settle();
+    assert_eq!(
+        fs::read_to_string(sub.join("fresh.txt")).ok(),
+        Some("a.txt".into())
+    );
+    assert_eq!(
+        fs::read_to_string(sub.join("a.txt")).ok(),
+        Some("old".into())
+    );
+    assert!(
+        h.names().contains(&"fresh.txt".to_owned()),
+        "the pane refreshed"
+    );
+    assert_eq!(
+        h.app
+            .model()
+            .jobs
+            .get(&conflict.job)
+            .map(|j| j.state.clone()),
+        Some(model::JobState::Done)
+    );
+}
+
+#[test]
+fn recent_follows_the_home_watch_and_survives_a_restart() {
+    let mut h = harness();
+    h.settle();
+    let home = h.fake.home_dir();
+    fs::write(home.join("older.txt"), "o").unwrap_or_else(|e| panic!("{e}"));
+    assert!(
+        wait_until(&mut h, Duration::from_millis(500), |h| {
+            h.app
+                .model()
+                .recent
+                .entries()
+                .first()
+                .is_some_and(|e| e.name == "older.txt")
+        }),
+        "the touched file is the first row within 500 ms"
+    );
+    std::thread::sleep(Duration::from_millis(30));
+    fs::write(home.join("newer.txt"), "n").unwrap_or_else(|e| panic!("{e}"));
+    assert!(wait_until(&mut h, Duration::from_millis(500), |h| {
+        h.app
+            .model()
+            .recent
+            .entries()
+            .first()
+            .is_some_and(|e| e.name == "newer.txt")
+    }));
+    let rows: Vec<String> = h
+        .app
+        .model()
+        .recent
+        .entries()
+        .iter()
+        .map(|e| e.name.clone())
+        .collect();
+    assert_eq!(rows, ["newer.txt", "older.txt"]);
+    h.settle();
+    let file = h.app.settings_path().with_file_name(super::RECENT_FILE);
+    assert!(
+        wait_until(&mut h, Duration::from_secs(2), |_| {
+            fs::read_to_string(&file).is_ok_and(|t| t.contains("newer.txt"))
+        }),
+        "the list is written"
+    );
+
+    // A second app from the same config directory has the rows.
+    let ui = Arc::new(Scripted::default());
+    let again = App::new(Config {
+        platform: h.fake.clone(),
+        ui,
+        extensions: Vec::new(),
+        config_dir: Some(h.fake.config_dir()),
+        start: Some(local(h.root.path())),
+    });
+    let mut h2 = Harness {
+        root: tempfile::tempdir().unwrap_or_else(|e| panic!("{e}")),
+        fake: h.fake.clone(),
+        ui: h.ui.clone(),
+        app: again,
+        events: Vec::new(),
+    };
+    assert!(wait_until(&mut h2, Duration::from_secs(5), |h| {
+        h.app.model().recent.entries().len() == 2
+    }));
+    let rows: Vec<String> = h2
+        .app
+        .model()
+        .recent
+        .entries()
+        .iter()
+        .map(|e| e.name.clone())
+        .collect();
+    assert_eq!(rows, ["newer.txt", "older.txt"]);
+}
+
+#[test]
+fn the_trash_and_the_volumes_reach_the_model() {
+    let mut h = harness();
+    h.settle();
+    assert!(h.app.model().trash.listed);
+    assert_eq!(h.app.model().trash.items.len(), 0, "the trash is empty");
+    let pane = h.app.model().focused;
+    h.send(Command::Select {
+        pane,
+        change: SelectionChange::Set(vec![id_of(&h, "b.txt")]),
+    });
+    let ctx = h
+        .app
+        .action_ctx(pane, Invocation::Shortcut)
+        .unwrap_or_else(|| panic!("ctx"));
+    h.send(Command::Run {
+        action: ActionId("core.trash"),
+        ctx,
+    });
+    assert!(wait_until(&mut h, Duration::from_secs(5), |h| {
+        h.app.model().trash.items.len() == 1
+    }));
+    assert!(h.app.model().trash.items[0].original.ends_with("b.txt"));
+    let record = h.app.settings_path().with_file_name(super::TRASH_FILE);
+    assert!(wait_until(&mut h, Duration::from_secs(2), |_| {
+        fs::read_to_string(&record).is_ok_and(|t| t.contains("b.txt"))
+    }));
+
+    // Restore through the trash context, as the side panel does.
+    let entry = ops::trash_entry(&h.app.model().trash.items[0]);
+    h.send(Command::Run {
+        action: ActionId("core.restore_trash"),
+        ctx: ext::ActionCtx {
+            pane,
+            location: ops::trash_location(),
+            selection: vec![entry],
+            invoked_from: Invocation::ContextMenu,
+        },
+    });
+    assert!(wait_until(&mut h, Duration::from_secs(5), |h| {
+        h.app.model().trash.items.is_empty()
+    }));
+    assert!(h.root.path().join("b.txt").exists());
+    assert_eq!(h.app.undo_label().as_deref(), Some("Restore b.txt"));
+    h.send(Command::Undo);
+    assert!(wait_until(&mut h, Duration::from_secs(5), |h| {
+        h.app.model().trash.items.len() == 1
+    }));
+    assert!(!h.root.path().join("b.txt").exists());
+
+    // Volumes come from the platform.
+    assert_eq!(h.app.model().volumes.len(), 0, "no volume is listed");
+    h.fake.add_volume(platform::Volume {
+        name: "USB".into(),
+        mount_point: h.root.path().join("sub"),
+        kind: platform::VolumeKind::Removable,
+        total: Some(100),
+        free: Some(50),
+    });
+    h.send(Command::RefreshVolumes);
+    assert!(wait_until(&mut h, Duration::from_secs(5), |h| {
+        h.app.model().volumes.len() == 1
+    }));
+    assert_eq!(h.app.model().volumes[0].name, "USB");
 }

@@ -126,6 +126,36 @@ pub const BENCHMARKS: &[Benchmark] = &[
         macos: ms(150),
         windows: ms(20),
     },
+    Benchmark {
+        key: "tree-first",
+        linux: ms(50),
+        macos: ms(50),
+        windows: ms(50),
+    },
+    Benchmark {
+        key: "search-first",
+        linux: ms(100),
+        macos: ms(100),
+        windows: ms(100),
+    },
+    Benchmark {
+        key: "recent",
+        linux: ms(500),
+        macos: ms(500),
+        windows: ms(500),
+    },
+    Benchmark {
+        key: "cancel",
+        linux: ms(1_000),
+        macos: ms(1_000),
+        windows: ms(1_000),
+    },
+    Benchmark {
+        key: "session-start",
+        linux: ms(1_000),
+        macos: ms(1_000),
+        windows: ms(1_000),
+    },
 ];
 
 /// The benchmark named `key`.
@@ -171,13 +201,15 @@ pub fn target_on(key: &str, os: &str) -> Duration {
 /// operating system.
 ///
 /// The line is `BENCH <key> <os> <microseconds> <readable>`; the bench
-/// workflow collects the first four fields. With `RICK_BENCH_RECORD` set
-/// the measurement is printed and not asserted.
+/// workflow collects the first four fields. The targets are release
+/// numbers: a debug build prints and does not assert, and so does a run
+/// with `RICK_BENCH_RECORD` set, which the bench workflow uses to measure
+/// before a target exists.
 ///
 /// # Panics
 ///
-/// When the measurement is over the target and `RICK_BENCH_RECORD` is not
-/// set.
+/// When the measurement is over the target in a release build without
+/// `RICK_BENCH_RECORD`.
 pub fn record(key: &str, measured: Duration) {
     let os = std::env::consts::OS;
     let target = target(key);
@@ -185,7 +217,7 @@ pub fn record(key: &str, measured: Duration) {
         "BENCH {key} {os} {} {measured:?} (target {target:?})",
         measured.as_micros()
     );
-    if std::env::var_os("RICK_BENCH_RECORD").is_none() {
+    if !cfg!(debug_assertions) && std::env::var_os("RICK_BENCH_RECORD").is_none() {
         assert!(
             measured <= target,
             "{key}: {measured:?} is over the {target:?} target on {os}"

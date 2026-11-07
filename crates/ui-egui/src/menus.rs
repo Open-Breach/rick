@@ -1,15 +1,26 @@
 //! Menus: the burger menu and the context menu built from the action
 //! registry.
 
+use app::{App, Command};
 use ext::{ActionCtx, ActionGroup, ActionId, Availability, Invocation};
 use types::Entry;
 
 use crate::keys::Intent;
 use crate::shell::{PaneCx, Request};
 
-/// The burger menu at the top of the window.
-pub fn burger(ui: &mut egui::Ui, requests: &mut Vec<Request>, pane: model::PaneId) {
+/// The burger menu at the top of the window: New window, the Layouts
+/// submenu, Settings, Keyboard shortcuts, About.
+pub fn burger(ui: &mut egui::Ui, requests: &mut Vec<Request>, pane: model::PaneId, app: &App) {
     ui.menu_button(crate::icons::MENU, |ui| {
+        if ui.button("New window").clicked() {
+            requests.push(Request::Intent {
+                intent: Intent::NewWindow,
+                pane,
+            });
+            ui.close();
+        }
+        ui.menu_button("Layouts", |ui| layouts_menu(ui, requests, pane, app));
+        ui.separator();
         if ui.button("Settings…").clicked() {
             requests.push(Request::Intent {
                 intent: Intent::Settings,
@@ -32,6 +43,66 @@ pub fn burger(ui: &mut egui::Ui, requests: &mut Vec<Request>, pane: model::PaneI
     });
 }
 
+/// The Layouts submenu: "Continue where I left off" first, then one
+/// submenu per saved layout with Switch, Set as start layout, Rename and
+/// Delete, then Save layout as….
+fn layouts_menu(ui: &mut egui::Ui, requests: &mut Vec<Request>, pane: model::PaneId, app: &App) {
+    ui.set_min_width(200.0);
+    if ui.button("Continue where I left off").clicked() {
+        requests.push(Request::Intent {
+            intent: Intent::LastSession,
+            pane,
+        });
+        ui.close();
+    }
+    let start = app.model().settings.session.start_layout();
+    for (index, name) in app.layouts().iter().enumerate() {
+        let Ok(index) = u16::try_from(index) else {
+            break;
+        };
+        let title = if start == Some(name.as_str()) {
+            format!("{name} (start layout)")
+        } else {
+            name.clone()
+        };
+        ui.menu_button(title, |ui| {
+            if ui.button("Switch").clicked() {
+                requests.push(Request::Intent {
+                    intent: Intent::Layout(index),
+                    pane,
+                });
+                ui.close();
+            }
+            let is_start = start == Some(name.as_str());
+            if ui
+                .add_enabled(!is_start, egui::Button::new("Set as start layout"))
+                .clicked()
+            {
+                requests.push(Request::Command(Command::Settings(
+                    model::SettingsChange::StartLayout(Some(name.clone())),
+                )));
+                ui.close();
+            }
+            if ui.button("Rename…").clicked() {
+                requests.push(Request::RenameLayout(name.clone()));
+                ui.close();
+            }
+            if ui.button("Delete").clicked() {
+                requests.push(Request::Command(Command::DeleteLayout(name.clone())));
+                ui.close();
+            }
+        });
+    }
+    ui.separator();
+    if ui.button("Save layout as…").clicked() {
+        requests.push(Request::Intent {
+            intent: Intent::SaveLayout,
+            pane,
+        });
+        ui.close();
+    }
+}
+
 /// The action context for the pane: the selection, or `only` when the menu
 /// was opened on an entry outside the selection.
 #[must_use]
@@ -50,7 +121,16 @@ pub fn context_for(cx: &PaneCx<'_>, only: Option<Entry>) -> ActionCtx {
 
 /// The spec's groups, as action ids in order.
 const GROUPS: &[(&str, &[&str])] = &[
-    ("Open", &["core.open_default", "core.pin", "core.unpin"]),
+    (
+        "Open",
+        &[
+            "core.open_default",
+            "core.open_containing",
+            "core.open_containing_tab",
+            "core.pin",
+            "core.unpin",
+        ],
+    ),
     (
         "Edit",
         &[

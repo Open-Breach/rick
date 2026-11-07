@@ -12,7 +12,7 @@ use ext::{
     ReadHandle, RemoveMode, WriteHandle, WriteOptions, async_trait,
 };
 use futures::{StreamExt, stream};
-use runtime::ProgressSink;
+use runtime::{PauseGate, ProgressSink};
 use tokio::io::AsyncWrite;
 use types::{
     Attrs, CancelToken, Entry, EntryId, EntryKind, Error, Location, Progress, ProviderId, VPath,
@@ -304,6 +304,7 @@ fn cross_provider_copy_streams_a_whole_tree_with_progress() {
         CopyOptions::default(),
         sink,
         CancelToken::new(),
+        &PauseGate::open(),
     ))
     .unwrap_or_else(|e| panic!("{e}"));
 
@@ -337,6 +338,7 @@ fn same_provider_copy_uses_the_native_path() {
         CopyOptions::default(),
         sink,
         CancelToken::new(),
+        &PauseGate::open(),
     ))
     .unwrap_or_else(|e| panic!("{e}"));
     assert_eq!(a.native_copies.load(Ordering::Relaxed), 2);
@@ -369,6 +371,7 @@ fn existing_targets_need_overwrite() {
         CopyOptions::default(),
         ProgressSink::channel().0,
         CancelToken::new(),
+        &PauseGate::open(),
     ));
     assert!(matches!(refused, Err(Error::Io(e)) if e.kind() == std::io::ErrorKind::AlreadyExists));
 
@@ -379,6 +382,7 @@ fn existing_targets_need_overwrite() {
         CopyOptions { overwrite: true },
         ProgressSink::channel().0,
         CancelToken::new(),
+        &PauseGate::open(),
     ))
     .unwrap_or_else(|e| panic!("{e}"));
     assert_eq!(b.get("/dst/a.txt"), Some(Node::File(b"alpha".to_vec())));
@@ -399,6 +403,7 @@ fn a_cancelled_copy_stops_and_says_so() {
         CopyOptions::default(),
         ProgressSink::channel().0,
         cancel,
+        &PauseGate::open(),
     ));
     assert!(matches!(result, Err(Error::Cancelled)), "{result:?}");
     assert_eq!(b.get("/dst/a.txt"), None);
@@ -418,6 +423,7 @@ fn move_renames_within_a_provider_and_copies_across() {
         CopyOptions::default(),
         ProgressSink::channel().0,
         CancelToken::new(),
+        &PauseGate::open(),
     ))
     .unwrap_or_else(|e| panic!("{e}"));
     assert_eq!(a.get("/src/a.txt"), None);
@@ -430,6 +436,7 @@ fn move_renames_within_a_provider_and_copies_across() {
         CopyOptions::default(),
         ProgressSink::channel().0,
         CancelToken::new(),
+        &PauseGate::open(),
     ))
     .unwrap_or_else(|e| panic!("{e}"));
     assert_eq!(a.get("/src"), None);

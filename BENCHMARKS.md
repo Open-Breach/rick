@@ -241,3 +241,66 @@ platform is the fake. Test: `startup_to_the_first_frame` in `startup.rs`.
 | Linux | 20 ms | 7.6 ms | 7.9 ms |
 | macOS | 150 ms | 63.4 ms | 81.1 ms |
 | Windows | 20 ms | 9.7 ms | 11.9 ms |
+
+### `tree-first` — the tree view's first children on the 200k fixture
+
+Spec target: 50 ms for the first screen after expanding a folder (close-out
+A). Test: `tree_view_on_the_200k_fixture_expands_within_the_budget` in
+`closeout.rs`.
+
+| OS | Target | Median | Worst |
+| --- | --- | --- | --- |
+| Linux | 50 ms | — | — |
+| macOS | 50 ms | — | — |
+| Windows | 50 ms | — | — |
+
+### `search-first` — first batch of a subtree search
+
+Spec target: 100 ms for the first matches of `foo` over 20 nested levels and
+a 12 000-file folder (close-out A). Test:
+`the_first_search_batch_arrives_within_100_ms` in `closeout.rs`.
+
+| OS | Target | Median | Worst |
+| --- | --- | --- | --- |
+| Linux | 100 ms | — | — |
+| macOS | 100 ms | — | — |
+| Windows | 100 ms | — | — |
+
+### `recent` — a touched file as Recent's first row
+
+Spec target: 500 ms (close-out A). Test:
+`recent_shows_a_touched_file_first_and_survives_a_restart` in `closeout.rs`,
+which also runs in the ordinary test suite.
+
+| OS | Target | Median | Worst |
+| --- | --- | --- | --- |
+| Linux | 500 ms | — | — |
+| macOS | 500 ms | — | — |
+| Windows | 500 ms | — | — |
+
+### `cancel` — cancelling the 1 GiB sparse copy from the operations area
+
+No spec number (the job ends "within one batch"); the targets come from
+the measurements. Where the fast path finishes the copy before its row is
+seen there is nothing to cancel and no measurement. Test:
+`a_1gib_sparse_copy_shows_progress_pauses_and_cancels` in `closeout.rs`.
+
+| OS | Target | Median | Worst |
+| --- | --- | --- | --- |
+| Linux | 1000 ms | — | — |
+| macOS | 1000 ms | — | — |
+| Windows | 1000 ms | — | — |
+
+### `session-start` — starting a three-window, twenty-tab session
+
+No spec number; the test asserts the big session starts within 300 ms of a
+one-tab one, and the absolute time of the big one is recorded here with
+targets from the measurements. `App::new` with the session file, headless.
+Test: `a_big_session_starts_about_as_fast_as_a_small_one` in `session.rs`,
+which also runs in the ordinary test suite.
+
+| OS | Target | Median | Worst |
+| --- | --- | --- | --- |
+| Linux | 1000 ms | — | — |
+| macOS | 1000 ms | — | — |
+| Windows | 1000 ms | — | — |

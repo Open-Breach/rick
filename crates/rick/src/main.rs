@@ -51,11 +51,17 @@ fn main() -> anyhow::Result<()> {
         .with_writer(std::io::stderr)
         .init();
 
-    let start = std::env::args_os().nth(1).map(PathBuf::from).map_or_else(
-        || std::env::home_dir().unwrap_or_else(|| PathBuf::from(".")),
-        |p| std::fs::canonicalize(&p).unwrap_or(p),
-    );
-    tracing::info!(start = %start.display(), "starting");
+    // A path on the command line opens in a new tab of the restored
+    // session; without one the session comes back as it was.
+    let start = std::env::args_os()
+        .nth(1)
+        .map(PathBuf::from)
+        .map(|p| std::fs::canonicalize(&p).unwrap_or(p));
+    if let Some(start) = &start {
+        tracing::info!(start = %start.display(), "starting");
+    } else {
+        tracing::info!("starting");
+    }
 
     let platform = Arc::new(platform::Native::new());
     let host = Arc::new(ui_egui::EguiHost::new());
@@ -64,7 +70,7 @@ fn main() -> anyhow::Result<()> {
         ui: host.clone(),
         extensions: built_ins(),
         config_dir: None,
-        start: Location::new(vfs_local::PROVIDER_ID, platform::paths::from_path(&start)),
+        start: start.map(|p| Location::new(vfs_local::PROVIDER_ID, platform::paths::from_path(&p))),
     });
     ui_egui::run("Rick", VERSION, app, host).context("the window could not be opened")
 }

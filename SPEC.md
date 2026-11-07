@@ -113,9 +113,9 @@ Rick draws its own window chrome; the platform's title bar is turned off. The to
 - **Centre:** the search box, which is also the command palette (below).
 - **Right:** a small group of layout toggles, then the window controls (minimise, maximise, close) drawn by Rick. Which toggles sit there is still to be decided; the candidates are side panel, inspector and split. On macOS the traffic lights keep their place on the left and the burger menu moves right of them.
 
-Dragging an empty part of the title row moves the window; double-clicking it maximises or restores. Tabs do not live in the title row: each pane keeps its own tab strip directly below it, as VS Code's editor groups do, so a window with two panes shows two strips and the title row never changes when focus moves between panes.
+Dragging an empty part of the title row moves the window; double-clicking it maximises or restores. Where Rick draws the controls (Linux, Windows) the window is transparent behind a 10-point margin that holds a light shadow and a one-point border in the theme's window-stroke colour, with invisible resize grips along the edges and corners; a maximised or fullscreen window has no frame; macOS keeps the system's border and resize handles. Tabs do not live in the title row: each pane keeps its own tab strip directly below it, as VS Code's editor groups do, so a window with two panes shows two strips and the title row never changes when focus moves between panes.
 
-**Search box.** One box serves search and commands. Plain text searches by name — the current location first, the platform index when a `SearchIndex` is available — and results drop down below the box; a leading `>` switches the box to commands, listing every registered Action fuzzy-matched as you type, each with its shortcut, Enter running the chosen one on the current selection and recently used commands floating to the top. Mod+P focuses the box empty, Mod+Shift+P focuses it with `>` already typed. Escape clears it and returns focus to the list.
+**Search box.** One box serves search and commands. Plain text searches by name — the current location in 0.1, the platform index as well once a `SearchIndex` is available — and results drop down below the box; a leading `>` switches the box to commands, listing every registered Action fuzzy-matched as you type, each with its shortcut, Enter running the chosen one on the current selection and recently used commands floating to the top. Mod+P focuses the box empty, Mod+Shift+P focuses it with `>` already typed. Escape clears it and returns focus to the list.
 
 **Spacing.** No wasted space, but room to breathe: controls and rows get VS Code-like padding rather than touching, and the row-density setting (compact, normal, comfortable) is the single knob that scales it.
 
@@ -123,19 +123,20 @@ Dragging an empty part of the title row moves the window; double-clicking it max
 
 ### Side panel
 
-Docked on the left by default; the user can move it to the right side, and collapse it to a narrow icon strip or hide it entirely, with a shortcut to toggle it back. Its entries, top to bottom:
+Docked on the left by default; the user can move it to the right side and hide it entirely, with a shortcut (Mod+B) to toggle it back; a collapsed icon-strip mode comes later. Its side, width, visibility and folded sections are part of each window's session state, not of `rick.toml`. Its entries, top to bottom:
 
 | Entry | What it shows | Notes |
 | --- | --- | --- |
 | Home | The user's home directory | Linux and macOS: `$HOME`; Windows: the user profile directory (`C:\Users\<name>`) |
-| Recent | Files and folders recently changed anywhere in the file system | Fed by file-system events, not only by what Rick touched; newest first |
+| Recent | Files and folders recently changed anywhere in the file system | Fed by the watches on Home, the pinned folders and every open pane, plus a bounded scan at start (the newest 200 of up to 50 000 entries per root); newest first |
 | Network | Network environment: discovered shares and hosts, mounted network file systems, configured object-storage connections | Connect, mount and unmount from here |
 | Trash | The platform trash | Restore and empty |
 | Pinned | Folders and files the user pins | Any path, local or remote; drag to reorder; dropping items from a file list here pins them (see Drag and drop) |
+| Tree | The folder tree of the focused pane's volume | Lazy, follows the focused pane unless unlinked; the same tree view is also a dockable tab (Further GUI elements) |
 
 Each entry is a section that folds and expands independently, so a user short on room can collapse Recent or Network and keep Pinned open. The panel's width is draggable, and the folded state and width persist across sessions.
 
-**Operations area.** The bottom of the side panel shows running long operations, such as copying a large file, extracting an archive or an upload to object storage: one row per job with name, progress bar, throughput and remaining time, plus pause, resume and cancel. The area appears only while a job runs and folds away when the queue is empty; completed jobs stay listed briefly with their result, and a failed job stays until dismissed.
+**Operations area.** The bottom of the side panel shows running long operations, such as copying a large file, extracting an archive or an upload to object storage: one row per job with name, progress bar, throughput and remaining time, plus pause, resume and cancel. The area appears only while a job runs and folds away when the queue is empty; completed jobs stay listed briefly with their result, and a failed job stays until dismissed. When the side panel is hidden the area sits at the bottom of the window instead, so a running job is never invisible.
 
 ### Main area
 
@@ -186,7 +187,7 @@ Columns sort on click, resize, reorder and can be hidden; further columns may be
 
 **Indexed search.** If the platform has a search index, a search box appears on the toolbar: it queries Windows Search, Spotlight or, on Linux, Tracker or Baloo through a search-index extension, and shows results in the list with their paths. Without an index the box is absent, not greyed out; detection happens at start and when the index service appears or disappears. Each index connection is its own plugin (search-windows, search-spotlight, search-tracker, search-baloo) against one \`SearchIndex\` trait in \`ext\`, so a connector can be replaced, and a future Rick-owned index would be just another plugin implementing the same trait.
 
-**Context menu.** Right-clicking a file, folder or selection opens a full operations menu, built from the Action registry so extensions add entries in their own group. Right-clicking the empty area of the list — below the last row, or anywhere in an empty folder — opens the same menu for the current folder with no selection. Default groups:
+**Context menu.** Right-clicking a file, folder or selection opens a full operations menu, built from the Action registry so extensions add entries in their own group. Right-clicking the empty area of the list — below the last row, or anywhere in an empty folder — clears the selection and opens the same menu for the current folder. Default groups:
 
 | Group | Entries |
 | --- | --- |
@@ -202,7 +203,7 @@ Entries that do not apply are hidden rather than greyed: each Action's `availabi
 
 ### Preview
 
-The preview is its own tab, not part of any explorer tab. It docks and moves like every other tab (right of the explorer by default, or below, or torn out to a second monitor), and there is one of it.
+The preview is its own tab, not part of any explorer tab. It docks and moves like every other tab (right of the explorer by default, or below, or torn out to a second monitor), and there is one of it. In 0.1 it is a panel on the right of the window, toggled with "Toggle preview pane"; it becomes a dock tab together with the viewer in 0.2.
 
 - It follows focus: it always shows the selection of whichever explorer tab was last focused. Select a file in tab A, switch to tab B and select a file there, and the preview switches to that file.
 - Space on a file or folder opens the preview tab if it is closed and shows the entry; Space again closes it. While open, moving the selection updates it live.
@@ -217,7 +218,7 @@ The preview is its own tab, not part of any explorer tab. It docks and moves lik
 - **Middle:** the active previewer's controls, so the row changes with the content. Text and code: line numbers, word wrap, and pretty print when the format supports it. Images: Fit and 1:1. Paged documents: previous page, `n / N`, next page. Media: the transport. Controls come from two sources — the kind of document (text layer, pages, raster) supplies the standard ones, and the previewer's `controls()` adds its own, such as pretty print.
 - **Right:** one **info badge** per section available for this file — File info, EXIF, Git, media stream details, whatever applies — then the close button. A section that does not apply has no badge. Sections come from the previewer's `sections()` and from the Decorators' `panel()` contributions (Git's branch and last commit, for example).
 
-**Info badges.** Hovering a badge shows its section as an overlay card over the content, like a tooltip; moving away closes it. Clicking a badge pins it: the section becomes a panel between the toolbar and the content, pushing the content down, and the badge stays highlighted until it is clicked again. One section is pinned at a time; pinning another replaces it. The pin is remembered per content kind (image, text, PDF, …) and persists across files and restarts, so a pinned EXIF stays pinned while arrowing through photos. Each section is a key–value list, searchable when long, with copy on every row.
+**Info badges.** Hovering a badge shows its section as an overlay card over the content, like a tooltip; moving away closes it. Clicking a badge pins it: the section becomes a panel between the toolbar and the content, pushing the content down, and the badge stays highlighted until it is clicked again. One section is pinned at a time; pinning another replaces it. The pin is remembered per content kind — `pages` (anything with `pages()`), `text` (a text layer, no pages), `image` (a raster frame), `other` (no previewer, a decorator section only) — and persists across files and restarts, so a pinned EXIF stays pinned while arrowing through photos. Each section is a key–value list, searchable when long, with copy on every row.
 
 **Text defaults.** Text and code open with line numbers on and word wrap off. Toggling either in the toolbar changes the current view and saves the new value as the default, so the choice holds for every later file and across restarts. Pretty print is the exception: it is off for every newly shown file, must be pressed each time, and is never remembered.
 
@@ -246,23 +247,23 @@ The remaining menu entries will be specified later.
 
 **Dual pane.** One command (F6) lays out two explorer tabs side by side, the classic commander layout; a second press returns to a single pane.
 
-**Inline rename.** F2 or a slow second click edits the name in place in the list, with the extension excluded from the initial selection.
+**Inline rename.** F2, or a second click on the single selected row at least 0.5 s after the first (past the double-click window), edits the name in place in the list, with the extension excluded from the initial selection; Enter commits, Escape cancels, a clashing name is refused in place. New file and New folder insert a row in the same edit mode at the top of the list.
 
 ### General behaviour
 
-**Session restore.** Closing Rick and opening it again brings back exactly what was left: every window with its position and size, its dock layout, every tab with its path, sort, filter and scroll position, and the side panel's state. The session is saved continuously, so a crash loses nothing but the last few seconds.
+**Session restore.** Closing Rick and opening it again brings back exactly what was left: every window with its position and size, its dock layout, every tab with its path, sort, filter and scroll position, and the side panel's state. The session is saved continuously, so a crash loses nothing but the last few seconds. A tab whose location no longer exists opens at its nearest existing ancestor with a note in the status line; one whose provider is not mounted opens at Home.
 
 **Saved layouts.** A user can arrange panels and tabs, then save that arrangement as a named layout and mark it as the start layout; Rick then opens with that layout instead of the last session. Layouts are listed in the menu and the command palette for switching at any time; the last session remains available as "Continue where I left off".
 
 **Windows.** New window is one click (menu, Ctrl+N, or the + on the tab strip with Shift) and opens with the start layout. Dragging a tab out of the tab strip and dropping it outside the window creates a new window holding that tab; dropping a tab onto another window's strip moves it there. Every window has the full side panel and shares the operations queue, the preview follows focus across windows.
 
-**Text files.** The preview shows the file's text in a monospace view with two toggles in the pane's toolbar: word wrap (off = lines keep their real length and the view scrolls sideways; on = long lines break at the pane width, a wrapped continuation marked in the gutter) and line numbers. The defaults are line numbers on and wrap off; changing either saves the new default (see Preview, Text defaults). Large files are never loaded whole: the previewer memory-maps the file (or reads windows of it) and renders only the visible lines, so a 500 MB log shows its top immediately and scrolls through the rest; line starts are indexed in the background for exact line numbers and scrollbar position, with a byte-offset estimate until that finishes, and highlighting and pretty print work on the visible window only. Memory use is bounded by the window, not the file size, and encoding is detected. Structured and code formats get syntax highlighting: JSON, YAML, XML, HTML, Markdown and every language in the preview list, detected by extension and, failing that, by content; the highlighter is syntect with the theme following the app theme, and the format name shows in the pane's status bar.
+**Text files.** The preview shows the file's text in a monospace view with two toggles in the pane's toolbar: word wrap (off = lines keep their real length and the view scrolls sideways; on = long lines break at the pane width at any character, so a line's row count follows from its length and the view stays virtualised; a wrapped continuation is marked in the gutter) and line numbers. The defaults are line numbers on and wrap off; changing either saves the new default (see Preview, Text defaults). Large files are never loaded whole: the previewer memory-maps the file (or reads windows of it) and renders only the visible lines, so a 500 MB log shows its top immediately and scrolls through the rest; line starts are indexed in the background for exact line numbers and scrollbar position, with a byte-offset estimate until that finishes, and highlighting and pretty print work on the visible window only. Memory use is bounded by the window, not the file size, and encoding is detected. Structured and code formats get syntax highlighting: JSON, YAML, XML, HTML, Markdown and every language in the preview list, detected by extension and, failing that, by content; the highlighter is syntect with the theme following the app theme, and the format name shows in the pane's status bar.
 
-**Pretty print.** For JSON, XML, YAML and minified HTML, CSS or JavaScript, a Pretty-print toggle in the pane's toolbar reformats the text with consistent indentation and one element per line; it is a view transformation only, the file is never modified, and the raw view is one click away. It is off for every newly shown file and is never remembered. Invalid input shows the raw text with the parse error highlighted.
+**Pretty print.** For JSON, XML and minified HTML in 0.1 — YAML, CSS and JavaScript when each has a formatter — a Pretty-print toggle in the pane's toolbar reformats the text with consistent indentation and one element per line; it is a view transformation only, the file is never modified, and the raw view is one click away. It is off for every newly shown file and is never remembered. Invalid input shows the raw text with the parse error highlighted.
 
 **Images.** By default the image is scaled to fit the available pane, keeping its aspect ratio and never upscaled beyond 100%. A 1:1 button (or double-click) switches to actual pixels, where the image can be panned by dragging or with the scroll wheel, and Ctrl+wheel zooms in steps around the cursor; Fit returns to the scaled view. EXIF orientation is applied. Large images decode a downscaled version first for an instant fit view, with the full-resolution decode following for 1:1.
 
-**Media metadata.** Image, audio and video previews put the basics in the pane's status bar — dimensions or duration, file size, format, colour depth or codec — and the rest behind info badges: a File info section with the camera, date taken and exposure for photos, an EXIF section with every EXIF, IPTC and XMP tag (via the `kamadak-exif` and `rexiv2` crates), ID3 or Vorbis tags for audio, and stream details for video. Each is a searchable key-value list with copy, shown on hover and pinned on click as the Preview section describes.
+**Media metadata.** Image, audio and video previews put the basics in the pane's status bar — dimensions or duration, file size, format, colour depth or codec — and the rest behind info badges: a File info section with the camera, date taken and exposure for photos, an EXIF section with every EXIF tag (via `kamadak-exif`; IPTC and XMP when a reader without a system library is adopted), ID3 or Vorbis tags for audio, and stream details for video. Each is a searchable key-value list with copy, shown on hover and pinned on click as the Preview section describes.
 
 **Audio and video.** Media files play inside the preview: play/pause (Space while the preview has focus), a seek bar with elapsed and total time, volume, and for video the frames drawn into the pane with a fit/1:1 toggle like images. Audio shows a waveform and cover art when present. Playback starts on demand, not on selection, stops when the selection changes, and decoding runs through GStreamer on every platform, one code path, with the runtime bundled on macOS and Windows.
 
@@ -300,7 +301,7 @@ The viewer never writes to the file; editing is the job of an external applicati
 | The Pinned section of the side panel: its header, its empty space, or any pinned entry | Pin the dragged items, inserted at the drop position; never a file operation |
 | The Trash entry of the side panel | Move to trash — the same job and the same undo as the action |
 | The Home entry, or a mounted volume under Network | Move into that location |
-| Outside the window: another application, or another Rick process | Hand over through the platform drag-and-drop with file URIs; the receiver decides |
+| Outside the window: another application, or another Rick process | Hand over through the platform drag-and-drop with file URIs; the receiver decides. A drop arriving without a cursor position (the backend reports none on some platforms) lands in the focused pane's folder |
 
 *Move or copy.* Inside one Rick process the rule is by volume: same volume moves, across volumes copies. Mod forces a copy, Shift forces a move, and Alt (or a right-button drag) asks on drop. Anything arriving from outside the process — another application, a browser, a second Rick window of another process — is always a copy, whatever the volume; Shift forces a move. The drag ghost shows the first item's icon and name, a count badge when several items are dragged, and a small indicator under the cursor — `ARROW_RIGHT` for move, `PLUS` for copy, `PUSH_PIN` for pin, `TRASH` for trash — that updates live as the target and the modifier keys change, so the outcome is visible before the button is released.
 
@@ -308,7 +309,7 @@ The viewer never writes to the file; editing is the job of an external applicati
 
 *No-ops and cancel.* Escape cancels a drag in progress and the ghost disappears. Dropping items onto the folder they are already in, a folder onto itself or into its own subtree, or a file onto a file does nothing and shows no error; the target simply does not highlight.
 
-*Execution.* A move or copy runs as a job in the operations area with progress, pause and cancel; a conflict on an existing name asks once with skip, overwrite, rename or apply-to-all; a move within one provider uses rename, a copy uses the provider's fast path. Pin and trash go through their Actions, so they appear in the undo log and the palette like any other operation. Across processes, the receiving Rick applies these same rules from the moment the cursor enters its window; the indicator and spring-loading work there too.
+*Execution.* A move or copy runs as a job in the operations area with progress, pause and cancel; a conflict on an existing name pauses the job and asks once with Skip, Overwrite, Rename, Apply to all and Cancel — overwriting a folder with a folder merges (same-named files replaced, the rest kept), a file replaces a file, a folder onto a file or the reverse removes the target first; Rename proposes `name (2).ext`, and applied to all numbers each remaining name with its first free number; the undo of a move that overwrote brings the item back but not the overwritten target. A move within one provider uses rename, a copy uses the provider's fast path. Pin and trash go through their Actions, so they appear in the undo log and the palette like any other operation. Across processes, the receiving Rick applies these same rules from the moment the cursor enters its window; the indicator and spring-loading work there too.
 
 **Permission management.** Properties on a file or folder shows and edits ownership and permissions: owner, group, mode bits (rwx for user, group, other, plus setuid, setgid, sticky) on Linux and macOS, ACLs where the file system has them (POSIX ACLs, NFSv4 ACLs, NTFS ACLs on Windows), and an apply-recursively option with a separate choice for files and folders. Changes that need elevation ask for it through the platform (polkit, sudo, UAC). Details to be discussed.
 
@@ -420,7 +421,7 @@ One Cargo workspace, one crate per concern, grouped by layer. Kernel crates carr
 
 - `types` — paths, entries, mime, errors, capability flags; no I/O, no async runtime and no dependency on any other Rick crate. It may use the small ecosystem crates it needs (`bitflags`, `thiserror`), nothing heavier.
 - `runtime` — job system, cancellation, progress, thread pools, event bus.
-- `platform` — per-OS code behind one trait set: trash, links and junctions, elevation, system properties dialogue, file associations, mounts. In 0.1 the set is `Trash` (trash, list, restore, empty), `OpenWith` (`open` with the default application, `reveal` in the system file manager), `Properties` (the native dialogue on Windows and macOS, label/value rows on Linux), `NativeDialogs` (async, through `rfd`, the XDG portal on Linux), `Clipboard` and `ConfigDir`; elevation, file associations and mounts come later. The three RustSec "unmaintained" notices on `rfd`'s D-Bus dependencies are accepted in deny.toml with the reason recorded, to be dropped when `rfd` moves on.
+- `platform` — per-OS code behind one trait set: trash, links and junctions, elevation, system properties dialogue, file associations, mounts. In 0.1 the set is `Trash` (trash, list, restore, remove one item, empty), `OpenWith` (`open` with the default application, `reveal` in the system file manager), `Properties` (the native dialogue on Windows and macOS, label/value rows on Linux), `NativeDialogs` (async, through `rfd`, the XDG portal on Linux), `Clipboard` and `ConfigDir`; elevation, file associations and mounts come later. The three RustSec "unmaintained" notices on `rfd`'s D-Bus dependencies are accepted in deny.toml with the reason recorded, to be dropped when `rfd` moves on.
 - `ext` — the five extension traits, the registry, manifests and the extension context.
 - `vfs` — the mount table that routes a path to its `Provider`, and cross-provider copy and move.
 - `vfs-local` — the local filesystem provider: listing, statx, watching, copy and reflink.
@@ -596,7 +597,12 @@ pub struct JobHandle<T> {
 /// What a job receives when it starts. Cancelling drops the job's future, so
 /// a job that never looks at the token still stops at its next await point
 /// and its handle resolves with `Error::Cancelled`.
-pub struct JobCtx { pub id: JobId, pub cancel: CancelToken, pub progress: ProgressSink }
+pub struct JobCtx { pub id: JobId, pub cancel: CancelToken, pub progress: ProgressSink, pub pause: PauseGate }
+
+/// Pausable jobs await the gate before each item, directory, file and streamed
+/// buffer; `JobRunner::pause` closes it, `resume` opens it. Copy and move jobs
+/// are pausable; listings and decorations are not.
+pub struct PauseGate;
 
 /// Where a job publishes progress; `report` replaces the previous value and never fails.
 pub struct ProgressSink(watch::Sender<Progress>);
@@ -604,8 +610,12 @@ pub struct ProgressSink(watch::Sender<Progress>);
 impl JobRunner {
     pub fn spawn<T, F, Fut>(&self, job: F) -> JobHandle<T>
         where F: FnOnce(JobCtx) -> Fut, Fut: Future<Output = Result<T, Error>> + Send + 'static;
+    pub fn spawn_pausable<T, F, Fut>(&self, job: F) -> JobHandle<T>
+        where F: FnOnce(JobCtx) -> Fut, Fut: Future<Output = Result<T, Error>> + Send + 'static;
     pub fn running(&self) -> Vec<JobId>;
     pub fn cancel(&self, id: JobId) -> bool;
+    pub fn pause(&self, id: JobId) -> bool;
+    pub fn resume(&self, id: JobId) -> bool;
 }
 ```
 
@@ -824,6 +834,17 @@ pub enum Command {
     SpringLoad { pane: PaneId, to: Location, first: bool },
     /// Pin and unpin, undoable; `at` is the position in the Pinned list, None = end.
     Pin { items: Vec<Location>, at: Option<usize> }, Unpin(Location),
+    /// Items dropped from outside the process (file URIs, no EntryId): the same
+    /// job as Transfer with the outside rule (copy unless Shift) already applied.
+    Receive { items: Vec<Location>, to: Location, mode: TransferMode },
+    /// Thumbnail for the icon view, rendered by the best-scoring previewer as an
+    /// internal job; answered by Event::Thumbnail.
+    Thumbnail { pane: PaneId, id: EntryId, size: u32 },
+    /// Session, layouts and windows (General behaviour).
+    TabOrder { pane: PaneId, tabs: Vec<TabId>, active: TabId }, Layout(DockLayout), Scroll { pane: PaneId, offset: f32 },
+    WindowGeometry { window: WindowId, rect: Rect, maximised: bool }, SidePanel { window: WindowId, state: SidePanelState },
+    FocusWindow(WindowId), NewWindow, CloseWindow(WindowId),
+    SaveLayout(String), SwitchLayout(String), DeleteLayout(String), RenameLayout { from: String, to: String },
 }
 
 pub enum Event {
@@ -834,6 +855,7 @@ pub enum Event {
     SelectionChanged { pane: PaneId, ids: Vec<EntryId> },
     PreviewReady { pane: PaneId, doc: Box<dyn PreviewDoc> },
     PreviewFailed { pane: PaneId, error: Error },   // no previewer claims the file, or open failed
+    Thumbnail { pane: PaneId, id: EntryId, size: u32, frame: Frame },
     Notify { level: Level, text: String },
 }
 ```
@@ -881,7 +903,7 @@ The default `default_shortcut` of every built-in Action. **Mod** is Ctrl on Linu
 | Shift+Delete | Delete permanently |
 | F2 | Rename |
 | Mod+F2 | Bulk rename |
-| Mod+N | New file |
+| — | New file (no default; rebindable) |
 | Mod+Shift+N | New folder |
 | Mod+Shift+C | Copy path and name |
 | Mod+Alt+C | Copy name |
@@ -896,6 +918,7 @@ The default `default_shortcut` of every built-in Action. **Mod** is Ctrl on Linu
 
 | Shortcut | Action |
 | --- | --- |
+| Mod+N | New window |
 | Mod+T | New tab |
 | Mod+W | Close tab |
 | Mod+Shift+T | Reopen closed tab |
@@ -917,7 +940,8 @@ The default `default_shortcut` of every built-in Action. **Mod** is Ctrl on Linu
 | Mod+H | Toggle hidden files |
 | Mod+Shift+H | Toggle system files |
 | Mod+E | Toggle file extensions |
-| Mod+Shift+F | Toggle flatten subfolders |
+| Mod+Shift+F | Search in subdirectories (focuses the filter) |
+| — | Toggle flatten subfolders (no default; rebindable) |
 | Mod+Shift+I | Toggle inspector |
 | Mod+\` | Open console |
 | Mod+, | Settings |

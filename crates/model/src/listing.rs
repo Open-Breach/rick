@@ -84,7 +84,7 @@ pub enum SortDir {
 }
 
 /// A column and a direction.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Sort {
     /// The column sorted on.
     pub by: Column,

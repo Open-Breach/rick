@@ -1,6 +1,7 @@
-//! Acceptance (side panel): the panel shows its five sections by default,
+//! Acceptance (side panel): the panel shows its six sections by default,
 //! Mod+B hides and shows it, Home navigates, pins persist across a restart
-//! and a folded section stays folded.
+//! and a folded section stays folded (through the session file, where the
+//! panel's state lives since issue B).
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -23,7 +24,7 @@ fn harness(start: &Path, config: &Path) -> (Harness<'static, RickUi>, Arc<Fake>)
         ui: host.clone(),
         extensions: Vec::new(),
         config_dir: Some(config.to_path_buf()),
-        start: local(start),
+        start: Some(local(start)),
     });
     let mut harness = Harness::builder()
         .with_size(egui::vec2(1100.0, 720.0))
@@ -61,18 +62,30 @@ fn location(harness: &Harness<'_, RickUi>) -> PathBuf {
         .unwrap_or_else(|| panic!("no location"))
 }
 
+/// Waits until the session file contains `needle`: the panel's state is
+/// session state, written within a second of the change.
+fn session_contains(harness: &mut Harness<'_, RickUi>, needle: &str) -> String {
+    let path = harness.state().app().session_path().to_path_buf();
+    wait_for(harness, &path, needle)
+}
+
 /// Waits until the settings file contains `needle`.
 fn settings_contain(harness: &mut Harness<'_, RickUi>, needle: &str) -> String {
     let path = harness.state().app().settings_path().to_path_buf();
+    wait_for(harness, &path, needle)
+}
+
+fn wait_for(harness: &mut Harness<'_, RickUi>, path: &Path, needle: &str) -> String {
     let deadline = Instant::now() + Duration::from_secs(10);
     loop {
-        let text = fs::read_to_string(&path).unwrap_or_default();
+        let text = fs::read_to_string(path).unwrap_or_default();
         if text.contains(needle) {
             return text;
         }
         assert!(
             Instant::now() < deadline,
-            "settings file never contained {needle:?}:\n{text}"
+            "{} never contained {needle:?}:\n{text}",
+            path.display()
         );
         harness.step();
         std::thread::sleep(Duration::from_millis(20));
@@ -83,28 +96,30 @@ fn settings_contain(harness: &mut Harness<'_, RickUi>, needle: &str) -> String {
 fn the_panel_shows_its_sections_and_mod_b_hides_and_shows_it() {
     let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
     let (mut harness, _fake) = harness(dir.path(), &dir.path().join("config"));
-    for title in ["Home", "Recent", "Network", "Trash", "Pinned"] {
+    for title in ["Home", "Recent", "Network", "Trash", "Pinned", "Tree"] {
         harness.get_by_label(title);
     }
     assert_eq!(
         harness
             .query_all_by_label_contains("Coming in a later issue")
             .count(),
-        3,
-        "Recent, Network and Trash say so"
+        0,
+        "every section has its contents now"
     );
+    harness.get_by_label_contains("The trash is empty");
+    harness.get_by_label_contains("No removable media");
 
     harness.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::B);
     harness.step();
     harness.step();
     assert!(harness.query_by_label("Pinned").is_none(), "hidden");
-    settings_contain(&mut harness, "visible = false");
+    session_contains(&mut harness, "visible = false");
 
     harness.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::B);
     harness.step();
     harness.step();
     harness.get_by_label("Pinned");
-    settings_contain(&mut harness, "visible = true");
+    session_contains(&mut harness, "visible = true");
 }
 
 #[test]
@@ -184,7 +199,7 @@ fn a_folded_section_stays_folded_across_a_restart() {
                 .is_none(),
             "folded"
         );
-        settings_contain(&mut harness, "folded = [\"pinned\"]");
+        session_contains(&mut harness, "folded = [\"pinned\"]");
     }
     let (harness, _fake) = harness(dir.path(), &config);
     harness.get_by_label("Pinned");

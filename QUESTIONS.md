@@ -430,10 +430,9 @@ Once answered, an entry keeps its number and gains a dated decision line.
     exist. Pinning is done from a button in the Pinned section's header for
     the focused pane's folder, and unpinning from the entry; the context
     menu action stays out.
-    Decided (2026-11-06): superseded by the 0.1 close-out list (spec
-    1309213): the Recent, Network and Trash sections land in close-out issue
-    A; Pin to side panel has been a context-menu action since #11 (entry
-    65).
+    Decided (2026-11-06): superseded by close-out A (#15): the sections, the
+    conflict dialogue with pause, and mounted volumes as drop targets are
+    built.
 
 44. (side panel) The spec says the folded state and width persist across
     sessions, and session restore is a later issue.
@@ -441,23 +440,20 @@ Once answered, an entry keeps its number and gains a dated decision line.
     locations, are settings in `rick.toml` (`[side_panel]` and `pinned`),
     written like every other setting, so they survive a restart today and
     can move into the session file when it exists.
-    Decided (2026-11-06): as assumed; spec unchanged. Whether the panel
-    state moves into the session file is settled with session restore in
-    close-out issue B.
+    Decided (2026-11-06): as assumed; spec updated in 12f3b25.
 
 45. (side panel) The spec puts the operations area at the bottom of the
     side panel; it does not say where it goes when the panel is hidden.
     Assumed: at the bottom of the window, as before, so a running job is
     never invisible.
-    Decided (2026-11-06): as assumed; spec unchanged.
+    Decided (2026-11-06): as assumed; spec updated in 12f3b25.
 
 46. (side panel) The spec lets the panel "collapse to a narrow icon strip or
     hide entirely".
     Assumed: hide entirely (Mod+B, the Panel toggle in the top bar, the
     Settings screen); the icon strip comes with the Recent and Network
     sections, which would give it more than two icons.
-    Decided (2026-11-06): as assumed; spec unchanged. The icon strip waits
-    for the Recent and Network sections (close-out issue A).
+    Decided (2026-11-06): as assumed; spec updated in 12f3b25.
 
 47. (GUI chrome) The spec's title row has no undo and redo buttons, which
     the old top bar had, and the burger menu lists New window, Settings,
@@ -481,8 +477,7 @@ Once answered, an entry keeps its number and gains a dated decision line.
     Assumed: the current location only, as the issue scopes it; a hit is
     selected and scrolled into view on Enter. The index path comes with the
     first search-index extension.
-    Decided (2026-11-06): as assumed; spec unchanged; the index path comes
-    with the search-index plugins (0.2 scope, item 5).
+    Decided (2026-11-06): as assumed; spec updated in 12f3b25.
 
 50. (GUI chrome) Thumbnails are specified "at the cell size, off the UI
     thread, cached per entry and size".
@@ -491,14 +486,14 @@ Once answered, an entry keeps its number and gains a dated decision line.
     (not in the operations area, like listings) and answers with
     `Event::Thumbnail`; the UI keeps the textures per entry id and pixel
     size, up to 2048, and starts over past that. Folders never ask for one.
-    Decided (2026-11-06): as assumed; spec unchanged.
+    Decided (2026-11-06): as assumed; spec updated in 12f3b25.
 
 51. (GUI chrome) The right-click on empty space is specified to open the
     folder's menu "with no selection", while a right-click on a row outside
     the selection selects that row first.
     Assumed: a right-click on empty space clears the selection as well, so
     the menu and the list agree about what the actions would act on.
-    Decided (2026-11-06): as assumed; spec unchanged.
+    Decided (2026-11-06): as assumed; spec updated in 12f3b25.
 
 52. (GUI chrome) The spec turns the platform's title bar off and has Rick draw
     the chrome, but says nothing about the window's border, shadow or how it
@@ -509,7 +504,7 @@ Once answered, an entry keeps its number and gains a dated decision line.
     colour, and invisible grips along the edges and corners that resize the
     window through the backend; a maximised or fullscreen window has no
     frame, and macOS keeps the system's border and resize handles.
-    Decided (2026-11-06): as assumed; spec unchanged.
+    Decided (2026-11-06): as assumed; spec updated in 12f3b25.
 
 53. (Preview pane) The spec remembers the pinned info section "per content
     kind (image, text, PDF, …)" without naming the kinds.
@@ -518,7 +513,7 @@ Once answered, an entry keeps its number and gains a dated decision line.
     and no pages, `image` otherwise — plus `other` for a file no previewer
     opens but a decorator describes. Stored as
     `[preview.pinned] text = "file"` in `rick.toml`.
-    Decided (2026-11-06): as assumed; spec unchanged.
+    Decided (2026-11-06): as assumed; spec updated in 12f3b25.
 
 54. (Preview pane) The spec's Pretty print covers "JSON, XML, YAML and
     minified HTML, CSS or JavaScript".
@@ -526,23 +521,21 @@ Once answered, an entry keeps its number and gains a dated decision line.
     (a tag-per-line indenter) get the toggle; YAML, CSS and JavaScript do
     not yet, since each needs a formatter of its own, so their files show
     no Pretty print control rather than one that does nothing.
-    Decided (2026-11-06): as assumed for 0.1; spec unchanged. YAML, CSS and
-    JavaScript formatters are a later addition.
+    Decided (2026-11-06): as assumed; spec updated in 12f3b25.
 
 55. (Preview pane) The spec names `kamadak-exif` and `rexiv2` for "every
     EXIF, IPTC and XMP tag".
     Assumed: `rexiv2` binds the system's gexiv2 library and was not a
     dependency, so the EXIF section lists what `kamadak-exif` reads (every
     EXIF tag, thumbnail IFD included); IPTC and XMP wait for a reader.
-    Decided (2026-11-06): as assumed for 0.1; spec unchanged. IPTC and XMP
-    wait for a reader.
+    Decided (2026-11-06): as assumed; spec updated in 12f3b25.
 
 56. (Preview pane) The spec says the pane needs no heading because "the
     dock tab's label is enough", but the pane is still a side panel, not a
     dock tab (the preview-as-tab is a later issue).
     Assumed: the heading goes now; the panel has no label at all until it
     becomes a tab. The title row's toggle reads "Toggle preview pane".
-    Decided (2026-11-06): as assumed; spec unchanged.
+    Decided (2026-11-06): as assumed; spec updated in 12f3b25.
 
 57. (Preview pane) The spec says wrapped lines "break at the pane width"
     and asks for only the visible lines to be laid out.
@@ -550,7 +543,7 @@ Once answered, an entry keeps its number and gains a dated decision line.
     monospace line's row count follows from its length and the pane can
     place 200 000 lines without laying them out; a line whose real row
     count differs (tabs, wide glyphs) corrects the index on the next frame.
-    Decided (2026-11-06): as assumed; spec unchanged.
+    Decided (2026-11-06): as assumed; spec updated in 12f3b25.
 
 58. (drag and drop) The spec's `Transfer` carries `EntryId`s and the source
     pane; items dropped from another application or another Rick process
@@ -559,7 +552,7 @@ Once answered, an entry keeps its number and gains a dated decision line.
     `Transfer`, the same job behind it, with the outside rule (copy unless
     Shift) already applied by the UI. No other shape of the spec's enum is
     touched.
-    Decided (2026-11-06): as assumed; spec unchanged.
+    Decided (2026-11-06): as assumed; spec updated in 12f3b25.
 
 59. (drag and drop) `TransferMode::Ask` "opens the move/copy prompt first",
     but `UiHost` offers yes/no and a text line only, and the prompt sits at
@@ -578,9 +571,9 @@ Once answered, an entry keeps its number and gains a dated decision line.
     conflict with the error shown), and the operations area offers cancel
     only, as before. The conflict prompt and pause are their own issue; the
     transfer job is written so a conflict policy drops into the pair loop.
-    Decided (2026-11-06): superseded for conflicts: the dialogue is
-    specified (Drag and drop, Execution) and built in close-out issue A, as
-    entry 20; pause in the operations area stays open.
+    Decided (2026-11-06): superseded by close-out A (#15): the sections, the
+    conflict dialogue with pause, and mounted volumes as drop targets are
+    built.
 
 61. (drag and drop) "Same volume moves, across volumes copies" needs the
     volume of the target folder; a `Location` has none.
@@ -610,8 +603,7 @@ Once answered, an entry keeps its number and gains a dated decision line.
     `DragEntered`/`DragMoved` events and a drag-source API are on its main
     branch), and the drag then stays inside the window. The fake platform
     records the URIs, which is what the acceptance test checks.
-    Decided (2026-11-06): as assumed; spec unchanged; to revisit when winit
-    exposes a drag-source API.
+    Decided (2026-11-06): as assumed; spec updated in 12f3b25.
 
 63. (drag and drop) A pinned entry is a `Location`; the spec wants a pinned
     folder to open in the pane and a pinned file to open its folder with
@@ -628,8 +620,9 @@ Once answered, an entry keeps its number and gains a dated decision line.
     Network", and the Network section holds nothing yet.
     Assumed: Home is the one side-panel folder target today; volumes join
     it when the Network section is filled.
-    Decided (2026-11-06): superseded by close-out issue A, which fills the
-    Network section; its volumes join the drop targets then.
+    Decided (2026-11-06): superseded by close-out A (#15): the sections, the
+    conflict dialogue with pause, and mounted volumes as drop targets are
+    built.
 
 65. (drag and drop) The spec has `Pin to side panel` in the context menu's
     Open group "of every entry"; actions carry a fixed label, and the flip
@@ -641,3 +634,166 @@ Once answered, an entry keeps its number and gains a dated decision line.
     Spring-loading into a tab header switches the pane to that tab and
     "return" switches back; a drop on a header never switches.
     Decided (2026-11-06): as assumed; spec unchanged.
+
+66. (session) The spec's shortcut table binds Mod+N to New file, the
+    Windows paragraph of General behaviour opens a new window with Ctrl+N,
+    and the issue asks for Mod+N to open a window.
+    Assumed: Mod+N opens a new window, as the issue and the Windows
+    paragraph say; `core.new_file` has no default shortcut until the spec
+    names one (it stays in the menu and the palette and is rebindable in
+    Settings → Keyboard shortcuts).
+    Decided (2026-11-06): as assumed; spec updated in 12f3b25.
+
+67. (session) The issue wants "egui_dock's serialised tree" in the session,
+    and `model` may not depend on `egui_dock` (only `ui-egui` knows egui).
+    Assumed: the model keeps a mirror of what that tree holds that matters
+    across a start, the splits with their fractions (`Dock::Split` gained
+    `fraction`) and each pane's tabs in strip order with the active one, and
+    the UI reports the tree's changes to it after every frame
+    (`Command::TabOrder`, `Command::Layout`). Question 28 is thereby
+    narrowed: tab order is still the dock's display state, but it is
+    reported to the model and is part of the session. Leaf rectangles and
+    scroll positions of the strips are not kept.
+    Decided (2026-11-06): as assumed; spec unchanged.
+
+68. (session) The issue names `show_viewport_deferred` as the mechanism for
+    further windows. A deferred viewport's callback must be `Send + Sync +
+    'static`, so the whole UI state would live behind a lock, which the
+    test harness's `&App` accessors cannot give.
+    Assumed: `ViewportBuilder` per window as specified, shown with
+    `show_viewport_immediate`, so every window draws from the one `RickUi`
+    in the parent's frame; the windows share one app, one job table and
+    one undo log either way. eframe's root viewport cannot close while its
+    children stay, so closing the first window with others open moves the
+    root viewport to the next window (position, size and state follow);
+    the window that closes is the model's.
+    Decided (2026-11-06): as assumed; spec unchanged.
+
+69. (session) "Continue where I left off" names the last session, and the
+    session file is overwritten continuously, so after starting with a
+    layout the file no longer holds where the user left off.
+    Assumed: the session file as read at start is kept in memory for the
+    run and is what the entry switches to; at the next start it is the
+    file. New window "opens with the start layout": with a named start
+    layout it is that layout's focused window; with `start = "last"` it is
+    one tab at the focused tab's location, since the last session is the
+    whole set of windows already on screen. A path on the command line
+    opens in a new tab of the restored session's focused pane rather than
+    replacing the session. The issue's "window-qualified `DockTarget`" is
+    `DockTarget::Into(pane)` as before, since pane ids are unique across
+    windows, plus `DockTarget::NewWindow` for a tear-out.
+    Decided (2026-11-06): as assumed; spec unchanged.
+
+70. (session) The spec's `Command` list has nothing for sessions, layouts
+    and windows, and question 44 put the side panel's state in `rick.toml`.
+    Assumed, as the issue asks: the side panel's side, width, collapsed
+    state and folded sections move from the settings to each window's
+    session state (`Command::SidePanel`; an old `[side_panel]` table in
+    `rick.toml` is ignored), the Settings screen's side panel row changes
+    the window it is open in, and the commands `TabOrder`, `Layout`,
+    `Scroll`, `WindowGeometry`, `SidePanel`, `FocusWindow`, `NewWindow`,
+    `CloseWindow`, `SaveLayout`, `SwitchLayout`, `DeleteLayout` and
+    `RenameLayout` join the list, to be added to the spec. Settings gained
+    `[session] start = "last" | "<layout name>"` as the issue names it; a
+    layout cannot be called `last`.
+    Decided (2026-11-06): as assumed; spec updated in 12f3b25.
+
+71. (session) The issue says a tab whose location no longer exists "opens
+    at the nearest existing ancestor and says so in the status line", and
+    the spec's status line holds counts only.
+    Assumed: `Tab` carries a `note` the status line appends after the
+    counts, cleared by the next navigation; the check at start is a
+    synchronous `std::fs` look at the local path and its ancestors (the
+    only provider in 0.1), locations of a provider that is not mounted open
+    at Home with a note, and locations of any other mounted provider are
+    taken as they are.
+    Decided (2026-11-06): as assumed; spec updated in 12f3b25.
+
+72. (close-out A) The spec's View shortcut table gives Mod+Shift+F to
+    "Toggle flatten subfolders", while the Main area and the issue give
+    Mod+Shift+F (Ctrl+Shift+F) to Search in subdirectories.
+    Assumed: the issue wins. Mod+Shift+F toggles the subtree search and
+    focuses the filter; Flatten keeps its intent and palette entry with no
+    default binding, rebindable in Settings → Keyboard shortcuts.
+    Decided (2026-11-06): as assumed; spec updated in 12f3b25.
+
+73. (close-out A) The spec names the side panel's Tree view "as a section
+    in the side panel and as its own dockable tab", but the side panel table
+    lists five sections and gives the Tree no place.
+    Assumed: `Section::Tree` is the sixth section, after Pinned, folding and
+    persisting like the others; it is rooted at the top of the focused
+    pane's volume (`/`, the drive root), lists folders lazily as they are
+    opened, and follows the focused pane unless its link toggle is off. The
+    dockable Tree tab is not in issue A.
+    Decided (2026-11-06): as assumed; spec updated in 12f3b25.
+
+74. (close-out A) The `Trash` platform trait is specified as "trash, list,
+    restore, empty", and the Trash section's Delete permanently needs to
+    remove one trashed item without restoring it.
+    Assumed: `Trash::remove(&TrashedItem)` joins the set, implemented beside
+    `empty` on every platform and the `Fake`. Trash items are not entries of
+    any provider in 0.1, so the trash actions (`core.restore`,
+    `core.restore_trash`, `core.purge_trash`, `core.empty_trash`) take an
+    `ActionCtx` whose location is the `trash` pseudo-provider and whose
+    selection holds one synthesised entry per item (`ops::trash_entry`);
+    they are `Hidden` outside that context. Restore is undoable as a trash
+    of the restored entries; a restore into a taken path is reported, not
+    resolved (QUESTIONS.md 11 stands). On macOS, and wherever `Trash::list`
+    answers `Unsupported`, the section shows Rick's own record of what it
+    trashed, persisted in `trash.toml` in the config directory, and says
+    that items trashed elsewhere are not listed. Supersedes 15's "cannot
+    be undone" for the restore direction.
+    Decided (2026-11-06): as assumed; spec updated in 12f3b25.
+
+75. (close-out A) The spec feeds Recent "by file-system events, not only by
+    what Rick touched", and the local provider's watch is not recursive
+    (QUESTIONS.md 42).
+    Assumed: Recent is fed by the non-recursive watches on its roots (the
+    home directory and the pinned local folders), by every pane's own watch,
+    and by a bounded scan at start (the newest 200 of up to 50 000 entries
+    per root, 5 s at most). A change deep under Home that no pane shows is
+    picked up by the next scan. The list persists in `recent.toml`, a path
+    per row, re-examined on start so the rows carry current ids.
+    Decided (2026-11-06): as assumed; spec updated in 12f3b25.
+
+76. (close-out A) "udisks2 on Linux" for the volume list would need a D-Bus
+    client; `rfd` already pulls `zbus` in, but only as its portal backend.
+    Assumed: Linux reads `/proc/mounts` and the kernel's removable flag from
+    `/sys/block/<disk>/removable` (what udisks2 itself reads), filtering
+    pseudo file systems, the system disk and its bind mounts; network mounts
+    are told by type. The list is polled every 3 s, so media that come and
+    go show without a user action. udisks2 proper comes with mount and
+    unmount in 0.2.
+    Decided (2026-11-06): as assumed; spec unchanged.
+
+77. (close-out A) The conflict dialogue replaces 20's "never overwrite":
+    Paste, Duplicate's siblings (Transfer, drag and drop, undo of a move)
+    ask once per conflict with Skip, Overwrite, Rename, Apply to all and
+    Cancel; the job pauses at the first conflict. Assumed details: Overwrite
+    of a folder onto a folder merges (files replaced, others kept), of a
+    file replaces it, and of a folder onto a file (or the reverse) removes
+    the target first; Rename proposes `name (2).ext` and a Rename applied to
+    all numbers each remaining name itself with the first free number; the
+    undo of a move that overwrote moves the item back but cannot bring the
+    overwritten target back. Conflicts are values in `types`
+    (`Conflict`, `ConflictAnswer`) since they cross from `ops` to the UI.
+    Decided (2026-11-06): as assumed; spec updated in 12f3b25.
+
+78. (close-out A) Pause in the operations area needs a job-side gate the
+    spec's `JobCtx` does not name.
+    Assumed: `JobCtx` gains `pause: PauseGate`, `JobRunner` gains `pause`,
+    `resume` and `spawn_pausable`, and `JobEvent::Started` says whether a
+    job is pausable; copy and move jobs are pausable and wait at the gate
+    before each item, directory, file and streamed buffer. Pause buttons
+    show only for pausable jobs, as the issue asks. `Command` gains
+    `PauseJob`, `ResumeJob`, `Subtree`, `TreeExpand`, `TreeCollapse`,
+    `FolderTreeToggle`, `FolderTreeLink`, `ResolveConflict`, `RefreshTrash`
+    and `RefreshVolumes`, and `Event` gains `Conflict`, all in the spirit of
+    the spec's enum; the spec block should list them.
+    Decided (2026-11-06): as assumed; spec updated in 12f3b25.
+
+79. (close-out A) The spec's "slow second click" has no delay. Assumed: a
+    plain second click on the one selected row at least 0.5 s after the
+    first (past egui's double-click window) starts the rename; a faster
+    second click opens the entry as a double-click does.
+    Decided (2026-11-06): as assumed; spec updated in 12f3b25.

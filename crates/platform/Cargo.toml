@@ -24,7 +24,7 @@ rustix = { workspace = true, features = ["fs", "process", "std"] }
 [target.'cfg(target_os = "macos")'.dependencies]
 libc = { workspace = true }
 objc2 = { workspace = true }
-objc2-foundation = { workspace = true, features = ["NSFileManager", "NSURL", "NSError", "NSString"] }
+objc2-foundation = { workspace = true, features = ["NSArray", "NSFileManager", "NSURL", "NSError", "NSString"] }
 rustix = { workspace = true, features = ["fs", "process", "std"] }
 
 [target.'cfg(windows)'.dependencies]
@@ -34,6 +34,7 @@ windows = { workspace = true, features = [
     "Win32_Storage_FileSystem",
     "Win32_System_Com",
     "Win32_System_Registry",
+    "Win32_System_SystemInformation",
     "Win32_UI_Shell",
     "Win32_UI_Shell_Common",
     "Win32_UI_Shell_PropertiesSystem",

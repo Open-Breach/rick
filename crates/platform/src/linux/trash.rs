@@ -210,6 +210,47 @@ fn parse_info(text: &str, trashed: PathBuf) -> Option<TrashedItem> {
     })
 }
 
+/// Deletes a file or a whole directory; a missing path is fine.
+fn remove_path(path: &Path) -> io::Result<()> {
+    match fs::symlink_metadata(path) {
+        Ok(meta) if meta.is_dir() => fs::remove_dir_all(path),
+        Ok(_) => fs::remove_file(path),
+        Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(e),
+    }
+}
+
+/// Deletes one trashed entry and its `.trashinfo` record for good.
+pub(super) fn remove(item: &TrashedItem) -> Result<(), Error> {
+    if fs::symlink_metadata(&item.trashed).is_err() {
+        return Err(Error::NotFound);
+    }
+    remove_path(&item.trashed).map_err(Error::from_io)?;
+    if let Some(info) = info_path_for(&item.trashed) {
+        let _ = fs::remove_file(info);
+    }
+    Ok(())
+}
+
+/// Deletes everything in the home trash for good: every payload under
+/// `files/` and every record under `info/`.
+pub(super) fn empty() -> Result<(), Error> {
+    let root = home_trash();
+    for sub in ["files", "info"] {
+        let dir = root.join(sub);
+        let entries = match fs::read_dir(&dir) {
+            Ok(entries) => entries,
+            Err(e) if e.kind() == io::ErrorKind::NotFound => continue,
+            Err(e) => return Err(Error::from_io(e)),
+        };
+        for entry in entries {
+            let entry = entry.map_err(Error::from_io)?;
+            remove_path(&entry.path()).map_err(Error::from_io)?;
+        }
+    }
+    Ok(())
+}
+
 /// The home trash. Volume trashes are not walked; they belong to a later
 /// trash provider.
 pub(super) fn list() -> Result<Vec<TrashedItem>, Error> {

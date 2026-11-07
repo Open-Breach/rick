@@ -13,7 +13,32 @@ use types::{Entry, Location};
 use vfs::Mounts;
 use vfs_local::LocalProvider;
 
-use super::{ClipMode, Core, PinStore, TransferKind};
+use super::{ClipMode, Conflicts, Core, PinStore, TransferKind, TrashStore};
+
+/// A trash record in memory.
+#[derive(Default)]
+struct TrashRecord(Mutex<Vec<platform::TrashedItem>>);
+
+impl TrashStore for TrashRecord {
+    fn items(&self) -> Vec<platform::TrashedItem> {
+        self.0
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+    }
+    fn record(&self, items: &[platform::TrashedItem]) {
+        self.0
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .extend_from_slice(items);
+    }
+    fn forget(&self, items: &[platform::TrashedItem]) {
+        self.0
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .retain(|i| !items.iter().any(|gone| gone.trashed == i.trashed));
+    }
+}
 
 /// A host whose answers the test scripts.
 #[derive(Default)]
@@ -75,6 +100,8 @@ struct Harness {
     dir: tempfile::TempDir,
     fake: Arc<Fake>,
     pins: Arc<Pins>,
+    trash: Arc<TrashRecord>,
+    conflicts: Arc<Conflicts>,
     mounts: Arc<Mounts>,
     registry: Registry,
     core_clipboard: Arc<dyn Fn() -> Option<super::Clipboard> + Send + Sync>,
@@ -88,7 +115,15 @@ fn harness() -> Harness {
     let mounts = Arc::new(Mounts::new());
     mounts.mount(Arc::new(LocalProvider::new(fake.clone())));
     let pins = Arc::new(Pins::default());
-    let core = Arc::new(Core::new(Arc::clone(&mounts), fake.clone(), pins.clone()));
+    let trash = Arc::new(TrashRecord::default());
+    let conflicts = Conflicts::new();
+    let core = Arc::new(Core::new(
+        Arc::clone(&mounts),
+        fake.clone(),
+        pins.clone(),
+        trash.clone(),
+        Arc::clone(&conflicts),
+    ));
     let mut registry = Registry::new();
     registry.load(&*core).unwrap_or_else(|e| panic!("{e}"));
     let clip = Arc::clone(&core);
@@ -96,6 +131,8 @@ fn harness() -> Harness {
         dir,
         fake,
         pins,
+        trash,
+        conflicts,
         mounts,
         registry,
         core_clipboard: Arc::new(move || clip.clipboard()),
@@ -423,13 +460,26 @@ fn copy_path_open_and_reveal_go_to_the_platform() {
 #[test]
 fn every_action_has_an_id_label_and_core_group() {
     let h = harness();
-    assert_eq!(h.registry.actions().len(), 16);
+    assert_eq!(h.registry.actions().len(), 22);
     for action in h.registry.actions() {
         assert!(action.id().0.starts_with("core."), "{}", action.id().0);
         assert_ne!(action.label(), "");
         assert_eq!(action.group(), ext::ActionGroup::Core);
-        // Pin and Unpin have no shortcut in the spec's tables.
-        let unbound = matches!(action.id().0, "core.pin" | "core.unpin");
+        // Pin, Unpin, the trash actions and Open containing folder have no
+        // shortcut in the spec's tables; New file lost Mod+N to New window
+        // (QUESTIONS.md 66).
+        let unbound = matches!(
+            action.id().0,
+            "core.pin"
+                | "core.unpin"
+                | "core.new_file"
+                | "core.restore"
+                | "core.restore_trash"
+                | "core.empty_trash"
+                | "core.purge_trash"
+                | "core.open_containing"
+                | "core.open_containing_tab"
+        );
         assert_eq!(
             action.default_shortcut().is_some(),
             !unbound,
@@ -444,7 +494,13 @@ fn every_action_has_an_id_label_and_core_group() {
             "{always}"
         );
     }
-    let core = Core::new(Arc::clone(&h.mounts), h.fake.clone(), h.pins.clone());
+    let core = Core::new(
+        Arc::clone(&h.mounts),
+        h.fake.clone(),
+        h.pins.clone(),
+        h.trash.clone(),
+        Arc::clone(&h.conflicts),
+    );
     assert_eq!(core.manifest().id, types::ExtId("core"));
     assert!(format!("{core:?}").contains("core"));
 }
@@ -548,6 +604,7 @@ fn transfer_moves_with_undo_and_copies_without() {
     let outcome = super::transfer(
         &h.jobs,
         Arc::clone(&h.mounts),
+        Arc::clone(&h.conflicts),
         &[
             tests_local(&src.join("a.txt")),
             tests_local(&src.join("folder")),
@@ -573,6 +630,7 @@ fn transfer_moves_with_undo_and_copies_without() {
     let outcome = super::transfer(
         &h.jobs,
         Arc::clone(&h.mounts),
+        Arc::clone(&h.conflicts),
         &[tests_local(&src.join("a.txt"))],
         &tests_local(&dst),
         TransferKind::Copy,
@@ -587,10 +645,352 @@ fn transfer_moves_with_undo_and_copies_without() {
         super::transfer(
             &h.jobs,
             Arc::clone(&h.mounts),
+            Arc::clone(&h.conflicts),
             &[],
             &tests_local(&dst),
             TransferKind::Copy,
         ),
         Err(types::Error::Unsupported(_))
+    ));
+}
+
+/// Answers the first open conflict with `answer` once a job asks, within
+/// two seconds.
+fn answer_conflict(h: &Harness, answer: types::ConflictAnswer) -> types::Conflict {
+    let deadline = Instant::now() + Duration::from_secs(2);
+    loop {
+        let fresh = h.conflicts.take_new();
+        if let Some(conflict) = fresh.into_iter().next() {
+            assert!(h.conflicts.is_waiting(conflict.id));
+            assert!(h.conflicts.answer(conflict.id, answer));
+            return conflict;
+        }
+        assert!(Instant::now() < deadline, "no conflict was asked");
+        std::thread::sleep(Duration::from_millis(5));
+    }
+}
+
+/// A source folder with `a.txt`, `b.txt` and `sub/inner.txt`, and a target
+/// folder that already holds `a.txt`, `b.txt` and `sub/other.txt`.
+fn conflicting_tree(h: &Harness) -> (std::path::PathBuf, std::path::PathBuf) {
+    let (src, dst) = (h.dir.path().join("src"), h.dir.path().join("dst"));
+    fs::create_dir_all(src.join("sub")).unwrap_or_else(|e| panic!("{e}"));
+    fs::create_dir_all(dst.join("sub")).unwrap_or_else(|e| panic!("{e}"));
+    write(&src.join("a.txt"), "new a");
+    write(&src.join("b.txt"), "new b");
+    write(&src.join("sub/inner.txt"), "inner");
+    write(&dst.join("a.txt"), "old a");
+    write(&dst.join("b.txt"), "old b");
+    write(&dst.join("sub/other.txt"), "other");
+    (src, dst)
+}
+
+fn paste_all(h: &Harness, src: &Path, dst: &Path) -> ActionOutcome {
+    let ctx = h.ctx(
+        src,
+        &[&src.join("a.txt"), &src.join("b.txt"), &src.join("sub")],
+    );
+    h.run("core.copy", ctx);
+    let action = h.action("core.paste");
+    action
+        .run(h.ctx(dst, &[]), &h.jobs, &h.ui)
+        .unwrap_or_else(|e| panic!("{e}"))
+}
+
+#[test]
+fn a_paste_over_existing_names_asks_and_skip_leaves_the_target_alone() {
+    let h = harness();
+    let (src, dst) = conflicting_tree(&h);
+    let outcome = paste_all(&h, &src, &dst);
+    let ActionOutcome::Started(id) = outcome else {
+        panic!("{outcome:?}");
+    };
+    let first = answer_conflict(&h, types::ConflictAnswer::once(types::Resolution::Skip));
+    assert_eq!(first.job, id);
+    assert!(!first.target_is_dir);
+    assert_eq!(first.proposed, "a (2).txt");
+    assert_eq!(first.remaining, 2);
+    let second = answer_conflict(&h, types::ConflictAnswer::once(types::Resolution::Skip));
+    assert_eq!(second.proposed, "b (2).txt");
+    let third = answer_conflict(&h, types::ConflictAnswer::once(types::Resolution::Skip));
+    assert!(third.target_is_dir);
+    h.settle();
+    assert_eq!(
+        fs::read_to_string(dst.join("a.txt")).ok(),
+        Some("old a".into())
+    );
+    assert_eq!(
+        fs::read_to_string(dst.join("b.txt")).ok(),
+        Some("old b".into())
+    );
+    assert!(!dst.join("sub/inner.txt").exists());
+    assert_eq!(h.conflicts.take_new().len(), 0, "no new conflict");
+}
+
+#[test]
+fn overwrite_replaces_files_and_merges_folders() {
+    let h = harness();
+    let (src, dst) = conflicting_tree(&h);
+    paste_all(&h, &src, &dst);
+    answer_conflict(
+        &h,
+        types::ConflictAnswer::for_all(types::Resolution::Overwrite),
+    );
+    h.settle();
+    assert_eq!(
+        fs::read_to_string(dst.join("a.txt")).ok(),
+        Some("new a".into())
+    );
+    assert_eq!(
+        fs::read_to_string(dst.join("b.txt")).ok(),
+        Some("new b".into())
+    );
+    assert!(dst.join("sub/inner.txt").exists(), "merged in");
+    assert!(
+        dst.join("sub/other.txt").exists(),
+        "merge keeps what was there"
+    );
+    assert!(src.join("a.txt").exists(), "a copy leaves the source");
+}
+
+#[test]
+fn rename_puts_the_item_under_the_proposed_name_and_apply_to_all_numbers_the_rest() {
+    let h = harness();
+    let (src, dst) = conflicting_tree(&h);
+    paste_all(&h, &src, &dst);
+    answer_conflict(
+        &h,
+        types::ConflictAnswer::once(types::Resolution::Rename("fresh.txt".into())),
+    );
+    answer_conflict(
+        &h,
+        types::ConflictAnswer::for_all(types::Resolution::Rename(String::new())),
+    );
+    h.settle();
+    assert_eq!(
+        fs::read_to_string(dst.join("fresh.txt")).ok(),
+        Some("new a".into())
+    );
+    assert_eq!(
+        fs::read_to_string(dst.join("a.txt")).ok(),
+        Some("old a".into())
+    );
+    assert_eq!(
+        fs::read_to_string(dst.join("b (2).txt")).ok(),
+        Some("new b".into())
+    );
+    assert!(
+        dst.join("sub (2)/inner.txt").exists(),
+        "folders are numbered too"
+    );
+    assert!(dst.join("sub/other.txt").exists());
+}
+
+#[test]
+fn cancel_leaves_everything_untouched_and_ends_the_job_cancelled() {
+    let h = harness();
+    let (src, dst) = conflicting_tree(&h);
+    let (jobs, mut events) = JobRunner::with_events();
+    let ctx = h.ctx(
+        src.as_path(),
+        &[&src.join("a.txt"), &src.join("b.txt"), &src.join("sub")],
+    );
+    h.run("core.copy", ctx);
+    h.action("core.paste")
+        .run(h.ctx(&dst, &[]), &jobs, &h.ui)
+        .unwrap_or_else(|e| panic!("{e}"));
+    answer_conflict(&h, types::ConflictAnswer::once(types::Resolution::Cancel));
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !jobs.running().is_empty() {
+        assert!(Instant::now() < deadline);
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    let mut finished = None;
+    while let Ok(event) = events.try_recv() {
+        if let runtime::JobEvent::Finished { result, .. } = event {
+            finished = Some(result);
+        }
+    }
+    assert!(
+        matches!(finished, Some(Err(types::Error::Cancelled))),
+        "{finished:?}"
+    );
+    assert_eq!(
+        fs::read_to_string(dst.join("a.txt")).ok(),
+        Some("old a".into())
+    );
+    assert_eq!(
+        fs::read_to_string(dst.join("b.txt")).ok(),
+        Some("old b".into())
+    );
+    assert!(!dst.join("sub/inner.txt").exists());
+}
+
+#[test]
+fn a_move_that_overwrites_merges_and_its_undo_moves_back() {
+    let h = harness();
+    let (src, dst) = conflicting_tree(&h);
+    let ctx = h.ctx(src.as_path(), &[&src.join("a.txt"), &src.join("sub")]);
+    h.run("core.cut", ctx);
+    let outcome = h
+        .action("core.paste")
+        .run(h.ctx(&dst, &[]), &h.jobs, &h.ui)
+        .unwrap_or_else(|e| panic!("{e}"));
+    let ActionOutcome::Undoable(command) = outcome else {
+        panic!("{outcome:?}");
+    };
+    answer_conflict(
+        &h,
+        types::ConflictAnswer::for_all(types::Resolution::Overwrite),
+    );
+    h.settle();
+    assert_eq!(
+        fs::read_to_string(dst.join("a.txt")).ok(),
+        Some("new a".into())
+    );
+    assert!(!src.join("a.txt").exists(), "moved");
+    assert!(!src.join("sub").exists(), "the folder was merged away");
+    assert!(dst.join("sub/inner.txt").exists());
+    assert!(dst.join("sub/other.txt").exists());
+    command.undo(&h.jobs).unwrap_or_else(|e| panic!("{e}"));
+    h.settle();
+    assert_eq!(
+        fs::read_to_string(src.join("a.txt")).ok(),
+        Some("new a".into())
+    );
+    assert!(src.join("sub/inner.txt").exists());
+    assert!(!dst.join("a.txt").exists());
+}
+
+#[test]
+fn trash_actions_restore_purge_and_empty_through_the_store() {
+    let h = harness();
+    let dir = h.dir.path().join("d");
+    fs::create_dir_all(&dir).unwrap_or_else(|e| panic!("{e}"));
+    write(&dir.join("one.txt"), "1");
+    write(&dir.join("two.txt"), "2");
+    write(&dir.join("three.txt"), "3");
+    h.run(
+        "core.trash",
+        h.ctx(
+            &dir,
+            &[
+                &dir.join("one.txt"),
+                &dir.join("two.txt"),
+                &dir.join("three.txt"),
+            ],
+        ),
+    );
+    let items = h.trash.items();
+    assert_eq!(items.len(), 3, "the store records what was trashed");
+    let entry_for = |name: &str| {
+        super::trash_entry(
+            items
+                .iter()
+                .find(|i| i.original.ends_with(name))
+                .unwrap_or_else(|| panic!("{name}")),
+        )
+    };
+    let trash_ctx = |selection: Vec<Entry>| ActionCtx {
+        pane: PaneId(1),
+        location: super::trash_location(),
+        selection,
+        invoked_from: Invocation::ContextMenu,
+    };
+    // Outside the trash the actions are hidden.
+    assert_eq!(
+        h.action("core.restore_trash")
+            .availability(&h.ctx(&dir, &[])),
+        Availability::Hidden
+    );
+    assert_eq!(
+        h.action("core.restore")
+            .availability(&trash_ctx(vec![entry_for("one.txt"), entry_for("two.txt")])),
+        Availability::Disabled("Restore trash items puts several back")
+    );
+
+    // Restore one; undo trashes it again; redo restores it.
+    let outcome = h.run("core.restore", trash_ctx(vec![entry_for("one.txt")]));
+    let ActionOutcome::Undoable(restore) = outcome else {
+        panic!("{outcome:?}");
+    };
+    assert_eq!(restore.label(), "Restore one.txt");
+    assert_eq!(
+        fs::read_to_string(dir.join("one.txt")).ok(),
+        Some("1".into())
+    );
+    assert_eq!(h.trash.items().len(), 2);
+    restore.undo(&h.jobs).unwrap_or_else(|e| panic!("{e}"));
+    h.settle();
+    assert!(!dir.join("one.txt").exists());
+    assert_eq!(h.trash.items().len(), 3);
+    restore.redo(&h.jobs).unwrap_or_else(|e| panic!("{e}"));
+    h.settle();
+    assert!(dir.join("one.txt").exists());
+    assert_eq!(h.fake.list().map(|l| l.len()).ok(), Some(2));
+
+    // Delete one permanently, after confirmation.
+    let items = h.trash.items();
+    let two = super::trash_entry(
+        items
+            .iter()
+            .find(|i| i.original.ends_with("two.txt"))
+            .unwrap_or_else(|| panic!("two")),
+    );
+    *h.ui.confirm.lock().unwrap_or_else(PoisonError::into_inner) = false;
+    assert!(matches!(
+        h.run("core.purge_trash", trash_ctx(vec![two.clone()])),
+        ActionOutcome::Done
+    ));
+    assert_eq!(h.fake.list().map(|l| l.len()).ok(), Some(2), "refused");
+    *h.ui.confirm.lock().unwrap_or_else(PoisonError::into_inner) = true;
+    assert!(matches!(
+        h.run("core.purge_trash", trash_ctx(vec![two])),
+        ActionOutcome::Started(_)
+    ));
+    assert_eq!(h.fake.list().map(|l| l.len()).ok(), Some(1));
+    assert_eq!(h.trash.items().len(), 1);
+
+    // Empty the rest.
+    assert!(matches!(
+        h.run("core.empty_trash", h.ctx(&dir, &[])),
+        ActionOutcome::Started(_)
+    ));
+    assert_eq!(h.fake.list().map(|l| l.len()).ok(), Some(0));
+    assert_eq!(h.trash.items().len(), 0, "the trash is empty");
+    assert!(!dir.join("three.txt").exists());
+}
+
+#[test]
+fn open_containing_folder_is_available_away_from_the_selection_folder() {
+    let h = harness();
+    let dir = h.dir.path().join("d");
+    fs::create_dir_all(dir.join("sub")).unwrap_or_else(|e| panic!("{e}"));
+    write(&dir.join("sub/deep.txt"), "x");
+    write(&dir.join("here.txt"), "y");
+    let action = h.action("core.open_containing");
+    assert!(matches!(
+        action.availability(&h.ctx(&dir, &[])),
+        Availability::Disabled(_)
+    ));
+    assert!(matches!(
+        action.availability(&h.ctx(&dir, &[&dir.join("here.txt")])),
+        Availability::Disabled(_)
+    ));
+    assert_eq!(
+        action.availability(&h.ctx(&dir, &[&dir.join("sub/deep.txt")])),
+        Availability::Enabled
+    );
+    assert_eq!(
+        h.action("core.open_containing_tab")
+            .availability(&h.ctx(&dir, &[&dir.join("sub/deep.txt")])),
+        Availability::Enabled
+    );
+    assert!(matches!(
+        h.run(
+            "core.open_containing",
+            h.ctx(&dir, &[&dir.join("sub/deep.txt")])
+        ),
+        ActionOutcome::Done
     ));
 }

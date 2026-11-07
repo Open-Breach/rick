@@ -81,6 +81,32 @@ pub const LINK: &str = ph::LINK_SIMPLE;
 pub const DONE: &str = ph::CHECK;
 /// Failed.
 pub const FAILED: &str = ph::WARNING;
+/// A collapsed tree node.
+pub const TREE_CLOSED: &str = ph::CARET_RIGHT;
+/// An expanded tree node.
+pub const TREE_OPEN: &str = ph::CARET_DOWN;
+/// An open folder, for the expanded folder tree node.
+pub const FOLDER_OPEN: &str = ph::FOLDER_OPEN;
+/// Pause a job.
+pub const PAUSE: &str = ph::PAUSE;
+/// Resume a job.
+pub const PLAY: &str = ph::PLAY;
+/// Search in subdirectories.
+pub const SUBTREE: &str = ph::FOLDERS;
+/// Removable media.
+pub const USB: &str = ph::USB;
+/// An internal disk.
+pub const DISK: &str = ph::HARD_DRIVE;
+/// An optical disc.
+pub const DISC: &str = ph::DISC;
+/// The side panel's tree follows the focused pane.
+pub const LINKED: &str = ph::LINK_SIMPLE;
+/// The side panel's tree is unlinked.
+pub const UNLINKED: &str = ph::LINK_SIMPLE_BREAK;
+/// Open containing folder.
+pub const CONTAINING: &str = ph::ARROW_SQUARE_OUT;
+/// Restore from the trash.
+pub const UNTRASH: &str = ph::ARROW_COUNTER_CLOCKWISE;
 
 /// Line numbers in a text preview.
 pub const LINE_NUMBERS: &str = ph::LIST_NUMBERS;
@@ -268,6 +294,19 @@ mod tests {
         CONTINUATION,
         DONE,
         FAILED,
+        TREE_CLOSED,
+        TREE_OPEN,
+        FOLDER_OPEN,
+        PAUSE,
+        PLAY,
+        SUBTREE,
+        USB,
+        DISK,
+        DISC,
+        LINKED,
+        UNLINKED,
+        CONTAINING,
+        UNTRASH,
     ];
 
     #[test]

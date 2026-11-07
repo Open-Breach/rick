@@ -9,11 +9,25 @@
 //! itself.
 //!
 //! Each pane shows its active tab's location. The app keeps that listing
-//! live: when the location, the hidden flag, the flatten flag or the
-//! system-files setting changes, it cancels the pane's listing job, starts a
-//! new one that streams batches into the model, and watches the location
-//! for changes until the next switch. Listing jobs do not appear in the job
-//! table; their output is the [`Event::Listed`] stream.
+//! live: when the location, the hidden flag, the flatten flag, the subtree
+//! search or the system-files setting changes, it cancels the pane's
+//! listing job, starts a new one that streams batches into the model, and
+//! watches the location for changes until the next switch. Listing jobs do
+//! not appear in the job table; their output is the [`Event::Listed`]
+//! stream. A subtree search is the exception: its walk is a job the
+//! operations area shows and cancels. Only a pane's active tab lists; the
+//! other tabs list when they are first shown.
+//!
+//! The app also feeds the side panel: the Recent list from every change
+//! watch it holds plus a bounded scan at start, the mounted volumes polled
+//! through the platform, the trash's contents after every operation, and
+//! the folder tree following the focused pane; and it routes the name
+//! conflicts copy and move jobs ask about to the UI and back.
+//!
+//! The session (every window, pane and tab, see [`model::Session`]) is
+//! written to `session.toml` after every change, at most once per second,
+//! and once more by [`App::save_session`] on exit. A start restores it, or
+//! the start layout the settings name; saved layouts live in `layouts/`.
 //!
 //! ```no_run
 //! use std::sync::Arc;
@@ -37,7 +51,7 @@
 //!     ui: Arc::new(Headless),
 //!     extensions: Vec::new(),
 //!     config_dir: None,
-//!     start: Location::new(vfs_local::PROVIDER_ID, home),
+//!     start: Some(Location::new(vfs_local::PROVIDER_ID, home)),
 //! });
 //! let mut events: Vec<Event> = Vec::new();
 //! let pane = app.model().focused;
@@ -48,10 +62,16 @@
 #![forbid(unsafe_code)]
 
 mod command;
+mod recent;
+mod session;
 mod settings;
+mod trash;
 
 pub use command::{Command, Event, TransferMode};
+pub use recent::RECENT_FILE;
+pub use session::{LAYOUTS_DIR, SAVE_INTERVAL, SESSION_FILE};
 pub use settings::SETTINGS_FILE;
+pub use trash::TRASH_FILE;
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::path::{Path, PathBuf};
@@ -63,12 +83,13 @@ use ext::{
     FsChange, Invocation, Level, ListOptions, PreviewDoc, Previewer, Registry, UiHost, UndoCommand,
 };
 use futures::StreamExt;
-use model::{JobState, Model, PaneId, Settings, SettingsChange, TabId};
-use ops::PinStore;
-use platform::Platform;
+use model::{JobState, Model, PaneId, Section, Session, Settings, SettingsChange, TabId, Volume};
+use ops::{Conflicts, PinStore, TrashStore};
+use platform::{Platform, TrashedItem};
 use runtime::{JobEvent, JobRunner, mpsc};
 use tracing::{debug, warn};
-use types::{CancelToken, Entry, EntryId, Error, JobId, Location, Progress};
+use trash::TrashBridge;
+use types::{CancelToken, Entry, EntryId, Error, JobId, Location, Progress, VPath};
 use vfs::Mounts;
 use vfs_local::LocalProvider;
 
@@ -80,10 +101,13 @@ pub struct Config {
     pub ui: Arc<dyn UiHost>,
     /// Extensions to load besides the built-in [`ops::Core`].
     pub extensions: Vec<Arc<dyn Extension>>,
-    /// Where `rick.toml` lives; `None` for the platform's config directory.
+    /// Where `rick.toml`, `session.toml` and `layouts/` live; `None` for
+    /// the platform's config directory.
     pub config_dir: Option<PathBuf>,
-    /// The location of the first tab.
-    pub start: Location,
+    /// A location to open in a new tab of the restored session's focused
+    /// pane, as a path on the command line asks; with no session to restore
+    /// it is the one tab's location, and `None` means Home.
+    pub start: Option<Location>,
 }
 
 /// Called whenever a background task has left a message for the loop, so a
@@ -155,10 +179,47 @@ enum Msg {
         size: u32,
         frame: Option<ext::Frame>,
     },
+    /// A batch of an expanded folder's children, in Tree view.
+    TreeBatch {
+        pane: PaneId,
+        generation: u64,
+        folder: EntryId,
+        batch: Vec<Entry>,
+    },
+    /// An expanded folder's listing ended.
+    TreeDone {
+        pane: PaneId,
+        generation: u64,
+        folder: EntryId,
+        result: Result<(), Error>,
+    },
+    /// A job asked about a name conflict.
+    Conflicts,
+    /// The persisted Recent list was read.
+    RecentLoaded(Vec<Entry>),
+    /// A scan of a Recent root finished.
+    RecentScanned(Vec<Entry>),
+    /// A Recent root changed.
+    RecentChange(FsChange),
+    /// The mounted volumes were enumerated.
+    Volumes(Result<Vec<Volume>, Error>),
+    /// The trash was listed.
+    Trash(Result<Vec<TrashedItem>, Error>),
+    /// The folders under a path of the side panel's tree.
+    FolderTree {
+        root: Location,
+        path: VPath,
+        folders: Vec<Entry>,
+    },
 }
 
 /// How long changes are collected before the decorators run again.
 const REDECORATE_AFTER: Duration = Duration::from_millis(150);
+/// How often the mounted volumes are enumerated again.
+const VOLUMES_EVERY: Duration = Duration::from_secs(3);
+/// How long one [`App::poll`] may spend applying messages before it leaves
+/// the rest to the next one.
+const POLL_BUDGET: Duration = Duration::from_millis(8);
 /// How many of this process's own settings writes are remembered, so the
 /// watcher's report of each is told from an edit.
 const RECENT_SAVES: usize = 16;
@@ -251,6 +312,15 @@ struct ListKey {
     tab: TabId,
     location: Location,
     opts: ListOptions,
+    /// The subtree search text, when the filter searches the subtree.
+    search: Option<String>,
+}
+
+/// The running listing of one expanded folder in Tree view.
+struct Child {
+    cancel: CancelToken,
+    /// Set while a refresh collects the children to swap them in at once.
+    buffer: Option<Vec<Entry>>,
 }
 
 /// A pane's running or finished listing and its watch.
@@ -265,6 +335,17 @@ struct Live {
     decorators: Vec<Arc<dyn Decorator>>,
     /// A re-decoration is scheduled after the debounce.
     redecorate_scheduled: bool,
+    /// The expanded folders' listings in flight.
+    children: BTreeMap<EntryId, Child>,
+}
+
+/// The Recent feed's roots and watches.
+#[derive(Default)]
+struct RecentFeed {
+    /// Each watched root with the token that stops its watch and scan.
+    roots: Vec<(Location, CancelToken)>,
+    /// Writes `recent.toml`, latest snapshot wins.
+    saver: Option<mpsc::UnboundedSender<Vec<Entry>>>,
 }
 
 /// The application: model, registry, jobs, undo log and settings.
@@ -275,6 +356,8 @@ pub struct App {
     platform: Arc<dyn Platform>,
     ui: Arc<dyn UiHost>,
     pins: Arc<PinBridge>,
+    trash: Arc<TrashBridge>,
+    conflicts: Arc<Conflicts>,
     jobs: JobRunner,
     job_events: mpsc::UnboundedReceiver<JobEvent>,
     /// Where decorators run their lookups: part of listing, so kept out of
@@ -302,12 +385,39 @@ pub struct App {
     thumbnails: BTreeSet<(EntryId, u32)>,
     /// Events from start-up, delivered on the first poll.
     pending: Vec<Event>,
+    recent: RecentFeed,
+    /// Writes `trash.toml`, latest snapshot wins.
+    trash_saver: mpsc::UnboundedSender<Vec<TrashedItem>>,
+    /// Stops the volume poll.
+    volumes_watch: CancelToken,
+    /// The location the side panel's tree followed last.
+    followed: Option<Location>,
+    /// The user's home, where a tab opens when its own location is gone.
+    home: Location,
+    /// Writes `session.toml`, debounced.
+    session_saver: session::Saver,
+    /// The session last handed to the saver, so an unchanged model sends
+    /// nothing.
+    last_sent: Option<Session>,
+    /// `session.toml` as it was at start: "Continue where I left off" when
+    /// the start was a layout.
+    last_session: Option<Session>,
+    /// The `layouts/` directory.
+    layouts_dir: PathBuf,
+    /// The saved layouts' names, refreshed on every change to the directory
+    /// this process makes.
+    layouts: Vec<String>,
+    /// The last window was closed: the UI should exit.
+    exit: bool,
 }
 
 impl App {
     /// Builds the application: mounts the local provider, loads the
     /// built-in operations and `config.extensions`, reads the settings file
-    /// and starts watching it, and lists the start location.
+    /// and starts watching it, restores the session or the start layout,
+    /// starts the side panel's feeds, and lists every active tab's location.
+    // Start-up is one straight line: registry, settings, session, loop.
+    #[allow(clippy::too_many_lines)]
     #[must_use]
     pub fn new(config: Config) -> Self {
         let Config {
@@ -324,10 +434,14 @@ impl App {
         let trash: Arc<dyn platform::Trash> = Arc::clone(&platform) as Arc<dyn platform::Trash>;
         mounts.mount(Arc::new(LocalProvider::new(trash)));
         let pins = Arc::new(PinBridge::default());
+        let trash = Arc::new(TrashBridge::default());
+        let conflicts = Conflicts::new();
         let core = ops::Core::new(
             Arc::clone(&mounts),
             Arc::clone(&platform),
             Arc::clone(&pins) as Arc<dyn PinStore>,
+            Arc::clone(&trash) as Arc<dyn TrashStore>,
+            Arc::clone(&conflicts),
         );
         for ext in std::iter::once(&core as &dyn Extension).chain(extensions.iter().map(|e| &**e)) {
             if let Err(error) = registry.load(ext) {
@@ -343,9 +457,14 @@ impl App {
             mounts.mount(Arc::clone(provider));
         }
 
-        let settings_path = config_dir
-            .unwrap_or_else(|| platform.config_dir())
-            .join(SETTINGS_FILE);
+        let config_dir = config_dir.unwrap_or_else(|| platform.config_dir());
+        let settings_path = config_dir.join(SETTINGS_FILE);
+        match trash::load(&config_dir.join(TRASH_FILE)) {
+            Ok(items) => trash.set(items),
+            Err(error) => warn!(%error, "trash record not read"),
+        }
+        let session_path = config_dir.join(SESSION_FILE);
+        let layouts_dir = config_dir.join(LAYOUTS_DIR);
         let settings = match settings::load(&settings_path) {
             Ok(settings) => settings,
             Err(error) => {
@@ -359,23 +478,84 @@ impl App {
         };
         pins.sync(&settings.pinned);
 
+        let home = Location::new(
+            vfs_local::PROVIDER_ID,
+            platform::paths::from_path(&platform.home_dir()),
+        );
+        // The last session, whatever starts: it stays reachable as
+        // "Continue where I left off".
+        let last_session = match session::load(&session_path) {
+            Ok(session) => Some(session),
+            Err(Error::NotFound) => None,
+            Err(error) => {
+                warn!(%error, path = %session_path.display(), "session not read");
+                pending.push(Event::Notify {
+                    level: Level::Warning,
+                    text: format!("Session file not read: {error}"),
+                });
+                None
+            }
+        };
+        let start_layout = settings.session.start_layout().and_then(|name| {
+            match session::load(&session::layout_path(&layouts_dir, name)) {
+                Ok(layout) => Some(layout),
+                Err(error) => {
+                    warn!(%error, name, "start layout not read");
+                    pending.push(Event::Notify {
+                        level: Level::Warning,
+                        text: format!("Start layout {name} not read: {error}"),
+                    });
+                    None
+                }
+            }
+        });
+        let restored = start_layout.or_else(|| last_session.clone());
+        let model = match restored {
+            Some(mut session) => {
+                repair(&mounts, &home, &mut session);
+                let mut model = Model::from_session(settings, &session, &home);
+                if let Some(start) = start {
+                    model.new_tab(None, start);
+                }
+                model
+            }
+            None => Model::new(settings, start.unwrap_or_else(|| home.clone())),
+        };
         let (jobs, job_events) = JobRunner::with_events();
         let (tx, rx) = mpsc::unbounded_channel();
         let settings_saver = settings::saver(settings_path.clone());
+        let layouts = session::layouts(&layouts_dir);
+        let trash_saver = {
+            let path = config_dir.join(TRASH_FILE);
+            saver(move |items: &Vec<TrashedItem>| trash::save(&path, items))
+        };
+        let recent_saver = {
+            let path = config_dir.join(RECENT_FILE);
+            saver(move |entries: &Vec<Entry>| recent::save(&path, entries))
+        };
+        let mailbox = Mailbox {
+            tx,
+            waker: Arc::new(std::sync::Mutex::new(None)),
+        };
+        {
+            let tx = mailbox.clone();
+            conflicts.set_waker(Arc::new(move || {
+                tx.send(Msg::Conflicts);
+            }));
+        }
         let mut app = Self {
-            model: Model::new(settings, start),
+            model,
             mounts,
             registry,
             platform,
             ui,
             pins,
+            trash,
+            conflicts,
             jobs,
             job_events,
             decor_jobs: JobRunner::new(),
-            mailbox: Mailbox {
-                tx,
-                waker: Arc::new(std::sync::Mutex::new(None)),
-            },
+            mailbox,
             rx,
             live: BTreeMap::new(),
             internal: BTreeSet::new(),
@@ -389,13 +569,215 @@ impl App {
             preview: PreviewState::default(),
             thumbnails: BTreeSet::new(),
             pending,
+            recent: RecentFeed {
+                roots: Vec::new(),
+                saver: Some(recent_saver),
+            },
+            trash_saver,
+            volumes_watch: CancelToken::new(),
+            followed: None,
+            home,
+            session_saver: session::Saver::new(session_path),
+            last_sent: None,
+            last_session,
+            layouts_dir,
+            layouts,
+            exit: false,
         };
         app.watch_settings();
+        app.load_recent(&config_dir.join(RECENT_FILE));
+        app.sync_recent_roots();
+        app.poll_volumes();
+        app.refresh_trash();
         let mut events = Vec::new();
         app.sync_panes(&mut events);
         app.sync_preview();
         app.pending.append(&mut events);
+        app.sync_session();
         app
+    }
+
+    /// Where jobs ask about name conflicts; the UI answers through
+    /// [`Command::ResolveConflict`].
+    #[must_use]
+    pub fn conflicts(&self) -> &Arc<Conflicts> {
+        &self.conflicts
+    }
+
+    /// The session the model is right now.
+    #[must_use]
+    pub fn session(&self) -> Session {
+        self.model.session()
+    }
+
+    /// Writes the session now and stops the continuous writer: the exit
+    /// hook. Every window still in the model is in the file, so closing the
+    /// last window leaves it there for the next start.
+    ///
+    /// # Errors
+    ///
+    /// The I/O error.
+    pub fn save_session(&mut self) -> Result<(), Error> {
+        let session = self.model.session();
+        self.last_sent = Some(session.clone());
+        self.session_saver.flush(&session)
+    }
+
+    /// Where the session is written.
+    #[must_use]
+    pub fn session_path(&self) -> &Path {
+        self.session_saver.path()
+    }
+
+    /// How many times the continuous writer wrote the session file.
+    #[must_use]
+    pub fn session_writes(&self) -> u64 {
+        self.session_saver.writes()
+    }
+
+    /// The saved layouts' names, sorted.
+    #[must_use]
+    pub fn layouts(&self) -> &[String] {
+        &self.layouts
+    }
+
+    /// Whether the last window was closed and the UI should exit.
+    #[must_use]
+    pub fn exit_requested(&self) -> bool {
+        self.exit
+    }
+
+    /// The user's home directory as a location.
+    #[must_use]
+    pub fn home(&self) -> &Location {
+        &self.home
+    }
+
+    /// Hands the saver a snapshot when the session changed since the last
+    /// one.
+    fn sync_session(&mut self) {
+        let session = self.model.session();
+        if self.last_sent.as_ref() == Some(&session) {
+            return;
+        }
+        self.session_saver.send(session.clone());
+        self.last_sent = Some(session);
+    }
+
+    /// Opens a window with the start layout: the start layout's focused
+    /// window when one is named and reads, otherwise one tab at the focused
+    /// tab's location.
+    fn new_window(&mut self, events: &mut Vec<Event>) {
+        let layout = self
+            .model
+            .settings
+            .session
+            .start_layout()
+            .map(str::to_owned)
+            .and_then(|name| self.load_layout(&name, events));
+        let window = layout.and_then(|mut layout| {
+            repair(&self.mounts, &self.home, &mut layout);
+            let index = layout
+                .focused_window
+                .min(layout.windows.len().saturating_sub(1));
+            layout.windows.into_iter().nth(index)
+        });
+        if let Some(saved) = window {
+            let home = self.home.clone();
+            self.model.add_window(&saved, &home);
+        } else {
+            let location = self
+                .model
+                .active_tab(self.model.focused)
+                .map_or_else(|| self.home.clone(), |(_, tab)| tab.location.clone());
+            self.model.new_window(location);
+        }
+    }
+
+    /// Reads a layout file, reporting failure.
+    fn load_layout(&self, name: &str, events: &mut Vec<Event>) -> Option<Session> {
+        match session::load(&session::layout_path(&self.layouts_dir, name)) {
+            Ok(layout) => Some(layout),
+            Err(error) => {
+                events.push(Event::Notify {
+                    level: Level::Error,
+                    text: format!("Layout {name}: {error}"),
+                });
+                None
+            }
+        }
+    }
+
+    /// Replaces every window and tab with `session`.
+    fn switch_to(&mut self, mut session: Session) {
+        repair(&self.mounts, &self.home, &mut session);
+        let settings = self.model.settings.clone();
+        let jobs = std::mem::take(&mut self.model.jobs);
+        let mut model = Model::from_session(settings, &session, &self.home);
+        model.jobs = jobs;
+        self.model = model;
+    }
+
+    fn save_layout(&mut self, name: &str, events: &mut Vec<Event>) {
+        let name = name.trim();
+        if name.is_empty() || name == model::LAST_SESSION {
+            events.push(Event::Notify {
+                level: Level::Warning,
+                text: format!("\"{name}\" cannot name a layout"),
+            });
+            return;
+        }
+        let path = session::layout_path(&self.layouts_dir, name);
+        match session::save(&path, &self.model.session()) {
+            Ok(()) => events.push(Event::Notify {
+                level: Level::Info,
+                text: format!("Layout {name} saved"),
+            }),
+            Err(error) => events.push(Event::Notify {
+                level: Level::Error,
+                text: format!("Layout {name} not saved: {error}"),
+            }),
+        }
+        self.layouts = session::layouts(&self.layouts_dir);
+    }
+
+    fn delete_layout(&mut self, name: &str, events: &mut Vec<Event>) {
+        let path = session::layout_path(&self.layouts_dir, name);
+        if let Err(error) = std::fs::remove_file(&path) {
+            events.push(Event::Notify {
+                level: Level::Error,
+                text: format!("Layout {name} not deleted: {error}"),
+            });
+        }
+        if self.model.settings.session.start_layout() == Some(name) {
+            self.change_settings(SettingsChange::StartLayout(None));
+        }
+        self.layouts = session::layouts(&self.layouts_dir);
+    }
+
+    fn rename_layout(&mut self, from: &str, to: &str, events: &mut Vec<Event>) {
+        let to = to.trim();
+        if to.is_empty() || to == model::LAST_SESSION {
+            events.push(Event::Notify {
+                level: Level::Warning,
+                text: format!("\"{to}\" cannot name a layout"),
+            });
+            return;
+        }
+        let source = session::layout_path(&self.layouts_dir, from);
+        let target = session::layout_path(&self.layouts_dir, to);
+        if source == target {
+            return;
+        }
+        if let Err(error) = std::fs::rename(&source, &target) {
+            events.push(Event::Notify {
+                level: Level::Error,
+                text: format!("Layout {from} not renamed: {error}"),
+            });
+        } else if self.model.settings.session.start_layout() == Some(from) {
+            self.change_settings(SettingsChange::StartLayout(Some(to.to_owned())));
+        }
+        self.layouts = session::layouts(&self.layouts_dir);
     }
 
     /// The entry the preview follows: the focused pane's single selected
@@ -491,6 +873,8 @@ impl App {
         self.dispatch(command, events);
         self.sync_panes(events);
         self.sync_preview();
+        self.drain_trash();
+        self.sync_session();
     }
 
     // One arm per command: the enum is the table.
@@ -572,6 +956,46 @@ impl App {
                     Self::selection_cleared(pane, before, events);
                 }
             }
+            Command::Subtree { pane, on } => {
+                let before = self.selection_len(pane);
+                if self.model.set_subtree(pane, on) {
+                    Self::selection_cleared(pane, before, events);
+                }
+            }
+            Command::TreeExpand { pane, id } => {
+                if self.model.tree_expand(pane, id) {
+                    let location = self
+                        .model
+                        .active_tab(pane)
+                        .and_then(|(_, tab)| tab.entry(id).map(|e| tab.location_of(e)));
+                    if let Some(location) = location {
+                        self.list_child(pane, id, location, false);
+                    }
+                }
+            }
+            Command::TreeCollapse { pane, id } => {
+                if let Some(live) = self.live.get_mut(&pane)
+                    && let Some(child) = live.children.remove(&id)
+                {
+                    child.cancel.cancel();
+                }
+                let before = self.selected_ids(pane);
+                if self.model.tree_collapse(pane, id) {
+                    let after = self.selected_ids(pane);
+                    if before != after {
+                        events.push(Event::SelectionChanged { pane, ids: after });
+                    }
+                }
+            }
+            Command::FolderTreeToggle(path) => {
+                if let Some(location) = self.model.folder_tree_toggle(&path) {
+                    self.list_folders(location);
+                }
+            }
+            Command::FolderTreeLink(linked) => {
+                self.model.folder_tree_link(linked);
+                self.followed = None;
+            }
             Command::Run { action, ctx } => self.run(action, ctx, events),
             Command::NewTab(location) => {
                 self.model.new_tab(None, location);
@@ -594,21 +1018,94 @@ impl App {
             Command::CancelJob(id) => {
                 self.jobs.cancel(id);
             }
+            Command::PauseJob(id) => {
+                if self.jobs.pause(id) {
+                    self.model.job_paused(id, true);
+                }
+            }
+            Command::ResumeJob(id) => {
+                if self.jobs.resume(id) {
+                    self.model.job_paused(id, false);
+                }
+            }
             Command::DismissJob(id) => {
                 self.model.job_dismiss(id);
             }
+            Command::ResolveConflict { id, answer } => {
+                if !self.conflicts.answer(id, answer) {
+                    debug!(%id, "no job waits on this conflict");
+                }
+                self.model.conflict_closed(id);
+            }
+            Command::RefreshTrash => self.refresh_trash(),
+            Command::RefreshVolumes => self.enumerate_volumes(),
             Command::Undo => self.undo(events),
             Command::Redo => self.redo(events),
             Command::Settings(change) => self.change_settings(change),
             Command::Thumbnail { pane, id, size } => self.thumbnail(pane, id, size),
+            Command::TabOrder { pane, order } => {
+                self.model.set_tab_order(pane, order);
+            }
+            Command::Layout { window, dock } => {
+                self.model.set_layout(window, dock);
+            }
+            Command::Scroll { tab, offset } => {
+                self.model.set_scroll(tab, offset);
+            }
+            Command::WindowGeometry { window, geometry } => {
+                self.model.set_geometry(window, geometry);
+            }
+            Command::SidePanel { window, change } => {
+                self.model.side_panel(window, change);
+                // A tree section that opens, or a panel that shows, follows
+                // anew.
+                self.followed = None;
+            }
+            Command::FocusWindow(window) => {
+                self.model.focus_window(window);
+            }
+            Command::NewWindow => self.new_window(events),
+            Command::CloseWindow(window) => {
+                if !self.model.close_window(window) && self.model.window(window).is_some() {
+                    self.exit = true;
+                }
+            }
+            Command::SaveLayout(name) => self.save_layout(&name, events),
+            Command::SwitchLayout(name) => {
+                let session = match name {
+                    Some(name) => self.load_layout(&name, events),
+                    None => match self.last_session.clone() {
+                        Some(session) => Some(session),
+                        None => match session::load(self.session_saver.path()) {
+                            Ok(session) => Some(session),
+                            Err(error) => {
+                                events.push(Event::Notify {
+                                    level: Level::Warning,
+                                    text: format!("No last session: {error}"),
+                                });
+                                None
+                            }
+                        },
+                    },
+                };
+                if let Some(session) = session {
+                    self.switch_to(session);
+                }
+            }
+            Command::DeleteLayout(name) => self.delete_layout(&name, events),
+            Command::RenameLayout { from, to } => self.rename_layout(&from, &to, events),
         }
         self.sync_panes(events);
         self.sync_preview();
     }
 
-    /// Processes everything that has arrived from listings, watches and
-    /// jobs without waiting. Returns how many messages it handled.
+    /// Processes what has arrived from listings, watches and jobs without
+    /// waiting, for at most `POLL_BUDGET` (8 ms) so a stream that keeps
+    /// producing (a search over thousands of matches) never holds a frame
+    /// back; the rest is picked up by the next poll. Returns how many
+    /// messages it handled.
     pub fn poll(&mut self, events: &mut Vec<Event>) -> usize {
+        let started = std::time::Instant::now();
         events.append(&mut self.pending);
         let mut handled = 0;
         loop {
@@ -616,17 +1113,25 @@ impl App {
             while let Ok(msg) = self.rx.try_recv() {
                 self.on_msg(msg, events);
                 handled += 1;
+                if started.elapsed() >= POLL_BUDGET {
+                    break;
+                }
             }
             while let Ok(event) = self.job_events.try_recv() {
                 self.on_job_event(event, events);
                 handled += 1;
+                if started.elapsed() >= POLL_BUDGET {
+                    break;
+                }
             }
-            if handled == before {
+            if handled == before || started.elapsed() >= POLL_BUDGET {
                 break;
             }
         }
         if handled > 0 {
             self.sync_preview();
+            self.drain_trash();
+            self.sync_session();
         }
         handled
     }
@@ -718,6 +1223,323 @@ impl App {
         self.pins.sync(&pinned);
     }
 
+    /// Writes the trash record when an action changed it, and shows it in
+    /// the model where the platform cannot list its trash.
+    fn drain_trash(&mut self) {
+        if !self.trash.take_dirty() {
+            return;
+        }
+        let items = self.trash.items();
+        if !self.model.trash.listed {
+            self.model.trash.set(items.clone(), false);
+        }
+        let _ = self.trash_saver.send(items);
+    }
+
+    /// Lists the trash again, off the loop's thread.
+    fn refresh_trash(&mut self) {
+        let platform = Arc::clone(&self.platform);
+        let tx = self.mailbox.clone();
+        runtime::handle().spawn(async move {
+            let result = runtime::handle()
+                .spawn_blocking(move || platform.list())
+                .await
+                .unwrap_or_else(|join| Err(Error::Io(std::io::Error::other(join))));
+            tx.send(Msg::Trash(result));
+        });
+    }
+
+    /// Enumerates the mounted volumes once, off the loop's thread.
+    fn enumerate_volumes(&self) {
+        let platform = Arc::clone(&self.platform);
+        let tx = self.mailbox.clone();
+        runtime::handle().spawn(async move {
+            let result = runtime::handle()
+                .spawn_blocking(move || platform.volumes())
+                .await
+                .unwrap_or_else(|join| Err(Error::Io(std::io::Error::other(join))));
+            tx.send(Msg::Volumes(result));
+        });
+    }
+
+    /// Enumerates the volumes now and every [`VOLUMES_EVERY`], so media
+    /// that come and go show up without a user action.
+    fn poll_volumes(&self) {
+        let platform = Arc::clone(&self.platform);
+        let tx = self.mailbox.clone();
+        let cancel = self.volumes_watch.clone();
+        runtime::handle().spawn(async move {
+            loop {
+                let platform = Arc::clone(&platform);
+                let result = runtime::handle()
+                    .spawn_blocking(move || platform.volumes())
+                    .await
+                    .unwrap_or_else(|join| Err(Error::Io(std::io::Error::other(join))));
+                if !tx.send(Msg::Volumes(result)) {
+                    break;
+                }
+                tokio::select! {
+                    () = cancel.cancelled() => break,
+                    () = tokio::time::sleep(VOLUMES_EVERY) => {}
+                }
+            }
+        });
+    }
+
+    /// Reads the persisted Recent list off the loop's thread.
+    fn load_recent(&self, path: &Path) {
+        let path = path.to_path_buf();
+        let tx = self.mailbox.clone();
+        runtime::handle().spawn(async move {
+            let loaded = runtime::handle()
+                .spawn_blocking(move || recent::load(&path))
+                .await
+                .unwrap_or_else(|join| Err(Error::Io(std::io::Error::other(join))));
+            match loaded {
+                Ok(entries) => {
+                    tx.send(Msg::RecentLoaded(entries));
+                }
+                Err(error) => warn!(%error, "recent list not read"),
+            }
+        });
+    }
+
+    /// The Recent roots: the home directory and the pinned local folders.
+    fn recent_roots(&self) -> Vec<Location> {
+        let home = Location::new(
+            vfs_local::PROVIDER_ID,
+            platform::paths::from_path(&self.platform.home_dir()),
+        );
+        let mut roots = vec![home];
+        for pinned in &self.model.settings.pinned {
+            if pinned.provider != vfs_local::PROVIDER_ID || roots.contains(pinned) {
+                continue;
+            }
+            let is_dir = platform::paths::to_path(&pinned.path)
+                .is_ok_and(|p| std::fs::metadata(p).is_ok_and(|m| m.is_dir()));
+            if is_dir {
+                roots.push(pinned.clone());
+            }
+        }
+        roots
+    }
+
+    /// Watches every Recent root that is not watched yet, scanning it once,
+    /// and stops watching roots that are gone.
+    fn sync_recent_roots(&mut self) {
+        let wanted = self.recent_roots();
+        self.recent.roots.retain(|(root, cancel)| {
+            let keep = wanted.contains(root);
+            if !keep {
+                cancel.cancel();
+            }
+            keep
+        });
+        for root in wanted {
+            if self.recent.roots.iter().any(|(r, _)| *r == root) {
+                continue;
+            }
+            let Ok(provider) = self.mounts.resolve(&root) else {
+                continue;
+            };
+            let cancel = CancelToken::new();
+            self.recent.roots.push((root.clone(), cancel.clone()));
+            let tx = self.mailbox.clone();
+            match provider.watch(&root) {
+                Ok(mut changes) => {
+                    let tx = tx.clone();
+                    let cancel = cancel.clone();
+                    runtime::handle().spawn(async move {
+                        loop {
+                            tokio::select! {
+                                () = cancel.cancelled() => break,
+                                next = changes.next() => match next {
+                                    Some(change) => {
+                                        if !tx.send(Msg::RecentChange(change)) {
+                                            break;
+                                        }
+                                    }
+                                    None => break,
+                                },
+                            }
+                        }
+                    });
+                }
+                Err(error) => debug!(%root, %error, "recent root not watched"),
+            }
+            let handle = self
+                .jobs
+                .spawn_named(format!("Scan {root}"), move |job| async move {
+                    let found = recent::scan(&*provider, &root, job.cancel.clone()).await;
+                    tx.send(Msg::RecentScanned(found));
+                    Ok(())
+                });
+            self.internal.insert(handle.id);
+            // The root's token ends the scan with the watch.
+            let scan = handle.cancel;
+            runtime::handle().spawn(async move {
+                cancel.cancelled().await;
+                scan.cancel();
+            });
+        }
+    }
+
+    /// Feeds a change from any watch into the Recent list and saves it.
+    fn recent_apply(&mut self, change: &FsChange) {
+        let changed = match change {
+            FsChange::Created(entry) | FsChange::Modified(entry) => {
+                if entry.attrs.contains(types::Attrs::HIDDEN) {
+                    false
+                } else {
+                    self.model.recent.touched(entry.clone())
+                }
+            }
+            FsChange::Removed(id) => self.model.recent.removed(*id),
+            FsChange::Renamed { from, to } => {
+                let removed = self.model.recent.removed(*from);
+                let touched = !to.attrs.contains(types::Attrs::HIDDEN)
+                    && self.model.recent.touched(to.clone());
+                removed || touched
+            }
+            FsChange::Rescan => false,
+        };
+        if changed {
+            self.save_recent();
+        }
+    }
+
+    fn save_recent(&self) {
+        if let Some(saver) = &self.recent.saver {
+            let _ = saver.send(self.model.recent.entries().to_vec());
+        }
+    }
+
+    /// Points the side panel's tree at the focused pane's location when it
+    /// moved, listing the folders down to it that are not listed yet.
+    fn follow_folder_tree(&mut self) {
+        let Some(window) = self.model.window(self.model.focused_window) else {
+            return;
+        };
+        let side = &window.side_panel;
+        if !side.visible || side.folded.contains(&Section::Tree) {
+            return;
+        }
+        let Some((_, tab)) = self.model.active_tab(self.model.focused) else {
+            return;
+        };
+        let location = tab.location.clone();
+        if self.followed.as_ref() == Some(&location) {
+            return;
+        }
+        self.followed = Some(location.clone());
+        let root = top_of(&location.path);
+        for needed in self.model.folder_tree_follow(&location, root) {
+            self.list_folders(needed);
+        }
+    }
+
+    /// Lists the folders directly under `location` for the side panel's
+    /// tree, as an internal job.
+    fn list_folders(&mut self, location: Location) {
+        let Some(root) = self.model.folder_tree.root.clone() else {
+            return;
+        };
+        let Ok(provider) = self.mounts.resolve(&location) else {
+            return;
+        };
+        let tx = self.mailbox.clone();
+        let handle = self
+            .jobs
+            .spawn_named(format!("Tree {location}"), move |job| async move {
+                let opts = ListOptions {
+                    hidden: false,
+                    system: false,
+                    depth: Depth::One,
+                };
+                let mut stream = provider.list(&location, opts, job.cancel.clone());
+                let mut folders = Vec::new();
+                while let Some(batch) = stream.next().await {
+                    match batch {
+                        Ok(batch) => folders.extend(
+                            batch
+                                .into_iter()
+                                .filter(|e| e.kind == types::EntryKind::Dir),
+                        ),
+                        Err(error) => {
+                            debug!(%location, %error, "tree folder not listed");
+                            break;
+                        }
+                    }
+                }
+                tx.send(Msg::FolderTree {
+                    root,
+                    path: location.path,
+                    folders,
+                });
+                Ok(())
+            });
+        self.internal.insert(handle.id);
+    }
+
+    /// Lists the children of an expanded folder of a pane in Tree view,
+    /// streaming them in, or collecting them to swap in at once when
+    /// `reconcile`.
+    fn list_child(&mut self, pane: PaneId, folder: EntryId, location: Location, reconcile: bool) {
+        let Some(live) = self.live.get_mut(&pane) else {
+            return;
+        };
+        if let Some(old) = live.children.remove(&folder) {
+            old.cancel.cancel();
+        }
+        let generation = live.generation;
+        let opts = live.key.opts;
+        let Ok(provider) = self.mounts.resolve(&location) else {
+            return;
+        };
+        let tx = self.mailbox.clone();
+        let handle = self
+            .jobs
+            .spawn_named(format!("List {location}"), move |job| async move {
+                let opts = ListOptions {
+                    depth: Depth::One,
+                    ..opts
+                };
+                let result = async {
+                    let mut stream = provider.list(&location, opts, job.cancel.clone());
+                    while let Some(batch) = stream.next().await {
+                        let batch = batch?;
+                        if !tx.send(Msg::TreeBatch {
+                            pane,
+                            generation,
+                            folder,
+                            batch,
+                        }) {
+                            break;
+                        }
+                    }
+                    Ok(())
+                }
+                .await;
+                tx.send(Msg::TreeDone {
+                    pane,
+                    generation,
+                    folder,
+                    result: result.as_ref().copied().map_err(Error::replicate),
+                });
+                result
+            });
+        self.internal.insert(handle.id);
+        if let Some(live) = self.live.get_mut(&pane) {
+            live.children.insert(
+                folder,
+                Child {
+                    cancel: handle.cancel,
+                    buffer: reconcile.then(Vec::new),
+                },
+            );
+        }
+    }
+
     /// Runs a freshly built undoable command and puts it on the undo log.
     fn apply_undoable(&mut self, command: Box<dyn UndoCommand>, events: &mut Vec<Event>) {
         match command.redo(&self.jobs) {
@@ -766,7 +1588,14 @@ impl App {
                 return;
             }
         };
-        match ops::transfer(&self.jobs, Arc::clone(&self.mounts), &sources, to, kind) {
+        match ops::transfer(
+            &self.jobs,
+            Arc::clone(&self.mounts),
+            Arc::clone(&self.conflicts),
+            &sources,
+            to,
+            kind,
+        ) {
             Ok(ActionOutcome::Undoable(command)) => {
                 self.undo.push(command);
                 self.redo.clear();
@@ -798,9 +1627,13 @@ impl App {
     /// writes land in order.
     fn change_settings(&mut self, change: model::SettingsChange) {
         let mut settings = self.model.settings.clone();
+        let pinned_before = settings.pinned.clone();
         settings.apply(change);
         self.pins.sync(&settings.pinned);
         self.model.apply_settings(settings.clone());
+        if settings.pinned != pinned_before {
+            self.sync_recent_roots();
+        }
         self.recent_saves.push_back(settings.clone());
         while self.recent_saves.len() > RECENT_SAVES {
             self.recent_saves.pop_front();
@@ -880,6 +1713,7 @@ impl App {
             }),
         }
         self.drain_pins();
+        self.drain_trash();
         self.attribute(pane, events);
     }
 
@@ -910,12 +1744,13 @@ impl App {
                     Depth::One
                 },
             },
+            search: state.is_searching().then(|| state.filter.clone()),
         })
     }
 
     /// Brings every pane's listing in line with what its active tab shows.
     fn sync_panes(&mut self, events: &mut Vec<Event>) {
-        let panes = self.model.dock.panes();
+        let panes = self.model.all_panes();
         let gone: Vec<PaneId> = self
             .live
             .keys()
@@ -950,6 +1785,7 @@ impl App {
                 }
             }
         }
+        self.follow_folder_tree();
     }
 
     /// Lists the pane's location again, swapping the result in when it is
@@ -973,11 +1809,17 @@ impl App {
     /// Cancels the pane's listing and watch and starts new ones. With
     /// `reconcile` the batches are collected and replace the listing in one
     /// step when done; otherwise the listing is cleared and streams in.
+    #[allow(clippy::too_many_lines)]
     fn relist(&mut self, pane: PaneId, key: ListKey, reconcile: bool) {
         let generation = self.live.get(&pane).map_or(0, |l| l.generation) + 1;
         if let Some(old) = self.live.remove(&pane) {
             old.cancel.cancel();
+            for child in old.children.values() {
+                child.cancel.cancel();
+            }
         }
+        // Search results never reconcile: the walk streams in afresh.
+        let reconcile = reconcile && key.search.is_none();
         if !reconcile {
             self.model.clear_listing(pane);
         }
@@ -991,6 +1833,10 @@ impl App {
                 return;
             }
         };
+        if let Some(text) = key.search.clone() {
+            self.search(pane, key, generation, &text);
+            return;
+        }
         let tx = self.mailbox.clone();
         let location = key.location.clone();
         let opts = key.opts;
@@ -1074,6 +1920,65 @@ impl App {
                 buffer: reconcile.then(Vec::new),
                 decorators,
                 redecorate_scheduled: false,
+                children: BTreeMap::new(),
+            },
+        );
+    }
+
+    /// Starts the subtree search of `key` as a job the operations area
+    /// shows; the matches stream into the pane's listing like a listing's
+    /// batches, and a change of text or location cancels it.
+    fn search(&mut self, pane: PaneId, key: ListKey, generation: u64, text: &str) {
+        let tx = self.mailbox.clone();
+        let location = key.location.clone();
+        let opts = vfs_local::search::SearchOptions {
+            text: text.to_owned(),
+            hidden: key.opts.hidden,
+            ignore: self.model.settings.search.ignore.clone(),
+        };
+        let handle = self.jobs.spawn_named(
+            format!("Search {text} in {location}"),
+            move |job| async move {
+                let mut stream = vfs_local::search::search(&location, opts, job.cancel.clone());
+                let mut count = 0u64;
+                let result = async {
+                    while let Some(batch) = stream.next().await {
+                        let batch = batch?;
+                        count += batch.len() as u64;
+                        job.progress.report(Progress::Items {
+                            done: count,
+                            total: None,
+                        });
+                        if !tx.send(Msg::Batch {
+                            pane,
+                            generation,
+                            batch,
+                        }) {
+                            break;
+                        }
+                    }
+                    Ok(())
+                }
+                .await;
+                tx.send(Msg::ListDone {
+                    pane,
+                    generation,
+                    result: result.as_ref().copied().map_err(Error::replicate),
+                });
+                result
+            },
+        );
+        self.live.insert(
+            pane,
+            Live {
+                key,
+                generation,
+                cancel: handle.cancel,
+                complete: false,
+                buffer: None,
+                decorators: Vec::new(),
+                redecorate_scheduled: false,
+                children: BTreeMap::new(),
             },
         );
     }
@@ -1206,6 +2111,8 @@ impl App {
         self.decorate(pane, &entries, events);
     }
 
+    // One arm per message: the enum is the table.
+    #[allow(clippy::too_many_lines)]
     fn on_msg(&mut self, msg: Msg, events: &mut Vec<Event>) {
         match msg {
             Msg::Batch {
@@ -1293,6 +2200,106 @@ impl App {
             Msg::Thumbnail { id, size, frame } => {
                 self.thumbnails.remove(&(id, size));
                 events.push(Event::Thumbnail { id, size, frame });
+            }
+            Msg::TreeBatch {
+                pane,
+                generation,
+                folder,
+                batch,
+            } => {
+                let Some(live) = self.live.get_mut(&pane) else {
+                    return;
+                };
+                if live.generation != generation {
+                    return;
+                }
+                if let Some(child) = live.children.get_mut(&folder)
+                    && let Some(buffer) = &mut child.buffer
+                {
+                    buffer.extend(batch);
+                    return;
+                }
+                self.model.tree_batch(pane, folder, batch.clone());
+                self.decorate(pane, &batch, events);
+                events.push(Event::Listed {
+                    pane,
+                    batch,
+                    done: false,
+                });
+            }
+            Msg::TreeDone {
+                pane,
+                generation,
+                folder,
+                result,
+            } => {
+                let Some(live) = self.live.get_mut(&pane) else {
+                    return;
+                };
+                if live.generation != generation {
+                    return;
+                }
+                let child = live.children.remove(&folder);
+                match (child.and_then(|c| c.buffer), result) {
+                    (Some(entries), Ok(())) => {
+                        self.model.tree_replace(pane, folder, entries.clone());
+                        self.decorate(pane, &entries, events);
+                    }
+                    (_, Err(error)) => {
+                        events.push(Event::Notify {
+                            level: Level::Warning,
+                            text: format!("Listing folder: {error}"),
+                        });
+                        self.model.tree_done(pane, folder);
+                    }
+                    (None, Ok(())) => {
+                        self.model.tree_done(pane, folder);
+                    }
+                }
+                events.push(Event::Listed {
+                    pane,
+                    batch: Vec::new(),
+                    done: true,
+                });
+            }
+            Msg::Conflicts => {
+                for conflict in self.conflicts.take_new() {
+                    self.model.conflict_opened(conflict.clone());
+                    events.push(Event::Conflict(conflict));
+                }
+            }
+            Msg::RecentLoaded(entries) | Msg::RecentScanned(entries) => {
+                self.model.recent.merge(entries);
+                self.save_recent();
+            }
+            Msg::RecentChange(change) => self.recent_apply(&change),
+            Msg::Volumes(Ok(volumes)) => {
+                if volumes != self.model.volumes {
+                    debug!(count = volumes.len(), "volumes");
+                    self.model.volumes = volumes;
+                }
+            }
+            Msg::Volumes(Err(error)) => debug!(%error, "volumes not enumerated"),
+            Msg::Trash(Ok(items)) => {
+                self.trash.prune();
+                self.model.trash.set(items, true);
+            }
+            Msg::Trash(Err(Error::Unsupported(_))) => {
+                self.model.trash.set(self.trash.items(), false);
+            }
+            Msg::Trash(Err(error)) => {
+                warn!(%error, "trash not listed");
+                self.model.trash.set(self.trash.items(), false);
+                self.model.trash.error = Some(error.to_string());
+            }
+            Msg::FolderTree {
+                root,
+                path,
+                folders,
+            } => {
+                if self.model.folder_tree.root.as_ref() == Some(&root) {
+                    self.model.folder_tree_listed(path, folders);
+                }
             }
             Msg::Invalidate { pane, generation } => {
                 if self
@@ -1474,6 +2481,22 @@ impl App {
                 Vec::new()
             }
         };
+        // Tree view: the expanded folders list their children again, swapped
+        // in at once where they were listed before.
+        let expanded = self.model.tree_expanded(pane);
+        for (folder, location) in expanded {
+            let listed = self
+                .model
+                .active_tab(pane)
+                .is_some_and(|(_, tab)| !tab.tree.is_loading(folder));
+            let running = self
+                .live
+                .get(&pane)
+                .is_some_and(|l| l.children.contains_key(&folder));
+            if !running {
+                self.list_child(pane, folder, location, listed);
+            }
+        }
         events.push(Event::Listed {
             pane,
             batch,
@@ -1488,11 +2511,15 @@ impl App {
         if live.generation != generation {
             return;
         }
+        let local = live.key.location.provider == vfs_local::PROVIDER_ID;
         let before = self.selected_ids(pane);
         if self.model.apply_change(pane, change.clone()) {
             let after = self.selected_ids(pane);
             if before != after {
                 events.push(Event::SelectionChanged { pane, ids: after });
+            }
+            if local {
+                self.recent_apply(&change);
             }
             events.push(Event::Changed { pane, change });
             self.schedule_redecorate(pane);
@@ -1511,9 +2538,9 @@ impl App {
 
     fn on_job_event(&mut self, event: JobEvent, events: &mut Vec<Event>) {
         match event {
-            JobEvent::Started { id, name } => {
+            JobEvent::Started { id, name, pausable } => {
                 if !self.internal.contains(&id) {
-                    self.model.job_started(id, name);
+                    self.model.job_started(id, name, pausable);
                 }
             }
             JobEvent::Progress { id, progress } => {
@@ -1549,6 +2576,9 @@ impl App {
                 events.push(Event::JobDone { id, result });
                 if let Some(pane) = self.pane_jobs.remove(&id) {
                     self.refresh(pane);
+                    // An operation may have trashed, restored or emptied.
+                    self.refresh_trash();
+                    self.drain_trash();
                 }
             }
         }
@@ -1608,6 +2638,97 @@ impl App {
     }
 }
 
+/// A writer that saves every snapshot sent to it, in order, off the
+/// caller's thread; only the latest of a burst is written.
+fn saver<T, F>(write: F) -> mpsc::UnboundedSender<T>
+where
+    T: Send + 'static,
+    F: Fn(&T) -> Result<(), Error> + Send + Sync + 'static,
+{
+    let (tx, mut rx) = mpsc::unbounded_channel::<T>();
+    let write = Arc::new(write);
+    runtime::handle().spawn(async move {
+        while let Some(mut value) = rx.recv().await {
+            while let Ok(newer) = rx.try_recv() {
+                value = newer;
+            }
+            let write = Arc::clone(&write);
+            let written = runtime::handle()
+                .spawn_blocking(move || write(&value))
+                .await;
+            match written {
+                Ok(Ok(())) => {}
+                Ok(Err(error)) => warn!(%error, "not saved"),
+                Err(error) => warn!(%error, "writer stopped"),
+            }
+        }
+    });
+    tx
+}
+
+/// The top of the volume or provider `path` sits on: `/`, `C:\`, or the
+/// path itself when it has no parent.
+#[must_use]
+pub fn top_of(path: &VPath) -> VPath {
+    let mut current = path.clone();
+    while let Some(parent) = current.parent() {
+        current = parent;
+    }
+    current
+}
+
+/// Puts every tab of a restored session somewhere that exists: a location
+/// whose provider is not mounted opens at Home, a local folder that is gone
+/// opens at its nearest existing ancestor, each with a note for the status
+/// line. Locations on other providers are taken as they are.
+fn repair(mounts: &Mounts, home: &Location, session: &mut Session) {
+    for tab in session
+        .windows
+        .iter_mut()
+        .flat_map(|w| w.panes.iter_mut())
+        .flat_map(|p| p.tabs.iter_mut())
+    {
+        if mounts.provider(tab.location.provider).is_none() {
+            tab.note = Some(format!(
+                "{} is not available; opened Home instead of {}",
+                tab.location.provider, tab.location.path
+            ));
+            tab.location = home.clone();
+            continue;
+        }
+        if tab.location.provider != vfs_local::PROVIDER_ID {
+            continue;
+        }
+        let Ok(path) = platform::paths::to_path(&tab.location.path) else {
+            continue;
+        };
+        if path.is_dir() {
+            continue;
+        }
+        let mut ancestor = path.parent();
+        while let Some(dir) = ancestor {
+            if dir.is_dir() {
+                tab.note = Some(format!(
+                    "{} no longer exists; opened {}",
+                    tab.location.path,
+                    dir.display()
+                ));
+                tab.location =
+                    Location::new(vfs_local::PROVIDER_ID, platform::paths::from_path(dir));
+                break;
+            }
+            ancestor = dir.parent();
+        }
+        if ancestor.is_none() {
+            tab.note = Some(format!(
+                "{} no longer exists; opened Home",
+                tab.location.path
+            ));
+            tab.location = home.clone();
+        }
+    }
+}
+
 /// Whether moving or copying `source` into `to` would change nothing: the
 /// item is in `to` already, or `to` is the item itself or lies under it.
 #[must_use]
@@ -1621,8 +2742,15 @@ pub fn transfer_is_noop(source: &Location, to: &Location) -> bool {
 impl Drop for App {
     fn drop(&mut self) {
         self.settings_watch.cancel();
+        self.volumes_watch.cancel();
+        for (_, cancel) in &self.recent.roots {
+            cancel.cancel();
+        }
         for live in self.live.values() {
             live.cancel.cancel();
+            for child in live.children.values() {
+                child.cancel.cancel();
+            }
         }
     }
 }
@@ -1630,7 +2758,7 @@ impl Drop for App {
 impl std::fmt::Debug for App {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("App")
-            .field("panes", &self.model.dock.panes())
+            .field("panes", &self.model.all_panes())
             .field("live", &self.live.keys().collect::<Vec<_>>())
             .field("undo", &self.undo.len())
             .field("redo", &self.redo.len())

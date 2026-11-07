@@ -125,7 +125,7 @@ impl Driver {
             ui: ui.clone(),
             extensions: vec![Arc::new(GitExtension::new())],
             config_dir: Some(fake.config_dir()),
-            start: local(start),
+            start: Some(local(start)),
         });
         let pane = app.model().focused;
         let mut driver = Self {
@@ -441,7 +441,7 @@ fn harness(start: &Path) -> Harness<'static, RickUi> {
         ui: host.clone(),
         extensions: vec![Arc::new(GitExtension::new())],
         config_dir: Some(fake.config_dir()),
-        start: local(start),
+        start: Some(local(start)),
     });
     let mut harness = Harness::builder()
         .with_size(egui::vec2(1100.0, 720.0))

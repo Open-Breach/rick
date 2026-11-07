@@ -82,6 +82,16 @@ jobs:
       # Release: startup to the first frame.
       - run: cargo test -p tests --release --test startup -- --ignored --nocapture
         env: { TMP: "${{ runner.temp }}", TEMP: "${{ runner.temp }}", TMPDIR: "${{ runner.temp }}" }
+      # Close-out A: the tree view's first screen on the 200k fixture, the
+      # first search batch, Recent's first row, and the 1 GiB sparse copy's
+      # row with pause and cancel.
+      - run: cargo test -p tests --release --test closeout -- --ignored --nocapture --test-threads=1
+        env: { TMP: "${{ runner.temp }}", TEMP: "${{ runner.temp }}", TMPDIR: "${{ runner.temp }}" }
+      # Close-out A and B, the two timed tests that are not #[ignore]d:
+      # Recent's first row, and a three-window, twenty-tab session starting
+      # about as fast as a one-tab one; in release so the targets apply.
+      - run: cargo test -p tests --release --test closeout --test session -- --nocapture --test-threads=1 recent_shows_a_touched_file a_big_session_starts
+        env: { TMP: "${{ runner.temp }}", TEMP: "${{ runner.temp }}", TMPDIR: "${{ runner.temp }}" }
       # Screenshots of the chrome for the pull request, through wgpu on the
       # runner's software adapter: lavapipe on Linux, Metal on macOS. Not on
       # Windows: the dx12 software adapter (WARP) on the runner crashed the

@@ -4,9 +4,12 @@ use std::fmt;
 
 use ext::{ActionCtx, ActionId, Decoration, FsChange, Level, PreviewDoc};
 use model::{
-    Column, DockTarget, PaneId, SelectionChange, SettingsChange, SortDir, SplitDir, TabId, ViewMode,
+    Column, Dock, DockTarget, Geometry, PaneId, SelectionChange, SettingsChange, SidePanelChange,
+    SortDir, SplitDir, TabId, ViewMode, WindowId,
 };
-use types::{Entry, EntryId, Error, JobId, Location, Progress};
+use types::{
+    Conflict, ConflictAnswer, ConflictId, Entry, EntryId, Error, JobId, Location, Progress, VPath,
+};
 
 /// Whether a transfer moves or copies, or asks on drop.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -84,6 +87,34 @@ pub enum Command {
         /// On or off.
         on: bool,
     },
+    /// Search in subdirectories: the pane's filter text matches the whole
+    /// subtree, the matches streaming in from a cancellable walk, or only
+    /// the location's own entries.
+    Subtree {
+        /// The pane.
+        pane: PaneId,
+        /// On or off.
+        on: bool,
+    },
+    /// Tree view: expand a folder of the pane's active tab in place; its
+    /// children are listed lazily on the first expand.
+    TreeExpand {
+        /// The pane.
+        pane: PaneId,
+        /// The folder.
+        id: EntryId,
+    },
+    /// Tree view: collapse an expanded folder.
+    TreeCollapse {
+        /// The pane.
+        pane: PaneId,
+        /// The folder.
+        id: EntryId,
+    },
+    /// Open or close a folder of the side panel's tree.
+    FolderTreeToggle(VPath),
+    /// Link or unlink the side panel's tree from the focused pane.
+    FolderTreeLink(bool),
     /// Run an action on a context, usually from
     /// [`App::action_ctx`](crate::App::action_ctx).
     Run {
@@ -116,8 +147,23 @@ pub enum Command {
     },
     /// Cancel a running job.
     CancelJob(JobId),
+    /// Pause a running job that supports it.
+    PauseJob(JobId),
+    /// Resume a paused job.
+    ResumeJob(JobId),
     /// Forget a finished job.
     DismissJob(JobId),
+    /// Answer the conflict dialogue of a waiting job.
+    ResolveConflict {
+        /// The conflict.
+        id: ConflictId,
+        /// Skip, overwrite, rename, cancel; for this item or all remaining.
+        answer: ConflictAnswer,
+    },
+    /// List the trash again.
+    RefreshTrash,
+    /// Enumerate the mounted volumes again.
+    RefreshVolumes,
     /// Revert the last reversible operation.
     Undo,
     /// Apply the last undone operation again.
@@ -181,6 +227,64 @@ pub enum Command {
     },
     /// Unpin from the side panel, undoable.
     Unpin(Location),
+    /// The strip order of a pane's tabs, as the dock shows them; display
+    /// state the session keeps.
+    TabOrder {
+        /// The pane.
+        pane: PaneId,
+        /// Its tabs, left to right.
+        order: Vec<TabId>,
+    },
+    /// A window's split fractions, as the dock shows them: `dock` has the
+    /// window's panes in the window's splits.
+    Layout {
+        /// The window.
+        window: WindowId,
+        /// The tree with its fractions.
+        dock: Dock,
+    },
+    /// A tab's list scroll offset, as the UI shows it.
+    Scroll {
+        /// The tab.
+        tab: TabId,
+        /// The vertical offset in logical points.
+        offset: f32,
+    },
+    /// Where a window is on the screen.
+    WindowGeometry {
+        /// The window.
+        window: WindowId,
+        /// Its position, size and maximised state.
+        geometry: Geometry,
+    },
+    /// Change a window's side panel.
+    SidePanel {
+        /// The window.
+        window: WindowId,
+        /// The change.
+        change: SidePanelChange,
+    },
+    /// Give a window the focus, as the system did.
+    FocusWindow(WindowId),
+    /// Open a window with the start layout.
+    NewWindow,
+    /// Close a window; closing the last one asks the application to exit
+    /// ([`App::exit_requested`](crate::App::exit_requested)).
+    CloseWindow(WindowId),
+    /// Store the current session as the layout of this name.
+    SaveLayout(String),
+    /// Replace every window and tab with a saved layout, or with the last
+    /// session for `None` ("Continue where I left off").
+    SwitchLayout(Option<String>),
+    /// Delete a saved layout.
+    DeleteLayout(String),
+    /// Rename a saved layout.
+    RenameLayout {
+        /// The current name.
+        from: String,
+        /// The new name.
+        to: String,
+    },
 }
 
 /// What the application tells the UI happened. The model already reflects
@@ -255,6 +359,9 @@ pub enum Event {
         /// The pixels, when there are any.
         frame: Option<ext::Frame>,
     },
+    /// A job met an existing name and waits for the conflict dialogue's
+    /// answer; the conflict is in the model until it is resolved.
+    Conflict(Conflict),
     /// Something to show the user.
     Notify {
         /// How serious.
@@ -313,6 +420,7 @@ impl fmt::Debug for Event {
                 .field("pane", pane)
                 .field("error", error)
                 .finish(),
+            Self::Conflict(conflict) => f.debug_tuple("Conflict").field(&conflict.id).finish(),
             Self::Notify { level, text } => f
                 .debug_struct("Notify")
                 .field("level", level)

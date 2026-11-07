@@ -162,8 +162,7 @@ fn view_modes() -> [(&'static str, ViewMode, bool); 7] {
     [
         ("List", ViewMode::List, true),
         ("Details", ViewMode::Details, true),
-        // The tree view is not implemented yet.
-        ("Tree", ViewMode::Tree, false),
+        ("Tree", ViewMode::Tree, true),
         ("Icons, small", ViewMode::Icons(IconSize::Small), true),
         ("Icons, medium", ViewMode::Icons(IconSize::Medium), true),
         ("Icons, large", ViewMode::Icons(IconSize::Large), true),
@@ -423,9 +422,28 @@ fn foot(ui: &mut egui::Ui, cx: &mut PaneCx<'_>) {
                     text: String::new(),
                 }));
             }
+            // Search in subdirectories: the filter text matches the subtree.
+            let subtree = ui
+                .add(
+                    egui::Button::new(icons::SUBTREE)
+                        .small()
+                        .selected(cx.tab.subtree),
+                )
+                .on_hover_text(if cx.tab.subtree {
+                    "Searching in subdirectories; click to filter this folder only"
+                } else {
+                    "Search in subdirectories"
+                });
+            if subtree.clicked() {
+                intent(cx, Intent::ToggleSubtree);
+            }
             let mut text = cx.tab.filter.clone();
             let output = egui::TextEdit::singleline(&mut text)
-                .hint_text("Filter")
+                .hint_text(if cx.tab.subtree {
+                    "Search in subdirectories"
+                } else {
+                    "Filter"
+                })
                 .desired_width(180.0)
                 .show(ui);
             if cx.tab_ui.focus_filter {
@@ -463,6 +481,8 @@ fn status_line(cx: &PaneCx<'_>) -> String {
             "{folders} folders, {files} files, {}",
             format::size(Some(bytes))
         )
+    } else if cx.tab.is_searching() {
+        format!("{} matches in subdirectories", listing.row_count())
     } else {
         format!("{} of {} entries", listing.row_count(), listing.len())
     };
@@ -479,6 +499,9 @@ fn status_line(cx: &PaneCx<'_>) -> String {
     }
     if !listing.complete {
         text.push_str(" · listing…");
+    }
+    if let Some(note) = &cx.tab.note {
+        let _ = write!(text, " · {note}");
     }
     text
 }

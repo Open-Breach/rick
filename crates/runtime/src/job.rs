@@ -21,6 +21,8 @@ pub enum JobEvent {
         id: JobId,
         /// Its name, empty for jobs spawned with [`JobRunner::spawn`].
         name: String,
+        /// Whether the job honours [`JobRunner::pause`].
+        pausable: bool,
     },
     /// A job published progress.
     Progress {
@@ -91,6 +93,40 @@ pub struct JobCtx {
     pub cancel: CancelToken,
     /// Progress output.
     pub progress: ProgressSink,
+    /// Where a pausable job waits between steps while it is paused.
+    pub pause: PauseGate,
+}
+
+/// The pause switch of a job, as the job sees it. A job that supports
+/// pausing awaits [`wait`](Self::wait) between its steps (files, chunks);
+/// one that does not never looks and runs through.
+#[derive(Debug, Clone)]
+pub struct PauseGate(watch::Receiver<bool>);
+
+impl PauseGate {
+    /// A gate that is never paused, for jobs run outside a runner.
+    #[must_use]
+    pub fn open() -> Self {
+        let (_tx, rx) = watch::channel(false);
+        Self(rx)
+    }
+
+    /// Whether the job is paused right now.
+    #[must_use]
+    pub fn is_paused(&self) -> bool {
+        *self.0.borrow()
+    }
+
+    /// Returns at once while the job runs, and once it is resumed while it
+    /// is paused. A runner that is gone counts as resumed.
+    pub async fn wait(&self) {
+        let mut rx = self.0.clone();
+        while *rx.borrow_and_update() {
+            if rx.changed().await.is_err() {
+                return;
+            }
+        }
+    }
 }
 
 /// Spawns jobs on the process-wide runtime and keeps track of the running
@@ -100,15 +136,21 @@ pub struct JobRunner {
     inner: Arc<Inner>,
 }
 
+/// A running job's controls.
+struct Running {
+    cancel: CancelToken,
+    pause: Option<watch::Sender<bool>>,
+}
+
 #[derive(Default)]
 struct Inner {
     next_id: AtomicU64,
-    running: Mutex<BTreeMap<JobId, CancelToken>>,
+    running: Mutex<BTreeMap<JobId, Running>>,
     events: Option<mpsc::UnboundedSender<JobEvent>>,
 }
 
 impl Inner {
-    fn running(&self) -> MutexGuard<'_, BTreeMap<JobId, CancelToken>> {
+    fn running(&self) -> MutexGuard<'_, BTreeMap<JobId, Running>> {
         // The map holds plain tokens; a panic elsewhere cannot corrupt it.
         self.running.lock().unwrap_or_else(PoisonError::into_inner)
     }
@@ -179,6 +221,27 @@ impl JobRunner {
         F: FnOnce(JobCtx) -> Fut,
         Fut: Future<Output = Result<T, Error>> + Send + 'static,
     {
+        self.spawn_with(name, false, job)
+    }
+
+    /// [`spawn_named`](Self::spawn_named) for a job that awaits its
+    /// [`PauseGate`] between steps, so [`pause`](Self::pause) and
+    /// [`resume`](Self::resume) work on it.
+    pub fn spawn_pausable<T, F, Fut>(&self, name: impl Into<String>, job: F) -> JobHandle<T>
+    where
+        T: Send + 'static,
+        F: FnOnce(JobCtx) -> Fut,
+        Fut: Future<Output = Result<T, Error>> + Send + 'static,
+    {
+        self.spawn_with(name, true, job)
+    }
+
+    fn spawn_with<T, F, Fut>(&self, name: impl Into<String>, pausable: bool, job: F) -> JobHandle<T>
+    where
+        T: Send + 'static,
+        F: FnOnce(JobCtx) -> Fut,
+        Fut: Future<Output = Result<T, Error>> + Send + 'static,
+    {
         let id = JobId(self.inner.next_id.fetch_add(1, Ordering::Relaxed) + 1);
         let cancel = CancelToken::new();
         let (progress_tx, progress_rx) = watch::channel(Progress::Items {
@@ -186,11 +249,19 @@ impl JobRunner {
             total: None,
         });
         let (result_tx, result_rx) = oneshot::channel();
+        let (pause_tx, pause_rx) = watch::channel(false);
 
-        self.inner.running().insert(id, cancel.clone());
+        self.inner.running().insert(
+            id,
+            Running {
+                cancel: cancel.clone(),
+                pause: pausable.then_some(pause_tx),
+            },
+        );
         self.inner.publish(JobEvent::Started {
             id,
             name: name.into(),
+            pausable,
         });
         let deregister = Deregister {
             inner: Arc::clone(&self.inner),
@@ -201,6 +272,7 @@ impl JobRunner {
             id,
             cancel: cancel.clone(),
             progress: ProgressSink(progress_tx),
+            pause: PauseGate(pause_rx),
         });
         let cancelled = cancel.cancelled();
         let span = tracing::debug_span!("job", %id);
@@ -284,7 +356,7 @@ impl JobRunner {
     // Cancelling is the point of the call; the flag is advisory.
     #[allow(clippy::must_use_candidate)]
     pub fn cancel(&self, id: JobId) -> bool {
-        let token = self.inner.running().get(&id).cloned();
+        let token = self.inner.running().get(&id).map(|r| r.cancel.clone());
         match token {
             Some(token) => {
                 token.cancel();
@@ -292,6 +364,41 @@ impl JobRunner {
             }
             None => false,
         }
+    }
+
+    /// Pauses a running job that supports it: the job stops at its next
+    /// step and waits for [`resume`](Self::resume). Returns `false` when the
+    /// job is not running or does not support pausing.
+    #[allow(clippy::must_use_candidate)]
+    pub fn pause(&self, id: JobId) -> bool {
+        self.set_paused(id, true)
+    }
+
+    /// Resumes a paused job. Returns `false` when the job is not running or
+    /// does not support pausing.
+    #[allow(clippy::must_use_candidate)]
+    pub fn resume(&self, id: JobId) -> bool {
+        self.set_paused(id, false)
+    }
+
+    fn set_paused(&self, id: JobId, paused: bool) -> bool {
+        let running = self.inner.running();
+        match running.get(&id).and_then(|r| r.pause.as_ref()) {
+            Some(gate) => {
+                gate.send_replace(paused);
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// Whether a running job supports pausing.
+    #[must_use]
+    pub fn is_pausable(&self, id: JobId) -> bool {
+        self.inner
+            .running()
+            .get(&id)
+            .is_some_and(|r| r.pause.is_some())
     }
 }
 
@@ -423,6 +530,40 @@ mod tests {
             });
             handle.cancel.cancel();
             assert!(matches!(handle.result.await, Ok(Err(Error::Cancelled))));
+        });
+    }
+
+    #[test]
+    fn a_pausable_job_waits_at_its_gate_until_resumed() {
+        let runner = JobRunner::new();
+        crate::block_on(async {
+            let (step_tx, mut step_rx) = mpsc::unbounded_channel::<u8>();
+            let handle = runner.spawn_pausable("copy", |ctx| async move {
+                for step in 1..=3u8 {
+                    ctx.pause.wait().await;
+                    let _ = step_tx.send(step);
+                    tokio::time::sleep(Duration::from_millis(5)).await;
+                }
+                Ok::<(), Error>(())
+            });
+            assert!(runner.is_pausable(handle.id));
+            assert_eq!(step_rx.recv().await, Some(1));
+            assert!(runner.pause(handle.id));
+            // Either the second step was already past its gate or it waits.
+            let paused_at = tokio::time::timeout(Duration::from_millis(60), async {
+                let mut last = 1;
+                while let Some(step) = step_rx.recv().await {
+                    last = step;
+                }
+                last
+            })
+            .await;
+            assert!(paused_at.is_err(), "the job stopped at its gate");
+            assert!(runner.resume(handle.id));
+            assert!(matches!(handle.result.await, Ok(Ok(()))));
+            let plain = runner.spawn(|_| async { Ok::<(), Error>(()) });
+            assert!(!runner.is_pausable(plain.id));
+            assert!(!runner.pause(JobId(9_999)));
         });
     }
 
