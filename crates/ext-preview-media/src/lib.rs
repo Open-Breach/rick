@@ -5,7 +5,7 @@
 //! `open` reads what the file says about itself without decoding (the
 //! headers and tags, [`probe`]), then, when the plugin was built with the
 //! `gstreamer` feature and GStreamer initialises, asks the Discoverer for
-//! the streams and tags, opens a [`gst::Player`] that prerolls the first
+//! the streams and tags, opens a `gst::Player` that prerolls the first
 //! frame and becomes the document's [`Transport`] (play, pause, seek,
 //! volume, speed, frame step, loop), and for audio decodes the file to a
 //! [`Waveform`] inside the preview job. `render` returns the latest video
