@@ -7,6 +7,39 @@ the pull request that brought the change.
 
 ## [Unreleased]
 
+### Added
+
+- The side panel reworked (0.2 milestone 2, issue #26): an editable Places
+  list seeded from the system's standard folders and kept in `places.toml`
+  (drag to reorder, a dropped folder becomes a place at the insertion line,
+  Remove and Edit… with a Phosphor icon, open in new tab by middle click,
+  Mod+click and the context menu, Up, Down, Enter and Mod+Enter with the
+  panel focused); Favorites, Recent and Trash as views in the active tab
+  under `rick://` (the system's recently-used list replaces 0.1's own feed;
+  the Trash view keeps restore and Empty trash); This Machine, Network and
+  Cloud as collapsible sections whose header opens an overview with the full
+  drive table and whose rows open a root, with utilisation bars, Eject for
+  removable media, live mount and unmount, Add… on empty sections and Cloud
+  shown only while a cloud provider plugin is loaded. The operations area
+  grew: a header with the running count and an overall bar, a progress bar
+  with bytes or items done of total on every row, a height that follows the
+  jobs up to a cap, progress coalesced to twenty reports a second per job,
+  and per-volume scheduling: copies and moves that share a volume run in
+  turn, the queued one as *Waiting*, disjoint ones together.
+
+### Changed
+
+- The side panel is navigation only: it is no longer a drop target for file
+  operations (Pin and Trash drops went with the Pinned and Trash sections),
+  highlights no current location and draws no indent guide; the Tree section
+  is gone (the Tree view mode stays). Every drive of the machine is listed,
+  the system disk included.
+
+### Removed
+
+- The 0.1 Recent feed (`recent.toml`, the watches and the scan at start),
+  replaced by the system's recently-used list.
+
 ## [0.1.0] - 2026-11-06
 
 The first release: local files, tabs, panes and windows with session restore,
