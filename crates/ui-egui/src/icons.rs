@@ -75,6 +75,8 @@ pub const TRASH: &str = ph::TRASH;
 pub const FOLDER: &str = ph::FOLDER;
 /// A location on a provider that is not the local disk.
 pub const PROVIDER: &str = ph::HARD_DRIVES;
+/// An archive browsed as a location.
+pub const ARCHIVE: &str = ph::FILE_ARCHIVE;
 /// A link.
 pub const LINK: &str = ph::LINK_SIMPLE;
 /// Done.

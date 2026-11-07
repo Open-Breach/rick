@@ -1,6 +1,6 @@
 //! Gives the plugin library a run path to the GStreamer runtime a bundle
 //! carries on macOS: `<bundle>/gstreamer/lib`, two directories up from
-//! `plugins/preview-media/` (`cargo xtask bundle`, QUESTIONS.md 97). The
+//! `plugins/preview-media/` (`cargo xtask bundle`, QUESTIONS.md 106). The
 //! official GStreamer libraries name each other through `@rpath`, so the
 //! library that loads them has to say where they are. Linux uses the
 //! system GStreamer and Windows searches the binary's directory, where the

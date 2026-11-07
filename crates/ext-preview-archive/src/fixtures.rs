@@ -211,7 +211,7 @@ fn rar_header(kind: u64, flags: u64, extra: &[u8], data: Option<u64>, body: &[u8
 
 /// A RAR 5 archive written by hand: a directory, a stored file and a file
 /// whose content is encrypted (the one case the issue's "encrypted
-/// entries" question is about, QUESTIONS.md 96).
+/// entries" question is about, QUESTIONS.md 105).
 #[must_use]
 pub fn sample_rar() -> Vec<u8> {
     let mut out = b"Rar!\x1A\x07\x01\x00".to_vec();

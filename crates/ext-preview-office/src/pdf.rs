@@ -2,7 +2,7 @@
 //! previewer binds it (`RICK_PDFIUM_DIR`, then beside the executable, then
 //! the system), pages rendered to the request, text per page as it is
 //! shown. A plugin sees `ext` and `types` only, so this mirrors
-//! `ext-preview-pdf` rather than calling it (QUESTIONS.md 95).
+//! `ext-preview-pdf` rather than calling it (QUESTIONS.md 104).
 
 use std::path::PathBuf;
 use std::sync::{Arc, OnceLock};

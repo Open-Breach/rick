@@ -329,7 +329,7 @@ pub fn available() -> bool {
     find_soffice().is_some()
 }
 
-/// The cache directory: `<temp dir>/rick/office` (QUESTIONS.md 95).
+/// The cache directory: `<temp dir>/rick/office` (QUESTIONS.md 104).
 #[must_use]
 pub fn cache_dir() -> PathBuf {
     std::env::temp_dir().join("rick").join("office")

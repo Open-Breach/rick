@@ -1,4 +1,6 @@
-//! macOS: `NSFileManager` trash, `open`, Finder's Get Info window,
+//! macOS: `NSFileManager` trash with Rick's own record of what it trashed
+//! (the system keeps the original paths in Finder's `.DS_Store`, which has
+//! no public reader), `open`, Finder's Get Info window,
 //! `~/Library/Application Support/Rick`, the mounted volumes from
 //! `NSFileManager.mountedVolumeURLs` ejected through `diskutil`, the
 //! standard directories under the home, and Spotlight's last-used dates
@@ -20,6 +22,7 @@ use crate::traits::{
     RecentItem, RecentlyUsed, StandardFolder, StandardFolders, Trash, TrashedItem, Volume,
     VolumeKind, Volumes, WindowChrome,
 };
+use crate::trash_record::{self, TRASH_FILE};
 
 /// How many recently-used items are kept, newest first.
 const RECENT_LIMIT: usize = 500;
@@ -49,15 +52,22 @@ impl Trash for Native {
             .ok_or(Error::Unsupported(
                 "the trash did not report the new location",
             ))?;
-        Ok(TrashedItem {
+        let item = TrashedItem {
             original,
             trashed,
             deleted_at: SystemTime::now(),
-        })
+        };
+        // The record is what `list` answers; a record that cannot be
+        // written loses the item from the Trash view, not from the trash.
+        if let Err(error) = trash_record::record(&self.record_file(), &item) {
+            tracing::warn!(%error, "trash record not written");
+        }
+        Ok(item)
     }
 
     fn restore(&self, item: &TrashedItem) -> Result<(), Error> {
         if fs::symlink_metadata(&item.trashed).is_err() {
+            trash_record::forget(&self.record_file(), &item.trashed)?;
             return Err(Error::NotFound);
         }
         if fs::symlink_metadata(&item.original).is_ok() {
@@ -69,16 +79,16 @@ impl Trash for Native {
         if let Some(parent) = item.original.parent() {
             fs::create_dir_all(parent).map_err(Error::from_io)?;
         }
-        fs::rename(&item.trashed, &item.original).map_err(Error::from_io)
+        fs::rename(&item.trashed, &item.original).map_err(Error::from_io)?;
+        trash_record::forget(&self.record_file(), &item.trashed)
     }
 
     /// macOS keeps the original locations of trashed items in Finder's own
-    /// `.DS_Store`, which has no public reader, so the trash cannot be
-    /// listed with restore targets.
+    /// `.DS_Store`, which has no public reader, so the trash lists Rick's
+    /// own record of what it trashed, pruned of what has left the trash
+    /// since (QUESTIONS.md 74 and 94).
     fn list(&self) -> Result<Vec<TrashedItem>, Error> {
-        Err(Error::Unsupported(
-            "macOS does not expose the original paths of trashed items",
-        ))
+        trash_record::load(&self.record_file())
     }
 
     fn remove(&self, item: &TrashedItem) -> Result<(), Error> {
@@ -88,7 +98,8 @@ impl Trash for Native {
         } else {
             fs::remove_file(&item.trashed)
         }
-        .map_err(Error::from_io)
+        .map_err(Error::from_io)?;
+        trash_record::forget(&self.record_file(), &item.trashed)
     }
 
     /// Empties the user's own trash, `~/.Trash`, which holds what Rick and
@@ -115,7 +126,15 @@ impl Trash for Native {
             }
             .map_err(Error::from_io)?;
         }
-        Ok(())
+        trash_record::save(&self.record_file(), &[])
+    }
+}
+
+impl Native {
+    /// Where the trash record lives: `trash.toml` in the config directory.
+    /// `Native` is a zero-sized `Copy` type, so it goes by value.
+    fn record_file(self) -> PathBuf {
+        self.config_dir().join(TRASH_FILE)
     }
 }
 

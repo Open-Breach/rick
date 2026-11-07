@@ -47,7 +47,7 @@ fn main() {
     // binary's directory on its own. This is build configuration, not a
     // `cfg(target_os)` in code.
     // On macOS the bundle may also carry the GStreamer runtime under
-    // `gstreamer/lib/` (QUESTIONS.md 97); its libraries name each other
+    // `gstreamer/lib/` (QUESTIONS.md 106); its libraries name each other
     // through `@rpath`, and the elements GStreamer loads at run time
     // resolve those names through the executable's run paths.
     match std::env::var("CARGO_CFG_TARGET_OS").as_deref() {

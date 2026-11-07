@@ -5,11 +5,10 @@ into the binary. At start it scans `<binary dir>/plugins/` and
 `<config dir>/plugins/` (per-user wins on an id clash), reads each plugin's
 `plugin.toml`, refuses a plugin whose `api_version`, `toolchain` or
 `platforms` do not fit this host, skips the ids `rick.toml` disables, loads
-the rest with `libloading`, calls the one exported entry point
-(`rick_plugin_register_<crate>`, named after the library's file name so
-that a binary may link several plugin crates at once, QUESTIONS.md 98)
-with a registry of its own, and hands each plugin to
-the application as an extension it registers like a built-in. A plugin that
+the rest with `libloading`, calls the one exported entry point, named
+after the crate (`rick_plugin_register_ext_git`), with a registry of its
+own that lends the platform services, and hands each plugin to the
+application as an extension it registers like a built-in. A plugin that
 fails or panics while registering is reported in the plugins table and left
 alone, its library kept mapped since code that ran may have registered
 itself with the runtime (QUESTIONS.md 85); it never takes the host down. A plugin shares the kernel crates
@@ -53,10 +52,13 @@ workspace = true
 **The extension and its entry point.** Implement `ext::Extension` as any
 built-in does: a `Manifest` with the id, the name, the crate's version, the
 `API_VERSION`, the points it fills and the platforms it runs on, and
-`register`, which contributes to the registry it is given. Then one line
-declares the entry point, exported as `rick_plugin_register_<crate name>`;
-the macro carries the `#[export_name]` allowance, so the crate keeps
-`#![deny(unsafe_code)]` (QUESTIONS.md 82):
+`register`, which contributes to the registry it is given. A provider that
+serves a virtual location registers it with `reg.view("name", provider)`
+(`rick://name`); an extension that needs the platform services (the trash,
+the config directory, the dialogues) takes `reg.platform()`, which the host
+lends and the tests fill with a `Fake`. Then one line declares the entry
+point; the macro carries the `#[export_name]` allowance, so the crate keeps
+`#![deny(unsafe_code)]` (QUESTIONS.md 82, 99):
 
 ```rust
 #![deny(unsafe_code)]

@@ -6,15 +6,15 @@
 //! dylibs, so the five traits, the job runner and the tracing subscriber
 //! are the same code in the same memory on both sides and cross the
 //! boundary unchanged (QUESTIONS.md 81). The one thing a plugin exports is
-//! one `extern "C"` function, declared with [`plugin!`](crate::plugin!) and
-//! exported as `rick_plugin_register_<crate>` (the crate's name with
-//! underscores, [`entry_point`]), so that a binary may link several plugin
-//! crates as ordinary libraries without two of them exporting the same
-//! symbol (QUESTIONS.md 98): the host loads the library, calls that
-//! function with a [`Registry`] and reads a [`Status`] back. Inside, [`register`] builds
-//! the extension, lets the registry load it and catches any panic, so a
-//! plugin that fails to register is reported and never takes the host
-//! down.
+//! an `extern "C"` function named after the crate,
+//! `rick_plugin_register_<crate>` ([`entry_point`]), declared with
+//! [`plugin!`](crate::plugin!): the host loads the library, calls it with a
+//! [`Registry`] and reads a [`Status`] back. The crate's name is in the
+//! symbol so two plugins compiled into one binary (the tests, a build with
+//! several plugin features on) do not clash (QUESTIONS.md 99). Inside,
+//! [`register`] builds the extension, lets the registry load it and catches
+//! any panic, so a plugin that fails to register is reported and never
+//! takes the host down.
 //!
 //! # Worked example
 //!
@@ -57,10 +57,10 @@
 //! // entry point; in the library this is the one exported symbol.
 //! ext::plugin!(|| Arc::new(Hello::new()) as Arc<dyn Extension>);
 //!
-//! // The host, having loaded the library and resolved the entry point
-//! // (`entry_point("hello")` for a library `libhello.so`) as an
-//! // `EntryPoint`, calls it with a registry of its own; in Rust the
-//! // function keeps its plain name.
+//! // The host, having loaded the library and resolved the symbol
+//! // `entry_point("ext-hello")` as an `EntryPoint`, calls it with a
+//! // registry of its own; the Rust function is always `rick_plugin_register`.
+//! assert_eq!(ext::plugin::entry_point("ext-hello"), "rick_plugin_register_ext_hello");
 //! let mut registry = Registry::new();
 //! assert_eq!(rick_plugin_register(&mut registry), Status::Registered);
 //! assert_eq!(registry.extensions(), &[ExtId("hello")]);
@@ -77,16 +77,14 @@ use std::sync::Arc;
 use crate::registry::{Extension, Registry};
 
 /// The prefix of the function every plugin library exports; the crate's
-/// name with underscores follows it, see [`entry_point`].
+/// name follows, see [`entry_point`].
 pub const ENTRY_POINT_PREFIX: &str = "rick_plugin_register_";
 
-/// The exported name of the entry point of the plugin crate `stem`: the
-/// library's file name without its platform prefix and suffix
-/// (`libext_git.so` gives `ext_git`), which is the crate's name with
-/// underscores, as `CARGO_CRATE_NAME` spells it.
+/// The exported symbol of the plugin built from the crate `name`
+/// (`ext-git` or `ext_git`): `rick_plugin_register_ext_git`.
 #[must_use]
-pub fn entry_point(stem: &str) -> String {
-    format!("{ENTRY_POINT_PREFIX}{}", stem.replace('-', "_"))
+pub fn entry_point(name: &str) -> String {
+    format!("{ENTRY_POINT_PREFIX}{}", name.replace('-', "_"))
 }
 
 /// The entry point's signature, as the host resolves it from the library.
@@ -156,11 +154,11 @@ pub fn register(reg: &mut Registry, ctor: impl FnOnce() -> Arc<dyn Extension>) -
 /// Declares the plugin entry point.
 ///
 /// Takes an expression that builds the extension, `|| Arc::new(…) as
-/// Arc<dyn Extension>`, and defines the function `rick_plugin_register`
-/// around [`register`], exported from the library as
-/// `rick_plugin_register_<crate name>` ([`entry_point`]). Use it once, at
-/// the top level of the plugin crate. `#[export_name]` is the one unsafe
-/// attribute a plugin needs and the macro carries the allowance for it.
+/// Arc<dyn Extension>`, and defines the `rick_plugin_register` function
+/// around [`register`], exported under the symbol [`entry_point`] gives for
+/// the crate. Use it once, at the top level of the plugin crate.
+/// `#[export_name]` is the one unsafe attribute a plugin needs and the
+/// macro carries the allowance for it.
 #[macro_export]
 macro_rules! plugin {
     ($ctor:expr) => {
@@ -207,12 +205,9 @@ mod tests {
     }
 
     #[test]
-    fn the_entry_point_follows_the_crate_name() {
+    fn the_symbol_carries_the_crate_name() {
+        assert_eq!(entry_point("ext-git"), "rick_plugin_register_ext_git");
         assert_eq!(entry_point("ext_git"), "rick_plugin_register_ext_git");
-        assert_eq!(
-            entry_point("ext-preview-csv"),
-            "rick_plugin_register_ext_preview_csv"
-        );
     }
 
     #[test]

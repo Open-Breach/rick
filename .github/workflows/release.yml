@@ -66,7 +66,7 @@ jobs:
       # for the smoke test; the archive relies on the user's GStreamer.
       # macOS and Windows: the official runtime and development packages,
       # installed where their installers put them; the runtime is copied
-      # into the bundle (RICK_GSTREAMER_DIR, QUESTIONS.md 97). The new
+      # into the bundle (RICK_GSTREAMER_DIR, QUESTIONS.md 106). The new
       # Windows installer is one Inno Setup executable per architecture.
       - name: gstreamer (linux)
         if: runner.os == 'Linux'
@@ -247,7 +247,7 @@ jobs:
           done
           test -f libpdfium.so || test -f libpdfium.dylib || test -f pdfium.dll || { echo "no pdfium library beside the binary"; exit 1; }
           # The GStreamer runtime the media previewer plays through, bundled
-          # on macOS and Windows (QUESTIONS.md 97).
+          # on macOS and Windows (QUESTIONS.md 106).
           case "${{ runner.os }}" in
             macOS) test -f gstreamer/lib/libgstreamer-1.0.0.dylib || { echo "no bundled GStreamer"; exit 1; }
                    ls gstreamer/lib/gstreamer-1.0 | head -5 ;;
@@ -263,16 +263,19 @@ jobs:
           out="$("./rick$exe" --version)"
           echo "rick --version: $out"
           echo "$out" | grep -Eq "^${version%%-*}(-[0-9A-Za-z.]+)? \([0-9a-f]{7,}\)$" || { echo "unexpected version line"; exit 1; }
-          # The plugins, bundled and loaded from plugins/<id>/: Git and the
-          # four previewers of issue 18. The media previewer loading on
-          # macOS and Windows shows the bundled GStreamer runtime resolves;
-          # on Linux the runner's system GStreamer does.
-          for id in git preview-archive preview-csv preview-media preview-office; do
+          # The plugins, bundled and loaded from plugins/<id>/: Git, the
+          # archive and trash providers of issue 20 and the four previewers
+          # of issue 18. The media previewer loading on macOS and Windows
+          # shows the bundled GStreamer runtime resolves; on Linux the
+          # runner's system GStreamer does.
+          for id in git vfs-trash vfs-archive preview-archive preview-csv preview-media preview-office; do
             test -f "plugins/$id/plugin.toml" || { echo "no plugins/$id/plugin.toml"; exit 1; }
           done
           plugins="$("./rick$exe" --list-plugins)"
           echo "$plugins"
           echo "$plugins" | grep -Eq '^git +Git +[^ ]+ +decorator, action +loaded +' || { echo "git plugin not loaded"; exit 1; }
+          echo "$plugins" | grep -Eq '^vfs-trash +Trash +[^ ]+ +provider, decorator, action +loaded +' || { echo "trash plugin not loaded"; exit 1; }
+          echo "$plugins" | grep -Eq '^vfs-archive +Archives +[^ ]+ +provider +loaded +' || { echo "archive plugin not loaded"; exit 1; }
           for id in preview-archive preview-csv preview-media preview-office; do
             echo "$plugins" | grep -Eq "^$id +[^ ].* +previewer +loaded +" || { echo "$id plugin not loaded"; exit 1; }
           done

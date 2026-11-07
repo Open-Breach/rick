@@ -1030,123 +1030,224 @@ Once answered, an entry keeps its number and gains a dated decision line.
     Escape releases. The Edit… dialogue and the reorder drag are the
     panel's own state, not the model's.
 
-94. (issue 18) The spec's `PreviewDoc` returns `Frame::{Rgba, Text,
-    External}`, and the archive, CSV and rendered Markdown/HTML previews
-    need the pane to lay out a file list, a table and a document; the
-    issue's media transport asks for volume, speed, frame step and loop,
-    which the spec's `Transport` does not have. Changing `Frame` would
-    have touched `ui-egui`, which the viewer (issue 17) is reworking in
-    parallel.
-    Assumed: `PreviewDoc` gains `content(&self) -> Option<Content>` with a
-    default of `None`; `Content` is `Listing(Arc<Listing>)` (entries in
-    explorer order with depth, kind, size, compressed size, date and an
-    encrypted flag, plus a stats line), `Grid(Arc<dyn Grid>)` (header, row
-    count, and the cells of any window of rows, parsed on demand) or
-    `Document(Arc<Document>)` (headings, paragraphs, styled inlines, links,
-    lists, quotes, code, tables, images, rules). `render` keeps answering
-    for such a document with a textual fallback (the listing as text, the
-    raw CSV, the highlighted source), so the 0.1 pane shows something
-    sensible until the viewer lays the content out. `Transport` gains
-    `volume`/`set_volume`, `speed`/`set_speed`, `step` and
-    `looping`/`set_looping` with defaults that do nothing, so the viewer's
-    fake transport keeps compiling. `Icon` gains `Rendered`. The extension
-    API is version 4.
+94. (issue 20) The trash record of QUESTIONS.md 74 lived in `app`
+    (`trash.toml` through `ops::TrashStore`, which the `rick://trash` view
+    of 86 fell back to as `TrashRecord`); the trash provider plugin, which
+    depends on `ext` and `types` only, cannot reach it.
+    Assumed: the record moves into `platform`, behind `Trash::list`: on
+    macOS the trash itself writes `trash.toml` in the config directory when
+    it trashes, forgets on restore and removal, and `list` reads it back
+    pruned of items that left the trash, so the local provider's trashing
+    and the Trash view see one list and `list` never answers `Unsupported`
+    any more. `TrashStore`, `TrashRecord` and the `Fake`'s unlistable knob
+    go; the record module carries its own tests.
 
-95. (issue 18) The office previewer: the issue says LibreOffice is found
-    "through platform", but a plugin may depend on `ext` and `types` only
-    (SPEC.md "Module rules"); and the spec names no place for the cache of
-    converted PDFs, while plugins have no access to the config directory.
-    Assumed: the plugin looks for `soffice` itself: `RICK_SOFFICE` (a
-    development override like `RICK_PDFIUM_DIR`), then the `PATH`, then the
-    install directories of all three platforms checked as plain paths (a
-    path that does not exist on the current OS is simply absent), so no
-    `cfg(target_os)` is needed; a hit is remembered, a miss is looked up
-    again next time. The cache lives under the temporary directory,
-    `<temp>/rick/office/<key>.pdf` with `<key>` a hash of the file's path,
-    size and modification time (a changed file misses the cache by
-    itself), trimmed to 512 MiB and 200 files, oldest out; LibreOffice runs
-    with its own user profile under the same directory so that an open
-    LibreOffice does not swallow the command. A conversion runs inside the
-    preview job on the blocking pool, cancellable (the process is killed)
-    and limited to 60 s; it is not a separate row in the operations area,
-    since the preview job already is the job. The office pages render
-    through the plugin's own pdfium binding (a mirror of the PDF
-    previewer's; a plugin cannot call `ext-preview-pdf`), which means two
-    copies of `pdfium-render`'s call serialisation exist in the process; a
-    PDF and an office page rendering at the same instant are not
-    serialised against each other. To revisit if pdfium shows it.
+95. (issue 20) Milestone 2 (86) made `vfs-rick` the one provider of the six
+    virtual locations, built in; the issue wants the Trash view served by
+    the plugin `ext-vfs-trash`, and Favorites, Recent and the overviews are
+    to follow the same road later.
+    Assumed: an extension serves a virtual location by registering a view,
+    `Registry::view(name, provider)`, which the application hands to
+    `RickProvider::add_view`; the rick provider then routes that location
+    and everything below it (`rick://trash`, `rick://trash/<item>/…`) to the
+    view's provider for `list`, `stat`, `open_read`, `remove` and the rest,
+    including `capabilities`, keeps `watch` itself so `changed` still
+    re-lists the view, and lists a location no extension serves as empty.
+    The view's provider sees the full path (`trash/<name>`), answers under
+    `ProviderId::RICK` and lives in a plugin that knows nothing of
+    `vfs-rick`. The path bar takes `rick://trash/<name>` as typed.
 
-96. (issue 18) The spec and the issue say nothing about encrypted entries
-    in an archive listing.
-    Assumed: an entry whose content is encrypted (zip and RAR with a
-    password, 7z without header encryption) is listed with its name and
-    size and marked `encrypted`, and the stats line counts them; an archive
-    whose directory itself is encrypted (7z `-mhe`, RAR `-hp`) lists
-    nothing, its stats line says the list of files needs a password, and
-    the status bar says "encrypted"; no password is ever asked for in the
-    preview. Also assumed: a listing stops after 200 000 entries or, for a
-    compressed tar (which has no directory and must be streamed), after
-    10 s, and says so; symbolic links in zips show without their target
-    (it is the entry's content). Archives are case-sensitive: `Alpha/` and
-    `alpha/` are two folders, ordered without regard to case.
+96. (issue 20) Plugins depend on `ext` and `types` only (Module rules 2),
+    but the trash provider needs `platform::Trash` and the archive provider
+    the runtime's blocking pool.
+    Assumed: `ext` re-exports `platform` and `runtime`, and the `Registry`
+    is the extension context the Package layout names: the host builds it
+    with `Registry::with_platform` and an extension takes
+    `Registry::platform()` while it registers (`None` in a registry built
+    with `Registry::new()`, which the trash extension refuses). The plugin
+    host and the binary pass the platform on; the tests pass the `Fake`, so
+    a plugin's trash is the test's. `platform` becomes part of the `ext`
+    dylib; the layer order is unchanged (platform sits below ext).
 
-97. (issue 18) GStreamer: the spec bundles the runtime on macOS and
-    Windows and the issue asks for "a clear runtime missing state"; the
-    GStreamer Rust bindings link the libraries at build time, so a plugin
-    built with them needs the development files to build and cannot load
-    where the core library is absent.
-    Assumed: playback sits behind the media plugin's `gstreamer` Cargo
-    feature, off by default so every workspace build still builds; Linux
-    CI and the release builds turn it on (`--features
-    ext-preview-media/gstreamer`, which `cargo xtask bundle` passes
-    through), with the system packages on Linux and the official
-    GStreamer packages (1.28.8) installed on the macOS and Windows runners.
-    The bundle carries the runtime where `RICK_GSTREAMER_DIR` names it:
-    macOS `gstreamer/lib/` (the libraries name each other through
-    `@rpath`, which the media plugin's run path `@loader_path/../../
-    gstreamer/lib` and the binary's `@executable_path/gstreamer/lib`
-    resolve) and the elements in `gstreamer/lib/gstreamer-1.0/`, thinned
-    to arm64 by the release workflow; Windows the DLLs beside the binary,
-    where every DLL the process loads is searched for, and the elements in
-    `gstreamer-1.0/`; the plugin scans those directories at start, and
-    Linux uses the system's. The missing-runtime state has three shapes:
-    built without the feature, or GStreamer failing to initialise, the
-    document shows the file's metadata (read natively from the headers and
-    tags) and says so; a core library absent on Linux, where the plugin
-    cannot be loaded at all, the Extensions screen and `--list-plugins`
-    show it refused with the loader's message; a decoder or demuxer
-    missing for one file (the usual case: codec plug-ins not installed),
-    the document shows the metadata and names the missing plug-in and the
-    package family to install. A plugin written against GStreamer's C API
-    with `libloading`, which would have given the first shape in every
-    case, would have put hundreds of `unsafe` calls into a plugin; a helper
-    process would have doubled the code. Hardware decoding is GStreamer's
-    own choice of the highest-ranked decoder. On a machine without an audio
-    device (CI) playback runs with a `fakesink` and says so.
+97. (issue 20) "Entering an archive … navigates into it as a location
+    (archive: provider); the breadcrumb shows the archive as a segment"
+    does not say what the location's path is.
+    Assumed: the archive's OS path with the path inside appended,
+    `archive:/home/me/a.zip/docs/x`. Which prefix is the archive is found
+    by asking the filesystem for the shortest prefix that is a file
+    (`ext_vfs_archive::split`); the UI does the same once per location for
+    its breadcrumbs, whose segments above the archive navigate the local
+    provider, and Up from the archive root goes to its folder. Open
+    (Enter, double-click) hands a local file to the archive provider first,
+    whose `stat` says whether it browses the file; anything else opens with
+    the system default. An archive inside an archive is a file, not a
+    location: the archive previewer of #18 is the way to look inside
+    without extracting. Entry ids hash the archive path and the inner path,
+    so they are stable across listings and survive a rewrite.
 
-98. (issue 18) Every plugin crate exported the same `rick_plugin_register`
-    symbol, so a binary that links two plugin crates as ordinary libraries
-    (the acceptance tests, or `rick` with two of its opt-in plugin
-    features) failed to link with duplicate symbols.
-    Assumed: `ext::plugin!` exports the entry point as
-    `rick_plugin_register_<crate name>` through `#[export_name]` with
-    `CARGO_CRATE_NAME`, and the host resolves that name from the library's
-    file stem (`libext_git.so` gives `rick_plugin_register_ext_git`); in
-    Rust the function keeps its plain name. One entry point per library,
-    as the spec asks, with a name of its own.
+98. (issue 20) "Change notification by polling (watch returns
+    Unsupported)" names no poller.
+    Assumed: the kernel polls. For a pane whose provider's `watch` answers
+    `Unsupported` (an archive, a trashed folder browsed below the view),
+    `app` calls `stat` on the location every 3 s and right after an
+    operation finished, and lists again when the entry's size or times
+    changed; an archive's root entry carries the archive file's size and
+    time. The Trash view itself is re-listed the milestone-2 way: `app`
+    lists the platform trash after every operation for the Places row's
+    count and rings `RickProvider::changed` when the list changed.
 
-99. (issue 18) The CSV grid's header and window: the spec says "a
-    virtualised grid with header row" and leaves the heuristics open.
-    Assumed: the first record is the header unless every cell of it reads
-    as a number, in which case the columns are numbered; the delimiter is
-    the one of comma, semicolon, tab and pipe that appears the same number
-    of times on each of the first twenty records, the most frequent on the
-    first record otherwise, a tab for `.tsv` and a comma for `.csv` when
-    none appears; up to 256 MiB of the file is read and indexed (a cut
-    file says so), the raw text up to 1 MiB is the fallback and the text
-    layer for find. Rendered Markdown and HTML: the Rendered toggle is on
-    for every newly opened file (unlike pretty print), images are read
-    from the document's own folder or below only (no parent steps, no
-    absolute paths, no network), 16 MiB each and 64 MiB in all, and a link
-    is kept only with a web, mail or relative address; raw HTML inside
-    Markdown is shown as text.
+99. (issue 20) Two plugin libraries linked into one binary (the tests, or
+    `rick` with two plugin features on) both exported
+    `rick_plugin_register` and the link failed.
+    Assumed: the exported symbol carries the crate name,
+    `rick_plugin_register_ext_vfs_trash`, which `ext::plugin!` takes from
+    `CARGO_CRATE_NAME`; the host and the bundler derive it from the
+    library's file name, so `plugin.toml` needs no new field. The Rust
+    function keeps its name, `rick_plugin_register`.
+
+100. (issue 20) Restore, Restore trash items and Empty trash are in the
+    spec's operations list without a context-menu group, and "live inside
+    the view only"; 92 had them as core actions over the application's
+    record.
+    Assumed: they are the plugin's, in the "Trash" action group
+    (`ActionGroup::Extension("Trash")`): `trash.restore`,
+    `trash.restore_items` and `trash.empty`, Hidden unless the pane is at
+    `rick://trash`, so the context menu offers them under Trash in the view
+    and nowhere else, and the palette lists them there too. Delete
+    permanently in the view is the core action through the view's
+    `remove(Permanent)`; Move to trash hides there, as 92 says, and the
+    other file actions with it. Enter and a double-click still restore
+    (the shell runs `trash.restore_items`). Without the plugin the view
+    lists nothing. The Places row keeps its count hint (92).
+
+101. (issue 20) Which core actions apply at a location another provider
+    serves; 92 settled the virtual locations only.
+    Assumed: the actions follow the provider's capabilities, as the
+    Provider contract says the kernel should: Paste, Duplicate, Rename, New
+    file and New folder are Hidden without `WRITE`, Move to trash without
+    `TRASH` (except in Favorites and Recent, whose entries are real files
+    elsewhere), so a read-only archive, the Trash view and a RAR show only
+    what works. The inline edits of New file and New folder start only
+    where the provider takes writes.
+
+102. (issue 20) How a write into an archive happens.
+    Assumed: zip, the tar family and 7z declare `WRITE | RENAME`; every
+    `open_write`, `create_dir`, `rename`, `remove` and same-archive `copy`
+    rewrites the whole archive into a temporary file beside it and renames
+    it over the original, under a lock per archive, inside the operation's
+    job (the rewrite reports no progress of its own). Zip entries keep
+    their compressed bytes, a compressed tar is recompressed with its
+    codec, 7z entries are re-encoded with LZMA2, new zip entries use
+    DEFLATE. RAR, ISO 9660 and UDF images and single-file codecs are
+    read-only. A `.iso` is tried as ISO 9660 first, then as UDF; a codec
+    file whose stream holds a tar is a tar.
+
+103. (issue 18) The spec's `PreviewDoc` returns `Frame::{Rgba, Text,
+     External}`, and the archive, CSV and rendered Markdown/HTML previews
+     need the pane to lay out a file list, a table and a document; the
+     issue's media transport asks for volume, speed, frame step and loop,
+     which the spec's `Transport` does not have. Changing `Frame` would
+     have touched `ui-egui`, which the viewer (issue 17) is reworking in
+     parallel.
+     Assumed: `PreviewDoc` gains `content(&self) -> Option<Content>` with a
+     default of `None`; `Content` is `Listing(Arc<Listing>)` (entries in
+     explorer order with depth, kind, size, compressed size, date and an
+     encrypted flag, plus a stats line), `Grid(Arc<dyn Grid>)` (header, row
+     count, and the cells of any window of rows, parsed on demand) or
+     `Document(Arc<Document>)` (headings, paragraphs, styled inlines, links,
+     lists, quotes, code, tables, images, rules). `render` keeps answering
+     for such a document with a textual fallback (the listing as text, the
+     raw CSV, the highlighted source), so the 0.1 pane shows something
+     sensible until the viewer lays the content out. `Transport` gains
+     `volume`/`set_volume`, `speed`/`set_speed`, `step` and
+     `looping`/`set_looping` with defaults that do nothing, so the viewer's
+     fake transport keeps compiling. `Icon` gains `Rendered`. The extension
+     API is version 4.
+
+104. (issue 18) The office previewer: the issue says LibreOffice is found
+     "through platform", but a plugin may depend on `ext` and `types` only
+     (SPEC.md "Module rules"); and the spec names no place for the cache of
+     converted PDFs, while plugins have no access to the config directory.
+     Assumed: the plugin looks for `soffice` itself: `RICK_SOFFICE` (a
+     development override like `RICK_PDFIUM_DIR`), then the `PATH`, then the
+     install directories of all three platforms checked as plain paths (a
+     path that does not exist on the current OS is simply absent), so no
+     `cfg(target_os)` is needed; a hit is remembered, a miss is looked up
+     again next time. The cache lives under the temporary directory,
+     `<temp>/rick/office/<key>.pdf` with `<key>` a hash of the file's path,
+     size and modification time (a changed file misses the cache by
+     itself), trimmed to 512 MiB and 200 files, oldest out; LibreOffice runs
+     with its own user profile under the same directory so that an open
+     LibreOffice does not swallow the command. A conversion runs inside the
+     preview job on the blocking pool, cancellable (the process is killed)
+     and limited to 60 s; it is not a separate row in the operations area,
+     since the preview job already is the job. The office pages render
+     through the plugin's own pdfium binding (a mirror of the PDF
+     previewer's; a plugin cannot call `ext-preview-pdf`), which means two
+     copies of `pdfium-render`'s call serialisation exist in the process; a
+     PDF and an office page rendering at the same instant are not
+     serialised against each other. To revisit if pdfium shows it.
+
+105. (issue 18) The spec and the issue say nothing about encrypted entries
+     in an archive listing.
+     Assumed: an entry whose content is encrypted (zip and RAR with a
+     password, 7z without header encryption) is listed with its name and
+     size and marked `encrypted`, and the stats line counts them; an archive
+     whose directory itself is encrypted (7z `-mhe`, RAR `-hp`) lists
+     nothing, its stats line says the list of files needs a password, and
+     the status bar says "encrypted"; no password is ever asked for in the
+     preview. Also assumed: a listing stops after 200 000 entries or, for a
+     compressed tar (which has no directory and must be streamed), after
+     10 s, and says so; symbolic links in zips show without their target
+     (it is the entry's content). Archives are case-sensitive: `Alpha/` and
+     `alpha/` are two folders, ordered without regard to case.
+
+106. (issue 18) GStreamer: the spec bundles the runtime on macOS and
+     Windows and the issue asks for "a clear runtime missing state"; the
+     GStreamer Rust bindings link the libraries at build time, so a plugin
+     built with them needs the development files to build and cannot load
+     where the core library is absent.
+     Assumed: playback sits behind the media plugin's `gstreamer` Cargo
+     feature, off by default so every workspace build still builds; Linux
+     CI and the release builds turn it on (`--features
+     ext-preview-media/gstreamer`, which `cargo xtask bundle` passes
+     through), with the system packages on Linux and the official
+     GStreamer packages (1.28.8) installed on the macOS and Windows runners.
+     The bundle carries the runtime where `RICK_GSTREAMER_DIR` names it:
+     macOS `gstreamer/lib/` (the libraries name each other through
+     `@rpath`, which the media plugin's run path `@loader_path/../../
+     gstreamer/lib` and the binary's `@executable_path/gstreamer/lib`
+     resolve) and the elements in `gstreamer/lib/gstreamer-1.0/`, thinned
+     to arm64 by the release workflow; Windows the DLLs beside the binary,
+     where every DLL the process loads is searched for, and the elements in
+     `gstreamer-1.0/`; the plugin scans those directories at start, and
+     Linux uses the system's. The missing-runtime state has three shapes:
+     built without the feature, or GStreamer failing to initialise, the
+     document shows the file's metadata (read natively from the headers and
+     tags) and says so; a core library absent on Linux, where the plugin
+     cannot be loaded at all, the Extensions screen and `--list-plugins`
+     show it refused with the loader's message; a decoder or demuxer
+     missing for one file (the usual case: codec plug-ins not installed),
+     the document shows the metadata and names the missing plug-in and the
+     package family to install. A plugin written against GStreamer's C API
+     with `libloading`, which would have given the first shape in every
+     case, would have put hundreds of `unsafe` calls into a plugin; a helper
+     process would have doubled the code. Hardware decoding is GStreamer's
+     own choice of the highest-ranked decoder. On a machine without an audio
+     device (CI) playback runs with a `fakesink` and says so.
+
+107. (issue 18) The CSV grid's header and window: the spec says "a
+     virtualised grid with header row" and leaves the heuristics open.
+     Assumed: the first record is the header unless every cell of it reads
+     as a number, in which case the columns are numbered; the delimiter is
+     the one of comma, semicolon, tab and pipe that appears the same number
+     of times on each of the first twenty records, the most frequent on the
+     first record otherwise, a tab for `.tsv` and a comma for `.csv` when
+     none appears; up to 256 MiB of the file is read and indexed (a cut
+     file says so), the raw text up to 1 MiB is the fallback and the text
+     layer for find. Rendered Markdown and HTML: the Rendered toggle is on
+     for every newly opened file (unlike pretty print), images are read
+     from the document's own folder or below only (no parent steps, no
+     absolute paths, no network), 16 MiB each and 64 MiB in all, and a link
+     is kept only with a web, mail or relative address; raw HTML inside
+     Markdown is shown as text.

@@ -9,6 +9,26 @@ the pull request that brought the change.
 
 ### Added
 
+- Archives browsed in place, as the plugin `ext-vfs-archive`: Enter or a
+  double-click on a zip (DEFLATE, zstd), a tar (plain, gz, zst, xz, bz2,
+  lz4), a 7z, a RAR, an ISO 9660 or UDF image or a single compressed file
+  (gzip, zstd, xz, bzip2, LZ4, Brotli, Snappy) enters it as a location
+  with the archive as a breadcrumb segment; files inside preview and copy
+  out through the streamed path; zip, tar and 7z take new files, folders,
+  renames and removals by rewriting the archive; RAR and the images are
+  read-only (#20).
+- The Trash view, `rick://trash`, as the plugin `ext-vfs-trash`: the side
+  panel's Trash row opens it in the pane, where the trashed items list with
+  their original location, Restore, Restore trash items and Empty trash
+  live in the Trash group of the context menu and the palette, Delete
+  permanently works as everywhere, and a trashed folder is browsable (#20).
+- Views served by extensions: the `rick://` provider routes a location an
+  extension registered (`Registry::view`) to that extension's provider, the
+  Trash view being the first; the registry lends the host's platform
+  services to extensions (#20).
+- A location its provider cannot watch (an archive, a trashed folder
+  browsed in the Trash view) is polled: every three seconds and right after
+  an operation, a change lists it again (#20).
 - Five previewers as plugins, every one in `plugins/` of the archives
   (#18): `preview-office` converts DOCX, XLSX, PPTX, ODT, ODS and ODP to
   PDF with an installed LibreOffice, cached by path and modification time,
@@ -71,6 +91,16 @@ the pull request that brought the change.
   binary can link several plugin crates (#18).
 - The extension API is version 3: a manifest declares the points it fills
   and the platforms it runs on (#16).
+- The core actions follow the provider's capabilities: Paste, Duplicate,
+  Rename, New file and New folder are hidden where nothing can be written,
+  Move to trash where there is no trash (#20).
+- The trash record macOS needs lives in `platform` behind the trash itself,
+  so the Trash view and the local provider see one list; Restore, Restore
+  trash items and Empty trash are the trash plugin's actions
+  (`trash.restore`, `trash.restore_items`, `trash.empty`) (#20).
+- A plugin's entry point is named after its crate
+  (`rick_plugin_register_ext_git`), so several plugins link into one binary
+  (#20).
 - The workspace version is `0.2.0-dev` until 0.2.0 is tagged (#16).
 - The side panel is navigation only: it is no longer a drop target for file
   operations (Pin and Trash drops went with the Pinned and Trash sections),

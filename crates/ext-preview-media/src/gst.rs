@@ -3,7 +3,7 @@
 //! [`Runtime::get`] initialises GStreamer once per process and adds the
 //! plugin directories a bundle carries (`<binary dir>/gstreamer/lib/
 //! gstreamer-1.0` on macOS, `<binary dir>/gstreamer-1.0` on Windows,
-//! QUESTIONS.md 97). [`Player`] is a `playbin3` whose video sink is an
+//! QUESTIONS.md 106). [`Player`] is a `playbin3` whose video sink is an
 //! `appsink` asking for RGBA frames, kept as the latest frame for `render`;
 //! it is the [`Transport`]. [`discover`] reads duration, streams and tags
 //! with the Discoverer, and [`waveform`] decodes the audio to mono samples

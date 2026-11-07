@@ -5,7 +5,7 @@
 //! lays out `target/<profile>/bundle/` (QUESTIONS.md 84): the `rick`
 //! binary, the kernel dylibs and the `libstd` they need beside it, pdfium
 //! when `RICK_PDFIUM_DIR` names it, the GStreamer runtime when
-//! `RICK_GSTREAMER_DIR` names it (QUESTIONS.md 97: on macOS into
+//! `RICK_GSTREAMER_DIR` names it (QUESTIONS.md 106: on macOS into
 //! `gstreamer/lib/`, on Windows the DLLs beside the binary and the
 //! elements into `gstreamer-1.0/`; Linux uses the system's), and
 //! `plugins/<id>/plugin.toml` with the library for every plugin crate (an
@@ -146,7 +146,7 @@ fn bundle(args: &[String]) -> Result<()> {
 }
 
 /// Copies the GStreamer runtime at `dir` into the bundle, in the layout the
-/// media previewer looks in (QUESTIONS.md 97). macOS: the libraries into
+/// media previewer looks in (QUESTIONS.md 106). macOS: the libraries into
 /// `gstreamer/lib/`, the elements into `gstreamer/lib/gstreamer-1.0/`, the
 /// plugin scanner into `gstreamer/libexec/gstreamer-1.0/`; the official
 /// framework names its libraries through `@rpath`, which the binary and

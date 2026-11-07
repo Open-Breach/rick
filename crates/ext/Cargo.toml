@@ -15,6 +15,7 @@ crate-type = ["dylib", "rlib"]
 thiserror = { workspace = true }
 types = { workspace = true }
 runtime = { workspace = true }
+platform = { workspace = true }
 async-trait = { workspace = true }
 bitflags = { workspace = true }
 futures = { workspace = true }

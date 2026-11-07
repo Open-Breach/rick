@@ -149,16 +149,6 @@ const GROUPS: &[(&str, &[&str])] = &[
         ],
     ),
     ("Delete", &["core.trash", "core.delete"]),
-    // Inside the Trash view only: the actions hide themselves elsewhere.
-    (
-        "Trash",
-        &[
-            "core.restore",
-            "core.restore_trash",
-            "core.purge_trash",
-            "core.empty_trash",
-        ],
-    ),
     ("Create", &["core.new_folder", "core.new_file"]),
     ("Share", &["core.copy_path", "core.reveal"]),
 ];

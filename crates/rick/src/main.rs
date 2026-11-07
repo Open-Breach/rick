@@ -44,6 +44,10 @@ fn built_ins() -> Vec<Arc<dyn ext::Extension>> {
     extensions.push(Arc::new(ext_preview_csv::CsvPreview::new()));
     #[cfg(feature = "git")]
     extensions.push(Arc::new(ext_git::GitExtension::new()));
+    #[cfg(feature = "vfs-trash")]
+    extensions.push(Arc::new(ext_vfs_trash::TrashExtension::new()));
+    #[cfg(feature = "vfs-archive")]
+    extensions.push(Arc::new(ext_vfs_archive::ArchiveExtension::new()));
     extensions
 }
 
@@ -94,6 +98,7 @@ fn main() -> anyhow::Result<()> {
             .iter()
             .map(|e| e.manifest().id.0.to_owned())
             .collect(),
+        platform: Some(platform.clone()),
     });
     if list_plugins {
         write!(std::io::stdout().lock(), "{}", table(host.plugins()))

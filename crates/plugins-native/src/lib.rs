@@ -13,9 +13,9 @@
 //! [`plugin.toml`](PluginToml), refuses a plugin whose `api_version`,
 //! `toolchain` or `platforms` do not fit this host, skips the ids
 //! `rick.toml` disables, and loads the rest with [`load_library`]: the
-//! library's entry point ([`ext::plugin::entry_point`], named after the
-//! crate) is called with a registry of its
-//! own and the result wrapped as a [`Loaded`] extension that the application
+//! library's entry point, named after its file
+//! ([`ext::plugin::entry_point`]), is called with a registry of its own
+//! and the result wrapped as a [`Loaded`] extension that the application
 //! registers like a built-in. A plugin that fails or panics while
 //! registering is reported in its row and left alone, its library kept
 //! mapped (QUESTIONS.md 85); it never takes the host down. One tracing span
@@ -37,42 +37,28 @@ mod manifest;
 use std::path::Path;
 
 pub use host::{Host, Options, PLUGINS_DIR, Plugin, PluginStatus, Source};
-pub use load::{LoadError, Loaded, load_library};
+pub use load::{LoadError, Loaded, crate_stem, load_library};
 pub use manifest::{Library, MANIFEST_FILE, ManifestError, PluginToml};
 
 /// The toolchain this host was built with, as `rustc -V` prints it. A
 /// plugin's manifest must name the same one.
 pub const HOST_TOOLCHAIN: &str = env!("RICK_TOOLCHAIN");
 
-/// Loads the library at `path` once, reads the manifest its entry point
-/// registers and returns the `plugin.toml` for it, with this build's
-/// toolchain and the library names cargo gives the crate; the library
-/// stays mapped. For the bundler, not the running application.
+/// Loads the library at `path` once, with the platform the binary runs on,
+/// reads the manifest its entry point registers and returns the
+/// `plugin.toml` for it, with this build's toolchain and the library names
+/// cargo gives the crate; the library stays mapped. For the bundler, not
+/// the running application.
 ///
 /// # Errors
 ///
 /// [`LoadError`] when the library is not a plugin of this build.
 pub fn describe(path: &Path) -> Result<PluginToml, LoadError> {
-    let loaded = load_library(path)?;
+    let loaded = load_library(path, std::sync::Arc::new(ext::platform::Native::new()))?;
+    let stem = crate_stem(path);
     Ok(PluginToml::describe(
         loaded.manifest(),
-        &stem_of(path),
+        &stem,
         HOST_TOOLCHAIN,
     ))
-}
-
-/// The crate name a library file stands for: its file name without the
-/// platform's prefix and suffix (`libext_git.so` gives `ext_git`), which
-/// names the entry point it exports.
-#[must_use]
-pub fn stem_of(path: &Path) -> String {
-    let name = path
-        .file_name()
-        .map(|n| n.to_string_lossy().into_owned())
-        .unwrap_or_default();
-    name.strip_prefix(std::env::consts::DLL_PREFIX)
-        .unwrap_or(&name)
-        .strip_suffix(std::env::consts::DLL_SUFFIX)
-        .unwrap_or(&name)
-        .to_owned()
 }

@@ -172,6 +172,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "alloc-no-stdlib"
+version = "3.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c2fb6cfd47bf496ff64095c20eaba0c201404ee38714d4142fcfa1dc334fcc7a"
+
+[[package]]
+name = "alloc-stdlib"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0b5c1865780388bfa186411ab5f247819487fc4864c6e9c3106611fa347586e1"
+dependencies = [
+ "alloc-no-stdlib",
+]
+
+[[package]]
 name = "allocator-api2"
 version = "0.2.21"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -597,6 +612,27 @@ dependencies = [
  "futures-io",
  "futures-lite",
  "piper",
+]
+
+[[package]]
+name = "brotli"
+version = "9.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "627b7cfb0578f0eafce087a90fcd40add1231900b69e4d4de2d456260a4f5d81"
+dependencies = [
+ "alloc-no-stdlib",
+ "alloc-stdlib",
+ "brotli-decompressor",
+]
+
+[[package]]
+name = "brotli-decompressor"
+version = "6.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "97d9071e5b45944c5a9c06baf13a7a65ffa2c88c204015967852c90869692c05"
+dependencies = [
+ "alloc-no-stdlib",
+ "alloc-stdlib",
 ]
 
 [[package]]
@@ -1380,6 +1416,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "embedded-io"
+version = "0.7.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9eb1aa714776b75c7e67e1da744b81a129b3ff919c8712b5e1b32252c1f07cc7"
+
+[[package]]
+name = "embedded-io-async"
+version = "0.7.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2564b9f813c544241430e147d8bc454815ef9ac998878d30cc3055449f7fd4c0"
+dependencies = [
+ "embedded-io",
+]
+
+[[package]]
 name = "encoding_rs"
 version = "0.8.44"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1529,6 +1580,7 @@ dependencies = [
  "async-trait",
  "bitflags 2.13.2",
  "futures",
+ "platform",
  "runtime",
  "semver",
  "smallvec",
@@ -1688,6 +1740,48 @@ dependencies = [
  "tracing",
  "types",
  "vfs-local",
+]
+
+[[package]]
+name = "ext-vfs-archive"
+version = "0.2.0-dev"
+dependencies = [
+ "brotli",
+ "bzip2",
+ "ext",
+ "flate2",
+ "futures",
+ "hadris-fs",
+ "hadris-iso",
+ "hadris-storage",
+ "hadris-udf",
+ "liblzma",
+ "lz4_flex",
+ "runtime",
+ "sevenz-rust2",
+ "snap",
+ "tar",
+ "tempfile",
+ "tokio",
+ "tracing",
+ "types",
+ "unrar",
+ "zip",
+ "zstd",
+]
+
+[[package]]
+name = "ext-vfs-trash"
+version = "0.2.0-dev"
+dependencies = [
+ "ext",
+ "futures",
+ "platform",
+ "runtime",
+ "tempfile",
+ "tokio",
+ "tracing",
+ "types",
 ]
 
 [[package]]
@@ -3185,6 +3279,121 @@ dependencies = [
 ]
 
 [[package]]
+name = "hadris-fs"
+version = "3.0.0-rc.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "700c97ceb27e5e99f94f18c7e450eac272246334c11799d9b3ba0d3323d16c51"
+dependencies = [
+ "async-lock",
+ "bitflags 2.13.2",
+ "hadris-io",
+ "hadris-macros",
+ "hadris-storage",
+ "libc",
+ "spin",
+]
+
+[[package]]
+name = "hadris-io"
+version = "3.0.0-rc.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1564c55ee51215a301c68bb2bddd00db0d256d64acfa9574263dda5f148238ac"
+dependencies = [
+ "embedded-io",
+ "embedded-io-async",
+ "hadris-macros",
+]
+
+[[package]]
+name = "hadris-iso"
+version = "3.0.0-rc.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "47342f436c6550c525203c67421f431428b43062c72239bfa2912955e9fc86b7"
+dependencies = [
+ "bitflags 2.13.2",
+ "bytemuck",
+ "hadris-fs",
+ "hadris-io",
+ "hadris-iso-raw",
+ "hadris-macros",
+ "hadris-part",
+ "hadris-storage",
+ "tracing",
+]
+
+[[package]]
+name = "hadris-iso-raw"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f8236b77aea365e3bd88e36328a0ae94e74ad5291f399408293df5aa3ac2a8a5"
+dependencies = [
+ "bitflags 2.13.2",
+ "bytemuck",
+ "hadris-fs",
+]
+
+[[package]]
+name = "hadris-macros"
+version = "3.0.0-rc.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "17564167ddba078018254501b890302e721d1cb7a1b9c6059f505231e61d44ee"
+dependencies = [
+ "proc-macro2",
+]
+
+[[package]]
+name = "hadris-part"
+version = "3.0.0-rc.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d6b6558725b62c8c68192a31f41ab2fa4ebe110b1507c1e1a64628cd2b816d14"
+dependencies = [
+ "bitflags 2.13.2",
+ "bytemuck",
+ "hadris-fs",
+ "hadris-io",
+ "hadris-macros",
+ "hadris-storage",
+ "tracing",
+]
+
+[[package]]
+name = "hadris-storage"
+version = "3.0.0-rc.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "60c516e00733aefd8a35453c763063b082082e41c96b9a6589327ab46e8d4632"
+dependencies = [
+ "hadris-io",
+ "hadris-macros",
+ "libc",
+]
+
+[[package]]
+name = "hadris-udf"
+version = "3.0.0-rc.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8e6ecdc1b7d864f249431a2bc01845dab9a54205810e87e7a2484faceb7775da"
+dependencies = [
+ "bytemuck",
+ "hadris-fs",
+ "hadris-io",
+ "hadris-iso",
+ "hadris-macros",
+ "hadris-storage",
+ "hadris-udf-raw",
+ "tracing",
+]
+
+[[package]]
+name = "hadris-udf-raw"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "993bf82c88bb896828c2cca52d9bcbd8240ac812123be4662c5b32d8d2437689"
+dependencies = [
+ "bitflags 2.13.2",
+ "bytemuck",
+]
+
+[[package]]
 name = "half"
 version = "2.7.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3406,9 +3615,9 @@ dependencies = [
 
 [[package]]
 name = "id3"
-version = "1.17.2"
+version = "1.17.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ef8be496a46468ba3d43690775aa3a79102ce4daf7d99e8072589aae1a3cd955"
+checksum = "33cf1819f31542d9f81db9caa644f91bcf8a375f6de0ce649e4596778b955ab7"
 dependencies = [
  "bitflags 2.13.2",
  "byteorder",
@@ -3778,6 +3987,26 @@ checksum = "d7c4b02199fee7c5d21a5ae7d8cfa79a6ef5bb2fc834d6e9058e89c825efdc55"
 dependencies = [
  "cfg-if",
  "windows-link",
+]
+
+[[package]]
+name = "liblzma"
+version = "0.4.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "aa980ea6744074a5b5e0ac6b164aca94fc970121869b3e78ae12a2b0097dbea7"
+dependencies = [
+ "liblzma-sys",
+]
+
+[[package]]
+name = "liblzma-sys"
+version = "0.4.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7c7e3581f367a78d7b7e7ae948d023310556f0cfc13156c2e4e00e25616492b9"
+dependencies = [
+ "cc",
+ "libc",
+ "pkg-config",
 ]
 
 [[package]]
@@ -4750,8 +4979,10 @@ dependencies = [
  "rfd",
  "runtime",
  "rustix 1.1.6",
+ "serde",
  "tempfile",
  "thiserror 2.0.21",
+ "toml 0.9.12+spec-1.1.0",
  "tracing",
  "types",
  "windows",
@@ -4864,6 +5095,12 @@ checksum = "d83eb9bc6d8e5cf568e7a1101d60ee05e81ed50ea106026f3d18deeb046d7661"
 dependencies = [
  "zerovec",
 ]
+
+[[package]]
+name = "ppmd-rust"
+version = "1.5.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cd4acc8d264ea385db64ccfdcdfd5909ee9eda0975666723d59f3bfec80b3611"
 
 [[package]]
 name = "ppv-lite86"
@@ -5164,6 +5401,8 @@ dependencies = [
  "ext-preview-office",
  "ext-preview-pdf",
  "ext-preview-text",
+ "ext-vfs-archive",
+ "ext-vfs-trash",
  "platform",
  "plugins-native",
  "tracing",
@@ -5369,13 +5608,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e5e465701779cbc6d0d10cf907f175035cfdd50b8d3cb628d7f1f435ef02972f"
 dependencies = [
  "aes",
+ "bzip2",
  "cbc",
  "crc32fast",
+ "flate2",
  "getrandom 0.4.3",
  "js-sys",
  "lzma-rust2",
+ "ppmd-rust",
  "sha2",
  "wasm-bindgen",
+ "zstd",
 ]
 
 [[package]]
@@ -5563,6 +5806,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "snap"
+version = "1.1.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "199905e6153d6405f9728fe44daace35f8f837bbf830bb6e85fbd5828709a886"
+
+[[package]]
 name = "socket2"
 version = "0.6.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5571,6 +5820,12 @@ dependencies = [
  "libc",
  "windows-sys 0.61.2",
 ]
+
+[[package]]
+name = "spin"
+version = "0.12.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0134f9043ed38b087ac4f7d4af44c79e2c9e5094421fe3164f435ce585953b10"
 
 [[package]]
 name = "spirv"
@@ -5671,6 +5926,7 @@ checksum = "3f6221d9a6003c78398e3b239969f352578258df48c8eb051caadae0015bc840"
 dependencies = [
  "filetime",
  "libc",
+ "xattr",
 ]
 
 [[package]]
@@ -5718,7 +5974,11 @@ dependencies = [
  "ext-preview-office",
  "ext-preview-pdf",
  "ext-preview-text",
+ "ext-vfs-archive",
+ "ext-vfs-trash",
  "futures",
+ "hadris-fs",
+ "hadris-iso",
  "image",
  "model",
  "ops",
@@ -5727,6 +5987,8 @@ dependencies = [
  "plugin-probe",
  "plugins-native",
  "runtime",
+ "sevenz-rust2",
+ "tar",
  "tempfile",
  "thiserror 2.0.21",
  "tokio",
@@ -5736,6 +5998,8 @@ dependencies = [
  "vfs",
  "vfs-local",
  "vfs-rick",
+ "zip",
+ "zstd",
 ]
 
 [[package]]
@@ -6073,7 +6337,6 @@ dependencies = [
  "egui_kittest",
  "ext",
  "model",
- "ops",
  "platform",
  "runtime",
  "tempfile",
@@ -7169,6 +7432,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ea6fc2961e4ef194dcbfe56bb845534d0dc8098940c7e5c012a258bfec6701bd"
 
 [[package]]
+name = "xattr"
+version = "1.7.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "963d6fab92d5504b971dc8bd90ca743c2575e590bc8071ea5bc571598667ae08"
+dependencies = [
+ "libc",
+ "rustix 1.1.6",
+]
+
+[[package]]
 name = "xcursor"
 version = "0.3.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7437,6 +7710,7 @@ dependencies = [
  "typed-path",
  "windows-sys 0.61.2",
  "zeroize",
+ "zstd",
 ]
 
 [[package]]

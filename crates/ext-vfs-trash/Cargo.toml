@@ -1,0 +1,27 @@
+[package]
+name = "ext-vfs-trash"
+version.workspace = true
+description = "Rick's trash provider: the platform trash as the browsable location rick://trash, with Restore, Restore trash items and Empty trash."
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+# A plugin: a `cdylib` the host loads from `plugins/vfs-trash/`, and an
+# `rlib` for the binary's opt-in `vfs-trash` feature and the tests.
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+types = { workspace = true }
+ext = { workspace = true }
+futures = { workspace = true }
+tokio = { workspace = true, features = ["fs", "io-util"] }
+tracing = { workspace = true }
+
+[dev-dependencies]
+runtime = { workspace = true }
+platform = { workspace = true }
+tempfile = { workspace = true }
+
+[lints]
+workspace = true
