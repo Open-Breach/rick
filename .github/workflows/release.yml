@@ -1,0 +1,221 @@
+name: release
+# On a `v*` tag: a release build on every OS, one archive per platform with
+# the binary, the pdfium library beside it (SPEC.md: pdfium ships beside the
+# binary), LICENSE, README, CHANGELOG and the third-party licenses; a smoke
+# test of every archive; then a GitHub Release with the archives, their
+# SHA-256 sums and the tag's changelog section as its body. A tag with a
+# pre-release suffix (v0.1.0-rc1) makes a draft pre-release; a plain tag
+# publishes. Run by hand from a branch with a tag name, it is a dry run: the
+# same build and smoke test, then a draft release under that name on the
+# branch's commit (the tag itself is only created if the draft is published).
+# No signing, notarisation or installers in 0.1.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release as this tag (vX.Y.Z or vX.Y.Z-rcN); a draft is created"
+        required: true
+permissions:
+  contents: write
+env:
+  CARGO_TERM_COLOR: always
+  TAG: ${{ inputs.tag || github.ref_name }}
+jobs:
+  licenses:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: taiki-e/install-action@v2
+        with: { tool: cargo-about }
+      # about.toml lists the four release targets, so one run covers them all.
+      - run: cargo about generate about.hbs -o THIRD-PARTY-LICENSES.md
+      - uses: actions/upload-artifact@v4
+        with: { name: third-party-licenses, path: THIRD-PARTY-LICENSES.md }
+
+  build:
+    needs: licenses
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-latest, platform: linux-x64, pdfium: pdfium-linux-x64 }
+          # aarch64 Linux builds natively on GitHub's arm runner, no cross
+          # toolchain needed.
+          - { os: ubuntu-24.04-arm, platform: linux-arm64, pdfium: pdfium-linux-arm64 }
+          - { os: macos-latest, platform: macos-arm64, pdfium: pdfium-mac-arm64 }
+          - { os: windows-latest, platform: windows-x64, pdfium: pdfium-win-x64 }
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      # The version is the tag's; its release part must be the workspace's,
+      # so `rick --version` and the archive name agree.
+      - name: version
+        shell: bash
+        run: |
+          tag_version="${TAG#v}"
+          crate_version="$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -1)"
+          if [ "${tag_version%%-*}" != "$crate_version" ]; then
+            echo "tag $TAG does not match workspace version $crate_version"
+            exit 1
+          fi
+          echo "VERSION=$tag_version" >> "$GITHUB_ENV"
+          echo "NAME=rick-$tag_version-${{ matrix.platform }}" >> "$GITHUB_ENV"
+      - name: pdfium
+        shell: bash
+        run: |
+          dest="$RUNNER_TEMP/pdfium"
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            dest="$(cygpath -u "$RUNNER_TEMP")/pdfium"
+          fi
+          mkdir -p "$dest"
+          curl -sSL "https://github.com/bblanchon/pdfium-binaries/releases/latest/download/${{ matrix.pdfium }}.tgz" | tar xz -C "$dest"
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            echo "PDFIUM_LIB=$dest/bin/pdfium.dll" >> "$GITHUB_ENV"
+            echo "RICK_PDFIUM_DIR=$(cygpath -w "$dest/bin")" >> "$GITHUB_ENV"
+          elif [ "${{ runner.os }}" = "macOS" ]; then
+            echo "PDFIUM_LIB=$dest/lib/libpdfium.dylib" >> "$GITHUB_ENV"
+            echo "RICK_PDFIUM_DIR=$dest/lib" >> "$GITHUB_ENV"
+          else
+            echo "PDFIUM_LIB=$dest/lib/libpdfium.so" >> "$GITHUB_ENV"
+            echo "RICK_PDFIUM_DIR=$dest/lib" >> "$GITHUB_ENV"
+          fi
+      - run: cargo build --release -p rick
+      # The previewer's test binary for the smoke test; not in the archive.
+      - run: cargo build --release -p ext-preview-pdf --example pdfium_check
+      - uses: actions/download-artifact@v4
+        with: { name: third-party-licenses }
+      - name: package
+        shell: bash
+        run: |
+          set -euo pipefail
+          exe=""
+          if [ "${{ runner.os }}" = "Windows" ]; then exe=".exe"; fi
+          mkdir -p "dist/$NAME"
+          cp "target/release/rick$exe" "dist/$NAME/"
+          cp "$PDFIUM_LIB" "dist/$NAME/"
+          cp LICENSE README.md CHANGELOG.md THIRD-PARTY-LICENSES.md "dist/$NAME/"
+          ls -l "dist/$NAME"
+          cd dist
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            7z a -tzip "$NAME.zip" "$NAME" > /dev/null
+            archive="$NAME.zip"
+          else
+            tar czf "$NAME.tar.gz" "$NAME"
+            archive="$NAME.tar.gz"
+          fi
+          if command -v sha256sum > /dev/null; then
+            sha256sum "$archive" > "$archive.sha256"
+          else
+            shasum -a 256 "$archive" > "$archive.sha256"
+          fi
+          cat "$archive.sha256"
+          rm -r "$NAME"
+          mkdir -p ../check
+          cp "../target/release/examples/pdfium_check$exe" ../check/
+      - uses: actions/upload-artifact@v4
+        with:
+          name: archive-${{ matrix.platform }}
+          path: dist/
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pdfium-check-${{ matrix.platform }}
+          path: check/
+          if-no-files-found: error
+
+  # Each archive, as a user gets it: unpacked in an empty directory, the
+  # binary reports its version, and pdfium loads from beside it.
+  smoke:
+    needs: build
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-latest, platform: linux-x64 }
+          - { os: ubuntu-24.04-arm, platform: linux-arm64 }
+          - { os: macos-latest, platform: macos-arm64 }
+          - { os: windows-latest, platform: windows-x64 }
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    steps:
+      - uses: actions/download-artifact@v4
+        with: { name: "archive-${{ matrix.platform }}", path: dist }
+      - uses: actions/download-artifact@v4
+        with: { name: "pdfium-check-${{ matrix.platform }}", path: check }
+      - name: smoke test
+        shell: bash
+        env:
+          RICK_PDFIUM_DIR: ""
+        run: |
+          set -euo pipefail
+          unset RICK_PDFIUM_DIR
+          version="${TAG#v}"
+          name="rick-$version-${{ matrix.platform }}"
+          exe=""
+          if [ "${{ runner.os }}" = "Windows" ]; then exe=".exe"; fi
+          cd dist
+          if command -v sha256sum > /dev/null; then sha256sum -c "$name".*.sha256; else shasum -a 256 -c "$name".*.sha256; fi
+          mkdir empty && cd empty
+          if [ -f "../$name.zip" ]; then 7z x "../$name.zip" > /dev/null; else tar xzf "../$name.tar.gz"; fi
+          cd "$name"
+          ls -l
+          for file in "rick$exe" LICENSE README.md CHANGELOG.md THIRD-PARTY-LICENSES.md; do
+            test -f "$file" || { echo "missing $file"; exit 1; }
+          done
+          ls libpdfium.so libpdfium.dylib pdfium.dll 2> /dev/null | grep -q . || { echo "no pdfium library beside the binary"; exit 1; }
+          # The version line: the workspace version (the tag without any
+          # pre-release suffix) and the git hash in brackets.
+          out="$("./rick$exe" --version)"
+          echo "rick --version: $out"
+          echo "$out" | grep -Eq "^${version%%-*} \([0-9a-f]{7,}\)$" || { echo "unexpected version line"; exit 1; }
+          # rick --list-plugins does not exist in 0.1 (the plugin host is 0.2).
+          # pdfium from beside the binary: the previewer's test binary, copied
+          # next to rick, with RICK_PDFIUM_DIR unset and no system pdfium.
+          cp "../../../check/pdfium_check$exe" .
+          chmod +x "pdfium_check$exe"
+          "./pdfium_check$exe" | tee check.txt
+          grep -q "^pdfium ok" check.txt
+
+  release:
+    needs: [build, smoke]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with: { pattern: "archive-*", path: dist, merge-multiple: true }
+      - name: checksums and body
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd dist
+          cat ./*.sha256 | sort -k2 > SHA256SUMS.txt
+          rm ./*.sha256
+          cat SHA256SUMS.txt
+          cd ..
+          python3 .github/scripts/changelog-section.py "$TAG" CHANGELOG.md > body.md
+          {
+            echo
+            echo "Archives: the \`rick\` binary with the pdfium library beside it, LICENSE, README, CHANGELOG and THIRD-PARTY-LICENSES; \`SHA256SUMS.txt\` has the checksums. Not signed or notarised (see README, Try it)."
+          } >> body.md
+          cat body.md
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.TAG }}
+          target_commitish: ${{ github.sha }}
+          name: Rick ${{ env.TAG }}
+          body_path: body.md
+          draft: ${{ contains(env.TAG, '-') || github.event_name == 'workflow_dispatch' }}
+          prerelease: ${{ contains(env.TAG, '-') }}
+          files: |
+            dist/*.tar.gz
+            dist/*.zip
+            dist/SHA256SUMS.txt
+          fail_on_unmatched_files: true
