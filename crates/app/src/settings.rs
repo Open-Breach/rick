@@ -34,6 +34,7 @@ pub fn load(path: &Path) -> Result<Settings, Error> {
 
 /// A writer that saves every settings snapshot sent to it, in order, off
 /// the caller's thread: two changes in a row can never land reversed.
+#[must_use]
 pub fn saver(path: PathBuf) -> mpsc::UnboundedSender<Settings> {
     let (tx, mut rx) = mpsc::unbounded_channel::<Settings>();
     runtime::handle().spawn(async move {

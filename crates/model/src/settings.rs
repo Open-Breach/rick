@@ -82,6 +82,17 @@ pub struct Settings {
     pub preview: Preview,
     /// Search in subdirectories: the names the walk skips.
     pub search: Search,
+    /// Plugins: which of them not to load.
+    pub plugins: Plugins,
+}
+
+/// The `[plugins]` table.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(default)]
+pub struct Plugins {
+    /// Ids of the plugins not to load on the next start; they stay on disk
+    /// and the Extensions screen lists them as disabled.
+    pub disabled: Vec<String>,
 }
 
 /// The `[search]` table.
@@ -371,6 +382,7 @@ impl Default for Settings {
             drag: Drag::default(),
             preview: Preview::default(),
             search: Search::default(),
+            plugins: Plugins::default(),
         }
     }
 }
@@ -434,6 +446,13 @@ pub enum SettingsChange {
     },
     /// The names the subtree search skips.
     SearchIgnore(Vec<String>),
+    /// Enable or disable a plugin; takes effect on the next start.
+    Plugin {
+        /// The plugin id.
+        id: String,
+        /// `false` adds it to `[plugins] disabled`, `true` removes it.
+        enabled: bool,
+    },
 }
 
 impl Settings {
@@ -487,6 +506,12 @@ impl Settings {
                 }
             },
             SettingsChange::SearchIgnore(names) => self.search.ignore = names,
+            SettingsChange::Plugin { id, enabled } => {
+                self.plugins.disabled.retain(|d| *d != id);
+                if !enabled {
+                    self.plugins.disabled.push(id);
+                }
+            }
         }
     }
 }

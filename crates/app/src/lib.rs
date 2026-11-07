@@ -64,7 +64,7 @@
 mod command;
 mod recent;
 mod session;
-mod settings;
+pub mod settings;
 mod trash;
 
 pub use command::{Command, Event, TransferMode};
@@ -80,7 +80,8 @@ use std::time::Duration;
 
 use ext::{
     ActionCtx, ActionOutcome, Availability, DecorateCtx, Decoration, Decorator, Depth, Extension,
-    FsChange, Invocation, Level, ListOptions, PreviewDoc, Previewer, Registry, UiHost, UndoCommand,
+    FsChange, Invocation, Level, ListOptions, Points, PreviewDoc, Previewer, Registry, UiHost,
+    UndoCommand,
 };
 use futures::StreamExt;
 use model::{JobState, Model, PaneId, Section, Session, Settings, SettingsChange, TabId, Volume};
@@ -92,6 +93,36 @@ use trash::TrashBridge;
 use types::{CancelToken, Entry, EntryId, Error, JobId, Location, Progress, VPath};
 use vfs::Mounts;
 use vfs_local::LocalProvider;
+
+/// What became of a plugin the host found, for the Extensions screen.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PluginStatus {
+    /// Loaded; its contributions are registered.
+    Loaded,
+    /// Listed in `rick.toml` as disabled: on disk, not loaded.
+    Disabled,
+    /// Not loaded, for the reason given.
+    Refused(String),
+}
+
+/// One plugin the host found, as the Extensions screen and
+/// `rick --list-plugins` show it. The binary builds the rows from the
+/// plugin host and hands them over after [`App::new`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Plugin {
+    /// The extension id.
+    pub id: String,
+    /// The name its manifest gives.
+    pub name: String,
+    /// The version its manifest gives.
+    pub version: String,
+    /// The extension points its manifest lists.
+    pub points: Points,
+    /// Loaded, disabled or refused.
+    pub status: PluginStatus,
+    /// The plugin's directory.
+    pub path: PathBuf,
+}
 
 /// What an [`App`] is built from.
 pub struct Config {
@@ -409,6 +440,8 @@ pub struct App {
     layouts: Vec<String>,
     /// The last window was closed: the UI should exit.
     exit: bool,
+    /// The plugins the host found, for the Extensions screen.
+    plugins: Vec<Plugin>,
 }
 
 impl App {
@@ -583,6 +616,7 @@ impl App {
             layouts_dir,
             layouts,
             exit: false,
+            plugins: Vec::new(),
         };
         app.watch_settings();
         app.load_recent(&config_dir.join(RECENT_FILE));
@@ -633,6 +667,18 @@ impl App {
     #[must_use]
     pub fn session_writes(&self) -> u64 {
         self.session_saver.writes()
+    }
+
+    /// Records the plugins the host found, for the Extensions screen.
+    pub fn set_plugins(&mut self, plugins: Vec<Plugin>) {
+        self.plugins = plugins;
+    }
+
+    /// The plugins the host found, as the binary recorded them; empty when
+    /// no host ran (the tests' apps).
+    #[must_use]
+    pub fn plugins(&self) -> &[Plugin] {
+        &self.plugins
     }
 
     /// The saved layouts' names, sorted.
