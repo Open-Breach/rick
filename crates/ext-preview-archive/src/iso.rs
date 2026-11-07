@@ -105,8 +105,10 @@ fn parse_directory(bytes: &[u8], names: Names, skip: usize) -> Vec<Record> {
         let mut name = match names {
             Names::Joliet if !is_dot => {
                 let units: Vec<u16> = raw_name
-                    .chunks_exact(2)
-                    .map(|c| u16::from_be_bytes([c[0], c[1]]))
+                    .as_chunks::<2>()
+                    .0
+                    .iter()
+                    .map(|c| u16::from_be_bytes(*c))
                     .collect();
                 String::from_utf16_lossy(&units)
             }

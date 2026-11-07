@@ -212,8 +212,7 @@ pub fn detect(name: &str, sniff: &[u8]) -> Option<(Format, u8)> {
             .or_else(|| named(&["tar.gz", "tgz"]).then_some(Format::Tar(Compression::Gzip)))
     } else if sniff.starts_with(b"\x28\xB5\x2F\xFD") {
         zstd::stream::read::Decoder::new(sniff)
-            .ok()
-            .is_some_and(decodes_to_tar)
+            .is_ok_and(decodes_to_tar)
             .then_some(Format::Tar(Compression::Zstd))
             .or_else(|| named(&["tar.zst", "tzst"]).then_some(Format::Tar(Compression::Zstd)))
     } else if sniff.starts_with(b"\xFD7zXZ\x00") {

@@ -268,7 +268,7 @@ fn without_playback_the_document_shows_the_facts_and_the_reason() {
     assert_eq!(doc.pages(), None);
     assert!(doc.transport().is_none());
     assert!(doc.text_layer().is_none());
-    assert!(doc.controls().is_empty());
+    assert_eq!(doc.controls(), []);
     assert!(
         doc.set_control(ControlId("x"), ControlValue::Pressed)
             .is_err()
@@ -486,7 +486,9 @@ mod with_gstreamer {
         );
         assert_eq!(data.len(), 320 * 240 * 4);
         assert!(
-            data.chunks_exact(4)
+            data.as_chunks::<4>()
+                .0
+                .iter()
                 .any(|p| p[0] > 100 || p[1] > 100 || p[2] > 100),
             "a test pattern has colour"
         );

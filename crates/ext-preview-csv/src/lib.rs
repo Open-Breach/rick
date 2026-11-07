@@ -673,8 +673,8 @@ mod tests {
         );
         assert_eq!(grid.cells(999..1005).len(), 1);
         assert_eq!(grid.cells(0..1)[0][0], "0");
-        assert!(grid.cells(1000..1001).is_empty());
-        assert!(grid.cells(5..5).is_empty());
+        assert_eq!(grid.cells(1000..1001), [] as [Vec<String>; 0]);
+        assert_eq!(grid.cells(5..5), [] as [Vec<String>; 0]);
         assert_eq!(doc.status()[0], "1000 rows × 3 columns");
         assert_eq!(doc.status()[1], "semicolon");
         assert_eq!(doc.status()[2], "UTF-8");

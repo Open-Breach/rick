@@ -157,7 +157,7 @@ fn without_libreoffice_the_document_shows_metadata_and_the_hint() {
         doc.set_control(ControlId("x"), ControlValue::Pressed)
             .is_err()
     );
-    assert!(doc.controls().is_empty());
+    assert_eq!(doc.controls(), []);
     assert_eq!(
         ConvertError::TimedOut.to_string(),
         "LibreOffice took longer than 60 s"

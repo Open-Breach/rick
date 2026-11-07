@@ -1393,7 +1393,7 @@ mod tests {
             rust.set_control(RENDERED, ControlValue::Bool(false))
                 .is_err()
         );
-        assert!(rust.controls().is_empty());
+        assert_eq!(rust.controls(), []);
     }
 
     #[test]

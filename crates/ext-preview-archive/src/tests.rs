@@ -360,7 +360,7 @@ fn sevenz_lists_entries_and_marks_encryption() {
     let hidden = write(dir.path(), "h.7z", &sample_7z(true, true));
     let listed = list(&hidden, Format::SevenZ, &limit()).unwrap_or_else(|e| panic!("{e}"));
     assert!(listed.facts.encrypted_headers);
-    assert!(listed.entries.is_empty());
+    assert_eq!(listed.entries, []);
     let doc = ArchiveDoc::new(Format::SevenZ, listed, Some(500));
     assert_eq!(
         doc.listing().stats,
