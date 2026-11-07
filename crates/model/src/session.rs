@@ -200,18 +200,18 @@ impl Default for TabSession {
 }
 
 /// A location as a `provider:path` string.
-mod location_toml {
+pub(crate) mod location_toml {
     use serde::{Deserialize, Deserializer, Serialize, Serializer};
     use types::Location;
 
-    pub(super) fn serialize<S: Serializer>(
+    pub(crate) fn serialize<S: Serializer>(
         location: &Location,
         serializer: S,
     ) -> Result<S::Ok, S::Error> {
         location.to_string().serialize(serializer)
     }
 
-    pub(super) fn deserialize<'de, D: Deserializer<'de>>(
+    pub(crate) fn deserialize<'de, D: Deserializer<'de>>(
         deserializer: D,
     ) -> Result<Location, D::Error> {
         let text = String::deserialize(deserializer)?;

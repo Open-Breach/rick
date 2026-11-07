@@ -17,6 +17,7 @@ use vfs::Mounts;
 use crate::conflict::Conflicts;
 use crate::edit::{MoveCommand, spawn_copies};
 use crate::inside;
+use crate::schedule::Scheduler;
 
 /// Move or copy.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -47,8 +48,9 @@ fn folder_name(folder: &Location) -> String {
 }
 
 /// Starts the job that moves or copies `sources` into `to`, each under its
-/// own name, asking about existing names through `conflicts`. A move returns
-/// the undoable command, already running; a copy returns the job it started.
+/// own name, asking about existing names through `conflicts` and waiting
+/// its turn on its volumes through `scheduler`. A move returns the undoable
+/// command, already running; a copy returns the job it started.
 ///
 /// # Errors
 ///
@@ -58,6 +60,7 @@ pub fn transfer(
     jobs: &JobRunner,
     mounts: Arc<Mounts>,
     conflicts: Arc<Conflicts>,
+    scheduler: Arc<Scheduler>,
     sources: &[Location],
     to: &Location,
     kind: TransferKind,
@@ -80,6 +83,7 @@ pub fn transfer(
             let command = MoveCommand {
                 mounts,
                 conflicts,
+                scheduler,
                 pairs,
                 label: format!("Move {what} to {folder}"),
             };
@@ -91,6 +95,7 @@ pub fn transfer(
                 jobs,
                 mounts,
                 conflicts,
+                scheduler,
                 format!("Copy {what} to {folder}"),
                 pairs,
             );

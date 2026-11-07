@@ -149,6 +149,16 @@ const GROUPS: &[(&str, &[&str])] = &[
         ],
     ),
     ("Delete", &["core.trash", "core.delete"]),
+    // Inside the Trash view only: the actions hide themselves elsewhere.
+    (
+        "Trash",
+        &[
+            "core.restore",
+            "core.restore_trash",
+            "core.purge_trash",
+            "core.empty_trash",
+        ],
+    ),
     ("Create", &["core.new_folder", "core.new_file"]),
     ("Share", &["core.copy_path", "core.reveal"]),
 ];
@@ -181,11 +191,8 @@ pub fn context_menu(
                 ui.close();
             }
             if ui.button("Open in new tab").clicked() {
-                let location = types::Location::new(
-                    cx.tab.location.provider,
-                    cx.tab.location.path.join(entry.name.as_bytes()),
-                );
-                cx.requests.push(Request::NewTabAt(location));
+                cx.requests
+                    .push(Request::NewTabAt(cx.tab.location_of(entry)));
                 ui.close();
             }
             any = true;

@@ -5,10 +5,18 @@ use std::fmt;
 use std::future::Future;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::time::{Duration, Instant};
 
 use tokio::sync::{mpsc, oneshot, watch};
 use tracing::Instrument;
 use types::{CancelToken, Error, JobId, Progress};
+
+/// The least time between two progress events of one job. A job over
+/// hundreds of thousands of entries reports each; the event sink, and so
+/// the UI, sees at most this many reports a second per job, always the
+/// latest, and the last one before the job ends. A `Progress::Message` is
+/// a change of state and is published at once.
+pub const PROGRESS_EVERY: Duration = Duration::from_millis(50);
 
 /// What a runner tells its event sink about every job it runs, so the
 /// application can follow jobs it did not spawn itself, such as those an
@@ -236,6 +244,9 @@ impl JobRunner {
         self.spawn_with(name, true, job)
     }
 
+    // The forwarding loop is one `select!`: the job, its cancellation and
+    // the throttled progress belong together.
+    #[allow(clippy::too_many_lines)]
     fn spawn_with<T, F, Fut>(&self, name: impl Into<String>, pausable: bool, job: F) -> JobHandle<T>
     where
         T: Send + 'static,
@@ -278,13 +289,19 @@ impl JobRunner {
         let span = tracing::debug_span!("job", %id);
         let inner = Arc::clone(&self.inner);
         // Progress is forwarded from the job's own task, so the sink sees
-        // every report before `Finished`.
+        // the latest report before `Finished`; reports closer together than
+        // `PROGRESS_EVERY` are coalesced into the one at the window's end.
         let mut progress = inner.events.as_ref().map(|_| progress_rx.clone());
 
         crate::handle().spawn(
             async move {
                 let mut future = Box::pin(future);
                 let mut cancelled = Box::pin(cancelled);
+                let mut last_published: Option<Instant> = None;
+                // A report arrived inside the window and waits for its end.
+                let mut deferred = false;
+                let window = tokio::time::sleep(Duration::ZERO);
+                tokio::pin!(window);
                 let result = loop {
                     tokio::select! {
                         biased;
@@ -296,25 +313,52 @@ impl JobRunner {
                                 None => std::future::pending().await,
                             }
                         } => {
-                            if changed {
-                                let latest = progress
-                                    .as_mut()
-                                    .map(|rx| rx.borrow_and_update().clone());
-                                if let Some(latest) = latest {
-                                    inner.publish(JobEvent::Progress { id, progress: latest });
-                                }
-                            } else {
+                            if !changed {
                                 // The job dropped its sink; nothing more to forward.
                                 progress = None;
+                                continue;
+                            }
+                            let latest = progress
+                                .as_mut()
+                                .map(|rx| rx.borrow_and_update().clone());
+                            let Some(latest) = latest else {
+                                continue;
+                            };
+                            // A message is a change of state (a conflict, a
+                            // wait) and goes out at once; counts are throttled.
+                            let is_message = matches!(latest, Progress::Message(_));
+                            match last_published {
+                                Some(at) if at.elapsed() < PROGRESS_EVERY && !is_message => {
+                                    if !deferred {
+                                        deferred = true;
+                                        window.as_mut().reset((at + PROGRESS_EVERY).into());
+                                    }
+                                }
+                                _ => {
+                                    deferred = false;
+                                    inner.publish(JobEvent::Progress { id, progress: latest });
+                                    last_published = Some(Instant::now());
+                                }
+                            }
+                        }
+                        () = &mut window, if deferred => {
+                            deferred = false;
+                            let latest = progress
+                                .as_mut()
+                                .map(|rx| rx.borrow_and_update().clone());
+                            if let Some(latest) = latest {
+                                inner.publish(JobEvent::Progress { id, progress: latest });
+                                last_published = Some(Instant::now());
                             }
                         }
                     }
                 };
-                // A report the job made just before returning is still
-                // unseen; the sender being gone does not matter.
+                // A report the job made just before returning, or one held
+                // back by the window, is still unpublished; the sender being
+                // gone does not matter.
                 let last = progress.as_mut().and_then(|rx| {
                     let value = rx.borrow_and_update();
-                    value.has_changed().then(|| value.clone())
+                    (deferred || value.has_changed()).then(|| value.clone())
                 });
                 if let Some(latest) = last {
                     inner.publish(JobEvent::Progress {
@@ -477,6 +521,49 @@ mod tests {
                 ),
                 "{seen:?}"
             );
+        });
+    }
+
+    #[test]
+    fn a_burst_of_reports_reaches_the_sink_throttled_with_the_last_one_intact() {
+        let (runner, mut events) = JobRunner::with_events();
+        crate::block_on(async {
+            let handle = runner.spawn_named("count", |ctx| async move {
+                for done in 1..=20_000u64 {
+                    ctx.progress.report(Progress::Items {
+                        done,
+                        total: Some(20_000),
+                    });
+                    if done % 5_000 == 0 {
+                        tokio::task::yield_now().await;
+                    }
+                }
+                Ok::<(), Error>(())
+            });
+            assert!(matches!(handle.result.await, Ok(Ok(()))));
+            let mut seen = Vec::new();
+            while let Ok(Some(event)) =
+                tokio::time::timeout(Duration::from_millis(200), events.recv()).await
+            {
+                seen.push(event);
+            }
+            let reports: Vec<u64> = seen
+                .iter()
+                .filter_map(|e| match e {
+                    JobEvent::Progress {
+                        progress: Progress::Items { done, .. },
+                        ..
+                    } => Some(*done),
+                    _ => None,
+                })
+                .collect();
+            assert!(
+                reports.len() <= 8,
+                "{} progress events for 20 000 reports",
+                reports.len()
+            );
+            assert_eq!(reports.last(), Some(&20_000), "{reports:?}");
+            assert!(matches!(seen.last(), Some(JobEvent::Finished { .. })));
         });
     }
 

@@ -931,3 +931,101 @@ Once answered, an entry keeps its number and gains a dated decision line.
     process ends (`Loaded` holds the library in a `ManuallyDrop`). Only a
     file that is no plugin at all (no entry point) is unmapped again. The
     cost is the memory of a plugin that could not be used.
+
+86. (side panel) The spec leaves the scheme of the virtual locations to the
+    implementer and suggests `rick://favorites`, `rick://recent`,
+    `rick://trash`, `rick://machine`, `rick://network` and `rick://cloud`.
+    Assumed: those six names, served by one built-in provider in the new
+    crate `vfs-rick` under the provider id `rick`, each location's path
+    being the bare name, so the session and places files write them in the
+    `provider:path` form every location uses (`rick:trash`); the path bar
+    accepts the `rick://trash` form typed anywhere. The 0.1 `trash`
+    pseudo-provider of the trash actions is folded into it.
+
+87. (side panel) The Cloud section needs to know which providers are cloud
+    ones and the Network section which are host-addressed connections, and
+    the `Provider` contract has no kind: the manifest of the plugin host
+    (#27) declares the points an extension fills and the platforms it runs
+    on, not what kind of provider it mounts.
+    Assumed: a mounted provider counts as cloud when its id is `s3`, `azure`
+    or `gcs` and as network when it is `sftp`, the ids the spec's package
+    layout fixes; the Cloud rows are what each cloud provider lists at its
+    root (its accounts or containers), fetched at start and whenever the
+    Cloud overview lists; the *Add…* row of an empty Network or Cloud
+    section says that a provider plugin creates connections and accounts,
+    since none exists yet. To be replaced by a registry contribution once a
+    provider can declare its kind. The integration tests prove the section with an in-memory
+    provider under the `s3` id.
+
+88. (side panel) The standard folders and the system's recently-used list
+    are platform services the `platform` trait set did not have.
+    Assumed: `StandardFolders` (XDG user-dirs on Linux, the known folders
+    on Windows, the fixed directories under the home on macOS, `Video`
+    being `Movies` there) and `RecentlyUsed` (`recently-used.xbel` on
+    Linux; the Recent folder's shortcuts resolved with `IShellLinkW` on
+    Windows; Spotlight's `kMDItemLastUsedDate` over the home for the last
+    thirty days through `mdfind` on macOS, which keeps its Recent Items in a
+    private store) join the set, implemented on the fake with three folders
+    under its home and a settable list. The Recent view sorts by date
+    accessed descending, the use time being the entry's `accessed`. This
+    Machine lists the system disk too, as `System`, since `/` has no last
+    component to name it by, with the file system name added to `Volume`.
+
+89. (operations) "Jobs are scheduled per volume" needs a volume key and a
+    place in the job's life to wait.
+    Assumed: the key is the device half of the local entry id (of the
+    nearest existing ancestor for a target that does not exist yet) and the
+    provider id for every other provider; copy, move and its undo, duplicate
+    and a drag's transfer acquire their keys first thing through an
+    `ops::Scheduler` the application owns, queued first in first out, and a
+    cancelled job releases them by dropping its lease; trash, restore,
+    rename, new file and new folder, which end in milliseconds, do not
+    queue. The waiting job's row shows `JobState::Waiting(name)` with the
+    name of the first running job holding one of its keys. Progress events
+    are coalesced in the runtime to one per 50 ms per job, a message (a
+    conflict, a wait) going out at once, so a job over hundreds of thousands
+    of entries never redraws the area per entry.
+
+90. (side panel) Editing Places: the spec names Remove, Edit… (title and a
+    Phosphor icon, `FOLDER` by default) and drag reorder, without saying
+    what a dropped folder is called, how the icon is picked from 1 500
+    glyphs, or whether edits are undoable.
+    Assumed: a dropped folder's title is its name and its icon `FOLDER`;
+    Edit… offers a curated set of forty Phosphor icons by name (the names are
+    what `places.toml` stores, an unknown name shows the folder); place edits
+    are not undoable, the spec listing none among the undoable operations;
+    removing the place of the folder a tab shows leaves the tab where it is.
+    Clicking the place of the folder the tab already shows lists it again
+    instead of emptying it, which 0.1's `Navigate` to the current location
+    did (a latent bug the Places rows would have exposed).
+
+91. (side panel) Eject and "the list follows mounts live".
+    Assumed: Eject runs as a job, so a refusal lands in the operations
+    area: `udisksctl unmount` then `power-off` on Linux (`umount` where
+    udisks2 is absent), `diskutil eject` on macOS, lock, dismount and
+    `IOCTL_STORAGE_EJECT_MEDIA` through `DeviceIoControl` on Windows; the
+    fake records the mount point and forgets the volume. "Live" is the
+    platform's volume list polled every two seconds (76 continued, which
+    polled every three); udisks2 and the Windows device notifications come
+    with milestone 5's mount and unmount.
+
+92. (side panel) The Trash view's operations and the other views' entries.
+    Assumed: the trash actions (`core.restore`, `core.restore_trash`,
+    `core.purge_trash`, `core.empty_trash`) move into the context menu of
+    the Trash view as a group of their own and are hidden elsewhere; in the
+    view Delete deletes permanently and Enter or a double-click restores;
+    the file actions are hidden there, and the ones that write to the
+    location (Paste, Rename, New file, New folder) in every virtual view,
+    while Copy, Open, Copy path, Pin and Move to trash work on the real
+    entries the Favorites and Recent views list. Those entries carry their
+    own provider and path (`Tab::location_of` follows the entry's provider),
+    so Open, Open in new tab and Unpin work; a pin whose path is gone stays
+    listed with a hashed id so it can be unpinned. Nothing can be dropped
+    into a virtual view.
+
+93. (side panel) Keyboard: "with the panel focused" is not defined.
+    Assumed: a click on a panel row gives the panel the keyboard, a click
+    anywhere else gives it back; Up and Down move over every row including
+    the section headers and *Add…*, Enter opens, Mod+Enter in a new tab,
+    Escape releases. The Edit… dialogue and the reorder drag are the
+    panel's own state, not the model's.

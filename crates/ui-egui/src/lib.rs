@@ -38,6 +38,7 @@ pub mod inspector;
 pub mod keys;
 pub mod menus;
 pub mod operations;
+pub mod overview;
 pub mod palette;
 pub mod pane;
 pub mod paths;

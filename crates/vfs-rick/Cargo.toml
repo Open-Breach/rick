@@ -1,0 +1,25 @@
+[package]
+name = "vfs-rick"
+version.workspace = true
+description = "Rick's virtual locations as a Provider: the Favorites, Recent and Trash views and the This Machine, Network and Cloud overviews under rick://."
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+types = { workspace = true }
+runtime = { workspace = true }
+platform = { workspace = true }
+ext = { workspace = true }
+vfs = { workspace = true }
+vfs-local = { workspace = true }
+async-trait = { workspace = true }
+futures = { workspace = true }
+tokio = { workspace = true, features = ["sync"] }
+tracing = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+
+[lints]
+workspace = true

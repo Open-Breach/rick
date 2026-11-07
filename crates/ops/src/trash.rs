@@ -1,14 +1,14 @@
 //! Restore, Restore trash items, Empty trash and Delete permanently for the
-//! trash: the actions behind the side panel's Trash section.
+//! trash: the actions behind the Trash view.
 //!
-//! Trash items are not entries of any provider in 0.1, so the section hands
-//! the actions an [`ActionCtx`] whose location is [`trash_location`] and
-//! whose selection is one [`trash_entry`] per item; the actions find the
-//! [`TrashedItem`]s again through the [`TrashStore`] the application keeps,
-//! which also holds Rick's own record of what it trashed where the platform
-//! cannot list its trash (macOS).
+//! Trash items are the entries of `rick://trash`, which `vfs-rick` lists;
+//! the view hands the actions an [`ActionCtx`] whose location is
+//! [`trash_location`] and whose selection holds those entries, one
+//! [`trash_entry`] per item; the actions find the [`TrashedItem`]s again
+//! through the [`TrashStore`] the application keeps, which also holds Rick's
+//! own record of what it trashed where the platform cannot list its trash
+//! (macOS).
 
-use std::hash::{Hash, Hasher};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, PoisonError};
 
@@ -18,49 +18,15 @@ use ext::{
 };
 use platform::TrashedItem;
 use runtime::JobRunner;
-use types::{Attrs, Entry, EntryId, EntryKind, Error, Location, Progress, ProviderId, VPath};
+use types::{Error, Progress};
+pub use vfs_rick::{trash_entry, trash_location};
 
 use crate::State;
 
-/// The provider id of the trash's pseudo-location.
-pub const TRASH_PROVIDER: ProviderId = ProviderId("trash");
-
-/// The location an [`ActionCtx`] carries when it stands for the trash.
-#[must_use]
-pub fn trash_location() -> Location {
-    Location::new(TRASH_PROVIDER, "/")
-}
-
-/// Whether a context stands for the trash.
+/// Whether a context stands for the Trash view.
 #[must_use]
 pub fn is_trash(ctx: &ActionCtx) -> bool {
-    ctx.location.provider == TRASH_PROVIDER
-}
-
-/// The entry that stands for a trashed item in an [`ActionCtx`]: the
-/// original name, the trashed path, the deletion time as `modified`.
-#[must_use]
-pub fn trash_entry(item: &TrashedItem) -> Entry {
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    item.trashed.hash(&mut hasher);
-    let key = u128::from(hasher.finish());
-    let is_dir = std::fs::symlink_metadata(&item.trashed).is_ok_and(|m| m.is_dir());
-    Entry {
-        id: EntryId::new(TRASH_PROVIDER, key),
-        name: original_name(item),
-        path: VPath::from_os_str(item.trashed.as_os_str()),
-        kind: if is_dir {
-            EntryKind::Dir
-        } else {
-            EntryKind::File
-        },
-        size: None,
-        created: None,
-        modified: Some(item.deleted_at),
-        accessed: None,
-        attrs: Attrs::empty(),
-        mime: None,
-    }
+    vfs_rick::is_trash(&ctx.location)
 }
 
 /// The trash as the actions see it: what the platform lists plus Rick's own
@@ -76,9 +42,18 @@ pub trait TrashStore: Send + Sync {
     fn forget(&self, items: &[TrashedItem]);
 }
 
-/// The items a trash context names, in selection order.
-fn items_of(store: &dyn TrashStore, ctx: &ActionCtx) -> Vec<TrashedItem> {
-    let known = store.items();
+/// The items a trash context names, in selection order: from the store's
+/// record, or, for an item the platform listed that Rick never recorded,
+/// from the platform's own list.
+fn items_of(state: &State, ctx: &ActionCtx) -> Vec<TrashedItem> {
+    let mut known = state.trash.items();
+    if let Ok(listed) = state.platform.list() {
+        for item in listed {
+            if !known.iter().any(|k| k.trashed == item.trashed) {
+                known.push(item);
+            }
+        }
+    }
     ctx.selection
         .iter()
         .filter_map(|entry| {
@@ -88,13 +63,7 @@ fn items_of(store: &dyn TrashStore, ctx: &ActionCtx) -> Vec<TrashedItem> {
         .collect()
 }
 
-/// The name a trashed item had where it came from.
-fn original_name(item: &TrashedItem) -> String {
-    item.original.file_name().map_or_else(
-        || item.original.display().to_string(),
-        |n| n.to_string_lossy().into_owned(),
-    )
-}
+use vfs_rick::original_name;
 
 fn describe_items(items: &[TrashedItem]) -> String {
     match items {
@@ -242,7 +211,7 @@ impl Action for Restore {
         jobs: &JobRunner,
         _ui: &dyn UiHost,
     ) -> Result<ActionOutcome, Error> {
-        let items = items_of(&*self.0.trash, &ctx);
+        let items = items_of(&self.0, &ctx);
         restore(&self.0, jobs, items)
     }
 }
@@ -278,7 +247,7 @@ impl Action for RestoreTrash {
         jobs: &JobRunner,
         _ui: &dyn UiHost,
     ) -> Result<ActionOutcome, Error> {
-        let items = items_of(&*self.0.trash, &ctx);
+        let items = items_of(&self.0, &ctx);
         restore(&self.0, jobs, items)
     }
 }
@@ -299,8 +268,12 @@ impl Action for EmptyTrash {
     fn default_shortcut(&self) -> Option<Shortcut> {
         None
     }
-    fn availability(&self, _ctx: &ActionCtx) -> Availability {
-        Availability::Enabled
+    fn availability(&self, ctx: &ActionCtx) -> Availability {
+        if is_trash(ctx) {
+            Availability::Enabled
+        } else {
+            Availability::Hidden
+        }
     }
     fn run(
         &self,
@@ -362,7 +335,7 @@ impl Action for PurgeTrash {
         jobs: &JobRunner,
         ui: &dyn UiHost,
     ) -> Result<ActionOutcome, Error> {
-        let items = items_of(&*self.0.trash, &ctx);
+        let items = items_of(&self.0, &ctx);
         if items.is_empty() {
             return Err(Error::Unsupported("nothing to delete"));
         }

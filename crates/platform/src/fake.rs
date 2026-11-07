@@ -12,14 +12,25 @@ use types::Error;
 
 use crate::traits::{
     Chrome, Clipboard, ConfigDir, ControlsSide, DialogFilter, DragSource, NativeDialogs, OpenWith,
-    Properties, PropertiesOutcome, Trash, TrashedItem, Volume, Volumes, WindowChrome,
+    Properties, PropertiesOutcome, RecentItem, RecentlyUsed, StandardFolder, StandardFolders,
+    Trash, TrashedItem, Volume, Volumes, WindowChrome,
 };
+
+/// The standard folders the fake creates under its home, so the side
+/// panel's default places have rows to show.
+pub const FAKE_STANDARD_FOLDERS: [StandardFolder; 3] = [
+    StandardFolder::Documents,
+    StandardFolder::Downloads,
+    StandardFolder::Pictures,
+];
 
 /// A platform that touches nothing outside its own temporary directory.
 ///
 /// The trash really moves files, into a private directory that disappears
 /// with the `Fake`; opening and revealing are recorded instead of launching
-/// anything; dialogues answer what the test told them to.
+/// anything; dialogues answer what the test told them to; the volumes and
+/// the recently-used list are what the test registered; the standard
+/// folders are the directories under the fake's home.
 #[derive(Debug)]
 pub struct Fake {
     dir: TempDir,
@@ -33,6 +44,8 @@ pub struct Fake {
     dragged: Mutex<Vec<Vec<String>>>,
     answers: Mutex<Answers>,
     volumes: Mutex<Vec<Volume>>,
+    ejected: Mutex<Vec<PathBuf>>,
+    recent: Mutex<Vec<RecentItem>>,
     /// `list` answers `Unsupported`, as the macOS trash does.
     unlistable: Mutex<bool>,
 }
@@ -61,7 +74,11 @@ impl Fake {
             .tempdir()
             .map_err(Error::from_io)?;
         fs::create_dir_all(dir.path().join("trash")).map_err(Error::from_io)?;
-        fs::create_dir_all(dir.path().join("home")).map_err(Error::from_io)?;
+        let home = dir.path().join("home");
+        fs::create_dir_all(&home).map_err(Error::from_io)?;
+        for folder in FAKE_STANDARD_FOLDERS {
+            fs::create_dir_all(home.join(folder.title())).map_err(Error::from_io)?;
+        }
         Ok(Self {
             dir,
             items: Mutex::new(Vec::new()),
@@ -72,6 +89,8 @@ impl Fake {
             dragged: Mutex::new(Vec::new()),
             answers: Mutex::new(Answers::default()),
             volumes: Mutex::new(Vec::new()),
+            ejected: Mutex::new(Vec::new()),
+            recent: Mutex::new(Vec::new()),
             unlistable: Mutex::new(false),
         })
     }
@@ -133,11 +152,57 @@ impl Fake {
     pub fn remove_volume(&self, mount_point: &Path) {
         lock(&self.volumes).retain(|v| v.mount_point != mount_point);
     }
+
+    /// The mount points handed to [`Volumes::eject`], oldest first.
+    #[must_use]
+    pub fn ejected(&self) -> Vec<PathBuf> {
+        lock(&self.ejected).clone()
+    }
+
+    /// What [`RecentlyUsed::recently_used`] answers from now on; the
+    /// test's stand-in for the system's list.
+    pub fn set_recent(&self, items: Vec<RecentItem>) {
+        *lock(&self.recent) = items;
+    }
 }
 
 impl Volumes for Fake {
     fn volumes(&self) -> Result<Vec<Volume>, Error> {
         Ok(lock(&self.volumes).clone())
+    }
+
+    /// Records the eject and forgets the volume, as the unmount would.
+    fn eject(&self, volume: &Volume) -> Result<(), Error> {
+        if !volume.is_removable() {
+            return Err(Error::Unsupported("only removable media can be ejected"));
+        }
+        let mut volumes = lock(&self.volumes);
+        if !volumes.iter().any(|v| v.mount_point == volume.mount_point) {
+            return Err(Error::NotFound);
+        }
+        volumes.retain(|v| v.mount_point != volume.mount_point);
+        lock(&self.ejected).push(volume.mount_point.clone());
+        Ok(())
+    }
+}
+
+impl StandardFolders for Fake {
+    /// The home, or the directory of the folder's title under it when it
+    /// exists.
+    fn standard_folder(&self, folder: StandardFolder) -> Option<PathBuf> {
+        let path = match folder {
+            StandardFolder::Home => self.home_dir(),
+            other => self.home_dir().join(other.title()),
+        };
+        path.is_dir().then_some(path)
+    }
+}
+
+impl RecentlyUsed for Fake {
+    fn recently_used(&self) -> Result<Vec<RecentItem>, Error> {
+        let mut items = lock(&self.recent).clone();
+        items.sort_by_key(|item| std::cmp::Reverse(item.used_at));
+        Ok(items)
     }
 }
 
@@ -371,20 +436,56 @@ mod tests {
             Ok(PropertiesOutcome::Rows(rows)) if rows[0].0 == "Name"
         ));
         assert_eq!(fake.volumes().map(|v| v.len()).ok(), Some(0));
-        fake.add_volume(Volume {
+        let usb = Volume {
             name: "USB".into(),
             mount_point: PathBuf::from("/media/usb"),
             kind: crate::VolumeKind::Removable,
+            fs_type: "vfat".into(),
+            device: None,
             total: Some(10),
             free: Some(5),
-        });
+        };
+        assert_eq!(usb.used(), Some(5));
+        assert!(usb.utilisation().is_some_and(|u| (u - 0.5).abs() < 1e-6));
+        fake.add_volume(usb.clone());
         assert_eq!(
             fake.volumes()
                 .ok()
                 .and_then(|v| v.first().map(|v| v.name.clone())),
             Some("USB".to_owned())
         );
+        fake.eject(&usb).unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(fake.ejected(), [PathBuf::from("/media/usb")]);
+        assert_eq!(fake.volumes().map(|v| v.len()).ok(), Some(0));
+        assert!(matches!(fake.eject(&usb), Err(Error::NotFound)));
+        fake.add_volume(usb.clone());
         fake.remove_volume(Path::new("/media/usb"));
         assert_eq!(fake.volumes().map(|v| v.len()).ok(), Some(0));
+        assert_eq!(
+            fake.standard_folder(StandardFolder::Home),
+            Some(fake.home_dir())
+        );
+        assert_eq!(
+            fake.standard_folder(StandardFolder::Documents),
+            Some(fake.home_dir().join("Documents"))
+        );
+        assert_eq!(fake.standard_folder(StandardFolder::Music), None);
+        assert!(fake.recently_used().is_ok_and(|r| r.is_empty()));
+        fake.set_recent(vec![
+            RecentItem {
+                path: PathBuf::from("/old"),
+                used_at: SystemTime::UNIX_EPOCH,
+            },
+            RecentItem {
+                path: PathBuf::from("/new"),
+                used_at: SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(5),
+            },
+        ]);
+        assert_eq!(
+            fake.recently_used()
+                .ok()
+                .and_then(|r| r.first().map(|i| i.path.clone())),
+            Some(PathBuf::from("/new"))
+        );
     }
 }
