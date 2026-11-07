@@ -1,5 +1,6 @@
 //! Records the git hash of the build, which `rick --version` prints after the
-//! version and the About window shows.
+//! version and the About window shows, and gives the binary a run path so
+//! it finds the kernel dylibs and `libstd` beside itself in the bundle.
 //!
 //! The hash comes from `RICK_GIT_HASH` when set (a build outside a checkout
 //! can pass it), else from `git rev-parse`, else it is `unknown`.
@@ -39,4 +40,15 @@ fn main() {
         })
         .unwrap_or_else(|| "unknown".to_owned());
     println!("cargo:rustc-env=RICK_GIT_HASH={hash}");
+
+    // The kernel dylibs (`types`, `runtime`, `ext`) and `libstd` sit beside
+    // the binary in a bundle (`cargo xtask bundle`, QUESTIONS.md 81). Linux
+    // and macOS look there through a run path; Windows searches the
+    // binary's directory on its own. This is build configuration, not a
+    // `cfg(target_os)` in code.
+    match std::env::var("CARGO_CFG_TARGET_OS").as_deref() {
+        Ok("linux") => println!("cargo:rustc-link-arg-bins=-Wl,-rpath,$ORIGIN"),
+        Ok("macos") => println!("cargo:rustc-link-arg-bins=-Wl,-rpath,@executable_path"),
+        _ => {}
+    }
 }

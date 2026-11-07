@@ -6,6 +6,11 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 
+# A Rust dylib shared by the binary and the plugin libraries (QUESTIONS.md 81);
+# the rlib is for the doctests, which cargo runs for no dylib-only crate.
+[lib]
+crate-type = ["dylib", "rlib"]
+
 [dependencies]
 thiserror = { workspace = true }
 types = { workspace = true }

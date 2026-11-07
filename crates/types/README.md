@@ -8,4 +8,6 @@ the name `Conflict` a job asks about with its `ConflictAnswer`, and the
 single kernel `Error`. It performs no I/O, spawns no threads and knows
 nothing about any operating system; it depends on no other Rick crate and only
 on `bitflags` and `thiserror` from the ecosystem, so every other crate in the
-workspace may depend on it.
+workspace may depend on it. It is built as a Rust dylib that the binary and
+every plugin library share, so one `EntryId`, one `Error` and one
+`CancelToken` exist in the process (QUESTIONS.md 81).
