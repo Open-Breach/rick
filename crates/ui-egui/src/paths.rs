@@ -191,9 +191,10 @@ pub fn crumbs(location: &Location) -> Vec<Crumb> {
         .into_iter()
         .map(|(label, prefix)| {
             let crumb_provider = if provider == ProviderId::ARCHIVE {
+                // Following symlinks: a symlinked folder is a folder.
                 if !inside_archive
                     && platform::paths::to_path(&prefix)
-                        .is_ok_and(|p| std::fs::symlink_metadata(p).is_ok_and(|m| !m.is_dir()))
+                        .is_ok_and(|p| std::fs::metadata(p).is_ok_and(|m| !m.is_dir()))
                 {
                     inside_archive = true;
                 }
@@ -365,5 +366,29 @@ mod crumb_tests {
             typed(&inside, &archive.display().to_string()).provider,
             ProviderId::ARCHIVE
         );
+    }
+
+    /// macOS keeps temporary files under `/var`, a symlink to
+    /// `/private/var`: a symlinked folder on the way to the archive is a
+    /// folder, not the archive.
+    #[cfg(unix)]
+    #[test]
+    fn a_symlinked_folder_above_the_archive_is_a_folder() {
+        let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+        let real = dir.path().join("real");
+        std::fs::create_dir(&real).unwrap_or_else(|e| panic!("{e}"));
+        std::fs::write(real.join("a.zip"), b"PK").unwrap_or_else(|e| panic!("{e}"));
+        let link = dir.path().join("link");
+        std::os::unix::fs::symlink(&real, &link).unwrap_or_else(|e| panic!("{e}"));
+        let inside = Location::new(
+            ProviderId::ARCHIVE,
+            platform::paths::from_path(&link.join("a.zip")).join("dir"),
+        );
+        let c = crumbs(&inside);
+        let n = c.len();
+        assert_eq!(c[n - 2].label, "a.zip");
+        assert_eq!(c[n - 2].location.provider, ProviderId::ARCHIVE);
+        assert_eq!(c[n - 3].label, "link");
+        assert_eq!(c[n - 3].location.provider, ProviderId::LOCAL);
     }
 }
