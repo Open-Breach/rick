@@ -42,7 +42,7 @@ fn window(
         ui: host.clone(),
         extensions,
         config_dir: Some(fake.config_dir()),
-        start: local(start),
+        start: Some(local(start)),
     });
     let mut harness = Harness::builder()
         .with_size(size)

@@ -30,7 +30,7 @@ fn shell(start: &Path, size: egui::Vec2) -> Harness<'static, RickUi> {
             Arc::new(ext_preview_pdf::PdfPreview::new()),
         ],
         config_dir: Some(fake.config_dir()),
-        start: local(start),
+        start: Some(local(start)),
     });
     let mut harness = Harness::builder()
         .with_size(size)

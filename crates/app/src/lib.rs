@@ -13,7 +13,13 @@
 //! system-files setting changes, it cancels the pane's listing job, starts a
 //! new one that streams batches into the model, and watches the location
 //! for changes until the next switch. Listing jobs do not appear in the job
-//! table; their output is the [`Event::Listed`] stream.
+//! table; their output is the [`Event::Listed`] stream. Only a pane's active
+//! tab lists; the other tabs list when they are first shown.
+//!
+//! The session (every window, pane and tab, see [`model::Session`]) is
+//! written to `session.toml` after every change, at most once per second,
+//! and once more by [`App::save_session`] on exit. A start restores it, or
+//! the start layout the settings name; saved layouts live in `layouts/`.
 //!
 //! ```no_run
 //! use std::sync::Arc;
@@ -37,7 +43,7 @@
 //!     ui: Arc::new(Headless),
 //!     extensions: Vec::new(),
 //!     config_dir: None,
-//!     start: Location::new(vfs_local::PROVIDER_ID, home),
+//!     start: Some(Location::new(vfs_local::PROVIDER_ID, home)),
 //! });
 //! let mut events: Vec<Event> = Vec::new();
 //! let pane = app.model().focused;
@@ -48,9 +54,11 @@
 #![forbid(unsafe_code)]
 
 mod command;
+mod session;
 mod settings;
 
 pub use command::{Command, Event, TransferMode};
+pub use session::{LAYOUTS_DIR, SAVE_INTERVAL, SESSION_FILE};
 pub use settings::SETTINGS_FILE;
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
@@ -63,7 +71,7 @@ use ext::{
     FsChange, Invocation, Level, ListOptions, PreviewDoc, Previewer, Registry, UiHost, UndoCommand,
 };
 use futures::StreamExt;
-use model::{JobState, Model, PaneId, Settings, SettingsChange, TabId};
+use model::{JobState, Model, PaneId, Session, Settings, SettingsChange, TabId};
 use ops::PinStore;
 use platform::Platform;
 use runtime::{JobEvent, JobRunner, mpsc};
@@ -80,10 +88,13 @@ pub struct Config {
     pub ui: Arc<dyn UiHost>,
     /// Extensions to load besides the built-in [`ops::Core`].
     pub extensions: Vec<Arc<dyn Extension>>,
-    /// Where `rick.toml` lives; `None` for the platform's config directory.
+    /// Where `rick.toml`, `session.toml` and `layouts/` live; `None` for
+    /// the platform's config directory.
     pub config_dir: Option<PathBuf>,
-    /// The location of the first tab.
-    pub start: Location,
+    /// A location to open in a new tab of the restored session's focused
+    /// pane, as a path on the command line asks; with no session to restore
+    /// it is the one tab's location, and `None` means Home.
+    pub start: Option<Location>,
 }
 
 /// Called whenever a background task has left a message for the loop, so a
@@ -302,12 +313,32 @@ pub struct App {
     thumbnails: BTreeSet<(EntryId, u32)>,
     /// Events from start-up, delivered on the first poll.
     pending: Vec<Event>,
+    /// The user's home, where a tab opens when its own location is gone.
+    home: Location,
+    /// Writes `session.toml`, debounced.
+    session_saver: session::Saver,
+    /// The session last handed to the saver, so an unchanged model sends
+    /// nothing.
+    last_sent: Option<Session>,
+    /// `session.toml` as it was at start: "Continue where I left off" when
+    /// the start was a layout.
+    last_session: Option<Session>,
+    /// The `layouts/` directory.
+    layouts_dir: PathBuf,
+    /// The saved layouts' names, refreshed on every change to the directory
+    /// this process makes.
+    layouts: Vec<String>,
+    /// The last window was closed: the UI should exit.
+    exit: bool,
 }
 
 impl App {
     /// Builds the application: mounts the local provider, loads the
     /// built-in operations and `config.extensions`, reads the settings file
-    /// and starts watching it, and lists the start location.
+    /// and starts watching it, restores the session or the start layout, and
+    /// lists every active tab's location.
+    // Start-up is one straight line: registry, settings, session, loop.
+    #[allow(clippy::too_many_lines)]
     #[must_use]
     pub fn new(config: Config) -> Self {
         let Config {
@@ -343,9 +374,10 @@ impl App {
             mounts.mount(Arc::clone(provider));
         }
 
-        let settings_path = config_dir
-            .unwrap_or_else(|| platform.config_dir())
-            .join(SETTINGS_FILE);
+        let config_dir = config_dir.unwrap_or_else(|| platform.config_dir());
+        let settings_path = config_dir.join(SETTINGS_FILE);
+        let session_path = config_dir.join(SESSION_FILE);
+        let layouts_dir = config_dir.join(LAYOUTS_DIR);
         let settings = match settings::load(&settings_path) {
             Ok(settings) => settings,
             Err(error) => {
@@ -359,11 +391,55 @@ impl App {
         };
         pins.sync(&settings.pinned);
 
+        let home = Location::new(
+            vfs_local::PROVIDER_ID,
+            platform::paths::from_path(&platform.home_dir()),
+        );
+        // The last session, whatever starts: it stays reachable as
+        // "Continue where I left off".
+        let last_session = match session::load(&session_path) {
+            Ok(session) => Some(session),
+            Err(Error::NotFound) => None,
+            Err(error) => {
+                warn!(%error, path = %session_path.display(), "session not read");
+                pending.push(Event::Notify {
+                    level: Level::Warning,
+                    text: format!("Session file not read: {error}"),
+                });
+                None
+            }
+        };
+        let start_layout = settings.session.start_layout().and_then(|name| {
+            match session::load(&session::layout_path(&layouts_dir, name)) {
+                Ok(layout) => Some(layout),
+                Err(error) => {
+                    warn!(%error, name, "start layout not read");
+                    pending.push(Event::Notify {
+                        level: Level::Warning,
+                        text: format!("Start layout {name} not read: {error}"),
+                    });
+                    None
+                }
+            }
+        });
+        let restored = start_layout.or_else(|| last_session.clone());
+        let model = match restored {
+            Some(mut session) => {
+                repair(&mounts, &home, &mut session);
+                let mut model = Model::from_session(settings, &session, &home);
+                if let Some(start) = start {
+                    model.new_tab(None, start);
+                }
+                model
+            }
+            None => Model::new(settings, start.unwrap_or_else(|| home.clone())),
+        };
         let (jobs, job_events) = JobRunner::with_events();
         let (tx, rx) = mpsc::unbounded_channel();
         let settings_saver = settings::saver(settings_path.clone());
+        let layouts = session::layouts(&layouts_dir);
         let mut app = Self {
-            model: Model::new(settings, start),
+            model,
             mounts,
             registry,
             platform,
@@ -389,13 +465,197 @@ impl App {
             preview: PreviewState::default(),
             thumbnails: BTreeSet::new(),
             pending,
+            home,
+            session_saver: session::Saver::new(session_path),
+            last_sent: None,
+            last_session,
+            layouts_dir,
+            layouts,
+            exit: false,
         };
         app.watch_settings();
         let mut events = Vec::new();
         app.sync_panes(&mut events);
         app.sync_preview();
         app.pending.append(&mut events);
+        app.sync_session();
         app
+    }
+
+    /// The session the model is right now.
+    #[must_use]
+    pub fn session(&self) -> Session {
+        self.model.session()
+    }
+
+    /// Writes the session now and stops the continuous writer: the exit
+    /// hook. Every window still in the model is in the file, so closing the
+    /// last window leaves it there for the next start.
+    ///
+    /// # Errors
+    ///
+    /// The I/O error.
+    pub fn save_session(&mut self) -> Result<(), Error> {
+        let session = self.model.session();
+        self.last_sent = Some(session.clone());
+        self.session_saver.flush(&session)
+    }
+
+    /// Where the session is written.
+    #[must_use]
+    pub fn session_path(&self) -> &Path {
+        self.session_saver.path()
+    }
+
+    /// How many times the continuous writer wrote the session file.
+    #[must_use]
+    pub fn session_writes(&self) -> u64 {
+        self.session_saver.writes()
+    }
+
+    /// The saved layouts' names, sorted.
+    #[must_use]
+    pub fn layouts(&self) -> &[String] {
+        &self.layouts
+    }
+
+    /// Whether the last window was closed and the UI should exit.
+    #[must_use]
+    pub fn exit_requested(&self) -> bool {
+        self.exit
+    }
+
+    /// The user's home directory as a location.
+    #[must_use]
+    pub fn home(&self) -> &Location {
+        &self.home
+    }
+
+    /// Hands the saver a snapshot when the session changed since the last
+    /// one.
+    fn sync_session(&mut self) {
+        let session = self.model.session();
+        if self.last_sent.as_ref() == Some(&session) {
+            return;
+        }
+        self.session_saver.send(session.clone());
+        self.last_sent = Some(session);
+    }
+
+    /// Opens a window with the start layout: the start layout's focused
+    /// window when one is named and reads, otherwise one tab at the focused
+    /// tab's location.
+    fn new_window(&mut self, events: &mut Vec<Event>) {
+        let layout = self
+            .model
+            .settings
+            .session
+            .start_layout()
+            .map(str::to_owned)
+            .and_then(|name| self.load_layout(&name, events));
+        let window = layout.and_then(|mut layout| {
+            repair(&self.mounts, &self.home, &mut layout);
+            let index = layout
+                .focused_window
+                .min(layout.windows.len().saturating_sub(1));
+            layout.windows.into_iter().nth(index)
+        });
+        if let Some(saved) = window {
+            let home = self.home.clone();
+            self.model.add_window(&saved, &home);
+        } else {
+            let location = self
+                .model
+                .active_tab(self.model.focused)
+                .map_or_else(|| self.home.clone(), |(_, tab)| tab.location.clone());
+            self.model.new_window(location);
+        }
+    }
+
+    /// Reads a layout file, reporting failure.
+    fn load_layout(&self, name: &str, events: &mut Vec<Event>) -> Option<Session> {
+        match session::load(&session::layout_path(&self.layouts_dir, name)) {
+            Ok(layout) => Some(layout),
+            Err(error) => {
+                events.push(Event::Notify {
+                    level: Level::Error,
+                    text: format!("Layout {name}: {error}"),
+                });
+                None
+            }
+        }
+    }
+
+    /// Replaces every window and tab with `session`.
+    fn switch_to(&mut self, mut session: Session) {
+        repair(&self.mounts, &self.home, &mut session);
+        let settings = self.model.settings.clone();
+        let jobs = std::mem::take(&mut self.model.jobs);
+        let mut model = Model::from_session(settings, &session, &self.home);
+        model.jobs = jobs;
+        self.model = model;
+    }
+
+    fn save_layout(&mut self, name: &str, events: &mut Vec<Event>) {
+        let name = name.trim();
+        if name.is_empty() || name == model::LAST_SESSION {
+            events.push(Event::Notify {
+                level: Level::Warning,
+                text: format!("\"{name}\" cannot name a layout"),
+            });
+            return;
+        }
+        let path = session::layout_path(&self.layouts_dir, name);
+        match session::save(&path, &self.model.session()) {
+            Ok(()) => events.push(Event::Notify {
+                level: Level::Info,
+                text: format!("Layout {name} saved"),
+            }),
+            Err(error) => events.push(Event::Notify {
+                level: Level::Error,
+                text: format!("Layout {name} not saved: {error}"),
+            }),
+        }
+        self.layouts = session::layouts(&self.layouts_dir);
+    }
+
+    fn delete_layout(&mut self, name: &str, events: &mut Vec<Event>) {
+        let path = session::layout_path(&self.layouts_dir, name);
+        if let Err(error) = std::fs::remove_file(&path) {
+            events.push(Event::Notify {
+                level: Level::Error,
+                text: format!("Layout {name} not deleted: {error}"),
+            });
+        }
+        if self.model.settings.session.start_layout() == Some(name) {
+            self.change_settings(SettingsChange::StartLayout(None));
+        }
+        self.layouts = session::layouts(&self.layouts_dir);
+    }
+
+    fn rename_layout(&mut self, from: &str, to: &str, events: &mut Vec<Event>) {
+        let to = to.trim();
+        if to.is_empty() || to == model::LAST_SESSION {
+            events.push(Event::Notify {
+                level: Level::Warning,
+                text: format!("\"{to}\" cannot name a layout"),
+            });
+            return;
+        }
+        let source = session::layout_path(&self.layouts_dir, from);
+        let target = session::layout_path(&self.layouts_dir, to);
+        if source == target {
+            return;
+        }
+        if let Err(error) = std::fs::rename(&source, &target) {
+            events.push(Event::Notify {
+                level: Level::Error,
+                text: format!("Layout {from} not renamed: {error}"),
+            });
+        } else if self.model.settings.session.start_layout() == Some(from) {
+            self.change_settings(SettingsChange::StartLayout(Some(to.to_owned())));
+        }
+        self.layouts = session::layouts(&self.layouts_dir);
     }
 
     /// The entry the preview follows: the focused pane's single selected
@@ -491,6 +751,7 @@ impl App {
         self.dispatch(command, events);
         self.sync_panes(events);
         self.sync_preview();
+        self.sync_session();
     }
 
     // One arm per command: the enum is the table.
@@ -601,6 +862,54 @@ impl App {
             Command::Redo => self.redo(events),
             Command::Settings(change) => self.change_settings(change),
             Command::Thumbnail { pane, id, size } => self.thumbnail(pane, id, size),
+            Command::TabOrder { pane, order } => {
+                self.model.set_tab_order(pane, order);
+            }
+            Command::Layout { window, dock } => {
+                self.model.set_layout(window, dock);
+            }
+            Command::Scroll { tab, offset } => {
+                self.model.set_scroll(tab, offset);
+            }
+            Command::WindowGeometry { window, geometry } => {
+                self.model.set_geometry(window, geometry);
+            }
+            Command::SidePanel { window, change } => {
+                self.model.side_panel(window, change);
+            }
+            Command::FocusWindow(window) => {
+                self.model.focus_window(window);
+            }
+            Command::NewWindow => self.new_window(events),
+            Command::CloseWindow(window) => {
+                if !self.model.close_window(window) && self.model.window(window).is_some() {
+                    self.exit = true;
+                }
+            }
+            Command::SaveLayout(name) => self.save_layout(&name, events),
+            Command::SwitchLayout(name) => {
+                let session = match name {
+                    Some(name) => self.load_layout(&name, events),
+                    None => match self.last_session.clone() {
+                        Some(session) => Some(session),
+                        None => match session::load(self.session_saver.path()) {
+                            Ok(session) => Some(session),
+                            Err(error) => {
+                                events.push(Event::Notify {
+                                    level: Level::Warning,
+                                    text: format!("No last session: {error}"),
+                                });
+                                None
+                            }
+                        },
+                    },
+                };
+                if let Some(session) = session {
+                    self.switch_to(session);
+                }
+            }
+            Command::DeleteLayout(name) => self.delete_layout(&name, events),
+            Command::RenameLayout { from, to } => self.rename_layout(&from, &to, events),
         }
         self.sync_panes(events);
         self.sync_preview();
@@ -627,6 +936,7 @@ impl App {
         }
         if handled > 0 {
             self.sync_preview();
+            self.sync_session();
         }
         handled
     }
@@ -915,7 +1225,7 @@ impl App {
 
     /// Brings every pane's listing in line with what its active tab shows.
     fn sync_panes(&mut self, events: &mut Vec<Event>) {
-        let panes = self.model.dock.panes();
+        let panes = self.model.all_panes();
         let gone: Vec<PaneId> = self
             .live
             .keys()
@@ -1608,6 +1918,58 @@ impl App {
     }
 }
 
+/// Puts every tab of a restored session somewhere that exists: a location
+/// whose provider is not mounted opens at Home, a local folder that is gone
+/// opens at its nearest existing ancestor, each with a note for the status
+/// line. Locations on other providers are taken as they are.
+fn repair(mounts: &Mounts, home: &Location, session: &mut Session) {
+    for tab in session
+        .windows
+        .iter_mut()
+        .flat_map(|w| w.panes.iter_mut())
+        .flat_map(|p| p.tabs.iter_mut())
+    {
+        if mounts.provider(tab.location.provider).is_none() {
+            tab.note = Some(format!(
+                "{} is not available; opened Home instead of {}",
+                tab.location.provider, tab.location.path
+            ));
+            tab.location = home.clone();
+            continue;
+        }
+        if tab.location.provider != vfs_local::PROVIDER_ID {
+            continue;
+        }
+        let Ok(path) = platform::paths::to_path(&tab.location.path) else {
+            continue;
+        };
+        if path.is_dir() {
+            continue;
+        }
+        let mut ancestor = path.parent();
+        while let Some(dir) = ancestor {
+            if dir.is_dir() {
+                tab.note = Some(format!(
+                    "{} no longer exists; opened {}",
+                    tab.location.path,
+                    dir.display()
+                ));
+                tab.location =
+                    Location::new(vfs_local::PROVIDER_ID, platform::paths::from_path(dir));
+                break;
+            }
+            ancestor = dir.parent();
+        }
+        if ancestor.is_none() {
+            tab.note = Some(format!(
+                "{} no longer exists; opened Home",
+                tab.location.path
+            ));
+            tab.location = home.clone();
+        }
+    }
+}
+
 /// Whether moving or copying `source` into `to` would change nothing: the
 /// item is in `to` already, or `to` is the item itself or lies under it.
 #[must_use]
@@ -1630,7 +1992,7 @@ impl Drop for App {
 impl std::fmt::Debug for App {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("App")
-            .field("panes", &self.model.dock.panes())
+            .field("panes", &self.model.all_panes())
             .field("live", &self.live.keys().collect::<Vec<_>>())
             .field("undo", &self.undo.len())
             .field("redo", &self.redo.len())

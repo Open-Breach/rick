@@ -327,7 +327,7 @@ fn the_app_opens_a_preview_for_the_selection() {
         ui: Arc::new(Quiet),
         extensions: extensions(),
         config_dir: Some(fake.config_dir()),
-        start: local(dir.path()),
+        start: Some(local(dir.path())),
     });
     let pane = app.model().focused;
     let mut events = Vec::new();
@@ -435,7 +435,7 @@ fn ui_harness(start: &Path) -> Harness<'static, RickUi> {
         ui: host.clone(),
         extensions: extensions(),
         config_dir: Some(fake.config_dir()),
-        start: local(start),
+        start: Some(local(start)),
     });
     let mut harness = Harness::builder()
         .with_size(egui::vec2(1400.0, 900.0))

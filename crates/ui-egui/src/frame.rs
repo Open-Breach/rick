@@ -71,8 +71,9 @@ impl Frame {
 
     /// Registers the resize grips along the edges, after the content so they
     /// win the pointer where they overlap it. Hovering shows the resize
-    /// cursor; a drag starts a resize through the backend.
-    pub fn grips(&self, ui: &mut egui::Ui) {
+    /// cursor; a drag starts a resize through the backend. `salt` tells one
+    /// window's grips from another's.
+    pub fn grips(&self, ui: &mut egui::Ui, salt: u64) {
         let (outer, inner) = (self.outer, self.inner);
         let bands = [
             (
@@ -93,7 +94,11 @@ impl Frame {
             ),
         ];
         for (name, band) in bands {
-            let response = ui.interact(band, egui::Id::new(("window-grip", name)), Sense::drag());
+            let response = ui.interact(
+                band,
+                egui::Id::new(("window-grip", salt, name)),
+                Sense::drag(),
+            );
             let Some(pos) = response
                 .interact_pointer_pos()
                 .or_else(|| response.hover_pos())

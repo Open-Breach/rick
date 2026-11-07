@@ -1,21 +1,35 @@
 //! The Settings, Keyboard shortcuts, About and Properties windows.
 
-use app::Command;
+use app::{App, Command};
 use ext::{Registry, Shortcut};
-use model::{AfterDrag, Column, Density, PanelSide, Settings, SettingsChange, SortDir, Theme};
+use model::{
+    AfterDrag, Column, Density, PanelSide, SettingsChange, SidePanelChange, SortDir, Theme,
+    WindowId,
+};
 
 use crate::keys::{Intent, KeyMap, UI_INTENTS, from_egui_key, from_egui_modifiers};
 use crate::shell::Request;
 
-/// The Settings screen; every change is a `Command::Settings`.
+/// The Settings screen; every change is a `Command::Settings`, except the
+/// side panel row, which changes `window`'s panel (session state).
 // One form, one row per setting in the spec's order.
 #[allow(clippy::too_many_lines)]
 pub fn settings_window(
     ctx: &egui::Context,
     open: &mut bool,
-    settings: &Settings,
+    app: &App,
+    window: WindowId,
     requests: &mut Vec<Request>,
 ) {
+    let settings = &app.model().settings;
+    let side_panel = app
+        .model()
+        .window(window)
+        .map(|w| w.side_panel.clone())
+        .unwrap_or_default();
+    let layouts = app.layouts();
+    let mut panel_changes: Vec<SidePanelChange> = Vec::new();
+    let mut panel = |c: SidePanelChange| panel_changes.push(c);
     let mut change = |c: SettingsChange| requests.push(Request::Command(Command::Settings(c)));
     egui::Window::new("Settings")
         .open(open)
@@ -96,11 +110,11 @@ pub fn settings_window(
 
                     ui.label("Side panel");
                     ui.horizontal(|ui| {
-                        let mut visible = settings.side_panel.visible;
+                        let mut visible = side_panel.visible;
                         if ui.checkbox(&mut visible, "Show").changed() {
-                            change(SettingsChange::SidePanelVisible(visible));
+                            panel(SidePanelChange::Visible(visible));
                         }
-                        let mut side = settings.side_panel.side;
+                        let mut side = side_panel.side;
                         egui::ComboBox::from_id_salt("side-panel-side")
                             .selected_text(match side {
                                 PanelSide::Left => "Left",
@@ -110,10 +124,30 @@ pub fn settings_window(
                                 ui.selectable_value(&mut side, PanelSide::Left, "Left");
                                 ui.selectable_value(&mut side, PanelSide::Right, "Right");
                             });
-                        if side != settings.side_panel.side {
-                            change(SettingsChange::SidePanelSide(side));
+                        if side != side_panel.side {
+                            panel(SidePanelChange::Side(side));
                         }
                     });
+                    ui.end_row();
+
+                    ui.label("Start with");
+                    let start = settings.session.start_layout().map(str::to_owned);
+                    let mut picked = start.clone();
+                    egui::ComboBox::from_id_salt("session-start")
+                        .selected_text(
+                            start
+                                .clone()
+                                .unwrap_or_else(|| "Continue where I left off".to_owned()),
+                        )
+                        .show_ui(ui, |ui| {
+                            ui.selectable_value(&mut picked, None, "Continue where I left off");
+                            for name in layouts {
+                                ui.selectable_value(&mut picked, Some(name.clone()), name);
+                            }
+                        });
+                    if picked != start {
+                        change(SettingsChange::StartLayout(picked));
+                    }
                     ui.end_row();
 
                     ui.label("Spring-loading delay");
@@ -200,6 +234,9 @@ pub fn settings_window(
                     ui.end_row();
                 });
         });
+    for change in panel_changes {
+        requests.push(Request::Command(Command::SidePanel { window, change }));
+    }
 }
 
 fn column_name(column: Column) -> &'static str {

@@ -140,6 +140,14 @@ pub enum Intent {
     Quit,
     /// Show or hide the side panel.
     ToggleSidePanel,
+    /// A new window with the start layout.
+    NewWindow,
+    /// Store the current windows and tabs as a named layout.
+    SaveLayout,
+    /// Back to the last session: "Continue where I left off".
+    LastSession,
+    /// Switch to the saved layout at this index of `App::layouts`.
+    Layout(u16),
     /// Move the list cursor one row up.
     CursorUp,
     /// Move the list cursor one row down.
@@ -588,6 +596,27 @@ pub const UI_INTENTS: &[IntentSpec] = &[
     ),
     spec(Intent::Quit, "window.quit", "Quit", WINDOW, &["Mod+Q"]),
     spec(
+        Intent::NewWindow,
+        "window.new",
+        "New window",
+        WINDOW,
+        &["Mod+N"],
+    ),
+    spec(
+        Intent::SaveLayout,
+        "window.save_layout",
+        "Save layout as…",
+        WINDOW,
+        &[],
+    ),
+    spec(
+        Intent::LastSession,
+        "window.last_session",
+        "Continue where I left off",
+        WINDOW,
+        &[],
+    ),
+    spec(
         Intent::ToggleSidePanel,
         "window.side_panel",
         "Toggle side panel",
@@ -675,7 +704,8 @@ pub const UI_INTENTS: &[IntentSpec] = &[
 ];
 
 impl Intent {
-    /// The row of [`UI_INTENTS`] for a UI intent; `None` for actions.
+    /// The row of [`UI_INTENTS`] for a UI intent; `None` for actions and
+    /// for the saved layouts, which the palette lists by name.
     #[must_use]
     pub fn spec(self) -> Option<&'static IntentSpec> {
         UI_INTENTS.iter().find(|s| s.intent == self)
@@ -686,6 +716,7 @@ impl Intent {
     pub fn id(self) -> &'static str {
         match self {
             Self::Action(id) => id.0,
+            Self::Layout(_) => "window.layout",
             other => other.spec().map_or("?", |s| s.id),
         }
     }

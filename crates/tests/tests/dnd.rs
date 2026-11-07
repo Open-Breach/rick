@@ -30,7 +30,7 @@ fn harness(start: &Path) -> (Harness<'static, RickUi>, Arc<Fake>) {
         ui: host.clone(),
         extensions: Vec::new(),
         config_dir: Some(fake.config_dir()),
-        start: local(start),
+        start: Some(local(start)),
     });
     let mut harness = Harness::builder()
         .with_size(egui::vec2(1400.0, 800.0))
