@@ -14,7 +14,8 @@ use types::{CancelToken, Error, JobId, Progress};
 /// The least time between two progress events of one job. A job over
 /// hundreds of thousands of entries reports each; the event sink, and so
 /// the UI, sees at most this many reports a second per job, always the
-/// latest, and the last one before the job ends.
+/// latest, and the last one before the job ends. A `Progress::Message` is
+/// a change of state and is published at once.
 pub const PROGRESS_EVERY: Duration = Duration::from_millis(50);
 
 /// What a runner tells its event sink about every job it runs, so the
@@ -317,21 +318,26 @@ impl JobRunner {
                                 progress = None;
                                 continue;
                             }
+                            let latest = progress
+                                .as_mut()
+                                .map(|rx| rx.borrow_and_update().clone());
+                            let Some(latest) = latest else {
+                                continue;
+                            };
+                            // A message is a change of state (a conflict, a
+                            // wait) and goes out at once; counts are throttled.
+                            let is_message = matches!(latest, Progress::Message(_));
                             match last_published {
-                                Some(at) if at.elapsed() < PROGRESS_EVERY => {
+                                Some(at) if at.elapsed() < PROGRESS_EVERY && !is_message => {
                                     if !deferred {
                                         deferred = true;
                                         window.as_mut().reset((at + PROGRESS_EVERY).into());
                                     }
                                 }
                                 _ => {
-                                    let latest = progress
-                                        .as_mut()
-                                        .map(|rx| rx.borrow_and_update().clone());
-                                    if let Some(latest) = latest {
-                                        inner.publish(JobEvent::Progress { id, progress: latest });
-                                        last_published = Some(Instant::now());
-                                    }
+                                    deferred = false;
+                                    inner.publish(JobEvent::Progress { id, progress: latest });
+                                    last_published = Some(Instant::now());
                                 }
                             }
                         }
