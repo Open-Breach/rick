@@ -475,6 +475,12 @@ fn a_1gib_sparse_copy_shows_progress_pauses_and_cancels() {
             .unwrap_or_else(|e| panic!("{e}"));
         file.set_len(1 << 30).unwrap_or_else(|e| panic!("{e}"));
     }
+    // The target folders exist before the window opens, so the listed folder
+    // does not change under the test.
+    for run_index in 0..tests::bench::runs() {
+        fs::create_dir(dir.path().join(format!("dst{run_index}")))
+            .unwrap_or_else(|e| panic!("{e}"));
+    }
     let (mut harness, _) = harness(dir.path());
     let pane = pane(&harness);
     let running = |h: &Harness<'_, RickUi>| {
@@ -496,14 +502,15 @@ fn a_1gib_sparse_copy_shows_progress_pauses_and_cancels() {
     // One copy per run, each into a folder of its own.
     for run_index in 0..tests::bench::runs() {
         let dst = dir.path().join(format!("dst{run_index}"));
-        fs::create_dir(&dst).unwrap_or_else(|e| panic!("{e}"));
-        command(
-            &mut harness,
-            app::Command::Navigate {
-                pane,
-                to: local(dir.path()),
-            },
-        );
+        if run_index > 0 {
+            command(
+                &mut harness,
+                app::Command::Navigate {
+                    pane,
+                    to: local(dir.path()),
+                },
+            );
+        }
         select(&mut harness, "sparse.bin");
         run(&mut harness, "core.copy");
         command(
