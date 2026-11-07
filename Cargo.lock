@@ -1558,6 +1558,7 @@ version = "0.2.0-dev"
 dependencies = [
  "bzip2",
  "ext",
+ "ext-preview-archive",
  "flate2",
  "lz4_flex",
  "lzma-rust2",
@@ -1580,7 +1581,9 @@ version = "0.2.0-dev"
 dependencies = [
  "encoding_rs",
  "ext",
+ "html-escape",
  "platform",
+ "pulldown-cmark",
  "runtime",
  "serde_json",
  "syntect",
@@ -3279,6 +3282,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "html-escape"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "491194d601b4fa9fac3c9571e014070a0ad1bc3392d1bc10419695196a8b3cc3"
+
+[[package]]
 name = "hybrid-array"
 version = "0.4.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4914,6 +4923,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3d595e54a326bc53c1c197b32d295e14b169e3cfeaa8dc82b529f947fba6bcf5"
 
 [[package]]
+name = "pulldown-cmark"
+version = "0.13.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3db2be46835f013dd3f4fa7f5f7402c537787b54ebb6fe2b94bbdd7e2669bb7b"
+dependencies = [
+ "bitflags 2.13.2",
+ "memchr",
+ "unicase",
+]
+
+[[package]]
 name = "pxfm"
 version = "0.1.30"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5687,8 +5707,12 @@ dependencies = [
  "egui_kittest",
  "ext",
  "ext-git",
+ "ext-preview-archive",
  "ext-preview-code",
+ "ext-preview-csv",
  "ext-preview-image",
+ "ext-preview-media",
+ "ext-preview-office",
  "ext-preview-pdf",
  "ext-preview-text",
  "futures",
@@ -6053,6 +6077,12 @@ dependencies = [
  "types",
  "vfs-local",
 ]
+
+[[package]]
+name = "unicase"
+version = "2.10.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "357cc3acc6a036009fd6c973ed009037c732d60d0b4f6c673e9041497482a28f"
 
 [[package]]
 name = "unicode-bom"
