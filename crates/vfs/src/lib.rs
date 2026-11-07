@@ -2,7 +2,10 @@
 //! operations that span providers.
 //!
 //! [`Mounts`] maps a [`ProviderId`] to its [`Provider`]; a [`Location`]
-//! carries the id, so routing is a lookup. [`copy`] and [`move_entry`] are
+//! carries the id, so routing is a lookup. The `rick` provider is always
+//! mounted: [`Virtual`] routes Rick's own virtual locations,
+//! `rick://trash` and the like, to the views extensions registered
+//! ([`Mounts::view`]). [`copy`] and [`move_entry`] are
 //! what `ops` runs: within one provider they use the provider's own fast
 //! path (`Provider::copy`, `Provider::rename`); across providers, or when a
 //! rename crosses devices, they stream through `open_read` and `open_write`,
@@ -10,6 +13,8 @@
 //! stopping within one buffer of cancellation.
 
 #![forbid(unsafe_code)]
+
+pub mod virt;
 
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
@@ -20,30 +25,75 @@ use runtime::{PauseGate, ProgressSink};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use types::{CancelToken, Entry, EntryKind, Error, Location, Progress, ProviderId, VPath};
 
+pub use virt::Virtual;
+
 /// Bytes moved per read when streaming between providers.
 const BUFFER: usize = 1 << 20;
 
 /// The provider table.
-#[derive(Default)]
 pub struct Mounts {
     providers: RwLock<HashMap<ProviderId, Arc<dyn Provider>>>,
+    /// The `rick` provider, mounted from the start.
+    virt: Arc<Virtual>,
+}
+
+impl Default for Mounts {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl Mounts {
-    /// An empty table.
+    /// A table holding the `rick` provider and nothing else yet.
     #[must_use]
     pub fn new() -> Self {
-        Self::default()
+        let virt = Arc::new(Virtual::new());
+        let mounts = Self {
+            providers: RwLock::new(HashMap::new()),
+            virt: Arc::clone(&virt),
+        };
+        mounts.mount(virt);
+        mounts
     }
 
-    /// A table holding every provider the registry collected.
+    /// A table holding every provider and view the registry collected.
     #[must_use]
     pub fn from_registry(registry: &Registry) -> Self {
         let mounts = Self::new();
-        for provider in registry.providers() {
-            mounts.mount(Arc::clone(provider));
-        }
+        mounts.absorb(registry);
         mounts
+    }
+
+    /// Mounts every provider and view the registry collected.
+    pub fn absorb(&self, registry: &Registry) {
+        for provider in registry.providers() {
+            self.mount(Arc::clone(provider));
+        }
+        for (name, provider) in registry.views() {
+            self.mount_view(name, Arc::clone(provider));
+        }
+    }
+
+    /// Adds a view to the `rick` provider: `rick://<name>` is served by
+    /// `provider` from now on.
+    pub fn mount_view(&self, name: &str, provider: Arc<dyn Provider>) {
+        self.virt.add(name, provider);
+    }
+
+    /// The provider serving the view `rick://<name>`, if one is mounted.
+    #[must_use]
+    pub fn view(&self, name: &str) -> Option<Arc<dyn Provider>> {
+        self.virt.view(name)
+    }
+
+    /// Whether `loc` is served: its provider is mounted and, for a `rick`
+    /// location, its view too (the root is always served).
+    #[must_use]
+    pub fn serves(&self, loc: &Location) -> bool {
+        if loc.provider == ProviderId::RICK {
+            return virt::view_name(&loc.path).is_none_or(|name| self.view(name).is_some());
+        }
+        self.provider(loc.provider).is_some()
     }
 
     fn table(&self) -> std::sync::RwLockReadGuard<'_, HashMap<ProviderId, Arc<dyn Provider>>> {

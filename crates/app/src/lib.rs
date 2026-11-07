@@ -462,7 +462,7 @@ impl App {
         } = config;
         let mut pending = Vec::new();
 
-        let mut registry = Registry::new();
+        let mut registry = Registry::with_platform(Arc::clone(&platform) as Arc<dyn Platform>);
         let mounts = Arc::new(Mounts::new());
         let trash: Arc<dyn platform::Trash> = Arc::clone(&platform) as Arc<dyn platform::Trash>;
         mounts.mount(Arc::new(LocalProvider::new(trash)));
@@ -486,9 +486,7 @@ impl App {
                 });
             }
         }
-        for provider in registry.providers() {
-            mounts.mount(Arc::clone(provider));
-        }
+        mounts.absorb(&registry);
 
         let config_dir = config_dir.unwrap_or_else(|| platform.config_dir());
         let settings_path = config_dir.join(SETTINGS_FILE);

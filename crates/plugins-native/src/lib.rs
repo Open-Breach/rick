@@ -43,16 +43,17 @@ pub use manifest::{Library, MANIFEST_FILE, ManifestError, PluginToml};
 /// plugin's manifest must name the same one.
 pub const HOST_TOOLCHAIN: &str = env!("RICK_TOOLCHAIN");
 
-/// Loads the library at `path` once, reads the manifest its entry point
-/// registers and returns the `plugin.toml` for it, with this build's
-/// toolchain and the library names cargo gives the crate; the library
-/// stays mapped. For the bundler, not the running application.
+/// Loads the library at `path` once, with the platform the binary runs on,
+/// reads the manifest its entry point registers and returns the
+/// `plugin.toml` for it, with this build's toolchain and the library names
+/// cargo gives the crate; the library stays mapped. For the bundler, not
+/// the running application.
 ///
 /// # Errors
 ///
 /// [`LoadError`] when the library is not a plugin of this build.
 pub fn describe(path: &Path) -> Result<PluginToml, LoadError> {
-    let loaded = load_library(path)?;
+    let loaded = load_library(path, std::sync::Arc::new(ext::platform::Native::new()))?;
     let stem = path
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())

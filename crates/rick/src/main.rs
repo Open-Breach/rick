@@ -86,6 +86,7 @@ fn main() -> anyhow::Result<()> {
             .iter()
             .map(|e| e.manifest().id.0.to_owned())
             .collect(),
+        platform: Some(platform.clone()),
     });
     if list_plugins {
         write!(std::io::stdout().lock(), "{}", table(host.plugins()))

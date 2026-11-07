@@ -3,7 +3,9 @@
 use std::fmt;
 use std::mem::ManuallyDrop;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
+use ext::platform::Platform;
 use ext::plugin::{ENTRY_POINT, EntryPoint, Status};
 use ext::{Extension, Manifest, Registry};
 use tracing::{debug, warn};
@@ -94,7 +96,8 @@ impl fmt::Debug for Loaded {
 }
 
 /// Opens the library at `path`, calls its entry point with a fresh
-/// registry and returns the plugin with its contributions.
+/// registry lending `platform` and returns the plugin with its
+/// contributions.
 ///
 /// The caller has checked the plugin's manifest file first: the toolchain
 /// and the API version are what make the library's entry point safe to
@@ -106,13 +109,13 @@ impl fmt::Debug for Loaded {
 ///
 /// [`LoadError`] says what went wrong; the reason a plugin gave for failing
 /// or the message of the panic it raised is in the error's text.
-pub fn load_library(path: &Path) -> Result<Loaded, LoadError> {
+pub fn load_library(path: &Path, platform: Arc<dyn Platform>) -> Result<Loaded, LoadError> {
     debug!(path = %path.display(), "loading");
     // SAFETY: loading runs the library's initialisers. A Rust cdylib built
     // from this workspace has none beyond the runtime's own, and the caller
     // has checked the manifest that says it is one.
     let library = unsafe { libloading::Library::new(path) }.map_err(LoadError::Open)?;
-    let mut registry = Registry::new();
+    let mut registry = Registry::with_platform(platform);
     let status = {
         // SAFETY: `EntryPoint` is the signature `ext::plugin!` declares for
         // this symbol; the manifest checks (API version, toolchain) make

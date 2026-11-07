@@ -20,7 +20,7 @@ multiple-versions = "warn"
 # entry. Add an entry per crate as crates appear.
 deny = [
     { crate = "runtime", wrappers = ["platform", "ext", "vfs", "vfs-local", "model", "ops", "app", "ui-egui", "rick", "tests"] },
-    { crate = "platform", wrappers = ["vfs", "vfs-local", "model", "ops", "app", "ui-egui", "rick", "tests"] },
+    { crate = "platform", wrappers = ["ext", "vfs", "vfs-local", "model", "ops", "app", "ui-egui", "rick", "tests"] },
     { crate = "ext", wrappers = ["vfs", "vfs-local", "model", "ops", "app", "ui-egui", "rick", "tests", "ext-preview-text", "ext-preview-code", "ext-preview-image", "ext-preview-pdf", "ext-git", "plugins-native", "plugin-probe", "plugin-panic"] },
     { crate = "vfs", wrappers = ["vfs-local", "ops", "app", "ui-egui", "rick", "tests"] },
     { crate = "vfs-local", wrappers = ["ops", "app", "ui-egui", "rick", "tests"] },
