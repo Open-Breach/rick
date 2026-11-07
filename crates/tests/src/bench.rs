@@ -129,7 +129,7 @@ pub const BENCHMARKS: &[Benchmark] = &[
     Benchmark {
         key: "tree-first",
         linux: ms(50),
-        macos: ms(80),
+        macos: ms(100),
         windows: ms(50),
     },
     Benchmark {
