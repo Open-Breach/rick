@@ -931,3 +931,124 @@ Once answered, an entry keeps its number and gains a dated decision line.
     process ends (`Loaded` holds the library in a `ManuallyDrop`). Only a
     file that is no plugin at all (no entry point) is unmapped again. The
     cost is the memory of a plugin that could not be used.
+
+86. (issue 18) The spec's `PreviewDoc` returns `Frame::{Rgba, Text,
+    External}`, and the archive, CSV and rendered Markdown/HTML previews
+    need the pane to lay out a file list, a table and a document; the
+    issue's media transport asks for volume, speed, frame step and loop,
+    which the spec's `Transport` does not have. Changing `Frame` would
+    have touched `ui-egui`, which the viewer (issue 17) is reworking in
+    parallel.
+    Assumed: `PreviewDoc` gains `content(&self) -> Option<Content>` with a
+    default of `None`; `Content` is `Listing(Arc<Listing>)` (entries in
+    explorer order with depth, kind, size, compressed size, date and an
+    encrypted flag, plus a stats line), `Grid(Arc<dyn Grid>)` (header, row
+    count, and the cells of any window of rows, parsed on demand) or
+    `Document(Arc<Document>)` (headings, paragraphs, styled inlines, links,
+    lists, quotes, code, tables, images, rules). `render` keeps answering
+    for such a document with a textual fallback (the listing as text, the
+    raw CSV, the highlighted source), so the 0.1 pane shows something
+    sensible until the viewer lays the content out. `Transport` gains
+    `volume`/`set_volume`, `speed`/`set_speed`, `step` and
+    `looping`/`set_looping` with defaults that do nothing, so the viewer's
+    fake transport keeps compiling. `Icon` gains `Rendered`. The extension
+    API is version 4.
+
+87. (issue 18) The office previewer: the issue says LibreOffice is found
+    "through platform", but a plugin may depend on `ext` and `types` only
+    (SPEC.md "Module rules"); and the spec names no place for the cache of
+    converted PDFs, while plugins have no access to the config directory.
+    Assumed: the plugin looks for `soffice` itself: `RICK_SOFFICE` (a
+    development override like `RICK_PDFIUM_DIR`), then the `PATH`, then the
+    install directories of all three platforms checked as plain paths (a
+    path that does not exist on the current OS is simply absent), so no
+    `cfg(target_os)` is needed; a hit is remembered, a miss is looked up
+    again next time. The cache lives under the temporary directory,
+    `<temp>/rick/office/<key>.pdf` with `<key>` a hash of the file's path,
+    size and modification time (a changed file misses the cache by
+    itself), trimmed to 512 MiB and 200 files, oldest out; LibreOffice runs
+    with its own user profile under the same directory so that an open
+    LibreOffice does not swallow the command. A conversion runs inside the
+    preview job on the blocking pool, cancellable (the process is killed)
+    and limited to 60 s; it is not a separate row in the operations area,
+    since the preview job already is the job. The office pages render
+    through the plugin's own pdfium binding (a mirror of the PDF
+    previewer's; a plugin cannot call `ext-preview-pdf`), which means two
+    copies of `pdfium-render`'s call serialisation exist in the process; a
+    PDF and an office page rendering at the same instant are not
+    serialised against each other. To revisit if pdfium shows it.
+
+88. (issue 18) The spec and the issue say nothing about encrypted entries
+    in an archive listing.
+    Assumed: an entry whose content is encrypted (zip and RAR with a
+    password, 7z without header encryption) is listed with its name and
+    size and marked `encrypted`, and the stats line counts them; an archive
+    whose directory itself is encrypted (7z `-mhe`, RAR `-hp`) lists
+    nothing, its stats line says the list of files needs a password, and
+    the status bar says "encrypted"; no password is ever asked for in the
+    preview. Also assumed: a listing stops after 200 000 entries or, for a
+    compressed tar (which has no directory and must be streamed), after
+    10 s, and says so; symbolic links in zips show without their target
+    (it is the entry's content). Archives are case-sensitive: `Alpha/` and
+    `alpha/` are two folders, ordered without regard to case.
+
+89. (issue 18) GStreamer: the spec bundles the runtime on macOS and
+    Windows and the issue asks for "a clear runtime missing state"; the
+    GStreamer Rust bindings link the libraries at build time, so a plugin
+    built with them needs the development files to build and cannot load
+    where the core library is absent.
+    Assumed: playback sits behind the media plugin's `gstreamer` Cargo
+    feature, off by default so every workspace build still builds; Linux
+    CI and the release builds turn it on (`--features
+    ext-preview-media/gstreamer`, which `cargo xtask bundle` passes
+    through), with the system packages on Linux and the official
+    GStreamer packages (1.28.8) installed on the macOS and Windows runners.
+    The bundle carries the runtime where `RICK_GSTREAMER_DIR` names it:
+    macOS `gstreamer/lib/` (the libraries name each other through
+    `@rpath`, which the media plugin's run path `@loader_path/../../
+    gstreamer/lib` and the binary's `@executable_path/gstreamer/lib`
+    resolve) and the elements in `gstreamer/lib/gstreamer-1.0/`, thinned
+    to arm64 by the release workflow; Windows the DLLs beside the binary,
+    where every DLL the process loads is searched for, and the elements in
+    `gstreamer-1.0/`; the plugin scans those directories at start, and
+    Linux uses the system's. The missing-runtime state has three shapes:
+    built without the feature, or GStreamer failing to initialise, the
+    document shows the file's metadata (read natively from the headers and
+    tags) and says so; a core library absent on Linux, where the plugin
+    cannot be loaded at all, the Extensions screen and `--list-plugins`
+    show it refused with the loader's message; a decoder or demuxer
+    missing for one file (the usual case: codec plug-ins not installed),
+    the document shows the metadata and names the missing plug-in and the
+    package family to install. A plugin written against GStreamer's C API
+    with `libloading`, which would have given the first shape in every
+    case, would have put hundreds of `unsafe` calls into a plugin; a helper
+    process would have doubled the code. Hardware decoding is GStreamer's
+    own choice of the highest-ranked decoder. On a machine without an audio
+    device (CI) playback runs with a `fakesink` and says so.
+
+90. (issue 18) Every plugin crate exported the same `rick_plugin_register`
+    symbol, so a binary that links two plugin crates as ordinary libraries
+    (the acceptance tests, or `rick` with two of its opt-in plugin
+    features) failed to link with duplicate symbols.
+    Assumed: `ext::plugin!` exports the entry point as
+    `rick_plugin_register_<crate name>` through `#[export_name]` with
+    `CARGO_CRATE_NAME`, and the host resolves that name from the library's
+    file stem (`libext_git.so` gives `rick_plugin_register_ext_git`); in
+    Rust the function keeps its plain name. One entry point per library,
+    as the spec asks, with a name of its own.
+
+91. (issue 18) The CSV grid's header and window: the spec says "a
+    virtualised grid with header row" and leaves the heuristics open.
+    Assumed: the first record is the header unless every cell of it reads
+    as a number, in which case the columns are numbered; the delimiter is
+    the one of comma, semicolon, tab and pipe that appears the same number
+    of times on each of the first twenty records, the most frequent on the
+    first record otherwise, a tab for `.tsv` and a comma for `.csv` when
+    none appears; up to 256 MiB of the file is read and indexed (a cut
+    file says so), the raw text up to 1 MiB is the fallback and the text
+    layer for find. Rendered Markdown and HTML: the Rendered toggle is on
+    for every newly opened file (unlike pretty print), images are read
+    from the document's own folder or below only (no parent steps, no
+    absolute paths, no network), 16 MiB each and 64 MiB in all, and a link
+    is kept only with a web, mail or relative address; raw HTML inside
+    Markdown is shown as text.
