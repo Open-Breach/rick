@@ -113,8 +113,11 @@ use crate::search::SearchIndex;
 /// History: 1 the first contract; 2 `PreviewDoc::info` became `sections`,
 /// with `status`, `controls` and `set_control` added; 3 [`Manifest`] gained
 /// `points` and `platforms`, and plugin libraries gained their entry point
-/// ([`plugin`](mod@crate::plugin)) and their manifest file.
-pub const API_VERSION: u32 = 3;
+/// ([`plugin`](mod@crate::plugin)) and their manifest file; 4
+/// `PreviewDoc` gained `content` (file listings, grids and documents the
+/// UI lays out), `Transport` gained volume, speed, frame step and loop,
+/// and `Icon` gained `Rendered` (QUESTIONS.md 86).
+pub const API_VERSION: u32 = 4;
 
 bitflags::bitflags! {
     /// The extension points an extension fills, as its manifest declares
