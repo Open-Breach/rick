@@ -37,10 +37,10 @@ pub use session::{
 pub use settings::{
     AfterDrag, Density, Drag, LAST_SESSION, PanelSide, Plugins, Preview, Search, Section,
     SessionSettings, Settings, SettingsChange, SidePanel, SidePanelChange, TextPreview, Theme,
-    parse_location,
+    Viewer, parse_location,
 };
 pub use tree::{FolderTree, Tree, TreeRow};
-use types::{Conflict, ConflictId, Entry, EntryId, JobId, Location, Progress, VPath};
+use types::{Conflict, ConflictId, Entry, EntryId, EntryKind, JobId, Location, Progress, VPath};
 
 /// Identity of a tab, unique within one model.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -1415,6 +1415,58 @@ impl Model {
                 .filter(|id| tab.selection.contains(id))
                 .collect(),
         )
+    }
+
+    /// Opens the file `id` of the pane's active tab in a viewer tab of the
+    /// same pane, next to that tab: a copy of it with the listing, sort,
+    /// filter and hidden flag it has, showing `id` as its selection. The
+    /// pane's viewer tab for the same location is reused when it has one.
+    /// Returns the viewer tab, now active; `None` when the pane's tab is the
+    /// Preview tab or `id` is not a file of it.
+    pub fn open_viewer(&mut self, pane: PaneId, id: EntryId) -> Option<TabId> {
+        let (source_id, source) = self.active_tab(pane)?;
+        if source.kind == TabKind::Preview {
+            return None;
+        }
+        let entry = source.entry(id)?;
+        if entry.kind == EntryKind::Dir {
+            return None;
+        }
+        let location = source.location.clone();
+        let existing = self.panes.get(&pane)?.tabs.iter().copied().find(|t| {
+            self.tabs
+                .get(t)
+                .is_some_and(|tab| tab.kind == TabKind::Viewer && tab.location == location)
+        });
+        let tab = if let Some(tab) = existing {
+            tab
+        } else {
+            let mut state = source.clone();
+            state.kind = TabKind::Viewer;
+            state.history = History::default();
+            // The viewer steps through the listing's rows; the tree's
+            // children and the scroll are the explorer's.
+            state.view = ViewMode::Details;
+            state.tree = Tree::default();
+            state.scroll = 0.0;
+            state.note = None;
+            let id = TabId(self.next_tab);
+            self.next_tab += 1;
+            self.tabs.insert(id, state);
+            let p = self.panes.get_mut(&pane)?;
+            let at = p
+                .tabs
+                .iter()
+                .position(|t| *t == source_id)
+                .map_or(p.tabs.len(), |i| i + 1);
+            p.tabs.insert(at, id);
+            id
+        };
+        if let Some(viewer) = self.tabs.get_mut(&tab) {
+            viewer.selection = BTreeSet::from([id]);
+        }
+        self.activate(tab);
+        Some(tab)
     }
 
     /// Opens a tab at `location` in `pane`, or in the focused pane, and makes

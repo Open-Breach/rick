@@ -193,6 +193,12 @@ enum Msg {
         generation: u64,
         result: Result<Box<dyn PreviewDoc>, Error>,
     },
+    /// Open scored a file through the previewers.
+    Opened {
+        pane: PaneId,
+        id: EntryId,
+        previewable: bool,
+    },
     /// A decorator finished a batch late.
     Decorated {
         pane: PaneId,
@@ -954,6 +960,7 @@ impl App {
                     Self::selection_cleared(pane, before, events);
                 }
             }
+            Command::Open { pane, id } => self.open(pane, id, events),
             Command::Back(pane) => {
                 let before = self.selected_ids(pane);
                 if self.model.back(pane).is_some() {
@@ -2265,6 +2272,23 @@ impl App {
                     Err(error) => Event::PreviewFailed { pane, error },
                 });
             }
+            Msg::Opened {
+                pane,
+                id,
+                previewable,
+            } => {
+                if previewable {
+                    self.model.open_viewer(pane, id);
+                } else if let Some(entry) = self
+                    .model
+                    .active_tab(pane)
+                    .and_then(|(_, tab)| tab.entry(id).cloned())
+                {
+                    self.open_default(pane, entry, events);
+                }
+                self.sync_panes(events);
+                self.sync_preview();
+            }
             Msg::Decorated {
                 pane,
                 generation,
@@ -2556,6 +2580,74 @@ impl App {
                 cancel: handle.cancel,
             },
         );
+    }
+
+    /// Open: a folder navigates the pane; a file opens in a viewer tab when
+    /// a previewer claims it, which a job finds out by reading its first
+    /// bytes, and with the system's default application otherwise or when
+    /// `[viewer] external` names its type.
+    fn open(&mut self, pane: PaneId, id: EntryId, events: &mut Vec<Event>) {
+        let Some((_, tab)) = self.model.active_tab(pane) else {
+            return;
+        };
+        if tab.kind == model::TabKind::Preview {
+            return;
+        }
+        let Some(entry) = tab.entry(id).cloned() else {
+            return;
+        };
+        if entry.kind == EntryKind::Dir {
+            let to = tab.location_of(&entry);
+            let before = self.selection_len(pane);
+            if self.model.navigate(pane, to).is_some() {
+                Self::selection_cleared(pane, before, events);
+            }
+            return;
+        }
+        let loc = tab.location_of(&entry);
+        let provider = self.mounts.resolve(&loc).ok();
+        let externally = self.model.settings.viewer.opens_externally(&entry.name);
+        let (Some(provider), false, false) =
+            (provider, externally, self.registry.previewers().is_empty())
+        else {
+            self.open_default(pane, entry, events);
+            return;
+        };
+        let previewers: Vec<Arc<dyn Previewer>> = self.registry.previewers().to_vec();
+        let tx = self.mailbox.clone();
+        let handle = self
+            .jobs
+            .spawn_named(format!("Open {}", entry.name), move |job| async move {
+                let previewable =
+                    match ext::read_bytes(&*provider, &loc, Some(4096), &job.cancel).await {
+                        Ok(sniff) => previewers.iter().any(|p| p.score(&entry, &sniff) > 0),
+                        Err(error) => {
+                            debug!(%error, "open: no sniff; the system application takes it");
+                            false
+                        }
+                    };
+                tx.send(Msg::Opened {
+                    pane,
+                    id,
+                    previewable,
+                });
+                Ok(())
+            });
+        self.internal.insert(handle.id);
+    }
+
+    /// Runs `core.open_default` on one entry of the pane.
+    fn open_default(&mut self, pane: PaneId, entry: Entry, events: &mut Vec<Event>) {
+        let Some((_, tab)) = self.model.active_tab(pane) else {
+            return;
+        };
+        let ctx = ActionCtx {
+            pane,
+            location: tab.location.clone(),
+            selection: vec![entry],
+            invoked_from: Invocation::Shortcut,
+        };
+        self.run(ext::ActionId("core.open_default"), ctx, events);
     }
 
     fn list_done(

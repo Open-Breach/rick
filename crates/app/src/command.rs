@@ -35,6 +35,18 @@ pub enum Command {
         /// Where to go.
         to: Location,
     },
+    /// Open an entry of the pane's active tab: a folder navigates the pane
+    /// to it; a file opens in a viewer tab of the pane when a previewer
+    /// claims it, and with the system's default application otherwise or
+    /// when its type is listed in `[viewer] external`. Scoring reads the
+    /// file's first bytes as a job, so the viewer tab or the application
+    /// follows a moment later.
+    Open {
+        /// The pane.
+        pane: PaneId,
+        /// The entry.
+        id: EntryId,
+    },
     /// One step back in the pane's history.
     Back(PaneId),
     /// One step forward in the pane's history.

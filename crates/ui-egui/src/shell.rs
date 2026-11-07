@@ -22,7 +22,7 @@ use model::{
     SettingsChange, SidePanelChange, SortDir, Tab, TabId, TabKind, Theme, ViewMode, WindowId,
 };
 use platform::{ControlsSide, PropertiesOutcome};
-use types::{EntryId, EntryKind, Location};
+use types::{EntryId, Location};
 
 use crate::dnd::{Dnd, DragView, Source, Spring, Target, Zone};
 use crate::dock::DockSync;
@@ -1436,25 +1436,10 @@ impl RickUi {
         }
     }
 
+    /// Opens an entry: a folder navigates, a file goes to the viewer or the
+    /// system's default application, as the app decides.
     fn open_entry(&mut self, pane: PaneId, id: EntryId) {
-        let Some((_, tab)) = self.app.model().active_tab(pane) else {
-            return;
-        };
-        let Some(entry) = tab.entry(id).cloned() else {
-            return;
-        };
-        if entry.kind == EntryKind::Dir {
-            let to = tab.location_of(&entry);
-            self.handle(Command::Navigate { pane, to });
-        } else {
-            let ctx = ActionCtx {
-                pane,
-                location: tab.location.clone(),
-                selection: vec![entry],
-                invoked_from: Invocation::Shortcut,
-            };
-            self.run_action_with(ActionId("core.open_default"), ctx);
-        }
+        self.handle(Command::Open { pane, id });
     }
 
     fn unavailable(&mut self, what: &str) {
@@ -1802,7 +1787,9 @@ impl RickUi {
                     self.open_entry(pane, id);
                 }
             }
-            [one] if one.kind == EntryKind::Dir => {
+            // One entry: a folder navigates, a file goes to the viewer or
+            // the system application; several files all go to the system.
+            [one] => {
                 let id = one.id;
                 self.open_entry(pane, id);
             }
