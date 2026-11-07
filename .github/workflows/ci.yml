@@ -9,7 +9,10 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 30
+    # The Windows runner spends about 27 minutes on the steps and several
+    # more saving the cache, which the shared libraries and the plugin
+    # libraries made larger (CI run 168 was cancelled in that save at 30).
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
