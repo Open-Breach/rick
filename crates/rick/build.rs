@@ -42,7 +42,7 @@ fn main() {
     println!("cargo:rustc-env=RICK_GIT_HASH={hash}");
 
     // The kernel dylibs (`types`, `runtime`, `ext`) and `libstd` sit beside
-    // the binary in a bundle (`cargo xtask bundle`, QUESTIONS.md 81). Linux
+    // the binary in a bundle (`cargo xtask bundle`, QUESTIONS.md 84). Linux
     // and macOS look there through a run path; Windows searches the
     // binary's directory on its own. This is build configuration, not a
     // `cfg(target_os)` in code.

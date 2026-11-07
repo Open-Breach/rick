@@ -6,6 +6,11 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 
+# The reference plugin: a `cdylib` the host loads from `plugins/git/`, and
+# an `rlib` for the binary's opt-in `git` feature and the tests.
+[lib]
+crate-type = ["cdylib", "rlib"]
+
 [dependencies]
 types = { workspace = true }
 ext = { workspace = true }
