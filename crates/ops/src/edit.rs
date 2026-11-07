@@ -3,8 +3,8 @@
 use std::sync::Arc;
 
 use ext::{
-    Action, ActionCtx, ActionGroup, ActionId, ActionOutcome, Availability, CopyOptions, Key,
-    Modifiers, RemoveMode, Shortcut, UiHost, UndoCommand,
+    Action, ActionCtx, ActionGroup, ActionId, ActionOutcome, Availability, Capabilities,
+    CopyOptions, Key, Modifiers, RemoveMode, Shortcut, UiHost, UndoCommand,
 };
 use runtime::{JobCtx, JobRunner};
 use types::{EntryKind, Error, Location, Progress};
@@ -113,7 +113,11 @@ impl Action for Paste {
             key: Key::Char('v'),
         })
     }
-    fn availability(&self, _ctx: &ActionCtx) -> Availability {
+    fn availability(&self, ctx: &ActionCtx) -> Availability {
+        match self.0.needs(&ctx.location, Capabilities::WRITE) {
+            Availability::Enabled => {}
+            hidden => return hidden,
+        }
         if self
             .0
             .clipboard()
@@ -408,7 +412,10 @@ impl Action for Duplicate {
         })
     }
     fn availability(&self, ctx: &ActionCtx) -> Availability {
-        needs_selection(ctx)
+        match self.0.needs(&ctx.location, Capabilities::WRITE) {
+            Availability::Enabled => needs_selection(ctx),
+            hidden => hidden,
+        }
     }
     fn run(
         &self,

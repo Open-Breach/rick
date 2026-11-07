@@ -1,8 +1,7 @@
-//! The side panel's data: the recent entries and the trash's contents.
+//! The side panel's data: the recent entries.
 
 use std::time::SystemTime;
 
-use platform::TrashedItem;
 use types::{Entry, EntryId, VPath};
 
 /// How many recent entries are kept.
@@ -75,29 +74,6 @@ impl Recent {
     }
 }
 
-/// The trash as the side panel shows it.
-#[derive(Debug, Clone, Default)]
-pub struct TrashView {
-    /// The items, newest first.
-    pub items: Vec<TrashedItem>,
-    /// `true` when the platform listed its trash; `false` when the items are
-    /// Rick's own record of what it trashed, because the platform cannot
-    /// list original paths (macOS).
-    pub listed: bool,
-    /// The platform's trash could not be read at all; the text says why.
-    pub error: Option<String>,
-}
-
-impl TrashView {
-    /// Replaces the items, newest first.
-    pub fn set(&mut self, mut items: Vec<TrashedItem>, listed: bool) {
-        items.sort_by_key(|item| std::cmp::Reverse(item.deleted_at));
-        self.items = items;
-        self.listed = listed;
-        self.error = None;
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use std::time::Duration;
@@ -145,22 +121,5 @@ mod tests {
         }
         assert_eq!(recent.entries().len(), RECENT_LIMIT);
         assert_eq!(recent.entries()[0].name, "299");
-    }
-
-    #[test]
-    fn the_trash_view_sorts_newest_first() {
-        let mut view = TrashView::default();
-        let item = |n: u64| TrashedItem {
-            original: std::path::PathBuf::from(format!("/o/{n}")),
-            trashed: std::path::PathBuf::from(format!("/t/{n}")),
-            deleted_at: SystemTime::UNIX_EPOCH + Duration::from_secs(n),
-        };
-        view.set(vec![item(1), item(3), item(2)], true);
-        let order: Vec<_> = view.items.iter().map(|i| i.deleted_at).collect();
-        assert_eq!(
-            order,
-            [item(3).deleted_at, item(2).deleted_at, item(1).deleted_at]
-        );
-        assert!(view.listed);
     }
 }

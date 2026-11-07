@@ -967,55 +967,9 @@ fn recent_follows_the_home_watch_and_survives_a_restart() {
 }
 
 #[test]
-fn the_trash_and_the_volumes_reach_the_model() {
+fn the_volumes_reach_the_model() {
     let mut h = harness();
     h.settle();
-    assert!(h.app.model().trash.listed);
-    assert_eq!(h.app.model().trash.items.len(), 0, "the trash is empty");
-    let pane = h.app.model().focused;
-    h.send(Command::Select {
-        pane,
-        change: SelectionChange::Set(vec![id_of(&h, "b.txt")]),
-    });
-    let ctx = h
-        .app
-        .action_ctx(pane, Invocation::Shortcut)
-        .unwrap_or_else(|| panic!("ctx"));
-    h.send(Command::Run {
-        action: ActionId("core.trash"),
-        ctx,
-    });
-    assert!(wait_until(&mut h, Duration::from_secs(5), |h| {
-        h.app.model().trash.items.len() == 1
-    }));
-    assert!(h.app.model().trash.items[0].original.ends_with("b.txt"));
-    let record = h.app.settings_path().with_file_name(super::TRASH_FILE);
-    assert!(wait_until(&mut h, Duration::from_secs(2), |_| {
-        fs::read_to_string(&record).is_ok_and(|t| t.contains("b.txt"))
-    }));
-
-    // Restore through the trash context, as the side panel does.
-    let entry = ops::trash_entry(&h.app.model().trash.items[0]);
-    h.send(Command::Run {
-        action: ActionId("core.restore_trash"),
-        ctx: ext::ActionCtx {
-            pane,
-            location: ops::trash_location(),
-            selection: vec![entry],
-            invoked_from: Invocation::ContextMenu,
-        },
-    });
-    assert!(wait_until(&mut h, Duration::from_secs(5), |h| {
-        h.app.model().trash.items.is_empty()
-    }));
-    assert!(h.root.path().join("b.txt").exists());
-    assert_eq!(h.app.undo_label().as_deref(), Some("Restore b.txt"));
-    h.send(Command::Undo);
-    assert!(wait_until(&mut h, Duration::from_secs(5), |h| {
-        h.app.model().trash.items.len() == 1
-    }));
-    assert!(!h.root.path().join("b.txt").exists());
-
     // Volumes come from the platform.
     assert_eq!(h.app.model().volumes.len(), 0, "no volume is listed");
     h.fake.add_volume(platform::Volume {

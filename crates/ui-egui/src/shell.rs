@@ -33,7 +33,6 @@ use crate::operations::Operations;
 use crate::preview::Previews;
 use crate::search::{Pick, SearchBox};
 use crate::settings_ui::ShortcutsScreen;
-use crate::side_panel::SidePanelState;
 use crate::thumbs::Thumbnails;
 use crate::{conflict, frame, icons, inspector, menus, pane, paths, settings_ui, side_panel};
 
@@ -340,8 +339,6 @@ pub struct RickUi {
     closed_tabs: Vec<Location>,
     /// The operations area's rows: rates and when each job ended.
     operations: Operations,
-    /// The side panel's own state: the trash selection.
-    side: SidePanelState,
     /// The conflict dialogue's text field and checkbox.
     conflict: conflict::DialogState,
     /// Set while the inline editor commits through the action, so the shell
@@ -504,7 +501,6 @@ impl RickUi {
             previews: Previews::default(),
             closed_tabs: Vec::new(),
             operations: Operations::default(),
-            side: SidePanelState::default(),
             conflict: conflict::DialogState::default(),
             inline_commit: false,
             applied: None,
@@ -642,13 +638,6 @@ impl RickUi {
     #[must_use]
     pub fn editing(&self, tab: TabId) -> Option<&RowEdit> {
         self.tabs.get(&tab).and_then(|t| t.edit.as_ref())
-    }
-
-    /// The trash rows selected in the side panel, by trashed path, for
-    /// tests.
-    #[must_use]
-    pub fn trash_selection(&self) -> Vec<std::path::PathBuf> {
-        self.side.trash_selection.iter().cloned().collect()
     }
 
     /// Whether the layout name prompt is up, for tests.
@@ -904,9 +893,6 @@ impl RickUi {
             || self.shortcuts.rebinding.is_some()
             || !self.app.model().conflicts.is_empty()
         {
-            return;
-        }
-        if self.side.trash_focused && self.side.handle_keys(ctx, &self.app, &mut self.requests) {
             return;
         }
         let search_active = self.windows.get(&window).is_some_and(|w| w.search.active());
@@ -1318,6 +1304,15 @@ impl RickUi {
         });
     }
 
+    /// Whether the provider at `location` takes new entries: the inline
+    /// edits start only where New file and New folder can finish.
+    fn writable(&self, location: &Location) -> bool {
+        self.app
+            .mounts()
+            .resolve(location)
+            .is_ok_and(|p| p.capabilities(location).contains(ext::Capabilities::WRITE))
+    }
+
     /// Whether the shell handles an action itself rather than running it:
     /// the three inline edits (QUESTIONS.md 26) and Open containing folder
     /// (QUESTIONS.md 19).
@@ -1330,14 +1325,14 @@ impl RickUi {
                 });
                 true
             }
-            "core.new_file" if !self.inline_commit && !ops::is_trash(ctx) => {
+            "core.new_file" if !self.inline_commit && self.writable(&ctx.location) => {
                 self.requests.push(Request::StartEdit {
                     pane: ctx.pane,
                     kind: EditKind::NewFile,
                 });
                 true
             }
-            "core.new_folder" if !self.inline_commit && !ops::is_trash(ctx) => {
+            "core.new_folder" if !self.inline_commit && self.writable(&ctx.location) => {
                 self.requests.push(Request::StartEdit {
                     pane: ctx.pane,
                     kind: EditKind::NewFolder,
@@ -1963,15 +1958,7 @@ impl RickUi {
                             .show(ui, self.app.model(), &mut self.requests);
                     });
                 }
-                side_panel::show(
-                    ui,
-                    &self.app,
-                    window,
-                    &side,
-                    &mut self.side,
-                    &mut self.requests,
-                    &mut w.dnd,
-                );
+                side_panel::show(ui, &self.app, window, &side, &mut self.requests, &mut w.dnd);
             });
         // The outer width is what egui restores from `default_size`, so it
         // is what persists; only once the pointer is up, so a drag writes

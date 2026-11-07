@@ -5,93 +5,23 @@
 //! next start.
 //!
 //! Recent lists what changed lately under the home directory and the pinned
-//! folders; Network the mounted volumes other than the system disk; Trash
-//! the trash's contents with restore, delete and empty; Tree a folder tree
-//! following the focused pane. Home, Trash, the volumes and the whole Pinned
-//! section are drop targets while a drag is in progress.
+//! folders; Network the mounted volumes other than the system disk; Trash is
+//! one row that opens the Trash view, `rick://trash`, in the focused pane,
+//! where Restore and Empty trash live (SPEC.md "Places"); Tree a folder
+//! tree following the focused pane. Home, Trash, the volumes and the whole
+//! Pinned section are drop targets while a drag is in progress; a drop on
+//! Trash trashes.
 
-use std::collections::BTreeSet;
 use std::path::PathBuf;
 
 use app::{App, Command};
 use ext::{ActionCtx, ActionId, Invocation};
-use model::{PaneId, Section, SidePanel, SidePanelChange, TrashedItem, VolumeKind, WindowId};
-use types::{Entry, EntryKind, Location, VPath};
+use model::{PaneId, Section, SidePanel, SidePanelChange, VolumeKind, WindowId};
+use types::{Entry, EntryKind, Location, ProviderId, VPath};
 
 use crate::dnd::{self, Dnd, Target, Zone};
 use crate::shell::Request;
 use crate::{format, icons};
-
-/// The panel's own state: what is selected in the Trash section.
-#[derive(Debug, Default)]
-pub struct SidePanelState {
-    /// Selected trash rows, by trashed path.
-    pub trash_selection: BTreeSet<PathBuf>,
-    /// Where a range selection in the trash starts.
-    trash_anchor: Option<PathBuf>,
-    /// The trash list took the last click, so Delete and Enter act on it.
-    pub trash_focused: bool,
-    /// The Trash section's rectangle in the last frame.
-    trash_rect: Option<egui::Rect>,
-}
-
-impl SidePanelState {
-    /// The trash rows selected, as the items.
-    fn selected_items(&self, app: &App) -> Vec<TrashedItem> {
-        app.model()
-            .trash
-            .items
-            .iter()
-            .filter(|item| self.trash_selection.contains(&item.trashed))
-            .cloned()
-            .collect()
-    }
-
-    /// Delete and Enter while the trash list has the keyboard: Delete
-    /// permanently and Restore trash items. Returns whether a key was taken.
-    pub fn handle_keys(
-        &mut self,
-        ctx: &egui::Context,
-        app: &App,
-        requests: &mut Vec<Request>,
-    ) -> bool {
-        if self.trash_selection.is_empty() {
-            return false;
-        }
-        let (delete, enter) = ctx.input_mut(|i| {
-            (
-                i.consume_key(egui::Modifiers::NONE, egui::Key::Delete),
-                i.consume_key(egui::Modifiers::NONE, egui::Key::Enter),
-            )
-        });
-        let action = if delete {
-            "core.purge_trash"
-        } else if enter {
-            "core.restore_trash"
-        } else {
-            return false;
-        };
-        requests.push(trash_action(app, self, action));
-        true
-    }
-}
-
-/// The request that runs a trash action on the selected trash rows.
-fn trash_action(app: &App, state: &SidePanelState, action: &'static str) -> Request {
-    Request::RunAction {
-        action: ActionId(action),
-        ctx: ActionCtx {
-            pane: app.model().focused,
-            location: ops::trash_location(),
-            selection: state
-                .selected_items(app)
-                .iter()
-                .map(ops::trash_entry)
-                .collect(),
-            invoked_from: Invocation::ContextMenu,
-        },
-    }
-}
 
 /// Draws the sections for the focused pane of `window`; navigation, pin and
 /// fold changes go out as requests, drop zones into `dnd`.
@@ -100,7 +30,6 @@ pub fn show(
     app: &App,
     window: WindowId,
     panel: &SidePanel,
-    state: &mut SidePanelState,
     requests: &mut Vec<Request>,
     dnd: &mut Dnd,
 ) {
@@ -112,14 +41,6 @@ pub fn show(
         .model()
         .active_tab(focused)
         .map(|(_, tab)| tab.location.clone());
-    // A click anywhere but the trash list takes the keys away from it.
-    if state.trash_focused
-        && ui.input(|i| i.pointer.any_pressed())
-        && let Some(pos) = ui.input(|i| i.pointer.interact_pos())
-        && !state.trash_rect.is_some_and(|r| r.contains(pos))
-    {
-        state.trash_focused = false;
-    }
     egui::ScrollArea::vertical()
         .auto_shrink([false, false])
         .show(ui, |ui| {
@@ -131,16 +52,7 @@ pub fn show(
                     .id_salt(("side-section", section.title()))
                     .open(Some(!folded))
                     .show(ui, |ui| {
-                        body(
-                            ui,
-                            section,
-                            app,
-                            focused,
-                            current.as_ref(),
-                            state,
-                            requests,
-                            dnd,
-                        );
+                        body(ui, section, app, focused, current.as_ref(), requests, dnd);
                     });
                 if response.header_response.clicked() {
                     requests.push(Request::Command(Command::SidePanel {
@@ -157,9 +69,6 @@ pub fn show(
                     .map_or(response.header_response.rect, |b| {
                         response.header_response.rect.union(b.rect)
                     });
-                if section == Section::Trash {
-                    state.trash_rect = Some(whole);
-                }
                 section_zone(ui, section, whole, dnd);
             }
         });
@@ -213,14 +122,12 @@ fn pin_button(
     }
 }
 
-#[allow(clippy::too_many_arguments)]
 fn body(
     ui: &mut egui::Ui,
     section: Section,
     app: &App,
     focused: PaneId,
     current: Option<&Location>,
-    state: &mut SidePanelState,
     requests: &mut Vec<Request>,
     dnd: &mut Dnd,
 ) {
@@ -239,7 +146,7 @@ fn body(
         }
         Section::Recent => recent(ui, app, focused, requests),
         Section::Network => network(ui, app, focused, current, requests, dnd),
-        Section::Trash => trash(ui, app, state, requests),
+        Section::Trash => trash(ui, app, focused, current, requests),
         Section::Pinned => pinned(ui, app, focused, current, requests, dnd),
         Section::Tree => tree(ui, app, focused, current, requests),
     }
@@ -407,138 +314,46 @@ fn network(
     }
 }
 
-/// The Trash section: an Empty trash button in the header row, then the
-/// items with name, original folder and deletion date, newest first, with
-/// multi-select, a context menu and the keyboard.
-// One list, top to bottom.
-#[allow(clippy::too_many_lines)]
-fn trash(ui: &mut egui::Ui, app: &App, state: &mut SidePanelState, requests: &mut Vec<Request>) {
-    let view = &app.model().trash;
-    ui.horizontal(|ui| {
-        if ui
-            .add_enabled(
-                !view.items.is_empty(),
-                egui::Button::new(format!("{} Empty trash", icons::TRASH)).small(),
-            )
-            .clicked()
-        {
-            requests.push(Request::RunAction {
-                action: ActionId("core.empty_trash"),
-                ctx: ActionCtx {
-                    pane: app.model().focused,
-                    location: ops::trash_location(),
-                    selection: Vec::new(),
-                    invoked_from: Invocation::Menu,
-                },
-            });
-        }
-        if !state.trash_selection.is_empty()
-            && ui
-                .small_button(format!("{} Restore", icons::UNTRASH))
-                .on_hover_text("Restore trash items")
-                .clicked()
-        {
-            requests.push(trash_action(app, state, "core.restore_trash"));
-        }
-    });
-    if let Some(error) = &view.error {
-        ui.colored_label(
-            ui.visuals().warn_fg_color,
-            format!("Trash not read: {error}"),
-        );
-    }
-    if !view.listed {
-        ui.weak("Items trashed elsewhere are not listed; these are the ones Rick trashed.");
-    }
-    if view.items.is_empty() {
-        ui.weak("The trash is empty.");
-        state.trash_selection.clear();
+/// The Trash section: one row that opens the Trash view, `rick://trash`,
+/// in the focused pane; Restore and Empty trash live in the view. Without
+/// the trash provider plugin the row says so instead.
+fn trash(
+    ui: &mut egui::Ui,
+    app: &App,
+    focused: PaneId,
+    current: Option<&Location>,
+    requests: &mut Vec<Request>,
+) {
+    let view = trash_view();
+    if app.mounts().view(TRASH_VIEW).is_none() {
+        ui.weak("The Trash view needs the vfs-trash plugin.");
         return;
     }
-    // Rows that left the trash leave the selection.
-    state
-        .trash_selection
-        .retain(|p| view.items.iter().any(|i| i.trashed == *p));
-    let now = std::time::SystemTime::now();
-    let items = view.items.clone();
-    for item in &items {
-        let name = item.original.file_name().map_or_else(
-            || item.original.display().to_string(),
-            |n| n.to_string_lossy().into_owned(),
-        );
-        let folder = item
-            .original
-            .parent()
-            .map_or_else(String::new, |p| p.display().to_string());
-        let (date, full_date) = format::date(Some(item.deleted_at), now);
-        let is_dir = item.trashed.is_dir();
-        let icon = if is_dir {
-            icons::FOLDER
-        } else {
-            icons::by_extension(&name)
-        };
-        let selected = state.trash_selection.contains(&item.trashed);
-        let response = ui
-            .add(
-                egui::Button::new(two_line_text(
-                    ui,
-                    icon,
-                    &name,
-                    &format!("{folder} · {date}"),
-                ))
-                .frame(false)
-                .selected(selected)
-                .min_size(egui::vec2(ui.available_width(), 0.0)),
-            )
-            .on_hover_text(format!("{}\nDeleted {full_date}", item.original.display()));
-        if response.clicked() || (response.secondary_clicked() && !selected) {
-            state.trash_focused = true;
-            let modifiers = ui.input(|i| i.modifiers);
-            if modifiers.command && response.clicked() {
-                if !state.trash_selection.remove(&item.trashed) {
-                    state.trash_selection.insert(item.trashed.clone());
-                }
-            } else if modifiers.shift && response.clicked() {
-                let anchor = state
-                    .trash_anchor
-                    .as_ref()
-                    .and_then(|a| items.iter().position(|i| i.trashed == *a));
-                let here = items.iter().position(|i| i.trashed == item.trashed);
-                if let (Some(a), Some(b)) = (anchor, here) {
-                    state.trash_selection = items[a.min(b)..=a.max(b)]
-                        .iter()
-                        .map(|i| i.trashed.clone())
-                        .collect();
-                }
-            } else {
-                state.trash_selection.clear();
-                state.trash_selection.insert(item.trashed.clone());
-                state.trash_anchor = Some(item.trashed.clone());
-            }
-        }
-        response.context_menu(|ui| {
-            let restore = if state.trash_selection.len() > 1 {
-                "core.restore_trash"
-            } else {
-                "core.restore"
-            };
-            if ui
-                .button(if state.trash_selection.len() > 1 {
-                    "Restore trash items"
-                } else {
-                    "Restore"
-                })
-                .clicked()
-            {
-                requests.push(trash_action(app, state, restore));
-                ui.close();
-            }
-            if ui.button("Delete permanently").clicked() {
-                requests.push(trash_action(app, state, "core.purge_trash"));
-                ui.close();
-            }
-        });
+    let response = location_row(ui, icons::TRASH, "Trash", &view, current);
+    if response.clicked() {
+        requests.push(Request::Command(Command::Navigate {
+            pane: focused,
+            to: view.clone(),
+        }));
     }
+    if response.middle_clicked() {
+        requests.push(Request::NewTabAt(view.clone()));
+    }
+    response.context_menu(|ui| {
+        if ui.button("Open in new tab").clicked() {
+            requests.push(Request::NewTabAt(view.clone()));
+            ui.close();
+        }
+    });
+}
+
+/// The name of the Trash view under the `rick` provider.
+const TRASH_VIEW: &str = "trash";
+
+/// The location of the Trash view: `rick://trash`.
+#[must_use]
+pub fn trash_view() -> Location {
+    Location::new(ProviderId::RICK, format!("/{TRASH_VIEW}"))
 }
 
 /// The Pinned section.

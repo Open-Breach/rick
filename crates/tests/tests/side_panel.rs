@@ -106,7 +106,6 @@ fn the_panel_shows_its_sections_and_mod_b_hides_and_shows_it() {
         0,
         "every section has its contents now"
     );
-    harness.get_by_label_contains("The trash is empty");
     harness.get_by_label_contains("No removable media");
 
     harness.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::B);

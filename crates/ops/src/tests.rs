@@ -13,32 +13,7 @@ use types::{Entry, Location};
 use vfs::Mounts;
 use vfs_local::LocalProvider;
 
-use super::{ClipMode, Conflicts, Core, PinStore, TransferKind, TrashStore};
-
-/// A trash record in memory.
-#[derive(Default)]
-struct TrashRecord(Mutex<Vec<platform::TrashedItem>>);
-
-impl TrashStore for TrashRecord {
-    fn items(&self) -> Vec<platform::TrashedItem> {
-        self.0
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .clone()
-    }
-    fn record(&self, items: &[platform::TrashedItem]) {
-        self.0
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .extend_from_slice(items);
-    }
-    fn forget(&self, items: &[platform::TrashedItem]) {
-        self.0
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .retain(|i| !items.iter().any(|gone| gone.trashed == i.trashed));
-    }
-}
+use super::{ClipMode, Conflicts, Core, PinStore, TransferKind};
 
 /// A host whose answers the test scripts.
 #[derive(Default)]
@@ -100,7 +75,6 @@ struct Harness {
     dir: tempfile::TempDir,
     fake: Arc<Fake>,
     pins: Arc<Pins>,
-    trash: Arc<TrashRecord>,
     conflicts: Arc<Conflicts>,
     mounts: Arc<Mounts>,
     registry: Registry,
@@ -115,13 +89,11 @@ fn harness() -> Harness {
     let mounts = Arc::new(Mounts::new());
     mounts.mount(Arc::new(LocalProvider::new(fake.clone())));
     let pins = Arc::new(Pins::default());
-    let trash = Arc::new(TrashRecord::default());
     let conflicts = Conflicts::new();
     let core = Arc::new(Core::new(
         Arc::clone(&mounts),
         fake.clone(),
         pins.clone(),
-        trash.clone(),
         Arc::clone(&conflicts),
     ));
     let mut registry = Registry::new();
@@ -131,7 +103,6 @@ fn harness() -> Harness {
         dir,
         fake,
         pins,
-        trash,
         conflicts,
         mounts,
         registry,
@@ -460,23 +431,18 @@ fn copy_path_open_and_reveal_go_to_the_platform() {
 #[test]
 fn every_action_has_an_id_label_and_core_group() {
     let h = harness();
-    assert_eq!(h.registry.actions().len(), 22);
+    assert_eq!(h.registry.actions().len(), 18);
     for action in h.registry.actions() {
         assert!(action.id().0.starts_with("core."), "{}", action.id().0);
         assert_ne!(action.label(), "");
         assert_eq!(action.group(), ext::ActionGroup::Core);
-        // Pin, Unpin, the trash actions and Open containing folder have no
-        // shortcut in the spec's tables; New file lost Mod+N to New window
-        // (QUESTIONS.md 66).
+        // Pin, Unpin and Open containing folder have no shortcut in the
+        // spec's tables; New file lost Mod+N to New window (QUESTIONS.md 66).
         let unbound = matches!(
             action.id().0,
             "core.pin"
                 | "core.unpin"
                 | "core.new_file"
-                | "core.restore"
-                | "core.restore_trash"
-                | "core.empty_trash"
-                | "core.purge_trash"
                 | "core.open_containing"
                 | "core.open_containing_tab"
         );
@@ -498,7 +464,6 @@ fn every_action_has_an_id_label_and_core_group() {
         Arc::clone(&h.mounts),
         h.fake.clone(),
         h.pins.clone(),
-        h.trash.clone(),
         Arc::clone(&h.conflicts),
     );
     assert_eq!(core.manifest().id, types::ExtId("core"));
@@ -860,105 +825,6 @@ fn a_move_that_overwrites_merges_and_its_undo_moves_back() {
     );
     assert!(src.join("sub/inner.txt").exists());
     assert!(!dst.join("a.txt").exists());
-}
-
-#[test]
-fn trash_actions_restore_purge_and_empty_through_the_store() {
-    let h = harness();
-    let dir = h.dir.path().join("d");
-    fs::create_dir_all(&dir).unwrap_or_else(|e| panic!("{e}"));
-    write(&dir.join("one.txt"), "1");
-    write(&dir.join("two.txt"), "2");
-    write(&dir.join("three.txt"), "3");
-    h.run(
-        "core.trash",
-        h.ctx(
-            &dir,
-            &[
-                &dir.join("one.txt"),
-                &dir.join("two.txt"),
-                &dir.join("three.txt"),
-            ],
-        ),
-    );
-    let items = h.trash.items();
-    assert_eq!(items.len(), 3, "the store records what was trashed");
-    let entry_for = |name: &str| {
-        super::trash_entry(
-            items
-                .iter()
-                .find(|i| i.original.ends_with(name))
-                .unwrap_or_else(|| panic!("{name}")),
-        )
-    };
-    let trash_ctx = |selection: Vec<Entry>| ActionCtx {
-        pane: PaneId(1),
-        location: super::trash_location(),
-        selection,
-        invoked_from: Invocation::ContextMenu,
-    };
-    // Outside the trash the actions are hidden.
-    assert_eq!(
-        h.action("core.restore_trash")
-            .availability(&h.ctx(&dir, &[])),
-        Availability::Hidden
-    );
-    assert_eq!(
-        h.action("core.restore")
-            .availability(&trash_ctx(vec![entry_for("one.txt"), entry_for("two.txt")])),
-        Availability::Disabled("Restore trash items puts several back")
-    );
-
-    // Restore one; undo trashes it again; redo restores it.
-    let outcome = h.run("core.restore", trash_ctx(vec![entry_for("one.txt")]));
-    let ActionOutcome::Undoable(restore) = outcome else {
-        panic!("{outcome:?}");
-    };
-    assert_eq!(restore.label(), "Restore one.txt");
-    assert_eq!(
-        fs::read_to_string(dir.join("one.txt")).ok(),
-        Some("1".into())
-    );
-    assert_eq!(h.trash.items().len(), 2);
-    restore.undo(&h.jobs).unwrap_or_else(|e| panic!("{e}"));
-    h.settle();
-    assert!(!dir.join("one.txt").exists());
-    assert_eq!(h.trash.items().len(), 3);
-    restore.redo(&h.jobs).unwrap_or_else(|e| panic!("{e}"));
-    h.settle();
-    assert!(dir.join("one.txt").exists());
-    assert_eq!(h.fake.list().map(|l| l.len()).ok(), Some(2));
-
-    // Delete one permanently, after confirmation.
-    let items = h.trash.items();
-    let two = super::trash_entry(
-        items
-            .iter()
-            .find(|i| i.original.ends_with("two.txt"))
-            .unwrap_or_else(|| panic!("two")),
-    );
-    *h.ui.confirm.lock().unwrap_or_else(PoisonError::into_inner) = false;
-    assert!(matches!(
-        h.run("core.purge_trash", trash_ctx(vec![two.clone()])),
-        ActionOutcome::Done
-    ));
-    assert_eq!(h.fake.list().map(|l| l.len()).ok(), Some(2), "refused");
-    *h.ui.confirm.lock().unwrap_or_else(PoisonError::into_inner) = true;
-    assert!(matches!(
-        h.run("core.purge_trash", trash_ctx(vec![two])),
-        ActionOutcome::Started(_)
-    ));
-    assert_eq!(h.fake.list().map(|l| l.len()).ok(), Some(1));
-    assert_eq!(h.trash.items().len(), 1);
-
-    // Empty the rest.
-    assert!(matches!(
-        h.run("core.empty_trash", h.ctx(&dir, &[])),
-        ActionOutcome::Started(_)
-    ));
-    assert_eq!(h.fake.list().map(|l| l.len()).ok(), Some(0));
-    assert_eq!(h.trash.items().len(), 0, "the trash is empty");
-    assert!(!dir.join("three.txt").exists());
 }
 
 #[test]

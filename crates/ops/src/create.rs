@@ -3,8 +3,8 @@
 use std::sync::Arc;
 
 use ext::{
-    Action, ActionCtx, ActionGroup, ActionId, ActionOutcome, Availability, Key, Modifiers,
-    RemoveMode, Shortcut, UiHost, UndoCommand, WriteOptions,
+    Action, ActionCtx, ActionGroup, ActionId, ActionOutcome, Availability, Capabilities, Key,
+    Modifiers, RemoveMode, Shortcut, UiHost, UndoCommand, WriteOptions,
 };
 use runtime::JobRunner;
 use tokio::io::AsyncWriteExt;
@@ -34,6 +34,10 @@ impl Action for Rename {
         })
     }
     fn availability(&self, ctx: &ActionCtx) -> Availability {
+        match self.0.needs(&ctx.location, Capabilities::WRITE) {
+            Availability::Enabled => {}
+            hidden => return hidden,
+        }
         match ctx.selection.len() {
             1 => Availability::Enabled,
             0 => Availability::Disabled("select an entry first"),
@@ -205,8 +209,8 @@ impl Action for NewFile {
     fn default_shortcut(&self) -> Option<Shortcut> {
         None
     }
-    fn availability(&self, _ctx: &ActionCtx) -> Availability {
-        Availability::Enabled
+    fn availability(&self, ctx: &ActionCtx) -> Availability {
+        self.0.needs(&ctx.location, Capabilities::WRITE)
     }
     fn run(
         &self,
@@ -245,8 +249,8 @@ impl Action for NewFolder {
             key: Key::Char('n'),
         })
     }
-    fn availability(&self, _ctx: &ActionCtx) -> Availability {
-        Availability::Enabled
+    fn availability(&self, ctx: &ActionCtx) -> Availability {
+        self.0.needs(&ctx.location, Capabilities::WRITE)
     }
     fn run(
         &self,

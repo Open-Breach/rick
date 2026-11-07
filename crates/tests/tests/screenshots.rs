@@ -445,6 +445,7 @@ fn screenshots_of_the_side_panel_and_list() {
         extensions: vec![
             Arc::new(ext_preview_text::TextPreview::new()),
             Arc::new(ext_preview_image::ImagePreview::new()),
+            Arc::new(ext_vfs_trash::TrashExtension::new()),
         ],
         config_dir: Some(fake.config_dir()),
         start: Some(local(&deep)),
@@ -476,11 +477,34 @@ fn screenshots_of_the_side_panel_and_list() {
         .queue(Intent::Action(ext::ActionId("core.trash")), pane);
     harness.step();
     settle(&mut harness);
+    // The Trash view, opened from the side panel's row, in a new tab so
+    // the photo folder stays where it was.
+    let photos = harness
+        .state()
+        .app()
+        .model()
+        .active_tab(pane)
+        .map(|(_, t)| t.location.clone())
+        .unwrap_or_else(|| panic!("tab"));
+    harness.state_mut().app_mut().handle(
+        app::Command::NewTab(ext_vfs_trash::location()),
+        &mut Vec::new(),
+    );
+    settle(&mut harness);
     step_until(&mut harness, Duration::from_secs(5), |h| {
-        h.state().app().model().trash.items.len() == 2
+        h.state()
+            .app()
+            .model()
+            .active_tab(pane)
+            .is_some_and(|(_, t)| t.listing.len() == 2)
     });
     harness.step();
-    shoot(&mut harness, "side-panel-trash-with-items");
+    shoot(&mut harness, "trash-view-with-items");
+    harness
+        .state_mut()
+        .app_mut()
+        .handle(app::Command::Navigate { pane, to: photos }, &mut Vec::new());
+    settle(&mut harness);
 
     // Tree view, `raw` expanded.
     harness.state_mut().app_mut().handle(

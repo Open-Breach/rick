@@ -9,7 +9,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use egui_kittest::Harness;
-use egui_kittest::kittest::{NodeT as _, Queryable as _};
+use egui_kittest::kittest::Queryable as _;
 use ext::ActionId;
 use model::{JobState, SelectionChange, ViewMode};
 use platform::{ConfigDir, Fake, Trash as _};
@@ -29,7 +29,8 @@ fn harness_with(
     let app = app::App::new(app::Config {
         platform: fake.clone(),
         ui: host.clone(),
-        extensions: Vec::new(),
+        // The Trash view the side panel's Trash row opens.
+        extensions: vec![Arc::new(ext_vfs_trash::TrashExtension::new())],
         config_dir: Some(config.to_path_buf()),
         start: Some(local(start)),
     });
@@ -138,20 +139,6 @@ fn select(harness: &mut Harness<'_, RickUi>, name: &str) {
             change: SelectionChange::Set(vec![id]),
         },
     );
-}
-
-/// The one node whose label contains every piece of `parts`.
-fn node_with<'a>(harness: &'a Harness<'_, RickUi>, parts: &'a [&'a str]) -> egui_kittest::Node<'a> {
-    let mut found: Vec<egui_kittest::Node<'a>> = harness
-        .query_all_by_label_contains(parts[0])
-        .filter(|n| {
-            n.accesskit_node()
-                .label()
-                .is_some_and(|l| parts.iter().all(|p| l.contains(p)))
-        })
-        .collect();
-    assert_eq!(found.len(), 1, "nodes with {parts:?}: {}", found.len());
-    found.remove(0)
 }
 
 /// The one node labelled `label` inside the focused pane's file list, below
@@ -311,60 +298,64 @@ fn network_lists_a_registered_volume_and_clicking_navigates_there() {
     harness.get_by_label_contains("No removable media");
 }
 
+/// The Trash row opens `rick://trash` in the focused pane; the view lists
+/// the trashed item with its original location, Restore puts it back and
+/// is undoable, Empty trash asks first and leaves the view empty.
 #[test]
 fn trash_lists_restores_undoes_and_empties() {
     let dir = tree();
     let (mut harness, fake) = harness(dir.path());
-    harness.get_by_label_contains("The trash is empty");
     select(&mut harness, "b.txt");
     run(&mut harness, "core.trash");
     settle(&mut harness);
     assert!(!dir.path().join("b.txt").exists());
-    assert!(step_until(&mut harness, Duration::from_secs(5), |h| {
-        h.state().app().model().trash.items.len() == 1
-    }));
-    harness.step();
-    // The row names the file and its original folder.
-    let folder = dir.path().display().to_string();
-    let parts = ["b.txt", folder.as_str()];
-    let row = node_with(&harness, &parts);
 
-    // Select the row; Enter restores (Restore trash items on the keyboard).
-    row.click();
+    // The row in the side panel opens the view.
+    harness
+        .get_by_label(&format!("{} Trash", icons::TRASH))
+        .click();
     harness.step();
-    assert_eq!(
-        harness.state().trash_selection(),
-        [fake
-            .list()
-            .ok()
-            .and_then(|l| l.first().map(|i| i.trashed.clone()))
-            .unwrap_or_else(|| panic!("trashed"))]
-    );
-    harness.key_press(egui::Key::Enter);
-    harness.step();
+    settle(&mut harness);
+    assert_eq!(tab(&harness).1.location, ext_vfs_trash::location());
+    assert_eq!(row_names(&harness), ["b.txt"]);
+    // The decorator's column names where it came from.
+    let folder = dir.path().display().to_string();
+    assert!(step_until(&mut harness, Duration::from_secs(5), |h| {
+        let (_, t) = tab(h);
+        t.rows()
+            .next()
+            .and_then(|e| t.decorations.get(&e.id))
+            .is_some_and(|d| {
+                d.cells
+                    .iter()
+                    .any(|(_, v)| *v == ext::CellValue::Text(folder.clone()))
+            })
+    }));
+
+    // Restore from the view; the view empties and the file is back.
+    select(&mut harness, "b.txt");
+    run(&mut harness, "trash.restore");
     settle(&mut harness);
     assert!(dir.path().join("b.txt").exists(), "restored");
     assert!(step_until(&mut harness, Duration::from_secs(5), |h| {
-        h.state().app().model().trash.items.is_empty()
+        row_names(h).is_empty()
     }));
     assert_eq!(
         harness.state().app().undo_label().as_deref(),
         Some("Restore b.txt")
     );
 
-    // Undo trashes it again.
+    // Undo trashes it again and the view shows it again.
     harness.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::Z);
     harness.step();
     settle(&mut harness);
     assert!(!dir.path().join("b.txt").exists());
     assert!(step_until(&mut harness, Duration::from_secs(5), |h| {
-        h.state().app().model().trash.items.len() == 1
+        row_names(h) == ["b.txt"]
     }));
 
-    // Empty trash asks first, then leaves the section empty.
-    harness.step();
-    harness.get_by_label_contains("Empty trash").click();
-    harness.step();
+    // Empty trash asks first, then leaves the view empty.
+    run(&mut harness, "trash.empty");
     harness.step();
     assert!(
         matches!(harness.state().asking(), Some(ui_egui::Ask::Confirm { title, .. }) if title == "Empty trash"),
@@ -374,12 +365,26 @@ fn trash_lists_restores_undoes_and_empties() {
     harness.key_press(egui::Key::Enter);
     harness.step();
     settle(&mut harness);
-    assert!(step_until(&mut harness, Duration::from_secs(5), |h| {
-        h.state().app().model().trash.items.is_empty()
-    }));
     assert_eq!(fake.list().map(|l| l.len()).ok(), Some(0));
-    harness.step();
-    harness.get_by_label_contains("The trash is empty");
+    assert!(step_until(&mut harness, Duration::from_secs(5), |h| {
+        row_names(h).is_empty()
+    }));
+    // Move to trash is not offered inside the trash.
+    let ctx = harness
+        .state()
+        .app()
+        .action_ctx(pane(&harness), ext::Invocation::ContextMenu)
+        .unwrap_or_else(|| panic!("ctx"));
+    let trash_action = harness
+        .state()
+        .app()
+        .registry()
+        .actions()
+        .iter()
+        .find(|a| a.id() == ActionId("core.trash"))
+        .cloned()
+        .unwrap_or_else(|| panic!("core.trash"));
+    assert_eq!(trash_action.availability(&ctx), ext::Availability::Hidden);
 }
 
 #[test]

@@ -20,9 +20,11 @@
 //!
 //! The app also feeds the side panel: the Recent list from every change
 //! watch it holds plus a bounded scan at start, the mounted volumes polled
-//! through the platform, the trash's contents after every operation, and
-//! the folder tree following the focused pane; and it routes the name
-//! conflicts copy and move jobs ask about to the UI and back.
+//! through the platform, and the folder tree following the focused pane;
+//! and it routes the name conflicts copy and move jobs ask about to the UI
+//! and back. A location whose provider cannot watch it (an archive, the
+//! Trash view) is polled instead: its `stat` every few seconds, a change of
+//! size or time listing it again.
 //!
 //! The session (every window, pane and tab, see [`model::Session`]) is
 //! written to `session.toml` after every change, at most once per second,
@@ -65,13 +67,11 @@ mod command;
 mod recent;
 mod session;
 pub mod settings;
-mod trash;
 
 pub use command::{Command, Event, TransferMode};
 pub use recent::RECENT_FILE;
 pub use session::{LAYOUTS_DIR, SAVE_INTERVAL, SESSION_FILE};
 pub use settings::SETTINGS_FILE;
-pub use trash::TRASH_FILE;
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::path::{Path, PathBuf};
@@ -85,11 +85,10 @@ use ext::{
 };
 use futures::StreamExt;
 use model::{JobState, Model, PaneId, Section, Session, Settings, SettingsChange, TabId, Volume};
-use ops::{Conflicts, PinStore, TrashStore};
-use platform::{Platform, TrashedItem};
+use ops::{Conflicts, PinStore};
+use platform::Platform;
 use runtime::{JobEvent, JobRunner, mpsc};
 use tracing::{debug, warn};
-use trash::TrashBridge;
 use types::{CancelToken, Entry, EntryId, Error, JobId, Location, Progress, VPath};
 use vfs::Mounts;
 use vfs_local::LocalProvider;
@@ -234,8 +233,6 @@ enum Msg {
     RecentChange(FsChange),
     /// The mounted volumes were enumerated.
     Volumes(Result<Vec<Volume>, Error>),
-    /// The trash was listed.
-    Trash(Result<Vec<TrashedItem>, Error>),
     /// The folders under a path of the side panel's tree.
     FolderTree {
         root: Location,
@@ -248,6 +245,8 @@ enum Msg {
 const REDECORATE_AFTER: Duration = Duration::from_millis(150);
 /// How often the mounted volumes are enumerated again.
 const VOLUMES_EVERY: Duration = Duration::from_secs(3);
+/// How often a location its provider cannot watch is checked for a change.
+const POLL_EVERY: Duration = Duration::from_secs(3);
 /// How long one [`App::poll`] may spend applying messages before it leaves
 /// the rest to the next one.
 const POLL_BUDGET: Duration = Duration::from_millis(8);
@@ -387,7 +386,6 @@ pub struct App {
     platform: Arc<dyn Platform>,
     ui: Arc<dyn UiHost>,
     pins: Arc<PinBridge>,
-    trash: Arc<TrashBridge>,
     conflicts: Arc<Conflicts>,
     jobs: JobRunner,
     job_events: mpsc::UnboundedReceiver<JobEvent>,
@@ -417,10 +415,11 @@ pub struct App {
     /// Events from start-up, delivered on the first poll.
     pending: Vec<Event>,
     recent: RecentFeed,
-    /// Writes `trash.toml`, latest snapshot wins.
-    trash_saver: mpsc::UnboundedSender<Vec<TrashedItem>>,
     /// Stops the volume poll.
     volumes_watch: CancelToken,
+    /// Rung to make every polled location check for a change now; see
+    /// [`poll_location`].
+    poke: runtime::watch::Sender<u64>,
     /// The location the side panel's tree followed last.
     followed: Option<Location>,
     /// The user's home, where a tab opens when its own location is gone.
@@ -467,13 +466,11 @@ impl App {
         let trash: Arc<dyn platform::Trash> = Arc::clone(&platform) as Arc<dyn platform::Trash>;
         mounts.mount(Arc::new(LocalProvider::new(trash)));
         let pins = Arc::new(PinBridge::default());
-        let trash = Arc::new(TrashBridge::default());
         let conflicts = Conflicts::new();
         let core = ops::Core::new(
             Arc::clone(&mounts),
             Arc::clone(&platform),
             Arc::clone(&pins) as Arc<dyn PinStore>,
-            Arc::clone(&trash) as Arc<dyn TrashStore>,
             Arc::clone(&conflicts),
         );
         for ext in std::iter::once(&core as &dyn Extension).chain(extensions.iter().map(|e| &**e)) {
@@ -490,10 +487,6 @@ impl App {
 
         let config_dir = config_dir.unwrap_or_else(|| platform.config_dir());
         let settings_path = config_dir.join(SETTINGS_FILE);
-        match trash::load(&config_dir.join(TRASH_FILE)) {
-            Ok(items) => trash.set(items),
-            Err(error) => warn!(%error, "trash record not read"),
-        }
         let session_path = config_dir.join(SESSION_FILE);
         let layouts_dir = config_dir.join(LAYOUTS_DIR);
         let settings = match settings::load(&settings_path) {
@@ -556,10 +549,6 @@ impl App {
         let (tx, rx) = mpsc::unbounded_channel();
         let settings_saver = settings::saver(settings_path.clone());
         let layouts = session::layouts(&layouts_dir);
-        let trash_saver = {
-            let path = config_dir.join(TRASH_FILE);
-            saver(move |items: &Vec<TrashedItem>| trash::save(&path, items))
-        };
         let recent_saver = {
             let path = config_dir.join(RECENT_FILE);
             saver(move |entries: &Vec<Entry>| recent::save(&path, entries))
@@ -581,7 +570,6 @@ impl App {
             platform,
             ui,
             pins,
-            trash,
             conflicts,
             jobs,
             job_events,
@@ -604,8 +592,8 @@ impl App {
                 roots: Vec::new(),
                 saver: Some(recent_saver),
             },
-            trash_saver,
             volumes_watch: CancelToken::new(),
+            poke: runtime::watch::channel(0).0,
             followed: None,
             home,
             session_saver: session::Saver::new(session_path),
@@ -620,7 +608,6 @@ impl App {
         app.load_recent(&config_dir.join(RECENT_FILE));
         app.sync_recent_roots();
         app.poll_volumes();
-        app.refresh_trash();
         let mut events = Vec::new();
         app.sync_panes(&mut events);
         app.sync_preview();
@@ -917,7 +904,6 @@ impl App {
         self.dispatch(command, events);
         self.sync_panes(events);
         self.sync_preview();
-        self.drain_trash();
         self.sync_session();
     }
 
@@ -1081,7 +1067,6 @@ impl App {
                 }
                 self.model.conflict_closed(id);
             }
-            Command::RefreshTrash => self.refresh_trash(),
             Command::RefreshVolumes => self.enumerate_volumes(),
             Command::Undo => self.undo(events),
             Command::Redo => self.redo(events),
@@ -1174,7 +1159,6 @@ impl App {
         }
         if handled > 0 {
             self.sync_preview();
-            self.drain_trash();
             self.sync_session();
         }
         handled
@@ -1267,30 +1251,10 @@ impl App {
         self.pins.sync(&pinned);
     }
 
-    /// Writes the trash record when an action changed it, and shows it in
-    /// the model where the platform cannot list its trash.
-    fn drain_trash(&mut self) {
-        if !self.trash.take_dirty() {
-            return;
-        }
-        let items = self.trash.items();
-        if !self.model.trash.listed {
-            self.model.trash.set(items.clone(), false);
-        }
-        let _ = self.trash_saver.send(items);
-    }
-
-    /// Lists the trash again, off the loop's thread.
-    fn refresh_trash(&mut self) {
-        let platform = Arc::clone(&self.platform);
-        let tx = self.mailbox.clone();
-        runtime::handle().spawn(async move {
-            let result = runtime::handle()
-                .spawn_blocking(move || platform.list())
-                .await
-                .unwrap_or_else(|join| Err(Error::Io(std::io::Error::other(join))));
-            tx.send(Msg::Trash(result));
-        });
+    /// Makes every polled location check for a change now, after an
+    /// operation that may have changed it.
+    fn poll_now(&self) {
+        self.poke.send_modify(|n| *n += 1);
     }
 
     /// Enumerates the mounted volumes once, off the loop's thread.
@@ -1757,7 +1721,6 @@ impl App {
             }),
         }
         self.drain_pins();
-        self.drain_trash();
         self.attribute(pane, events);
     }
 
@@ -1884,6 +1847,7 @@ impl App {
         let tx = self.mailbox.clone();
         let location = key.location.clone();
         let opts = key.opts;
+        let poke = self.poke.clone();
         let handle = self
             .jobs
             .spawn_named(format!("List {location}"), move |job| async move {
@@ -1910,7 +1874,23 @@ impl App {
                             }
                         });
                     }
-                    Err(error) => debug!(%location, %error, "no watch"),
+                    Err(error) => {
+                        debug!(%location, %error, "no watch; polling");
+                        let tx = tx.clone();
+                        poll_location(
+                            Arc::clone(&provider),
+                            location.clone(),
+                            job.cancel.clone(),
+                            &poke,
+                            move |change| {
+                                tx.send(Msg::Change {
+                                    pane,
+                                    generation,
+                                    change,
+                                })
+                            },
+                        );
+                    }
                 }
                 let result = async {
                     let mut stream = provider.list(&location, opts, job.cancel.clone());
@@ -2324,18 +2304,6 @@ impl App {
                 }
             }
             Msg::Volumes(Err(error)) => debug!(%error, "volumes not enumerated"),
-            Msg::Trash(Ok(items)) => {
-                self.trash.prune();
-                self.model.trash.set(items, true);
-            }
-            Msg::Trash(Err(Error::Unsupported(_))) => {
-                self.model.trash.set(self.trash.items(), false);
-            }
-            Msg::Trash(Err(error)) => {
-                warn!(%error, "trash not listed");
-                self.model.trash.set(self.trash.items(), false);
-                self.model.trash.error = Some(error.to_string());
-            }
             Msg::FolderTree {
                 root,
                 path,
@@ -2620,9 +2588,9 @@ impl App {
                 events.push(Event::JobDone { id, result });
                 if let Some(pane) = self.pane_jobs.remove(&id) {
                     self.refresh(pane);
-                    // An operation may have trashed, restored or emptied.
-                    self.refresh_trash();
-                    self.drain_trash();
+                    // An operation may have trashed, restored or emptied:
+                    // every pane on a polled location checks again now.
+                    self.poll_now();
                 }
             }
         }
@@ -2680,6 +2648,46 @@ impl App {
             }
         });
     }
+}
+
+/// Polls a location its provider cannot watch: its `stat` every
+/// [`POLL_EVERY`], and at once when `poke` is rung, reporting
+/// [`FsChange::Rescan`] through `report` when the entry's size or times
+/// changed (a view counts its items in `size`; an archive is its file).
+/// Stops with `cancel`, or when `report` says the loop is gone.
+fn poll_location(
+    provider: Arc<dyn ext::Provider>,
+    location: Location,
+    cancel: CancelToken,
+    poke: &runtime::watch::Sender<u64>,
+    report: impl Fn(FsChange) -> bool + Send + 'static,
+) {
+    let mut poke = poke.subscribe();
+    runtime::handle().spawn(async move {
+        let marker = |entry: &Entry| (entry.size, entry.modified, entry.created);
+        let mut last = provider.stat(&location).await.ok().map(|e| marker(&e));
+        loop {
+            tokio::select! {
+                () = cancel.cancelled() => break,
+                () = tokio::time::sleep(POLL_EVERY) => {}
+                changed = poke.changed() => {
+                    if changed.is_err() {
+                        break;
+                    }
+                }
+            }
+            if cancel.is_cancelled() {
+                break;
+            }
+            let now = provider.stat(&location).await.ok().map(|e| marker(&e));
+            if now != last {
+                last = now;
+                if !report(FsChange::Rescan) {
+                    break;
+                }
+            }
+        }
+    });
 }
 
 /// A writer that saves every snapshot sent to it, in order, off the

@@ -6,7 +6,7 @@
 //! [`Listing`] with its sort, group, filter and selection, the [`ViewMode`]
 //! with the [`Tree`] state of expanded folders and the scroll offset, plus
 //! the job table, the side panel's data ([`Recent`], the volumes, the
-//! [`TrashView`], the [`FolderTree`]), the name conflicts jobs wait on and
+//! [`FolderTree`]), the name conflicts jobs wait on and
 //! the [`Settings`] snapshot. All windows share the one model, so a job
 //! started in one shows in every other. It applies listing batches and
 //! filesystem changes and derives the visible rows; it performs no I/O.
@@ -28,8 +28,8 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 pub use ext::PaneId;
 use ext::{CellValue, Decoration, FsChange};
 pub use listing::{Column, Group, IconSize, Listing, Sort, SortDir, ViewMode, ViewSpec, type_of};
-pub use panel::{RECENT_LIMIT, Recent, TrashView};
-pub use platform::{TrashedItem, Volume, VolumeKind};
+pub use panel::{RECENT_LIMIT, Recent};
+pub use platform::{Volume, VolumeKind};
 use serde::{Deserialize, Serialize};
 pub use session::{
     DockSession, Geometry, PaneSession, Session, TabSession, WindowSession, parse_entry_id,
@@ -557,8 +557,6 @@ pub struct Model {
     pub recent: Recent,
     /// The mounted volumes other than the system disk.
     pub volumes: Vec<Volume>,
-    /// The trash's contents.
-    pub trash: TrashView,
     /// The side panel's folder tree.
     pub folder_tree: FolderTree,
     /// The settings snapshot.
@@ -589,7 +587,6 @@ impl Model {
             conflicts: Vec::new(),
             recent: Recent::default(),
             volumes: Vec::new(),
-            trash: TrashView::default(),
             folder_tree: FolderTree::new(),
             settings,
             next_pane: 1,

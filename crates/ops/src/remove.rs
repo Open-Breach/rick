@@ -3,8 +3,8 @@
 use std::sync::{Arc, Mutex, PoisonError};
 
 use ext::{
-    Action, ActionCtx, ActionGroup, ActionId, ActionOutcome, Availability, Key, Modifiers,
-    RemoveMode, Shortcut, UiHost, UndoCommand,
+    Action, ActionCtx, ActionGroup, ActionId, ActionOutcome, Availability, Capabilities, Key,
+    Modifiers, RemoveMode, Shortcut, UiHost, UndoCommand,
 };
 use platform::TrashedItem;
 use runtime::JobRunner;
@@ -20,7 +20,8 @@ fn needs_selection(ctx: &ActionCtx) -> Availability {
     }
 }
 
-/// Sends the selection to the platform trash.
+/// Sends the selection to the platform trash; hidden where the provider
+/// has no trash (an archive, the Trash view).
 pub(crate) struct Trash(pub(crate) Arc<State>);
 
 impl Action for Trash {
@@ -40,7 +41,10 @@ impl Action for Trash {
         })
     }
     fn availability(&self, ctx: &ActionCtx) -> Availability {
-        needs_selection(ctx)
+        match self.0.needs(&ctx.location, Capabilities::TRASH) {
+            Availability::Enabled => needs_selection(ctx),
+            hidden => hidden,
+        }
     }
     fn run(
         &self,
@@ -90,7 +94,6 @@ impl UndoCommand for TrashCommand {
                     .await
                     .map_err(|join| Error::Io(std::io::Error::other(join)))??;
             }
-            state.trash.forget(&items);
             Ok(())
         });
         Ok(())
@@ -119,7 +122,6 @@ impl UndoCommand for TrashCommand {
                             .spawn_blocking(move || platform.trash(&path))
                             .await
                             .map_err(|join| Error::Io(std::io::Error::other(join)))??;
-                        state.trash.record(std::slice::from_ref(&item));
                         trashed
                             .lock()
                             .unwrap_or_else(PoisonError::into_inner)
