@@ -859,8 +859,10 @@ Once answered, an entry keeps its number and gains a dated decision line.
     and the next whole-workspace build recompiles them and everything above
     them; `cargo clean -p types -p runtime -p ext` when the two disagree.
     For the same reason `xtask` depends on no kernel crate: it drives
-    `cargo build --workspace --examples` and a helper binary from that
-    build, never a kernel dylib of its own.
+    `cargo build --workspace --lib --bins --examples` (the libraries,
+    binaries and examples of every member, with the dev-dependency features
+    the tests build with) and a helper binary from that build, never a
+    kernel dylib of its own.
     Rejected: a C-ABI vtable layer (`abi_stable` or hand-written). The five
     traits are async (boxed futures, `BoxStream`, `AsyncRead` handles), the
     host hands the plugin `Arc<dyn Provider>`, `&JobRunner`, `&DecorateCtx`
@@ -887,3 +889,30 @@ Once answered, an entry keeps its number and gains a dated decision line.
     for the one attribute, so a plugin crate writes no `unsafe` of its own.
     A plugin crate uses `#![deny(unsafe_code)]` rather than `forbid`, since a
     `forbid` would refuse the macro's allowance.
+
+83. (issue 16) The issue lists the fields of `plugin.toml` — id, name,
+    version, `api_version`, points, platforms, toolchain, library — and says
+    `ext::Manifest` "gains the fields it lacks", with the TOML "generated at
+    build time from the crate's Cargo.toml and the manifest constant".
+    Assumed: `Manifest` gains `points` and `platforms`, which an extension
+    declares about itself (the registry refuses a contribution to a point the
+    manifest does not declare, so the declaration stays honest); `toolchain`
+    and `library` describe the compiled file, not the extension, so they
+    live in the file only (`plugins_native::PluginToml`). The file is
+    written by `cargo xtask bundle`, the build step that lays the bundle
+    out: it loads the freshly built library through the workspace's
+    `rick-plugin-manifest` helper, reads the manifest the entry point
+    registers (its `version` comes from the crate's `Cargo.toml` through
+    `CARGO_PKG_VERSION`), adds the toolchain of the build and the library's
+    file names, and writes `plugins/<id>/plugin.toml` beside a copy of the
+    library. At start the host checks the file against the library it loads
+    (id, version, points) and refuses a stale one. The extension API is
+    version 3 for the manifest change.
+
+84. (issue 16) The issue places the bundle in `target/<profile>/rick/`, the
+    path of the `rick` binary itself on Linux and macOS, where cargo writes
+    it; a directory cannot take its place.
+    Assumed: `cargo xtask bundle` lays the bundle out in
+    `target/<profile>/bundle/` (the binary, the kernel dylibs and `libstd`,
+    pdfium when `RICK_PDFIUM_DIR` names it, `plugins/<id>/` per plugin), and
+    the release archives are that directory's contents.

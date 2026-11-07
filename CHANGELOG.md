@@ -7,6 +7,33 @@ the pull request that brought the change.
 
 ## [Unreleased]
 
+### Added
+
+- The native plugin host: plugins are dynamic libraries beside a
+  `plugin.toml` in `plugins/` next to the binary or in the config
+  directory (per-user wins on an id clash), checked for their extension API
+  version, toolchain and platform before loading, loaded through one entry
+  point into the shared registry, and listed with their status; a plugin
+  that panics while registering is caught and reported. `rick
+  --list-plugins` prints the table. The kernel crates are shared libraries
+  that the binary and every plugin link, so one runtime, one tracing
+  subscriber and one registry serve them all (#16).
+- Git is the first plugin: `plugins/git/` ships in every archive and loads
+  at start; the `git` Cargo feature compiles it in instead, off by default
+  (#16).
+- The Extensions screen in the burger menu: every plugin found, with name,
+  version, the points it fills and its status, and an enable/disable toggle
+  that writes `rick.toml` and takes effect on the next start (#16).
+- `cargo xtask bundle` lays out the binary, the shared libraries and every
+  plugin in `target/<profile>/bundle/`; the release archives are that bundle
+  (#16).
+
+### Changed
+
+- The extension API is version 3: a manifest declares the points it fills
+  and the platforms it runs on (#16).
+- The workspace version is `0.2.0-dev` until 0.2.0 is tagged (#16).
+
 ## [0.1.0] - 2026-11-06
 
 The first release: local files, tabs, panes and windows with session restore,
