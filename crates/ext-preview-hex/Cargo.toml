@@ -1,0 +1,26 @@
+[package]
+name = "ext-preview-hex"
+version.workspace = true
+description = "Rick preview extension for anything no other previewer claims: a hex dump with an ASCII column, virtualised, as a plugin."
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+# A plugin: a `cdylib` the host loads from `plugins/preview-hex/`, and an
+# `rlib` for the binary's opt-in `preview-hex` feature and the tests.
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+types = { workspace = true }
+ext = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+runtime = { workspace = true }
+vfs-local = { workspace = true }
+platform = { workspace = true }
+tempfile = { workspace = true }
+
+[lints]
+workspace = true

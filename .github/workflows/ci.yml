@@ -53,20 +53,23 @@ jobs:
       - run: cargo clippy --all-targets -- -D warnings
       - run: cargo test --workspace
       # Issue 16: the bundle, target/debug/bundle/ with the binary, the kernel
-      # dylibs, libstd and plugins/git/, and the host loading git from it.
-      # The same whole-workspace build as the tests: a smaller package set
-      # would rewrite the shared libraries (QUESTIONS.md 81).
+      # dylibs, libstd and plugins/git/ and plugins/preview-hex/ (the viewer's
+      # hex fallback, issue 17), and the host loading both from it. The same
+      # whole-workspace build as the tests: a smaller package set would
+      # rewrite the shared libraries (QUESTIONS.md 81).
       - run: cargo xtask bundle
       - name: list plugins
         shell: bash
         run: |
           exe=""
           if [ "$RUNNER_OS" = "Windows" ]; then exe=".exe"; fi
-          ls -l target/debug/bundle target/debug/bundle/plugins/git
+          ls -l target/debug/bundle target/debug/bundle/plugins/git target/debug/bundle/plugins/preview-hex
           test -f target/debug/bundle/plugins/git/plugin.toml || { echo "no plugin.toml"; exit 1; }
+          test -f target/debug/bundle/plugins/preview-hex/plugin.toml || { echo "no hex plugin.toml"; exit 1; }
           out="$("./target/debug/bundle/rick$exe" --list-plugins)"
           echo "$out"
           echo "$out" | grep -E '^git +Git +[^ ]+ +decorator, action +loaded +' || { echo "git plugin not loaded"; exit 1; }
+          echo "$out" | grep -E '^preview-hex +Hex preview +[^ ]+ +previewer +loaded +' || { echo "hex plugin not loaded"; exit 1; }
       # The acceptance benchmarks, each asserting the target of the runner's
       # OS from crates/tests/src/bench.rs (BENCHMARKS.md has the numbers):
       # all three OSes assert, nothing is soft.

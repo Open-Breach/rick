@@ -23,6 +23,7 @@ ext-preview-text = { workspace = true }
 ext-preview-code = { workspace = true }
 ext-preview-image = { workspace = true }
 ext-preview-pdf = { workspace = true }
+ext-preview-hex = { workspace = true }
 ext-git = { workspace = true }
 plugins-native = { workspace = true }
 # The fixture plugins, built as library files beside the test binaries and

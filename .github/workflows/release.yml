@@ -184,11 +184,13 @@ jobs:
           out="$("./rick$exe" --version)"
           echo "rick --version: $out"
           echo "$out" | grep -Eq "^${version%%-*}(-[0-9A-Za-z.]+)? \([0-9a-f]{7,}\)$" || { echo "unexpected version line"; exit 1; }
-          # The Git plugin, bundled and loaded from plugins/git/.
+          # The Git and hex plugins, bundled and loaded from plugins/.
           test -f plugins/git/plugin.toml || { echo "no plugins/git/plugin.toml"; exit 1; }
+          test -f plugins/preview-hex/plugin.toml || { echo "no plugins/preview-hex/plugin.toml"; exit 1; }
           plugins="$("./rick$exe" --list-plugins)"
           echo "$plugins"
           echo "$plugins" | grep -Eq '^git +Git +[^ ]+ +decorator, action +loaded +' || { echo "git plugin not loaded"; exit 1; }
+          echo "$plugins" | grep -Eq '^preview-hex +Hex preview +[^ ]+ +previewer +loaded +' || { echo "hex plugin not loaded"; exit 1; }
           # pdfium from beside the binary: the previewer's test binary, copied
           # next to rick, with RICK_PDFIUM_DIR unset and no system pdfium. The
           # example has no run path of its own, so the library path names the
@@ -218,7 +220,7 @@ jobs:
           python3 .github/scripts/changelog-section.py "$TAG" CHANGELOG.md > body.md
           {
             echo
-            echo "Archives: the \`rick\` binary with the shared kernel libraries, libstd and the pdfium library beside it, \`plugins/\` with the Git plugin, LICENSE, README, CHANGELOG and THIRD-PARTY-LICENSES; \`SHA256SUMS.txt\` has the checksums. Not signed or notarised (see README, Try it)."
+            echo "Archives: the \`rick\` binary with the shared kernel libraries, libstd and the pdfium library beside it, \`plugins/\` with the Git and hex-preview plugins, LICENSE, README, CHANGELOG and THIRD-PARTY-LICENSES; \`SHA256SUMS.txt\` has the checksums. Not signed or notarised (see README, Try it)."
           } >> body.md
           cat body.md
       - uses: softprops/action-gh-release@v2
