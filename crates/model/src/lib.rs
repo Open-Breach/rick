@@ -322,7 +322,6 @@ impl Tab {
     }
 
     /// The visible rows in display order.
-    #[must_use]
     pub fn rows(&self) -> Box<dyn Iterator<Item = &Entry> + '_> {
         if self.is_tree() {
             Box::new(
@@ -1611,10 +1610,9 @@ mod tests {
         );
         assert!(model.folder_tree_toggle(&VPath::from("/a/x")).is_some());
         model.folder_tree_link(false);
-        assert!(
-            model
-                .folder_tree_follow(&loc("/q"), VPath::from("/"))
-                .is_empty()
+        assert_eq!(
+            model.folder_tree_follow(&loc("/q"), VPath::from("/")),
+            [] as [Location; 0]
         );
     }
 }

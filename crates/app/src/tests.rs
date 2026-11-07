@@ -863,7 +863,7 @@ fn paste_conflicts_reach_the_model_and_the_answer_reaches_the_job() {
         id: conflict.id,
         answer: types::ConflictAnswer::once(types::Resolution::Rename("fresh.txt".into())),
     });
-    assert!(h.app.model().conflicts.is_empty());
+    assert_eq!(h.app.model().conflicts.len(), 0, "no conflict is pending");
     h.settle();
     assert_eq!(
         fs::read_to_string(sub.join("fresh.txt")).ok(),
@@ -967,7 +967,7 @@ fn the_trash_and_the_volumes_reach_the_model() {
     let mut h = harness();
     h.settle();
     assert!(h.app.model().trash.listed);
-    assert!(h.app.model().trash.items.is_empty());
+    assert_eq!(h.app.model().trash.items.len(), 0, "the trash is empty");
     let pane = h.app.model().focused;
     h.send(Command::Select {
         pane,
@@ -1013,7 +1013,7 @@ fn the_trash_and_the_volumes_reach_the_model() {
     assert!(!h.root.path().join("b.txt").exists());
 
     // Volumes come from the platform.
-    assert!(h.app.model().volumes.is_empty());
+    assert_eq!(h.app.model().volumes.len(), 0, "no volume is listed");
     h.fake.add_volume(platform::Volume {
         name: "USB".into(),
         mount_point: h.root.path().join("sub"),

@@ -178,7 +178,7 @@ mod tests {
         bridge.prune();
         assert!(bridge.take_dirty());
         bridge.forget(&[item]);
-        assert!(bridge.items().is_empty());
+        assert_eq!(bridge.items().len(), 0, "the record is empty");
         assert!(load(&dir.path().join("missing")).is_ok_and(|l| l.is_empty()));
     }
 }

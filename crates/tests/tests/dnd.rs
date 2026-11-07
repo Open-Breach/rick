@@ -311,7 +311,11 @@ fn a_file_dragged_onto_a_folder_row_moves_and_the_modifiers_force_the_mode() {
     harness.get_by_label("Overwrite").click();
     harness.step();
     settle(&mut harness);
-    assert!(harness.state().app().model().conflicts.is_empty());
+    assert_eq!(
+        harness.state().app().model().conflicts.len(),
+        0,
+        "no conflict is pending"
+    );
     assert!(dir.path().join("b.txt").exists());
     assert_eq!(
         fs::read_to_string(dir.path().join("sub/b.txt")).ok(),

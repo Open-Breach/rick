@@ -722,7 +722,7 @@ fn a_paste_over_existing_names_asks_and_skip_leaves_the_target_alone() {
         Some("old b".into())
     );
     assert!(!dst.join("sub/inner.txt").exists());
-    assert!(h.conflicts.take_new().is_empty());
+    assert_eq!(h.conflicts.take_new().len(), 0, "no new conflict");
 }
 
 #[test]
@@ -955,7 +955,7 @@ fn trash_actions_restore_purge_and_empty_through_the_store() {
         ActionOutcome::Started(_)
     ));
     assert_eq!(h.fake.list().map(|l| l.len()).ok(), Some(0));
-    assert!(h.trash.items().is_empty());
+    assert_eq!(h.trash.items().len(), 0, "the trash is empty");
     assert!(!dir.join("three.txt").exists());
 }
 

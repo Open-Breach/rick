@@ -580,7 +580,7 @@ fn tree_view_expands_folders_in_place_and_keeps_them_across_a_refresh() {
     harness.step();
     settle(&mut harness);
     assert_eq!(row_names(&harness), ["sub", "a.txt", "b.txt", "c.txt"]);
-    assert!(tab_expanded(&harness).is_empty());
+    assert_eq!(tab_expanded(&harness).len(), 0, "nothing stays expanded");
 }
 
 fn tab_expanded(harness: &Harness<'_, RickUi>) -> Vec<types::EntryId> {
@@ -787,7 +787,11 @@ fn pasting_over_an_existing_name_opens_the_dialogue_and_cancel_touches_nothing()
     harness.get_by_label("Cancel").click();
     harness.step();
     settle(&mut harness);
-    assert!(harness.state().app().model().conflicts.is_empty());
+    assert_eq!(
+        harness.state().app().model().conflicts.len(),
+        0,
+        "no conflict is pending"
+    );
     assert_eq!(
         fs::read_to_string(dir.path().join("sub/a.txt")).ok(),
         Some("old".into())
