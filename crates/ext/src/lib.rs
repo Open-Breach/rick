@@ -63,7 +63,7 @@ pub use registry::{
     API_VERSION, Extension, Manifest, Platforms, Points, Registry, SettingField, SettingKind,
     SettingsSchema,
 };
-pub use runtime::JobRunner;
+pub use runtime::{JobRunner, ProgressSink};
 pub use search::{Filter, Query, QueryKind, SearchHit, SearchIndex, SearchScope};
 pub use semver::Version;
 

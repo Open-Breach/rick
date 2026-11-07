@@ -1451,6 +1451,33 @@ dependencies = [
 ]
 
 [[package]]
+name = "ext-vfs-archive"
+version = "0.2.0-dev"
+dependencies = [
+ "ext",
+ "futures",
+ "runtime",
+ "tempfile",
+ "tokio",
+ "tracing",
+ "types",
+]
+
+[[package]]
+name = "ext-vfs-trash"
+version = "0.2.0-dev"
+dependencies = [
+ "ext",
+ "futures",
+ "platform",
+ "runtime",
+ "tempfile",
+ "tokio",
+ "tracing",
+ "types",
+]
+
+[[package]]
 name = "fancy-regex"
 version = "0.16.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4974,6 +5001,8 @@ dependencies = [
  "ext-preview-image",
  "ext-preview-pdf",
  "ext-preview-text",
+ "ext-vfs-archive",
+ "ext-vfs-trash",
  "futures",
  "image",
  "model",
