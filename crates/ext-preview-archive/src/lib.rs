@@ -14,6 +14,7 @@
 
 #![deny(unsafe_code)]
 
+pub mod fixtures;
 mod iso;
 mod rar;
 mod sevenz;

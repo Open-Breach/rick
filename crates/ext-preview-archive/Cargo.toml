@@ -12,6 +12,12 @@ repository.workspace = true
 [lib]
 crate-type = ["cdylib", "rlib"]
 
+# `fixtures` adds the encoders the test fixtures need (AES zip entries, 7z
+# writing, xz); the shipped plugin is built without it.
+[features]
+default = []
+fixtures = ["zip/aes-crypto", "sevenz-rust2/compress", "sevenz-rust2/aes256", "lzma-rust2/encoder"]
+
 [dependencies]
 types = { workspace = true }
 ext = { workspace = true }
@@ -28,14 +34,11 @@ tempfile = { workspace = true }
 tracing = { workspace = true }
 
 [dev-dependencies]
+# The crate's own tests use the fixtures with their encoders.
+ext-preview-archive = { path = ".", features = ["fixtures"] }
 runtime = { workspace = true }
 vfs-local = { workspace = true }
 platform = { workspace = true }
-# The fixtures the tests write: an AES-encrypted zip entry, a 7z with and
-# without encrypted headers, and xz-compressed tars.
-zip = { workspace = true, features = ["aes-crypto"] }
-sevenz-rust2 = { workspace = true, features = ["compress", "aes256"] }
-lzma-rust2 = { workspace = true, features = ["encoder"] }
 
 [lints]
 workspace = true
