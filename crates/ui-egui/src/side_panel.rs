@@ -350,6 +350,23 @@ fn trash(
 /// The name of the Trash view under the `rick` provider.
 const TRASH_VIEW: &str = "trash";
 
+/// The icon of a location for a tab: a folder locally, the archive glyph
+/// inside an archive, the trash for the Trash view, the provider's glyph
+/// otherwise (SPEC.md "Tab strip").
+#[must_use]
+pub fn location_icon(location: &Location) -> &'static str {
+    match location.provider {
+        ProviderId::LOCAL => icons::FOLDER,
+        ProviderId::ARCHIVE => icons::ARCHIVE,
+        ProviderId::RICK
+            if *location == trash_view() || location.path.is_inside(&trash_view().path) =>
+        {
+            icons::TRASH
+        }
+        _ => icons::PROVIDER,
+    }
+}
+
 /// The location of the Trash view: `rick://trash`.
 #[must_use]
 pub fn trash_view() -> Location {

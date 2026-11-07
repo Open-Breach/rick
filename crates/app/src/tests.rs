@@ -985,3 +985,28 @@ fn the_volumes_reach_the_model() {
     }));
     assert_eq!(h.app.model().volumes[0].name, "USB");
 }
+
+/// Open navigates into a folder; with no archive provider mounted a file
+/// goes straight to the system default.
+#[test]
+fn open_navigates_into_a_folder_and_opens_a_file_with_the_default() {
+    let mut h = harness();
+    h.settle();
+    let pane = h.app.model().focused;
+    let file = id_of(&h, "a.txt");
+    h.send(Command::Open { pane, id: file });
+    h.settle();
+    assert_eq!(h.fake.opened(), [h.root.path().join("a.txt")]);
+    assert_eq!(h.names(), ["sub", "a.txt", "b.txt", "c.txt"], "still here");
+
+    let sub = id_of(&h, "sub");
+    h.send(Command::Open { pane, id: sub });
+    h.settle();
+    let location = h
+        .app
+        .model()
+        .active_tab(pane)
+        .map_or_else(|| panic!("tab"), |(_, tab)| tab.location.clone());
+    assert_eq!(location, local(&h.root.path().join("sub")));
+    assert_eq!(h.fake.opened().len(), 1, "a folder opens nothing outside");
+}

@@ -89,7 +89,7 @@ use ops::{Conflicts, PinStore};
 use platform::Platform;
 use runtime::{JobEvent, JobRunner, mpsc};
 use tracing::{debug, warn};
-use types::{CancelToken, Entry, EntryId, Error, JobId, Location, Progress, VPath};
+use types::{CancelToken, Entry, EntryId, Error, JobId, Location, Progress, ProviderId, VPath};
 use vfs::Mounts;
 use vfs_local::LocalProvider;
 
@@ -233,6 +233,14 @@ enum Msg {
     RecentChange(FsChange),
     /// The mounted volumes were enumerated.
     Volumes(Result<Vec<Volume>, Error>),
+    /// The archive provider answered whether a file opens as a location:
+    /// navigate there, or open the entry with the system default.
+    Opened {
+        pane: PaneId,
+        tab: TabId,
+        entry: Entry,
+        location: Option<Location>,
+    },
     /// The folders under a path of the side panel's tree.
     FolderTree {
         root: Location,
@@ -917,6 +925,7 @@ impl App {
                     Self::selection_cleared(pane, before, events);
                 }
             }
+            Command::Open { pane, id } => self.open(pane, id, events),
             Command::Back(pane) => {
                 let before = self.selected_ids(pane);
                 if self.model.back(pane).is_some() {
@@ -1546,6 +1555,68 @@ impl App {
                 },
             );
         }
+    }
+
+    /// Opens an entry: a folder navigates; a local file is first offered to
+    /// the archive provider, which says in an internal job whether it
+    /// browses the file as a location, and opens with the system default
+    /// otherwise.
+    fn open(&mut self, pane: PaneId, id: EntryId, events: &mut Vec<Event>) {
+        let Some((tab_id, tab)) = self.model.active_tab(pane) else {
+            return;
+        };
+        let Some(entry) = tab.entry(id).cloned() else {
+            return;
+        };
+        if entry.kind == types::EntryKind::Dir {
+            let to = tab.location_of(&entry);
+            self.dispatch(Command::Navigate { pane, to }, events);
+            return;
+        }
+        let archive = (tab.location.provider == ProviderId::LOCAL)
+            .then(|| self.mounts.provider(ProviderId::ARCHIVE))
+            .flatten();
+        let Some(archive) = archive else {
+            self.open_default(pane, entry, events);
+            return;
+        };
+        let tx = self.mailbox.clone();
+        let inside = Location::new(ProviderId::ARCHIVE, entry.path.clone());
+        let handle =
+            self.jobs
+                .spawn_named(format!("Open {}", entry.name), move |_job| async move {
+                    let location = match archive.stat(&inside).await {
+                        Ok(root) if root.kind == types::EntryKind::Dir => Some(inside),
+                        Ok(_) => None,
+                        Err(error) => {
+                            debug!(%inside, %error, "not an archive to browse");
+                            None
+                        }
+                    };
+                    tx.send(Msg::Opened {
+                        pane,
+                        tab: tab_id,
+                        entry,
+                        location,
+                    });
+                    Ok(())
+                });
+        self.internal.insert(handle.id);
+    }
+
+    /// Opens an entry with the system default application, through the
+    /// core action, from the pane's location.
+    fn open_default(&mut self, pane: PaneId, entry: Entry, events: &mut Vec<Event>) {
+        let Some((_, tab)) = self.model.active_tab(pane) else {
+            return;
+        };
+        let ctx = ActionCtx {
+            pane,
+            location: tab.location.clone(),
+            selection: vec![entry],
+            invoked_from: Invocation::Shortcut,
+        };
+        self.run(ext::ActionId("core.open_default"), ctx, events);
     }
 
     /// Runs a freshly built undoable command and puts it on the undo log.
@@ -2304,6 +2375,23 @@ impl App {
                 }
             }
             Msg::Volumes(Err(error)) => debug!(%error, "volumes not enumerated"),
+            Msg::Opened {
+                pane,
+                tab,
+                entry,
+                location,
+            } => {
+                // The pane may have moved on since; then the answer is moot.
+                if self.model.active_tab(pane).map(|(id, _)| id) != Some(tab) {
+                    return;
+                }
+                match location {
+                    Some(to) => {
+                        self.dispatch(Command::Navigate { pane, to }, events);
+                    }
+                    None => self.open_default(pane, entry, events),
+                }
+            }
             Msg::FolderTree {
                 root,
                 path,
@@ -2730,9 +2818,11 @@ pub fn top_of(path: &VPath) -> VPath {
 }
 
 /// Puts every tab of a restored session somewhere that exists: a location
-/// whose provider is not mounted opens at Home, a local folder that is gone
-/// opens at its nearest existing ancestor, each with a note for the status
-/// line. Locations on other providers are taken as they are.
+/// whose provider is not mounted, or whose `rick://` view is not served,
+/// opens at Home; a local folder that is gone opens at its nearest existing
+/// ancestor, and so does an archive location whose archive is gone, as a
+/// local folder; each with a note for the status line. Locations on other
+/// providers are taken as they are.
 fn repair(mounts: &Mounts, home: &Location, session: &mut Session) {
     for tab in session
         .windows
@@ -2740,7 +2830,7 @@ fn repair(mounts: &Mounts, home: &Location, session: &mut Session) {
         .flat_map(|w| w.panes.iter_mut())
         .flat_map(|p| p.tabs.iter_mut())
     {
-        if mounts.provider(tab.location.provider).is_none() {
+        if !mounts.serves(&tab.location) {
             tab.note = Some(format!(
                 "{} is not available; opened Home instead of {}",
                 tab.location.provider, tab.location.path
@@ -2748,13 +2838,19 @@ fn repair(mounts: &Mounts, home: &Location, session: &mut Session) {
             tab.location = home.clone();
             continue;
         }
-        if tab.location.provider != vfs_local::PROVIDER_ID {
+        let archive = tab.location.provider == ProviderId::ARCHIVE;
+        if tab.location.provider != ProviderId::LOCAL && !archive {
             continue;
         }
         let Ok(path) = platform::paths::to_path(&tab.location.path) else {
             continue;
         };
-        if path.is_dir() {
+        if path.is_dir() && !archive {
+            continue;
+        }
+        if archive && path.ancestors().any(std::path::Path::is_file) {
+            // The archive is still there; what is inside it is its own
+            // listing's business.
             continue;
         }
         let mut ancestor = path.parent();

@@ -108,11 +108,14 @@ pub fn show(ui: &mut egui::Ui, cx: &mut PaneCx<'_>) {
         && cx.dnd.zone(Zone {
             key: egui::Id::new(("dnd-pane", cx.tab_id)),
             rect: area,
-            target: Target::Folder {
-                to: cx.tab.location.clone(),
-                device: dnd::listing_device(cx.tab),
-                spring: None,
-            },
+            target: dnd::into_pane(
+                cx.tab,
+                Target::Folder {
+                    to: cx.tab.location.clone(),
+                    device: dnd::listing_device(cx.tab),
+                    spring: None,
+                },
+            ),
         })
     {
         dnd::highlight(ui.painter(), ui.visuals(), area);
@@ -235,11 +238,14 @@ fn row_zone(ui: &egui::Ui, cx: &mut PaneCx<'_>, entry: &Entry, rect: egui::Rect)
         return;
     }
     let target = if entry.kind == EntryKind::Dir {
-        Target::Folder {
-            to: Location::new(cx.tab.location.provider, entry.path.clone()),
-            device: dnd::device_of(entry.id),
-            spring: Some(Spring::Pane(cx.pane)),
-        }
+        dnd::into_pane(
+            cx.tab,
+            Target::Folder {
+                to: Location::new(cx.tab.location.provider, entry.path.clone()),
+                device: dnd::device_of(entry.id),
+                spring: Some(Spring::Pane(cx.pane)),
+            },
+        )
     } else {
         Target::NoOp
     };

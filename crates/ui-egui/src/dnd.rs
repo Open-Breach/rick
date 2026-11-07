@@ -769,6 +769,19 @@ fn smallest_zone(zones: &[Zone], pos: Pos2) -> Option<&Zone> {
         })
 }
 
+/// The target of a drop into a pane's space, tab header or row: the folder
+/// given, except that a pane showing the Trash view trashes what lands
+/// anywhere in it, as the side panel's Trash row does.
+#[must_use]
+pub fn into_pane(tab: &Tab, folder: Target) -> Target {
+    let trash = crate::side_panel::trash_view();
+    if tab.location == trash || tab.location.path.is_inside(&trash.path) {
+        Target::Trash
+    } else {
+        folder
+    }
+}
+
 /// The zone's target for this source: a folder the items would not move
 /// by going into, or the trash for items of no pane, is a no-op.
 fn resolve(source: &Source, target: &Target) -> Target {

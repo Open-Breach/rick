@@ -35,6 +35,16 @@ pub enum Command {
         /// Where to go.
         to: Location,
     },
+    /// Open an entry of the pane's listing: a folder navigates into it, a
+    /// local file the archive provider can browse navigates into it as a
+    /// location (`archive:` with the archive as a breadcrumb segment), any
+    /// other file opens with the system default (`core.open_default`).
+    Open {
+        /// The pane.
+        pane: PaneId,
+        /// The entry.
+        id: EntryId,
+    },
     /// One step back in the pane's history.
     Back(PaneId),
     /// One step forward in the pane's history.

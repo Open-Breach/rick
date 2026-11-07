@@ -115,12 +115,8 @@ fn left_group(ui: &mut egui::Ui, cx: &mut PaneCx<'_>) {
     if forward.clicked() {
         intent(cx, Intent::Forward);
     }
-    let up = icon_button(
-        ui,
-        icons::UP,
-        paths::parent(&cx.tab.location.path).is_some(),
-    )
-    .on_hover_text("Parent directory");
+    let has_parent = cx.tab_ui.crumbs_of(&cx.tab.location).len() >= 2;
+    let up = icon_button(ui, icons::UP, has_parent).on_hover_text("Parent directory");
     remember(cx, "left", up.rect);
     if up.clicked() {
         intent(cx, Intent::Parent);
@@ -240,7 +236,7 @@ fn path_edit(ui: &mut egui::Ui, cx: &mut PaneCx<'_>, rect: egui::Rect) {
         let typed = text.trim().to_owned();
         cx.tab_ui.path_edit = None;
         if !typed.is_empty() {
-            let location = Location::new(cx.tab.location.provider, typed.as_str());
+            let location = paths::typed(&cx.tab.location, &typed);
             cx.requests.push(Request::Command(Command::Navigate {
                 pane: cx.pane,
                 to: location,
@@ -278,7 +274,7 @@ fn fit_segments(widths: &[f32], separator_w: f32, chevron_w: f32, available: f32
 /// folded into a chevron with a dropdown, the last one truncated when even
 /// it does not fit, and the copy button at the right end.
 fn breadcrumb(ui: &mut egui::Ui, cx: &mut PaneCx<'_>, rect: egui::Rect) {
-    let segments = paths::segments(&cx.tab.location.path);
+    let segments: Vec<paths::Crumb> = cx.tab_ui.crumbs_of(&cx.tab.location).to_vec();
     let last = segments.len().saturating_sub(1);
     let spacing = ui.spacing().item_spacing.x;
     let pad = 2.0 * ui.spacing().button_padding.x;
@@ -295,7 +291,7 @@ fn breadcrumb(ui: &mut egui::Ui, cx: &mut PaneCx<'_>, rect: egui::Rect) {
     let chevron_w = ICON_BUTTON + separator_w;
     let widths: Vec<f32> = segments
         .iter()
-        .map(|(label, _)| text_width(ui, label) + pad)
+        .map(|crumb| text_width(ui, &crumb.label) + pad)
         .collect();
 
     let available = (rect.width() - copy_w).max(0.0);
@@ -303,13 +299,13 @@ fn breadcrumb(ui: &mut egui::Ui, cx: &mut PaneCx<'_>, rect: egui::Rect) {
     remember(cx, "middle", rect);
 
     if first_shown > 0 {
-        let hidden: Vec<(String, types::VPath)> = segments[..first_shown].to_vec();
+        let hidden: Vec<paths::Crumb> = segments[..first_shown].to_vec();
         let response = ui.menu_button(icons::COLLAPSED, |ui| {
-            for (label, prefix) in hidden {
-                if ui.button(label).clicked() {
+            for crumb in hidden {
+                if ui.button(crumb.label).clicked() {
                     cx.requests.push(Request::Command(Command::Navigate {
                         pane: cx.pane,
-                        to: Location::new(cx.tab.location.provider, prefix),
+                        to: crumb.location,
                     }));
                     ui.close();
                 }
@@ -319,7 +315,8 @@ fn breadcrumb(ui: &mut egui::Ui, cx: &mut PaneCx<'_>, rect: egui::Rect) {
         ui.weak(icons::SEGMENT);
     }
     let room_for_last = (available - (used - widths[last])).max(24.0);
-    for (i, (label, prefix)) in segments.iter().enumerate().skip(first_shown) {
+    for (i, crumb) in segments.iter().enumerate().skip(first_shown) {
+        let label = &crumb.label;
         let text = if i == last {
             egui::RichText::new(label).strong()
         } else {
@@ -339,12 +336,14 @@ fn breadcrumb(ui: &mut egui::Ui, cx: &mut PaneCx<'_>, rect: egui::Rect) {
         } else {
             ui.add(button)
         };
-        response.clone().on_hover_text(prefix.to_string_lossy());
-        crumb_zone(ui, cx, i, i != last, prefix, response.rect);
+        response
+            .clone()
+            .on_hover_text(paths::text_of(&crumb.location));
+        crumb_zone(ui, cx, i, i != last, &crumb.location, response.rect);
         if response.clicked() && i != last {
             cx.requests.push(Request::Command(Command::Navigate {
                 pane: cx.pane,
-                to: Location::new(cx.tab.location.provider, prefix.clone()),
+                to: crumb.location.clone(),
             }));
         }
         if i != last {
@@ -377,7 +376,7 @@ fn breadcrumb(ui: &mut egui::Ui, cx: &mut PaneCx<'_>, rect: egui::Rect) {
         egui::Sense::click(),
     );
     if response.clicked() {
-        cx.tab_ui.path_edit = Some(cx.tab.location.path.to_string_lossy().into_owned());
+        cx.tab_ui.path_edit = Some(paths::text_of(&cx.tab.location));
         cx.tab_ui.focus_path = true;
     }
 }
@@ -389,18 +388,21 @@ fn crumb_zone(
     cx: &mut PaneCx<'_>,
     index: usize,
     ancestor: bool,
-    prefix: &types::VPath,
+    to: &Location,
     rect: egui::Rect,
 ) {
     if cx.dnd.active()
         && cx.dnd.zone(Zone {
             key: egui::Id::new(("dnd-crumb", cx.tab_id, index)),
             rect,
-            target: Target::Folder {
-                to: Location::new(cx.tab.location.provider, prefix.clone()),
-                device: dnd::listing_device(cx.tab),
-                spring: ancestor.then_some(Spring::Pane(cx.pane)),
-            },
+            target: dnd::into_pane(
+                cx.tab,
+                Target::Folder {
+                    to: to.clone(),
+                    device: dnd::listing_device(cx.tab),
+                    spring: ancestor.then_some(Spring::Pane(cx.pane)),
+                },
+            ),
         })
     {
         dnd::highlight(ui.painter(), ui.visuals(), rect);
