@@ -121,6 +121,12 @@ pub const BENCHMARKS: &[Benchmark] = &[
         windows: us(16_600),
     },
     Benchmark {
+        key: "viewer-frame",
+        linux: us(16_600),
+        macos: us(16_600),
+        windows: us(16_600),
+    },
+    Benchmark {
         key: "startup",
         linux: ms(20),
         macos: ms(150),

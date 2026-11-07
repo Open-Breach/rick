@@ -100,6 +100,9 @@ jobs:
       # Preview pane: 200 000 wrapped lines, the worst frame.
       - run: cargo test -p tests --release --test preview_pane -- --ignored --nocapture
         env: { TMP: "${{ runner.temp }}", TEMP: "${{ runner.temp }}", TMPDIR: "${{ runner.temp }}" }
+      # Viewer (0.2 milestone 3): the worst frame stepping through 50 images.
+      - run: cargo test -p tests --release --test viewer -- --ignored --nocapture
+        env: { TMP: "${{ runner.temp }}", TEMP: "${{ runner.temp }}", TMPDIR: "${{ runner.temp }}" }
       # Release: startup to the first frame.
       - run: cargo test -p tests --release --test startup -- --ignored --nocapture
         env: { TMP: "${{ runner.temp }}", TEMP: "${{ runner.temp }}", TMPDIR: "${{ runner.temp }}" }
