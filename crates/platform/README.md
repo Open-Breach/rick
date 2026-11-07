@@ -1,7 +1,9 @@
 # platform
 
 `platform` holds every line of per-OS code in Rick behind one trait set:
-`Trash` (trash, restore, list, remove, empty), `OpenWith`, `Properties`,
+`Trash` (trash, restore, list, remove, empty; on macOS `list` is Rick's own
+record of what it trashed, `trash.toml` in the config directory, since the
+system keeps the original paths to itself), `OpenWith`, `Properties`,
 `ConfigDir`, `NativeDialogs`, `Clipboard`, `Chrome`, `DragSource` (starting a
 drag other applications receive; drop reception comes through the windowing
 backend) and `Volumes` (the mounted volumes other than the system disk, from
