@@ -10,8 +10,6 @@ name: release
 # branch's commit (the tag itself is only created if the draft is published).
 # No signing, notarisation or installers in 0.1.
 on:
-  push:
-    tags: ["v*"]
   workflow_dispatch:
     inputs:
       tag:
