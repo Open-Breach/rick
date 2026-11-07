@@ -50,6 +50,25 @@ fn settle(harness: &mut Harness<'_, RickUi>) {
     }
 }
 
+/// The nodes whose label contains `text` in the focused pane or in the
+/// title row above it (the search dropdown), not in the side panel.
+fn outside_the_side_panel(harness: &Harness<'_, RickUi>, text: &str) -> usize {
+    let pane = harness.state().app().model().focused;
+    let rect = harness
+        .state()
+        .pane_rects()
+        .into_iter()
+        .find(|(p, _)| *p == pane)
+        .map_or_else(|| panic!("no pane rect"), |(_, r)| r);
+    harness
+        .query_all_by_label_contains(text)
+        .filter(|n| {
+            let centre = n.rect().center();
+            rect.contains(centre) || centre.y < rect.top()
+        })
+        .count()
+}
+
 fn selection_len(harness: &Harness<'_, RickUi>) -> usize {
     let app = harness.state().app();
     let pane = app.model().focused;
@@ -75,9 +94,11 @@ fn the_search_box_searches_names_and_runs_commands() {
     assert_eq!(harness.state().search_text(), "");
     harness.event(egui::Event::Text("gam".to_owned()));
     harness.step();
-    // The list row and the dropdown's hit; the others only in the list.
-    assert_eq!(harness.query_all_by_label_contains("gamma.txt").count(), 2);
-    assert_eq!(harness.query_all_by_label_contains("alpha.txt").count(), 1);
+    // The list row and the dropdown's hit; the others only in the list. The
+    // side panel is left out: its Recent section lists the files too once
+    // the folder's watch reports them, which on macOS can be before now.
+    assert_eq!(outside_the_side_panel(&harness, "gamma.txt"), 2);
+    assert_eq!(outside_the_side_panel(&harness, "alpha.txt"), 1);
     harness.key_press(egui::Key::Enter);
     harness.step();
     harness.step();
@@ -616,45 +637,52 @@ fn the_icon_view_shows_thumbnails_for_pictures() {
 #[test]
 #[ignore = "timing; run with --ignored in release"]
 fn the_icon_view_thumbnails_arrive_within_500_ms_without_long_frames() {
-    let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
-    let drawable = picture_fixtures(dir.path(), 40);
-    let mut harness = harness_with(dir.path(), egui::vec2(1400.0, 900.0), previewers());
-    harness.key_press_modifiers(
-        egui::Modifiers::COMMAND | egui::Modifiers::SHIFT,
-        egui::Key::Num4,
-    );
-    harness.step();
-    let pane = harness.state().app().model().focused;
-    harness.state_mut().app_mut().handle(
-        app::Command::SetView {
-            pane,
-            mode: model::ViewMode::Icons(model::IconSize::ExtraLarge),
-        },
-        &mut Vec::new(),
-    );
     let pdfium = std::env::var_os("RICK_REQUIRE_PDFIUM").is_some();
-    let drawable = if pdfium { drawable } else { drawable - 1 };
-    let started = Instant::now();
-    let mut frames = Vec::new();
-    while harness.state().thumbnails().ready() < drawable {
-        assert!(
-            started.elapsed() < Duration::from_secs(10),
-            "only {} of {drawable} thumbnails",
-            harness.state().thumbnails().ready()
+    let mut tooks = Vec::new();
+    let mut longests = Vec::new();
+    // A fresh folder and window per run: the thumbnails are cached per entry.
+    for _ in 0..tests::bench::runs() {
+        let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+        let drawable = picture_fixtures(dir.path(), 40);
+        let mut harness = harness_with(dir.path(), egui::vec2(1400.0, 900.0), previewers());
+        harness.key_press_modifiers(
+            egui::Modifiers::COMMAND | egui::Modifiers::SHIFT,
+            egui::Key::Num4,
         );
-        let frame = Instant::now();
         harness.step();
-        frames.push(frame.elapsed());
-        std::thread::sleep(Duration::from_millis(2));
+        let pane = harness.state().app().model().focused;
+        harness.state_mut().app_mut().handle(
+            app::Command::SetView {
+                pane,
+                mode: model::ViewMode::Icons(model::IconSize::ExtraLarge),
+            },
+            &mut Vec::new(),
+        );
+        let drawable = if pdfium { drawable } else { drawable - 1 };
+        let started = Instant::now();
+        let mut frames = Vec::new();
+        while harness.state().thumbnails().ready() < drawable {
+            assert!(
+                started.elapsed() < Duration::from_secs(10),
+                "only {} of {drawable} thumbnails",
+                harness.state().thumbnails().ready()
+            );
+            let frame = Instant::now();
+            harness.step();
+            frames.push(frame.elapsed());
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        let took = started.elapsed();
+        let longest = frames.iter().copied().max().unwrap_or_default();
+        println!(
+            "icon view: {drawable} thumbnails in {took:?}, {} frames, longest {longest:?}",
+            frames.len()
+        );
+        tooks.push(took);
+        longests.push(longest);
     }
-    let took = started.elapsed();
-    let longest = frames.iter().copied().max().unwrap_or_default();
-    println!(
-        "icon view: {drawable} thumbnails in {took:?}, {} frames, longest {longest:?}",
-        frames.len()
-    );
-    tests::bench::record("thumbnails", took);
-    tests::bench::record("thumbnails-frame", longest);
+    tests::bench::record("thumbnails", &tooks);
+    tests::bench::record("thumbnails-frame", &longests);
 }
 
 /// Whether the focused window's side panel is shown.

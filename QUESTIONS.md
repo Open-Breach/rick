@@ -797,3 +797,20 @@ Once answered, an entry keeps its number and gains a dated decision line.
     first (past egui's double-click window) starts the rename; a faster
     second click opens the entry as a double-click does.
     Decided (2026-11-06): as assumed; spec updated in 12f3b25.
+
+80. (release) Two macOS flakes on the release pull request's CI: the tree
+    view's first screen measured 80.8 ms once against an 80 ms target set
+    at median × 1.5 (median 42 ms, worst 50.5 ms in five runs), and the
+    search box test counted a third label with a file's name because the
+    side panel's Recent section, fed by every open pane's watch since
+    close-out A, listed the test's freshly written files before the
+    assertion ran, which the FSEvents timing on macOS allows.
+    Assumed: on macOS and Windows a timed test repeats its measured part
+    three times and asserts the median against the target, whose rule
+    (median × 1.5, rounded up, never below Linux) is unchanged; Linux keeps
+    the spec's numbers on a single run. Label counts in the integration
+    tests are scoped to the widgets they are about (the file list and the
+    search dropdown), never to the whole window, since the side panel may
+    list the same names.
+    Decided (2026-11-06): as assumed; spec unchanged. BENCHMARKS.md says so
+    in its Targets paragraph.

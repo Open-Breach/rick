@@ -397,23 +397,27 @@ fn scrolling_the_200k_fixture_in_details_view_holds_60_fps() {
     for _ in 0..10 {
         harness.step();
     }
-    let mut frame_times = Vec::with_capacity(240);
-    for i in 0..240 {
-        let delta = if i % 60 < 30 { -400.0 } else { 400.0 };
-        harness.event(egui::Event::MouseWheel {
-            unit: egui::MouseWheelUnit::Point,
-            delta: egui::vec2(0.0, delta),
-            phase: egui::TouchPhase::Move,
-            modifiers: egui::Modifiers::NONE,
-        });
-        let started = Instant::now();
-        harness.step();
-        frame_times.push(started.elapsed());
+    let mut p95s = Vec::new();
+    for _ in 0..tests::bench::runs() {
+        let mut frame_times = Vec::with_capacity(240);
+        for i in 0..240 {
+            let delta = if i % 60 < 30 { -400.0 } else { 400.0 };
+            harness.event(egui::Event::MouseWheel {
+                unit: egui::MouseWheelUnit::Point,
+                delta: egui::vec2(0.0, delta),
+                phase: egui::TouchPhase::Move,
+                modifiers: egui::Modifiers::NONE,
+            });
+            let started = Instant::now();
+            harness.step();
+            frame_times.push(started.elapsed());
+        }
+        frame_times.sort_unstable();
+        let median = frame_times[frame_times.len() / 2];
+        let p95 = frame_times[frame_times.len() * 95 / 100];
+        let worst = frame_times[frame_times.len() - 1];
+        println!("200k details view scrolling: median {median:?}, p95 {p95:?}, worst {worst:?}");
+        p95s.push(p95);
     }
-    frame_times.sort_unstable();
-    let median = frame_times[frame_times.len() / 2];
-    let p95 = frame_times[frame_times.len() * 95 / 100];
-    let worst = frame_times[frame_times.len() - 1];
-    println!("200k details view scrolling: median {median:?}, p95 {p95:?}, worst {worst:?}");
-    tests::bench::record("details-frame", p95);
+    tests::bench::record("details-frame", &p95s);
 }

@@ -35,50 +35,54 @@ fn copying_a_1gib_sparse_file_uses_the_fast_path() {
     sparse_gib(&source);
     let source_allocated = allocated_size(&source).unwrap_or_else(|e| panic!("{e}"));
 
-    // Through the provider, as `vfs::copy` does it.
+    // Through the provider, as `vfs::copy` does it; once per run.
     let provider = LocalProvider::new(Arc::new(
         platform::Fake::new().unwrap_or_else(|e| panic!("{e}")),
     ));
-    let target = dir.path().join("copy.bin");
-    let (sink, rx) = ProgressSink::channel();
-    let started = Instant::now();
-    runtime::block_on(provider.copy(
-        &local(&source),
-        &local(&target),
-        CopyOptions::default(),
-        sink,
-        CancelToken::new(),
-    ))
-    .unwrap_or_else(|e| panic!("{e}"));
-    let elapsed = started.elapsed();
-    let allocated = allocated_size(&target).unwrap_or_else(|e| panic!("{e}"));
-    println!(
-        "1 GiB sparse copy on {}: {elapsed:?}, source {source_allocated} bytes on disk, copy {allocated} bytes on disk",
-        std::env::consts::OS
-    );
-
-    assert_eq!(fs::metadata(&target).map(|m| m.len()).ok(), Some(GIB));
-    assert_eq!(
-        *rx.borrow(),
-        Progress::Bytes {
-            done: GIB,
-            total: Some(GIB)
-        }
-    );
-    tests::bench::record("copy-sparse", elapsed);
-    // Writing 1 GiB of zeros would take seconds and allocate a gigabyte; the
-    // fast path copies the two data segments and leaves the hole.
-    let hole_preserved = allocated <= source_allocated + (64 << 20);
-    if std::env::consts::OS == "windows" {
-        // CopyFileEx keeps sparse ranges on NTFS but not every volume agrees;
-        // the elapsed-time bound is the assertion there.
-        println!("hole preserved: {hole_preserved}");
-    } else {
-        assert!(
-            hole_preserved,
-            "copy allocated {allocated} bytes for a {source_allocated}-byte sparse source"
+    let mut took = Vec::new();
+    for run in 0..tests::bench::runs() {
+        let target = dir.path().join(format!("copy{run}.bin"));
+        let (sink, rx) = ProgressSink::channel();
+        let started = Instant::now();
+        runtime::block_on(provider.copy(
+            &local(&source),
+            &local(&target),
+            CopyOptions::default(),
+            sink,
+            CancelToken::new(),
+        ))
+        .unwrap_or_else(|e| panic!("{e}"));
+        let elapsed = started.elapsed();
+        took.push(elapsed);
+        let allocated = allocated_size(&target).unwrap_or_else(|e| panic!("{e}"));
+        println!(
+            "1 GiB sparse copy on {}: {elapsed:?}, source {source_allocated} bytes on disk, copy {allocated} bytes on disk",
+            std::env::consts::OS
         );
+
+        assert_eq!(fs::metadata(&target).map(|m| m.len()).ok(), Some(GIB));
+        assert_eq!(
+            *rx.borrow(),
+            Progress::Bytes {
+                done: GIB,
+                total: Some(GIB)
+            }
+        );
+        // Writing 1 GiB of zeros would take seconds and allocate a gigabyte;
+        // the fast path copies the two data segments and leaves the hole.
+        let hole_preserved = allocated <= source_allocated + (64 << 20);
+        if std::env::consts::OS == "windows" {
+            // CopyFileEx keeps sparse ranges on NTFS but not every volume
+            // agrees; the elapsed-time bound is the assertion there.
+            println!("hole preserved: {hole_preserved}");
+        } else {
+            assert!(
+                hole_preserved,
+                "copy allocated {allocated} bytes for a {source_allocated}-byte sparse source"
+            );
+        }
     }
+    tests::bench::record("copy-sparse", &took);
 
     // Directly, to learn which path the platform took; a reflink must show
     // shared extents where the filesystem can report them (Btrfs, XFS).

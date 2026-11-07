@@ -8,11 +8,17 @@ each once per push on the three runners and asserts the target of that
 runner's OS (`crates/tests/src/bench.rs`, whose table a unit test checks
 against this file).
 
-**Targets.** Linux: the spec's (Decisions table, QUESTIONS.md 5, 24 and 30).
-macOS and Windows: the median × 1.5, rounded up to a round number, and never
-below the Linux target, so a faster runner is not held to a tighter budget
-than the spec asks; where that number still sat below the worst run it was
-rounded up past the worst run. Two benchmarks then went over their first
+**Targets.** Linux: the spec's (Decisions table, QUESTIONS.md 5, 24 and 30),
+asserted on a single run. macOS and Windows: the median × 1.5, rounded up to
+a round number, and never below the Linux target, so a faster runner is not
+held to a tighter budget than the spec asks; where that number still sat
+below the worst run it was rounded up past the worst run. On macOS and
+Windows a test repeats its measured part three times and asserts the median
+of the three against the target (`tests::bench::runs`, QUESTIONS.md 80): one
+run on those shared runners swings too much for a 1.5 × budget, as the
+macOS tree view first screen showed (median 42 ms, single CI runs of 66 and
+81 ms). The tables below keep the single-run medians and worsts of the
+measurement runs; the targets are unchanged. Two benchmarks then went over their first
 targets in CI runs of the release pull request and were set to what the
 runner does, as the close-out issue provides: the macOS listing (first batch
 400 ms, complete 3 s), the macOS tree view first screen (100 ms) and startup

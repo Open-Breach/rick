@@ -31,24 +31,27 @@ fn built_ins() -> Vec<Arc<dyn Extension>> {
 #[ignore = "timing; run with --ignored in release"]
 fn startup_to_the_first_frame() {
     let fixture = tests::fixture::generate(100, 3).unwrap_or_else(|e| panic!("{e}"));
-    let fake = Arc::new(Fake::new().unwrap_or_else(|e| panic!("{e}")));
-    let config_dir = fake.config_dir();
+    let mut samples = Vec::new();
+    for _ in 0..tests::bench::runs() {
+        let fake = Arc::new(Fake::new().unwrap_or_else(|e| panic!("{e}")));
+        let config_dir = fake.config_dir();
 
-    let started = Instant::now();
-    let host = Arc::new(EguiHost::new());
-    let app = app::App::new(app::Config {
-        platform: fake,
-        ui: host.clone(),
-        extensions: built_ins(),
-        config_dir: Some(config_dir),
-        start: Some(local(fixture.root())),
-    });
-    let harness = Harness::builder()
-        .with_size(egui::vec2(1100.0, 720.0))
-        .build_eframe(move |cc| RickUi::new(app, host, &cc.egui_ctx));
-    let first_frame = started.elapsed();
+        let started = Instant::now();
+        let host = Arc::new(EguiHost::new());
+        let app = app::App::new(app::Config {
+            platform: fake,
+            ui: host.clone(),
+            extensions: built_ins(),
+            config_dir: Some(config_dir),
+            start: Some(local(fixture.root())),
+        });
+        let harness = Harness::builder()
+            .with_size(egui::vec2(1100.0, 720.0))
+            .build_eframe(move |cc| RickUi::new(app, host, &cc.egui_ctx));
+        samples.push(started.elapsed());
 
-    assert!(harness.state().app().model().panes().next().is_some());
-    drop(harness);
-    tests::bench::record("startup", first_frame);
+        assert!(harness.state().app().model().panes().next().is_some());
+        drop(harness);
+    }
+    tests::bench::record("startup", &samples);
 }

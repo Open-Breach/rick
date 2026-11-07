@@ -48,33 +48,38 @@ fn listing_200k_entries_first_batch_under_50ms_complete_under_400ms() {
         while stream.next().await.is_some() {}
     });
 
-    let (first_batch, complete, count) = runtime::block_on(async {
-        let started = Instant::now();
-        let mut stream = provider.list(
-            &local(fixture.root()),
-            ListOptions::default(),
-            CancelToken::new(),
+    let mut firsts = Vec::new();
+    let mut completes = Vec::new();
+    for _ in 0..tests::bench::runs() {
+        let (first_batch, complete, count) = runtime::block_on(async {
+            let started = Instant::now();
+            let mut stream = provider.list(
+                &local(fixture.root()),
+                ListOptions::default(),
+                CancelToken::new(),
+            );
+            let first = stream
+                .next()
+                .await
+                .unwrap_or_else(|| panic!("empty listing"))
+                .unwrap_or_else(|e| panic!("{e}"));
+            let first_batch = started.elapsed();
+            let mut count = first.len();
+            while let Some(batch) = stream.next().await {
+                count += batch.unwrap_or_else(|e| panic!("{e}")).len();
+            }
+            (first_batch, started.elapsed(), count)
+        });
+        println!(
+            "listing 200 000 entries on {}: first batch {first_batch:?}, complete {complete:?}",
+            std::env::consts::OS
         );
-        let first = stream
-            .next()
-            .await
-            .unwrap_or_else(|| panic!("empty listing"))
-            .unwrap_or_else(|e| panic!("{e}"));
-        let first_batch = started.elapsed();
-        let mut count = first.len();
-        while let Some(batch) = stream.next().await {
-            count += batch.unwrap_or_else(|e| panic!("{e}")).len();
-        }
-        (first_batch, started.elapsed(), count)
-    });
-
-    println!(
-        "listing 200 000 entries on {}: first batch {first_batch:?}, complete {complete:?}",
-        std::env::consts::OS
-    );
-    assert_eq!(count, 200_000);
-    tests::bench::record("listing-first", first_batch);
-    tests::bench::record("listing-complete", complete);
+        assert_eq!(count, 200_000);
+        firsts.push(first_batch);
+        completes.push(complete);
+    }
+    tests::bench::record("listing-first", &firsts);
+    tests::bench::record("listing-complete", &completes);
 }
 
 #[test]

@@ -197,30 +197,66 @@ pub fn target_on(key: &str, os: &str) -> Duration {
     }
 }
 
-/// Prints the measurement of `key` and asserts it meets the target of this
-/// operating system.
-///
-/// The line is `BENCH <key> <os> <microseconds> <readable>`; the bench
-/// workflow collects the first four fields. The targets are release
-/// numbers: a debug build prints and does not assert, and so does a run
-/// with `RICK_BENCH_RECORD` set, which the bench workflow uses to measure
-/// before a target exists.
+/// How many times a timed test repeats its measured part: once on Linux,
+/// where the spec's numbers hold on a single run, three times on macOS and
+/// Windows, whose shared runners are too noisy for one run against a 1.5×
+/// budget; [`record`] then asserts the median of the runs. `RICK_BENCH_RUNS`
+/// overrides the count, to try the repeat paths on any machine.
+#[must_use]
+pub fn runs() -> usize {
+    if let Some(runs) = std::env::var("RICK_BENCH_RUNS")
+        .ok()
+        .and_then(|v| v.parse::<usize>().ok())
+        .filter(|n| *n > 0)
+    {
+        return runs;
+    }
+    if std::env::consts::OS == "linux" {
+        1
+    } else {
+        3
+    }
+}
+
+/// The median of `samples`: the middle one, the upper middle of an even
+/// count.
 ///
 /// # Panics
 ///
-/// When the measurement is over the target in a release build without
-/// `RICK_BENCH_RECORD`.
-pub fn record(key: &str, measured: Duration) {
+/// On no samples.
+#[must_use]
+pub fn median(samples: &[Duration]) -> Duration {
+    assert!(!samples.is_empty(), "no samples");
+    let mut sorted = samples.to_vec();
+    sorted.sort_unstable();
+    sorted[sorted.len() / 2]
+}
+
+/// Prints the measurement of `key`, the median of `samples` (one per run,
+/// see [`runs`]), and asserts it meets the target of this operating system.
+///
+/// The line is `BENCH <key> <os> <microseconds> <readable>`; the bench
+/// workflow collects the first four fields, and every run's sample follows
+/// in brackets. The targets are release numbers: a debug build prints and
+/// does not assert, and so does a run with `RICK_BENCH_RECORD` set, which
+/// the bench workflow uses to measure before a target exists.
+///
+/// # Panics
+///
+/// On no samples, and when the median is over the target in a release
+/// build without `RICK_BENCH_RECORD`.
+pub fn record(key: &str, samples: &[Duration]) {
     let os = std::env::consts::OS;
     let target = target(key);
+    let measured = median(samples);
     println!(
-        "BENCH {key} {os} {} {measured:?} (target {target:?})",
+        "BENCH {key} {os} {} {measured:?} (target {target:?}; runs {samples:?})",
         measured.as_micros()
     );
     if !cfg!(debug_assertions) && std::env::var_os("RICK_BENCH_RECORD").is_none() {
         assert!(
             measured <= target,
-            "{key}: {measured:?} is over the {target:?} target on {os}"
+            "{key}: median {measured:?} of {samples:?} is over the {target:?} target on {os}"
         );
     }
 }
@@ -309,6 +345,14 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn the_median_is_the_middle_or_upper_middle_sample() {
+        let ms = |n| Duration::from_millis(n);
+        assert_eq!(super::median(&[ms(3), ms(1), ms(2)]), ms(2));
+        assert_eq!(super::median(&[ms(1), ms(9)]), ms(9));
+        assert_eq!(super::median(&[ms(7)]), ms(7));
     }
 
     #[test]

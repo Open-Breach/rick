@@ -116,10 +116,14 @@ fn flat_layout_has_no_directories() {
 #[test]
 #[ignore = "writes 200 000 entries; run with --ignored"]
 fn two_hundred_thousand_entries_in_under_thirty_seconds() {
-    let started = Instant::now();
-    let fixture =
-        fixture::generate(fixture::DEFAULT_ENTRIES, 2026).unwrap_or_else(|e| panic!("{e}"));
-    let elapsed = started.elapsed();
-    assert_eq!(fixture.entries(), 200_000);
-    tests::bench::record("fixture", elapsed);
+    let mut took = Vec::new();
+    for run in 0..tests::bench::runs() {
+        let seed = 2026 + u64::try_from(run).unwrap_or(0);
+        let started = Instant::now();
+        let fixture =
+            fixture::generate(fixture::DEFAULT_ENTRIES, seed).unwrap_or_else(|e| panic!("{e}"));
+        took.push(started.elapsed());
+        assert_eq!(fixture.entries(), 200_000);
+    }
+    tests::bench::record("fixture", &took);
 }
