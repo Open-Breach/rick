@@ -64,7 +64,7 @@ pub fn save(path: &Path, entries: &[Entry]) -> Result<(), Error> {
     };
     let text = toml::to_string_pretty(&file)
         .map_err(|error| Error::Io(std::io::Error::other(error.to_string())))?;
-    crate::settings::write_atomically(path, &text)
+    crate::session::write_atomically(path, &text)
 }
 
 /// Reads the entries back, examining each path again so the rows carry

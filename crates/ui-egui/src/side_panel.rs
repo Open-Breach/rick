@@ -1,7 +1,8 @@
 //! The side panel: Home, Recent, Network, Trash, Pinned and Tree as sections
 //! that fold independently, with the operations area at its foot. Which
 //! sections are folded, the panel's width, its side and whether it shows at
-//! all are settings, so they come back on the next start.
+//! all are part of the window's session state, so they come back on the
+//! next start.
 //!
 //! Recent lists what changed lately under the home directory and the pinned
 //! folders; Network the mounted volumes other than the system disk; Trash
@@ -14,7 +15,7 @@ use std::path::PathBuf;
 
 use app::{App, Command};
 use ext::{ActionCtx, ActionId, Invocation};
-use model::{PaneId, Section, TrashedItem, VolumeKind};
+use model::{PaneId, Section, SidePanel, SidePanelChange, TrashedItem, VolumeKind, WindowId};
 use types::{Entry, EntryKind, Location, VPath};
 
 use crate::dnd::{self, Dnd, Target, Zone};
@@ -92,17 +93,21 @@ fn trash_action(app: &App, state: &SidePanelState, action: &'static str) -> Requ
     }
 }
 
-/// Draws the sections for the focused pane; navigation and pin changes go
-/// out as requests, drop zones into `dnd`.
+/// Draws the sections for the focused pane of `window`; navigation, pin and
+/// fold changes go out as requests, drop zones into `dnd`.
 pub fn show(
     ui: &mut egui::Ui,
     app: &App,
-    focused: PaneId,
+    window: WindowId,
+    panel: &SidePanel,
     state: &mut SidePanelState,
     requests: &mut Vec<Request>,
     dnd: &mut Dnd,
 ) {
-    let settings = &app.model().settings;
+    let focused = app
+        .model()
+        .window(window)
+        .map_or(app.model().focused, |w| w.focused);
     let current = app
         .model()
         .active_tab(focused)
@@ -119,9 +124,9 @@ pub fn show(
         .auto_shrink([false, false])
         .show(ui, |ui| {
             for section in Section::ALL {
-                // The settings drive the open state; a click on the header
+                // The model drives the open state; a click on the header
                 // asks for the change, and the next frame shows it.
-                let folded = settings.side_panel.folded.contains(&section);
+                let folded = panel.folded.contains(&section);
                 let response = egui::CollapsingHeader::new(section.title())
                     .id_salt(("side-section", section.title()))
                     .open(Some(!folded))
@@ -138,12 +143,13 @@ pub fn show(
                         );
                     });
                 if response.header_response.clicked() {
-                    requests.push(Request::Command(Command::Settings(
-                        model::SettingsChange::SidePanelFold {
+                    requests.push(Request::Command(Command::SidePanel {
+                        window,
+                        change: SidePanelChange::Fold {
                             section,
                             folded: !folded,
                         },
-                    )));
+                    }));
                 }
                 let whole = response
                     .body_response

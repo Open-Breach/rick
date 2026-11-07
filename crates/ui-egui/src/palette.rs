@@ -61,6 +61,20 @@ pub fn items(app: &App, keys: &KeyMap, pane: PaneId, recents: &[Intent]) -> Vec<
                 recency: recency(spec.intent),
             }),
     );
+    // The saved layouts, by name, after "Continue where I left off" above.
+    items.extend(
+        app.layouts()
+            .iter()
+            .enumerate()
+            .filter_map(|(index, name)| u16::try_from(index).ok().map(|i| (i, name)))
+            .map(|(index, name)| Item {
+                intent: Intent::Layout(index),
+                label: format!("Layout: {name}"),
+                shortcut: None,
+                disabled: None,
+                recency: recency(Intent::Layout(index)),
+            }),
+    );
     items
 }
 

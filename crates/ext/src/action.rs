@@ -17,7 +17,7 @@
 //!     Level, Modifiers, PaneId, Shortcut, UiHost,
 //! };
 //! use runtime::JobRunner;
-//! use std::cell::RefCell;
+//! use std::sync::Mutex;
 //! use types::{Error, Location, ProviderId};
 //!
 //! struct CountSelection;
@@ -55,11 +55,11 @@
 //!
 //! /// A host that records what the action said.
 //! #[derive(Default)]
-//! struct Recorder(RefCell<Vec<String>>);
+//! struct Recorder(Mutex<Vec<String>>);
 //!
 //! impl UiHost for Recorder {
 //!     fn notify(&self, _level: Level, text: &str) {
-//!         self.0.borrow_mut().push(text.to_owned());
+//!         self.0.lock().unwrap().push(text.to_owned());
 //!     }
 //!     fn confirm(&self, _title: &str, _text: &str) -> bool {
 //!         true
@@ -68,7 +68,7 @@
 //!         Some(default.to_owned())
 //!     }
 //!     fn show(&self, title: &str, _text: &str) {
-//!         self.0.borrow_mut().push(title.to_owned());
+//!         self.0.lock().unwrap().push(title.to_owned());
 //!     }
 //! }
 //!
@@ -83,7 +83,7 @@
 //! let host = Recorder::default();
 //! let outcome = CountSelection.run(ctx, &JobRunner::new(), &host).unwrap();
 //! assert!(matches!(outcome, ActionOutcome::Done));
-//! assert_eq!(host.0.borrow()[0], "0 entries selected");
+//! assert_eq!(host.0.lock().unwrap()[0], "0 entries selected");
 //! ```
 
 use std::fmt;
@@ -373,7 +373,7 @@ pub enum Level {
 }
 
 /// What an action may ask of the UI while it runs on the app thread.
-pub trait UiHost {
+pub trait UiHost: Send + Sync {
     /// Shows a transient notification.
     fn notify(&self, level: Level, text: &str);
 

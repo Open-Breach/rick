@@ -68,9 +68,8 @@ pub struct Settings {
     /// Rebound shortcuts: action id to shortcut text, e.g. `"core.copy" =
     /// "Mod+C"`. Actions not listed keep their default.
     pub shortcuts: BTreeMap<String, String>,
-    /// The side panel: shown or hidden, which side, its width and which of
-    /// its sections are folded.
-    pub side_panel: SidePanel,
+    /// What Rick opens with: the last session or a named layout.
+    pub session: SessionSettings,
     /// Folders and files pinned to the side panel, in display order.
     /// Written as `provider:path` strings; a bare path is a local one.
     #[serde(with = "pinned_toml")]
@@ -262,7 +261,9 @@ impl Section {
     }
 }
 
-/// The side panel's persisted state.
+/// The side panel of one window: shown or hidden, which side, its width
+/// and which of its sections are folded. Part of the session, not of the
+/// settings file.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct SidePanel {
@@ -287,6 +288,69 @@ impl Default for SidePanel {
     }
 }
 
+/// One change to a window's side panel.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SidePanelChange {
+    /// Show or hide the panel.
+    Visible(bool),
+    /// Dock it left or right.
+    Side(PanelSide),
+    /// Its width in logical points.
+    Width(u16),
+    /// Fold or unfold one section.
+    Fold {
+        /// Which section.
+        section: Section,
+        /// Folded shut, or open.
+        folded: bool,
+    },
+}
+
+impl SidePanel {
+    /// Applies one change.
+    pub fn apply(&mut self, change: SidePanelChange) {
+        match change {
+            SidePanelChange::Visible(v) => self.visible = v,
+            SidePanelChange::Side(v) => self.side = v,
+            SidePanelChange::Width(v) => self.width = v,
+            SidePanelChange::Fold { section, folded } => {
+                if folded {
+                    self.folded.insert(section);
+                } else {
+                    self.folded.remove(&section);
+                }
+            }
+        }
+    }
+}
+
+/// The value of `[session] start` that means the last session.
+pub const LAST_SESSION: &str = "last";
+
+/// The `[session]` table: what Rick opens with.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct SessionSettings {
+    /// `"last"` for the last session, otherwise the name of a saved layout.
+    pub start: String,
+}
+
+impl Default for SessionSettings {
+    fn default() -> Self {
+        Self {
+            start: LAST_SESSION.to_owned(),
+        }
+    }
+}
+
+impl SessionSettings {
+    /// The start layout's name, or `None` for the last session.
+    #[must_use]
+    pub fn start_layout(&self) -> Option<&str> {
+        (self.start != LAST_SESSION).then_some(self.start.as_str())
+    }
+}
+
 impl Default for Settings {
     fn default() -> Self {
         Self {
@@ -302,7 +366,7 @@ impl Default for Settings {
             density: Density::Normal,
             accent: None,
             shortcuts: BTreeMap::new(),
-            side_panel: SidePanel::default(),
+            session: SessionSettings::default(),
             pinned: Vec::new(),
             drag: Drag::default(),
             preview: Preview::default(),
@@ -341,19 +405,8 @@ pub enum SettingsChange {
         /// The new binding as text, or `None`.
         binding: Option<String>,
     },
-    /// Show or hide the side panel.
-    SidePanelVisible(bool),
-    /// Dock the side panel left or right.
-    SidePanelSide(PanelSide),
-    /// The side panel's width in logical points.
-    SidePanelWidth(u16),
-    /// Fold or unfold one section of the side panel.
-    SidePanelFold {
-        /// Which section.
-        section: Section,
-        /// Folded shut, or open.
-        folded: bool,
-    },
+    /// What Rick opens with: `None` for the last session, or a layout name.
+    StartLayout(Option<String>),
     /// Pin locations to the side panel at `at`, or at the end; a location
     /// already pinned stays where it is.
     Pin {
@@ -408,15 +461,8 @@ impl Settings {
                     self.shortcuts.remove(&action);
                 }
             },
-            SettingsChange::SidePanelVisible(v) => self.side_panel.visible = v,
-            SettingsChange::SidePanelSide(v) => self.side_panel.side = v,
-            SettingsChange::SidePanelWidth(v) => self.side_panel.width = v,
-            SettingsChange::SidePanelFold { section, folded } => {
-                if folded {
-                    self.side_panel.folded.insert(section);
-                } else {
-                    self.side_panel.folded.remove(&section);
-                }
+            SettingsChange::StartLayout(layout) => {
+                self.session.start = layout.unwrap_or_else(|| LAST_SESSION.to_owned());
             }
             SettingsChange::Pin { items, at } => {
                 let mut index = at.map_or(self.pinned.len(), |at| at.min(self.pinned.len()));
@@ -487,6 +533,27 @@ mod tests {
         );
         let text = Location::new(ProviderId("local"), "C:\\x").to_string();
         assert_eq!(parse_location(&text).path.to_string(), "C:\\x");
+    }
+
+    #[test]
+    fn side_panel_changes_apply() {
+        let mut p = SidePanel::default();
+        p.apply(SidePanelChange::Fold {
+            section: Section::Recent,
+            folded: true,
+        });
+        p.apply(SidePanelChange::Side(PanelSide::Right));
+        p.apply(SidePanelChange::Width(300));
+        p.apply(SidePanelChange::Visible(false));
+        assert!(p.folded.contains(&Section::Recent));
+        assert_eq!(p.side, PanelSide::Right);
+        assert_eq!(p.width, 300);
+        assert!(!p.visible);
+        p.apply(SidePanelChange::Fold {
+            section: Section::Recent,
+            folded: false,
+        });
+        assert!(p.folded.is_empty());
     }
 
     #[test]
@@ -568,22 +635,11 @@ mod tests {
         s.apply(SettingsChange::AfterDrag(AfterDrag::Return));
         assert_eq!(s.drag.spring_delay_ms, 250);
         assert_eq!(s.drag.after, AfterDrag::Return);
-        s.apply(SettingsChange::SidePanelFold {
-            section: Section::Recent,
-            folded: true,
-        });
-        s.apply(SettingsChange::SidePanelSide(PanelSide::Right));
-        s.apply(SettingsChange::SidePanelWidth(300));
-        s.apply(SettingsChange::SidePanelVisible(false));
-        assert!(s.side_panel.folded.contains(&Section::Recent));
-        assert_eq!(s.side_panel.side, PanelSide::Right);
-        assert_eq!(s.side_panel.width, 300);
-        assert!(!s.side_panel.visible);
-        s.apply(SettingsChange::SidePanelFold {
-            section: Section::Recent,
-            folded: false,
-        });
-        assert!(s.side_panel.folded.is_empty());
+        assert_eq!(s.session.start_layout(), None);
+        s.apply(SettingsChange::StartLayout(Some("Review".into())));
+        assert_eq!(s.session.start_layout(), Some("Review"));
+        s.apply(SettingsChange::StartLayout(None));
+        assert_eq!(s.session.start, LAST_SESSION);
         assert_eq!(
             s.shortcuts.get("core.copy").map(String::as_str),
             Some("Mod+Shift+C")

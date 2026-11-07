@@ -466,11 +466,13 @@ fn every_action_has_an_id_label_and_core_group() {
         assert_ne!(action.label(), "");
         assert_eq!(action.group(), ext::ActionGroup::Core);
         // Pin, Unpin, the trash actions and Open containing folder have no
-        // shortcut in the spec's tables.
+        // shortcut in the spec's tables; New file lost Mod+N to New window
+        // (QUESTIONS.md 66).
         let unbound = matches!(
             action.id().0,
             "core.pin"
                 | "core.unpin"
+                | "core.new_file"
                 | "core.restore"
                 | "core.restore_trash"
                 | "core.empty_trash"

@@ -148,13 +148,25 @@ pub fn show(ui: &mut egui::Ui, cx: &mut PaneCx<'_>) {
     }
 }
 
-/// The scroll offset to put back: a drag spring-loaded out of this location
-/// and the tab is back at it with its listing complete. Any other change of
+/// The scroll offset to put back: the session's, once the restored tab's
+/// listing is complete; or a drag spring-loaded out of this location and
+/// the tab is back at it with its listing complete. Any other change of
 /// location forgets it.
 fn restore_scroll(cx: &mut PaneCx<'_>) -> Option<f32> {
     let changed = cx.tab_ui.last_location.as_ref() != Some(&cx.tab.location);
     if changed {
+        // A restored offset belongs to the first location drawn; a move
+        // away from it forgets it.
+        if cx.tab_ui.last_location.is_some() {
+            cx.tab_ui.restore_scroll = None;
+        }
         cx.tab_ui.last_location = Some(cx.tab.location.clone());
+    }
+    if cx.tab_ui.restore_scroll.is_some() {
+        if !cx.tab.listing.complete {
+            return None;
+        }
+        return cx.tab_ui.restore_scroll.take();
     }
     let (location, offset) = cx.tab_ui.scroll_restore.clone()?;
     if location != cx.tab.location {

@@ -30,7 +30,7 @@ fn shell(start: &Path, size: egui::Vec2) -> Harness<'static, RickUi> {
             Arc::new(ext_preview_pdf::PdfPreview::new()),
         ],
         config_dir: Some(fake.config_dir()),
-        start: local(start),
+        start: Some(local(start)),
     });
     let mut harness = Harness::builder()
         .with_size(size)
@@ -447,7 +447,7 @@ fn screenshots_of_the_side_panel_and_list() {
             Arc::new(ext_preview_image::ImagePreview::new()),
         ],
         config_dir: Some(fake.config_dir()),
-        start: local(&deep),
+        start: Some(local(&deep)),
     });
     let mut harness = Harness::builder()
         .with_size(egui::vec2(1280.0, 800.0))

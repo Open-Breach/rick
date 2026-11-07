@@ -31,7 +31,7 @@ fn harness_with(
         ui: host.clone(),
         extensions: Vec::new(),
         config_dir: Some(config.to_path_buf()),
-        start: local(start),
+        start: Some(local(start)),
     });
     let mut harness = Harness::builder()
         .with_size(egui::vec2(1400.0, 800.0))
@@ -748,10 +748,9 @@ fn f2_edits_the_name_in_place_and_new_folder_inserts_an_editable_row() {
         selected_names(h) == ["made here"]
     }));
 
-    // New file too.
-    harness.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::N);
-    harness.step();
-    harness.step();
+    // New file too; it has no default shortcut since Mod+N opens a new
+    // window (QUESTIONS.md 66).
+    run(&mut harness, "core.new_file");
     assert_eq!(
         harness.state().editing(tab_id).map(|e| e.kind),
         Some(EditKind::NewFile)
