@@ -192,10 +192,24 @@ pub trait Extension: Send + Sync + 'static {
     fn register(&self, reg: &mut Registry) -> Result<(), Error>;
 }
 
+/// A static whose address tells this copy of the kernel from any other: a
+/// plugin that carries its own copy of `ext` sees another address than the
+/// host's registry records (QUESTIONS.md 81).
+static KERNEL: [u8; 1] = [1];
+
+/// The address of this copy of the kernel.
+#[inline(never)]
+pub(crate) fn kernel_id() -> usize {
+    std::ptr::from_ref(&KERNEL) as usize
+}
+
 /// Collects contributions from extensions.
-#[derive(Default)]
 pub struct Registry {
+    /// The kernel the registry was created in, as [`kernel_id`] gives it.
+    kernel: usize,
     extensions: Vec<ExtId>,
+    manifests: Vec<Manifest>,
+    failure: Option<String>,
     providers: Vec<Arc<dyn Provider>>,
     decorators: Vec<Arc<dyn Decorator>>,
     actions: Vec<Arc<dyn Action>>,
@@ -204,11 +218,45 @@ pub struct Registry {
     settings: Vec<SettingsSchema>,
 }
 
+impl Default for Registry {
+    fn default() -> Self {
+        Self {
+            kernel: kernel_id(),
+            extensions: Vec::new(),
+            manifests: Vec::new(),
+            failure: None,
+            providers: Vec::new(),
+            decorators: Vec::new(),
+            actions: Vec::new(),
+            previewers: Vec::new(),
+            search_indexes: Vec::new(),
+            settings: Vec::new(),
+        }
+    }
+}
+
 impl Registry {
     /// An empty registry.
     #[must_use]
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Whether the registry was created by this copy of the kernel: `false`
+    /// when a plugin carrying its own copy of `ext` looks at a host's
+    /// registry, or the other way round.
+    #[must_use]
+    pub fn shares_kernel(&self) -> bool {
+        self.kernel == kernel_id()
+    }
+
+    /// A registry that claims another kernel, for the tests of the check.
+    #[cfg(test)]
+    pub(crate) fn from_another_kernel() -> Self {
+        Self {
+            kernel: kernel_id().wrapping_add(1),
+            ..Self::default()
+        }
     }
 
     /// Checks the manifest and lets the extension register.
@@ -232,6 +280,7 @@ impl Registry {
         let mut staging = Registry::default();
         ext.register(&mut staging)?;
         self.extensions.push(manifest.id);
+        self.manifests.push(manifest.clone());
         self.providers.append(&mut staging.providers);
         self.decorators.append(&mut staging.decorators);
         self.actions.append(&mut staging.actions);
@@ -272,10 +321,40 @@ impl Registry {
         self.settings.push(schema);
     }
 
+    /// Takes every contribution of `other` as well: the plugin host fills a
+    /// registry of its own per plugin and the application absorbs it.
+    pub fn absorb(&mut self, other: &Registry) {
+        self.providers.extend(other.providers.iter().cloned());
+        self.decorators.extend(other.decorators.iter().cloned());
+        self.actions.extend(other.actions.iter().cloned());
+        self.previewers.extend(other.previewers.iter().cloned());
+        self.search_indexes
+            .extend(other.search_indexes.iter().cloned());
+        self.settings.extend(other.settings.iter().cloned());
+    }
+
     /// Ids of the extensions loaded so far, in load order.
     #[must_use]
     pub fn extensions(&self) -> &[ExtId] {
         &self.extensions
+    }
+
+    /// Manifests of the extensions loaded so far, in load order.
+    #[must_use]
+    pub fn manifests(&self) -> &[Manifest] {
+        &self.manifests
+    }
+
+    /// Why a plugin's registration through this registry failed, as
+    /// [`plugin::register`](crate::plugin::register) recorded it; `None`
+    /// when nothing failed.
+    #[must_use]
+    pub fn failure(&self) -> Option<&str> {
+        self.failure.as_deref()
+    }
+
+    pub(crate) fn set_failure(&mut self, reason: String) {
+        self.failure = Some(reason);
     }
 
     /// Registered providers, in registration order.
@@ -319,13 +398,15 @@ impl std::fmt::Debug for Registry {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Registry")
             .field("extensions", &self.extensions)
+            .field("manifests", &self.manifests.len())
             .field("providers", &self.providers.len())
             .field("decorators", &self.decorators.len())
             .field("actions", &self.actions.len())
             .field("previewers", &self.previewers.len())
             .field("search_indexes", &self.search_indexes.len())
             .field("settings", &self.settings.len())
-            .finish()
+            .field("failure", &self.failure)
+            .finish_non_exhaustive()
     }
 }
 
