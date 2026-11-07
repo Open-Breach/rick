@@ -83,10 +83,14 @@ jobs:
       - run: cargo test -p tests --release --test startup -- --ignored --nocapture
         env: { TMP: "${{ runner.temp }}", TEMP: "${{ runner.temp }}", TMPDIR: "${{ runner.temp }}" }
       # Screenshots of the chrome for the pull request, through wgpu on the
-      # runner's software adapter.
+      # runner's software adapter: lavapipe on Linux, Metal on macOS. Not on
+      # Windows: the dx12 software adapter (WARP) on the runner crashed the
+      # test process once in four runs (run 42314323512), and a screenshot
+      # step that fails by chance would block a release.
       - run: |
           if [ "$RUNNER_OS" = "Linux" ]; then sudo apt-get install -y mesa-vulkan-drivers; fi
           cargo test -p tests --release --features screenshots --test screenshots -- --ignored --nocapture
+        if: runner.os != 'Windows'
         shell: bash
         env: { TMP: "${{ runner.temp }}", TEMP: "${{ runner.temp }}", TMPDIR: "${{ runner.temp }}", WGPU_BACKEND: "${{ runner.os == 'Windows' && 'dx12' || runner.os == 'macOS' && 'metal' || 'vulkan' }}" }
       - uses: actions/upload-artifact@v4
