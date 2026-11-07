@@ -1,17 +1,22 @@
-//! The preview pane's content: one slot per pane holding the opened
-//! document, the texture it rendered to, and the render in flight.
+//! The documents the Preview tab and the viewer tabs show: one slot per
+//! pane holding the opened document, the frames it rendered as textures,
+//! and the render in flight.
 //!
 //! Rendering decodes pixels, so it never runs on the UI thread: the slot
 //! hands its document to a blocking task on the runtime and takes it back
 //! with the frame through a channel it polls each frame, showing the last
-//! frame or a placeholder meanwhile. Textures are cached per pane and
-//! replaced only when the page, the size or the theme changes.
+//! frame or a placeholder meanwhile. Frames are cached per page, size and
+//! theme ([`RenderKey`]), a bounded number of them, so a viewer can show the
+//! pages in view and the thumbnails of its page strip from one document;
+//! the Preview tab asks for one frame at a time and keeps the last.
 //!
 //! Text frames are laid out here, only the visible lines of them: with wrap
 //! off each line is one row and the view scrolls both ways; with wrap on
 //! lines break at the pane width (anywhere, so a monospace line's row count
 //! follows from its length and the whole file never needs laying out), the
 //! continuation rows start at the text column and the gutter marks them.
+//! Find's matches are drawn as backgrounds on the text, the current one
+//! darker.
 //!
 //! The content never sets the pane's width: frames are asked for at the
 //! pane's width and scaled down to fit, text scrolls inside a clipped area,
@@ -25,7 +30,7 @@ use egui::text::{LayoutJob, TextFormat};
 use egui::{Align2, Color32, FontId, Rect, TextStyle, TextureHandle, TextureOptions, pos2, vec2};
 use ext::{
     ControlId, ControlValue, Frame, InfoSection, PreviewControl, PreviewDoc, RenderRequest,
-    TextBlock,
+    TextBlock, TextLayer, Transport,
 };
 use model::{PaneId, TextPreview};
 use runtime::oneshot;
@@ -37,11 +42,15 @@ type Rendered = (Box<dyn PreviewDoc>, Result<Frame, Error>);
 
 /// Requests are rounded up to this many pixels so a slow resize does not
 /// re-render on every frame.
-const QUANTUM: f32 = 64.0;
+pub const QUANTUM: f32 = 64.0;
 
 /// The largest frame asked for at actual size, per axis, within what GPUs
 /// take as one texture.
-const MAX_ACTUAL: u32 = 8192;
+pub const MAX_ACTUAL: u32 = 8192;
+
+/// How many rendered frames a slot keeps: the pages and the strip
+/// thumbnails a viewer has in view, with room to scroll.
+const CACHE: usize = 32;
 
 /// A tab counts as this many columns.
 const TAB_COLUMNS: u32 = 4;
@@ -52,6 +61,30 @@ pub const KIND_TEXT: &str = "text";
 pub const KIND_IMAGE: &str = "image";
 /// Content kind of a paged document, for the pinned section setting.
 pub const KIND_PAGES: &str = "pages";
+
+/// What a frame was rendered for: the page, the requested size and the
+/// theme. The same key never renders twice while the frame is cached.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct RenderKey {
+    /// The page, zero-based.
+    pub page: usize,
+    /// The requested width in pixels.
+    pub width: u32,
+    /// The requested height in pixels.
+    pub height: u32,
+    /// Rendered for the dark theme.
+    pub dark: bool,
+}
+
+/// A rendered frame kept as a texture.
+struct Cached {
+    key: RenderKey,
+    texture: TextureHandle,
+    /// The frame's size in pixels, which is at most the requested one.
+    size: (u32, u32),
+    /// The slot's tick when it was last drawn, for eviction.
+    used: u64,
+}
 
 /// Wrapped row counts per line at one column width, with prefix sums so a
 /// scroll offset maps to a line by binary search.
@@ -101,7 +134,7 @@ impl WrapIndex {
 
 /// A text frame prepared for drawing: the block, its line ranges, the
 /// column count of each line, and the wrap index of the last width.
-struct TextView {
+pub struct TextView {
     block: TextBlock,
     lines: Vec<Range<usize>>,
     cells: Vec<u32>,
@@ -124,6 +157,20 @@ impl TextView {
             max_cells,
             wrap: None,
         }
+    }
+
+    /// The text.
+    #[must_use]
+    pub fn text(&self) -> &str {
+        &self.block.text
+    }
+
+    /// The zero-based line holding byte `offset`.
+    #[must_use]
+    pub fn line_of(&self, offset: usize) -> usize {
+        self.lines
+            .partition_point(|range| range.start <= offset)
+            .saturating_sub(1)
     }
 
     /// The wrap index for `cols` columns, built or rebuilt as needed.
@@ -166,20 +213,48 @@ pub struct DrawnLine {
     pub gutter_x: f32,
 }
 
-/// One pane's preview.
+/// How a text frame is drawn: the settings, find's matches and a line to
+/// scroll into view.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct TextOptions<'a> {
+    /// Lines break at the width.
+    pub wrap: bool,
+    /// Line numbers in the gutter.
+    pub numbers: bool,
+    /// Byte ranges drawn with a highlight background.
+    pub highlights: &'a [Range<usize>],
+    /// The index into `highlights` drawn stronger: the current match.
+    pub current: Option<usize>,
+    /// A line to bring into view this frame.
+    pub scroll_to_line: Option<usize>,
+}
+
+impl TextOptions<'_> {
+    /// The settings alone: no highlights, no scrolling.
+    #[must_use]
+    pub fn from_settings(settings: TextPreview) -> Self {
+        Self {
+            wrap: settings.wrap,
+            numbers: settings.line_numbers,
+            ..Self::default()
+        }
+    }
+}
+
+/// One pane's document and its frames.
 #[derive(Default)]
 pub struct Slot {
     entry: Option<EntryId>,
     doc: Option<Box<dyn PreviewDoc>>,
-    pending: Option<oneshot::Receiver<Rendered>>,
-    rendered_for: Option<(usize, u32, u32, bool)>,
-    texture: Option<TextureHandle>,
-    texture_size: (u32, u32),
-    text: Option<TextView>,
+    pending: Option<(RenderKey, oneshot::Receiver<Rendered>)>,
+    textures: Vec<Cached>,
+    tick: u64,
+    /// The laid-out text frame and the theme it was rendered for.
+    text: Option<(bool, TextView)>,
     /// The page shown, zero-based.
     pub page: usize,
     pages: Option<usize>,
-    has_text_layer: bool,
+    text_layer: Option<TextLayer>,
     sections: Vec<InfoSection>,
     status: Vec<String>,
     controls: Vec<PreviewControl>,
@@ -203,6 +278,7 @@ impl std::fmt::Debug for Slot {
             .field("pending", &self.pending.is_some())
             .field("page", &self.page)
             .field("pages", &self.pages)
+            .field("frames", &self.textures.len())
             .field("error", &self.error)
             .finish_non_exhaustive()
     }
@@ -218,19 +294,29 @@ impl Slot {
 
     fn take_facts(&mut self, doc: &dyn PreviewDoc) {
         self.pages = doc.pages().or(self.pages);
-        self.has_text_layer = doc.text_layer().is_some();
         self.sections = doc.sections();
         self.status = doc.status();
         self.controls = doc.controls();
+        // The layer grows as pages render; copy it when it changed.
+        let size = |layer: &TextLayer| {
+            (
+                layer.pages.len(),
+                layer.pages.iter().map(String::len).sum::<usize>(),
+            )
+        };
+        let fresh = doc.text_layer();
+        if fresh.map(size) != self.text_layer.as_ref().map(size) {
+            self.text_layer = fresh.cloned();
+        }
     }
 
     fn set_doc(&mut self, doc: Box<dyn PreviewDoc>) {
         self.pages = None;
+        self.text_layer = None;
         self.take_facts(&*doc);
         self.page = 0;
-        self.rendered_for = None;
         self.error = None;
-        self.texture = None;
+        self.textures.clear();
         self.text = None;
         self.doc = Some(doc);
     }
@@ -244,7 +330,7 @@ impl Slot {
     /// Whether a frame has been shown for the current document.
     #[must_use]
     pub fn has_frame(&self) -> bool {
-        self.texture.is_some() || self.text.is_some()
+        !self.textures.is_empty() || self.text.is_some()
     }
 
     /// Whether a document is open or on its way.
@@ -266,7 +352,7 @@ impl Slot {
         if !self.has_doc() {
             return None;
         }
-        Some(match (self.pages, self.has_text_layer) {
+        Some(match (self.pages, self.text_layer.is_some()) {
             (Some(_), _) => KIND_PAGES,
             (None, true) => KIND_TEXT,
             (None, false) => KIND_IMAGE,
@@ -301,6 +387,41 @@ impl Slot {
     #[must_use]
     pub fn controls(&self) -> &[PreviewControl] {
         &self.controls
+    }
+
+    /// The document's text, one string per page, for find; as far as the
+    /// previewer has it (a paged document may fill it page by page).
+    #[must_use]
+    pub fn text_layer(&self) -> Option<&TextLayer> {
+        self.text_layer.as_ref()
+    }
+
+    /// The laid-out text frame, when the content is text.
+    #[must_use]
+    pub fn text_view(&self) -> Option<&TextView> {
+        self.text.as_ref().map(|(_, view)| view)
+    }
+
+    /// The laid-out text frame, for drawing it.
+    pub fn text_view_mut(&mut self) -> Option<&mut TextView> {
+        self.text.as_mut().map(|(_, view)| view)
+    }
+
+    /// The pixel size of the most recently drawn frame of `page`, if one is
+    /// cached; it says the page's aspect.
+    #[must_use]
+    pub fn frame_size(&self, page: usize) -> Option<(u32, u32)> {
+        self.textures
+            .iter()
+            .filter(|c| c.key.page == page)
+            .max_by_key(|c| c.used)
+            .map(|c| c.size)
+    }
+
+    /// The document's playback control, when it is media and the document
+    /// is not out rendering.
+    pub fn transport(&mut self) -> Option<&mut dyn Transport> {
+        self.doc.as_mut()?.transport()
     }
 
     /// What went wrong, if anything.
@@ -343,7 +464,8 @@ impl Slot {
                 }
                 self.controls = doc.controls();
                 self.sections = doc.sections();
-                self.rendered_for = None;
+                self.textures.clear();
+                self.text = None;
             }
             None if self.pending.is_some() => self.queued.push((id, value)),
             None => {}
@@ -352,21 +474,28 @@ impl Slot {
 
     /// Takes a finished render back, if any.
     fn poll(&mut self, ctx: &egui::Context, pane: PaneId) {
-        let Some(rx) = self.pending.as_mut() else {
+        let Some((key, rx)) = self.pending.as_mut() else {
             return;
         };
+        let key = *key;
         match rx.try_recv() {
             Ok((mut doc, result)) => {
                 self.pending = None;
                 let queued = std::mem::take(&mut self.queued);
+                let changed = !queued.is_empty();
                 for (id, value) in queued {
                     if let Err(error) = doc.set_control(id, value) {
                         tracing::warn!(%error, control = id.0, "control not set");
                     }
-                    self.rendered_for = None;
                 }
                 self.take_facts(&*doc);
                 self.doc = Some(doc);
+                if changed {
+                    // The frame is of the document before the change.
+                    self.textures.clear();
+                    self.text = None;
+                    return;
+                }
                 match result {
                     Ok(Frame::Rgba {
                         width,
@@ -377,18 +506,18 @@ impl Slot {
                             [width as usize, height as usize],
                             &data,
                         );
-                        self.texture = Some(ctx.load_texture(
-                            format!("preview-{}", pane.0),
+                        let texture = ctx.load_texture(
+                            format!("preview-{}-{}-{}", pane.0, key.page, key.width),
                             image,
                             TextureOptions::LINEAR,
-                        ));
-                        self.texture_size = (width, height);
+                        );
+                        self.remember(key, texture, (width, height));
                         self.text = None;
                         self.error = None;
                     }
                     Ok(Frame::Text(block)) => {
-                        self.text = Some(TextView::new(block));
-                        self.texture = None;
+                        self.text = Some((key.dark, TextView::new(block)));
+                        self.textures.clear();
                         self.error = None;
                     }
                     Ok(Frame::External(_)) => {
@@ -407,34 +536,82 @@ impl Slot {
         }
     }
 
-    /// Starts a render for `req` on the runtime's blocking pool when the
-    /// shown frame is not for this page, size or theme.
-    fn request(&mut self, ctx: &egui::Context, req: RenderRequest) {
-        let key = (self.page, req.width, req.height, req.dark);
-        if self.pending.is_some() || self.rendered_for == Some(key) {
+    /// Keeps a frame, dropping the least recently drawn one past the cap.
+    fn remember(&mut self, key: RenderKey, texture: TextureHandle, size: (u32, u32)) {
+        self.textures.retain(|c| c.key != key);
+        if self.textures.len() >= CACHE
+            && let Some(oldest) = self
+                .textures
+                .iter()
+                .enumerate()
+                .min_by_key(|(_, c)| c.used)
+                .map(|(i, _)| i)
+        {
+            self.textures.remove(oldest);
+        }
+        self.tick += 1;
+        self.textures.push(Cached {
+            key,
+            texture,
+            size,
+            used: self.tick,
+        });
+    }
+
+    /// Starts a render for `key` on the runtime's blocking pool, unless a
+    /// render is in flight, the frame is cached, or the content is text
+    /// already laid out for the theme. `scale` is the display's.
+    pub fn request(&mut self, ctx: &egui::Context, key: RenderKey, scale: f32) {
+        if self.pending.is_some() || self.textures.iter().any(|c| c.key == key) {
             return;
         }
         // Text lays itself out; one render per document and theme is enough.
-        if self.text.is_some()
-            && self
-                .rendered_for
-                .is_some_and(|(_, _, _, dark)| dark == req.dark)
+        if self
+            .text
+            .as_ref()
+            .is_some_and(|(dark, _)| *dark == key.dark)
         {
-            self.rendered_for = Some(key);
             return;
         }
         let Some(mut doc) = self.doc.take() else {
             return;
         };
-        let page = self.page;
+        let req = RenderRequest {
+            width: key.width,
+            height: key.height,
+            scale,
+            dark: key.dark,
+        };
         let (tx, rx) = oneshot::channel();
         runtime::handle().spawn_blocking(move || {
-            let result = doc.render(page, req);
+            let result = doc.render(key.page, req);
             let _ = tx.send((doc, result));
         });
-        self.pending = Some(rx);
-        self.rendered_for = Some(key);
+        self.pending = Some((key, rx));
         ctx.request_repaint_after(Duration::from_millis(16));
+    }
+
+    /// The cached frame for `key`, marked as drawn.
+    pub fn texture(&mut self, key: RenderKey) -> Option<(TextureHandle, (u32, u32))> {
+        self.tick += 1;
+        let tick = self.tick;
+        let cached = self.textures.iter_mut().find(|c| c.key == key)?;
+        cached.used = tick;
+        Some((cached.texture.clone(), cached.size))
+    }
+
+    /// The most recently drawn frame of `page` at any size, to show while
+    /// the right size renders.
+    pub fn any_texture(&mut self, page: usize) -> Option<(TextureHandle, (u32, u32))> {
+        self.tick += 1;
+        let tick = self.tick;
+        let cached = self
+            .textures
+            .iter_mut()
+            .filter(|c| c.key.page == page)
+            .max_by_key(|c| c.used)?;
+        cached.used = tick;
+        Some((cached.texture.clone(), cached.size))
     }
 }
 
@@ -510,6 +687,21 @@ impl Previews {
         slot
     }
 
+    /// [`sync`](Self::sync), with the slot open for the viewer's drawing.
+    pub fn sync_mut(
+        &mut self,
+        ctx: &egui::Context,
+        pane: PaneId,
+        target: Option<EntryId>,
+    ) -> &mut Slot {
+        let slot = self.slot(pane);
+        if slot.entry != target {
+            slot.reset(target);
+        }
+        slot.poll(ctx, pane);
+        slot
+    }
+
     /// Draws `pane`'s content into the space the caller allocated: the
     /// frame fitted to it, text scrolling inside it, or a placeholder.
     pub fn content(
@@ -523,27 +715,25 @@ impl Previews {
         let ctx = ui.ctx().clone();
         let body = ui.available_rect_before_wrap();
         let ppp = ctx.pixels_per_point();
-        let quantise =
-            |points: f32| ((points * ppp / QUANTUM).ceil() * QUANTUM).max(QUANTUM) as u32;
         let (width, height) = if slot.actual_size && slot.is_raster() {
             (MAX_ACTUAL, MAX_ACTUAL)
         } else {
-            (quantise(body.width()), quantise(body.height()))
+            (quantise(body.width(), ppp), quantise(body.height(), ppp))
         };
-        let req = RenderRequest {
+        let key = RenderKey {
+            page: slot.page,
             width,
             height,
-            scale: ppp,
             dark: ui.visuals().dark_mode,
         };
-        slot.request(&ctx, req);
+        slot.request(&ctx, key, ppp);
+        let shown = slot.texture(key).or_else(|| slot.any_texture(slot.page));
 
         slot.drawn.clear();
         slot.h_scroll = false;
         slot.frame_rect = None;
         ui.set_clip_rect(body.intersect(ui.clip_rect()));
-        if let Some(texture) = &slot.texture {
-            let (w, h) = slot.texture_size;
+        if let Some((texture, (w, h))) = shown {
             let native = vec2(w as f32 / ppp, h as f32 / ppp);
             if slot.actual_size && slot.is_raster() {
                 // Actual pixels: pan by dragging the picture or with the
@@ -553,7 +743,7 @@ impl Previews {
                     .scroll_source(egui::scroll_area::ScrollSource::ALL)
                     .on_drag_cursor(egui::CursorIcon::Grabbing)
                     .show(ui, |ui| {
-                        ui.add(egui::Image::from_texture(texture).fit_to_exact_size(native))
+                        ui.add(egui::Image::from_texture(&texture).fit_to_exact_size(native))
                     });
                 if output.inner.hovered() && !output.inner.dragged() {
                     ctx.set_cursor_icon(egui::CursorIcon::Grab);
@@ -569,13 +759,12 @@ impl Previews {
                 let rect = Rect::from_center_size(body.center(), size);
                 let response = ui.put(
                     rect,
-                    egui::Image::from_texture(texture).fit_to_exact_size(size),
+                    egui::Image::from_texture(&texture).fit_to_exact_size(size),
                 );
                 slot.frame_rect = Some(response.rect);
             }
-        } else if let Some(view) = slot.text.as_mut() {
-            let (drawn, h_scroll) =
-                draw_text(ui, view, text_settings.wrap, text_settings.line_numbers);
+        } else if let Some((_, view)) = slot.text.as_mut() {
+            let (drawn, h_scroll) = draw_text(ui, view, TextOptions::from_settings(text_settings));
             slot.drawn = drawn;
             slot.h_scroll = h_scroll;
             slot.frame_rect = Some(body);
@@ -602,6 +791,12 @@ impl Previews {
     }
 }
 
+/// Points to pixels, rounded up to the [`QUANTUM`].
+#[must_use]
+pub fn quantise(points: f32, ppp: f32) -> u32 {
+    ((points * ppp / QUANTUM).ceil() * QUANTUM).max(QUANTUM) as u32
+}
+
 /// The gutter's width in characters for `lines` lines: at least two digits
 /// and a space.
 fn gutter_chars(lines: usize) -> usize {
@@ -616,6 +811,9 @@ struct Metrics {
     gutter_w: f32,
     text_color: Color32,
     gutter_color: Color32,
+    /// Backgrounds of a match and of the current match.
+    highlight: Color32,
+    current: Color32,
 }
 
 impl Metrics {
@@ -623,6 +821,7 @@ impl Metrics {
         let font = TextStyle::Monospace.resolve(ui.style());
         let (row_h, char_w) = ui.fonts_mut(|f| (f.row_height(&font), f.glyph_width(&font, '0')));
         let char_w = char_w.max(1.0);
+        let selection = ui.visuals().selection.bg_fill;
         Self {
             gutter_w: if numbers {
                 gutter_chars(lines) as f32 * char_w
@@ -634,6 +833,8 @@ impl Metrics {
             char_w,
             text_color: ui.visuals().text_color(),
             gutter_color: ui.visuals().weak_text_color(),
+            highlight: selection.linear_multiply(0.45),
+            current: selection,
         }
     }
 
@@ -651,18 +852,23 @@ impl Metrics {
 
 /// Draws a text frame into the Ui's available rect, only the visible lines
 /// of it. Returns what was drawn and whether a horizontal scrollbar showed.
-fn draw_text(
+pub fn draw_text(
     ui: &mut egui::Ui,
     view: &mut TextView,
-    wrap: bool,
-    numbers: bool,
+    options: TextOptions<'_>,
 ) -> (Vec<DrawnLine>, bool) {
-    let metrics = Metrics::new(ui, view.lines.len(), numbers);
-    if wrap {
-        (draw_wrapped(ui, view, &metrics, numbers), false)
+    let metrics = Metrics::new(ui, view.lines.len(), options.numbers);
+    if options.wrap {
+        (draw_wrapped(ui, view, &metrics, &options), false)
     } else {
-        draw_unwrapped(ui, view, &metrics, numbers)
+        draw_unwrapped(ui, view, &metrics, &options)
     }
+}
+
+/// The offset that brings the row at `row_y` into the upper third of a
+/// viewport `height` high.
+fn offset_for(row_y: f32, height: f32) -> f32 {
+    (row_y - height / 3.0).max(0.0)
 }
 
 /// Wrap on: lines break anywhere at the text width, the wrap index says
@@ -674,73 +880,70 @@ fn draw_wrapped(
     ui: &mut egui::Ui,
     view: &mut TextView,
     m: &Metrics,
-    numbers: bool,
+    options: &TextOptions<'_>,
 ) -> Vec<DrawnLine> {
     let avail = ui.available_rect_before_wrap();
     let text_w = (avail.width() - m.gutter_w).max(m.char_w);
     let cols = ((text_w / m.char_w).floor() as u32).max(1);
     let total_h = view.wrap_index(cols).total() as f32 * m.row_h;
+    let mut area = egui::ScrollArea::vertical().auto_shrink([false, false]);
+    if let Some(line) = options.scroll_to_line {
+        let row = view.wrap_index(cols).starts.get(line).copied().unwrap_or(0);
+        area = area.vertical_scroll_offset(offset_for(row as f32 * m.row_h, avail.height()));
+    }
     let mut drawn = Vec::new();
-    egui::ScrollArea::vertical()
-        .auto_shrink([false, false])
-        .show_viewport(ui, |ui, viewport| {
-            let width = ui.available_width();
-            let (rect, _) = ui.allocate_exact_size(
-                vec2(width, total_h.max(viewport.height())),
-                egui::Sense::hover(),
-            );
-            let painter = ui.painter_at(ui.clip_rect());
-            let first_row = (viewport.min.y / m.row_h).floor().max(0.0) as u32;
-            let mut line = view.wrap_index(cols).line_at(first_row);
-            let mut fixes = Vec::new();
-            while line < view.lines.len() {
-                let start_row = view.wrap_index(cols).starts[line];
-                let y = rect.top() + start_row as f32 * m.row_h;
-                if y > rect.top() + viewport.max.y {
-                    break;
-                }
-                let mut job = LayoutJob::default();
-                job.wrap.max_width = text_w;
-                job.wrap.break_anywhere = true;
-                append_line(
-                    &mut job,
-                    &view.block,
-                    &view.lines[line],
-                    &m.font,
-                    m.text_color,
-                );
-                let galley = ui.fonts_mut(|f| f.layout_job(job));
-                let rows = galley.rows.len().max(1);
-                let x = rect.left() + m.gutter_w;
-                painter.galley(pos2(x, y), galley.clone(), m.text_color);
-                if numbers {
-                    m.gutter(&painter, rect.left(), y, &(line + 1).to_string());
-                    for row in 1..rows {
-                        let row_y = y + row as f32 * m.row_h;
-                        m.gutter(&painter, rect.left(), row_y, icons::CONTINUATION);
-                    }
-                }
-                drawn.push(DrawnLine {
-                    line,
-                    rows,
-                    width: galley.rect.width(),
-                    x,
-                    gutter_x: rect.left(),
-                });
-                if view.wrap_index(cols).rows[line] as usize != rows {
-                    fixes.push((line, rows as u32));
-                }
-                line += 1;
+    area.show_viewport(ui, |ui, viewport| {
+        let width = ui.available_width();
+        let (rect, _) = ui.allocate_exact_size(
+            vec2(width, total_h.max(viewport.height())),
+            egui::Sense::hover(),
+        );
+        let painter = ui.painter_at(ui.clip_rect());
+        let first_row = (viewport.min.y / m.row_h).floor().max(0.0) as u32;
+        let mut line = view.wrap_index(cols).line_at(first_row);
+        let mut fixes = Vec::new();
+        while line < view.lines.len() {
+            let start_row = view.wrap_index(cols).starts[line];
+            let y = rect.top() + start_row as f32 * m.row_h;
+            if y > rect.top() + viewport.max.y {
+                break;
             }
-            if !fixes.is_empty() {
-                let index = view.wrap_index(cols);
-                for (line, rows) in fixes {
-                    index.rows[line] = rows;
+            let mut job = LayoutJob::default();
+            job.wrap.max_width = text_w;
+            job.wrap.break_anywhere = true;
+            append_line(&mut job, &view.block, &view.lines[line], m, options);
+            let galley = ui.fonts_mut(|f| f.layout_job(job));
+            let rows = galley.rows.len().max(1);
+            let x = rect.left() + m.gutter_w;
+            painter.galley(pos2(x, y), galley.clone(), m.text_color);
+            if options.numbers {
+                m.gutter(&painter, rect.left(), y, &(line + 1).to_string());
+                for row in 1..rows {
+                    let row_y = y + row as f32 * m.row_h;
+                    m.gutter(&painter, rect.left(), row_y, icons::CONTINUATION);
                 }
-                index.dirty = true;
-                ui.ctx().request_repaint();
             }
-        });
+            drawn.push(DrawnLine {
+                line,
+                rows,
+                width: galley.rect.width(),
+                x,
+                gutter_x: rect.left(),
+            });
+            if view.wrap_index(cols).rows[line] as usize != rows {
+                fixes.push((line, rows as u32));
+            }
+            line += 1;
+        }
+        if !fixes.is_empty() {
+            let index = view.wrap_index(cols);
+            for (line, rows) in fixes {
+                index.rows[line] = rows;
+            }
+            index.dirty = true;
+            ui.ctx().request_repaint();
+        }
+    });
     drawn
 }
 
@@ -750,96 +953,118 @@ fn draw_unwrapped(
     ui: &mut egui::Ui,
     view: &mut TextView,
     m: &Metrics,
-    numbers: bool,
+    options: &TextOptions<'_>,
 ) -> (Vec<DrawnLine>, bool) {
+    let avail_h = ui.available_height();
     let total_h = view.lines.len() as f32 * m.row_h;
     let content_w = m.gutter_w + (view.max_cells as f32 + 1.0) * m.char_w;
+    let mut area = egui::ScrollArea::both().auto_shrink([false, false]);
+    if let Some(line) = options.scroll_to_line {
+        area = area.vertical_scroll_offset(offset_for(line as f32 * m.row_h, avail_h));
+    }
     let mut drawn = Vec::new();
-    let output = egui::ScrollArea::both()
-        .auto_shrink([false, false])
-        .show_viewport(ui, |ui, viewport| {
-            let (rect, _) = ui.allocate_exact_size(
-                vec2(
-                    content_w.max(viewport.width()),
-                    total_h.max(viewport.height()),
-                ),
-                egui::Sense::hover(),
-            );
-            let painter = ui.painter_at(ui.clip_rect());
-            let first = (viewport.min.y / m.row_h).floor().max(0.0) as usize;
-            let last = ((viewport.max.y / m.row_h).ceil().max(0.0) as usize).min(view.lines.len());
-            for line in first..last {
-                let y = rect.top() + line as f32 * m.row_h;
-                let mut job = LayoutJob::default();
-                job.wrap.max_width = f32::INFINITY;
-                append_line(
-                    &mut job,
-                    &view.block,
-                    &view.lines[line],
-                    &m.font,
-                    m.text_color,
-                );
-                let galley = ui.fonts_mut(|f| f.layout_job(job));
-                let x = rect.left() + m.gutter_w;
-                painter.galley(pos2(x, y), galley.clone(), m.text_color);
-                if numbers {
-                    m.gutter(&painter, rect.left(), y, &(line + 1).to_string());
-                }
-                drawn.push(DrawnLine {
-                    line,
-                    rows: galley.rows.len().max(1),
-                    width: galley.rect.width(),
-                    x,
-                    gutter_x: rect.left(),
-                });
+    let output = area.show_viewport(ui, |ui, viewport| {
+        let (rect, _) = ui.allocate_exact_size(
+            vec2(
+                content_w.max(viewport.width()),
+                total_h.max(viewport.height()),
+            ),
+            egui::Sense::hover(),
+        );
+        let painter = ui.painter_at(ui.clip_rect());
+        let first = (viewport.min.y / m.row_h).floor().max(0.0) as usize;
+        let last = ((viewport.max.y / m.row_h).ceil().max(0.0) as usize).min(view.lines.len());
+        for line in first..last {
+            let y = rect.top() + line as f32 * m.row_h;
+            let mut job = LayoutJob::default();
+            job.wrap.max_width = f32::INFINITY;
+            append_line(&mut job, &view.block, &view.lines[line], m, options);
+            let galley = ui.fonts_mut(|f| f.layout_job(job));
+            let x = rect.left() + m.gutter_w;
+            painter.galley(pos2(x, y), galley.clone(), m.text_color);
+            if options.numbers {
+                m.gutter(&painter, rect.left(), y, &(line + 1).to_string());
             }
-        });
+            drawn.push(DrawnLine {
+                line,
+                rows: galley.rows.len().max(1),
+                width: galley.rect.width(),
+                x,
+                gutter_x: rect.left(),
+            });
+        }
+    });
     let h_scroll = output.content_size.x > output.inner_rect.width() + 0.5;
     (drawn, h_scroll)
 }
 
-fn format(font: &FontId, color: Color32, italics: bool) -> TextFormat {
+fn format(font: &FontId, color: Color32, italics: bool, background: Color32) -> TextFormat {
     TextFormat {
         font_id: font.clone(),
         color,
         italics,
+        background,
         ..TextFormat::default()
     }
 }
 
-/// Appends one line of the block with its spans; gaps take the default
-/// colour.
+/// Appends one line of the block with its spans and the highlights that
+/// touch it; gaps take the default colour. The text is cut at every span
+/// and highlight edge so each run has one colour and one background.
 fn append_line(
     job: &mut LayoutJob,
     block: &TextBlock,
     line: &Range<usize>,
-    font: &FontId,
-    default: Color32,
+    m: &Metrics,
+    options: &TextOptions<'_>,
 ) {
     let text = &block.text;
-    let mut cursor = line.start;
     // Spans are sorted; find the first that may touch this line.
-    let first = block.spans.partition_point(|s| s.end <= line.start);
-    for span in &block.spans[first..] {
-        if span.start >= line.end {
-            break;
-        }
-        let start = span.start.max(line.start);
-        let end = span.end.min(line.end);
-        if start > cursor {
-            job.append(&text[cursor..start], 0.0, format(font, default, false));
-        }
-        let color = Color32::from_rgba_unmultiplied(
-            span.color[0],
-            span.color[1],
-            span.color[2],
-            span.color[3],
-        );
-        job.append(&text[start..end], 0.0, format(font, color, span.italic));
-        cursor = end;
+    let first_span = block.spans.partition_point(|s| s.end <= line.start);
+    let spans = block.spans[first_span..]
+        .iter()
+        .take_while(|s| s.start < line.end);
+    let highlights = options
+        .highlights
+        .iter()
+        .enumerate()
+        .filter(|(_, h)| h.start < line.end && h.end > line.start);
+    let mut edges: Vec<usize> = vec![line.start, line.end];
+    for span in spans.clone() {
+        edges.push(span.start.clamp(line.start, line.end));
+        edges.push(span.end.clamp(line.start, line.end));
     }
-    if cursor < line.end {
-        job.append(&text[cursor..line.end], 0.0, format(font, default, false));
+    for (_, h) in highlights.clone() {
+        edges.push(h.start.clamp(line.start, line.end));
+        edges.push(h.end.clamp(line.start, line.end));
+    }
+    edges.sort_unstable();
+    edges.dedup();
+    for pair in edges.windows(2) {
+        let (start, end) = (pair[0], pair[1]);
+        if start >= end || !text.is_char_boundary(start) || !text.is_char_boundary(end) {
+            continue;
+        }
+        let span = spans.clone().find(|s| s.start <= start && end <= s.end);
+        let (color, italic) = span.map_or((m.text_color, false), |s| {
+            (
+                Color32::from_rgba_unmultiplied(s.color[0], s.color[1], s.color[2], s.color[3]),
+                s.italic,
+            )
+        });
+        let highlight = highlights
+            .clone()
+            .find(|(_, h)| h.start <= start && end <= h.end);
+        let background = match highlight {
+            Some((i, _)) if options.current == Some(i) => m.current,
+            Some(_) => m.highlight,
+            None => Color32::TRANSPARENT,
+        };
+        job.append(
+            &text[start..end],
+            0.0,
+            format(&m.font, color, italic, background),
+        );
     }
 }
 
@@ -855,6 +1080,14 @@ mod tests {
         assert_eq!((empty.len(), empty[0].clone()), (1, 0..0));
         let one = line_ranges("x");
         assert_eq!((one.len(), one[0].clone()), (1, 0..1));
+        let view = TextView::new(TextBlock {
+            text: "ab\ncd\nef".to_owned(),
+            language: None,
+            spans: Vec::new(),
+        });
+        assert_eq!(view.line_of(0), 0);
+        assert_eq!(view.line_of(4), 1);
+        assert_eq!(view.line_of(7), 2);
     }
 
     #[test]
@@ -877,5 +1110,60 @@ mod tests {
         assert_eq!(index.line_at(5), 3);
         assert_eq!(gutter_chars(7), 3);
         assert_eq!(gutter_chars(200_000), 7);
+    }
+
+    #[test]
+    fn highlights_cut_a_line_into_runs_with_backgrounds() {
+        let block = TextBlock {
+            text: "one two three".to_owned(),
+            language: None,
+            spans: vec![ext::TextSpan {
+                start: 4,
+                end: 7,
+                color: [255, 0, 0, 255],
+                bold: false,
+                italic: false,
+            }],
+        };
+        let m = Metrics {
+            font: FontId::monospace(12.0),
+            row_h: 12.0,
+            char_w: 6.0,
+            gutter_w: 0.0,
+            text_color: Color32::WHITE,
+            gutter_color: Color32::GRAY,
+            highlight: Color32::DARK_BLUE,
+            current: Color32::BLUE,
+        };
+        let highlights = [2..5, 8..13];
+        let options = TextOptions {
+            highlights: &highlights,
+            current: Some(1),
+            ..TextOptions::default()
+        };
+        let mut job = LayoutJob::default();
+        append_line(&mut job, &block, &(0..13), &m, &options);
+        let runs: Vec<(String, Color32, Color32)> = job
+            .sections
+            .iter()
+            .map(|s| {
+                (
+                    job.text[s.byte_range.start.0..s.byte_range.end.0].to_owned(),
+                    s.format.color,
+                    s.format.background,
+                )
+            })
+            .collect();
+        assert_eq!(
+            runs,
+            [
+                ("on".to_owned(), Color32::WHITE, Color32::TRANSPARENT),
+                ("e ".to_owned(), Color32::WHITE, Color32::DARK_BLUE),
+                ("t".to_owned(), Color32::RED, Color32::DARK_BLUE),
+                ("wo".to_owned(), Color32::RED, Color32::TRANSPARENT),
+                (" ".to_owned(), Color32::WHITE, Color32::TRANSPARENT),
+                ("three".to_owned(), Color32::WHITE, Color32::BLUE),
+            ]
+        );
     }
 }

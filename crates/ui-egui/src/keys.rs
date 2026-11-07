@@ -176,6 +176,41 @@ pub enum Intent {
     ExtendHome,
     /// Extend the selection to the last row.
     ExtendEnd,
+    /// Viewer: the previous file of the folder.
+    ViewerPrev,
+    /// Viewer: the next file of the folder.
+    ViewerNext,
+    /// Viewer: the previous page of a paged document, else the previous
+    /// file.
+    ViewerPageUp,
+    /// Viewer: the next page of a paged document, else the next file.
+    ViewerPageDown,
+    /// Viewer: the first file of the folder.
+    ViewerFirst,
+    /// Viewer: the last file of the folder.
+    ViewerLast,
+    /// Viewer: zoom to fit.
+    ViewerFit,
+    /// Viewer: actual size.
+    ViewerActual,
+    /// Viewer: fit the width.
+    ViewerFitWidth,
+    /// Viewer: zoom in.
+    ViewerZoomIn,
+    /// Viewer: zoom out.
+    ViewerZoomOut,
+    /// Viewer: play or pause media.
+    ViewerPlay,
+    /// Viewer: rewind media.
+    ViewerRewind,
+    /// Viewer: pause media.
+    ViewerPause,
+    /// Viewer: fast-forward media.
+    ViewerForward,
+    /// Viewer: find in the text layer.
+    ViewerFind,
+    /// Viewer: show or hide the info panel.
+    ViewerInfo,
 }
 
 /// One row of the UI's part of the shortcut table.
@@ -216,6 +251,9 @@ const TABS: &str = "Tabs and panes";
 const VIEW: &str = "View";
 const WINDOW: &str = "Window";
 const LIST: &str = "List";
+/// The viewer's own table: bound only while a viewer tab is active, where
+/// its rows shadow the list's and the view's.
+pub const VIEWER: &str = "Viewer";
 
 /// Every intent the UI handles itself, with the spec's default bindings.
 /// File operations are not here: they come from the action registry.
@@ -716,6 +754,119 @@ pub const UI_INTENTS: &[IntentSpec] = &[
         LIST,
         &["Shift+End"],
     ),
+    spec(
+        Intent::ViewerPrev,
+        "viewer.prev",
+        "Previous item",
+        VIEWER,
+        &["Left"],
+    ),
+    spec(
+        Intent::ViewerNext,
+        "viewer.next",
+        "Next item",
+        VIEWER,
+        &["Right"],
+    ),
+    spec(
+        Intent::ViewerPageUp,
+        "viewer.page_up",
+        "Previous page or item",
+        VIEWER,
+        &["PageUp"],
+    ),
+    spec(
+        Intent::ViewerPageDown,
+        "viewer.page_down",
+        "Next page or item",
+        VIEWER,
+        &["PageDown"],
+    ),
+    spec(
+        Intent::ViewerFirst,
+        "viewer.first",
+        "First item",
+        VIEWER,
+        &["Home"],
+    ),
+    spec(
+        Intent::ViewerLast,
+        "viewer.last",
+        "Last item",
+        VIEWER,
+        &["End"],
+    ),
+    spec(
+        Intent::ViewerFit,
+        "viewer.fit",
+        "Zoom to fit",
+        VIEWER,
+        &["Mod+0"],
+    ),
+    spec(
+        Intent::ViewerActual,
+        "viewer.actual",
+        "Actual size",
+        VIEWER,
+        &["Mod+1"],
+    ),
+    spec(
+        Intent::ViewerFitWidth,
+        "viewer.fit_width",
+        "Fit width",
+        VIEWER,
+        &["Mod+2"],
+    ),
+    spec(
+        Intent::ViewerZoomIn,
+        "viewer.zoom_in",
+        "Zoom in",
+        VIEWER,
+        &["Mod+Plus"],
+    ),
+    spec(
+        Intent::ViewerZoomOut,
+        "viewer.zoom_out",
+        "Zoom out",
+        VIEWER,
+        &["Mod+Minus"],
+    ),
+    spec(
+        Intent::ViewerPlay,
+        "viewer.play",
+        "Play / pause",
+        VIEWER,
+        &["Space"],
+    ),
+    spec(
+        Intent::ViewerRewind,
+        "viewer.rewind",
+        "Rewind",
+        VIEWER,
+        &["J"],
+    ),
+    spec(Intent::ViewerPause, "viewer.pause", "Pause", VIEWER, &["K"]),
+    spec(
+        Intent::ViewerForward,
+        "viewer.forward",
+        "Fast-forward",
+        VIEWER,
+        &["L"],
+    ),
+    spec(
+        Intent::ViewerFind,
+        "viewer.find",
+        "Find in text layer",
+        VIEWER,
+        &["Mod+F"],
+    ),
+    spec(
+        Intent::ViewerInfo,
+        "viewer.info",
+        "Toggle info panel",
+        VIEWER,
+        &["I"],
+    ),
 ];
 
 impl Intent {
@@ -757,6 +908,22 @@ pub struct Binding {
     pub shortcut: Shortcut,
     /// What they do.
     pub intent: Intent,
+    /// A row of the Viewer table: live only while a viewer tab is active,
+    /// where it wins over any other row of the same keys.
+    pub viewer: bool,
+}
+
+/// Whether an intent is a row of the Viewer table.
+#[must_use]
+pub fn is_viewer(intent: Intent) -> bool {
+    intent.spec().is_some_and(|s| s.group == VIEWER)
+}
+
+/// Whether an intent is about the file list's rows, which a viewer tab has
+/// none of: the List table and Open.
+#[must_use]
+pub fn is_list(intent: Intent) -> bool {
+    intent == Intent::Open || intent.spec().is_some_and(|s| s.group == LIST)
 }
 
 /// The live shortcut table: defaults with the user's rebindings applied.
@@ -799,9 +966,11 @@ impl KeyMap {
         let bindings = defaults
             .into_iter()
             .flat_map(|(intent, shortcuts)| {
-                shortcuts
-                    .into_iter()
-                    .map(move |shortcut| Binding { shortcut, intent })
+                shortcuts.into_iter().map(move |shortcut| Binding {
+                    shortcut,
+                    intent,
+                    viewer: is_viewer(intent),
+                })
             })
             .collect();
         Self { bindings }
@@ -827,38 +996,67 @@ impl KeyMap {
         self.shortcuts_for(intent).next().map(|s| s.text())
     }
 
-    /// What this shortcut does, if anything.
+    /// What this shortcut does in an explorer, if anything.
     #[must_use]
     pub fn lookup(&self, shortcut: Shortcut) -> Option<Intent> {
-        self.bindings
-            .iter()
-            .find(|b| b.shortcut == shortcut)
-            .map(|b| b.intent)
+        self.lookup_in(shortcut, false)
+    }
+
+    /// What this shortcut does, in a viewer tab or an explorer: in a
+    /// viewer the Viewer table is tried first and the list's rows are not
+    /// bound; in an explorer the Viewer table is not.
+    #[must_use]
+    pub fn lookup_in(&self, shortcut: Shortcut, in_viewer: bool) -> Option<Intent> {
+        if in_viewer {
+            self.bindings
+                .iter()
+                .filter(|b| b.viewer)
+                .chain(
+                    self.bindings
+                        .iter()
+                        .filter(|b| !b.viewer && !is_list(b.intent)),
+                )
+                .find(|b| b.shortcut == shortcut)
+                .map(|b| b.intent)
+        } else {
+            self.bindings
+                .iter()
+                .find(|b| !b.viewer && b.shortcut == shortcut)
+                .map(|b| b.intent)
+        }
     }
 
     /// What a key press does: the logical key is tried first, then the
     /// physical one, so `Mod+Shift+1` works where Shift+1 types `!`.
+    /// `in_viewer` says whether a viewer tab takes the keys.
     #[must_use]
     pub fn match_key(
         &self,
         modifiers: egui::Modifiers,
         key: egui::Key,
         physical: Option<egui::Key>,
+        in_viewer: bool,
     ) -> Option<Intent> {
         let mods = from_egui_modifiers(modifiers);
         from_egui_key(key)
             .and_then(|key| {
-                self.lookup(Shortcut {
-                    modifiers: mods,
-                    key,
-                })
+                self.lookup_in(
+                    Shortcut {
+                        modifiers: mods,
+                        key,
+                    },
+                    in_viewer,
+                )
             })
             .or_else(|| {
                 physical.and_then(from_egui_key).and_then(|key| {
-                    self.lookup(Shortcut {
-                        modifiers: mods,
-                        key,
-                    })
+                    self.lookup_in(
+                        Shortcut {
+                            modifiers: mods,
+                            key,
+                        },
+                        in_viewer,
+                    )
                 })
             })
     }
@@ -1059,20 +1257,58 @@ mod tests {
         let map = KeyMap::new(&Registry::new(), &Settings::default());
         let mods = egui::Modifiers::COMMAND.plus(egui::Modifiers::SHIFT);
         assert_eq!(
-            map.match_key(mods, egui::Key::Exclamationmark, Some(egui::Key::Num1)),
+            map.match_key(
+                mods,
+                egui::Key::Exclamationmark,
+                Some(egui::Key::Num1),
+                false
+            ),
             Some(Intent::ViewList)
         );
         assert_eq!(
-            map.match_key(mods, egui::Key::Pipe, Some(egui::Key::Backslash)),
+            map.match_key(mods, egui::Key::Pipe, Some(egui::Key::Backslash), false),
             Some(Intent::SplitDown)
         );
         assert_eq!(
-            map.match_key(egui::Modifiers::NONE, egui::Key::F5, None),
+            map.match_key(egui::Modifiers::NONE, egui::Key::F5, None, false),
             Some(Intent::Refresh)
         );
         assert_eq!(
-            map.match_key(egui::Modifiers::ALT, egui::Key::F5, None),
+            map.match_key(egui::Modifiers::ALT, egui::Key::F5, None, false),
             None
+        );
+    }
+
+    #[test]
+    fn the_viewer_table_is_live_in_a_viewer_only_and_shadows_the_list() {
+        let map = KeyMap::new(&Registry::new(), &Settings::default());
+        let key = |text: &str| -> Shortcut { text.parse().unwrap_or_else(|e| panic!("{e}")) };
+        // In an explorer the viewer's rows are not bound.
+        assert_eq!(map.lookup(key("Mod+F")), Some(Intent::Filter));
+        assert_eq!(map.lookup(key("Mod+1")), Some(Intent::Tab(1)));
+        assert_eq!(map.lookup(key("Left")), None);
+        assert_eq!(map.lookup(key("J")), None);
+        // In a viewer they win, the list's rows are off, the rest stays.
+        assert_eq!(map.lookup_in(key("Mod+F"), true), Some(Intent::ViewerFind));
+        assert_eq!(
+            map.lookup_in(key("Mod+1"), true),
+            Some(Intent::ViewerActual)
+        );
+        assert_eq!(map.lookup_in(key("Left"), true), Some(Intent::ViewerPrev));
+        assert_eq!(
+            map.lookup_in(key("PageDown"), true),
+            Some(Intent::ViewerPageDown)
+        );
+        assert_eq!(map.lookup_in(key("Space"), true), Some(Intent::ViewerPlay));
+        assert_eq!(map.lookup_in(key("J"), true), Some(Intent::ViewerRewind));
+        assert_eq!(map.lookup_in(key("Up"), true), None);
+        assert_eq!(map.lookup_in(key("Enter"), true), None);
+        assert_eq!(map.lookup_in(key("Escape"), true), Some(Intent::Escape));
+        assert_eq!(map.lookup_in(key("F11"), true), Some(Intent::Fullscreen));
+        assert_eq!(map.lookup_in(key("Mod+W"), true), Some(Intent::CloseTab));
+        assert_eq!(
+            map.match_key(egui::Modifiers::NONE, egui::Key::I, None, true),
+            Some(Intent::ViewerInfo)
         );
     }
 }
