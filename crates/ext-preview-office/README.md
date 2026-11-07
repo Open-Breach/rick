@@ -6,7 +6,7 @@ or slide count), looks for LibreOffice (`RICK_SOFFICE`, the `PATH`, then
 the install directories of the three platforms) and, when it is there,
 converts the file to PDF with `soffice --headless` inside the preview job,
 cancellable and with a timeout, into a cache under the temporary directory
-keyed by path, size and modification time (QUESTIONS.md 87); the pages then
+keyed by path, size and modification time (QUESTIONS.md 95); the pages then
 render through pdfium like the PDF previewer's. Without LibreOffice the
 preview shows the metadata and a hint to install it; LibreOffice is never
 bundled. It is a plugin (`cdylib`, loaded from `plugins/preview-office/`)

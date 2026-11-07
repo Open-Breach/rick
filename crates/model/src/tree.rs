@@ -1,9 +1,8 @@
-//! Tree state: the expandable folders of a tab in Tree view, and the side
-//! panel's folder tree.
+//! Tree state: the expandable folders of a tab in Tree view.
 
 use std::collections::{BTreeSet, HashMap};
 
-use types::{Entry, EntryId, EntryKind, Location, VPath};
+use types::{Entry, EntryId, EntryKind};
 
 use crate::listing::{Listing, ViewSpec};
 
@@ -179,112 +178,5 @@ impl Tree {
                 self.push_rows(children, depth + 1, rows);
             }
         }
-    }
-}
-
-/// The side panel's folder tree: folders only, lazily listed from the root
-/// of the focused pane's volume, following the pane's location unless
-/// unlinked.
-#[derive(Debug, Clone, Default)]
-pub struct FolderTree {
-    /// The tree's root, the top of the current volume or provider.
-    pub root: Option<Location>,
-    /// The folders listed so far, by path.
-    nodes: HashMap<VPath, Vec<Entry>>,
-    /// Folders whose listing is running.
-    pub loading: BTreeSet<VPath>,
-    /// Folders shown open.
-    pub expanded: BTreeSet<VPath>,
-    /// Whether the tree follows the focused pane's location.
-    pub linked: bool,
-}
-
-impl FolderTree {
-    pub(crate) fn new() -> Self {
-        Self {
-            linked: true,
-            ..Self::default()
-        }
-    }
-
-    /// The folders directly under `path`, in name order, once listed.
-    #[must_use]
-    pub fn children(&self, path: &VPath) -> Option<&[Entry]> {
-        self.nodes.get(path).map(Vec::as_slice)
-    }
-
-    /// Whether `path` has been listed.
-    #[must_use]
-    pub fn is_listed(&self, path: &VPath) -> bool {
-        self.nodes.contains_key(path)
-    }
-
-    /// Records the folders under `path`.
-    pub(crate) fn set_children(&mut self, path: VPath, mut folders: Vec<Entry>) {
-        folders.retain(|e| e.kind == EntryKind::Dir);
-        folders.sort_by(|a, b| {
-            a.name
-                .to_lowercase()
-                .cmp(&b.name.to_lowercase())
-                .then_with(|| a.name.cmp(&b.name))
-        });
-        self.loading.remove(&path);
-        self.nodes.insert(path, folders);
-    }
-
-    /// Points the tree at a new root, forgetting what it listed.
-    pub(crate) fn set_root(&mut self, root: Location) {
-        if self.root.as_ref() == Some(&root) {
-            return;
-        }
-        self.root = Some(root.clone());
-        self.nodes.clear();
-        self.loading.clear();
-        self.expanded.clear();
-        self.expanded.insert(root.path);
-    }
-
-    /// Opens every folder from the root down to `path`, so the path's
-    /// folder is visible. Returns the folders that still need listing.
-    pub(crate) fn reveal(&mut self, path: &VPath) -> Vec<VPath> {
-        let Some(root) = &self.root else {
-            return Vec::new();
-        };
-        let mut chain = Vec::new();
-        let mut current = Some(path.clone());
-        while let Some(p) = current {
-            let at_root = p == root.path;
-            chain.push(p.clone());
-            if at_root {
-                break;
-            }
-            current = p.parent();
-        }
-        // Everything above the folder itself opens; the folder shows closed.
-        let mut needed = Vec::new();
-        for (i, p) in chain.iter().rev().enumerate() {
-            let is_last = i + 1 == chain.len();
-            if !is_last {
-                self.expanded.insert(p.clone());
-            }
-            if !self.nodes.contains_key(p) && !self.loading.contains(p) {
-                self.loading.insert(p.clone());
-                needed.push(p.clone());
-            }
-        }
-        needed
-    }
-
-    /// Opens or closes one folder. Returns whether it needs listing.
-    pub(crate) fn toggle(&mut self, path: &VPath) -> bool {
-        if self.expanded.remove(path) {
-            return false;
-        }
-        self.expanded.insert(path.clone());
-        if self.nodes.contains_key(path) || self.loading.contains(path) {
-            return false;
-        }
-        self.loading.insert(path.clone());
-        true
     }
 }

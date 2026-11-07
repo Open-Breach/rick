@@ -1,6 +1,6 @@
 //! Audio and video previews: MP3, WAV, MP4 and AVI through GStreamer, one
 //! code path on every platform (system GStreamer on Linux, the runtime a
-//! bundle carries on macOS and Windows, QUESTIONS.md 89).
+//! bundle carries on macOS and Windows, QUESTIONS.md 97).
 //!
 //! `open` reads what the file says about itself without decoding (the
 //! headers and tags, [`probe`]), then, when the plugin was built with the

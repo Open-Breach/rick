@@ -7,7 +7,7 @@ archive's directory, or walks a tar's headers within a time budget, and
 hands the pane an `ext::Listing` in explorer order (folders first, each
 directory followed by its contents) with name, kind, size, compressed size,
 date and whether the entry is encrypted; an archive whose directory is
-itself encrypted lists nothing and says so (QUESTIONS.md 88). The status
+itself encrypted lists nothing and says so (QUESTIONS.md 96). The status
 bar shows entries, compressed and uncompressed size and the format;
 `render` gives the same list as text for a pane that shows no listings. It
 is a plugin (`cdylib`, loaded from `plugins/preview-archive/`) and an

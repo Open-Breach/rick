@@ -240,7 +240,16 @@ fn path_edit(ui: &mut egui::Ui, cx: &mut PaneCx<'_>, rect: egui::Rect) {
         let typed = text.trim().to_owned();
         cx.tab_ui.path_edit = None;
         if !typed.is_empty() {
-            let location = Location::new(cx.tab.location.provider, typed.as_str());
+            // `rick://trash` names a virtual location from any tab; a path
+            // typed into a virtual tab is a local one.
+            let location = vfs_rick::parse_uri(&typed).unwrap_or_else(|| {
+                let provider = if cx.tab.location.provider == vfs_rick::PROVIDER_ID {
+                    vfs_local::PROVIDER_ID
+                } else {
+                    cx.tab.location.provider
+                };
+                Location::new(provider, typed.as_str())
+            });
             cx.requests.push(Request::Command(Command::Navigate {
                 pane: cx.pane,
                 to: location,
@@ -278,7 +287,11 @@ fn fit_segments(widths: &[f32], separator_w: f32, chevron_w: f32, available: f32
 /// folded into a chevron with a dropdown, the last one truncated when even
 /// it does not fit, and the copy button at the right end.
 fn breadcrumb(ui: &mut egui::Ui, cx: &mut PaneCx<'_>, rect: egui::Rect) {
-    let segments = paths::segments(&cx.tab.location.path);
+    // A virtual location is one segment, its title.
+    let segments = match vfs_rick::Virtual::of(&cx.tab.location) {
+        Some(which) => vec![(which.title().to_owned(), cx.tab.location.path.clone())],
+        None => paths::segments(&cx.tab.location.path),
+    };
     let last = segments.len().saturating_sub(1);
     let spacing = ui.spacing().item_spacing.x;
     let pad = 2.0 * ui.spacing().button_padding.x;

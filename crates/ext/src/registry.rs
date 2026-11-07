@@ -116,7 +116,7 @@ use crate::search::SearchIndex;
 /// ([`plugin`](mod@crate::plugin)) and their manifest file; 4
 /// `PreviewDoc` gained `content` (file listings, grids and documents the
 /// UI lays out), `Transport` gained volume, speed, frame step and loop,
-/// and `Icon` gained `Rendered` (QUESTIONS.md 86).
+/// and `Icon` gained `Rendered` (QUESTIONS.md 94).
 pub const API_VERSION: u32 = 4;
 
 bitflags::bitflags! {

@@ -95,7 +95,7 @@ jobs:
           for i in $(seq 1 "${{ inputs.runs }}"); do
             echo "::group::run $i"
             cargo test -p tests --release ${{ env.RICK_TESTS_FEATURES }} --test fixture --test listing --test copy --test ui --test preview --test git --test chrome --test preview_pane --test startup --test plugins --test closeout --test previewers -- --ignored --nocapture --test-threads 1 --skip a_new_text_cancels_the_running_walk 2>&1 | tee "bench-$i.log"
-            cargo test -p tests --release ${{ env.RICK_TESTS_FEATURES }} --test closeout --test session -- --nocapture --test-threads 1 recent_shows_a_touched_file a_big_session_starts 2>&1 | tee -a "bench-$i.log"
+            cargo test -p tests --release ${{ env.RICK_TESTS_FEATURES }} --test session -- --nocapture --test-threads 1 a_big_session_starts 2>&1 | tee -a "bench-$i.log"
             echo "::endgroup::"
           done
       - name: summary

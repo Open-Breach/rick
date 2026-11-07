@@ -7,7 +7,7 @@ into the binary. At start it scans `<binary dir>/plugins/` and
 `platforms` do not fit this host, skips the ids `rick.toml` disables, loads
 the rest with `libloading`, calls the one exported entry point
 (`rick_plugin_register_<crate>`, named after the library's file name so
-that a binary may link several plugin crates at once, QUESTIONS.md 90)
+that a binary may link several plugin crates at once, QUESTIONS.md 98)
 with a registry of its own, and hands each plugin to
 the application as an extension it registers like a built-in. A plugin that
 fails or panics while registering is reported in the plugins table and left

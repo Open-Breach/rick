@@ -1,100 +1,162 @@
-//! The side panel: Home, Recent, Network, Trash, Pinned and Tree as sections
-//! that fold independently, with the operations area at its foot. Which
-//! sections are folded, the panel's width, its side and whether it shows at
-//! all are part of the window's session state, so they come back on the
-//! next start.
+//! The side panel: the Places list, the This Machine, Network and Cloud
+//! sections, and nothing else; the operations area sits under it in the
+//! shell. The panel is navigation only: it takes the user places and never
+//! performs a file operation, highlights no current location and draws no
+//! indent guide.
 //!
-//! Recent lists what changed lately under the home directory and the pinned
-//! folders; Network the mounted volumes other than the system disk; Trash
-//! the trash's contents with restore, delete and empty; Tree a folder tree
-//! following the focused pane. Home, Trash, the volumes and the whole Pinned
-//! section are drop targets while a drag is in progress.
+//! Places is a flat, headerless, user-owned list: a click opens the row in
+//! the focused pane, a middle click, a Mod+click or the context menu's
+//! *Open in new tab* in a new tab; rows reorder by drag, the context menu
+//! offers *Remove* and *Edit…* (title and a Phosphor icon), and a folder
+//! dragged from a file list becomes a place at the insertion line. Files
+//! are refused anywhere in the panel. The three titled sections fold with a
+//! chevron; their header opens the section's overview (`rick://machine`,
+//! `rick://network`, `rick://cloud`) and their rows a root. With the panel
+//! focused, Up and Down move, Enter opens, Mod+Enter opens in a new tab.
 
 use std::collections::BTreeSet;
-use std::path::PathBuf;
 
 use app::{App, Command};
-use ext::{ActionCtx, ActionId, Invocation};
-use model::{PaneId, Section, SidePanel, SidePanelChange, TrashedItem, VolumeKind, WindowId};
-use types::{Entry, EntryKind, Location, VPath};
+use ext::Level;
+use model::{PaneId, Place, Section, SidePanel, SidePanelChange, Volume, VolumeKind, WindowId};
+use types::Location;
+use vfs_rick::Virtual;
 
-use crate::dnd::{self, Dnd, Target, Zone};
+use crate::dnd::{Dnd, Target, Zone};
+use crate::icons;
+use crate::overview::{percent, utilisation_bar, volume_icon};
 use crate::shell::Request;
-use crate::{format, icons};
 
-/// The panel's own state: what is selected in the Trash section.
+/// The height of a utilisation bar under a drive row.
+const BAR_HEIGHT: f32 = 4.0;
+
+/// One row the keyboard can land on.
+#[derive(Debug, Clone)]
+struct Row {
+    id: egui::Id,
+    location: Option<Location>,
+}
+
+/// The Edit… dialogue of a place.
+#[derive(Debug, Clone)]
+pub struct PlaceEdit {
+    /// The row being edited.
+    pub index: usize,
+    /// The title as typed.
+    pub title: String,
+    /// The Phosphor icon name picked.
+    pub icon: String,
+    focus: bool,
+}
+
+/// The panel's own state: the keyboard focus, a reorder in progress, the
+/// Edit… dialogue.
 #[derive(Debug, Default)]
 pub struct SidePanelState {
-    /// Selected trash rows, by trashed path.
-    pub trash_selection: BTreeSet<PathBuf>,
-    /// Where a range selection in the trash starts.
-    trash_anchor: Option<PathBuf>,
-    /// The trash list took the last click, so Delete and Enter act on it.
-    pub trash_focused: bool,
-    /// The Trash section's rectangle in the last frame.
-    trash_rect: Option<egui::Rect>,
+    /// The row the keyboard is on.
+    focus: Option<egui::Id>,
+    /// The panel took the last click, so Up, Down and Enter act on it.
+    focused: bool,
+    /// The rows drawn last frame, top to bottom.
+    rows: Vec<Row>,
+    /// A Places row being dragged to reorder: its index.
+    reorder: Option<usize>,
+    /// The Edit… dialogue, when open.
+    pub edit: Option<PlaceEdit>,
 }
 
 impl SidePanelState {
-    /// The trash rows selected, as the items.
-    fn selected_items(&self, app: &App) -> Vec<TrashedItem> {
-        app.model()
-            .trash
-            .items
-            .iter()
-            .filter(|item| self.trash_selection.contains(&item.trashed))
-            .cloned()
-            .collect()
+    /// Whether the panel has the keyboard.
+    #[must_use]
+    pub fn focused(&self) -> bool {
+        self.focused
     }
 
-    /// Delete and Enter while the trash list has the keyboard: Delete
-    /// permanently and Restore trash items. Returns whether a key was taken.
+    /// The row the keyboard is on, for tests: its location.
+    #[must_use]
+    pub fn focused_location(&self) -> Option<Location> {
+        let id = self.focus?;
+        self.rows
+            .iter()
+            .find(|r| r.id == id)
+            .and_then(|r| r.location.clone())
+    }
+
+    /// Up and Down move, Enter opens, Mod+Enter opens in a new tab, Escape
+    /// gives the keyboard back to the list. Returns whether a key was taken.
     pub fn handle_keys(
         &mut self,
         ctx: &egui::Context,
         app: &App,
         requests: &mut Vec<Request>,
     ) -> bool {
-        if self.trash_selection.is_empty() {
+        if !self.focused || self.rows.is_empty() {
             return false;
         }
-        let (delete, enter) = ctx.input_mut(|i| {
+        let (up, down, enter, mod_enter, escape) = ctx.input_mut(|i| {
             (
-                i.consume_key(egui::Modifiers::NONE, egui::Key::Delete),
+                i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowUp),
+                i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowDown),
                 i.consume_key(egui::Modifiers::NONE, egui::Key::Enter),
+                i.consume_key(egui::Modifiers::COMMAND, egui::Key::Enter),
+                i.consume_key(egui::Modifiers::NONE, egui::Key::Escape),
             )
         });
-        let action = if delete {
-            "core.purge_trash"
-        } else if enter {
-            "core.restore_trash"
-        } else {
-            return false;
-        };
-        requests.push(trash_action(app, self, action));
-        true
+        if escape {
+            self.focused = false;
+            return true;
+        }
+        let at = self
+            .focus
+            .and_then(|id| self.rows.iter().position(|r| r.id == id));
+        if up || down {
+            let next = match (at, up) {
+                (None, _) => 0,
+                (Some(i), true) => i.saturating_sub(1),
+                (Some(i), false) => (i + 1).min(self.rows.len() - 1),
+            };
+            self.focus = Some(self.rows[next].id);
+            return true;
+        }
+        if enter || mod_enter {
+            if let Some(location) = at.and_then(|i| self.rows[i].location.clone()) {
+                open(requests, app.model().focused, location, mod_enter);
+            }
+            return true;
+        }
+        false
+    }
+
+    /// Records a row for the keyboard, in display order.
+    fn row(&mut self, id: egui::Id, location: Option<Location>) {
+        self.rows.push(Row { id, location });
+    }
+
+    /// Takes the keyboard for the row that was clicked.
+    fn take_focus(&mut self, id: egui::Id) {
+        self.focus = Some(id);
+        self.focused = true;
     }
 }
 
-/// The request that runs a trash action on the selected trash rows.
-fn trash_action(app: &App, state: &SidePanelState, action: &'static str) -> Request {
-    Request::RunAction {
-        action: ActionId(action),
-        ctx: ActionCtx {
-            pane: app.model().focused,
-            location: ops::trash_location(),
-            selection: state
-                .selected_items(app)
-                .iter()
-                .map(ops::trash_entry)
-                .collect(),
-            invoked_from: Invocation::ContextMenu,
-        },
+/// Opens a location in the focused pane, or in a new tab.
+fn open(requests: &mut Vec<Request>, pane: PaneId, location: Location, new_tab: bool) {
+    if new_tab {
+        requests.push(Request::NewTabAt(location));
+    } else {
+        requests.push(Request::Command(Command::Navigate { pane, to: location }));
     }
 }
 
-/// Draws the sections for the focused pane of `window`; navigation, pin and
-/// fold changes go out as requests, drop zones into `dnd`.
+/// The focused pane of `window`.
+fn focused_pane(app: &App, window: WindowId) -> PaneId {
+    app.model()
+        .window(window)
+        .map_or(app.model().focused, |w| w.focused)
+}
+
+/// Draws the panel for `window`: navigation goes out as requests, drop
+/// zones into `dnd`.
 pub fn show(
     ui: &mut egui::Ui,
     app: &App,
@@ -104,705 +166,559 @@ pub fn show(
     requests: &mut Vec<Request>,
     dnd: &mut Dnd,
 ) {
-    let focused = app
-        .model()
-        .window(window)
-        .map_or(app.model().focused, |w| w.focused);
-    let current = app
-        .model()
-        .active_tab(focused)
-        .map(|(_, tab)| tab.location.clone());
-    // A click anywhere but the trash list takes the keys away from it.
-    if state.trash_focused
+    let pane = focused_pane(app, window);
+    let rect = ui.max_rect();
+    // A click anywhere else takes the keyboard away from the panel.
+    if state.focused
         && ui.input(|i| i.pointer.any_pressed())
         && let Some(pos) = ui.input(|i| i.pointer.interact_pos())
-        && !state.trash_rect.is_some_and(|r| r.contains(pos))
+        && !rect.contains(pos)
     {
-        state.trash_focused = false;
+        state.focused = false;
     }
+    state.rows.clear();
+    // The panel is never a file-operation target: outside the Places list
+    // a drop is refused, and the Places list accepts folders only.
+    if dnd.active() {
+        dnd.zone(Zone {
+            key: egui::Id::new(("dnd-side-panel", window.0)),
+            rect,
+            target: Target::Refused,
+        });
+    }
+    ui.visuals_mut().indent_has_left_vline = false;
     egui::ScrollArea::vertical()
+        .id_salt(("side-panel", window.0))
         .auto_shrink([false, false])
         .show(ui, |ui| {
+            places(ui, app, pane, state, requests, dnd);
+            ui.add_space(6.0);
             for section in Section::ALL {
-                // The model drives the open state; a click on the header
-                // asks for the change, and the next frame shows it.
-                let folded = panel.folded.contains(&section);
-                let response = egui::CollapsingHeader::new(section.title())
-                    .id_salt(("side-section", section.title()))
-                    .open(Some(!folded))
-                    .show(ui, |ui| {
-                        body(
-                            ui,
-                            section,
-                            app,
-                            focused,
-                            current.as_ref(),
-                            state,
-                            requests,
-                            dnd,
-                        );
-                    });
-                if response.header_response.clicked() {
-                    requests.push(Request::Command(Command::SidePanel {
-                        window,
-                        change: SidePanelChange::Fold {
-                            section,
-                            folded: !folded,
-                        },
-                    }));
+                if section == Section::Cloud && app.model().cloud_providers.is_empty() {
+                    continue;
                 }
-                let whole = response
-                    .body_response
-                    .as_ref()
-                    .map_or(response.header_response.rect, |b| {
-                        response.header_response.rect.union(b.rect)
-                    });
-                if section == Section::Trash {
-                    state.trash_rect = Some(whole);
-                }
-                section_zone(ui, section, whole, dnd);
+                titled_section(ui, app, window, pane, panel, section, state, requests);
             }
         });
+    edit_dialog(ui.ctx(), app, state, requests);
 }
 
-/// The section as a drop target: Trash trashes, Pinned pins at the end.
-/// Registered after the entries inside it, which are smaller and win.
-fn section_zone(ui: &egui::Ui, section: Section, rect: egui::Rect, dnd: &mut Dnd) {
-    if !dnd.active() {
-        return;
-    }
-    let target = match section {
-        Section::Trash => Target::Trash,
-        Section::Pinned => Target::Pin { at: None },
-        Section::Home | Section::Recent | Section::Network | Section::Tree => return,
-    };
-    if dnd.zone(Zone {
-        key: egui::Id::new(("dnd-section", section.title())),
-        rect,
-        target,
-    }) {
-        dnd::highlight(ui.painter(), ui.visuals(), rect);
+/// Paints the keyboard focus around a row when the panel has it.
+fn focus_ring(ui: &egui::Ui, state: &SidePanelState, id: egui::Id, rect: egui::Rect) {
+    if state.focused && state.focus == Some(id) {
+        ui.painter().rect_stroke(
+            rect.shrink(0.5),
+            3.0,
+            egui::Stroke::new(1.0, ui.visuals().selection.stroke.color),
+            egui::StrokeKind::Inside,
+        );
     }
 }
 
-/// "Pin current folder" for the focused pane's location, enabled when it is
-/// not pinned yet.
-fn pin_button(
-    ui: &mut egui::Ui,
-    app: &App,
-    current: Option<&Location>,
-    requests: &mut Vec<Request>,
-) {
-    let Some(location) = current else {
-        return;
-    };
-    let pinned = app.model().settings.pinned.contains(location);
-    if ui
-        .add_enabled(!pinned, egui::Button::new("Pin current folder").small())
-        .on_hover_text(if pinned {
-            "This folder is pinned".to_owned()
-        } else {
-            location.path.to_string()
-        })
-        .clicked()
-    {
-        requests.push(Request::Command(Command::Pin {
-            items: vec![location.clone()],
-            at: None,
-        }));
-    }
-}
-
+/// A row that opens a location: click, middle click, Mod+click and the
+/// context menu with *Open in new tab* first and `extra` after it. Returns
+/// the response for the caller's own handling (a drag, a drop zone).
 #[allow(clippy::too_many_arguments)]
-fn body(
+fn location_row(
     ui: &mut egui::Ui,
-    section: Section,
+    state: &mut SidePanelState,
+    requests: &mut Vec<Request>,
+    pane: PaneId,
+    id: egui::Id,
+    button: egui::Button<'_>,
+    location: &Location,
+    extra: &mut dyn FnMut(&mut egui::Ui, &mut Vec<Request>),
+) -> egui::Response {
+    let response = ui.add(button.min_size(egui::vec2(ui.available_width(), 0.0)));
+    state.row(id, Some(location.clone()));
+    focus_ring(ui, state, id, response.rect);
+    if response.clicked() {
+        state.take_focus(id);
+        let new_tab = ui.input(|i| i.modifiers.command);
+        open(requests, pane, location.clone(), new_tab);
+    }
+    if response.middle_clicked() {
+        state.take_focus(id);
+        open(requests, pane, location.clone(), true);
+    }
+    if response.secondary_clicked() {
+        state.take_focus(id);
+    }
+    response.context_menu(|ui| {
+        if ui.button("Open in new tab").clicked() {
+            open(requests, pane, location.clone(), true);
+            ui.close();
+        }
+        extra(ui, requests);
+    });
+    response
+}
+
+/// Which gap of the Places list a pointer at `y` points into, given the
+/// rows' rectangles top to bottom.
+fn gap_at(rects: &[egui::Rect], y: f32) -> usize {
+    for (index, rect) in rects.iter().enumerate() {
+        if y < rect.center().y {
+            return index;
+        }
+    }
+    rects.len()
+}
+
+/// The index a row at `from` ends up at when dropped into gap `gap`.
+fn target_of(from: usize, gap: usize) -> usize {
+    if gap > from { gap - 1 } else { gap }
+}
+
+/// Paints the insertion line at `y` across the list.
+fn insertion_line(ui: &egui::Ui, x_range: egui::Rangef, y: f32) {
+    ui.painter().hline(
+        x_range,
+        y,
+        egui::Stroke::new(2.0, ui.visuals().selection.stroke.color),
+    );
+}
+
+/// The Places list.
+fn places(
+    ui: &mut egui::Ui,
     app: &App,
-    focused: PaneId,
-    current: Option<&Location>,
+    pane: PaneId,
     state: &mut SidePanelState,
     requests: &mut Vec<Request>,
     dnd: &mut Dnd,
 ) {
-    match section {
-        Section::Home => {
-            let home = app.platform().home_dir();
-            let home = Location::new(vfs_local::PROVIDER_ID, platform::paths::from_path(&home));
-            let response = location_row(ui, icons::HOME, "Home", &home, current);
-            if response.clicked() {
-                requests.push(Request::Command(Command::Navigate {
-                    pane: focused,
-                    to: home.clone(),
-                }));
-            }
-            folder_zone(ui, dnd, egui::Id::new("dnd-home"), response.rect, home);
+    let rows: Vec<Place> = app.model().places.rows().to_vec();
+    let trash_count = app.model().trash.items.len();
+    let mut rects = Vec::with_capacity(rows.len());
+    let mut lines: Vec<f32> = Vec::new();
+    let list_top = ui.cursor().top();
+    for (index, place) in rows.iter().enumerate() {
+        let id = egui::Id::new(("side-place", index, &place.location));
+        let glyph = icons::named(&place.icon);
+        let mut button = egui::Button::new(format!("{glyph} {}", place.title))
+            .frame(false)
+            .truncate()
+            .sense(egui::Sense::click_and_drag());
+        if trash_count > 0 && Virtual::of(&place.location) == Some(Virtual::Trash) {
+            button = button.right_text(egui::RichText::new(trash_count.to_string()).weak());
         }
-        Section::Recent => recent(ui, app, focused, requests),
-        Section::Network => network(ui, app, focused, current, requests, dnd),
-        Section::Trash => trash(ui, app, state, requests),
-        Section::Pinned => pinned(ui, app, focused, current, requests, dnd),
-        Section::Tree => tree(ui, app, focused, current, requests),
-    }
-}
-
-/// The Recent section: icon, name and parent folder per row, newest first;
-/// click selects it in the focused pane, double-click opens it.
-fn recent(ui: &mut egui::Ui, app: &App, focused: PaneId, requests: &mut Vec<Request>) {
-    let entries = app.model().recent.entries();
-    if entries.is_empty() {
-        ui.weak("Nothing changed recently under Home or the pinned folders.");
-        return;
-    }
-    for entry in entries {
-        let parent = entry
-            .path
-            .parent()
-            .map_or_else(String::new, |p| p.to_string_lossy().into_owned());
-        let response = ui
-            .add(
-                egui::Button::new(two_line_text(
-                    ui,
-                    icons::for_entry(entry),
-                    &entry.name,
-                    &parent,
-                ))
-                .frame(false)
-                .min_size(egui::vec2(ui.available_width(), 0.0)),
-            )
-            .on_hover_text(entry.path.to_string_lossy());
-        if response.double_clicked() {
-            open_entry(entry, focused, requests);
-        } else if response.clicked() {
-            requests.push(Request::OpenContaining {
-                pane: focused,
-                entry: entry.clone(),
-                new_tab: false,
-            });
-        }
-        response.context_menu(|ui| {
-            if ui.button("Open containing folder").clicked() {
-                requests.push(Request::OpenContaining {
-                    pane: focused,
-                    entry: entry.clone(),
-                    new_tab: false,
-                });
+        let location = place.location.clone();
+        let mut extra = |ui: &mut egui::Ui, requests: &mut Vec<Request>| {
+            if ui.button(format!("{} Edit…", icons::EDIT)).clicked() {
+                state_edit_start(requests, index, place);
                 ui.close();
             }
-            if ui.button("Open containing folder in new tab").clicked() {
-                requests.push(Request::OpenContaining {
-                    pane: focused,
-                    entry: entry.clone(),
-                    new_tab: true,
-                });
+            if ui.button("Remove").clicked() {
+                requests.push(Request::Command(Command::PlaceRemove(index)));
                 ui.close();
             }
-            if ui.button("Open").clicked() {
-                open_entry(entry, focused, requests);
-                ui.close();
-            }
-        });
-    }
-}
-
-/// Opens an entry from the side panel: a folder navigates the focused pane,
-/// a file opens with the system default.
-fn open_entry(entry: &Entry, focused: PaneId, requests: &mut Vec<Request>) {
-    if entry.kind == EntryKind::Dir {
-        requests.push(Request::Command(Command::Navigate {
-            pane: focused,
-            to: Location::new(entry.id.provider, entry.path.clone()),
-        }));
-    } else {
-        let location = entry.path.parent().unwrap_or_else(|| entry.path.clone());
-        requests.push(Request::RunAction {
-            action: ActionId("core.open_default"),
-            ctx: ActionCtx {
-                pane: focused,
-                location: Location::new(entry.id.provider, location),
-                selection: vec![entry.clone()],
-                invoked_from: Invocation::Menu,
-            },
-        });
-    }
-}
-
-/// A row of two lines: the icon and name, then a weak second line.
-fn two_line_text(ui: &egui::Ui, icon: &str, name: &str, below: &str) -> egui::WidgetText {
-    let font = egui::TextStyle::Body.resolve(ui.style());
-    let small = egui::TextStyle::Small.resolve(ui.style());
-    let mut job = egui::text::LayoutJob::default();
-    job.wrap.max_width = ui.available_width() - 8.0;
-    job.wrap.max_rows = 2;
-    job.wrap.break_anywhere = true;
-    job.append(
-        &format!("{icon} {name}\n"),
-        0.0,
-        egui::TextFormat::simple(font, ui.visuals().text_color()),
-    );
-    job.append(
-        below,
-        0.0,
-        egui::TextFormat::simple(small, ui.visuals().weak_text_color()),
-    );
-    job.into()
-}
-
-/// The Network section: the mounted volumes with name, mount point and free
-/// space; click navigates the focused pane there.
-fn network(
-    ui: &mut egui::Ui,
-    app: &App,
-    focused: PaneId,
-    current: Option<&Location>,
-    requests: &mut Vec<Request>,
-    dnd: &mut Dnd,
-) {
-    let volumes = &app.model().volumes;
-    if volumes.is_empty() {
-        ui.weak("No removable media or network mounts.");
-        return;
-    }
-    for (index, volume) in volumes.iter().enumerate() {
-        let location = Location::new(
-            vfs_local::PROVIDER_ID,
-            platform::paths::from_path(&volume.mount_point),
-        );
-        let icon = match volume.kind {
-            VolumeKind::Removable => icons::USB,
-            VolumeKind::Network => icons::NETWORK,
-            VolumeKind::Optical => icons::DISC,
-            VolumeKind::Fixed => icons::DISK,
         };
-        let space = match (volume.free, volume.total) {
-            (Some(free), Some(total)) => format!(
-                "{} · {} free of {}",
-                volume.mount_point.display(),
-                format::size(Some(free)),
-                format::size(Some(total))
-            ),
-            _ => volume.mount_point.display().to_string(),
-        };
-        let here = current == Some(&location);
-        let response = ui
-            .add(
-                egui::Button::new(two_line_text(ui, icon, &volume.name, &space))
-                    .frame(false)
-                    .selected(here)
-                    .min_size(egui::vec2(ui.available_width(), 0.0)),
-            )
-            .on_hover_text(volume.mount_point.display().to_string());
-        if response.clicked() {
-            requests.push(Request::Command(Command::Navigate {
-                pane: focused,
-                to: location.clone(),
-            }));
+        let response = location_row(ui, state, requests, pane, id, button, &location, &mut extra);
+        rects.push(response.rect);
+        // Dragging a row reorders the list; a drag of entries is the
+        // shell's drag and never starts here.
+        if response.drag_started_by(egui::PointerButton::Primary) && !dnd.active() {
+            state.reorder = Some(index);
         }
-        folder_zone(
-            ui,
-            dnd,
-            egui::Id::new(("dnd-volume", index)),
-            response.rect,
-            location,
-        );
-    }
-}
-
-/// The Trash section: an Empty trash button in the header row, then the
-/// items with name, original folder and deletion date, newest first, with
-/// multi-select, a context menu and the keyboard.
-// One list, top to bottom.
-#[allow(clippy::too_many_lines)]
-fn trash(ui: &mut egui::Ui, app: &App, state: &mut SidePanelState, requests: &mut Vec<Request>) {
-    let view = &app.model().trash;
-    ui.horizontal(|ui| {
-        if ui
-            .add_enabled(
-                !view.items.is_empty(),
-                egui::Button::new(format!("{} Empty trash", icons::TRASH)).small(),
-            )
-            .clicked()
-        {
-            requests.push(Request::RunAction {
-                action: ActionId("core.empty_trash"),
-                ctx: ActionCtx {
-                    pane: app.model().focused,
-                    location: ops::trash_location(),
-                    selection: Vec::new(),
-                    invoked_from: Invocation::Menu,
+        // A folder dropped on the upper half goes before the row, on the
+        // lower half after it.
+        if dnd.active() {
+            let (upper, lower) = response.rect.split_top_bottom_at_fraction(0.5);
+            if dnd.zone(Zone {
+                key: egui::Id::new(("dnd-place-before", index)),
+                rect: upper,
+                target: Target::Place { at: Some(index) },
+            }) {
+                lines.push(response.rect.top());
+            }
+            if dnd.zone(Zone {
+                key: egui::Id::new(("dnd-place-after", index)),
+                rect: lower,
+                target: Target::Place {
+                    at: Some(index + 1),
                 },
-            });
+            }) {
+                lines.push(response.rect.bottom());
+            }
         }
-        if !state.trash_selection.is_empty()
-            && ui
-                .small_button(format!("{} Restore", icons::UNTRASH))
-                .on_hover_text("Restore trash items")
-                .clicked()
-        {
-            requests.push(trash_action(app, state, "core.restore_trash"));
-        }
-    });
-    if let Some(error) = &view.error {
-        ui.colored_label(
-            ui.visuals().warn_fg_color,
-            format!("Trash not read: {error}"),
-        );
     }
-    if !view.listed {
-        ui.weak("Items trashed elsewhere are not listed; these are the ones Rick trashed.");
+    // The empty strip under the list: a drop there appends.
+    let (strip, _) =
+        ui.allocate_exact_size(egui::vec2(ui.available_width(), 10.0), egui::Sense::hover());
+    if dnd.active()
+        && dnd.zone(Zone {
+            key: egui::Id::new("dnd-place-end"),
+            rect: strip,
+            target: Target::Place { at: None },
+        })
+    {
+        lines.push(rects.last().map_or(list_top, egui::Rect::bottom));
     }
-    if view.items.is_empty() {
-        ui.weak("The trash is empty.");
-        state.trash_selection.clear();
-        return;
+    let x_range = egui::Rangef::new(ui.max_rect().left(), ui.max_rect().right());
+    for y in lines {
+        insertion_line(ui, x_range, y);
     }
-    // Rows that left the trash leave the selection.
-    state
-        .trash_selection
-        .retain(|p| view.items.iter().any(|i| i.trashed == *p));
-    let now = std::time::SystemTime::now();
-    let items = view.items.clone();
-    for item in &items {
-        let name = item.original.file_name().map_or_else(
-            || item.original.display().to_string(),
-            |n| n.to_string_lossy().into_owned(),
-        );
-        let folder = item
-            .original
-            .parent()
-            .map_or_else(String::new, |p| p.display().to_string());
-        let (date, full_date) = format::date(Some(item.deleted_at), now);
-        let is_dir = item.trashed.is_dir();
-        let icon = if is_dir {
-            icons::FOLDER
-        } else {
-            icons::by_extension(&name)
-        };
-        let selected = state.trash_selection.contains(&item.trashed);
-        let response = ui
-            .add(
-                egui::Button::new(two_line_text(
-                    ui,
-                    icon,
-                    &name,
-                    &format!("{folder} · {date}"),
-                ))
-                .frame(false)
-                .selected(selected)
-                .min_size(egui::vec2(ui.available_width(), 0.0)),
+    // The reorder in progress: the line where the row would land, and the
+    // move on release.
+    if let Some(from) = state.reorder {
+        let pointer = ui.input(|i| {
+            (
+                i.pointer.latest_pos(),
+                i.pointer.any_released(),
+                i.pointer.any_down(),
             )
-            .on_hover_text(format!("{}\nDeleted {full_date}", item.original.display()));
-        if response.clicked() || (response.secondary_clicked() && !selected) {
-            state.trash_focused = true;
-            let modifiers = ui.input(|i| i.modifiers);
-            if modifiers.command && response.clicked() {
-                if !state.trash_selection.remove(&item.trashed) {
-                    state.trash_selection.insert(item.trashed.clone());
-                }
-            } else if modifiers.shift && response.clicked() {
-                let anchor = state
-                    .trash_anchor
-                    .as_ref()
-                    .and_then(|a| items.iter().position(|i| i.trashed == *a));
-                let here = items.iter().position(|i| i.trashed == item.trashed);
-                if let (Some(a), Some(b)) = (anchor, here) {
-                    state.trash_selection = items[a.min(b)..=a.max(b)]
-                        .iter()
-                        .map(|i| i.trashed.clone())
-                        .collect();
-                }
+        });
+        let gap = pointer.0.map(|p| gap_at(&rects, p.y));
+        if let Some(gap) = gap {
+            let y = if gap == rects.len() {
+                rects.last().map_or(list_top, egui::Rect::bottom)
             } else {
-                state.trash_selection.clear();
-                state.trash_selection.insert(item.trashed.clone());
-                state.trash_anchor = Some(item.trashed.clone());
-            }
-        }
-        response.context_menu(|ui| {
-            let restore = if state.trash_selection.len() > 1 {
-                "core.restore_trash"
-            } else {
-                "core.restore"
+                rects[gap].top()
             };
-            if ui
-                .button(if state.trash_selection.len() > 1 {
-                    "Restore trash items"
-                } else {
-                    "Restore"
-                })
-                .clicked()
-            {
-                requests.push(trash_action(app, state, restore));
-                ui.close();
+            insertion_line(ui, x_range, y);
+        }
+        if pointer.1 || !pointer.2 {
+            state.reorder = None;
+            if let Some(gap) = gap {
+                let to = target_of(from, gap);
+                if to != from {
+                    requests.push(Request::Command(Command::PlaceMove { from, to }));
+                }
             }
-            if ui.button("Delete permanently").clicked() {
-                requests.push(trash_action(app, state, "core.purge_trash"));
-                ui.close();
-            }
-        });
+        }
+        ui.ctx().request_repaint();
+    }
+    if rows.is_empty() {
+        ui.weak("Drop a folder here to add a place.");
     }
 }
 
-/// The Pinned section.
-fn pinned(
-    ui: &mut egui::Ui,
-    app: &App,
-    focused: PaneId,
-    current: Option<&Location>,
-    requests: &mut Vec<Request>,
-    dnd: &mut Dnd,
-) {
-    pin_button(ui, app, current, requests);
-    let pinned = app.model().settings.pinned.clone();
-    if pinned.is_empty() {
-        ui.weak("Nothing pinned yet. Pin the current folder with the button above, or drop entries here.");
-    }
-    for (index, location) in pinned.into_iter().enumerate() {
-        let name = location.path.file_name().map_or_else(
-            || location.path.to_string(),
-            |n| String::from_utf8_lossy(n).into_owned(),
-        );
-        // The unpin button takes its place first; the name gets the rest and
-        // is truncated to it, so a long name cannot widen the panel.
-        let response = ui
-            .horizontal(|ui| {
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if ui
-                        .small_button(icons::UNPIN)
-                        .on_hover_text("Unpin")
-                        .clicked()
-                    {
-                        requests.push(Request::Command(Command::Unpin(location.clone())));
-                    }
-                    ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
-                        location_row(ui, icons::PIN, &name, &location, current)
-                    })
-                    .inner
-                })
-                .inner
-            })
-            .inner;
-        if response.clicked() {
-            open_pinned(&location, focused, requests);
-        }
-        response.context_menu(|ui| {
-            if ui.button("Unpin").clicked() {
-                requests.push(Request::Command(Command::Unpin(location.clone())));
-                ui.close();
-            }
-            if ui.button("Open in new tab").clicked() {
-                requests.push(Request::NewTabAt(folder_of(&location)));
-                ui.close();
-            }
-        });
-        // A drop on a pinned entry inserts before it.
-        if dnd.active()
-            && dnd.zone(Zone {
-                key: egui::Id::new(("dnd-pinned", index)),
-                rect: response.rect,
-                target: Target::Pin { at: Some(index) },
-            })
-        {
-            dnd::highlight(ui.painter(), ui.visuals(), response.rect);
-        }
-    }
-}
-
-/// The Tree section: a folder tree from the root of the focused pane's
-/// volume, following its location unless unlinked; a node navigates, its
-/// chevron opens or closes it.
-fn tree(
-    ui: &mut egui::Ui,
-    app: &App,
-    focused: PaneId,
-    current: Option<&Location>,
-    requests: &mut Vec<Request>,
-) {
-    let tree = &app.model().folder_tree;
-    ui.horizontal(|ui| {
-        let glyph = if tree.linked {
-            icons::LINKED
-        } else {
-            icons::UNLINKED
-        };
-        if ui
-            .add(egui::Button::new(glyph).small().selected(tree.linked))
-            .on_hover_text(if tree.linked {
-                "Following the focused pane; click to unlink"
-            } else {
-                "Unlinked; click to follow the focused pane"
-            })
-            .clicked()
-        {
-            requests.push(Request::Command(Command::FolderTreeLink(!tree.linked)));
-        }
+/// Opens the Edit… dialogue for a place through the request queue, so the
+/// borrow of the list ends first.
+fn state_edit_start(requests: &mut Vec<Request>, index: usize, place: &Place) {
+    requests.push(Request::EditPlace {
+        index,
+        title: place.title.clone(),
+        icon: place.icon.clone(),
     });
-    let Some(root) = tree.root.clone() else {
-        ui.weak("The tree follows the focused pane.");
+}
+
+/// Begins editing a place; the shell calls this for `Request::EditPlace`.
+pub fn begin_edit(state: &mut SidePanelState, index: usize, title: String, icon: String) {
+    state.edit = Some(PlaceEdit {
+        index,
+        title,
+        icon,
+        focus: true,
+    });
+}
+
+/// The Edit… dialogue: the title, the Phosphor icon picked from a grid,
+/// OK and Cancel.
+fn edit_dialog(
+    ctx: &egui::Context,
+    app: &App,
+    state: &mut SidePanelState,
+    requests: &mut Vec<Request>,
+) {
+    let Some(edit) = state.edit.as_mut() else {
         return;
     };
-    let label = crate::paths::title(&root.path);
-    tree_node(ui, app, &root, &label, 0, focused, current, requests);
-}
-
-/// One node of the folder tree and, when open, its children.
-#[allow(clippy::too_many_arguments)]
-fn tree_node(
-    ui: &mut egui::Ui,
-    app: &App,
-    location: &Location,
-    label: &str,
-    depth: usize,
-    focused: PaneId,
-    current: Option<&Location>,
-    requests: &mut Vec<Request>,
-) {
-    if depth > 48 {
+    if app.model().places.rows().get(edit.index).is_none() {
+        state.edit = None;
         return;
     }
-    let tree = &app.model().folder_tree;
-    let open = tree.expanded.contains(&location.path);
-    let here = current.is_some_and(|c| c.path == location.path);
+    let mut open = true;
+    let mut done: Option<bool> = None;
+    egui::Window::new("Edit place")
+        .id(egui::Id::new("edit-place"))
+        .collapsible(false)
+        .resizable(false)
+        .open(&mut open)
+        .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
+        .show(ctx, |ui| {
+            ui.label("Title");
+            let title = ui.text_edit_singleline(&mut edit.title);
+            if edit.focus {
+                title.request_focus();
+                edit.focus = false;
+            }
+            ui.add_space(6.0);
+            ui.label("Icon");
+            egui::ScrollArea::vertical()
+                .max_height(160.0)
+                .show(ui, |ui| {
+                    ui.horizontal_wrapped(|ui| {
+                        for (name, glyph) in icons::PICKABLE {
+                            let selected = edit.icon == *name;
+                            if ui
+                                .add(egui::Button::selectable(selected, *glyph))
+                                .on_hover_text(*name)
+                                .clicked()
+                            {
+                                (*name).clone_into(&mut edit.icon);
+                            }
+                        }
+                    });
+                });
+            ui.add_space(6.0);
+            ui.horizontal(|ui| {
+                let enter = title.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                if ui.button("OK").clicked() || enter {
+                    done = Some(true);
+                }
+                if ui.button("Cancel").clicked() || ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+                    done = Some(false);
+                }
+            });
+        });
+    if !open {
+        done = Some(false);
+    }
+    if let Some(ok) = done {
+        if ok {
+            requests.push(Request::Command(Command::PlaceEdit {
+                index: edit.index,
+                title: edit.title.clone(),
+                icon: edit.icon.clone(),
+            }));
+        }
+        state.edit = None;
+    }
+}
+
+/// A titled section: the header with its chevron and its rows, indented
+/// without a guide line.
+// One section, header then rows, top to bottom.
+#[allow(clippy::too_many_arguments, clippy::too_many_lines)]
+fn titled_section(
+    ui: &mut egui::Ui,
+    app: &App,
+    window: WindowId,
+    pane: PaneId,
+    panel: &SidePanel,
+    section: Section,
+    state: &mut SidePanelState,
+    requests: &mut Vec<Request>,
+) {
+    let folded = panel.folded.contains(&section);
+    let overview = match section {
+        Section::Machine => Virtual::Machine,
+        Section::Network => Virtual::Network,
+        Section::Cloud => Virtual::Cloud,
+    }
+    .location();
     ui.horizontal(|ui| {
-        ui.add_space(depth as f32 * 14.0);
         let chevron = ui.add(
-            egui::Button::new(egui::RichText::new(if open {
-                icons::TREE_OPEN
-            } else {
+            egui::Button::new(if folded {
                 icons::TREE_CLOSED
-            }))
+            } else {
+                icons::TREE_OPEN
+            })
             .frame(false)
             .small(),
         );
         if chevron.clicked() {
-            requests.push(Request::Command(Command::FolderTreeToggle(
-                location.path.clone(),
-            )));
-        }
-        let icon = if open {
-            icons::FOLDER_OPEN
-        } else {
-            icons::FOLDER
-        };
-        // Truncated to the panel: a long name must not widen it.
-        let node = ui
-            .add(egui::Button::selectable(here, format!("{icon} {label}")).truncate())
-            .on_hover_text(location.path.to_string_lossy());
-        if node.clicked() {
-            requests.push(Request::Command(Command::Navigate {
-                pane: focused,
-                to: location.clone(),
+            requests.push(Request::Command(Command::SidePanel {
+                window,
+                change: SidePanelChange::Fold {
+                    section,
+                    folded: !folded,
+                },
             }));
         }
-        if node.double_clicked() {
-            requests.push(Request::Command(Command::FolderTreeToggle(
-                location.path.clone(),
-            )));
-        }
+        let id = egui::Id::new(("side-section", section.name()));
+        let button = egui::Button::new(egui::RichText::new(section.title()).strong())
+            .frame(false)
+            .truncate();
+        location_row(
+            ui,
+            state,
+            requests,
+            pane,
+            id,
+            button,
+            &overview,
+            &mut |_, _| {},
+        )
+        .on_hover_text(format!("Open the {} overview", section.title()));
     });
-    if !open {
+    if folded {
         return;
     }
-    match tree.children(&location.path) {
-        Some(children) => {
-            for child in children {
-                let child_location = Location::new(location.provider, child.path.clone());
-                tree_node(
+    ui.indent(("side-section-body", section.name()), |ui| {
+        let mut any = false;
+        let volumes: Vec<Volume> = app
+            .model()
+            .volumes
+            .iter()
+            .filter(|v| (v.kind == VolumeKind::Network) == (section == Section::Network))
+            .cloned()
+            .collect();
+        if section != Section::Cloud {
+            for volume in &volumes {
+                any = true;
+                volume_row(ui, state, requests, pane, volume);
+            }
+        }
+        if section == Section::Network {
+            for id in &app.model().network_providers {
+                any = true;
+                let location = Location::new(*id, "/");
+                let button = egui::Button::new(format!("{} {}", icons::NETWORK, id))
+                    .frame(false)
+                    .truncate();
+                location_row(
                     ui,
-                    app,
-                    &child_location,
-                    &child.name,
-                    depth + 1,
-                    focused,
-                    current,
+                    state,
                     requests,
+                    pane,
+                    egui::Id::new(("side-network-provider", id.0)),
+                    button,
+                    &location,
+                    &mut |_, _| {},
                 );
             }
         }
-        None => {
-            ui.horizontal(|ui| {
-                ui.add_space((depth + 1) as f32 * 14.0 + 20.0);
-                if tree.loading.contains(&location.path) {
-                    ui.spinner();
-                } else {
-                    ui.weak("…");
-                }
-            });
+        if section == Section::Cloud {
+            for (index, entry) in app.model().cloud.iter().enumerate() {
+                any = true;
+                let location = Location::new(entry.id.provider, entry.path.clone());
+                let button = egui::Button::new(format!("{} {}", icons::CLOUD, entry.name))
+                    .frame(false)
+                    .truncate();
+                location_row(
+                    ui,
+                    state,
+                    requests,
+                    pane,
+                    egui::Id::new(("side-cloud", index)),
+                    button,
+                    &location,
+                    &mut |_, _| {},
+                );
+            }
         }
-    }
+        if !any {
+            add_row(ui, state, requests, section);
+        }
+    });
 }
 
-/// A pinned folder opens in the focused pane; a pinned file opens its folder
-/// with the file selected. Whether a local path is a folder is one metadata
-/// call; a location on another provider is taken for a folder.
-fn open_pinned(location: &Location, focused: PaneId, requests: &mut Vec<Request>) {
-    let is_file = local_path(location)
-        .is_some_and(|path| std::fs::symlink_metadata(&path).is_ok_and(|meta| !meta.is_dir()));
-    if is_file && let Some(name) = location.path.file_name() {
-        requests.push(Request::Command(Command::Navigate {
-            pane: focused,
-            to: folder_of(location),
-        }));
-        requests.push(Request::SelectNamed {
-            pane: focused,
-            name: name.to_vec(),
-        });
-    } else {
-        requests.push(Request::Command(Command::Navigate {
-            pane: focused,
-            to: location.clone(),
-        }));
-    }
-}
-
-/// The folder a pinned location opens: itself for a folder, its parent for
-/// a file.
-fn folder_of(location: &Location) -> Location {
-    let is_file = local_path(location)
-        .is_some_and(|path| std::fs::symlink_metadata(&path).is_ok_and(|meta| !meta.is_dir()));
-    match (is_file, location.path.parent()) {
-        (true, Some(parent)) => Location::new(location.provider, parent),
-        _ => location.clone(),
-    }
-}
-
-/// A folder entry of the panel as a drop target.
-fn folder_zone(ui: &egui::Ui, dnd: &mut Dnd, key: egui::Id, rect: egui::Rect, to: Location) {
-    if dnd.active()
-        && dnd.zone(Zone {
-            key,
-            rect,
-            target: Target::Folder {
-                to,
-                device: None,
-                spring: None,
-            },
-        })
-    {
-        dnd::highlight(ui.painter(), ui.visuals(), rect);
-    }
-}
-
-/// A clickable location, highlighted when the focused pane is there.
-fn location_row(
+/// A drive row: icon, name and the utilisation percentage, with a small bar
+/// under it; Eject in the context menu of removable media.
+fn volume_row(
     ui: &mut egui::Ui,
-    icon: &str,
-    label: &str,
-    location: &Location,
-    current: Option<&Location>,
-) -> egui::Response {
-    let here = current == Some(location);
-    ui.add(egui::Button::selectable(here, format!("{icon} {label}")).truncate())
-        .on_hover_text(location.path.to_string())
+    state: &mut SidePanelState,
+    requests: &mut Vec<Request>,
+    pane: PaneId,
+    volume: &Volume,
+) {
+    let location = Location::new(
+        vfs_local::PROVIDER_ID,
+        platform::paths::from_path(&volume.mount_point),
+    );
+    let id = egui::Id::new(("side-volume", &volume.mount_point));
+    let mut button = egui::Button::new(format!("{} {}", volume_icon(volume.kind), volume.name))
+        .frame(false)
+        .truncate();
+    if volume.total.is_some() {
+        button = button.right_text(egui::RichText::new(percent(volume)).weak());
+    }
+    let mount_point = volume.mount_point.clone();
+    let removable = volume.is_removable();
+    let mut extra = |ui: &mut egui::Ui, requests: &mut Vec<Request>| {
+        if removable && ui.button(format!("{} Eject", icons::EJECT)).clicked() {
+            requests.push(Request::Command(Command::Eject(mount_point.clone())));
+            ui.close();
+        }
+    };
+    let response = location_row(ui, state, requests, pane, id, button, &location, &mut extra)
+        .on_hover_text(format!(
+            "{}\n{} · {} free of {}",
+            volume.mount_point.display(),
+            volume.fs_type,
+            crate::format::size(volume.free),
+            crate::format::size(volume.total)
+        ));
+    if let Some(fraction) = volume.utilisation() {
+        let width = response.rect.width() - 2.0 * ui.spacing().button_padding.x;
+        let (rect, _) = ui.allocate_exact_size(
+            egui::vec2(width.max(20.0), BAR_HEIGHT),
+            egui::Sense::hover(),
+        );
+        utilisation_bar(ui, rect, fraction);
+    }
 }
 
-/// The OS path of a location on the local provider.
-fn local_path(loc: &Location) -> Option<PathBuf> {
-    (loc.provider == vfs_local::PROVIDER_ID)
-        .then(|| platform::paths::to_path(&loc.path).ok())
-        .flatten()
+/// The *Add…* row of an empty section: how connections and accounts are
+/// created, once a provider that makes them is installed.
+fn add_row(
+    ui: &mut egui::Ui,
+    state: &mut SidePanelState,
+    requests: &mut Vec<Request>,
+    section: Section,
+) {
+    let id = egui::Id::new(("side-add", section.name()));
+    let response = ui.add(
+        egui::Button::new(egui::RichText::new(format!("{} Add…", icons::ADD)).weak())
+            .frame(false)
+            .min_size(egui::vec2(ui.available_width(), 0.0)),
+    );
+    state.row(id, None);
+    focus_ring(ui, state, id, response.rect);
+    if response.clicked() {
+        state.take_focus(id);
+        let text = match section {
+            Section::Machine => "Drives appear here as the system mounts them.",
+            Section::Network => {
+                "Connections are created by a network provider plugin; SFTP comes with a later 0.2 milestone."
+            }
+            Section::Cloud => {
+                "Accounts are created in the cloud provider plugin's settings; none is configured yet."
+            }
+        };
+        requests.push(Request::Toast(Level::Info, text.to_owned()));
+    }
 }
 
-/// The path a tree node stands for, for tests.
+/// The sections drawn, for tests: those shown in display order.
 #[must_use]
-pub fn node_path(location: &Location) -> &VPath {
-    &location.path
+pub fn sections_shown(app: &App) -> Vec<Section> {
+    Section::ALL
+        .into_iter()
+        .filter(|s| *s != Section::Cloud || !app.model().cloud_providers.is_empty())
+        .collect()
+}
+
+/// The folded sections of a window, for tests.
+#[must_use]
+pub fn folded(app: &App, window: WindowId) -> BTreeSet<Section> {
+    app.model()
+        .window(window)
+        .map(|w| w.side_panel.folded.clone())
+        .unwrap_or_default()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn gaps_and_targets_follow_the_pointer() {
+        let rects: Vec<egui::Rect> = (0..3)
+            .map(|i| {
+                egui::Rect::from_min_size(egui::pos2(0.0, i as f32 * 20.0), egui::vec2(100.0, 20.0))
+            })
+            .collect();
+        assert_eq!(gap_at(&rects, 5.0), 0);
+        assert_eq!(gap_at(&rects, 15.0), 1);
+        assert_eq!(gap_at(&rects, 45.0), 2);
+        assert_eq!(gap_at(&rects, 99.0), 3);
+        assert_eq!(target_of(0, 3), 2, "the first row dropped at the end");
+        assert_eq!(target_of(2, 0), 0, "the last row dropped at the top");
+        assert_eq!(target_of(1, 1), 1, "dropped where it is");
+        assert_eq!(target_of(1, 2), 1, "dropped right after itself");
+    }
 }

@@ -2,7 +2,7 @@
 
 `ext-preview-media` previews MP3, WAV, MP4 and AVI files through GStreamer,
 one code path on every platform: the system GStreamer on Linux, the runtime
-the release archives bundle on macOS and Windows (QUESTIONS.md 89). It
+the release archives bundle on macOS and Windows (QUESTIONS.md 97). It
 reads the headers and tags itself (ID3, RIFF `INFO`, MP4 `ilst`), asks the
 Discoverer for the streams, opens a `playbin3` whose video sink hands the
 frames to the document as RGBA and whose transport the pane drives (play,

@@ -10,7 +10,7 @@
 //! exported as `rick_plugin_register_<crate>` (the crate's name with
 //! underscores, [`entry_point`]), so that a binary may link several plugin
 //! crates as ordinary libraries without two of them exporting the same
-//! symbol (QUESTIONS.md 90): the host loads the library, calls that
+//! symbol (QUESTIONS.md 98): the host loads the library, calls that
 //! function with a [`Registry`] and reads a [`Status`] back. Inside, [`register`] builds
 //! the extension, lets the registry load it and catches any panic, so a
 //! plugin that fails to register is reported and never takes the host

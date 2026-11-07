@@ -256,7 +256,7 @@ fn restore_brings_every_detail_back_and_writes_at_most_once_per_second() {
         SidePanelChange::Side(PanelSide::Right),
         SidePanelChange::Width(300),
         SidePanelChange::Fold {
-            section: Section::Recent,
+            section: Section::Network,
             folded: true,
         },
     ] {
@@ -298,7 +298,7 @@ fn restore_brings_every_detail_back_and_writes_at_most_once_per_second() {
     assert!(!w.side_panel.visible, "collapsed");
     assert_eq!(w.side_panel.side, PanelSide::Right);
     assert_eq!(w.side_panel.width, 300);
-    assert!(w.side_panel.folded.contains(&Section::Recent));
+    assert!(w.side_panel.folded.contains(&Section::Network));
     assert_eq!(
         w.geometry.map(|g| (g.x, g.y, g.width, g.height)),
         Some((10.0, 20.0, 900.0, 600.0))

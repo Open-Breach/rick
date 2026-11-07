@@ -12,7 +12,7 @@ use types::{Error, Location};
 use vfs::Mounts;
 
 use crate::edit::parent;
-use crate::{State, inside, location_of};
+use crate::{State, inside, location_of, needs_writable_location};
 
 /// Renames the one selected entry.
 pub(crate) struct Rename(pub(crate) Arc<State>);
@@ -34,6 +34,9 @@ impl Action for Rename {
         })
     }
     fn availability(&self, ctx: &ActionCtx) -> Availability {
+        if needs_writable_location(ctx) == Availability::Hidden {
+            return Availability::Hidden;
+        }
         match ctx.selection.len() {
             1 => Availability::Enabled,
             0 => Availability::Disabled("select an entry first"),
@@ -205,8 +208,8 @@ impl Action for NewFile {
     fn default_shortcut(&self) -> Option<Shortcut> {
         None
     }
-    fn availability(&self, _ctx: &ActionCtx) -> Availability {
-        Availability::Enabled
+    fn availability(&self, ctx: &ActionCtx) -> Availability {
+        needs_writable_location(ctx)
     }
     fn run(
         &self,
@@ -245,8 +248,8 @@ impl Action for NewFolder {
             key: Key::Char('n'),
         })
     }
-    fn availability(&self, _ctx: &ActionCtx) -> Availability {
-        Availability::Enabled
+    fn availability(&self, ctx: &ActionCtx) -> Availability {
+        needs_writable_location(ctx)
     }
     fn run(
         &self,

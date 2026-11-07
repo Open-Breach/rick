@@ -10,15 +10,7 @@ use platform::TrashedItem;
 use runtime::JobRunner;
 use types::{Error, Location, Progress};
 
-use crate::{State, describe, local_path, location_of};
-
-fn needs_selection(ctx: &ActionCtx) -> Availability {
-    if ctx.selection.is_empty() {
-        Availability::Disabled("select something first")
-    } else {
-        Availability::Enabled
-    }
-}
+use crate::{State, describe, local_path, location_of, needs_entries};
 
 /// Sends the selection to the platform trash.
 pub(crate) struct Trash(pub(crate) Arc<State>);
@@ -40,7 +32,7 @@ impl Action for Trash {
         })
     }
     fn availability(&self, ctx: &ActionCtx) -> Availability {
-        needs_selection(ctx)
+        needs_entries(ctx)
     }
     fn run(
         &self,
@@ -168,7 +160,7 @@ impl Action for Delete {
         })
     }
     fn availability(&self, ctx: &ActionCtx) -> Availability {
-        needs_selection(ctx)
+        needs_entries(ctx)
     }
     fn run(
         &self,
