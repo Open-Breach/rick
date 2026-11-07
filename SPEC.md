@@ -1031,6 +1031,12 @@ The smallest Rick worth using every day. Everything in this list ships; nothing 
 
 **3D models.** A previewer for STL, OBJ and 3MF, for people who print. The mesh is parsed natively (`stl_io`, `tobj`, a small 3MF reader over its zip and XML) and rendered through wgpu into the preview frame as a shaded solid with a neutral material and a ground grid; drag orbits, wheel zooms, double-click resets the view, and the view is remembered per file while it stays open. The status bar shows triangle count, bounding box in millimetres and, for OBJ, the number of objects; the File info section adds the units declared by 3MF. Models beyond a configurable triangle budget decimate for the preview and say so. Ships as `ext-preview-3d`, a plugin.
 
+### Separate specs
+
+Some plugins are specified in their own file under `specs/`, so they can be handed to an implementer on their own. Each is binding in the same way as this document; where one disagrees with this document, the question goes to `QUESTIONS.md`.
+
+- [`specs/ext-installer.md`](specs/ext-installer.md) — `ext-installer`, the tarball installer: *Install as application* on a tar or zip archive, versioned layout with a `current` symlink, desktop entry, icon and commands on the PATH, user-space or system-wide scope, update with one previous version kept, revert, uninstall, repair, and an Installed Apps view. Linux only. Target version 0.3. It extracts with the tar and zip crates itself, so it has no dependency on `ext-vfs-archive` and no ordering constraint within 0.2.
+
 ### Still open
 
 - Extension security model: what a WASM plugin may touch (capabilities per extension point), and whether native plugins need signing.
