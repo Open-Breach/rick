@@ -1022,6 +1022,8 @@ fn the_trash_and_the_volumes_reach_the_model() {
         name: "USB".into(),
         mount_point: h.root.path().join("sub"),
         kind: platform::VolumeKind::Removable,
+        fs_type: String::new(),
+        device: None,
         total: Some(100),
         free: Some(50),
     });

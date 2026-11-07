@@ -423,6 +423,8 @@ fn screenshots_of_the_side_panel_and_list() {
         name: "HOLIDAY".into(),
         mount_point: stick.path().to_path_buf(),
         kind: platform::VolumeKind::Removable,
+        fs_type: String::new(),
+        device: None,
         total: Some(64 << 30),
         free: Some(21 << 30),
     });
@@ -430,6 +432,8 @@ fn screenshots_of_the_side_panel_and_list() {
         name: "nas".into(),
         mount_point: stick.path().join("nas"),
         kind: platform::VolumeKind::Network,
+        fs_type: String::new(),
+        device: None,
         total: Some(4 << 40),
         free: Some(1 << 40),
     });

@@ -1,14 +1,15 @@
 //! The mounted volumes from `/proc/mounts`, with the removable flag from
-//! sysfs (`/sys/block/<disk>/removable`, which is what udisks2 reads) and
-//! the free space from `statvfs`.
+//! sysfs (`/sys/block/<disk>/removable`, which is what udisks2 reads), the
+//! free space from `statvfs`, and ejecting through `udisksctl`.
 //!
-//! Pseudo file systems and the system disk (what is mounted at `/`, and any
-//! bind mount of it) are left out; network file systems and anything the
-//! kernel calls removable are marked as such.
+//! Pseudo file systems and bind mounts of the system disk are left out; the
+//! system disk itself is listed as `System`; network file systems and
+//! anything the kernel calls removable are marked as such.
 
 use std::fs;
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
 
 use types::Error;
 
@@ -147,9 +148,12 @@ fn kind_of(line: &MountLine) -> VolumeKind {
     VolumeKind::Fixed
 }
 
-/// The volume's display name: its mount point's last component, or the
-/// device for a root mount.
+/// The volume's display name: its mount point's last component, `System`
+/// for the root mount.
 fn name_of(line: &MountLine) -> String {
+    if line.mount_point == Path::new("/") {
+        return "System".to_owned();
+    }
     line.mount_point
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
@@ -157,8 +161,8 @@ fn name_of(line: &MountLine) -> String {
         .unwrap_or_else(|| line.device.clone())
 }
 
-/// The mounts of `text` that are user-browsable volumes other than the
-/// system disk, `root_dev` being the device id of `/`.
+/// The mounts of `text` that are user-browsable volumes, the system disk
+/// first, `root_dev` being the device id of `/`.
 fn volumes_from(
     text: &str,
     root_dev: Option<u64>,
@@ -166,9 +170,10 @@ fn volumes_from(
 ) -> Vec<Volume> {
     let mut out: Vec<Volume> = Vec::new();
     for line in parse(text) {
-        if PSEUDO.contains(&line.fs_type.as_str()) || line.mount_point == Path::new("/") {
+        if PSEUDO.contains(&line.fs_type.as_str()) {
             continue;
         }
+        let is_root = line.mount_point == Path::new("/");
         if line.mount_point.starts_with("/proc")
             || line.mount_point.starts_with("/sys")
             || line.mount_point.starts_with("/dev")
@@ -184,7 +189,7 @@ fn volumes_from(
         }
         // A bind mount of the system disk shows the root's device id.
         let dev = fs::metadata(&line.mount_point).ok().map(|m| m.dev());
-        if dev.is_some() && dev == root_dev {
+        if !is_root && dev.is_some() && dev == root_dev {
             continue;
         }
         if out.iter().any(|v| v.mount_point == line.mount_point) {
@@ -192,9 +197,19 @@ fn volumes_from(
         }
         let (total, free) =
             space(&line.mount_point).map_or((None, None), |(t, f)| (Some(t), Some(f)));
+        let device = line
+            .device
+            .starts_with("/dev/")
+            .then(|| line.device.clone());
         out.push(Volume {
             name: name_of(&line),
-            kind: kind_of(&line),
+            kind: if is_root {
+                VolumeKind::Fixed
+            } else {
+                kind_of(&line)
+            },
+            fs_type: line.fs_type,
+            device,
             mount_point: line.mount_point,
             total,
             free,
@@ -204,11 +219,73 @@ fn volumes_from(
     out
 }
 
-/// Every mounted volume that is not the system disk.
+/// Every mounted volume the user can browse, the system disk first.
 pub(super) fn list() -> Result<Vec<Volume>, Error> {
     let text = fs::read_to_string("/proc/mounts").map_err(Error::from_io)?;
     let root_dev = fs::metadata("/").ok().map(|m| m.dev());
     Ok(volumes_from(&text, root_dev, &crate::volumes::space))
+}
+
+/// Runs a command and turns a failure into an error carrying what it said.
+fn run(program: &str, args: &[&std::ffi::OsStr]) -> Result<(), Error> {
+    let output = Command::new(program)
+        .args(args)
+        .stdin(Stdio::null())
+        .output()
+        .map_err(Error::from_io)?;
+    if output.status.success() {
+        return Ok(());
+    }
+    let said = String::from_utf8_lossy(&output.stderr);
+    let said = said.trim();
+    Err(Error::Io(std::io::Error::other(if said.is_empty() {
+        format!("{program} exited with {}", output.status)
+    } else {
+        said.to_owned()
+    })))
+}
+
+/// Whether `program` is on the path.
+fn available(program: &str) -> bool {
+    std::env::var_os("PATH")
+        .is_some_and(|path| std::env::split_paths(&path).any(|dir| dir.join(program).is_file()))
+}
+
+/// Unmounts the volume and powers its drive off: `udisksctl unmount` and
+/// `udisksctl power-off` where udisks2 is installed, which needs no
+/// privilege for media the user plugged in; a plain `umount` otherwise.
+pub(super) fn eject(volume: &Volume) -> Result<(), Error> {
+    if !volume.is_removable() {
+        return Err(Error::Unsupported("only removable media can be ejected"));
+    }
+    let mount_point = volume.mount_point.as_os_str();
+    match &volume.device {
+        Some(device) if available("udisksctl") => {
+            let device = std::ffi::OsStr::new(device);
+            run(
+                "udisksctl",
+                &[
+                    std::ffi::OsStr::new("unmount"),
+                    std::ffi::OsStr::new("-b"),
+                    device,
+                ],
+            )?;
+            // Powering the drive off is the eject proper; a drive that does
+            // not support it (an SD reader) is unmounted all the same.
+            if let Err(error) = run(
+                "udisksctl",
+                &[
+                    std::ffi::OsStr::new("power-off"),
+                    std::ffi::OsStr::new("-b"),
+                    device,
+                ],
+            ) {
+                tracing::debug!(%error, "power-off refused; unmounted only");
+            }
+            Ok(())
+        }
+        _ => run("umount", &[mount_point]),
+    }
 }
 
 #[cfg(test)]
@@ -229,32 +306,52 @@ server:/export /mnt/nfs nfs4 rw 0 0
 ";
 
     #[test]
-    fn pseudo_mounts_and_the_system_disk_are_left_out() {
+    fn pseudo_mounts_are_left_out_and_the_system_disk_comes_first() {
         let volumes = volumes_from(SAMPLE, None, &|p| {
             (p == Path::new("/data")).then_some((100, 40))
         });
-        let names: Vec<(&str, &Path, VolumeKind)> = volumes
+        let names: Vec<(&str, &Path, VolumeKind, &str)> = volumes
             .iter()
-            .map(|v| (v.name.as_str(), v.mount_point.as_path(), v.kind))
+            .map(|v| {
+                (
+                    v.name.as_str(),
+                    v.mount_point.as_path(),
+                    v.kind,
+                    v.fs_type.as_str(),
+                )
+            })
             .collect();
         assert_eq!(
             names,
             [
-                ("data", Path::new("/data"), VolumeKind::Fixed),
-                ("DISC", Path::new("/media/me/DISC"), VolumeKind::Optical),
+                ("System", Path::new("/"), VolumeKind::Fixed, "ext4"),
+                ("data", Path::new("/data"), VolumeKind::Fixed, "ext4"),
+                (
+                    "DISC",
+                    Path::new("/media/me/DISC"),
+                    VolumeKind::Optical,
+                    "iso9660"
+                ),
                 (
                     "USB STICK",
                     Path::new("/media/me/USB STICK"),
-                    VolumeKind::Removable
+                    VolumeKind::Removable,
+                    "vfat"
                 ),
-                ("nfs", Path::new("/mnt/nfs"), VolumeKind::Network),
+                ("nfs", Path::new("/mnt/nfs"), VolumeKind::Network, "nfs4"),
             ]
         );
         let data = volumes
             .iter()
             .find(|v| v.name == "data")
-            .map(|v| (v.total, v.free));
-        assert_eq!(data, Some((Some(100), Some(40))));
+            .map(|v| (v.total, v.free, v.device.clone()));
+        assert_eq!(data, Some((Some(100), Some(40), Some("/dev/sda1".into()))));
+        let nfs = volumes.iter().find(|v| v.name == "nfs");
+        assert_eq!(nfs.and_then(|v| v.device.clone()), None);
+        assert!(matches!(
+            eject(nfs.unwrap_or_else(|| panic!("nfs"))),
+            Err(Error::Unsupported(_))
+        ));
     }
 
     #[test]

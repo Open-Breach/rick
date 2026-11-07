@@ -286,6 +286,8 @@ fn network_lists_a_registered_volume_and_clicking_navigates_there() {
         name: "STICK".into(),
         mount_point: mount.path().to_path_buf(),
         kind: platform::VolumeKind::Removable,
+        fs_type: String::new(),
+        device: None,
         total: Some(16 << 30),
         free: Some(4 << 30),
     });

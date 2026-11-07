@@ -1,6 +1,9 @@
 //! Windows: the Recycle Bin through `IFileOperation`, `ShellExecute`, the
-//! shell Properties dialogue, `%APPDATA%\Rick`, and the drives from
-//! `GetLogicalDrives` with `GetVolumeInformationW` and `GetDiskFreeSpaceExW`.
+//! shell Properties dialogue, `%APPDATA%\Rick`, the drives from
+//! `GetLogicalDrives` with `GetVolumeInformationW` and `GetDiskFreeSpaceExW`
+//! and ejected through `DeviceIoControl`, the known folders through
+//! `SHGetKnownFolderPath`, and the Recent folder's shortcuts resolved with
+//! `IShellLinkW`.
 
 use std::ffi::c_void;
 use std::fs;
@@ -9,21 +12,30 @@ use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
 use types::Error;
+use windows::Win32::Foundation::{CloseHandle, GENERIC_READ, GENERIC_WRITE, HANDLE};
 use windows::Win32::Foundation::{HWND, PROPERTYKEY, RPC_E_CHANGED_MODE};
 use windows::Win32::Storage::FileSystem::{
-    GetDiskFreeSpaceExW, GetDriveTypeW, GetLogicalDrives, GetVolumeInformationW,
+    CreateFileW, FILE_FLAGS_AND_ATTRIBUTES, FILE_SHARE_READ, FILE_SHARE_WRITE, GetDiskFreeSpaceExW,
+    GetDriveTypeW, GetLogicalDrives, GetVolumeInformationW, OPEN_EXISTING,
 };
 use windows::Win32::System::Com::{
-    CLSCTX_ALL, COINIT_APARTMENTTHREADED, COINIT_DISABLE_OLE1DDE, CoCreateInstance, CoInitializeEx,
-    CoTaskMemFree, CoUninitialize,
+    CLSCTX_ALL, CLSCTX_INPROC_SERVER, COINIT_APARTMENTTHREADED, COINIT_DISABLE_OLE1DDE,
+    CoCreateInstance, CoInitializeEx, CoTaskMemFree, CoUninitialize, IPersistFile, STGM_READ,
+};
+use windows::Win32::System::IO::DeviceIoControl;
+use windows::Win32::System::Ioctl::{
+    FSCTL_DISMOUNT_VOLUME, FSCTL_LOCK_VOLUME, IOCTL_STORAGE_EJECT_MEDIA,
+    IOCTL_STORAGE_MEDIA_REMOVAL, PREVENT_MEDIA_REMOVAL,
 };
 use windows::Win32::System::SystemInformation::GetWindowsDirectoryW;
 use windows::Win32::UI::Shell::{
-    BHID_EnumItems, FOF_ALLOWUNDO, FOF_NO_UI, FOFX_RECYCLEONDELETE, FOLDERID_RecycleBinFolder,
-    FileOperation, IEnumShellItems, IFileOperation, IShellItem, IShellItem2, KF_FLAG_DEFAULT,
-    SEE_MASK_INVOKEIDLIST, SHCreateItemFromParsingName, SHELLEXECUTEINFOW, SHERB_NOCONFIRMATION,
-    SHERB_NOPROGRESSUI, SHERB_NOSOUND, SHEmptyRecycleBinW, SHGetKnownFolderItem, SIGDN_FILESYSPATH,
-    SIGDN_NORMALDISPLAY, ShellExecuteExW, ShellExecuteW,
+    BHID_EnumItems, FOF_ALLOWUNDO, FOF_NO_UI, FOFX_RECYCLEONDELETE, FOLDERID_Desktop,
+    FOLDERID_Documents, FOLDERID_Downloads, FOLDERID_Music, FOLDERID_Pictures, FOLDERID_Recent,
+    FOLDERID_RecycleBinFolder, FOLDERID_Videos, FileOperation, IEnumShellItems, IFileOperation,
+    IShellItem, IShellItem2, IShellLinkW, KF_FLAG_DEFAULT, SEE_MASK_INVOKEIDLIST,
+    SHCreateItemFromParsingName, SHELLEXECUTEINFOW, SHERB_NOCONFIRMATION, SHERB_NOPROGRESSUI,
+    SHERB_NOSOUND, SHEmptyRecycleBinW, SHGetKnownFolderItem, SHGetKnownFolderPath,
+    SIGDN_FILESYSPATH, SIGDN_NORMALDISPLAY, ShellExecuteExW, ShellExecuteW, ShellLink,
 };
 use windows::Win32::UI::WindowsAndMessaging::{SW_SHOW, SW_SHOWNORMAL};
 use windows::core::{GUID, Interface, PCWSTR, PWSTR, w};
@@ -31,8 +43,9 @@ use windows::core::{GUID, Interface, PCWSTR, PWSTR, w};
 use crate::Native;
 use crate::fs::windows::{filetime, io_error, wide};
 use crate::traits::{
-    Chrome, ConfigDir, ControlsSide, DragSource, OpenWith, Properties, PropertiesOutcome, Trash,
-    TrashedItem, Volume, VolumeKind, Volumes, WindowChrome,
+    Chrome, ConfigDir, ControlsSide, DragSource, OpenWith, Properties, PropertiesOutcome,
+    RecentItem, RecentlyUsed, StandardFolder, StandardFolders, Trash, TrashedItem, Volume,
+    VolumeKind, Volumes, WindowChrome,
 };
 
 /// `System.Recycle.DeletedFrom`: the folder a recycled item came from.
@@ -325,8 +338,8 @@ fn system_drive() -> Option<char> {
 }
 
 impl Volumes for Native {
-    /// Every drive letter but the system drive's, with the volume label, the
-    /// drive type and the free space.
+    /// Every drive letter with the volume label, the drive type, the file
+    /// system and the free space; the system drive first.
     fn volumes(&self) -> Result<Vec<Volume>, Error> {
         // SAFETY: a plain query with no pointers.
         let mask = unsafe { GetLogicalDrives() };
@@ -340,14 +353,11 @@ impl Volumes for Native {
                 continue;
             }
             let letter = char::from(b'A' + u8::try_from(bit).unwrap_or(0));
-            if Some(letter) == system {
-                continue;
-            }
             let root = format!("{letter}:\\");
             let root_wide = wide(Path::new(&root));
             // SAFETY: the root string is NUL-terminated and outlives the
             // calls; the out-pointers point at locals of the right type.
-            let (kind, label, space) = unsafe {
+            let (kind, label, fs_type, space) = unsafe {
                 let drive_type = GetDriveTypeW(PCWSTR(root_wide.as_ptr()));
                 let kind = match drive_type {
                     DRIVE_REMOVABLE => VolumeKind::Removable,
@@ -357,21 +367,22 @@ impl Volumes for Native {
                     _ => continue,
                 };
                 let mut label = [0u16; 261];
+                let mut fs_name = [0u16; 261];
                 let labelled = GetVolumeInformationW(
                     PCWSTR(root_wide.as_ptr()),
                     Some(&mut label),
                     None,
                     None,
                     None,
-                    None,
+                    Some(&mut fs_name),
                 )
                 .is_ok();
-                let label = labelled
-                    .then(|| {
-                        let end = label.iter().position(|&c| c == 0).unwrap_or(label.len());
-                        String::from_utf16_lossy(&label[..end])
-                    })
-                    .filter(|l| !l.is_empty());
+                let text = |buffer: &[u16]| {
+                    let end = buffer.iter().position(|&c| c == 0).unwrap_or(buffer.len());
+                    String::from_utf16_lossy(&buffer[..end])
+                };
+                let label = labelled.then(|| text(&label)).filter(|l| !l.is_empty());
+                let fs_type = labelled.then(|| text(&fs_name)).unwrap_or_default();
                 let (mut free, mut total) = (0u64, 0u64);
                 let space = GetDiskFreeSpaceExW(
                     PCWSTR(root_wide.as_ptr()),
@@ -381,19 +392,198 @@ impl Volumes for Native {
                 )
                 .is_ok()
                 .then_some((total, free));
-                (kind, label, space)
+                (kind, label, fs_type, space)
             };
-            let name = label.unwrap_or_else(|| format!("{letter}:"));
+            let name = match label {
+                Some(label) => label,
+                None if Some(letter) == system => "System".to_owned(),
+                None => format!("{letter}:"),
+            };
             let (total, free) = space.map_or((None, None), |(t, f)| (Some(t), Some(f)));
             out.push(Volume {
                 name: format!("{name} ({letter}:)"),
                 mount_point: PathBuf::from(root),
                 kind,
+                fs_type,
+                device: None,
                 total,
                 free,
             });
         }
+        // The system drive first, the rest by letter.
+        out.sort_by_key(|v| {
+            let letter = v.mount_point.to_string_lossy().chars().next();
+            (letter != system, letter)
+        });
         Ok(out)
+    }
+
+    /// Locks and dismounts the volume, then asks the device to eject its
+    /// medium: what the shell's Eject does for a USB stick or a disc.
+    fn eject(&self, volume: &Volume) -> Result<(), Error> {
+        if !volume.is_removable() {
+            return Err(Error::Unsupported("only removable media can be ejected"));
+        }
+        let letter = volume
+            .mount_point
+            .to_string_lossy()
+            .chars()
+            .next()
+            .ok_or(Error::Unsupported("the volume has no drive letter"))?;
+        let device = wide(Path::new(&format!("\\\\.\\{letter}:")));
+        // SAFETY: the device name is NUL-terminated and outlives the open;
+        // the handle it returns is used only until `CloseHandle` below.
+        let handle = unsafe {
+            CreateFileW(
+                PCWSTR(device.as_ptr()),
+                GENERIC_READ.0 | GENERIC_WRITE.0,
+                FILE_SHARE_READ | FILE_SHARE_WRITE,
+                None,
+                OPEN_EXISTING,
+                FILE_FLAGS_AND_ATTRIBUTES(0),
+                None,
+            )
+        }
+        .map_err(|e| Error::Io(io_error(e)))?;
+        let allow = PREVENT_MEDIA_REMOVAL {
+            PreventMediaRemoval: false,
+        };
+        let size = u32::try_from(std::mem::size_of::<PREVENT_MEDIA_REMOVAL>()).unwrap_or(1);
+        // SAFETY: the handle is open; each control code is passed the
+        // buffer its documentation names, which outlives the call, or none.
+        let result = unsafe {
+            control(handle, FSCTL_LOCK_VOLUME, None)
+                .and_then(|()| control(handle, FSCTL_DISMOUNT_VOLUME, None))
+                .and_then(|()| {
+                    control(
+                        handle,
+                        IOCTL_STORAGE_MEDIA_REMOVAL,
+                        Some((std::ptr::from_ref(&allow).cast::<c_void>(), size)),
+                    )
+                })
+                .and_then(|()| control(handle, IOCTL_STORAGE_EJECT_MEDIA, None))
+        };
+        // SAFETY: balances the successful `CreateFileW` above.
+        let _ = unsafe { CloseHandle(handle) };
+        result
+    }
+}
+
+/// One `DeviceIoControl` with an optional input buffer and no output.
+///
+/// # Safety
+///
+/// `handle` must be open and `input`, when given, must point at `size`
+/// readable bytes for the duration of the call.
+unsafe fn control(
+    handle: HANDLE,
+    code: u32,
+    input: Option<(*const c_void, u32)>,
+) -> Result<(), Error> {
+    let mut returned = 0u32;
+    let (buffer, size) = input.unwrap_or((std::ptr::null(), 0));
+    // SAFETY: the caller's contract.
+    unsafe {
+        DeviceIoControl(
+            handle,
+            code,
+            (!buffer.is_null()).then_some(buffer),
+            size,
+            None,
+            0,
+            Some(&raw mut returned),
+            None,
+        )
+    }
+    .map_err(|e| Error::Io(io_error(e)))
+}
+
+/// The path of a known folder, when the shell knows it.
+fn known_folder(id: &GUID) -> Option<PathBuf> {
+    // SAFETY: the id is a static GUID and the returned string is freed
+    // exactly once by `take_string`.
+    let path = unsafe { SHGetKnownFolderPath(id, KF_FLAG_DEFAULT, None) }.ok()?;
+    take_string(path).map(PathBuf::from)
+}
+
+impl StandardFolders for Native {
+    fn standard_folder(&self, folder: StandardFolder) -> Option<PathBuf> {
+        let path = match folder {
+            StandardFolder::Home => self.home_dir(),
+            StandardFolder::Documents => known_folder(&FOLDERID_Documents)?,
+            StandardFolder::Pictures => known_folder(&FOLDERID_Pictures)?,
+            StandardFolder::Music => known_folder(&FOLDERID_Music)?,
+            StandardFolder::Video => known_folder(&FOLDERID_Videos)?,
+            StandardFolder::Downloads => known_folder(&FOLDERID_Downloads)?,
+            StandardFolder::Desktop => known_folder(&FOLDERID_Desktop)?,
+        };
+        path.is_dir().then_some(path)
+    }
+}
+
+/// The target of a `.lnk` shortcut, through the shell link object.
+fn shortcut_target(link: &IShellLinkW, shortcut: &Path) -> Option<PathBuf> {
+    let file = wide(shortcut);
+    // SAFETY: COM is initialised by the caller; the file name is
+    // NUL-terminated and outlives the load; the path buffer is valid for
+    // its whole length and `GetPath` writes at most that many code units.
+    unsafe {
+        let persist: IPersistFile = link.cast().ok()?;
+        persist.Load(PCWSTR(file.as_ptr()), STGM_READ).ok()?;
+        let mut buffer = [0u16; 1024];
+        link.GetPath(&mut buffer, std::ptr::null_mut(), 0).ok()?;
+        let end = buffer.iter().position(|&c| c == 0).unwrap_or(buffer.len());
+        if end == 0 {
+            return None;
+        }
+        Some(PathBuf::from(String::from_utf16_lossy(&buffer[..end])))
+    }
+}
+
+impl RecentlyUsed for Native {
+    /// The shortcuts of the Recent folder, each resolved to its target;
+    /// the shortcut's modification time is when the item was last used.
+    fn recently_used(&self) -> Result<Vec<RecentItem>, Error> {
+        let Some(recent) = known_folder(&FOLDERID_Recent) else {
+            return Ok(Vec::new());
+        };
+        let entries = match fs::read_dir(&recent) {
+            Ok(entries) => entries,
+            Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(e) => return Err(Error::from_io(e)),
+        };
+        let _com = Com::new()?;
+        // SAFETY: COM is initialised on this thread and the class id is a
+        // static GUID.
+        let link: IShellLinkW = unsafe { CoCreateInstance(&ShellLink, None, CLSCTX_INPROC_SERVER) }
+            .map_err(|e| Error::Io(io_error(e)))?;
+        let mut items: Vec<RecentItem> = Vec::new();
+        for entry in entries.flatten() {
+            let shortcut = entry.path();
+            if !shortcut
+                .extension()
+                .is_some_and(|e| e.eq_ignore_ascii_case("lnk"))
+            {
+                continue;
+            }
+            let Some(target) = shortcut_target(&link, &shortcut) else {
+                continue;
+            };
+            if fs::symlink_metadata(&target).is_err() {
+                continue;
+            }
+            let used_at = entry
+                .metadata()
+                .and_then(|m| m.modified())
+                .unwrap_or(SystemTime::UNIX_EPOCH);
+            items.retain(|item| !same_path(&item.path, &target));
+            items.push(RecentItem {
+                path: target,
+                used_at,
+            });
+        }
+        items.sort_by_key(|item| std::cmp::Reverse(item.used_at));
+        Ok(items)
     }
 }
 
