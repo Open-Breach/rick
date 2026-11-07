@@ -815,7 +815,124 @@ Once answered, an entry keeps its number and gains a dated decision line.
     Decided (2026-11-06): as assumed; spec unchanged. BENCHMARKS.md says so
     in its Targets paragraph.
 
-85. (side panel) The spec leaves the scheme of the virtual locations to the
+81. (issue 16) The spec leaves the plugin ABI to the implementer: "dynamic
+    linking of the kernel crates, or a C-ABI vtable", recorded here.
+    Decided (2026-11-07): **Rust dylibs.** `types`, `runtime` and `ext` are
+    `crate-type = ["dylib"]`, the whole workspace builds with
+    `-C prefer-dynamic` (`.cargo/config.toml`; cargo gives a workspace
+    member's dylib a static std otherwise, which no consumer can link next
+    to the dynamic one), and macOS adds `-C rpath` so the dylibs get an
+    `@rpath/…` install name. The binary carries a run path to its own
+    directory (`rick`'s build script, reading `CARGO_CFG_TARGET_OS`, which
+    is build configuration and not a `cfg(target_os)` in code). A plugin is
+    a `cdylib` + `rlib` crate that exports one `extern "C"` function,
+    `rick_plugin_register(&mut Registry) -> Status`, through `ext::plugin!`;
+    the five traits, `JobRunner`, `Arc<dyn Provider>`, `Box<dyn
+    PreviewDoc>` and the error type cross the boundary as themselves, since
+    both sides run the same code from the same shared libraries, and the
+    plugin's jobs run on the host's tokio runtime, its tracing events reach
+    the host's subscriber and its contributions land in the host's registry
+    with nothing duplicated. A panic during registration is caught on the
+    plugin's side of the `extern "C"` boundary and reported as a status.
+    Constraints: (a) the same toolchain, the exact `rustc -V` line, which
+    the manifest records and the host checks before loading; (b) the same
+    workspace build, since cargo's feature unification and crate metadata
+    fix the symbol names — a plugin built elsewhere fails at `dlopen` with
+    an unresolved symbol, which the host reports as a refusal; (c) the
+    bundle ships `libstd-<hash>`, `libtypes`, `libruntime` and `libext`
+    beside the binary (cargo names workspace dylibs and cdylibs without a
+    hash, only `libstd` keeps one); (d) `RUSTFLAGS` must stay unset, as it
+    replaces the config's flags and the build then fails with "cannot
+    satisfy dependencies so `std` only shows up once"; (e) a crate that
+    both a plugin and the host use but no kernel dylib contains is
+    duplicated, which is harmless unless it holds process-wide state — the
+    kernel dylibs hold tokio, rayon, tracing, futures, thiserror, smallvec,
+    semver and bitflags, so the state that matters is shared, and a plugin
+    must take `tracing`, `tokio` and `rayon` through `ext` and `runtime`
+    rather than depend on a copy of its own; (f) every build is a build of
+    the whole workspace with its dev targets (`cargo test --workspace`,
+    `cargo build --workspace --all-targets`, `cargo xtask bundle`), because
+    cargo names a workspace dylib without the metadata hash and so one file
+    serves every feature set — a `-p` build of a crate below `ext` rewrites
+    the shared libraries for its own, smaller feature set (measured: the
+    `plugins-native` tests alone give another `libruntime` and `libext`),
+    and the next whole-workspace build recompiles them and everything above
+    them; `cargo clean -p types -p runtime -p ext` when the two disagree.
+    For the same reason `xtask` depends on no kernel crate: it drives
+    `cargo build --workspace --exclude xtask --lib --bins --examples` (the
+    libraries, binaries and examples of every member but itself, with the
+    dev-dependency features the tests build with; a rebuild of the running
+    `xtask` binary is what Windows refuses) and a helper binary from that
+    build, never a kernel dylib of its own.
+    Rejected: a C-ABI vtable layer (`abi_stable` or hand-written). The five
+    traits are async (boxed futures, `BoxStream`, `AsyncRead` handles), the
+    host hands the plugin `Arc<dyn Provider>`, `&JobRunner`, `&DecorateCtx`
+    and `&dyn UiHost`, and the plugin hands back `Box<dyn PreviewDoc>` and
+    `Arc<dyn Decorator>`: every one of these would need an FFI-safe mirror
+    with adapters in both directions, the plugin would still carry its own
+    tokio, tracing and rayon whose statics the host cannot reach, and
+    "one runtime, one subscriber" would mean a forwarding shim for each —
+    the opposite of the issue's "without duplicated statics". A C ABI stays
+    the right tool for plugins built outside the workspace or by another
+    compiler, which 0.2 does not promise.
+    Proven by `crates/plugin-probe` (a Previewer whose `open` spawns a job,
+    plus an Action whose job waits for cancellation) and `crates/plugin-panic`,
+    loaded by `crates/plugins-native/tests/probe.rs` on Linux, macOS and
+    Windows in CI.
+
+82. (issue 16) The spec allows `unsafe` only in `platform`, and the plugin
+    host it asks for must call `libloading` and a symbol it resolved, which
+    is unsafe by nature; a plugin crate must declare its entry point with
+    `#[unsafe(no_mangle)]`, which the `unsafe_code` lint also flags.
+    Assumed: `plugins-native` is the second crate allowed `unsafe`, for the
+    loader calls only, each block with a `// SAFETY:` comment like
+    `platform`'s; the `ext::plugin!` macro carries the `#[allow(unsafe_code)]`
+    for the one attribute, so a plugin crate writes no `unsafe` of its own.
+    A plugin crate uses `#![deny(unsafe_code)]` rather than `forbid`, since a
+    `forbid` would refuse the macro's allowance.
+
+83. (issue 16) The issue lists the fields of `plugin.toml` — id, name,
+    version, `api_version`, points, platforms, toolchain, library — and says
+    `ext::Manifest` "gains the fields it lacks", with the TOML "generated at
+    build time from the crate's Cargo.toml and the manifest constant".
+    Assumed: `Manifest` gains `points` and `platforms`, which an extension
+    declares about itself (the registry refuses a contribution to a point the
+    manifest does not declare, so the declaration stays honest); `toolchain`
+    and `library` describe the compiled file, not the extension, so they
+    live in the file only (`plugins_native::PluginToml`). The file is
+    written by `cargo xtask bundle`, the build step that lays the bundle
+    out: it loads the freshly built library through the workspace's
+    `rick-plugin-manifest` helper, reads the manifest the entry point
+    registers (its `version` comes from the crate's `Cargo.toml` through
+    `CARGO_PKG_VERSION`), adds the toolchain of the build and the library's
+    file names, and writes `plugins/<id>/plugin.toml` beside a copy of the
+    library. At start the host checks the file against the library it loads
+    (id, version, points) and refuses a stale one. The extension API is
+    version 3 for the manifest change.
+
+84. (issue 16) The issue places the bundle in `target/<profile>/rick/`, the
+    path of the `rick` binary itself on Linux and macOS, where cargo writes
+    it; a directory cannot take its place.
+    Assumed: `cargo xtask bundle` lays the bundle out in
+    `target/<profile>/bundle/` (the binary, the kernel dylibs and `libstd`,
+    pdfium when `RICK_PDFIUM_DIR` names it, `plugins/<id>/` per plugin), and
+    the release archives are that directory's contents.
+
+85. (issue 16) The issue says a plugin that panics during registration is
+    "caught, unloaded and reported". Unloading proved unsafe: the first CI
+    run of the pull request loaded the probe plugin, dropped it, loaded it
+    again at the same address, and `tracing` panicked on a callsite it had
+    already registered — the first load's `info!` had put a pointer to the
+    library's static into tracing-core's process-wide callsite list, which
+    `dlclose` left dangling. Thread-local destructors would do the same.
+    Assumed: a library whose entry point ran is never unmapped, whatever
+    became of it; a refused or panicking plugin is caught and reported, its
+    contributions dropped, and its code stays mapped and idle until the
+    process ends (`Loaded` holds the library in a `ManuallyDrop`). Only a
+    file that is no plugin at all (no entry point) is unmapped again. The
+    cost is the memory of a plugin that could not be used.
+
+86. (side panel) The spec leaves the scheme of the virtual locations to the
     implementer and suggests `rick://favorites`, `rick://recent`,
     `rick://trash`, `rick://machine`, `rick://network` and `rick://cloud`.
     Assumed: those six names, served by one built-in provider in the new
@@ -823,24 +940,24 @@ Once answered, an entry keeps its number and gains a dated decision line.
     being the bare name, so the session and places files write them in the
     `provider:path` form every location uses (`rick:trash`); the path bar
     accepts the `rick://trash` form typed anywhere. The 0.1 `trash`
-    pseudo-provider of the trash actions is folded into it. Numbers 81 to 84
-    are reserved by the plugin-host pull request (#27), which this one does
-    not build on.
+    pseudo-provider of the trash actions is folded into it.
 
-86. (side panel) The Cloud section needs to know which providers are cloud
+87. (side panel) The Cloud section needs to know which providers are cloud
     ones and the Network section which are host-addressed connections, and
-    the `Provider` contract has no kind while #27 reshapes `ext`.
+    the `Provider` contract has no kind: the manifest of the plugin host
+    (#27) declares the points an extension fills and the platforms it runs
+    on, not what kind of provider it mounts.
     Assumed: a mounted provider counts as cloud when its id is `s3`, `azure`
     or `gcs` and as network when it is `sftp`, the ids the spec's package
     layout fixes; the Cloud rows are what each cloud provider lists at its
     root (its accounts or containers), fetched at start and whenever the
     Cloud overview lists; the *Add…* row of an empty Network or Cloud
     section says that a provider plugin creates connections and accounts,
-    since none exists yet. To be replaced by a registry contribution once
-    #27 lands. The integration tests prove the section with an in-memory
+    since none exists yet. To be replaced by a registry contribution once a
+    provider can declare its kind. The integration tests prove the section with an in-memory
     provider under the `s3` id.
 
-87. (side panel) The standard folders and the system's recently-used list
+88. (side panel) The standard folders and the system's recently-used list
     are platform services the `platform` trait set did not have.
     Assumed: `StandardFolders` (XDG user-dirs on Linux, the known folders
     on Windows, the fixed directories under the home on macOS, `Video`
@@ -854,7 +971,7 @@ Once answered, an entry keeps its number and gains a dated decision line.
     Machine lists the system disk too, as `System`, since `/` has no last
     component to name it by, with the file system name added to `Volume`.
 
-88. (operations) "Jobs are scheduled per volume" needs a volume key and a
+89. (operations) "Jobs are scheduled per volume" needs a volume key and a
     place in the job's life to wait.
     Assumed: the key is the device half of the local entry id (of the
     nearest existing ancestor for a target that does not exist yet) and the
@@ -869,7 +986,7 @@ Once answered, an entry keeps its number and gains a dated decision line.
     conflict, a wait) going out at once, so a job over hundreds of thousands
     of entries never redraws the area per entry.
 
-89. (side panel) Editing Places: the spec names Remove, Edit… (title and a
+90. (side panel) Editing Places: the spec names Remove, Edit… (title and a
     Phosphor icon, `FOLDER` by default) and drag reorder, without saying
     what a dropped folder is called, how the icon is picked from 1 500
     glyphs, or whether edits are undoable.
@@ -882,7 +999,7 @@ Once answered, an entry keeps its number and gains a dated decision line.
     instead of emptying it, which 0.1's `Navigate` to the current location
     did (a latent bug the Places rows would have exposed).
 
-90. (side panel) Eject and "the list follows mounts live".
+91. (side panel) Eject and "the list follows mounts live".
     Assumed: Eject runs as a job, so a refusal lands in the operations
     area: `udisksctl unmount` then `power-off` on Linux (`umount` where
     udisks2 is absent), `diskutil eject` on macOS, lock, dismount and
@@ -892,7 +1009,7 @@ Once answered, an entry keeps its number and gains a dated decision line.
     polled every three); udisks2 and the Windows device notifications come
     with milestone 5's mount and unmount.
 
-91. (side panel) The Trash view's operations and the other views' entries.
+92. (side panel) The Trash view's operations and the other views' entries.
     Assumed: the trash actions (`core.restore`, `core.restore_trash`,
     `core.purge_trash`, `core.empty_trash`) move into the context menu of
     the Trash view as a group of their own and are hidden elsewhere; in the
@@ -906,7 +1023,7 @@ Once answered, an entry keeps its number and gains a dated decision line.
     listed with a hashed id so it can be unpinned. Nothing can be dropped
     into a virtual view.
 
-92. (side panel) Keyboard: "with the panel focused" is not defined.
+93. (side panel) Keyboard: "with the panel focused" is not defined.
     Assumed: a click on a panel row gives the panel the keyboard, a click
     anywhere else gives it back; Up and Down move over every row including
     the section headers and *Add…*, Enter opens, Mod+Enter in a new tab,

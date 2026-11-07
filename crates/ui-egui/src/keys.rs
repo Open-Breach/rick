@@ -118,6 +118,8 @@ pub enum Intent {
     Settings,
     /// The Keyboard shortcuts screen.
     Shortcuts,
+    /// The Extensions screen.
+    Extensions,
     /// List view.
     ViewList,
     /// Details view.
@@ -515,6 +517,7 @@ pub const UI_INTENTS: &[IntentSpec] = &[
         VIEW,
         &[],
     ),
+    spec(Intent::Extensions, "view.plugins", "Extensions", VIEW, &[]),
     spec(
         Intent::ViewList,
         "view.list",

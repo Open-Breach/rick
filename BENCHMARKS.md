@@ -262,6 +262,20 @@ platform is the fake. Test: `startup_to_the_first_frame` in `startup.rs`.
 | macOS | 150 ms | 63.4 ms | 81.1 ms |
 | Windows | 40 ms | 9.7 ms | 11.9 ms |
 
+### `plugin-load` — loading the Git plugin at start
+
+Issue 16: the plugin host scanning a plugins directory with the Git plugin,
+checking its manifest, loading the library and letting it register, which is
+what the plugin build adds to startup over the compiled-in build; the issue
+asks for 50 ms on CI Linux. macOS and Windows carry a provisional target of
+twice that until the bench workflow measures them.
+
+| OS | Target | Median | Worst |
+| --- | --- | --- | --- |
+| Linux | 50 ms | — | — |
+| macOS | 100 ms | — | — |
+| Windows | 100 ms | — | — |
+
 ### `tree-first` — the tree view's first children on the 200k fixture
 
 Spec target: 50 ms for the first screen after expanding a folder (close-out

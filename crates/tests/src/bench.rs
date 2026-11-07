@@ -127,6 +127,12 @@ pub const BENCHMARKS: &[Benchmark] = &[
         windows: ms(40),
     },
     Benchmark {
+        key: "plugin-load",
+        linux: ms(50),
+        macos: ms(100),
+        windows: ms(100),
+    },
+    Benchmark {
         key: "tree-first",
         linux: ms(50),
         macos: ms(100),

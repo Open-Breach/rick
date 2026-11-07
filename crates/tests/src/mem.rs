@@ -11,8 +11,8 @@ use std::time::{Duration, SystemTime};
 
 use ext::{
     API_VERSION, Capabilities, ChangeStream, CopyOptions, EntryStream, Extension, LinkKind,
-    ListOptions, Manifest, Provider, ReadHandle, Registry, RemoveMode, Version, WriteHandle,
-    WriteOptions, async_trait,
+    ListOptions, Manifest, Platforms, Points, Provider, ReadHandle, Registry, RemoveMode, Version,
+    WriteHandle, WriteOptions, async_trait,
 };
 use futures::StreamExt;
 use futures::stream;
@@ -337,6 +337,8 @@ impl MemExtension {
                 version: Version::new(0, 1, 0),
                 api_version: API_VERSION,
                 requires: Capabilities::empty(),
+                points: Points::PROVIDER,
+                platforms: Platforms::ALL,
             },
             provider,
         }

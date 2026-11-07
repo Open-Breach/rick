@@ -1,0 +1,23 @@
+# The kernel crates `types`, `runtime` and `ext` are Rust dylibs that the
+# binary and every plugin library share, so a plugin and the host run one
+# tokio runtime, one tracing subscriber and one registry (SPEC.md "Version
+# 0.2", QUESTIONS.md 81). Cargo gives a workspace member's dylib a static
+# copy of std unless the whole build prefers dynamic linking, and a static
+# std inside a dylib cannot be linked next to the dynamic one every other
+# artifact then needs, so the flag is global. On macOS `-C rpath` also makes
+# rustc give the dylibs an `@rpath/…` install name, the one thing that lets a
+# bundle be moved; Linux records the file name as the soname by itself and
+# Windows imports by file name.
+#
+# Setting RUSTFLAGS replaces these flags and breaks the build with "cannot
+# satisfy dependencies so `std` only shows up once".
+[target.'cfg(target_os = "macos")']
+rustflags = ["-C", "prefer-dynamic", "-C", "rpath"]
+
+[target.'cfg(not(target_os = "macos"))']
+rustflags = ["-C", "prefer-dynamic"]
+
+[alias]
+# `cargo xtask bundle [--release]`: the binary, the shared libraries and
+# every plugin laid out in target/<profile>/bundle/ (crates/xtask).
+xtask = "run -p xtask --"

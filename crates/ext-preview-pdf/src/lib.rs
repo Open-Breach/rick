@@ -18,8 +18,8 @@ use std::sync::{Arc, OnceLock};
 
 use ext::{
     API_VERSION, Capabilities, ControlId, ControlValue, Extension, Frame, Icon, InfoSection,
-    Manifest, PreviewControl, PreviewDoc, Previewer, Provider, Registry, RenderRequest, TextLayer,
-    Transport, Version, async_trait,
+    Manifest, Platforms, Points, PreviewControl, PreviewDoc, Previewer, Provider, Registry,
+    RenderRequest, TextLayer, Transport, Version, async_trait,
 };
 use pdfium_render::prelude::*;
 use types::{CancelToken, Entry, Error, ExtId, Location};
@@ -57,6 +57,8 @@ impl PdfPreview {
                 version: Version::new(0, 1, 0),
                 api_version: API_VERSION,
                 requires: Capabilities::empty(),
+                points: Points::PREVIEWER,
+                platforms: Platforms::ALL,
             },
         }
     }

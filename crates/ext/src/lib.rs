@@ -19,7 +19,8 @@
 //! version.
 //!
 //! Each module's documentation carries a worked example of its extension
-//! point; [`registry`] shows how one extension contributes to two of them.
+//! point; [`registry`] shows how one extension contributes to two of them,
+//! and [`plugin`](mod@plugin) how a plugin library exports its extension to the host.
 //!
 //! Async trait methods use [`macro@async_trait`] so the traits stay usable as
 //! `dyn` objects (`Arc<dyn Provider>`), which native `async fn` in traits
@@ -32,6 +33,7 @@
 
 pub mod action;
 pub mod decorator;
+pub mod plugin;
 pub mod preview;
 pub mod provider;
 pub mod registry;
@@ -55,7 +57,8 @@ pub use provider::{
     Provider, ReadHandle, RemoveMode, WriteHandle, WriteOptions,
 };
 pub use registry::{
-    API_VERSION, Extension, Manifest, Registry, SettingField, SettingKind, SettingsSchema,
+    API_VERSION, Extension, Manifest, Platforms, Points, Registry, SettingField, SettingKind,
+    SettingsSchema,
 };
 pub use runtime::JobRunner;
 pub use search::{Filter, Query, QueryKind, SearchHit, SearchIndex, SearchScope};

@@ -1,6 +1,6 @@
-//! The Settings, Keyboard shortcuts, About and Properties windows.
+//! The Settings, Keyboard shortcuts, Extensions, About and Properties windows.
 
-use app::{App, Command};
+use app::{App, Command, PluginStatus};
 use ext::{Registry, Shortcut};
 use model::{
     AfterDrag, Column, Density, PanelSide, SettingsChange, SidePanelChange, SortDir, Theme,
@@ -469,6 +469,85 @@ pub fn about_window(ctx: &egui::Context, open: &mut bool, version: &str) {
             ui.label("A god-like file manager.");
             ui.label(format!("Version {version}"));
             ui.hyperlink("https://github.com/Open-Breach/rick");
+        });
+}
+
+/// The Extensions screen: the plugins the host found, each with its name,
+/// version, the points it fills and its status (loaded, disabled, or
+/// refused with the reason), and an Enabled toggle per row. The toggle is a
+/// `SettingsChange::Plugin`, which writes `rick.toml`; the row says that it
+/// takes effect on the next start.
+pub fn extensions_window(
+    ctx: &egui::Context,
+    open: &mut bool,
+    app: &App,
+    requests: &mut Vec<Request>,
+) {
+    let plugins = app.plugins();
+    let disabled = &app.model().settings.plugins.disabled;
+    egui::Window::new("Extensions")
+        .open(open)
+        .default_width(640.0)
+        .show(ctx, |ui| {
+            if plugins.is_empty() {
+                ui.label("No plugins found.");
+            }
+            egui::Grid::new("extensions-grid")
+                .num_columns(5)
+                .striped(true)
+                .spacing([16.0, 6.0])
+                .show(ui, |ui| {
+                    for heading in ["Name", "Version", "Points", "Status", ""] {
+                        ui.strong(heading);
+                    }
+                    ui.end_row();
+                    for plugin in plugins {
+                        let name = if plugin.name.is_empty() {
+                            plugin.id.as_str()
+                        } else {
+                            plugin.name.as_str()
+                        };
+                        ui.label(name).on_hover_text(format!(
+                            "{}\n{}",
+                            plugin.id,
+                            plugin.path.display()
+                        ));
+                        ui.label(&plugin.version);
+                        ui.label(plugin.points.to_string());
+                        let status = match &plugin.status {
+                            PluginStatus::Loaded => "loaded".to_owned(),
+                            PluginStatus::Disabled => "disabled".to_owned(),
+                            PluginStatus::Refused(reason) => format!("refused: {reason}"),
+                        };
+                        ui.label(status);
+                        let mut enabled = !disabled.contains(&plugin.id);
+                        ui.horizontal(|ui| {
+                            if ui.checkbox(&mut enabled, "Enabled").changed() {
+                                requests.push(Request::Command(Command::Settings(
+                                    SettingsChange::Plugin {
+                                        id: plugin.id.clone(),
+                                        enabled,
+                                    },
+                                )));
+                            }
+                            let disabled_at_start = plugin.status == PluginStatus::Disabled;
+                            if enabled == disabled_at_start {
+                                ui.weak(if enabled {
+                                    "loads on the next start"
+                                } else {
+                                    "disabled on the next start"
+                                });
+                            }
+                        });
+                        ui.end_row();
+                    }
+                });
+            ui.separator();
+            ui.weak(
+                "Plugins live in the plugins folder beside the binary and in the config \
+                 directory; a per-user plugin wins on an id clash. Changes take effect \
+                 on the next start.",
+            );
         });
 }
 

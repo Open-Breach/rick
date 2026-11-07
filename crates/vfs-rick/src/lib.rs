@@ -59,7 +59,7 @@ pub const SCHEME: &str = "rick://";
 
 /// Provider ids that count as cloud providers: account-addressed object
 /// stores, one plugin each (SPEC.md "Object storage"). The Cloud section
-/// shows while one of them is mounted (QUESTIONS.md 90).
+/// shows while one of them is mounted (QUESTIONS.md 87).
 pub const CLOUD_PROVIDERS: &[&str] = &["s3", "azure", "gcs"];
 
 /// Provider ids that count as network providers: host-addressed

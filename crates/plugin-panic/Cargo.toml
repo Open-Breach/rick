@@ -1,0 +1,17 @@
+[package]
+name = "plugin-panic"
+version.workspace = true
+description = "A plugin whose entry point panics: the fixture for the host's promise that a panicking plugin never takes it down."
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+ext = { workspace = true }
+
+[lints]
+workspace = true

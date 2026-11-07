@@ -327,6 +327,7 @@ pub struct RickUi {
     name_prompt: Option<NamePrompt>,
     settings_open: bool,
     shortcuts: ShortcutsScreen,
+    extensions_open: bool,
     about_open: bool,
     /// What the About window shows as the version: the binary's version
     /// and git hash, or this crate's version until the binary says.
@@ -500,6 +501,7 @@ impl RickUi {
             name_prompt: None,
             settings_open: false,
             shortcuts: ShortcutsScreen::default(),
+            extensions_open: false,
             about_open: false,
             version: env!("CARGO_PKG_VERSION").to_owned(),
             inspector_state: inspector::PaneState::default(),
@@ -632,6 +634,12 @@ impl RickUi {
     #[must_use]
     pub fn shortcuts_open(&self) -> bool {
         self.shortcuts.open
+    }
+
+    /// Whether the Extensions screen is open.
+    #[must_use]
+    pub fn extensions_open(&self) -> bool {
+        self.extensions_open
     }
 
     /// The question a dialogue is showing, if any.
@@ -1640,6 +1648,7 @@ impl RickUi {
             }
             Intent::Settings => self.settings_open = true,
             Intent::Shortcuts => self.shortcuts.open = true,
+            Intent::Extensions => self.extensions_open = true,
             Intent::ViewList => self.handle(Command::SetView {
                 pane,
                 mode: ViewMode::List,
@@ -2711,6 +2720,12 @@ impl RickUi {
             );
             self.shortcuts
                 .show(ctx, &self.keys, self.app.registry(), &mut self.requests);
+            settings_ui::extensions_window(
+                ctx,
+                &mut self.extensions_open,
+                &self.app,
+                &mut self.requests,
+            );
             settings_ui::about_window(ctx, &mut self.about_open, &self.version);
             settings_ui::properties_window(ctx, &mut self.properties);
             self.show_texts(ctx);

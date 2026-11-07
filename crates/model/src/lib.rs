@@ -35,8 +35,9 @@ pub use session::{
     DockSession, Geometry, PaneSession, Session, TabSession, WindowSession, parse_entry_id,
 };
 pub use settings::{
-    AfterDrag, Density, Drag, LAST_SESSION, PanelSide, Preview, Search, Section, SessionSettings,
-    Settings, SettingsChange, SidePanel, SidePanelChange, TextPreview, Theme, parse_location,
+    AfterDrag, Density, Drag, LAST_SESSION, PanelSide, Plugins, Preview, Search, Section,
+    SessionSettings, Settings, SettingsChange, SidePanel, SidePanelChange, TextPreview, Theme,
+    parse_location,
 };
 pub use tree::{Tree, TreeRow};
 use types::{Conflict, ConflictId, Entry, EntryId, JobId, Location, Progress, ProviderId};
@@ -383,7 +384,8 @@ impl Tab {
     }
 
     /// The visible rows in display order.
-    #[must_use]
+    // Clippy 1.97 wants the attribute, 1.99 wants a reason with it.
+    #[must_use = "the rows are the listing as the user sees it"]
     pub fn rows(&self) -> Box<dyn Iterator<Item = &Entry> + '_> {
         if self.is_tree() {
             Box::new(
