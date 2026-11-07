@@ -165,41 +165,51 @@ struct Fixture {
 /// `dir`; the media encodings only where GStreamer and its encoders are.
 fn fixtures(dir: &Path) -> Vec<Fixture> {
     let mut out = Vec::new();
-    let mut put = |name: &str, bytes: &[u8], previewer: &'static str| {
-        let path = dir.join(name);
-        fs::write(&path, bytes).unwrap_or_else(|e| panic!("{e}"));
-        out.push(Fixture { path, previewer });
-    };
-    let tar = archives::sample_tar(4096);
-    put("a.zip", &archives::sample_zip(), "preview-archive");
-    put("a.tar", &tar, "preview-archive");
-    put("a.tar.gz", &archives::gzip(&tar), "preview-archive");
-    put("a.tar.zst", &archives::zstd_bytes(&tar), "preview-archive");
-    put("a.tar.xz", &archives::xz(&tar), "preview-archive");
-    put("a.tar.bz2", &archives::bzip2_bytes(&tar), "preview-archive");
-    put("a.tar.lz4", &archives::lz4(&tar), "preview-archive");
-    put(
-        "a.7z",
-        &archives::sample_7z(false, false),
-        "preview-archive",
-    );
-    put("a.rar", &archives::sample_rar(), "preview-archive");
-    put("a.iso", &archives::sample_iso(true), "preview-archive");
-    put("data.csv", b"name,age\nAda,36\nAlan,41\n", "preview-csv");
-    put("data.tsv", b"name\tage\nAda\t36\n", "preview-csv");
-    for kind in ext_preview_office::Kind::ALL {
-        let name = format!("doc.{}", kind.extension());
+    // The files written here; the media encodings follow, outside the
+    // closure's borrow of `out`.
+    {
+        let mut put = |name: &str, bytes: &[u8], previewer: &'static str| {
+            let path = dir.join(name);
+            fs::write(&path, bytes).unwrap_or_else(|e| panic!("{e}"));
+            out.push(Fixture { path, previewer });
+        };
+        put("README.md", ALL_MARKDOWN.as_bytes(), "preview-code");
         put(
-            &name,
-            &ext_preview_office::fixtures::sample(kind, "Fixture", "Rick", 2),
-            "preview-office",
+            "page.html",
+            b"<html><body><h1>Hi</h1><p>Text <b>bold</b></p><ul><li>a</li></ul></body></html>",
+            "preview-code",
+        );
+        let tar = archives::sample_tar(4096);
+        put("a.zip", &archives::sample_zip(), "preview-archive");
+        put("a.tar", &tar, "preview-archive");
+        put("a.tar.gz", &archives::gzip(&tar), "preview-archive");
+        put("a.tar.zst", &archives::zstd_bytes(&tar), "preview-archive");
+        put("a.tar.xz", &archives::xz(&tar), "preview-archive");
+        put("a.tar.bz2", &archives::bzip2_bytes(&tar), "preview-archive");
+        put("a.tar.lz4", &archives::lz4(&tar), "preview-archive");
+        put(
+            "a.7z",
+            &archives::sample_7z(false, false),
+            "preview-archive",
+        );
+        put("a.rar", &archives::sample_rar(), "preview-archive");
+        put("a.iso", &archives::sample_iso(true), "preview-archive");
+        put("data.csv", b"name,age\nAda,36\nAlan,41\n", "preview-csv");
+        put("data.tsv", b"name\tage\nAda\t36\n", "preview-csv");
+        for kind in ext_preview_office::Kind::ALL {
+            let name = format!("doc.{}", kind.extension());
+            put(
+                &name,
+                &ext_preview_office::fixtures::sample(kind, "Fixture", "Rick", 2),
+                "preview-office",
+            );
+        }
+        put(
+            "tone.wav",
+            &ext_preview_media::fixtures::sample_wav(1.0, 8000, 440.0),
+            "preview-media",
         );
     }
-    put(
-        "tone.wav",
-        &ext_preview_media::fixtures::sample_wav(1.0, 8000, 440.0),
-        "preview-media",
-    );
     #[cfg(feature = "gstreamer")]
     {
         use ext_preview_media::fixtures::encode;
@@ -223,12 +233,6 @@ fn fixtures(dir: &Path) -> Vec<Fixture> {
             }
         }
     }
-    put("README.md", ALL_MARKDOWN.as_bytes(), "preview-code");
-    put(
-        "page.html",
-        b"<html><body><h1>Hi</h1><p>Text <b>bold</b></p><ul><li>a</li></ul></body></html>",
-        "preview-code",
-    );
     out
 }
 
@@ -454,46 +458,14 @@ fn a_docx_converts_within_5_s_when_libreoffice_is_present() {
     tests::bench::record("office-convert", &samples);
 }
 
+/// Plays the opened video, waits for the position to advance, pauses,
+/// seeks to two seconds and checks a frame at the native size.
 #[cfg(feature = "gstreamer")]
-#[test]
-#[ignore = "timing; run with --ignored in release"]
-fn an_mp4_plays_and_seeks_and_a_3_minute_mp3_gets_its_waveform_within_500_ms() {
-    use ext::Transport;
-    use ext_preview_media::fixtures::encode;
-    use ext_preview_media::gst::GstError;
-    let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
-    let mp4 = dir.path().join("clip.mp4");
-    let mp3 = dir.path().join("long.mp3");
-    let skip = |outcome: Result<(), GstError>, what: &str| -> bool {
-        match outcome {
-            Ok(()) => false,
-            Err(error) => {
-                eprintln!("{what}: {error}; not measured here");
-                assert!(
-                    std::env::var_os("RICK_REQUIRE_GSTREAMER").is_none(),
-                    "{what}: GStreamer required but {error}"
-                );
-                true
-            }
-        }
-    };
-    if skip(encode::mp4(&mp4, 90, 320, 240), "mp4 fixture")
-        || skip(encode::mp3(&mp3, 180), "mp3 fixture")
-    {
-        return;
-    }
-    let host = load_plugins();
-    let previewers = previewers(host);
-    let provider = provider();
-    let (entry, bytes) = sniff(&provider, &mp4);
-    let media = best(&previewers, &entry, &bytes).unwrap_or_else(|| panic!("no previewer"));
-    assert_eq!(media.id().0, "preview-media");
-
-    // Plays and seeks, through the plugin as the host loaded it.
-    let mut doc = open(media, &provider, &mp4);
+fn play_and_seek(mut doc: Box<dyn ext::PreviewDoc>) {
+    let status = doc.status();
     let transport = doc
         .transport()
-        .unwrap_or_else(|| panic!("no transport: {:?}", doc.status()));
+        .unwrap_or_else(|| panic!("no transport: {status:?}"));
     transport.play();
     let deadline = Instant::now() + Duration::from_secs(10);
     while doc
@@ -536,7 +508,44 @@ fn an_mp4_plays_and_seeks_and_a_3_minute_mp3_gets_its_waveform_within_500_ms() {
         ),
         "a frame at native size"
     );
-    drop(doc);
+}
+
+#[cfg(feature = "gstreamer")]
+#[test]
+#[ignore = "timing; run with --ignored in release"]
+fn an_mp4_plays_and_seeks_and_a_3_minute_mp3_gets_its_waveform_within_500_ms() {
+    use ext_preview_media::fixtures::encode;
+    use ext_preview_media::gst::GstError;
+    let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+    let mp4 = dir.path().join("clip.mp4");
+    let mp3 = dir.path().join("long.mp3");
+    let skip = |outcome: Result<(), GstError>, what: &str| -> bool {
+        match outcome {
+            Ok(()) => false,
+            Err(error) => {
+                eprintln!("{what}: {error}; not measured here");
+                assert!(
+                    std::env::var_os("RICK_REQUIRE_GSTREAMER").is_none(),
+                    "{what}: GStreamer required but {error}"
+                );
+                true
+            }
+        }
+    };
+    if skip(encode::mp4(&mp4, 90, 320, 240), "mp4 fixture")
+        || skip(encode::mp3(&mp3, 180), "mp3 fixture")
+    {
+        return;
+    }
+    let host = load_plugins();
+    let previewers = previewers(host);
+    let provider = provider();
+    let (entry, bytes) = sniff(&provider, &mp4);
+    let media = best(&previewers, &entry, &bytes).unwrap_or_else(|| panic!("no previewer"));
+    assert_eq!(media.id().0, "preview-media");
+
+    // Plays and seeks, through the plugin as the host loaded it.
+    play_and_seek(open(media, &provider, &mp4));
 
     // The waveform of three minutes of MP3: open and render, as the pane
     // does when the file is selected.

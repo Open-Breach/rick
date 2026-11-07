@@ -20,7 +20,7 @@ jobs:
     # command of the job, so the kernel dylibs are built once per profile
     # (QUESTIONS.md 81).
     env:
-      RICK_WS_FEATURES: ${{ matrix.os == 'ubuntu-latest' && '--features ext-preview-media/gstreamer' || '' }}
+      RICK_WS_FEATURES: ${{ matrix.os == 'ubuntu-latest' && '--features ext-preview-media/gstreamer,tests/gstreamer' || '' }}
       RICK_TESTS_FEATURES: ${{ matrix.os == 'ubuntu-latest' && '--features gstreamer' || '' }}
     steps:
       - uses: actions/checkout@v4
