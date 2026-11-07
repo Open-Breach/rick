@@ -33,6 +33,13 @@ plugin-probe = { workspace = true }
 plugin-panic = { workspace = true }
 image = { workspace = true }
 egui = { workspace = true }
+# Fixture archives for the provider acceptance tests.
+zip = { workspace = true }
+tar = { workspace = true }
+zstd = { workspace = true }
+sevenz-rust2 = { workspace = true }
+hadris-fs = { workspace = true }
+hadris-iso = { workspace = true, features = ["write"] }
 futures = { workspace = true }
 tempfile = { workspace = true }
 thiserror = { workspace = true }

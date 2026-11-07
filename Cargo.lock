@@ -4796,6 +4796,8 @@ dependencies = [
  "ext-preview-image",
  "ext-preview-pdf",
  "ext-preview-text",
+ "ext-vfs-archive",
+ "ext-vfs-trash",
  "platform",
  "plugins-native",
  "tracing",
@@ -5306,6 +5308,8 @@ dependencies = [
  "ext-vfs-archive",
  "ext-vfs-trash",
  "futures",
+ "hadris-fs",
+ "hadris-iso",
  "image",
  "model",
  "ops",
@@ -5314,6 +5318,8 @@ dependencies = [
  "plugin-probe",
  "plugins-native",
  "runtime",
+ "sevenz-rust2",
+ "tar",
  "tempfile",
  "thiserror 2.0.21",
  "tokio",
@@ -5322,6 +5328,8 @@ dependencies = [
  "ui-egui",
  "vfs",
  "vfs-local",
+ "zip",
+ "zstd",
 ]
 
 [[package]]
@@ -5651,7 +5659,6 @@ dependencies = [
  "egui_kittest",
  "ext",
  "model",
- "ops",
  "platform",
  "runtime",
  "tempfile",
