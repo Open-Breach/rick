@@ -69,8 +69,7 @@ fn install(plugins_dir: &Path, stem: &str, edit: impl FnOnce(&mut PluginToml)) -
 fn options(dirs: Vec<(Source, PathBuf)>) -> Options {
     Options {
         dirs,
-        disabled: Vec::new(),
-        compiled_in: Vec::new(),
+        ..Options::default()
     }
 }
 
@@ -249,7 +248,7 @@ fn disabling_a_plugin_writes_rick_toml_and_the_next_start_lists_it_disabled() {
     let host = Host::load(&Options {
         dirs: vec![(Source::BesideBinary, plugins.clone())],
         disabled: settings.plugins.disabled,
-        compiled_in: Vec::new(),
+        ..Options::default()
     });
     assert_eq!(status_of(&host, "probe"), &PluginStatus::Disabled);
     assert_eq!(host.extensions().len(), 0);
@@ -270,7 +269,7 @@ fn disabling_a_plugin_writes_rick_toml_and_the_next_start_lists_it_disabled() {
     let host = Host::load(&Options {
         dirs: vec![(Source::BesideBinary, plugins)],
         disabled: settings.plugins.disabled,
-        compiled_in: Vec::new(),
+        ..Options::default()
     });
     assert_eq!(status_of(&host, "probe"), &PluginStatus::Loaded);
 }

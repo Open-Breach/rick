@@ -35,6 +35,8 @@ pub enum Indicator {
     Place,
     /// Nothing: the side panel does not take this drop.
     Refused,
+    /// Move to the trash: the drop lands in a pane showing the Trash view.
+    Trash,
 }
 
 impl Indicator {
@@ -46,6 +48,7 @@ impl Indicator {
             Self::Copy => icons::PLUS,
             Self::Place => icons::PIN,
             Self::Refused => icons::REFUSED,
+            Self::Trash => icons::TRASH,
         }
     }
 }
@@ -84,6 +87,9 @@ pub enum Target {
     /// Nothing, with the not-allowed cursor: the side panel outside its
     /// Places list, or files over the Places list.
     Refused,
+    /// Move to trash through the action: anywhere in a pane showing the
+    /// Trash view (issue 20).
+    Trash,
 }
 
 /// A drop target drawn this frame.
@@ -583,7 +589,6 @@ impl Dnd {
         let Some(target) = target else {
             return;
         };
-        let _ = app;
         match target {
             Target::NoOp | Target::Refused => {}
             Target::Folder { to, device, .. } => {
@@ -604,6 +609,21 @@ impl Dnd {
                 for place in drag.source.places() {
                     requests.push(Request::Command(Command::PlaceAdd { place, at }));
                     at = at.map(|i| i + 1);
+                }
+            }
+            Target::Trash => {
+                if let Source::Internal { from, tab, items } = &drag.source
+                    && let Some(tab) = app.model().tab(*tab)
+                {
+                    requests.push(Request::RunAction {
+                        action: ext::ActionId("core.trash"),
+                        ctx: ext::ActionCtx {
+                            pane: *from,
+                            location: tab.location.clone(),
+                            selection: items.clone(),
+                            invoked_from: ext::Invocation::Menu,
+                        },
+                    });
                 }
             }
         }
@@ -676,6 +696,7 @@ fn indicator_for(
         }
         Target::Place { .. } => Some(Indicator::Place),
         Target::Refused => Some(Indicator::Refused),
+        Target::Trash => Some(Indicator::Trash),
         Target::NoOp => None,
     }
 }
@@ -791,6 +812,18 @@ fn smallest_zone(zones: &[Zone], pos: Pos2) -> Option<&Zone> {
         })
 }
 
+/// The target of a drop into a pane's space, tab header or row: the folder
+/// given, except that a pane showing the Trash view trashes what lands
+/// anywhere in it, as the side panel's Trash row does.
+#[must_use]
+pub fn into_pane(tab: &Tab, folder: Target) -> Target {
+    if vfs_rick::view_name(&tab.location) == Some(vfs_rick::Virtual::Trash.name()) {
+        Target::Trash
+    } else {
+        folder
+    }
+}
+
 /// The zone's target for this source: a folder the items would not move
 /// by going into, or a virtual location, is a no-op; the Places list takes
 /// folders only and refuses a drag with a file in it.
@@ -810,6 +843,8 @@ fn resolve(source: &Source, target: &Target) -> Target {
             }
         }
         Target::Place { .. } if !source.folders_only() => Target::Refused,
+        // Only this process's own rows know their entries to trash.
+        Target::Trash if source.is_external() => Target::NoOp,
         other => other.clone(),
     }
 }
@@ -1057,6 +1092,8 @@ mod tests {
         );
         assert_eq!(resolve(&outside, &folder("/a")), Target::NoOp);
         assert_eq!(resolve(&outside, &folder("/b")), folder("/b"));
+        assert_eq!(resolve(&dir, &Target::Trash), Target::Trash);
+        assert_eq!(resolve(&outside, &Target::Trash), Target::NoOp);
         assert_eq!(
             dir.places()[0].title,
             "sub",

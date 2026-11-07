@@ -1031,8 +1031,9 @@ fn the_recent_and_trash_views_list_through_the_rick_provider() {
         Some(Some(at(20)))
     );
 
-    // Trash: an item trashed from a folder shows in the view and restores
-    // from it.
+    // Trash: an item trashed from a folder counts on the Places row; the
+    // view itself is the trash plugin's (issue 20), so without the plugin
+    // the location is served empty.
     h.send(Command::Back(pane));
     h.settle();
     h.send(Command::Select {
@@ -1048,29 +1049,9 @@ fn the_recent_and_trash_views_list_through_the_rick_provider() {
         to: vfs_rick::Virtual::Trash.location(),
     });
     h.settle();
-    assert_eq!(h.names(), ["c.txt"]);
-    let entry = h
-        .tab(pane)
-        .listing
-        .rows()
-        .next()
-        .cloned()
-        .unwrap_or_else(|| panic!("row"));
-    assert_eq!(entry.id.provider, vfs_rick::PROVIDER_ID);
-    h.send(Command::Run {
-        action: ActionId("core.restore_trash"),
-        ctx: ext::ActionCtx {
-            pane,
-            location: vfs_rick::trash_location(),
-            selection: vec![entry],
-            invoked_from: Invocation::ContextMenu,
-        },
-    });
-    assert!(wait_until(&mut h, Duration::from_secs(5), |h| {
-        h.app.model().trash.items.is_empty() && h.names().is_empty()
-    }));
-    assert!(h.root.path().join("c.txt").exists());
-    assert_eq!(h.app.undo_label().as_deref(), Some("Restore c.txt"));
+    assert_eq!(h.tab(pane).location, vfs_rick::Virtual::Trash.location());
+    assert!(h.names().is_empty(), "{:?}", h.names());
+    assert!(!h.root.path().join("c.txt").exists());
 }
 
 /// Two copies into one folder share its volume: the second waits for the
@@ -1219,55 +1200,9 @@ fn a_virtual_location_comes_back_with_the_session() {
 }
 
 #[test]
-fn the_trash_and_the_volumes_reach_the_model() {
+fn the_volumes_reach_the_model() {
     let mut h = harness();
     h.settle();
-    assert!(h.app.model().trash.listed);
-    assert_eq!(h.app.model().trash.items.len(), 0, "the trash is empty");
-    let pane = h.app.model().focused;
-    h.send(Command::Select {
-        pane,
-        change: SelectionChange::Set(vec![id_of(&h, "b.txt")]),
-    });
-    let ctx = h
-        .app
-        .action_ctx(pane, Invocation::Shortcut)
-        .unwrap_or_else(|| panic!("ctx"));
-    h.send(Command::Run {
-        action: ActionId("core.trash"),
-        ctx,
-    });
-    assert!(wait_until(&mut h, Duration::from_secs(5), |h| {
-        h.app.model().trash.items.len() == 1
-    }));
-    assert!(h.app.model().trash.items[0].original.ends_with("b.txt"));
-    let record = h.app.settings_path().with_file_name(super::TRASH_FILE);
-    assert!(wait_until(&mut h, Duration::from_secs(2), |_| {
-        fs::read_to_string(&record).is_ok_and(|t| t.contains("b.txt"))
-    }));
-
-    // Restore through the trash context, as the side panel does.
-    let entry = ops::trash_entry(&h.app.model().trash.items[0]);
-    h.send(Command::Run {
-        action: ActionId("core.restore_trash"),
-        ctx: ext::ActionCtx {
-            pane,
-            location: ops::trash_location(),
-            selection: vec![entry],
-            invoked_from: Invocation::ContextMenu,
-        },
-    });
-    assert!(wait_until(&mut h, Duration::from_secs(5), |h| {
-        h.app.model().trash.items.is_empty()
-    }));
-    assert!(h.root.path().join("b.txt").exists());
-    assert_eq!(h.app.undo_label().as_deref(), Some("Restore b.txt"));
-    h.send(Command::Undo);
-    assert!(wait_until(&mut h, Duration::from_secs(5), |h| {
-        h.app.model().trash.items.len() == 1
-    }));
-    assert!(!h.root.path().join("b.txt").exists());
-
     // Volumes come from the platform.
     assert_eq!(h.app.model().volumes.len(), 0, "no volume is listed");
     h.fake.add_volume(platform::Volume {
@@ -1284,4 +1219,29 @@ fn the_trash_and_the_volumes_reach_the_model() {
         h.app.model().volumes.len() == 1
     }));
     assert_eq!(h.app.model().volumes[0].name, "USB");
+}
+
+/// Open navigates into a folder; with no archive provider mounted a file
+/// goes straight to the system default.
+#[test]
+fn open_navigates_into_a_folder_and_opens_a_file_with_the_default() {
+    let mut h = harness();
+    h.settle();
+    let pane = h.app.model().focused;
+    let file = id_of(&h, "a.txt");
+    h.send(Command::Open { pane, id: file });
+    h.settle();
+    assert_eq!(h.fake.opened(), [h.root.path().join("a.txt")]);
+    assert_eq!(h.names(), ["sub", "a.txt", "b.txt", "c.txt"], "still here");
+
+    let sub = id_of(&h, "sub");
+    h.send(Command::Open { pane, id: sub });
+    h.settle();
+    let location = h
+        .app
+        .model()
+        .active_tab(pane)
+        .map_or_else(|| panic!("tab"), |(_, tab)| tab.location.clone());
+    assert_eq!(location, local(&h.root.path().join("sub")));
+    assert_eq!(h.fake.opened().len(), 1, "a folder opens nothing outside");
 }

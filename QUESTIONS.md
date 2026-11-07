@@ -1029,3 +1029,115 @@ Once answered, an entry keeps its number and gains a dated decision line.
     the section headers and *Add…*, Enter opens, Mod+Enter in a new tab,
     Escape releases. The Edit… dialogue and the reorder drag are the
     panel's own state, not the model's.
+
+94. (issue 20) The trash record of QUESTIONS.md 74 lived in `app`
+    (`trash.toml` through `ops::TrashStore`, which the `rick://trash` view
+    of 86 fell back to as `TrashRecord`); the trash provider plugin, which
+    depends on `ext` and `types` only, cannot reach it.
+    Assumed: the record moves into `platform`, behind `Trash::list`: on
+    macOS the trash itself writes `trash.toml` in the config directory when
+    it trashes, forgets on restore and removal, and `list` reads it back
+    pruned of items that left the trash, so the local provider's trashing
+    and the Trash view see one list and `list` never answers `Unsupported`
+    any more. `TrashStore`, `TrashRecord` and the `Fake`'s unlistable knob
+    go; the record module carries its own tests.
+
+95. (issue 20) Milestone 2 (86) made `vfs-rick` the one provider of the six
+    virtual locations, built in; the issue wants the Trash view served by
+    the plugin `ext-vfs-trash`, and Favorites, Recent and the overviews are
+    to follow the same road later.
+    Assumed: an extension serves a virtual location by registering a view,
+    `Registry::view(name, provider)`, which the application hands to
+    `RickProvider::add_view`; the rick provider then routes that location
+    and everything below it (`rick://trash`, `rick://trash/<item>/…`) to the
+    view's provider for `list`, `stat`, `open_read`, `remove` and the rest,
+    including `capabilities`, keeps `watch` itself so `changed` still
+    re-lists the view, and lists a location no extension serves as empty.
+    The view's provider sees the full path (`trash/<name>`), answers under
+    `ProviderId::RICK` and lives in a plugin that knows nothing of
+    `vfs-rick`. The path bar takes `rick://trash/<name>` as typed.
+
+96. (issue 20) Plugins depend on `ext` and `types` only (Module rules 2),
+    but the trash provider needs `platform::Trash` and the archive provider
+    the runtime's blocking pool.
+    Assumed: `ext` re-exports `platform` and `runtime`, and the `Registry`
+    is the extension context the Package layout names: the host builds it
+    with `Registry::with_platform` and an extension takes
+    `Registry::platform()` while it registers (`None` in a registry built
+    with `Registry::new()`, which the trash extension refuses). The plugin
+    host and the binary pass the platform on; the tests pass the `Fake`, so
+    a plugin's trash is the test's. `platform` becomes part of the `ext`
+    dylib; the layer order is unchanged (platform sits below ext).
+
+97. (issue 20) "Entering an archive … navigates into it as a location
+    (archive: provider); the breadcrumb shows the archive as a segment"
+    does not say what the location's path is.
+    Assumed: the archive's OS path with the path inside appended,
+    `archive:/home/me/a.zip/docs/x`. Which prefix is the archive is found
+    by asking the filesystem for the shortest prefix that is a file
+    (`ext_vfs_archive::split`); the UI does the same once per location for
+    its breadcrumbs, whose segments above the archive navigate the local
+    provider, and Up from the archive root goes to its folder. Open
+    (Enter, double-click) hands a local file to the archive provider first,
+    whose `stat` says whether it browses the file; anything else opens with
+    the system default. An archive inside an archive is a file, not a
+    location: the archive previewer of #18 is the way to look inside
+    without extracting. Entry ids hash the archive path and the inner path,
+    so they are stable across listings and survive a rewrite.
+
+98. (issue 20) "Change notification by polling (watch returns
+    Unsupported)" names no poller.
+    Assumed: the kernel polls. For a pane whose provider's `watch` answers
+    `Unsupported` (an archive, a trashed folder browsed below the view),
+    `app` calls `stat` on the location every 3 s and right after an
+    operation finished, and lists again when the entry's size or times
+    changed; an archive's root entry carries the archive file's size and
+    time. The Trash view itself is re-listed the milestone-2 way: `app`
+    lists the platform trash after every operation for the Places row's
+    count and rings `RickProvider::changed` when the list changed.
+
+99. (issue 20) Two plugin libraries linked into one binary (the tests, or
+    `rick` with two plugin features on) both exported
+    `rick_plugin_register` and the link failed.
+    Assumed: the exported symbol carries the crate name,
+    `rick_plugin_register_ext_vfs_trash`, which `ext::plugin!` takes from
+    `CARGO_CRATE_NAME`; the host and the bundler derive it from the
+    library's file name, so `plugin.toml` needs no new field. The Rust
+    function keeps its name, `rick_plugin_register`.
+
+100. (issue 20) Restore, Restore trash items and Empty trash are in the
+    spec's operations list without a context-menu group, and "live inside
+    the view only"; 92 had them as core actions over the application's
+    record.
+    Assumed: they are the plugin's, in the "Trash" action group
+    (`ActionGroup::Extension("Trash")`): `trash.restore`,
+    `trash.restore_items` and `trash.empty`, Hidden unless the pane is at
+    `rick://trash`, so the context menu offers them under Trash in the view
+    and nowhere else, and the palette lists them there too. Delete
+    permanently in the view is the core action through the view's
+    `remove(Permanent)`; Move to trash hides there, as 92 says, and the
+    other file actions with it. Enter and a double-click still restore
+    (the shell runs `trash.restore_items`). Without the plugin the view
+    lists nothing. The Places row keeps its count hint (92).
+
+101. (issue 20) Which core actions apply at a location another provider
+    serves; 92 settled the virtual locations only.
+    Assumed: the actions follow the provider's capabilities, as the
+    Provider contract says the kernel should: Paste, Duplicate, Rename, New
+    file and New folder are Hidden without `WRITE`, Move to trash without
+    `TRASH` (except in Favorites and Recent, whose entries are real files
+    elsewhere), so a read-only archive, the Trash view and a RAR show only
+    what works. The inline edits of New file and New folder start only
+    where the provider takes writes.
+
+102. (issue 20) How a write into an archive happens.
+    Assumed: zip, the tar family and 7z declare `WRITE | RENAME`; every
+    `open_write`, `create_dir`, `rename`, `remove` and same-archive `copy`
+    rewrites the whole archive into a temporary file beside it and renames
+    it over the original, under a lock per archive, inside the operation's
+    job (the rewrite reports no progress of its own). Zip entries keep
+    their compressed bytes, a compressed tar is recompressed with its
+    codec, 7z entries are re-encoded with LZMA2, new zip entries use
+    DEFLATE. RAR, ISO 9660 and UDF images and single-file codecs are
+    read-only. A `.iso` is tried as ISO 9660 first, then as UDF; a codec
+    file whose stream holds a tar is a tar.

@@ -16,7 +16,10 @@
 //! `register` method that contributes to any of the five points through the
 //! [`Registry`]. Built-ins register exactly like plugins. The contract is
 //! versioned by [`API_VERSION`]; the registry refuses a manifest of another
-//! version.
+//! version. The registry is also the extension context: it lends the
+//! host's [`platform`] services ([`Registry::platform`]) to an extension
+//! while it registers, and takes a provider for a virtual location,
+//! `rick://<name>`, through [`Registry::view`].
 //!
 //! Each module's documentation carries a worked example of its extension
 //! point; [`registry`] shows how one extension contributes to two of them,
@@ -60,6 +63,16 @@ pub use registry::{
     API_VERSION, Extension, Manifest, Platforms, Points, Registry, SettingField, SettingKind,
     SettingsSchema,
 };
-pub use runtime::JobRunner;
+pub use runtime::{JobRunner, ProgressSink};
 pub use search::{Filter, Query, QueryKind, SearchHit, SearchIndex, SearchScope};
 pub use semver::Version;
+
+/// The platform services an extension programs against (`Trash`,
+/// `OpenWith`, `ConfigDir`, `NativeDialogs`, …), re-exported so an
+/// extension depends on `ext` and `types` only; the host lends an instance
+/// through [`Registry::platform`].
+pub use platform;
+/// The job system, re-exported for the same reason: an extension that
+/// bridges a synchronous library to a stream spawns on the one runtime's
+/// blocking pool through `runtime::handle()`.
+pub use runtime;

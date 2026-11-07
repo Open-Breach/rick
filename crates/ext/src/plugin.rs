@@ -6,12 +6,15 @@
 //! dylibs, so the five traits, the job runner and the tracing subscriber
 //! are the same code in the same memory on both sides and cross the
 //! boundary unchanged (QUESTIONS.md 81). The one thing a plugin exports is
-//! the `extern "C"` function [`ENTRY_POINT`], `rick_plugin_register`,
-//! declared with [`plugin!`](crate::plugin!): the host loads the library, calls it with a
-//! [`Registry`] and reads a [`Status`] back. Inside, [`register`] builds
-//! the extension, lets the registry load it and catches any panic, so a
-//! plugin that fails to register is reported and never takes the host
-//! down.
+//! an `extern "C"` function named after the crate,
+//! `rick_plugin_register_<crate>` ([`entry_point`]), declared with
+//! [`plugin!`](crate::plugin!): the host loads the library, calls it with a
+//! [`Registry`] and reads a [`Status`] back. The crate's name is in the
+//! symbol so two plugins compiled into one binary (the tests, a build with
+//! several plugin features on) do not clash (QUESTIONS.md 99). Inside,
+//! [`register`] builds the extension, lets the registry load it and catches
+//! any panic, so a plugin that fails to register is reported and never
+//! takes the host down.
 //!
 //! # Worked example
 //!
@@ -54,8 +57,10 @@
 //! // entry point; in the library this is the one exported symbol.
 //! ext::plugin!(|| Arc::new(Hello::new()) as Arc<dyn Extension>);
 //!
-//! // The host, having loaded the library and resolved `ENTRY_POINT` as an
-//! // `EntryPoint`, calls it with a registry of its own.
+//! // The host, having loaded the library and resolved the symbol
+//! // `entry_point("ext-hello")` as an `EntryPoint`, calls it with a
+//! // registry of its own; the Rust function is always `rick_plugin_register`.
+//! assert_eq!(ext::plugin::entry_point("ext-hello"), "rick_plugin_register_ext_hello");
 //! let mut registry = Registry::new();
 //! assert_eq!(rick_plugin_register(&mut registry), Status::Registered);
 //! assert_eq!(registry.extensions(), &[ExtId("hello")]);
@@ -71,8 +76,16 @@ use std::sync::Arc;
 
 use crate::registry::{Extension, Registry};
 
-/// The name of the function every plugin library exports.
-pub const ENTRY_POINT: &str = "rick_plugin_register";
+/// The prefix of the function every plugin library exports; the crate's
+/// name follows, see [`entry_point`].
+pub const ENTRY_POINT_PREFIX: &str = "rick_plugin_register_";
+
+/// The exported symbol of the plugin built from the crate `name`
+/// (`ext-git` or `ext_git`): `rick_plugin_register_ext_git`.
+#[must_use]
+pub fn entry_point(name: &str) -> String {
+    format!("{ENTRY_POINT_PREFIX}{}", name.replace('-', "_"))
+}
 
 /// The entry point's signature, as the host resolves it from the library.
 ///
@@ -141,16 +154,17 @@ pub fn register(reg: &mut Registry, ctor: impl FnOnce() -> Arc<dyn Extension>) -
 /// Declares the plugin entry point.
 ///
 /// Takes an expression that builds the extension, `|| Arc::new(…) as
-/// Arc<dyn Extension>`, and defines the exported `rick_plugin_register`
-/// function around [`register`]. Use it once, at the top level of the
-/// plugin crate. `#[no_mangle]` is the one unsafe attribute a plugin needs
-/// and the macro carries the allowance for it.
+/// Arc<dyn Extension>`, and defines the `rick_plugin_register` function
+/// around [`register`], exported under the symbol [`entry_point`] gives for
+/// the crate. Use it once, at the top level of the plugin crate.
+/// `#[export_name]` is the one unsafe attribute a plugin needs and the
+/// macro carries the allowance for it.
 #[macro_export]
 macro_rules! plugin {
     ($ctor:expr) => {
         /// The plugin's entry point; the host calls it once with a registry.
         #[allow(unsafe_code)]
-        #[unsafe(no_mangle)]
+        #[unsafe(export_name = concat!("rick_plugin_register_", env!("CARGO_CRATE_NAME")))]
         pub extern "C" fn rick_plugin_register(
             registry: &mut $crate::Registry,
         ) -> $crate::plugin::Status {
@@ -188,6 +202,12 @@ mod tests {
             points: Points::empty(),
             platforms: Platforms::ALL,
         }
+    }
+
+    #[test]
+    fn the_symbol_carries_the_crate_name() {
+        assert_eq!(entry_point("ext-git"), "rick_plugin_register_ext_git");
+        assert_eq!(entry_point("ext_git"), "rick_plugin_register_ext_git");
     }
 
     #[test]

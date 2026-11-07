@@ -1,0 +1,45 @@
+[package]
+name = "ext-vfs-archive"
+version.workspace = true
+description = "Rick's archive provider: zip, the tar family, 7z, RAR (read-only), ISO 9660 and UDF images and single-file codecs browsed in place as locations, with zip, tar and 7z writable."
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+# A plugin: a `cdylib` the host loads from `plugins/vfs-archive/`, and an
+# `rlib` for the binary's opt-in `vfs-archive` feature and the tests.
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+types = { workspace = true }
+ext = { workspace = true }
+futures = { workspace = true }
+tokio = { workspace = true, features = ["fs", "io-util", "sync"] }
+tracing = { workspace = true }
+tempfile = { workspace = true }
+zip = { workspace = true }
+flate2 = { workspace = true }
+tar = { workspace = true }
+zstd = { workspace = true }
+liblzma = { workspace = true }
+bzip2 = { workspace = true }
+lz4_flex = { workspace = true }
+brotli = { workspace = true }
+snap = { workspace = true }
+sevenz-rust2 = { workspace = true }
+unrar = { workspace = true }
+hadris-fs = { workspace = true }
+hadris-iso = { workspace = true }
+hadris-udf = { workspace = true }
+hadris-storage = { workspace = true }
+
+[dev-dependencies]
+runtime = { workspace = true }
+# The ISO 9660 and UDF images the tests browse are written with the same
+# readers' writers.
+hadris-iso = { workspace = true, features = ["write"] }
+hadris-udf = { workspace = true, features = ["write"] }
+
+[lints]
+workspace = true

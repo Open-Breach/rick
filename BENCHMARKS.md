@@ -276,6 +276,21 @@ twice that until the bench workflow measures them.
 | macOS | 100 ms | — | — |
 | Windows | 100 ms | — | — |
 
+### `archive-zip-first` — the first batch of a 10 000-entry zip
+
+Issue 20: the archive provider reading a 10 000-entry zip's central
+directory, building its index and handing the root listing's first batch to
+the stream, measured from `list` to the batch's arrival with a cold cache;
+the issue asks for 50 ms. Test: `a_10_000_entry_zip_lists_its_first_batch_within_50_ms`
+in `providers.rs`. macOS and Windows carry a provisional target of twice
+that until the bench workflow measures them.
+
+| OS | Target | Median | Worst |
+| --- | --- | --- | --- |
+| Linux | 50 ms | — | — |
+| macOS | 100 ms | — | — |
+| Windows | 100 ms | — | — |
+
 ### `tree-first` — the tree view's first children on the 200k fixture
 
 Spec target: 50 ms for the first screen after expanding a folder (close-out

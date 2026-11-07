@@ -4,7 +4,7 @@
 
 Rick is a lens into your files. Point it at a folder and you see what's what: what every file is, what's inside it, what changed, what's where. Then you move things, rename things, sort things out, without ever leaving the window. One tool, written in Rust, identical on Linux, macOS and Windows, and built from modules so it only carries what *you* need.
 
-> Status: 0.1.0 is out, on all three platforms at once, as plain archives from the [Releases page](https://github.com/Open-Breach/rick/releases). 0.2 is under way: a native plugin host, so every non-essential feature becomes a file you can drop in or remove, then the viewer, more previewers (Office, media, archives, CSV, 3D models), archive, ISO, trash, SFTP and cloud providers, search connectors, and the remaining actions — the plan is in [SPEC.md](SPEC.md) under "Version 0.2 — scope". Star the repo, watch it, and come along for the ride.
+> Status: 0.1.0 is out, on all three platforms at once, as plain archives from the [Releases page](https://github.com/Open-Breach/rick/releases). 0.2 is under way: the native plugin host is in, so every non-essential feature becomes a file you can drop in or remove, and the first providers are plugins — archives, ISO and UDF images browsed in place, and the Trash as a location; the viewer, more previewers (Office, media, archives, CSV, 3D models), SFTP and cloud providers, search connectors and the remaining actions follow — the plan is in [SPEC.md](SPEC.md) under "Version 0.2 — scope". Star the repo, watch it, and come along for the ride.
 
 > **Use with caution.** Rick is written largely by an AI coding agent working from [SPEC.md](SPEC.md), with human review, a strict test gate and CI on all three platforms. That makes it fast to build and easy to audit, but it is still young software whose entire purpose is to move, rename and delete your files. Until 1.0, run it on data you have backed up, prefer *Move to trash* over *Delete permanently*, and treat every release as a preview. If it does something surprising, that's a bug: please report it.
 
@@ -71,7 +71,7 @@ The full story, from supported file systems to the trait signatures, lives in [S
 
 ## Try it
 
-Release archives for Linux (x64 and arm64), macOS (Apple silicon) and Windows (x64) are on the [Releases page](https://github.com/Open-Breach/rick/releases). Each archive holds the `rick` binary, the shared libraries it needs beside it (Rick's kernel and the Rust standard library, which the plugins share with it), the pdfium library for PDF previews, a `plugins/` folder with the Git plugin, the license, this README, the changelog and the third-party licenses; `SHA256SUMS.txt` has the checksums. Unpack it anywhere and run it from the unpacked folder:
+Release archives for Linux (x64 and arm64), macOS (Apple silicon) and Windows (x64) are on the [Releases page](https://github.com/Open-Breach/rick/releases). Each archive holds the `rick` binary, the shared libraries it needs beside it (Rick's kernel and the Rust standard library, which the plugins share with it), the pdfium library for PDF previews, a `plugins/` folder with the Git, archive and trash plugins, the license, this README, the changelog and the third-party licenses; `SHA256SUMS.txt` has the checksums. Unpack it anywhere and run it from the unpacked folder:
 
 ```bash
 # Linux
@@ -90,7 +90,7 @@ Expand-Archive rick-0.1.0-windows-x64.zip -DestinationPath . ; .\rick-0.1.0-wind
 
 `rick --version` prints the version and the git hash it was built from; `rick --list-plugins` prints the plugins it found and whether each loaded; `rick <folder>` starts in that folder. Plugins live in the `plugins/` folder beside the binary and in a per-user one in the config directory (`~/.config/rick/plugins` on Linux, `~/Library/Application Support/Rick/plugins` on macOS, `%APPDATA%\Rick\plugins` on Windows); the Extensions screen in the burger menu lists them and switches each on or off for the next start. The archives are not signed or notarised yet (0.2 at the earliest): macOS may refuse a binary downloaded through a browser until you allow it under System Settings → Privacy & Security, or clear the quarantine flag with `xattr -dr com.apple.quarantine rick-0.1.0-macos-arm64`; Windows SmartScreen may warn the first time. The Linux builds need glibc 2.39 or later (Ubuntu 24.04). Intel Macs are not covered yet.
 
-0.1 ships local files, tabs and panes, the core operations, previews for text, code, images and PDF, and the Git module. 0.2 starts with the plugin host: Git is the first plugin, and archives, ISO, media and Office follow as plugins. The numbers the release was measured against are in [BENCHMARKS.md](BENCHMARKS.md), the changes in [CHANGELOG.md](CHANGELOG.md).
+0.1 ships local files, tabs and panes, the core operations, previews for text, code, images and PDF, and the Git module. 0.2 starts with the plugin host: Git is the first plugin, archives (zip, tar, 7z, RAR, ISO and UDF images) and the Trash view are the next two, and media and Office follow as plugins. The numbers the release was measured against are in [BENCHMARKS.md](BENCHMARKS.md), the changes in [CHANGELOG.md](CHANGELOG.md).
 
 To build from source instead:
 

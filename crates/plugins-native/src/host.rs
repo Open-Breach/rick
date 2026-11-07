@@ -5,6 +5,7 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use ext::platform::Platform;
 use ext::{API_VERSION, Extension, Platforms, Points};
 use tracing::{debug, info, info_span, warn};
 
@@ -69,7 +70,7 @@ pub struct Plugin {
 }
 
 /// What the host is told at start.
-#[derive(Debug, Clone, Default)]
+#[derive(Clone, Default)]
 pub struct Options {
     /// The plugins directories to scan, in order; see [`Options::dirs`].
     pub dirs: Vec<(Source, PathBuf)>,
@@ -79,9 +80,33 @@ pub struct Options {
     /// Ids of the extensions compiled into the binary, which a plugin of the
     /// same id cannot replace.
     pub compiled_in: Vec<String>,
+    /// The platform services lent to every plugin while it registers
+    /// (`ext::Registry::platform`); the platform the binary runs on when
+    /// `None`.
+    pub platform: Option<Arc<dyn Platform>>,
+}
+
+impl std::fmt::Debug for Options {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Options")
+            .field("dirs", &self.dirs)
+            .field("disabled", &self.disabled)
+            .field("compiled_in", &self.compiled_in)
+            .field("platform", &self.platform.is_some())
+            .finish()
+    }
 }
 
 impl Options {
+    /// The platform the plugins register with: the one given, else the
+    /// binary's own.
+    #[must_use]
+    pub fn platform(&self) -> Arc<dyn Platform> {
+        self.platform
+            .clone()
+            .unwrap_or_else(|| Arc::new(ext::platform::Native::new()))
+    }
+
     /// The two plugins directories: beside the binary `exe` and in the
     /// per-user `config_dir`.
     #[must_use]
@@ -296,7 +321,7 @@ fn check_and_load(
     if options.disabled.contains(&toml.id) {
         return Ok(None);
     }
-    let loaded = load_library(&path).map_err(|e| e.to_string())?;
+    let loaded = load_library(&path, options.platform()).map_err(|e| e.to_string())?;
     let manifest = loaded.manifest();
     if manifest.id.0 != toml.id {
         return Err(format!(

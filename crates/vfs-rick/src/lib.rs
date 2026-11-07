@@ -10,16 +10,23 @@
 //! | --- | --- |
 //! | Favorites | the pinned folders and files, with their own ids and paths |
 //! | Recent | the system's recently-used list, the use time as `accessed` |
-//! | Trash | the platform trash, or Rick's own record where it cannot be listed |
+//! | Trash | what the view's provider lists: the trash plugin's; nothing without it |
 //! | This Machine | the drives of the machine, one folder entry per mount root |
 //! | Network | the mounted network file systems and the network providers' roots |
 //! | Cloud | the roots of the cloud providers mounted, as they list them |
 //!
 //! Because they are provider-backed paths they sit in a tab, the
-//! breadcrumb, the history and the session like any folder. The provider
-//! cannot write; every mutating method answers `Unsupported`. A view lists
+//! breadcrumb, the history and the session like any folder. A view lists
 //! again when the application calls [`RickProvider::changed`] for it, which
 //! its watchers see as [`FsChange::Rescan`].
+//!
+//! An extension serves a virtual location by registering a view
+//! (`Registry::view`), which the application hands to
+//! [`RickProvider::add_view`]: from then on the location and everything
+//! below it (`rick://trash`, `rick://trash/<item>/…`) go to that provider,
+//! `list`, `stat`, `open_read`, `remove`, `capabilities` and all, under this
+//! provider's id (QUESTIONS.md 95). The built-in views cannot write; every
+//! mutating method answers `Unsupported` there.
 //!
 //! ```
 //! use vfs_rick::{PROVIDER_ID, Virtual, parse_uri};
@@ -35,10 +42,11 @@
 
 #![forbid(unsafe_code)]
 
+use std::collections::BTreeMap;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::path::Path;
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 
 use ext::{
     Capabilities, ChangeStream, CopyOptions, Depth, EntryStream, FsChange, LinkKind, ListOptions,
@@ -46,7 +54,7 @@ use ext::{
 };
 use futures::StreamExt;
 use futures::stream;
-use platform::{Platform, TrashedItem, VolumeKind};
+use platform::{Platform, VolumeKind};
 use runtime::{ProgressSink, watch};
 use types::{Attrs, CancelToken, Entry, EntryId, EntryKind, Error, Location, ProviderId, VPath};
 use vfs::Mounts;
@@ -180,13 +188,6 @@ pub trait Favorites: Send + Sync {
     fn pinned(&self) -> Vec<Location>;
 }
 
-/// Rick's own record of what it trashed, for platforms whose trash cannot
-/// be listed (macOS); the Trash view falls back to it.
-pub trait TrashRecord: Send + Sync {
-    /// Every item known, newest first.
-    fn items(&self) -> Vec<TrashedItem>;
-}
-
 /// A stable 128-bit key for a path or a name.
 fn key_of(bytes: &[u8]) -> u128 {
     let mut hasher = DefaultHasher::new();
@@ -209,48 +210,24 @@ pub fn is_trash(loc: &Location) -> bool {
     Virtual::of(loc) == Some(Virtual::Trash)
 }
 
-/// The entry that stands for a trashed item: the original name, the trashed
-/// path, the deletion time as `modified`, an id of this provider hashed
-/// from the trashed path.
+/// The view a location is in: the first component of its path, `trash` for
+/// `rick://trash` and for `rick://trash/old/notes.txt`; `None` for another
+/// provider's location and for the bare scheme.
 #[must_use]
-pub fn trash_entry(item: &TrashedItem) -> Entry {
-    let is_dir = std::fs::symlink_metadata(&item.trashed).is_ok_and(|m| m.is_dir());
-    let size = (!is_dir)
-        .then(|| {
-            std::fs::symlink_metadata(&item.trashed)
-                .ok()
-                .map(|m| m.len())
-        })
-        .flatten();
-    Entry {
-        id: EntryId::new(
-            PROVIDER_ID,
-            key_of(item.trashed.as_os_str().as_encoded_bytes()),
-        ),
-        name: original_name(item),
-        path: VPath::from_os_str(item.trashed.as_os_str()),
-        kind: if is_dir {
-            EntryKind::Dir
-        } else {
-            EntryKind::File
-        },
-        size,
-        created: None,
-        modified: Some(item.deleted_at),
-        accessed: None,
-        attrs: Attrs::empty(),
-        mime: None,
+pub fn view_name(loc: &Location) -> Option<&str> {
+    if loc.provider != PROVIDER_ID {
+        return None;
     }
+    let text = std::str::from_utf8(loc.path.as_bytes()).ok()?;
+    let name = text
+        .trim_start_matches(['/', '\\'])
+        .split(['/', '\\'])
+        .next()?;
+    (!name.is_empty()).then_some(name)
 }
 
-/// The name a trashed item had where it came from.
-#[must_use]
-pub fn original_name(item: &TrashedItem) -> String {
-    item.original.file_name().map_or_else(
-        || item.original.display().to_string(),
-        |n| n.to_string_lossy().into_owned(),
-    )
-}
+/// The providers extensions registered for views, by view name.
+type Views = Arc<RwLock<BTreeMap<String, Arc<dyn Provider>>>>;
 
 /// The folder entry for a path on the local disk, with the local provider's
 /// own id when the path can be examined and a hashed one otherwise.
@@ -337,8 +314,10 @@ where
 pub struct RickProvider {
     platform: Arc<dyn Platform>,
     favorites: Arc<dyn Favorites>,
-    trash: Arc<dyn TrashRecord>,
     mounts: Arc<Mounts>,
+    /// The views extensions serve, by name; a location in one of them is
+    /// theirs.
+    views: Views,
     /// One change counter per virtual location; a watch stream yields a
     /// `Rescan` on every increment.
     changes: [watch::Sender<u64>; 6],
@@ -351,23 +330,48 @@ impl std::fmt::Debug for RickProvider {
 }
 
 impl RickProvider {
-    /// A provider over the platform's trash, volumes and recently-used
-    /// list, the application's pinned locations and trash record, and the
-    /// provider table for the network and cloud roots.
+    /// A provider over the platform's volumes and recently-used list, the
+    /// application's pinned locations, and the provider table for the
+    /// network and cloud roots; no view is served by an extension yet.
     #[must_use]
     pub fn new(
         platform: Arc<dyn Platform>,
         favorites: Arc<dyn Favorites>,
-        trash: Arc<dyn TrashRecord>,
         mounts: Arc<Mounts>,
     ) -> Self {
         Self {
             platform,
             favorites,
-            trash,
             mounts,
+            views: Arc::default(),
             changes: std::array::from_fn(|_| watch::channel(0).0),
         }
+    }
+
+    /// Hands the view `rick://<name>` to `provider`: from now on the
+    /// location and everything below it are served by it. A later
+    /// registration for the same name replaces the earlier.
+    pub fn add_view(&self, name: &str, provider: Arc<dyn Provider>) {
+        self.views
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .insert(name.to_owned(), provider);
+    }
+
+    /// The provider serving the view `rick://<name>`, if an extension
+    /// registered one.
+    #[must_use]
+    pub fn view(&self, name: &str) -> Option<Arc<dyn Provider>> {
+        self.views
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .get(name)
+            .cloned()
+    }
+
+    /// The provider serving `loc`, when an extension serves its view.
+    fn view_of(&self, loc: &Location) -> Option<Arc<dyn Provider>> {
+        self.view(view_name(loc)?)
     }
 
     /// Tells every open view of `which` to list again: the pins, the
@@ -406,22 +410,6 @@ impl RickProvider {
                 .collect())
         })
         .await
-    }
-
-    /// The entries of the Trash view: the platform's list, or Rick's own
-    /// record where the platform keeps the original paths to itself.
-    async fn list_trash(&self) -> Result<Vec<Entry>, Error> {
-        let platform = Arc::clone(&self.platform);
-        let mut items = match blocking(move || platform.list()).await {
-            Ok(items) => items,
-            Err(Error::Unsupported(why)) => {
-                tracing::debug!(why, "trash not listable; showing Rick's own record");
-                self.trash.items()
-            }
-            Err(error) => return Err(error),
-        };
-        items.sort_by_key(|item| std::cmp::Reverse(item.deleted_at));
-        blocking(move || Ok(items.iter().map(trash_entry).collect())).await
     }
 
     /// The volumes of the given kinds as folder entries at their mount
@@ -499,19 +487,31 @@ impl Provider for RickProvider {
         PROVIDER_ID
     }
 
-    fn capabilities(&self, _loc: &Location) -> Capabilities {
-        Capabilities::WATCH
+    /// What the view's provider can do there; the built-in views can only
+    /// be watched, and a view's root is watched through this provider.
+    fn capabilities(&self, loc: &Location) -> Capabilities {
+        let own = self
+            .view_of(loc)
+            .map_or(Capabilities::empty(), |v| v.capabilities(loc));
+        if Virtual::of(loc).is_some() {
+            own | Capabilities::WATCH
+        } else {
+            own
+        }
     }
 
-    fn list(&self, loc: &Location, _opts: ListOptions, cancel: CancelToken) -> EntryStream {
+    fn list(&self, loc: &Location, opts: ListOptions, cancel: CancelToken) -> EntryStream {
+        if let Some(view) = self.view_of(loc) {
+            return view.list(loc, opts, cancel);
+        }
         let Some(which) = Virtual::of(loc) else {
             return stream::once(async { Err(Error::NotFound) }).boxed();
         };
         let this = Self {
             platform: Arc::clone(&self.platform),
             favorites: Arc::clone(&self.favorites),
-            trash: Arc::clone(&self.trash),
             mounts: Arc::clone(&self.mounts),
+            views: Arc::clone(&self.views),
             changes: self.changes.clone(),
         };
         stream::once(async move {
@@ -521,7 +521,8 @@ impl Provider for RickProvider {
             match which {
                 Virtual::Favorites => this.list_favorites().await,
                 Virtual::Recent => this.list_recent().await,
-                Virtual::Trash => this.list_trash().await,
+                // Served by the trash plugin's view; nothing without it.
+                Virtual::Trash => Ok(Vec::new()),
                 Virtual::Machine => this.list_volumes(false).await,
                 Virtual::Network => {
                     let mut entries = this.list_volumes(true).await?;
@@ -539,6 +540,9 @@ impl Provider for RickProvider {
     }
 
     async fn stat(&self, loc: &Location) -> Result<Entry, Error> {
+        if let Some(view) = self.view_of(loc) {
+            return view.stat(loc).await;
+        }
         let which = Virtual::of(loc).ok_or(Error::NotFound)?;
         Ok(Entry {
             id: EntryId::new(PROVIDER_ID, key_of(which.name().as_bytes())),
@@ -554,54 +558,75 @@ impl Provider for RickProvider {
         })
     }
 
-    async fn open_read(&self, _loc: &Location) -> Result<ReadHandle, Error> {
+    async fn open_read(&self, loc: &Location) -> Result<ReadHandle, Error> {
+        if let Some(view) = self.view_of(loc) {
+            return view.open_read(loc).await;
+        }
         Err(Error::Unsupported(
             "a virtual location has no contents to read",
         ))
     }
 
-    async fn open_write(&self, _loc: &Location, _opts: WriteOptions) -> Result<WriteHandle, Error> {
+    async fn open_write(&self, loc: &Location, opts: WriteOptions) -> Result<WriteHandle, Error> {
+        if let Some(view) = self.view_of(loc) {
+            return view.open_write(loc, opts).await;
+        }
         Err(Error::Unsupported("a virtual location cannot be written"))
     }
 
-    async fn create_dir(&self, _loc: &Location) -> Result<Entry, Error> {
+    async fn create_dir(&self, loc: &Location) -> Result<Entry, Error> {
+        if let Some(view) = self.view_of(loc) {
+            return view.create_dir(loc).await;
+        }
         Err(Error::Unsupported(
             "a virtual location cannot hold a folder",
         ))
     }
 
-    async fn rename(&self, _from: &Location, _to: &Location) -> Result<Entry, Error> {
+    async fn rename(&self, from: &Location, to: &Location) -> Result<Entry, Error> {
+        if let Some(view) = self.view_of(from) {
+            return view.rename(from, to).await;
+        }
         Err(Error::Unsupported("a virtual location cannot be renamed"))
     }
 
-    async fn remove(&self, _loc: &Location, _mode: RemoveMode) -> Result<(), Error> {
+    async fn remove(&self, loc: &Location, mode: RemoveMode) -> Result<(), Error> {
+        if let Some(view) = self.view_of(loc) {
+            return view.remove(loc, mode).await;
+        }
         Err(Error::Unsupported("a virtual location cannot be removed"))
     }
 
-    async fn link(
-        &self,
-        _target: &Location,
-        _at: &Location,
-        _kind: LinkKind,
-    ) -> Result<Entry, Error> {
+    async fn link(&self, target: &Location, at: &Location, kind: LinkKind) -> Result<Entry, Error> {
+        if let Some(view) = self.view_of(at) {
+            return view.link(target, at, kind).await;
+        }
         Err(Error::Unsupported("a virtual location cannot hold a link"))
     }
 
     async fn copy(
         &self,
-        _from: &Location,
-        _to: &Location,
-        _opts: CopyOptions,
-        _progress: ProgressSink,
-        _cancel: CancelToken,
+        from: &Location,
+        to: &Location,
+        opts: CopyOptions,
+        progress: ProgressSink,
+        cancel: CancelToken,
     ) -> Result<(), Error> {
+        if let Some(view) = self.view_of(from) {
+            return view.copy(from, to, opts, progress, cancel).await;
+        }
         Err(Error::Unsupported("a virtual location cannot be copied"))
     }
 
     /// A `Rescan` every time [`RickProvider::changed`] is called for the
-    /// location.
+    /// location; below a view's root, whatever its provider offers (the
+    /// kernel polls what cannot be watched).
     fn watch(&self, loc: &Location) -> Result<ChangeStream, Error> {
-        let which = Virtual::of(loc).ok_or(Error::NotFound)?;
+        let Some(which) = Virtual::of(loc) else {
+            return self
+                .view_of(loc)
+                .map_or(Err(Error::NotFound), |view| view.watch(loc));
+        };
         let mut rx = self.changes[which as usize].subscribe();
         rx.mark_unchanged();
         Ok(stream::unfold(rx, |mut rx| async move {
@@ -630,10 +655,91 @@ mod tests {
         }
     }
 
-    struct NoRecord;
-    impl TrashRecord for NoRecord {
-        fn items(&self) -> Vec<TrashedItem> {
-            Vec::new()
+    /// A view's provider that lists one entry at `trash` and nothing
+    /// below, reads nothing, and can remove.
+    #[derive(Debug)]
+    struct OneItem;
+
+    fn one_item_entry() -> Entry {
+        Entry {
+            id: EntryId::new(PROVIDER_ID, 7),
+            name: "doomed.txt".to_owned(),
+            path: VPath::from("trash/doomed.txt"),
+            kind: EntryKind::File,
+            size: Some(1),
+            created: None,
+            modified: None,
+            accessed: None,
+            attrs: Attrs::empty(),
+            mime: None,
+        }
+    }
+
+    #[async_trait]
+    impl Provider for OneItem {
+        fn id(&self) -> ProviderId {
+            PROVIDER_ID
+        }
+        fn capabilities(&self, _loc: &Location) -> Capabilities {
+            Capabilities::RENAME
+        }
+        fn list(&self, loc: &Location, _opts: ListOptions, _cancel: CancelToken) -> EntryStream {
+            let root = loc.path.as_bytes() == b"trash";
+            stream::once(async move {
+                if root {
+                    Ok(vec![one_item_entry()])
+                } else {
+                    Ok(Vec::new())
+                }
+            })
+            .boxed()
+        }
+        async fn stat(&self, loc: &Location) -> Result<Entry, Error> {
+            if loc.path.as_bytes() == b"trash/doomed.txt" {
+                Ok(one_item_entry())
+            } else {
+                Err(Error::NotFound)
+            }
+        }
+        async fn open_read(&self, _loc: &Location) -> Result<ReadHandle, Error> {
+            Err(Error::Unsupported("nothing to read"))
+        }
+        async fn open_write(
+            &self,
+            _loc: &Location,
+            _opts: WriteOptions,
+        ) -> Result<WriteHandle, Error> {
+            Err(Error::Unsupported("no writing"))
+        }
+        async fn create_dir(&self, _loc: &Location) -> Result<Entry, Error> {
+            Err(Error::Unsupported("no folders"))
+        }
+        async fn rename(&self, _from: &Location, _to: &Location) -> Result<Entry, Error> {
+            Ok(one_item_entry())
+        }
+        async fn remove(&self, _loc: &Location, _mode: RemoveMode) -> Result<(), Error> {
+            Ok(())
+        }
+        async fn link(
+            &self,
+            _target: &Location,
+            _at: &Location,
+            _kind: LinkKind,
+        ) -> Result<Entry, Error> {
+            Err(Error::Unsupported("no links"))
+        }
+        async fn copy(
+            &self,
+            _from: &Location,
+            _to: &Location,
+            _opts: CopyOptions,
+            _progress: ProgressSink,
+            _cancel: CancelToken,
+        ) -> Result<(), Error> {
+            Err(Error::Unsupported("no copying"))
+        }
+        fn watch(&self, _loc: &Location) -> Result<ChangeStream, Error> {
+            Err(Error::Unsupported("polled"))
         }
     }
 
@@ -645,10 +751,67 @@ mod tests {
         let provider = RickProvider::new(
             Arc::clone(fake) as Arc<dyn Platform>,
             Arc::new(Pins(pins)),
-            Arc::new(NoRecord),
             Arc::clone(&mounts),
         );
         (provider, mounts)
+    }
+
+    #[test]
+    fn view_names_are_the_first_component() {
+        assert_eq!(view_name(&Virtual::Trash.location()), Some("trash"));
+        assert_eq!(
+            view_name(&Location::new(PROVIDER_ID, "trash/old/notes.txt")),
+            Some("trash")
+        );
+        assert_eq!(
+            view_name(&Location::new(PROVIDER_ID, "/trash/x")),
+            Some("trash")
+        );
+        assert_eq!(view_name(&Location::new(PROVIDER_ID, "")), None);
+        assert_eq!(view_name(&Location::new(PROVIDER_ID, "/")), None);
+        assert_eq!(
+            view_name(&Location::new(vfs_local::PROVIDER_ID, "trash")),
+            None
+        );
+    }
+
+    #[test]
+    fn a_registered_view_serves_its_location_and_what_is_below_it() {
+        let fake = Arc::new(Fake::new().unwrap_or_else(|e| panic!("{e}")));
+        let (provider, _mounts) = provider(&fake, Vec::new());
+        let trash = Virtual::Trash.location();
+        runtime::block_on(async {
+            assert_eq!(collect(&provider, Virtual::Trash).await, [] as [Entry; 0]);
+            assert_eq!(provider.capabilities(&trash), Capabilities::WATCH);
+            provider.add_view("trash", Arc::new(OneItem));
+            let listed = collect(&provider, Virtual::Trash).await;
+            assert_eq!(listed, [one_item_entry()]);
+            assert_eq!(
+                provider.capabilities(&trash),
+                Capabilities::RENAME | Capabilities::WATCH,
+                "the view's capabilities, watched through the router"
+            );
+            let item = Location::new(PROVIDER_ID, "trash/doomed.txt");
+            assert_eq!(provider.capabilities(&item), Capabilities::RENAME);
+            assert_eq!(
+                provider.stat(&item).await.unwrap_or_else(|e| panic!("{e}")),
+                one_item_entry()
+            );
+            assert!(provider.remove(&item, RemoveMode::Permanent).await.is_ok());
+            assert!(
+                matches!(provider.watch(&item), Err(Error::Unsupported(_))),
+                "below the view's root the view's own watch answers"
+            );
+            let mut own = provider.watch(&trash).unwrap_or_else(|e| panic!("{e}"));
+            provider.changed(Virtual::Trash);
+            assert_eq!(own.next().await, Some(FsChange::Rescan));
+            assert!(provider.view("trash").is_some());
+            assert!(provider.view("favorites").is_none());
+            assert!(matches!(
+                provider.stat(&Location::new(PROVIDER_ID, "x")).await,
+                Err(Error::NotFound)
+            ));
+        });
     }
 
     async fn collect(provider: &RickProvider, which: Virtual) -> Vec<Entry> {
@@ -728,7 +891,7 @@ mod tests {
         });
         let trashed = home.join("doomed.txt");
         std::fs::write(&trashed, "y").unwrap_or_else(|e| panic!("{e}"));
-        let item = fake.trash(&trashed).unwrap_or_else(|e| panic!("{e}"));
+        fake.trash(&trashed).unwrap_or_else(|e| panic!("{e}"));
 
         runtime::block_on(async {
             let favorites = collect(&provider, Virtual::Favorites).await;
@@ -752,11 +915,7 @@ mod tests {
             );
 
             let trash = collect(&provider, Virtual::Trash).await;
-            assert_eq!(trash.len(), 1);
-            assert_eq!(trash[0].name, "doomed.txt");
-            assert_eq!(trash[0].id.provider, PROVIDER_ID);
-            assert_eq!(trash[0].path, VPath::from_os_str(item.trashed.as_os_str()));
-            assert_eq!(trash[0], trash_entry(&item));
+            assert!(trash.is_empty(), "the Trash view is the trash plugin's");
 
             let machine = collect(&provider, Virtual::Machine).await;
             assert_eq!(machine.len(), 1);

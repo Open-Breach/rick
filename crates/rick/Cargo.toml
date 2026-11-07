@@ -13,8 +13,9 @@ name = "rick"
 path = "src/main.rs"
 
 # Built-in extensions are features, default-on; a lean build turns them off.
-# `git` compiles the Git plugin in instead of loading it from `plugins/`;
-# default off since 0.2, when `ext-git` became the first plugin.
+# `git`, `vfs-trash` and `vfs-archive` compile a plugin in instead of
+# loading it from `plugins/`; default off, since the plugins directory is
+# where they live in 0.2.
 [features]
 default = ["preview-text", "preview-code", "preview-image", "preview-pdf"]
 preview-text = ["dep:ext-preview-text"]
@@ -22,6 +23,8 @@ preview-code = ["dep:ext-preview-code"]
 preview-image = ["dep:ext-preview-image"]
 preview-pdf = ["dep:ext-preview-pdf"]
 git = ["dep:ext-git"]
+vfs-trash = ["dep:ext-vfs-trash"]
+vfs-archive = ["dep:ext-vfs-archive"]
 
 [dependencies]
 types = { workspace = true }
@@ -36,6 +39,8 @@ ext-preview-code = { workspace = true, optional = true }
 ext-preview-image = { workspace = true, optional = true }
 ext-preview-pdf = { workspace = true, optional = true }
 ext-git = { workspace = true, optional = true }
+ext-vfs-trash = { workspace = true, optional = true }
+ext-vfs-archive = { workspace = true, optional = true }
 anyhow = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }

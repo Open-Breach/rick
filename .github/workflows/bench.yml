@@ -82,7 +82,7 @@ jobs:
           set -o pipefail
           for i in $(seq 1 "${{ inputs.runs }}"); do
             echo "::group::run $i"
-            cargo test -p tests --release --test fixture --test listing --test copy --test ui --test preview --test git --test chrome --test preview_pane --test startup --test plugins --test closeout -- --ignored --nocapture --test-threads 1 --skip a_new_text_cancels_the_running_walk 2>&1 | tee "bench-$i.log"
+            cargo test -p tests --release --test fixture --test listing --test copy --test ui --test preview --test git --test chrome --test preview_pane --test startup --test plugins --test providers --test closeout -- --ignored --nocapture --test-threads 1 --skip a_new_text_cancels_the_running_walk 2>&1 | tee "bench-$i.log"
             cargo test -p tests --release --test session -- --nocapture --test-threads 1 a_big_session_starts 2>&1 | tee -a "bench-$i.log"
             echo "::endgroup::"
           done

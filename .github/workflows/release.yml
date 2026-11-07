@@ -184,11 +184,15 @@ jobs:
           out="$("./rick$exe" --version)"
           echo "rick --version: $out"
           echo "$out" | grep -Eq "^${version%%-*}(-[0-9A-Za-z.]+)? \([0-9a-f]{7,}\)$" || { echo "unexpected version line"; exit 1; }
-          # The Git plugin, bundled and loaded from plugins/git/.
-          test -f plugins/git/plugin.toml || { echo "no plugins/git/plugin.toml"; exit 1; }
+          # The plugins, bundled and loaded from plugins/<id>/.
+          for id in git vfs-trash vfs-archive; do
+            test -f "plugins/$id/plugin.toml" || { echo "no plugins/$id/plugin.toml"; exit 1; }
+          done
           plugins="$("./rick$exe" --list-plugins)"
           echo "$plugins"
           echo "$plugins" | grep -Eq '^git +Git +[^ ]+ +decorator, action +loaded +' || { echo "git plugin not loaded"; exit 1; }
+          echo "$plugins" | grep -Eq '^vfs-trash +Trash +[^ ]+ +provider, decorator, action +loaded +' || { echo "trash plugin not loaded"; exit 1; }
+          echo "$plugins" | grep -Eq '^vfs-archive +Archives +[^ ]+ +provider +loaded +' || { echo "archive plugin not loaded"; exit 1; }
           # pdfium from beside the binary: the previewer's test binary, copied
           # next to rick, with RICK_PDFIUM_DIR unset and no system pdfium. The
           # example has no run path of its own, so the library path names the

@@ -40,10 +40,15 @@ impl Mounts {
     #[must_use]
     pub fn from_registry(registry: &Registry) -> Self {
         let mounts = Self::new();
-        for provider in registry.providers() {
-            mounts.mount(Arc::clone(provider));
-        }
+        mounts.absorb(registry);
         mounts
+    }
+
+    /// Mounts every provider the registry collected.
+    pub fn absorb(&self, registry: &Registry) {
+        for provider in registry.providers() {
+            self.mount(Arc::clone(provider));
+        }
     }
 
     fn table(&self) -> std::sync::RwLockReadGuard<'_, HashMap<ProviderId, Arc<dyn Provider>>> {
