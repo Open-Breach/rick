@@ -37,7 +37,7 @@ use std::sync::OnceLock;
 pub mod compute;
 mod job;
 
-pub use job::{JobCtx, JobEvent, JobHandle, JobRunner, ProgressSink};
+pub use job::{JobCtx, JobEvent, JobHandle, JobRunner, PauseGate, ProgressSink};
 /// Re-exported so callers can name the channel types in [`JobHandle`] and
 /// [`JobRunner::with_events`] without depending on `tokio` themselves.
 pub use tokio::sync::{mpsc, oneshot, watch};

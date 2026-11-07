@@ -1,5 +1,6 @@
 //! Windows: the Recycle Bin through `IFileOperation`, `ShellExecute`, the
-//! shell Properties dialogue, `%APPDATA%\Rick`.
+//! shell Properties dialogue, `%APPDATA%\Rick`, and the drives from
+//! `GetLogicalDrives` with `GetVolumeInformationW` and `GetDiskFreeSpaceExW`.
 
 use std::ffi::c_void;
 use std::fs;
@@ -9,15 +10,20 @@ use std::time::SystemTime;
 
 use types::Error;
 use windows::Win32::Foundation::{HWND, PROPERTYKEY, RPC_E_CHANGED_MODE};
+use windows::Win32::Storage::FileSystem::{
+    GetDiskFreeSpaceExW, GetDriveTypeW, GetLogicalDrives, GetVolumeInformationW,
+};
 use windows::Win32::System::Com::{
     CLSCTX_ALL, COINIT_APARTMENTTHREADED, COINIT_DISABLE_OLE1DDE, CoCreateInstance, CoInitializeEx,
     CoTaskMemFree, CoUninitialize,
 };
+use windows::Win32::System::SystemInformation::GetWindowsDirectoryW;
 use windows::Win32::UI::Shell::{
     BHID_EnumItems, FOF_ALLOWUNDO, FOF_NO_UI, FOFX_RECYCLEONDELETE, FOLDERID_RecycleBinFolder,
     FileOperation, IEnumShellItems, IFileOperation, IShellItem, IShellItem2, KF_FLAG_DEFAULT,
-    SEE_MASK_INVOKEIDLIST, SHCreateItemFromParsingName, SHELLEXECUTEINFOW, SHGetKnownFolderItem,
-    SIGDN_FILESYSPATH, SIGDN_NORMALDISPLAY, ShellExecuteExW, ShellExecuteW,
+    SEE_MASK_INVOKEIDLIST, SHCreateItemFromParsingName, SHELLEXECUTEINFOW, SHERB_NOCONFIRMATION,
+    SHERB_NOPROGRESSUI, SHERB_NOSOUND, SHEmptyRecycleBinW, SHGetKnownFolderItem, SIGDN_FILESYSPATH,
+    SIGDN_NORMALDISPLAY, ShellExecuteExW, ShellExecuteW,
 };
 use windows::Win32::UI::WindowsAndMessaging::{SW_SHOW, SW_SHOWNORMAL};
 use windows::core::{GUID, Interface, PCWSTR, PWSTR, w};
@@ -26,7 +32,7 @@ use crate::Native;
 use crate::fs::windows::{filetime, io_error, wide};
 use crate::traits::{
     Chrome, ConfigDir, ControlsSide, DragSource, OpenWith, Properties, PropertiesOutcome, Trash,
-    TrashedItem, WindowChrome,
+    TrashedItem, Volume, VolumeKind, Volumes, WindowChrome,
 };
 
 /// `System.Recycle.DeletedFrom`: the folder a recycled item came from.
@@ -267,6 +273,127 @@ impl Trash for Native {
 
     fn list(&self) -> Result<Vec<TrashedItem>, Error> {
         recycle_bin_items()
+    }
+
+    /// Deletes the `$R<id>` payload and its `$I<id>` record.
+    fn remove(&self, item: &TrashedItem) -> Result<(), Error> {
+        let meta = fs::symlink_metadata(&item.trashed).map_err(|_| Error::NotFound)?;
+        if meta.is_dir() {
+            fs::remove_dir_all(&item.trashed)
+        } else {
+            fs::remove_file(&item.trashed)
+        }
+        .map_err(Error::from_io)?;
+        if let Some(name) = item.trashed.file_name().and_then(|n| n.to_str())
+            && let Some(rest) = name.strip_prefix("$R")
+        {
+            let info = item.trashed.with_file_name(format!("$I{rest}"));
+            let _ = fs::remove_file(info);
+        }
+        Ok(())
+    }
+
+    fn empty(&self) -> Result<(), Error> {
+        // SAFETY: no window, every drive's bin, no UI; plain flags.
+        unsafe {
+            SHEmptyRecycleBinW(
+                None,
+                PCWSTR::null(),
+                SHERB_NOCONFIRMATION | SHERB_NOPROGRESSUI | SHERB_NOSOUND,
+            )
+        }
+        .map_err(|e| Error::Io(io_error(e)))
+    }
+}
+
+/// `GetDriveTypeW` answers, from `winbase.h` (the `windows` crate keeps
+/// them in `Win32::System::WindowsProgramming`, a feature not otherwise
+/// needed).
+const DRIVE_REMOVABLE: u32 = 2;
+const DRIVE_FIXED: u32 = 3;
+const DRIVE_REMOTE: u32 = 4;
+const DRIVE_CDROM: u32 = 5;
+
+/// The drive letter of the Windows directory, upper case.
+fn system_drive() -> Option<char> {
+    let mut buffer = [0u16; 260];
+    // SAFETY: the buffer is valid for its whole length and the call writes
+    // at most that many code units.
+    let written = usize::try_from(unsafe { GetWindowsDirectoryW(Some(&mut buffer)) }).unwrap_or(0);
+    let text = String::from_utf16_lossy(&buffer[..written.min(buffer.len())]);
+    text.chars().next().map(|c| c.to_ascii_uppercase())
+}
+
+impl Volumes for Native {
+    /// Every drive letter but the system drive's, with the volume label, the
+    /// drive type and the free space.
+    fn volumes(&self) -> Result<Vec<Volume>, Error> {
+        // SAFETY: a plain query with no pointers.
+        let mask = unsafe { GetLogicalDrives() };
+        if mask == 0 {
+            return Err(Error::Io(io::Error::last_os_error()));
+        }
+        let system = system_drive();
+        let mut out = Vec::new();
+        for bit in 0..26u32 {
+            if mask & (1 << bit) == 0 {
+                continue;
+            }
+            let letter = char::from(b'A' + u8::try_from(bit).unwrap_or(0));
+            if Some(letter) == system {
+                continue;
+            }
+            let root = format!("{letter}:\\");
+            let root_wide = wide(Path::new(&root));
+            // SAFETY: the root string is NUL-terminated and outlives the
+            // calls; the out-pointers point at locals of the right type.
+            let (kind, label, space) = unsafe {
+                let drive_type = GetDriveTypeW(PCWSTR(root_wide.as_ptr()));
+                let kind = match drive_type {
+                    DRIVE_REMOVABLE => VolumeKind::Removable,
+                    DRIVE_REMOTE => VolumeKind::Network,
+                    DRIVE_CDROM => VolumeKind::Optical,
+                    DRIVE_FIXED => VolumeKind::Fixed,
+                    _ => continue,
+                };
+                let mut label = [0u16; 261];
+                let labelled = GetVolumeInformationW(
+                    PCWSTR(root_wide.as_ptr()),
+                    Some(&mut label),
+                    None,
+                    None,
+                    None,
+                    None,
+                )
+                .is_ok();
+                let label = labelled
+                    .then(|| {
+                        let end = label.iter().position(|&c| c == 0).unwrap_or(label.len());
+                        String::from_utf16_lossy(&label[..end])
+                    })
+                    .filter(|l| !l.is_empty());
+                let (mut free, mut total) = (0u64, 0u64);
+                let space = GetDiskFreeSpaceExW(
+                    PCWSTR(root_wide.as_ptr()),
+                    Some(&raw mut free),
+                    Some(&raw mut total),
+                    None,
+                )
+                .is_ok()
+                .then_some((total, free));
+                (kind, label, space)
+            };
+            let name = label.unwrap_or_else(|| format!("{letter}:"));
+            let (total, free) = space.map_or((None, None), |(t, f)| (Some(t), Some(f)));
+            out.push(Volume {
+                name: format!("{name} ({letter}:)"),
+                mount_point: PathBuf::from(root),
+                kind,
+                total,
+                free,
+            });
+        }
+        Ok(out)
     }
 }
 

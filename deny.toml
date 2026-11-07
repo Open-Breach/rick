@@ -20,14 +20,14 @@ multiple-versions = "warn"
 # entry. Add an entry per crate as crates appear.
 deny = [
     { crate = "runtime", wrappers = ["platform", "ext", "vfs", "vfs-local", "model", "ops", "app", "ui-egui", "rick", "tests"] },
-    { crate = "platform", wrappers = ["vfs", "vfs-local", "ops", "app", "ui-egui", "rick", "tests"] },
+    { crate = "platform", wrappers = ["vfs", "vfs-local", "model", "ops", "app", "ui-egui", "rick", "tests"] },
     { crate = "ext", wrappers = ["vfs", "vfs-local", "model", "ops", "app", "ui-egui", "rick", "tests", "ext-preview-text", "ext-preview-code", "ext-preview-image", "ext-preview-pdf", "ext-git"] },
     { crate = "vfs", wrappers = ["vfs-local", "ops", "app", "ui-egui", "rick", "tests"] },
     { crate = "vfs-local", wrappers = ["ops", "app", "ui-egui", "rick", "tests"] },
     # `ops` may use `model` by the layer order but does not today; listing
     # it would only draw an unused-wrapper warning. Add it back when needed.
     { crate = "model", wrappers = ["app", "ui-egui", "rick", "tests"] },
-    { crate = "ops", wrappers = ["app", "rick", "tests"] },
+    { crate = "ops", wrappers = ["app", "ui-egui", "rick", "tests"] },
     { crate = "app", wrappers = ["ui-egui", "rick", "tests"] },
     { crate = "ui-egui", wrappers = ["rick", "tests"] },
     # Extensions see `ext` and `types` only; only the binary and the tests load them.

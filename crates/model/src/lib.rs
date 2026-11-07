@@ -4,18 +4,23 @@
 //! A [`Model`] holds every [`Window`] with its [`Dock`] tree of panes, each
 //! [`Pane`]'s tabs, and per [`Tab`] the location with its [`History`], the
 //! [`Listing`] with its sort, group, filter and selection, the [`ViewMode`]
-//! and the scroll offset, plus the job table and the [`Settings`] snapshot.
-//! All windows share the one model, so a job started in one shows in every
-//! other. It applies listing batches and filesystem changes and derives the
-//! visible rows; it performs no I/O. `app` mutates it in response to
-//! `Command`s; the UI only reads it. [`Model::session`] turns it into the
-//! [`Session`] that `session.toml` and the saved layouts hold.
+//! with the [`Tree`] state of expanded folders and the scroll offset, plus
+//! the job table, the side panel's data ([`Recent`], the volumes, the
+//! [`TrashView`], the [`FolderTree`]), the name conflicts jobs wait on and
+//! the [`Settings`] snapshot. All windows share the one model, so a job
+//! started in one shows in every other. It applies listing batches and
+//! filesystem changes and derives the visible rows; it performs no I/O.
+//! `app` mutates it in response to `Command`s; the UI only reads it.
+//! [`Model::session`] turns it into the [`Session`] that `session.toml` and
+//! the saved layouts hold.
 
 #![forbid(unsafe_code)]
 
 mod listing;
+mod panel;
 mod session;
 mod settings;
+mod tree;
 
 use std::collections::hash_map::Entry as Slot;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
@@ -23,15 +28,18 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 pub use ext::PaneId;
 use ext::{CellValue, Decoration, FsChange};
 pub use listing::{Column, Group, IconSize, Listing, Sort, SortDir, ViewMode, ViewSpec, type_of};
+pub use panel::{RECENT_LIMIT, Recent, TrashView};
+pub use platform::{TrashedItem, Volume, VolumeKind};
 use serde::{Deserialize, Serialize};
 pub use session::{
     DockSession, Geometry, PaneSession, Session, TabSession, WindowSession, parse_entry_id,
 };
 pub use settings::{
-    AfterDrag, Density, Drag, LAST_SESSION, PanelSide, Preview, Section, SessionSettings, Settings,
-    SettingsChange, SidePanel, SidePanelChange, TextPreview, Theme, parse_location,
+    AfterDrag, Density, Drag, LAST_SESSION, PanelSide, Preview, Search, Section, SessionSettings,
+    Settings, SettingsChange, SidePanel, SidePanelChange, TextPreview, Theme, parse_location,
 };
-use types::{Entry, EntryId, JobId, Location, Progress};
+pub use tree::{FolderTree, Tree, TreeRow};
+use types::{Conflict, ConflictId, Entry, EntryId, JobId, Location, Progress, VPath};
 
 /// Identity of a tab, unique within one model.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -296,12 +304,17 @@ pub struct Tab {
     pub show_hidden: bool,
     /// Subfolders flattened into the list.
     pub flatten: bool,
+    /// The filter text searches the whole subtree: the listing then holds
+    /// the matches the walk streams in, each with its full path.
+    pub subtree: bool,
     /// The entries and the view over them.
     pub listing: Listing,
     /// Selected entry ids.
     pub selection: BTreeSet<EntryId>,
     /// What decorators said about the entries: badges, tints, cells.
     pub decorations: HashMap<EntryId, Decoration>,
+    /// The expanded folders and their children, in [`ViewMode::Tree`].
+    pub tree: Tree,
     /// The list's vertical scroll offset in logical points, as the UI last
     /// reported it; restored with the session.
     pub scroll: f32,
@@ -324,21 +337,112 @@ impl Tab {
             filter: String::new(),
             show_hidden: settings.show_hidden,
             flatten: false,
+            subtree: false,
             listing: Listing::new(),
             selection: BTreeSet::new(),
             decorations: HashMap::new(),
+            tree: Tree::default(),
             scroll: 0.0,
             note: None,
         }
     }
 
-    /// Forgets the listing, selection, decorations, scroll offset and note
-    /// before the tab shows another location.
+    /// Whether the rows come from the tree: the listing plus the children
+    /// of every expanded folder.
+    fn is_tree(&self) -> bool {
+        self.view == ViewMode::Tree
+    }
+
+    /// Whether the listing holds subtree search results rather than the
+    /// location's own entries.
+    #[must_use]
+    pub fn is_searching(&self) -> bool {
+        self.subtree && !self.filter.is_empty()
+    }
+
+    /// Number of visible rows, children of expanded folders included in
+    /// Tree view.
+    #[must_use]
+    pub fn row_count(&self) -> usize {
+        if self.is_tree() {
+            self.tree.rows().len()
+        } else {
+            self.listing.row_count()
+        }
+    }
+
+    /// The visible row at `index`.
+    #[must_use]
+    pub fn row(&self, index: usize) -> Option<&Entry> {
+        if self.is_tree() {
+            let row = self.tree.rows().get(index)?;
+            self.entry(row.id)
+        } else {
+            self.listing.row(index)
+        }
+    }
+
+    /// The visible rows in display order.
+    pub fn rows(&self) -> Box<dyn Iterator<Item = &Entry> + '_> {
+        if self.is_tree() {
+            Box::new(
+                self.tree
+                    .rows()
+                    .iter()
+                    .filter_map(move |row| self.entry(row.id)),
+            )
+        } else {
+            Box::new(self.listing.rows())
+        }
+    }
+
+    /// Ids of the visible rows in display order.
+    #[must_use]
+    pub fn row_ids(&self) -> Vec<EntryId> {
+        if self.is_tree() {
+            self.tree.rows().iter().map(|row| row.id).collect()
+        } else {
+            self.listing.row_ids()
+        }
+    }
+
+    /// The depth of the visible row at `index`: 0 outside Tree view.
+    #[must_use]
+    pub fn depth(&self, index: usize) -> u16 {
+        if self.is_tree() {
+            self.tree.rows().get(index).map_or(0, |row| row.depth)
+        } else {
+            0
+        }
+    }
+
+    /// The entry with this id, in the listing or under an expanded folder.
+    #[must_use]
+    pub fn entry(&self, id: EntryId) -> Option<&Entry> {
+        self.listing.get(id).or_else(|| self.tree.child(id))
+    }
+
+    /// The location of an entry of this tab.
+    #[must_use]
+    pub fn location_of(&self, entry: &Entry) -> Location {
+        Location::new(self.location.provider, entry.path.clone())
+    }
+
+    /// Rebuilds the tree rows when the tab is in Tree view.
+    fn rebuild_tree(&mut self) {
+        if self.is_tree() {
+            self.tree.rebuild(&self.listing);
+        }
+    }
+
+    /// Forgets the listing, selection, decorations, expanded folders, scroll
+    /// offset and note before the tab shows another location.
     fn leave(&mut self) {
         self.filter.clear();
         self.listing.clear();
         self.selection.clear();
         self.decorations.clear();
+        self.tree.clear();
         self.scroll = 0.0;
         self.note = None;
     }
@@ -357,20 +461,36 @@ impl Tab {
 
     /// The selected entries, in view order.
     pub fn selected(&self) -> impl Iterator<Item = &Entry> + '_ {
-        self.listing
-            .rows()
-            .filter(|e| self.selection.contains(&e.id))
+        self.rows().filter(|e| self.selection.contains(&e.id))
+    }
+
+    /// The text the view filters on: nothing while searching, since the
+    /// results are the matches themselves.
+    fn filter_text(&self) -> String {
+        if self.is_searching() {
+            String::new()
+        } else {
+            self.filter.clone()
+        }
+    }
+
+    /// The view specification over `filter`, borrowing nothing of the tab.
+    fn spec_with<'a>(&self, settings: &Settings, filter: &'a str) -> ViewSpec<'a> {
+        ViewSpec {
+            sort: self.sort,
+            folders_first: settings.folders_first,
+            filter,
+            show_hidden: self.show_hidden,
+            show_system: settings.show_system,
+        }
     }
 
     fn refresh_view(&mut self, settings: &Settings) {
-        let spec = ViewSpec {
-            sort: self.sort,
-            folders_first: settings.folders_first,
-            filter: &self.filter,
-            show_hidden: self.show_hidden,
-            show_system: settings.show_system,
-        };
+        let filter = self.filter_text();
+        let spec = self.spec_with(settings, &filter);
         self.listing.refresh_view(&spec);
+        self.tree.refresh_views(&spec);
+        self.rebuild_tree();
     }
 }
 
@@ -381,6 +501,10 @@ pub struct JobInfo {
     pub name: String,
     /// Running with progress, or how it ended.
     pub state: JobState,
+    /// Whether the job can be paused.
+    pub pausable: bool,
+    /// Whether the job is paused right now.
+    pub paused: bool,
 }
 
 /// Lifecycle of a job in the table.
@@ -423,6 +547,17 @@ pub struct Model {
     pub focused_window: WindowId,
     /// Jobs running or recently finished; shared by every window.
     pub jobs: BTreeMap<JobId, JobInfo>,
+    /// Name conflicts jobs wait on, oldest first; the UI asks about the
+    /// first.
+    pub conflicts: Vec<Conflict>,
+    /// Files and folders changed recently, newest first.
+    pub recent: Recent,
+    /// The mounted volumes other than the system disk.
+    pub volumes: Vec<Volume>,
+    /// The trash's contents.
+    pub trash: TrashView,
+    /// The side panel's folder tree.
+    pub folder_tree: FolderTree,
     /// The settings snapshot.
     pub settings: Settings,
     next_pane: u64,
@@ -448,6 +583,11 @@ impl Model {
             focused: PaneId(0),
             focused_window: WindowId(0),
             jobs: BTreeMap::new(),
+            conflicts: Vec::new(),
+            recent: Recent::default(),
+            volumes: Vec::new(),
+            trash: TrashView::default(),
+            folder_tree: FolderTree::new(),
             settings,
             next_pane: 1,
             next_tab: 1,
@@ -980,6 +1120,27 @@ impl Model {
                 tab.flatten = on;
                 tab.listing.clear();
                 tab.selection.clear();
+                tab.tree.clear();
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// Sets whether the pane's active tab's filter searches the whole
+    /// subtree. Returns whether it changed; the listing must then be redone
+    /// when a filter text is set.
+    pub fn set_subtree(&mut self, pane: PaneId, on: bool) -> bool {
+        let settings = self.settings.clone();
+        match self.active_tab_mut(pane) {
+            Some((_, tab)) if tab.subtree != on => {
+                tab.subtree = on;
+                if !tab.filter.is_empty() {
+                    tab.listing.clear();
+                    tab.selection.clear();
+                    tab.tree.clear();
+                }
+                tab.refresh_view(&settings);
                 true
             }
             _ => false,
@@ -991,10 +1152,106 @@ impl Model {
         match self.active_tab_mut(pane) {
             Some((_, tab)) => {
                 tab.view = mode;
+                tab.rebuild_tree();
                 true
             }
             None => false,
         }
+    }
+
+    /// Expands a folder of the pane's active tab in Tree view. Returns
+    /// whether it was not expanded before, in which case its children must
+    /// be listed into [`tree_batch`](Self::tree_batch).
+    pub fn tree_expand(&mut self, pane: PaneId, folder: EntryId) -> bool {
+        let Some((_, tab)) = self.active_tab_mut(pane) else {
+            return false;
+        };
+        if tab
+            .entry(folder)
+            .is_none_or(|e| e.kind != types::EntryKind::Dir)
+        {
+            return false;
+        }
+        let fresh = tab.tree.expand(folder);
+        tab.rebuild_tree();
+        fresh
+    }
+
+    /// Collapses an expanded folder, dropping its cached children. Returns
+    /// whether it was expanded.
+    pub fn tree_collapse(&mut self, pane: PaneId, folder: EntryId) -> bool {
+        let Some((_, tab)) = self.active_tab_mut(pane) else {
+            return false;
+        };
+        let was = tab.tree.collapse(folder);
+        if was {
+            let listing = &tab.listing;
+            let tree = &tab.tree;
+            tab.selection
+                .retain(|id| listing.get(*id).is_some() || tree.child(*id).is_some());
+            tab.rebuild_tree();
+        }
+        was
+    }
+
+    /// Records a batch of an expanded folder's children.
+    pub fn tree_batch(&mut self, pane: PaneId, folder: EntryId, batch: Vec<Entry>) -> bool {
+        let settings = self.settings.clone();
+        let Some((_, tab)) = self.active_tab_mut(pane) else {
+            return false;
+        };
+        let filter = tab.filter_text();
+        let spec = tab.spec_with(&settings, &filter);
+        let took = tab.tree.extend(folder, batch, &spec);
+        tab.rebuild_tree();
+        took
+    }
+
+    /// Replaces an expanded folder's children in one step, as a refresh
+    /// does.
+    pub fn tree_replace(&mut self, pane: PaneId, folder: EntryId, entries: Vec<Entry>) -> bool {
+        let settings = self.settings.clone();
+        let Some((_, tab)) = self.active_tab_mut(pane) else {
+            return false;
+        };
+        let filter = tab.filter_text();
+        let spec = tab.spec_with(&settings, &filter);
+        let took = tab.tree.replace(folder, entries, &spec);
+        if took {
+            let listing = &tab.listing;
+            let tree = &tab.tree;
+            tab.selection
+                .retain(|id| listing.get(*id).is_some() || tree.child(*id).is_some());
+        }
+        tab.rebuild_tree();
+        took
+    }
+
+    /// Marks an expanded folder's listing complete.
+    pub fn tree_done(&mut self, pane: PaneId, folder: EntryId) -> bool {
+        match self.active_tab_mut(pane) {
+            Some((_, tab)) => tab.tree.done(folder),
+            None => false,
+        }
+    }
+
+    /// The expanded folders of the pane's active tab that are still in its
+    /// listing, with their locations, for listing them again after a
+    /// refresh.
+    #[must_use]
+    pub fn tree_expanded(&self, pane: PaneId) -> Vec<(EntryId, Location)> {
+        let Some((_, tab)) = self.active_tab(pane) else {
+            return Vec::new();
+        };
+        let mut out: Vec<(EntryId, Location)> = tab
+            .tree
+            .expanded
+            .iter()
+            .filter_map(|id| tab.entry(*id).map(|e| (*id, tab.location_of(e))))
+            .collect();
+        // Parents before children, so a child's listing finds its folder.
+        out.sort_by_key(|(_, loc)| loc.path.len());
+        out
     }
 
     /// Applies a selection change to the pane's active tab. Returns the new
@@ -1015,9 +1272,9 @@ impl Model {
                     tab.selection.insert(id);
                 }
             }
-            SelectionChange::All => tab.selection = tab.listing.row_ids().into_iter().collect(),
+            SelectionChange::All => tab.selection = tab.row_ids().into_iter().collect(),
             SelectionChange::Invert => {
-                let visible: BTreeSet<EntryId> = tab.listing.row_ids().into_iter().collect();
+                let visible: BTreeSet<EntryId> = tab.row_ids().into_iter().collect();
                 tab.selection = visible.difference(&before).copied().collect();
             }
             SelectionChange::Clear => tab.selection.clear(),
@@ -1026,8 +1283,7 @@ impl Model {
             return None;
         }
         Some(
-            tab.listing
-                .row_ids()
+            tab.row_ids()
                 .into_iter()
                 .filter(|id| tab.selection.contains(id))
                 .collect(),
@@ -1213,23 +1469,22 @@ impl Model {
         let Some((_, tab)) = self.active_tab_mut(pane) else {
             return false;
         };
-        let spec = ViewSpec {
-            sort: tab.sort,
-            folders_first: settings.folders_first,
-            filter: &tab.filter,
-            show_hidden: tab.show_hidden,
-            show_system: settings.show_system,
-        };
+        let filter = tab.filter_text();
+        let spec = tab.spec_with(&settings, &filter);
         tab.listing.extend(batch, &spec);
+        tab.rebuild_tree();
         true
     }
 
     /// Empties the pane's active tab's listing before a fresh one streams
-    /// in; the selection and filter stay. Returns whether a tab took it.
+    /// in; the selection and filter stay, and so does the set of expanded
+    /// folders, whose children are listed again. Returns whether a tab took
+    /// it.
     pub fn clear_listing(&mut self, pane: PaneId) -> bool {
         match self.active_tab_mut(pane) {
             Some((_, tab)) => {
                 tab.listing.clear();
+                tab.tree.clear_children();
                 true
             }
             None => false,
@@ -1244,18 +1499,27 @@ impl Model {
         let Some((_, tab)) = self.active_tab_mut(pane) else {
             return false;
         };
-        let spec = ViewSpec {
-            sort: tab.sort,
-            folders_first: settings.folders_first,
-            filter: &tab.filter,
-            show_hidden: tab.show_hidden,
-            show_system: settings.show_system,
-        };
+        let filter = tab.filter_text();
+        let spec = tab.spec_with(&settings, &filter);
         tab.listing.clear();
         tab.listing.extend(entries, &spec);
         tab.listing.complete = true;
+        // Folders that are gone leave the expanded set.
+        let gone: Vec<EntryId> = tab
+            .tree
+            .expanded
+            .iter()
+            .copied()
+            .filter(|id| tab.entry(*id).is_none())
+            .collect();
+        for id in gone {
+            tab.tree.collapse(id);
+        }
         let listing = &tab.listing;
-        tab.selection.retain(|id| listing.get(*id).is_some());
+        let tree = &tab.tree;
+        tab.selection
+            .retain(|id| listing.get(*id).is_some() || tree.child(*id).is_some());
+        tab.rebuild_tree();
         true
     }
 
@@ -1288,6 +1552,7 @@ impl Model {
         match self.active_tab_mut(pane) {
             Some((_, tab)) => {
                 tab.listing.complete = true;
+                tab.rebuild_tree();
                 true
             }
             None => false,
@@ -1301,13 +1566,8 @@ impl Model {
         let Some((_, tab)) = self.active_tab_mut(pane) else {
             return true;
         };
-        let spec = ViewSpec {
-            sort: tab.sort,
-            folders_first: settings.folders_first,
-            filter: &tab.filter,
-            show_hidden: tab.show_hidden,
-            show_system: settings.show_system,
-        };
+        let filter = tab.filter_text();
+        let spec = tab.spec_with(&settings, &filter);
         match change {
             FsChange::Created(entry) | FsChange::Modified(entry) => {
                 tab.listing.upsert(entry, &spec);
@@ -1316,6 +1576,7 @@ impl Model {
                 tab.listing.remove(id);
                 tab.selection.remove(&id);
                 tab.decorations.remove(&id);
+                tab.tree.collapse(id);
             }
             FsChange::Renamed { from, to } => {
                 tab.listing.remove(from);
@@ -1326,11 +1587,12 @@ impl Model {
             }
             FsChange::Rescan => return false,
         }
+        tab.rebuild_tree();
         true
     }
 
     /// Records a job.
-    pub fn job_started(&mut self, id: JobId, name: String) {
+    pub fn job_started(&mut self, id: JobId, name: String, pausable: bool) {
         self.jobs.insert(
             id,
             JobInfo {
@@ -1339,6 +1601,8 @@ impl Model {
                     done: 0,
                     total: None,
                 }),
+                pausable,
+                paused: false,
             },
         );
     }
@@ -1348,9 +1612,22 @@ impl Model {
         let info = self.jobs.entry(id).or_insert_with(|| JobInfo {
             name: String::new(),
             state: JobState::Running(progress.clone()),
+            pausable: false,
+            paused: false,
         });
         if matches!(info.state, JobState::Running(_)) {
             info.state = JobState::Running(progress);
+        }
+    }
+
+    /// Records that a job was paused or resumed.
+    pub fn job_paused(&mut self, id: JobId, paused: bool) -> bool {
+        match self.jobs.get_mut(&id) {
+            Some(info) if info.pausable && matches!(info.state, JobState::Running(_)) => {
+                info.paused = paused;
+                true
+            }
+            _ => false,
         }
     }
 
@@ -1359,8 +1636,62 @@ impl Model {
         let info = self.jobs.entry(id).or_insert_with(|| JobInfo {
             name: String::new(),
             state: JobState::Done,
+            pausable: false,
+            paused: false,
         });
         info.state = state;
+        info.paused = false;
+        self.conflicts.retain(|c| c.job != id);
+    }
+
+    /// Records a conflict a job waits on.
+    pub fn conflict_opened(&mut self, conflict: Conflict) {
+        if !self.conflicts.iter().any(|c| c.id == conflict.id) {
+            self.conflicts.push(conflict);
+        }
+    }
+
+    /// Forgets an answered conflict. Returns whether it was open.
+    pub fn conflict_closed(&mut self, id: ConflictId) -> bool {
+        let before = self.conflicts.len();
+        self.conflicts.retain(|c| c.id != id);
+        before != self.conflicts.len()
+    }
+
+    /// Points the side panel's folder tree at the root of `location`'s
+    /// volume and opens the folders down to it, when the tree is linked.
+    /// Returns the folders that still need listing.
+    pub fn folder_tree_follow(&mut self, location: &Location, root: VPath) -> Vec<Location> {
+        if !self.folder_tree.linked {
+            return Vec::new();
+        }
+        self.folder_tree
+            .set_root(Location::new(location.provider, root));
+        let provider = location.provider;
+        self.folder_tree
+            .reveal(&location.path)
+            .into_iter()
+            .map(|path| Location::new(provider, path))
+            .collect()
+    }
+
+    /// Opens or closes a folder of the side panel's tree. Returns the
+    /// location to list when it opens for the first time.
+    pub fn folder_tree_toggle(&mut self, path: &VPath) -> Option<Location> {
+        let provider = self.folder_tree.root.as_ref()?.provider;
+        self.folder_tree
+            .toggle(path)
+            .then(|| Location::new(provider, path.clone()))
+    }
+
+    /// Records the folders under a path of the side panel's tree.
+    pub fn folder_tree_listed(&mut self, path: VPath, folders: Vec<Entry>) {
+        self.folder_tree.set_children(path, folders);
+    }
+
+    /// Links or unlinks the side panel's tree from the focused pane.
+    pub fn folder_tree_link(&mut self, linked: bool) {
+        self.folder_tree.linked = linked;
     }
 
     /// Forgets a finished job.
@@ -1710,7 +2041,9 @@ mod tests {
     #[test]
     fn jobs_and_settings() {
         let mut model = Model::new(Settings::default(), loc("/a"));
-        model.job_started(JobId(1), "copy".into());
+        model.job_started(JobId(1), "copy".into(), true);
+        assert!(model.job_paused(JobId(1), true));
+        assert!(model.jobs.get(&JobId(1)).is_some_and(|j| j.paused));
         model.job_progress(
             JobId(1),
             Progress::Bytes {
@@ -1760,5 +2093,164 @@ mod tests {
         assert!(!model.set_flatten(pane, true));
         assert!(model.set_view(pane, ViewMode::Icons(IconSize::Large)));
         assert!(model.set_group(pane, Some(Column::Type)));
+    }
+
+    fn dir(id: u128, path: &str) -> Entry {
+        Entry {
+            kind: EntryKind::Dir,
+            path: VPath::from(path),
+            ..entry(id, path.rsplit('/').next().unwrap_or(path))
+        }
+    }
+
+    #[test]
+    fn the_tree_view_expands_folders_in_place_and_keeps_them_across_a_refresh() {
+        let mut model = Model::new(Settings::default(), loc("/a"));
+        let pane = model.focused;
+        model.listing_batch(
+            pane,
+            vec![dir(1, "/a/one"), entry(2, "file"), dir(3, "/a/two")],
+        );
+        model.listing_done(pane);
+        model.set_view(pane, ViewMode::Tree);
+        let one = EntryId::new(ProviderId("t"), 1);
+        let two = EntryId::new(ProviderId("t"), 3);
+        assert!(model.tree_expand(pane, one), "first expand lists");
+        assert!(!model.tree_expand(pane, one), "already expanded");
+        assert!(
+            !model.tree_expand(pane, EntryId::new(ProviderId("t"), 2)),
+            "files do not expand"
+        );
+        assert!(active(&model, pane).tree.is_loading(one));
+        assert!(model.tree_batch(pane, one, vec![dir(11, "/a/one/inner"), entry(12, "leaf")]));
+        assert!(model.tree_done(pane, one));
+        let names = |m: &Model| -> Vec<(String, u16)> {
+            let tab = active(m, pane);
+            (0..tab.row_count())
+                .filter_map(|i| tab.row(i).map(|e| (e.name.clone(), tab.depth(i))))
+                .collect()
+        };
+        assert_eq!(
+            names(&model),
+            [
+                ("one".to_owned(), 0),
+                ("inner".to_owned(), 1),
+                ("leaf".to_owned(), 1),
+                ("two".to_owned(), 0),
+                ("file".to_owned(), 0)
+            ]
+        );
+        // A nested folder expands too; Select all takes the children.
+        let inner = EntryId::new(ProviderId("t"), 11);
+        assert!(model.tree_expand(pane, inner));
+        model.tree_batch(pane, inner, vec![entry(111, "deep")]);
+        assert_eq!(active(&model, pane).row_count(), 6);
+        model.select(pane, SelectionChange::All);
+        assert_eq!(active(&model, pane).selection.len(), 6);
+        assert_eq!(model.tree_expanded(pane).len(), 2);
+
+        // A refresh keeps the expanded set and relists the children.
+        model.clear_listing(pane);
+        assert!(active(&model, pane).tree.expanded.contains(&one));
+        model.listing_batch(
+            pane,
+            vec![dir(1, "/a/one"), entry(2, "file"), dir(3, "/a/two")],
+        );
+        model.listing_done(pane);
+        assert_eq!(
+            model.tree_expanded(pane).len(),
+            1,
+            "the nested folder is gone with its parent's listing"
+        );
+        assert!(model.tree_replace(pane, one, vec![entry(12, "leaf")]));
+        assert_eq!(names(&model).len(), 4);
+        // Collapse drops the children and their selection; the set shrinks.
+        assert!(model.tree_collapse(pane, one));
+        assert!(!model.tree_collapse(pane, one));
+        assert_eq!(names(&model).len(), 3);
+        assert!(active(&model, pane).selection.iter().all(|id| *id != inner));
+        assert!(model.tree_expand(pane, two));
+        model.navigate(pane, loc("/b"));
+        assert!(
+            active(&model, pane).tree.expanded.is_empty(),
+            "navigation clears the tree"
+        );
+        // Outside Tree view the rows are the listing's.
+        model.set_view(pane, ViewMode::Details);
+        model.listing_batch(pane, vec![dir(5, "/b/x")]);
+        assert_eq!(active(&model, pane).row_count(), 1);
+        assert_eq!(active(&model, pane).depth(0), 0);
+    }
+
+    #[test]
+    fn subtree_search_and_conflicts_and_the_folder_tree() {
+        let mut model = Model::new(Settings::default(), loc("/a"));
+        let pane = model.focused;
+        model.listing_batch(pane, vec![entry(1, "foo"), entry(2, "bar")]);
+        model.set_filter(pane, "zzz");
+        assert_eq!(active(&model, pane).row_count(), 0);
+        assert!(model.set_subtree(pane, true));
+        assert!(!model.set_subtree(pane, true));
+        assert!(active(&model, pane).is_searching());
+        assert!(
+            active(&model, pane).listing.is_empty(),
+            "search results replace the listing"
+        );
+        // Search results are not filtered again by the view.
+        model.listing_batch(pane, vec![entry(3, "x/zzz-match")]);
+        assert_eq!(active(&model, pane).row_count(), 1);
+        assert!(model.set_subtree(pane, false));
+        assert!(!active(&model, pane).is_searching());
+
+        let conflict = Conflict {
+            id: ConflictId(1),
+            job: JobId(7),
+            source: loc("/s"),
+            target: loc("/t"),
+            target_is_dir: false,
+            proposed: "t (2)".into(),
+            remaining: 0,
+        };
+        model.conflict_opened(conflict.clone());
+        model.conflict_opened(conflict);
+        assert_eq!(model.conflicts.len(), 1);
+        model.job_finished(JobId(7), JobState::Cancelled);
+        assert!(model.conflicts.is_empty(), "a finished job's conflicts go");
+        assert!(!model.conflict_closed(ConflictId(1)));
+
+        let needed = model.folder_tree_follow(&loc("/a/b/c"), VPath::from("/"));
+        assert_eq!(
+            needed
+                .iter()
+                .map(|l| l.path.to_string())
+                .collect::<Vec<_>>(),
+            ["/", "/a", "/a/b", "/a/b/c"]
+        );
+        assert!(model.folder_tree.expanded.contains(&VPath::from("/a/b")));
+        assert!(!model.folder_tree.expanded.contains(&VPath::from("/a/b/c")));
+        model.folder_tree_listed(VPath::from("/"), vec![dir(1, "/a"), entry(2, "file")]);
+        assert_eq!(
+            model
+                .folder_tree
+                .children(&VPath::from("/"))
+                .map(<[Entry]>::len),
+            Some(1)
+        );
+        assert_eq!(
+            model.folder_tree_toggle(&VPath::from("/a/b")),
+            None,
+            "closing lists nothing"
+        );
+        assert_eq!(
+            model.folder_tree_toggle(&VPath::from("/a/b")),
+            None,
+            "already listed"
+        );
+        assert!(model.folder_tree_toggle(&VPath::from("/a/x")).is_some());
+        model.folder_tree_link(false);
+        assert_eq!(
+            model.folder_tree_follow(&loc("/q"), VPath::from("/")),
+            [] as [Location; 0]
+        );
     }
 }

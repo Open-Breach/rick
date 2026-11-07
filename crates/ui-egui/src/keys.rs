@@ -108,6 +108,8 @@ pub enum Intent {
     ToggleExtensions,
     /// Flatten subfolders on or off.
     ToggleFlatten,
+    /// Search in subdirectories on or off.
+    ToggleSubtree,
     /// The preview pane on or off.
     ToggleInspector,
     /// A console at the location (not in 0.1).
@@ -120,7 +122,7 @@ pub enum Intent {
     ViewList,
     /// Details view.
     ViewDetails,
-    /// Tree view (not in 0.1).
+    /// Tree view.
     ViewTree,
     /// Icons view (not in 0.1).
     ViewIcons,
@@ -468,10 +470,20 @@ pub const UI_INTENTS: &[IntentSpec] = &[
         VIEW,
         &["Mod+E"],
     ),
+    // The spec's View table gives Mod+Shift+F to Flatten, its Main area to
+    // Search in subdirectories; issue A of the close-out settles it on the
+    // search (QUESTIONS.md), so Flatten keeps no default binding.
     spec(
         Intent::ToggleFlatten,
         "view.flatten",
         "Toggle flatten subfolders",
+        VIEW,
+        &[],
+    ),
+    spec(
+        Intent::ToggleSubtree,
+        "view.subtree",
+        "Search in subdirectories",
         VIEW,
         &["Mod+Shift+F"],
     ),

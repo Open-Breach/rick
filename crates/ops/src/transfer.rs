@@ -14,6 +14,7 @@ use runtime::JobRunner;
 use types::{Error, Location};
 use vfs::Mounts;
 
+use crate::conflict::Conflicts;
 use crate::edit::{MoveCommand, spawn_copies};
 use crate::inside;
 
@@ -46,8 +47,8 @@ fn folder_name(folder: &Location) -> String {
 }
 
 /// Starts the job that moves or copies `sources` into `to`, each under its
-/// own name. A move returns the undoable command, already running; a copy
-/// returns the job it started.
+/// own name, asking about existing names through `conflicts`. A move returns
+/// the undoable command, already running; a copy returns the job it started.
 ///
 /// # Errors
 ///
@@ -56,6 +57,7 @@ fn folder_name(folder: &Location) -> String {
 pub fn transfer(
     jobs: &JobRunner,
     mounts: Arc<Mounts>,
+    conflicts: Arc<Conflicts>,
     sources: &[Location],
     to: &Location,
     kind: TransferKind,
@@ -77,6 +79,7 @@ pub fn transfer(
         TransferKind::Move => {
             let command = MoveCommand {
                 mounts,
+                conflicts,
                 pairs,
                 label: format!("Move {what} to {folder}"),
             };
@@ -84,7 +87,13 @@ pub fn transfer(
             Ok(ActionOutcome::Undoable(Box::new(command)))
         }
         TransferKind::Copy => {
-            let handle = spawn_copies(jobs, mounts, format!("Copy {what} to {folder}"), pairs);
+            let handle = spawn_copies(
+                jobs,
+                mounts,
+                conflicts,
+                format!("Copy {what} to {folder}"),
+                pairs,
+            );
             Ok(ActionOutcome::Started(handle.id))
         }
     }

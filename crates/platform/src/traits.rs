@@ -39,8 +39,65 @@ pub trait Trash: Send + Sync {
     ///
     /// # Errors
     ///
-    /// The I/O error from reading the trash.
+    /// The I/O error from reading the trash; `Error::Unsupported` where the
+    /// platform keeps the original paths to itself (macOS).
     fn list(&self) -> Result<Vec<TrashedItem>, Error>;
+
+    /// Deletes a trashed entry for good, without restoring it.
+    ///
+    /// # Errors
+    ///
+    /// `Error::NotFound` when the item is no longer in the trash; otherwise
+    /// the I/O error.
+    fn remove(&self, item: &TrashedItem) -> Result<(), Error>;
+
+    /// Deletes everything in the trash for good.
+    ///
+    /// # Errors
+    ///
+    /// The I/O or platform error.
+    fn empty(&self) -> Result<(), Error>;
+}
+
+/// What kind of volume a mount is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VolumeKind {
+    /// An internal disk or partition that is not the system disk.
+    Fixed,
+    /// Removable media: a USB stick, a card, an external drive.
+    Removable,
+    /// An optical disc.
+    Optical,
+    /// A network file system the OS mounted (NFS, SMB, SSHFS, 9p, …).
+    Network,
+}
+
+/// A mounted volume other than the system disk.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Volume {
+    /// The label, or the mount point's last component when it has none.
+    pub name: String,
+    /// Where the volume is mounted.
+    pub mount_point: PathBuf,
+    /// Removable, network, optical or another internal disk.
+    pub kind: VolumeKind,
+    /// Capacity in bytes, when the OS reports it.
+    pub total: Option<u64>,
+    /// Free bytes available to the user, when the OS reports it.
+    pub free: Option<u64>,
+}
+
+/// The volumes the OS has mounted, for the side panel's Network section.
+/// Mounting and unmounting are not part of 0.1.
+pub trait Volumes: Send + Sync {
+    /// Every mounted volume that is not the system disk: removable media
+    /// and network mounts, plus other internal disks, with name, mount point
+    /// and free space.
+    ///
+    /// # Errors
+    ///
+    /// The I/O or platform error from reading the mount table.
+    fn volumes(&self) -> Result<Vec<Volume>, Error>;
 }
 
 /// Handing entries to other applications.
@@ -178,11 +235,28 @@ pub trait DragSource: Send + Sync {
 
 /// All platform services behind one object.
 pub trait Platform:
-    Trash + OpenWith + Properties + ConfigDir + NativeDialogs + Clipboard + Chrome + DragSource
+    Trash
+    + OpenWith
+    + Properties
+    + ConfigDir
+    + NativeDialogs
+    + Clipboard
+    + Chrome
+    + DragSource
+    + Volumes
 {
 }
 
-impl<T: Trash + OpenWith + Properties + ConfigDir + NativeDialogs + Clipboard + Chrome + DragSource>
-    Platform for T
+impl<
+    T: Trash
+        + OpenWith
+        + Properties
+        + ConfigDir
+        + NativeDialogs
+        + Clipboard
+        + Chrome
+        + DragSource
+        + Volumes,
+> Platform for T
 {
 }

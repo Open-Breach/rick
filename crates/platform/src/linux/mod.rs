@@ -1,7 +1,8 @@
 //! Linux: the XDG trash specification, `xdg-open`, Rick's own properties
-//! rows, `$XDG_CONFIG_HOME/rick`.
+//! rows, `$XDG_CONFIG_HOME/rick`, and the mount table from `/proc/mounts`.
 
 mod trash;
+mod volumes;
 
 use std::fs;
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
@@ -14,7 +15,7 @@ use crate::Native;
 use crate::time::iso8601;
 use crate::traits::{
     Chrome, ConfigDir, ControlsSide, DragSource, OpenWith, Properties, PropertiesOutcome, Trash,
-    TrashedItem, WindowChrome,
+    TrashedItem, Volume, Volumes, WindowChrome,
 };
 
 impl Trash for Native {
@@ -28,6 +29,20 @@ impl Trash for Native {
 
     fn list(&self) -> Result<Vec<TrashedItem>, Error> {
         trash::list()
+    }
+
+    fn remove(&self, item: &TrashedItem) -> Result<(), Error> {
+        trash::remove(item)
+    }
+
+    fn empty(&self) -> Result<(), Error> {
+        trash::empty()
+    }
+}
+
+impl Volumes for Native {
+    fn volumes(&self) -> Result<Vec<Volume>, Error> {
+        volumes::list()
     }
 }
 

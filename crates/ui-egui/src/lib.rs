@@ -26,15 +26,18 @@
     clippy::cast_possible_wrap
 )]
 
+pub mod conflict;
 pub mod dnd;
 pub mod dock;
 pub mod format;
 pub mod frame;
 pub mod host;
 pub mod icons;
+pub mod inline;
 pub mod inspector;
 pub mod keys;
 pub mod menus;
+pub mod operations;
 pub mod palette;
 pub mod pane;
 pub mod paths;
@@ -51,6 +54,7 @@ use std::sync::Arc;
 use app::App;
 
 pub use host::{Ask, EguiHost};
+pub use inline::{EditKind, RowEdit};
 pub use keys::{Intent, KeyMap};
 pub use pane::toolbar_height;
 pub use shell::{Dispatched, Request, RickUi, TabUi, WindowUi, viewport_builder};

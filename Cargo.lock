@@ -2579,6 +2579,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "globset"
+version = "0.4.21"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f98b0d85522dc0a824cfebbc9594ff4a9b289c568bea0370319dfbdf20ccdd2d"
+dependencies = [
+ "aho-corasick",
+ "bstr",
+ "log",
+ "regex-automata",
+ "regex-syntax",
+]
+
+[[package]]
 name = "glow"
 version = "0.17.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2894,6 +2907,22 @@ checksum = "cb68373c0d6620ef8105e855e7745e18b0d00d3bdb07fb532e434244cdb9a714"
 dependencies = [
  "icu_normalizer",
  "icu_properties",
+]
+
+[[package]]
+name = "ignore"
+version = "0.4.34"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "484be5657551d7868d67587df967fb4fcbe9d266a761cc855aaa148fda0b3cc7"
+dependencies = [
+ "crossbeam-deque",
+ "globset",
+ "log",
+ "memchr",
+ "regex-automata",
+ "same-file",
+ "walkdir",
+ "winapi-util",
 ]
 
 [[package]]
@@ -3338,6 +3367,7 @@ name = "model"
 version = "0.1.0"
 dependencies = [
  "ext",
+ "platform",
  "rayon",
  "runtime",
  "serde",
@@ -5235,6 +5265,7 @@ dependencies = [
  "egui_kittest",
  "ext",
  "model",
+ "ops",
  "platform",
  "runtime",
  "tempfile",
@@ -5403,6 +5434,7 @@ dependencies = [
  "async-trait",
  "ext",
  "futures",
+ "ignore",
  "notify",
  "platform",
  "runtime",

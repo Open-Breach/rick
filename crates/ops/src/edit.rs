@@ -4,13 +4,14 @@ use std::sync::Arc;
 
 use ext::{
     Action, ActionCtx, ActionGroup, ActionId, ActionOutcome, Availability, CopyOptions, Key,
-    Modifiers, Shortcut, UiHost, UndoCommand,
+    Modifiers, RemoveMode, Shortcut, UiHost, UndoCommand,
 };
-use runtime::JobRunner;
-use types::{Error, Location, Progress};
+use runtime::{JobCtx, JobRunner};
+use types::{EntryKind, Error, Location, Progress};
 use vfs::Mounts;
 
 use crate::clipboard::{ClipMode, Clipboard};
+use crate::conflict::{Conflicts, Landing, Policy};
 use crate::{State, describe, file_name, inside, location_of};
 
 fn needs_selection(ctx: &ActionCtx) -> Availability {
@@ -144,6 +145,7 @@ impl Action for Paste {
                 let handle = spawn_copies(
                     jobs,
                     Arc::clone(&self.0.mounts),
+                    Arc::clone(&self.0.conflicts),
                     format!("Copy {what}"),
                     pairs,
                 );
@@ -153,6 +155,7 @@ impl Action for Paste {
                 *self.0.clipboard() = None;
                 let command = MoveCommand {
                     mounts: Arc::clone(&self.0.mounts),
+                    conflicts: Arc::clone(&self.0.conflicts),
                     pairs,
                     label: format!("Move {what}"),
                 };
@@ -166,34 +169,129 @@ impl Action for Paste {
 /// Moves `pairs` forward, or back again.
 pub(crate) struct MoveCommand {
     pub(crate) mounts: Arc<Mounts>,
+    pub(crate) conflicts: Arc<Conflicts>,
     pub(crate) pairs: Vec<(Location, Location)>,
     pub(crate) label: String,
 }
 
+/// Copies `from` to `to`; with `overwrite`, a target of another kind (a
+/// file where a folder goes, or the reverse) is removed first, a folder
+/// over a folder merges and a file over a file is replaced.
+async fn copy_one(
+    mounts: &Mounts,
+    job: &JobCtx,
+    from: &Location,
+    to: &Location,
+    overwrite: bool,
+) -> Result<(), Error> {
+    if overwrite {
+        clear_mismatched_target(mounts, from, to).await?;
+    }
+    vfs::copy(
+        mounts,
+        from,
+        to,
+        CopyOptions { overwrite },
+        job.progress.clone(),
+        job.cancel.clone(),
+        &job.pause,
+    )
+    .await
+}
+
+/// Moves `from` to `to`; with `overwrite`, a folder over a folder merges
+/// (copy, then remove the source) and anything else replaces the target.
+async fn move_one(
+    mounts: &Mounts,
+    job: &JobCtx,
+    from: &Location,
+    to: &Location,
+    overwrite: bool,
+) -> Result<(), Error> {
+    if overwrite {
+        let dst = mounts.resolve(to)?;
+        let src = mounts.resolve(from)?;
+        let both_dirs = matches!(src.stat(from).await, Ok(e) if e.kind == EntryKind::Dir)
+            && matches!(dst.stat(to).await, Ok(e) if e.kind == EntryKind::Dir);
+        if both_dirs {
+            vfs::copy(
+                mounts,
+                from,
+                to,
+                CopyOptions { overwrite: true },
+                job.progress.clone(),
+                job.cancel.clone(),
+                &job.pause,
+            )
+            .await?;
+            if job.cancel.is_cancelled() {
+                return Err(Error::Cancelled);
+            }
+            return src.remove(from, RemoveMode::Permanent).await;
+        }
+        match dst.remove(to, RemoveMode::Permanent).await {
+            Ok(()) | Err(Error::NotFound) => {}
+            Err(e) => return Err(e),
+        }
+    }
+    vfs::move_entry(
+        mounts,
+        from,
+        to,
+        CopyOptions { overwrite },
+        job.progress.clone(),
+        job.cancel.clone(),
+        &job.pause,
+    )
+    .await
+}
+
+/// Removes `to` when it is of another kind than `from`, so a folder can
+/// take a file's place and the reverse.
+async fn clear_mismatched_target(
+    mounts: &Mounts,
+    from: &Location,
+    to: &Location,
+) -> Result<(), Error> {
+    let src = mounts.resolve(from)?;
+    let dst = mounts.resolve(to)?;
+    let (Ok(source), Ok(target)) = (src.stat(from).await, dst.stat(to).await) else {
+        return Ok(());
+    };
+    if (source.kind == EntryKind::Dir) != (target.kind == EntryKind::Dir) {
+        dst.remove(to, RemoveMode::Permanent).await?;
+    }
+    Ok(())
+}
+
 /// Spawns a job that copies every pair in order, through the provider's
-/// fast path, and returns its handle.
+/// fast path, asking about existing names, and returns its handle.
 pub(crate) fn spawn_copies(
     jobs: &JobRunner,
     mounts: Arc<Mounts>,
+    conflicts: Arc<Conflicts>,
     name: String,
     pairs: Vec<(Location, Location)>,
 ) -> runtime::JobHandle<()> {
-    jobs.spawn_named(name, move |job| async move {
+    jobs.spawn_pausable(name, move |job| async move {
         let total = pairs.len() as u64;
+        let mut policy = Policy::default();
         for (done, (from, to)) in pairs.iter().enumerate() {
+            job.pause.wait().await;
             job.progress.report(Progress::Items {
                 done: done as u64,
                 total: Some(total),
             });
-            vfs::copy(
-                &mounts,
-                from,
-                to,
-                CopyOptions::default(),
-                job.progress.clone(),
-                job.cancel.clone(),
-            )
-            .await?;
+            let remaining = total - done as u64 - 1;
+            match policy
+                .land(&conflicts, &job, &mounts, from, to, remaining)
+                .await?
+            {
+                Landing::Skip => {}
+                Landing::At { to, overwrite } => {
+                    copy_one(&mounts, &job, from, &to, overwrite).await?;
+                }
+            }
         }
         job.progress.report(Progress::Items {
             done: total,
@@ -203,29 +301,34 @@ pub(crate) fn spawn_copies(
     })
 }
 
-/// Spawns a job that moves every pair in order.
+/// Spawns a job that moves every pair in order, asking about existing
+/// names.
 pub(crate) fn spawn_moves(
     jobs: &JobRunner,
     mounts: Arc<Mounts>,
+    conflicts: Arc<Conflicts>,
     name: String,
     pairs: Vec<(Location, Location)>,
 ) {
-    jobs.spawn_named(name, move |job| async move {
+    jobs.spawn_pausable(name, move |job| async move {
         let total = pairs.len() as u64;
+        let mut policy = Policy::default();
         for (done, (from, to)) in pairs.iter().enumerate() {
+            job.pause.wait().await;
             job.progress.report(Progress::Items {
                 done: done as u64,
                 total: Some(total),
             });
-            vfs::move_entry(
-                &mounts,
-                from,
-                to,
-                CopyOptions::default(),
-                job.progress.clone(),
-                job.cancel.clone(),
-            )
-            .await?;
+            let remaining = total - done as u64 - 1;
+            match policy
+                .land(&conflicts, &job, &mounts, from, to, remaining)
+                .await?
+            {
+                Landing::Skip => {}
+                Landing::At { to, overwrite } => {
+                    move_one(&mounts, &job, from, &to, overwrite).await?;
+                }
+            }
         }
         job.progress.report(Progress::Items {
             done: total,
@@ -246,6 +349,7 @@ impl UndoCommand for MoveCommand {
         spawn_moves(
             jobs,
             Arc::clone(&self.mounts),
+            Arc::clone(&self.conflicts),
             format!("Undo {}", self.label),
             back,
         );
@@ -256,6 +360,7 @@ impl UndoCommand for MoveCommand {
         spawn_moves(
             jobs,
             Arc::clone(&self.mounts),
+            Arc::clone(&self.conflicts),
             self.label.clone(),
             self.pairs.clone(),
         );
@@ -340,6 +445,7 @@ impl Action for Duplicate {
                     CopyOptions::default(),
                     job.progress.clone(),
                     job.cancel.clone(),
+                    &job.pause,
                 )
                 .await?;
             }

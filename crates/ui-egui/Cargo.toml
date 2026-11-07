@@ -13,6 +13,7 @@ platform = { workspace = true }
 ext = { workspace = true }
 vfs-local = { workspace = true }
 model = { workspace = true }
+ops = { workspace = true }
 app = { workspace = true }
 chrono = { workspace = true }
 eframe = { workspace = true }
