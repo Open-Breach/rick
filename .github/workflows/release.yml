@@ -169,7 +169,7 @@ jobs:
           for file in "rick$exe" LICENSE README.md CHANGELOG.md THIRD-PARTY-LICENSES.md; do
             test -f "$file" || { echo "missing $file"; exit 1; }
           done
-          ls libpdfium.so libpdfium.dylib pdfium.dll 2> /dev/null | grep -q . || { echo "no pdfium library beside the binary"; exit 1; }
+          test -f libpdfium.so || test -f libpdfium.dylib || test -f pdfium.dll || { echo "no pdfium library beside the binary"; exit 1; }
           # The version line: the workspace version (the tag without any
           # pre-release suffix) and the git hash in brackets.
           out="$("./rick$exe" --version)"
