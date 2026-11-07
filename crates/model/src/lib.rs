@@ -50,6 +50,25 @@ pub struct TabId(pub u64);
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct WindowId(pub u64);
 
+/// What a tab shows. Every kind is a tab of the dock: split, docked and
+/// torn out alike.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum TabKind {
+    /// An explorer view of a location: toolbar, file list, status line.
+    #[default]
+    Explorer,
+    /// The preview, one per window: it shows the selection of the explorer
+    /// tab that was last focused ([`Model::preview_follows`]) and holds no
+    /// listing of its own.
+    Preview,
+    /// The viewer: one file of its location full size, the location's
+    /// listing in the explorer's sort and filter behind it, so the viewer
+    /// steps through the folder like a slideshow. The selection is the
+    /// file shown.
+    Viewer,
+}
+
 /// Where a split puts the new pane.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -286,9 +305,13 @@ pub struct History {
     pub forward: Vec<HistoryEntry>,
 }
 
-/// One explorer view: a location and everything shown for it.
+/// One tab: a location and everything shown for it. An explorer shows the
+/// location's entries; a viewer shows the selected one of them full size;
+/// the preview tab carries a location for form's sake and lists nothing.
 #[derive(Debug, Clone)]
 pub struct Tab {
+    /// What the tab shows.
+    pub kind: TabKind,
     /// Where the tab is.
     pub location: Location,
     /// Back and forward stacks.
@@ -327,6 +350,7 @@ pub struct Tab {
 impl Tab {
     fn new(location: Location, settings: &Settings) -> Self {
         Self {
+            kind: TabKind::Explorer,
             location,
             history: History::default(),
             view: ViewMode::Details,
@@ -563,6 +587,8 @@ pub struct Model {
     pub folder_tree: FolderTree,
     /// The settings snapshot.
     pub settings: Settings,
+    /// The explorer tab the preview follows: the last one focused.
+    preview_follows: Option<TabId>,
     next_pane: u64,
     next_tab: u64,
     next_window: u64,
@@ -592,10 +618,101 @@ impl Model {
             trash: TrashView::default(),
             folder_tree: FolderTree::new(),
             settings,
+            preview_follows: None,
             next_pane: 1,
             next_tab: 1,
             next_window: 1,
         }
+    }
+
+    /// Keeps [`preview_follows`](Self::preview_follows) true to the focus:
+    /// the focused pane's active tab when that is an explorer, else the
+    /// explorer followed so far while it exists.
+    fn refollow(&mut self) {
+        if self
+            .preview_follows
+            .is_some_and(|tab| !self.tabs.contains_key(&tab))
+        {
+            self.preview_follows = None;
+        }
+        if let Some((id, tab)) = self.active_tab(self.focused)
+            && tab.kind == TabKind::Explorer
+        {
+            self.preview_follows = Some(id);
+        }
+    }
+
+    /// The explorer tab the preview shows the selection of: the one last
+    /// focused, in any window. `None` until an explorer tab has had the
+    /// focus, or once the last one was closed.
+    #[must_use]
+    pub fn preview_follows(&self) -> Option<TabId> {
+        self.preview_follows
+    }
+
+    /// The window's Preview tab, if it is open.
+    #[must_use]
+    pub fn preview_tab(&self, window: WindowId) -> Option<TabId> {
+        let w = self.windows.get(&window)?;
+        w.dock
+            .panes()
+            .into_iter()
+            .filter_map(|pane| self.panes.get(&pane))
+            .flat_map(|pane| pane.tabs.iter().copied())
+            .find(|tab| {
+                self.tabs
+                    .get(tab)
+                    .is_some_and(|t| t.kind == TabKind::Preview)
+            })
+    }
+
+    /// Opens the window's Preview tab in a new pane right of every other,
+    /// the others keeping `fraction` of the width, or returns the one it
+    /// has. The focus stays where it is: the preview follows it.
+    pub fn open_preview(&mut self, window: WindowId, fraction: f32) -> Option<TabId> {
+        if let Some(tab) = self.preview_tab(window) {
+            return Some(tab);
+        }
+        let w = self.windows.get(&window)?;
+        // A location for form's sake: the preview lists nothing.
+        let location = self
+            .active_tab(w.focused)
+            .map(|(_, tab)| tab.location.clone())
+            .or_else(|| {
+                w.dock
+                    .panes()
+                    .into_iter()
+                    .filter_map(|pane| self.active_tab(pane))
+                    .map(|(_, tab)| tab.location.clone())
+                    .next()
+            })?;
+        let pane = PaneId(self.next_pane);
+        self.next_pane += 1;
+        let tab = TabId(self.next_tab);
+        self.next_tab += 1;
+        let mut state = Tab::new(location, &self.settings);
+        state.kind = TabKind::Preview;
+        self.tabs.insert(tab, state);
+        self.panes.insert(
+            pane,
+            Pane {
+                tabs: vec![tab],
+                active: Some(tab),
+            },
+        );
+        let w = self.windows.get_mut(&window)?;
+        let rest = std::mem::replace(&mut w.dock, Dock::Pane(pane));
+        w.dock = Dock::Split {
+            dir: SplitDir::Right,
+            fraction: if fraction.is_finite() {
+                fraction.clamp(0.05, 0.95)
+            } else {
+                0.72
+            },
+            first: Box::new(rest),
+            second: Box::new(Dock::Pane(pane)),
+        };
+        Some(tab)
     }
 
     /// Opens a window with one pane and one tab at `location`, focused.
@@ -626,6 +743,7 @@ impl Model {
         );
         self.focused_window = window;
         self.focused = pane;
+        self.refollow();
         (window, pane, tab)
     }
 
@@ -648,6 +766,7 @@ impl Model {
                 let tab = TabId(self.next_tab);
                 self.next_tab += 1;
                 let mut state = Tab::new(saved_tab.location.clone(), &self.settings);
+                state.kind = saved_tab.kind;
                 state.view = saved_tab.view;
                 state.sort = saved_tab.sort;
                 state.group = saved_tab.group;
@@ -725,6 +844,7 @@ impl Model {
         );
         self.focused_window = window;
         self.focused = focused;
+        self.refollow();
         window
     }
 
@@ -780,6 +900,7 @@ impl Model {
                                 .iter()
                                 .filter_map(|id| self.tabs.get(id))
                                 .map(|tab| TabSession {
+                                    kind: tab.kind,
                                     location: tab.location.clone(),
                                     view: tab.view,
                                     sort: tab.sort,
@@ -846,6 +967,7 @@ impl Model {
             Some(w) => {
                 self.focused_window = window;
                 self.focused = w.focused;
+                self.refollow();
                 true
             }
             None => false,
@@ -873,6 +995,7 @@ impl Model {
         {
             self.focus_window(next);
         }
+        self.refollow();
         true
     }
 
@@ -998,6 +1121,7 @@ impl Model {
         }
         self.focused_window = window;
         self.focused = pane;
+        self.refollow();
         true
     }
 
@@ -1324,6 +1448,7 @@ impl Model {
         if p.tabs.is_empty() {
             self.drop_pane(pane);
         }
+        self.refollow();
         Some(pane)
     }
 
@@ -1935,6 +2060,79 @@ mod tests {
         assert!(!model.close_window(first), "the last window stays");
         assert!(model.focus(pane_a));
         assert!(!model.focus(PaneId(99)));
+    }
+
+    #[test]
+    fn the_preview_tab_is_one_per_window_and_follows_the_focused_explorer() {
+        let mut model = Model::new(Settings::default(), loc("/a"));
+        let window = model.focused_window;
+        let pane = model.focused;
+        assert_eq!(model.preview_follows(), Some(TabId(1)));
+        assert_eq!(model.preview_tab(window), None);
+
+        let preview = model
+            .open_preview(window, 0.7)
+            .unwrap_or_else(|| panic!("preview"));
+        assert_eq!(
+            model.open_preview(window, 0.3),
+            Some(preview),
+            "one per window"
+        );
+        assert_eq!(model.preview_tab(window), Some(preview));
+        assert_eq!(model.tab(preview).map(|t| t.kind), Some(TabKind::Preview));
+        let preview_pane = model.pane_of(preview).unwrap_or_else(|| panic!("pane"));
+        assert_ne!(preview_pane, pane);
+        assert!(
+            matches!(
+                model.dock(),
+                Dock::Split { dir: SplitDir::Right, fraction, first, second }
+                    if (*fraction - 0.7).abs() < 1e-6
+                        && **first == Dock::Pane(pane)
+                        && **second == Dock::Pane(preview_pane)
+            ),
+            "{:?}",
+            model.dock()
+        );
+        assert_eq!(model.focused, pane, "opening the preview moves no focus");
+
+        // The preview pane focused: the explorer stays followed. Another
+        // explorer focused: followed instead.
+        assert!(model.focus(preview_pane));
+        assert_eq!(model.preview_follows(), Some(TabId(1)));
+        let (_, second) = model.new_tab(Some(pane), loc("/b"));
+        assert_eq!(model.preview_follows(), Some(second));
+        assert!(model.activate(TabId(1)));
+        assert_eq!(model.preview_follows(), Some(TabId(1)));
+
+        // The session keeps the kind and the follow comes back with the
+        // focus.
+        let session = model.session();
+        let restored = Model::from_session(Settings::default(), &session, &loc("/home"));
+        let restored_preview = restored
+            .preview_tab(restored.focused_window)
+            .unwrap_or_else(|| panic!("restored preview"));
+        assert_eq!(
+            restored.tab(restored_preview).map(|t| t.kind),
+            Some(TabKind::Preview)
+        );
+        assert!(
+            restored
+                .preview_follows()
+                .and_then(|t| restored.tab(t))
+                .is_some_and(|t| t.kind == TabKind::Explorer && t.location == loc("/a"))
+        );
+
+        // Closing the tab collapses its split.
+        assert_eq!(model.close_tab(preview), Some(preview_pane));
+        assert_eq!(model.preview_tab(window), None);
+        assert_eq!(model.dock(), &Dock::Pane(pane));
+
+        // The follow moves with the focus across windows and never names a
+        // closed tab.
+        let (other, _, third) = model.new_window(loc("/c"));
+        assert_eq!(model.preview_follows(), Some(third));
+        assert!(model.close_window(other));
+        assert_eq!(model.preview_follows(), Some(TabId(1)));
     }
 
     #[test]

@@ -3,8 +3,8 @@
 //!
 //! A [`Session`] holds every window with its geometry, side panel, dock tree
 //! (splits with their fractions, panes with their tabs in strip order and
-//! the active one) and every tab's location, view mode, sort, group, filter,
-//! flatten, hidden flag, selection ids and scroll offset. Panes are indexed
+//! the active one) and every tab's kind, location, view mode, sort, group,
+//! filter, flatten, hidden flag, selection ids and scroll offset. Panes are indexed
 //! within their window, so a file written by hand needs no ids. The
 //! [`Model`](crate::Model) turns itself into one with
 //! [`Model::session`](crate::Model::session) and is rebuilt from one with
@@ -15,7 +15,7 @@ use types::{EntryId, Location, ProviderId};
 
 use crate::listing::{Column, Sort, ViewMode};
 use crate::settings::{SidePanel, parse_location};
-use crate::{Dock, PaneId, SplitDir};
+use crate::{Dock, PaneId, SplitDir, TabKind};
 
 /// Where a window is on the screen, in logical points.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, Default)]
@@ -153,6 +153,8 @@ pub struct PaneSession {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct TabSession {
+    /// What the tab shows: an explorer unless the file says otherwise.
+    pub kind: TabKind,
     /// Where the tab is, as `provider:path`.
     #[serde(with = "location_toml")]
     pub location: Location,
@@ -182,6 +184,7 @@ pub struct TabSession {
 impl Default for TabSession {
     fn default() -> Self {
         Self {
+            kind: TabKind::Explorer,
             location: Location::new(ProviderId("local"), "/"),
             view: ViewMode::Details,
             sort: Sort {

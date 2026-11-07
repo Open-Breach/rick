@@ -503,7 +503,10 @@ fn a_50_mb_image_and_a_300_page_pdf_show_a_first_frame_within_200_ms_without_blo
     .unwrap_or_else(|e| panic!("{e}"));
     let mut harness = ui_harness(dir.path());
     let pane = harness.state().app().model().focused;
-    harness.state_mut().queue(Intent::ToggleInspector, pane);
+    if !harness.state().inspector_open() {
+        harness.state_mut().queue(Intent::ToggleInspector, pane);
+        harness.step();
+    }
     harness.step();
     assert!(harness.state().inspector_open());
 

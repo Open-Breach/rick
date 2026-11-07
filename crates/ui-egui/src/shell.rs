@@ -1,6 +1,6 @@
-//! The windows: for each one the title row, dock of tabs and panes, side
-//! panel, inspector and operations area; and, shared by all of them, the
-//! dialogues, palette, toasts and the keyboard.
+//! The windows: for each one the title row, dock of tabs and panes (the
+//! Preview tab among them), side panel and operations area; and, shared by
+//! all of them, the dialogues, palette, toasts and the keyboard.
 //!
 //! One [`RickUi`] holds the `App` and every window's state; the first
 //! window is eframe's root viewport and every further one an immediate
@@ -19,7 +19,7 @@ use egui_dock::{DockArea, NodePath, TabViewer};
 use ext::{ActionCtx, ActionId, Invocation, Level};
 use model::{
     Column, Density, DockTarget, Geometry, IconSize, JobState, PaneId, PanelSide, SelectionChange,
-    SettingsChange, SidePanelChange, SortDir, Tab, TabId, Theme, ViewMode, WindowId,
+    SettingsChange, SidePanelChange, SortDir, Tab, TabId, TabKind, Theme, ViewMode, WindowId,
 };
 use platform::{ControlsSide, PropertiesOutcome};
 use types::{EntryId, EntryKind, Location};
@@ -249,16 +249,14 @@ struct NamePrompt {
     focus: bool,
 }
 
-/// The state of one window: its dock, search box, inspector and drag.
+/// The state of one window: its dock, search box and drag.
 pub struct WindowUi {
     /// The dock tree.
     dock: DockSync,
     search: SearchBox,
-    inspector_open: bool,
-    /// The preview pane's width when it first opens.
-    inspector_width: f32,
-    /// Where the preview pane was in the last frame, if open.
-    inspector_rect: Option<egui::Rect>,
+    /// Where the Preview tab's content was in the last frame, when the
+    /// window showed it.
+    preview_rect: Option<egui::Rect>,
     /// The tab the pointer was over in the frame being drawn.
     hovered_tab: Option<TabId>,
     /// Each tab's header button in the last frame, for tests that drop on
@@ -282,13 +280,11 @@ pub struct WindowUi {
 }
 
 impl WindowUi {
-    fn new(model: &model::Model, window: WindowId, inspector_width: f32) -> Self {
+    fn new(model: &model::Model, window: WindowId) -> Self {
         Self {
             dock: DockSync::new(model, window),
             search: SearchBox::default(),
-            inspector_open: false,
-            inspector_width,
-            inspector_rect: None,
+            preview_rect: None,
             hovered_tab: None,
             tab_headers: HashMap::new(),
             window_frame: None,
@@ -323,10 +319,10 @@ pub struct RickUi {
     /// What the About window shows as the version: the binary's version
     /// and git hash, or this crate's version until the binary says.
     version: String,
-    /// The preview pane's own state: pinned-panel search, what it drew.
-    /// One preview, shown in every window that opens the pane.
+    /// The Preview tab's own state: pinned-panel search, what it drew. One
+    /// preview, shown in every window that opens the tab.
     inspector_state: inspector::PaneState,
-    /// The width a window's preview pane first opens at.
+    /// The width the Preview tab's pane opens at, in points.
     inspector_width: f32,
     properties: Option<(String, Vec<(String, String)>)>,
     /// Read-only texts actions asked to show, each in its own window.
@@ -476,7 +472,7 @@ impl RickUi {
         let inspector_width = 260.0;
         let mut windows = BTreeMap::new();
         for (id, _) in app.model().windows() {
-            windows.insert(id, WindowUi::new(app.model(), id, inspector_width));
+            windows.insert(id, WindowUi::new(app.model(), id));
         }
         Self {
             app,
@@ -552,26 +548,23 @@ impl RickUi {
         ids
     }
 
-    /// Whether the root window's preview pane is shown.
+    /// Whether the root window has its Preview tab open.
     #[must_use]
     pub fn inspector_open(&self) -> bool {
-        self.windows
-            .get(&self.root)
-            .is_some_and(|w| w.inspector_open)
+        self.app.model().preview_tab(self.root).is_some()
     }
 
-    /// The width the preview pane opens at; for tests, before it opens.
+    /// The width the Preview tab's pane opens at; for tests, before it
+    /// opens.
     pub fn set_inspector_width(&mut self, width: f32) {
         self.inspector_width = width;
-        for window in self.windows.values_mut() {
-            window.inspector_width = width;
-        }
     }
 
-    /// Where the root window's preview pane was in the last frame, if open.
+    /// Where the root window's Preview tab drew its content in the last
+    /// frame, if the tab is open and shown.
     #[must_use]
     pub fn inspector_rect(&self) -> Option<egui::Rect> {
-        self.windows.get(&self.root).and_then(|w| w.inspector_rect)
+        self.windows.get(&self.root).and_then(|w| w.preview_rect)
     }
 
     /// Where the preview pane's parts were in the last frame, for tests.
@@ -830,12 +823,10 @@ impl RickUi {
         });
     }
 
-    /// The entry the app is previewing in `pane`, if any.
+    /// The entry the app is previewing in `pane`, if any: the Preview tab's
+    /// or a viewer tab's.
     fn preview_entry(&self, pane: PaneId) -> Option<EntryId> {
-        self.app
-            .preview_target()
-            .filter(|(p, _)| *p == pane)
-            .map(|(_, id)| id)
+        self.app.preview_entry(pane)
     }
 
     fn handle(&mut self, command: Command) {
@@ -895,10 +886,63 @@ impl RickUi {
             .map_or(self.app.model().focused, |w| w.focused)
     }
 
+    /// The pane an intent about files goes to: `pane` itself, or, when its
+    /// active tab is the Preview tab, the pane of the explorer the preview
+    /// follows. The dock never focuses a preview pane on its own, but a
+    /// Preview tab dragged into an explorer pane can be the active one.
+    fn explorer_pane(&self, pane: PaneId) -> PaneId {
+        if crate::dock::shows_preview(self.app.model(), pane) {
+            self.app.preview_pane().unwrap_or(pane)
+        } else {
+            pane
+        }
+    }
+
+    /// Where an intent lands: the tab-strip intents stay with the pane
+    /// they were pressed in, everything else follows
+    /// [`explorer_pane`](Self::explorer_pane).
+    fn route(&self, intent: Intent, pane: PaneId) -> PaneId {
+        match intent {
+            Intent::CloseTab
+            | Intent::CloseOtherTabs
+            | Intent::NextTab
+            | Intent::PrevTab
+            | Intent::Tab(_)
+            | Intent::MoveTabLeft
+            | Intent::MoveTabRight
+            | Intent::FocusPane(_) => pane,
+            _ => self.explorer_pane(pane),
+        }
+    }
+
+    /// The share of the dock the existing panes keep when the Preview tab
+    /// opens, so that its pane is [`inspector_width`](Self::inspector_width)
+    /// wide: the dock puts the divider at the fraction and gives each side
+    /// half of its width.
+    fn preview_fraction(&self, window: WindowId) -> f32 {
+        let Some(w) = self.windows.get(&window) else {
+            return 0.72;
+        };
+        let rects = w.dock.pane_rects(self.app.model());
+        let left = rects
+            .iter()
+            .map(|(_, r)| r.left())
+            .fold(f32::INFINITY, f32::min);
+        let right = rects
+            .iter()
+            .map(|(_, r)| r.right())
+            .fold(f32::NEG_INFINITY, f32::max);
+        let width = right - left;
+        if !width.is_finite() || width <= 0.0 {
+            return 0.72;
+        }
+        (1.0 - (self.inspector_width + 0.5) / width).clamp(0.2, 0.9)
+    }
+
     /// Turns this frame's key presses into intents, unless a text field, a
     /// dialogue, the palette or the shortcuts screen wants them.
     fn handle_keys(&mut self, ctx: &egui::Context, window: WindowId) {
-        let pane = self.focused_in(window);
+        let pane = self.explorer_pane(self.focused_in(window));
         if self.dialog.is_some()
             || self.name_prompt.is_some()
             || self.shortcuts.rebinding.is_some()
@@ -967,7 +1011,14 @@ impl RickUi {
             self.requests
                 .push(Request::Command(Command::Filter { pane, text }));
         }
+        let strip = self.focused_in(window);
         for intent in intents {
+            // The tab-strip intents act on the pane they were pressed in.
+            let pane = if self.route(intent, strip) == strip {
+                strip
+            } else {
+                pane
+            };
             self.requests.push(Request::Intent { intent, pane });
         }
     }
@@ -1412,6 +1463,7 @@ impl RickUi {
 
     #[allow(clippy::too_many_lines)]
     fn dispatch(&mut self, intent: Intent, pane: PaneId, ctx: &egui::Context) {
+        let pane = self.route(intent, pane);
         self.dispatched.push_back(Dispatched { intent, pane });
         while self.dispatched.len() > RECENTS {
             self.dispatched.pop_front();
@@ -1602,9 +1654,8 @@ impl RickUi {
                 mode: ViewMode::Tree,
             }),
             Intent::ToggleInspector => {
-                if let Some(w) = self.windows.get_mut(&window) {
-                    w.inspector_open = !w.inspector_open;
-                }
+                let fraction = self.preview_fraction(window);
+                self.handle(Command::TogglePreview { window, fraction });
             }
             Intent::Settings => self.settings_open = true,
             Intent::Shortcuts => self.shortcuts.open = true,
@@ -1803,7 +1854,7 @@ impl RickUi {
         let from = *from;
         let best = rects
             .iter()
-            .filter(|(p, _)| *p != pane)
+            .filter(|(p, _)| *p != pane && !crate::dock::shows_preview(self.app.model(), *p))
             .filter(|(_, r)| match direction {
                 Direction::Left => r.max.x <= from.min.x + 1.0,
                 Direction::Right => r.min.x >= from.max.x - 1.0,
@@ -2031,14 +2082,16 @@ impl RickUi {
             }
             right.separator();
         }
-        let inspector_open = self.windows.get(&window).is_some_and(|w| w.inspector_open);
+        let preview_open = self.app.model().preview_tab(window).is_some();
         if right
-            .add(toggle_icon(icons::INSPECTOR, inspector_open))
+            .add(toggle_icon(icons::PREVIEW, preview_open))
             .on_hover_text("Toggle preview pane")
             .clicked()
-            && let Some(w) = self.windows.get_mut(&window)
         {
-            w.inspector_open = !w.inspector_open;
+            self.requests.push(Request::Intent {
+                intent: Intent::ToggleInspector,
+                pane: focused,
+            });
         }
         let side_visible = self
             .app
@@ -2307,6 +2360,10 @@ struct Viewer<'a> {
     shift: bool,
     /// The pane keyboard input goes to in this window.
     focused: PaneId,
+    /// The previews, for the Preview tab and the viewers.
+    previews: &'a mut Previews,
+    /// The Preview tab's own state.
+    inspector_state: &'a mut inspector::PaneState,
 }
 
 impl TabViewer for Viewer<'_> {
@@ -2341,9 +2398,10 @@ impl TabViewer for Viewer<'_> {
                 .push(Request::Command(Command::CloseTab(*tab)));
         }
         // A drop target: into the folder the tab shows; hovering activates
-        // the tab.
+        // the tab. The Preview tab shows no folder.
         if self.dnd.active()
             && let Some(state) = self.app.model().tab(*tab)
+            && state.kind != TabKind::Preview
         {
             let highlight = self.dnd.zone(Zone {
                 key: egui::Id::new(("dnd-tab", tab.0)),
@@ -2381,6 +2439,20 @@ impl TabViewer for Viewer<'_> {
         let Some(state) = model.tab(*tab) else {
             return;
         };
+        if state.kind == TabKind::Preview {
+            let close = inspector::show(
+                ui,
+                self.app,
+                self.previews,
+                self.inspector_state,
+                self.requests,
+            );
+            if close {
+                self.requests
+                    .push(Request::Command(Command::CloseTab(*tab)));
+            }
+            return;
+        }
         let tab_ui = self
             .tabs
             .entry(*tab)
@@ -2430,45 +2502,14 @@ impl TabViewer for Viewer<'_> {
 }
 
 impl RickUi {
-    /// The window's panels: title row, side panel, inspector and the dock.
+    /// The window's panels: title row, side panel and the dock, the Preview
+    /// tab among its tabs.
     fn panels(&mut self, ui: &mut egui::Ui, ctx: &egui::Context, window: WindowId) {
         let focused = self.focused_in(window);
         self.title_row(ui, ctx, window, focused);
         self.apply_requests(ctx);
 
         self.side_panel(ui, ctx, window);
-
-        let inspector_open = self.windows.get(&window).is_some_and(|w| w.inspector_open);
-        if let Some(w) = self.windows.get_mut(&window) {
-            w.inspector_rect = None;
-        }
-        if inspector_open {
-            let width = self
-                .windows
-                .get(&window)
-                .map_or(self.inspector_width, |w| w.inspector_width);
-            // The pane's width is the dock's and the user's; its content
-            // fits itself in and never asks for more.
-            let response = egui::Panel::right(egui::Id::new(("inspector", window.0)))
-                .default_size(width)
-                .size_range(inspector::MIN_WIDTH..=f32::INFINITY)
-                .show(ui, |ui| {
-                    inspector::show(
-                        ui,
-                        &self.app,
-                        self.app.model().focused,
-                        &mut self.previews,
-                        &mut self.inspector_state,
-                        &mut self.requests,
-                    )
-                });
-            if let Some(w) = self.windows.get_mut(&window) {
-                w.inspector_rect = Some(response.response.rect);
-                if response.inner {
-                    w.inspector_open = false;
-                }
-            }
-        }
 
         let shift = ctx.input(|i| i.modifiers.shift);
         let dock_id = egui::Id::new(("dock", window.0));
@@ -2493,6 +2534,8 @@ impl RickUi {
                 tab_headers: &mut w.tab_headers,
                 shift,
                 focused,
+                previews: &mut self.previews,
+                inspector_state: &mut self.inspector_state,
             };
             DockArea::new(&mut w.dock.state)
                 .id(dock_id)
@@ -2504,6 +2547,26 @@ impl RickUi {
                 .show_inside(ui, &mut viewer);
             w.strips = w.dock.strips(self.app.model(), strip_height);
             w.tab_drag = w.dock.dragged_tab(ctx, dock_id);
+            // The Preview tab's leaf below its strip, for tests.
+            let model = self.app.model();
+            w.preview_rect = model
+                .preview_tab(window)
+                .and_then(|tab| model.pane_of(tab))
+                .filter(|pane| {
+                    model.pane(*pane).and_then(model::Pane::active) == model.preview_tab(window)
+                })
+                .and_then(|pane| {
+                    w.dock
+                        .pane_rects(model)
+                        .into_iter()
+                        .find(|(p, _)| *p == pane)
+                        .map(|(_, rect)| {
+                            egui::Rect::from_min_max(
+                                egui::pos2(rect.left(), rect.top() + strip_height),
+                                rect.max,
+                            )
+                        })
+                });
         });
         self.cross_window_drop(ctx, window, drag_before);
         let may_focus = ctx.input(|i| i.viewport().focused.unwrap_or(true));
@@ -2606,7 +2669,7 @@ impl RickUi {
         let ctx = ui.ctx().clone();
         let ctx = &ctx;
         if !self.windows.contains_key(&window) {
-            let state = WindowUi::new(self.app.model(), window, self.inspector_width);
+            let state = WindowUi::new(self.app.model(), window);
             self.windows.insert(window, state);
         }
         self.now = SystemTime::now();

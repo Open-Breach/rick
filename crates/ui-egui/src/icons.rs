@@ -33,8 +33,8 @@ pub const HIDDEN_SHOWN: &str = ph::EYE;
 pub const HIDDEN_HIDDEN: &str = ph::EYE_SLASH;
 /// The side panel.
 pub const SIDE_PANEL: &str = ph::SIDEBAR_SIMPLE;
-/// The inspector.
-pub const INSPECTOR: &str = ph::INFO;
+/// The Preview tab and its toggle.
+pub const PREVIEW: &str = ph::IMAGE;
 /// Window: minimise.
 pub const MINIMISE: &str = ph::MINUS;
 /// Window: maximise.
@@ -255,7 +255,7 @@ mod tests {
         HIDDEN_SHOWN,
         HIDDEN_HIDDEN,
         SIDE_PANEL,
-        INSPECTOR,
+        PREVIEW,
         MINIMISE,
         MAXIMISE,
         RESTORE,
