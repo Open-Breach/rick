@@ -18,11 +18,13 @@
 //! operations area shows and cancels. Only a pane's active tab lists; the
 //! other tabs list when they are first shown.
 //!
-//! The app also feeds the side panel: the Recent list from every change
-//! watch it holds plus a bounded scan at start, the mounted volumes polled
-//! through the platform, the trash's contents after every operation, and
-//! the folder tree following the focused pane; and it routes the name
-//! conflicts copy and move jobs ask about to the UI and back.
+//! The app also feeds the side panel: the Places list from `places.toml`
+//! (seeded from the standard folders on the first start), the mounted
+//! volumes polled through the platform, the cloud providers' rows, and the
+//! trash's contents after every operation; it mounts the `rick://` provider
+//! whose views the panel opens and tells it when they changed; it routes
+//! the name conflicts copy and move jobs ask about to the UI and back, and
+//! shows a job queued behind another on its volume as *Waiting*.
 //!
 //! The session (every window, pane and tab, see [`model::Session`]) is
 //! written to `session.toml` after every change, at most once per second,
@@ -62,13 +64,13 @@
 #![forbid(unsafe_code)]
 
 mod command;
-mod recent;
+mod places;
 mod session;
 pub mod settings;
 mod trash;
 
 pub use command::{Command, Event, TransferMode};
-pub use recent::RECENT_FILE;
+pub use places::{PLACES_FILE, defaults as default_places, virtual_icon};
 pub use session::{LAYOUTS_DIR, SAVE_INTERVAL, SESSION_FILE};
 pub use settings::SETTINGS_FILE;
 pub use trash::TRASH_FILE;
@@ -84,8 +86,11 @@ use ext::{
     UndoCommand,
 };
 use futures::StreamExt;
-use model::{JobState, Model, PaneId, Section, Session, Settings, SettingsChange, TabId, Volume};
-use ops::{Conflicts, PinStore, TrashStore};
+use model::{
+    Column, JobState, Model, PaneId, Place, Session, Settings, SettingsChange, SortDir, TabId,
+    Volume,
+};
+use ops::{Conflicts, PinStore, Scheduler, TrashStore};
 use platform::{Platform, TrashedItem};
 use runtime::{JobEvent, JobRunner, mpsc};
 use tracing::{debug, warn};
@@ -93,6 +98,7 @@ use trash::TrashBridge;
 use types::{CancelToken, Entry, EntryId, EntryKind, Error, JobId, Location, Progress, VPath};
 use vfs::Mounts;
 use vfs_local::LocalProvider;
+use vfs_rick::{RickProvider, Virtual};
 
 /// What became of a plugin the host found, for the Extensions screen.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -232,28 +238,21 @@ enum Msg {
     },
     /// A job asked about a name conflict.
     Conflicts,
-    /// The persisted Recent list was read.
-    RecentLoaded(Vec<Entry>),
-    /// A scan of a Recent root finished.
-    RecentScanned(Vec<Entry>),
-    /// A Recent root changed.
-    RecentChange(FsChange),
+    /// A job started waiting for its volume, or stopped.
+    Schedule,
     /// The mounted volumes were enumerated.
     Volumes(Result<Vec<Volume>, Error>),
     /// The trash was listed.
     Trash(Result<Vec<TrashedItem>, Error>),
-    /// The folders under a path of the side panel's tree.
-    FolderTree {
-        root: Location,
-        path: VPath,
-        folders: Vec<Entry>,
-    },
+    /// The cloud providers' roots were listed.
+    Cloud(Vec<Entry>),
 }
 
 /// How long changes are collected before the decorators run again.
 const REDECORATE_AFTER: Duration = Duration::from_millis(150);
-/// How often the mounted volumes are enumerated again.
-const VOLUMES_EVERY: Duration = Duration::from_secs(3);
+/// How often the mounted volumes are enumerated again, so a drive that is
+/// plugged in or a share that is mounted shows up without a user action.
+const VOLUMES_EVERY: Duration = Duration::from_secs(2);
 /// How long one [`App::poll`] may spend applying messages before it leaves
 /// the rest to the next one.
 const POLL_BUDGET: Duration = Duration::from_millis(8);
@@ -283,6 +282,12 @@ impl PinBridge {
     /// The changes asked for since the last call.
     fn take(&self) -> Vec<SettingsChange> {
         std::mem::take(&mut self.pending.lock().unwrap_or_else(PoisonError::into_inner))
+    }
+}
+
+impl vfs_rick::Favorites for PinBridge {
+    fn pinned(&self) -> Vec<Location> {
+        PinStore::pinned(self)
     }
 }
 
@@ -367,15 +372,6 @@ struct Live {
     children: BTreeMap<EntryId, Child>,
 }
 
-/// The Recent feed's roots and watches.
-#[derive(Default)]
-struct RecentFeed {
-    /// Each watched root with the token that stops its watch and scan.
-    roots: Vec<(Location, CancelToken)>,
-    /// Writes `recent.toml`, latest snapshot wins.
-    saver: Option<mpsc::UnboundedSender<Vec<Entry>>>,
-}
-
 /// The application: model, registry, jobs, undo log and settings.
 pub struct App {
     model: Model,
@@ -386,6 +382,12 @@ pub struct App {
     pins: Arc<PinBridge>,
     trash: Arc<TrashBridge>,
     conflicts: Arc<Conflicts>,
+    /// The per-volume queue the copy and move jobs go through.
+    scheduler: Arc<Scheduler>,
+    /// The jobs shown as *Waiting* right now.
+    waiting: BTreeSet<JobId>,
+    /// The `rick://` provider, told when a view's contents changed.
+    rick: Arc<RickProvider>,
     jobs: JobRunner,
     job_events: mpsc::UnboundedReceiver<JobEvent>,
     /// Where decorators run their lookups: part of listing, so kept out of
@@ -416,13 +418,12 @@ pub struct App {
     thumbnails: BTreeSet<(EntryId, u32)>,
     /// Events from start-up, delivered on the first poll.
     pending: Vec<Event>,
-    recent: RecentFeed,
     /// Writes `trash.toml`, latest snapshot wins.
     trash_saver: mpsc::UnboundedSender<Vec<TrashedItem>>,
+    /// Writes `places.toml`, latest snapshot wins.
+    places_saver: mpsc::UnboundedSender<Vec<Place>>,
     /// Stops the volume poll.
     volumes_watch: CancelToken,
-    /// The location the side panel's tree followed last.
-    followed: Option<Location>,
     /// The user's home, where a tab opens when its own location is gone.
     home: Location,
     /// Writes `session.toml`, debounced.
@@ -446,8 +447,9 @@ pub struct App {
 
 impl App {
     /// Builds the application: mounts the local provider, loads the
-    /// built-in operations and `config.extensions`, reads the settings file
-    /// and starts watching it, restores the session or the start layout,
+    /// built-in operations and `config.extensions`, mounts the `rick://`
+    /// provider over them, reads the settings and places files and starts
+    /// watching the settings, restores the session or the start layout,
     /// starts the side panel's feeds, and lists every active tab's location.
     // Start-up is one straight line: registry, settings, session, loop.
     #[allow(clippy::too_many_lines)]
@@ -469,12 +471,14 @@ impl App {
         let pins = Arc::new(PinBridge::default());
         let trash = Arc::new(TrashBridge::default());
         let conflicts = Conflicts::new();
+        let scheduler = Scheduler::new();
         let core = ops::Core::new(
             Arc::clone(&mounts),
             Arc::clone(&platform),
             Arc::clone(&pins) as Arc<dyn PinStore>,
             Arc::clone(&trash) as Arc<dyn TrashStore>,
             Arc::clone(&conflicts),
+            Arc::clone(&scheduler),
         );
         for ext in std::iter::once(&core as &dyn Extension).chain(extensions.iter().map(|e| &**e)) {
             if let Err(error) = registry.load(ext) {
@@ -489,6 +493,27 @@ impl App {
         for provider in registry.providers() {
             mounts.mount(Arc::clone(provider));
         }
+        // The virtual locations go on top of every provider, since the
+        // Network and Cloud overviews list the others' roots.
+        let rick = Arc::new(RickProvider::new(
+            Arc::clone(&platform),
+            Arc::clone(&pins) as Arc<dyn vfs_rick::Favorites>,
+            Arc::clone(&trash) as Arc<dyn vfs_rick::TrashRecord>,
+            Arc::clone(&mounts),
+        ));
+        mounts.mount(Arc::clone(&rick) as Arc<dyn ext::Provider>);
+        let mut cloud_providers: Vec<types::ProviderId> = mounts
+            .ids()
+            .into_iter()
+            .filter(|id| vfs_rick::is_cloud_provider(*id))
+            .collect();
+        cloud_providers.sort();
+        let mut network_providers: Vec<types::ProviderId> = mounts
+            .ids()
+            .into_iter()
+            .filter(|id| vfs_rick::is_network_provider(*id))
+            .collect();
+        network_providers.sort();
 
         let config_dir = config_dir.unwrap_or_else(|| platform.config_dir());
         let settings_path = config_dir.join(SETTINGS_FILE);
@@ -496,6 +521,19 @@ impl App {
             Ok(items) => trash.set(items),
             Err(error) => warn!(%error, "trash record not read"),
         }
+        let places_path = config_dir.join(PLACES_FILE);
+        let (places, seeded) = match places::load(&places_path) {
+            Ok(Some(places)) => (places, false),
+            Ok(None) => (places::defaults(&*platform), true),
+            Err(error) => {
+                warn!(%error, path = %places_path.display(), "places not read");
+                pending.push(Event::Notify {
+                    level: Level::Warning,
+                    text: format!("Places file not read: {error}"),
+                });
+                (places::defaults(&*platform), false)
+            }
+        };
         let session_path = config_dir.join(SESSION_FILE);
         let layouts_dir = config_dir.join(LAYOUTS_DIR);
         let settings = match settings::load(&settings_path) {
@@ -543,7 +581,7 @@ impl App {
             }
         });
         let restored = start_layout.or_else(|| last_session.clone());
-        let model = match restored {
+        let mut model = match restored {
             Some(mut session) => {
                 repair(&mounts, &home, &mut session);
                 let mut model = Model::from_session(settings, &session, &home);
@@ -554,6 +592,9 @@ impl App {
             }
             None => Model::new(settings, start.unwrap_or_else(|| home.clone())),
         };
+        model.set_places(places);
+        model.cloud_providers = cloud_providers;
+        model.network_providers = network_providers;
         let (jobs, job_events) = JobRunner::with_events();
         let (tx, rx) = mpsc::unbounded_channel();
         let settings_saver = settings::saver(settings_path.clone());
@@ -562,9 +603,9 @@ impl App {
             let path = config_dir.join(TRASH_FILE);
             saver(move |items: &Vec<TrashedItem>| trash::save(&path, items))
         };
-        let recent_saver = {
-            let path = config_dir.join(RECENT_FILE);
-            saver(move |entries: &Vec<Entry>| recent::save(&path, entries))
+        let places_saver = {
+            let path = places_path;
+            saver(move |places: &Vec<Place>| places::save(&path, places))
         };
         let mailbox = Mailbox {
             tx,
@@ -576,6 +617,12 @@ impl App {
                 tx.send(Msg::Conflicts);
             }));
         }
+        {
+            let tx = mailbox.clone();
+            scheduler.set_waker(Arc::new(move || {
+                tx.send(Msg::Schedule);
+            }));
+        }
         let mut app = Self {
             model,
             mounts,
@@ -585,6 +632,9 @@ impl App {
             pins,
             trash,
             conflicts,
+            scheduler,
+            waiting: BTreeSet::new(),
+            rick,
             jobs,
             job_events,
             decor_jobs: JobRunner::new(),
@@ -603,13 +653,9 @@ impl App {
             preview_generation: 0,
             thumbnails: BTreeSet::new(),
             pending,
-            recent: RecentFeed {
-                roots: Vec::new(),
-                saver: Some(recent_saver),
-            },
             trash_saver,
+            places_saver,
             volumes_watch: CancelToken::new(),
-            followed: None,
             home,
             session_saver: session::Saver::new(session_path),
             last_sent: None,
@@ -620,10 +666,12 @@ impl App {
             plugins: Vec::new(),
         };
         app.watch_settings();
-        app.load_recent(&config_dir.join(RECENT_FILE));
-        app.sync_recent_roots();
+        if seeded {
+            app.save_places();
+        }
         app.poll_volumes();
         app.refresh_trash();
+        app.refresh_cloud();
         let mut events = Vec::new();
         app.sync_panes(&mut events);
         app.sync_preview();
@@ -955,9 +1003,25 @@ impl App {
     fn dispatch(&mut self, command: Command, events: &mut Vec<Event>) {
         match command {
             Command::Navigate { pane, to } => {
+                // Where the tab is already, navigating is a refresh: the
+                // Places row of the current folder lists it again rather
+                // than emptying it.
+                if self
+                    .model
+                    .active_tab(pane)
+                    .is_some_and(|(_, tab)| tab.location == to)
+                {
+                    self.refresh(pane);
+                    return;
+                }
                 let before = self.selection_len(pane);
+                let recent = Virtual::of(&to) == Some(Virtual::Recent);
                 if self.model.navigate(pane, to).is_some() {
                     Self::selection_cleared(pane, before, events);
+                    if recent {
+                        self.model
+                            .set_sort(pane, Column::Accessed, SortDir::Descending);
+                    }
                 }
             }
             Command::Open { pane, id } => self.open(pane, id, events),
@@ -1061,18 +1125,35 @@ impl App {
                     }
                 }
             }
-            Command::FolderTreeToggle(path) => {
-                if let Some(location) = self.model.folder_tree_toggle(&path) {
-                    self.list_folders(location);
+            Command::PlaceAdd { place, at } => {
+                if self.model.places.add(place, at) {
+                    self.save_places();
                 }
             }
-            Command::FolderTreeLink(linked) => {
-                self.model.folder_tree_link(linked);
-                self.followed = None;
+            Command::PlaceRemove(index) => {
+                if self.model.places.remove(index).is_some() {
+                    self.save_places();
+                }
             }
+            Command::PlaceMove { from, to } => {
+                if self.model.places.shift(from, to) {
+                    self.save_places();
+                }
+            }
+            Command::PlaceEdit { index, title, icon } => {
+                if self.model.places.edit(index, &title, &icon) {
+                    self.save_places();
+                }
+            }
+            Command::Eject(mount_point) => self.eject(&mount_point, events),
             Command::Run { action, ctx } => self.run(action, ctx, events),
             Command::NewTab(location) => {
-                self.model.new_tab(None, location);
+                let recent = Virtual::of(&location) == Some(Virtual::Recent);
+                let (pane, _) = self.model.new_tab(None, location);
+                if recent {
+                    self.model
+                        .set_sort(pane, Column::Accessed, SortDir::Descending);
+                }
             }
             Command::CloseTab(tab) => {
                 self.model.close_tab(tab);
@@ -1139,9 +1220,6 @@ impl App {
             }
             Command::SidePanel { window, change } => {
                 self.model.side_panel(window, change);
-                // A tree section that opens, or a panel that shows, follows
-                // anew.
-                self.followed = None;
             }
             Command::FocusWindow(window) => {
                 self.model.focus_window(window);
@@ -1368,198 +1446,97 @@ impl App {
         });
     }
 
-    /// Reads the persisted Recent list off the loop's thread.
-    fn load_recent(&self, path: &Path) {
-        let path = path.to_path_buf();
-        let tx = self.mailbox.clone();
-        runtime::handle().spawn(async move {
-            let loaded = runtime::handle()
-                .spawn_blocking(move || recent::load(&path))
-                .await
-                .unwrap_or_else(|join| Err(Error::Io(std::io::Error::other(join))));
-            match loaded {
-                Ok(entries) => {
-                    tx.send(Msg::RecentLoaded(entries));
-                }
-                Err(error) => warn!(%error, "recent list not read"),
-            }
-        });
-    }
-
-    /// The Recent roots: the home directory and the pinned local folders.
-    fn recent_roots(&self) -> Vec<Location> {
-        let home = Location::new(
-            vfs_local::PROVIDER_ID,
-            platform::paths::from_path(&self.platform.home_dir()),
-        );
-        let mut roots = vec![home];
-        for pinned in &self.model.settings.pinned {
-            if pinned.provider != vfs_local::PROVIDER_ID || roots.contains(pinned) {
-                continue;
-            }
-            let is_dir = platform::paths::to_path(&pinned.path)
-                .is_ok_and(|p| std::fs::metadata(p).is_ok_and(|m| m.is_dir()));
-            if is_dir {
-                roots.push(pinned.clone());
+    /// Brings the model's *Waiting* rows in line with the scheduler's queue.
+    fn sync_waiting(&mut self) {
+        let now: BTreeMap<JobId, String> = self.scheduler.waiting().into_iter().collect();
+        for id in self.waiting.clone() {
+            if !now.contains_key(&id) {
+                self.model.job_waiting(id, None);
+                self.waiting.remove(&id);
             }
         }
-        roots
+        for (id, for_name) in now {
+            // A waiting job that has no row yet (its `Started` event is still
+            // in the channel) is picked up on the next change.
+            if self.model.job_waiting(id, Some(for_name)) {
+                self.waiting.insert(id);
+            }
+        }
     }
 
-    /// Watches every Recent root that is not watched yet, scanning it once,
-    /// and stops watching roots that are gone.
-    fn sync_recent_roots(&mut self) {
-        let wanted = self.recent_roots();
-        self.recent.roots.retain(|(root, cancel)| {
-            let keep = wanted.contains(root);
-            if !keep {
-                cancel.cancel();
-            }
-            keep
-        });
-        for root in wanted {
-            if self.recent.roots.iter().any(|(r, _)| *r == root) {
-                continue;
-            }
-            let Ok(provider) = self.mounts.resolve(&root) else {
-                continue;
-            };
-            let cancel = CancelToken::new();
-            self.recent.roots.push((root.clone(), cancel.clone()));
-            let tx = self.mailbox.clone();
-            match provider.watch(&root) {
-                Ok(mut changes) => {
-                    let tx = tx.clone();
-                    let cancel = cancel.clone();
-                    runtime::handle().spawn(async move {
-                        loop {
-                            tokio::select! {
-                                () = cancel.cancelled() => break,
-                                next = changes.next() => match next {
-                                    Some(change) => {
-                                        if !tx.send(Msg::RecentChange(change)) {
-                                            break;
-                                        }
-                                    }
-                                    None => break,
-                                },
-                            }
-                        }
-                    });
-                }
-                Err(error) => debug!(%root, %error, "recent root not watched"),
-            }
-            let handle = self
-                .jobs
-                .spawn_named(format!("Scan {root}"), move |job| async move {
-                    let found = recent::scan(&*provider, &root, job.cancel.clone()).await;
-                    tx.send(Msg::RecentScanned(found));
-                    Ok(())
-                });
-            self.internal.insert(handle.id);
-            // The root's token ends the scan with the watch.
-            let scan = handle.cancel;
-            runtime::handle().spawn(async move {
-                cancel.cancelled().await;
-                scan.cancel();
+    /// Hands the saver the Places list as it is now.
+    fn save_places(&self) {
+        let _ = self.places_saver.send(self.model.places.rows().to_vec());
+    }
+
+    /// Ejects the removable volume at `mount_point` as a job, then lists
+    /// the volumes again.
+    fn eject(&mut self, mount_point: &Path, events: &mut Vec<Event>) {
+        let Some(volume) = self
+            .model
+            .volumes
+            .iter()
+            .find(|v| v.mount_point == mount_point)
+            .cloned()
+        else {
+            events.push(Event::Notify {
+                level: Level::Warning,
+                text: format!("{} is not mounted", mount_point.display()),
             });
-        }
-    }
-
-    /// Feeds a change from any watch into the Recent list and saves it.
-    fn recent_apply(&mut self, change: &FsChange) {
-        let changed = match change {
-            FsChange::Created(entry) | FsChange::Modified(entry) => {
-                if entry.attrs.contains(types::Attrs::HIDDEN) {
-                    false
-                } else {
-                    self.model.recent.touched(entry.clone())
-                }
-            }
-            FsChange::Removed(id) => self.model.recent.removed(*id),
-            FsChange::Renamed { from, to } => {
-                let removed = self.model.recent.removed(*from);
-                let touched = !to.attrs.contains(types::Attrs::HIDDEN)
-                    && self.model.recent.touched(to.clone());
-                removed || touched
-            }
-            FsChange::Rescan => false,
-        };
-        if changed {
-            self.save_recent();
-        }
-    }
-
-    fn save_recent(&self) {
-        if let Some(saver) = &self.recent.saver {
-            let _ = saver.send(self.model.recent.entries().to_vec());
-        }
-    }
-
-    /// Points the side panel's tree at the focused pane's location when it
-    /// moved, listing the folders down to it that are not listed yet.
-    fn follow_folder_tree(&mut self) {
-        let Some(window) = self.model.window(self.model.focused_window) else {
             return;
         };
-        let side = &window.side_panel;
-        if !side.visible || side.folded.contains(&Section::Tree) {
-            return;
-        }
-        let Some((_, tab)) = self.model.active_tab(self.model.focused) else {
-            return;
-        };
-        let location = tab.location.clone();
-        if self.followed.as_ref() == Some(&location) {
-            return;
-        }
-        self.followed = Some(location.clone());
-        let root = top_of(&location.path);
-        for needed in self.model.folder_tree_follow(&location, root) {
-            self.list_folders(needed);
-        }
-    }
-
-    /// Lists the folders directly under `location` for the side panel's
-    /// tree, as an internal job.
-    fn list_folders(&mut self, location: Location) {
-        let Some(root) = self.model.folder_tree.root.clone() else {
-            return;
-        };
-        let Ok(provider) = self.mounts.resolve(&location) else {
-            return;
-        };
-        let tx = self.mailbox.clone();
+        let platform = Arc::clone(&self.platform);
+        let name = volume.name.clone();
         let handle = self
             .jobs
-            .spawn_named(format!("Tree {location}"), move |job| async move {
-                let opts = ListOptions {
-                    hidden: false,
-                    system: false,
-                    depth: Depth::One,
-                };
-                let mut stream = provider.list(&location, opts, job.cancel.clone());
-                let mut folders = Vec::new();
-                while let Some(batch) = stream.next().await {
-                    match batch {
-                        Ok(batch) => folders.extend(
-                            batch
-                                .into_iter()
-                                .filter(|e| e.kind == types::EntryKind::Dir),
-                        ),
-                        Err(error) => {
-                            debug!(%location, %error, "tree folder not listed");
-                            break;
-                        }
+            .spawn_named(format!("Eject {name}"), move |job| async move {
+                job.progress
+                    .report(Progress::Message(format!("Ejecting {name}")));
+                runtime::handle()
+                    .spawn_blocking(move || platform.eject(&volume))
+                    .await
+                    .unwrap_or_else(|join| Err(Error::Io(std::io::Error::other(join))))
+            });
+        let id = handle.id;
+        // Whatever happened, the list may have changed.
+        let tx = self.mailbox.clone();
+        let platform = Arc::clone(&self.platform);
+        runtime::handle().spawn(async move {
+            let _ = handle.result.await;
+            let result = runtime::handle()
+                .spawn_blocking(move || platform.volumes())
+                .await
+                .unwrap_or_else(|join| Err(Error::Io(std::io::Error::other(join))));
+            tx.send(Msg::Volumes(result));
+        });
+        debug!(%id, "eject started");
+        self.attribute(self.model.focused, events);
+    }
+
+    /// Lists the cloud providers' roots for the side panel's Cloud rows,
+    /// as an internal job.
+    fn refresh_cloud(&mut self) {
+        if self.model.cloud_providers.is_empty() {
+            return;
+        }
+        let provider: Arc<dyn ext::Provider> = Arc::clone(&self.rick) as Arc<dyn ext::Provider>;
+        let tx = self.mailbox.clone();
+        let handle = self.jobs.spawn_named("List cloud", move |job| async move {
+            let location = Virtual::Cloud.location();
+            let mut stream = provider.list(&location, ListOptions::default(), job.cancel.clone());
+            let mut entries = Vec::new();
+            while let Some(batch) = stream.next().await {
+                match batch {
+                    Ok(batch) => entries.extend(batch),
+                    Err(error) => {
+                        debug!(%error, "cloud roots not listed");
+                        break;
                     }
                 }
-                tx.send(Msg::FolderTree {
-                    root,
-                    path: location.path,
-                    folders,
-                });
-                Ok(())
-            });
+            }
+            tx.send(Msg::Cloud(entries));
+            Ok(())
+        });
         self.internal.insert(handle.id);
     }
 
@@ -1674,6 +1651,7 @@ impl App {
             &self.jobs,
             Arc::clone(&self.mounts),
             Arc::clone(&self.conflicts),
+            Arc::clone(&self.scheduler),
             &sources,
             to,
             kind,
@@ -1714,7 +1692,7 @@ impl App {
         self.pins.sync(&settings.pinned);
         self.model.apply_settings(settings.clone());
         if settings.pinned != pinned_before {
-            self.sync_recent_roots();
+            self.rick.changed(Virtual::Favorites);
         }
         self.recent_saves.push_back(settings.clone());
         while self.recent_saves.len() > RECENT_SAVES {
@@ -1871,7 +1849,6 @@ impl App {
                 }
             }
         }
-        self.follow_folder_tree();
     }
 
     /// Lists the pane's location again, swapping the result in when it is
@@ -2373,38 +2350,39 @@ impl App {
                     events.push(Event::Conflict(conflict));
                 }
             }
-            Msg::RecentLoaded(entries) | Msg::RecentScanned(entries) => {
-                self.model.recent.merge(entries);
-                self.save_recent();
-            }
-            Msg::RecentChange(change) => self.recent_apply(&change),
+            Msg::Schedule => self.sync_waiting(),
             Msg::Volumes(Ok(volumes)) => {
                 if volumes != self.model.volumes {
                     debug!(count = volumes.len(), "volumes");
                     self.model.volumes = volumes;
+                    self.rick.changed(Virtual::Machine);
+                    self.rick.changed(Virtual::Network);
                 }
             }
             Msg::Volumes(Err(error)) => debug!(%error, "volumes not enumerated"),
             Msg::Trash(Ok(items)) => {
                 self.trash.prune();
+                let changed = self.model.trash.items != items || !self.model.trash.listed;
                 self.model.trash.set(items, true);
+                if changed {
+                    self.rick.changed(Virtual::Trash);
+                }
             }
             Msg::Trash(Err(Error::Unsupported(_))) => {
-                self.model.trash.set(self.trash.items(), false);
+                let items = self.trash.items();
+                let changed = self.model.trash.items != items;
+                self.model.trash.set(items, false);
+                if changed {
+                    self.rick.changed(Virtual::Trash);
+                }
             }
             Msg::Trash(Err(error)) => {
                 warn!(%error, "trash not listed");
                 self.model.trash.set(self.trash.items(), false);
                 self.model.trash.error = Some(error.to_string());
             }
-            Msg::FolderTree {
-                root,
-                path,
-                folders,
-            } => {
-                if self.model.folder_tree.root.as_ref() == Some(&root) {
-                    self.model.folder_tree_listed(path, folders);
-                }
+            Msg::Cloud(entries) => {
+                self.model.cloud = entries;
             }
             Msg::Invalidate { pane, generation } => {
                 if self
@@ -2688,6 +2666,15 @@ impl App {
                 Vec::new()
             }
         };
+        // The Cloud overview's rows are the side panel's Cloud rows too.
+        if result.is_ok() && Virtual::of(&location) == Some(Virtual::Cloud) {
+            let rows: Vec<Entry> = self
+                .model
+                .active_tab(pane)
+                .map(|(_, tab)| tab.listing.entries().to_vec())
+                .unwrap_or_default();
+            self.model.cloud = rows;
+        }
         // Tree view: the expanded folders list their children again, swapped
         // in at once where they were listed before.
         let expanded = self.model.tree_expanded(pane);
@@ -2718,15 +2705,11 @@ impl App {
         if live.generation != generation {
             return;
         }
-        let local = live.key.location.provider == vfs_local::PROVIDER_ID;
         let before = self.selected_ids(pane);
         if self.model.apply_change(pane, change.clone()) {
             let after = self.selected_ids(pane);
             if before != after {
                 events.push(Event::SelectionChanged { pane, ids: after });
-            }
-            if local {
-                self.recent_apply(&change);
             }
             events.push(Event::Changed { pane, change });
             self.schedule_redecorate(pane);
@@ -2779,6 +2762,7 @@ impl App {
                         text: format!("{name}: {error}"),
                     });
                 }
+                self.waiting.remove(&id);
                 self.model.job_finished(id, state);
                 events.push(Event::JobDone { id, result });
                 if let Some(pane) = self.pane_jobs.remove(&id) {
@@ -2961,9 +2945,6 @@ impl Drop for App {
     fn drop(&mut self) {
         self.settings_watch.cancel();
         self.volumes_watch.cancel();
-        for (_, cancel) in &self.recent.roots {
-            cancel.cancel();
-        }
         for live in self.live.values() {
             live.cancel.cancel();
             for child in live.children.values() {

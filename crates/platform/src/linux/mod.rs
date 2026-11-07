@@ -1,7 +1,9 @@
 //! Linux: the XDG trash specification, `xdg-open`, Rick's own properties
-//! rows, `$XDG_CONFIG_HOME/rick`, and the mount table from `/proc/mounts`.
+//! rows, `$XDG_CONFIG_HOME/rick`, the mount table from `/proc/mounts` with
+//! `udisksctl` for ejecting, XDG user-dirs and `recently-used.xbel`.
 
 mod trash;
+mod user;
 mod volumes;
 
 use std::fs;
@@ -14,8 +16,9 @@ use types::Error;
 use crate::Native;
 use crate::time::iso8601;
 use crate::traits::{
-    Chrome, ConfigDir, ControlsSide, DragSource, OpenWith, Properties, PropertiesOutcome, Trash,
-    TrashedItem, Volume, Volumes, WindowChrome,
+    Chrome, ConfigDir, ControlsSide, DragSource, OpenWith, Properties, PropertiesOutcome,
+    RecentItem, RecentlyUsed, StandardFolder, StandardFolders, Trash, TrashedItem, Volume, Volumes,
+    WindowChrome,
 };
 
 impl Trash for Native {
@@ -43,6 +46,22 @@ impl Trash for Native {
 impl Volumes for Native {
     fn volumes(&self) -> Result<Vec<Volume>, Error> {
         volumes::list()
+    }
+
+    fn eject(&self, volume: &Volume) -> Result<(), Error> {
+        volumes::eject(volume)
+    }
+}
+
+impl StandardFolders for Native {
+    fn standard_folder(&self, folder: StandardFolder) -> Option<PathBuf> {
+        user::standard_folder(folder, &self.home_dir())
+    }
+}
+
+impl RecentlyUsed for Native {
+    fn recently_used(&self) -> Result<Vec<RecentItem>, Error> {
+        user::recently_used(&self.home_dir())
     }
 }
 
@@ -95,6 +114,7 @@ impl OpenWith for Native {
 }
 
 pub(crate) use crate::paths::percent_encode;
+use trash::percent_decode;
 
 impl Properties for Native {
     fn show(&self, path: &Path) -> Result<PropertiesOutcome, Error> {

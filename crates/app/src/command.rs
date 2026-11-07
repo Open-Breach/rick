@@ -2,13 +2,15 @@
 
 use std::fmt;
 
+use std::path::PathBuf;
+
 use ext::{ActionCtx, ActionId, Decoration, FsChange, Level, PreviewDoc};
 use model::{
-    Column, Dock, DockTarget, Geometry, PaneId, SelectionChange, SettingsChange, SidePanelChange,
-    SortDir, SplitDir, TabId, ViewMode, WindowId,
+    Column, Dock, DockTarget, Geometry, PaneId, Place, SelectionChange, SettingsChange,
+    SidePanelChange, SortDir, SplitDir, TabId, ViewMode, WindowId,
 };
 use types::{
-    Conflict, ConflictAnswer, ConflictId, Entry, EntryId, Error, JobId, Location, Progress, VPath,
+    Conflict, ConflictAnswer, ConflictId, Entry, EntryId, Error, JobId, Location, Progress,
 };
 
 /// Whether a transfer moves or copies, or asks on drop.
@@ -123,10 +125,35 @@ pub enum Command {
         /// The folder.
         id: EntryId,
     },
-    /// Open or close a folder of the side panel's tree.
-    FolderTreeToggle(VPath),
-    /// Link or unlink the side panel's tree from the focused pane.
-    FolderTreeLink(bool),
+    /// Add a row to the side panel's Places list at `at`, or at the end: a
+    /// folder dropped on the list, or a location to keep one click away. A
+    /// location already listed stays where it is.
+    PlaceAdd {
+        /// The row.
+        place: Place,
+        /// The index to insert at; `None` appends.
+        at: Option<usize>,
+    },
+    /// Remove the Places row at this index.
+    PlaceRemove(usize),
+    /// Move a Places row, by its index, so that it sits at `to`.
+    PlaceMove {
+        /// The row's index now.
+        from: usize,
+        /// Its index afterwards.
+        to: usize,
+    },
+    /// Change a Places row's title and icon.
+    PlaceEdit {
+        /// The row's index.
+        index: usize,
+        /// The new title; empty keeps the old one.
+        title: String,
+        /// The new Phosphor icon name; empty keeps the old one.
+        icon: String,
+    },
+    /// Eject the removable volume mounted at this path, as a job.
+    Eject(PathBuf),
     /// Run an action on a context, usually from
     /// [`App::action_ctx`](crate::App::action_ctx).
     Run {

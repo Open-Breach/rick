@@ -2,8 +2,8 @@
 //!
 //! Other crates program against the traits here and never against an
 //! operating system: [`Trash`], [`OpenWith`], [`Properties`], [`ConfigDir`],
-//! [`NativeDialogs`], [`Clipboard`], [`Chrome`], [`DragSource`] and
-//! [`Volumes`], bundled as [`Platform`]. [`Native`] is the real
+//! [`NativeDialogs`], [`Clipboard`], [`Chrome`], [`DragSource`], [`Volumes`],
+//! [`StandardFolders`] and [`RecentlyUsed`], bundled as [`Platform`]. [`Native`] is the real
 //! implementation for the OS the binary runs on; [`Fake`] is the one tests
 //! use, with a private trash directory and recorded calls.
 //!
@@ -24,7 +24,8 @@ mod dialogs;
 mod fake;
 pub mod fs;
 pub mod paths;
-// Only the Linux trash and properties format dates so far.
+// Only the Linux trash and properties format dates; macOS parses them
+// (Spotlight's last-used dates) and Windows does neither so far.
 #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 mod time;
 mod traits;
@@ -42,11 +43,11 @@ mod windows;
 compile_error!("Rick supports Linux, macOS and Windows");
 
 pub use async_trait::async_trait;
-pub use fake::Fake;
+pub use fake::{FAKE_STANDARD_FOLDERS, Fake};
 pub use traits::{
     Chrome, Clipboard, ConfigDir, ControlsSide, DialogFilter, DragSource, NativeDialogs, OpenWith,
-    Platform, Properties, PropertiesOutcome, Trash, TrashedItem, Volume, VolumeKind, Volumes,
-    WindowChrome,
+    Platform, Properties, PropertiesOutcome, RecentItem, RecentlyUsed, StandardFolder,
+    StandardFolders, Trash, TrashedItem, Volume, VolumeKind, Volumes, WindowChrome,
 };
 
 /// The platform the binary runs on.

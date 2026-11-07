@@ -72,32 +72,151 @@ pub enum VolumeKind {
     Network,
 }
 
-/// A mounted volume other than the system disk.
+/// A mounted volume: a drive of the machine or a network mount.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Volume {
-    /// The label, or the mount point's last component when it has none.
+    /// The label, or the mount point's last component when it has none;
+    /// `System` for the disk the operating system runs from.
     pub name: String,
-    /// Where the volume is mounted.
+    /// Where the volume is mounted: a mount point, or a drive root such as
+    /// `C:\` on Windows.
     pub mount_point: PathBuf,
-    /// Removable, network, optical or another internal disk.
+    /// Removable, network, optical or an internal disk.
     pub kind: VolumeKind,
+    /// The file system, as the OS names it (`ext4`, `apfs`, `NTFS`, `cifs`).
+    pub fs_type: String,
+    /// The block device behind the mount, where the OS has one and the
+    /// eject needs it (`/dev/sdb1` on Linux); `None` elsewhere.
+    pub device: Option<String>,
     /// Capacity in bytes, when the OS reports it.
     pub total: Option<u64>,
     /// Free bytes available to the user, when the OS reports it.
     pub free: Option<u64>,
 }
 
-/// The volumes the OS has mounted, for the side panel's Network section.
-/// Mounting and unmounting are not part of 0.1.
+impl Volume {
+    /// Bytes in use, when both the capacity and the free space are known.
+    #[must_use]
+    pub fn used(&self) -> Option<u64> {
+        Some(self.total?.saturating_sub(self.free?))
+    }
+
+    /// The share of the capacity in use, 0 to 1, when known.
+    #[must_use]
+    pub fn utilisation(&self) -> Option<f32> {
+        let total = self.total?;
+        if total == 0 {
+            return None;
+        }
+        // A share for a bar: the precision loss and the narrowing are fine.
+        #[allow(clippy::cast_precision_loss, clippy::cast_possible_truncation)]
+        Some((self.used()? as f64 / total as f64) as f32)
+    }
+
+    /// Whether the volume is media the user can take out.
+    #[must_use]
+    pub fn is_removable(&self) -> bool {
+        matches!(self.kind, VolumeKind::Removable | VolumeKind::Optical)
+    }
+}
+
+/// The volumes the OS has mounted, for the side panel's This Machine and
+/// Network sections. Mounting is not part of 0.2's milestone 2; ejecting
+/// removable media is.
 pub trait Volumes: Send + Sync {
-    /// Every mounted volume that is not the system disk: removable media
-    /// and network mounts, plus other internal disks, with name, mount point
-    /// and free space.
+    /// Every mounted volume the user can browse: the system disk, other
+    /// internal disks, removable media and network mounts, each with its
+    /// name, mount point, file system and space.
     ///
     /// # Errors
     ///
     /// The I/O or platform error from reading the mount table.
     fn volumes(&self) -> Result<Vec<Volume>, Error>;
+
+    /// Unmounts a removable volume and powers it off or opens the tray where
+    /// the OS can, so the medium can be taken out.
+    ///
+    /// # Errors
+    ///
+    /// `Error::Unsupported` for a volume that is not removable; otherwise
+    /// the I/O or platform error, with what the OS said.
+    fn eject(&self, volume: &Volume) -> Result<(), Error>;
+}
+
+/// A folder the operating system sets aside for the user.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum StandardFolder {
+    /// The home directory.
+    Home,
+    /// Documents.
+    Documents,
+    /// Pictures.
+    Pictures,
+    /// Music.
+    Music,
+    /// Video (`Videos` on Linux, `Movies` on macOS).
+    Video,
+    /// Downloads.
+    Downloads,
+    /// The desktop.
+    Desktop,
+}
+
+impl StandardFolder {
+    /// Every folder, in the order the side panel's defaults list them.
+    pub const ALL: [Self; 7] = [
+        Self::Home,
+        Self::Documents,
+        Self::Pictures,
+        Self::Music,
+        Self::Video,
+        Self::Downloads,
+        Self::Desktop,
+    ];
+
+    /// The title the side panel gives the folder.
+    #[must_use]
+    pub fn title(self) -> &'static str {
+        match self {
+            Self::Home => "Home",
+            Self::Documents => "Documents",
+            Self::Pictures => "Pictures",
+            Self::Music => "Music",
+            Self::Video => "Video",
+            Self::Downloads => "Downloads",
+            Self::Desktop => "Desktop",
+        }
+    }
+}
+
+/// The user's standard folders, from the platform's conventions: XDG
+/// user-dirs on Linux, the known folders on Windows, the fixed directories
+/// under the home on macOS.
+pub trait StandardFolders: Send + Sync {
+    /// Where the folder is, when the platform names it and it exists.
+    fn standard_folder(&self, folder: StandardFolder) -> Option<PathBuf>;
+}
+
+/// One entry of the system's recently-used list.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RecentItem {
+    /// The file or folder.
+    pub path: PathBuf,
+    /// When the user last used it.
+    pub used_at: SystemTime,
+}
+
+/// The system's recently-used list: the XDG `recently-used.xbel` on Linux,
+/// Spotlight's last-used dates on macOS, the Recent folder's shortcuts on
+/// Windows. Rick keeps no list of its own.
+pub trait RecentlyUsed: Send + Sync {
+    /// The items the system remembers, newest first, those that still exist.
+    ///
+    /// # Errors
+    ///
+    /// The I/O or platform error from reading the list; `Error::Unsupported`
+    /// where the platform keeps none.
+    fn recently_used(&self) -> Result<Vec<RecentItem>, Error>;
 }
 
 /// Handing entries to other applications.
@@ -244,6 +363,8 @@ pub trait Platform:
     + Chrome
     + DragSource
     + Volumes
+    + StandardFolders
+    + RecentlyUsed
 {
 }
 
@@ -256,7 +377,9 @@ impl<
         + Clipboard
         + Chrome
         + DragSource
-        + Volumes,
+        + Volumes
+        + StandardFolders
+        + RecentlyUsed,
 > Platform for T
 {
 }

@@ -65,6 +65,12 @@ impl TrashBridge {
     }
 }
 
+impl vfs_rick::TrashRecord for TrashBridge {
+    fn items(&self) -> Vec<TrashedItem> {
+        TrashStore::items(self)
+    }
+}
+
 impl TrashStore for TrashBridge {
     fn items(&self) -> Vec<TrashedItem> {
         self.lock().clone()

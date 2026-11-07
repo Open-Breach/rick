@@ -932,7 +932,105 @@ Once answered, an entry keeps its number and gains a dated decision line.
     file that is no plugin at all (no entry point) is unmapped again. The
     cost is the memory of a plugin that could not be used.
 
-86. (issue 17) The spec says the preview "follows focus: it always shows
+86. (side panel) The spec leaves the scheme of the virtual locations to the
+    implementer and suggests `rick://favorites`, `rick://recent`,
+    `rick://trash`, `rick://machine`, `rick://network` and `rick://cloud`.
+    Assumed: those six names, served by one built-in provider in the new
+    crate `vfs-rick` under the provider id `rick`, each location's path
+    being the bare name, so the session and places files write them in the
+    `provider:path` form every location uses (`rick:trash`); the path bar
+    accepts the `rick://trash` form typed anywhere. The 0.1 `trash`
+    pseudo-provider of the trash actions is folded into it.
+
+87. (side panel) The Cloud section needs to know which providers are cloud
+    ones and the Network section which are host-addressed connections, and
+    the `Provider` contract has no kind: the manifest of the plugin host
+    (#27) declares the points an extension fills and the platforms it runs
+    on, not what kind of provider it mounts.
+    Assumed: a mounted provider counts as cloud when its id is `s3`, `azure`
+    or `gcs` and as network when it is `sftp`, the ids the spec's package
+    layout fixes; the Cloud rows are what each cloud provider lists at its
+    root (its accounts or containers), fetched at start and whenever the
+    Cloud overview lists; the *Add…* row of an empty Network or Cloud
+    section says that a provider plugin creates connections and accounts,
+    since none exists yet. To be replaced by a registry contribution once a
+    provider can declare its kind. The integration tests prove the section with an in-memory
+    provider under the `s3` id.
+
+88. (side panel) The standard folders and the system's recently-used list
+    are platform services the `platform` trait set did not have.
+    Assumed: `StandardFolders` (XDG user-dirs on Linux, the known folders
+    on Windows, the fixed directories under the home on macOS, `Video`
+    being `Movies` there) and `RecentlyUsed` (`recently-used.xbel` on
+    Linux; the Recent folder's shortcuts resolved with `IShellLinkW` on
+    Windows; Spotlight's `kMDItemLastUsedDate` over the home for the last
+    thirty days through `mdfind` on macOS, which keeps its Recent Items in a
+    private store) join the set, implemented on the fake with three folders
+    under its home and a settable list. The Recent view sorts by date
+    accessed descending, the use time being the entry's `accessed`. This
+    Machine lists the system disk too, as `System`, since `/` has no last
+    component to name it by, with the file system name added to `Volume`.
+
+89. (operations) "Jobs are scheduled per volume" needs a volume key and a
+    place in the job's life to wait.
+    Assumed: the key is the device half of the local entry id (of the
+    nearest existing ancestor for a target that does not exist yet) and the
+    provider id for every other provider; copy, move and its undo, duplicate
+    and a drag's transfer acquire their keys first thing through an
+    `ops::Scheduler` the application owns, queued first in first out, and a
+    cancelled job releases them by dropping its lease; trash, restore,
+    rename, new file and new folder, which end in milliseconds, do not
+    queue. The waiting job's row shows `JobState::Waiting(name)` with the
+    name of the first running job holding one of its keys. Progress events
+    are coalesced in the runtime to one per 50 ms per job, a message (a
+    conflict, a wait) going out at once, so a job over hundreds of thousands
+    of entries never redraws the area per entry.
+
+90. (side panel) Editing Places: the spec names Remove, Edit… (title and a
+    Phosphor icon, `FOLDER` by default) and drag reorder, without saying
+    what a dropped folder is called, how the icon is picked from 1 500
+    glyphs, or whether edits are undoable.
+    Assumed: a dropped folder's title is its name and its icon `FOLDER`;
+    Edit… offers a curated set of forty Phosphor icons by name (the names are
+    what `places.toml` stores, an unknown name shows the folder); place edits
+    are not undoable, the spec listing none among the undoable operations;
+    removing the place of the folder a tab shows leaves the tab where it is.
+    Clicking the place of the folder the tab already shows lists it again
+    instead of emptying it, which 0.1's `Navigate` to the current location
+    did (a latent bug the Places rows would have exposed).
+
+91. (side panel) Eject and "the list follows mounts live".
+    Assumed: Eject runs as a job, so a refusal lands in the operations
+    area: `udisksctl unmount` then `power-off` on Linux (`umount` where
+    udisks2 is absent), `diskutil eject` on macOS, lock, dismount and
+    `IOCTL_STORAGE_EJECT_MEDIA` through `DeviceIoControl` on Windows; the
+    fake records the mount point and forgets the volume. "Live" is the
+    platform's volume list polled every two seconds (76 continued, which
+    polled every three); udisks2 and the Windows device notifications come
+    with milestone 5's mount and unmount.
+
+92. (side panel) The Trash view's operations and the other views' entries.
+    Assumed: the trash actions (`core.restore`, `core.restore_trash`,
+    `core.purge_trash`, `core.empty_trash`) move into the context menu of
+    the Trash view as a group of their own and are hidden elsewhere; in the
+    view Delete deletes permanently and Enter or a double-click restores;
+    the file actions are hidden there, and the ones that write to the
+    location (Paste, Rename, New file, New folder) in every virtual view,
+    while Copy, Open, Copy path, Pin and Move to trash work on the real
+    entries the Favorites and Recent views list. Those entries carry their
+    own provider and path (`Tab::location_of` follows the entry's provider),
+    so Open, Open in new tab and Unpin work; a pin whose path is gone stays
+    listed with a hashed id so it can be unpinned. Nothing can be dropped
+    into a virtual view.
+
+93. (side panel) Keyboard: "with the panel focused" is not defined.
+    Assumed: a click on a panel row gives the panel the keyboard, a click
+    anywhere else gives it back; Up and Down move over every row including
+    the section headers and *Add…*, Enter opens, Mod+Enter in a new tab,
+    Escape releases. The Edit… dialogue and the reorder drag are the
+    panel's own state, not the model's.
+
+94. (issue 17) The spec says the preview "follows focus: it always shows
     the selection of whichever explorer tab was last focused", and as a
     dock tab the preview sits in a pane of its own that a click would
     focus, which would leave it with no selection to show.
@@ -951,7 +1049,7 @@ Once answered, an entry keeps its number and gains a dated decision line.
     its kind is part of the session (`TabSession::kind`), so it comes back
     where it was.
 
-87. (issue 17) The spec's viewer "steps to the previous and next file of
+95. (issue 17) The spec's viewer "steps to the previous and next file of
     the same folder in the list's current sort and filter", and nothing
     says what the viewer holds once the list it came from has moved on or
     closed.
@@ -972,7 +1070,7 @@ Once answered, an entry keeps its number and gains a dated decision line.
     list do not apply: those actions use their own prompts there. The
     viewer tab persists in the session like an explorer tab.
 
-88. (issue 17) "Enter … previewable file: viewer; other: system default",
+96. (issue 17) "Enter … previewable file: viewer; other: system default",
     where the hex fallback claims every file, and the issue's acceptance
     test opens an unknown binary in hex with Enter.
     Assumed: a file is previewable when any registered previewer scores
@@ -987,7 +1085,7 @@ Once answered, an entry keeps its number and gains a dated decision line.
     file nothing claims (stepping through a folder without the hex plugin,
     or a previewer failing to open it) it says "No preview for this file".
 
-89. (issue 17) "The zoom level is remembered per type" does not say for
+97. (issue 17) "The zoom level is remembered per type" does not say for
     how long, and "1:1" has no meaning for paged content, since
     `PreviewDoc` does not say how large a page is in points.
     Assumed: the zoom is remembered per lower-case file extension for the
@@ -1000,7 +1098,7 @@ Once answered, an entry keeps its number and gains a dated decision line.
     previewer that knows its page sizes needs it). The free zoom is a
     factor on the fitted size, shown as a percentage of it.
 
-90. (issue 17) The shortcut table binds Left/Right and PageUp/PageDown to
+98. (issue 17) The shortcut table binds Left/Right and PageUp/PageDown to
     "Previous / next item or page" in one row, while the Navigation bullet
     gives both pairs to files.
     Assumed: Left and Right always step files; PageUp and PageDown step
@@ -1013,7 +1111,7 @@ Once answered, an entry keeps its number and gains a dated decision line.
     windows, actions) keeps working; F11 fills the screen with the viewer
     alone, Escape leaves fullscreen and then closes the tab.
 
-91. (issue 17) Find "searches the text layer … with match count, next and
+99. (issue 17) Find "searches the text layer … with match count, next and
     previous, and highlights in place", and `TextLayer` holds page texts
     without positions.
     Assumed: matches are highlighted in place for text content, which the
@@ -1024,7 +1122,7 @@ Once answered, an entry keeps its number and gains a dated decision line.
     lower-casing keeps the byte offsets, which it does for ASCII and most
     scripts, and is exact otherwise.
 
-92. (issue 17) The spec's viewer media transport names "seek bar, volume,
+100. (issue 17) The spec's viewer media transport names "seek bar, volume,
     playback speed, frame step, loop", and `Transport` has play, pause,
     seek, position, duration and playing.
     Assumed: the viewer's transport bar is built against the trait as it
@@ -1033,7 +1131,7 @@ Once answered, an entry keeps its number and gains a dated decision line.
     wait for the media previewer of milestone 4, which will need them added
     to the trait through a question of its own.
 
-93. (issue 17) The spec's Preview section says "Space on a file or folder
+101. (issue 17) The spec's Preview section says "Space on a file or folder
     opens the preview tab if it is closed and shows the entry; Space again
     closes it", while the Selection table binds Space to "Toggle selection
     of the focused entry" (question 21 settled the tables in the second
@@ -1041,7 +1139,7 @@ Once answered, an entry keeps its number and gains a dated decision line.
     Assumed: Space keeps toggling the selection; the Preview tab opens and
     closes with Mod+Shift+I and the title row's toggle, as in 0.1.
 
-94. (issue 17) The issue asks for "a page strip on the side"; the spec
+102. (issue 17) The issue asks for "a page strip on the side"; the spec
     says the same without saying what a tile is.
     Assumed: one tile per page with the page's number and a thumbnail the
     pane's slot renders as the tile comes into view, the current page

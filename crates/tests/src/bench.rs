@@ -151,12 +151,6 @@ pub const BENCHMARKS: &[Benchmark] = &[
         windows: ms(150),
     },
     Benchmark {
-        key: "recent",
-        linux: ms(500),
-        macos: ms(500),
-        windows: ms(500),
-    },
-    Benchmark {
         key: "cancel",
         linux: ms(20),
         macos: ms(50),

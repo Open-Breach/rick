@@ -13,6 +13,7 @@ platform = { workspace = true }
 ext = { workspace = true }
 vfs = { workspace = true }
 vfs-local = { workspace = true }
+vfs-rick = { workspace = true }
 model = { workspace = true }
 ops = { workspace = true }
 futures = { workspace = true }

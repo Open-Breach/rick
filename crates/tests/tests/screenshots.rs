@@ -332,14 +332,37 @@ fn screenshots_of_drag_and_drop() {
     harness.step();
     drop(&mut harness, raw);
 
-    // A drop onto the Pinned header.
+    // A folder dropped onto the Places list becomes a place; a file over
+    // the panel is refused.
     let mut harness = shell(&deep, egui::vec2(1280.0, 800.0));
-    let pinned = harness.get_by_label("Pinned").rect().center();
-    pull(&mut harness, "notes.md", pinned);
-    shoot(&mut harness, "dnd-over-pinned");
-    drop(&mut harness, pinned);
-    harness.get_by_label(&format!("{} notes.md", ui_egui::icons::PIN));
-    shoot(&mut harness, "dnd-dropped-onto-pinned");
+    let documents = panel_row(&harness, "Documents");
+    pull(&mut harness, "raw", documents);
+    shoot(&mut harness, "dnd-over-places");
+    drop(&mut harness, documents);
+    panel_row(&harness, "raw");
+    shoot(&mut harness, "dnd-dropped-onto-places");
+    pull(&mut harness, "notes.md", documents);
+    shoot(&mut harness, "dnd-file-refused-by-the-panel");
+    harness.key_press(egui::Key::Escape);
+    harness.step();
+    drop(&mut harness, documents);
+}
+
+/// The centre of the side panel row whose label contains `text`: left of
+/// the focused pane.
+fn panel_row(harness: &Harness<'_, RickUi>, text: &str) -> egui::Pos2 {
+    let pane = harness.state().app().model().focused;
+    let rect = harness
+        .state()
+        .pane_rects()
+        .into_iter()
+        .find(|(p, _)| *p == pane)
+        .map_or_else(|| panic!("no pane rect"), |(_, r)| r);
+    harness
+        .query_all_by_label_contains(text)
+        .map(|n| n.rect())
+        .find(|r| r.center().x < rect.left())
+        .map_or_else(|| panic!("no {text} in the side panel"), |r| r.center())
 }
 
 #[test]
@@ -487,9 +510,9 @@ fn select_named(harness: &mut Harness<'_, RickUi>, name: &str) {
     settle(harness);
 }
 
-/// The close-out's side panel and list: Recent, Network, Trash with items,
-/// the operations area mid-copy, tree view expanded, inline rename and the
-/// conflict dialogue.
+/// The side panel and list: Places with This Machine and Network, the
+/// Trash view with items, the operations area mid-copy, tree view expanded,
+/// inline rename and the conflict dialogue.
 #[test]
 #[ignore = "needs a wgpu adapter; CI runs it and uploads the images"]
 fn screenshots_of_the_side_panel_and_list() {
@@ -498,9 +521,20 @@ fn screenshots_of_the_side_panel_and_list() {
     let fake = Arc::new(Fake::new().unwrap_or_else(|e| panic!("{e}")));
     let stick = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
     fake.add_volume(platform::Volume {
+        name: "System".into(),
+        mount_point: stick.path().join("system"),
+        kind: platform::VolumeKind::Fixed,
+        fs_type: "ext4".into(),
+        device: None,
+        total: Some(512 << 30),
+        free: Some(200 << 30),
+    });
+    fake.add_volume(platform::Volume {
         name: "HOLIDAY".into(),
         mount_point: stick.path().to_path_buf(),
         kind: platform::VolumeKind::Removable,
+        fs_type: "exfat".into(),
+        device: None,
         total: Some(64 << 30),
         free: Some(21 << 30),
     });
@@ -508,14 +542,11 @@ fn screenshots_of_the_side_panel_and_list() {
         name: "nas".into(),
         mount_point: stick.path().join("nas"),
         kind: platform::VolumeKind::Network,
+        fs_type: "cifs".into(),
+        device: None,
         total: Some(4 << 40),
         free: Some(1 << 40),
     });
-    // Recent: touch a few files under the fake home.
-    let home = fake.home_dir();
-    for name in ["budget.xlsx", "notes.md", "IMG_1207.png"] {
-        fs::write(home.join(name), name).unwrap_or_else(|e| panic!("{e}"));
-    }
     let host = Arc::new(EguiHost::new());
     let app = app::App::new(app::Config {
         platform: fake.clone(),
@@ -534,15 +565,30 @@ fn screenshots_of_the_side_panel_and_list() {
         .build_eframe(move |cc| RickUi::new(app, host, &cc.egui_ctx));
     settle(&mut harness);
     step_until(&mut harness, Duration::from_secs(5), |h| {
-        h.state().app().model().recent.entries().len() >= 3
-            && h.state().app().model().volumes.len() == 2
+        h.state().app().model().volumes.len() == 3
     });
     harness.step();
-    shoot(&mut harness, "side-panel-recent-and-network");
+    shoot(&mut harness, "side-panel-places-and-sections");
 
-    // Trash with items.
-    select_named(&mut harness, "IMG_1203.png");
+    // The This Machine overview.
     let pane = harness.state().app().model().focused;
+    harness.state_mut().app_mut().handle(
+        app::Command::Navigate {
+            pane,
+            to: vfs_rick::Virtual::Machine.location(),
+        },
+        &mut Vec::new(),
+    );
+    settle(&mut harness);
+    shoot(&mut harness, "this-machine-overview");
+    harness
+        .state_mut()
+        .app_mut()
+        .handle(app::Command::Back(pane), &mut Vec::new());
+    settle(&mut harness);
+
+    // The Trash view with items.
+    select_named(&mut harness, "IMG_1203.png");
     harness
         .state_mut()
         .queue(Intent::Action(ext::ActionId("core.trash")), pane);
@@ -557,8 +603,21 @@ fn screenshots_of_the_side_panel_and_list() {
     step_until(&mut harness, Duration::from_secs(5), |h| {
         h.state().app().model().trash.items.len() == 2
     });
+    harness.state_mut().app_mut().handle(
+        app::Command::Navigate {
+            pane,
+            to: vfs_rick::Virtual::Trash.location(),
+        },
+        &mut Vec::new(),
+    );
+    settle(&mut harness);
     harness.step();
-    shoot(&mut harness, "side-panel-trash-with-items");
+    shoot(&mut harness, "trash-view-with-items");
+    harness
+        .state_mut()
+        .app_mut()
+        .handle(app::Command::Back(pane), &mut Vec::new());
+    settle(&mut harness);
 
     // Tree view, `raw` expanded.
     harness.state_mut().app_mut().handle(

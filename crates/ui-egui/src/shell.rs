@@ -183,6 +183,15 @@ pub enum Request {
         /// On or off.
         on: bool,
     },
+    /// Open the side panel's Edit… dialogue for a place.
+    EditPlace {
+        /// The row's index.
+        index: usize,
+        /// Its title now.
+        title: String,
+        /// Its icon now.
+        icon: String,
+    },
 }
 
 /// What a tab's widgets see.
@@ -350,7 +359,8 @@ pub struct RickUi {
     closed_tabs: Vec<Location>,
     /// The operations area's rows: rates and when each job ended.
     operations: Operations,
-    /// The side panel's own state: the trash selection.
+    /// The side panel's own state: the keyboard focus, a reorder, the
+    /// Edit… dialogue.
     side: SidePanelState,
     /// The conflict dialogue's text field and checkbox.
     conflict: conflict::DialogState,
@@ -654,11 +664,16 @@ impl RickUi {
         self.tabs.get(&tab).and_then(|t| t.edit.as_ref())
     }
 
-    /// The trash rows selected in the side panel, by trashed path, for
-    /// tests.
+    /// The side panel's state, for tests.
     #[must_use]
-    pub fn trash_selection(&self) -> Vec<std::path::PathBuf> {
-        self.side.trash_selection.iter().cloned().collect()
+    pub fn side_panel_state(&self) -> &SidePanelState {
+        &self.side
+    }
+
+    /// The operations area, for tests: how often it was drawn.
+    #[must_use]
+    pub fn operations_paints(&self) -> u64 {
+        self.operations.paints()
     }
 
     /// Whether the layout name prompt is up, for tests.
@@ -994,7 +1009,7 @@ impl RickUi {
         {
             return;
         }
-        if self.side.trash_focused && self.side.handle_keys(ctx, &self.app, &mut self.requests) {
+        if self.side.focused() && self.side.handle_keys(ctx, &self.app, &mut self.requests) {
             return;
         }
         let search_active = self.windows.get(&window).is_some_and(|w| w.search.active());
@@ -1119,6 +1134,9 @@ impl RickUi {
                     }
                     Request::CloseWindow(window) => self.close_window(window, ctx),
                     Request::ViewerFullscreen { tab, on } => self.set_fullscreen(ctx, tab, on),
+                    Request::EditPlace { index, title, icon } => {
+                        side_panel::begin_edit(&mut self.side, index, title, icon);
+                    }
                 }
             }
         }
@@ -1367,6 +1385,17 @@ impl RickUi {
 
     fn run_action(&mut self, action: ActionId, pane: PaneId, invoked_from: Invocation) {
         if let Some(ctx) = self.app.action_ctx(pane, invoked_from) {
+            // In the Trash view the Delete key deletes for good and Enter
+            // restores: the view's own operations take the keys.
+            let action = if vfs_rick::is_trash(&ctx.location) {
+                match action.0 {
+                    "core.trash" | "core.delete" => ActionId("core.purge_trash"),
+                    "core.open_default" => ActionId("core.restore_trash"),
+                    _ => action,
+                }
+            } else {
+                action
+            };
             self.run_action_with(action, ctx);
         }
     }
@@ -1516,6 +1545,23 @@ impl RickUi {
     /// Opens an entry: a folder navigates, a file goes to the viewer or the
     /// system's default application, as the app decides.
     fn open_entry(&mut self, pane: PaneId, id: EntryId) {
+        let Some((_, tab)) = self.app.model().active_tab(pane) else {
+            return;
+        };
+        // A trashed item opens nowhere; Enter and a double-click restore it.
+        if vfs_rick::is_trash(&tab.location) {
+            let Some(entry) = tab.entry(id).cloned() else {
+                return;
+            };
+            let ctx = ActionCtx {
+                pane,
+                location: tab.location.clone(),
+                selection: vec![entry],
+                invoked_from: Invocation::Shortcut,
+            };
+            self.run_action_with(ActionId("core.restore_trash"), ctx);
+            return;
+        }
         self.handle(Command::Open { pane, id });
     }
 
@@ -1995,7 +2041,8 @@ impl RickUi {
                 }
             }
             // One entry: a folder navigates, a file goes to the viewer or
-            // the system application; several files all go to the system.
+            // the system application, a trashed item is restored; several
+            // entries all go to the system (or back out of the trash).
             [one] => {
                 let id = one.id;
                 self.open_entry(pane, id);
@@ -2181,12 +2228,15 @@ impl RickUi {
             .map(|w| w.side_panel.clone())
             .unwrap_or_default();
         let jobs = !self.app.model().jobs.is_empty();
+        let operations_height = Operations::height(self.app.model());
         if !side.visible {
             if jobs {
-                egui::Panel::bottom(egui::Id::new(("operations", window.0))).show(ui, |ui| {
-                    self.operations
-                        .show(ui, self.app.model(), &mut self.requests);
-                });
+                egui::Panel::bottom(egui::Id::new(("operations", window.0)))
+                    .exact_size(operations_height)
+                    .show(ui, |ui| {
+                        self.operations
+                            .show(ui, self.app.model(), &mut self.requests);
+                    });
             }
             return;
         }
@@ -2203,10 +2253,12 @@ impl RickUi {
             .size_range(120.0..=600.0)
             .show(ui, |ui| {
                 if jobs {
-                    egui::Panel::bottom(egui::Id::new(("operations", window.0))).show(ui, |ui| {
-                        self.operations
-                            .show(ui, self.app.model(), &mut self.requests);
-                    });
+                    egui::Panel::bottom(egui::Id::new(("operations", window.0)))
+                        .exact_size(operations_height)
+                        .show(ui, |ui| {
+                            self.operations
+                                .show(ui, self.app.model(), &mut self.requests);
+                        });
                 }
                 side_panel::show(
                     ui,
@@ -2580,14 +2632,18 @@ impl TabViewer for Viewer<'_> {
                 TabKind::Preview => format!("{} Preview", icons::PREVIEW).into(),
                 TabKind::Viewer => viewer::title(t).into(),
                 TabKind::Explorer => {
-                    // A folder icon for local folders, the provider's
-                    // otherwise.
-                    let icon = if t.location.provider.0 == "local" {
-                        icons::FOLDER
+                    // A folder icon for local folders, a view's own for a
+                    // virtual location, the provider's otherwise.
+                    if let Some(which) = vfs_rick::Virtual::of(&t.location) {
+                        format!("{} {}", virtual_icon(which), which.title()).into()
                     } else {
-                        icons::PROVIDER
-                    };
-                    format!("{icon} {}", paths::title(&t.location.path)).into()
+                        let icon = if t.location.provider.0 == "local" {
+                            icons::FOLDER
+                        } else {
+                            icons::PROVIDER
+                        };
+                        format!("{icon} {}", paths::title(&t.location.path)).into()
+                    }
                 }
             },
         )
@@ -3138,6 +3194,19 @@ impl std::fmt::Debug for RickUi {
             .field("windows", &self.windows.keys().collect::<Vec<_>>())
             .field("dispatched", &self.dispatched.len())
             .finish_non_exhaustive()
+    }
+}
+
+/// The icon of a virtual location, for its tab and its Places row.
+#[must_use]
+pub fn virtual_icon(which: vfs_rick::Virtual) -> &'static str {
+    match which {
+        vfs_rick::Virtual::Favorites => icons::STAR,
+        vfs_rick::Virtual::Recent => icons::RECENT,
+        vfs_rick::Virtual::Trash => icons::TRASH,
+        vfs_rick::Virtual::Machine => icons::MACHINE,
+        vfs_rick::Virtual::Network => icons::NETWORK,
+        vfs_rick::Virtual::Cloud => icons::CLOUD,
     }
 }
 

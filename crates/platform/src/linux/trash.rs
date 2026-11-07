@@ -174,7 +174,9 @@ pub(super) fn restore(item: &TrashedItem) -> Result<(), Error> {
     Ok(())
 }
 
-fn percent_decode(text: &str) -> Vec<u8> {
+/// Decodes `%XX` escapes byte by byte; what [`percent_encode`] produced
+/// comes back exactly.
+pub(crate) fn percent_decode(text: &str) -> Vec<u8> {
     let bytes = text.as_bytes();
     let mut out = Vec::with_capacity(bytes.len());
     let mut i = 0;
