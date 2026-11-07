@@ -9,8 +9,12 @@ of tabs and split panes, whose tab order and divider positions it reports
 back for the session, a tab dragged outside every window opening a new one,
 each tab's toolbar, path bar, file list (details, tree, list or icon view,
 only the visible rows laid out, names edited in place for Rename, New file
-and New folder) and status line with the subtree-search toggle, the preview
-pane (toolbar, info badges, content, status bar), the side panel (Home,
+and New folder) and status line with the subtree-search toggle, the Preview
+tab (toolbar, info badges, content, status bar; one per window, following
+the focused explorer, docked and torn out like any tab), the viewer tabs
+(one file full size with the folder behind it as a slideshow: zoom, pages
+with a strip, find in the text layer, the info panel, the actions menu, the
+transport bar, fullscreen), the side panel (Home,
 Recent, Network, Trash, Pinned, Tree) with the operations area at its foot
 (progress, throughput, remaining time, pause, resume, cancel), the conflict
 dialogue, the context menu and command palette built from the action

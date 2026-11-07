@@ -931,3 +931,121 @@ Once answered, an entry keeps its number and gains a dated decision line.
     process ends (`Loaded` holds the library in a `ManuallyDrop`). Only a
     file that is no plugin at all (no entry point) is unmapped again. The
     cost is the memory of a plugin that could not be used.
+
+86. (issue 17) The spec says the preview "follows focus: it always shows
+    the selection of whichever explorer tab was last focused", and as a
+    dock tab the preview sits in a pane of its own that a click would
+    focus, which would leave it with no selection to show.
+    Assumed: the model keeps the explorer tab the preview follows
+    (`Model::preview_follows`): the focused pane's active tab whenever that
+    is an explorer, else the one followed so far while it exists. A pane
+    whose active tab is the Preview tab never takes the model's focus from
+    the dock, so clicking in the preview leaves the keyboard with the
+    explorer; the Preview tab is the one tab the Action registry has no
+    context for (`App::action_ctx` is `None` there). A Preview tab dragged
+    into an explorer pane can still be that pane's active tab, in which
+    case the keys about files go to the followed explorer and only the
+    tab-strip keys (close, next, previous, move) stay with the pane. The
+    tab is one per window, opens in a new pane right of the whole dock with
+    the width the 0.1 panel had (the UI works the split fraction out), and
+    its kind is part of the session (`TabSession::kind`), so it comes back
+    where it was.
+
+87. (issue 17) The spec's viewer "steps to the previous and next file of
+    the same folder in the list's current sort and filter", and nothing
+    says what the viewer holds once the list it came from has moved on or
+    closed.
+    Assumed: a viewer tab is a copy of the explorer tab it was opened from
+    (`TabKind::Viewer`: location, listing, sort, filter, hidden flag), with
+    the file shown as its selection, so it steps through its own rows,
+    the app lists and watches it like any tab (a rename or trash of the
+    file reaches it, and the explorer, through their watches), and the
+    Action registry works on its selection through the same `ActionCtx`.
+    The explorer's listing is cloned at open, so the position ("12 of 240")
+    is known at once and the relist reconciles behind it. Enter or a
+    double-click on another file of the same folder reuses the pane's
+    viewer tab for that folder rather than opening a second one; a file of
+    another folder opens another viewer tab. When the file shown goes
+    (trashed, renamed out of the filter) the viewer shows the file that
+    took its place in the order, the last one when it was last. The
+    viewer's inline-rename, new-file and new-folder interceptions of the
+    list do not apply: those actions use their own prompts there. The
+    viewer tab persists in the session like an explorer tab.
+
+88. (issue 17) "Enter … previewable file: viewer; other: system default",
+    where the hex fallback claims every file, and the issue's acceptance
+    test opens an unknown binary in hex with Enter.
+    Assumed: a file is previewable when any registered previewer scores
+    it above 0, the hex plugin included, so with it loaded Enter opens every
+    file in the viewer; without it (disabled in the Extensions screen, or
+    absent) Enter hands a file no previewer claims to the system's default
+    application. The decision reads the file's first 4 KiB as an internal
+    job (`Command::Open`), like the preview's scoring; the per-type flip the
+    spec names is `[viewer] external`, a list of extensions in `rick.toml`
+    with a row in the Settings screen, and Mod+Enter (`core.open_default`)
+    forces the application whatever the type. When the viewer lands on a
+    file nothing claims (stepping through a folder without the hex plugin,
+    or a previewer failing to open it) it says "No preview for this file".
+
+89. (issue 17) "The zoom level is remembered per type" does not say for
+    how long, and "1:1" has no meaning for paged content, since
+    `PreviewDoc` does not say how large a page is in points.
+    Assumed: the zoom is remembered per lower-case file extension for the
+    session, in the UI, not in `rick.toml`: a setting the spec does not
+    name, and a wheel zoom would rewrite the file on every step. For a
+    raster Fit never enlarges past 100%, Fit width and the free factors
+    may, and 1:1 is one pixel per pixel; for paged content 1:1 shows the
+    page as wide as the content, the same as Fit width, until a page size
+    reaches the trait (a `PreviewDoc` method, a spec change, when the first
+    previewer that knows its page sizes needs it). The free zoom is a
+    factor on the fitted size, shown as a percentage of it.
+
+90. (issue 17) The shortcut table binds Left/Right and PageUp/PageDown to
+    "Previous / next item or page" in one row, while the Navigation bullet
+    gives both pairs to files.
+    Assumed: Left and Right always step files; PageUp and PageDown step
+    pages while a paged document has a page that way and files otherwise.
+    The Viewer table is live only while a viewer tab is the pane's active
+    tab, where its rows shadow the list's and the view's of the same keys
+    (Mod+F finds, Mod+1 is actual size, Space plays, Home and End are the
+    first and last file), the list's own rows (cursor movement, Enter,
+    type-to-filter) are not bound at all, and every other row (tabs, panes,
+    windows, actions) keeps working; F11 fills the screen with the viewer
+    alone, Escape leaves fullscreen and then closes the tab.
+
+91. (issue 17) Find "searches the text layer … with match count, next and
+    previous, and highlights in place", and `TextLayer` holds page texts
+    without positions.
+    Assumed: matches are highlighted in place for text content, which the
+    UI lays out itself; for paged content find counts the matches, and
+    next and previous go to the match's page, without a box on the page.
+    The PDF previewer fills a page's text when the page is rendered, so
+    find in a PDF covers the pages seen so far. Matching ignores case where
+    lower-casing keeps the byte offsets, which it does for ASCII and most
+    scripts, and is exact otherwise.
+
+92. (issue 17) The spec's viewer media transport names "seek bar, volume,
+    playback speed, frame step, loop", and `Transport` has play, pause,
+    seek, position, duration and playing.
+    Assumed: the viewer's transport bar is built against the trait as it
+    is (play/pause, a seek bar with elapsed and total time; Space, J, K and
+    L), tested with a fake transport; volume, speed, frame step and loop
+    wait for the media previewer of milestone 4, which will need them added
+    to the trait through a question of its own.
+
+93. (issue 17) The spec's Preview section says "Space on a file or folder
+    opens the preview tab if it is closed and shows the entry; Space again
+    closes it", while the Selection table binds Space to "Toggle selection
+    of the focused entry" (question 21 settled the tables in the second
+    one's favour).
+    Assumed: Space keeps toggling the selection; the Preview tab opens and
+    closes with Mod+Shift+I and the title row's toggle, as in 0.1.
+
+94. (issue 17) The issue asks for "a page strip on the side"; the spec
+    says the same without saying what a tile is.
+    Assumed: one tile per page with the page's number and a thumbnail the
+    pane's slot renders as the tile comes into view, the current page
+    marked and kept in view; a click goes to the page. Pages open one at a
+    time; a toolbar toggle stacks them in one continuous scroll, where the
+    page under the upper third of the view is the current one. Both are
+    kept per tab for the session.
