@@ -37,7 +37,7 @@ mod trash;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
-use ext::{API_VERSION, Capabilities, Extension, Manifest, Registry, Version};
+use ext::{API_VERSION, Capabilities, Extension, Manifest, Platforms, Points, Registry, Version};
 use platform::Platform;
 use types::{Entry, Error, ExtId, Location};
 use vfs::Mounts;
@@ -93,6 +93,8 @@ impl Core {
                 version: Version::new(0, 1, 0),
                 api_version: API_VERSION,
                 requires: Capabilities::WRITE,
+                points: Points::ACTION,
+                platforms: Platforms::ALL,
             },
             state: Arc::new(State {
                 mounts,

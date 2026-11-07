@@ -24,6 +24,11 @@ ext-preview-code = { workspace = true }
 ext-preview-image = { workspace = true }
 ext-preview-pdf = { workspace = true }
 ext-git = { workspace = true }
+plugins-native = { workspace = true }
+# The fixture plugins, built as library files beside the test binaries and
+# loaded from there; never named in the test code.
+plugin-probe = { workspace = true }
+plugin-panic = { workspace = true }
 image = { workspace = true }
 egui = { workspace = true }
 futures = { workspace = true }

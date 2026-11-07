@@ -21,7 +21,7 @@ multiple-versions = "warn"
 deny = [
     { crate = "runtime", wrappers = ["platform", "ext", "vfs", "vfs-local", "model", "ops", "app", "ui-egui", "rick", "tests"] },
     { crate = "platform", wrappers = ["vfs", "vfs-local", "model", "ops", "app", "ui-egui", "rick", "tests"] },
-    { crate = "ext", wrappers = ["vfs", "vfs-local", "model", "ops", "app", "ui-egui", "rick", "tests", "ext-preview-text", "ext-preview-code", "ext-preview-image", "ext-preview-pdf", "ext-git"] },
+    { crate = "ext", wrappers = ["vfs", "vfs-local", "model", "ops", "app", "ui-egui", "rick", "tests", "ext-preview-text", "ext-preview-code", "ext-preview-image", "ext-preview-pdf", "ext-git", "plugins-native", "plugin-probe", "plugin-panic"] },
     { crate = "vfs", wrappers = ["vfs-local", "ops", "app", "ui-egui", "rick", "tests"] },
     { crate = "vfs-local", wrappers = ["ops", "app", "ui-egui", "rick", "tests"] },
     # `ops` may use `model` by the layer order but does not today; listing
@@ -29,6 +29,9 @@ deny = [
     { crate = "model", wrappers = ["app", "ui-egui", "rick", "tests"] },
     { crate = "ops", wrappers = ["app", "ui-egui", "rick", "tests"] },
     { crate = "app", wrappers = ["ui-egui", "rick", "tests"] },
+    # The plugin host sits beside `app`: the binary loads plugins through it
+    # and hands them to the app as extensions.
+    { crate = "plugins-native", wrappers = ["rick", "tests"] },
     { crate = "ui-egui", wrappers = ["rick", "tests"] },
     # Extensions see `ext` and `types` only; only the binary and the tests load them.
     { crate = "ext-preview-text", wrappers = ["rick", "tests"] },
@@ -36,6 +39,10 @@ deny = [
     { crate = "ext-preview-image", wrappers = ["rick", "tests"] },
     { crate = "ext-preview-pdf", wrappers = ["rick", "tests"] },
     { crate = "ext-git", wrappers = ["rick", "tests"] },
+    # The fixture plugins are test libraries loaded as files; only the
+    # integration tests name them, to have them built.
+    { crate = "plugin-probe", wrappers = ["tests"] },
+    { crate = "plugin-panic", wrappers = ["tests"] },
 ]
 
 [advisories]

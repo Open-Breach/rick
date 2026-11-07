@@ -9,7 +9,7 @@ use crate::keys::Intent;
 use crate::shell::{PaneCx, Request};
 
 /// The burger menu at the top of the window: New window, the Layouts
-/// submenu, Settings, Keyboard shortcuts, About.
+/// submenu, Settings, Keyboard shortcuts, Extensions, About.
 pub fn burger(ui: &mut egui::Ui, requests: &mut Vec<Request>, pane: model::PaneId, app: &App) {
     ui.menu_button(crate::icons::MENU, |ui| {
         if ui.button("New window").clicked() {
@@ -31,6 +31,13 @@ pub fn burger(ui: &mut egui::Ui, requests: &mut Vec<Request>, pane: model::PaneI
         if ui.button("Keyboard shortcuts…").clicked() {
             requests.push(Request::Intent {
                 intent: Intent::Shortcuts,
+                pane,
+            });
+            ui.close();
+        }
+        if ui.button("Extensions…").clicked() {
+            requests.push(Request::Intent {
+                intent: Intent::Extensions,
                 pane,
             });
             ui.close();

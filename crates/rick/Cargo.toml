@@ -13,8 +13,10 @@ name = "rick"
 path = "src/main.rs"
 
 # Built-in extensions are features, default-on; a lean build turns them off.
+# `git` compiles the Git plugin in instead of loading it from `plugins/`;
+# default off since 0.2, when `ext-git` became the first plugin.
 [features]
-default = ["preview-text", "preview-code", "preview-image", "preview-pdf", "git"]
+default = ["preview-text", "preview-code", "preview-image", "preview-pdf"]
 preview-text = ["dep:ext-preview-text"]
 preview-code = ["dep:ext-preview-code"]
 preview-image = ["dep:ext-preview-image"]
@@ -28,6 +30,7 @@ ext = { workspace = true }
 vfs-local = { workspace = true }
 app = { workspace = true }
 ui-egui = { workspace = true }
+plugins-native = { workspace = true }
 ext-preview-text = { workspace = true, optional = true }
 ext-preview-code = { workspace = true, optional = true }
 ext-preview-image = { workspace = true, optional = true }

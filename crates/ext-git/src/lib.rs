@@ -10,8 +10,15 @@
 //! directory. A batch whose work tree has no cached status gets
 //! [`CellValue::Pending`] at once and its decorations through
 //! [`DecorateCtx::publish`] when the job that reads the status is done.
+//!
+//! This is the reference plugin: the crate builds as a `cdylib` that the
+//! plugin host loads from `plugins/git/` through the entry point
+//! [`ext::plugin!`] declares, and as an `rlib` for the binary's opt-in
+//! `git` feature.
 
-#![forbid(unsafe_code)]
+// `deny`, not `forbid`: the entry point's `#[no_mangle]` carries its own
+// allowance (QUESTIONS.md 82).
+#![deny(unsafe_code)]
 
 pub mod actions;
 pub mod repo;
@@ -22,7 +29,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 
 use ext::{
     API_VERSION, Badge, Capabilities, CellValue, ColumnDef, ColumnId, DecorateCtx, Decoration,
-    Decorator, Extension, Manifest, PanelSection, Registry, Version,
+    Decorator, Extension, Manifest, PanelSection, Platforms, Points, Registry, Version,
 };
 use types::{Entry, EntryId, Error, ExtId, Location};
 
@@ -69,9 +76,12 @@ impl GitExtension {
             manifest: Manifest {
                 id: ID,
                 name: "Git",
-                version: Version::new(0, 1, 0),
+                version: Version::parse(env!("CARGO_PKG_VERSION"))
+                    .unwrap_or_else(|_| Version::new(0, 0, 0)),
                 api_version: API_VERSION,
                 requires: Capabilities::empty(),
+                points: Points::DECORATOR | Points::ACTION,
+                platforms: Platforms::ALL,
             },
             repos: Arc::new(Repos::default()),
         }
@@ -100,6 +110,8 @@ impl Extension for GitExtension {
         Ok(())
     }
 }
+
+ext::plugin!(|| Arc::new(GitExtension::new()) as Arc<dyn Extension>);
 
 /// Batches waiting for a work tree's status to be read, with the context to
 /// publish them through.

@@ -207,7 +207,7 @@ checksum = "330a5ed07fa54e4702c9d6c4174f74427fc0ef6e214bbd677ae50a5099946470"
 
 [[package]]
 name = "app"
-version = "0.1.0"
+version = "0.2.0-dev"
 dependencies = [
  "ext",
  "futures",
@@ -1360,7 +1360,7 @@ dependencies = [
 
 [[package]]
 name = "ext"
-version = "0.1.0"
+version = "0.2.0-dev"
 dependencies = [
  "async-trait",
  "bitflags 2.13.2",
@@ -1375,7 +1375,7 @@ dependencies = [
 
 [[package]]
 name = "ext-git"
-version = "0.1.0"
+version = "0.2.0-dev"
 dependencies = [
  "ext",
  "gix",
@@ -1391,7 +1391,7 @@ dependencies = [
 
 [[package]]
 name = "ext-preview-code"
-version = "0.1.0"
+version = "0.2.0-dev"
 dependencies = [
  "encoding_rs",
  "ext",
@@ -1407,7 +1407,7 @@ dependencies = [
 
 [[package]]
 name = "ext-preview-image"
-version = "0.1.0"
+version = "0.2.0-dev"
 dependencies = [
  "ext",
  "image",
@@ -1423,7 +1423,7 @@ dependencies = [
 
 [[package]]
 name = "ext-preview-pdf"
-version = "0.1.0"
+version = "0.2.0-dev"
 dependencies = [
  "ext",
  "pdfium-render",
@@ -1437,7 +1437,7 @@ dependencies = [
 
 [[package]]
 name = "ext-preview-text"
-version = "0.1.0"
+version = "0.2.0-dev"
 dependencies = [
  "encoding_rs",
  "ext",
@@ -3364,7 +3364,7 @@ dependencies = [
 
 [[package]]
 name = "model"
-version = "0.1.0"
+version = "0.2.0-dev"
 dependencies = [
  "ext",
  "platform",
@@ -3874,7 +3874,7 @@ checksum = "9f7c3e4beb33f85d45ae3e3a1792185706c8e16d043238c593331cc7cd313b50"
 
 [[package]]
 name = "ops"
-version = "0.1.0"
+version = "0.2.0-dev"
 dependencies = [
  "ext",
  "futures",
@@ -4105,7 +4105,7 @@ checksum = "b4596b6d070b27117e987119b4dac604f3c58cfb0b191112e24771b2faeac1a6"
 
 [[package]]
 name = "platform"
-version = "0.1.0"
+version = "0.2.0-dev"
 dependencies = [
  "arboard",
  "async-trait",
@@ -4121,6 +4121,42 @@ dependencies = [
  "tracing",
  "types",
  "windows",
+]
+
+[[package]]
+name = "plugin-panic"
+version = "0.2.0-dev"
+dependencies = [
+ "ext",
+]
+
+[[package]]
+name = "plugin-probe"
+version = "0.2.0-dev"
+dependencies = [
+ "ext",
+ "tracing",
+ "types",
+]
+
+[[package]]
+name = "plugins-native"
+version = "0.2.0-dev"
+dependencies = [
+ "ext",
+ "libloading",
+ "platform",
+ "plugin-panic",
+ "plugin-probe",
+ "runtime",
+ "serde",
+ "tempfile",
+ "thiserror 2.0.21",
+ "toml 0.9.12+spec-1.1.0",
+ "tracing",
+ "tracing-subscriber",
+ "types",
+ "vfs-local",
 ]
 
 [[package]]
@@ -4457,7 +4493,7 @@ dependencies = [
 
 [[package]]
 name = "rick"
-version = "0.1.0"
+version = "0.2.0-dev"
 dependencies = [
  "anyhow",
  "app",
@@ -4468,6 +4504,7 @@ dependencies = [
  "ext-preview-pdf",
  "ext-preview-text",
  "platform",
+ "plugins-native",
  "tracing",
  "tracing-subscriber",
  "types",
@@ -4477,7 +4514,7 @@ dependencies = [
 
 [[package]]
 name = "runtime"
-version = "0.1.0"
+version = "0.2.0-dev"
 dependencies = [
  "rayon",
  "tokio",
@@ -4923,7 +4960,7 @@ dependencies = [
 
 [[package]]
 name = "tests"
-version = "0.1.0"
+version = "0.2.0-dev"
 dependencies = [
  "app",
  "egui",
@@ -4939,6 +4976,9 @@ dependencies = [
  "model",
  "ops",
  "platform",
+ "plugin-panic",
+ "plugin-probe",
+ "plugins-native",
  "runtime",
  "tempfile",
  "thiserror 2.0.21",
@@ -5234,7 +5274,7 @@ dependencies = [
 
 [[package]]
 name = "types"
-version = "0.1.0"
+version = "0.2.0-dev"
 dependencies = [
  "bitflags 2.13.2",
  "thiserror 2.0.21",
@@ -5253,7 +5293,7 @@ dependencies = [
 
 [[package]]
 name = "ui-egui"
-version = "0.1.0"
+version = "0.2.0-dev"
 dependencies = [
  "app",
  "chrono",
@@ -5417,7 +5457,7 @@ checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
 
 [[package]]
 name = "vfs"
-version = "0.1.0"
+version = "0.2.0-dev"
 dependencies = [
  "ext",
  "futures",
@@ -5429,7 +5469,7 @@ dependencies = [
 
 [[package]]
 name = "vfs-local"
-version = "0.1.0"
+version = "0.2.0-dev"
 dependencies = [
  "async-trait",
  "ext",
@@ -6309,6 +6349,13 @@ name = "xml-rs"
 version = "0.8.29"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e450f9b2ed1dff33c94c12589a87338689467b9c4f5d8a5710bd09a847d2c8a7"
+
+[[package]]
+name = "xtask"
+version = "0.2.0-dev"
+dependencies = [
+ "serde_json",
+]
 
 [[package]]
 name = "yoke"

@@ -1,0 +1,17 @@
+# xtask
+
+`xtask` is the build tasks binary behind `cargo xtask` (an alias in
+`.cargo/config.toml`). `cargo xtask bundle [--release]` builds the whole
+workspace with its examples and lays out `target/<profile>/bundle/`
+(QUESTIONS.md 84): the
+`rick` binary, the kernel dylibs `types`, `runtime` and `ext` and the
+`libstd` they need beside it, pdfium when `RICK_PDFIUM_DIR` names it, and
+`plugins/<id>/plugin.toml` with the library for every plugin crate (an
+`ext-*` member built as a `cdylib`), so that running `rick` from there finds
+every plugin with nothing copied by hand; the release workflow archives the
+same directory. It depends on `serde_json` only and on no kernel crate: it
+drives `cargo build --workspace --exclude xtask --lib --bins --examples`
+and the workspace's own
+`rick-plugin-manifest` helper, since a build of a smaller package set would
+rewrite the shared libraries for another feature set (QUESTIONS.md 81). It
+is a developer tool, not part of Rick, and prints to the terminal.
