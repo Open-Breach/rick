@@ -764,6 +764,42 @@ fn f2_edits_the_name_in_place_and_new_folder_inserts_an_editable_row() {
     assert!(dir.path().join("New file.txt").is_file());
 }
 
+/// A long name in the side panel is truncated to the panel: pinning a folder
+/// with a 90-character name leaves the panel, and so the pane, where they
+/// were.
+#[test]
+fn the_side_panel_keeps_its_width_under_a_long_name() {
+    let dir = tree();
+    let long = "a".repeat(90);
+    fs::create_dir(dir.path().join(&long)).unwrap_or_else(|e| panic!("{e}"));
+    let (mut harness, _) = harness(dir.path());
+    let pane = pane(&harness);
+    let pane_left = |h: &Harness<'_, RickUi>| {
+        h.state()
+            .pane_rects()
+            .into_iter()
+            .find(|(p, _)| *p == pane)
+            .map_or_else(|| panic!("no pane rect"), |(_, r)| r.left())
+    };
+    let before = pane_left(&harness);
+    command(
+        &mut harness,
+        app::Command::Settings(model::SettingsChange::Pin {
+            items: vec![local(&dir.path().join(&long))],
+            at: None,
+        }),
+    );
+    harness.step();
+    harness.step();
+    // The pinned row and the pane's row both show the name.
+    assert_eq!(harness.query_all_by_label_contains(&long[..20]).count(), 2);
+    let after = pane_left(&harness);
+    assert!(
+        (after - before).abs() < 1.0,
+        "the pane moved from {before} to {after}: the panel grew to fit the name"
+    );
+}
+
 #[test]
 fn pasting_over_an_existing_name_opens_the_dialogue_and_cancel_touches_nothing() {
     let dir = tree();
@@ -867,6 +903,47 @@ fn search_foo(harness: &mut Harness<'_, RickUi>) -> Duration {
     started.elapsed()
 }
 
+/// The states of the search jobs in the job table.
+fn search_states(harness: &Harness<'_, RickUi>) -> Vec<JobState> {
+    harness
+        .state()
+        .app()
+        .model()
+        .jobs
+        .values()
+        .filter(|j| j.name.starts_with("Search"))
+        .map(|j| j.state.clone())
+        .collect()
+}
+
+/// A new text cancels the walk still running for the old one: on the 200k
+/// fixture the walk outlives the second text by far, so the first job ends
+/// Cancelled and the second runs to Done.
+#[test]
+#[ignore = "lists 200 000 entries; run with --ignored in release"]
+fn a_new_text_cancels_the_running_walk_on_the_200k_fixture() {
+    let fixture = tests::fixture::generate(200_000, 7).unwrap_or_else(|e| panic!("{e}"));
+    let (mut harness, _) = harness(fixture.root());
+    let pane = pane(&harness);
+    command(&mut harness, app::Command::Subtree { pane, on: true });
+    for text in ["f0", "f00"] {
+        harness.state_mut().app_mut().handle(
+            app::Command::Filter {
+                pane,
+                text: text.to_owned(),
+            },
+            &mut Vec::new(),
+        );
+    }
+    settle(&mut harness);
+    let states = search_states(&harness);
+    assert_eq!(
+        states,
+        [JobState::Cancelled, JobState::Done],
+        "the first walk is cancelled, the second runs through"
+    );
+}
+
 /// Typing `foo` with the subtree toggle on streams matches from 20 nested
 /// levels within 100 ms for the first batch. Timed in release on CI, as the
 /// other budgets are.
@@ -891,7 +968,7 @@ fn the_first_search_batch_arrives_within_100_ms() {
 }
 
 #[test]
-fn search_in_subdirectories_streams_matches_and_a_new_text_cancels_the_walk() {
+fn search_in_subdirectories_streams_matches_and_a_new_text_supersedes_the_walk() {
     let dir = search_tree(12_000);
     let (mut harness, _) = harness(dir.path());
     let (tab_id, _) = tab(&harness);
@@ -909,9 +986,11 @@ fn search_in_subdirectories_streams_matches_and_a_new_text_cancels_the_walk() {
     );
     let _ = tab_id;
 
-    // A changed text cancels the running walk and starts another. The two
-    // texts go straight to the app, as a typist faster than a frame would
-    // send them, so the first walk is still running when the second comes.
+    // A changed text supersedes the walk and starts another: the two texts
+    // go straight to the app, as a typist faster than a frame would send
+    // them. Whether the first walk is cancelled or had already finished
+    // depends on the machine; that it is cancelled while running is shown
+    // on the 200k fixture below. Either way only the last text's rows show.
     let pane = pane(&harness);
     for text in ["foo19", "foo1"] {
         harness.state_mut().app_mut().handle(
@@ -923,17 +1002,14 @@ fn search_in_subdirectories_streams_matches_and_a_new_text_cancels_the_walk() {
         );
     }
     settle(&mut harness);
-    let states: Vec<JobState> = harness
-        .state()
-        .app()
-        .model()
-        .jobs
-        .values()
-        .filter(|j| j.name.starts_with("Search"))
-        .map(|j| j.state.clone())
-        .collect();
-    assert!(states.contains(&JobState::Cancelled), "{states:?}");
-    assert!(states.contains(&JobState::Done), "{states:?}");
+    let states = search_states(&harness);
+    assert_eq!(states.len(), 3, "{states:?}");
+    assert!(
+        states
+            .iter()
+            .all(|s| matches!(s, JobState::Done | JobState::Cancelled)),
+        "{states:?}"
+    );
     assert!(row_names(&harness).iter().all(|n| n.starts_with("foo1")));
     assert_eq!(row_names(&harness).len(), 11, "foo1 and foo10 to foo19");
 
