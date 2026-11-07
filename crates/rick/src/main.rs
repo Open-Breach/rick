@@ -34,6 +34,14 @@ fn built_ins() -> Vec<Arc<dyn ext::Extension>> {
     extensions.push(Arc::new(ext_preview_image::ImagePreview::new()));
     #[cfg(feature = "preview-pdf")]
     extensions.push(Arc::new(ext_preview_pdf::PdfPreview::new()));
+    #[cfg(feature = "preview-office")]
+    extensions.push(Arc::new(ext_preview_office::OfficePreview::new()));
+    #[cfg(feature = "preview-media")]
+    extensions.push(Arc::new(ext_preview_media::MediaPreview::new()));
+    #[cfg(feature = "preview-archive")]
+    extensions.push(Arc::new(ext_preview_archive::ArchivePreview::new()));
+    #[cfg(feature = "preview-csv")]
+    extensions.push(Arc::new(ext_preview_csv::CsvPreview::new()));
     #[cfg(feature = "git")]
     extensions.push(Arc::new(ext_git::GitExtension::new()));
     extensions

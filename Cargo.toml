@@ -25,6 +25,10 @@ ext-preview-code = { path = "crates/ext-preview-code" }
 ext-preview-image = { path = "crates/ext-preview-image" }
 ext-preview-pdf = { path = "crates/ext-preview-pdf" }
 ext-git = { path = "crates/ext-git" }
+ext-preview-office = { path = "crates/ext-preview-office" }
+ext-preview-media = { path = "crates/ext-preview-media" }
+ext-preview-archive = { path = "crates/ext-preview-archive" }
+ext-preview-csv = { path = "crates/ext-preview-csv" }
 plugins-native = { path = "crates/plugins-native" }
 plugin-probe = { path = "crates/plugin-probe" }
 plugin-panic = { path = "crates/plugin-panic" }
@@ -39,6 +43,30 @@ pdfium-render = { version = "0.9", default-features = false, features = ["pdfium
 # Bundled grammars and themes with the pure-Rust regex engine; no YAML or
 # plist loading at run time.
 syntect = { version = "5", default-features = false, features = ["parsing", "default-syntaxes", "default-themes", "regex-fancy"] }
+# Previewer plugins (issue 18). The archive previewer lists entries only,
+# so the codec crates decode just enough of a compressed tar to read its
+# headers; zip reads its central directory without any codec.
+zip = { version = "9", default-features = false, features = ["deflate-flate2"] }
+tar = { version = "0.4", default-features = false }
+flate2 = "1"
+zstd = { version = "0.14", default-features = false }
+lzma-rust2 = { version = "0.25", default-features = false, features = ["std", "xz"] }
+bzip2 = "0.6"
+lz4_flex = "0.14"
+sevenz-rust2 = { version = "0.25", default-features = false }
+unrar = "0.5"
+roxmltree = "0.21"
+csv = "1"
+memchr = "2"
+pulldown-cmark = { version = "0.13", default-features = false }
+html-escape = "0.3"
+id3 = { version = "1", default-features = false }
+mp4 = "0.14"
+gstreamer = "0.25"
+gstreamer-app = "0.25"
+gstreamer-audio = "0.25"
+gstreamer-video = "0.25"
+gstreamer-pbutils = "0.25"
 anyhow = "1"
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 eframe = "0.36"

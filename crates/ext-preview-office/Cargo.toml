@@ -1,0 +1,29 @@
+[package]
+name = "ext-preview-office"
+version.workspace = true
+description = "Rick preview plugin for office documents: LibreOffice headless to PDF with a cache, then pdfium pages; metadata and a hint without LibreOffice."
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+# A plugin: the `cdylib` the host loads from `plugins/preview-office/`, and
+# an `rlib` for the binary's opt-in `preview-office` feature and the tests.
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+types = { workspace = true }
+ext = { workspace = true }
+pdfium-render = { workspace = true }
+roxmltree = { workspace = true }
+zip = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+runtime = { workspace = true }
+vfs-local = { workspace = true }
+platform = { workspace = true }
+tempfile = { workspace = true }
+
+[lints]
+workspace = true

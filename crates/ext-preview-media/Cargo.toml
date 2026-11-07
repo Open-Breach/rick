@@ -1,0 +1,52 @@
+[package]
+name = "ext-preview-media"
+version.workspace = true
+description = "Rick preview plugin for audio and video: GStreamer playback with transport, waveform and cover art, tags and stream details; metadata and a hint without the runtime."
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+build = "build.rs"
+
+# A plugin: the `cdylib` the host loads from `plugins/preview-media/`, and
+# an `rlib` for the binary's opt-in `preview-media` feature and the tests.
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+# `gstreamer` links the GStreamer libraries and turns playback and the
+# waveform on; it needs the GStreamer development files at build time
+# (pkg-config on Linux and macOS, the official SDK on Windows), so it is
+# off by default and CI and the release workflow turn it on where they
+# have them. Without it the plugin still claims media files and shows
+# their metadata with a hint that playback is not built in.
+[features]
+default = []
+gstreamer = [
+    "dep:gstreamer",
+    "dep:gstreamer-app",
+    "dep:gstreamer-audio",
+    "dep:gstreamer-video",
+    "dep:gstreamer-pbutils",
+]
+
+[dependencies]
+types = { workspace = true }
+ext = { workspace = true }
+id3 = { workspace = true }
+mp4 = { workspace = true }
+image = { workspace = true }
+tracing = { workspace = true }
+gstreamer = { workspace = true, optional = true }
+gstreamer-app = { workspace = true, optional = true }
+gstreamer-audio = { workspace = true, optional = true }
+gstreamer-video = { workspace = true, optional = true }
+gstreamer-pbutils = { workspace = true, optional = true }
+
+[dev-dependencies]
+runtime = { workspace = true }
+vfs-local = { workspace = true }
+platform = { workspace = true }
+tempfile = { workspace = true }
+
+[lints]
+workspace = true
