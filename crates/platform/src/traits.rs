@@ -36,11 +36,14 @@ pub trait Trash: Send + Sync {
     fn restore(&self, item: &TrashedItem) -> Result<(), Error>;
 
     /// Everything currently in the trash the current user can restore.
+    /// Where the platform keeps the original paths to itself (macOS), this
+    /// is Rick's own record of what it trashed
+    /// ([`trash_record`](crate::trash_record)), so items trashed by other
+    /// programs are not listed there.
     ///
     /// # Errors
     ///
-    /// The I/O error from reading the trash; `Error::Unsupported` where the
-    /// platform keeps the original paths to itself (macOS).
+    /// The I/O error from reading the trash or the record.
     fn list(&self) -> Result<Vec<TrashedItem>, Error>;
 
     /// Deletes a trashed entry for good, without restoring it.

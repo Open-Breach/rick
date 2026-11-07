@@ -19,7 +19,7 @@ use ui_egui::{EditKind, EguiHost, RickUi, icons};
 
 /// A harness whose settings live in `config`, so a second one can start
 /// from what the first one saved; `fake` is handed in so a test can prepare
-/// it (volumes, an unlistable trash) before the app starts.
+/// it (volumes) before the app starts.
 fn harness_with(
     start: &Path,
     config: &Path,
@@ -380,44 +380,6 @@ fn trash_lists_restores_undoes_and_empties() {
     assert_eq!(fake.list().map(|l| l.len()).ok(), Some(0));
     harness.step();
     harness.get_by_label_contains("The trash is empty");
-}
-
-/// Where the platform cannot list its trash (macOS), the section shows what
-/// Rick trashed, in this and earlier sessions, and says so.
-#[test]
-fn an_unlistable_trash_shows_ricks_own_record_across_sessions() {
-    let dir = tree();
-    let fake = Arc::new(Fake::new().unwrap_or_else(|e| panic!("{e}")));
-    fake.set_trash_unlistable(true);
-    let config = dir.path().join("config");
-    {
-        let (mut harness, _) = harness_with(dir.path(), &config, fake.clone());
-        harness.get_by_label_contains("Items trashed elsewhere are not listed");
-        select(&mut harness, "c.txt");
-        run(&mut harness, "core.trash");
-        settle(&mut harness);
-        assert!(step_until(&mut harness, Duration::from_secs(5), |h| {
-            h.state().app().model().trash.items.len() == 1
-        }));
-        assert!(!harness.state().app().model().trash.listed);
-        harness.step();
-        let folder = dir.path().display().to_string();
-        let parts = ["c.txt", folder.as_str()];
-        node_with(&harness, &parts);
-        let record = config.join(app::TRASH_FILE);
-        assert!(step_until(&mut harness, Duration::from_secs(3), |_| {
-            fs::read_to_string(&record).is_ok_and(|t| t.contains("c.txt"))
-        }));
-    }
-    let (mut harness, _) = harness_with(dir.path(), &config, fake);
-    assert!(step_until(&mut harness, Duration::from_secs(5), |h| {
-        h.state().app().model().trash.items.len() == 1
-    }));
-    harness.step();
-    let folder = dir.path().display().to_string();
-    let parts = ["c.txt", folder.as_str()];
-    node_with(&harness, &parts);
-    harness.get_by_label_contains("Items trashed elsewhere are not listed");
 }
 
 #[test]
