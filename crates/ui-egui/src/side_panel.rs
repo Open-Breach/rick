@@ -560,19 +560,21 @@ fn pinned(
             || location.path.to_string(),
             |n| String::from_utf8_lossy(n).into_owned(),
         );
+        // The unpin button takes its place first; the name gets the rest and
+        // is truncated to it, so a long name cannot widen the panel.
         let response = ui
-            .horizontal(|ui| {
-                let response = location_row(ui, icons::PIN, &name, &location, current);
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if ui
-                        .small_button(icons::UNPIN)
-                        .on_hover_text("Unpin")
-                        .clicked()
-                    {
-                        requests.push(Request::Command(Command::Unpin(location.clone())));
-                    }
-                });
-                response
+            .with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if ui
+                    .small_button(icons::UNPIN)
+                    .on_hover_text("Unpin")
+                    .clicked()
+                {
+                    requests.push(Request::Command(Command::Unpin(location.clone())));
+                }
+                ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                    location_row(ui, icons::PIN, &name, &location, current)
+                })
+                .inner
             })
             .inner;
         if response.clicked() {
@@ -677,8 +679,9 @@ fn tree_node(
         } else {
             icons::FOLDER
         };
+        // Truncated to the panel: a long name must not widen it.
         let node = ui
-            .selectable_label(here, format!("{icon} {label}"))
+            .add(egui::Button::selectable(here, format!("{icon} {label}")).truncate())
             .on_hover_text(location.path.to_string_lossy());
         if node.clicked() {
             requests.push(Request::Command(Command::Navigate {
@@ -784,7 +787,7 @@ fn location_row(
     current: Option<&Location>,
 ) -> egui::Response {
     let here = current == Some(location);
-    ui.selectable_label(here, format!("{icon} {label}"))
+    ui.add(egui::Button::selectable(here, format!("{icon} {label}")).truncate())
         .on_hover_text(location.path.to_string())
 }
 
