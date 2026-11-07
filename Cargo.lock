@@ -5265,6 +5265,7 @@ dependencies = [
  "egui_kittest",
  "ext",
  "model",
+ "ops",
  "platform",
  "runtime",
  "tempfile",

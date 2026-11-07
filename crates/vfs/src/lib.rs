@@ -162,8 +162,7 @@ pub async fn copy(
             }
             _ => {
                 stream_copy(
-                    &src, &dst, &source, &target, opts, &progress, &cancel, pause, done,
-                    plan.total,
+                    &src, &dst, &source, &target, opts, &progress, &cancel, pause, done, plan.total,
                 )
                 .await?;
             }

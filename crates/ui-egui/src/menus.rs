@@ -50,7 +50,16 @@ pub fn context_for(cx: &PaneCx<'_>, only: Option<Entry>) -> ActionCtx {
 
 /// The spec's groups, as action ids in order.
 const GROUPS: &[(&str, &[&str])] = &[
-    ("Open", &["core.open_default", "core.pin", "core.unpin"]),
+    (
+        "Open",
+        &[
+            "core.open_default",
+            "core.open_containing",
+            "core.open_containing_tab",
+            "core.pin",
+            "core.unpin",
+        ],
+    ),
     (
         "Edit",
         &[

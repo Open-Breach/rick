@@ -1,4 +1,4 @@
-//! Acceptance (side panel): the panel shows its five sections by default,
+//! Acceptance (side panel): the panel shows its six sections by default,
 //! Mod+B hides and shows it, Home navigates, pins persist across a restart
 //! and a folded section stays folded.
 
@@ -83,16 +83,18 @@ fn settings_contain(harness: &mut Harness<'_, RickUi>, needle: &str) -> String {
 fn the_panel_shows_its_sections_and_mod_b_hides_and_shows_it() {
     let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
     let (mut harness, _fake) = harness(dir.path(), &dir.path().join("config"));
-    for title in ["Home", "Recent", "Network", "Trash", "Pinned"] {
+    for title in ["Home", "Recent", "Network", "Trash", "Pinned", "Tree"] {
         harness.get_by_label(title);
     }
     assert_eq!(
         harness
             .query_all_by_label_contains("Coming in a later issue")
             .count(),
-        3,
-        "Recent, Network and Trash say so"
+        0,
+        "every section has its contents now"
     );
+    harness.get_by_label_contains("The trash is empty");
+    harness.get_by_label_contains("No removable media");
 
     harness.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::B);
     harness.step();

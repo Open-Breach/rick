@@ -13,17 +13,20 @@ use model::{
     SortDir, Tab, TabId, Theme, ViewMode,
 };
 use platform::{ControlsSide, PropertiesOutcome};
-use types::{EntryId, EntryKind, Location, Progress};
+use types::{EntryId, EntryKind, Location};
 
 use crate::dnd::{Dnd, DragView, Source, Spring, Target, Zone};
 use crate::dock::DockSync;
 use crate::host::{Ask, EguiHost};
+use crate::inline::{EditKind, RowEdit};
 use crate::keys::{Direction, Intent, KeyMap};
+use crate::operations::Operations;
 use crate::preview::Previews;
 use crate::search::{Pick, SearchBox};
 use crate::settings_ui::ShortcutsScreen;
+use crate::side_panel::SidePanelState;
 use crate::thumbs::Thumbnails;
-use crate::{frame, icons, inspector, menus, pane, paths, settings_ui, side_panel};
+use crate::{conflict, frame, icons, inspector, menus, pane, paths, settings_ui, side_panel};
 
 /// Per-tab view state that is the UI's business, not the model's.
 #[derive(Debug, Default)]
@@ -60,6 +63,10 @@ pub struct TabUi {
     pub last_location: Option<Location>,
     /// Select the entry with this name once the listing is complete.
     pub pending_select: Option<Vec<u8>>,
+    /// The name being edited in place, if any.
+    pub edit: Option<RowEdit>,
+    /// The last plain click on a row and when, for the slow second click.
+    pub last_click: Option<(EntryId, f64)>,
 }
 
 /// What widgets ask the shell to do; applied after the frame's layout.
@@ -113,6 +120,32 @@ pub enum Request {
         pane: PaneId,
         /// The entry's file name.
         name: Vec<u8>,
+    },
+    /// Start editing a name in the pane's list.
+    StartEdit {
+        /// The pane.
+        pane: PaneId,
+        /// Rename this entry, or name a new file or folder.
+        kind: EditKind,
+    },
+    /// The inline editor committed a name: run the action with it.
+    CommitEdit {
+        /// The pane.
+        pane: PaneId,
+        /// What the name is for.
+        kind: EditKind,
+        /// The name.
+        name: String,
+    },
+    /// Navigate the pane to the folder holding `entry` and select it there,
+    /// in this tab or a new one: Open containing folder.
+    OpenContaining {
+        /// The pane.
+        pane: PaneId,
+        /// The entry.
+        entry: types::Entry,
+        /// In a new tab.
+        new_tab: bool,
     },
 }
 
@@ -173,6 +206,8 @@ struct Dialog {
 }
 
 /// The eframe application.
+// The window's open flags are what they are: one per screen.
+#[allow(clippy::struct_excessive_bools)]
 pub struct RickUi {
     app: App,
     host: Arc<EguiHost>,
@@ -207,7 +242,15 @@ pub struct RickUi {
     ctx: egui::Context,
     previews: Previews,
     closed_tabs: Vec<Location>,
-    job_done_at: HashMap<types::JobId, Instant>,
+    /// The operations area's rows: rates and when each job ended.
+    operations: Operations,
+    /// The side panel's own state: the trash selection.
+    side: SidePanelState,
+    /// The conflict dialogue's text field and checkbox.
+    conflict: conflict::DialogState,
+    /// Set while the inline editor commits through the action, so the shell
+    /// runs the action instead of starting another edit.
+    inline_commit: bool,
     applied: Option<(Theme, u8, Density, Option<String>)>,
     now: SystemTime,
     /// Rick's own window frame as the last frame drew it, if it did; the
@@ -267,8 +310,6 @@ fn toggle_icon(glyph: &str, on: bool) -> egui::Button<'static> {
 }
 /// How long a notification stays.
 const TOAST_FOR: Duration = Duration::from_secs(5);
-/// How long a finished job stays listed before it is dismissed.
-const DONE_FOR: Duration = Duration::from_secs(4);
 
 impl RickUi {
     /// Wraps `app`; `host` is the `UiHost` the app was built with.
@@ -307,7 +348,10 @@ impl RickUi {
             ctx: ctx.clone(),
             previews: Previews::default(),
             closed_tabs: Vec::new(),
-            job_done_at: HashMap::new(),
+            operations: Operations::default(),
+            side: SidePanelState::default(),
+            conflict: conflict::DialogState::default(),
+            inline_commit: false,
             applied: None,
             now: SystemTime::now(),
             window_frame: None,
@@ -413,6 +457,19 @@ impl RickUi {
     #[must_use]
     pub fn asking(&self) -> Option<&Ask> {
         self.dialog.as_ref().map(|d| &d.ask)
+    }
+
+    /// The inline edit in progress in a tab, for tests.
+    #[must_use]
+    pub fn editing(&self, tab: TabId) -> Option<&RowEdit> {
+        self.tabs.get(&tab).and_then(|t| t.edit.as_ref())
+    }
+
+    /// The trash rows selected in the side panel, by trashed path, for
+    /// tests.
+    #[must_use]
+    pub fn trash_selection(&self) -> Vec<std::path::PathBuf> {
+        self.side.trash_selection.iter().cloned().collect()
     }
 
     /// The notifications currently shown.
@@ -621,7 +678,13 @@ impl RickUi {
     /// dialogue, the palette or the shortcuts screen wants them.
     fn handle_keys(&mut self, ctx: &egui::Context) {
         let pane = self.app.model().focused;
-        if self.dialog.is_some() || self.shortcuts.rebinding.is_some() {
+        if self.dialog.is_some()
+            || self.shortcuts.rebinding.is_some()
+            || !self.app.model().conflicts.is_empty()
+        {
+            return;
+        }
+        if self.side.trash_focused && self.side.handle_keys(ctx, &self.app, &mut self.requests) {
             return;
         }
         // An open menu owns the keyboard: Escape closes it, nothing else.
@@ -712,6 +775,15 @@ impl RickUi {
                             self.tabs.entry(tab_id).or_default().pending_select = Some(name);
                         }
                     }
+                    Request::StartEdit { pane, kind } => self.start_edit(pane, kind),
+                    Request::CommitEdit { pane, kind, name } => {
+                        self.commit_edit(pane, kind, &name);
+                    }
+                    Request::OpenContaining {
+                        pane,
+                        entry,
+                        new_tab,
+                    } => self.open_containing(pane, &entry, new_tab),
                 }
             }
         }
@@ -723,7 +795,6 @@ impl RickUi {
             return;
         };
         let entries: Vec<types::Entry> = state
-            .listing
             .rows()
             .filter(|e| items.contains(&e.id))
             .cloned()
@@ -754,10 +825,9 @@ impl RickUi {
                 continue;
             }
             let hit = tab
-                .listing
                 .rows()
                 .position(|e| e.path.file_name() == Some(name.as_slice()))
-                .and_then(|index| tab.listing.row(index).map(|e| (index, e.id)));
+                .and_then(|index| tab.row(index).map(|e| (index, e.id)));
             found.push((*tab_id, self.app.model().pane_of(*tab_id), hit));
         }
         for (tab_id, pane, hit) in found {
@@ -783,7 +853,127 @@ impl RickUi {
         }
     }
 
+    /// Begins editing a name in the pane's list.
+    fn start_edit(&mut self, pane: PaneId, kind: EditKind) {
+        let Some((tab_id, tab)) = self.app.model().active_tab(pane) else {
+            return;
+        };
+        let text = match kind {
+            EditKind::Rename(id) => match tab.entry(id) {
+                Some(entry) => entry.name.clone(),
+                None => return,
+            },
+            EditKind::NewFile => "New file.txt".to_owned(),
+            EditKind::NewFolder => "New folder".to_owned(),
+        };
+        let tab_ui = self.tabs.entry(tab_id).or_default();
+        tab_ui.edit = Some(RowEdit::new(kind, text));
+        if !matches!(kind, EditKind::Rename(_)) {
+            tab_ui.scroll_to = Some(0);
+        }
+    }
+
+    /// Runs the action behind an inline edit with the name pre-answered,
+    /// then selects the result once it is listed.
+    fn commit_edit(&mut self, pane: PaneId, kind: EditKind, name: &str) {
+        let Some((_, tab)) = self.app.model().active_tab(pane) else {
+            return;
+        };
+        let (action, selection) = match kind {
+            EditKind::Rename(id) => match tab.entry(id) {
+                Some(entry) => (ActionId("core.rename"), vec![entry.clone()]),
+                None => return,
+            },
+            EditKind::NewFile => (ActionId("core.new_file"), Vec::new()),
+            EditKind::NewFolder => (ActionId("core.new_folder"), Vec::new()),
+        };
+        let ctx = ActionCtx {
+            pane,
+            location: tab.location.clone(),
+            selection,
+            invoked_from: Invocation::Shortcut,
+        };
+        self.host.answer_prompt(name.to_owned());
+        self.inline_commit = true;
+        self.run_action_with(action, ctx);
+        self.inline_commit = false;
+        self.host.clear_answers();
+        self.requests.push(Request::SelectNamed {
+            pane,
+            name: name.as_bytes().to_vec(),
+        });
+    }
+
+    /// Open containing folder: the pane, or a new tab, goes to the entry's
+    /// folder and selects the entry there.
+    fn open_containing(&mut self, pane: PaneId, entry: &types::Entry, new_tab: bool) {
+        let Some(parent) = entry.path.parent() else {
+            return;
+        };
+        let Some(name) = entry.path.file_name() else {
+            return;
+        };
+        let to = Location::new(entry.id.provider, parent);
+        if new_tab {
+            self.handle(Command::NewTab(to));
+        } else {
+            self.handle(Command::Navigate { pane, to });
+        }
+        let pane = self.app.model().focused;
+        self.requests.push(Request::SelectNamed {
+            pane,
+            name: name.to_vec(),
+        });
+    }
+
+    /// Whether the shell handles an action itself rather than running it:
+    /// the three inline edits (QUESTIONS.md 26) and Open containing folder
+    /// (QUESTIONS.md 19).
+    fn intercept(&mut self, action: ActionId, ctx: &ActionCtx) -> bool {
+        match action.0 {
+            "core.rename" if !self.inline_commit && ctx.selection.len() == 1 => {
+                self.requests.push(Request::StartEdit {
+                    pane: ctx.pane,
+                    kind: EditKind::Rename(ctx.selection[0].id),
+                });
+                true
+            }
+            "core.new_file" if !self.inline_commit && !ops::is_trash(ctx) => {
+                self.requests.push(Request::StartEdit {
+                    pane: ctx.pane,
+                    kind: EditKind::NewFile,
+                });
+                true
+            }
+            "core.new_folder" if !self.inline_commit && !ops::is_trash(ctx) => {
+                self.requests.push(Request::StartEdit {
+                    pane: ctx.pane,
+                    kind: EditKind::NewFolder,
+                });
+                true
+            }
+            "core.open_containing" | "core.open_containing_tab" => {
+                let Some(entry) = ctx.selection.first().cloned() else {
+                    return false;
+                };
+                if entry.path.parent() == Some(ctx.location.path.clone()) {
+                    return false;
+                }
+                self.requests.push(Request::OpenContaining {
+                    pane: ctx.pane,
+                    entry,
+                    new_tab: action.0 == "core.open_containing_tab",
+                });
+                true
+            }
+            _ => false,
+        }
+    }
+
     fn run_action_with(&mut self, action: ActionId, ctx: ActionCtx) {
+        if self.intercept(action, &ctx) {
+            return;
+        }
         self.handle(Command::Run {
             action,
             ctx: ctx.clone(),
@@ -807,14 +997,11 @@ impl RickUi {
         let Some((_, tab)) = self.app.model().active_tab(pane) else {
             return;
         };
-        let Some(entry) = tab.listing.get(id).cloned() else {
+        let Some(entry) = tab.entry(id).cloned() else {
             return;
         };
         if entry.kind == EntryKind::Dir {
-            let to = Location::new(
-                tab.location.provider,
-                tab.location.path.join(entry.name.as_bytes()),
-            );
+            let to = tab.location_of(&entry);
             self.handle(Command::Navigate { pane, to });
         } else {
             let ctx = ActionCtx {
@@ -892,7 +1079,11 @@ impl RickUi {
             }
             Intent::Escape => {
                 if let Some((tab_id, tab)) = self.app.model().active_tab(pane) {
-                    if self
+                    if self.tabs.get(&tab_id).is_some_and(|t| t.edit.is_some()) {
+                        if let Some(t) = self.tabs.get_mut(&tab_id) {
+                            t.edit = None;
+                        }
+                    } else if self
                         .tabs
                         .get(&tab_id)
                         .is_some_and(|t| t.path_edit.is_some())
@@ -994,6 +1185,19 @@ impl RickUi {
                     self.handle(Command::Flatten { pane, on });
                 }
             }
+            Intent::ToggleSubtree => {
+                if let Some((tab_id, tab)) = self.app.model().active_tab(pane) {
+                    let on = !tab.subtree;
+                    self.handle(Command::Subtree { pane, on });
+                    if on {
+                        self.tabs.entry(tab_id).or_default().focus_filter = true;
+                    }
+                }
+            }
+            Intent::ViewTree => self.handle(Command::SetView {
+                pane,
+                mode: ViewMode::Tree,
+            }),
             Intent::ToggleInspector => self.inspector_open = !self.inspector_open,
             Intent::Settings => self.settings_open = true,
             Intent::Shortcuts => self.shortcuts.open = true,
@@ -1082,8 +1286,7 @@ impl RickUi {
             | Intent::PasteAsLink
             | Intent::BulkRename
             | Intent::OpenWith
-            | Intent::Console
-            | Intent::ViewTree => {
+            | Intent::Console => {
                 let label = intent.spec().map_or("This", |s| s.label);
                 self.unavailable(label);
             }
@@ -1104,7 +1307,7 @@ impl RickUi {
         match selected.as_slice() {
             [] => {
                 if !tab.filter.is_empty()
-                    && let Some(first) = tab.listing.row(0)
+                    && let Some(first) = tab.row(0)
                 {
                     let id = first.id;
                     self.open_entry(pane, id);
@@ -1190,14 +1393,14 @@ impl RickUi {
         let Some((tab_id, tab)) = model.active_tab(pane) else {
             return;
         };
-        let count = tab.listing.row_count();
+        let count = tab.row_count();
         if count == 0 {
             return;
         }
         let tab_ui = self.tabs.entry(tab_id).or_default();
         let current = tab_ui
             .cursor
-            .and_then(|c| tab.listing.rows().position(|e| e.id == c));
+            .and_then(|c| tab.rows().position(|e| e.id == c));
         let target = match (by, current) {
             (isize::MIN, _) => 0,
             (isize::MAX, _) => count - 1,
@@ -1205,7 +1408,7 @@ impl RickUi {
             (by, None) if by < 0 => count - 1,
             (_, None) => 0,
         };
-        let Some(id) = tab.listing.row(target).map(|e| e.id) else {
+        let Some(id) = tab.row(target).map(|e| e.id) else {
             return;
         };
         let change = if extend {
@@ -1213,17 +1416,9 @@ impl RickUi {
             if tab_ui.anchor.is_none() {
                 tab_ui.anchor = Some(anchor);
             }
-            let anchor_index = tab
-                .listing
-                .rows()
-                .position(|e| e.id == anchor)
-                .unwrap_or(target);
+            let anchor_index = tab.rows().position(|e| e.id == anchor).unwrap_or(target);
             let (a, b) = (anchor_index.min(target), anchor_index.max(target));
-            SelectionChange::Set(
-                (a..=b)
-                    .filter_map(|i| tab.listing.row(i).map(|e| e.id))
-                    .collect(),
-            )
+            SelectionChange::Set((a..=b).filter_map(|i| tab.row(i).map(|e| e.id)).collect())
         } else {
             tab_ui.anchor = Some(id);
             SelectionChange::Set(vec![id])
@@ -1308,7 +1503,14 @@ impl RickUi {
                     egui::Panel::bottom(egui::Id::new("operations"))
                         .show(ui, |ui| self.operations_area(ui));
                 }
-                side_panel::show(ui, &self.app, focused, &mut self.requests, &mut self.dnd);
+                side_panel::show(
+                    ui,
+                    &self.app,
+                    focused,
+                    &mut self.side,
+                    &mut self.requests,
+                    &mut self.dnd,
+                );
             });
         // The outer width is what egui restores from `default_size`, so it
         // is what persists; only once the pointer is up, so a drag writes
@@ -1446,78 +1648,8 @@ impl RickUi {
     }
 
     fn operations_area(&mut self, ui: &mut egui::Ui) {
-        let now = Instant::now();
-        let jobs: Vec<(types::JobId, model::JobInfo)> = self
-            .app
-            .model()
-            .jobs
-            .iter()
-            .map(|(id, info)| (*id, info.clone()))
-            .collect();
-        for (id, info) in jobs {
-            ui.horizontal(|ui| {
-                ui.label(&info.name);
-                match &info.state {
-                    JobState::Running(progress) => {
-                        let (fraction, text) = match progress {
-                            Progress::Items { done, total } => (
-                                total.map_or(0.0, |t| *done as f32 / t.max(1) as f32),
-                                format!(
-                                    "{done} of {}",
-                                    total.map_or("?".to_owned(), |t| t.to_string())
-                                ),
-                            ),
-                            Progress::Bytes { done, total } => (
-                                total.map_or(0.0, |t| *done as f32 / t.max(1) as f32),
-                                format!(
-                                    "{} of {}",
-                                    crate::format::size(Some(*done)),
-                                    crate::format::size(*total)
-                                ),
-                            ),
-                            Progress::Message(text) => (0.0, text.clone()),
-                        };
-                        ui.add(
-                            egui::ProgressBar::new(fraction)
-                                .desired_width(160.0)
-                                .text(text),
-                        );
-                        if ui.small_button("Cancel").clicked() {
-                            self.requests.push(Request::Command(Command::CancelJob(id)));
-                        }
-                    }
-                    JobState::Done => {
-                        ui.weak("done");
-                        let at = *self.job_done_at.entry(id).or_insert(now);
-                        if now.duration_since(at) > DONE_FOR
-                            || ui.small_button(icons::CLOSE).clicked()
-                        {
-                            self.requests
-                                .push(Request::Command(Command::DismissJob(id)));
-                        }
-                    }
-                    JobState::Cancelled => {
-                        ui.weak("cancelled");
-                        let at = *self.job_done_at.entry(id).or_insert(now);
-                        if now.duration_since(at) > DONE_FOR
-                            || ui.small_button(icons::CLOSE).clicked()
-                        {
-                            self.requests
-                                .push(Request::Command(Command::DismissJob(id)));
-                        }
-                    }
-                    JobState::Failed(error) => {
-                        ui.colored_label(ui.visuals().error_fg_color, error);
-                        if ui.small_button(icons::CLOSE).clicked() {
-                            self.requests
-                                .push(Request::Command(Command::DismissJob(id)));
-                        }
-                    }
-                }
-            });
-        }
-        self.job_done_at
-            .retain(|id, _| self.app.model().jobs.contains_key(id));
+        self.operations
+            .show(ui, self.app.model(), &mut self.requests);
     }
 
     fn show_dialog(&mut self, ctx: &egui::Context) {
@@ -1866,6 +1998,7 @@ impl eframe::App for RickUi {
         self.apply_requests(ctx);
 
         self.show_dialog(ctx);
+        conflict::show(ctx, &self.app, &mut self.conflict, &mut self.requests);
         settings_ui::settings_window(
             ctx,
             &mut self.settings_open,
@@ -1880,7 +2013,7 @@ impl eframe::App for RickUi {
         self.show_toasts(ctx);
         self.apply_requests(ctx);
 
-        if self.app.is_busy() || !self.job_done_at.is_empty() {
+        if self.app.is_busy() || self.operations.has_finished_rows() {
             ctx.request_repaint_after(Duration::from_millis(50));
         }
         // Keep the dock in step before the next frame draws it.

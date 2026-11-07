@@ -168,7 +168,8 @@ fn spec_rows() -> Vec<(&'static str, Intent)> {
         ("Mod+H", Intent::ToggleHidden),
         ("Mod+Shift+H", Intent::ToggleSystem),
         ("Mod+E", Intent::ToggleExtensions),
-        ("Mod+Shift+F", Intent::ToggleFlatten),
+        // Issue A gives Mod+Shift+F to Search in subdirectories (QUESTIONS.md).
+        ("Mod+Shift+F", Intent::ToggleSubtree),
         ("Mod+Shift+I", Intent::ToggleInspector),
         ("Mod+`", Intent::Console),
         ("Mod+,", Intent::Settings),

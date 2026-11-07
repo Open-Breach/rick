@@ -59,7 +59,12 @@ fn settle(harness: &mut Harness<'_, RickUi>) {
                 break;
             }
         }
-        assert!(Instant::now() < deadline, "did not settle");
+        assert!(
+            Instant::now() < deadline,
+            "did not settle: {:?} jobs {:?}",
+            harness.state().app(),
+            harness.state().app().model().jobs
+        );
         std::thread::sleep(Duration::from_millis(10));
     }
 }
@@ -291,8 +296,22 @@ fn a_file_dragged_onto_a_folder_row_moves_and_the_modifiers_force_the_mode() {
         .get_by_label(&format!("{} Copy", icons::PLUS))
         .click();
     harness.step();
-    settle(&mut harness);
     assert!(!harness.state().drop_prompt_open());
+    // `sub/b.txt` exists from the forced copy: the conflict dialogue asks,
+    // and Overwrite replaces it.
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while harness.state().app().model().conflicts.is_empty() {
+        assert!(Instant::now() < deadline, "no conflict dialogue");
+        harness.step();
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    // The dialogue takes a frame to find its place.
+    harness.step();
+    harness.step();
+    harness.get_by_label("Overwrite").click();
+    harness.step();
+    settle(&mut harness);
+    assert!(harness.state().app().model().conflicts.is_empty());
     assert!(dir.path().join("b.txt").exists());
     assert_eq!(
         fs::read_to_string(dir.path().join("sub/b.txt")).ok(),

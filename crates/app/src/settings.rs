@@ -79,8 +79,7 @@ pub fn write_atomically(path: &Path, text: &str) -> Result<(), Error> {
     std::fs::create_dir_all(dir).map_err(Error::from_io)?;
     let name = path
         .file_name()
-        .map(|n| n.to_string_lossy().into_owned())
-        .unwrap_or_else(|| "file".to_owned());
+        .map_or_else(|| "file".to_owned(), |n| n.to_string_lossy().into_owned());
     let temp = dir.join(format!(".{name}.{}.tmp", std::process::id()));
     std::fs::write(&temp, text).map_err(Error::from_io)?;
     match std::fs::rename(&temp, path) {
