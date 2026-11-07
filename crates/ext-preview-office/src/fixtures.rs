@@ -245,8 +245,11 @@ pub fn sample_pptx(title: &str, author: &str, slides: usize) -> Vec<u8> {
 
 fn odf(kind: Kind, title: &str, author: &str, body: &str, statistic: &str) -> Vec<u8> {
     let ns = "xmlns:office=\"urn:oasis:names:tc:opendocument:xmlns:office:1.0\" xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" xmlns:table=\"urn:oasis:names:tc:opendocument:xmlns:table:1.0\" xmlns:draw=\"urn:oasis:names:tc:opendocument:xmlns:drawing:1.0\" xmlns:style=\"urn:oasis:names:tc:opendocument:xmlns:style:1.0\" xmlns:fo=\"urn:oasis:names:tc:opendocument:xmlns:xsl-fo-compatible:1.0\" xmlns:svg=\"urn:oasis:names:tc:opendocument:xmlns:svg-compatible:1.0\" xmlns:meta=\"urn:oasis:names:tc:opendocument:xmlns:meta:1.0\" xmlns:dc=\"http://purl.org/dc/elements/1.1/\" office:version=\"1.3\"";
+    // `Break` is the paragraph style the text fixture starts a new page with;
+    // a style a paragraph names has to exist, or LibreOffice ignores it.
+    let styles = "<office:automatic-styles><style:style style:name=\"Break\" style:family=\"paragraph\"><style:paragraph-properties fo:break-before=\"page\"/></style:style></office:automatic-styles>";
     let content = format!(
-        "{XML_HEAD}<office:document-content {ns}><office:automatic-styles/><office:body>{body}</office:body></office:document-content>"
+        "{XML_HEAD}<office:document-content {ns}>{styles}<office:body>{body}</office:body></office:document-content>"
     );
     let meta = format!(
         "{XML_HEAD}<office:document-meta {ns}><office:meta><dc:title>{}</dc:title><meta:initial-creator>{}</meta:initial-creator><dc:creator>{}</dc:creator><meta:creation-date>2026-11-07T10:00:00</meta:creation-date><dc:date>2026-11-07T11:30:00</dc:date><meta:generator>Rick fixture</meta:generator><meta:document-statistic {statistic}/></office:meta></office:document-meta>",
