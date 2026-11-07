@@ -563,16 +563,19 @@ fn pinned(
         // The unpin button takes its place first; the name gets the rest and
         // is truncated to it, so a long name cannot widen the panel.
         let response = ui
-            .with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if ui
-                    .small_button(icons::UNPIN)
-                    .on_hover_text("Unpin")
-                    .clicked()
-                {
-                    requests.push(Request::Command(Command::Unpin(location.clone())));
-                }
-                ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
-                    location_row(ui, icons::PIN, &name, &location, current)
+            .horizontal(|ui| {
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if ui
+                        .small_button(icons::UNPIN)
+                        .on_hover_text("Unpin")
+                        .clicked()
+                    {
+                        requests.push(Request::Command(Command::Unpin(location.clone())));
+                    }
+                    ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                        location_row(ui, icons::PIN, &name, &location, current)
+                    })
+                    .inner
                 })
                 .inner
             })
