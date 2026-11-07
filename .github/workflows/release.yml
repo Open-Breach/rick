@@ -1,8 +1,10 @@
 name: release
 # On a `v*` tag: a release build on every OS, one archive per platform with
-# the binary, the pdfium library beside it (SPEC.md: pdfium ships beside the
-# binary), LICENSE, README, CHANGELOG and the third-party licenses; a smoke
-# test of every archive; then a GitHub Release with the archives, their
+# the bundle `cargo xtask bundle --release` lays out — the binary, the kernel
+# dylibs and libstd it shares with the plugins, the pdfium library beside it
+# (SPEC.md: pdfium ships beside the binary) and `plugins/` with every plugin
+# (QUESTIONS.md 81) — plus LICENSE, README, CHANGELOG and the third-party
+# licenses; a smoke test of every archive; then a GitHub Release with the archives, their
 # SHA-256 sums and the tag's changelog section as its body. A tag with a
 # pre-release suffix (v0.1.0-rc1) makes a draft pre-release; a plain tag
 # publishes. Run by hand from a branch with a tag name, it is a dry run: the
@@ -55,13 +57,14 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       # The version is the tag's; its release part must be the workspace's,
-      # so `rick --version` and the archive name agree.
+      # so `rick --version` and the archive name agree. During a cycle the
+      # workspace carries a `-dev` suffix, which a dry run may keep.
       - name: version
         shell: bash
         run: |
           tag_version="${TAG#v}"
           crate_version="$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -1)"
-          if [ "${tag_version%%-*}" != "$crate_version" ]; then
+          if [ "${tag_version%%-*}" != "${crate_version%%-*}" ]; then
             echo "tag $TAG does not match workspace version $crate_version"
             exit 1
           fi
@@ -86,9 +89,11 @@ jobs:
             echo "PDFIUM_LIB=$dest/lib/libpdfium.so" >> "$GITHUB_ENV"
             echo "RICK_PDFIUM_DIR=$dest/lib" >> "$GITHUB_ENV"
           fi
-      - run: cargo build --release -p rick
-      # The previewer's test binary for the smoke test; not in the archive.
-      - run: cargo build --release -p ext-preview-pdf --example pdfium_check
+      # The bundle: binary, kernel dylibs, libstd, pdfium (from
+      # RICK_PDFIUM_DIR) and plugins/, from one build of every library,
+      # binary and example in the workspace, the previewer's pdfium_check
+      # example for the smoke test among them.
+      - run: cargo xtask bundle --release
       - uses: actions/download-artifact@v4
         with: { name: third-party-licenses }
       - name: package
@@ -98,10 +103,9 @@ jobs:
           exe=""
           if [ "${{ runner.os }}" = "Windows" ]; then exe=".exe"; fi
           mkdir -p "dist/$NAME"
-          cp "target/release/rick$exe" "dist/$NAME/"
-          cp "$PDFIUM_LIB" "dist/$NAME/"
+          cp -R target/release/bundle/. "dist/$NAME/"
           cp LICENSE README.md CHANGELOG.md THIRD-PARTY-LICENSES.md "dist/$NAME/"
-          ls -l "dist/$NAME"
+          ls -lR "dist/$NAME"
           cd dist
           if [ "${{ runner.os }}" = "Windows" ]; then
             7z a -tzip "$NAME.zip" "$NAME" > /dev/null
@@ -131,7 +135,8 @@ jobs:
           if-no-files-found: error
 
   # Each archive, as a user gets it: unpacked in an empty directory, the
-  # binary reports its version, and pdfium loads from beside it.
+  # binary reports its version, lists the Git plugin as loaded, and pdfium
+  # loads from beside it.
   smoke:
     needs: build
     strategy:
@@ -170,17 +175,27 @@ jobs:
             test -f "$file" || { echo "missing $file"; exit 1; }
           done
           test -f libpdfium.so || test -f libpdfium.dylib || test -f pdfium.dll || { echo "no pdfium library beside the binary"; exit 1; }
+          # The kernel dylibs and libstd the binary shares with the plugins.
+          ls -1 | grep -Eq '^(lib)?std-' || { echo "no libstd beside the binary"; exit 1; }
+          ls -1 | grep -Eq '^(lib)?ext\.' || { echo "no ext library beside the binary"; exit 1; }
           # The version line: the workspace version (the tag without any
-          # pre-release suffix) and the git hash in brackets.
+          # pre-release suffix, a `-dev` workspace keeps its suffix) and the
+          # git hash in brackets.
           out="$("./rick$exe" --version)"
           echo "rick --version: $out"
-          echo "$out" | grep -Eq "^${version%%-*} \([0-9a-f]{7,}\)$" || { echo "unexpected version line"; exit 1; }
-          # rick --list-plugins does not exist in 0.1 (the plugin host is 0.2).
+          echo "$out" | grep -Eq "^${version%%-*}(-[0-9A-Za-z.]+)? \([0-9a-f]{7,}\)$" || { echo "unexpected version line"; exit 1; }
+          # The Git plugin, bundled and loaded from plugins/git/.
+          test -f plugins/git/plugin.toml || { echo "no plugins/git/plugin.toml"; exit 1; }
+          plugins="$("./rick$exe" --list-plugins)"
+          echo "$plugins"
+          echo "$plugins" | grep -Eq '^git +Git +[^ ]+ +decorator, action +loaded +' || { echo "git plugin not loaded"; exit 1; }
           # pdfium from beside the binary: the previewer's test binary, copied
-          # next to rick, with RICK_PDFIUM_DIR unset and no system pdfium.
+          # next to rick, with RICK_PDFIUM_DIR unset and no system pdfium. The
+          # example has no run path of its own, so the library path names the
+          # directory for the kernel dylibs and libstd.
           cp "../../../check/pdfium_check$exe" .
           chmod +x "pdfium_check$exe"
-          "./pdfium_check$exe" | tee check.txt
+          LD_LIBRARY_PATH=. DYLD_LIBRARY_PATH=. "./pdfium_check$exe" | tee check.txt
           grep -q "^pdfium ok" check.txt
 
   release:
@@ -203,7 +218,7 @@ jobs:
           python3 .github/scripts/changelog-section.py "$TAG" CHANGELOG.md > body.md
           {
             echo
-            echo "Archives: the \`rick\` binary with the pdfium library beside it, LICENSE, README, CHANGELOG and THIRD-PARTY-LICENSES; \`SHA256SUMS.txt\` has the checksums. Not signed or notarised (see README, Try it)."
+            echo "Archives: the \`rick\` binary with the shared kernel libraries, libstd and the pdfium library beside it, \`plugins/\` with the Git plugin, LICENSE, README, CHANGELOG and THIRD-PARTY-LICENSES; \`SHA256SUMS.txt\` has the checksums. Not signed or notarised (see README, Try it)."
           } >> body.md
           cat body.md
       - uses: softprops/action-gh-release@v2
