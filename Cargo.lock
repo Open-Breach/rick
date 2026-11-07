@@ -4124,6 +4124,40 @@ dependencies = [
 ]
 
 [[package]]
+name = "plugin-panic"
+version = "0.1.0"
+dependencies = [
+ "ext",
+]
+
+[[package]]
+name = "plugin-probe"
+version = "0.1.0"
+dependencies = [
+ "ext",
+ "tracing",
+ "types",
+]
+
+[[package]]
+name = "plugins-native"
+version = "0.1.0"
+dependencies = [
+ "ext",
+ "libloading",
+ "platform",
+ "plugin-panic",
+ "plugin-probe",
+ "runtime",
+ "tempfile",
+ "thiserror 2.0.21",
+ "tracing",
+ "tracing-subscriber",
+ "types",
+ "vfs-local",
+]
+
+[[package]]
 name = "png"
 version = "0.18.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"

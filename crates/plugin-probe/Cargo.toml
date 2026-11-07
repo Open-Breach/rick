@@ -1,0 +1,19 @@
+[package]
+name = "plugin-probe"
+version.workspace = true
+description = "The probe plugin: the fixture that proves Rick's plugin boundary and stands in for a real plugin in the host's tests."
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+types = { workspace = true }
+ext = { workspace = true }
+tracing = { workspace = true }
+
+[lints]
+workspace = true
