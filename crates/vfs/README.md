@@ -1,9 +1,7 @@
 # vfs
 
 `vfs` routes a `Location` to the `Provider` that owns it through the `Mounts`
-table, holds the `rick` provider that routes Rick's own virtual locations
-(`rick://trash`, later Favorites, Recent and the overviews) to the views
-extensions registered, and composes what no single provider can do alone:
+table and composes what no single provider can do alone:
 copying and moving between providers from `open_read`, `open_write`, `list`
 and `create_dir`, with progress and cancellation, while same-provider
 operations go to the provider's own fast path. It depends on `types`, `runtime` and `ext`;

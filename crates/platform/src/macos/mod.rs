@@ -1,8 +1,10 @@
 //! macOS: `NSFileManager` trash with Rick's own record of what it trashed
 //! (the system keeps the original paths in Finder's `.DS_Store`, which has
 //! no public reader), `open`, Finder's Get Info window,
-//! `~/Library/Application Support/Rick`, and the mounted volumes from
-//! `NSFileManager.mountedVolumeURLs`.
+//! `~/Library/Application Support/Rick`, the mounted volumes from
+//! `NSFileManager.mountedVolumeURLs` ejected through `diskutil`, the
+//! standard directories under the home, and Spotlight's last-used dates
+//! through `mdfind` for the recently-used list.
 
 use std::fs;
 use std::io;
@@ -14,11 +16,18 @@ use objc2_foundation::{NSFileManager, NSString, NSURL, NSVolumeEnumerationOption
 use types::Error;
 
 use crate::Native;
+use crate::time::parse_iso8601;
 use crate::traits::{
-    Chrome, ConfigDir, ControlsSide, DragSource, OpenWith, Properties, PropertiesOutcome, Trash,
-    TrashedItem, Volume, VolumeKind, Volumes, WindowChrome,
+    Chrome, ConfigDir, ControlsSide, DragSource, OpenWith, Properties, PropertiesOutcome,
+    RecentItem, RecentlyUsed, StandardFolder, StandardFolders, Trash, TrashedItem, Volume,
+    VolumeKind, Volumes, WindowChrome,
 };
 use crate::trash_record::{self, TRASH_FILE};
+
+/// How many recently-used items are kept, newest first.
+const RECENT_LIMIT: usize = 500;
+/// How far back Spotlight is asked for used files, in seconds (30 days).
+const RECENT_WINDOW_SECS: u64 = 30 * 24 * 3600;
 
 fn utf8(path: &Path) -> Result<&str, Error> {
     path.to_str()
@@ -77,7 +86,7 @@ impl Trash for Native {
     /// macOS keeps the original locations of trashed items in Finder's own
     /// `.DS_Store`, which has no public reader, so the trash lists Rick's
     /// own record of what it trashed, pruned of what has left the trash
-    /// since (QUESTIONS.md 74 and 86).
+    /// since (QUESTIONS.md 74 and 94).
     fn list(&self) -> Result<Vec<TrashedItem>, Error> {
         trash_record::load(&self.record_file())
     }
@@ -129,10 +138,10 @@ impl Native {
 }
 
 impl Volumes for Native {
-    /// `mountedVolumeURLs` without hidden volumes, less the system volume
-    /// (`/`), with `statvfs` for the space. Everything under `/Volumes` that
-    /// is not an internal disk counts as removable; network mounts are told
-    /// by their file system type from `statfs`.
+    /// `mountedVolumeURLs` without hidden volumes, with `statvfs` for the
+    /// space and `statfs` for the file system; the system volume (`/`)
+    /// first as `System`. Everything under `/Volumes` that is not a network
+    /// or optical mount counts as removable.
     fn volumes(&self) -> Result<Vec<Volume>, Error> {
         let manager = NSFileManager::defaultManager();
         let urls = manager
@@ -145,26 +154,59 @@ impl Volumes for Native {
         for url in urls.to_vec() {
             let Some(path) = url.path() else { continue };
             let mount_point = PathBuf::from(path.to_string());
-            if mount_point == Path::new("/") {
-                continue;
-            }
-            let name = mount_point.file_name().map_or_else(
-                || mount_point.display().to_string(),
-                |n| n.to_string_lossy().into_owned(),
-            );
-            let kind = volume_kind(&mount_point);
+            let is_root = mount_point == Path::new("/");
+            let name = if is_root {
+                "System".to_owned()
+            } else {
+                mount_point.file_name().map_or_else(
+                    || mount_point.display().to_string(),
+                    |n| n.to_string_lossy().into_owned(),
+                )
+            };
+            let fs_type = fs_type_of(&mount_point);
+            let kind = if is_root {
+                VolumeKind::Fixed
+            } else {
+                volume_kind(&mount_point, &fs_type)
+            };
             let (total, free) = crate::volumes::space(&mount_point)
                 .map_or((None, None), |(t, f)| (Some(t), Some(f)));
             out.push(Volume {
                 name,
                 mount_point,
                 kind,
+                fs_type,
+                device: None,
                 total,
                 free,
             });
         }
         out.sort_by(|a, b| a.mount_point.cmp(&b.mount_point));
         Ok(out)
+    }
+
+    /// `diskutil eject` on the mount point: unmounts the volume and ejects
+    /// the disk or opens the tray.
+    fn eject(&self, volume: &Volume) -> Result<(), Error> {
+        if !volume.is_removable() {
+            return Err(Error::Unsupported("only removable media can be ejected"));
+        }
+        let output = Command::new("diskutil")
+            .arg("eject")
+            .arg(volume.mount_point.as_os_str())
+            .stdin(Stdio::null())
+            .output()
+            .map_err(Error::from_io)?;
+        if output.status.success() {
+            return Ok(());
+        }
+        let said = String::from_utf8_lossy(&output.stderr);
+        let said = said.trim();
+        Err(Error::Io(io::Error::other(if said.is_empty() {
+            format!("diskutil exited with {}", output.status)
+        } else {
+            said.to_owned()
+        })))
     }
 }
 
@@ -173,10 +215,9 @@ const NETWORK_FS: &[&str] = &[
     "nfs", "smbfs", "afpfs", "webdav", "cifs", "fuse", "osxfuse", "macfuse",
 ];
 
-/// The kind of a mounted volume: network by file system type, optical by
-/// type, removable for anything else under `/Volumes`.
-fn volume_kind(mount_point: &Path) -> VolumeKind {
-    let fs_type = rustix::fs::statfs(mount_point)
+/// The file system type name `statfs` reports for a mount point.
+fn fs_type_of(mount_point: &Path) -> String {
+    rustix::fs::statfs(mount_point)
         .ok()
         .map(|stat| {
             let bytes: Vec<u8> = stat
@@ -187,15 +228,89 @@ fn volume_kind(mount_point: &Path) -> VolumeKind {
                 .collect();
             String::from_utf8_lossy(&bytes).into_owned()
         })
-        .unwrap_or_default();
+        .unwrap_or_default()
+}
+
+/// The kind of a mounted volume: network by file system type, optical by
+/// type, removable for anything else under `/Volumes`.
+fn volume_kind(mount_point: &Path, fs_type: &str) -> VolumeKind {
     if NETWORK_FS.iter().any(|n| fs_type.starts_with(n)) {
         VolumeKind::Network
-    } else if matches!(fs_type.as_str(), "cd9660" | "udf") {
+    } else if matches!(fs_type, "cd9660" | "udf") {
         VolumeKind::Optical
     } else if mount_point.starts_with("/Volumes") {
         VolumeKind::Removable
     } else {
         VolumeKind::Fixed
+    }
+}
+
+impl StandardFolders for Native {
+    /// The fixed directories under the home: `Documents`, `Pictures`,
+    /// `Music`, `Movies`, `Downloads`, `Desktop`.
+    fn standard_folder(&self, folder: StandardFolder) -> Option<PathBuf> {
+        let home = self.home_dir();
+        let path = match folder {
+            StandardFolder::Home => home,
+            StandardFolder::Documents => home.join("Documents"),
+            StandardFolder::Pictures => home.join("Pictures"),
+            StandardFolder::Music => home.join("Music"),
+            StandardFolder::Video => home.join("Movies"),
+            StandardFolder::Downloads => home.join("Downloads"),
+            StandardFolder::Desktop => home.join("Desktop"),
+        };
+        path.is_dir().then_some(path)
+    }
+}
+
+/// One line of `mdfind -attr kMDItemLastUsedDate`: the path, whitespace,
+/// then `kMDItemLastUsedDate = 2026-11-07 10:00:00 +0000`.
+fn parse_mdfind_line(line: &str) -> Option<RecentItem> {
+    let (path, rest) = line.split_once("kMDItemLastUsedDate")?;
+    let value = rest.trim_start().strip_prefix('=')?.trim();
+    let (date, rest) = value.split_once(' ')?;
+    let clock = rest.split_whitespace().next()?;
+    let used_at = parse_iso8601(&format!("{date}T{clock}"))?;
+    let path = path.trim_end();
+    if path.is_empty() {
+        return None;
+    }
+    Some(RecentItem {
+        path: PathBuf::from(path),
+        used_at,
+    })
+}
+
+impl RecentlyUsed for Native {
+    /// Spotlight's `kMDItemLastUsedDate` over the home for the last thirty
+    /// days, newest first. macOS keeps its Recent Items in a private store
+    /// without a public reader; the Spotlight attribute is what the Finder
+    /// itself searches on.
+    fn recently_used(&self) -> Result<Vec<RecentItem>, Error> {
+        let output = Command::new("mdfind")
+            .arg("-onlyin")
+            .arg(self.home_dir())
+            .arg("-attr")
+            .arg("kMDItemLastUsedDate")
+            .arg(format!(
+                "kMDItemLastUsedDate >= $time.now(-{RECENT_WINDOW_SECS})"
+            ))
+            .stdin(Stdio::null())
+            .output()
+            .map_err(Error::from_io)?;
+        if !output.status.success() {
+            let said = String::from_utf8_lossy(&output.stderr);
+            return Err(Error::Io(io::Error::other(said.trim().to_owned())));
+        }
+        let text = String::from_utf8_lossy(&output.stdout);
+        let mut items: Vec<RecentItem> = text
+            .lines()
+            .filter_map(parse_mdfind_line)
+            .filter(|item| fs::symlink_metadata(&item.path).is_ok())
+            .collect();
+        items.sort_by_key(|item| std::cmp::Reverse(item.used_at));
+        items.truncate(RECENT_LIMIT);
+        Ok(items)
     }
 }
 
@@ -283,5 +398,25 @@ impl DragSource for Native {
         Err(Error::Unsupported(
             "starting a drag needs the window's NSView and the press event, which winit does not expose",
         ))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn mdfind_lines_give_a_path_and_a_time() {
+        let item = parse_mdfind_line(
+            "/Users/me/Documents/a b.pdf   kMDItemLastUsedDate = 2026-11-07 10:00:00 +0000",
+        )
+        .unwrap_or_else(|| panic!("parsed"));
+        assert_eq!(item.path, PathBuf::from("/Users/me/Documents/a b.pdf"));
+        assert_eq!(
+            item.used_at,
+            parse_iso8601("2026-11-07T10:00:00").unwrap_or(SystemTime::UNIX_EPOCH)
+        );
+        assert!(parse_mdfind_line("/Users/me/x.txt").is_none());
+        assert!(parse_mdfind_line("kMDItemLastUsedDate = (null)").is_none());
     }
 }

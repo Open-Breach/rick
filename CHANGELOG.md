@@ -22,13 +22,13 @@ the pull request that brought the change.
   their original location, Restore, Restore trash items and Empty trash
   live in the Trash group of the context menu and the palette, Delete
   permanently works as everywhere, and a trashed folder is browsable (#20).
-- Virtual locations under one scheme: the `rick` provider routes
-  `rick://<name>` to the view an extension registered, so Favorites, Recent
-  and the overviews can follow; the registry lends the host's platform
+- Views served by extensions: the `rick://` provider routes a location an
+  extension registered (`Registry::view`) to that extension's provider, the
+  Trash view being the first; the registry lends the host's platform
   services to extensions (#20).
-- A location its provider cannot watch (an archive, the Trash view) is
-  polled: every three seconds and right after an operation, a change lists
-  it again (#20).
+- A location its provider cannot watch (an archive, a trashed folder
+  browsed in the Trash view) is polled: every three seconds and right after
+  an operation, a change lists it again (#20).
 - The native plugin host: plugins are dynamic libraries beside a
   `plugin.toml` in `plugins/` next to the binary or in the config
   directory (per-user wins on an id clash), checked for their extension API
@@ -47,6 +47,23 @@ the pull request that brought the change.
 - `cargo xtask bundle` lays out the binary, the shared libraries and every
   plugin in `target/<profile>/bundle/`; the release archives are that bundle
   (#16).
+- The side panel reworked (0.2 milestone 2, issue #26): an editable Places
+  list seeded from the system's standard folders and kept in `places.toml`
+  (drag to reorder, a dropped folder becomes a place at the insertion line,
+  Remove and Edit… with a Phosphor icon, open in new tab by middle click,
+  Mod+click and the context menu, Up, Down, Enter and Mod+Enter with the
+  panel focused); Favorites, Recent and Trash as views in the active tab
+  under `rick://` (the system's recently-used list replaces 0.1's own feed;
+  the Trash view keeps restore and Empty trash); This Machine, Network and
+  Cloud as collapsible sections whose header opens an overview with the full
+  drive table and whose rows open a root, with utilisation bars, Eject for
+  removable media, live mount and unmount, Add… on empty sections and Cloud
+  shown only while a cloud provider plugin is loaded. The operations area
+  grew: a header with the running count and an overall bar, a progress bar
+  with bytes or items done of total on every row, a height that follows the
+  jobs up to a cap, progress coalesced to twenty reports a second per job,
+  and per-volume scheduling: copies and moves that share a volume run in
+  turn, the queued one as *Waiting*, disjoint ones together.
 
 ### Changed
 
@@ -55,13 +72,25 @@ the pull request that brought the change.
 - The core actions follow the provider's capabilities: Paste, Duplicate,
   Rename, New file and New folder are hidden where nothing can be written,
   Move to trash where there is no trash (#20).
-- The trash record macOS needs lives in `platform` behind the trash itself;
-  the side panel's Trash section, with its own list, restore and empty, is
-  one row that opens the Trash view (#20).
+- The trash record macOS needs lives in `platform` behind the trash itself,
+  so the Trash view and the local provider see one list; Restore, Restore
+  trash items and Empty trash are the trash plugin's actions
+  (`trash.restore`, `trash.restore_items`, `trash.empty`) (#20).
 - A plugin's entry point is named after its crate
   (`rick_plugin_register_ext_git`), so several plugins link into one binary
   (#20).
 - The workspace version is `0.2.0-dev` until 0.2.0 is tagged (#16).
+- The side panel is navigation only: it is no longer a drop target for file
+  operations (Pin and Trash drops went with the Pinned and Trash sections),
+  highlights no current location and draws no indent guide; the Tree section
+  is gone (the Tree view mode stays). Every drive of the machine is listed,
+  the system disk included.
+
+### Removed
+
+- The 0.1 Recent feed (`recent.toml`, the watches and the scan at start),
+  replaced by the system's recently-used list.
+
 
 ## [0.1.0] - 2026-11-06
 

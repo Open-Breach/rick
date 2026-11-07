@@ -10,15 +10,7 @@ use platform::TrashedItem;
 use runtime::JobRunner;
 use types::{Error, Location, Progress};
 
-use crate::{State, describe, local_path, location_of};
-
-fn needs_selection(ctx: &ActionCtx) -> Availability {
-    if ctx.selection.is_empty() {
-        Availability::Disabled("select something first")
-    } else {
-        Availability::Enabled
-    }
-}
+use crate::{State, describe, is_virtual, local_path, location_of, needs_entries};
 
 /// Sends the selection to the platform trash; hidden where the provider
 /// has no trash (an archive, the Trash view).
@@ -41,8 +33,13 @@ impl Action for Trash {
         })
     }
     fn availability(&self, ctx: &ActionCtx) -> Availability {
+        // In a virtual view the entries are real files elsewhere: Favorites
+        // and Recent trash them, the Trash view hides the action.
+        if is_virtual(ctx) {
+            return needs_entries(ctx);
+        }
         match self.0.needs(&ctx.location, Capabilities::TRASH) {
-            Availability::Enabled => needs_selection(ctx),
+            Availability::Enabled => needs_entries(ctx),
             hidden => hidden,
         }
     }
@@ -169,8 +166,14 @@ impl Action for Delete {
             key: Key::Delete,
         })
     }
+    /// With a selection, in the Trash view too: a trashed item is deleted
+    /// for good through the view's own `remove`.
     fn availability(&self, ctx: &ActionCtx) -> Availability {
-        needs_selection(ctx)
+        if ctx.selection.is_empty() {
+            Availability::Disabled("select something first")
+        } else {
+            Availability::Enabled
+        }
     }
     fn run(
         &self,

@@ -7,7 +7,7 @@ use egui::{Align, Sense};
 use egui_extras::{Column as TableColumn, TableBuilder};
 use ext::{Badge, CellValue, ColumnDef, Decoration};
 use model::{Column, IconSize, SelectionChange, SortDir, Tab, ViewMode};
-use types::{Entry, EntryId, EntryKind, Location};
+use types::{Entry, EntryId, EntryKind};
 
 use crate::dnd::{self, Spring, Target, Zone};
 use crate::format;
@@ -120,13 +120,15 @@ pub fn show(ui: &mut egui::Ui, cx: &mut PaneCx<'_>) {
     {
         dnd::highlight(ui.painter(), ui.visuals(), area);
     }
-    match cx.tab.view {
-        ViewMode::List => {
+    let overview = vfs_rick::Virtual::of(&cx.tab.location).filter(|v| v.is_overview());
+    match (overview, cx.tab.view) {
+        (Some(which), _) => crate::overview::show(ui, cx, which),
+        (None, ViewMode::List) => {
             new_row_strip(ui, cx);
             list(ui, cx);
         }
-        ViewMode::Details | ViewMode::Tree => details(ui, cx),
-        ViewMode::Icons(size) => {
+        (None, ViewMode::Details | ViewMode::Tree) => details(ui, cx),
+        (None, ViewMode::Icons(size)) => {
             new_row_strip(ui, cx);
             icons(ui, cx, size);
         }
@@ -237,11 +239,11 @@ fn row_zone(ui: &egui::Ui, cx: &mut PaneCx<'_>, entry: &Entry, rect: egui::Rect)
     if !cx.dnd.active() {
         return;
     }
-    let target = if entry.kind == EntryKind::Dir {
+    let target = if entry.kind == EntryKind::Dir && !vfs_rick::is_trash(&cx.tab.location) {
         dnd::into_pane(
             cx.tab,
             Target::Folder {
-                to: Location::new(cx.tab.location.provider, entry.path.clone()),
+                to: cx.tab.location_of(entry),
                 device: dnd::device_of(entry.id),
                 spring: Some(Spring::Pane(cx.pane)),
             },
@@ -1026,12 +1028,12 @@ fn interact(ui: &mut egui::Ui, cx: &mut PaneCx<'_>, index: usize, response: &egu
             cx.tab_ui.anchor = Some(id);
         }
     }
-    if response.middle_clicked() && entry.kind == EntryKind::Dir {
-        let location = types::Location::new(
-            cx.tab.location.provider,
-            cx.tab.location.path.join(entry.name.as_bytes()),
-        );
-        cx.requests.push(Request::NewTabAt(location));
+    if response.middle_clicked()
+        && entry.kind == EntryKind::Dir
+        && !vfs_rick::is_trash(&cx.tab.location)
+    {
+        cx.requests
+            .push(Request::NewTabAt(cx.tab.location_of(entry)));
     }
     if response.secondary_clicked() && !selected {
         cx.requests.push(Request::Command(app::Command::Select {

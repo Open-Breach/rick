@@ -109,6 +109,22 @@ pub const UNLINKED: &str = ph::LINK_SIMPLE_BREAK;
 pub const CONTAINING: &str = ph::ARROW_SQUARE_OUT;
 /// Restore from the trash.
 pub const UNTRASH: &str = ph::ARROW_COUNTER_CLOCKWISE;
+/// Favorites.
+pub const STAR: &str = ph::STAR;
+/// This Machine.
+pub const MACHINE: &str = ph::DESKTOP_TOWER;
+/// Cloud.
+pub const CLOUD: &str = ph::CLOUD;
+/// Eject removable media.
+pub const EJECT: &str = ph::EJECT;
+/// A drop the panel refuses.
+pub const REFUSED: &str = ph::PROHIBIT;
+/// Edit a place.
+pub const EDIT: &str = ph::PENCIL_SIMPLE;
+/// Add a connection or an account.
+pub const ADD: &str = ph::PLUS_CIRCLE;
+/// A job waiting for its volume.
+pub const WAITING: &str = ph::HOURGLASS;
 
 /// Line numbers in a text preview.
 pub const LINE_NUMBERS: &str = ph::LIST_NUMBERS;
@@ -140,6 +156,62 @@ pub const ZOOM_IN: &str = ph::MAGNIFYING_GLASS_PLUS;
 pub const ZOOM_OUT: &str = ph::MAGNIFYING_GLASS_MINUS;
 /// A wrapped line's continuation mark in the gutter.
 pub const CONTINUATION: &str = ph::ARROW_ELBOW_DOWN_RIGHT;
+
+/// The Phosphor icons a place can be given, by name, as the Edit… dialogue
+/// offers them: the folder kinds first, then what people keep one click
+/// away. The name is what `places.toml` stores.
+pub const PICKABLE: &[(&str, &str)] = &[
+    ("FOLDER", ph::FOLDER),
+    ("FOLDER_OPEN", ph::FOLDER_OPEN),
+    ("FOLDER_STAR", ph::FOLDER_STAR),
+    ("HOUSE", ph::HOUSE),
+    ("DESKTOP", ph::DESKTOP),
+    ("FILE_TEXT", ph::FILE_TEXT),
+    ("FILES", ph::FILES),
+    ("IMAGE", ph::IMAGE),
+    ("CAMERA", ph::CAMERA),
+    ("MUSIC_NOTES", ph::MUSIC_NOTES),
+    ("FILM_STRIP", ph::FILM_STRIP),
+    ("VIDEO_CAMERA", ph::VIDEO_CAMERA),
+    ("DOWNLOAD_SIMPLE", ph::DOWNLOAD_SIMPLE),
+    ("STAR", ph::STAR),
+    ("HEART", ph::HEART),
+    ("BOOKMARK", ph::BOOKMARK),
+    ("FLAG", ph::FLAG),
+    ("CLOCK_COUNTER_CLOCKWISE", ph::CLOCK_COUNTER_CLOCKWISE),
+    ("TRASH", ph::TRASH),
+    ("BRIEFCASE", ph::BRIEFCASE),
+    ("CODE", ph::CODE),
+    ("TERMINAL", ph::TERMINAL),
+    ("BOOK", ph::BOOK),
+    ("GRADUATION_CAP", ph::GRADUATION_CAP),
+    ("PALETTE", ph::PALETTE),
+    ("GAME_CONTROLLER", ph::GAME_CONTROLLER),
+    ("ARCHIVE", ph::ARCHIVE),
+    ("GEAR", ph::GEAR),
+    ("WRENCH", ph::WRENCH),
+    ("ROCKET", ph::ROCKET),
+    ("LIGHTBULB", ph::LIGHTBULB),
+    ("SHOPPING_CART", ph::SHOPPING_CART),
+    ("GLOBE", ph::GLOBE),
+    ("CLOUD", ph::CLOUD),
+    ("NETWORK", ph::NETWORK),
+    ("DESKTOP_TOWER", ph::DESKTOP_TOWER),
+    ("HARD_DRIVE", ph::HARD_DRIVE),
+    ("HARD_DRIVES", ph::HARD_DRIVES),
+    ("USB", ph::USB),
+    ("DISC", ph::DISC),
+];
+
+/// The glyph of a Phosphor icon name from [`PICKABLE`]; the folder for a
+/// name that is not in the list.
+#[must_use]
+pub fn named(name: &str) -> &'static str {
+    PICKABLE
+        .iter()
+        .find(|(n, _)| *n == name)
+        .map_or(FOLDER, |(_, glyph)| glyph)
+}
 
 /// The glyph for an extension's icon name.
 #[must_use]
@@ -309,6 +381,14 @@ mod tests {
         UNLINKED,
         CONTAINING,
         UNTRASH,
+        STAR,
+        MACHINE,
+        CLOUD,
+        EJECT,
+        REFUSED,
+        EDIT,
+        ADD,
+        WAITING,
     ];
 
     #[test]
@@ -317,12 +397,15 @@ mod tests {
         let text: String = ALL
             .iter()
             .copied()
+            .chain(PICKABLE.iter().map(|(_, glyph)| *glyph))
             .chain(
                 ["a.png", "b.pdf", "c.zip", "d.rs", "e.unknownext", "f"]
                     .iter()
                     .map(|n| by_extension(n)),
             )
             .collect();
+        assert_eq!(named("STAR"), STAR);
+        assert_eq!(named("nope"), FOLDER);
         let mut harness = egui_kittest::Harness::new_ui(|ui| {
             ui.label(&text);
         });

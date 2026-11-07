@@ -1,7 +1,8 @@
-//! Acceptance (0.1 close-out, issue A): the side panel's Recent, Network and
-//! Trash sections, the operations area, Tree view, inline rename and new
-//! entries, the conflict dialogue, search in subdirectories and Open
-//! containing folder, driven through the egui shell with `egui_kittest`.
+//! Acceptance (0.1 close-out, issue A): the operations area, Tree view,
+//! inline rename and new entries, the conflict dialogue, search in
+//! subdirectories and Open containing folder, driven through the egui shell
+//! with `egui_kittest`. The side panel's sections of 0.1 were reworked in
+//! 0.2 milestone 2; their tests live in `side_panel.rs`.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -12,14 +13,14 @@ use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable as _;
 use ext::ActionId;
 use model::{JobState, SelectionChange, ViewMode};
-use platform::{ConfigDir, Fake, Trash as _};
+use platform::{ConfigDir, Fake};
 use tests::local;
 use ui_egui::keys::Intent;
 use ui_egui::{EditKind, EguiHost, RickUi, icons};
 
 /// A harness whose settings live in `config`, so a second one can start
 /// from what the first one saved; `fake` is handed in so a test can prepare
-/// it (volumes) before the app starts.
+/// it (volumes, an unlistable trash) before the app starts.
 fn harness_with(
     start: &Path,
     config: &Path,
@@ -29,8 +30,7 @@ fn harness_with(
     let app = app::App::new(app::Config {
         platform: fake.clone(),
         ui: host.clone(),
-        // The Trash view the side panel's Trash row opens.
-        extensions: vec![Arc::new(ext_vfs_trash::TrashExtension::new())],
+        extensions: Vec::new(),
         config_dir: Some(config.to_path_buf()),
         start: Some(local(start)),
     });
@@ -194,197 +194,6 @@ fn tree() -> tempfile::TempDir {
     fs::write(dir.path().join("sub/inner.txt"), "inner").unwrap_or_else(|e| panic!("{e}"));
     fs::write(dir.path().join("sub/deeper/leaf.txt"), "leaf").unwrap_or_else(|e| panic!("{e}"));
     dir
-}
-
-#[test]
-fn recent_shows_a_touched_file_first_and_survives_a_restart() {
-    let dir = tree();
-    let fake = Arc::new(Fake::new().unwrap_or_else(|e| panic!("{e}")));
-    // The config directory is written at start; inside the listed folder it
-    // would be the first recent entry itself.
-    let config_dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
-    let config = config_dir.path().join("config");
-    let home = fake.home_dir();
-    let touched = &["first.txt", "second.txt", "third.txt"][..tests::bench::runs().max(2)];
-    let last = touched[touched.len() - 1];
-    {
-        let (mut harness, _) = harness_with(dir.path(), &config, fake.clone());
-        harness.get_by_label_contains("Nothing changed recently");
-        // Each touched file is the first row within the budget; at least two
-        // touches, so the order after a restart means something.
-        let mut samples = Vec::new();
-        for (i, name) in touched.iter().enumerate() {
-            if i > 0 {
-                std::thread::sleep(Duration::from_millis(30));
-            }
-            fs::write(home.join(name), name).unwrap_or_else(|e| panic!("{e}"));
-            let started = Instant::now();
-            assert!(
-                step_until(&mut harness, Duration::from_millis(500), |h| {
-                    h.state()
-                        .app()
-                        .model()
-                        .recent
-                        .entries()
-                        .first()
-                        .is_some_and(|e| e.name == *name)
-                }),
-                "{name} is the first row within 500 ms"
-            );
-            samples.push(started.elapsed());
-            harness.get_by_label_contains(name);
-        }
-        tests::bench::record("recent", &samples[..tests::bench::runs()]);
-        settle(&mut harness);
-        let file = config.join(app::RECENT_FILE);
-        assert!(step_until(&mut harness, Duration::from_secs(3), |_| {
-            fs::read_to_string(&file).is_ok_and(|t| t.contains(last))
-        }));
-
-        // A click selects the file in the focused pane; a double-click opens.
-        harness.get_by_label_contains(last).click();
-        harness.step();
-        settle(&mut harness);
-        assert_eq!(location(&harness), home);
-        assert_eq!(selected_names(&harness), [last]);
-    }
-    let (harness, _) = harness_with(dir.path(), &config, fake);
-    let rows: Vec<String> = harness
-        .state()
-        .app()
-        .model()
-        .recent
-        .entries()
-        .iter()
-        .map(|e| e.name.clone())
-        .collect();
-    let newest_first: Vec<&str> = touched.iter().rev().copied().collect();
-    assert_eq!(rows, newest_first, "the same rows after a restart");
-    harness.get_by_label_contains(last);
-}
-
-#[test]
-fn network_lists_a_registered_volume_and_clicking_navigates_there() {
-    let dir = tree();
-    let fake = Arc::new(Fake::new().unwrap_or_else(|e| panic!("{e}")));
-    let mount = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
-    fs::write(mount.path().join("on-the-stick.txt"), "x").unwrap_or_else(|e| panic!("{e}"));
-    fake.add_volume(platform::Volume {
-        name: "STICK".into(),
-        mount_point: mount.path().to_path_buf(),
-        kind: platform::VolumeKind::Removable,
-        total: Some(16 << 30),
-        free: Some(4 << 30),
-    });
-    let config = fake.config_dir();
-    let (mut harness, fake) = harness_with(dir.path(), &config, fake);
-    assert!(step_until(&mut harness, Duration::from_secs(5), |h| {
-        h.state().app().model().volumes.len() == 1
-    }));
-    let row = harness.get_by_label_contains("STICK");
-    row.click();
-    harness.step();
-    settle(&mut harness);
-    assert_eq!(location(&harness), mount.path());
-    harness.get_by_label("on-the-stick.txt");
-    harness.get_by_label_contains("4.0 GiB free of 16.0 GiB");
-
-    // The volume goes away: the section follows on the next poll.
-    fake.remove_volume(mount.path());
-    command(&mut harness, app::Command::RefreshVolumes);
-    assert!(step_until(&mut harness, Duration::from_secs(5), |h| {
-        h.state().app().model().volumes.is_empty()
-    }));
-    harness.get_by_label_contains("No removable media");
-}
-
-/// The Trash row opens `rick://trash` in the focused pane; the view lists
-/// the trashed item with its original location, Restore puts it back and
-/// is undoable, Empty trash asks first and leaves the view empty.
-#[test]
-fn trash_lists_restores_undoes_and_empties() {
-    let dir = tree();
-    let (mut harness, fake) = harness(dir.path());
-    select(&mut harness, "b.txt");
-    run(&mut harness, "core.trash");
-    settle(&mut harness);
-    assert!(!dir.path().join("b.txt").exists());
-
-    // The row in the side panel opens the view.
-    harness
-        .get_by_label(&format!("{} Trash", icons::TRASH))
-        .click();
-    harness.step();
-    settle(&mut harness);
-    assert_eq!(tab(&harness).1.location, ext_vfs_trash::location());
-    assert_eq!(row_names(&harness), ["b.txt"]);
-    // The decorator's column names where it came from.
-    let folder = dir.path().display().to_string();
-    assert!(step_until(&mut harness, Duration::from_secs(5), |h| {
-        let (_, t) = tab(h);
-        t.rows()
-            .next()
-            .and_then(|e| t.decorations.get(&e.id))
-            .is_some_and(|d| {
-                d.cells
-                    .iter()
-                    .any(|(_, v)| *v == ext::CellValue::Text(folder.clone()))
-            })
-    }));
-
-    // Restore from the view; the view empties and the file is back.
-    select(&mut harness, "b.txt");
-    run(&mut harness, "trash.restore");
-    settle(&mut harness);
-    assert!(dir.path().join("b.txt").exists(), "restored");
-    assert!(step_until(&mut harness, Duration::from_secs(5), |h| {
-        row_names(h).is_empty()
-    }));
-    assert_eq!(
-        harness.state().app().undo_label().as_deref(),
-        Some("Restore b.txt")
-    );
-
-    // Undo trashes it again and the view shows it again.
-    harness.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::Z);
-    harness.step();
-    settle(&mut harness);
-    assert!(!dir.path().join("b.txt").exists());
-    assert!(step_until(&mut harness, Duration::from_secs(5), |h| {
-        row_names(h) == ["b.txt"]
-    }));
-
-    // Empty trash asks first, then leaves the view empty.
-    run(&mut harness, "trash.empty");
-    harness.step();
-    assert!(
-        matches!(harness.state().asking(), Some(ui_egui::Ask::Confirm { title, .. }) if title == "Empty trash"),
-        "{:?}",
-        harness.state().asking()
-    );
-    harness.key_press(egui::Key::Enter);
-    harness.step();
-    settle(&mut harness);
-    assert_eq!(fake.list().map(|l| l.len()).ok(), Some(0));
-    assert!(step_until(&mut harness, Duration::from_secs(5), |h| {
-        row_names(h).is_empty()
-    }));
-    // Move to trash is not offered inside the trash.
-    let ctx = harness
-        .state()
-        .app()
-        .action_ctx(pane(&harness), ext::Invocation::ContextMenu)
-        .unwrap_or_else(|| panic!("ctx"));
-    let trash_action = harness
-        .state()
-        .app()
-        .registry()
-        .actions()
-        .iter()
-        .find(|a| a.id() == ActionId("core.trash"))
-        .cloned()
-        .unwrap_or_else(|| panic!("core.trash"));
-    assert_eq!(trash_action.availability(&ctx), ext::Availability::Hidden);
 }
 
 #[test]
@@ -782,14 +591,14 @@ fn the_side_panel_keeps_its_width_under_a_long_name() {
     let before = pane_left(&harness);
     command(
         &mut harness,
-        app::Command::Settings(model::SettingsChange::Pin {
-            items: vec![local(&dir.path().join(&long))],
+        app::Command::PlaceAdd {
+            place: model::Place::new(&long, local(&dir.path().join(&long))),
             at: None,
-        }),
+        },
     );
     harness.step();
     harness.step();
-    // The pinned row and the pane's row both show the name.
+    // The place's row and the pane's row both show the name.
     assert_eq!(harness.query_all_by_label_contains(&long[..20]).count(), 2);
     let after = pane_left(&harness);
     assert!(

@@ -2,6 +2,9 @@
 //! and the breadcrumbs of a [`Location`] on any provider.
 
 use types::{Location, ProviderId, VPath};
+use vfs_rick::{SCHEME, Virtual};
+
+use crate::icons;
 
 /// Whether `b` separates path components.
 fn is_sep(b: u8) -> bool {
@@ -140,7 +143,7 @@ pub struct Crumb {
 /// The breadcrumbs of a location, provider by provider.
 ///
 /// A local path is its segments. A `rick://` location starts with its view,
-/// titled (`Trash` for `/trash`), then the path below it; the root is
+/// titled (`Trash` for `trash`), then the path below it; the root is
 /// `rick://`. An archive location is an OS path with the path inside the
 /// archive appended, so the segments above the archive file are local
 /// folders and open as such, the archive and everything below it stay on
@@ -151,25 +154,34 @@ pub struct Crumb {
 pub fn crumbs(location: &Location) -> Vec<Crumb> {
     let provider = location.provider;
     if provider == ProviderId::RICK {
-        let mut out = Vec::new();
-        let Some(view) = vfs::virt::view_name(&location.path) else {
+        let Some(view) = vfs_rick::view_name(location) else {
             return vec![Crumb {
-                label: vfs::virt::SCHEME.to_owned(),
+                label: SCHEME.to_owned(),
                 location: location.clone(),
             }];
         };
-        let mut title = view.to_owned();
-        if let Some(first) = title.get(..1) {
-            title.replace_range(..1, &first.to_uppercase());
-        }
-        for (i, (label, prefix)) in segments(&location.path).into_iter().enumerate() {
-            if i == 0 {
-                // The leading `/`; the view comes next.
+        let title = Virtual::of(&Location::new(provider, view)).map_or_else(
+            || {
+                let mut title = view.to_owned();
+                if let Some(first) = title.get(..1) {
+                    title.replace_range(..1, &first.to_uppercase());
+                }
+                title
+            },
+            |which| which.title().to_owned(),
+        );
+        let mut out: Vec<Crumb> = Vec::new();
+        for (label, prefix) in segments(&location.path) {
+            if label == "/" {
+                // A leading slash a hand-edited file carries; the view is next.
                 continue;
             }
+            // The crumb's location in the provider's own form, `rick:trash`.
+            let bytes = prefix.as_bytes();
+            let start = bytes.iter().take_while(|b| is_sep(**b)).count();
             out.push(Crumb {
-                label: if i == 1 { title.clone() } else { label },
-                location: Location::new(provider, prefix),
+                label: if out.is_empty() { title.clone() } else { label },
+                location: Location::new(provider, VPath::from_bytes(bytes[start..].to_vec())),
             });
         }
         return out;
@@ -225,9 +237,26 @@ pub fn title_of(location: &Location) -> String {
     if location.provider == ProviderId::RICK {
         return crumbs(location)
             .pop()
-            .map_or_else(|| vfs::virt::SCHEME.to_owned(), |c| c.label);
+            .map_or_else(|| SCHEME.to_owned(), |c| c.label);
     }
     title(&location.path)
+}
+
+/// The glyph in front of a location's title: a folder locally, the
+/// archive glyph inside an archive, the trash's in the Trash view and
+/// below it, the provider's otherwise (a view's own glyph is the shell's
+/// `virtual_icon`).
+#[must_use]
+pub fn location_icon(location: &Location) -> &'static str {
+    match location.provider {
+        ProviderId::LOCAL => icons::FOLDER,
+        ProviderId::ARCHIVE => icons::ARCHIVE,
+        ProviderId::RICK => match vfs_rick::view_name(location) {
+            Some(view) if view == Virtual::Trash.name() => icons::TRASH,
+            _ => icons::PROVIDER,
+        },
+        _ => icons::PROVIDER,
+    }
 }
 
 /// The text of a location in the path bar's edit field: `rick://trash` for
@@ -235,7 +264,8 @@ pub fn title_of(location: &Location) -> String {
 #[must_use]
 pub fn text_of(location: &Location) -> String {
     if location.provider == ProviderId::RICK {
-        return vfs::virt::display(&location.path);
+        let path = location.path.to_string_lossy();
+        return format!("{SCHEME}{}", path.trim_start_matches(['/', '\\']));
     }
     location.path.to_string_lossy().into_owned()
 }
@@ -246,8 +276,9 @@ pub fn text_of(location: &Location) -> String {
 /// archive is a local one when it names an existing folder.
 #[must_use]
 pub fn typed(current: &Location, text: &str) -> Location {
-    if let Some(location) = vfs::virt::parse(text) {
-        return location;
+    if let Some(rest) = text.trim().strip_prefix(SCHEME) {
+        return vfs_rick::parse_uri(text)
+            .unwrap_or_else(|| Location::new(ProviderId::RICK, rest.trim_matches(['/', '\\'])));
     }
     let provider = match current.provider {
         ProviderId::RICK => ProviderId::LOCAL,
@@ -263,12 +294,18 @@ mod crumb_tests {
 
     #[test]
     fn rick_locations_start_with_their_view() {
-        let trash = Location::new(ProviderId::RICK, "/trash");
+        let trash = Location::new(ProviderId::RICK, "trash");
         let c = crumbs(&trash);
         assert_eq!(c.len(), 1);
         assert_eq!(c[0].label, "Trash");
         assert_eq!(c[0].location, trash);
-        let deeper = Location::new(ProviderId::RICK, "/trash/folder");
+        assert_eq!(crumbs(&Location::new(ProviderId::RICK, "/trash")), c);
+        assert_eq!(location_icon(&trash), icons::TRASH);
+        assert_eq!(
+            location_icon(&Location::new(ProviderId::RICK, "favorites")),
+            icons::PROVIDER
+        );
+        let deeper = Location::new(ProviderId::RICK, "trash/folder");
         let c = crumbs(&deeper);
         assert_eq!(c.len(), 2);
         assert_eq!(c[1].label, "folder");
@@ -277,12 +314,15 @@ mod crumb_tests {
         assert_eq!(title_of(&deeper), "folder");
         assert_eq!(title_of(&trash), "Trash");
         assert_eq!(text_of(&trash), "rick://trash");
-        let root = Location::new(ProviderId::RICK, "/");
+        assert_eq!(text_of(&deeper), "rick://trash/folder");
+        assert_eq!(location_icon(&deeper), icons::TRASH);
+        let root = Location::new(ProviderId::RICK, "");
         assert_eq!(crumbs(&root)[0].label, "rick://");
         assert_eq!(
             typed(&trash, "rick://trash/x"),
-            Location::new(ProviderId::RICK, "/trash/x")
+            Location::new(ProviderId::RICK, "trash/x")
         );
+        assert_eq!(typed(&trash, "rick://machine"), Virtual::Machine.location());
         assert_eq!(typed(&trash, "/home").provider, ProviderId::LOCAL);
     }
 

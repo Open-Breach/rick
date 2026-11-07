@@ -25,7 +25,15 @@
 //! A copy or move that would land on an existing name asks through
 //! [`Conflicts`] — skip, overwrite, rename, apply to all, cancel — and waits
 //! for the answer; the application owns the queue and the UI shows the
-//! dialogue.
+//! dialogue. Copy, move and duplicate jobs go through the [`Scheduler`]:
+//! two that share a source or destination volume run one after the other,
+//! jobs on disjoint volumes run in parallel, and a queued job is shown as
+//! *Waiting* for the one it waits for.
+//!
+//! In the virtual locations (`rick://trash` and the other views of
+//! `vfs-rick`) the actions that would write to the location, or operate on
+//! trash entries as if they were files, are hidden; the trash actions are
+//! available there and nowhere else.
 
 #![forbid(unsafe_code)]
 
@@ -37,14 +45,15 @@ mod edit;
 mod open;
 mod pin;
 mod remove;
+mod schedule;
 mod transfer;
 
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use ext::{
-    API_VERSION, Availability, Capabilities, Extension, Manifest, Platforms, Points, Registry,
-    Version,
+    API_VERSION, ActionCtx, Availability, Capabilities, Extension, Manifest, Platforms, Points,
+    Registry, Version,
 };
 use platform::Platform;
 use types::{Entry, Error, ExtId, Location};
@@ -53,7 +62,33 @@ use vfs::Mounts;
 pub use clipboard::{ClipMode, Clipboard};
 pub use conflict::{ConflictWaker, Conflicts};
 pub use pin::{PinStore, pin_command, unpin_command};
+pub use schedule::{Lease, ScheduleWaker, Scheduler, VolumeKey, volume_key, volume_keys};
 pub use transfer::{TransferKind, transfer};
+/// Whether the context's location is a virtual one: a view or an overview
+/// of `vfs-rick`, which no file operation can write to.
+#[must_use]
+pub fn is_virtual(ctx: &ActionCtx) -> bool {
+    ctx.location.provider == vfs_rick::PROVIDER_ID
+}
+
+/// Whether the context stands for the Trash view, whose entries are
+/// trashed items rather than files to operate on.
+#[must_use]
+pub fn is_trash(ctx: &ActionCtx) -> bool {
+    vfs_rick::is_trash(&ctx.location)
+}
+
+/// Enabled with a selection, disabled without one, hidden in the Trash
+/// view, whose entries are not files to operate on.
+fn needs_entries(ctx: &ActionCtx) -> Availability {
+    if is_trash(ctx) {
+        Availability::Hidden
+    } else if ctx.selection.is_empty() {
+        Availability::Disabled("select something first")
+    } else {
+        Availability::Enabled
+    }
+}
 
 /// The built-in extension holding the core operations.
 pub struct Core {
@@ -67,6 +102,7 @@ struct State {
     platform: Arc<dyn Platform>,
     pins: Arc<dyn PinStore>,
     conflicts: Arc<Conflicts>,
+    scheduler: Arc<Scheduler>,
     // Actions run on the app thread one at a time; the lock is for the
     // `Send + Sync` bound, not for contention.
     clipboard: Mutex<Option<Clipboard>>,
@@ -100,13 +136,15 @@ impl State {
 impl Core {
     /// The core operations over `mounts`, trashing and opening through
     /// `platform`, pinning into `pins`, asking about name conflicts through
-    /// `conflicts`.
+    /// `conflicts`, queueing copies and moves per volume through
+    /// `scheduler`.
     #[must_use]
     pub fn new(
         mounts: Arc<Mounts>,
         platform: Arc<dyn Platform>,
         pins: Arc<dyn PinStore>,
         conflicts: Arc<Conflicts>,
+        scheduler: Arc<Scheduler>,
     ) -> Self {
         Self {
             manifest: Manifest {
@@ -123,6 +161,7 @@ impl Core {
                 platform,
                 pins,
                 conflicts,
+                scheduler,
                 clipboard: Mutex::new(None),
             }),
         }

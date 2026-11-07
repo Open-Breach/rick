@@ -12,15 +12,8 @@ use vfs::Mounts;
 
 use crate::clipboard::{ClipMode, Clipboard};
 use crate::conflict::{Conflicts, Landing, Policy};
-use crate::{State, describe, file_name, inside, location_of};
-
-fn needs_selection(ctx: &ActionCtx) -> Availability {
-    if ctx.selection.is_empty() {
-        Availability::Disabled("select something first")
-    } else {
-        Availability::Enabled
-    }
-}
+use crate::schedule::{self, Scheduler};
+use crate::{State, describe, file_name, inside, location_of, needs_entries};
 
 /// Puts the selection on the clipboard for copying.
 pub(crate) struct Copy(pub(crate) Arc<State>);
@@ -42,7 +35,7 @@ impl Action for Copy {
         })
     }
     fn availability(&self, ctx: &ActionCtx) -> Availability {
-        needs_selection(ctx)
+        needs_entries(ctx)
     }
     fn run(
         &self,
@@ -78,7 +71,7 @@ impl Action for Cut {
         })
     }
     fn availability(&self, ctx: &ActionCtx) -> Availability {
-        needs_selection(ctx)
+        needs_entries(ctx)
     }
     fn run(
         &self,
@@ -150,6 +143,7 @@ impl Action for Paste {
                     jobs,
                     Arc::clone(&self.0.mounts),
                     Arc::clone(&self.0.conflicts),
+                    Arc::clone(&self.0.scheduler),
                     format!("Copy {what}"),
                     pairs,
                 );
@@ -160,6 +154,7 @@ impl Action for Paste {
                 let command = MoveCommand {
                     mounts: Arc::clone(&self.0.mounts),
                     conflicts: Arc::clone(&self.0.conflicts),
+                    scheduler: Arc::clone(&self.0.scheduler),
                     pairs,
                     label: format!("Move {what}"),
                 };
@@ -174,6 +169,7 @@ impl Action for Paste {
 pub(crate) struct MoveCommand {
     pub(crate) mounts: Arc<Mounts>,
     pub(crate) conflicts: Arc<Conflicts>,
+    pub(crate) scheduler: Arc<Scheduler>,
     pub(crate) pairs: Vec<(Location, Location)>,
     pub(crate) label: String,
 }
@@ -269,15 +265,19 @@ async fn clear_mismatched_target(
 }
 
 /// Spawns a job that copies every pair in order, through the provider's
-/// fast path, asking about existing names, and returns its handle.
+/// fast path, asking about existing names, after waiting its turn on the
+/// volumes it touches, and returns its handle.
 pub(crate) fn spawn_copies(
     jobs: &JobRunner,
     mounts: Arc<Mounts>,
     conflicts: Arc<Conflicts>,
+    scheduler: Arc<Scheduler>,
     name: String,
     pairs: Vec<(Location, Location)>,
 ) -> runtime::JobHandle<()> {
-    jobs.spawn_pausable(name, move |job| async move {
+    jobs.spawn_pausable(name.clone(), move |job| async move {
+        let keys = schedule::volume_keys(&mounts, &pairs).await;
+        let _lease = scheduler.acquire(&job, &name, keys).await;
         let total = pairs.len() as u64;
         let mut policy = Policy::default();
         for (done, (from, to)) in pairs.iter().enumerate() {
@@ -306,15 +306,18 @@ pub(crate) fn spawn_copies(
 }
 
 /// Spawns a job that moves every pair in order, asking about existing
-/// names.
+/// names, after waiting its turn on the volumes it touches.
 pub(crate) fn spawn_moves(
     jobs: &JobRunner,
     mounts: Arc<Mounts>,
     conflicts: Arc<Conflicts>,
+    scheduler: Arc<Scheduler>,
     name: String,
     pairs: Vec<(Location, Location)>,
 ) {
-    jobs.spawn_pausable(name, move |job| async move {
+    jobs.spawn_pausable(name.clone(), move |job| async move {
+        let keys = schedule::volume_keys(&mounts, &pairs).await;
+        let _lease = scheduler.acquire(&job, &name, keys).await;
         let total = pairs.len() as u64;
         let mut policy = Policy::default();
         for (done, (from, to)) in pairs.iter().enumerate() {
@@ -354,6 +357,7 @@ impl UndoCommand for MoveCommand {
             jobs,
             Arc::clone(&self.mounts),
             Arc::clone(&self.conflicts),
+            Arc::clone(&self.scheduler),
             format!("Undo {}", self.label),
             back,
         );
@@ -365,6 +369,7 @@ impl UndoCommand for MoveCommand {
             jobs,
             Arc::clone(&self.mounts),
             Arc::clone(&self.conflicts),
+            Arc::clone(&self.scheduler),
             self.label.clone(),
             self.pairs.clone(),
         );
@@ -413,7 +418,7 @@ impl Action for Duplicate {
     }
     fn availability(&self, ctx: &ActionCtx) -> Availability {
         match self.0.needs(&ctx.location, Capabilities::WRITE) {
-            Availability::Enabled => needs_selection(ctx),
+            Availability::Enabled => needs_entries(ctx),
             hidden => hidden,
         }
     }
@@ -424,9 +429,15 @@ impl Action for Duplicate {
         _ui: &dyn UiHost,
     ) -> Result<ActionOutcome, Error> {
         let mounts = Arc::clone(&self.0.mounts);
+        let scheduler = Arc::clone(&self.0.scheduler);
         let what = describe(&ctx.selection);
+        let name = format!("Duplicate {what}");
         let sources: Vec<Location> = ctx.selection.iter().map(location_of).collect();
-        let handle = jobs.spawn_named(format!("Duplicate {what}"), move |job| async move {
+        let handle = jobs.spawn_named(name.clone(), move |job| async move {
+            let pairs: Vec<(Location, Location)> =
+                sources.iter().map(|s| (s.clone(), s.clone())).collect();
+            let keys = schedule::volume_keys(&mounts, &pairs).await;
+            let _lease = scheduler.acquire(&job, &name, keys).await;
             let total = sources.len() as u64;
             for (done, from) in sources.iter().enumerate() {
                 job.progress.report(Progress::Items {

@@ -16,7 +16,7 @@ use types::{
     Attrs, CancelToken, Entry, EntryId, EntryKind, Error, ExtId, Location, ProviderId, VPath,
 };
 
-use crate::{ID, VIEW, location};
+use crate::{ID, VIEW, is_view, location, view_path};
 
 /// The decorator's column: the folder an item was trashed from.
 pub const ORIGINAL_COLUMN: ColumnId = ColumnId("trash.original");
@@ -139,12 +139,7 @@ fn target(loc: &Location) -> Result<Target, Error> {
     if loc.provider != ProviderId::RICK {
         return Err(Error::Unsupported("location belongs to another provider"));
     }
-    let root = location();
-    let rest = loc
-        .path
-        .as_bytes()
-        .strip_prefix(root.path.as_bytes())
-        .ok_or(Error::NotFound)?;
+    let rest = view_path(loc).ok_or(Error::NotFound)?;
     let mut parts = rest
         .split(|b| matches!(b, b'/' | b'\\'))
         .filter(|p| !p.is_empty());
@@ -509,7 +504,7 @@ impl Decorator for TrashDecorator {
     }
 
     fn applies_to(&self, loc: &Location) -> bool {
-        *loc == location()
+        is_view(loc)
     }
 
     fn columns(&self) -> &[ColumnDef] {

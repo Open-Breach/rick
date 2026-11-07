@@ -58,7 +58,7 @@ serves a virtual location registers it with `reg.view("name", provider)`
 the config directory, the dialogues) takes `reg.platform()`, which the host
 lends and the tests fill with a `Fake`. Then one line declares the entry
 point; the macro carries the `#[export_name]` allowance, so the crate keeps
-`#![deny(unsafe_code)]` (QUESTIONS.md 82, 91):
+`#![deny(unsafe_code)]` (QUESTIONS.md 82, 99):
 
 ```rust
 #![deny(unsafe_code)]

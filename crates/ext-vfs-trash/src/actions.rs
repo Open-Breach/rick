@@ -34,7 +34,7 @@ pub fn all(provider: &Arc<TrashProvider>) -> Vec<Arc<dyn Action>> {
 /// Whether the context is the view itself: the actions are hidden anywhere
 /// else, inside a trashed folder included.
 fn in_view(ctx: &ActionCtx) -> bool {
-    ctx.location == crate::location()
+    crate::is_view(&ctx.location)
 }
 
 /// The name an item had where it came from.

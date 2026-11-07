@@ -14,7 +14,7 @@ use ext::{
 use runtime::JobRunner;
 use types::{Error, Location};
 
-use crate::{State, describe, location_of};
+use crate::{State, describe, is_trash, location_of};
 
 /// The side panel's Pinned list, as the pin actions see it. The application
 /// owns the list and persists it; it hands the actions this view.
@@ -157,7 +157,9 @@ impl Action for Pin {
         None
     }
     fn availability(&self, ctx: &ActionCtx) -> Availability {
-        if ctx.selection.is_empty() {
+        if is_trash(ctx) {
+            Availability::Hidden
+        } else if ctx.selection.is_empty() {
             Availability::Disabled("select something first")
         } else if all_pinned(&self.0, ctx) {
             // Unpin takes its place.
@@ -197,7 +199,7 @@ impl Action for Unpin {
         None
     }
     fn availability(&self, ctx: &ActionCtx) -> Availability {
-        if all_pinned(&self.0, ctx) {
+        if !is_trash(ctx) && all_pinned(&self.0, ctx) {
             Availability::Enabled
         } else {
             Availability::Hidden

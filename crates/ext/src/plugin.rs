@@ -11,7 +11,7 @@
 //! [`plugin!`](crate::plugin!): the host loads the library, calls it with a
 //! [`Registry`] and reads a [`Status`] back. The crate's name is in the
 //! symbol so two plugins compiled into one binary (the tests, a build with
-//! several plugin features on) do not clash (QUESTIONS.md 91). Inside,
+//! several plugin features on) do not clash (QUESTIONS.md 99). Inside,
 //! [`register`] builds the extension, lets the registry load it and catches
 //! any panic, so a plugin that fails to register is reported and never
 //! takes the host down.

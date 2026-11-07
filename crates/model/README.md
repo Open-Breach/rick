@@ -5,9 +5,11 @@ plain data: every window with its geometry, side panel and dock tree of
 panes, each pane's tabs in strip order, and per tab the location and history,
 the listing with its sort, group, filter and selection, the view mode with
 the tree view's expanded folders and the scroll offset, the job table every
-window shares, the side panel's data (recent entries, volumes, folder
-tree), the name conflicts jobs wait on, and the settings snapshot, with the
-pinned locations, the drag and the search settings among them. It turns
+window shares (with a job's *Waiting* state when it queues behind another on
+its volume), the side panel's data (the Places list, the mounted volumes,
+the cloud providers' rows, the trash's count), the name conflicts jobs wait
+on, and the settings snapshot, with the pinned locations, the drag and the
+search settings among them. It turns
 itself into the `Session` that `session.toml` and the saved layouts hold, and
 is rebuilt from one. It knows how to apply a listing batch or a filesystem
 change and how to derive the visible, sorted, grouped rows, but it performs

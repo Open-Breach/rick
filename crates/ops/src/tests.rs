@@ -13,7 +13,7 @@ use types::{Entry, Location};
 use vfs::Mounts;
 use vfs_local::LocalProvider;
 
-use super::{ClipMode, Conflicts, Core, PinStore, TransferKind};
+use super::{ClipMode, Conflicts, Core, PinStore, Scheduler, TransferKind};
 
 /// A host whose answers the test scripts.
 #[derive(Default)]
@@ -76,6 +76,7 @@ struct Harness {
     fake: Arc<Fake>,
     pins: Arc<Pins>,
     conflicts: Arc<Conflicts>,
+    scheduler: Arc<Scheduler>,
     mounts: Arc<Mounts>,
     registry: Registry,
     core_clipboard: Arc<dyn Fn() -> Option<super::Clipboard> + Send + Sync>,
@@ -90,11 +91,13 @@ fn harness() -> Harness {
     mounts.mount(Arc::new(LocalProvider::new(fake.clone())));
     let pins = Arc::new(Pins::default());
     let conflicts = Conflicts::new();
+    let scheduler = Scheduler::new();
     let core = Arc::new(Core::new(
         Arc::clone(&mounts),
         fake.clone(),
         pins.clone(),
         Arc::clone(&conflicts),
+        Arc::clone(&scheduler),
     ));
     let mut registry = Registry::new();
     registry.load(&*core).unwrap_or_else(|e| panic!("{e}"));
@@ -104,6 +107,7 @@ fn harness() -> Harness {
         fake,
         pins,
         conflicts,
+        scheduler,
         mounts,
         registry,
         core_clipboard: Arc::new(move || clip.clipboard()),
@@ -465,6 +469,7 @@ fn every_action_has_an_id_label_and_core_group() {
         h.fake.clone(),
         h.pins.clone(),
         Arc::clone(&h.conflicts),
+        Arc::clone(&h.scheduler),
     );
     assert_eq!(core.manifest().id, types::ExtId("core"));
     assert!(format!("{core:?}").contains("core"));
@@ -570,6 +575,7 @@ fn transfer_moves_with_undo_and_copies_without() {
         &h.jobs,
         Arc::clone(&h.mounts),
         Arc::clone(&h.conflicts),
+        Arc::clone(&h.scheduler),
         &[
             tests_local(&src.join("a.txt")),
             tests_local(&src.join("folder")),
@@ -596,6 +602,7 @@ fn transfer_moves_with_undo_and_copies_without() {
         &h.jobs,
         Arc::clone(&h.mounts),
         Arc::clone(&h.conflicts),
+        Arc::clone(&h.scheduler),
         &[tests_local(&src.join("a.txt"))],
         &tests_local(&dst),
         TransferKind::Copy,
@@ -611,6 +618,7 @@ fn transfer_moves_with_undo_and_copies_without() {
             &h.jobs,
             Arc::clone(&h.mounts),
             Arc::clone(&h.conflicts),
+            Arc::clone(&h.scheduler),
             &[],
             &tests_local(&dst),
             TransferKind::Copy,
@@ -859,4 +867,82 @@ fn open_containing_folder_is_available_away_from_the_selection_folder() {
         ),
         ActionOutcome::Done
     ));
+}
+
+/// In the Trash view the file actions are hidden and Delete permanently
+/// stays (the trash plugin's own actions join it there); in another virtual
+/// location the writing actions are hidden and the rest work on the real
+/// entries listed there.
+#[test]
+fn virtual_locations_hide_the_actions_that_do_not_apply() {
+    let h = harness();
+    let dir = h.dir.path().join("d");
+    fs::create_dir_all(&dir).unwrap_or_else(|e| panic!("{e}"));
+    write(&dir.join("one.txt"), "1");
+    let entries = h.entries(&[&dir.join("one.txt")]);
+    let trash_ctx = ActionCtx {
+        pane: PaneId(1),
+        location: vfs_rick::trash_location(),
+        selection: entries.clone(),
+        invoked_from: Invocation::ContextMenu,
+    };
+    for hidden in [
+        "core.copy",
+        "core.cut",
+        "core.paste",
+        "core.duplicate",
+        "core.rename",
+        "core.trash",
+        "core.new_file",
+        "core.new_folder",
+        "core.copy_path",
+        "core.reveal",
+        "core.open_default",
+        "core.pin",
+        "core.unpin",
+    ] {
+        assert_eq!(
+            h.action(hidden).availability(&trash_ctx),
+            Availability::Hidden,
+            "{hidden} in the trash"
+        );
+    }
+    assert_eq!(
+        h.action("core.delete").availability(&trash_ctx),
+        Availability::Enabled,
+        "Delete permanently goes through the view's own remove"
+    );
+    let favorites_ctx = ActionCtx {
+        pane: PaneId(1),
+        location: vfs_rick::Virtual::Favorites.location(),
+        selection: entries,
+        invoked_from: Invocation::ContextMenu,
+    };
+    for hidden in [
+        "core.paste",
+        "core.rename",
+        "core.new_file",
+        "core.new_folder",
+    ] {
+        assert_eq!(
+            h.action(hidden).availability(&favorites_ctx),
+            Availability::Hidden,
+            "{hidden} in Favorites"
+        );
+    }
+    for shown in [
+        "core.copy",
+        "core.open_default",
+        "core.copy_path",
+        "core.pin",
+        "core.trash",
+    ] {
+        assert_eq!(
+            h.action(shown).availability(&favorites_ctx),
+            Availability::Enabled,
+            "{shown} in Favorites"
+        );
+    }
+    assert!(super::is_virtual(&favorites_ctx));
+    assert!(!super::is_trash(&favorites_ctx));
 }

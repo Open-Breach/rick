@@ -613,7 +613,13 @@ fn both_plugins_load_through_the_host() {
         config_dir: Some(fake.config_dir()),
         start: Some(local(dir.path())),
     });
-    assert!(app.mounts().view("trash").is_some());
+    assert!(
+        app.registry()
+            .views()
+            .iter()
+            .any(|(name, _)| name == "trash"),
+        "the trash view is registered for the rick provider to serve"
+    );
     assert!(app.mounts().provider(ProviderId::ARCHIVE).is_some());
     assert!(
         app.registry()

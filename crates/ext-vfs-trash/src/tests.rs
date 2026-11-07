@@ -135,7 +135,11 @@ fn the_extension_needs_the_platform_and_registers_the_view() {
         h.registry.points(),
         Points::PROVIDER | Points::DECORATOR | Points::ACTION
     );
-    assert_eq!(location(), Location::new(ProviderId::RICK, "/trash"));
+    assert_eq!(location(), Location::new(ProviderId::RICK, "trash"));
+    assert!(is_view(&Location::new(ProviderId::RICK, "/trash")));
+    assert!(!is_view(&Location::new(ProviderId::RICK, "trash/x")));
+    assert!(!is_view(&Location::new(ProviderId::RICK, "trashed")));
+    assert!(!is_view(&Location::new(ProviderId::LOCAL, "trash")));
     assert_eq!(h.view().id(), ProviderId::RICK);
     assert_eq!(h.view().capabilities(&location()), Capabilities::empty());
 
@@ -240,7 +244,7 @@ fn the_view_lists_trashed_items_browses_a_folder_reads_and_deletes() {
         Err(Error::Unsupported(_))
     ));
     assert!(matches!(
-        runtime::block_on(view.create_dir(&Location::new(ProviderId::RICK, "/trash/new"))),
+        runtime::block_on(view.create_dir(&Location::new(ProviderId::RICK, "trash/new"))),
         Err(Error::Unsupported(_))
     ));
     assert!(matches!(
@@ -255,7 +259,7 @@ fn the_view_lists_trashed_items_browses_a_folder_reads_and_deletes() {
         Err(Error::NotFound)
     ));
     assert!(matches!(
-        runtime::block_on(view.stat(&Location::new(ProviderId::LOCAL, "/trash"))),
+        runtime::block_on(view.stat(&Location::new(ProviderId::LOCAL, "trash"))),
         Err(Error::Unsupported(_))
     ));
 }

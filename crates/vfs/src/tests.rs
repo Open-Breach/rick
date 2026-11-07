@@ -281,17 +281,12 @@ fn mounts_route_by_provider_id() {
         mounts.resolve(&loc("b", "/")),
         Err(Error::Unsupported(_))
     ));
-    let mut ids = mounts.ids();
-    ids.sort();
-    assert_eq!(ids, [ProviderId("a"), ProviderId::RICK]);
+    assert_eq!(mounts.ids(), [ProviderId("a")]);
     assert!(format!("{mounts:?}").contains("ids"));
 
     let mut registry = ext::Registry::new();
     registry.provider(Memory::new("c"));
-    let from_registry = Mounts::from_registry(&registry);
-    let mut ids = from_registry.ids();
-    ids.sort();
-    assert_eq!(ids, [ProviderId("c"), ProviderId::RICK]);
+    assert_eq!(Mounts::from_registry(&registry).ids(), [ProviderId("c")]);
 }
 
 #[test]

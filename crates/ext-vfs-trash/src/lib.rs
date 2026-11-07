@@ -40,10 +40,33 @@ pub const ID: ExtId = ExtId("vfs-trash");
 /// The view's name: `rick://trash`.
 pub const VIEW: &str = "trash";
 
-/// The location of the view: `rick://trash`.
+/// The location of the view: `rick://trash`, the path being the bare
+/// view name as the `rick` provider writes its locations.
 #[must_use]
 pub fn location() -> Location {
-    Location::new(ProviderId::RICK, format!("/{VIEW}"))
+    Location::new(ProviderId::RICK, VIEW)
+}
+
+/// Whether `loc` is the view itself (a leading slash, as a hand-edited
+/// file might carry, is tolerated).
+#[must_use]
+pub fn is_view(loc: &Location) -> bool {
+    loc.provider == ProviderId::RICK && view_path(loc) == Some(&[][..])
+}
+
+/// The path below the view, with its separators: empty for the view
+/// itself, `None` for a location outside it.
+pub(crate) fn view_path(loc: &Location) -> Option<&[u8]> {
+    let bytes = loc.path.as_bytes();
+    let start = bytes
+        .iter()
+        .take_while(|b| matches!(b, b'/' | b'\\'))
+        .count();
+    let rest = bytes[start..].strip_prefix(VIEW.as_bytes())?;
+    if rest.first().is_some_and(|b| !matches!(b, b'/' | b'\\')) {
+        return None;
+    }
+    Some(rest)
 }
 
 /// The extension: the view, its decorator and the trash actions.

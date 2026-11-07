@@ -10,7 +10,10 @@ good, everything else is `Unsupported` and the capabilities say so. A
 Decorator adds the *Original location* column to the view, and the "Trash"
 action group holds Restore, Restore trash items and Empty trash, available
 in the view only; Restore is undoable as a trash of the restored entries.
-Nothing watches the trash: `watch` is `Unsupported` and the kernel polls.
+Its locations are the `rick` provider's, `rick:trash` and `rick:trash/<name>`,
+which `vfs-rick` routes to it. Nothing watches the trash: `watch` is
+`Unsupported`; the application re-lists the view after every operation and
+the kernel polls a trashed folder browsed below it.
 It is a plugin (`plugins/vfs-trash/`) that depends on `ext` and `types`
 only; `rick` (behind `vfs-trash`) and `tests` link it, and the plugin host
 loads it.
