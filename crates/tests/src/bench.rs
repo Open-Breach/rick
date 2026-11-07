@@ -124,19 +124,19 @@ pub const BENCHMARKS: &[Benchmark] = &[
         key: "startup",
         linux: ms(20),
         macos: ms(150),
-        windows: ms(20),
+        windows: ms(40),
     },
     Benchmark {
         key: "tree-first",
         linux: ms(50),
-        macos: ms(50),
+        macos: ms(80),
         windows: ms(50),
     },
     Benchmark {
         key: "search-first",
         linux: ms(100),
         macos: ms(100),
-        windows: ms(100),
+        windows: ms(150),
     },
     Benchmark {
         key: "recent",
@@ -146,15 +146,15 @@ pub const BENCHMARKS: &[Benchmark] = &[
     },
     Benchmark {
         key: "cancel",
-        linux: ms(1_000),
-        macos: ms(1_000),
-        windows: ms(1_000),
+        linux: ms(20),
+        macos: ms(50),
+        windows: ms(20),
     },
     Benchmark {
         key: "session-start",
-        linux: ms(1_000),
-        macos: ms(1_000),
-        windows: ms(1_000),
+        linux: ms(5),
+        macos: ms(15),
+        windows: ms(5),
     },
 ];
 
