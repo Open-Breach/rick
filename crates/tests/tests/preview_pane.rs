@@ -827,6 +827,18 @@ fn the_git_badge_appears_only_inside_a_work_tree() {
     extensions.push(Arc::new(ext_git::GitExtension::new()));
     let mut harness = window(&fake, &repo, egui::vec2(1200.0, 700.0), 320.0, extensions);
     select(&mut harness, "tracked.txt");
+    // The Git section arrives with the decoration job, which may land after
+    // the preview's first frame.
+    let started = Instant::now();
+    while !harness
+        .state()
+        .preview_badges()
+        .iter()
+        .any(|b| b.id == "git")
+        && started.elapsed() < Duration::from_secs(10)
+    {
+        harness.step();
+    }
     let badges: Vec<&str> = harness
         .state()
         .preview_badges()
