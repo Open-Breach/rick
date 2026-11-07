@@ -97,7 +97,7 @@ jobs:
       # fixture within 50 ms, the first search batch within 100 ms, and the
       # 1 GiB sparse copy's row with pause and cancel. Linux asserts the
       # budgets; the others print.
-      - run: cargo test -p tests --release --test closeout -- --ignored --nocapture
+      - run: cargo test -p tests --release --test closeout -- --ignored --nocapture --test-threads=1
         continue-on-error: ${{ runner.os != 'Linux' }}
         env: { TMP: "${{ runner.temp }}", TEMP: "${{ runner.temp }}", TMPDIR: "${{ runner.temp }}" }
       # Screenshots of the chrome for the pull request, through wgpu on the
