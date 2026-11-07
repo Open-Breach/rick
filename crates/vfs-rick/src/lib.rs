@@ -380,7 +380,10 @@ impl RickProvider {
     async fn list_favorites(&self) -> Result<Vec<Entry>, Error> {
         let mut out = Vec::new();
         for pinned in self.favorites.pinned() {
-            out.push(favorite_entry(&self.mounts, &pinned).await);
+            let mut entry = favorite_entry(&self.mounts, &pinned).await;
+            // What the user pinned is wanted whatever its attributes.
+            entry.attrs.remove(Attrs::HIDDEN);
+            out.push(entry);
         }
         Ok(out)
     }
@@ -396,6 +399,8 @@ impl RickProvider {
                     let vpath = platform::paths::from_path(&item.path);
                     let mut entry = vfs_local::entry_at(&item.path, &vpath).ok()?;
                     entry.accessed = Some(item.used_at);
+                    // What the system remembers is wanted whatever its attributes.
+                    entry.attrs.remove(Attrs::HIDDEN);
                     Some(entry)
                 })
                 .collect())
@@ -431,6 +436,8 @@ impl RickProvider {
                 .map(|v| {
                     let mut entry = local_dir_entry(&v.mount_point, Some(v.name.clone()));
                     entry.size = v.total;
+                    // A mount root under a dot directory is no hidden file.
+                    entry.attrs.remove(Attrs::HIDDEN);
                     entry
                 })
                 .collect())

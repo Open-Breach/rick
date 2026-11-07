@@ -1,6 +1,8 @@
 //! Drag and drop of entries: the drag state, the drop targets the widgets
 //! register each frame, the move-or-copy rule, spring-loading, the ghost
-//! with its indicator, and the move/copy/cancel prompt.
+//! with its indicator, and the move/copy/cancel prompt. The side panel is
+//! never a file-operation target: a folder dropped on its Places list
+//! becomes a place, a file is refused anywhere in it.
 //!
 //! The widgets never decide anything themselves. A row that is dragged asks
 //! the shell to [`start`](Dnd::start) a drag; every target that is drawn
@@ -16,8 +18,7 @@ use std::path::PathBuf;
 
 use app::{App, Command, TransferMode};
 use egui::{Color32, Id, LayerId, Order, Pos2, Rect, Stroke, Vec2, pos2, vec2};
-use ext::{ActionCtx, ActionId, Invocation};
-use model::{AfterDrag, PaneId, Tab, TabId};
+use model::{AfterDrag, PaneId, Place, Tab, TabId};
 use types::{Entry, EntryId, EntryKind, Location};
 
 use crate::shell::{Request, TabUi};
@@ -30,10 +31,10 @@ pub enum Indicator {
     Move,
     /// Copy into the target folder.
     Copy,
-    /// Pin to the side panel.
-    Pin,
-    /// Move to the trash.
-    Trash,
+    /// Become a place in the side panel's Places list.
+    Place,
+    /// Nothing: the side panel does not take this drop.
+    Refused,
 }
 
 impl Indicator {
@@ -43,8 +44,8 @@ impl Indicator {
         match self {
             Self::Move => icons::FORWARD,
             Self::Copy => icons::PLUS,
-            Self::Pin => icons::PIN,
-            Self::Trash => icons::TRASH,
+            Self::Place => icons::PIN,
+            Self::Refused => icons::REFUSED,
         }
     }
 }
@@ -74,13 +75,15 @@ pub enum Target {
     },
     /// Nothing, silently: a file row, or a folder the items are in already.
     NoOp,
-    /// Pin at this index of the Pinned list, or at the end.
-    Pin {
+    /// Every dragged folder becomes a place at this index of the Places
+    /// list, or at the end; a drag with a file in it is refused.
+    Place {
         /// The index, `None` for the end.
         at: Option<usize>,
     },
-    /// Move to trash through the action.
-    Trash,
+    /// Nothing, with the not-allowed cursor: the side panel outside its
+    /// Places list, or files over the Places list.
+    Refused,
 }
 
 /// A drop target drawn this frame.
@@ -162,6 +165,29 @@ impl Source {
 
     fn is_external(&self) -> bool {
         matches!(self, Self::External { .. })
+    }
+
+    /// Whether every dragged item is a folder; a drop on the Places list
+    /// takes only those. An external path is examined on the disk.
+    fn folders_only(&self) -> bool {
+        match self {
+            Self::Internal { items, .. } => items.iter().all(|e| e.kind == EntryKind::Dir),
+            Self::External { paths } => paths.iter().all(|p| p.is_dir()),
+        }
+    }
+
+    /// The places the dragged folders would become, titled by their names.
+    fn places(&self) -> Vec<Place> {
+        self.locations()
+            .into_iter()
+            .map(|location| {
+                let title = location.path.file_name().map_or_else(
+                    || location.path.to_string(),
+                    |n| String::from_utf8_lossy(n).into_owned(),
+                );
+                Place::new(title, location)
+            })
+            .collect()
     }
 }
 
@@ -290,6 +316,12 @@ impl Dnd {
         self.prompt.is_some()
     }
 
+    /// Whether every dragged item is a folder; `None` without a drag.
+    #[must_use]
+    pub fn folders_only(&self) -> Option<bool> {
+        self.drag.as_ref().map(|d| d.source.folders_only())
+    }
+
     /// Starts a drag of `source`; `right_button` asks on drop.
     pub fn start(&mut self, source: Source, right_button: bool) {
         if self.suppressed || source.count() == 0 {
@@ -315,10 +347,9 @@ impl Dnd {
         let Some(drag) = &self.drag else {
             return false;
         };
-        let highlight = drag
-            .target
-            .as_ref()
-            .is_some_and(|(key, target)| *key == zone.key && *target != Target::NoOp);
+        let highlight = drag.target.as_ref().is_some_and(|(key, target)| {
+            *key == zone.key && !matches!(target, Target::NoOp | Target::Refused)
+        });
         self.zones.push(zone);
         highlight
     }
@@ -503,6 +534,9 @@ impl Dnd {
         drag.indicator = resolved
             .as_ref()
             .and_then(|(_, t)| indicator_for(&drag.source, t, modifiers, drag.right_button));
+        if drag.indicator == Some(Indicator::Refused) {
+            ctx.set_cursor_icon(egui::CursorIcon::NotAllowed);
+        }
         drag.target.clone_from(&resolved);
 
         // Spring-loading: the same key for the delay.
@@ -549,8 +583,9 @@ impl Dnd {
         let Some(target) = target else {
             return;
         };
+        let _ = app;
         match target {
-            Target::NoOp => {}
+            Target::NoOp | Target::Refused => {}
             Target::Folder { to, device, .. } => {
                 let mode = mode_for(&drag.source, device, modifiers, drag.right_button);
                 if mode == TransferMode::Ask {
@@ -563,25 +598,12 @@ impl Dnd {
                 }
                 requests.push(Request::Command(transfer_command(&drag.source, to, mode)));
             }
-            Target::Pin { at } => {
-                requests.push(Request::Command(Command::Pin {
-                    items: drag.source.locations(),
-                    at,
-                }));
-            }
-            Target::Trash => {
-                if let Source::Internal { from, tab, items } = &drag.source
-                    && let Some(tab) = app.model().tab(*tab)
-                {
-                    requests.push(Request::RunAction {
-                        action: ActionId("core.trash"),
-                        ctx: ActionCtx {
-                            pane: *from,
-                            location: tab.location.clone(),
-                            selection: items.clone(),
-                            invoked_from: Invocation::Menu,
-                        },
-                    });
+            Target::Place { at } => {
+                // Each folder in turn, after the one before it.
+                let mut at = at;
+                for place in drag.source.places() {
+                    requests.push(Request::Command(Command::PlaceAdd { place, at }));
+                    at = at.map(|i| i + 1);
                 }
             }
         }
@@ -652,8 +674,8 @@ fn indicator_for(
                 }
             })
         }
-        Target::Pin { .. } => Some(Indicator::Pin),
-        Target::Trash => Some(Indicator::Trash),
+        Target::Place { .. } => Some(Indicator::Place),
+        Target::Refused => Some(Indicator::Refused),
         Target::NoOp => None,
     }
 }
@@ -770,12 +792,14 @@ fn smallest_zone(zones: &[Zone], pos: Pos2) -> Option<&Zone> {
 }
 
 /// The zone's target for this source: a folder the items would not move
-/// by going into, or the trash for items of no pane, is a no-op.
+/// by going into, or a virtual location, is a no-op; the Places list takes
+/// folders only and refuses a drag with a file in it.
 fn resolve(source: &Source, target: &Target) -> Target {
     match target {
         Target::Folder { to, .. } => {
             let locations = source.locations();
-            if locations.is_empty()
+            if to.provider == vfs_rick::PROVIDER_ID
+                || locations.is_empty()
                 || locations
                     .iter()
                     .all(|source| app::transfer_is_noop(source, to))
@@ -785,7 +809,7 @@ fn resolve(source: &Source, target: &Target) -> Target {
                 target.clone()
             }
         }
-        Target::Trash if source.is_external() => Target::NoOp,
+        Target::Place { .. } if !source.folders_only() => Target::Refused,
         other => other.clone(),
     }
 }
@@ -993,13 +1017,51 @@ mod tests {
             "own subtree"
         );
         assert_eq!(resolve(&dir, &folder("/b")), folder("/b"));
-        assert_eq!(resolve(&dir, &Target::Trash), Target::Trash);
+        assert_eq!(
+            resolve(&dir, &Target::Place { at: Some(1) }),
+            Target::Place { at: Some(1) },
+            "a folder becomes a place"
+        );
+        let file = internal(vec![entry(2, "/a/x.txt", EntryKind::File)]);
+        assert_eq!(
+            resolve(&file, &Target::Place { at: None }),
+            Target::Refused,
+            "a file is refused"
+        );
+        let mixed = internal(vec![
+            entry(1, "/a/sub", EntryKind::Dir),
+            entry(2, "/a/x.txt", EntryKind::File),
+        ]);
+        assert_eq!(
+            resolve(&mixed, &Target::Place { at: None }),
+            Target::Refused
+        );
+        assert_eq!(resolve(&dir, &Target::Refused), Target::Refused);
+        let virtual_view = Target::Folder {
+            to: vfs_rick::Virtual::Favorites.location(),
+            device: None,
+            spring: None,
+        };
+        assert_eq!(
+            resolve(&dir, &virtual_view),
+            Target::NoOp,
+            "no drop into a view"
+        );
         let outside = Source::External {
             paths: vec![PathBuf::from("/a/x.txt")],
         };
-        assert_eq!(resolve(&outside, &Target::Trash), Target::NoOp);
+        assert_eq!(
+            resolve(&outside, &Target::Place { at: None }),
+            Target::Refused,
+            "a path that is no folder on the disk"
+        );
         assert_eq!(resolve(&outside, &folder("/a")), Target::NoOp);
         assert_eq!(resolve(&outside, &folder("/b")), folder("/b"));
+        assert_eq!(
+            dir.places()[0].title,
+            "sub",
+            "the place is titled by the folder's name"
+        );
         let other = Location::new(ProviderId("other"), "/a");
         assert_eq!(
             resolve(

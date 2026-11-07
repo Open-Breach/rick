@@ -5,9 +5,9 @@
 //! [`Pane`]'s tabs, and per [`Tab`] the location with its [`History`], the
 //! [`Listing`] with its sort, group, filter and selection, the [`ViewMode`]
 //! with the [`Tree`] state of expanded folders and the scroll offset, plus
-//! the job table, the side panel's data ([`Recent`], the volumes, the
-//! [`TrashView`], the [`FolderTree`]), the name conflicts jobs wait on and
-//! the [`Settings`] snapshot. All windows share the one model, so a job
+//! the job table, the side panel's data (the [`Places`], the volumes, the
+//! cloud rows, the [`TrashView`]), the name conflicts jobs wait on and the
+//! [`Settings`] snapshot. All windows share the one model, so a job
 //! started in one shows in every other. It applies listing batches and
 //! filesystem changes and derives the visible rows; it performs no I/O.
 //! `app` mutates it in response to `Command`s; the UI only reads it.
@@ -28,7 +28,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 pub use ext::PaneId;
 use ext::{CellValue, Decoration, FsChange};
 pub use listing::{Column, Group, IconSize, Listing, Sort, SortDir, ViewMode, ViewSpec, type_of};
-pub use panel::{RECENT_LIMIT, Recent, TrashView};
+pub use panel::{DEFAULT_PLACE_ICON, Place, Places, TrashView};
 pub use platform::{TrashedItem, Volume, VolumeKind};
 use serde::{Deserialize, Serialize};
 pub use session::{
@@ -38,8 +38,8 @@ pub use settings::{
     AfterDrag, Density, Drag, LAST_SESSION, PanelSide, Preview, Search, Section, SessionSettings,
     Settings, SettingsChange, SidePanel, SidePanelChange, TextPreview, Theme, parse_location,
 };
-pub use tree::{FolderTree, Tree, TreeRow};
-use types::{Conflict, ConflictId, Entry, EntryId, JobId, Location, Progress, VPath};
+pub use tree::{Tree, TreeRow};
+use types::{Conflict, ConflictId, Entry, EntryId, JobId, Location, Progress, ProviderId};
 
 /// Identity of a tab, unique within one model.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -383,6 +383,7 @@ impl Tab {
     }
 
     /// The visible rows in display order.
+    #[must_use]
     pub fn rows(&self) -> Box<dyn Iterator<Item = &Entry> + '_> {
         if self.is_tree() {
             Box::new(
@@ -422,10 +423,12 @@ impl Tab {
         self.listing.get(id).or_else(|| self.tree.child(id))
     }
 
-    /// The location of an entry of this tab.
+    /// The location of an entry of this tab: on the tab's provider, or on
+    /// the entry's own where the two differ, as in a virtual view that lists
+    /// entries of other providers.
     #[must_use]
     pub fn location_of(&self, entry: &Entry) -> Location {
-        Location::new(self.location.provider, entry.path.clone())
+        Location::new(entry.id.provider, entry.path.clone())
     }
 
     /// Rebuilds the tree rows when the tab is in Tree view.
@@ -510,6 +513,9 @@ pub struct JobInfo {
 /// Lifecycle of a job in the table.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum JobState {
+    /// Queued behind another job on a volume it shares with it; the text is
+    /// that job's name.
+    Waiting(String),
     /// Still running, with its latest progress.
     Running(Progress),
     /// Finished well.
@@ -550,14 +556,21 @@ pub struct Model {
     /// Name conflicts jobs wait on, oldest first; the UI asks about the
     /// first.
     pub conflicts: Vec<Conflict>,
-    /// Files and folders changed recently, newest first.
-    pub recent: Recent,
-    /// The mounted volumes other than the system disk.
+    /// The side panel's Places list.
+    pub places: Places,
+    /// The mounted volumes: the machine's drives and the network mounts.
     pub volumes: Vec<Volume>,
+    /// The cloud providers mounted, sorted; the Cloud section shows while
+    /// there is one.
+    pub cloud_providers: Vec<ProviderId>,
+    /// The cloud rows: what the cloud providers list at their roots, their
+    /// accounts or containers.
+    pub cloud: Vec<Entry>,
+    /// The network providers mounted, sorted; each adds a root row to the
+    /// Network section.
+    pub network_providers: Vec<ProviderId>,
     /// The trash's contents.
     pub trash: TrashView,
-    /// The side panel's folder tree.
-    pub folder_tree: FolderTree,
     /// The settings snapshot.
     pub settings: Settings,
     next_pane: u64,
@@ -584,10 +597,12 @@ impl Model {
             focused_window: WindowId(0),
             jobs: BTreeMap::new(),
             conflicts: Vec::new(),
-            recent: Recent::default(),
+            places: Places::default(),
             volumes: Vec::new(),
+            cloud_providers: Vec::new(),
+            cloud: Vec::new(),
+            network_providers: Vec::new(),
             trash: TrashView::default(),
-            folder_tree: FolderTree::new(),
             settings,
             next_pane: 1,
             next_tab: 1,
@@ -1607,7 +1622,9 @@ impl Model {
         );
     }
 
-    /// Records a job's progress; unknown jobs are added without a name.
+    /// Records a job's progress; unknown jobs are added without a name. A
+    /// job that waits for its volume keeps waiting: its first report comes
+    /// once it runs.
     pub fn job_progress(&mut self, id: JobId, progress: Progress) {
         let info = self.jobs.entry(id).or_insert_with(|| JobInfo {
             name: String::new(),
@@ -1618,6 +1635,38 @@ impl Model {
         if matches!(info.state, JobState::Running(_)) {
             info.state = JobState::Running(progress);
         }
+    }
+
+    /// Records that a job queued behind `waiting_for`, another job on a
+    /// volume it shares, or that it runs now (`None`). A finished job is
+    /// left alone.
+    pub fn job_waiting(&mut self, id: JobId, waiting_for: Option<String>) -> bool {
+        let Some(info) = self.jobs.get_mut(&id) else {
+            return false;
+        };
+        match (&info.state, waiting_for) {
+            (JobState::Running(_) | JobState::Waiting(_), Some(name)) => {
+                info.state = JobState::Waiting(name);
+                true
+            }
+            (JobState::Waiting(_), None) => {
+                info.state = JobState::Running(Progress::Items {
+                    done: 0,
+                    total: None,
+                });
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// Replaces the Places list; `true` when it differs from the old one.
+    pub fn set_places(&mut self, rows: Vec<Place>) -> bool {
+        if self.places.rows() == rows.as_slice() {
+            return false;
+        }
+        self.places.set(rows);
+        true
     }
 
     /// Records that a job was paused or resumed.
@@ -1656,42 +1705,6 @@ impl Model {
         let before = self.conflicts.len();
         self.conflicts.retain(|c| c.id != id);
         before != self.conflicts.len()
-    }
-
-    /// Points the side panel's folder tree at the root of `location`'s
-    /// volume and opens the folders down to it, when the tree is linked.
-    /// Returns the folders that still need listing.
-    pub fn folder_tree_follow(&mut self, location: &Location, root: VPath) -> Vec<Location> {
-        if !self.folder_tree.linked {
-            return Vec::new();
-        }
-        self.folder_tree
-            .set_root(Location::new(location.provider, root));
-        let provider = location.provider;
-        self.folder_tree
-            .reveal(&location.path)
-            .into_iter()
-            .map(|path| Location::new(provider, path))
-            .collect()
-    }
-
-    /// Opens or closes a folder of the side panel's tree. Returns the
-    /// location to list when it opens for the first time.
-    pub fn folder_tree_toggle(&mut self, path: &VPath) -> Option<Location> {
-        let provider = self.folder_tree.root.as_ref()?.provider;
-        self.folder_tree
-            .toggle(path)
-            .then(|| Location::new(provider, path.clone()))
-    }
-
-    /// Records the folders under a path of the side panel's tree.
-    pub fn folder_tree_listed(&mut self, path: VPath, folders: Vec<Entry>) {
-        self.folder_tree.set_children(path, folders);
-    }
-
-    /// Links or unlinks the side panel's tree from the focused pane.
-    pub fn folder_tree_link(&mut self, linked: bool) {
-        self.folder_tree.linked = linked;
     }
 
     /// Forgets a finished job.
@@ -2183,7 +2196,7 @@ mod tests {
     }
 
     #[test]
-    fn subtree_search_and_conflicts_and_the_folder_tree() {
+    fn subtree_search_and_conflicts() {
         let mut model = Model::new(Settings::default(), loc("/a"));
         let pane = model.focused;
         model.listing_batch(pane, vec![entry(1, "foo"), entry(2, "bar")]);
@@ -2217,40 +2230,5 @@ mod tests {
         model.job_finished(JobId(7), JobState::Cancelled);
         assert!(model.conflicts.is_empty(), "a finished job's conflicts go");
         assert!(!model.conflict_closed(ConflictId(1)));
-
-        let needed = model.folder_tree_follow(&loc("/a/b/c"), VPath::from("/"));
-        assert_eq!(
-            needed
-                .iter()
-                .map(|l| l.path.to_string())
-                .collect::<Vec<_>>(),
-            ["/", "/a", "/a/b", "/a/b/c"]
-        );
-        assert!(model.folder_tree.expanded.contains(&VPath::from("/a/b")));
-        assert!(!model.folder_tree.expanded.contains(&VPath::from("/a/b/c")));
-        model.folder_tree_listed(VPath::from("/"), vec![dir(1, "/a"), entry(2, "file")]);
-        assert_eq!(
-            model
-                .folder_tree
-                .children(&VPath::from("/"))
-                .map(<[Entry]>::len),
-            Some(1)
-        );
-        assert_eq!(
-            model.folder_tree_toggle(&VPath::from("/a/b")),
-            None,
-            "closing lists nothing"
-        );
-        assert_eq!(
-            model.folder_tree_toggle(&VPath::from("/a/b")),
-            None,
-            "already listed"
-        );
-        assert!(model.folder_tree_toggle(&VPath::from("/a/x")).is_some());
-        model.folder_tree_link(false);
-        assert_eq!(
-            model.folder_tree_follow(&loc("/q"), VPath::from("/")),
-            [] as [Location; 0]
-        );
     }
 }

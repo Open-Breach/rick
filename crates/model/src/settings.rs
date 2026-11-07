@@ -218,47 +218,54 @@ pub enum PanelSide {
     Right,
 }
 
-/// The side panel's sections, top to bottom.
+/// The side panel's titled sections, top to bottom, below the Places list.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Section {
-    /// The user's home directory.
-    Home,
-    /// Recently changed files and folders.
-    Recent,
-    /// Shares, hosts and mounted network file systems.
+    /// Every drive of the machine, fixed and removable.
+    Machine,
+    /// Mounted network file systems and connections.
     Network,
-    /// The platform trash.
-    Trash,
-    /// Locations the user pinned.
-    Pinned,
-    /// The folder tree following the focused pane.
-    Tree,
+    /// The cloud providers' accounts and containers.
+    Cloud,
 }
 
 impl Section {
     /// Every section in display order.
-    pub const ALL: [Self; 6] = [
-        Self::Home,
-        Self::Recent,
-        Self::Network,
-        Self::Trash,
-        Self::Pinned,
-        Self::Tree,
-    ];
+    pub const ALL: [Self; 3] = [Self::Machine, Self::Network, Self::Cloud];
 
     /// The section's title.
     #[must_use]
     pub fn title(self) -> &'static str {
         match self {
-            Self::Home => "Home",
-            Self::Recent => "Recent",
+            Self::Machine => "This Machine",
             Self::Network => "Network",
-            Self::Trash => "Trash",
-            Self::Pinned => "Pinned",
-            Self::Tree => "Tree",
+            Self::Cloud => "Cloud",
         }
     }
+
+    /// The section's name in the session file.
+    #[must_use]
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Machine => "machine",
+            Self::Network => "network",
+            Self::Cloud => "cloud",
+        }
+    }
+}
+
+/// The folded sections of a session file: names that are no section any
+/// more (0.1's `recent`, `trash`, `pinned`, `tree`) are dropped instead of
+/// failing the whole file.
+fn lenient_sections<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<BTreeSet<Section>, D::Error> {
+    let names: Vec<String> = Vec::deserialize(deserializer)?;
+    Ok(names
+        .iter()
+        .filter_map(|name| Section::ALL.into_iter().find(|s| s.name() == name))
+        .collect())
 }
 
 /// The side panel of one window: shown or hidden, which side, its width
@@ -274,6 +281,7 @@ pub struct SidePanel {
     /// Width in logical points.
     pub width: u16,
     /// Sections folded shut.
+    #[serde(deserialize_with = "lenient_sections")]
     pub folded: BTreeSet<Section>,
 }
 
@@ -539,21 +547,37 @@ mod tests {
     fn side_panel_changes_apply() {
         let mut p = SidePanel::default();
         p.apply(SidePanelChange::Fold {
-            section: Section::Recent,
+            section: Section::Network,
             folded: true,
         });
         p.apply(SidePanelChange::Side(PanelSide::Right));
         p.apply(SidePanelChange::Width(300));
         p.apply(SidePanelChange::Visible(false));
-        assert!(p.folded.contains(&Section::Recent));
+        assert!(p.folded.contains(&Section::Network));
         assert_eq!(p.side, PanelSide::Right);
         assert_eq!(p.width, 300);
         assert!(!p.visible);
         p.apply(SidePanelChange::Fold {
-            section: Section::Recent,
+            section: Section::Network,
             folded: false,
         });
         assert!(p.folded.is_empty());
+    }
+
+    #[test]
+    fn a_session_file_with_old_section_names_still_reads() {
+        let text = "visible = true\nside = \"left\"\nwidth = 220\nfolded = [\"pinned\", \"machine\", \"tree\"]\n";
+        let panel: SidePanel = toml::from_str(text).unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(
+            panel.folded.into_iter().collect::<Vec<_>>(),
+            [Section::Machine]
+        );
+        let written = toml::to_string(&SidePanel {
+            folded: [Section::Cloud].into_iter().collect(),
+            ..SidePanel::default()
+        })
+        .unwrap_or_default();
+        assert!(written.contains("folded = [\"cloud\"]"), "{written}");
     }
 
     #[test]

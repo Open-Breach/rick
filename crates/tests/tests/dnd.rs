@@ -1,7 +1,8 @@
 //! Acceptance (drag and drop): every internal drop target, the move/copy
 //! rule with its modifiers, the ghost with its indicator, spring-loading
 //! with the stay-or-return setting, the no-op cases, Escape, drops from
-//! outside the process, and Pin/Unpin from the context menu.
+//! outside the process, the side panel's drop rule (a folder becomes a
+//! place, files are refused) and Pin/Unpin from the context menu.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -11,7 +12,7 @@ use std::time::{Duration, Instant};
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable as _;
 use model::{AfterDrag, SettingsChange};
-use platform::{ConfigDir, Fake, Trash as _};
+use platform::{ConfigDir, Fake};
 use tests::local;
 use ui_egui::dnd::{Indicator, Target};
 use ui_egui::{EguiHost, RickUi, icons};
@@ -107,6 +108,18 @@ fn selected_names(harness: &Harness<'_, RickUi>, pane: model::PaneId) -> Vec<Str
 /// The centre of the one widget labelled `label`.
 fn centre_of(harness: &Harness<'_, RickUi>, label: &str) -> egui::Pos2 {
     harness.get_by_label(label).rect().center()
+}
+
+/// The centre of the side panel row whose label contains `text`: the
+/// panel sits left of the focused pane.
+fn centre_in_panel(harness: &Harness<'_, RickUi>, text: &str) -> egui::Pos2 {
+    let pane = harness.state().app().model().focused;
+    let rect = rect_of(harness, pane);
+    harness
+        .query_all_by_label_contains(text)
+        .map(|n| n.rect())
+        .find(|r| r.center().x < rect.left())
+        .map_or_else(|| panic!("no {text} in the side panel"), |r| r.center())
 }
 
 /// The centre of the widget labelled `label` inside `pane`, when the label
@@ -442,108 +455,82 @@ fn drops_onto_a_breadcrumb_a_tab_header_and_another_panes_space_move_the_file() 
     assert!(!dir.path().join("b.txt").exists());
 }
 
+/// The side panel is never a file-operation target: a folder dropped on
+/// the Places list becomes a place at the insertion line and is neither
+/// moved nor copied; a file is refused there and everywhere else in the
+/// panel, with the not-allowed indicator.
 #[test]
-fn drops_onto_pinned_pin_and_a_pinned_file_opens_its_folder_selected() {
+fn a_folder_dropped_on_places_becomes_a_place_and_files_are_refused() {
     let dir = tree();
+    fs::create_dir(dir.path().join("other")).unwrap_or_else(|e| panic!("{e}"));
     let (mut harness, _fake) = harness(dir.path());
-    let pane = harness.state().app().model().focused;
-    let pinned = |harness: &Harness<'_, RickUi>| -> Vec<String> {
+    let titles = |harness: &Harness<'_, RickUi>| -> Vec<String> {
         harness
             .state()
             .app()
             .model()
-            .settings
-            .pinned
+            .places
+            .rows()
             .iter()
-            .map(|l| l.path.to_string())
+            .map(|p| p.title.clone())
             .collect()
     };
+    let before = titles(&harness);
+    assert_eq!(before[1], "Documents", "{before:?}");
 
-    // The header pins at the end; nothing moves.
-    let to = centre_of(&harness, "Pinned");
-    let view = drag(&mut harness, "a.txt", to, egui::Modifiers::NONE);
+    // The upper half of the Documents row: the folder goes before it.
+    let docs = centre_in_panel(&harness, "Documents");
+    let above = egui::pos2(docs.x, docs.y - 5.0);
+    let view = drag(&mut harness, "sub", above, egui::Modifiers::NONE);
     assert_eq!(
         view.as_ref().and_then(|v| v.indicator),
-        Some(Indicator::Pin)
+        Some(Indicator::Place)
     );
+    let after = titles(&harness);
+    assert_eq!(after.len(), before.len() + 1);
+    assert_eq!(after[1], "sub", "{after:?}");
+    assert_eq!(after[2], "Documents");
+    assert!(dir.path().join("sub/child").is_dir(), "nothing moved");
     assert_eq!(
-        pinned(&harness),
-        [dir.path().join("a.txt").display().to_string()]
+        harness.state().app().model().places.rows()[1].location,
+        local(&dir.path().join("sub"))
     );
-    assert!(dir.path().join("a.txt").exists());
-    assert_eq!(
-        harness.state().app().undo_label().as_deref(),
-        Some("Pin a.txt"),
-        "a pin, not a transfer"
+    assert!(
+        harness.state().app().undo_label().is_none(),
+        "a place is not a file operation: nothing to undo"
     );
-    harness.get_by_label(&format!("{} a.txt", icons::PIN));
 
-    // A folder pins too.
-    let to = centre_of(&harness, "Pinned");
-    drag(&mut harness, "sub", to, egui::Modifiers::NONE);
-    assert_eq!(pinned(&harness).len(), 2);
-    assert!(dir.path().join("sub").is_dir());
-    assert!(dir.path().join("a.txt").exists());
+    // The lower half of the last row: appended.
+    let trash = centre_in_panel(&harness, "Trash");
+    let below = egui::pos2(trash.x, trash.y + 5.0);
+    drag(&mut harness, "other", below, egui::Modifiers::NONE);
+    let after = titles(&harness);
+    assert_eq!(after.last().map(String::as_str), Some("other"), "{after:?}");
+    assert!(dir.path().join("other").is_dir());
 
-    // Onto an existing entry: inserted before it.
-    let to = centre_of(&harness, &format!("{} a.txt", icons::PIN));
-    drag(&mut harness, "b.txt", to, egui::Modifiers::NONE);
-    assert_eq!(
-        pinned(&harness),
-        [
-            dir.path().join("b.txt").display().to_string(),
-            dir.path().join("a.txt").display().to_string(),
-            dir.path().join("sub").display().to_string(),
-        ]
-    );
-    assert!(dir.path().join("b.txt").exists());
-
-    // Clicking the pinned file from elsewhere: its folder, the file selected.
-    command(
-        &mut harness,
-        app::Command::Navigate {
-            pane,
-            to: local(&dir.path().join("sub")),
-        },
-    );
-    harness
-        .get_by_label(&format!("{} a.txt", icons::PIN))
-        .click();
-    harness.step();
-    settle(&mut harness);
-    harness.step();
-    settle(&mut harness);
-    assert_eq!(location(&harness, pane), dir.path());
-    assert_eq!(selected_names(&harness, pane), ["a.txt"]);
-
-    // The pinned folder opens in the pane.
-    harness.get_by_label(&format!("{} sub", icons::PIN)).click();
-    harness.step();
-    settle(&mut harness);
-    assert_eq!(location(&harness, pane), dir.path().join("sub"));
-}
-
-#[test]
-fn a_drop_onto_trash_trashes_and_undo_restores() {
-    let dir = tree();
-    let (mut harness, fake) = harness(dir.path());
-    let to = centre_of(&harness, "Trash");
-    let view = drag(&mut harness, "a.txt", to, egui::Modifiers::NONE);
+    // A file is refused on the list and on a section's header.
+    let view = drag(&mut harness, "a.txt", docs, egui::Modifiers::NONE);
     assert_eq!(
         view.as_ref().and_then(|v| v.indicator),
-        Some(Indicator::Trash)
+        Some(Indicator::Refused)
     );
-    assert!(!dir.path().join("a.txt").exists());
-    assert_eq!(fake.list().map(|l| l.len()).ok(), Some(1));
+    assert_eq!(titles(&harness), after, "the list is unchanged");
+    assert!(dir.path().join("a.txt").exists());
+    let machine = centre_in_panel(&harness, "This Machine");
+    let view = drag(&mut harness, "a.txt", machine, egui::Modifiers::NONE);
     assert_eq!(
-        harness.state().app().undo_label().as_deref(),
-        Some("Move to trash a.txt")
+        view.as_ref().and_then(|v| v.indicator),
+        Some(Indicator::Refused)
     );
-    harness.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::Z);
-    harness.step();
-    settle(&mut harness);
-    assert!(dir.path().join("a.txt").exists(), "undo restored it");
-    assert_eq!(fake.list().map(|l| l.len()).ok(), Some(0));
+    // And so is a folder anywhere but the Places list.
+    let view = drag(&mut harness, "sub", machine, egui::Modifiers::NONE);
+    assert_eq!(
+        view.as_ref().and_then(|v| v.indicator),
+        Some(Indicator::Refused)
+    );
+    assert_eq!(titles(&harness), after);
+    assert!(dir.path().join("a.txt").exists());
+    assert!(dir.path().join("sub/child").is_dir());
 }
 
 #[test]
@@ -632,10 +619,16 @@ fn the_ghost_counts_the_items_and_the_indicator_follows_target_and_keys() {
     assert_eq!(view.indicator, Some(Indicator::Copy), "Mod mid-drag");
     hold(&mut harness, egui::Modifiers::NONE);
 
-    let pinned = centre_of(&harness, "Pinned");
-    move_to(&mut harness, sub, pinned);
+    // Over the Places list with files among the items: refused.
+    let docs = centre_in_panel(&harness, "Documents");
+    move_to(&mut harness, sub, docs);
     let view = harness.state().drag().unwrap_or_else(|| panic!("a drag"));
-    assert_eq!(view.indicator, Some(Indicator::Pin), "over Pinned");
+    assert_eq!(
+        view.indicator,
+        Some(Indicator::Refused),
+        "files over Places"
+    );
+    let places_before = harness.state().app().model().places.len();
 
     // Escape: the ghost goes and the model is unchanged.
     harness.state_mut().clear_dispatched();
@@ -647,11 +640,8 @@ fn the_ghost_counts_the_items_and_the_indicator_follows_target_and_keys() {
         "the drag took the key: {:?}",
         harness.state().dispatched()
     );
-    release(&mut harness, pinned, egui::PointerButton::Primary);
-    assert_eq!(
-        harness.state().app().model().settings.pinned,
-        [] as [types::Location; 0]
-    );
+    release(&mut harness, docs, egui::PointerButton::Primary);
+    assert_eq!(harness.state().app().model().places.len(), places_before);
     assert!(dir.path().join("a.txt").exists());
     assert_eq!(
         selected_names(&harness, pane).len(),
@@ -903,7 +893,7 @@ fn pin_and_unpin_from_the_context_menu_flip_and_undo() {
         harness.get_by_label("Pin to side panel").click();
         harness.step();
         harness.step();
-        harness.get_by_label(&format!("{} {label}", icons::PIN));
+        assert_eq!(pinned(&harness), 1);
 
         harness.get_by_label(label).click_secondary();
         harness.step();
@@ -927,18 +917,45 @@ fn pin_and_unpin_from_the_context_menu_flip_and_undo() {
         harness.step();
     }
 
-    // The Pinned entry's own menu unpins too.
+    // The Favorites view lists the pins; its rows' menu unpins too.
     harness.get_by_label("sub").click_secondary();
     harness.step();
     harness.get_by_label("Pin to side panel").click();
     harness.step();
     harness.step();
-    harness
-        .get_by_label(&format!("{} sub", icons::PIN))
-        .click_secondary();
+    assert_eq!(pinned(&harness), 1);
+    let pane = harness.state().app().model().focused;
+    command(
+        &mut harness,
+        app::Command::Navigate {
+            pane,
+            to: vfs_rick::Virtual::Favorites.location(),
+        },
+    );
+    settle(&mut harness);
+    assert_eq!(
+        tab(&harness, pane)
+            .1
+            .listing
+            .rows()
+            .map(|e| e.name.clone())
+            .collect::<Vec<_>>(),
+        ["sub"],
+        "the pin is a row of the Favorites view"
+    );
+    harness.get_by_label("sub").click_secondary();
     harness.step();
+    assert!(
+        harness.query_by_label("Pin to side panel").is_none(),
+        "a favourite offers Unpin, not Pin"
+    );
     harness.get_by_label("Unpin").click();
     harness.step();
-    harness.step();
+    settle(&mut harness);
     assert_eq!(pinned(&harness), 0);
+    assert!(
+        tab(&harness, pane).1.listing.rows().next().is_none(),
+        "the view listed again without it"
+    );
+    let _ = icons::PIN;
 }

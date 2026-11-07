@@ -10,15 +10,7 @@ use ext::{
 use runtime::JobRunner;
 use types::Error;
 
-use crate::{State, local_path, location_of};
-
-fn needs_selection(ctx: &ActionCtx) -> Availability {
-    if ctx.selection.is_empty() {
-        Availability::Disabled("select something first")
-    } else {
-        Availability::Enabled
-    }
-}
+use crate::{State, is_trash, local_path, location_of, needs_entries};
 
 /// The clipboard text for a selection: one line per item, `f` picking what
 /// each item contributes; duplicates dropped when `dedup`.
@@ -73,7 +65,7 @@ impl Action for CopyName {
         })
     }
     fn availability(&self, ctx: &ActionCtx) -> Availability {
-        needs_selection(ctx)
+        needs_entries(ctx)
     }
     fn run(
         &self,
@@ -108,8 +100,12 @@ impl Action for CopyPath {
             key: Key::Char('c'),
         })
     }
-    fn availability(&self, _ctx: &ActionCtx) -> Availability {
-        Availability::Enabled
+    fn availability(&self, ctx: &ActionCtx) -> Availability {
+        if is_trash(ctx) {
+            Availability::Hidden
+        } else {
+            Availability::Enabled
+        }
     }
     fn run(
         &self,
@@ -150,7 +146,7 @@ impl Action for CopyPathAndName {
         })
     }
     fn availability(&self, ctx: &ActionCtx) -> Availability {
-        needs_selection(ctx)
+        needs_entries(ctx)
     }
     fn run(
         &self,
@@ -184,7 +180,7 @@ impl Action for OpenDefault {
         })
     }
     fn availability(&self, ctx: &ActionCtx) -> Availability {
-        needs_selection(ctx)
+        needs_entries(ctx)
     }
     fn run(
         &self,
@@ -220,8 +216,12 @@ impl Action for Reveal {
             key: Key::Char('o'),
         })
     }
-    fn availability(&self, _ctx: &ActionCtx) -> Availability {
-        Availability::Enabled
+    fn availability(&self, ctx: &ActionCtx) -> Availability {
+        if crate::is_virtual(ctx) && ctx.selection.is_empty() || is_trash(ctx) {
+            Availability::Hidden
+        } else {
+            Availability::Enabled
+        }
     }
     fn run(
         &self,

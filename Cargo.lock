@@ -223,6 +223,7 @@ dependencies = [
  "types",
  "vfs",
  "vfs-local",
+ "vfs-rick",
 ]
 
 [[package]]
@@ -3371,6 +3372,7 @@ dependencies = [
  "rayon",
  "runtime",
  "serde",
+ "toml 0.9.12+spec-1.1.0",
  "types",
 ]
 
@@ -3886,6 +3888,7 @@ dependencies = [
  "types",
  "vfs",
  "vfs-local",
+ "vfs-rick",
 ]
 
 [[package]]
@@ -4948,6 +4951,7 @@ dependencies = [
  "ui-egui",
  "vfs",
  "vfs-local",
+ "vfs-rick",
 ]
 
 [[package]]
@@ -5272,6 +5276,7 @@ dependencies = [
  "tracing",
  "types",
  "vfs-local",
+ "vfs-rick",
 ]
 
 [[package]]

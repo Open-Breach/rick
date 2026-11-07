@@ -290,18 +290,6 @@ the spec's 100 ms, which stands (four runs; a CI run measured 86.5 ms).
 | macOS | 100 ms | 50.6 ms | 90.5 ms |
 | Windows | 150 ms | 85.1 ms | 116 ms |
 
-### `recent` — a touched file as Recent's first row
-
-Spec target: 500 ms (close-out A). Test:
-`recent_shows_a_touched_file_first_and_survives_a_restart` in `closeout.rs`,
-which also runs in the ordinary test suite.
-
-| OS | Target | Median | Worst |
-| --- | --- | --- | --- |
-| Linux | 500 ms | 11.6 ms | 11.7 ms |
-| macOS | 500 ms | 55.2 ms | 65.4 ms |
-| Windows | 500 ms | 13.2 ms | 13.6 ms |
-
 ### `cancel` — cancelling the 1 GiB sparse copy from the operations area
 
 No spec number (the job ends "within one batch"); the targets come from

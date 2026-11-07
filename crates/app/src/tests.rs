@@ -102,6 +102,26 @@ impl Harness {
     fn take_events(&mut self) -> Vec<Event> {
         std::mem::take(&mut self.events)
     }
+
+    /// The pane's active tab.
+    fn tab(&self, pane: model::PaneId) -> &model::Tab {
+        self.app
+            .model()
+            .active_tab(pane)
+            .map_or_else(|| panic!("no tab"), |(_, tab)| tab)
+    }
+
+    /// Runs an action on the pane's location and selection.
+    fn run(&mut self, pane: model::PaneId, action: &'static str) {
+        let ctx = self
+            .app
+            .action_ctx(pane, Invocation::Shortcut)
+            .unwrap_or_else(|| panic!("ctx"));
+        self.send(Command::Run {
+            action: ActionId(action),
+            ctx,
+        });
+    }
 }
 
 #[test]
@@ -892,78 +912,310 @@ fn paste_conflicts_reach_the_model_and_the_answer_reaches_the_job() {
 }
 
 #[test]
-fn recent_follows_the_home_watch_and_survives_a_restart() {
+fn places_are_seeded_from_the_standard_folders_and_edits_persist() {
     let mut h = harness();
     h.settle();
-    let home = h.fake.home_dir();
-    fs::write(home.join("older.txt"), "o").unwrap_or_else(|e| panic!("{e}"));
-    assert!(
-        wait_until(&mut h, Duration::from_millis(500), |h| {
-            h.app
-                .model()
-                .recent
-                .entries()
-                .first()
-                .is_some_and(|e| e.name == "older.txt")
-        }),
-        "the touched file is the first row within 500 ms"
-    );
-    std::thread::sleep(Duration::from_millis(30));
-    fs::write(home.join("newer.txt"), "n").unwrap_or_else(|e| panic!("{e}"));
-    assert!(wait_until(&mut h, Duration::from_millis(500), |h| {
+    let titles = |h: &Harness| -> Vec<String> {
         h.app
             .model()
-            .recent
-            .entries()
-            .first()
-            .is_some_and(|e| e.name == "newer.txt")
-    }));
-    let rows: Vec<String> = h
-        .app
-        .model()
-        .recent
-        .entries()
-        .iter()
-        .map(|e| e.name.clone())
-        .collect();
-    assert_eq!(rows, ["newer.txt", "older.txt"]);
-    h.settle();
-    let file = h.app.settings_path().with_file_name(super::RECENT_FILE);
+            .places
+            .rows()
+            .iter()
+            .map(|p| p.title.clone())
+            .collect()
+    };
+    // The fake has Documents, Pictures and Downloads under its home.
+    assert_eq!(
+        titles(&h),
+        [
+            "Home",
+            "Documents",
+            "Pictures",
+            "Downloads",
+            "Favorites",
+            "Recent",
+            "Trash"
+        ]
+    );
+    let file = h.app.settings_path().with_file_name(super::PLACES_FILE);
     assert!(
         wait_until(&mut h, Duration::from_secs(2), |_| {
-            fs::read_to_string(&file).is_ok_and(|t| t.contains("newer.txt"))
+            fs::read_to_string(&file).is_ok_and(|t| t.contains("Downloads"))
         }),
-        "the list is written"
+        "the seeded list is written"
     );
+    let sub = local(&h.root.path().join("sub"));
+    h.send(Command::PlaceAdd {
+        place: model::Place::new("sub", sub.clone()),
+        at: Some(1),
+    });
+    assert_eq!(h.app.model().places.rows()[1].title, "sub");
+    h.send(Command::PlaceAdd {
+        place: model::Place::new("again", sub),
+        at: None,
+    });
+    assert_eq!(h.app.model().places.len(), 8, "a listed location stays");
+    h.send(Command::PlaceMove { from: 1, to: 7 });
+    assert_eq!(
+        h.app.model().places.rows().last().map(|p| p.title.as_str()),
+        Some("sub")
+    );
+    h.send(Command::PlaceEdit {
+        index: 7,
+        title: "Project".into(),
+        icon: "STAR".into(),
+    });
+    h.send(Command::PlaceRemove(2));
+    assert_eq!(
+        titles(&h),
+        [
+            "Home",
+            "Documents",
+            "Downloads",
+            "Favorites",
+            "Recent",
+            "Trash",
+            "Project"
+        ]
+    );
+    assert_eq!(h.app.model().places.rows()[6].icon, "STAR");
+    assert!(wait_until(&mut h, Duration::from_secs(2), |_| {
+        fs::read_to_string(&file).is_ok_and(|t| t.contains("Project") && !t.contains("Pictures"))
+    }));
 
-    // A second app from the same config directory has the rows.
-    let ui = Arc::new(Scripted::default());
+    // A second app from the same config directory has the edited list.
     let again = App::new(Config {
         platform: h.fake.clone(),
-        ui,
+        ui: Arc::new(Scripted::default()),
         extensions: Vec::new(),
         config_dir: Some(h.fake.config_dir()),
         start: Some(local(h.root.path())),
     });
-    let mut h2 = Harness {
-        root: tempfile::tempdir().unwrap_or_else(|e| panic!("{e}")),
-        fake: h.fake.clone(),
-        ui: h.ui.clone(),
-        app: again,
-        events: Vec::new(),
-    };
-    assert!(wait_until(&mut h2, Duration::from_secs(5), |h| {
-        h.app.model().recent.entries().len() == 2
+    assert_eq!(again.model().places.rows(), h.app.model().places.rows());
+}
+
+#[test]
+fn the_recent_and_trash_views_list_through_the_rick_provider() {
+    let mut h = harness();
+    h.settle();
+    let pane = h.app.model().focused;
+    let at = |secs: u64| std::time::SystemTime::UNIX_EPOCH + Duration::from_secs(secs);
+    h.fake.set_recent(vec![
+        platform::RecentItem {
+            path: h.root.path().join("b.txt"),
+            used_at: at(10),
+        },
+        platform::RecentItem {
+            path: h.root.path().join("a.txt"),
+            used_at: at(20),
+        },
+        platform::RecentItem {
+            path: h.root.path().join("gone.txt"),
+            used_at: at(30),
+        },
+    ]);
+    h.send(Command::Navigate {
+        pane,
+        to: vfs_rick::Virtual::Recent.location(),
+    });
+    h.settle();
+    assert_eq!(
+        h.names(),
+        ["a.txt", "b.txt"],
+        "newest use first, what exists"
+    );
+    assert_eq!(h.tab(pane).sort.by, Column::Accessed);
+    assert_eq!(h.tab(pane).sort.dir, SortDir::Descending);
+    assert_eq!(
+        h.tab(pane).listing.rows().next().map(|e| e.accessed),
+        Some(Some(at(20)))
+    );
+
+    // Trash: an item trashed from a folder shows in the view and restores
+    // from it.
+    h.send(Command::Back(pane));
+    h.settle();
+    h.send(Command::Select {
+        pane,
+        change: SelectionChange::Set(vec![id_of(&h, "c.txt")]),
+    });
+    h.run(pane, "core.trash");
+    assert!(wait_until(&mut h, Duration::from_secs(5), |h| {
+        h.app.model().trash.items.len() == 1
     }));
-    let rows: Vec<String> = h2
-        .app
+    h.send(Command::Navigate {
+        pane,
+        to: vfs_rick::Virtual::Trash.location(),
+    });
+    h.settle();
+    assert_eq!(h.names(), ["c.txt"]);
+    let entry = h
+        .tab(pane)
+        .listing
+        .rows()
+        .next()
+        .cloned()
+        .unwrap_or_else(|| panic!("row"));
+    assert_eq!(entry.id.provider, vfs_rick::PROVIDER_ID);
+    h.send(Command::Run {
+        action: ActionId("core.restore_trash"),
+        ctx: ext::ActionCtx {
+            pane,
+            location: vfs_rick::trash_location(),
+            selection: vec![entry],
+            invoked_from: Invocation::ContextMenu,
+        },
+    });
+    assert!(wait_until(&mut h, Duration::from_secs(5), |h| {
+        h.app.model().trash.items.is_empty() && h.names().is_empty()
+    }));
+    assert!(h.root.path().join("c.txt").exists());
+    assert_eq!(h.app.undo_label().as_deref(), Some("Restore c.txt"));
+}
+
+/// Two copies into one folder share its volume: the second waits for the
+/// first, which a conflict holds open, and runs once it is answered.
+#[test]
+fn a_copy_on_a_busy_volume_waits_for_the_running_one() {
+    let mut h = harness();
+    h.settle();
+    let pane = h.app.model().focused;
+    let sub = h.root.path().join("sub");
+    fs::write(sub.join("a.txt"), "old").unwrap_or_else(|e| panic!("{e}"));
+    let paste = |h: &mut Harness, name: &str| {
+        h.send(Command::Navigate {
+            pane,
+            to: local(h.root.path()),
+        });
+        // Not `settle`: a job may be running (or waiting) the whole time.
+        let wanted = name.to_owned();
+        assert!(wait_until(h, Duration::from_secs(5), |h| {
+            h.tab(pane).listing.complete && h.names().contains(&wanted)
+        }));
+        h.send(Command::Select {
+            pane,
+            change: SelectionChange::Set(vec![id_of(h, name)]),
+        });
+        h.run(pane, "core.copy");
+        h.send(Command::Navigate {
+            pane,
+            to: local(&sub),
+        });
+        h.run(pane, "core.paste");
+    };
+    paste(&mut h, "a.txt");
+    assert!(
+        wait_until(&mut h, Duration::from_secs(5), |h| {
+            !h.app.model().conflicts.is_empty()
+        }),
+        "the first copy asks about a.txt"
+    );
+    let first = h.app.model().conflicts[0].job;
+    paste(&mut h, "b.txt");
+    assert!(
+        wait_until(&mut h, Duration::from_secs(5), |h| {
+            h.app
+                .model()
+                .jobs
+                .values()
+                .any(|j| j.state == model::JobState::Waiting("Copy a.txt".into()))
+        }),
+        "the second copy waits for the first: {:?}",
+        h.app.model().jobs
+    );
+    assert!(!sub.join("b.txt").exists(), "nothing copied while waiting");
+    let conflict = h.app.model().conflicts[0].id;
+    h.send(Command::ResolveConflict {
+        id: conflict,
+        answer: types::ConflictAnswer::once(types::Resolution::Skip),
+    });
+    assert!(wait_until(&mut h, Duration::from_secs(5), |h| {
+        h.app
+            .model()
+            .jobs
+            .values()
+            .all(|j| j.state == model::JobState::Done)
+            && h.app.model().jobs.len() == 2
+    }));
+    assert!(
+        sub.join("b.txt").exists(),
+        "the second copy ran after the first"
+    );
+    assert_eq!(
+        fs::read_to_string(sub.join("a.txt")).ok(),
+        Some("old".into())
+    );
+    assert!(h.app.model().jobs.contains_key(&first));
+}
+
+#[test]
+fn eject_goes_through_the_platform_and_the_list_follows() {
+    let mut h = harness();
+    h.settle();
+    let sub = h.root.path().join("sub");
+    h.fake.add_volume(platform::Volume {
+        name: "STICK".into(),
+        mount_point: sub.clone(),
+        kind: platform::VolumeKind::Removable,
+        fs_type: "vfat".into(),
+        device: None,
+        total: Some(100),
+        free: Some(50),
+    });
+    h.fake.add_volume(platform::Volume {
+        name: "data".into(),
+        mount_point: h.root.path().to_path_buf(),
+        kind: platform::VolumeKind::Fixed,
+        fs_type: "ext4".into(),
+        device: None,
+        total: Some(100),
+        free: Some(50),
+    });
+    h.send(Command::RefreshVolumes);
+    assert!(wait_until(&mut h, Duration::from_secs(5), |h| {
+        h.app.model().volumes.len() == 2
+    }));
+    h.send(Command::Eject(sub.clone()));
+    assert!(wait_until(&mut h, Duration::from_secs(5), |h| {
+        h.fake.ejected() == [sub.clone()] && h.app.model().volumes.len() == 1
+    }));
+    assert!(h.app.model().jobs.values().any(|j| j.name == "Eject STICK"));
+    // A fixed disk cannot be ejected: the job fails and says so.
+    h.send(Command::Eject(h.root.path().to_path_buf()));
+    assert!(wait_until(&mut h, Duration::from_secs(5), |h| {
+        h.app
+            .model()
+            .jobs
+            .values()
+            .any(|j| j.name == "Eject data" && matches!(j.state, model::JobState::Failed(_)))
+    }));
+    assert_eq!(h.fake.ejected().len(), 1);
+}
+
+#[test]
+fn a_virtual_location_comes_back_with_the_session() {
+    let mut h = harness();
+    h.settle();
+    let pane = h.app.model().focused;
+    h.send(Command::Navigate {
+        pane,
+        to: vfs_rick::Virtual::Favorites.location(),
+    });
+    h.settle();
+    h.app.save_session().unwrap_or_else(|e| panic!("{e}"));
+    let again = App::new(Config {
+        platform: h.fake.clone(),
+        ui: Arc::new(Scripted::default()),
+        extensions: Vec::new(),
+        config_dir: Some(h.fake.config_dir()),
+        start: None,
+    });
+    let (_, tab) = again
         .model()
-        .recent
-        .entries()
-        .iter()
-        .map(|e| e.name.clone())
-        .collect();
-    assert_eq!(rows, ["newer.txt", "older.txt"]);
+        .active_tab(again.model().focused)
+        .unwrap_or_else(|| panic!("tab"));
+    assert_eq!(tab.location, vfs_rick::Virtual::Favorites.location());
+    assert!(tab.note.is_none(), "{:?}", tab.note);
 }
 
 #[test]

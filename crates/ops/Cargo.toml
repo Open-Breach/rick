@@ -13,6 +13,7 @@ platform = { workspace = true }
 ext = { workspace = true }
 vfs = { workspace = true }
 vfs-local = { workspace = true }
+vfs-rick = { workspace = true }
 tokio = { workspace = true, features = ["io-util"] }
 tracing = { workspace = true }
 

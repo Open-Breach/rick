@@ -10,17 +10,24 @@ back for the session, a tab dragged outside every window opening a new one,
 each tab's toolbar, path bar, file list (details, tree, list or icon view,
 only the visible rows laid out, names edited in place for Rename, New file
 and New folder) and status line with the subtree-search toggle, the preview
-pane (toolbar, info badges, content, status bar), the side panel (Home,
-Recent, Network, Trash, Pinned, Tree) with the operations area at its foot
-(progress, throughput, remaining time, pause, resume, cancel), the conflict
-dialogue, the context menu and command palette built from the action
-registry, the keyboard shortcut table, the Settings and Keyboard shortcuts
-screens, and drag and drop of entries: rows are drag sources, folders, pane
-space, breadcrumb segments, tab headers and the side panel's Home, Trash,
-volume and Pinned entries are drop zones, with the ghost, the live indicator
-and spring-loading in between. It never mutates the model: everything the user does
+pane (toolbar, info badges, content, status bar), the side panel (the
+editable Places list with its drag reorder, Edit… dialogue and keyboard; the
+This Machine, Network and Cloud sections with their utilisation bars, Eject
+and Add… rows, folding without an indent guide; the section overviews drawn
+as drive tables in the pane) with the operations area at its foot (a header
+with the running count and an overall bar, one row per job with its progress
+bar, bytes or items done of total, throughput and remaining time, the
+*Waiting* state, pause, resume and cancel, a height that grows with the jobs
+up to a cap), the conflict dialogue, the context menu and command palette
+built from the action registry, the keyboard shortcut table, the Settings
+and Keyboard shortcuts screens, and drag and drop of entries: rows are drag
+sources, folders, pane space, breadcrumb segments and tab headers are drop
+zones with the ghost, the live indicator and spring-loading in between; the
+side panel is never a file-operation target, a dragged folder becomes a
+place at the insertion line and files are refused with the not-allowed
+indicator. It never mutates the model: everything the user does
 becomes a `Command` handed to `app`, and it re-renders from the model. It
 depends on `types`, `runtime`, `platform`, `ext`, `vfs-local` (the local
-provider's id, for pinned and dropped paths), `model`, `ops` (the trash
-context the Trash section hands the actions) and `app`; only `rick` and
+provider's id, for dropped paths), `vfs-rick` (the virtual locations'
+titles and ids), `model`, `ops` and `app`; only `rick` and
 `tests` may depend on it.
