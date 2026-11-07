@@ -441,13 +441,13 @@ fn places_open_in_the_pane_and_the_views_are_never_listed_inline() {
     settle(&mut harness);
     assert_eq!(location(&harness), Virtual::Recent.location());
     assert_eq!(row_names(&harness), ["c.txt", "a.txt"]);
-    assert!(panel_rects(&harness, "c.txt").is_empty());
+    assert_eq!(panel_rects(&harness, "c.txt"), Vec::<egui::Rect>::new());
 
     // Trash: the view, empty.
     click_row(&mut harness, "Trash", egui::PointerButton::Primary);
     settle(&mut harness);
     assert_eq!(location(&harness), Virtual::Trash.location());
-    assert!(row_names(&harness).is_empty());
+    assert_eq!(row_names(&harness), Vec::<String>::new());
     // Back and forward work across views like folders.
     let focused = pane(&harness);
     command(&mut harness, app::Command::Back(focused));
@@ -507,7 +507,7 @@ fn places_can_be_reordered_removed_and_edited_and_survive_a_restart() {
         harness.step();
         harness.step();
         assert!(!titles(&harness).iter().any(|t| t == "Pictures"));
-        assert!(panel_rects(&harness, "Pictures").is_empty());
+        assert_eq!(panel_rects(&harness, "Pictures"), Vec::<egui::Rect>::new());
 
         // Edit Downloads: a new title and the star icon.
         click_row(&mut harness, "Downloads", egui::PointerButton::Secondary);
@@ -579,7 +579,7 @@ fn places_can_be_reordered_removed_and_edited_and_survive_a_restart() {
         ["Trash", "Home", "Documents", "Inbox", "Favorites", "Recent"]
     );
     panel_row(&harness, "Inbox");
-    assert!(panel_rects(&harness, "Pictures").is_empty());
+    assert_eq!(panel_rects(&harness, "Pictures"), Vec::<egui::Rect>::new());
 }
 
 #[test]
@@ -656,7 +656,7 @@ fn this_machine_shows_utilisation_the_header_opens_the_overview_and_eject_works(
     for id in ejects {
         command(&mut harness, app::Command::DismissJob(id));
     }
-    assert!(panel_rects(&harness, "STICK").is_empty());
+    assert_eq!(panel_rects(&harness, "STICK"), Vec::<egui::Rect>::new());
 
     // Eject from the row's context menu too.
     fake.add_volume(volume(
@@ -686,7 +686,7 @@ fn this_machine_shows_utilisation_the_header_opens_the_overview_and_eject_works(
 fn a_mounted_volume_appears_and_an_unmounted_one_goes_without_a_refresh() {
     let dir = tree();
     let (mut harness, fake) = harness(dir.path());
-    assert!(panel_rects(&harness, "USB").is_empty());
+    assert_eq!(panel_rects(&harness, "USB"), Vec::<egui::Rect>::new());
     assert_eq!(
         panel_rects(&harness, "Add…").len(),
         2,

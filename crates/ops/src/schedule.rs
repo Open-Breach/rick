@@ -338,9 +338,9 @@ mod tests {
                     .await
                     .is_ok()
             );
-            assert!(scheduler.waiting().is_empty());
+            assert_eq!(scheduler.waiting(), Vec::<(JobId, String)>::new());
             assert!(matches!(second.result.await, Ok(Ok(()))));
-            assert!(scheduler.running().is_empty());
+            assert_eq!(scheduler.running(), Vec::<JobId>::new());
         });
     }
 
@@ -390,8 +390,8 @@ mod tests {
                     .is_ok()
             );
             assert!(matches!(third.result.await, Ok(Ok(()))));
-            assert!(scheduler.running().is_empty());
-            assert!(scheduler.waiting().is_empty());
+            assert_eq!(scheduler.running(), Vec::<JobId>::new());
+            assert_eq!(scheduler.waiting(), Vec::<(JobId, String)>::new());
         });
     }
 
