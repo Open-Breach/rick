@@ -382,7 +382,11 @@ impl Volumes for Native {
                     String::from_utf16_lossy(&buffer[..end])
                 };
                 let label = labelled.then(|| text(&label)).filter(|l| !l.is_empty());
-                let fs_type = labelled.then(|| text(&fs_name)).unwrap_or_default();
+                let fs_type = if labelled {
+                    text(&fs_name)
+                } else {
+                    String::new()
+                };
                 let (mut free, mut total) = (0u64, 0u64);
                 let space = GetDiskFreeSpaceExW(
                     PCWSTR(root_wide.as_ptr()),

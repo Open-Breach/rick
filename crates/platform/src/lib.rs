@@ -24,8 +24,9 @@ mod dialogs;
 mod fake;
 pub mod fs;
 pub mod paths;
-// Only Linux and macOS parse dates so far.
-#[cfg_attr(windows, allow(dead_code))]
+// Only the Linux trash and properties format dates; macOS parses them
+// (Spotlight's last-used dates) and Windows does neither so far.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 mod time;
 mod traits;
 #[cfg(unix)]
