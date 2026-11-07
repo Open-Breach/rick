@@ -13,7 +13,8 @@
 //! [`plugin.toml`](PluginToml), refuses a plugin whose `api_version`,
 //! `toolchain` or `platforms` do not fit this host, skips the ids
 //! `rick.toml` disables, and loads the rest with [`load_library`]: the
-//! library's [`ext::plugin::ENTRY_POINT`] is called with a registry of its
+//! library's entry point ([`ext::plugin::entry_point`], named after the
+//! crate) is called with a registry of its
 //! own and the result wrapped as a [`Loaded`] extension that the application
 //! registers like a built-in. A plugin that fails or panics while
 //! registering is reported in its row and left alone, its library kept
@@ -53,19 +54,25 @@ pub const HOST_TOOLCHAIN: &str = env!("RICK_TOOLCHAIN");
 /// [`LoadError`] when the library is not a plugin of this build.
 pub fn describe(path: &Path) -> Result<PluginToml, LoadError> {
     let loaded = load_library(path)?;
-    let stem = path
+    Ok(PluginToml::describe(
+        loaded.manifest(),
+        &stem_of(path),
+        HOST_TOOLCHAIN,
+    ))
+}
+
+/// The crate name a library file stands for: its file name without the
+/// platform's prefix and suffix (`libext_git.so` gives `ext_git`), which
+/// names the entry point it exports.
+#[must_use]
+pub fn stem_of(path: &Path) -> String {
+    let name = path
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_default();
-    let stem = stem
-        .strip_prefix(std::env::consts::DLL_PREFIX)
-        .unwrap_or(&stem)
+    name.strip_prefix(std::env::consts::DLL_PREFIX)
+        .unwrap_or(&name)
         .strip_suffix(std::env::consts::DLL_SUFFIX)
-        .unwrap_or(&stem)
-        .to_owned();
-    Ok(PluginToml::describe(
-        loaded.manifest(),
-        &stem,
-        HOST_TOOLCHAIN,
-    ))
+        .unwrap_or(&name)
+        .to_owned()
 }

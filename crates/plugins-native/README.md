@@ -6,7 +6,9 @@ into the binary. At start it scans `<binary dir>/plugins/` and
 `plugin.toml`, refuses a plugin whose `api_version`, `toolchain` or
 `platforms` do not fit this host, skips the ids `rick.toml` disables, loads
 the rest with `libloading`, calls the one exported entry point
-`rick_plugin_register` with a registry of its own, and hands each plugin to
+(`rick_plugin_register_<crate>`, named after the library's file name so
+that a binary may link several plugin crates at once, QUESTIONS.md 90)
+with a registry of its own, and hands each plugin to
 the application as an extension it registers like a built-in. A plugin that
 fails or panics while registering is reported in the plugins table and left
 alone, its library kept mapped since code that ran may have registered
@@ -52,8 +54,9 @@ workspace = true
 built-in does: a `Manifest` with the id, the name, the crate's version, the
 `API_VERSION`, the points it fills and the platforms it runs on, and
 `register`, which contributes to the registry it is given. Then one line
-declares the entry point; the macro carries the `#[no_mangle]` allowance, so
-the crate keeps `#![deny(unsafe_code)]` (QUESTIONS.md 82):
+declares the entry point, exported as `rick_plugin_register_<crate name>`;
+the macro carries the `#[export_name]` allowance, so the crate keeps
+`#![deny(unsafe_code)]` (QUESTIONS.md 82):
 
 ```rust
 #![deny(unsafe_code)]

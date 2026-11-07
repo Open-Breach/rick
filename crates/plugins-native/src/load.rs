@@ -4,7 +4,7 @@ use std::fmt;
 use std::mem::ManuallyDrop;
 use std::path::{Path, PathBuf};
 
-use ext::plugin::{ENTRY_POINT, EntryPoint, Status};
+use ext::plugin::{ENTRY_POINT_PREFIX, EntryPoint, Status, entry_point};
 use ext::{Extension, Manifest, Registry};
 use tracing::{debug, warn};
 use types::Error;
@@ -16,8 +16,9 @@ pub enum LoadError {
     /// built against another kernel build whose libraries it cannot find.
     #[error("the library could not be loaded: {0}")]
     Open(#[source] libloading::Error),
-    /// The library is not a Rick plugin.
-    #[error("the library exports no `{ENTRY_POINT}`: {0}")]
+    /// The library is not a Rick plugin: it exports no
+    /// `rick_plugin_register_<crate>`.
+    #[error("the library exports no `{ENTRY_POINT_PREFIX}<crate>` entry point: {0}")]
     NoEntryPoint(#[source] libloading::Error),
     /// The registry refused the manifest or the extension's `register`
     /// failed.
@@ -108,6 +109,7 @@ impl fmt::Debug for Loaded {
 /// or the message of the panic it raised is in the error's text.
 pub fn load_library(path: &Path) -> Result<Loaded, LoadError> {
     debug!(path = %path.display(), "loading");
+    let symbol = entry_point(&crate::stem_of(path));
     // SAFETY: loading runs the library's initialisers. A Rust cdylib built
     // from this workspace has none beyond the runtime's own, and the caller
     // has checked the manifest that says it is one.
@@ -118,7 +120,7 @@ pub fn load_library(path: &Path) -> Result<Loaded, LoadError> {
         // this symbol; the manifest checks (API version, toolchain) make
         // the library one built against the same `ext`.
         let entry: libloading::Symbol<EntryPoint> =
-            unsafe { library.get(ENTRY_POINT.as_bytes()) }.map_err(LoadError::NoEntryPoint)?;
+            unsafe { library.get(symbol.as_bytes()) }.map_err(LoadError::NoEntryPoint)?;
         // SAFETY: the entry point catches its own panics and only touches
         // the registry it is given, which outlives the call.
         unsafe { entry(&mut registry) }
