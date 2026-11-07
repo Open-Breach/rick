@@ -724,6 +724,13 @@ fn subtree_search_streams_matches_as_a_job_and_cancels_on_a_new_text() {
         dir.push(format!("l{level}"));
         fs::create_dir_all(&dir).unwrap_or_else(|e| panic!("{e}"));
         fs::write(dir.join(format!("foo{level}.txt")), "x").unwrap_or_else(|e| panic!("{e}"));
+        // Padding the walk has to visit (12 000 files in all), so a
+        // superseded walk is still running when the next text arrives, even
+        // on a fast machine whose two cores the walker shares with the test.
+        for n in 0..600 {
+            fs::write(dir.join(format!("pad{level}_{n}.txt")), "x")
+                .unwrap_or_else(|e| panic!("{e}"));
+        }
     }
     h.send(Command::Subtree { pane, on: true });
     assert_eq!(h.names().len(), 4, "a toggle without text changes nothing");
@@ -764,9 +771,8 @@ fn subtree_search_streams_matches_as_a_job_and_cancels_on_a_new_text() {
     assert_eq!(search_jobs.len(), 1, "the walk is a job the user sees");
     assert_eq!(search_jobs[0].state, model::JobState::Done);
 
-    // A new text cancels the running walk: slow the walk down with a big tree
-    // is not needed; the cancelled state shows on the first job when the
-    // text changes before it ends.
+    // A new text cancels the running walk: the second text arrives before
+    // the first walk is through the padding.
     h.send(Command::Filter {
         pane,
         text: "fo".into(),
