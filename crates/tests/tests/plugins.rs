@@ -15,12 +15,14 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use app::{App, Command, Config, Event};
+use egui_kittest::Harness;
+use egui_kittest::kittest::Queryable as _;
 use ext::{API_VERSION, ActionGroup, ActionId, Invocation, Platforms};
 use model::{JobState, SettingsChange};
 use platform::{ConfigDir, Fake};
 use plugins_native::{Host, Library, MANIFEST_FILE, Options, PluginStatus, PluginToml, Source};
 use tests::local;
-use ui_egui::EguiHost;
+use ui_egui::{EguiHost, Intent, RickUi};
 
 /// The directory the test binary runs from, where cargo puts every
 /// dependency's `cdylib` under its plain name.
@@ -415,6 +417,102 @@ fn the_git_plugin_brings_the_badges_and_the_git_group_like_the_compiled_in_exten
         })
     });
     drop(app);
+    drop(host);
+}
+
+/// Runs frames until the app has nothing in flight.
+fn settle_ui(harness: &mut Harness<'_, RickUi>) {
+    let deadline = Instant::now() + Duration::from_secs(30);
+    loop {
+        for _ in 0..3 {
+            harness.step();
+        }
+        if !harness.state().app().is_busy() {
+            std::thread::sleep(Duration::from_millis(50));
+            harness.step();
+            if !harness.state().app().is_busy() {
+                break;
+            }
+        }
+        assert!(Instant::now() < deadline, "did not settle");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
+/// The plugin rows as the binary hands them to the app.
+fn rows(host: &Host) -> Vec<app::Plugin> {
+    host.plugins()
+        .iter()
+        .map(|p| app::Plugin {
+            id: p.id.clone(),
+            name: p.name.clone(),
+            version: p.version.clone(),
+            points: p.points,
+            status: match &p.status {
+                PluginStatus::Loaded => app::PluginStatus::Loaded,
+                PluginStatus::Disabled => app::PluginStatus::Disabled,
+                PluginStatus::Refused(reason) => app::PluginStatus::Refused(reason.clone()),
+            },
+            path: p.dir.clone(),
+        })
+        .collect()
+}
+
+#[test]
+fn the_extensions_screen_lists_the_plugins_and_its_toggle_writes_the_setting() {
+    let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+    let plugins = dir.path().join("plugins");
+    install(&plugins, "plugin_probe", |_| {});
+    install(&plugins, "plugin_probe", |t| {
+        t.id = "probe-api".into();
+        t.name = "Old probe".into();
+        t.api_version = API_VERSION + 1;
+    });
+    let host = Host::load(&options(vec![(Source::BesideBinary, plugins)]));
+
+    let fake = Arc::new(Fake::new().unwrap_or_else(|e| panic!("{e}")));
+    let ui = Arc::new(EguiHost::new());
+    let mut app = App::new(Config {
+        platform: fake.clone(),
+        ui: ui.clone(),
+        extensions: host.extensions(),
+        config_dir: Some(fake.config_dir()),
+        start: Some(local(dir.path())),
+    });
+    app.set_plugins(rows(&host));
+    let pane = app.model().focused;
+    let mut harness = Harness::builder()
+        .with_size(egui::vec2(1100.0, 720.0))
+        .build_eframe(move |cc| RickUi::new(app, ui, &cc.egui_ctx));
+    settle_ui(&mut harness);
+
+    // The burger menu's entry is this intent.
+    harness.state_mut().queue(Intent::Extensions, pane);
+    harness.step();
+    harness.step();
+    assert!(harness.state().extensions_open());
+    harness.get_by_label("Probe");
+    // Both probe rows fill the same points.
+    assert_eq!(harness.get_all_by_label("action, previewer").count(), 2);
+    harness.get_by_label("loaded");
+    harness.get_by_label("Old probe");
+    let refused = harness
+        .get_all_by_label_contains("refused: extension API version")
+        .count();
+    assert_eq!(refused, 1);
+
+    // The toggle of the loaded row writes the setting and says so.
+    let toggles: Vec<_> = harness.get_all_by_label("Enabled").collect();
+    assert_eq!(toggles.len(), 2);
+    toggles[0].click();
+    harness.step();
+    harness.step();
+    assert_eq!(
+        harness.state().app().model().settings.plugins.disabled,
+        ["probe"]
+    );
+    harness.get_by_label("disabled on the next start");
+    drop(harness);
     drop(host);
 }
 

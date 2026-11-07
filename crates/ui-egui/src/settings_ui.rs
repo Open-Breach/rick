@@ -497,7 +497,7 @@ pub fn extensions_window(
                 .striped(true)
                 .spacing([16.0, 6.0])
                 .show(ui, |ui| {
-                    for heading in ["Name", "Version", "Points", "Status", "Enabled"] {
+                    for heading in ["Name", "Version", "Points", "Status", ""] {
                         ui.strong(heading);
                     }
                     ui.end_row();
@@ -522,7 +522,7 @@ pub fn extensions_window(
                         ui.label(status);
                         let mut enabled = !disabled.contains(&plugin.id);
                         ui.horizontal(|ui| {
-                            if ui.checkbox(&mut enabled, "").changed() {
+                            if ui.checkbox(&mut enabled, "Enabled").changed() {
                                 requests.push(Request::Command(Command::Settings(
                                     SettingsChange::Plugin {
                                         id: plugin.id.clone(),
