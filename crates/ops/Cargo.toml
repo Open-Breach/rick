@@ -1,6 +1,6 @@
 [package]
 name = "ops"
-version = "0.1.0"
+version.workspace = true
 description = "Rick file operations: the 0.1 operations as Actions, each long one a Job, each reversible one undoable."
 edition.workspace = true
 license.workspace = true

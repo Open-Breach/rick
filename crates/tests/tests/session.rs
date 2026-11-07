@@ -644,13 +644,19 @@ fn a_big_session_starts_about_as_fast_as_a_small_one() {
     // Warm the caches once, then measure.
     drop(time(&small));
     let (small_took, small_app) = time(&small);
-    let (big_took, big_app) = time(&big);
-    assert_eq!(big_app.model().windows().count(), 3);
     assert_eq!(small_app.model().windows().count(), 1);
-    assert!(
-        big_took <= small_took + Duration::from_millis(300),
-        "big {big_took:?} vs small {small_took:?}"
-    );
+    let mut bigs = Vec::new();
+    for _ in 0..tests::bench::runs() {
+        let (big_took, big_app) = time(&big);
+        assert_eq!(big_app.model().windows().count(), 3);
+        println!("session start: small {small_took:?}, big {big_took:?}");
+        assert!(
+            big_took <= small_took + Duration::from_millis(300),
+            "big {big_took:?} vs small {small_took:?}"
+        );
+        bigs.push(big_took);
+    }
+    tests::bench::record("session-start", &bigs);
 }
 
 /// A kittest harness whose config lives in `config`, so a second one can

@@ -59,13 +59,14 @@ pub use keys::{Intent, KeyMap};
 pub use pane::toolbar_height;
 pub use shell::{Dispatched, Request, RickUi, TabUi, WindowUi, viewport_builder};
 
-/// Opens the first window and runs until the last one closes.
+/// Opens the first window and runs until the last one closes. `version` is
+/// what the About window shows: the binary's version and git hash.
 ///
 /// # Errors
 ///
 /// The error eframe reports when the window or its renderer cannot be set
 /// up.
-pub fn run(title: &str, app: App, host: Arc<EguiHost>) -> eframe::Result {
+pub fn run(title: &str, version: &str, app: App, host: Arc<EguiHost>) -> eframe::Result {
     // Rick draws its own title row. Where the system keeps its controls
     // (macOS), the title bar goes but the window keeps its buttons; elsewhere
     // the decorations go altogether. The restored session's focused window
@@ -77,12 +78,15 @@ pub fn run(title: &str, app: App, host: Arc<EguiHost>) -> eframe::Result {
         ..Default::default()
     };
     let mut app = Some(app);
+    let version = version.to_owned();
     eframe::run_native(
         title,
         options,
         Box::new(move |cc| {
             let app = app.take().ok_or("the app was already taken")?;
-            Ok(Box::new(RickUi::new(app, host, &cc.egui_ctx)))
+            Ok(Box::new(
+                RickUi::new(app, host, &cc.egui_ctx).with_version(version),
+            ))
         }),
     )
 }

@@ -276,56 +276,60 @@ fn decorating_a_visible_batch_of_a_10k_repository_is_fast() {
     );
 
     // Cached: answered inline.
-    let started = Instant::now();
-    let cached = decorator.decorate(&batch, &ctx);
-    let took = started.elapsed();
-    assert!(
-        took < Duration::from_millis(16),
-        "cached batch took {took:?}"
-    );
-    assert_eq!(cached.len(), 100);
-    assert!(
-        cached
-            .iter()
-            .all(|(_, d)| !d.cells.iter().any(|(_, c)| *c == CellValue::Pending))
-    );
-
-    // Not cached: Pending now, the real thing within 500 ms.
-    decorator.invalidate(&location);
-    let started = Instant::now();
-    let pending = decorator.decorate(&batch, &ctx);
-    let took = started.elapsed();
-    assert!(
-        took < Duration::from_millis(16),
-        "pending batch took {took:?}"
-    );
-    assert!(
-        pending
-            .iter()
-            .all(|(_, d)| d.cells.iter().any(|(_, c)| *c == CellValue::Pending))
-    );
-    let deadline = started + Duration::from_millis(500);
-    loop {
-        let count = published
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .len();
-        if count >= 100 {
-            break;
-        }
+    let mut cached_tooks = Vec::new();
+    let mut cached = Vec::new();
+    for _ in 0..tests::bench::runs() {
+        let started = Instant::now();
+        cached = decorator.decorate(&batch, &ctx);
+        cached_tooks.push(started.elapsed());
+        assert_eq!(cached.len(), 100);
         assert!(
-            Instant::now() < deadline,
-            "only {count} decorations published within 500 ms"
+            cached
+                .iter()
+                .all(|(_, d)| !d.cells.iter().any(|(_, c)| *c == CellValue::Pending))
         );
-        std::thread::sleep(Duration::from_millis(5));
     }
-    eprintln!(
-        "10k repository: cached batch {:?}, completion {:?}",
-        took,
-        started.elapsed()
+
+    // Not cached: Pending now, the real thing within the target; the sink
+    // keeps every run's decorations.
+    let mut pending_tooks = Vec::new();
+    let mut completions = Vec::new();
+    for run in 0..tests::bench::runs() {
+        decorator.invalidate(&location);
+        let started = Instant::now();
+        let pending = decorator.decorate(&batch, &ctx);
+        pending_tooks.push(started.elapsed());
+        assert!(
+            pending
+                .iter()
+                .all(|(_, d)| d.cells.iter().any(|(_, c)| *c == CellValue::Pending))
+        );
+        let expected = 100 * (run + 1);
+        let deadline = started + Duration::from_secs(10);
+        loop {
+            let count = published
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .len();
+            if count >= expected {
+                break;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "only {count} of {expected} decorations published within 10 s"
+            );
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        completions.push(started.elapsed());
+    }
+    println!(
+        "10k repository: cached batch {cached_tooks:?}, pending batch {pending_tooks:?}, completion {completions:?}"
     );
     let published = published.lock().unwrap_or_else(PoisonError::into_inner);
-    assert_eq!(*published, cached);
+    assert_eq!(published[published.len() - 100..], cached[..]);
+    tests::bench::record("git-batch-cached", &cached_tooks);
+    tests::bench::record("git-batch-pending", &pending_tooks);
+    tests::bench::record("git-complete", &completions);
 }
 
 /// Every action of the group runs through the app on a temporary

@@ -1,6 +1,6 @@
 [package]
 name = "vfs"
-version = "0.1.0"
+version.workspace = true
 description = "Rick virtual filesystem: the provider table and the cross-provider copy and move composition."
 edition.workspace = true
 license.workspace = true

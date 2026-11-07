@@ -1,6 +1,6 @@
 [package]
 name = "ext-preview-code"
-version = "0.1.0"
+version.workspace = true
 description = "Rick preview extension for source code: syntax highlighting with syntect on top of the text previewer's window."
 edition.workspace = true
 license.workspace = true

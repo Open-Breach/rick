@@ -9,7 +9,7 @@ Entry format:
 
 `12. (issue 3) Should Undo of a trash operation restore to the original path if a new entry now has that name? Assumed: no, restore with a numbered suffix.`
 
-Once answered, an entry keeps its number and gains a `Decided (date):` line.
+Once answered, an entry keeps its number and gains a dated decision line.
 
 ---
 
@@ -145,6 +145,7 @@ Once answered, an entry keeps its number and gains a `Decided (date):` line.
     entries plus a copy-or-move mode; Paste after Cut empties it; Paste after
     Copy keeps it. Only Copy path writes to the system clipboard. Sharing
     file lists with other applications is left for a later issue.
+    Decided (2026-11-06): as assumed; spec updated in 1309213.
 
 15. (issue 3) `Provider::remove(loc, RemoveMode::Trash)` returns `()`, so
     an undo of Move to trash has nothing to restore from, while
@@ -152,6 +153,7 @@ Once answered, an entry keeps its number and gains a `Decided (date):` line.
     Assumed: Move to trash on a local location goes through the platform
     directly and keeps the items for undo; on any other provider it goes
     through the provider and cannot be undone. Only local exists in 0.1.
+    Decided (2026-11-06): as assumed; spec unchanged.
 
 16. (issue 3) "Every long operation is a Job" names directory listings, and
     the job table shows jobs. A listing per navigation would flood the
@@ -171,6 +173,7 @@ Once answered, an entry keeps its number and gains a `Decided (date):` line.
     in without an empty intermediate state, so the model is right even where
     the watcher lags or is unsupported. Watch events still apply as they
     arrive.
+    Decided (2026-11-06): as assumed; spec unchanged.
 
 18. (issue 3) "Settings in TOML" names no file, location or behaviour on a
     bad file.
@@ -178,6 +181,7 @@ Once answered, an entry keeps its number and gains a `Decided (date):` line.
     if missing so it can be watched. Keys not present take their defaults; a
     file that does not parse is reported as a warning and the last good
     settings stay. Every `Command::Settings` writes the whole file.
+    Decided (2026-11-06): as assumed; spec unchanged.
 
 19. (issue 3) Some entries of the 0.1 operations list need the UI rather
     than an `Action`: "Open containing folder" navigates the pane and selects
@@ -190,6 +194,7 @@ Once answered, an entry keeps its number and gains a `Decided (date):` line.
     `UiHost::prompt`, which the UI may implement as inline editing. The
     shortcut table's navigation and selection rows are therefore bound by the
     UI's key map, not by registered actions.
+    Decided (2026-11-06): as assumed; spec unchanged.
 
 20. (issue 3) The Paste conflict handling ("asks once with skip, overwrite,
     rename or apply-to-all") needs a dialogue the UI issue brings.
@@ -197,6 +202,8 @@ Once answered, an entry keeps its number and gains a `Decided (date):` line.
     that exists fails that item's job with `AlreadyExists`, reported in the
     job table and as a notification. Copy path's "name only" variant and
     New folder's "move the selection into it" variant are not in 0.1.
+    Decided (2026-11-06): superseded: the conflict dialogue is specified
+    (Drag and drop, Execution) and built in close-out issue A.
 
 21. (issue 4) The spec has two shortcut tables that disagree: the first
     ("Keyboard shortcuts" under Functions) binds Backspace to Parent
@@ -209,6 +216,7 @@ Once answered, an entry keeps its number and gains a `Decided (date):` line.
     of the first table that do not conflict are bound too: F11 Full screen,
     Mod+Q Quit, Mod+B Toggle side panel, Mod+, Settings, Alt+Enter
     Properties. New window and Search subdirectories are not bound.
+    Decided (2026-11-06): as assumed; spec updated in 1309213.
 
 22. (issue 4) The GUI section says type-to-filter "replaces the classic
     jump to first entry starting with the letter behaviour", while the
@@ -217,6 +225,8 @@ Once answered, an entry keeps its number and gains a `Decided (date):` line.
     Assumed: type-to-filter. Typing while the list has the keyboard appends
     to the tab's filter, shown in the bar at the foot of the list; Backspace
     edits it, Escape clears it and Enter opens the first match.
+    Decided (2026-11-06): type-to-filter stands; the Selection table row is
+    corrected in 0aaaf1a.
 
 23. (issue 4) Several rows of the shortcut tables name operations outside
     the 0.1 scope: Quick open, Select by pattern, Paste as link, Bulk
@@ -226,6 +236,7 @@ Once answered, an entry keeps its number and gains a `Decided (date):` line.
     of operations outside 0.1 show a notification saying so, so the binding
     is live and visible and the implementation slots in later. The Viewer
     table is not bound: the viewer is an explicit 0.1 non-goal.
+    Decided (2026-11-06): as assumed; spec unchanged.
 
 24. (issue 4) "60 fps on the CI runner's software renderer" names a
     renderer the headless test harness does not have: `egui_kittest` runs
@@ -236,6 +247,7 @@ Once answered, an entry keeps its number and gains a `Decided (date):` line.
     the UI code influences; the GPU upload of a few thousand triangles is
     not part of it. The test asserts the 95th percentile under 16.6 ms over
     240 scrolling frames of the 200k fixture, in release, on every runner.
+    Decided (2026-11-06): as assumed; spec unchanged.
 
 25. (issue 4) The GUI section says context-menu entries "that do not apply
     to the selection are hidden rather than greyed", while
@@ -243,6 +255,7 @@ Once answered, an entry keeps its number and gains a `Decided (date):` line.
     Assumed: the context menu hides both `Hidden` and `Disabled` entries,
     as the GUI section says; the command palette shows `Disabled` entries
     greyed with the reason as tooltip, which is what the variant is for.
+    Decided (2026-11-06): as assumed; spec updated in 1309213.
 
 26. (issue 4) Rename, New file and New folder are specified with "inline
     edit", and Delete permanently with a confirmation; actions ask through
@@ -253,11 +266,15 @@ Once answered, an entry keeps its number and gains a `Decided (date):` line.
     recorded; the shell shows a modal dialogue and, when the user answers,
     queues the answer and runs the action again. Inline editing in the list
     can replace the dialogue later without touching the actions.
+    Decided (2026-11-06): superseded for Rename, New file and New folder,
+    which edit inline (close-out issue A); `UiHost::prompt` remains for
+    other actions.
 
 27. (issue 4) `egui_dock` 0.21 builds against egui 0.36 while eframe,
     `egui_extras` and `egui_kittest` are at 0.37.
     Assumed: the whole egui stack is pinned to 0.36 until `egui_dock`
     moves; the dock is the spec's choice and must share egui's types.
+    Decided (2026-11-06): as assumed; spec unchanged.
 
 28. (issue 4) The model's `Pane` keeps its tabs in a `Vec`, and the spec's
     `Command` set has no way to reorder tabs within a pane, yet dragging a
@@ -266,6 +283,7 @@ Once answered, an entry keeps its number and gains a `Decided (date):` line.
     `egui_dock` tree; the model's order is only the initial placement. Drag
     and drop between panes and into splits is translated into `MoveTab`,
     `CloseTab`, `ActivateTab` and `FocusPane` commands after each frame.
+    Decided (2026-11-06): as assumed; spec unchanged.
 
 29. (issue 4) Several GUI items are specified but not in this issue's task
     list or the 0.1 definition of done: the side panel with its sections,
@@ -275,6 +293,8 @@ Once answered, an entry keeps its number and gains a `Decided (date):` line.
     Assumed: left for later issues. The inspector pane stands in for the
     Preview tab with a placeholder, as the issue asks; tabs cannot be torn
     out into windows yet.
+    Decided (2026-11-06): superseded by the 0.1 close-out list and issues A,
+    B, C.
 
 30. (issue 5) "A 50 MB image … shows its first frame within 200 ms" names a
     budget no CPU decoder meets for a 50 MB JPEG or PNG: entropy decoding
@@ -288,6 +308,7 @@ Once answered, an entry keeps its number and gains a `Decided (date):` line.
     downscaled. The acceptance fixture is a 48 MB BMP, which shows pixels
     well within 200 ms; a 50 MB JPEG shows its dimensions within 200 ms and
     its pixels after the decode, which never blocks the UI thread.
+    Decided (2026-11-06): as assumed; spec unchanged.
 
 31. (issue 5) `Frame::Text(TextBlock)` lets the UI lay text out, but the
     spec puts syntax highlighting in `ext-preview-code` with syntect, and a
@@ -296,12 +317,14 @@ Once answered, an entry keeps its number and gains a `Decided (date):` line.
     computed, and `RenderRequest` gains `dark` so the previewer can pick a
     theme that follows the UI (base16-ocean.dark, InspiredGitHub). Both
     types were shaped under question 8; this extends them.
+    Decided (2026-11-06): as assumed; spec updated in 1309213.
 
 32. (issue 5) The spec's Event list ends at `PreviewReady`; a file no
     previewer claims, or one whose previewer fails to open it, has no event.
     Assumed: `Event::PreviewFailed { pane, error }`, so the inspector can say
     why instead of showing a stale or empty preview. The alternative, a
     notification per unsupported selection, would be noise.
+    Decided (2026-11-06): as assumed; spec updated in 1309213.
 
 33. (issue 5) `PreviewDoc` must be `Send`, but pdfium's documents cannot be
     sent between threads and pdfium itself is single-threaded.
@@ -311,24 +334,32 @@ Once answered, an entry keeps its number and gains a `Decided (date):` line.
     page's text is extracted when that page is first rendered, so the text
     layer fills as the user reads instead of delaying `open` by 300 pages
     of extraction.
+    Decided (2026-11-06): as assumed; spec unchanged.
 
 34. (issue 5) pdfium is a dynamic library the crate does not bundle.
     Assumed: the previewer binds it from `RICK_PDFIUM_DIR`, then from the
     executable's directory, then from the system, and says which to set
     when none works; CI downloads the release build for each runner. How
     the packaged application ships pdfium is a later decision.
+    Decided (2026-11-06): pdfium ships beside the binary in every build and
+    release (spec 0aaaf1a); `RICK_PDFIUM_DIR` stays as the development
+    override.
 
 35. (issue 5) The spec's code list includes TypeScript, F# and Visual
     Basic, and TOML is common, but syntect's bundled grammars have none of
     them.
     Assumed: TypeScript is highlighted with the JavaScript grammar; F#,
     Visual Basic and TOML render as plain text until grammars are added.
+    Decided (2026-11-06): as assumed; spec unchanged.
 
 36. (issue 5) The spec puts word wrap and line numbers on the text preview
     as persisted toggles, but names no setting for them.
     Assumed: both are toggles on the preview, kept for the session, not
     written to `rick.toml`; CSV grids, Markdown and HTML rendering and the
     pretty-print toggle are not in this issue.
+    Decided (2026-11-06): superseded by the preview pane round: line numbers
+    and wrap are persisted defaults, pretty print is never remembered (spec
+    9e31f31, built in #10).
 
 37. (issue 6) The issue asks for status, branch and ahead/behind "via gix"
     and for actions that gix does not implement (stash, push with
@@ -339,6 +370,7 @@ Once answered, an entry keeps its number and gains a `Decided (date):` line.
     hanging. Show log and Blame run synchronously and open their text
     through `UiHost::show`, a method added for them (a read-only text
     window; the spec's `UiHost` had notify, confirm and prompt only).
+    Decided (2026-11-06): as assumed; spec unchanged.
 
 38. (issue 6) The spec's `Decorator` has no way to say what stales its
     cache or to be told when it did, yet the issue asks for a cache
@@ -349,6 +381,7 @@ Once answered, an entry keeps its number and gains a `Decided (date):` line.
     decorates the whole listing again, debounced by 150 ms, when a watched
     location or the listed directory changes, and on an explicit refresh.
     Navigating within the same work tree keeps the cache.
+    Decided (2026-11-06): as assumed; spec updated in 1309213.
 
 39. (issue 6) The spec says every long operation is a `Job`, and the
     decorator's status read is one, but the listing jobs are deliberately
@@ -357,6 +390,7 @@ Once answered, an entry keeps its number and gains a `Decided (date):` line.
     event sink, so status reads do not flash in the operations area; they
     are cancelled with the pane's listing through the context's token.
     The Git actions themselves run on the app's runner and are listed.
+    Decided (2026-11-06): as assumed; spec unchanged.
 
 40. (issue 6) `Decoration` has one badge and one tint, but several
     decorators may decorate the same entry.
@@ -366,6 +400,7 @@ Once answered, an entry keeps its number and gains a `Decided (date):` line.
     missing, so badges do not blink while a decorator looks again. Which
     badge wins between two decorators is the later one's; the spec would
     need a priority to do better.
+    Decided (2026-11-06): as assumed; spec unchanged.
 
 41. (issue 6) The context menu's extension groups show only `Enabled`
     actions, and the issue says the group is "available only when
@@ -375,6 +410,7 @@ Once answered, an entry keeps its number and gains a `Decided (date):` line.
     when the selection does not fit (nothing selected; not exactly one
     file), so they are absent from the context menu but explained in the
     palette.
+    Decided (2026-11-06): as assumed; spec unchanged.
 
 42. (issue 6) The local provider's watch is not recursive, so a watch on
     `.git` sees the index, HEAD, ORIG_HEAD and packed-refs change but not
@@ -383,6 +419,7 @@ Once answered, an entry keeps its number and gains a `Decided (date):` line.
     checkouts and staging done outside Rick; a fetch or push from outside
     that only writes a loose remote ref is picked up on the next change
     or refresh. Rick's own Git actions drop the cache themselves.
+    Decided (2026-11-06): as assumed; spec unchanged.
 
 43. (side panel) The GUI section specifies a side panel with Home, Recent,
     Network, Trash and Pinned, but the 0.1 definition of done does not list
@@ -393,6 +430,9 @@ Once answered, an entry keeps its number and gains a `Decided (date):` line.
     exist. Pinning is done from a button in the Pinned section's header for
     the focused pane's folder, and unpinning from the entry; the context
     menu action stays out.
+    Decided (2026-11-06): superseded by close-out A (#15): the sections, the
+    conflict dialogue with pause, and mounted volumes as drop targets are
+    built.
 
 44. (side panel) The spec says the folded state and width persist across
     sessions, and session restore is a later issue.
@@ -400,17 +440,20 @@ Once answered, an entry keeps its number and gains a `Decided (date):` line.
     locations, are settings in `rick.toml` (`[side_panel]` and `pinned`),
     written like every other setting, so they survive a restart today and
     can move into the session file when it exists.
+    Decided (2026-11-06): as assumed; spec updated in 12f3b25.
 
 45. (side panel) The spec puts the operations area at the bottom of the
     side panel; it does not say where it goes when the panel is hidden.
     Assumed: at the bottom of the window, as before, so a running job is
     never invisible.
+    Decided (2026-11-06): as assumed; spec updated in 12f3b25.
 
 46. (side panel) The spec lets the panel "collapse to a narrow icon strip or
     hide entirely".
     Assumed: hide entirely (Mod+B, the Panel toggle in the top bar, the
     Settings screen); the icon strip comes with the Recent and Network
     sections, which would give it more than two icons.
+    Decided (2026-11-06): as assumed; spec updated in 12f3b25.
 
 47. (GUI chrome) The spec's title row has no undo and redo buttons, which
     the old top bar had, and the burger menu lists New window, Settings,
@@ -418,6 +461,7 @@ Once answered, an entry keeps its number and gains a `Decided (date):` line.
     Assumed: undo and redo stay reachable through their shortcuts and the
     search box's command mode; no button or menu entry is added until the
     spec names one.
+    Decided (2026-11-06): as assumed; spec unchanged.
 
 48. (GUI chrome) The spec says Rick draws its own chrome and on macOS "the
     traffic lights keep their place".
@@ -426,12 +470,14 @@ Once answered, an entry keeps its number and gains a `Decided (date):` line.
     with the content view at full size, so the system's buttons stay, and
     the title row leaves 78 points free for them. Which platform does what
     comes from `platform::Chrome`, not from `cfg(target_os)` in the UI.
+    Decided (2026-11-06): as assumed; spec unchanged.
 
 49. (GUI chrome) The search box's name search is specified as "the current
     location first, the platform index when a SearchIndex is available".
     Assumed: the current location only, as the issue scopes it; a hit is
     selected and scrolled into view on Enter. The index path comes with the
     first search-index extension.
+    Decided (2026-11-06): as assumed; spec updated in 12f3b25.
 
 50. (GUI chrome) Thumbnails are specified "at the cell size, off the UI
     thread, cached per entry and size".
@@ -440,12 +486,14 @@ Once answered, an entry keeps its number and gains a `Decided (date):` line.
     (not in the operations area, like listings) and answers with
     `Event::Thumbnail`; the UI keeps the textures per entry id and pixel
     size, up to 2048, and starts over past that. Folders never ask for one.
+    Decided (2026-11-06): as assumed; spec updated in 12f3b25.
 
 51. (GUI chrome) The right-click on empty space is specified to open the
     folder's menu "with no selection", while a right-click on a row outside
     the selection selects that row first.
     Assumed: a right-click on empty space clears the selection as well, so
     the menu and the list agree about what the actions would act on.
+    Decided (2026-11-06): as assumed; spec updated in 12f3b25.
 
 52. (GUI chrome) The spec turns the platform's title bar off and has Rick draw
     the chrome, but says nothing about the window's border, shadow or how it
@@ -456,6 +504,7 @@ Once answered, an entry keeps its number and gains a `Decided (date):` line.
     colour, and invisible grips along the edges and corners that resize the
     window through the backend; a maximised or fullscreen window has no
     frame, and macOS keeps the system's border and resize handles.
+    Decided (2026-11-06): as assumed; spec updated in 12f3b25.
 
 53. (Preview pane) The spec remembers the pinned info section "per content
     kind (image, text, PDF, …)" without naming the kinds.
@@ -464,6 +513,7 @@ Once answered, an entry keeps its number and gains a `Decided (date):` line.
     and no pages, `image` otherwise — plus `other` for a file no previewer
     opens but a decorator describes. Stored as
     `[preview.pinned] text = "file"` in `rick.toml`.
+    Decided (2026-11-06): as assumed; spec updated in 12f3b25.
 
 54. (Preview pane) The spec's Pretty print covers "JSON, XML, YAML and
     minified HTML, CSS or JavaScript".
@@ -471,18 +521,21 @@ Once answered, an entry keeps its number and gains a `Decided (date):` line.
     (a tag-per-line indenter) get the toggle; YAML, CSS and JavaScript do
     not yet, since each needs a formatter of its own, so their files show
     no Pretty print control rather than one that does nothing.
+    Decided (2026-11-06): as assumed; spec updated in 12f3b25.
 
 55. (Preview pane) The spec names `kamadak-exif` and `rexiv2` for "every
     EXIF, IPTC and XMP tag".
     Assumed: `rexiv2` binds the system's gexiv2 library and was not a
     dependency, so the EXIF section lists what `kamadak-exif` reads (every
     EXIF tag, thumbnail IFD included); IPTC and XMP wait for a reader.
+    Decided (2026-11-06): as assumed; spec updated in 12f3b25.
 
 56. (Preview pane) The spec says the pane needs no heading because "the
     dock tab's label is enough", but the pane is still a side panel, not a
     dock tab (the preview-as-tab is a later issue).
     Assumed: the heading goes now; the panel has no label at all until it
     becomes a tab. The title row's toggle reads "Toggle preview pane".
+    Decided (2026-11-06): as assumed; spec updated in 12f3b25.
 
 57. (Preview pane) The spec says wrapped lines "break at the pane width"
     and asks for only the visible lines to be laid out.
@@ -490,6 +543,8 @@ Once answered, an entry keeps its number and gains a `Decided (date):` line.
     monospace line's row count follows from its length and the pane can
     place 200 000 lines without laying them out; a line whose real row
     count differs (tabs, wide glyphs) corrects the index on the next frame.
+    Decided (2026-11-06): as assumed; spec updated in 12f3b25.
+
 58. (drag and drop) The spec's `Transfer` carries `EntryId`s and the source
     pane; items dropped from another application or another Rick process
     have neither, since they are in no pane's listing.
@@ -497,6 +552,7 @@ Once answered, an entry keeps its number and gains a `Decided (date):` line.
     `Transfer`, the same job behind it, with the outside rule (copy unless
     Shift) already applied by the UI. No other shape of the spec's enum is
     touched.
+    Decided (2026-11-06): as assumed; spec updated in 12f3b25.
 
 59. (drag and drop) `TransferMode::Ask` "opens the move/copy prompt first",
     but `UiHost` offers yes/no and a text line only, and the prompt sits at
@@ -505,6 +561,7 @@ Once answered, an entry keeps its number and gains a `Decided (date):` line.
     place; an `Ask` that reaches the app is answered with a warning and
     does nothing. The prompt is Move, Copy and Cancel at the cursor;
     Escape cancels it.
+    Decided (2026-11-06): as assumed; spec unchanged.
 
 60. (drag and drop) The spec says a conflict on an existing name "asks once
     with skip, overwrite, rename or apply-to-all", and the operations area
@@ -514,6 +571,9 @@ Once answered, an entry keeps its number and gains a `Decided (date):` line.
     conflict with the error shown), and the operations area offers cancel
     only, as before. The conflict prompt and pause are their own issue; the
     transfer job is written so a conflict policy drops into the pair loop.
+    Decided (2026-11-06): superseded by close-out A (#15): the sections, the
+    conflict dialogue with pause, and mounted volumes as drop targets are
+    built.
 
 61. (drag and drop) "Same volume moves, across volumes copies" needs the
     volume of the target folder; a `Location` has none.
@@ -525,6 +585,7 @@ Once answered, an entry keeps its number and gains a `Decided (date):` line.
     so the drag moves; the rename then falls back to a copy and remove
     inside the job when the device differs, so the outcome is the same and
     only the undo entry is missing.
+    Decided (2026-11-06): as assumed; spec unchanged.
 
 62. (drag and drop) `egui` 0.36 over `winit` 0.30 receives hovered and
     dropped files on Linux (Wayland and X11), macOS and Windows but
@@ -542,6 +603,7 @@ Once answered, an entry keeps its number and gains a `Decided (date):` line.
     `DragEntered`/`DragMoved` events and a drag-source API are on its main
     branch), and the drag then stays inside the window. The fake platform
     records the URIs, which is what the acceptance test checks.
+    Decided (2026-11-06): as assumed; spec updated in 12f3b25.
 
 63. (drag and drop) A pinned entry is a `Location`; the spec wants a pinned
     folder to open in the pane and a pinned file to open its folder with
@@ -552,11 +614,15 @@ Once answered, an entry keeps its number and gains a `Decided (date):` line.
     location of any other provider for a folder. Pinned locations are
     written as `provider:path` strings; a bare path in an older file is
     read as local.
+    Decided (2026-11-06): as assumed; spec unchanged.
 
 64. (drag and drop) The spec's targets include "a mounted volume under
     Network", and the Network section holds nothing yet.
     Assumed: Home is the one side-panel folder target today; volumes join
     it when the Network section is filled.
+    Decided (2026-11-06): superseded by close-out A (#15): the sections, the
+    conflict dialogue with pause, and mounted volumes as drop targets are
+    built.
 
 65. (drag and drop) The spec has `Pin to side panel` in the context menu's
     Open group "of every entry"; actions carry a fixed label, and the flip
@@ -567,6 +633,7 @@ Once answered, an entry keeps its number and gains a `Decided (date):` line.
     settings and the actions reach it through a `PinStore` the app provides.
     Spring-loading into a tab header switches the pane to that tab and
     "return" switches back; a drop on a header never switches.
+    Decided (2026-11-06): as assumed; spec unchanged.
 
 66. (session) The spec's shortcut table binds Mod+N to New file, the
     Windows paragraph of General behaviour opens a new window with Ctrl+N,
@@ -575,6 +642,7 @@ Once answered, an entry keeps its number and gains a `Decided (date):` line.
     paragraph say; `core.new_file` has no default shortcut until the spec
     names one (it stays in the menu and the palette and is rebindable in
     Settings → Keyboard shortcuts).
+    Decided (2026-11-06): as assumed; spec updated in 12f3b25.
 
 67. (session) The issue wants "egui_dock's serialised tree" in the session,
     and `model` may not depend on `egui_dock` (only `ui-egui` knows egui).
@@ -586,6 +654,7 @@ Once answered, an entry keeps its number and gains a `Decided (date):` line.
     narrowed: tab order is still the dock's display state, but it is
     reported to the model and is part of the session. Leaf rectangles and
     scroll positions of the strips are not kept.
+    Decided (2026-11-06): as assumed; spec unchanged.
 
 68. (session) The issue names `show_viewport_deferred` as the mechanism for
     further windows. A deferred viewport's callback must be `Send + Sync +
@@ -598,6 +667,7 @@ Once answered, an entry keeps its number and gains a `Decided (date):` line.
     children stay, so closing the first window with others open moves the
     root viewport to the next window (position, size and state follow);
     the window that closes is the model's.
+    Decided (2026-11-06): as assumed; spec unchanged.
 
 69. (session) "Continue where I left off" names the last session, and the
     session file is overwritten continuously, so after starting with a
@@ -612,6 +682,7 @@ Once answered, an entry keeps its number and gains a `Decided (date):` line.
     replacing the session. The issue's "window-qualified `DockTarget`" is
     `DockTarget::Into(pane)` as before, since pane ids are unique across
     windows, plus `DockTarget::NewWindow` for a tear-out.
+    Decided (2026-11-06): as assumed; spec unchanged.
 
 70. (session) The spec's `Command` list has nothing for sessions, layouts
     and windows, and question 44 put the side panel's state in `rick.toml`.
@@ -625,6 +696,7 @@ Once answered, an entry keeps its number and gains a `Decided (date):` line.
     `RenameLayout` join the list, to be added to the spec. Settings gained
     `[session] start = "last" | "<layout name>"` as the issue names it; a
     layout cannot be called `last`.
+    Decided (2026-11-06): as assumed; spec updated in 12f3b25.
 
 71. (session) The issue says a tab whose location no longer exists "opens
     at the nearest existing ancestor and says so in the status line", and
@@ -635,7 +707,7 @@ Once answered, an entry keeps its number and gains a `Decided (date):` line.
     only provider in 0.1), locations of a provider that is not mounted open
     at Home with a note, and locations of any other mounted provider are
     taken as they are.
-
+    Decided (2026-11-06): as assumed; spec updated in 12f3b25.
 
 72. (close-out A) The spec's View shortcut table gives Mod+Shift+F to
     "Toggle flatten subfolders", while the Main area and the issue give
@@ -643,6 +715,7 @@ Once answered, an entry keeps its number and gains a `Decided (date):` line.
     Assumed: the issue wins. Mod+Shift+F toggles the subtree search and
     focuses the filter; Flatten keeps its intent and palette entry with no
     default binding, rebindable in Settings → Keyboard shortcuts.
+    Decided (2026-11-06): as assumed; spec updated in 12f3b25.
 
 73. (close-out A) The spec names the side panel's Tree view "as a section
     in the side panel and as its own dockable tab", but the side panel table
@@ -652,6 +725,7 @@ Once answered, an entry keeps its number and gains a `Decided (date):` line.
     pane's volume (`/`, the drive root), lists folders lazily as they are
     opened, and follows the focused pane unless its link toggle is off. The
     dockable Tree tab is not in issue A.
+    Decided (2026-11-06): as assumed; spec updated in 12f3b25.
 
 74. (close-out A) The `Trash` platform trait is specified as "trash, list,
     restore, empty", and the Trash section's Delete permanently needs to
@@ -669,6 +743,7 @@ Once answered, an entry keeps its number and gains a `Decided (date):` line.
     trashed, persisted in `trash.toml` in the config directory, and says
     that items trashed elsewhere are not listed. Supersedes 15's "cannot
     be undone" for the restore direction.
+    Decided (2026-11-06): as assumed; spec updated in 12f3b25.
 
 75. (close-out A) The spec feeds Recent "by file-system events, not only by
     what Rick touched", and the local provider's watch is not recursive
@@ -679,6 +754,7 @@ Once answered, an entry keeps its number and gains a `Decided (date):` line.
     per root, 5 s at most). A change deep under Home that no pane shows is
     picked up by the next scan. The list persists in `recent.toml`, a path
     per row, re-examined on start so the rows carry current ids.
+    Decided (2026-11-06): as assumed; spec updated in 12f3b25.
 
 76. (close-out A) "udisks2 on Linux" for the volume list would need a D-Bus
     client; `rfd` already pulls `zbus` in, but only as its portal backend.
@@ -688,6 +764,7 @@ Once answered, an entry keeps its number and gains a `Decided (date):` line.
     are told by type. The list is polled every 3 s, so media that come and
     go show without a user action. udisks2 proper comes with mount and
     unmount in 0.2.
+    Decided (2026-11-06): as assumed; spec unchanged.
 
 77. (close-out A) The conflict dialogue replaces 20's "never overwrite":
     Paste, Duplicate's siblings (Transfer, drag and drop, undo of a move)
@@ -700,6 +777,7 @@ Once answered, an entry keeps its number and gains a `Decided (date):` line.
     undo of a move that overwrote moves the item back but cannot bring the
     overwritten target back. Conflicts are values in `types`
     (`Conflict`, `ConflictAnswer`) since they cross from `ops` to the UI.
+    Decided (2026-11-06): as assumed; spec updated in 12f3b25.
 
 78. (close-out A) Pause in the operations area needs a job-side gate the
     spec's `JobCtx` does not name.
@@ -712,8 +790,27 @@ Once answered, an entry keeps its number and gains a `Decided (date):` line.
     `FolderTreeToggle`, `FolderTreeLink`, `ResolveConflict`, `RefreshTrash`
     and `RefreshVolumes`, and `Event` gains `Conflict`, all in the spirit of
     the spec's enum; the spec block should list them.
+    Decided (2026-11-06): as assumed; spec updated in 12f3b25.
 
 79. (close-out A) The spec's "slow second click" has no delay. Assumed: a
     plain second click on the one selected row at least 0.5 s after the
     first (past egui's double-click window) starts the rename; a faster
     second click opens the entry as a double-click does.
+    Decided (2026-11-06): as assumed; spec updated in 12f3b25.
+
+80. (release) Two macOS flakes on the release pull request's CI: the tree
+    view's first screen measured 80.8 ms once against an 80 ms target set
+    at median × 1.5 (median 42 ms, worst 50.5 ms in five runs), and the
+    search box test counted a third label with a file's name because the
+    side panel's Recent section, fed by every open pane's watch since
+    close-out A, listed the test's freshly written files before the
+    assertion ran, which the FSEvents timing on macOS allows.
+    Assumed: on macOS and Windows a timed test repeats its measured part
+    three times and asserts the median against the target, whose rule
+    (median × 1.5, rounded up, never below Linux) is unchanged; Linux keeps
+    the spec's numbers on a single run. Label counts in the integration
+    tests are scoped to the widgets they are about (the file list and the
+    search dropdown), never to the whole window, since the side panel may
+    list the same names.
+    Decided (2026-11-06): as assumed; spec unchanged. BENCHMARKS.md says so
+    in its Targets paragraph.

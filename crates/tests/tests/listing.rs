@@ -2,7 +2,7 @@
 //! ends it within one batch.
 
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use ext::{ListOptions, Provider};
 use futures::StreamExt;
@@ -30,8 +30,8 @@ fn flat(entries: usize) -> tests::fixture::Fixture {
     .unwrap_or_else(|e| panic!("{e}"))
 }
 
-/// The Decisions-table numbers hold on Linux CI; macOS and Windows record
-/// their timings until targets are set from measurements (issue 2).
+/// The Decisions-table numbers on Linux; the macOS and Windows targets are
+/// in `tests::bench` and BENCHMARKS.md.
 #[test]
 #[ignore = "lists 200 000 entries; run with --ignored in release"]
 fn listing_200k_entries_first_batch_under_50ms_complete_under_400ms() {
@@ -48,41 +48,38 @@ fn listing_200k_entries_first_batch_under_50ms_complete_under_400ms() {
         while stream.next().await.is_some() {}
     });
 
-    let (first_batch, complete, count) = runtime::block_on(async {
-        let started = Instant::now();
-        let mut stream = provider.list(
-            &local(fixture.root()),
-            ListOptions::default(),
-            CancelToken::new(),
+    let mut firsts = Vec::new();
+    let mut completes = Vec::new();
+    for _ in 0..tests::bench::runs() {
+        let (first_batch, complete, count) = runtime::block_on(async {
+            let started = Instant::now();
+            let mut stream = provider.list(
+                &local(fixture.root()),
+                ListOptions::default(),
+                CancelToken::new(),
+            );
+            let first = stream
+                .next()
+                .await
+                .unwrap_or_else(|| panic!("empty listing"))
+                .unwrap_or_else(|e| panic!("{e}"));
+            let first_batch = started.elapsed();
+            let mut count = first.len();
+            while let Some(batch) = stream.next().await {
+                count += batch.unwrap_or_else(|e| panic!("{e}")).len();
+            }
+            (first_batch, started.elapsed(), count)
+        });
+        println!(
+            "listing 200 000 entries on {}: first batch {first_batch:?}, complete {complete:?}",
+            std::env::consts::OS
         );
-        let first = stream
-            .next()
-            .await
-            .unwrap_or_else(|| panic!("empty listing"))
-            .unwrap_or_else(|e| panic!("{e}"));
-        let first_batch = started.elapsed();
-        let mut count = first.len();
-        while let Some(batch) = stream.next().await {
-            count += batch.unwrap_or_else(|e| panic!("{e}")).len();
-        }
-        (first_batch, started.elapsed(), count)
-    });
-
-    println!(
-        "listing 200 000 entries on {}: first batch {first_batch:?}, complete {complete:?}",
-        std::env::consts::OS
-    );
-    assert_eq!(count, 200_000);
-    if std::env::consts::OS == "linux" {
-        assert!(
-            first_batch < Duration::from_millis(50),
-            "first batch took {first_batch:?}"
-        );
-        assert!(
-            complete < Duration::from_millis(400),
-            "complete listing took {complete:?}"
-        );
+        assert_eq!(count, 200_000);
+        firsts.push(first_batch);
+        completes.push(complete);
     }
+    tests::bench::record("listing-first", &firsts);
+    tests::bench::record("listing-complete", &completes);
 }
 
 #[test]

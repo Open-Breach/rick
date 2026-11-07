@@ -430,44 +430,53 @@ fn two_hundred_thousand_wrapped_lines_keep_every_frame_under_the_budget() {
         .content
         .unwrap_or_else(|| panic!("content"));
 
-    harness.get_by_label(icons::WRAP).click();
-    let started = Instant::now();
-    harness.step();
-    let mut frames = vec![("toggle wrap", started.elapsed())];
-    harness.step();
-    assert_eq!(toolbar_item(&harness, "Word wrap"), Some(true));
-    harness.event(egui::Event::PointerMoved(content.center()));
-    harness.step();
-    for i in 0..3 {
-        harness.event(egui::Event::MouseWheel {
-            unit: egui::MouseWheelUnit::Point,
-            delta: egui::vec2(0.0, -400.0),
-            phase: egui::TouchPhase::Move,
-            modifiers: egui::Modifiers::default(),
-        });
+    let mut worsts = Vec::new();
+    for run in 0..tests::bench::runs() {
+        if run > 0 {
+            // Wrap off again, so the next run toggles it on from the start.
+            harness.get_by_label(icons::WRAP).click();
+            harness.step();
+            harness.step();
+            assert_eq!(toolbar_item(&harness, "Word wrap"), Some(false));
+        }
+        harness.get_by_label(icons::WRAP).click();
         let started = Instant::now();
         harness.step();
-        frames.push((["scroll 1", "scroll 2", "scroll 3"][i], started.elapsed()));
-    }
-    let drawn = harness
-        .state()
-        .previews()
-        .get(pane)
-        .map_or(0, |s| s.drawn_lines().len());
-    println!("200k lines wrapped: {frames:?}; {drawn} lines laid out in the last frame");
-    assert!(
-        drawn > 0 && drawn < 400,
-        "only the visible lines are laid out: {drawn}"
-    );
-    let budget = Duration::from_micros(16_600);
-    let release = !cfg!(debug_assertions);
-    for (name, took) in &frames {
-        if release && cfg!(target_os = "linux") {
-            assert!(*took < budget, "{name} took {took:?}");
-        } else if *took >= budget {
-            println!("{name} took {took:?} (over budget; not asserted here)");
+        let mut frames = vec![("toggle wrap", started.elapsed())];
+        harness.step();
+        assert_eq!(toolbar_item(&harness, "Word wrap"), Some(true));
+        harness.event(egui::Event::PointerMoved(content.center()));
+        harness.step();
+        for i in 0..3 {
+            harness.event(egui::Event::MouseWheel {
+                unit: egui::MouseWheelUnit::Point,
+                delta: egui::vec2(0.0, -400.0),
+                phase: egui::TouchPhase::Move,
+                modifiers: egui::Modifiers::default(),
+            });
+            let started = Instant::now();
+            harness.step();
+            frames.push((["scroll 1", "scroll 2", "scroll 3"][i], started.elapsed()));
         }
+        let drawn = harness
+            .state()
+            .previews()
+            .get(pane)
+            .map_or(0, |s| s.drawn_lines().len());
+        println!("200k lines wrapped: {frames:?}; {drawn} lines laid out in the last frame");
+        assert!(
+            drawn > 0 && drawn < 400,
+            "only the visible lines are laid out: {drawn}"
+        );
+        worsts.push(
+            frames
+                .iter()
+                .map(|(_, took)| *took)
+                .max()
+                .unwrap_or_default(),
+        );
     }
+    tests::bench::record("wrap-frame", &worsts);
 }
 
 /// A photo has File info and EXIF badges; hovering shows the rows, clicking

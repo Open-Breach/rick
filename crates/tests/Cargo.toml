@@ -1,6 +1,6 @@
 [package]
 name = "tests"
-version = "0.1.0"
+version.workspace = true
 description = "Rick integration tests and the generated fixture tree."
 edition.workspace = true
 license.workspace = true

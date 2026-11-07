@@ -1,6 +1,6 @@
 [package]
 name = "types"
-version = "0.1.0"
+version.workspace = true
 description = "Rick kernel value types: identities, paths, entries, cancellation, progress and the kernel error."
 edition.workspace = true
 license.workspace = true

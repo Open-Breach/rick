@@ -1,6 +1,6 @@
 [package]
 name = "ext-preview-text"
-version = "0.1.0"
+version.workspace = true
 description = "Rick preview extension for plain text: encoding detection, a bounded window into large files, and a text layer for find."
 edition.workspace = true
 license.workspace = true

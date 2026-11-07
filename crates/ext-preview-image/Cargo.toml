@@ -1,6 +1,6 @@
 [package]
 name = "ext-preview-image"
-version = "0.1.0"
+version.workspace = true
 description = "Rick preview extension for images: the image crate's decoders, EXIF orientation, downscaling to the pane."
 edition.workspace = true
 license.workspace = true

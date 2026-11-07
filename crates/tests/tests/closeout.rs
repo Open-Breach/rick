@@ -218,48 +218,48 @@ fn recent_shows_a_touched_file_first_and_survives_a_restart() {
     let config_dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
     let config = config_dir.path().join("config");
     let home = fake.home_dir();
+    let touched = &["first.txt", "second.txt", "third.txt"][..tests::bench::runs().max(2)];
+    let last = touched[touched.len() - 1];
     {
         let (mut harness, _) = harness_with(dir.path(), &config, fake.clone());
         harness.get_by_label_contains("Nothing changed recently");
-        fs::write(home.join("first.txt"), "1").unwrap_or_else(|e| panic!("{e}"));
-        let started = Instant::now();
-        assert!(
-            step_until(&mut harness, Duration::from_millis(500), |h| {
-                h.state()
-                    .app()
-                    .model()
-                    .recent
-                    .entries()
-                    .first()
-                    .is_some_and(|e| e.name == "first.txt")
-            }),
-            "the touched file is the first row within 500 ms"
-        );
-        println!("recent row after {:?}", started.elapsed());
-        harness.get_by_label_contains("first.txt");
-        std::thread::sleep(Duration::from_millis(30));
-        fs::write(home.join("second.txt"), "2").unwrap_or_else(|e| panic!("{e}"));
-        assert!(step_until(&mut harness, Duration::from_millis(500), |h| {
-            h.state()
-                .app()
-                .model()
-                .recent
-                .entries()
-                .first()
-                .is_some_and(|e| e.name == "second.txt")
-        }));
+        // Each touched file is the first row within the budget; at least two
+        // touches, so the order after a restart means something.
+        let mut samples = Vec::new();
+        for (i, name) in touched.iter().enumerate() {
+            if i > 0 {
+                std::thread::sleep(Duration::from_millis(30));
+            }
+            fs::write(home.join(name), name).unwrap_or_else(|e| panic!("{e}"));
+            let started = Instant::now();
+            assert!(
+                step_until(&mut harness, Duration::from_millis(500), |h| {
+                    h.state()
+                        .app()
+                        .model()
+                        .recent
+                        .entries()
+                        .first()
+                        .is_some_and(|e| e.name == *name)
+                }),
+                "{name} is the first row within 500 ms"
+            );
+            samples.push(started.elapsed());
+            harness.get_by_label_contains(name);
+        }
+        tests::bench::record("recent", &samples[..tests::bench::runs()]);
         settle(&mut harness);
         let file = config.join(app::RECENT_FILE);
         assert!(step_until(&mut harness, Duration::from_secs(3), |_| {
-            fs::read_to_string(&file).is_ok_and(|t| t.contains("second.txt"))
+            fs::read_to_string(&file).is_ok_and(|t| t.contains(last))
         }));
 
         // A click selects the file in the focused pane; a double-click opens.
-        harness.get_by_label_contains("second.txt").click();
+        harness.get_by_label_contains(last).click();
         harness.step();
         settle(&mut harness);
         assert_eq!(location(&harness), home);
-        assert_eq!(selected_names(&harness), ["second.txt"]);
+        assert_eq!(selected_names(&harness), [last]);
     }
     let (harness, _) = harness_with(dir.path(), &config, fake);
     let rows: Vec<String> = harness
@@ -271,12 +271,9 @@ fn recent_shows_a_touched_file_first_and_survives_a_restart() {
         .iter()
         .map(|e| e.name.clone())
         .collect();
-    assert_eq!(
-        rows,
-        ["second.txt", "first.txt"],
-        "the same rows after a restart"
-    );
-    harness.get_by_label_contains("second.txt");
+    let newest_first: Vec<&str> = touched.iter().rev().copied().collect();
+    assert_eq!(rows, newest_first, "the same rows after a restart");
+    harness.get_by_label_contains(last);
 }
 
 #[test]
@@ -460,37 +457,34 @@ fn a_finished_job_leaves_the_operations_area_after_five_seconds() {
     assert!(harness.query_by_label_contains("Copy a.txt").is_none());
 }
 
+/// A 1 GiB file with 4 MiB of data at each end and a hole between.
+fn sparse_gib(path: &Path) {
+    use std::io::{Seek, SeekFrom, Write};
+    let mut file = fs::File::create(path).unwrap_or_else(|e| panic!("{e}"));
+    file.write_all(&vec![0xABu8; 4 << 20])
+        .unwrap_or_else(|e| panic!("{e}"));
+    file.seek(SeekFrom::Start((1 << 30) - (4 << 20)))
+        .unwrap_or_else(|e| panic!("{e}"));
+    file.write_all(&vec![0xCDu8; 4 << 20])
+        .unwrap_or_else(|e| panic!("{e}"));
+    file.set_len(1 << 30).unwrap_or_else(|e| panic!("{e}"));
+}
+
 /// A 1 GiB sparse copy shows its row with progress, pause holds it, cancel
 /// ends it within one batch.
 #[test]
 #[ignore = "writes a 1 GiB sparse file; run with --ignored"]
 fn a_1gib_sparse_copy_shows_progress_pauses_and_cancels() {
-    use std::io::{Seek, SeekFrom, Write};
     let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
-    let source = dir.path().join("sparse.bin");
-    {
-        let mut file = fs::File::create(&source).unwrap_or_else(|e| panic!("{e}"));
-        file.write_all(&vec![0xABu8; 4 << 20])
+    sparse_gib(&dir.path().join("sparse.bin"));
+    // The target folders exist before the window opens, so the listed folder
+    // does not change under the test.
+    for run_index in 0..tests::bench::runs() {
+        fs::create_dir(dir.path().join(format!("dst{run_index}")))
             .unwrap_or_else(|e| panic!("{e}"));
-        file.seek(SeekFrom::Start((1 << 30) - (4 << 20)))
-            .unwrap_or_else(|e| panic!("{e}"));
-        file.write_all(&vec![0xCDu8; 4 << 20])
-            .unwrap_or_else(|e| panic!("{e}"));
-        file.set_len(1 << 30).unwrap_or_else(|e| panic!("{e}"));
     }
-    fs::create_dir(dir.path().join("dst")).unwrap_or_else(|e| panic!("{e}"));
     let (mut harness, _) = harness(dir.path());
-    select(&mut harness, "sparse.bin");
-    run(&mut harness, "core.copy");
     let pane = pane(&harness);
-    command(
-        &mut harness,
-        app::Command::Navigate {
-            pane,
-            to: local(&dir.path().join("dst")),
-        },
-    );
-    run(&mut harness, "core.paste");
     let running = |h: &Harness<'_, RickUi>| {
         h.state()
             .app()
@@ -500,52 +494,85 @@ fn a_1gib_sparse_copy_shows_progress_pauses_and_cancels() {
             .find(|(_, j)| matches!(j.state, JobState::Running(_)))
             .map(|(id, _)| *id)
     };
-    let Some(id) = running(&harness) else {
-        // The fast path finished within a frame; the row is still there.
-        harness.get_by_label_contains("Copy sparse.bin");
-        return;
+    let row_shown = |h: &Harness<'_, RickUi>| {
+        assert!(
+            h.query_all_by_label_contains("Copy sparse.bin").count() >= 1,
+            "the copy's row is in the operations area"
+        );
     };
-    harness.get_by_label_contains("Copy sparse.bin");
-    assert!(harness.state().app().model().jobs[&id].pausable);
-    // Pause holds the job at its next gate; a single file through the fast
-    // path may finish before one comes, so the flag is checked only while
-    // it still runs.
-    harness
-        .state_mut()
-        .app_mut()
-        .handle(app::Command::PauseJob(id), &mut Vec::new());
-    harness.step();
-    let info = harness.state().app().model().jobs[&id].clone();
-    if matches!(info.state, JobState::Running(_)) {
-        assert!(info.paused, "{info:?}");
-        harness.get_by_label(icons::PLAY);
+    let mut samples = Vec::new();
+    // One copy per run, each into a folder of its own.
+    for run_index in 0..tests::bench::runs() {
+        let dst = dir.path().join(format!("dst{run_index}"));
+        if run_index > 0 {
+            command(
+                &mut harness,
+                app::Command::Navigate {
+                    pane,
+                    to: local(dir.path()),
+                },
+            );
+        }
+        select(&mut harness, "sparse.bin");
+        run(&mut harness, "core.copy");
+        command(
+            &mut harness,
+            app::Command::Navigate {
+                pane,
+                to: local(&dst),
+            },
+        );
+        run(&mut harness, "core.paste");
+        let Some(id) = running(&harness) else {
+            // The fast path finished within a frame; the row is still there
+            // and there is nothing left to cancel.
+            row_shown(&harness);
+            continue;
+        };
+        row_shown(&harness);
+        assert!(harness.state().app().model().jobs[&id].pausable);
+        // Pause holds the job at its next gate; a single file through the
+        // fast path may finish before one comes, so the flag is checked only
+        // while it still runs.
+        harness
+            .state_mut()
+            .app_mut()
+            .handle(app::Command::PauseJob(id), &mut Vec::new());
+        harness.step();
+        let info = harness.state().app().model().jobs[&id].clone();
+        if matches!(info.state, JobState::Running(_)) {
+            assert!(info.paused, "{info:?}");
+            harness.get_by_label(icons::PLAY);
+        }
+        harness
+            .state_mut()
+            .app_mut()
+            .handle(app::Command::ResumeJob(id), &mut Vec::new());
+        harness.step();
+        let cancelled_at = Instant::now();
+        harness
+            .state_mut()
+            .app_mut()
+            .handle(app::Command::CancelJob(id), &mut Vec::new());
+        assert!(step_until(&mut harness, Duration::from_secs(5), |h| {
+            !matches!(
+                h.state().app().model().jobs[&id].state,
+                JobState::Running(_)
+            )
+        }));
+        let cancel_took = cancelled_at.elapsed();
+        let state = harness.state().app().model().jobs[&id].state.clone();
+        println!("cancel took {cancel_took:?}; the job ended {state:?}");
+        assert!(
+            matches!(state, JobState::Cancelled | JobState::Done),
+            "{state:?}"
+        );
+        samples.push(cancel_took);
+        settle(&mut harness);
     }
-    harness
-        .state_mut()
-        .app_mut()
-        .handle(app::Command::ResumeJob(id), &mut Vec::new());
-    harness.step();
-    let cancelled_at = Instant::now();
-    harness
-        .state_mut()
-        .app_mut()
-        .handle(app::Command::CancelJob(id), &mut Vec::new());
-    assert!(step_until(&mut harness, Duration::from_secs(5), |h| {
-        !matches!(
-            h.state().app().model().jobs[&id].state,
-            JobState::Running(_)
-        )
-    }));
-    let state = harness.state().app().model().jobs[&id].state.clone();
-    println!(
-        "cancel took {:?}; the job ended {state:?}",
-        cancelled_at.elapsed()
-    );
-    assert!(
-        matches!(state, JobState::Cancelled | JobState::Done),
-        "{state:?}"
-    );
-    settle(&mut harness);
+    if !samples.is_empty() {
+        tests::bench::record("cancel", &samples);
+    }
 }
 
 #[test]
@@ -591,7 +618,8 @@ fn tab_expanded(harness: &Harness<'_, RickUi>) -> Vec<types::EntryId> {
 }
 
 /// Tree view on the 200k fixture: expanding a folder lists its children
-/// lazily, the first screen within the 50 ms budget on Linux.
+/// lazily, the first screen within the budget (50 ms on Linux; BENCHMARKS.md
+/// for the others).
 #[test]
 #[ignore = "lists 200 000 entries; run with --ignored in release"]
 fn tree_view_on_the_200k_fixture_expands_within_the_budget() {
@@ -605,37 +633,40 @@ fn tree_view_on_the_200k_fixture_expands_within_the_budget() {
             mode: ViewMode::Tree,
         },
     );
-    let folder = tab(&harness)
+    // One folder per run, each expanded for the first time.
+    let folders: Vec<types::EntryId> = tab(&harness)
         .1
         .rows()
-        .find(|e| e.kind == types::EntryKind::Dir)
-        .map_or_else(|| panic!("the fixture has folders"), |e| e.id);
-    let before = tab(&harness).1.row_count();
-    let started = Instant::now();
-    harness.state_mut().app_mut().handle(
-        app::Command::TreeExpand { pane, id: folder },
-        &mut Vec::new(),
+        .filter(|e| e.kind == types::EntryKind::Dir)
+        .take(tests::bench::runs())
+        .map(|e| e.id)
+        .collect();
+    assert_eq!(
+        folders.len(),
+        tests::bench::runs(),
+        "the fixture has folders"
     );
-    let mut first_screen = None;
-    while first_screen.is_none() {
-        harness.step();
-        if tab(&harness).1.row_count() > before {
-            first_screen = Some(started.elapsed());
-        }
-        assert!(started.elapsed() < Duration::from_secs(10), "no children");
-    }
-    settle(&mut harness);
-    let first_screen = first_screen.unwrap_or_default();
-    println!(
-        "tree expand on {}: first children after {first_screen:?}",
-        std::env::consts::OS
-    );
-    if std::env::consts::OS == "linux" {
-        assert!(
-            first_screen < Duration::from_millis(50),
-            "first screen took {first_screen:?}"
+    let mut samples = Vec::new();
+    for folder in &folders {
+        let before = tab(&harness).1.row_count();
+        let started = Instant::now();
+        harness.state_mut().app_mut().handle(
+            app::Command::TreeExpand { pane, id: *folder },
+            &mut Vec::new(),
         );
+        let mut first_screen = None;
+        while first_screen.is_none() {
+            harness.step();
+            if tab(&harness).1.row_count() > before {
+                first_screen = Some(started.elapsed());
+            }
+            assert!(started.elapsed() < Duration::from_secs(10), "no children");
+        }
+        settle(&mut harness);
+        samples.push(first_screen.unwrap_or_default());
     }
+    tests::bench::record("tree-first", &samples);
+    let folder = folders[0];
     assert!(tab(&harness).1.tree.expanded.contains(&folder));
     harness.key_press(egui::Key::F5);
     harness.step();
@@ -945,26 +976,22 @@ fn a_new_text_cancels_the_running_walk_on_the_200k_fixture() {
 }
 
 /// Typing `foo` with the subtree toggle on streams matches from 20 nested
-/// levels within 100 ms for the first batch. Timed in release on CI, as the
-/// other budgets are.
+/// levels within the budget for the first batch (100 ms on Linux;
+/// BENCHMARKS.md for the others). Timed in release on CI, as the other
+/// budgets are.
 #[test]
 #[ignore = "timing; run with --ignored in release"]
 fn the_first_search_batch_arrives_within_100_ms() {
     let dir = search_tree(12_000);
-    let (mut harness, _) = harness(dir.path());
-    let first_batch = search_foo(&mut harness);
-    println!(
-        "first search batch on {}: {first_batch:?}",
-        std::env::consts::OS
-    );
-    if std::env::consts::OS == "linux" {
-        assert!(
-            first_batch < Duration::from_millis(100),
-            "first batch took {first_batch:?}"
-        );
+    let mut samples = Vec::new();
+    // A fresh window per run, so every run's walk starts from nothing.
+    for _ in 0..tests::bench::runs() {
+        let (mut harness, _) = harness(dir.path());
+        samples.push(search_foo(&mut harness));
+        settle(&mut harness);
+        assert_eq!(row_names(&harness).len(), 12_020);
     }
-    settle(&mut harness);
-    assert_eq!(row_names(&harness).len(), 12_020);
+    tests::bench::record("search-first", &samples);
 }
 
 #[test]
