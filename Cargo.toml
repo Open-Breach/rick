@@ -26,6 +26,7 @@ ext-preview-image = { path = "crates/ext-preview-image" }
 ext-preview-pdf = { path = "crates/ext-preview-pdf" }
 ext-git = { path = "crates/ext-git" }
 ext-vfs-trash = { path = "crates/ext-vfs-trash" }
+ext-vfs-archive = { path = "crates/ext-vfs-archive" }
 plugins-native = { path = "crates/plugins-native" }
 plugin-probe = { path = "crates/plugin-probe" }
 plugin-panic = { path = "crates/plugin-panic" }
@@ -40,6 +41,26 @@ pdfium-render = { version = "0.9", default-features = false, features = ["pdfium
 # Bundled grammars and themes with the pure-Rust regex engine; no YAML or
 # plist loading at run time.
 syntect = { version = "5", default-features = false, features = ["parsing", "default-syntaxes", "default-themes", "regex-fancy"] }
+# Archives (SPEC.md "Archives and compression"): zip through `zip` with
+# DEFLATE from flate2's Rust backend and zstd; the tar family through `tar`
+# and the codec crates; 7z through the pure-Rust `sevenz-rust2`; RAR through
+# the bundled unrar library (read-only); ISO 9660 and UDF images through
+# the hadris readers; brotli and snappy for the single-file codecs.
+zip = { version = "9", default-features = false, features = ["deflate-flate2", "zstd"] }
+flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
+tar = "0.4"
+zstd = { version = "0.14", default-features = false }
+liblzma = { version = "0.4", default-features = false, features = ["static"] }
+bzip2 = "0.6"
+lz4_flex = { version = "0.14", default-features = false, features = ["std", "frame", "safe-encode", "safe-decode"] }
+brotli = { version = "9", default-features = false, features = ["std"] }
+snap = "1"
+sevenz-rust2 = { version = "0.25", default-features = false, features = ["compress", "util", "bzip2", "deflate", "zstd", "ppmd"] }
+unrar = "0.5"
+hadris-fs = { version = "3.0.0-rc.3", default-features = false, features = ["std", "sync"] }
+hadris-iso = { version = "3.0.0-rc.3", default-features = false, features = ["std", "sync"] }
+hadris-udf = { version = "3.0.0-rc.3", default-features = false, features = ["std", "sync"] }
+hadris-storage = { version = "3.0.0-rc.3", default-features = false, features = ["std", "sync"] }
 anyhow = "1"
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 eframe = "0.36"

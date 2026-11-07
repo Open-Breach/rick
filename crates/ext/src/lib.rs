@@ -72,3 +72,7 @@ pub use semver::Version;
 /// extension depends on `ext` and `types` only; the host lends an instance
 /// through [`Registry::platform`].
 pub use platform;
+/// The job system, re-exported for the same reason: an extension that
+/// bridges a synchronous library to a stream spawns on the one runtime's
+/// blocking pool through `runtime::handle()`.
+pub use runtime;

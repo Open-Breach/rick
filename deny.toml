@@ -21,7 +21,7 @@ multiple-versions = "warn"
 deny = [
     { crate = "runtime", wrappers = ["platform", "ext", "vfs", "vfs-local", "model", "ops", "app", "ui-egui", "rick", "tests"] },
     { crate = "platform", wrappers = ["ext", "vfs", "vfs-local", "model", "ops", "app", "ui-egui", "rick", "tests"] },
-    { crate = "ext", wrappers = ["vfs", "vfs-local", "model", "ops", "app", "ui-egui", "rick", "tests", "ext-preview-text", "ext-preview-code", "ext-preview-image", "ext-preview-pdf", "ext-git", "ext-vfs-trash", "plugins-native", "plugin-probe", "plugin-panic"] },
+    { crate = "ext", wrappers = ["vfs", "vfs-local", "model", "ops", "app", "ui-egui", "rick", "tests", "ext-preview-text", "ext-preview-code", "ext-preview-image", "ext-preview-pdf", "ext-git", "ext-vfs-trash", "ext-vfs-archive", "plugins-native", "plugin-probe", "plugin-panic"] },
     { crate = "vfs", wrappers = ["vfs-local", "ops", "app", "ui-egui", "rick", "tests"] },
     { crate = "vfs-local", wrappers = ["ops", "app", "ui-egui", "rick", "tests"] },
     # `ops` may use `model` by the layer order but does not today; listing
@@ -40,6 +40,7 @@ deny = [
     { crate = "ext-preview-pdf", wrappers = ["rick", "tests"] },
     { crate = "ext-git", wrappers = ["rick", "tests"] },
     { crate = "ext-vfs-trash", wrappers = ["rick", "tests"] },
+    { crate = "ext-vfs-archive", wrappers = ["rick", "tests"] },
     # The fixture plugins are test libraries loaded as files; only the
     # integration tests name them, to have them built.
     { crate = "plugin-probe", wrappers = ["tests"] },
