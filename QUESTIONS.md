@@ -567,3 +567,84 @@ Once answered, an entry keeps its number and gains a `Decided (date):` line.
     settings and the actions reach it through a `PinStore` the app provides.
     Spring-loading into a tab header switches the pane to that tab and
     "return" switches back; a drop on a header never switches.
+
+66. (close-out A) The spec's View shortcut table gives Mod+Shift+F to
+    "Toggle flatten subfolders", while the Main area and the issue give
+    Mod+Shift+F (Ctrl+Shift+F) to Search in subdirectories.
+    Assumed: the issue wins. Mod+Shift+F toggles the subtree search and
+    focuses the filter; Flatten keeps its intent and palette entry with no
+    default binding, rebindable in Settings → Keyboard shortcuts.
+
+67. (close-out A) The spec names the side panel's Tree view "as a section
+    in the side panel and as its own dockable tab", but the side panel table
+    lists five sections and gives the Tree no place.
+    Assumed: `Section::Tree` is the sixth section, after Pinned, folding and
+    persisting like the others; it is rooted at the top of the focused
+    pane's volume (`/`, the drive root), lists folders lazily as they are
+    opened, and follows the focused pane unless its link toggle is off. The
+    dockable Tree tab is not in issue A.
+
+68. (close-out A) The `Trash` platform trait is specified as "trash, list,
+    restore, empty", and the Trash section's Delete permanently needs to
+    remove one trashed item without restoring it.
+    Assumed: `Trash::remove(&TrashedItem)` joins the set, implemented beside
+    `empty` on every platform and the `Fake`. Trash items are not entries of
+    any provider in 0.1, so the trash actions (`core.restore`,
+    `core.restore_trash`, `core.purge_trash`, `core.empty_trash`) take an
+    `ActionCtx` whose location is the `trash` pseudo-provider and whose
+    selection holds one synthesised entry per item (`ops::trash_entry`);
+    they are `Hidden` outside that context. Restore is undoable as a trash
+    of the restored entries; a restore into a taken path is reported, not
+    resolved (QUESTIONS.md 11 stands). On macOS, and wherever `Trash::list`
+    answers `Unsupported`, the section shows Rick's own record of what it
+    trashed, persisted in `trash.toml` in the config directory, and says
+    that items trashed elsewhere are not listed. Supersedes 15's "cannot
+    be undone" for the restore direction.
+
+69. (close-out A) The spec feeds Recent "by file-system events, not only by
+    what Rick touched", and the local provider's watch is not recursive
+    (QUESTIONS.md 42).
+    Assumed: Recent is fed by the non-recursive watches on its roots (the
+    home directory and the pinned local folders), by every pane's own watch,
+    and by a bounded scan at start (the newest 200 of up to 50 000 entries
+    per root, 5 s at most). A change deep under Home that no pane shows is
+    picked up by the next scan. The list persists in `recent.toml`, a path
+    per row, re-examined on start so the rows carry current ids.
+
+70. (close-out A) "udisks2 on Linux" for the volume list would need a D-Bus
+    client; `rfd` already pulls `zbus` in, but only as its portal backend.
+    Assumed: Linux reads `/proc/mounts` and the kernel's removable flag from
+    `/sys/block/<disk>/removable` (what udisks2 itself reads), filtering
+    pseudo file systems, the system disk and its bind mounts; network mounts
+    are told by type. The list is polled every 3 s, so media that come and
+    go show without a user action. udisks2 proper comes with mount and
+    unmount in 0.2.
+
+71. (close-out A) The conflict dialogue replaces 20's "never overwrite":
+    Paste, Duplicate's siblings (Transfer, drag and drop, undo of a move)
+    ask once per conflict with Skip, Overwrite, Rename, Apply to all and
+    Cancel; the job pauses at the first conflict. Assumed details: Overwrite
+    of a folder onto a folder merges (files replaced, others kept), of a
+    file replaces it, and of a folder onto a file (or the reverse) removes
+    the target first; Rename proposes `name (2).ext` and a Rename applied to
+    all numbers each remaining name itself with the first free number; the
+    undo of a move that overwrote moves the item back but cannot bring the
+    overwritten target back. Conflicts are values in `types`
+    (`Conflict`, `ConflictAnswer`) since they cross from `ops` to the UI.
+
+72. (close-out A) Pause in the operations area needs a job-side gate the
+    spec's `JobCtx` does not name.
+    Assumed: `JobCtx` gains `pause: PauseGate`, `JobRunner` gains `pause`,
+    `resume` and `spawn_pausable`, and `JobEvent::Started` says whether a
+    job is pausable; copy and move jobs are pausable and wait at the gate
+    before each item, directory, file and streamed buffer. Pause buttons
+    show only for pausable jobs, as the issue asks. `Command` gains
+    `PauseJob`, `ResumeJob`, `Subtree`, `TreeExpand`, `TreeCollapse`,
+    `FolderTreeToggle`, `FolderTreeLink`, `ResolveConflict`, `RefreshTrash`
+    and `RefreshVolumes`, and `Event` gains `Conflict`, all in the spirit of
+    the spec's enum; the spec block should list them.
+
+73. (close-out A) The spec's "slow second click" has no delay. Assumed: a
+    plain second click on the one selected row at least 0.5 s after the
+    first (past egui's double-click window) starts the rename; a faster
+    second click opens the entry as a double-click does.

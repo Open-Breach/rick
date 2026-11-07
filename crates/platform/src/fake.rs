@@ -33,6 +33,8 @@ pub struct Fake {
     dragged: Mutex<Vec<Vec<String>>>,
     answers: Mutex<Answers>,
     volumes: Mutex<Vec<Volume>>,
+    /// `list` answers `Unsupported`, as the macOS trash does.
+    unlistable: Mutex<bool>,
 }
 
 #[derive(Debug, Default)]
@@ -70,6 +72,7 @@ impl Fake {
             dragged: Mutex::new(Vec::new()),
             answers: Mutex::new(Answers::default()),
             volumes: Mutex::new(Vec::new()),
+            unlistable: Mutex::new(false),
         })
     }
 
@@ -111,6 +114,13 @@ impl Fake {
     /// What `save_file` answers from now on.
     pub fn answer_save(&self, path: Option<PathBuf>) {
         lock(&self.answers).save = path;
+    }
+
+    /// Makes [`Trash::list`] answer `Error::Unsupported` from now on, as
+    /// the macOS trash does, so the own-record path can be tested on every
+    /// OS. Trashing and restoring keep working.
+    pub fn set_trash_unlistable(&self, unlistable: bool) {
+        *lock(&self.unlistable) = unlistable;
     }
 
     /// Adds a volume [`Volumes::volumes`] lists from now on; the test's
@@ -169,6 +179,11 @@ impl Trash for Fake {
     }
 
     fn list(&self) -> Result<Vec<TrashedItem>, Error> {
+        if *lock(&self.unlistable) {
+            return Err(Error::Unsupported(
+                "this fake keeps its original paths to itself, like macOS",
+            ));
+        }
         Ok(lock(&self.items).clone())
     }
 

@@ -105,7 +105,7 @@ pub fn editor(
         0.0
     };
     let rect = rect.translate(vec2(dx, 0.0));
-    let id = ui.id().with(("inline-edit", edit.kind_key()));
+    let id = edit_id(edit.kind);
     let mut text_edit = egui::TextEdit::singleline(&mut edit.text)
         .id(id)
         .desired_width(rect.width())
@@ -172,14 +172,13 @@ pub fn editor(
     EditOutcome::Commit(name)
 }
 
-impl RowEdit {
-    /// A stable key for the text edit's id.
-    fn kind_key(&self) -> u128 {
-        match self.kind {
-            EditKind::Rename(id) => id.key,
-            EditKind::NewFile => 1,
-            EditKind::NewFolder => 2,
-        }
+/// The id of the editor's text field, so a test can read its state.
+#[must_use]
+pub fn edit_id(kind: EditKind) -> egui::Id {
+    match kind {
+        EditKind::Rename(id) => egui::Id::new(("inline-edit", id.key)),
+        EditKind::NewFile => egui::Id::new(("inline-edit", "new-file")),
+        EditKind::NewFolder => egui::Id::new(("inline-edit", "new-folder")),
     }
 }
 

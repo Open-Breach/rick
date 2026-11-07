@@ -30,8 +30,10 @@ pub struct SearchOptions {
     pub ignore: Vec<String>,
 }
 
-/// Matches per batch before a thread hands them over.
-const BATCH: usize = 64;
+/// Matches per batch before a thread hands them over. Each batch is merged
+/// into the list's sorted view, so they are kept large; the flush below
+/// keeps the first screen prompt when matches are sparse.
+const BATCH: usize = 512;
 /// A thread hands over what it has after this long, so sparse matches still
 /// reach the list promptly.
 const FLUSH_AFTER: Duration = Duration::from_millis(40);

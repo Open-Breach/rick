@@ -206,6 +206,9 @@ enum Msg {
 const REDECORATE_AFTER: Duration = Duration::from_millis(150);
 /// How often the mounted volumes are enumerated again.
 const VOLUMES_EVERY: Duration = Duration::from_secs(3);
+/// How long one [`App::poll`] may spend applying messages before it leaves
+/// the rest to the next one.
+const POLL_BUDGET: Duration = Duration::from_millis(8);
 /// How many of this process's own settings writes are remembered, so the
 /// watcher's report of each is told from an edit.
 const RECENT_SAVES: usize = 16;
@@ -785,9 +788,13 @@ impl App {
         self.sync_preview();
     }
 
-    /// Processes everything that has arrived from listings, watches and
-    /// jobs without waiting. Returns how many messages it handled.
+    /// Processes what has arrived from listings, watches and jobs without
+    /// waiting, for at most `POLL_BUDGET` (8 ms) so a stream that keeps
+    /// producing (a search over thousands of matches) never holds a frame
+    /// back; the rest is picked up by the next poll. Returns how many
+    /// messages it handled.
     pub fn poll(&mut self, events: &mut Vec<Event>) -> usize {
+        let started = std::time::Instant::now();
         events.append(&mut self.pending);
         let mut handled = 0;
         loop {
@@ -795,12 +802,18 @@ impl App {
             while let Ok(msg) = self.rx.try_recv() {
                 self.on_msg(msg, events);
                 handled += 1;
+                if started.elapsed() >= POLL_BUDGET {
+                    break;
+                }
             }
             while let Ok(event) = self.job_events.try_recv() {
                 self.on_job_event(event, events);
                 handled += 1;
+                if started.elapsed() >= POLL_BUDGET {
+                    break;
+                }
             }
-            if handled == before {
+            if handled == before || started.elapsed() >= POLL_BUDGET {
                 break;
             }
         }

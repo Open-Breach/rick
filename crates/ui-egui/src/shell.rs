@@ -61,8 +61,10 @@ pub struct TabUi {
     pub scroll_restore: Option<(Location, f32)>,
     /// The location drawn last frame, to notice a change.
     pub last_location: Option<Location>,
-    /// Select the entry with this name once the listing is complete.
-    pub pending_select: Option<Vec<u8>>,
+    /// Select the entry with this name once it is listed, giving up after
+    /// `SELECT_FOR` (5 s): the entry may still be on its way (a new folder's
+    /// job, a renamed entry's change event).
+    pub pending_select: Option<(Vec<u8>, Instant)>,
     /// The name being edited in place, if any.
     pub edit: Option<RowEdit>,
     /// The last plain click on a row and when, for the slow second click.
@@ -310,6 +312,8 @@ fn toggle_icon(glyph: &str, on: bool) -> egui::Button<'static> {
 }
 /// How long a notification stays.
 const TOAST_FOR: Duration = Duration::from_secs(5);
+/// How long a `SelectNamed` waits for its entry to be listed.
+const SELECT_FOR: Duration = Duration::from_secs(5);
 
 impl RickUi {
     /// Wraps `app`; `host` is the `UiHost` the app was built with.
@@ -772,7 +776,8 @@ impl RickUi {
                     } => self.start_drag(pane, tab, &items, right_button),
                     Request::SelectNamed { pane, name } => {
                         if let Some((tab_id, _)) = self.app.model().active_tab(pane) {
-                            self.tabs.entry(tab_id).or_default().pending_select = Some(name);
+                            self.tabs.entry(tab_id).or_default().pending_select =
+                                Some((name, Instant::now()));
                         }
                     }
                     Request::StartEdit { pane, kind } => self.start_edit(pane, kind),
@@ -809,25 +814,28 @@ impl RickUi {
         );
     }
 
-    /// Selects the entries a `SelectNamed` asked for once their listing is
-    /// complete: a pinned file's folder was opened, and the file is now in
-    /// the list.
+    /// Selects the entries a `SelectNamed` asked for once they are listed: a
+    /// pinned file's folder was opened and the file is in the list, a new
+    /// folder's job finished and the refresh brought it, Open containing
+    /// folder reached the parent. A name that never shows is dropped after
+    /// [`SELECT_FOR`].
     fn resolve_pending_selects(&mut self) {
+        let now = Instant::now();
         let mut found = Vec::new();
         for (tab_id, tab_ui) in &self.tabs {
-            let Some(name) = &tab_ui.pending_select else {
+            let Some((name, since)) = &tab_ui.pending_select else {
                 continue;
             };
             let Some(tab) = self.app.model().tab(*tab_id) else {
                 continue;
             };
-            if !tab.listing.complete {
-                continue;
-            }
             let hit = tab
                 .rows()
                 .position(|e| e.path.file_name() == Some(name.as_slice()))
                 .and_then(|index| tab.row(index).map(|e| (index, e.id)));
+            if hit.is_none() && now.duration_since(*since) < SELECT_FOR {
+                continue;
+            }
             found.push((*tab_id, self.app.model().pane_of(*tab_id), hit));
         }
         for (tab_id, pane, hit) in found {
