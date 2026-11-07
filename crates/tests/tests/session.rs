@@ -489,7 +489,7 @@ fn layouts_save_switch_start_rename_and_delete() {
     d.step(Command::SwitchLayout(Some("Final".into())));
     assert_eq!(d.app.session(), review);
     d.step(Command::DeleteLayout("Final".into()));
-    assert!(d.app.layouts().is_empty());
+    assert_eq!(d.app.layouts(), Vec::<String>::new());
     assert_eq!(d.app.model().settings.session.start_layout(), None);
     assert!(!config.join("layouts").join("Final.toml").exists());
     let events = d.step(Command::SaveLayout("last".into()));
