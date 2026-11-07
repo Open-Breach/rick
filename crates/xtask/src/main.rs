@@ -9,9 +9,9 @@
 //! every plugin with nothing copied by hand, and the release workflow
 //! archives the same directory.
 //!
-//! The task builds with `--workspace --lib --bins --examples` (every
-//! library, binary and example of every member: the one build flavour the
-//! tests use too, QUESTIONS.md 81) and runs the workspace's own
+//! The task builds with `--workspace --exclude xtask --lib --bins
+//! --examples` (every library, binary and example of every member but this
+//! one: the one build flavour the tests use too, QUESTIONS.md 81) and runs the workspace's own
 //! `rick-plugin-manifest` to write the manifests, so that it depends on no
 //! kernel crate itself: a build of a smaller package set would rewrite the
 //! shared libraries for another feature set.
@@ -54,9 +54,19 @@ fn bundle(args: &[String]) -> Result<()> {
     // with the dev-dependency features the tests build with: the one
     // flavour every other command of this repository builds. A target
     // selection builds only what it names, so the libraries and binaries
-    // are named with the examples.
+    // are named with the examples. xtask itself stays out: `cargo run -p
+    // xtask` built it with its own feature set, and a rebuild would
+    // replace the running binary, which Windows refuses.
     let mut build = Command::new(&cargo);
-    build.args(["build", "--workspace", "--lib", "--bins", "--examples"]);
+    build.args([
+        "build",
+        "--workspace",
+        "--exclude",
+        "xtask",
+        "--lib",
+        "--bins",
+        "--examples",
+    ]);
     if release {
         build.arg("--release");
     }

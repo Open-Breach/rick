@@ -10,7 +10,8 @@ workspace with its examples and lays out `target/<profile>/bundle/`
 `ext-*` member built as a `cdylib`), so that running `rick` from there finds
 every plugin with nothing copied by hand; the release workflow archives the
 same directory. It depends on `serde_json` only and on no kernel crate: it
-drives `cargo build --workspace --lib --bins --examples` and the workspace's own
+drives `cargo build --workspace --exclude xtask --lib --bins --examples`
+and the workspace's own
 `rick-plugin-manifest` helper, since a build of a smaller package set would
 rewrite the shared libraries for another feature set (QUESTIONS.md 81). It
 is a developer tool, not part of Rick, and prints to the terminal.

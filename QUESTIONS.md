@@ -859,10 +859,11 @@ Once answered, an entry keeps its number and gains a dated decision line.
     and the next whole-workspace build recompiles them and everything above
     them; `cargo clean -p types -p runtime -p ext` when the two disagree.
     For the same reason `xtask` depends on no kernel crate: it drives
-    `cargo build --workspace --lib --bins --examples` (the libraries,
-    binaries and examples of every member, with the dev-dependency features
-    the tests build with) and a helper binary from that build, never a
-    kernel dylib of its own.
+    `cargo build --workspace --exclude xtask --lib --bins --examples` (the
+    libraries, binaries and examples of every member but itself, with the
+    dev-dependency features the tests build with; a rebuild of the running
+    `xtask` binary is what Windows refuses) and a helper binary from that
+    build, never a kernel dylib of its own.
     Rejected: a C-ABI vtable layer (`abi_stable` or hand-written). The five
     traits are async (boxed futures, `BoxStream`, `AsyncRead` handles), the
     host hands the plugin `Arc<dyn Provider>`, `&JobRunner`, `&DecorateCtx`
