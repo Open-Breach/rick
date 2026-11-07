@@ -242,15 +242,30 @@ fn session_contains(harness: &mut Harness<'_, RickUi>, needle: &str) -> String {
 }
 
 fn wait_for(harness: &mut Harness<'_, RickUi>, path: &Path, needle: &str) -> String {
+    wait_until(harness, path, &format!("contain {needle:?}"), |text| {
+        text.contains(needle)
+    })
+}
+
+/// Steps until the file at `path` satisfies `done`, within ten seconds,
+/// and returns its text. The application writes its files from a
+/// background task that keeps only the latest value, so a test that made
+/// several changes waits for the last one's mark, not the first's.
+fn wait_until(
+    harness: &mut Harness<'_, RickUi>,
+    path: &Path,
+    what: &str,
+    done: impl Fn(&str) -> bool,
+) -> String {
     let deadline = Instant::now() + Duration::from_secs(10);
     loop {
         let text = fs::read_to_string(path).unwrap_or_default();
-        if text.contains(needle) {
+        if done(&text) {
             return text;
         }
         assert!(
             Instant::now() < deadline,
-            "{} never contained {needle:?}:\n{text}",
+            "{} never came to {what}:\n{text}",
             path.display()
         );
         harness.step();
@@ -564,13 +579,12 @@ fn places_can_be_reordered_removed_and_edited_and_survive_a_restart() {
             ["Trash", "Home", "Documents", "Inbox", "Favorites", "Recent"]
         );
         let file = config.join(app::PLACES_FILE);
-        let text = wait_for(&mut harness, &file, "Inbox");
+        // The reorder was the last change, so its order marks the final file.
+        let text = wait_until(&mut harness, &file, "Trash before Home", |text| {
+            text.contains("Inbox") && text.find("Trash") < text.find("Home")
+        });
         assert!(text.contains("icon = \"STAR\""), "{text}");
         assert!(!text.contains("Pictures"), "{text}");
-        assert!(
-            text.find("Trash") < text.find("Home"),
-            "the order is the file's: {text}"
-        );
     }
     // A fresh start from the same config has the edited list.
     let harness = harness_with(dir.path(), &config, fake, Vec::new());
