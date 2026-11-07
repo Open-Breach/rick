@@ -2,7 +2,7 @@ use std::fs;
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
-use ext::platform::{Fake, Trash as _};
+use ext::platform::Fake;
 use ext::{
     ActionCtx, ActionOutcome, Availability, CellValue, DecorateCtx, Depth, Invocation, Level,
     ListOptions, PaneId, Provider, Registry, RemoveMode, UiHost,
@@ -350,7 +350,7 @@ fn restore_undo_and_empty_work_in_the_view_only() {
         ActionOutcome::Started(_)
     ));
     assert_eq!(h.fake.list().map(|l| l.len()).ok(), Some(0));
-    assert!(h.list(&location()).is_empty());
+    assert_eq!(h.list(&location()), [] as [Entry; 0]);
     assert_eq!(
         h.action("trash.empty")
             .availability(&h.ctx(location(), Vec::new())),

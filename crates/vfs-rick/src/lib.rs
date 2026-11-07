@@ -781,7 +781,7 @@ mod tests {
         let (provider, _mounts) = provider(&fake, Vec::new());
         let trash = Virtual::Trash.location();
         runtime::block_on(async {
-            assert!(collect(&provider, Virtual::Trash).await.is_empty());
+            assert_eq!(collect(&provider, Virtual::Trash).await, [] as [Entry; 0]);
             assert_eq!(provider.capabilities(&trash), Capabilities::WATCH);
             provider.add_view("trash", Arc::new(OneItem));
             let listed = collect(&provider, Virtual::Trash).await;

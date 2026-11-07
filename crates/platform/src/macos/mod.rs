@@ -132,7 +132,8 @@ impl Trash for Native {
 
 impl Native {
     /// Where the trash record lives: `trash.toml` in the config directory.
-    fn record_file(&self) -> PathBuf {
+    /// `Native` is a zero-sized `Copy` type, so it goes by value.
+    fn record_file(self) -> PathBuf {
         self.config_dir().join(TRASH_FILE)
     }
 }
