@@ -615,7 +615,11 @@ fn an_unknown_binary_opens_in_hex_with_the_plugin_and_says_so_without() {
             .is_some_and(|v| v.text().starts_with("00000000  00 07 0e 15")),
         "the dump starts with the offset and the bytes"
     );
-    assert!(fake.opened().is_empty());
+    assert_eq!(
+        fake.opened(),
+        Vec::<std::path::PathBuf>::new(),
+        "the viewer took it, not the system"
+    );
     drop(harness);
 
     // Without the plugin.

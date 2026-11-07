@@ -1546,7 +1546,7 @@ mod tests {
         };
         let matches = search(&layer, "hello");
         assert_eq!(matches, [(0, 0..5), (0, 6..11), (0, 12..17), (2, 0..5)]);
-        assert!(search(&layer, "").is_empty());
+        assert_eq!(search(&layer, ""), Vec::new(), "no query, no matches");
         assert_eq!(search(&layer, "NOTH"), [(1, 0..4)]);
         let mut find = Find {
             query: "hello".to_owned(),
