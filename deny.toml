@@ -13,17 +13,18 @@ exclude-dev = true
 [bans]
 multiple-versions = "warn"
 # Layer order (SPEC.md "Package layout", refined in QUESTIONS.md 7): types →
-# runtime → platform → ext → vfs → vfs-local → model → ops → app → ui-egui →
-# rick, with `tests` on top. Each workspace crate below lists in `wrappers`
+# runtime → platform → ext → vfs → vfs-local → vfs-rick → model → ops → app →
+# ui-egui → rick, with `tests` on top. Each workspace crate below lists in `wrappers`
 # the crates that may depend on it; a crate missing from the list is an upward
 # edge and fails the check. `types` may be used by everyone and needs no
 # entry. Add an entry per crate as crates appear.
 deny = [
-    { crate = "runtime", wrappers = ["platform", "ext", "vfs", "vfs-local", "model", "ops", "app", "ui-egui", "rick", "tests"] },
-    { crate = "platform", wrappers = ["vfs", "vfs-local", "model", "ops", "app", "ui-egui", "rick", "tests"] },
-    { crate = "ext", wrappers = ["vfs", "vfs-local", "model", "ops", "app", "ui-egui", "rick", "tests", "ext-preview-text", "ext-preview-code", "ext-preview-image", "ext-preview-pdf", "ext-git"] },
-    { crate = "vfs", wrappers = ["vfs-local", "ops", "app", "ui-egui", "rick", "tests"] },
-    { crate = "vfs-local", wrappers = ["ops", "app", "ui-egui", "rick", "tests"] },
+    { crate = "runtime", wrappers = ["platform", "ext", "vfs", "vfs-local", "vfs-rick", "model", "ops", "app", "ui-egui", "rick", "tests"] },
+    { crate = "platform", wrappers = ["vfs", "vfs-local", "vfs-rick", "model", "ops", "app", "ui-egui", "rick", "tests"] },
+    { crate = "ext", wrappers = ["vfs", "vfs-local", "vfs-rick", "model", "ops", "app", "ui-egui", "rick", "tests", "ext-preview-text", "ext-preview-code", "ext-preview-image", "ext-preview-pdf", "ext-git"] },
+    { crate = "vfs", wrappers = ["vfs-local", "vfs-rick", "ops", "app", "ui-egui", "rick", "tests"] },
+    { crate = "vfs-local", wrappers = ["vfs-rick", "ops", "app", "ui-egui", "rick", "tests"] },
+    { crate = "vfs-rick", wrappers = ["ops", "app", "ui-egui", "rick", "tests"] },
     # `ops` may use `model` by the layer order but does not today; listing
     # it would only draw an unused-wrapper warning. Add it back when needed.
     { crate = "model", wrappers = ["app", "ui-egui", "rick", "tests"] },

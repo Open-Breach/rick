@@ -16,6 +16,7 @@ platform = { path = "crates/platform" }
 ext = { path = "crates/ext" }
 vfs = { path = "crates/vfs" }
 vfs-local = { path = "crates/vfs-local" }
+vfs-rick = { path = "crates/vfs-rick" }
 model = { path = "crates/model" }
 ops = { path = "crates/ops" }
 app = { path = "crates/app" }
