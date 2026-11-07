@@ -22,7 +22,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 
 use ext::{
     API_VERSION, Badge, Capabilities, CellValue, ColumnDef, ColumnId, DecorateCtx, Decoration,
-    Decorator, Extension, Manifest, PanelSection, Registry, Version,
+    Decorator, Extension, Manifest, PanelSection, Platforms, Points, Registry, Version,
 };
 use types::{Entry, EntryId, Error, ExtId, Location};
 
@@ -72,6 +72,8 @@ impl GitExtension {
                 version: Version::new(0, 1, 0),
                 api_version: API_VERSION,
                 requires: Capabilities::empty(),
+                points: Points::DECORATOR | Points::ACTION,
+                platforms: Platforms::ALL,
             },
             repos: Arc::new(Repos::default()),
         }

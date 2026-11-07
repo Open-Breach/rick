@@ -57,7 +57,8 @@ pub use provider::{
     Provider, ReadHandle, RemoveMode, WriteHandle, WriteOptions,
 };
 pub use registry::{
-    API_VERSION, Extension, Manifest, Registry, SettingField, SettingKind, SettingsSchema,
+    API_VERSION, Extension, Manifest, Platforms, Points, Registry, SettingField, SettingKind,
+    SettingsSchema,
 };
 pub use runtime::JobRunner;
 pub use search::{Filter, Query, QueryKind, SearchHit, SearchIndex, SearchScope};

@@ -18,8 +18,8 @@
 //! use ext::{
 //!     API_VERSION, Action, ActionCtx, ActionGroup, ActionId, ActionOutcome, Availability,
 //!     Capabilities, ColumnDef, DecorateCtx, Decoration, Decorator, Extension, Manifest,
-//!     PanelSection, Registry, SettingField, SettingKind, SettingsSchema, Shortcut, UiHost,
-//!     Version,
+//!     PanelSection, Platforms, Points, Registry, SettingField, SettingKind, SettingsSchema,
+//!     Shortcut, UiHost, Version,
 //! };
 //! use runtime::JobRunner;
 //! use std::sync::Arc;
@@ -76,6 +76,8 @@
 //!     version: Version::new(0, 1, 0),
 //!     api_version,
 //!     requires: Capabilities::empty(),
+//!     points: Points::DECORATOR | Points::ACTION,
+//!     platforms: Platforms::ALL,
 //! };
 //!
 //! let mut registry = Registry::new();
@@ -84,6 +86,7 @@
 //! assert_eq!(registry.actions().len(), 1);
 //! assert_eq!(registry.settings_schemas().len(), 1);
 //! assert_eq!(registry.extensions(), &[ExtId("demo")]);
+//! assert_eq!(registry.points(), Points::DECORATOR | Points::ACTION);
 //!
 //! // A manifest from another contract version is refused, and so is a
 //! // second load of the same id.
@@ -92,6 +95,7 @@
 //! assert_eq!(registry.actions().len(), 1);
 //! ```
 
+use std::fmt;
 use std::sync::Arc;
 
 use semver::Version;
@@ -107,8 +111,132 @@ use crate::search::SearchIndex;
 /// manifest format. Any breaking change bumps it.
 ///
 /// History: 1 the first contract; 2 `PreviewDoc::info` became `sections`,
-/// with `status`, `controls` and `set_control` added.
-pub const API_VERSION: u32 = 2;
+/// with `status`, `controls` and `set_control` added; 3 [`Manifest`] gained
+/// `points` and `platforms`, and plugin libraries gained their entry point
+/// ([`plugin`](mod@crate::plugin)) and their manifest file.
+pub const API_VERSION: u32 = 3;
+
+bitflags::bitflags! {
+    /// The extension points an extension fills, as its manifest declares
+    /// them and as the plugin manifest file lists them.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+    pub struct Points: u8 {
+        /// A [`Provider`].
+        const PROVIDER = 1;
+        /// A [`Decorator`].
+        const DECORATOR = 2;
+        /// One or more [`Action`]s.
+        const ACTION = 4;
+        /// A [`Previewer`].
+        const PREVIEWER = 8;
+        /// A [`SearchIndex`].
+        const SEARCH_INDEX = 16;
+    }
+}
+
+impl Points {
+    const NAMED: [(Self, &'static str); 5] = [
+        (Self::PROVIDER, "provider"),
+        (Self::DECORATOR, "decorator"),
+        (Self::ACTION, "action"),
+        (Self::PREVIEWER, "previewer"),
+        (Self::SEARCH_INDEX, "search-index"),
+    ];
+
+    /// The names of the points set, in the order of the five points:
+    /// `"provider"`, `"decorator"`, `"action"`, `"previewer"`,
+    /// `"search-index"`.
+    #[must_use]
+    pub fn names(self) -> Vec<&'static str> {
+        Self::NAMED
+            .iter()
+            .filter(|(point, _)| self.contains(*point))
+            .map(|(_, name)| *name)
+            .collect()
+    }
+
+    /// The point called `name`, as [`names`](Self::names) spells it;
+    /// bitflags' own `from_name` takes the constant names.
+    #[must_use]
+    pub fn named(name: &str) -> Option<Self> {
+        Self::NAMED
+            .iter()
+            .find(|(_, known)| *known == name)
+            .map(|(point, _)| *point)
+    }
+}
+
+impl fmt::Display for Points {
+    /// The names, comma-separated; `none` for no point at all.
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if self.is_empty() {
+            f.write_str("none")
+        } else {
+            f.write_str(&self.names().join(", "))
+        }
+    }
+}
+
+bitflags::bitflags! {
+    /// The operating systems an extension runs on.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+    pub struct Platforms: u8 {
+        /// Linux.
+        const LINUX = 1;
+        /// macOS.
+        const MACOS = 2;
+        /// Windows.
+        const WINDOWS = 4;
+    }
+}
+
+impl Platforms {
+    /// All three.
+    pub const ALL: Self = Self::LINUX.union(Self::MACOS).union(Self::WINDOWS);
+
+    const NAMED: [(Self, &'static str); 3] = [
+        (Self::LINUX, "linux"),
+        (Self::MACOS, "macos"),
+        (Self::WINDOWS, "windows"),
+    ];
+
+    /// The platform this code runs on, from `std::env::consts::OS`; empty
+    /// on any other operating system.
+    #[must_use]
+    pub fn current() -> Self {
+        Self::named(std::env::consts::OS).unwrap_or_default()
+    }
+
+    /// The names of the platforms set: `"linux"`, `"macos"`, `"windows"`.
+    #[must_use]
+    pub fn names(self) -> Vec<&'static str> {
+        Self::NAMED
+            .iter()
+            .filter(|(platform, _)| self.contains(*platform))
+            .map(|(_, name)| *name)
+            .collect()
+    }
+
+    /// The platform called `name`, as [`names`](Self::names) spells it.
+    #[must_use]
+    pub fn named(name: &str) -> Option<Self> {
+        Self::NAMED
+            .iter()
+            .find(|(_, known)| *known == name)
+            .map(|(platform, _)| *platform)
+    }
+}
+
+impl fmt::Display for Platforms {
+    /// The names, comma-separated; `none` for no platform at all.
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if self.is_empty() {
+            f.write_str("none")
+        } else {
+            f.write_str(&self.names().join(", "))
+        }
+    }
+}
 
 /// What an extension declares about itself.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -123,6 +251,12 @@ pub struct Manifest {
     pub api_version: u32,
     /// Provider capabilities the extension needs to be useful.
     pub requires: Capabilities,
+    /// The extension points it fills. The registry refuses a contribution
+    /// to a point not declared here, so the manifest stays honest.
+    pub points: Points,
+    /// The operating systems it runs on; the plugin host refuses the
+    /// plugin elsewhere.
+    pub platforms: Platforms,
 }
 
 /// How a setting is edited and stored.
@@ -264,9 +398,10 @@ impl Registry {
     /// # Errors
     ///
     /// `Error::Unsupported` when the manifest's `api_version` is not
-    /// [`API_VERSION`] or an extension with the same id is already loaded;
-    /// otherwise whatever [`Extension::register`] returns, in which case
-    /// nothing the extension registered is kept.
+    /// [`API_VERSION`], an extension with the same id is already loaded, or
+    /// the extension registered a contribution to a point its manifest does
+    /// not declare; otherwise whatever [`Extension::register`] returns. In
+    /// every failing case nothing the extension registered is kept.
     pub fn load(&mut self, ext: &dyn Extension) -> Result<(), Error> {
         let manifest = ext.manifest();
         if manifest.api_version != API_VERSION {
@@ -279,6 +414,11 @@ impl Registry {
         }
         let mut staging = Registry::default();
         ext.register(&mut staging)?;
+        if !manifest.points.contains(staging.points()) {
+            return Err(Error::Unsupported(
+                "extension registered a point its manifest does not declare",
+            ));
+        }
         self.extensions.push(manifest.id);
         self.manifests.push(manifest.clone());
         self.providers.append(&mut staging.providers);
@@ -319,6 +459,18 @@ impl Registry {
     /// in the extension's TOML file.
     pub fn settings(&mut self, schema: SettingsSchema) {
         self.settings.push(schema);
+    }
+
+    /// The points filled so far: the kinds of contribution registered.
+    #[must_use]
+    pub fn points(&self) -> Points {
+        let mut points = Points::empty();
+        points.set(Points::PROVIDER, !self.providers.is_empty());
+        points.set(Points::DECORATOR, !self.decorators.is_empty());
+        points.set(Points::ACTION, !self.actions.is_empty());
+        points.set(Points::PREVIEWER, !self.previewers.is_empty());
+        points.set(Points::SEARCH_INDEX, !self.search_indexes.is_empty());
+        points
     }
 
     /// Takes every contribution of `other` as well: the plugin host fills a
@@ -438,10 +590,91 @@ mod tests {
             version: Version::new(0, 1, 0),
             api_version: API_VERSION,
             requires: Capabilities::empty(),
+            points: Points::empty(),
+            platforms: Platforms::ALL,
         }));
         assert!(matches!(result, Err(Error::Unsupported(_))));
         assert_eq!(registry.extensions(), [] as [ExtId; 0]);
         assert_eq!(registry.settings_schemas(), [] as [SettingsSchema; 0]);
         assert!(format!("{registry:?}").contains("extensions: []"));
+    }
+
+    /// A previewer that handles nothing.
+    struct Nothing;
+
+    #[async_trait::async_trait]
+    impl Previewer for Nothing {
+        fn id(&self) -> ExtId {
+            ExtId("nothing")
+        }
+        fn score(&self, _entry: &types::Entry, _sniff: &[u8]) -> u8 {
+            0
+        }
+        async fn open(
+            &self,
+            _loc: &types::Location,
+            _provider: Arc<dyn Provider>,
+            _cancel: types::CancelToken,
+        ) -> Result<Box<dyn crate::preview::PreviewDoc>, Error> {
+            Err(Error::Unsupported("nothing to preview"))
+        }
+    }
+
+    struct Undeclared(Manifest);
+
+    impl Extension for Undeclared {
+        fn manifest(&self) -> &Manifest {
+            &self.0
+        }
+        fn register(&self, reg: &mut Registry) -> Result<(), Error> {
+            reg.settings(SettingsSchema {
+                ext: self.0.id,
+                fields: Vec::new(),
+            });
+            reg.previewer(Arc::new(Nothing));
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn a_point_the_manifest_does_not_declare_is_refused() {
+        let mut registry = Registry::new();
+        let manifest = Manifest {
+            id: ExtId("undeclared"),
+            name: "Undeclared",
+            version: Version::new(0, 1, 0),
+            api_version: API_VERSION,
+            requires: Capabilities::empty(),
+            points: Points::ACTION,
+            platforms: Platforms::ALL,
+        };
+        assert!(matches!(
+            registry.load(&Undeclared(manifest.clone())),
+            Err(Error::Unsupported(_))
+        ));
+        assert_eq!(registry.previewers().len(), 0);
+        let declared = Manifest {
+            points: Points::ACTION | Points::PREVIEWER,
+            ..manifest
+        };
+        registry
+            .load(&Undeclared(declared))
+            .unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(registry.points(), Points::PREVIEWER);
+    }
+
+    #[test]
+    fn points_and_platforms_have_names() {
+        assert_eq!(
+            (Points::DECORATOR | Points::ACTION).names(),
+            ["decorator", "action"]
+        );
+        assert_eq!(Points::named("search-index"), Some(Points::SEARCH_INDEX));
+        assert_eq!(Points::named("searchindex"), None);
+        assert_eq!(Points::empty().to_string(), "none");
+        assert_eq!(Platforms::ALL.to_string(), "linux, macos, windows");
+        assert_eq!(Platforms::named("macos"), Some(Platforms::MACOS));
+        assert!(Platforms::ALL.contains(Platforms::current()));
+        assert!(!Platforms::current().is_empty());
     }
 }

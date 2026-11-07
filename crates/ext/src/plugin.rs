@@ -22,7 +22,7 @@
 //! use std::sync::Arc;
 //!
 //! use ext::plugin::Status;
-//! use ext::{API_VERSION, Capabilities, Extension, Manifest, Registry, Version};
+//! use ext::{API_VERSION, Capabilities, Extension, Manifest, Platforms, Points, Registry, Version};
 //! use types::{Error, ExtId};
 //!
 //! struct Hello(Manifest);
@@ -35,6 +35,8 @@
 //!             version: Version::new(0, 1, 0),
 //!             api_version: API_VERSION,
 //!             requires: Capabilities::empty(),
+//!             points: Points::empty(),
+//!             platforms: Platforms::ALL,
 //!         })
 //!     }
 //! }
@@ -162,7 +164,7 @@ macro_rules! plugin {
 mod tests {
     use super::*;
     use crate::provider::Capabilities;
-    use crate::registry::{API_VERSION, Manifest};
+    use crate::registry::{API_VERSION, Manifest, Platforms, Points};
     use semver::Version;
     use types::{Error, ExtId};
 
@@ -184,6 +186,8 @@ mod tests {
             version: Version::new(0, 1, 0),
             api_version,
             requires: Capabilities::empty(),
+            points: Points::empty(),
+            platforms: Platforms::ALL,
         }
     }
 
@@ -201,7 +205,7 @@ mod tests {
         let mut reg = Registry::new();
         let status = register(&mut reg, || Arc::new(Fine(manifest(API_VERSION + 1))));
         assert_eq!(status, Status::Failed);
-        assert!(reg.extensions().is_empty());
+        assert_eq!(reg.extensions(), [] as [ExtId; 0]);
         assert!(
             reg.failure().is_some_and(|r| r.contains("API version")),
             "{reg:?}"
@@ -213,7 +217,7 @@ mod tests {
         let mut reg = Registry::from_another_kernel();
         let status = register(&mut reg, || Arc::new(Fine(manifest(API_VERSION))));
         assert_eq!(status, Status::Failed);
-        assert!(reg.extensions().is_empty());
+        assert_eq!(reg.extensions(), [] as [ExtId; 0]);
         assert!(
             reg.failure()
                 .is_some_and(|r| r.contains("own copy of the kernel")),

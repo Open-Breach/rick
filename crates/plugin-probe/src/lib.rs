@@ -17,8 +17,8 @@ use std::sync::Arc;
 use ext::{
     API_VERSION, Action, ActionCtx, ActionGroup, ActionId, ActionOutcome, Availability,
     Capabilities, ControlId, ControlValue, Extension, Frame, Icon, InfoSection, JobRunner,
-    Manifest, PreviewControl, PreviewDoc, Previewer, Provider, Registry, RenderRequest, Shortcut,
-    TextBlock, TextLayer, Transport, UiHost, Version, async_trait,
+    Manifest, Platforms, Points, PreviewControl, PreviewDoc, Previewer, Provider, Registry,
+    RenderRequest, Shortcut, TextBlock, TextLayer, Transport, UiHost, Version, async_trait,
 };
 use types::{CancelToken, Entry, Error, ExtId, Location, Progress};
 
@@ -52,6 +52,8 @@ impl ProbeExtension {
                     .unwrap_or_else(|_| Version::new(0, 0, 0)),
                 api_version: API_VERSION,
                 requires: Capabilities::empty(),
+                points: Points::PREVIEWER | Points::ACTION,
+                platforms: Platforms::ALL,
             },
         }
     }

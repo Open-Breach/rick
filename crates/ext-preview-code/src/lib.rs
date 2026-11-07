@@ -14,8 +14,8 @@ use std::sync::{Arc, LazyLock};
 
 use ext::{
     API_VERSION, Capabilities, ControlId, ControlValue, Extension, Frame, Icon, InfoSection,
-    Manifest, PreviewControl, PreviewDoc, Previewer, Provider, Registry, RenderRequest, TextBlock,
-    TextLayer, TextSpan, Transport, Version, async_trait,
+    Manifest, Platforms, Points, PreviewControl, PreviewDoc, Previewer, Provider, Registry,
+    RenderRequest, TextBlock, TextLayer, TextSpan, Transport, Version, async_trait,
 };
 use syntect::easy::HighlightLines;
 use syntect::highlighting::{FontStyle, Theme, ThemeSet};
@@ -103,6 +103,8 @@ impl CodePreview {
                 version: Version::new(0, 1, 0),
                 api_version: API_VERSION,
                 requires: Capabilities::empty(),
+                points: Points::PREVIEWER,
+                platforms: Platforms::ALL,
             },
         }
     }
