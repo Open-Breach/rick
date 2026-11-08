@@ -256,6 +256,23 @@ fn every_shortcut_in_the_spec_table_reaches_its_intent() {
         // Leave dialogs, the palette and windows the shortcut may have opened.
         harness.key_press(egui::Key::Escape);
         harness.step();
+        // A console tab the row opened takes the keyboard: close it, so the
+        // next row reaches the explorer.
+        let views: Vec<model::TabId> = {
+            let model = harness.state().app().model();
+            model
+                .panes()
+                .flat_map(|(_, pane)| pane.tabs().iter().copied())
+                .filter(|id| model.tab(*id).is_some_and(|t| t.kind.is_view()))
+                .collect()
+        };
+        for tab in views {
+            let mut events = Vec::new();
+            harness
+                .state_mut()
+                .app_mut()
+                .handle(app::Command::CloseTab(tab), &mut events);
+        }
         settle(&mut harness);
     }
     assert!(missed.is_empty(), "{}", missed.join("\n"));
