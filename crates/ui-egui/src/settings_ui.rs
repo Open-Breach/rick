@@ -322,12 +322,10 @@ fn extension_settings(
                         }
                         (ext::SettingKind::Text { .. }, ext::SettingValue::Text(text)) => {
                             let mut text = text.clone();
-                            let response =
-                                ui.add(egui::TextEdit::singleline(&mut text).desired_width(200.0));
-                            (response.lost_focus() && response.changed()
-                                || response.lost_focus()
-                                    && ui.input(|i| i.key_pressed(egui::Key::Enter)))
-                            .then_some(ext::SettingValue::Text(text))
+                            // Every change is written, as the main settings are.
+                            ui.add(egui::TextEdit::singleline(&mut text).desired_width(200.0))
+                                .changed()
+                                .then_some(ext::SettingValue::Text(text))
                         }
                         (
                             ext::SettingKind::Integer { min, max, .. },
