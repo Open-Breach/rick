@@ -30,7 +30,9 @@ fn harness_with(
     let app = app::App::new(app::Config {
         platform: fake.clone(),
         ui: host.clone(),
-        extensions: Vec::new(),
+        // The subtree search of 0.1 is the search-walk plugin since
+        // milestone 5 (issue 22); the filter bar's toggle needs it.
+        extensions: vec![Arc::new(ext_search_walk::WalkExtension::new())],
         config_dir: Some(config.to_path_buf()),
         start: Some(local(start)),
     });
