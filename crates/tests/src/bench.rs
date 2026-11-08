@@ -7,7 +7,7 @@
 //! spec's (Decisions table, QUESTIONS.md 5, 24 and 30); the macOS and
 //! Windows targets were set from five measured runs on the CI runners, as
 //! `BENCHMARKS.md` records, last from the 0.2 run of issue 25 (QUESTIONS.md
-//! 121). Setting `RICK_BENCH_RECORD` turns the assertion off, for measuring
+//! 188). Setting `RICK_BENCH_RECORD` turns the assertion off, for measuring
 //! before a target exists.
 
 use std::time::Duration;
@@ -198,6 +198,12 @@ pub const BENCHMARKS: &[Benchmark] = &[
         linux: us(16_600),
         macos: us(16_600),
         windows: us(16_600),
+    },
+    Benchmark {
+        key: "3d-first",
+        linux: ms(300),
+        macos: ms(300),
+        windows: ms(300),
     },
 ];
 

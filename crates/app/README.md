@@ -9,7 +9,10 @@ tab when a previewer claims it, the system application otherwise or when the
 `[viewer] external` setting names its type) by reading its first bytes as a
 job. It owns the undo/redo log of
 reversible commands, the extension `Registry` the actions come from, the
-TOML settings file with its watcher, and the session: `session.toml`, written
+TOML settings file with its watcher (the `language` setting among them: it
+registers the kernel's `locales/en.ftl` and `de.ftl` with the `t!` lookup,
+reads the overrides in the configuration directory's `locales/`, and applies
+a language change live), and the session: `session.toml`, written
 after every change at most once per second through a temporary file and once
 more on exit, restored at start (or the start layout the settings name, with
 a vanished folder's tab opened at its nearest ancestor), and the saved
@@ -23,7 +26,12 @@ in `ops` see it through the `PinStore` bridge it hands them. It feeds the
 side panel — the Places list from `places.toml`, seeded from the standard
 folders on the first start and edited through `PlaceAdd`, `PlaceRemove`,
 `PlaceMove` and `PlaceEdit`; the mounted volumes polled through the
-platform, with `Eject` as a job; the cloud providers' rows; and the trash's
+platform, with `Eject` as a job; the cloud and network providers' rows, one
+per connection; the connections themselves (`AddConnection`, `Connection`
+with connect, disconnect and remove), whose non-secret fields are
+`[[connections]]` tables of `rick.toml` and whose secrets go to the
+platform keychain as a job before the table is written, the provider's
+`Connector` told after every change; and the trash's
 count after every operation — mounts the `rick://` provider of `vfs-rick`
 over every other provider, hands it the views extensions registered (the
 Trash view of `ext-vfs-trash`) and tells it when a view's contents changed,

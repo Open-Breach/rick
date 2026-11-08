@@ -1,6 +1,7 @@
 //! The platform tests run against: a private trash directory, recorded
 //! calls and canned dialogue answers.
 
+use std::ffi::OsString;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
@@ -10,12 +11,21 @@ use async_trait::async_trait;
 use tempfile::TempDir;
 use types::Error;
 
-use crate::traits::{
-    Chrome, Clipboard, ConfigDir, ControlsSide, DialogFilter, DragSource, DropTarget,
-    IncomingFiles, NativeDialogs, OpenWith, Point, Properties, PropertiesOutcome, RecentItem,
-    RecentlyUsed, StandardFolder, StandardFolders, Trash, TrashedItem, Volume, Volumes,
-    WindowChrome, WindowRef,
+use crate::perms::{
+    FilePermissions, PermissionChange, Permissions, Principal, PrincipalKind, Principals,
 };
+use crate::traits::{
+    Application, Chrome, Clipboard, ConfigDir, ControlsSide, DialogFilter, DragSource, DropTarget,
+    Elevate, ElevatedOutput, IncomingFiles, NativeDialogs, OpenWith, Point, Properties,
+    PropertiesOutcome, RecentItem, RecentlyUsed, Secrets, StandardFolder, StandardFolders,
+    Terminal, Trash, TrashedItem, Volume, Volumes, WindowChrome, WindowRef,
+};
+
+/// The applications the fake offers for every file, the default first.
+pub const FAKE_APPLICATIONS: [(&str, &str); 2] = [
+    ("Fake Editor", "fake-editor"),
+    ("Fake Viewer", "fake-viewer"),
+];
 
 /// The standard folders the fake creates under its home, so the side
 /// panel's default places have rows to show.
@@ -31,7 +41,8 @@ pub const FAKE_STANDARD_FOLDERS: [StandardFolder; 3] = [
 /// with the `Fake`; opening and revealing are recorded instead of launching
 /// anything; dialogues answer what the test told them to; the volumes and
 /// the recently-used list are what the test registered; the standard
-/// folders are the directories under the fake's home.
+/// folders are the directories under the fake's home; the secrets live in
+/// a map the test can read back.
 #[derive(Debug)]
 pub struct Fake {
     dir: TempDir,
@@ -40,6 +51,14 @@ pub struct Fake {
     /// trashed after a restore does not land on another item's path.
     trashed_count: Mutex<u64>,
     opened: Mutex<Vec<PathBuf>>,
+    opened_with: Mutex<Vec<(PathBuf, Application)>>,
+    terminals: Mutex<Vec<(PathBuf, Option<Vec<String>>)>>,
+    /// The programs handed to [`Elevate::run_elevated`]; nothing runs
+    /// unless `elevate_runs` says so.
+    elevated: Mutex<Vec<(PathBuf, Vec<OsString>)>>,
+    /// Whether [`Elevate::run_elevated`] runs the program, as the current
+    /// user: for a test of the helper itself.
+    elevate_runs: Mutex<bool>,
     revealed: Mutex<Vec<PathBuf>>,
     clipboard: Mutex<Option<String>>,
     dragged: Mutex<Vec<Vec<String>>>,
@@ -55,6 +74,8 @@ pub struct Fake {
     recent: Mutex<Vec<RecentItem>>,
     /// `list` answers `Unsupported`, as the macOS trash does.
     unlistable: Mutex<bool>,
+    /// The keychain: secrets by key.
+    secrets: Mutex<std::collections::BTreeMap<String, String>>,
 }
 
 #[derive(Debug, Default)]
@@ -91,6 +112,10 @@ impl Fake {
             items: Mutex::new(Vec::new()),
             trashed_count: Mutex::new(0),
             opened: Mutex::new(Vec::new()),
+            opened_with: Mutex::new(Vec::new()),
+            terminals: Mutex::new(Vec::new()),
+            elevated: Mutex::new(Vec::new()),
+            elevate_runs: Mutex::new(false),
             revealed: Mutex::new(Vec::new()),
             clipboard: Mutex::new(None),
             dragged: Mutex::new(Vec::new()),
@@ -102,7 +127,37 @@ impl Fake {
             ejected: Mutex::new(Vec::new()),
             recent: Mutex::new(Vec::new()),
             unlistable: Mutex::new(false),
+            secrets: Mutex::new(std::collections::BTreeMap::new()),
         })
+    }
+
+    /// Paths and applications handed to [`OpenWith::open_with`], oldest
+    /// first.
+    #[must_use]
+    pub fn opened_with(&self) -> Vec<(PathBuf, Application)> {
+        lock(&self.opened_with).clone()
+    }
+
+    /// The folders and commands handed to [`Terminal::open_terminal`],
+    /// oldest first.
+    #[must_use]
+    pub fn terminals(&self) -> Vec<(PathBuf, Option<Vec<String>>)> {
+        lock(&self.terminals).clone()
+    }
+
+    /// The programs and arguments handed to [`Elevate::run_elevated`],
+    /// oldest first; the fake runs none of them unless
+    /// [`Fake::set_elevate_runs`] said so.
+    #[must_use]
+    pub fn elevated(&self) -> Vec<(PathBuf, Vec<OsString>)> {
+        lock(&self.elevated).clone()
+    }
+
+    /// Makes [`Elevate::run_elevated`] run the program, as the current user
+    /// and with its output captured, so a test can exercise the privileged
+    /// helper without privileges.
+    pub fn set_elevate_runs(&self, runs: bool) {
+        *lock(&self.elevate_runs) = runs;
     }
 
     /// Paths handed to [`OpenWith::open`], oldest first.
@@ -195,6 +250,29 @@ impl Fake {
     /// test's stand-in for the system's list.
     pub fn set_recent(&self, items: Vec<RecentItem>) {
         *lock(&self.recent) = items;
+    }
+
+    /// Every secret in the fake keychain, by key: what a test checks never
+    /// reached a file.
+    #[must_use]
+    pub fn secrets(&self) -> std::collections::BTreeMap<String, String> {
+        lock(&self.secrets).clone()
+    }
+}
+
+impl Secrets for Fake {
+    fn store_secret(&self, key: &str, secret: &str) -> Result<(), Error> {
+        lock(&self.secrets).insert(key.to_owned(), secret.to_owned());
+        Ok(())
+    }
+
+    fn get_secret(&self, key: &str) -> Result<Option<String>, Error> {
+        Ok(lock(&self.secrets).get(key).cloned())
+    }
+
+    fn remove_secret(&self, key: &str) -> Result<(), Error> {
+        lock(&self.secrets).remove(key);
+        Ok(())
     }
 }
 
@@ -327,6 +405,75 @@ impl OpenWith for Fake {
     fn reveal(&self, path: &Path) -> Result<(), Error> {
         lock(&self.revealed).push(path.to_path_buf());
         Ok(())
+    }
+
+    /// [`FAKE_APPLICATIONS`] for every entry that exists.
+    fn applications(&self, path: &Path) -> Result<Vec<Application>, Error> {
+        fs::symlink_metadata(path).map_err(Error::from_io)?;
+        Ok(FAKE_APPLICATIONS
+            .iter()
+            .map(|(name, id)| Application {
+                name: (*name).to_owned(),
+                id: (*id).to_owned(),
+            })
+            .collect())
+    }
+
+    fn open_with(&self, path: &Path, app: &Application) -> Result<(), Error> {
+        lock(&self.opened_with).push((path.to_path_buf(), app.clone()));
+        Ok(())
+    }
+}
+
+impl Terminal for Fake {
+    fn open_terminal(&self, dir: &Path, command: Option<&[String]>) -> Result<(), Error> {
+        lock(&self.terminals).push((dir.to_path_buf(), command.map(<[String]>::to_vec)));
+        Ok(())
+    }
+}
+
+impl Elevate for Fake {
+    /// Records the call and reports success without running anything, or
+    /// runs the program as the current user when [`Fake::set_elevate_runs`]
+    /// said so.
+    fn run_elevated(&self, program: &Path, args: &[OsString]) -> Result<ElevatedOutput, Error> {
+        lock(&self.elevated).push((program.to_path_buf(), args.to_vec()));
+        if !*lock(&self.elevate_runs) {
+            return Ok(ElevatedOutput {
+                code: Some(0),
+                ..ElevatedOutput::default()
+            });
+        }
+        let output = std::process::Command::new(program)
+            .args(args)
+            .stdin(std::process::Stdio::null())
+            .output()
+            .map_err(Error::from_io)?;
+        Ok(ElevatedOutput {
+            code: output.status.code(),
+            stdout: output.stdout,
+            stderr: output.stderr,
+        })
+    }
+}
+
+impl Permissions for Fake {
+    /// The real entry's permissions: the fake's temporary directory is a
+    /// real one, and the acceptance tests change modes on it.
+    fn permissions(&self, path: &Path) -> Result<FilePermissions, Error> {
+        crate::Native.permissions(path)
+    }
+
+    fn set_permissions(&self, path: &Path, change: &PermissionChange) -> Result<(), Error> {
+        crate::Native.set_permissions(path, change)
+    }
+
+    fn principals(&self) -> Result<Principals, Error> {
+        crate::Native.principals()
+    }
+
+    fn principal(&self, name: &str, kind: PrincipalKind) -> Result<Principal, Error> {
+        crate::Native.principal(name, kind)
     }
 }
 
@@ -462,6 +609,28 @@ mod tests {
             fake.trash(&work.path().join("nope")),
             Err(Error::NotFound)
         ));
+    }
+
+    #[test]
+    fn secrets_are_kept_in_memory_by_key() {
+        let fake = Fake::new().unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(fake.get_secret("s3/work/secret_key").ok(), Some(None));
+        fake.store_secret("s3/work/secret_key", "hunter2")
+            .unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(
+            fake.get_secret("s3/work/secret_key")
+                .ok()
+                .flatten()
+                .as_deref(),
+            Some("hunter2")
+        );
+        assert_eq!(fake.secrets().len(), 1);
+        fake.remove_secret("s3/work/secret_key")
+            .unwrap_or_else(|e| panic!("{e}"));
+        fake.remove_secret("s3/work/secret_key")
+            .unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(fake.get_secret("s3/work/secret_key").ok(), Some(None));
+        assert!(fake.secrets().is_empty());
     }
 
     #[test]

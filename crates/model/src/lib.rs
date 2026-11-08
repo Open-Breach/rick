@@ -6,7 +6,7 @@
 //! [`Listing`] with its sort, group, filter and selection, the [`ViewMode`]
 //! with the [`Tree`] state of expanded folders and the scroll offset, plus
 //! the job table, the side panel's data (the [`Places`], the volumes, the
-//! cloud rows, the [`TrashView`]), the name conflicts jobs wait on and the
+//! cloud and network rows, the [`TrashView`]), the name conflicts jobs wait on and the
 //! [`Settings`] snapshot. All windows share the one model, so a job
 //! started in one shows in every other. It applies listing batches and
 //! filesystem changes and derives the visible rows; it performs no I/O.
@@ -35,13 +35,14 @@ pub use session::{
     DockSession, Geometry, PaneSession, Session, TabSession, WindowSession, parse_entry_id,
 };
 pub use settings::{
-    AfterDrag, Density, Drag, LAST_SESSION, PanelSide, Plugins, Preview, Search, Section,
-    SessionSettings, Settings, SettingsChange, SidePanel, SidePanelChange, TextPreview, Theme,
-    Viewer, parse_location,
+    AfterDrag, ConnectionEntry, Density, Drag, LAST_SESSION, PanelSide, Plugins, Preview, Search,
+    Section, SessionSettings, Settings, SettingsChange, SidePanel, SidePanelChange, TextPreview,
+    Theme, Viewer, parse_location,
 };
 pub use tree::{Tree, TreeRow};
 use types::{
-    Conflict, ConflictId, Entry, EntryId, EntryKind, JobId, Location, Progress, ProviderId,
+    Conflict, ConflictId, Entry, EntryId, EntryKind, ExtId, JobId, Location, Progress, ProviderId,
+    Question, QuestionId,
 };
 
 /// Identity of a tab, unique within one model.
@@ -69,6 +70,30 @@ pub enum TabKind {
     /// steps through the folder like a slideshow. The selection is the
     /// file shown.
     Viewer,
+    /// A terminal session an action opened at the tab's location; drawn
+    /// by the UI from the view the action returned, never restored with a
+    /// session.
+    Console,
+    /// A comparison of two files or two folders an action opened; drawn by
+    /// the UI from the view the action returned, never restored with a
+    /// session.
+    Compare,
+}
+
+impl TabKind {
+    /// Whether a tab of this kind lists entries of its own: an explorer or
+    /// a viewer.
+    #[must_use]
+    pub fn lists(self) -> bool {
+        matches!(self, Self::Explorer | Self::Viewer)
+    }
+
+    /// Whether a tab of this kind shows a view an action handed the UI,
+    /// which cannot come back with a session.
+    #[must_use]
+    pub fn is_view(self) -> bool {
+        matches!(self, Self::Console | Self::Compare)
+    }
 }
 
 /// Where a split puts the new pane.
@@ -347,6 +372,13 @@ pub struct Tab {
     /// A note for the status line: why the tab is not where the session
     /// left it. Cleared by the next navigation.
     pub note: Option<String>,
+    /// Why the location could not be listed, shown as a banner with
+    /// *Retry* over the empty list (a connection that failed, a folder that
+    /// refused); cleared by the next listing that works.
+    pub failure: Option<String>,
+    /// The title of a console or compare tab, as the action named it; the
+    /// other kinds are titled from their location.
+    pub title: Option<String>,
 }
 
 impl Tab {
@@ -371,6 +403,8 @@ impl Tab {
             tree: Tree::default(),
             scroll: 0.0,
             note: None,
+            failure: None,
+            title: None,
         }
     }
 
@@ -568,6 +602,57 @@ pub struct Window {
     pub side_panel: SidePanel,
 }
 
+/// The title-row search box's query over the platform's search indexes and
+/// what came back so far (QUESTIONS.md 118). The box lists the current
+/// location's matches first and these hits, with their paths, after them.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IndexSearch {
+    /// The text the hits answer; empty when nothing is being searched.
+    pub text: String,
+    /// The hits in arrival order, each entry at most once.
+    pub hits: Vec<Entry>,
+    /// Every index has answered, or there was nothing to ask.
+    pub done: bool,
+    /// What the indexes that failed said, one line each.
+    pub errors: Vec<String>,
+}
+
+impl Default for IndexSearch {
+    /// Nothing searched, so nothing outstanding.
+    fn default() -> Self {
+        Self {
+            text: String::new(),
+            hits: Vec::new(),
+            done: true,
+            errors: Vec::new(),
+        }
+    }
+}
+
+impl IndexSearch {
+    /// Starts over for `text`: no hits yet; done at once when the text is
+    /// empty.
+    pub fn start(&mut self, text: String) {
+        self.done = text.is_empty();
+        self.text = text;
+        self.hits.clear();
+        self.errors.clear();
+    }
+
+    /// Takes a batch of hits, skipping entries already listed (two indexes
+    /// may know the same file); returns the ones that were new.
+    pub fn extend(&mut self, batch: Vec<Entry>) -> Vec<Entry> {
+        let mut new = Vec::new();
+        for entry in batch {
+            if self.hits.iter().all(|h| h.id != entry.id) {
+                self.hits.push(entry.clone());
+                new.push(entry);
+            }
+        }
+        new
+    }
+}
+
 /// The whole model: every window, their panes and tabs, the job table and
 /// the settings snapshot.
 #[derive(Debug, Clone)]
@@ -584,6 +669,9 @@ pub struct Model {
     /// Name conflicts jobs wait on, oldest first; the UI asks about the
     /// first.
     pub conflicts: Vec<Conflict>,
+    /// Questions extensions wait on (a host key to trust, a passphrase),
+    /// oldest first; the UI asks the first.
+    pub questions: Vec<Question>,
     /// The side panel's Places list.
     pub places: Places,
     /// The mounted volumes: the machine's drives and the network mounts.
@@ -594,13 +682,25 @@ pub struct Model {
     /// The cloud rows: what the cloud providers list at their roots, their
     /// accounts or containers.
     pub cloud: Vec<Entry>,
-    /// The network providers mounted, sorted; each adds a root row to the
-    /// Network section.
+    /// The network providers mounted, sorted; the Network section lists
+    /// what they list at their roots.
     pub network_providers: Vec<ProviderId>,
+    /// The network rows: what the network providers list at their roots,
+    /// their connections; the mounted network volumes are in `volumes`.
+    pub network: Vec<Entry>,
     /// The trash's contents.
     pub trash: TrashView,
     /// The settings snapshot.
     pub settings: Settings,
+    /// The title-row search box's query over the search indexes.
+    pub index_search: IndexSearch,
+    /// The search indexes available right now, by extension id: the ones
+    /// the title-row search box queries. Empty when the platform has none;
+    /// the box then searches the current location alone, as in 0.1.
+    pub search_indexes: Vec<ExtId>,
+    /// A subdirectory search index is registered, so the filter bar offers
+    /// *Search in subdirectories*.
+    pub subtree_search: bool,
     /// The explorer tab the preview follows: the last one focused.
     preview_follows: Option<TabId>,
     next_pane: u64,
@@ -627,13 +727,18 @@ impl Model {
             focused_window: WindowId(0),
             jobs: BTreeMap::new(),
             conflicts: Vec::new(),
+            questions: Vec::new(),
             places: Places::default(),
             volumes: Vec::new(),
             cloud_providers: Vec::new(),
             cloud: Vec::new(),
             network_providers: Vec::new(),
+            network: Vec::new(),
             trash: TrashView::default(),
             settings,
+            index_search: IndexSearch::default(),
+            search_indexes: Vec::new(),
+            subtree_search: false,
             preview_follows: None,
             next_pane: 1,
             next_tab: 1,
@@ -782,7 +887,13 @@ impl Model {
                 let tab = TabId(self.next_tab);
                 self.next_tab += 1;
                 let mut state = Tab::new(saved_tab.location.clone(), &self.settings);
-                state.kind = saved_tab.kind;
+                // A hand-edited file naming a console or a comparison: the
+                // view is gone, the location stays.
+                state.kind = if saved_tab.kind.is_view() {
+                    TabKind::Explorer
+                } else {
+                    saved_tab.kind
+                };
                 state.view = saved_tab.view;
                 state.sort = saved_tab.sort;
                 state.group = saved_tab.group;
@@ -907,11 +1018,19 @@ impl Model {
                     .iter()
                     .map(|pane| {
                         let pane = self.panes.get(pane);
-                        let tabs: Vec<TabId> = pane.map(|p| p.tabs.clone()).unwrap_or_default();
+                        // A console or a comparison cannot come back with
+                        // the session: its tab is left out.
+                        let tabs: Vec<TabId> = pane
+                            .map(|p| p.tabs.clone())
+                            .unwrap_or_default()
+                            .into_iter()
+                            .filter(|id| self.tabs.get(id).is_some_and(|t| !t.kind.is_view()))
+                            .collect();
                         PaneSession {
                             active: pane
                                 .and_then(Pane::active)
-                                .and_then(|a| tabs.iter().position(|t| *t == a)),
+                                .and_then(|a| tabs.iter().position(|t| *t == a))
+                                .or_else(|| (!tabs.is_empty()).then_some(0)),
                             tabs: tabs
                                 .iter()
                                 .filter_map(|id| self.tabs.get(id))
@@ -1485,6 +1604,33 @@ impl Model {
         Some(tab)
     }
 
+    /// Opens a tab of `kind` (a console or a comparison) titled `title` at
+    /// `location`, next to the pane's active tab and active in its place;
+    /// the UI draws it from the view the action returned. `None` when the
+    /// pane does not exist.
+    pub fn open_view(
+        &mut self,
+        pane: PaneId,
+        kind: TabKind,
+        location: Location,
+        title: String,
+    ) -> Option<TabId> {
+        let p = self.panes.get(&pane)?;
+        let at = p
+            .active
+            .and_then(|a| p.tabs.iter().position(|t| *t == a))
+            .map_or(p.tabs.len(), |i| i + 1);
+        let id = TabId(self.next_tab);
+        self.next_tab += 1;
+        let mut state = Tab::new(location, &self.settings);
+        state.kind = kind;
+        state.title = Some(title);
+        self.tabs.insert(id, state);
+        self.panes.get_mut(&pane)?.tabs.insert(at, id);
+        self.activate(id);
+        Some(id)
+    }
+
     /// Opens a tab at `location` in `pane`, or in the focused pane, and makes
     /// it active.
     pub fn new_tab(&mut self, pane: Option<PaneId>, location: Location) -> (PaneId, TabId) {
@@ -1755,6 +1901,18 @@ impl Model {
         }
     }
 
+    /// Records why the pane's active tab's listing failed, for the banner
+    /// with *Retry*; `None` clears it.
+    pub fn listing_failed(&mut self, pane: PaneId, why: Option<String>) -> bool {
+        match self.active_tab_mut(pane) {
+            Some((_, tab)) => {
+                tab.failure = why;
+                true
+            }
+            None => false,
+        }
+    }
+
     /// Applies a change notification to the pane's active tab. Returns
     /// `false` for [`FsChange::Rescan`], which needs a fresh listing.
     pub fn apply_change(&mut self, pane: PaneId, change: FsChange) -> bool {
@@ -1886,6 +2044,20 @@ impl Model {
         let before = self.conflicts.len();
         self.conflicts.retain(|c| c.id != id);
         before != self.conflicts.len()
+    }
+
+    /// Records a question an extension waits on.
+    pub fn question_opened(&mut self, question: Question) {
+        if !self.questions.iter().any(|q| q.id == question.id) {
+            self.questions.push(question);
+        }
+    }
+
+    /// Forgets an answered question. Returns whether it was open.
+    pub fn question_closed(&mut self, id: QuestionId) -> bool {
+        let before = self.questions.len();
+        self.questions.retain(|q| q.id != id);
+        before != self.questions.len()
     }
 
     /// Forgets a finished job.

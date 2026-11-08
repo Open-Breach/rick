@@ -33,6 +33,23 @@ ext-preview-office = { path = "crates/ext-preview-office" }
 ext-preview-media = { path = "crates/ext-preview-media" }
 ext-preview-archive = { path = "crates/ext-preview-archive" }
 ext-preview-csv = { path = "crates/ext-preview-csv" }
+ext-search-walk = { path = "crates/ext-search-walk" }
+ext-search-windows = { path = "crates/ext-search-windows" }
+ext-search-spotlight = { path = "crates/ext-search-spotlight" }
+ext-search-tracker = { path = "crates/ext-search-tracker" }
+ext-search-baloo = { path = "crates/ext-search-baloo" }
+ext-svn = { path = "crates/ext-svn" }
+ext-vfs-sftp = { path = "crates/ext-vfs-sftp" }
+ext-ssh = { path = "crates/ext-ssh" }
+ext-vfs-s3 = { path = "crates/ext-vfs-s3" }
+ext-vfs-azure = { path = "crates/ext-vfs-azure" }
+ext-vfs-gcs = { path = "crates/ext-vfs-gcs" }
+ext-action-compress = { path = "crates/ext-action-compress" }
+ext-action-compare = { path = "crates/ext-action-compare" }
+ext-action-terminal = { path = "crates/ext-action-terminal" }
+ext-action-rename = { path = "crates/ext-action-rename" }
+ext-preview-3d = { path = "crates/ext-preview-3d" }
+ext-installer = { path = "crates/ext-installer" }
 plugins-native = { path = "crates/plugins-native" }
 plugin-probe = { path = "crates/plugin-probe" }
 plugin-panic = { path = "crates/plugin-panic" }
@@ -77,13 +94,60 @@ csv = "1"
 memchr = "2"
 pulldown-cmark = { version = "0.13", default-features = false }
 html-escape = "0.3"
+# The subdirectory search plugin's parallel walker (issue 22).
+ignore = "0.4"
+# The 3D previewer (issue 19): STL through `stl_io`, OBJ through `tobj`, 3MF
+# through `zip` and `roxmltree` above, and the meshes rendered off screen
+# through wgpu, the version eframe draws with, read back as RGBA frames.
+stl_io = "0.11"
+tobj = { version = "4", default-features = false }
+wgpu = { version = "30", default-features = false, features = ["std", "wgsl", "vulkan", "metal", "dx12"] }
+bytemuck = { version = "1", features = ["derive"] }
+pollster = "0.4"
 id3 = { version = "1", default-features = false }
 gstreamer = "0.25"
 gstreamer-app = "0.25"
 gstreamer-audio = "0.25"
 gstreamer-video = "0.25"
 gstreamer-pbutils = "0.25"
+# Select by pattern (glob and regular expression) in the core actions,
+# bulk rename's find and replace; the text diff of `ext-action-compare`;
+# the console of `ext-action-terminal` (a pseudo-terminal and the parser
+# of its escape sequences).
+globset = "0.4"
+regex = "1"
+similar = "2"
+portable-pty = "0.9"
+vte = "0.15"
 anyhow = "1"
+# The platform keychain (SPEC.md "Package layout": `Secrets`, 0.2).
+keyring = "4"
+# The provider plugins of issue 21. SFTP through russh and russh-sftp,
+# with ring as the one crypto library of the process (the cloud plugins'
+# TLS uses it too), no aws-lc; the clouds through reqwest over rustls with
+# ring, streaming bodies, and the small signing crates: HMAC-SHA256 for
+# SigV4 and Azure's SharedKey, ring's RSA for the GCS service-account JWT.
+russh = { version = "0.65", default-features = false, features = ["ring", "flate2", "rsa"] }
+russh-sftp = "3"
+reqwest = { version = "0.13", default-features = false, features = ["rustls-no-provider", "stream", "http2"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12", "logging"] }
+ring = "0.17"
+tokio-util = { version = "0.7", default-features = false, features = ["io"] }
+bytes = "1"
+hmac = "0.12"
+sha2 = "0.10"
+# HMAC-SHA1 for the hashed entries of `known_hosts` in the SSH plugin.
+sha1 = { version = "0.10", default-features = false }
+# Localisation (`ext::i18n`): Fluent messages, language identifiers, the
+# negotiation of the system language against the bundled ones, and the
+# system language itself.
+fluent-bundle = "0.16"
+unic-langid = "0.9"
+sys-locale = "0.3"
+hex = "0.4"
+base64 = "0.22"
+percent-encoding = "2"
+url = "2"
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 eframe = "0.36"
 egui = "0.36"
@@ -124,6 +188,8 @@ x11rb = "0.13"
 windows = "0.62"
 # Named directly for the `implement` macro, which spells out its paths.
 windows-core = "0.62"
+# NTFS directory junctions for Create link / Paste as link on Windows.
+junction = "2"
 
 [workspace.lints.clippy]
 pedantic = { level = "warn", priority = -1 }

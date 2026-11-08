@@ -26,6 +26,7 @@ use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 use std::time::{Duration, Instant, SystemTime};
 
+use ext::Text;
 use ext::{
     API_VERSION, Capabilities, ControlId, ControlValue, Extension, Frame, Icon, InfoSection,
     Manifest, Platforms, Points, PreviewControl, PreviewDoc, Previewer, Provider, Registry,
@@ -95,6 +96,7 @@ impl Extension for OfficePreview {
     }
 
     fn register(&self, reg: &mut Registry) -> Result<(), Error> {
+        reg.translations(&[("en", include_str!("../locales/en.ftl"))]);
         reg.previewer(Arc::new(OfficePreviewer));
         Ok(())
     }
@@ -697,7 +699,7 @@ impl PreviewDoc for OfficeDoc {
         ));
         vec![InfoSection {
             id: "file",
-            title: "File info",
+            title: Text("preview-office-file-info"),
             icon: Icon::Info,
             rows,
         }]

@@ -1383,7 +1383,810 @@ Once answered, an entry keeps its number and gains a dated decision line.
     which runs the tests, the bundle and the plugin loading on the full
     matrix, without the timings.
 
-118. (issue 25) Question 62 assumed that `egui` 0.36 over `winit` 0.30
+118. (issue 22) The spec's Indexed search says a search box "appears on the
+    toolbar" when the platform has an index and is "absent, not greyed
+    out" without one, while the Window chrome puts one search box in the
+    title row that is also the command palette and, in 0.1, searches the
+    current location by name. It also says index results show "in the
+    list with their paths", while the issue has the title-row box "show
+    results with their paths" and the acceptance has the box list the
+    hits. And `SearchIndex::scope` is `Everywhere | Under(Location)` with
+    no argument, while the issue asks the walk plugin to have "scope =
+    Under(location)".
+    Assumed: the title-row box stays, whatever the platform has; what an
+    index adds is a second group of rows in its dropdown, after the
+    current location's matches: every available index is queried with the
+    text (root `None`, names only) once the text has stood for 150 ms, and
+    each hit lists once with its folder as the hint, errors and a
+    "searching" row below. Picking a hit does what Open containing folder
+    does: the pane goes to the hit's folder and selects it there; it does
+    not open the file. Two kinds of index share the trait: a platform
+    index has scope `Everywhere` and feeds the box; the walk has scope
+    `Under` the local provider's root (a `Location` with an empty path,
+    which `SearchScope::covers` reads as the provider's whole tree) and
+    answers only a query with a root, which the filter bar's *Search in
+    subdirectories* sends with the pane's location. The filter bar shows
+    its toggle only while an `Under` index is registered, and a subtree
+    search without one ends with a notice. The pane's listing is not
+    touched by the box.
+
+119. (issue 22) The walk of 0.1 took the pane's hidden toggle and the
+    `[search] ignore` list of `rick.toml`, and `Query` carries neither.
+    Assumed: `Filter` gained `NoHidden` (leave hidden entries out and
+    never descend into a hidden directory) and `SkipNames` (never descend
+    into or report these names), both narrowing a query as the other
+    filters do, and `SearchScope` gained `covers`; `API_VERSION` is 5. The
+    ignore list stays in `rick.toml` and reaches the walk through the
+    query, since no plugin reads its own settings file yet. A platform
+    connector applies both, and the size, extension and date filters, to
+    the hits its service returns, below the query's root when it has one.
+
+120. (issue 22) The issue names the services' interfaces (Windows Search
+    "via ISearchQueryHelper/OLE DB", Tracker "SPARQL over D-Bus", Baloo
+    "baloosearch or D-Bus") and asks for a fake service beside the real
+    one; a plugin may not use `unsafe`, which the COM interfaces need, and
+    the kernel has no D-Bus library.
+    Assumed: every connector drives a command line through one `Service`
+    trait (`output` for the probe, `stream` for a query's lines), the
+    real one a child process read on the blocking pool and killed on
+    cancel, the tests' one canned output. Windows Search runs its SQL
+    through a PowerShell script over an ADODB connection to the
+    `Search.CollatorDSO` OLE DB provider; Tracker sends its SPARQL to the
+    miner's D-Bus endpoint through `tracker3 sparql --dbus-service`;
+    Spotlight runs `mdfind`; Baloo runs `baloosearch` (the `6`-suffixed
+    tools first). "Detected at start and on change" is a probe at
+    construction and every ten seconds after (`sc.exe query WSearch`,
+    `mdutil -s /`, the bus name's owner through `gdbus` or `busctl`,
+    `balooctl status`); an index whose service is installed but not
+    running is not available, so Tracker is never started by a query.
+    Every hit is looked up on disk for its entry and id, hits that are
+    gone are dropped, and a query stops at 500 hits. The real-service
+    tests run where the runner has the service: Windows Search on
+    Windows (the setup action starts the service), Spotlight on macOS,
+    Tracker and Baloo on Linux inside a private session bus with the
+    indexers over a fixture directory (`.github/scripts/with-indexers.sh`,
+    both installed by apt in under half a minute); elsewhere they print a
+    note and pass, and `RICK_REQUIRE_<SERVICE>` makes them fail instead.
+
+121. (issue 22) The bundler put every `ext-*` library into `plugins/`,
+    and the host refused one whose manifest left the platform out; the
+    first platform-specific plugins would have shipped three refused rows
+    on every platform.
+    Assumed: `rick-plugin-manifest` exits with code 3 for a plugin whose
+    manifest leaves this platform out and `cargo xtask bundle` leaves it
+    out of the bundle, saying so; the release archives carry only the
+    connector of their platform, and `.github/scripts/check-plugins.sh`
+    checks the per-platform set.
+
+122. (issue 22) The spec's `ext-svn` row names "Update, Commit, Revert,
+    Log actions" and the issue adds Add; the "revision in the info panel"
+    does not say which revision a mixed-revision working copy shows.
+    Assumed: the group is Update, Commit, Revert, Log and Add, as the
+    issue says. The panel shows the working copy root's revision as `svn
+    info` reports it, with the relative URL, the repository root and the
+    last commit the root knows of; a commit made in the working copy
+    shows after an update, as in Subversion itself. Commit adds the
+    selected files that are not versioned yet before committing the
+    selection, Revert takes `svn revert -R` on the selection after a
+    confirmation and leaves unversioned files alone, Update and Log act
+    on the selection when there is one and the whole working copy
+    otherwise, and the badges use Subversion's own status letters
+    (`C` conflict, `!` missing, `?` unversioned). The tests generate a
+    repository with `svnadmin`; where the command line is missing they
+    skip with a note unless `RICK_REQUIRE_SVN` is set, which the setup
+    action does after installing Subversion.
+
+123. (issue 23) The action plugins need dialogues richer than `UiHost`'s
+    `prompt` and `confirm`: a format and a name for Compress to…, a
+    pattern with a live preview for Bulk rename, an application list for
+    Open with…, a pattern kind and mode for Select by pattern.
+    Assumed: `UiHost` gains `form(Form) -> Option<Values>`: a titled list
+    of fields (text, checkbox, choice, folder with a Browse… button) and an
+    optional preview closure the UI calls with the values as they are
+    typed, each row a from → to pair with an optional problem; a problem
+    keeps the form from being confirmed. The egui host answers it the way
+    it answers `prompt`: the first run records the form, the shell shows
+    it, and the action runs again with the values. The extension API is
+    version 6 for this and the changes of 124 to 128.
+
+124. (issue 23) An action that opens a console or a comparison, or that
+    selects entries, has no outcome to say so: `ActionOutcome` had `Done`,
+    `Started` and `Undoable`, and the UI never touches the model.
+    Assumed: `ActionOutcome::View(View)` hands the application data the
+    UI draws — `View::Compare(Arc<Compare>)`, filled by the action's job,
+    and `View::Console(Arc<dyn Console>)`, live — and the application opens
+    a tab of the new kinds `TabKind::Compare` and `TabKind::Console` next to
+    the pane's active one and passes the view on with `Event::ViewOpened`;
+    `ActionOutcome::Select(Selector)` hands it a matcher it applies to the
+    pane's rows, replacing or adding to the selection. A console or compare
+    tab lists nothing, offers no action context (like the Preview tab) and
+    is left out of the session, since a shell or a comparison cannot come
+    back; closing the tab drops the view, which ends the shell.
+
+125. (issue 23) Compare "the folders of the two panes": the action's
+    context carries one pane's location and selection.
+    Assumed: `ActionCtx` gains `other: Option<Location>`, the location of
+    the first other pane of the window whose active tab is an explorer, in
+    dock order. Compare uses it with nothing selected; with two files or
+    two folders selected it compares those and ignores it.
+
+126. (issue 23) An extraction "with the conflict dialogue": the `Conflicts`
+    queue lived in `ops`, which a plugin cannot depend on.
+    Assumed: the queue moves to `runtime` and every `JobCtx` carries its
+    runner's queue (`JobCtx::conflicts`), so a plugin's job asks the same
+    dialogue as a copy; `ops` keeps the landing policy and re-exports the
+    queue, and the application takes it from its `JobRunner`. The compress
+    plugin's extraction asks for a file over an existing entry and merges a
+    folder over a folder without asking, as the copy rules say; a job
+    whose dialogue was never answered ends when it is cancelled.
+
+127. (issue 23) The issue says Compress writes "through ext-vfs-archive's
+    writers", while Module rule 2 says extensions depend on `ext` and
+    `types` only.
+    Assumed: `ext-action-compress` links `ext-vfs-archive` as a library,
+    the one exception, so the zip, tar and 7z code exists once; the
+    archive crate gains `create` (a new archive from files on disk) and
+    `extract` (a whole archive in one pass, asking where each entry goes)
+    for it, and `deny.toml` allows the edge. The archive plugin's library
+    is still loaded by the host on its own; the compress plugin carries its
+    own copy of that code, which holds no process-wide state.
+
+128. (issue 23) "Create link / Paste as link (symlink; junction and .lnk
+    on Windows with a choice)": `LinkKind` had `Symbolic` and `Hard`, and
+    nothing told an action which kinds a provider offers.
+    Assumed: `LinkKind` gains `Junction` and `Shortcut`, `Capabilities`
+    gains `JUNCTION` and `SHORTCUT` (and the spec's `NATIVE_TRANSFER`,
+    which was missing), the local provider offers them where the platform
+    has them (Windows, through the `junction` crate and the shell link
+    object), and Paste as link and Create link… ask which kind when more
+    than one is offered. Create link… asks for the folder in a form; Paste
+    as link links to the clipboard's items, whatever the clipboard's mode,
+    in the current folder, under a numbered name when the name is taken; a
+    shortcut is named `name.lnk`. Both are undoable: undo removes the links.
+
+129. (issue 23) Open with… "the platform's application list for the type
+    plus any executable, remember-for-type".
+    Assumed: `platform::OpenWith` gains `applications` (the desktop files
+    the MIME databases register for the type on Linux, with `xdg-open` as
+    "System default" where nothing is registered; Launch Services' list on
+    macOS; the shell's recommended handlers for the extension on Windows,
+    File Explorer for a folder) and `open_with` (a listed application, or
+    a program the user typed, run with the path as its argument). The
+    choice is remembered per lower-case extension (`folder`, `none`) in
+    `core.toml` under `[open_with]` and listed first the next time; Enter
+    keeps opening with the viewer or the system default, as the spec's
+    navigation row says.
+
+130. (issue 23) "The system terminal when the setting says so": the spec
+    has `Registry::settings` render "in the Settings screen, stored in the
+    extension's TOML", which nothing did yet, and names the `Terminal`
+    platform trait without a shape.
+    Assumed: the Settings window renders every declared schema under the
+    extension's name and the application keeps the values in
+    `<config dir>/<extension id>.toml` (`Command::ExtSetting`); an
+    extension reads its own file. The console plugin declares `console`
+    with the options `embedded` and `system`. `platform::Terminal` is
+    `open_terminal(dir, command: Option<&[String]>)`: `$TERMINAL` or the
+    first of x-terminal-emulator, gnome-terminal, konsole, xfce4-terminal,
+    kitty, alacritty, foot, wezterm and xterm on Linux, Terminal.app on
+    macOS (`osascript` for a command), Windows Terminal or `cmd` in a new
+    window on Windows. The spec said `ext-ssh` introduces the trait; it
+    arrives here and `ext-ssh` reuses it.
+
+131. (issue 23) The embedded console: "a dock tab through portable-pty
+    with a small VT renderer" leaves the emulator's extent open.
+    Assumed: the user's shell (`$SHELL`, `ComSpec`) with `TERM` set to
+    `xterm-256color`; a screen of cells handling the VT100 to xterm
+    sequences a shell, an editor and a pager use (cursor movement, erasing,
+    insert and delete, a scroll region, the alternate screen, tab stops,
+    SGR with the 16 named colours, the 256-colour cube and true colour, the
+    cursor and application cursor keys modes, the title, the cursor
+    position and device attributes answers), a scrollback of 10 000 lines
+    shown with the wheel and Shift+PageUp/PageDown, and every character one
+    cell wide (double-width characters misalign until a width table is
+    added). While the console has the keyboard every key goes to the
+    shell, Tab, Escape and the arrows included, so the shell's shortcuts
+    rest until the mouse moves on; Ctrl+V pastes (egui turns it into a
+    paste) and Ctrl+C is the interrupt. The pane's title is the folder, or
+    what the shell sets. The reader runs on the runtime's blocking pool,
+    the one place a plugin may block.
+
+132. (issue 23) Bulk rename's placeholders and order are not defined, nor
+    what "Rename with several selected" does.
+    Assumed: `{name}` is the name without its extension, `{ext}` the
+    extension with its dot (empty when there is none, a folder has none),
+    `{n}` the counter from the form's start padded to the width of the last
+    number (`{n:4}` for a fixed width), `{date}` the modification date as
+    `YYYY-MM-DD` in local time; find and replace runs on the original name
+    first (a regular expression with `$1` groups when the box is ticked),
+    the pattern fills from the result, the case change applies to the
+    whole result. Clashes — two entries on one name, a name another entry
+    of the folder has, an empty name, a separator — are marked in the
+    preview and refuse the rename. The renames are one undoable job
+    through temporary names (so swaps and case-only renames work on
+    case-insensitive file systems), on local folders only. The shell runs
+    the bulk rename for Rename (F2) with several entries selected when the
+    plugin is loaded; the core action keeps asking for one entry otherwise.
+    The spec's operations list gives Select by pattern Ctrl+Shift+A, its
+    table Mod+Shift+S (Mod+Shift+A inverts); the table wins, as for 21.
+
+133. (issue 23) Compare's limits.
+    Assumed: local files and folders only; two files are compared as text
+    when both look like text and are at most 64 MiB, byte for byte
+    otherwise (reported as identical or different); folders are compared
+    one level deep by name, size and modification time (two times within a
+    second are the same), a subfolder present on both sides counting as
+    the same; the copy buttons of the folder diff run the kernel's copy
+    (`Command::Receive`), so the conflict dialogue and the operations area
+    apply. The comparison is a job on the blocking pool that fills the tab;
+    the tab's title is `left ↔ right`.
+
+134. (issue 23) The package layout lists "open in system file manager"
+    under `ext-action-terminal`, the issue says it "stays".
+    Assumed: it stays `core.reveal` in the built-in core actions, so it
+    works without the plugin; the terminal plugin holds Open console only.
+
+135. (issue 21) SPEC.md's milestone 5 and package layout replaced
+    `ext-vfs-sftp` with `ext-ssh` (`specs/ext-ssh.md`, shell commands over
+    `exec` channels, no SFTP); the issue, written against db17a20, asks for
+    `ext-vfs-sftp` through russh and russh-sftp, and so does the task.
+    Assumed: `ext-vfs-sftp` as the issue says, on the pieces the ssh spec
+    introduces for both (`platform::Secrets`, `Capabilities::REMOTE`, the
+    Network section's one row per connection), so `ext-ssh` lands on the
+    same foundations when its turn comes. Its connection dialogue asks for
+    host, port, user, key file, key passphrase, password and the remote
+    folder the connection opens at (the login folder when empty). Host keys
+    follow `~/.ssh/known_hosts` with OpenSSH semantics through russh: an
+    unknown host is learnt and recorded with a log line, a changed key is
+    refused with its fingerprint; the ssh spec's two dialogues, agent
+    authentication, jump hosts and `~/.ssh/config` are `ext-ssh`'s. The
+    listing streams packet by packet through a raw SFTP session of its own
+    beside the one the files use; `copy` within a host streams through the
+    machine (the protocol has no copy) and `transfer` answers `Unsupported`
+    for a copy, so the kernel's path takes it; a move is a remote rename.
+
+136. (issue 21) The issue wants connections in `rick.toml` with secrets in
+    the keychain and connect, disconnect and remove on the row's menu, and
+    a plugin depends on `ext` and `types` only (Module rules 2): it can
+    neither write `rick.toml` nor draw a dialogue, and the `Provider`
+    contract has no connections.
+    Assumed: `ext` gains the connection contract (API version 7): a
+    `Connector` a network provider registers beside its provider
+    (`Registry::connector`, part of the provider point) with a
+    `ConnectionSchema` (the dialogue's fields: text, integer, bool, path,
+    secret), `update` (the connections as the application keeps them, at
+    start and after every change), `connect`, `disconnect` and
+    `is_connected`. The application owns the list: the non-secret fields
+    are `[[connections]]` tables of `rick.toml` with `provider`, `name`
+    and the fields inline, a `Secret` field goes to the keychain under
+    `<provider>/<connection>/<field>` as a job (a keychain may ask to be
+    unlocked) before the table is written, and the connector is handed the
+    list; `Remove` deletes the table and the keys. The side panel builds
+    the *Add connection…* dialogue from the schema (the name, then the
+    fields, secrets masked), offered in the section header's context menu
+    per plugin and by the *Add…* row of an empty section; a connection
+    row's menu offers *Connect* or *Disconnect* and *Remove connection*.
+    The Network section lists what the network providers list at their
+    roots, as Cloud does (87); `vfs-rick` keeps the id lists of 87 for
+    which section a provider belongs to.
+
+137. (issue 21) `transfer()` joins the `Provider` trait as the spec writes
+    it, and the trait's other implementers (local, archive, trash, the
+    tests' providers) have no native transfer.
+    Assumed: a default body answering `Unsupported`, so every provider
+    keeps compiling; `ops` lands each pair through the conflict policy as
+    before and hands the provider, in one call per target folder, the
+    items whose source and target resolve to the same provider instance
+    with `NATIVE_TRANSFER` at both ends, land under their own name and
+    overwrite nothing; a provider that answers `Unsupported` (SFTP for a
+    copy) gets the kernel's path for those items, any other error fails
+    the job. Overwrites and renamed landings keep the kernel's path. The
+    undo of a move goes back the same way.
+
+138. (issue 21) Folders in an object store, and the spec's "no rename".
+    Assumed: a folder is a zero-byte object whose key ends in `/` (the
+    consoles' convention), listed through the service's delimiter as a
+    common prefix and never shown as a file; a folder's `stat` is a
+    one-key listing under its prefix; deleting a folder deletes every
+    object under it, deleting a bucket or container empties it first; the
+    bucket level offers `WRITE` (a new folder there is a new bucket) and
+    nothing moves into it natively. `RENAME` is not set, so F2 hides, and
+    a move within the account is the service's copy per object then a
+    delete, across buckets or containers of the account too; across two
+    connections the kernel streams. S3's `CopyObject` stops at 5 GB per
+    object, the service's limit; a larger object needs `UploadPartCopy`,
+    left for when someone has one. Uploads stream in 8 MiB parts, blocks
+    or chunks through a pipe to an upload task; dropping the writer before
+    `shutdown` aborts the S3 multipart upload, leaves Azure's blocks
+    uncommitted and abandons the GCS session, so a cancelled copy leaves
+    no object. The GCS connection's secret is the service account's key
+    file, its JSON or its path, exchanged for a bearer token through a
+    JWT signed with ring; no key means unauthenticated requests, which an
+    emulator takes. Downloads are streamed `GET`s; readers do not seek.
+
+139. (issue 21) The kernel's tokio runtime was built with its time driver
+    only; russh and reqwest need the I/O driver.
+    Assumed: `runtime` enables it (`enable_io`), the one runtime of the
+    process driving the network providers' sockets too (81).
+
+140. (issue 21) "Remote-latency behaviour (no eager stat, no thumbnails by
+    default)" for the network providers.
+    Assumed: `Capabilities::REMOTE` as the ssh spec names it; the kernel
+    answers `Thumbnail` with nothing for an entry of a provider with it,
+    and the connection rows of the side panel are synthesised without
+    connecting (a connection's `stat` and the root listing never touch
+    the network), so a panel full of connections opens nothing until one
+    is clicked or *Connect* is picked. The preview size caps of the ssh
+    spec are not built here.
+
+141. (issue 21) The acceptance names containers for Linux CI and "where
+    Docker is available" for the other runners.
+    Assumed: tier 1 and the Linux x64 job of tier 2 start MinIO (Bitnami's
+    frozen `bitnamilegacy/minio:2025.7.23-debian-12-r5`, since MinIO's
+    community edition is source only and Docker Hub's `minio/minio` is
+    gone), Azurite, fake-gcs-server and atmoz/sftp with `docker run`
+    (`.github/scripts/containers.sh`), name them to the tests through
+    `RICK_S3_ENDPOINT` and friends and set `RICK_REQUIRE_CONTAINERS`, so a
+    round trip that would skip for a missing variable fails there; the
+    plugins' round trips live in their crates' unit tests, the kernel
+    pipeline (a 100 MB upload with progress, cancelled half-way leaving no
+    object) in `tests`; macOS, Windows and Linux arm64 skip them with a
+    note. The sshd container's user is chrooted, so the connection's
+    folder is its writable `upload`. The in-account byte counter runs on
+    every OS through the in-memory provider's native mode, and the
+    plugins' own round trips assert the moves land without the machine
+    reading the objects.
+
+142. (issue 19) The spec's 3D previewer is orbited by drag, zoomed by the
+    wheel and reset by a double-click, and the issue asks for them to
+    arrive through `set_control` so that the viewer and the preview pane
+    need no 3D code; `PreviewControl` (toggle, button) and `ControlValue`
+    (bool, pressed) cannot carry a pointer gesture.
+    Assumed: API version 5 adds `PreviewControl::Pointer { id, gesture,
+    label }` with `Gesture::{Drag, Wheel, DoubleClick}` and
+    `ControlValue::Delta { x, y }` in points. A pane forwards a gesture
+    the document declares to `set_control` instead of its own pan, scroll
+    or 1:1 (the modifier wheel stays the viewer's zoom), draws nothing in
+    the toolbar for it, and keeps the frame rendered before a control
+    change on screen until the next render lands, so an orbit never drops
+    to a spinner; before, every control change cleared the frames.
+
+143. (issue 19) "Models beyond a configurable triangle budget" (the issue:
+    "setting, default 2 M"): how a plugin's setting reaches it.
+    Assumed: the plugin declares the schema (`triangle_budget`, an integer
+    from 1 000 to 20 000 000) and, as milestone 6's extension settings have
+    it (the Settings screen writes `<id>.toml`, an extension reads its own
+    file), reads `preview-3d.toml` in the config directory through the
+    platform the registry lends it, at every open, so a change takes effect
+    for the next file; a value outside the bounds is clamped as the
+    application clamps every integer setting. A budget above what the
+    device's largest buffer holds is capped there.
+
+144. (issue 19) The status bar shows "bounding box in millimetres", while
+    STL and OBJ carry no unit, and the spec says nothing about which way
+    is up.
+    Assumed: STL and OBJ coordinates are millimetres, the convention of
+    slicers; a 3MF's declared unit (micron, millimeter, centimeter, inch,
+    foot, meter) converts and is shown as declared in File info; Z is up
+    for all three formats and the ground grid lies under the model's
+    lowest point.
+
+145. (issue 19) "decimate for the preview and say so" names no method.
+    Assumed: vertex clustering on a uniform grid over the bounding box,
+    the finest grid resolution (bisection, up to 4096 cells a side) whose
+    result fits the budget, every corner snapped to its cell's centre and
+    collapsed triangles dropped; one pass per step and no allocation. A
+    3 000 000-triangle binary STL opened, parsed and decimated in 2.3 s in
+    release on the development machine, most of it the parse. The
+    triangle count shown stays the file's; the status bar adds "decimated
+    to N triangles for the preview" and File info the budget.
+
+146. (issue 44) The issue puts the install locations at
+    `~/.local/share/rick/apps/<id>/<version>/` and `/opt/rick/apps/…` and
+    asks for "the spec's exact paths and rules"; specs/ext-installer.md
+    puts them at `~/.local/opt/<app-id>/<version>/` and
+    `/opt/<app-id>/<version>/`, with `~/.local/bin`, the applications and
+    hicolor directories beside them.
+    Assumed: the spec's paths.
+
+147. (issue 44) The issue says an update "keeps previous versions until the
+    user removes them"; the spec keeps exactly one previous version, not
+    configurable (its settled questions).
+    Assumed: one previous version is kept, anything older is deleted when
+    an update lands, and Revert flips to the one kept.
+
+148. (issue 44) The issue says "uninstall is undoable while the previous
+    version's folder still exists"; the spec's uninstall deletes the app
+    folder with every version folder and the record, and nothing outside
+    the record's list, so nothing of the app remains to undo from.
+    Assumed: Uninstall asks first, listing exactly what goes and that the
+    app's settings stay, and is not on the undo stack; Revert in the view
+    is the way back while the app is installed.
+
+149. (issue 44) "Elevation for system-wide installs goes through
+    `platform::Elevate` from #24": the repository has no pull request 24
+    and `platform` had no such trait; the spec makes the privileged helper
+    its own milestone and shows the Scope choice as unavailable until it
+    exists.
+    Assumed: `platform::Elevate` is added now as the hook the issue names,
+    one method that runs a program as the administrator and waits for it,
+    through `pkexec` and the polkit prompt on Linux, `Unsupported` on
+    macOS and Windows, recorded by the Fake; nothing calls it yet. The
+    form offers "System-wide (unavailable: the privileged helper is not
+    part of this version)", and choosing it is a problem row; the helper,
+    its plan file and the elevated path are the next milestone.
+
+150. (issue 44) The spec opens the Installed Apps view "from the command
+    palette and the app menu", the issue puts `rick://apps` "in the Places
+    list", and no kernel path let an action take a pane to a location.
+    Assumed: `ActionOutcome::Navigate(Location)` joins the extension API
+    (API version 9, together with `Elevate`): the application dispatches
+    it as a `Navigate` command, and *Installed apps* in the Installer group
+    of the palette and the context menu returns it, as does *Open install
+    folder*. The Places list is the user's own file, seeded from the
+    kernel's defaults, which cannot name a plugin; a `rick:apps` place can
+    be added in places.toml, and a side-panel entry for views waits for a
+    kernel hook. The burger menu lists no extension groups today.
+
+151. (issue 44) "Dropping an archive onto the Installed Apps view opens the
+    same dialog", while the spec says the plugin needs only two generic
+    hooks, an action opening a dialogue and a job with progress; a drop
+    onto a virtual location is a no-op in the UI, and a provider has no
+    way to open a dialogue.
+    Assumed: the drop target is left out; the dialog opens from the
+    context menu and the palette on the archive; `rick install <archive>`
+    is 0.3's command line.
+
+152. (issue 44) Off Linux the issue wants the plugin to "report
+    'unsupported on this platform' for its actions" and its actions
+    "hidden".
+    Assumed: both. The actions' availability is Hidden, a run by id
+    answers `Unsupported("unsupported on this platform")`, and the view's
+    listing answers the same error.
+
+153. (issue 44) The issue cites the spec file's "Acceptance section"; the
+    spec has the "Test fixtures" table instead.
+    Assumed: the table's ten fixtures plus the issue's own list are the
+    acceptance tests: the crate's tests cover every fixture row and the
+    round trip, `crates/tests/tests/installer.rs` the round trip through
+    the application with the filesystem diff and the plugin loading
+    through the host.
+
+154. (issue 44) The UI host answers one dialogue per action run and runs
+    the action again once the user confirmed; detection must have happened
+    before the form is built.
+    Assumed: detection runs on the app thread when the action runs (a
+    compressed tar's index means one pass over the stream) and is cached
+    per archive by size and modification time, so the re-run with the
+    answer is instant; collisions and a downgrade are problem rows of the
+    one form, cleared by the `Overwrite` and `Allow downgrade` checkboxes,
+    instead of a second question; *Update from archive…* asks for the
+    archive's path with `prompt` and remembers it until the form is
+    answered, so its re-run goes straight to the form.
+
+155. (issue 44) An update leaves the desktop entry, icon and symlinks
+    alone "unless the main executable's relative path changed, in which
+    case the symlinks are updated".
+    Assumed: the desktop entry's `Exec` is rewritten in that case too: it
+    names the main executable through `current`, and a stale path is the
+    vanishing-launcher problem the spec avoids.
+
+156. (issue 44) The view's row shows "icon, name, version…", and the icon
+    field of the dialog has "a file picker"; a Form has text, check,
+    choice and folder fields, and a row's glyph is the kernel's.
+    Assumed: the row shows the folder glyph, the version, kind, scope,
+    state and commands in columns and the record's facts in the info
+    panel; the form's icon is a choice of the archive's icon files plus a
+    text field for a path of one's own, the file picker being a later
+    sibling of the folder field.
+
+157. (issue 44) Archive safety says hostile entries are "rejected" and
+    links and special entries "skipped", and the hostile fixture expects
+    "entries rejected or skipped" within one install.
+    Assumed: an entry whose path is absolute, carries `..` or a NUL, a
+    duplicate name, an outside-pointing link and a special entry are each
+    left out and listed in the install summary, and the install goes on
+    with the rest; only a source tree, a wrong architecture, a checksum
+    mismatch and a missing main executable refuse the whole install.
+
+158. (issue 44) The spec has the plugin declare "in its manifest that it
+    writes outside the browsed location (`~/.local/opt`, `~/.local/share`,
+    `~/.local/bin`) and may invoke `pkexec`; a good first real test of the
+    declarative permission model"; the extension manifest has no such
+    field, and the permission model is among the spec's open questions.
+    Assumed: the manifest declares nothing of the kind yet; the crate's
+    README and docs name the paths it writes, and the field comes with
+    the extension security model.
+
+159. (issue 34) The host-key dialogues, the passphrase and the password
+    prompt are asked from inside the plugin while a listing or a copy runs,
+    but the API's prompts (`UiHost::confirm`, `prompt`, `form`) are
+    synchronous calls meant for an action on the UI thread; nothing lets a
+    provider's asynchronous operation ask the user and wait for the answer.
+    Assumed: a `Prompts` queue in `runtime` beside `Conflicts`, lent to
+    extensions through `Registry::prompts`: an extension asks with
+    `Prompts::ask`, `choose` or `secret` and awaits; the kernel publishes
+    the question as `Event::Question`, the UI shows one modal dialogue at a
+    time, the oldest first, and answers through `Command::AnswerQuestion`,
+    a dismissed dialogue answering *Cancelled*. The extension API is at
+    version 10 for this and the three points below.
+
+160. (issue 34) *Open console here* attaches "an externally supplied PTY
+    stream" to the console pane that `ext-action-terminal` owns, but a
+    plugin cannot depend on another plugin, and the terminal emulator was
+    that plugin's private module.
+    Assumed: the emulator (`Screen` and the `vte` parser) moved into the
+    kernel as `ext::terminal`, where both plugins use it; the SSH console
+    is an `ActionOutcome::View(View::Console)` over a PTY `shell` channel
+    of the pooled connection, so no second login happens, and
+    `ext-action-terminal` is unchanged in behaviour.
+
+161. (issue 34) "Previewers declare whether they need the whole file or
+    can work on a prefix", the prefix served by the provider and the cap
+    "applied by the preview frame when the provider is REMOTE", with "a
+    temporary file that is removed when the tab closes".
+    Assumed: `Previewer::reads()` answers `Reads::Whole` (the default) or
+    `Reads::Prefix` (text, code, CSV and hex; Markdown has no previewer of
+    its own); for a `REMOTE` provider the kernel hands a prefix previewer a
+    provider whose reads stop at 256 KiB (`app::REMOTE_PREFIX_CHUNK`),
+    shows *Load more* under the preview with the bytes served, and each
+    *Load more* adds another chunk; a whole-file previewer's file above
+    the cap shows the badges and *Preview anyway* instead. The cap is the
+    provider's `remote_preview_cap(loc)` (the host's
+    `preview_size_cap_mib`, then the `ssh.toml` setting), the kernel's
+    4 MiB (`app::REMOTE_PREVIEW_CAP`) when the provider names none.
+    `Provider::open_read_at(loc, offset)` reads from an offset (`tail -c
+    +N` here; the default reads and discards). Nothing is spooled to a
+    temporary file by the kernel: the previewers read through the
+    provider, and the ones that need a path (Office, media) keep their
+    own temporary copies as they do for archives.
+
+162. (issue 34) The host editor offers "jump host (optional, picked from
+    the host list)" and Rick's hosts "are created and edited from the
+    Network section", but `Connector::schema` returned a borrowed, static
+    schema of text fields and the side panel had *Add connection…* only.
+    Assumed: `Connector::schema(&self) -> ConnectionSchema` is owned and
+    computed per call, so the jump field lists the hosts known now;
+    `ConnectionFieldKind::Choice { options, default }` draws a combo box;
+    `Command::EditConnection` and the row item *Edit…* open the same
+    dialogue filled in, for Rick's own connections only (a host of
+    `~/.ssh/config` is read-only in Rick, so its row has neither *Edit…*
+    nor *Remove connection*). The other provider plugins return a clone
+    of their schema.
+
+163. (issue 34) The configuration section keeps Rick's hosts as
+    `[[ssh.hosts]]` and the three settings under `[ssh]` in `rick.toml`,
+    while issue 21 made the connections of every network provider
+    `[[connections]]` tables of `rick.toml` and issue 23 put an
+    extension's settings in its own TOML file.
+    Assumed: Rick's hosts are `[[connections]]` tables with
+    `provider = "ssh"`, the alias as `name` and the spec's fields (`host`,
+    `port`, `user`, `default_dir`, `identity_file`, `jump`,
+    `remember_password`, `preview_size_cap_mib`), so the host editor is
+    the connection dialogue every network provider has, with *Edit…*; the
+    three settings (`read_openssh_config`, `idle_timeout_minutes`,
+    `preview_size_cap_mib`) live in `ssh.toml` and appear in Settings like
+    every extension's. The keys are the spec's; the tables moved.
+
+164. (issue 34) What `ssh:/<alias>` lists and how a remote path is kept in
+    a location.
+    Assumed: `ssh:/<alias>` is the host's default directory, the remote
+    home when the host names none, resolved once per connection with
+    `pwd`; every location below carries the remote path as absolute bytes,
+    so a folder outside the default directory is reached by typing its
+    path and names that are no UTF-8 survive. The rows of the provider's
+    root are synthesised from the configuration without connecting.
+
+165. (issue 34) "Secrets live only in the OS keychain", without the keys.
+    Assumed: `ssh/<alias>/password` and `ssh/<alias>/passphrase` through
+    `ext::secret_key`, the scheme of the other network providers; the
+    editor's *Remember password in the OS keychain* stores the password
+    typed there, the passphrase dialogue's *Remember in the keychain* box
+    the passphrase, and a secret typed when nothing is remembered serves
+    the one connection; *Remove connection* removes both keys.
+
+166. (issue 34) "disk usage: `df -P` for the status bar", but the status
+    bar shows no disk usage for any provider yet.
+    Assumed: `SshProvider::disk_usage` runs `df -P` and parses it, and no
+    kernel slot asks for it until the status bar grows one for every
+    provider.
+
+167. (issue 34) "Connection errors surface in the tab as a banner with
+    Retry, never as a modal dialogue": a listing that failed was a toast.
+    Assumed: the tab gained `failure`, set by the kernel for any provider's
+    listing error and cleared by the next listing that works, drawn as a
+    banner over the empty list with *Retry* (`Command::Refresh`); the toast
+    is gone for listing errors. A failed connection is a listing error.
+
+168. (issue 34) The `busybox` profile lists with "`ls -lan` where
+    `find -printf` is missing", but `ls -lan` has no stable layout (the
+    date changes with the file's age) and splits a name on its spaces and
+    newlines, which the acceptance requires to survive.
+    Assumed: `busybox` and `bsd` list through a shell loop over the
+    directory's names (`for f in * .[!.]* ..?*`) that runs `stat -c` or
+    `stat -f` on each and prints NUL-separated records: slower than one
+    `find`, byte-exact. `uname`, `stat`, `find -printf`, `head -c`,
+    `tail -c` and `busybox` itself are probed once per host.
+
+169. (issue 34) The acceptance names Docker containers for Linux CI and
+    the macOS runner's own sshd for `bsd`; the sandbox the plugin was built
+    in has neither Docker nor an sshd.
+    Assumed: an SSH server in the test process (`ext_ssh::fake_sshd`, the
+    server side of `russh`, behind the `fake-sshd` feature; a deterministic
+    host key, password, public-key and keyboard-interactive login,
+    `MaxSessions`, `direct-tcpip` for a bastion) runs the plugin's own
+    tests and the acceptance tests in `tests` on every OS; tier 1 and the
+    Linux x64 job of tier 2 also build the `gnu` (Debian) and `busybox`
+    (Alpine) sshd images and the bastion network from
+    `.github/scripts/containers.sh` and name them through
+    `RICK_SSH_GNU_PORT` and friends, with `RICK_REQUIRE_CONTAINERS` making
+    a skip a failure. The macOS runner's sshd is not enabled (Remote Login
+    is an interactive setting), so the `bsd` profile is proven by the
+    command tests with BSD `stat -f` output.
+
+170. (issue 24) The spec's *Inspect* opens "the Windows Properties dialogue,
+    the macOS Get Info window, and on Linux Rick's own properties
+    dialogue", while the issue has Properties edit ownership, mode bits and
+    ACLs, an NTFS ACL entry added and removed on Windows among them, which
+    the system dialogues cannot be driven to.
+    Assumed: Properties is Rick's own dialogue on every platform, the
+    general rows above the Permissions section, and on Windows and macOS a
+    *System properties…* button opens the platform's own dialogue as
+    before. The dialogue follows the entry: a change sends the new state
+    back while it is open.
+
+171. (issue 24) "ACLs where the file system has them (POSIX ACLs, NFSv4
+    ACLs, NTFS ACLs on Windows with a trustee list)"; macOS has ACLs of its
+    own the issue does not name.
+    Assumed: one `Acl` type with a flavour per file system, read and
+    written by `platform::Permissions`: POSIX ACLs through the
+    `system.posix_acl_access` and `system.posix_acl_default` attributes
+    (the minimal list derived from the mode when none is stored, and
+    removed again when the list is reduced to its three base entries),
+    NFSv4 ACLs through `system.nfs4_acl` (shown and reduced in the
+    dialogue, new entries written with the server's tools since the `who`
+    forms and masks are the server's), macOS ACLs through `acl_to_text`
+    and `acl_from_text` (allow or deny, user or group, the permission
+    words `chmod +a` takes), NTFS discretionary ACLs through the security
+    API (allow or deny per trustee, the standard rights as checkboxes, the
+    raw mask shown, inherited entries greyed out and left to the parent,
+    inheritance blockable). No ACL library is linked.
+
+172. (issue 24) "Changes that need elevation ask through a new
+    `platform::Elevate` trait (polkit on Linux, Authorization Services on
+    macOS, UAC via a helper on Windows) and run only the privileged step
+    elevated"; the installer (issue 44) had added `Elevate` for Linux.
+    Assumed: the privileged step is `rick-perms`, a second binary beside
+    `rick` that reads a request file (the entries and their changes),
+    records what each had and applies them with the same platform code,
+    and prints the reply; a job applies every entry unprivileged first and
+    hands the ones refused to the helper in one call, so the user sees one
+    prompt per job. `Elevate::run_elevated` reaches `pkexec` on Linux,
+    `osascript … with administrator privileges` on macOS (Authorization
+    Services' own prompt) and `ShellExecuteEx` with `runas` on Windows,
+    where an elevated process shares no pipes, so the arguments get
+    `--output <file>` and the file comes back as the output; a program run
+    elevated honours that flag. `RICK_PERMS_HELPER` names the helper for
+    packagers who keep it elsewhere; a test binary finds it one directory
+    up from `deps/`.
+
+173. (issue 24) "Apply recursively with separate choices for files and
+    folders".
+    Assumed: the folder's dialogue has *Apply to enclosed items* with
+    *Files* and *Folders* boxes: which kinds the one change applies to
+    inside, the target folder itself always included; folders are walked
+    without following links, and every folder is changed after what is
+    inside it, the target last, so a mode without the execute bit still
+    reaches the contents (undo restores in the reverse order for the same
+    reason). Locking folders out is otherwise the user's choice, as
+    `chmod -R` leaves it.
+
+174. (issue 24) "Every change a job with undo where the previous state was
+    captured".
+    Assumed: the job records each entry's owner, group, mode and ACL before
+    it changes it, the helper reports the same for the entries it changed,
+    and the whole job is one step on the undo stack; undo and redo run as
+    jobs of their own and may need the helper again, which prompts again.
+    An entry that fails is reported in a notification and the rest goes
+    on; nothing elevated runs when no entry was refused.
+
+175. (issue 24) "An elevation-needed change on a root-owned fixture prompts
+    (Linux CI with a polkit fake) and succeeds".
+    Assumed: the test job of tier 1 installs `.github/scripts/fake-pkexec.sh`
+    as `/usr/local/bin/pkexec`, which runs the program through the
+    runner's passwordless `sudo`, and sets `RICK_ELEVATE_FIXTURE`, under
+    which `crates/rick/tests/perms.rs` makes a file root's with `sudo`,
+    changes its mode through the job (refused, then the helper as root)
+    and undoes it; elsewhere that test prints a note and passes. The fake
+    platform runs the helper as the current user when a test asks
+    (`Fake::set_elevate_runs`), for the protocol round trip.
+
+176. (issue 24) Where the owner and group lists come from.
+    Assumed: `/etc/passwd` and `/etc/group` on Linux (a name typed resolves
+    through the C library, so LDAP and the like work by name), Open
+    Directory through `getpwent` and `getgrent` on macOS (the `_` service
+    accounts left out), the Net API's local users and groups plus the
+    well-known trustees (Everyone, Authenticated Users, SYSTEM,
+    Administrators, Users) on Windows; a name typed into the dialogue is
+    resolved when the change is applied.
+
+177. (issue 24) `Capabilities::PERMISSIONS` exists and the local provider
+    sets it, but `Provider` has no permission methods and the ssh spec says
+    the flag stays off there.
+    Assumed: permissions are the platform's business for local entries;
+    the Permissions section appears for a local entry only, every other
+    entry's Properties shows the general rows. A provider-level API waits
+    for a provider that wants it.
+
+178. (issue 24) "User-facing strings still go through one `t!` lookup
+    function from the start" (SPEC.md "Language"), and the issue has the
+    lookup read Fluent files; the spec names no crate for it, and every
+    plugin's strings must go through the same one.
+    Assumed: the lookup is `ext::i18n` with the `ext::t!` macro, in the
+    dylib the binary and every plugin share, so one bundle per language
+    serves the kernel and the plugins alike; `ext` gained `fluent-bundle`
+    for it. The strings of the crates below `ext` (`platform`'s error texts,
+    `types`' error display) stay English, as do the texts the issue does
+    not name: error messages and the reasons in `Error::Unsupported`, job
+    and undo labels ("Copy 3 items"), the bodies of confirmations that
+    carry data, the status bar's facts and the rows' keys of the info
+    sections; a later pass can move them the same way.
+
+179. (issue 24) A label an extension hands the registry once (a setting's,
+    a connection field's, a connection schema's title, an info section's,
+    a decorator column's) was a `&'static str`; a language applied live
+    cannot relabel it.
+    Assumed: those labels are `ext::Text`, a Fluent key read every time it
+    is shown, so they follow a language change too; `Action::label` and
+    `Availability::Disabled` return a `String` built with `t!` on each call.
+    The extension API is at version 11 for it.
+
+180. (issue 24) Where a plugin's translations live and how they reach the
+    lookup.
+    Assumed: `crates/<plugin>/locales/<lang>.ftl`, bundled with
+    `include_str!` and handed to `Registry::translations` while the plugin
+    registers; the keys carry the plugin's prefix (`git-commit`,
+    `ssh-open-console-here`) so one bundle holds every plugin's messages;
+    English is the one language every key must have. The names of the
+    extension groups (Git, SVN, SSH, Trash, Installer) and the option texts
+    of a `Choice` setting are values, not translated.
+
+181. (issue 24) "A CI check fails on a user-facing string literal outside
+    `t!` (a lint or a grep over ui-egui)".
+    Assumed: `.github/scripts/check-strings.py`, run by the `fmt` job and
+    by a test, reads the non-test code of `crates/ui-egui/src` and reports
+    a string literal with letters handed to a widget or a window title
+    (`ui.label("…")`, `egui::Button::new("…")`, `.on_hover_text("…")`, the
+    shell's toast); `t!("…")` on the line is the key, and `// i18n: ok`
+    exempts a glyph, a unit or a format of numbers. Text a helper function
+    returns was moved into `t!` by hand, since no grep sees it.
+
+182. (issue 24) The German proof.
+    Assumed: `locales/de.ftl` translates the Settings screen in full, the
+    burger and context menus with every core action and the reasons a core
+    action is greyed out, the Properties dialogue's permission words, and
+    the plugins with actions in the context menus translate those actions
+    in their own `de.ftl` (Git, SVN, SSH, the trash, compress, compare,
+    rename, the console, the installer); everything else falls back to
+    English, which is what the issue asks of the rest.
+
+183. (issue 24) "A language setting (system default, or a listed language)".
+    Assumed: `language` in `rick.toml`, `None` for the system's; the
+    Settings row lists *System default* and every language that has
+    messages under the name its own file gives it (`language-name`). The
+    system's language is `sys-locale`'s list, negotiated against the bundled
+    languages by whole tag, then by language alone (`de-CH` finds `de`),
+    English when nothing matches; `fluent-langneg` was not used, since it
+    speaks ICU's locale type. A file `locales/<lang>.ftl` in the
+    configuration directory overrides the bundled messages of that language
+    key by key, read at start.
+
+184. (issue 24) Fluent wraps placeables in Unicode isolation marks.
+    Assumed: off (`set_use_isolating(false)`), since egui draws the marks as
+    boxes; a key nobody wrote comes back as itself, so a missing translation
+    is a visible text or key, never a panic.
+
+185. (issue 25) Question 62 assumed that `egui` 0.36 over `winit` 0.30
     "receives hovered and dropped files on Linux (Wayland and X11), macOS
     and Windows". It does not on Wayland: `winit` 0.30.13 implements the
     drop target for X11 (XDND), macOS and Windows only, so a Wayland Rick
@@ -1400,7 +2203,7 @@ Once answered, an entry keeps its number and gains a dated decision line.
     pane's folder" stays as the fallback wherever the position cannot be
     had.
 
-119. (issue 25) The issue asks for the drag source "via winit's raw window
+186. (issue 25) The issue asks for the drag source "via winit's raw window
     handle". `eframe` hands out the raw window and display handles of the
     root viewport (its `Frame`); Rick's further windows are egui viewports
     drawn in the same frame, with no handle of their own.
@@ -1412,7 +2215,7 @@ Once answered, an entry keeps its number and gains a dated decision line.
     image at all; macOS shows the first file's icon, Windows the system's
     drag cursor.
 
-120. (issue 25) Once the desktop runs a drag, the windowing backend never
+187. (issue 25) Once the desktop runs a drag, the windowing backend never
     sees the button come up (`AppKit`, OLE and the compositor consume it),
     so egui would keep the row dragged and the button down until the next
     click.
@@ -1425,7 +2228,7 @@ Once answered, an entry keeps its number and gains a dated decision line.
     `DoDragDrop` runs its own loop and the frame that starts it ends when
     the drag does, `winit` buffering the window's messages meanwhile.
 
-121. (issue 25) The issue asks to "re-measure the four macOS benchmarks that
+188. (issue 25) The issue asks to "re-measure the four macOS benchmarks that
     run against measured targets" without naming them; `BENCHMARKS.md` had
     five macOS targets above the spec's numbers (fixture, listing-first,
     listing-complete, pdf-first, tree-first) and three with no spec number

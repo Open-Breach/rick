@@ -19,7 +19,16 @@
 //! version. The registry is also the extension context: it lends the
 //! host's [`platform`] services ([`Registry::platform`]) to an extension
 //! while it registers, and takes a provider for a virtual location,
-//! `rick://<name>`, through [`Registry::view`].
+//! `rick://<name>`, through [`Registry::view`]. A provider reached over a
+//! network registers a [`Connector`] beside itself ([`Registry::connector`]):
+//! the fields of its *Add connection…* dialogue and the calls behind
+//! *Connect*, *Disconnect* and *Remove* on its rows in the side panel
+//! ([`connection`]).
+//!
+//! Every string an extension shows the user goes through [`t!`] with a
+//! Fluent key ([`i18n`]): the extension bundles its translation files and
+//! hands them to [`Registry::translations`], and a label the registry keeps
+//! (a setting's, a connection field's) is a [`Text`] key read live.
 //!
 //! Each module's documentation carries a worked example of its extension
 //! point; [`registry`] shows how one extension contributes to two of them,
@@ -35,38 +44,53 @@
 #![allow(clippy::module_name_repetitions)]
 
 pub mod action;
+pub mod connection;
 pub mod decorator;
+pub mod form;
+pub mod i18n;
 pub mod plugin;
 pub mod preview;
 pub mod provider;
 pub mod registry;
 pub mod search;
+pub mod terminal;
+pub mod view;
 
 pub use action::{
     Action, ActionCtx, ActionGroup, ActionId, ActionOutcome, Availability, Invocation, Key, Level,
-    Modifiers, PaneId, Shortcut, ShortcutParseError, UiHost, UndoCommand,
+    Modifiers, PaneId, Selector, Shortcut, ShortcutParseError, UiHost, UndoCommand,
 };
 pub use async_trait::async_trait;
+pub use connection::{
+    Connection, ConnectionField, ConnectionFieldKind, ConnectionSchema, Connector, secret_key,
+};
 pub use decorator::{
     Badge, CellValue, Color, ColumnDef, ColumnId, DecorateCtx, Decoration, Decorator, PanelSection,
 };
+pub use form::{Field, FieldKind, Form, Preview, PreviewRow, Value, Values};
 pub use futures::stream::BoxStream;
+pub use i18n::Text;
 pub use preview::{
-    Block, Content, ControlId, ControlValue, Document, Frame, Grid, Icon, Image, InfoSection,
-    Inline, Listing, ListingEntry, PreviewControl, PreviewDoc, Previewer, RenderRequest, Style,
-    TextBlock, TextLayer, TextSpan, TextureId, Transport, blocking, read_bytes,
+    Block, Content, ControlId, ControlValue, Document, Frame, Gesture, Grid, Icon, Image,
+    InfoSection, Inline, Listing, ListingEntry, PreviewControl, PreviewDoc, Previewer, Reads,
+    RenderRequest, Style, TextBlock, TextLayer, TextSpan, TextureId, Transport, blocking,
+    read_bytes,
 };
 pub use provider::{
     Capabilities, ChangeStream, CopyOptions, Depth, EntryStream, FsChange, LinkKind, ListOptions,
-    Provider, ReadHandle, RemoveMode, WriteHandle, WriteOptions,
+    Provider, ReadHandle, RemoveMode, TransferMode, WriteHandle, WriteOptions,
 };
 pub use registry::{
     API_VERSION, Extension, Manifest, Platforms, Points, Registry, SettingField, SettingKind,
-    SettingsSchema,
+    SettingValue, SettingsSchema,
 };
-pub use runtime::{JobRunner, ProgressSink};
+pub use runtime::{Conflicts, JobCtx, JobRunner, ProgressSink, Prompts};
 pub use search::{Filter, Query, QueryKind, SearchHit, SearchIndex, SearchScope};
 pub use semver::Version;
+pub use view::{
+    Cell, CellStyle, Compare, Console, ConsoleWaker, Diff, FolderDiff, FolderRow, Hunk, HunkKind,
+    RowStatus, Screen, Side, TermColor, TextDiff, View,
+};
 
 /// The platform services an extension programs against (`Trash`,
 /// `OpenWith`, `ConfigDir`, `NativeDialogs`, …), re-exported so an

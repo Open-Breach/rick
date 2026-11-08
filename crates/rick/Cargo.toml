@@ -13,13 +13,15 @@ name = "rick"
 path = "src/main.rs"
 
 # Built-in extensions are features, default-on; a lean build turns them off.
-# `git`, `vfs-trash`, `vfs-archive` and `preview-hex` compile a plugin in
-# instead of loading it from `plugins/`; default off, since the plugins
-# directory is where they live in 0.2. The four previewer plugins of issue
-# 18 have the same opt-in features; `gstreamer` turns playback on in the
-# media previewer, wherever it is built (the plugin's own feature of that
-# name; off by default so a build without the GStreamer development files
-# still builds every crate).
+# `git`, `svn`, `vfs-trash`, `vfs-archive`, `vfs-sftp`, the three cloud
+# providers, `preview-hex` and the five `search-*` connectors compile a
+# plugin in instead of loading it from `plugins/`; default off, since the
+# plugins directory is where they live in 0.2. The four previewer plugins
+# of issue 18, the 3D previewer of issue 19, the four action plugins of
+# issue 23 and the installer of issue 44 have the same opt-in features;
+# `gstreamer` turns playback on in the media previewer, wherever it is
+# built (the plugin's own feature of that name; off by default so a build
+# without the GStreamer development files still builds every crate).
 [features]
 default = ["preview-text", "preview-code", "preview-image", "preview-pdf"]
 preview-text = ["dep:ext-preview-text"]
@@ -31,10 +33,27 @@ preview-office = ["dep:ext-preview-office"]
 preview-media = ["dep:ext-preview-media"]
 preview-archive = ["dep:ext-preview-archive"]
 preview-csv = ["dep:ext-preview-csv"]
+preview-3d = ["dep:ext-preview-3d"]
 gstreamer = ["preview-media", "ext-preview-media/gstreamer"]
 git = ["dep:ext-git"]
+svn = ["dep:ext-svn"]
 vfs-trash = ["dep:ext-vfs-trash"]
 vfs-archive = ["dep:ext-vfs-archive"]
+search-walk = ["dep:ext-search-walk"]
+search-windows = ["dep:ext-search-windows"]
+search-spotlight = ["dep:ext-search-spotlight"]
+search-tracker = ["dep:ext-search-tracker"]
+search-baloo = ["dep:ext-search-baloo"]
+vfs-sftp = ["dep:ext-vfs-sftp"]
+ssh = ["dep:ext-ssh"]
+vfs-s3 = ["dep:ext-vfs-s3"]
+vfs-azure = ["dep:ext-vfs-azure"]
+vfs-gcs = ["dep:ext-vfs-gcs"]
+action-compress = ["dep:ext-action-compress"]
+action-compare = ["dep:ext-action-compare"]
+action-terminal = ["dep:ext-action-terminal"]
+action-rename = ["dep:ext-action-rename"]
+installer = ["dep:ext-installer"]
 
 [dependencies]
 types = { workspace = true }
@@ -52,13 +71,37 @@ ext-preview-hex = { workspace = true, optional = true }
 ext-git = { workspace = true, optional = true }
 ext-vfs-trash = { workspace = true, optional = true }
 ext-vfs-archive = { workspace = true, optional = true }
+ext-vfs-sftp = { workspace = true, optional = true }
+ext-ssh = { workspace = true, optional = true }
+ext-vfs-s3 = { workspace = true, optional = true }
+ext-vfs-azure = { workspace = true, optional = true }
+ext-vfs-gcs = { workspace = true, optional = true }
+ext-action-compress = { workspace = true, optional = true }
+ext-action-compare = { workspace = true, optional = true }
+ext-action-terminal = { workspace = true, optional = true }
+ext-action-rename = { workspace = true, optional = true }
+ext-installer = { workspace = true, optional = true }
 ext-preview-office = { workspace = true, optional = true }
 ext-preview-media = { workspace = true, optional = true }
 ext-preview-archive = { workspace = true, optional = true }
 ext-preview-csv = { workspace = true, optional = true }
+ext-svn = { workspace = true, optional = true }
+ext-search-walk = { workspace = true, optional = true }
+ext-search-windows = { workspace = true, optional = true }
+ext-search-spotlight = { workspace = true, optional = true }
+ext-search-tracker = { workspace = true, optional = true }
+ext-search-baloo = { workspace = true, optional = true }
+ext-preview-3d = { workspace = true, optional = true }
 anyhow = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
+
+[dev-dependencies]
+# The tests of `rick-perms`, the privileged helper: run through the fake
+# platform, and as root through the polkit stand-in of Linux CI.
+ops = { workspace = true }
+runtime = { workspace = true }
+tempfile = { workspace = true }
 
 [lints]
 workspace = true

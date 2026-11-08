@@ -4,11 +4,14 @@
 # `libbz2-rs-sys` behind the archive provider's and the archive previewer's
 # bzip2 support keeps; Apache-2.0 WITH LLVM-exception is target-lexicon, a
 # build dependency of the GStreamer bindings' system-deps (the media
-# previewer's `gstreamer` feature).
+# previewer's `gstreamer` feature); CDLA-Permissive-2.0 is the data licence
+# of Mozilla's root certificates in `webpki-root-certs`, which
+# rustls-platform-verifier carries for the cloud providers' TLS where the
+# system has no store to ask.
 allow = [
     "Apache-2.0", "Apache-2.0 WITH LLVM-exception", "BSL-1.0", "MIT", "BSD-2-Clause",
     "BSD-3-Clause", "CC0-1.0", "ISC", "Unicode-3.0", "Zlib", "OFL-1.1", "Ubuntu-font-1.0",
-    "bzip2-1.0.6",
+    "bzip2-1.0.6", "CDLA-Permissive-2.0",
 ]
 
 [graph]
@@ -27,7 +30,7 @@ multiple-versions = "warn"
 deny = [
     { crate = "runtime", wrappers = ["platform", "ext", "vfs", "vfs-local", "vfs-rick", "model", "ops", "app", "ui-egui", "rick", "tests"] },
     { crate = "platform", wrappers = ["ext", "vfs", "vfs-local", "vfs-rick", "model", "ops", "app", "ui-egui", "rick", "tests"] },
-    { crate = "ext", wrappers = ["vfs", "vfs-local", "vfs-rick", "model", "ops", "app", "ui-egui", "rick", "tests", "ext-preview-text", "ext-preview-code", "ext-preview-image", "ext-preview-pdf", "ext-preview-office", "ext-preview-media", "ext-preview-archive", "ext-preview-csv", "ext-preview-hex", "ext-git", "ext-vfs-trash", "ext-vfs-archive", "plugins-native", "plugin-probe", "plugin-panic"] },
+    { crate = "ext", wrappers = ["vfs", "vfs-local", "vfs-rick", "model", "ops", "app", "ui-egui", "rick", "tests", "ext-preview-text", "ext-preview-code", "ext-preview-image", "ext-preview-pdf", "ext-preview-office", "ext-preview-media", "ext-preview-archive", "ext-preview-csv", "ext-preview-hex", "ext-preview-3d", "ext-git", "ext-svn", "ext-vfs-trash", "ext-vfs-archive", "ext-search-walk", "ext-search-windows", "ext-search-spotlight", "ext-search-tracker", "ext-search-baloo", "ext-vfs-sftp", "ext-ssh", "ext-vfs-s3", "ext-vfs-azure", "ext-vfs-gcs", "ext-action-compress", "ext-action-compare", "ext-action-terminal", "ext-action-rename", "ext-installer", "plugins-native", "plugin-probe", "plugin-panic"] },
     { crate = "vfs", wrappers = ["vfs-local", "vfs-rick", "ops", "app", "ui-egui", "rick", "tests"] },
     { crate = "vfs-local", wrappers = ["vfs-rick", "ops", "app", "ui-egui", "rick", "tests"] },
     { crate = "vfs-rick", wrappers = ["ops", "app", "ui-egui", "rick", "tests"] },
@@ -48,13 +51,41 @@ deny = [
     { crate = "ext-preview-hex", wrappers = ["rick", "tests"] },
     { crate = "ext-git", wrappers = ["rick", "tests"] },
     { crate = "ext-vfs-trash", wrappers = ["rick", "tests"] },
-    { crate = "ext-vfs-archive", wrappers = ["rick", "tests"] },
+    # The compress plugin writes and reads archives through the archive
+    # provider's crate (QUESTIONS.md 127).
+    { crate = "ext-vfs-archive", wrappers = ["rick", "tests", "ext-action-compress"] },
+    # The provider plugins of issue 21: SFTP and the three clouds.
+    { crate = "ext-vfs-sftp", wrappers = ["rick", "tests"] },
+    # The SSH plugin of issue 34: shell commands over SSH, no SFTP.
+    { crate = "ext-ssh", wrappers = ["rick", "tests"] },
+    { crate = "ext-vfs-s3", wrappers = ["rick", "tests"] },
+    { crate = "ext-vfs-azure", wrappers = ["rick", "tests"] },
+    { crate = "ext-vfs-gcs", wrappers = ["rick", "tests"] },
+    # The action plugins of issue 23: loaded from `plugins/` by the host;
+    # the binary compiles one in only behind its opt-in feature.
+    { crate = "ext-action-compress", wrappers = ["rick", "tests"] },
+    { crate = "ext-action-compare", wrappers = ["rick", "tests"] },
+    { crate = "ext-action-terminal", wrappers = ["rick", "tests"] },
+    { crate = "ext-action-rename", wrappers = ["rick", "tests"] },
+    # The tarball installer of issue 44 (specs/ext-installer.md), a plugin
+    # that reads tar and zip itself and so depends on no other plugin.
+    { crate = "ext-installer", wrappers = ["rick", "tests"] },
     # The previewer plugins of issue 18: loaded from `plugins/` by the host;
     # the binary compiles one in only behind its opt-in feature.
     { crate = "ext-preview-office", wrappers = ["rick", "tests"] },
     { crate = "ext-preview-media", wrappers = ["rick", "tests"] },
     { crate = "ext-preview-archive", wrappers = ["rick", "tests"] },
     { crate = "ext-preview-csv", wrappers = ["rick", "tests"] },
+    # Milestone 5 (issue 22): the subdirectory search and the four index
+    # connectors behind the search box, and Subversion beside Git.
+    { crate = "ext-search-walk", wrappers = ["rick", "tests"] },
+    { crate = "ext-search-windows", wrappers = ["rick", "tests"] },
+    { crate = "ext-search-spotlight", wrappers = ["rick", "tests"] },
+    { crate = "ext-search-tracker", wrappers = ["rick", "tests"] },
+    { crate = "ext-search-baloo", wrappers = ["rick", "tests"] },
+    { crate = "ext-svn", wrappers = ["rick", "tests"] },
+    # The 3D previewer plugin of issue 19, loaded the same way.
+    { crate = "ext-preview-3d", wrappers = ["rick", "tests"] },
     # The fixture plugins are test libraries loaded as files; only the
     # integration tests name them, to have them built.
     { crate = "plugin-probe", wrappers = ["tests"] },
@@ -77,4 +108,10 @@ ignore = [
     { id = "RUSTSEC-2024-0436", reason = "paste is a build-time proc macro; transitive via egui_dock" },
     { id = "RUSTSEC-2026-0192", reason = "ttf-parser reads font tables; transitive via winit → sctk-adwaita → ab_glyph" },
     { id = "RUSTSEC-2025-0141", reason = "bincode 1 decodes syntect's bundled grammar and theme dumps; no alternative without repacking them" },
+    # The `rsa` crate's Marvin timing side channel has no fixed release; it
+    # comes with russh's RSA support (ssh-rsa host keys, RSA user keys) in
+    # the SFTP plugin, where the only private-key operation is the user's
+    # own signature on the user's machine and the attacker would have to
+    # time it there. Revisit when `rsa` ships constant-time decryption.
+    { id = "RUSTSEC-2023-0071", reason = "rsa's timing side channel; transitive via russh for RSA SSH keys, client-side only" },
 ]

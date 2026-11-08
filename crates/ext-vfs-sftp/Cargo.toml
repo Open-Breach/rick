@@ -1,0 +1,29 @@
+[package]
+name = "ext-vfs-sftp"
+version.workspace = true
+description = "Rick's SFTP provider: remote hosts over SSH as locations, one connection per row of the side panel's Network section, through russh and russh-sftp."
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+# A plugin: a `cdylib` the host loads from `plugins/vfs-sftp/`, and an
+# `rlib` for the binary's opt-in `vfs-sftp` feature and the tests.
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+types = { workspace = true }
+ext = { workspace = true }
+futures = { workspace = true }
+tokio = { workspace = true, features = ["io-util", "sync", "net", "time"] }
+tracing = { workspace = true }
+russh = { workspace = true }
+russh-sftp = { workspace = true }
+
+[dev-dependencies]
+runtime = { workspace = true }
+platform = { workspace = true }
+tempfile = { workspace = true }
+
+[lints]
+workspace = true

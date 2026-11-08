@@ -1,0 +1,25 @@
+[package]
+name = "ext-search-spotlight"
+version.workspace = true
+description = "Rick's Spotlight search connector: the macOS metadata index queried through mdfind, feeding the title-row search box on macOS."
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+# A plugin: a `cdylib` the host loads from `plugins/search-spotlight/`, and an
+# `rlib` for the binary's opt-in `search-spotlight` feature and the tests.
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+types = { workspace = true }
+ext = { workspace = true }
+futures = { workspace = true }
+tokio = { workspace = true, features = ["time"] }
+tracing = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+
+[lints]
+workspace = true

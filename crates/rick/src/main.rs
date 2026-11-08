@@ -44,12 +44,46 @@ fn built_ins() -> Vec<Arc<dyn ext::Extension>> {
     extensions.push(Arc::new(ext_preview_archive::ArchivePreview::new()));
     #[cfg(feature = "preview-csv")]
     extensions.push(Arc::new(ext_preview_csv::CsvPreview::new()));
+    #[cfg(feature = "preview-3d")]
+    extensions.push(Arc::new(ext_preview_3d::Preview3d::new()));
     #[cfg(feature = "git")]
     extensions.push(Arc::new(ext_git::GitExtension::new()));
     #[cfg(feature = "vfs-trash")]
     extensions.push(Arc::new(ext_vfs_trash::TrashExtension::new()));
     #[cfg(feature = "vfs-archive")]
     extensions.push(Arc::new(ext_vfs_archive::ArchiveExtension::new()));
+    #[cfg(feature = "svn")]
+    extensions.push(Arc::new(ext_svn::SvnExtension::new()));
+    #[cfg(feature = "search-walk")]
+    extensions.push(Arc::new(ext_search_walk::WalkExtension::new()));
+    #[cfg(feature = "search-windows")]
+    extensions.push(Arc::new(ext_search_windows::WindowsSearchExtension::new()));
+    #[cfg(feature = "search-spotlight")]
+    extensions.push(Arc::new(ext_search_spotlight::SpotlightExtension::new()));
+    #[cfg(feature = "search-tracker")]
+    extensions.push(Arc::new(ext_search_tracker::TrackerExtension::new()));
+    #[cfg(feature = "search-baloo")]
+    extensions.push(Arc::new(ext_search_baloo::BalooExtension::new()));
+    #[cfg(feature = "vfs-sftp")]
+    extensions.push(Arc::new(ext_vfs_sftp::SftpExtension::new()));
+    #[cfg(feature = "ssh")]
+    extensions.push(Arc::new(ext_ssh::SshExtension::new()));
+    #[cfg(feature = "vfs-s3")]
+    extensions.push(Arc::new(ext_vfs_s3::S3Extension::new()));
+    #[cfg(feature = "vfs-azure")]
+    extensions.push(Arc::new(ext_vfs_azure::AzureExtension::new()));
+    #[cfg(feature = "vfs-gcs")]
+    extensions.push(Arc::new(ext_vfs_gcs::GcsExtension::new()));
+    #[cfg(feature = "action-compress")]
+    extensions.push(Arc::new(ext_action_compress::CompressExtension::new()));
+    #[cfg(feature = "action-compare")]
+    extensions.push(Arc::new(ext_action_compare::CompareExtension::new()));
+    #[cfg(feature = "action-terminal")]
+    extensions.push(Arc::new(ext_action_terminal::TerminalExtension::new()));
+    #[cfg(feature = "action-rename")]
+    extensions.push(Arc::new(ext_action_rename::RenameExtension::new()));
+    #[cfg(feature = "installer")]
+    extensions.push(Arc::new(ext_installer::InstallerExtension::new()));
     extensions
 }
 
@@ -87,6 +121,9 @@ fn main() -> anyhow::Result<()> {
     let platform = Arc::new(platform::Native::new());
     let config_dir = platform.config_dir();
     let built_ins = built_ins();
+    // The question queue the plugins ask the user through (a host key, a
+    // passphrase): one for the plugins and the app alike.
+    let prompts = ext::Prompts::new();
 
     // The plugins: beside the binary and per user, minus the ids rick.toml
     // disables. A settings file that does not read leaves every plugin
@@ -101,6 +138,7 @@ fn main() -> anyhow::Result<()> {
             .map(|e| e.manifest().id.0.to_owned())
             .collect(),
         platform: Some(platform.clone()),
+        prompts: Some(Arc::clone(&prompts)),
     });
     if list_plugins {
         write!(std::io::stdout().lock(), "{}", table(host.plugins()))
@@ -115,13 +153,17 @@ fn main() -> anyhow::Result<()> {
     Box::leak(Box::new(host));
 
     let ui = Arc::new(ui_egui::EguiHost::new());
-    let mut app = app::App::new(app::Config {
-        platform,
-        ui: ui.clone(),
-        extensions,
-        config_dir: None,
-        start: start.map(|p| Location::new(vfs_local::PROVIDER_ID, platform::paths::from_path(&p))),
-    });
+    let mut app = app::App::with_prompts(
+        app::Config {
+            platform,
+            ui: ui.clone(),
+            extensions,
+            config_dir: None,
+            start: start
+                .map(|p| Location::new(vfs_local::PROVIDER_ID, platform::paths::from_path(&p))),
+        },
+        prompts,
+    );
     app.set_plugins(rows);
     ui_egui::run("Rick", VERSION, app, ui).context("the window could not be opened")
 }

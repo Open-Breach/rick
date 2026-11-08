@@ -1,9 +1,14 @@
-//! Linux: the XDG trash specification, `xdg-open`, Rick's own properties
+//! Linux: the XDG trash specification, `xdg-open` and the desktop files of
+//! the MIME databases for Open with, `$TERMINAL` or a known emulator for
+//! the terminal, `pkexec` for a command run as root, Rick's own properties
 //! rows, `$XDG_CONFIG_HOME/rick`, the mount table from `/proc/mounts` with
 //! `udisksctl` for ejecting, XDG user-dirs and `recently-used.xbel`, and
 //! drag and drop through a Wayland data device or XDND.
 
+mod apps;
 mod drag;
+mod elevate;
+mod terminal;
 mod trash;
 mod user;
 mod volumes;
@@ -20,9 +25,10 @@ use types::Error;
 use crate::Native;
 use crate::time::iso8601;
 use crate::traits::{
-    Chrome, ConfigDir, ControlsSide, DragSource, DropTarget, IncomingFiles, OpenWith, Point,
-    Properties, PropertiesOutcome, RecentItem, RecentlyUsed, StandardFolder, StandardFolders,
-    Trash, TrashedItem, Volume, Volumes, WindowChrome, WindowRef,
+    Application, Chrome, ConfigDir, ControlsSide, DragSource, DropTarget, Elevate, ElevatedOutput,
+    IncomingFiles, OpenWith, Point, Properties, PropertiesOutcome, RecentItem, RecentlyUsed,
+    StandardFolder, StandardFolders, Terminal, Trash, TrashedItem, Volume, Volumes, WindowChrome,
+    WindowRef,
 };
 
 impl Trash for Native {
@@ -114,6 +120,30 @@ impl OpenWith for Native {
         }
         let parent = path.parent().unwrap_or(&path);
         spawn_detached("xdg-open", &[parent.as_os_str()])
+    }
+
+    fn applications(&self, path: &Path) -> Result<Vec<Application>, Error> {
+        apps::applications(path)
+    }
+
+    fn open_with(&self, path: &Path, app: &Application) -> Result<(), Error> {
+        apps::open_with(path, app)
+    }
+}
+
+impl Terminal for Native {
+    fn open_terminal(&self, dir: &Path, command: Option<&[String]>) -> Result<(), Error> {
+        terminal::open(dir, command)
+    }
+}
+
+impl Elevate for Native {
+    fn run_elevated(
+        &self,
+        program: &Path,
+        args: &[std::ffi::OsString],
+    ) -> Result<ElevatedOutput, Error> {
+        elevate::run(program, args)
     }
 }
 

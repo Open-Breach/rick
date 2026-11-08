@@ -14,6 +14,7 @@
 
 use std::sync::Arc;
 
+use ext::Text;
 use ext::{
     API_VERSION, Action, ActionCtx, ActionGroup, ActionId, ActionOutcome, Availability,
     Capabilities, ControlId, ControlValue, Extension, Frame, Icon, InfoSection, JobRunner,
@@ -155,7 +156,7 @@ impl PreviewDoc for ProbeDoc {
     fn sections(&self) -> Vec<InfoSection> {
         vec![InfoSection {
             id: "file",
-            title: "File info",
+            title: Text("File info"),
             icon: Icon::Info,
             rows: vec![("Job thread".to_owned(), self.thread.clone())],
         }]
@@ -187,8 +188,8 @@ impl Action for Wait {
         WAIT
     }
 
-    fn label(&self) -> &'static str {
-        "Wait until cancelled"
+    fn label(&self) -> String {
+        "Wait until cancelled".to_owned()
     }
 
     fn group(&self) -> ActionGroup {

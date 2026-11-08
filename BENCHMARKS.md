@@ -1,7 +1,7 @@
 # Benchmarks
 
 The acceptance benchmarks of version 0.2: the fifteen of 0.1, the five the
-0.1 close-out added and the eight of the 0.2 milestones, measured on the
+0.1 close-out added and the nine of the 0.2 milestones, measured on the
 GitHub-hosted CI runners by the `bench` workflow
 (`.github/workflows/bench.yml`): every benchmark five times in release on
 each runner, the median and the worst run below. Each benchmark is an
@@ -16,7 +16,7 @@ branch; a release run without `RICK_BENCH_RECORD` asserts them.
 30), asserted on a single run. macOS and Windows: the median × 1.5, rounded
 up to a round number, never below the Linux target, and past the worst run
 where that sits higher; where that lands at or under the spec's number, the
-spec's number is the target (QUESTIONS.md 121). On macOS and Windows a test
+spec's number is the target (QUESTIONS.md 188). On macOS and Windows a test
 repeats its measured part three times and asserts the median of the three
 against the target (`tests::bench::runs`, QUESTIONS.md 80): one run on
 those shared runners swings too much for a 1.5 × budget. The tables below
@@ -30,7 +30,8 @@ shows in the Worst column where it did.
 Measured: bench run
 [42488206033](https://github.com/Open-Breach/rick/actions/runs/42488206033),
 2026-11-08, commit `d140302`, five runs per benchmark on every runner
-(issue 25). It supersedes the 0.1 runs of 2026-11-06 and 2026-11-07
+(issue 25); `3d-first`, which landed on `dev` after that run, waits for the
+next one. It supersedes the 0.1 runs of 2026-11-06 and 2026-11-07
 ([42311657502](https://github.com/Open-Breach/rick/actions/runs/42311657502),
 [42328854042](https://github.com/Open-Breach/rick/actions/runs/42328854042)),
 whose numbers are quoted below where a target was set from them. The
@@ -447,3 +448,23 @@ preview pane, LibreOffice and GStreamer included where they are.
 | Linux | 16.6 ms | 6.4 ms | 6.5 ms |
 | macOS | 16.6 ms | 4.4 ms | 5.4 ms |
 | Windows | 16.6 ms | 1.8 ms | 1.9 ms |
+
+### `3d-first` — a 500 000-triangle binary STL opened and its first frame rendered
+
+Issue 19's target: 300 ms from opening the file to the first frame, for
+each of its fixtures (a 12-triangle STL, a 500 000-triangle binary STL, an
+OBJ with three objects, a 3MF in millimetres); the heaviest, the binary
+STL, is the one recorded, the other three are held to the same 300 ms in
+the test. Test: `each_fixture_shows_a_frame_within_300_ms` in
+`preview_3d.rs`, rendered at 800 × 600 through wgpu on the runner's
+software adapter (lavapipe on Linux, WARP on Windows; macOS skips with a
+note when it has no adapter), the device opened once before the runs. Not
+yet measured by the bench workflow; the local development machine opened
+and rendered the fixture in 261 ms on lavapipe (the other three fixtures
+in 8–24 ms).
+
+| OS | Target | Median | Worst |
+| --- | --- | --- | --- |
+| Linux | 300 ms | — | — |
+| macOS | 300 ms | — | — |
+| Windows | 300 ms | — | — |

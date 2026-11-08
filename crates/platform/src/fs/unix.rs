@@ -80,6 +80,18 @@ pub(super) fn symlink(target: &Path, at: &Path) -> io::Result<()> {
     std::os::unix::fs::symlink(target, at)
 }
 
+pub(super) fn unix_mode(path: &Path) -> io::Result<Option<u32>> {
+    use std::os::unix::fs::PermissionsExt as _;
+    Ok(Some(
+        std::fs::symlink_metadata(path)?.permissions().mode() & 0o7777,
+    ))
+}
+
+pub(super) fn set_unix_mode(path: &Path, mode: u32) -> io::Result<()> {
+    use std::os::unix::fs::PermissionsExt as _;
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode & 0o7777))
+}
+
 pub(super) fn allocated_size(path: &Path) -> io::Result<u64> {
     Ok(std::fs::symlink_metadata(path)?.blocks() * 512)
 }

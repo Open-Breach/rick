@@ -2,6 +2,7 @@
 //! registry.
 
 use app::{App, Command};
+use ext::t;
 use ext::{ActionCtx, ActionGroup, ActionId, Availability, Invocation};
 use types::Entry;
 
@@ -12,30 +13,32 @@ use crate::shell::{PaneCx, Request};
 /// submenu, Settings, Keyboard shortcuts, Extensions, About.
 pub fn burger(ui: &mut egui::Ui, requests: &mut Vec<Request>, pane: model::PaneId, app: &App) {
     ui.menu_button(crate::icons::MENU, |ui| {
-        if ui.button("New window").clicked() {
+        if ui.button(t!("menu-new-window")).clicked() {
             requests.push(Request::Intent {
                 intent: Intent::NewWindow,
                 pane,
             });
             ui.close();
         }
-        ui.menu_button("Layouts", |ui| layouts_menu(ui, requests, pane, app));
+        ui.menu_button(t!("menu-layouts"), |ui| {
+            layouts_menu(ui, requests, pane, app);
+        });
         ui.separator();
-        if ui.button("Settings…").clicked() {
+        if ui.button(t!("settings-ellipsis")).clicked() {
             requests.push(Request::Intent {
                 intent: Intent::Settings,
                 pane,
             });
             ui.close();
         }
-        if ui.button("Keyboard shortcuts…").clicked() {
+        if ui.button(t!("keyboard-shortcuts-ellipsis")).clicked() {
             requests.push(Request::Intent {
                 intent: Intent::Shortcuts,
                 pane,
             });
             ui.close();
         }
-        if ui.button("Extensions…").clicked() {
+        if ui.button(t!("extensions-ellipsis")).clicked() {
             requests.push(Request::Intent {
                 intent: Intent::Extensions,
                 pane,
@@ -43,7 +46,7 @@ pub fn burger(ui: &mut egui::Ui, requests: &mut Vec<Request>, pane: model::PaneI
             ui.close();
         }
         ui.separator();
-        if ui.button("About Rick").clicked() {
+        if ui.button(t!("about-rick")).clicked() {
             requests.push(Request::About);
             ui.close();
         }
@@ -55,7 +58,7 @@ pub fn burger(ui: &mut egui::Ui, requests: &mut Vec<Request>, pane: model::PaneI
 /// Delete, then Save layout as….
 fn layouts_menu(ui: &mut egui::Ui, requests: &mut Vec<Request>, pane: model::PaneId, app: &App) {
     ui.set_min_width(200.0);
-    if ui.button("Continue where I left off").clicked() {
+    if ui.button(t!("continue-where-i-left-off")).clicked() {
         requests.push(Request::Intent {
             intent: Intent::LastSession,
             pane,
@@ -73,7 +76,7 @@ fn layouts_menu(ui: &mut egui::Ui, requests: &mut Vec<Request>, pane: model::Pan
             name.clone()
         };
         ui.menu_button(title, |ui| {
-            if ui.button("Switch").clicked() {
+            if ui.button(t!("menu-switch")).clicked() {
                 requests.push(Request::Intent {
                     intent: Intent::Layout(index),
                     pane,
@@ -82,7 +85,7 @@ fn layouts_menu(ui: &mut egui::Ui, requests: &mut Vec<Request>, pane: model::Pan
             }
             let is_start = start == Some(name.as_str());
             if ui
-                .add_enabled(!is_start, egui::Button::new("Set as start layout"))
+                .add_enabled(!is_start, egui::Button::new(t!("menu-set-as-start-layout")))
                 .clicked()
             {
                 requests.push(Request::Command(Command::Settings(
@@ -90,18 +93,18 @@ fn layouts_menu(ui: &mut egui::Ui, requests: &mut Vec<Request>, pane: model::Pan
                 )));
                 ui.close();
             }
-            if ui.button("Rename…").clicked() {
+            if ui.button(t!("rename-ellipsis")).clicked() {
                 requests.push(Request::RenameLayout(name.clone()));
                 ui.close();
             }
-            if ui.button("Delete").clicked() {
+            if ui.button(t!("delete")).clicked() {
                 requests.push(Request::Command(Command::DeleteLayout(name.clone())));
                 ui.close();
             }
         });
     }
     ui.separator();
-    if ui.button("Save layout as…").clicked() {
+    if ui.button(t!("menu-save-layout-as")).clicked() {
         requests.push(Request::Intent {
             intent: Intent::SaveLayout,
             pane,
@@ -123,6 +126,10 @@ pub fn context_for(cx: &PaneCx<'_>, only: Option<Entry>) -> ActionCtx {
         location: cx.tab.location.clone(),
         selection,
         invoked_from: Invocation::ContextMenu,
+        other: cx
+            .app
+            .action_ctx(cx.pane, Invocation::ContextMenu)
+            .and_then(|c| c.other),
     }
 }
 
@@ -132,8 +139,11 @@ const GROUPS: &[(&str, &[&str])] = &[
         "Open",
         &[
             "core.open_default",
+            "core.open_with",
             "core.open_containing",
             "core.open_containing_tab",
+            "terminal.console",
+            "compare.compare",
             "core.pin",
             "core.unpin",
         ],
@@ -144,13 +154,29 @@ const GROUPS: &[(&str, &[&str])] = &[
             "core.cut",
             "core.copy",
             "core.paste",
+            "core.paste_link",
             "core.duplicate",
             "core.rename",
+            "rename.bulk",
         ],
     ),
     ("Delete", &["core.trash", "core.delete"]),
     ("Create", &["core.new_folder", "core.new_file"]),
-    ("Share", &["core.copy_path", "core.reveal"]),
+    (
+        "Share",
+        &[
+            "core.copy_name",
+            "core.copy_path",
+            "core.copy_path_and_name",
+            "core.create_link",
+            "compress.compress",
+            "compress.compress_as",
+            "compress.extract_here",
+            "compress.extract_folder",
+            "compress.extract_to",
+            "core.reveal",
+        ],
+    ),
 ];
 
 /// The context menu for `entry` (or the empty area when `None`): the
@@ -173,14 +199,14 @@ pub fn context_menu(
         && entry.kind == types::EntryKind::Dir
     {
         {
-            if ui.button("Open").clicked() {
+            if ui.button(t!("open")).clicked() {
                 cx.requests.push(Request::OpenEntry {
                     pane: cx.pane,
                     id: entry.id,
                 });
                 ui.close();
             }
-            if ui.button("Open in new tab").clicked() {
+            if ui.button(t!("open-in-new-tab")).clicked() {
                 cx.requests
                     .push(Request::NewTabAt(cx.tab.location_of(entry)));
                 ui.close();
@@ -266,7 +292,7 @@ pub fn context_menu(
         if any {
             ui.separator();
         }
-        let mut button = egui::Button::new("Properties");
+        let mut button = egui::Button::new(t!("properties"));
         if let Some(text) = cx.keys.text_for(Intent::Inspect) {
             button = button.shortcut_text(text);
         }

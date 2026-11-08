@@ -12,8 +12,8 @@
 //! | Recent | the system's recently-used list, the use time as `accessed` |
 //! | Trash | what the view's provider lists: the trash plugin's; nothing without it |
 //! | This Machine | the drives of the machine, one folder entry per mount root |
-//! | Network | the mounted network file systems and the network providers' roots |
-//! | Cloud | the roots of the cloud providers mounted, as they list them |
+//! | Network | the mounted network file systems, then what each network provider lists at its root: its connections |
+//! | Cloud | what each cloud provider lists at its root: its accounts, as they list them |
 //!
 //! Because they are provider-backed paths they sit in a tab, the
 //! breadcrumb, the history and the session like any folder. A view lists
@@ -71,8 +71,9 @@ pub const SCHEME: &str = "rick://";
 pub const CLOUD_PROVIDERS: &[&str] = &["s3", "azure", "gcs"];
 
 /// Provider ids that count as network providers: host-addressed
-/// connections, listed under Network beside the mounted shares.
-pub const NETWORK_PROVIDERS: &[&str] = &["sftp"];
+/// connections, listed under Network beside the mounted shares, one row
+/// per connection the provider lists at its root.
+pub const NETWORK_PROVIDERS: &[&str] = &["sftp", "ssh"];
 
 /// The six virtual locations.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -445,11 +446,12 @@ impl RickProvider {
         ids
     }
 
-    /// The Cloud overview: what each cloud provider lists at its root, its
-    /// accounts or containers, with the provider's own ids and paths.
-    async fn list_cloud(&self, cancel: CancelToken) -> Result<Vec<Entry>, Error> {
+    /// What each mounted provider `pick` accepts lists at its root, its
+    /// accounts or connections, with the provider's own ids and paths; a
+    /// provider whose root cannot be listed is one row for the provider.
+    async fn list_roots(&self, pick: fn(ProviderId) -> bool, cancel: CancelToken) -> Vec<Entry> {
         let mut out = Vec::new();
-        for id in self.provider_roots(is_cloud_provider) {
+        for id in self.provider_roots(pick) {
             let Some(provider) = self.mounts.provider(id) else {
                 continue;
             };
@@ -468,7 +470,7 @@ impl RickProvider {
                         out.extend(batch);
                     }
                     Err(error) => {
-                        tracing::debug!(%id, %error, "cloud root not listed");
+                        tracing::debug!(%id, %error, "provider root not listed");
                         break;
                     }
                 }
@@ -477,7 +479,13 @@ impl RickProvider {
                 out.push(provider_root(id));
             }
         }
-        Ok(out)
+        out
+    }
+
+    /// The Cloud overview: what each cloud provider lists at its root, its
+    /// accounts.
+    async fn list_cloud(&self, cancel: CancelToken) -> Result<Vec<Entry>, Error> {
+        Ok(self.list_roots(is_cloud_provider, cancel).await)
     }
 }
 
@@ -526,11 +534,7 @@ impl Provider for RickProvider {
                 Virtual::Machine => this.list_volumes(false).await,
                 Virtual::Network => {
                     let mut entries = this.list_volumes(true).await?;
-                    entries.extend(
-                        this.provider_roots(is_network_provider)
-                            .into_iter()
-                            .map(provider_root),
-                    );
+                    entries.extend(this.list_roots(is_network_provider, cancel).await);
                     Ok(entries)
                 }
                 Virtual::Cloud => this.list_cloud(cancel).await,

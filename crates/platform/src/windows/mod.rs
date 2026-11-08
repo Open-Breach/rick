@@ -11,7 +11,9 @@ mod drag;
 use std::ffi::c_void;
 use std::fs;
 use std::io;
+use std::os::windows::ffi::OsStrExt as _;
 use std::path::{Path, PathBuf};
+use std::process::Stdio;
 use std::time::SystemTime;
 
 use types::Error;
@@ -23,7 +25,8 @@ use windows::Win32::Storage::FileSystem::{
 };
 use windows::Win32::System::Com::{
     CLSCTX_ALL, CLSCTX_INPROC_SERVER, COINIT_APARTMENTTHREADED, COINIT_DISABLE_OLE1DDE,
-    CoCreateInstance, CoInitializeEx, CoTaskMemFree, CoUninitialize, IPersistFile, STGM_READ,
+    CoCreateInstance, CoInitializeEx, CoTaskMemFree, CoUninitialize, IDataObject, IPersistFile,
+    STGM_READ,
 };
 use windows::Win32::System::IO::DeviceIoControl;
 use windows::Win32::System::Ioctl::{
@@ -32,10 +35,11 @@ use windows::Win32::System::Ioctl::{
 };
 use windows::Win32::System::SystemInformation::GetWindowsDirectoryW;
 use windows::Win32::UI::Shell::{
-    BHID_EnumItems, FOF_ALLOWUNDO, FOF_NO_UI, FOFX_RECYCLEONDELETE, FOLDERID_Desktop,
-    FOLDERID_Documents, FOLDERID_Downloads, FOLDERID_Music, FOLDERID_Pictures, FOLDERID_Recent,
-    FOLDERID_RecycleBinFolder, FOLDERID_Videos, FileOperation, IEnumShellItems, IFileOperation,
-    IShellItem, IShellItem2, IShellLinkW, KF_FLAG_DEFAULT, SEE_MASK_INVOKEIDLIST,
+    ASSOC_FILTER_RECOMMENDED, BHID_DataObject, BHID_EnumItems, FOF_ALLOWUNDO, FOF_NO_UI,
+    FOFX_RECYCLEONDELETE, FOLDERID_Desktop, FOLDERID_Documents, FOLDERID_Downloads, FOLDERID_Music,
+    FOLDERID_Pictures, FOLDERID_Recent, FOLDERID_RecycleBinFolder, FOLDERID_Videos, FileOperation,
+    IAssocHandler, IEnumAssocHandlers, IEnumShellItems, IFileOperation, IShellItem, IShellItem2,
+    IShellLinkW, KF_FLAG_DEFAULT, SEE_MASK_INVOKEIDLIST, SHAssocEnumHandlers,
     SHCreateItemFromParsingName, SHELLEXECUTEINFOW, SHERB_NOCONFIRMATION, SHERB_NOPROGRESSUI,
     SHERB_NOSOUND, SHEmptyRecycleBinW, SHGetKnownFolderItem, SHGetKnownFolderPath,
     SIGDN_FILESYSPATH, SIGDN_NORMALDISPLAY, ShellExecuteExW, ShellExecuteW, ShellLink,
@@ -46,9 +50,10 @@ use windows::core::{GUID, Interface, PCWSTR, PWSTR, w};
 use crate::Native;
 use crate::fs::windows::{filetime, io_error, wide};
 use crate::traits::{
-    Chrome, ConfigDir, ControlsSide, DragSource, DropTarget, IncomingFiles, OpenWith, Point,
-    Properties, PropertiesOutcome, RecentItem, RecentlyUsed, StandardFolder, StandardFolders,
-    Trash, TrashedItem, Volume, VolumeKind, Volumes, WindowChrome, WindowRef,
+    Application, Chrome, ConfigDir, ControlsSide, DragSource, DropTarget, Elevate, ElevatedOutput,
+    IncomingFiles, OpenWith, Point, Properties, PropertiesOutcome, RecentItem, RecentlyUsed,
+    StandardFolder, StandardFolders, Terminal, Trash, TrashedItem, Volume, VolumeKind, Volumes,
+    WindowChrome, WindowRef,
 };
 
 /// `System.Recycle.DeletedFrom`: the folder a recycled item came from.
@@ -604,6 +609,55 @@ fn shell_execute(file: PCWSTR, parameters: PCWSTR) -> Result<(), Error> {
     Ok(())
 }
 
+/// The shell's handlers for a file name's extension (`.txt`), the
+/// recommended ones, each with its display name and executable; empty for
+/// a name without an extension. COM must be initialised.
+fn assoc_handlers(path: &Path) -> Result<Vec<(String, String, IAssocHandler)>, Error> {
+    let Some(ext) = path.extension() else {
+        return Ok(Vec::new());
+    };
+    let ext: Vec<u16> = std::iter::once(u16::from(b'.'))
+        .chain(ext.encode_wide())
+        .chain(Some(0))
+        .collect();
+    // SAFETY: the extension is NUL-terminated and outlives the call.
+    let enumerator: IEnumAssocHandlers =
+        unsafe { SHAssocEnumHandlers(PCWSTR(ext.as_ptr()), ASSOC_FILTER_RECOMMENDED) }
+            .map_err(|e| Error::Io(io_error(e)))?;
+    let mut out = Vec::new();
+    loop {
+        let mut handlers: [Option<IAssocHandler>; 8] = Default::default();
+        let mut fetched = 0u32;
+        // SAFETY: the slice and the count are valid for the call, which
+        // fills at most the slice's length and reports how many.
+        let result = unsafe { enumerator.Next(&mut handlers, Some(&raw mut fetched)) };
+        if result.is_err() || fetched == 0 {
+            break;
+        }
+        for handler in handlers.iter_mut().take(fetched as usize) {
+            let Some(handler) = handler.take() else {
+                continue;
+            };
+            // SAFETY: both calls return task-allocated strings that
+            // `take_string` reads once and frees once.
+            let (name, exe) = unsafe {
+                (
+                    handler.GetUIName().ok().and_then(take_string),
+                    handler.GetName().ok().and_then(take_string),
+                )
+            };
+            let (Some(name), Some(exe)) = (name, exe) else {
+                continue;
+            };
+            if out.iter().any(|(_, e, _): &(String, String, _)| *e == exe) {
+                continue;
+            }
+            out.push((name, exe, handler));
+        }
+    }
+    Ok(out)
+}
+
 impl OpenWith for Native {
     fn open(&self, path: &Path) -> Result<(), Error> {
         let path = std::path::absolute(path).map_err(Error::from_io)?;
@@ -619,6 +673,237 @@ impl OpenWith for Native {
             .collect();
         shell_execute(w!("explorer.exe"), PCWSTR(select.as_ptr()))
     }
+
+    /// The shell's recommended handlers for the extension; File Explorer
+    /// for a folder.
+    fn applications(&self, path: &Path) -> Result<Vec<Application>, Error> {
+        let path = std::path::absolute(path).map_err(Error::from_io)?;
+        let meta = fs::symlink_metadata(&path).map_err(Error::from_io)?;
+        if meta.is_dir() {
+            return Ok(vec![Application {
+                name: "File Explorer".to_owned(),
+                id: "explorer.exe".to_owned(),
+            }]);
+        }
+        let _com = Com::new()?;
+        Ok(assoc_handlers(&path)?
+            .into_iter()
+            .map(|(name, id, _)| Application { name, id })
+            .collect())
+    }
+
+    /// A handler of the extension is invoked through the shell, so store
+    /// applications work too; anything else runs with the path as its
+    /// argument.
+    fn open_with(&self, path: &Path, app: &Application) -> Result<(), Error> {
+        let path = std::path::absolute(path).map_err(Error::from_io)?;
+        {
+            let _com = Com::new()?;
+            if let Some((_, _, handler)) = assoc_handlers(&path)?
+                .into_iter()
+                .find(|(_, exe, _)| *exe == app.id)
+            {
+                let wide = wide(&path);
+                // SAFETY: the path is NUL-terminated and outlives the call;
+                // the item and the data object are owned COM pointers.
+                let invoked = unsafe {
+                    let item: IShellItem = SHCreateItemFromParsingName(PCWSTR(wide.as_ptr()), None)
+                        .map_err(|e| Error::Io(io_error(e)))?;
+                    let data: IDataObject = item
+                        .BindToHandler(None, &BHID_DataObject)
+                        .map_err(|e| Error::Io(io_error(e)))?;
+                    handler.Invoke(&data)
+                };
+                return invoked.map_err(|e| Error::Io(io_error(e)));
+            }
+        }
+        let mut words = app.id.split_whitespace();
+        let program = words
+            .next()
+            .ok_or(Error::Unsupported("no application named"))?;
+        let args: Vec<&str> = words.collect();
+        std::process::Command::new(program)
+            .args(args)
+            .arg(&path)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .map(drop)
+            .map_err(Error::from_io)
+    }
+}
+
+/// Whether `program` is on the `PATH`.
+fn on_path(program: &str) -> bool {
+    std::env::var_os("PATH")
+        .is_some_and(|path| std::env::split_paths(&path).any(|dir| dir.join(program).is_file()))
+}
+
+impl Elevate for Native {
+    /// Through User Account Control: `ShellExecuteEx` with the `runas` verb
+    /// shows the consent prompt and starts the program elevated; the call
+    /// waits for it to end. An elevated process shares no pipes with this
+    /// one, so the output comes back through a file the helper is told to
+    /// write (`--output <file>` appended to the arguments) when the caller
+    /// asked for one, else empty.
+    fn run_elevated(
+        &self,
+        program: &Path,
+        args: &[std::ffi::OsString],
+    ) -> Result<ElevatedOutput, Error> {
+        use windows::Win32::System::Threading::{
+            GetExitCodeProcess, INFINITE, WaitForSingleObject,
+        };
+        use windows::Win32::UI::Shell::{SEE_MASK_NO_CONSOLE, SEE_MASK_NOCLOSEPROCESS};
+        use windows::Win32::UI::WindowsAndMessaging::SW_HIDE;
+
+        let program = std::path::absolute(program).map_err(Error::from_io)?;
+        let output_file = tempfile::Builder::new()
+            .prefix("rick-elevated-")
+            .suffix(".out")
+            .tempfile()
+            .map_err(Error::from_io)?;
+        let mut words: Vec<String> = args
+            .iter()
+            .map(|a| quote_argument(&a.to_string_lossy()))
+            .collect();
+        words.push("--output".to_owned());
+        words.push(quote_argument(&output_file.path().to_string_lossy()));
+        let parameters = wide_text(&words.join(" "));
+        let file = wide(&program);
+        let mut info = SHELLEXECUTEINFOW {
+            cbSize: u32::try_from(std::mem::size_of::<SHELLEXECUTEINFOW>()).unwrap_or(0),
+            fMask: SEE_MASK_NOCLOSEPROCESS | SEE_MASK_NO_CONSOLE,
+            hwnd: HWND::default(),
+            lpVerb: w!("runas"),
+            lpFile: PCWSTR(file.as_ptr()),
+            lpParameters: PCWSTR(parameters.as_ptr()),
+            nShow: SW_HIDE.0,
+            ..Default::default()
+        };
+        // SAFETY: `info` is fully initialised and the strings outlive the call.
+        if let Err(error) = unsafe { ShellExecuteExW(&raw mut info) } {
+            // ERROR_CANCELLED: the user said no to the prompt.
+            if error.code().0 as u32 & 0xFFFF == 1223 {
+                return Err(Error::PermissionDenied);
+            }
+            return Err(Error::Io(io_error(error)));
+        }
+        let process = info.hProcess;
+        if process.is_invalid() {
+            return Err(Error::Io(io::Error::other("no process started")));
+        }
+        // SAFETY: `process` is the handle `ShellExecuteExW` returned, closed
+        // below.
+        let code = unsafe {
+            let _ = WaitForSingleObject(process, INFINITE);
+            let mut code: u32 = 0;
+            let got = GetExitCodeProcess(process, &raw mut code);
+            let _ = CloseHandle(process);
+            got.map(|()| code)
+        }
+        .map_err(|e| Error::Io(io_error(e)))?;
+        let stdout = fs::read(output_file.path()).unwrap_or_default();
+        Ok(ElevatedOutput {
+            code: i32::try_from(code).ok(),
+            stdout,
+            stderr: Vec::new(),
+        })
+    }
+}
+
+/// `text` as one argument of a Windows command line, quoted the way
+/// `CommandLineToArgvW` undoes it.
+fn quote_argument(text: &str) -> String {
+    if !text.is_empty() && !text.contains([' ', '\t', '"']) {
+        return text.to_owned();
+    }
+    let mut out = String::from("\"");
+    let mut backslashes = 0;
+    for c in text.chars() {
+        match c {
+            '\\' => backslashes += 1,
+            '"' => {
+                out.extend(std::iter::repeat_n('\\', backslashes * 2 + 1));
+                out.push('"');
+                backslashes = 0;
+            }
+            other => {
+                out.extend(std::iter::repeat_n('\\', backslashes));
+                out.push(other);
+                backslashes = 0;
+            }
+        }
+    }
+    out.extend(std::iter::repeat_n('\\', backslashes * 2));
+    out.push('"');
+    out
+}
+
+fn wide_text(text: &str) -> Vec<u16> {
+    text.encode_utf16().chain(Some(0)).collect()
+}
+
+impl Terminal for Native {
+    /// Windows Terminal when it is installed, `cmd` in a new window
+    /// otherwise.
+    fn open_terminal(&self, dir: &Path, command: Option<&[String]>) -> Result<(), Error> {
+        let dir = std::path::absolute(dir).map_err(Error::from_io)?;
+        let command = command.filter(|c| !c.is_empty());
+        let mut process = if on_path("wt.exe") {
+            let mut process = std::process::Command::new("wt.exe");
+            process.arg("-d").arg(&dir);
+            if let Some(command) = command {
+                process.arg("cmd.exe").arg("/k").args(command);
+            }
+            process
+        } else {
+            let mut process = std::process::Command::new("cmd.exe");
+            process
+                .args(["/c", "start", "", "/D"])
+                .arg(&dir)
+                .arg("cmd.exe");
+            if let Some(command) = command {
+                process.arg("/k").args(command);
+            }
+            process
+        };
+        process
+            .current_dir(&dir)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .map(drop)
+            .map_err(Error::from_io)
+    }
+}
+
+/// A `.lnk` shortcut at `at` pointing to `target`, through the shell link
+/// object.
+pub(crate) fn create_shortcut(target: &Path, at: &Path) -> io::Result<()> {
+    let target = std::path::absolute(target)?;
+    let _com = Com::new().map_err(|e| io::Error::other(e.to_string()))?;
+    // SAFETY: COM is initialised on this thread, the class id is a static
+    // GUID, and every string is NUL-terminated and outlives its call.
+    unsafe {
+        let link: IShellLinkW =
+            CoCreateInstance(&ShellLink, None, CLSCTX_INPROC_SERVER).map_err(io_error)?;
+        let target_w = wide(&target);
+        link.SetPath(PCWSTR(target_w.as_ptr())).map_err(io_error)?;
+        if let Some(dir) = target.parent() {
+            let dir_w = wide(dir);
+            link.SetWorkingDirectory(PCWSTR(dir_w.as_ptr()))
+                .map_err(io_error)?;
+        }
+        let persist: IPersistFile = link.cast().map_err(io_error)?;
+        let at_w = wide(at);
+        persist
+            .Save(PCWSTR(at_w.as_ptr()), true)
+            .map_err(io_error)?;
+    }
+    Ok(())
 }
 
 impl Properties for Native {

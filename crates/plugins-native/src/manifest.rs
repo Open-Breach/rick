@@ -10,7 +10,7 @@
 //! id = "git"
 //! name = "Git"
 //! version = "0.2.0-dev"
-//! api_version = 4
+//! api_version = 9
 //! points = ["decorator", "action"]
 //! platforms = ["linux", "macos", "windows"]
 //! toolchain = "rustc 1.97.0 (2d8144b78 2026-07-07)"

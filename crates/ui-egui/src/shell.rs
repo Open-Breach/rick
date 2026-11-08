@@ -9,6 +9,7 @@
 //! reports its geometry, its side panel, its tab order and split fractions
 //! and its tabs' scroll offsets to the app, which keeps them in the session.
 
+use ext::t;
 use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant, SystemTime};
@@ -22,9 +23,10 @@ use model::{
     SettingsChange, SidePanelChange, SortDir, Tab, TabId, TabKind, Theme, ViewMode, WindowId,
 };
 use platform::raw_window_handle::{HasDisplayHandle as _, HasWindowHandle as _};
-use platform::{ControlsSide, PropertiesOutcome, WindowRef};
+use platform::{ControlsSide, WindowRef};
 use types::{EntryId, Location};
 
+use crate::console::ConsoleUi;
 use crate::dnd::{Dnd, DragView, Source, Spring, Target, Zone};
 use crate::dock::DockSync;
 use crate::host::{Ask, EguiHost};
@@ -32,12 +34,16 @@ use crate::inline::{EditKind, RowEdit};
 use crate::keys::{Direction, Intent, KeyMap};
 use crate::operations::Operations;
 use crate::preview::Previews;
+use crate::properties;
 use crate::search::{Pick, SearchBox};
 use crate::settings_ui::ShortcutsScreen;
 use crate::side_panel::SidePanelState;
 use crate::thumbs::Thumbnails;
 use crate::viewer::{self, ViewerCx, ViewerState, Zoom};
-use crate::{conflict, frame, icons, inspector, menus, pane, paths, settings_ui, side_panel};
+use crate::{compare, console};
+use crate::{
+    conflict, frame, icons, inspector, menus, pane, paths, question, settings_ui, side_panel,
+};
 
 /// Per-tab view state that is the UI's business, not the model's.
 #[derive(Debug, Default)]
@@ -205,6 +211,10 @@ pub enum Request {
         /// Its icon now.
         icon: String,
     },
+    /// Open the side panel's *Add connection…* dialogue of a provider.
+    AddConnection(types::ProviderId),
+    /// Open the side panel's *Edit…* dialogue of a connection.
+    EditConnection(types::ProviderId, String),
 }
 
 /// What a tab's widgets see.
@@ -261,6 +271,15 @@ struct Dialog {
     ctx: ActionCtx,
     input: String,
     focus: bool,
+    /// A form's values as typed so far.
+    values: ext::Values,
+    /// A form's preview rows for `values`.
+    rows: Vec<ext::PreviewRow>,
+    /// A folder dialogue a Browse… button opened, for the field named.
+    browse: Option<(
+        &'static str,
+        runtime::oneshot::Receiver<Option<std::path::PathBuf>>,
+    )>,
 }
 
 /// What a name typed into the name prompt is for.
@@ -354,7 +373,8 @@ pub struct RickUi {
     inspector_state: inspector::PaneState,
     /// The width the Preview tab's pane opens at, in points.
     inspector_width: f32,
-    properties: Option<(String, Vec<(String, String)>)>,
+    /// The Properties dialogue, open or not.
+    properties: properties::PropertiesDialog,
     /// Read-only texts actions asked to show, each in its own window.
     texts: Vec<TextWindow>,
     next_text: u64,
@@ -365,6 +385,10 @@ pub struct RickUi {
     previews: Previews,
     /// Each viewer tab's own state.
     viewers: HashMap<TabId, ViewerState>,
+    /// The views actions opened (a console, a comparison), by their tab.
+    views: HashMap<TabId, ext::View>,
+    /// Each console tab's own state.
+    consoles: HashMap<TabId, ConsoleUi>,
     /// The zoom remembered per file type, for the viewers, this session.
     zoom_memory: HashMap<String, Zoom>,
     /// The viewer tab filling the screen, if one does.
@@ -377,6 +401,8 @@ pub struct RickUi {
     side: SidePanelState,
     /// The conflict dialogue's text field and checkbox.
     conflict: conflict::DialogState,
+    /// The question dialogue's secret field and checkbox.
+    question: question::DialogState,
     /// Set while the inline editor commits through the action, so the shell
     /// runs the action instead of starting another edit.
     inline_commit: bool,
@@ -441,7 +467,7 @@ fn tab_strip_style(egui_style: &egui::Style) -> egui_dock::Style {
 /// An icon-only toggle; the fill weight marks it active.
 fn toggle_icon(glyph: &str, on: bool) -> egui::Button<'static> {
     let text = if on {
-        egui::RichText::new(glyph).family(egui::FontFamily::Name("phosphor-fill".into()))
+        egui::RichText::new(glyph).family(egui::FontFamily::Name(t!("shell-phosphor-fill").into()))
     } else {
         egui::RichText::new(glyph)
     };
@@ -535,19 +561,22 @@ impl RickUi {
             version: env!("CARGO_PKG_VERSION").to_owned(),
             inspector_state: inspector::PaneState::default(),
             inspector_width,
-            properties: None,
+            properties: properties::PropertiesDialog::default(),
             texts: Vec::new(),
             next_text: 0,
             thumbnails: Thumbnails::default(),
             ctx: ctx.clone(),
             previews: Previews::default(),
             viewers: HashMap::new(),
+            views: HashMap::new(),
+            consoles: HashMap::new(),
             zoom_memory: HashMap::new(),
             fullscreen: None,
             closed_tabs: Vec::new(),
             operations: Operations::default(),
             side: SidePanelState::default(),
             conflict: conflict::DialogState::default(),
+            question: question::DialogState::default(),
             inline_commit: false,
             applied: None,
             now: SystemTime::now(),
@@ -617,6 +646,12 @@ impl RickUi {
 
     /// Where the preview pane's parts were in the last frame, for tests.
     #[must_use]
+    /// The Properties dialogue, for the tests.
+    pub fn properties(&self) -> &properties::PropertiesDialog {
+        &self.properties
+    }
+
+    #[must_use]
     pub fn preview_rects(&self) -> inspector::PaneRects {
         self.inspector_state.rects
     }
@@ -659,6 +694,11 @@ impl RickUi {
     #[must_use]
     pub fn settings_open(&self) -> bool {
         self.settings_open
+    }
+
+    /// Opens the Settings window, as the menu does; for the tests.
+    pub fn open_settings(&mut self) {
+        self.settings_open = true;
     }
 
     /// Whether the Keyboard shortcuts screen is open.
@@ -896,6 +936,7 @@ impl RickUi {
                     self.thumbnails.arrived(&self.ctx, id, size, frame);
                 }
                 Event::Notify { level, text } => self.toast(level, text),
+                Event::Properties(info) => self.properties.open(*info),
                 Event::PreviewReady { pane, doc } => {
                     let entry = self.preview_entry(pane);
                     self.previews.ready(pane, doc, entry);
@@ -903,6 +944,23 @@ impl RickUi {
                 Event::PreviewFailed { pane, error } => {
                     let entry = self.preview_entry(pane);
                     self.previews.failed(pane, &error, entry);
+                }
+                Event::PreviewPrefix {
+                    pane,
+                    served,
+                    total,
+                } => self.previews.prefix(pane, served, total),
+                Event::PreviewCapped { pane, size, cap } => {
+                    let entry = self.preview_entry(pane);
+                    self.previews.capped(pane, size, cap, entry);
+                }
+                Event::ViewOpened { tab, view, .. } => {
+                    if let ext::View::Console(console) = &view {
+                        let ctx = self.ctx.clone();
+                        console.set_waker(Arc::new(move || ctx.request_repaint()));
+                        self.consoles.entry(tab).or_default().focus_next = true;
+                    }
+                    self.views.insert(tab, view);
                 }
                 _ => {}
             }
@@ -1065,15 +1123,20 @@ impl RickUi {
             || self.name_prompt.is_some()
             || self.shortcuts.rebinding.is_some()
             || !self.app.model().conflicts.is_empty()
+            || !self.app.model().questions.is_empty()
         {
+            return;
+        }
+        // An open menu owns the keyboard: Escape closes it, nothing else —
+        // not even the side panel, whose row the menu may belong to.
+        if egui::Popup::is_any_open(ctx) {
             return;
         }
         if self.side.focused() && self.side.handle_keys(ctx, &self.app, &mut self.requests) {
             return;
         }
         let search_active = self.windows.get(&window).is_some_and(|w| w.search.active());
-        // An open menu owns the keyboard: Escape closes it, nothing else.
-        if search_active || ctx.egui_wants_keyboard_input() || egui::Popup::is_any_open(ctx) {
+        if search_active || ctx.egui_wants_keyboard_input() {
             return;
         }
         let in_viewer = self.in_viewer(pane);
@@ -1195,6 +1258,17 @@ impl RickUi {
                     Request::ViewerFullscreen { tab, on } => self.set_fullscreen(ctx, tab, on),
                     Request::EditPlace { index, title, icon } => {
                         side_panel::begin_edit(&mut self.side, index, title, icon);
+                    }
+                    Request::AddConnection(provider) => {
+                        side_panel::begin_connection(&mut self.side, &self.app, provider);
+                    }
+                    Request::EditConnection(provider, name) => {
+                        side_panel::begin_edit_connection(
+                            &mut self.side,
+                            &self.app,
+                            provider,
+                            &name,
+                        );
                     }
                 }
             }
@@ -1495,6 +1569,7 @@ impl RickUi {
             location: tab.location.clone(),
             selection,
             invoked_from: Invocation::Shortcut,
+            other: None,
         };
         self.host.answer_prompt(name.to_owned());
         self.inline_commit = true;
@@ -1545,6 +1620,12 @@ impl RickUi {
     fn intercept(&mut self, action: ActionId, ctx: &ActionCtx) -> bool {
         let in_viewer = self.in_viewer(ctx.pane);
         match action.0 {
+            // Rename with several selected is the bulk rename, when the
+            // rename plugin is loaded.
+            "core.rename" if ctx.selection.len() > 1 && self.has_action("rename.bulk") => {
+                self.run_action_with(ActionId("rename.bulk"), ctx.clone());
+                true
+            }
             "core.rename" if !self.inline_commit && !in_viewer && ctx.selection.len() == 1 => {
                 self.requests.push(Request::StartEdit {
                     pane: ctx.pane,
@@ -1588,6 +1669,11 @@ impl RickUi {
         }
     }
 
+    /// Whether the registry holds an action with this id.
+    fn has_action(&self, id: &str) -> bool {
+        self.app.registry().actions().iter().any(|a| a.id().0 == id)
+    }
+
     fn run_action_with(&mut self, action: ActionId, ctx: ActionCtx) {
         if self.intercept(action, &ctx) {
             return;
@@ -1599,7 +1685,15 @@ impl RickUi {
         if let Some(ask) = self.host.take_asked() {
             let input = match &ask {
                 Ask::Prompt { default, .. } => default.clone(),
-                Ask::Confirm { .. } => String::new(),
+                Ask::Confirm { .. } | Ask::Form(_) => String::new(),
+            };
+            let values = match &ask {
+                Ask::Form(form) => form.defaults(),
+                _ => ext::Values::default(),
+            };
+            let rows = match &ask {
+                Ask::Form(form) => form.preview_rows(&values),
+                _ => Vec::new(),
             };
             self.dialog = Some(Dialog {
                 ask,
@@ -1607,6 +1701,9 @@ impl RickUi {
                 ctx,
                 input,
                 focus: true,
+                values,
+                rows,
+                browse: None,
             });
         }
     }
@@ -1629,15 +1726,12 @@ impl RickUi {
                 location: tab.location.clone(),
                 selection: vec![entry],
                 invoked_from: Invocation::Shortcut,
+                other: None,
             };
             self.run_action_with(ActionId("trash.restore_items"), ctx);
             return;
         }
         self.handle(Command::Open { pane, id });
-    }
-
-    fn unavailable(&mut self, what: &str) {
-        self.toast(Level::Info, format!("{what} is not part of version 0.1"));
     }
 
     #[allow(clippy::too_many_lines)]
@@ -1825,7 +1919,11 @@ impl RickUi {
                 }
             }
             Intent::ToggleSubtree => {
-                if let Some((tab_id, tab)) = self.app.model().active_tab(pane) {
+                // Without a subdirectory search index there is nothing to
+                // walk, and the filter bar shows no toggle either.
+                if self.app.model().subtree_search
+                    && let Some((tab_id, tab)) = self.app.model().active_tab(pane)
+                {
                     let on = !tab.subtree;
                     self.handle(Command::Subtree { pane, on });
                     if on {
@@ -1942,14 +2040,6 @@ impl RickUi {
                     pane,
                     mode: ViewMode::Icons(order[next]),
                 });
-            }
-            Intent::SelectByPattern
-            | Intent::PasteAsLink
-            | Intent::BulkRename
-            | Intent::OpenWith
-            | Intent::Console => {
-                let label = intent.spec().map_or("This", |s| s.label);
-                self.unavailable(label);
             }
             Intent::ToggleSidePanel => {
                 let visible = self
@@ -2124,22 +2214,11 @@ impl RickUi {
         }
     }
 
+    /// Properties on the selection: the application reads the entry and
+    /// answers with `Event::Properties`, which opens the dialogue.
     fn inspect(&mut self, pane: PaneId) {
-        let Some(ctx) = self.app.action_ctx(pane, Invocation::Shortcut) else {
-            return;
-        };
-        let Some(entry) = ctx.selection.first() else {
-            self.toast(Level::Info, "Select an entry to inspect");
-            return;
-        };
-        let Ok(path) = platform::paths::to_path(&entry.path) else {
-            return;
-        };
-        match self.app.platform().show(&path) {
-            Ok(PropertiesOutcome::Native) => {}
-            Ok(PropertiesOutcome::Rows(rows)) => self.properties = Some((entry.name.clone(), rows)),
-            Err(error) => self.toast(Level::Error, format!("Properties: {error}")),
-        }
+        self.requests
+            .push(Request::Command(Command::ShowProperties(pane)));
     }
 
     fn step_tab(&mut self, pane: PaneId, by: isize) {
@@ -2374,7 +2453,7 @@ impl RickUi {
         if !chrome.native_controls {
             if right
                 .add(egui::Button::new(icons::CLOSE).frame(false))
-                .on_hover_text("Close")
+                .on_hover_text(t!("close"))
                 .clicked()
             {
                 self.requests.push(Request::CloseWindow(window));
@@ -2387,14 +2466,18 @@ impl RickUi {
             };
             if right
                 .add(egui::Button::new(glyph).frame(false))
-                .on_hover_text(if maximized { "Restore" } else { "Maximise" })
+                .on_hover_text(if maximized {
+                    t!("shell-restore")
+                } else {
+                    t!("shell-maximise")
+                })
                 .clicked()
             {
                 ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(!maximized));
             }
             if right
                 .add(egui::Button::new(icons::MINIMISE).frame(false))
-                .on_hover_text("Minimise")
+                .on_hover_text(t!("shell-minimise"))
                 .clicked()
             {
                 ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true));
@@ -2404,7 +2487,7 @@ impl RickUi {
         let preview_open = self.app.model().preview_tab(window).is_some();
         if right
             .add(toggle_icon(icons::PREVIEW, preview_open))
-            .on_hover_text("Toggle preview pane")
+            .on_hover_text(t!("shell-toggle-preview-pane"))
             .clicked()
         {
             self.requests.push(Request::Intent {
@@ -2419,7 +2502,7 @@ impl RickUi {
             .is_none_or(|w| w.side_panel.visible);
         if right
             .add(toggle_icon(icons::SIDE_PANEL, side_visible))
-            .on_hover_text("Toggle side panel")
+            .on_hover_text(t!("shell-toggle-side-panel"))
             .clicked()
         {
             self.requests.push(Request::Intent {
@@ -2477,10 +2560,27 @@ impl RickUi {
             &recents,
             window.0,
         );
+        // The indexes are asked for the text once it changed, and told
+        // when the box is cleared; without an available index there is
+        // nothing to ask and 0.1's search of the current location stands.
+        if let Some(text) = w.search.take_query() {
+            let model = self.app.model();
+            if text != model.index_search.text
+                && (!model.search_indexes.is_empty() || text.is_empty())
+            {
+                self.requests
+                    .push(Request::Command(Command::IndexSearch { text }));
+            }
+        }
         match pick {
             Some(Pick::Intent(intent)) => self.requests.push(Request::Intent {
                 intent,
                 pane: focused,
+            }),
+            Some(Pick::Hit(entry)) => self.requests.push(Request::OpenContaining {
+                pane: focused,
+                entry,
+                new_tab: false,
             }),
             Some(Pick::Entry { index, id }) => {
                 if let Some((tab_id, _)) = self.app.model().active_tab(focused) {
@@ -2498,14 +2598,189 @@ impl RickUi {
         }
     }
 
+    // One dialogue, three shapes.
+    #[allow(clippy::too_many_lines)]
     fn show_dialog(&mut self, ctx: &egui::Context) {
+        let platform = Arc::clone(self.app.platform());
         let Some(dialog) = self.dialog.as_mut() else {
             return;
         };
+        // A folder the Browse… button's dialogue picked lands in its field.
+        if let Some((key, rx)) = dialog.browse.as_mut() {
+            match rx.try_recv() {
+                Ok(Some(path)) => {
+                    dialog
+                        .values
+                        .set(key, ext::Value::Text(path.display().to_string()));
+                    if let Ask::Form(form) = &dialog.ask {
+                        dialog.rows = form.preview_rows(&dialog.values);
+                    }
+                    dialog.browse = None;
+                }
+                Ok(None) | Err(runtime::oneshot::error::TryRecvError::Closed) => {
+                    dialog.browse = None;
+                }
+                Err(runtime::oneshot::error::TryRecvError::Empty) => {
+                    ctx.request_repaint_after(Duration::from_millis(100));
+                }
+            }
+        }
         let mut outcome: Option<bool> = None;
-        let modal = egui::Modal::new(egui::Id::new("ask")).show(ctx, |ui| {
-            ui.set_width(360.0);
+        let wide = matches!(dialog.ask, Ask::Form(_));
+        let modal = egui::Modal::new(egui::Id::new(t!("shell-ask"))).show(ctx, |ui| {
+            ui.set_width(if wide { 560.0 } else { 360.0 });
             match &dialog.ask {
+                Ask::Form(form) => {
+                    ui.heading(&form.title);
+                    let mut changed = false;
+                    let mut browse: Option<&'static str> = None;
+                    egui::Grid::new("ask-form")
+                        .num_columns(2)
+                        .spacing([12.0, 6.0])
+                        .show(ui, |ui| {
+                            for (index, field) in form.fields.iter().enumerate() {
+                                ui.label(&field.label);
+                                match &field.kind {
+                                    ext::FieldKind::Text { hint, .. } => {
+                                        let mut text = dialog.values.text(field.key).to_owned();
+                                        let output = egui::TextEdit::singleline(&mut text)
+                                            .hint_text(hint)
+                                            .desired_width(f32::INFINITY)
+                                            .show(ui);
+                                        if dialog.focus && index == 0 {
+                                            output.response.request_focus();
+                                            let end = output.galley.text().len();
+                                            let mut state = output.state;
+                                            state.cursor.set_char_range(Some(
+                                                egui::text::CCursorRange::two(
+                                                    egui::text::CCursor::new(0),
+                                                    egui::text::CCursor::new(end),
+                                                ),
+                                            ));
+                                            state.store(ctx, output.response.id);
+                                        }
+                                        if output.response.changed() {
+                                            dialog.values.set(field.key, ext::Value::Text(text));
+                                            changed = true;
+                                        }
+                                        if output.response.lost_focus()
+                                            && ui.input(|i| i.key_pressed(egui::Key::Enter))
+                                        {
+                                            outcome = Some(true);
+                                        }
+                                    }
+                                    ext::FieldKind::Folder { .. } => {
+                                        ui.horizontal(|ui| {
+                                            let mut text = dialog.values.text(field.key).to_owned();
+                                            let response = ui.add(
+                                                egui::TextEdit::singleline(&mut text)
+                                                    .desired_width(ui.available_width() - 40.0),
+                                            );
+                                            if response.changed() {
+                                                dialog
+                                                    .values
+                                                    .set(field.key, ext::Value::Text(text));
+                                                changed = true;
+                                            }
+                                            if response.lost_focus()
+                                                && ui.input(|i| i.key_pressed(egui::Key::Enter))
+                                            {
+                                                outcome = Some(true);
+                                            }
+                                            if ui
+                                                .button(icons::BROWSE)
+                                                .on_hover_text(t!("shell-browse"))
+                                                .clicked()
+                                            {
+                                                browse = Some(field.key);
+                                            }
+                                        });
+                                    }
+                                    ext::FieldKind::Check { .. } => {
+                                        let mut on = dialog.values.check(field.key);
+                                        if ui.checkbox(&mut on, "").changed() {
+                                            dialog.values.set(field.key, ext::Value::Check(on));
+                                            changed = true;
+                                        }
+                                    }
+                                    ext::FieldKind::Choice { options, .. } => {
+                                        let mut selected = dialog.values.choice(field.key);
+                                        let current = options
+                                            .get(selected)
+                                            .map_or("", String::as_str)
+                                            .to_owned();
+                                        egui::ComboBox::from_id_salt(("ask-choice", field.key))
+                                            .selected_text(current)
+                                            .width(ui.available_width())
+                                            .show_ui(ui, |ui| {
+                                                for (i, option) in options.iter().enumerate() {
+                                                    ui.selectable_value(&mut selected, i, option);
+                                                }
+                                            });
+                                        if selected != dialog.values.choice(field.key) {
+                                            dialog
+                                                .values
+                                                .set(field.key, ext::Value::Choice(selected));
+                                            changed = true;
+                                        }
+                                    }
+                                }
+                                ui.end_row();
+                            }
+                        });
+                    dialog.focus = false;
+                    if changed {
+                        dialog.rows = form.preview_rows(&dialog.values);
+                    }
+                    if let Some(key) = browse
+                        && dialog.browse.is_none()
+                    {
+                        let (tx, rx) = runtime::oneshot::channel();
+                        let title = format!("{} — choose a folder", form.title);
+                        let platform = Arc::clone(&platform);
+                        runtime::handle().spawn(async move {
+                            let _ = tx.send(platform.pick_folder(&title).await);
+                        });
+                        dialog.browse = Some((key, rx));
+                    }
+                    if form.preview.is_some() {
+                        ui.add_space(6.0);
+                        let problems = dialog.rows.iter().filter(|r| r.problem.is_some()).count();
+                        ui.weak(match (dialog.rows.len(), problems) {
+                            (0, _) => "Nothing to preview".to_owned(),
+                            (n, 0) => format!("{n} entries"),
+                            (n, p) => format!("{n} entries, {p} with a problem"),
+                        });
+                        let row_height = ui.text_style_height(&egui::TextStyle::Body) + 4.0;
+                        egui::ScrollArea::vertical()
+                            .max_height(240.0)
+                            .auto_shrink([false, true])
+                            .show_rows(ui, row_height, dialog.rows.len(), |ui, range| {
+                                egui::Grid::new(("ask-preview", range.start))
+                                    .num_columns(3)
+                                    .striped(true)
+                                    .min_col_width(80.0)
+                                    .show(ui, |ui| {
+                                        for row in &dialog.rows[range] {
+                                            ui.label(&row.from);
+                                            ui.label(icons::FORWARD);
+                                            match &row.problem {
+                                                Some(problem) => {
+                                                    ui.colored_label(
+                                                        ui.visuals().error_fg_color,
+                                                        format!("{} — {problem}", row.to),
+                                                    );
+                                                }
+                                                None => {
+                                                    ui.label(&row.to);
+                                                }
+                                            }
+                                            ui.end_row();
+                                        }
+                                    });
+                            });
+                    }
+                }
                 Ask::Prompt { title, .. } => {
                     ui.heading(title);
                     let output = egui::TextEdit::singleline(&mut dialog.input)
@@ -2538,14 +2813,27 @@ impl RickUi {
                 }
             }
             ui.add_space(8.0);
+            // A form with a problem in its preview cannot be confirmed.
+            let blocked = matches!(&dialog.ask, Ask::Form(form) if form.preview.is_some())
+                && dialog.rows.iter().any(|r| r.problem.is_some());
+            let ok_label = match &dialog.ask {
+                Ask::Form(form) => form.ok.as_str(),
+                _ => "OK",
+            };
             ui.horizontal(|ui| {
-                if ui.button("OK").clicked() {
+                if ui
+                    .add_enabled(!blocked, egui::Button::new(ok_label))
+                    .clicked()
+                {
                     outcome = Some(true);
                 }
-                if ui.button("Cancel").clicked() {
+                if ui.button(t!("cancel")).clicked() {
                     outcome = Some(false);
                 }
             });
+            if blocked && outcome == Some(true) {
+                outcome = None;
+            }
             if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
                 outcome = Some(false);
             }
@@ -2566,6 +2854,7 @@ impl RickUi {
         match dialog.ask {
             Ask::Prompt { .. } => self.host.answer_prompt(dialog.input),
             Ask::Confirm { .. } => self.host.answer_confirm(true),
+            Ask::Form(_) => self.host.answer_form(dialog.values),
         }
         self.run_action_with(dialog.action, dialog.ctx);
     }
@@ -2580,11 +2869,11 @@ impl RickUi {
             NameFor::SaveLayout => "Save layout as".to_owned(),
             NameFor::RenameLayout(name) => format!("Rename layout {name}"),
         };
-        let modal = egui::Modal::new(egui::Id::new("layout-name")).show(ctx, |ui| {
+        let modal = egui::Modal::new(egui::Id::new(t!("shell-layout-name"))).show(ctx, |ui| {
             ui.set_width(360.0);
             ui.heading(title);
             let output = egui::TextEdit::singleline(&mut prompt.input)
-                .hint_text("Layout name")
+                .hint_text(t!("shell-layout-name-2"))
                 .desired_width(f32::INFINITY)
                 .show(ui);
             if prompt.focus {
@@ -2605,10 +2894,10 @@ impl RickUi {
             }
             ui.add_space(8.0);
             ui.horizontal(|ui| {
-                if ui.button("OK").clicked() {
+                if ui.button(t!("ok")).clicked() {
                     outcome = Some(true);
                 }
-                if ui.button("Cancel").clicked() {
+                if ui.button(t!("cancel")).clicked() {
                     outcome = Some(false);
                 }
             });
@@ -2685,6 +2974,10 @@ struct Viewer<'a> {
     inspector_state: &'a mut inspector::PaneState,
     /// Each viewer tab's state.
     viewers: &'a mut HashMap<TabId, ViewerState>,
+    /// The views actions opened, by tab.
+    views: &'a HashMap<TabId, ext::View>,
+    /// Each console tab's state.
+    consoles: &'a mut HashMap<TabId, ConsoleUi>,
     /// The zoom remembered per file type.
     zoom_memory: &'a mut HashMap<String, Zoom>,
     /// The viewer tab filling the screen.
@@ -2704,6 +2997,18 @@ impl TabViewer for Viewer<'_> {
             |t| match t.kind {
                 TabKind::Preview => format!("{} Preview", icons::PREVIEW).into(),
                 TabKind::Viewer => viewer::title(t).into(),
+                TabKind::Console => format!(
+                    "{} {}",
+                    icons::TERMINAL,
+                    t.title.as_deref().unwrap_or("Console")
+                )
+                .into(),
+                TabKind::Compare => format!(
+                    "{} {}",
+                    icons::COMPARE,
+                    t.title.as_deref().unwrap_or("Compare")
+                )
+                .into(),
                 TabKind::Explorer => {
                     // A folder icon for local folders, a view's own for a
                     // virtual location, the archive's for an archive, the
@@ -2729,7 +3034,7 @@ impl TabViewer for Viewer<'_> {
         // the tab. The Preview tab shows no folder.
         if self.dnd.active()
             && let Some(state) = self.app.model().tab(*tab)
-            && state.kind != TabKind::Preview
+            && state.kind.lists()
         {
             let highlight = self.dnd.zone(Zone {
                 key: egui::Id::new(("dnd-tab", tab.0)),
@@ -2781,6 +3086,21 @@ impl TabViewer for Viewer<'_> {
             if close {
                 self.requests
                     .push(Request::Command(Command::CloseTab(*tab)));
+            }
+            return;
+        }
+        if state.kind.is_view() {
+            match self.views.get(tab) {
+                Some(ext::View::Console(console)) => {
+                    let state = self.consoles.entry(*tab).or_default();
+                    console::show(ui, state, console, *tab);
+                }
+                Some(ext::View::Compare(compare)) => compare::show(ui, compare, self.requests),
+                None => {
+                    ui.centered_and_justified(|ui| {
+                        ui.weak(t!("shell-this-tab-s-content-is"));
+                    });
+                }
             }
             return;
         }
@@ -2880,6 +3200,8 @@ impl RickUi {
                 previews: &mut self.previews,
                 inspector_state: &mut self.inspector_state,
                 viewers: &mut self.viewers,
+                views: &self.views,
+                consoles: &mut self.consoles,
                 zoom_memory: &mut self.zoom_memory,
                 fullscreen: self.fullscreen,
             };
@@ -3057,6 +3379,10 @@ impl RickUi {
         // viewer that closed leaves the screen.
         let model = self.app.model();
         self.viewers.retain(|tab, _| model.tab(*tab).is_some());
+        // A closed console or comparison takes its view with it; dropping a
+        // console ends its shell.
+        self.views.retain(|tab, _| model.tab(*tab).is_some());
+        self.consoles.retain(|tab, _| model.tab(*tab).is_some());
         if self.fullscreen.is_some_and(|tab| model.tab(tab).is_none()) {
             self.set_fullscreen(ctx, TabId(0), false);
         }
@@ -3111,6 +3437,7 @@ impl RickUi {
         if self.is_front(ctx, window) {
             self.show_dialog(ctx);
             conflict::show(ctx, &self.app, &mut self.conflict, &mut self.requests);
+            question::show(ctx, &self.app, &mut self.question, &mut self.requests);
             self.show_name_prompt(ctx);
             settings_ui::settings_window(
                 ctx,
@@ -3128,7 +3455,7 @@ impl RickUi {
                 &mut self.requests,
             );
             settings_ui::about_window(ctx, &mut self.about_open, &self.version);
-            settings_ui::properties_window(ctx, &mut self.properties);
+            self.properties.show(ctx, &mut self.requests);
             self.show_texts(ctx);
             self.show_toasts(ctx);
             self.apply_requests(ctx);
@@ -3295,14 +3622,14 @@ pub fn virtual_icon(which: vfs_rick::Virtual) -> &'static str {
 
 /// Sort directions and columns are used by the palette's labels.
 #[must_use]
-pub fn column_label(column: Column) -> &'static str {
+pub fn column_label(column: Column) -> String {
     match column {
-        Column::Name => "name",
-        Column::Type => "type",
-        Column::Modified => "modified",
-        Column::Created => "created",
-        Column::Accessed => "accessed",
-        Column::Size => "size",
-        Column::Items => "items",
+        Column::Name => t!("column-name-lower"),
+        Column::Type => t!("column-type-lower"),
+        Column::Modified => t!("column-modified-lower"),
+        Column::Created => t!("column-created-lower"),
+        Column::Accessed => t!("column-accessed-lower"),
+        Column::Size => t!("column-size-lower"),
+        Column::Items => t!("column-items-lower"),
     }
 }

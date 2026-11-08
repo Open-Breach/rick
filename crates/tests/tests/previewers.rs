@@ -81,6 +81,7 @@ fn load_plugins() -> &'static Host {
         disabled: Vec::new(),
         compiled_in: Vec::new(),
         platform: None,
+        prompts: None,
     });
     for (_, id) in PLUGINS {
         let row = host
@@ -340,7 +341,7 @@ fn every_fixture_opens_with_the_right_previewer_by_sniff() {
             }
             other => panic!("{name}: unexpected previewer {other}"),
         }
-        assert_eq!(doc.sections()[0].title, "File info", "{name}");
+        assert_eq!(doc.sections()[0].title.get(), "File info", "{name}");
         assert!(!doc.status().is_empty(), "{name}: status facts");
     }
 }

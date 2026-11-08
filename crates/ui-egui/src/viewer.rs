@@ -18,6 +18,7 @@
 //! strip's thumbnails) and the slot renders them one at a time. Zoom is
 //! remembered per file type for the session.
 
+use ext::t;
 use std::collections::HashMap;
 use std::ops::Range;
 use std::time::Duration;
@@ -751,7 +752,7 @@ fn toolbar(
                 menus::context_menu(ui, cx, &action_ctx, Some(entry));
             })
             .response
-            .on_hover_text("Actions");
+            .on_hover_text(t!("viewer-actions"));
     }
     if toggle(
         &mut right,
@@ -847,7 +848,7 @@ fn toolbar(
             Zoom::Free(f) => format!("{:.0}%", f * 100.0),
         };
         left.add(egui::Label::new(label).selectable(false))
-            .on_hover_text("Zoom, relative to Fit");
+            .on_hover_text(t!("viewer-zoom-relative-to-fit"));
         if button(&mut left, state, icons::ZOOM_IN, "Zoom in", true) {
             acts.push(Act::Zoom(zoom_step(state, ZOOM_STEP)));
         }
@@ -914,6 +915,8 @@ fn toolbar(
                     acts.push(Act::Control(id, ControlValue::Pressed));
                 }
             }
+            // Pointer gestures are the frame's, not the toolbar's.
+            PreviewControl::Pointer { .. } => {}
         }
     }
 }
@@ -957,8 +960,8 @@ fn page_entry(
     if enter && let Ok(wanted) = text.trim().parse::<usize>() {
         acts.push(Act::GoToPage(wanted.saturating_sub(1)));
     }
-    ui.add(egui::Label::new(format!("/ {pages}")).selectable(false))
-        .on_hover_text("Pages");
+    ui.add(egui::Label::new(format!("/ {pages}")).selectable(false)) // i18n: ok
+        .on_hover_text(t!("viewer-pages"));
 }
 
 /// The find bar: the text field, the match count, previous, next, close.
@@ -974,7 +977,7 @@ fn find_bar(ui: &mut egui::Ui, bar: Rect, v: &mut ViewerCx<'_>, acts: &mut Vec<A
     row.set_clip_rect(bar.intersect(ui.clip_rect()));
     row.add_space(6.0);
     let output = egui::TextEdit::singleline(&mut find.query)
-        .hint_text("Find")
+        .hint_text(t!("viewer-find"))
         .desired_width(220.0)
         .show(&mut row);
     if find.focus {
@@ -1034,6 +1037,22 @@ fn draw_content(
     let slot = &mut *v.slot;
     state.frame_size = None;
     state.drawn_highlights = 0;
+    if let Some((size, cap)) = slot.capped().filter(|_| entry.is_some()) {
+        if crate::preview::capped_message(&mut inner, size, cap)
+            == Some(crate::preview::PreviewAct::PreviewAnyway)
+        {
+            cx.requests
+                .push(Request::Command(Command::PreviewAnyway(cx.pane)));
+        }
+        return;
+    }
+    if let Some((served, total)) = slot.prefix().filter(|_| slot.has_doc())
+        && crate::preview::prefix_bar(&mut inner, served, total)
+            == Some(crate::preview::PreviewAct::LoadMore)
+    {
+        cx.requests
+            .push(Request::Command(Command::PreviewMore(cx.pane)));
+    }
     if slot.is_text() {
         draw_text_content(&mut inner, cx, state, slot);
         return;
@@ -1050,7 +1069,7 @@ fn draw_content(
     if let Some(error) = slot.error() {
         inner.add_space(12.0);
         inner.vertical_centered(|ui| {
-            ui.label(egui::RichText::new("No preview for this file").strong());
+            ui.label(egui::RichText::new(t!("viewer-no-preview-for-this-file")).strong());
             if !error.contains("no previewer") {
                 ui.weak(error);
             }
@@ -1065,7 +1084,7 @@ fn draw_content(
             });
         });
     } else {
-        inner.weak("Nothing to show");
+        inner.weak(t!("inspector-nothing-to-show"));
     }
 }
 
@@ -1100,7 +1119,7 @@ fn draw_text_content(
     let Some(view) = slot.text_view_mut() else {
         ui.horizontal(|ui| {
             ui.spinner();
-            ui.weak("Rendering…");
+            ui.weak(t!("viewer-rendering"));
         });
         return;
     };
@@ -1156,7 +1175,7 @@ fn draw_single(
     let Some((texture, (w, h))) = slot.texture(key).or_else(|| slot.any_texture(page)) else {
         ui.horizontal(|ui| {
             ui.spinner();
-            ui.weak("Rendering…");
+            ui.weak(t!("viewer-rendering"));
         });
         return;
     };
@@ -1168,25 +1187,43 @@ fn draw_single(
         acts.push(Act::Zoom(Zoom::Free((factor * delta).clamp(0.05, 32.0))));
     }
     let pad = ((rect.size() - size) / 2.0).max(egui::Vec2::ZERO);
+    // A document that claims the drag, the wheel or a double-click (a 3D
+    // view's orbit, zoom and reset) gets them; the pane pans and scrolls
+    // with what is left.
+    let source = slot.scroll_source();
+    let claims = slot.claims_pointer();
     let output = egui::ScrollArea::both()
         .id_salt(("viewer-frame", page))
         .auto_shrink([false, false])
-        .scroll_source(egui::scroll_area::ScrollSource::ALL)
+        .scroll_source(source)
         .on_drag_cursor(egui::CursorIcon::Grabbing)
         .show(ui, |ui| {
             ui.add_space(pad.y);
             ui.horizontal(|ui| {
                 ui.add_space(pad.x);
-                ui.add(egui::Image::from_texture(&texture).fit_to_exact_size(size))
+                let image = ui.add(egui::Image::from_texture(&texture).fit_to_exact_size(size));
+                // Under one stable id, so a drag survives the frame being
+                // rendered again under it.
+                if claims {
+                    ui.interact(
+                        image.rect,
+                        ui.id().with("gestures"),
+                        egui::Sense::click_and_drag(),
+                    )
+                } else {
+                    image
+                }
             })
             .inner
         });
     if output.inner.hovered()
         && !output.inner.dragged()
+        && source.drag != egui::scroll_area::DragScroll::Never
         && (size.x > rect.width() || size.y > rect.height())
     {
         ctx.set_cursor_icon(egui::CursorIcon::Grab);
     }
+    slot.forward_gestures(ui, &output.inner);
 }
 
 /// The layout of the continuous view: the pages' widths and heights from
@@ -1461,7 +1498,7 @@ fn draw_info(
             ui.set_width(rect.width());
             if sections.is_empty() {
                 ui.add_space(8.0);
-                ui.weak("No information");
+                ui.weak(t!("viewer-no-information"));
             }
             for section in &sections {
                 let header = format!("{} {}", section.glyph, section.title);

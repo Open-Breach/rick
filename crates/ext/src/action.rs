@@ -13,8 +13,8 @@
 //!
 //! ```
 //! use ext::{
-//!     Action, ActionCtx, ActionGroup, ActionId, ActionOutcome, Availability, Invocation, Key,
-//!     Level, Modifiers, PaneId, Shortcut, UiHost,
+//!     Action, ActionCtx, ActionGroup, ActionId, ActionOutcome, Availability, Form, Invocation,
+//!     Key, Level, Modifiers, PaneId, Shortcut, UiHost, Values, t,
 //! };
 //! use runtime::JobRunner;
 //! use std::sync::Mutex;
@@ -27,8 +27,8 @@
 //!         ActionId("demo.count")
 //!     }
 //!
-//!     fn label(&self) -> &str {
-//!         "Count selection"
+//!     fn label(&self) -> String {
+//!         t!("count-selection")
 //!     }
 //!
 //!     fn group(&self) -> ActionGroup {
@@ -41,7 +41,7 @@
 //!
 //!     fn availability(&self, ctx: &ActionCtx) -> Availability {
 //!         if ctx.selection.is_empty() {
-//!             Availability::Disabled("select something first")
+//!             Availability::Disabled(t!("select-something-first"))
 //!         } else {
 //!             Availability::Enabled
 //!         }
@@ -70,6 +70,9 @@
 //!     fn show(&self, title: &str, _text: &str) {
 //!         self.0.lock().unwrap().push(title.to_owned());
 //!     }
+//!     fn form(&self, form: Form) -> Option<Values> {
+//!         Some(form.defaults())
+//!     }
 //! }
 //!
 //! let ctx = ActionCtx {
@@ -77,6 +80,7 @@
 //!     location: Location::new(ProviderId("local"), "/"),
 //!     selection: Vec::new(),
 //!     invoked_from: Invocation::Palette,
+//!     other: None,
 //! };
 //! assert!(matches!(CountSelection.availability(&ctx), Availability::Disabled(_)));
 //!
@@ -87,9 +91,13 @@
 //! ```
 
 use std::fmt;
+use std::sync::Arc;
 
 use runtime::JobRunner;
 use types::{Entry, Error, JobId, Location};
+
+use crate::form::{Form, Values};
+use crate::view::View;
 
 /// Identity of a pane in a window; `app` assigns them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -110,12 +118,13 @@ pub enum ActionGroup {
 }
 
 /// Whether an action can run for the current context.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Availability {
     /// Not shown at all.
     Hidden,
-    /// Shown greyed out, with the reason as tooltip.
-    Disabled(&'static str),
+    /// Shown greyed out, with the reason as tooltip, in the language in
+    /// use.
+    Disabled(String),
     /// Ready to run.
     Enabled,
 }
@@ -144,6 +153,9 @@ pub struct ActionCtx {
     pub selection: Vec<Entry>,
     /// How the user got here.
     pub invoked_from: Invocation,
+    /// The location of the other explorer pane of the window, when there is
+    /// one: what Compare puts beside the pane's own folder.
+    pub other: Option<Location>,
 }
 
 /// What `run` produced.
@@ -154,6 +166,15 @@ pub enum ActionOutcome {
     Started(JobId),
     /// Finished, and can be undone.
     Undoable(Box<dyn UndoCommand>),
+    /// Change the pane's selection: the application applies the selector
+    /// to the pane's rows.
+    Select(Selector),
+    /// Open this in a tab of its own, next to the pane's active tab.
+    View(View),
+    /// Take the pane to this location, as a click on a side-panel row
+    /// does: what an action that opens a view of its own returns (the
+    /// installer's Installed Apps).
+    Navigate(Location),
 }
 
 impl fmt::Debug for ActionOutcome {
@@ -162,7 +183,30 @@ impl fmt::Debug for ActionOutcome {
             Self::Done => f.write_str("Done"),
             Self::Started(id) => f.debug_tuple("Started").field(id).finish(),
             Self::Undoable(cmd) => f.debug_tuple("Undoable").field(&cmd.label()).finish(),
+            Self::Select(selector) => f
+                .debug_struct("Select")
+                .field("replace", &selector.replace)
+                .finish_non_exhaustive(),
+            Self::View(view) => f.debug_tuple("View").field(view).finish(),
+            Self::Navigate(to) => f.debug_tuple("Navigate").field(to).finish(),
         }
+    }
+}
+
+/// Which rows of the pane an action wants selected.
+#[derive(Clone)]
+pub struct Selector {
+    /// Whether a row is wanted.
+    pub matches: Arc<dyn Fn(&Entry) -> bool + Send + Sync>,
+    /// Replace the selection with the matches, or add them to it.
+    pub replace: bool,
+}
+
+impl fmt::Debug for Selector {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Selector")
+            .field("replace", &self.replace)
+            .finish_non_exhaustive()
     }
 }
 
@@ -386,6 +430,11 @@ pub trait UiHost: Send + Sync {
     /// Shows a read-only text, such as a log, under `title`; returns at
     /// once.
     fn show(&self, title: &str, text: &str);
+
+    /// Shows a form and blocks for its values; `None` when dismissed. A
+    /// host that cannot block runs the action again with the values once
+    /// the user confirmed, the way it does for `prompt`.
+    fn form(&self, form: Form) -> Option<Values>;
 }
 
 /// A command the user can invoke.
@@ -393,8 +442,9 @@ pub trait Action: Send + Sync + 'static {
     /// Unique id.
     fn id(&self) -> ActionId;
 
-    /// Text shown in menus and the palette.
-    fn label(&self) -> &str;
+    /// Text shown in menus and the palette, in the language in use:
+    /// `t!("count-selection")`.
+    fn label(&self) -> String;
 
     /// Where the action appears.
     fn group(&self) -> ActionGroup;

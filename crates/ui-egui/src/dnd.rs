@@ -19,6 +19,7 @@
 //! and egui's pointer is put right when that drag ends, since the backend
 //! never sees its button come up.
 
+use ext::t;
 use std::collections::{BTreeSet, HashMap};
 use std::path::PathBuf;
 
@@ -747,6 +748,7 @@ impl Dnd {
                             location: tab.location.clone(),
                             selection: items.clone(),
                             invoked_from: ext::Invocation::Menu,
+                            other: None,
                         },
                     });
                 }
@@ -772,7 +774,7 @@ impl Dnd {
                         if ui.button(format!("{} Copy", icons::PLUS)).clicked() {
                             choice = Some(Some(TransferMode::Copy));
                         }
-                        if ui.button("Cancel").clicked() {
+                        if ui.button(t!("cancel")).clicked() {
                             choice = Some(None);
                         }
                     });

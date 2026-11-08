@@ -15,6 +15,7 @@ use std::time::{Duration, Instant};
 use egui_kittest::Harness;
 use egui_kittest::kittest::{By, Queryable as _};
 use ext::Extension;
+use ext::Text;
 use model::{DockTarget, SelectionChange, Side, TabId, TabKind};
 use platform::{ConfigDir, Fake};
 use tests::{local, media};
@@ -1000,7 +1001,7 @@ impl ext::PreviewDoc for FakeMediaDoc {
     fn sections(&self) -> Vec<ext::InfoSection> {
         vec![ext::InfoSection {
             id: "file",
-            title: "File info",
+            title: Text("File info"),
             icon: ext::Icon::Info,
             rows: vec![("Duration".to_owned(), "1:30".to_owned())],
         }]

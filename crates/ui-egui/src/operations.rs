@@ -13,6 +13,7 @@
 //! while a job runs, so a job over hundreds of thousands of files never
 //! redraws the panel per entry.
 
+use ext::t;
 use std::collections::{HashMap, VecDeque};
 use std::fmt::Write as _;
 use std::time::{Duration, Instant};
@@ -210,7 +211,7 @@ impl Operations {
                             ui.add(
                                 egui::ProgressBar::new(0.0)
                                     .desired_width(ui.available_width())
-                                    .text("Waiting"),
+                                    .text(t!("jobs-waiting")),
                             );
                             ui.weak(format!("{} Waiting for {for_job}", icons::WAITING));
                         }
@@ -219,12 +220,12 @@ impl Operations {
                             ui.add(
                                 egui::ProgressBar::new(1.0)
                                     .desired_width(ui.available_width())
-                                    .text("done"),
+                                    .text(t!("jobs-done")),
                             );
                             ui.weak(format!("{} done", icons::DONE));
                         }
                         JobState::Cancelled => {
-                            ui.weak("cancelled");
+                            ui.weak(t!("jobs-cancelled"));
                         }
                         JobState::Failed(error) => {
                             ui.colored_label(ui.visuals().error_fg_color, error);
@@ -248,7 +249,7 @@ impl Operations {
             JobState::Running(_) | JobState::Waiting(_) => {
                 if ui
                     .small_button(icons::CLOSE)
-                    .on_hover_text("Cancel")
+                    .on_hover_text(t!("cancel"))
                     .clicked()
                 {
                     requests.push(Request::Command(Command::CancelJob(id)));
@@ -257,14 +258,14 @@ impl Operations {
                     if info.paused {
                         if ui
                             .small_button(icons::PLAY)
-                            .on_hover_text("Resume")
+                            .on_hover_text(t!("jobs-resume"))
                             .clicked()
                         {
                             requests.push(Request::Command(Command::ResumeJob(id)));
                         }
                     } else if ui
                         .small_button(icons::PAUSE)
-                        .on_hover_text("Pause")
+                        .on_hover_text(t!("jobs-pause"))
                         .clicked()
                     {
                         requests.push(Request::Command(Command::PauseJob(id)));
@@ -276,7 +277,7 @@ impl Operations {
                 if now.duration_since(at) >= DONE_FOR
                     || ui
                         .small_button(icons::CLOSE)
-                        .on_hover_text("Dismiss")
+                        .on_hover_text(t!("jobs-dismiss"))
                         .clicked()
                 {
                     requests.push(Request::Command(Command::DismissJob(id)));
@@ -285,7 +286,7 @@ impl Operations {
             JobState::Failed(_) => {
                 if ui
                     .small_button(icons::CLOSE)
-                    .on_hover_text("Dismiss")
+                    .on_hover_text(t!("jobs-dismiss"))
                     .clicked()
                 {
                     requests.push(Request::Command(Command::DismissJob(id)));
@@ -311,7 +312,7 @@ impl Operations {
             .text(progress_text(progress));
         ui.add(if info.paused { bar } else { bar.animate(true) });
         if info.paused {
-            ui.weak("paused");
+            ui.weak(t!("jobs-paused"));
             return;
         }
         if matches!(progress, Progress::Message(_)) {

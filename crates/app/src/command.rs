@@ -9,8 +9,11 @@ use model::{
     Column, Dock, DockTarget, Geometry, PaneId, Place, SelectionChange, SettingsChange,
     SidePanelChange, SortDir, SplitDir, TabId, ViewMode, WindowId,
 };
+use ops::PermissionRequest;
+use platform::{FilePermissions, Principals};
 use types::{
-    Conflict, ConflictAnswer, ConflictId, Entry, EntryId, Error, JobId, Location, Progress,
+    Answer, Conflict, ConflictAnswer, ConflictId, Entry, EntryId, Error, JobId, Location, Progress,
+    ProviderId, Question, QuestionId,
 };
 
 /// Whether a transfer moves or copies, or asks on drop.
@@ -23,6 +26,18 @@ pub enum TransferMode {
     /// Ask with the move/copy/cancel prompt first; the UI answers it and
     /// sends `Move` or `Copy` in its place.
     Ask,
+}
+
+/// What the context menu of a connection row in the side panel does.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConnectionOp {
+    /// Open or verify the connection now, as a job, so a wrong password is
+    /// reported at once.
+    Connect,
+    /// Drop its session; the next operation connects again.
+    Disconnect,
+    /// Forget it: out of `rick.toml`, its secrets out of the keychain.
+    Remove,
 }
 
 /// What the UI asks the application to do. The UI never touches the model;
@@ -112,6 +127,16 @@ pub enum Command {
         /// On or off.
         on: bool,
     },
+    /// The title-row search box: query every available search index for
+    /// `text` by name, after a short pause for the next keystroke, and
+    /// stream the hits into the model's [`IndexSearch`](model::IndexSearch)
+    /// with their paths; an empty text ends the search. Without an
+    /// available index the box searches the current location alone, as in
+    /// 0.1 (QUESTIONS.md 118).
+    IndexSearch {
+        /// What to look for; empty clears.
+        text: String,
+    },
     /// Tree view: expand a folder of the pane's active tab in place; its
     /// children are listed lazily on the first expand.
     TreeExpand {
@@ -156,6 +181,43 @@ pub enum Command {
     },
     /// Eject the removable volume mounted at this path, as a job.
     Eject(PathBuf),
+    /// Add a connection of a network or cloud provider, as its *Add
+    /// connection…* dialogue filled it in: the fields of
+    /// [`ConnectionFieldKind::Secret`](ext::ConnectionFieldKind::Secret) go into the platform
+    /// keychain (as a job, since a keychain may ask to be unlocked), the
+    /// rest into `rick.toml`, and the provider's connector is told.
+    AddConnection {
+        /// The provider.
+        provider: ProviderId,
+        /// The connection's name, unique within the provider.
+        name: String,
+        /// The field values by key, secrets included; an empty value is
+        /// left out.
+        values: Vec<(String, String)>,
+    },
+    /// Change a connection of a network or cloud provider, as its *Edit…*
+    /// dialogue filled it in: the non-secret fields replace the ones in
+    /// `rick.toml`, a secret given replaces the one in the keychain and a
+    /// secret left out keeps it.
+    EditConnection {
+        /// The provider.
+        provider: ProviderId,
+        /// The connection's name, which the dialogue cannot change.
+        name: String,
+        /// The field values by key, secrets included; an empty value is
+        /// left out.
+        values: Vec<(String, String)>,
+    },
+    /// Connect, disconnect or remove a connection of a network or cloud
+    /// provider.
+    Connection {
+        /// The provider.
+        provider: ProviderId,
+        /// The connection's name.
+        name: String,
+        /// What to do.
+        op: ConnectionOp,
+    },
     /// Run an action on a context, usually from
     /// [`App::action_ctx`](crate::App::action_ctx).
     Run {
@@ -211,6 +273,14 @@ pub enum Command {
         /// Skip, overwrite, rename, cancel; for this item or all remaining.
         answer: ConflictAnswer,
     },
+    /// Answer the question dialogue of a waiting extension: the host key to
+    /// trust, the passphrase or password typed, or the dismissal.
+    AnswerQuestion {
+        /// The question.
+        id: QuestionId,
+        /// The answer.
+        answer: Answer,
+    },
     /// Enumerate the mounted volumes again.
     RefreshVolumes,
     /// Revert the last reversible operation.
@@ -219,6 +289,40 @@ pub enum Command {
     Redo,
     /// Change one setting and save the settings file.
     Settings(SettingsChange),
+    /// Change one setting an extension declared and save its TOML file.
+    ExtSetting {
+        /// The extension's id.
+        ext: String,
+        /// The setting's key.
+        key: String,
+        /// The new value.
+        value: ext::SettingValue,
+    },
+    /// A remote file shown as a prefix (`Event::PreviewPrefix`): serve the
+    /// next chunk too and open the preview again.
+    PreviewMore(PaneId),
+    /// A remote file held behind the size cap (`Event::PreviewCapped`):
+    /// open the preview whatever its size.
+    PreviewAnyway(PaneId),
+    /// Open Properties on the pane's selected entry: the general rows and,
+    /// for a local entry, its owner, group, mode bits and ACL; answered by
+    /// `Event::Properties`, and again after a change while the dialogue is
+    /// open.
+    ShowProperties(PaneId),
+    /// The Properties dialogue closed; a later change does not report back.
+    PropertiesClosed,
+    /// Open the platform's own properties dialogue (Windows Properties,
+    /// macOS Get Info) on the pane's selected entry.
+    SystemProperties(PaneId),
+    /// Change the ownership, mode bits or ACL of entries, as the Properties
+    /// dialogue asks: one job with progress, one undo step, and the
+    /// privileged helper for what the user may not change by themselves.
+    SetPermissions {
+        /// The pane the entries are listed in, refreshed when the job ends.
+        pane: PaneId,
+        /// What to change, on which entries, and how deep.
+        request: PermissionRequest,
+    },
     /// Render a thumbnail of an entry of the pane's listing at `size`
     /// pixels square, through the previewer that claims it; answered by
     /// [`Event::Thumbnail`].
@@ -376,6 +480,14 @@ pub enum Event {
         /// How it ended.
         result: Result<(), Error>,
     },
+    /// Hits of the title-row search box's index search arrived, or the
+    /// search finished; the model's `index_search` already holds them.
+    IndexSearched {
+        /// The new hits, each listed once across the indexes.
+        batch: Vec<Entry>,
+        /// Whether every index has answered.
+        done: bool,
+    },
     /// A pane's selection changed.
     SelectionChanged {
         /// The pane.
@@ -398,6 +510,28 @@ pub enum Event {
         /// Why.
         error: Error,
     },
+    /// The preview just opened for the pane shows a prefix of a file on a
+    /// remote provider; the pane offers *Load more*
+    /// (`specs/ext-ssh.md`, "Previews over SSH").
+    PreviewPrefix {
+        /// The pane.
+        pane: PaneId,
+        /// How many bytes the previewer was served.
+        served: u64,
+        /// The file's size, when known.
+        total: Option<u64>,
+    },
+    /// The pane's selection is a file on a remote provider above the size
+    /// cap for whole-file previews; the pane shows the file's facts and
+    /// *Preview anyway*.
+    PreviewCapped {
+        /// The pane.
+        pane: PaneId,
+        /// The file's size.
+        size: u64,
+        /// The cap it is above.
+        cap: u64,
+    },
     /// A thumbnail finished: the frame, or `None` when no previewer claims
     /// the entry or the render failed.
     Thumbnail {
@@ -411,6 +545,19 @@ pub enum Event {
     /// A job met an existing name and waits for the conflict dialogue's
     /// answer; the conflict is in the model until it is resolved.
     Conflict(Conflict),
+    /// An extension asked the user something and waits for the answer; the
+    /// question is in the model until it is answered.
+    Question(Question),
+    /// An action opened a view in a new tab of the pane, which the model
+    /// already holds; the UI draws `view` in it.
+    ViewOpened {
+        /// The pane.
+        pane: PaneId,
+        /// The new tab.
+        tab: TabId,
+        /// What to draw.
+        view: ext::View,
+    },
     /// Something to show the user.
     Notify {
         /// How serious.
@@ -418,6 +565,30 @@ pub enum Event {
         /// The text.
         text: String,
     },
+    /// What `Command::ShowProperties` found: the dialogue's contents.
+    Properties(Box<PropertiesInfo>),
+}
+
+/// What the Properties dialogue shows for one entry.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PropertiesInfo {
+    /// The pane the entry is listed in.
+    pub pane: PaneId,
+    /// The entry.
+    pub entry: Entry,
+    /// The entry as a path on this machine, for a local entry: what the
+    /// permissions and the platform's dialogue work on.
+    pub path: Option<PathBuf>,
+    /// The general rows: name, type, location, size, dates, link target.
+    pub rows: Vec<(String, String)>,
+    /// The owner, group, mode bits and ACL, for a local entry the platform
+    /// could read them of.
+    pub permissions: Option<FilePermissions>,
+    /// The users and groups to choose from.
+    pub principals: Principals,
+    /// Whether the platform has a dialogue of its own to offer
+    /// (`Command::SystemProperties`).
+    pub native: bool,
 }
 
 impl fmt::Debug for Event {
@@ -449,6 +620,11 @@ impl fmt::Debug for Event {
                 .field("id", id)
                 .field("result", result)
                 .finish(),
+            Self::IndexSearched { batch, done } => f
+                .debug_struct("IndexSearched")
+                .field("batch", &batch.len())
+                .field("done", done)
+                .finish(),
             Self::SelectionChanged { pane, ids } => f
                 .debug_struct("SelectionChanged")
                 .field("pane", pane)
@@ -469,7 +645,35 @@ impl fmt::Debug for Event {
                 .field("pane", pane)
                 .field("error", error)
                 .finish(),
+            Self::PreviewPrefix {
+                pane,
+                served,
+                total,
+            } => f
+                .debug_struct("PreviewPrefix")
+                .field("pane", pane)
+                .field("served", served)
+                .field("total", total)
+                .finish(),
+            Self::PreviewCapped { pane, size, cap } => f
+                .debug_struct("PreviewCapped")
+                .field("pane", pane)
+                .field("size", size)
+                .field("cap", cap)
+                .finish(),
             Self::Conflict(conflict) => f.debug_tuple("Conflict").field(&conflict.id).finish(),
+            Self::Question(question) => f.debug_tuple("Question").field(&question.id).finish(),
+            Self::Properties(info) => f
+                .debug_struct("Properties")
+                .field("entry", &info.entry.name)
+                .field("permissions", &info.permissions.is_some())
+                .finish(),
+            Self::ViewOpened { pane, tab, view } => f
+                .debug_struct("ViewOpened")
+                .field("pane", pane)
+                .field("tab", tab)
+                .field("view", view)
+                .finish(),
             Self::Notify { level, text } => f
                 .debug_struct("Notify")
                 .field("level", level)

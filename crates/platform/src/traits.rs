@@ -1,5 +1,6 @@
 //! The trait set the rest of Rick programs against.
 
+use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::SystemTime;
@@ -7,6 +8,8 @@ use std::time::SystemTime;
 use async_trait::async_trait;
 use raw_window_handle::{RawDisplayHandle, RawWindowHandle};
 use types::Error;
+
+use crate::perms::Permissions;
 
 /// An entry in the trash, with enough to put it back.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -224,6 +227,34 @@ pub trait RecentlyUsed: Send + Sync {
     fn recently_used(&self) -> Result<Vec<RecentItem>, Error>;
 }
 
+/// An application the platform knows for a file type, or one the user
+/// named.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Application {
+    /// What the user sees: `Text Editor`, `Preview`, `Notepad`.
+    pub name: String,
+    /// What launches it: a desktop file's path on Linux, an application
+    /// bundle's path on macOS, an executable's path on Windows; or any
+    /// executable the user typed, on every platform.
+    pub id: String,
+}
+
+impl Application {
+    /// An application from an executable the user typed, named after it.
+    #[must_use]
+    pub fn executable(command: &str) -> Self {
+        let name = command
+            .split_whitespace()
+            .next()
+            .and_then(|program| Path::new(program).file_name())
+            .map_or_else(|| command.to_owned(), |n| n.to_string_lossy().into_owned());
+        Self {
+            name,
+            id: command.to_owned(),
+        }
+    }
+}
+
 /// Handing entries to other applications.
 pub trait OpenWith: Send + Sync {
     /// Opens the entry with the system default application.
@@ -239,6 +270,82 @@ pub trait OpenWith: Send + Sync {
     ///
     /// Fails when the platform refuses or has no file manager.
     fn reveal(&self, path: &Path) -> Result<(), Error>;
+
+    /// The applications the platform offers for the entry's type, the
+    /// default first: the desktop files registered for its MIME type on
+    /// Linux, Launch Services' list on macOS, the shell's handlers for its
+    /// extension on Windows. Empty when the platform knows none.
+    ///
+    /// # Errors
+    ///
+    /// The platform error from reading the registrations.
+    fn applications(&self, path: &Path) -> Result<Vec<Application>, Error>;
+
+    /// Opens the entry with one application: one of
+    /// [`applications`](Self::applications), or any executable the user
+    /// named ([`Application::executable`]), which is run with the entry's
+    /// path as its argument.
+    ///
+    /// # Errors
+    ///
+    /// Fails when the application cannot be started.
+    fn open_with(&self, path: &Path, app: &Application) -> Result<(), Error>;
+}
+
+/// The user's terminal emulator.
+pub trait Terminal: Send + Sync {
+    /// Opens a terminal window in `dir`, running `command` in it when one
+    /// is given and the user's shell otherwise: `$TERMINAL` or a known
+    /// emulator on Linux, Terminal.app on macOS, Windows Terminal or
+    /// `cmd` on Windows.
+    ///
+    /// # Errors
+    ///
+    /// `Error::Unsupported` when no terminal emulator is found; otherwise
+    /// the error from starting it.
+    fn open_terminal(&self, dir: &Path, command: Option<&[String]>) -> Result<(), Error>;
+}
+
+/// What a command run elevated produced.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct ElevatedOutput {
+    /// The exit code, when the process ended by itself.
+    pub code: Option<i32>,
+    /// What it wrote to standard output.
+    pub stdout: Vec<u8>,
+    /// What it wrote to standard error.
+    pub stderr: Vec<u8>,
+}
+
+impl ElevatedOutput {
+    /// Whether the command ended with exit code 0.
+    #[must_use]
+    pub fn success(&self) -> bool {
+        self.code == Some(0)
+    }
+}
+
+/// Running one command as the administrator through the platform's own
+/// prompt, for the few steps that need it (the privileged helper of a
+/// system-wide install): `pkexec` and its polkit prompt on Linux. Rick
+/// itself never runs elevated; the program does, and it is a helper that
+/// validates its input.
+pub trait Elevate: Send + Sync {
+    /// Runs `program` with `args` elevated and waits for it to end: through
+    /// `pkexec` and its polkit prompt on Linux, Authorization Services on
+    /// macOS, User Account Control on Windows. An elevated process on
+    /// Windows shares no pipes with this one, so there the arguments get
+    /// `--output <file>` appended and the file's contents come back as the
+    /// standard output: a program run this way must honour that flag, as
+    /// `rick-perms` does.
+    ///
+    /// # Errors
+    ///
+    /// `Error::Unsupported` where the platform offers no prompt (no
+    /// `pkexec` on Linux); `Error::PermissionDenied` when the user dismissed
+    /// the prompt or is not allowed; otherwise the error from starting the
+    /// program.
+    fn run_elevated(&self, program: &Path, args: &[OsString]) -> Result<ElevatedOutput, Error>;
 }
 
 /// What showing properties did.
@@ -445,11 +552,44 @@ pub trait DropTarget: Send + Sync {
     fn drop_position(&self, window: &WindowRef) -> Option<Point>;
 }
 
+/// The platform keychain: secrets by a stable key, never in a TOML file.
+/// Secret Service on Linux, Keychain on macOS, Credential Manager on
+/// Windows; the fake keeps them in memory. The key is the caller's: the
+/// connection plugins use `<provider>/<connection>/<field>`.
+pub trait Secrets: Send + Sync {
+    /// Stores `secret` under `key`, replacing what was there.
+    ///
+    /// # Errors
+    ///
+    /// `Error::Unsupported` when no keychain is reachable (no Secret Service
+    /// on the bus); otherwise the platform error.
+    fn store_secret(&self, key: &str, secret: &str) -> Result<(), Error>;
+
+    /// The secret stored under `key`, or `None` when there is none.
+    ///
+    /// # Errors
+    ///
+    /// `Error::Unsupported` when no keychain is reachable; otherwise the
+    /// platform error.
+    fn get_secret(&self, key: &str) -> Result<Option<String>, Error>;
+
+    /// Forgets the secret under `key`; a key without a secret is fine.
+    ///
+    /// # Errors
+    ///
+    /// `Error::Unsupported` when no keychain is reachable; otherwise the
+    /// platform error.
+    fn remove_secret(&self, key: &str) -> Result<(), Error>;
+}
+
 /// All platform services behind one object.
 pub trait Platform:
     Trash
     + OpenWith
+    + Terminal
+    + Elevate
     + Properties
+    + Permissions
     + ConfigDir
     + NativeDialogs
     + Clipboard
@@ -459,13 +599,17 @@ pub trait Platform:
     + Volumes
     + StandardFolders
     + RecentlyUsed
+    + Secrets
 {
 }
 
 impl<
     T: Trash
         + OpenWith
+        + Terminal
+        + Elevate
         + Properties
+        + Permissions
         + ConfigDir
         + NativeDialogs
         + Clipboard
@@ -474,7 +618,8 @@ impl<
         + DropTarget
         + Volumes
         + StandardFolders
-        + RecentlyUsed,
+        + RecentlyUsed
+        + Secrets,
 > Platform for T
 {
 }

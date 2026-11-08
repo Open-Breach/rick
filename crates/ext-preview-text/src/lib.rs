@@ -11,9 +11,10 @@
 
 use std::sync::Arc;
 
+use ext::Text;
 use ext::{
     API_VERSION, Capabilities, ControlId, ControlValue, Extension, Frame, Icon, InfoSection,
-    Manifest, Platforms, Points, PreviewControl, PreviewDoc, Previewer, Provider, Registry,
+    Manifest, Platforms, Points, PreviewControl, PreviewDoc, Previewer, Provider, Reads, Registry,
     RenderRequest, TextBlock, TextLayer, Transport, Version, async_trait,
 };
 use types::{CancelToken, Entry, Error, ExtId, Location};
@@ -85,6 +86,7 @@ impl Extension for TextPreview {
     }
 
     fn register(&self, reg: &mut Registry) -> Result<(), Error> {
+        reg.translations(&[("en", include_str!("../locales/en.ftl"))]);
         reg.previewer(Arc::new(TextPreviewer));
         Ok(())
     }
@@ -351,7 +353,7 @@ impl PreviewDoc for TextDoc {
     fn sections(&self) -> Vec<InfoSection> {
         vec![InfoSection {
             id: "file",
-            title: "File info",
+            title: Text("preview-text-file-info"),
             icon: Icon::Info,
             rows: self.facts.rows(),
         }]
@@ -380,6 +382,12 @@ impl PreviewDoc for TextDoc {
 impl Previewer for TextPreviewer {
     fn id(&self) -> ExtId {
         ID
+    }
+
+    /// The start of a file is enough: a remote file is served as a prefix
+    /// with *Load more*.
+    fn reads(&self) -> Reads {
+        Reads::Prefix
     }
 
     fn score(&self, entry: &Entry, sniff: &[u8]) -> u8 {
@@ -494,7 +502,10 @@ mod tests {
         assert_eq!(doc.text_layer().map(|l| l.pages.len()), Some(1));
         let sections = doc.sections();
         assert_eq!(sections.len(), 1);
-        assert_eq!((sections[0].id, sections[0].title), ("file", "File info"));
+        assert_eq!(
+            (sections[0].id, sections[0].title.key()),
+            ("file", "preview-text-file-info")
+        );
         let info = &sections[0].rows;
         assert!(info.iter().any(|(k, v)| k == "Lines" && v == "2"));
         assert!(info.iter().any(|(k, _)| k == "Shown"));

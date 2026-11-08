@@ -50,6 +50,9 @@ jobs:
       - run: cargo fmt --check
       # No Unicode symbol character is used as an icon (SPEC.md "Icons").
       - run: "! grep -rnP '(*UTF8)[\\x{2190}-\\x{2BFF}\\x{1F300}-\\x{1FAFF}]' crates/ui-egui/src"
+      # Every text the UI shows goes through the t! lookup (issue 24): a
+      # string literal handed to a widget outside t! fails here.
+      - run: .github/scripts/check-strings.py
   deny:
     needs: changes
     if: needs.changes.outputs.code == 'true'
@@ -77,12 +80,28 @@ jobs:
     needs: [changes, fmt]
     if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
       - uses: ./.github/actions/setup
         with: { system: test }
-      - run: cargo test --workspace ${{ env.RICK_WS_FEATURES }}
+      # Issue 21: the provider plugins' round trips run against MinIO,
+      # Azurite, fake-gcs-server and an sshd container; the tests skip with
+      # a note without the RICK_* variables and fail instead here.
+      - name: storage and sftp containers
+        run: .github/scripts/containers.sh
+      # Issue 24: a permission change the user may not make runs in the
+      # privileged helper through pkexec; no desktop here shows polkit's
+      # prompt, so a stand-in runs the helper through the runner's sudo and
+      # the elevation test (crates/rick/tests/perms.rs) runs for real.
+      - name: polkit stand-in
+        run: |
+          sudo install -m 755 .github/scripts/fake-pkexec.sh /usr/local/bin/pkexec
+          echo "RICK_ELEVATE_FIXTURE=1" >> "$GITHUB_ENV"
+      # With Tracker and Baloo indexing a fixture directory on a private
+      # session bus, so the two connectors answer through their real
+      # services (issue 22).
+      - run: .github/scripts/with-indexers.sh cargo test --workspace ${{ env.RICK_WS_FEATURES }}
   bundle:
     needs: [changes, fmt]
     if: needs.changes.outputs.code == 'true'
@@ -96,21 +115,10 @@ jobs:
       # libstd and plugins/<id>/ per plugin, from one build of the whole
       # workspace (QUESTIONS.md 81).
       - run: cargo xtask bundle ${{ env.RICK_WS_FEATURES }}
-      # Every plugin loads through --list-plugins.
+      # Every plugin built for this platform loads through --list-plugins;
+      # the connectors for the other platforms are not bundled (issue 22).
       - name: list plugins
-        run: |
-          ls -l target/debug/bundle target/debug/bundle/plugins
-          for id in git vfs-trash vfs-archive preview-archive preview-csv preview-media preview-office preview-hex; do
-            test -f "target/debug/bundle/plugins/$id/plugin.toml" || { echo "no plugin.toml for $id"; exit 1; }
-          done
-          out="$(./target/debug/bundle/rick --list-plugins)"
-          echo "$out"
-          echo "$out" | grep -E '^git +Git +[^ ]+ +decorator, action +loaded +' || { echo "git plugin not loaded"; exit 1; }
-          echo "$out" | grep -E '^vfs-trash +Trash +[^ ]+ +provider, decorator, action +loaded +' || { echo "trash plugin not loaded"; exit 1; }
-          echo "$out" | grep -E '^vfs-archive +Archives +[^ ]+ +provider +loaded +' || { echo "archive plugin not loaded"; exit 1; }
-          for id in preview-archive preview-csv preview-media preview-office preview-hex; do
-            echo "$out" | grep -E "^$id +[^ ].* +previewer +loaded +" || { echo "$id plugin not loaded"; exit 1; }
-          done
+        run: .github/scripts/check-plugins.sh target/debug/bundle
   tier1:
     name: tier 1
     # The one check to require: green when every job above succeeded or was

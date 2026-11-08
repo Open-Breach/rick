@@ -199,8 +199,8 @@ jobs:
           if-no-files-found: error
 
   # Each archive, as a user gets it: unpacked in an empty directory, the
-  # binary reports its version, lists the Git plugin as loaded, and pdfium
-  # loads from beside it.
+  # binary reports its version, lists every plugin of the platform as
+  # loaded, and pdfium loads from beside it.
   smoke:
     needs: build
     strategy:
@@ -214,6 +214,8 @@ jobs:
     runs-on: ${{ matrix.os }}
     timeout-minutes: 15
     steps:
+      # For .github/scripts/check-plugins.sh, the per-platform plugin check.
+      - uses: actions/checkout@v4
       # The Linux archives use the system GStreamer: the media plugin links
       # it and loads only where it is installed, as a user's desktop has it.
       - name: gstreamer (linux)
@@ -263,23 +265,14 @@ jobs:
           out="$("./rick$exe" --version)"
           echo "rick --version: $out"
           echo "$out" | grep -Eq "^${version%%-*}(-[0-9A-Za-z.]+)? \([0-9a-f]{7,}\)$" || { echo "unexpected version line"; exit 1; }
-          # The plugins, bundled and loaded from plugins/<id>/: Git, the
-          # archive and trash providers of issue 20, the four previewers of
-          # issue 18 and the hex fallback of issue 17. The media previewer
-          # loading on macOS and Windows
-          # shows the bundled GStreamer runtime resolves; on Linux the
-          # runner's system GStreamer does.
-          for id in git vfs-trash vfs-archive preview-archive preview-csv preview-media preview-office preview-hex; do
-            test -f "plugins/$id/plugin.toml" || { echo "no plugins/$id/plugin.toml"; exit 1; }
-          done
-          plugins="$("./rick$exe" --list-plugins)"
-          echo "$plugins"
-          echo "$plugins" | grep -Eq '^git +Git +[^ ]+ +decorator, action +loaded +' || { echo "git plugin not loaded"; exit 1; }
-          echo "$plugins" | grep -Eq '^vfs-trash +Trash +[^ ]+ +provider, decorator, action +loaded +' || { echo "trash plugin not loaded"; exit 1; }
-          echo "$plugins" | grep -Eq '^vfs-archive +Archives +[^ ]+ +provider +loaded +' || { echo "archive plugin not loaded"; exit 1; }
-          for id in preview-archive preview-csv preview-media preview-office preview-hex; do
-            echo "$plugins" | grep -Eq "^$id +[^ ].* +previewer +loaded +" || { echo "$id plugin not loaded"; exit 1; }
-          done
+          # The plugins, bundled and loaded from plugins/<id>/: Git and SVN,
+          # the archive and trash providers of issue 20, the four previewers
+          # of issue 18, the hex fallback of issue 17, the subdirectory
+          # search and this platform's index connector of issue 22. The
+          # media previewer loading on macOS and Windows shows the bundled
+          # GStreamer runtime resolves; on Linux the runner's system
+          # GStreamer does.
+          "$GITHUB_WORKSPACE/.github/scripts/check-plugins.sh" .
           # pdfium from beside the binary: the previewer's test binary, copied
           # next to rick, with RICK_PDFIUM_DIR unset and no system pdfium. The
           # example has no run path of its own, so the library path names the
@@ -309,7 +302,7 @@ jobs:
           python3 .github/scripts/changelog-section.py "$TAG" CHANGELOG.md > body.md
           {
             echo
-            echo "Archives: the \`rick\` binary with the shared kernel libraries, libstd and the pdfium library beside it, \`plugins/\` with the Git, Office, media, archive, CSV and hex-preview plugins, the GStreamer runtime on macOS and Windows (Linux uses the system's: install the gstreamer1.0 plug-in packages for playback), LICENSE, README, CHANGELOG and THIRD-PARTY-LICENSES; \`SHA256SUMS.txt\` has the checksums. Not signed or notarised (see README, Try it)."
+            echo "Archives: the \`rick\` binary with the shared kernel libraries, libstd and the pdfium library beside it, \`plugins/\` with the Git, SVN, archive, trash, Office, media, archive-preview, CSV, hex-preview and subdirectory-search plugins and the platform's search-index connector (Windows Search, Spotlight, or Tracker and Baloo), the GStreamer runtime on macOS and Windows (Linux uses the system's: install the gstreamer1.0 plug-in packages for playback), LICENSE, README, CHANGELOG and THIRD-PARTY-LICENSES; \`SHA256SUMS.txt\` has the checksums. Not signed or notarised (see README, Try it)."
           } >> body.md
           cat body.md
       - uses: softprops/action-gh-release@v2

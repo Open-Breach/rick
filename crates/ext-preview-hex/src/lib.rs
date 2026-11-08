@@ -20,9 +20,10 @@
 use std::fmt::Write as _;
 use std::sync::Arc;
 
+use ext::Text;
 use ext::{
     API_VERSION, Capabilities, ControlId, ControlValue, Extension, Frame, Icon, InfoSection,
-    Manifest, Platforms, Points, PreviewControl, PreviewDoc, Previewer, Provider, Registry,
+    Manifest, Platforms, Points, PreviewControl, PreviewDoc, Previewer, Provider, Reads, Registry,
     RenderRequest, TextBlock, TextLayer, Transport, Version, async_trait,
 };
 use types::{CancelToken, Entry, Error, ExtId, Location};
@@ -77,6 +78,7 @@ impl Extension for HexPreview {
     }
 
     fn register(&self, reg: &mut Registry) -> Result<(), Error> {
+        reg.translations(&[("en", include_str!("../locales/en.ftl"))]);
         reg.previewer(Arc::new(HexPreviewer));
         Ok(())
     }
@@ -92,6 +94,12 @@ pub struct HexPreviewer;
 impl Previewer for HexPreviewer {
     fn id(&self) -> ExtId {
         ID
+    }
+
+    /// The start of a file is enough: a remote file is served as a prefix
+    /// with *Load more*.
+    fn reads(&self) -> Reads {
+        Reads::Prefix
     }
 
     fn score(&self, _entry: &Entry, _sniff: &[u8]) -> u8 {
@@ -227,7 +235,7 @@ impl PreviewDoc for HexDoc {
         rows.push(("Rows".to_owned(), self.shown.div_ceil(ROW).to_string()));
         vec![InfoSection {
             id: "file",
-            title: "File info",
+            title: Text("preview-hex-file-info"),
             icon: Icon::Info,
             rows,
         }]

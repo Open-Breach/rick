@@ -18,13 +18,18 @@
 //! An archive inside an archive is a file, not a location (QUESTIONS.md
 //! 89). The crate builds as a `cdylib` the plugin host loads from
 //! `plugins/vfs-archive/` and as an `rlib` for the binary's opt-in
-//! `vfs-archive` feature and the tests.
+//! `vfs-archive` feature and the tests. [`create`] writes a new archive
+//! from files on disk and [`extract`] unpacks one in a single pass; the
+//! compress plugin, `ext-action-compress`, links this crate for them so the
+//! zip, tar and 7z code exists once.
 
 // `deny`, not `forbid`: the entry point's `#[no_mangle]` carries its own
 // allowance (QUESTIONS.md 82).
 #![deny(unsafe_code)]
 
 pub mod bridge;
+pub mod create;
+pub mod extract;
 pub mod format;
 mod image;
 pub mod index;
@@ -199,6 +204,17 @@ struct Inner {
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     // Plain data; a panic elsewhere leaves it usable.
     mutex.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
+/// The entries of the archive at `path`, read now by its format: what a
+/// listing answers from, for a caller that wants the sizes before it
+/// extracts (`ext-action-compress`). Blocking.
+///
+/// # Errors
+///
+/// `Unsupported` when the file is no archive; the I/O or library error.
+pub fn index(path: &Path) -> Result<Index, Error> {
+    read_index(path)
 }
 
 /// The entries of the archive at `path`, read by its format.

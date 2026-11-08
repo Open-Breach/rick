@@ -280,7 +280,7 @@ fn the_score_picks_the_right_previewer_by_sniff_and_every_fixture_opens() {
             }
             (kind, other) => panic!("{name}: {kind} produced {other:?}"),
         }
-        assert_eq!(doc.sections()[0].title, "File info", "{name}");
+        assert_eq!(doc.sections()[0].title.get(), "File info", "{name}");
         assert!(!doc.status().is_empty(), "{name}: status facts");
     }
     // Nothing claims noise.
@@ -314,6 +314,9 @@ impl UiHost for Quiet {
         None
     }
     fn show(&self, _title: &str, _text: &str) {}
+    fn form(&self, form: ext::Form) -> Option<ext::Values> {
+        Some(form.defaults())
+    }
 }
 
 /// The app follows the focused pane's single selected file.

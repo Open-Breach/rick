@@ -11,10 +11,10 @@
 
 use std::sync::{Mutex, MutexGuard, PoisonError};
 
-use ext::{Level, UiHost};
+use ext::{Form, Level, UiHost, Values};
 
 /// A question an action asked and nobody had answered yet.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub enum Ask {
     /// A line of text.
     Prompt {
@@ -30,12 +30,26 @@ pub enum Ask {
         /// The question.
         text: String,
     },
+    /// A form: fields with a live preview.
+    Form(Form),
+}
+
+impl Ask {
+    /// The dialogue's title.
+    #[must_use]
+    pub fn title(&self) -> &str {
+        match self {
+            Self::Prompt { title, .. } | Self::Confirm { title, .. } => title,
+            Self::Form(form) => &form.title,
+        }
+    }
 }
 
 #[derive(Default)]
 struct Inner {
     prompt_answer: Option<String>,
     confirm_answer: Option<bool>,
+    form_answer: Option<Values>,
     asked: Option<Ask>,
     notices: Vec<(Level, String)>,
     shown: Vec<(String, String)>,
@@ -69,11 +83,17 @@ impl EguiHost {
         self.lock().confirm_answer = Some(yes);
     }
 
+    /// The values the next `form` call gets.
+    pub fn answer_form(&self, values: Values) {
+        self.lock().form_answer = Some(values);
+    }
+
     /// Drops any queued answer.
     pub fn clear_answers(&self) {
         let mut inner = self.lock();
         inner.prompt_answer = None;
         inner.confirm_answer = None;
+        inner.form_answer = None;
     }
 
     /// The question an action asked since the last call, if any.
@@ -135,6 +155,15 @@ impl UiHost for EguiHost {
     fn show(&self, title: &str, text: &str) {
         self.lock().shown.push((title.to_owned(), text.to_owned()));
     }
+
+    fn form(&self, form: Form) -> Option<Values> {
+        let mut inner = self.lock();
+        if let Some(values) = inner.form_answer.take() {
+            return Some(values);
+        }
+        inner.asked = Some(Ask::Form(form));
+        None
+    }
 }
 
 #[cfg(test)]
@@ -145,14 +174,11 @@ mod tests {
     fn unanswered_questions_are_recorded_and_answers_are_consumed_once() {
         let host = EguiHost::new();
         assert_eq!(host.prompt("Rename", "a.txt"), None);
-        assert_eq!(
+        assert!(matches!(
             host.take_asked(),
-            Some(Ask::Prompt {
-                title: "Rename".into(),
-                default: "a.txt".into()
-            })
-        );
-        assert_eq!(host.take_asked(), None);
+            Some(Ask::Prompt { title, default }) if title == "Rename" && default == "a.txt"
+        ));
+        assert!(host.take_asked().is_none());
 
         host.answer_prompt("b.txt".into());
         assert_eq!(host.prompt("Rename", "a.txt").as_deref(), Some("b.txt"));
@@ -170,5 +196,14 @@ mod tests {
         host.notify(Level::Info, "hi");
         assert_eq!(host.take_notices(), vec![(Level::Info, "hi".to_owned())]);
         assert_eq!(host.take_notices(), Vec::new());
+
+        let form = Form::new("Compress", "OK").field(ext::Field::text("name", "Name", "a.zip", ""));
+        assert!(host.form(form.clone()).is_none());
+        assert!(matches!(host.take_asked(), Some(Ask::Form(f)) if f.title == "Compress"));
+        host.answer_form(form.defaults());
+        assert_eq!(
+            host.form(form).map(|v| v.text("name").to_owned()),
+            Some("a.zip".to_owned())
+        );
     }
 }
