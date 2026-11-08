@@ -9,6 +9,7 @@
 //! ([`Command::Receive`]), with the conflict dialogue and the operations
 //! area as for any copy.
 
+use ext::t;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -75,7 +76,7 @@ pub fn show(ui: &mut egui::Ui, compare: &Arc<Compare>, requests: &mut Vec<Reques
             ui.vertical_centered(|ui| {
                 ui.add_space(24.0);
                 ui.label(
-                    RichText::new(format!("Could not compare: {error}"))
+                    RichText::new(t!("compare-failed", error = error.as_str()))
                         .color(ui.visuals().error_fg_color),
                 );
             });
@@ -226,10 +227,10 @@ fn show_folders(ui: &mut egui::Ui, diff: &FolderDiff, requests: &mut Vec<Request
                 .num_columns(6)
                 .striped(true)
                 .show(ui, |ui| {
-                    ui.strong("Name");
-                    ui.strong("Left");
+                    ui.strong(t!("compare-name"));
+                    ui.strong(t!("compare-left"));
                     ui.label("");
-                    ui.strong("Right");
+                    ui.strong(t!("compare-right"));
                     ui.label("");
                     ui.strong("");
                     ui.end_row();
@@ -270,7 +271,7 @@ fn folder_row(
     if let Some(left) = &row.left {
         if ui
             .small_button(icons::FORWARD)
-            .on_hover_text("Copy to the right folder")
+            .on_hover_text(t!("compare-copy-to-the-right-folder"))
             .clicked()
         {
             requests.push(Request::Command(Command::Receive {
@@ -286,7 +287,7 @@ fn folder_row(
     if let Some(right) = &row.right {
         if ui
             .small_button(icons::BACK)
-            .on_hover_text("Copy to the left folder")
+            .on_hover_text(t!("compare-copy-to-the-left-folder"))
             .clicked()
         {
             requests.push(Request::Command(Command::Receive {

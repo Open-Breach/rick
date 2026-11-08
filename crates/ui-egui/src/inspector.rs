@@ -18,6 +18,7 @@
 
 use app::{App, Command};
 use egui::{Align, Rect, pos2, vec2};
+use ext::t;
 use ext::{ControlValue, PreviewControl};
 use model::{PaneId, SettingsChange, TextPreview};
 use types::{Entry, EntryId};
@@ -217,7 +218,7 @@ pub fn show(
             None => {}
         },
         None => {
-            inner.weak("Select a file to preview it");
+            inner.weak(t!("inspector-select-a-file-to-preview"));
         }
     }
     separator(ui, width);
@@ -544,7 +545,7 @@ pub(crate) fn section_rows(
             ui.add_space(4.0);
             ui.add_sized(
                 vec2(width - 8.0, ui.spacing().interact_size.y),
-                egui::TextEdit::singleline(filter).hint_text("Search"),
+                egui::TextEdit::singleline(filter).hint_text(t!("inspector-search")),
             );
             ui.add_space(2.0);
             filter.trim().to_lowercase()
@@ -571,7 +572,7 @@ pub(crate) fn section_rows(
                 section_row(ui, width, key_w, key, value);
             }
             if section.rows.is_empty() {
-                ui.weak("Nothing to show");
+                ui.weak(t!("inspector-nothing-to-show"));
             }
         });
 }
@@ -601,7 +602,7 @@ fn section_row(ui: &mut egui::Ui, width: f32, key_w: f32, key: &str, value: &str
     );
     if row
         .add(egui::Button::new(egui::RichText::new(icons::COPY).small()).frame(false))
-        .on_hover_text("Copy")
+        .on_hover_text(t!("inspector-copy"))
         .clicked()
     {
         row.ctx().copy_text(value.to_owned());

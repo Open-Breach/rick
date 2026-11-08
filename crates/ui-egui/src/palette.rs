@@ -19,7 +19,7 @@ pub struct Item {
     /// The binding, if any.
     pub shortcut: Option<String>,
     /// Greyed out with this reason when it cannot run now.
-    pub disabled: Option<&'static str>,
+    pub disabled: Option<String>,
     /// Lower is more recently used; `None` never used.
     pub recency: Option<usize>,
 }
@@ -37,7 +37,7 @@ pub fn items(app: &App, keys: &KeyMap, pane: PaneId, recents: &[Intent]) -> Vec<
             let intent = Intent::Action(action.id());
             let disabled = match ctx.as_ref().map(|c| action.availability(c)) {
                 Some(Availability::Enabled) => None,
-                Some(Availability::Disabled(why)) => Some(why),
+                Some(Availability::Disabled(why)) => Some(why.to_owned()),
                 Some(Availability::Hidden) | None => return None,
             };
             Some(Item {

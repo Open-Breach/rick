@@ -8,6 +8,7 @@
 //! (Windows, macOS), *System properties…* opens it.
 
 use app::{Command, PermissionRequest, PropertiesInfo, Recursion};
+use ext::t;
 use platform::{Acl, DarwinAce, NtAce, PermissionChange, PosixAce, PosixTag, Principal};
 
 use crate::shell::Request;
@@ -116,7 +117,7 @@ impl PropertiesDialog {
         let mut apply = false;
         let mut revert = false;
         let mut system = false;
-        egui::Window::new(format!("Properties of {}", info.entry.name))
+        egui::Window::new(t!("properties-title", name = info.entry.name.as_str()))
             .id(egui::Id::new("properties"))
             .open(&mut open)
             .default_width(460.0)
@@ -134,32 +135,32 @@ impl PropertiesDialog {
                     });
                 if let Some(current) = &info.permissions {
                     ui.separator();
-                    ui.heading("Permissions");
+                    ui.heading(t!("permissions"));
                     permissions_section(ui, info, current, edit);
                     ui.add_space(8.0);
                     let dirty = pending(info, edit).is_some();
                     ui.horizontal(|ui| {
                         if ui
-                            .add_enabled(dirty && !*applying, egui::Button::new("Apply"))
+                            .add_enabled(dirty && !*applying, egui::Button::new(t!("apply")))
                             .clicked()
                         {
                             apply = true;
                         }
                         if ui
-                            .add_enabled(dirty && !*applying, egui::Button::new("Revert"))
+                            .add_enabled(dirty && !*applying, egui::Button::new(t!("revert")))
                             .clicked()
                         {
                             revert = true;
                         }
                         if *applying {
                             ui.spinner();
-                            ui.weak("Applying…");
+                            ui.weak(t!("properties-applying"));
                         }
                     });
                 }
                 if info.native {
                     ui.add_space(4.0);
-                    if ui.button("System properties…").clicked() {
+                    if ui.button(t!("properties-system-properties")).clicked() {
                         system = true;
                     }
                 }
@@ -248,7 +249,7 @@ fn permissions_section(
         .num_columns(2)
         .spacing([16.0, 6.0])
         .show(ui, |ui| {
-            ui.weak("Owner");
+            ui.weak(t!("owner"));
             principal_picker(
                 ui,
                 "owner",
@@ -257,7 +258,7 @@ fn permissions_section(
                 &mut edit.owner_text,
             );
             ui.end_row();
-            ui.weak("Group");
+            ui.weak(t!("group"));
             principal_picker(
                 ui,
                 "group",
@@ -282,11 +283,14 @@ fn permissions_section(
     }
     if info.entry.kind == types::EntryKind::Dir {
         ui.add_space(4.0);
-        ui.checkbox(&mut edit.recursive, "Apply to enclosed items");
+        ui.checkbox(
+            &mut edit.recursive,
+            t!("properties-apply-to-enclosed-items"),
+        );
         if edit.recursive {
             ui.indent("recursion", |ui| {
-                ui.checkbox(&mut edit.files, "Files");
-                ui.checkbox(&mut edit.folders, "Folders");
+                ui.checkbox(&mut edit.files, t!("files"));
+                ui.checkbox(&mut edit.folders, t!("folders"));
             });
         }
     }
@@ -328,7 +332,7 @@ fn principal_picker(
                 }
             });
         let field = egui::TextEdit::singleline(typed)
-            .hint_text("Other…")
+            .hint_text(t!("properties-other"))
             .desired_width(120.0)
             .show(ui);
         if field.response.lost_focus()
@@ -359,9 +363,9 @@ fn mode_grid(ui: &mut egui::Ui, edit: &mut Edit) {
         .spacing([16.0, 2.0])
         .show(ui, |ui| {
             ui.weak("");
-            ui.weak("Read");
-            ui.weak("Write");
-            ui.weak("Execute");
+            ui.weak(t!("read"));
+            ui.weak(t!("write"));
+            ui.weak(t!("execute"));
             ui.end_row();
             for (label, shift) in [("User", 6u32), ("Group", 3), ("Other", 0)] {
                 ui.label(label);
@@ -396,7 +400,7 @@ fn mode_grid(ui: &mut egui::Ui, edit: &mut Edit) {
         }
     });
     ui.horizontal(|ui| {
-        ui.weak("Octal");
+        ui.weak(t!("octal"));
         if mode != edit.mode {
             edit.octal = format!("{mode:04o}");
         }
@@ -432,7 +436,7 @@ fn acl_section(ui: &mut egui::Ui, acl: &mut Acl, new: &mut NewEntry<'_>) {
                         });
                         ui.label(&entry.who);
                         ui.monospace(format!("{:#x}", entry.mask));
-                        if ui.small_button("Remove").clicked() {
+                        if ui.small_button(t!("remove")).clicked() {
                             // Marked for removal below; the index is kept.
                             ui.data_mut(|d| d.insert_temp(egui::Id::new("nfs4-remove"), index));
                         }
@@ -445,7 +449,7 @@ fn acl_section(ui: &mut egui::Ui, acl: &mut Acl, new: &mut NewEntry<'_>) {
             {
                 entries.remove(index);
             }
-            ui.weak("NFSv4 entries are removed here and added with the server's tools.");
+            ui.weak(t!("properties-nfsv4-entries-are-removed-here"));
         }
         Acl::Darwin(entries) => darwin_section(ui, entries, new),
         Acl::Nt { entries, protected } => nt_section(ui, entries, protected, new),
@@ -494,7 +498,7 @@ fn posix_section(ui: &mut egui::Ui, access: &mut Vec<PosixAce>, new: &mut NewEnt
                     }
                 });
                 let named = matches!(entry.tag, PosixTag::User | PosixTag::Group);
-                if named && ui.small_button("Remove").clicked() {
+                if named && ui.small_button(t!("remove")).clicked() {
                     remove = Some(index);
                 }
                 ui.end_row();
@@ -512,12 +516,15 @@ fn posix_section(ui: &mut egui::Ui, access: &mut Vec<PosixAce>, new: &mut NewEnt
     }
     ui.horizontal(|ui| {
         egui::TextEdit::singleline(new.name)
-            .hint_text("User or group name")
+            .hint_text(t!("properties-user-or-group-name"))
             .desired_width(160.0)
             .show(ui);
-        ui.checkbox(new.group, "Group");
+        ui.checkbox(new.group, t!("group"));
         if ui
-            .add_enabled(!new.name.trim().is_empty(), egui::Button::new("Add entry"))
+            .add_enabled(
+                !new.name.trim().is_empty(),
+                egui::Button::new(t!("add-entry")),
+            )
             .clicked()
         {
             let name = new.name.trim().to_owned();
@@ -546,9 +553,13 @@ fn darwin_section(ui: &mut egui::Ui, entries: &mut Vec<DarwinAce>, new: &mut New
     let mut remove: Option<usize> = None;
     for (index, entry) in entries.iter_mut().enumerate() {
         ui.horizontal_wrapped(|ui| {
-            ui.label(if entry.allow { "Allow" } else { "Deny" });
+            ui.label(if entry.allow { t!("allow") } else { t!("deny") });
             ui.strong(entry.principal.display());
-            ui.weak(if entry.group { "(group)" } else { "(user)" });
+            ui.weak(if entry.group {
+                t!("properties-group")
+            } else {
+                t!("properties-user")
+            });
             for perm in DARWIN_PERMS {
                 let mut set = entry.perms.iter().any(|p| p == perm);
                 if ui.checkbox(&mut set, *perm).changed() {
@@ -559,7 +570,7 @@ fn darwin_section(ui: &mut egui::Ui, entries: &mut Vec<DarwinAce>, new: &mut New
                     }
                 }
             }
-            if ui.small_button("Remove").clicked() {
+            if ui.small_button(t!("remove")).clicked() {
                 remove = Some(index);
             }
         });
@@ -569,13 +580,16 @@ fn darwin_section(ui: &mut egui::Ui, entries: &mut Vec<DarwinAce>, new: &mut New
     }
     ui.horizontal(|ui| {
         egui::TextEdit::singleline(new.name)
-            .hint_text("User or group name")
+            .hint_text(t!("properties-user-or-group-name"))
             .desired_width(160.0)
             .show(ui);
-        ui.checkbox(new.group, "Group");
-        ui.checkbox(new.allow, "Allow");
+        ui.checkbox(new.group, t!("group"));
+        ui.checkbox(new.allow, t!("allow"));
         if ui
-            .add_enabled(!new.name.trim().is_empty(), egui::Button::new("Add entry"))
+            .add_enabled(
+                !new.name.trim().is_empty(),
+                egui::Button::new(t!("add-entry")),
+            )
             .clicked()
         {
             let name = new.name.trim().to_owned();
@@ -601,10 +615,10 @@ fn nt_section(
         let inherited = entry.inherited();
         ui.horizontal_wrapped(|ui| {
             ui.add_enabled_ui(!inherited, |ui| {
-                ui.label(if entry.allow { "Allow" } else { "Deny" });
+                ui.label(if entry.allow { t!("allow") } else { t!("deny") });
                 ui.strong(entry.trustee.display());
                 if inherited {
-                    ui.weak("(inherited)");
+                    ui.weak(t!("properties-inherited"));
                 }
                 for (label, mask) in NT_RIGHTS {
                     let mut set = entry.mask & mask == *mask;
@@ -617,7 +631,7 @@ fn nt_section(
                     }
                 }
                 ui.monospace(format!("{:#x}", entry.mask));
-                if ui.small_button("Remove").clicked() {
+                if ui.small_button(t!("remove")).clicked() {
                     remove = Some(index);
                 }
             });
@@ -626,15 +640,21 @@ fn nt_section(
     if let Some(index) = remove {
         entries.remove(index);
     }
-    ui.checkbox(protected, "Block inheritance from the parent folder");
+    ui.checkbox(
+        protected,
+        t!("properties-block-inheritance-from-the-parent"),
+    );
     ui.horizontal(|ui| {
         egui::TextEdit::singleline(new.name)
-            .hint_text("Trustee name")
+            .hint_text(t!("properties-trustee-name"))
             .desired_width(160.0)
             .show(ui);
-        ui.checkbox(new.allow, "Allow");
+        ui.checkbox(new.allow, t!("allow"));
         if ui
-            .add_enabled(!new.name.trim().is_empty(), egui::Button::new("Add entry"))
+            .add_enabled(
+                !new.name.trim().is_empty(),
+                egui::Button::new(t!("add-entry")),
+            )
             .clicked()
         {
             let name = new.name.trim().to_owned();

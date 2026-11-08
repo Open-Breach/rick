@@ -7,6 +7,7 @@
 //! the keyboard back to the list.
 
 use app::App;
+use ext::t;
 use model::PaneId;
 use types::{Entry, EntryId};
 
@@ -239,7 +240,7 @@ impl SearchBox {
                                 if selected {
                                     response.scroll_to_me(None);
                                 }
-                                if let Some(why) = row.disabled {
+                                if let Some(why) = &row.disabled {
                                     response.clone().on_hover_text(why);
                                 }
                                 if response.clicked() {
@@ -265,8 +266,8 @@ impl SearchBox {
                 .map(|item: Item| Row {
                     label: item.label,
                     hint: item.shortcut,
-                    disabled: item.disabled,
                     pick: item.disabled.is_none().then_some(Pick::Intent(item.intent)),
+                    disabled: item.disabled,
                 })
                 .collect();
         }
@@ -313,7 +314,7 @@ impl SearchBox {
                 rows.push(Row {
                     label: error.clone(),
                     hint: None,
-                    disabled: Some("this index did not answer"),
+                    disabled: Some(t!("search-index-did-not-answer")),
                     pick: None,
                 });
             }
@@ -321,7 +322,7 @@ impl SearchBox {
                 rows.push(Row {
                     label: "Searching the index…".to_owned(),
                     hint: None,
-                    disabled: Some("hits appear as the index answers"),
+                    disabled: Some(t!("search-hits-appear-as-the-index-answers")),
                     pick: None,
                 });
             }
@@ -331,7 +332,7 @@ impl SearchBox {
             rows.push(Row {
                 label: "More matches: keep typing".to_owned(),
                 hint: None,
-                disabled: Some("narrow the search"),
+                disabled: Some(t!("search-narrow-the-search")),
                 pick: None,
             });
         }
@@ -348,6 +349,6 @@ fn needle_text(text: &str) -> &str {
 struct Row {
     label: String,
     hint: Option<String>,
-    disabled: Option<&'static str>,
+    disabled: Option<String>,
     pick: Option<Pick>,
 }

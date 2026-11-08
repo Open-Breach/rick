@@ -50,6 +50,9 @@ jobs:
       - run: cargo fmt --check
       # No Unicode symbol character is used as an icon (SPEC.md "Icons").
       - run: "! grep -rnP '(*UTF8)[\\x{2190}-\\x{2BFF}\\x{1F300}-\\x{1FAFF}]' crates/ui-egui/src"
+      # Every text the UI shows goes through the t! lookup (issue 24): a
+      # string literal handed to a widget outside t! fails here.
+      - run: .github/scripts/check-strings.py
   deny:
     needs: changes
     if: needs.changes.outputs.code == 'true'

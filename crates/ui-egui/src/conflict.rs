@@ -4,6 +4,7 @@
 //! through `Command::ResolveConflict`.
 
 use app::{App, Command};
+use ext::t;
 use types::{ConflictAnswer, ConflictId, Resolution};
 
 use crate::shell::Request;
@@ -40,7 +41,7 @@ pub fn show(ctx: &egui::Context, app: &App, state: &mut DialogState, requests: &
         .parent()
         .map_or_else(String::new, |p| p.to_string_lossy().into_owned());
     let mut answer: Option<Resolution> = None;
-    egui::Modal::new(egui::Id::new("conflict")).show(ctx, |ui| {
+    egui::Modal::new(egui::Id::new(t!("conflict-conflict"))).show(ctx, |ui| {
         ui.set_width(440.0);
         ui.heading(format!("{name} already exists"));
         ui.label(format!(
@@ -59,7 +60,7 @@ pub fn show(ctx: &egui::Context, app: &App, state: &mut DialogState, requests: &
         ui.weak(what);
         ui.add_space(8.0);
         ui.horizontal(|ui| {
-            ui.label("Rename to");
+            ui.label(t!("conflict-rename-to"));
             let output = egui::TextEdit::singleline(&mut state.name)
                 .desired_width(220.0)
                 .show(ui);
@@ -67,7 +68,10 @@ pub fn show(ctx: &egui::Context, app: &App, state: &mut DialogState, requests: &
                 answer = Some(Resolution::Rename(state.name.trim().to_owned()));
             }
             let free = !state.name.trim().is_empty() && state.name.trim() != name;
-            if ui.add_enabled(free, egui::Button::new("Rename")).clicked() {
+            if ui
+                .add_enabled(free, egui::Button::new(t!("conflict-rename")))
+                .clicked()
+            {
                 answer = Some(Resolution::Rename(state.name.trim().to_owned()));
             }
         });
@@ -79,7 +83,7 @@ pub fn show(ctx: &egui::Context, app: &App, state: &mut DialogState, requests: &
         }
         ui.add_space(8.0);
         ui.horizontal(|ui| {
-            if ui.button("Skip").clicked() {
+            if ui.button(t!("skip")).clicked() {
                 answer = Some(Resolution::Skip);
             }
             if ui
@@ -93,7 +97,7 @@ pub fn show(ctx: &egui::Context, app: &App, state: &mut DialogState, requests: &
                 answer = Some(Resolution::Overwrite);
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if ui.button("Cancel").clicked() {
+                if ui.button(t!("cancel")).clicked() {
                     answer = Some(Resolution::Cancel);
                 }
             });

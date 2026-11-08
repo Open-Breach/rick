@@ -13,6 +13,7 @@
 //! from outside the process arrive through egui's hovered and dropped files
 //! and go through the same resolution.
 
+use ext::t;
 use std::collections::{BTreeSet, HashMap};
 use std::path::PathBuf;
 
@@ -648,7 +649,7 @@ impl Dnd {
                         if ui.button(format!("{} Copy", icons::PLUS)).clicked() {
                             choice = Some(Some(TransferMode::Copy));
                         }
-                        if ui.button("Cancel").clicked() {
+                        if ui.button(t!("cancel")).clicked() {
                             choice = Some(None);
                         }
                     });

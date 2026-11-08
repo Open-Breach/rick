@@ -28,6 +28,7 @@
 //! 1:1, and a control change keeps the last frame on screen, marked stale,
 //! until the next render lands, so an orbit never drops to a spinner.
 
+use ext::t;
 use std::collections::HashMap;
 use std::ops::Range;
 use std::time::Duration;
@@ -938,7 +939,7 @@ impl Previews {
         } else if let Some(error) = &slot.error {
             ui.add(
                 egui::Label::new(
-                    egui::RichText::new(format!("No preview: {error}"))
+                    egui::RichText::new(t!("preview-failed", error = error.as_str()))
                         .color(ui.visuals().warn_fg_color),
                 )
                 .wrap(),
@@ -953,7 +954,7 @@ impl Previews {
                 });
             });
         } else {
-            ui.weak("Select a file to preview it");
+            ui.weak(t!("inspector-select-a-file-to-preview"));
         }
         act
     }
@@ -989,7 +990,7 @@ pub fn prefix_bar(ui: &mut egui::Ui, served: u64, total: Option<u64>) -> Option<
         None => format!("Showing the first {}", crate::format::size(Some(served))),
     });
     let act = foot
-        .button("Load more")
+        .button(t!("preview-load-more"))
         .clicked()
         .then_some(PreviewAct::LoadMore);
     ui.set_max_height((whole.height() - bar_h).max(0.0));
@@ -1009,9 +1010,9 @@ pub fn capped_message(ui: &mut egui::Ui, size: u64, cap: u64) -> Option<PreviewA
             ))
             .strong(),
         );
-        ui.weak("The whole file would be pulled over the connection to show it.");
+        ui.weak(t!("preview-the-whole-file-would-be"));
         ui.add_space(6.0);
-        if ui.button("Preview anyway").clicked() {
+        if ui.button(t!("preview-preview-anyway")).clicked() {
             act = Some(PreviewAct::PreviewAnyway);
         }
     });

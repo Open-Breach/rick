@@ -9,6 +9,7 @@
 //! reports its geometry, its side panel, its tab order and split fractions
 //! and its tabs' scroll offsets to the app, which keeps them in the session.
 
+use ext::t;
 use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant, SystemTime};
@@ -459,7 +460,7 @@ fn tab_strip_style(egui_style: &egui::Style) -> egui_dock::Style {
 /// An icon-only toggle; the fill weight marks it active.
 fn toggle_icon(glyph: &str, on: bool) -> egui::Button<'static> {
     let text = if on {
-        egui::RichText::new(glyph).family(egui::FontFamily::Name("phosphor-fill".into()))
+        egui::RichText::new(glyph).family(egui::FontFamily::Name(t!("shell-phosphor-fill").into()))
     } else {
         egui::RichText::new(glyph)
     };
@@ -684,6 +685,11 @@ impl RickUi {
     #[must_use]
     pub fn settings_open(&self) -> bool {
         self.settings_open
+    }
+
+    /// Opens the Settings window, as the menu does; for the tests.
+    pub fn open_settings(&mut self) {
+        self.settings_open = true;
     }
 
     /// Whether the Keyboard shortcuts screen is open.
@@ -2400,7 +2406,7 @@ impl RickUi {
         if !chrome.native_controls {
             if right
                 .add(egui::Button::new(icons::CLOSE).frame(false))
-                .on_hover_text("Close")
+                .on_hover_text(t!("close"))
                 .clicked()
             {
                 self.requests.push(Request::CloseWindow(window));
@@ -2413,14 +2419,18 @@ impl RickUi {
             };
             if right
                 .add(egui::Button::new(glyph).frame(false))
-                .on_hover_text(if maximized { "Restore" } else { "Maximise" })
+                .on_hover_text(if maximized {
+                    t!("shell-restore")
+                } else {
+                    t!("shell-maximise")
+                })
                 .clicked()
             {
                 ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(!maximized));
             }
             if right
                 .add(egui::Button::new(icons::MINIMISE).frame(false))
-                .on_hover_text("Minimise")
+                .on_hover_text(t!("shell-minimise"))
                 .clicked()
             {
                 ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true));
@@ -2430,7 +2440,7 @@ impl RickUi {
         let preview_open = self.app.model().preview_tab(window).is_some();
         if right
             .add(toggle_icon(icons::PREVIEW, preview_open))
-            .on_hover_text("Toggle preview pane")
+            .on_hover_text(t!("shell-toggle-preview-pane"))
             .clicked()
         {
             self.requests.push(Request::Intent {
@@ -2445,7 +2455,7 @@ impl RickUi {
             .is_none_or(|w| w.side_panel.visible);
         if right
             .add(toggle_icon(icons::SIDE_PANEL, side_visible))
-            .on_hover_text("Toggle side panel")
+            .on_hover_text(t!("shell-toggle-side-panel"))
             .clicked()
         {
             self.requests.push(Request::Intent {
@@ -2570,7 +2580,7 @@ impl RickUi {
         }
         let mut outcome: Option<bool> = None;
         let wide = matches!(dialog.ask, Ask::Form(_));
-        let modal = egui::Modal::new(egui::Id::new("ask")).show(ctx, |ui| {
+        let modal = egui::Modal::new(egui::Id::new(t!("shell-ask"))).show(ctx, |ui| {
             ui.set_width(if wide { 560.0 } else { 360.0 });
             match &dialog.ask {
                 Ask::Form(form) => {
@@ -2632,7 +2642,7 @@ impl RickUi {
                                             }
                                             if ui
                                                 .button(icons::BROWSE)
-                                                .on_hover_text("Browse…")
+                                                .on_hover_text(t!("shell-browse"))
                                                 .clicked()
                                             {
                                                 browse = Some(field.key);
@@ -2770,7 +2780,7 @@ impl RickUi {
                 {
                     outcome = Some(true);
                 }
-                if ui.button("Cancel").clicked() {
+                if ui.button(t!("cancel")).clicked() {
                     outcome = Some(false);
                 }
             });
@@ -2812,11 +2822,11 @@ impl RickUi {
             NameFor::SaveLayout => "Save layout as".to_owned(),
             NameFor::RenameLayout(name) => format!("Rename layout {name}"),
         };
-        let modal = egui::Modal::new(egui::Id::new("layout-name")).show(ctx, |ui| {
+        let modal = egui::Modal::new(egui::Id::new(t!("shell-layout-name"))).show(ctx, |ui| {
             ui.set_width(360.0);
             ui.heading(title);
             let output = egui::TextEdit::singleline(&mut prompt.input)
-                .hint_text("Layout name")
+                .hint_text(t!("shell-layout-name-2"))
                 .desired_width(f32::INFINITY)
                 .show(ui);
             if prompt.focus {
@@ -2837,10 +2847,10 @@ impl RickUi {
             }
             ui.add_space(8.0);
             ui.horizontal(|ui| {
-                if ui.button("OK").clicked() {
+                if ui.button(t!("ok")).clicked() {
                     outcome = Some(true);
                 }
-                if ui.button("Cancel").clicked() {
+                if ui.button(t!("cancel")).clicked() {
                     outcome = Some(false);
                 }
             });
@@ -3041,7 +3051,7 @@ impl TabViewer for Viewer<'_> {
                 Some(ext::View::Compare(compare)) => compare::show(ui, compare, self.requests),
                 None => {
                     ui.centered_and_justified(|ui| {
-                        ui.weak("This tab's content is gone; close it.");
+                        ui.weak(t!("shell-this-tab-s-content-is"));
                     });
                 }
             }
@@ -3552,14 +3562,14 @@ pub fn virtual_icon(which: vfs_rick::Virtual) -> &'static str {
 
 /// Sort directions and columns are used by the palette's labels.
 #[must_use]
-pub fn column_label(column: Column) -> &'static str {
+pub fn column_label(column: Column) -> String {
     match column {
-        Column::Name => "name",
-        Column::Type => "type",
-        Column::Modified => "modified",
-        Column::Created => "created",
-        Column::Accessed => "accessed",
-        Column::Size => "size",
-        Column::Items => "items",
+        Column::Name => t!("column-name-lower"),
+        Column::Type => t!("column-type-lower"),
+        Column::Modified => t!("column-modified-lower"),
+        Column::Created => t!("column-created-lower"),
+        Column::Accessed => t!("column-accessed-lower"),
+        Column::Size => t!("column-size-lower"),
+        Column::Items => t!("column-items-lower"),
     }
 }

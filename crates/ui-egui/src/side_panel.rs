@@ -20,6 +20,7 @@
 //! With the panel focused, Up and Down move, Enter opens, Mod+Enter opens
 //! in a new tab.
 
+use ext::t;
 use std::collections::BTreeSet;
 
 use std::sync::Arc;
@@ -441,7 +442,7 @@ fn connection_dialog(
                 .num_columns(2)
                 .spacing(egui::vec2(12.0, 6.0))
                 .show(ui, |ui| {
-                    ui.label("Name");
+                    ui.label(t!("compare-name"));
                     let name = ui.add_enabled(
                         !dialog.editing,
                         egui::TextEdit::singleline(&mut dialog.name).desired_width(260.0),
@@ -464,10 +465,12 @@ fn connection_dialog(
             ui.add_space(6.0);
             ui.horizontal(|ui| {
                 let enter = ui.input(|i| i.key_pressed(egui::Key::Enter));
-                if ui.button("OK").clicked() || enter {
+                if ui.button(t!("ok")).clicked() || enter {
                     done = Some(true);
                 }
-                if ui.button("Cancel").clicked() || ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+                if ui.button(t!("cancel")).clicked()
+                    || ui.input(|i| i.key_pressed(egui::Key::Escape))
+                {
                     done = Some(false);
                 }
             });
@@ -768,7 +771,7 @@ fn location_row(
         state.take_focus(id);
     }
     response.context_menu(|ui| {
-        if ui.button("Open in new tab").clicked() {
+        if ui.button(t!("open-in-new-tab")).clicked() {
             open(requests, pane, location.clone(), true);
             ui.close();
         }
@@ -832,7 +835,7 @@ fn places(
                 state_edit_start(requests, index, place);
                 ui.close();
             }
-            if ui.button("Remove").clicked() {
+            if ui.button(t!("remove")).clicked() {
                 requests.push(Request::Command(Command::PlaceRemove(index)));
                 ui.close();
             }
@@ -913,7 +916,7 @@ fn places(
         ui.ctx().request_repaint();
     }
     if rows.is_empty() {
-        ui.weak("Drop a folder here to add a place.");
+        ui.weak(t!("panel-drop-a-folder-here-to"));
     }
 }
 
@@ -954,21 +957,21 @@ fn edit_dialog(
     }
     let mut open = true;
     let mut done: Option<bool> = None;
-    egui::Window::new("Edit place")
+    egui::Window::new(t!("panel-edit-place"))
         .id(egui::Id::new("edit-place"))
         .collapsible(false)
         .resizable(false)
         .open(&mut open)
         .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
         .show(ctx, |ui| {
-            ui.label("Title");
+            ui.label(t!("panel-title"));
             let title = ui.text_edit_singleline(&mut edit.title);
             if edit.focus {
                 title.request_focus();
                 edit.focus = false;
             }
             ui.add_space(6.0);
-            ui.label("Icon");
+            ui.label(t!("panel-icon"));
             egui::ScrollArea::vertical()
                 .max_height(160.0)
                 .show(ui, |ui| {
@@ -988,10 +991,12 @@ fn edit_dialog(
             ui.add_space(6.0);
             ui.horizontal(|ui| {
                 let enter = title.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
-                if ui.button("OK").clicked() || enter {
+                if ui.button(t!("ok")).clicked() || enter {
                     done = Some(true);
                 }
-                if ui.button("Cancel").clicked() || ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+                if ui.button(t!("cancel")).clicked()
+                    || ui.input(|i| i.key_pressed(egui::Key::Escape))
+                {
                     done = Some(false);
                 }
             });
@@ -1066,7 +1071,7 @@ fn titled_section(
             &overview,
             &mut |ui, requests| add_connection_items(ui, requests, &connectors),
         )
-        .on_hover_text(format!("Open the {} overview", section.title()));
+        .on_hover_text(t!("panel-open-overview", section = section.title()));
     });
     if folded {
         return;

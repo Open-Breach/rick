@@ -7,6 +7,7 @@
 //! but its default, *Cancel*.
 
 use app::{App, Command};
+use ext::t;
 use types::{Answer, QuestionId, QuestionKind};
 
 use crate::shell::Request;
@@ -40,7 +41,7 @@ pub fn show(ctx: &egui::Context, app: &App, state: &mut DialogState, requests: &
         state.focus = true;
     }
     let mut answer: Option<Answer> = None;
-    egui::Modal::new(egui::Id::new("question")).show(ctx, |ui| {
+    egui::Modal::new(egui::Id::new(t!("question-question"))).show(ctx, |ui| {
         ui.set_width(460.0);
         let heading = egui::RichText::new(&question.title).heading();
         if question.warning {
@@ -81,17 +82,17 @@ pub fn show(ctx: &egui::Context, app: &App, state: &mut DialogState, requests: &
                     state.focus = false;
                 }
                 if remember.is_some() {
-                    ui.checkbox(&mut state.remember, "Remember in the keychain");
+                    ui.checkbox(&mut state.remember, t!("question-remember-in-the-keychain"));
                 }
                 ui.add_space(8.0);
                 ui.horizontal(|ui| {
-                    if ui.button("OK").clicked() || (enter && field.lost_focus()) {
+                    if ui.button(t!("ok")).clicked() || (enter && field.lost_focus()) {
                         answer = Some(Answer::Secret {
                             secret: state.secret.clone(),
                             remember: state.remember,
                         });
                     }
-                    if ui.button("Cancel").clicked() {
+                    if ui.button(t!("cancel")).clicked() {
                         answer = Some(Answer::Cancelled);
                     }
                 });

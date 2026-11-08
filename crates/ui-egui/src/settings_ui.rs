@@ -1,6 +1,7 @@
 //! The Settings, Keyboard shortcuts, Extensions, About and Properties windows.
 
 use app::{App, Command, PluginStatus};
+use ext::t;
 use ext::{Registry, Shortcut};
 use model::{
     AfterDrag, Column, Density, PanelSide, SettingsChange, SidePanelChange, SortDir, Theme,
@@ -32,7 +33,7 @@ pub fn settings_window(
     let mut panel = |c: SidePanelChange| panel_changes.push(c);
     let mut ext_changes: Vec<(String, String, ext::SettingValue)> = Vec::new();
     let mut change = |c: SettingsChange| requests.push(Request::Command(Command::Settings(c)));
-    egui::Window::new("Settings")
+    egui::Window::new(t!("settings"))
         .open(open)
         .resizable(false)
         .show(ctx, |ui| {
@@ -54,36 +55,36 @@ pub fn settings_window(
                         };
                     flag(
                         ui,
-                        "Folders first",
+                        &t!("settings-folders-first"),
                         settings.folders_first,
                         SettingsChange::FoldersFirst,
                     );
                     flag(
                         ui,
-                        "Show hidden files",
+                        &t!("settings-show-hidden-files"),
                         settings.show_hidden,
                         SettingsChange::ShowHidden,
                     );
                     flag(
                         ui,
-                        "Show system files",
+                        &t!("settings-show-system-files"),
                         settings.show_system,
                         SettingsChange::ShowSystem,
                     );
                     flag(
                         ui,
-                        "Show file extensions",
+                        &t!("settings-show-file-extensions"),
                         settings.show_extensions,
                         SettingsChange::ShowExtensions,
                     );
                     flag(
                         ui,
-                        "Zebra stripes",
+                        &t!("settings-zebra-stripes"),
                         settings.zebra_stripes,
                         SettingsChange::ZebraStripes,
                     );
 
-                    ui.label("Default sort");
+                    ui.label(t!("settings-default-sort"));
                     ui.horizontal(|ui| {
                         let mut by = settings.sort_by;
                         egui::ComboBox::from_id_salt("sort-by")
@@ -100,8 +101,8 @@ pub fn settings_window(
                                 SortDir::Descending => "Descending",
                             })
                             .show_ui(ui, |ui| {
-                                ui.selectable_value(&mut dir, SortDir::Ascending, "Ascending");
-                                ui.selectable_value(&mut dir, SortDir::Descending, "Descending");
+                                ui.selectable_value(&mut dir, SortDir::Ascending, t!("settings-ascending"));
+                                ui.selectable_value(&mut dir, SortDir::Descending, t!("settings-descending"));
                             });
                         if by != settings.sort_by || dir != settings.sort_dir {
                             change(SettingsChange::Sort(by, dir));
@@ -109,10 +110,10 @@ pub fn settings_window(
                     });
                     ui.end_row();
 
-                    ui.label("Side panel");
+                    ui.label(t!("settings-side-panel"));
                     ui.horizontal(|ui| {
                         let mut visible = side_panel.visible;
-                        if ui.checkbox(&mut visible, "Show").changed() {
+                        if ui.checkbox(&mut visible, t!("settings-show")).changed() {
                             panel(SidePanelChange::Visible(visible));
                         }
                         let mut side = side_panel.side;
@@ -122,8 +123,8 @@ pub fn settings_window(
                                 PanelSide::Right => "Right",
                             })
                             .show_ui(ui, |ui| {
-                                ui.selectable_value(&mut side, PanelSide::Left, "Left");
-                                ui.selectable_value(&mut side, PanelSide::Right, "Right");
+                                ui.selectable_value(&mut side, PanelSide::Left, t!("compare-left"));
+                                ui.selectable_value(&mut side, PanelSide::Right, t!("compare-right"));
                             });
                         if side != side_panel.side {
                             panel(SidePanelChange::Side(side));
@@ -131,7 +132,7 @@ pub fn settings_window(
                     });
                     ui.end_row();
 
-                    ui.label("Start with");
+                    ui.label(t!("settings-start-with"));
                     let start = settings.session.start_layout().map(str::to_owned);
                     let mut picked = start.clone();
                     egui::ComboBox::from_id_salt("session-start")
@@ -141,7 +142,7 @@ pub fn settings_window(
                                 .unwrap_or_else(|| "Continue where I left off".to_owned()),
                         )
                         .show_ui(ui, |ui| {
-                            ui.selectable_value(&mut picked, None, "Continue where I left off");
+                            ui.selectable_value(&mut picked, None, t!("continue-where-i-left-off"));
                             for name in layouts {
                                 ui.selectable_value(&mut picked, Some(name.clone()), name);
                             }
@@ -151,7 +152,7 @@ pub fn settings_window(
                     }
                     ui.end_row();
 
-                    ui.label("Open outside the viewer");
+                    ui.label(t!("settings-open-outside-the-viewer"));
                     ui.horizontal(|ui| {
                         // The types that go to the system application; typed
                         // as a list and saved when the field is left.
@@ -161,7 +162,7 @@ pub fn settings_window(
                             .data(|d| d.get_temp::<String>(id))
                             .unwrap_or_else(|| saved.clone());
                         let output = egui::TextEdit::singleline(&mut text)
-                            .hint_text("Extensions, e.g. docx, xlsx")
+                            .hint_text(t!("settings-extensions-e-g-docx-xlsx"))
                             .desired_width(220.0)
                             .show(ui);
                         if output.response.has_focus() {
@@ -186,17 +187,17 @@ pub fn settings_window(
                     );
                     ui.end_row();
 
-                    ui.label("Spring-loading delay");
+                    ui.label(t!("settings-spring-loading-delay"));
                     let mut delay = settings.drag.spring_delay_ms;
                     if ui
-                        .add(egui::Slider::new(&mut delay, 200..=3000).suffix(" ms"))
+                        .add(egui::Slider::new(&mut delay, 200..=3000).suffix(" ms"))  // i18n: ok
                         .changed()
                     {
                         change(SettingsChange::SpringDelay(delay));
                     }
                     ui.end_row();
 
-                    ui.label("After a drag");
+                    ui.label(t!("settings-after-a-drag"));
                     let mut after = settings.drag.after;
                     egui::ComboBox::from_id_salt("after-drag")
                         .selected_text(after_drag_name(after))
@@ -210,7 +211,7 @@ pub fn settings_window(
                     }
                     ui.end_row();
 
-                    ui.label("Theme");
+                    ui.label(t!("settings-theme"));
                     let mut theme = settings.theme;
                     egui::ComboBox::from_id_salt("theme")
                         .selected_text(theme_name(theme))
@@ -224,17 +225,17 @@ pub fn settings_window(
                     }
                     ui.end_row();
 
-                    ui.label("Font size");
+                    ui.label(t!("settings-font-size"));
                     let mut size = settings.font_size;
                     if ui
-                        .add(egui::Slider::new(&mut size, 9..=24).suffix(" pt"))
+                        .add(egui::Slider::new(&mut size, 9..=24).suffix(" pt"))  // i18n: ok
                         .changed()
                     {
                         change(SettingsChange::FontSize(size));
                     }
                     ui.end_row();
 
-                    ui.label("Density");
+                    ui.label(t!("settings-density"));
                     let mut density = settings.density;
                     egui::ComboBox::from_id_salt("density")
                         .selected_text(density_name(density))
@@ -248,7 +249,7 @@ pub fn settings_window(
                     }
                     ui.end_row();
 
-                    ui.label("Accent colour");
+                    ui.label(t!("settings-accent-colour"));
                     ui.horizontal(|ui| {
                         let mut color = settings
                             .accent
@@ -263,7 +264,7 @@ pub fn settings_window(
                                 color.b()
                             ))));
                         }
-                        if settings.accent.is_some() && ui.small_button("Theme default").clicked() {
+                        if settings.accent.is_some() && ui.small_button(t!("settings-theme-default")).clicked() {
                             change(SettingsChange::Accent(None));
                         }
                     });
@@ -365,38 +366,38 @@ fn extension_settings(
     }
 }
 
-fn column_name(column: Column) -> &'static str {
+fn column_name(column: Column) -> String {
     match column {
-        Column::Name => "Name",
-        Column::Type => "Type",
-        Column::Modified => "Date modified",
-        Column::Created => "Date created",
-        Column::Accessed => "Date accessed",
-        Column::Size => "Size",
-        Column::Items => "Items",
+        Column::Name => t!("column-name"),
+        Column::Type => t!("column-type"),
+        Column::Modified => t!("column-date-modified"),
+        Column::Created => t!("column-date-created"),
+        Column::Accessed => t!("column-date-accessed"),
+        Column::Size => t!("column-size"),
+        Column::Items => t!("column-items"),
     }
 }
 
-fn theme_name(theme: Theme) -> &'static str {
+fn theme_name(theme: Theme) -> String {
     match theme {
-        Theme::System => "System",
-        Theme::Light => "Light",
-        Theme::Dark => "Dark",
+        Theme::System => t!("settings-theme-system"),
+        Theme::Light => t!("settings-theme-light"),
+        Theme::Dark => t!("settings-theme-dark"),
     }
 }
 
-fn after_drag_name(after: AfterDrag) -> &'static str {
+fn after_drag_name(after: AfterDrag) -> String {
     match after {
-        AfterDrag::Stay => "Stay in the folder",
-        AfterDrag::Return => "Return to where the drag started",
+        AfterDrag::Stay => t!("settings-after-drag-stay"),
+        AfterDrag::Return => t!("settings-after-drag-return"),
     }
 }
 
-fn density_name(density: Density) -> &'static str {
+fn density_name(density: Density) -> String {
     match density {
-        Density::Compact => "Compact",
-        Density::Normal => "Normal",
-        Density::Comfortable => "Comfortable",
+        Density::Compact => t!("settings-density-compact"),
+        Density::Normal => t!("settings-density-normal"),
+        Density::Comfortable => t!("settings-density-comfortable"),
     }
 }
 
@@ -482,12 +483,12 @@ impl ShortcutsScreen {
         }
 
         let mut open = self.open;
-        egui::Window::new("Keyboard shortcuts")
+        egui::Window::new(t!("keyboard-shortcuts"))
             .open(&mut open)
             .default_width(560.0)
             .show(ctx, |ui| {
                 ui.horizontal(|ui| {
-                    ui.label("Filter");
+                    ui.label(t!("settings-filter"));
                     ui.text_edit_singleline(&mut self.filter);
                     if let Some(intent) = self.rebinding {
                         ui.strong(format!(
@@ -538,10 +539,10 @@ impl ShortcutsScreen {
                                         ui.monospace(bound.join(", "));
                                     }
                                     ui.horizontal(|ui| {
-                                        if ui.small_button("Change").clicked() {
+                                        if ui.small_button(t!("settings-change")).clicked() {
                                             self.rebinding = Some(intent);
                                         }
-                                        if ui.small_button("Reset").clicked() {
+                                        if ui.small_button(t!("settings-reset")).clicked() {
                                             requests.push(Request::Command(Command::Settings(
                                                 SettingsChange::Shortcut {
                                                     action: intent.id().to_owned(),
@@ -549,7 +550,7 @@ impl ShortcutsScreen {
                                                 },
                                             )));
                                         }
-                                        if ui.small_button("Unbind").clicked() {
+                                        if ui.small_button(t!("settings-unbind")).clicked() {
                                             requests.push(Request::Command(Command::Settings(
                                                 SettingsChange::Shortcut {
                                                     action: intent.id().to_owned(),
@@ -587,13 +588,13 @@ pub fn label_of(intent: Intent, registry: &Registry) -> String {
 
 /// The About window; `version` is the binary's version and git hash.
 pub fn about_window(ctx: &egui::Context, open: &mut bool, version: &str) {
-    egui::Window::new("About Rick")
+    egui::Window::new(t!("about-rick"))
         .open(open)
         .resizable(false)
         .show(ctx, |ui| {
-            ui.heading("Rick");
-            ui.label("A god-like file manager.");
-            ui.label(format!("Version {version}"));
+            ui.heading(t!("rick"));
+            ui.label(t!("settings-a-god-like-file-manager"));
+            ui.label(t!("about-version", version = version));
             ui.hyperlink("https://github.com/Open-Breach/rick");
         });
 }
@@ -611,12 +612,12 @@ pub fn extensions_window(
 ) {
     let plugins = app.plugins();
     let disabled = &app.model().settings.plugins.disabled;
-    egui::Window::new("Extensions")
+    egui::Window::new(t!("extensions"))
         .open(open)
         .default_width(640.0)
         .show(ctx, |ui| {
             if plugins.is_empty() {
-                ui.label("No plugins found.");
+                ui.label(t!("settings-no-plugins-found"));
             }
             egui::Grid::new("extensions-grid")
                 .num_columns(5)
@@ -648,7 +649,7 @@ pub fn extensions_window(
                         ui.label(status);
                         let mut enabled = !disabled.contains(&plugin.id);
                         ui.horizontal(|ui| {
-                            if ui.checkbox(&mut enabled, "Enabled").changed() {
+                            if ui.checkbox(&mut enabled, t!("settings-enabled")).changed() {
                                 requests.push(Request::Command(Command::Settings(
                                     SettingsChange::Plugin {
                                         id: plugin.id.clone(),

@@ -8,6 +8,7 @@
 //! work as in any list.
 
 use app::Command;
+use ext::t;
 use model::{SelectionChange, Volume, VolumeKind};
 use types::{Entry, Location};
 use vfs_rick::Virtual;
@@ -97,7 +98,7 @@ pub fn show(ui: &mut egui::Ui, cx: &mut PaneCx<'_>, which: Virtual) {
                     if !volumes.is_empty() {
                         ui.add_space(12.0);
                     }
-                    ui.strong("Connections");
+                    ui.strong(t!("overview-connections"));
                     ui.add_space(4.0);
                     cloud_table(ui, cx, &connections, icons::NETWORK);
                 }
@@ -156,7 +157,11 @@ fn drive_table(ui: &mut egui::Ui, cx: &mut PaneCx<'_>, entries: &[Entry]) {
                     utilisation_bar(ui, rect, v.utilisation().unwrap_or(0.0));
                     ui.label(percent(v));
                 });
-                ui.label(if v.is_removable() { "Yes" } else { "No" });
+                ui.label(if v.is_removable() {
+                    t!("overview-yes")
+                } else {
+                    t!("overview-no")
+                });
                 if v.is_removable() {
                     if ui.small_button(format!("{} Eject", icons::EJECT)).clicked() {
                         cx.requests
@@ -227,14 +232,14 @@ fn row_interaction(cx: &mut PaneCx<'_>, entry: &Entry, response: &egui::Response
         cx.requests.push(Request::FocusPane(cx.pane));
     }
     response.clone().context_menu(|ui| {
-        if ui.button("Open").clicked() {
+        if ui.button(t!("open")).clicked() {
             cx.requests.push(Request::Command(Command::Navigate {
                 pane: cx.pane,
                 to: location.clone(),
             }));
             ui.close();
         }
-        if ui.button("Open in new tab").clicked() {
+        if ui.button(t!("open-in-new-tab")).clicked() {
             cx.requests.push(Request::NewTabAt(location.clone()));
             ui.close();
         }
