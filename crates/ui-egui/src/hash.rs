@@ -303,11 +303,16 @@ fn block(
                 let verdict = expected.verdict(algorithm, digests.get(algorithm));
                 ui.weak(algorithm.label());
                 // An immutable buffer: the field selects and copies, never
-                // edits.
+                // edits. The minimum size is what keeps the field wide: a
+                // grid column offers a cell only as wide as it was last
+                // frame, which starts at the grid's minimum, and a field
+                // that clips itself to that never gives the column a
+                // reason to grow.
                 let mut shown = value.as_str();
                 let mut field = egui::TextEdit::singleline(&mut shown)
                     .font(egui::TextStyle::Monospace)
-                    .desired_width(width);
+                    .desired_width(width)
+                    .min_size(egui::vec2(width, 0.0));
                 match verdict {
                     Some(true) => field = field.text_color(success),
                     Some(false) => field = field.text_color(error),

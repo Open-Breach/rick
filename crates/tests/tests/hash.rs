@@ -586,4 +586,43 @@ fn the_shell_opens_the_dialogue_and_fills_in_its_rows() {
         assert!(harness.query_by_label(label).is_some(), "{label} is drawn");
     }
     assert_eq!(harness.state().hash_dialog().format(), Some(Format::Hex));
+
+    rows_fit_their_values(&harness, &reference(&bytes));
+}
+
+/// Every value field of the dialogue is wide enough for the whole hex
+/// SHA-256, 64 monospace characters, and its Copy button sits to the right
+/// of it: a field in a grid column must not collapse to the grid's minimum
+/// cell width.
+fn rows_fit_their_values(harness: &egui_kittest::Harness<'_, RickUi>, digests: &Digests) {
+    let values: Vec<String> = Algorithm::ALL
+        .into_iter()
+        .map(|a| hash::render(digests.get(a), Format::Hex))
+        .collect();
+    let font = egui::TextStyle::Monospace.resolve(&harness.ctx.global_style());
+    let glyph = harness.ctx.fonts_mut(|f| f.glyph_width(&font, '0'));
+    let copies: Vec<egui::Rect> = harness
+        .get_all_by_role_and_label(egui::accesskit::Role::Button, "Copy")
+        .map(|node| node.rect())
+        .collect();
+    assert_eq!(copies.len(), 4, "a Copy button per row");
+    let fields: Vec<(String, egui::Rect)> = harness
+        .get_all_by_role(egui::accesskit::Role::TextInput)
+        .filter_map(|node| node.value().map(|value| (value, node.rect())))
+        .filter(|(value, _)| values.contains(value))
+        .collect();
+    assert_eq!(fields.len(), 4, "a value field per row: {fields:?}");
+    for (value, rect) in &fields {
+        assert!(
+            rect.width() >= glyph * 64.0,
+            "the field of {value} is {} wide, {} characters; 64 are needed",
+            rect.width(),
+            rect.width() / glyph
+        );
+        assert!(
+            copies.iter().any(|copy| copy.min.x >= rect.max.x - 1.0
+                && (copy.center().y - rect.center().y).abs() < rect.height()),
+            "no Copy button right of the field of {value} at {rect:?}: {copies:?}"
+        );
+    }
 }
