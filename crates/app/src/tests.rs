@@ -965,7 +965,10 @@ fn without_a_subtree_index_the_toggle_is_absent_and_a_search_ends_with_a_notice(
 
 #[test]
 fn subtree_search_streams_matches_as_a_job_and_a_new_text_supersedes_it() {
-    let mut h = harness_with(vec![IndexExtension::around("fake-walk", Arc::new(FakeWalk))]);
+    let mut h = harness_with(vec![IndexExtension::around(
+        "fake-walk",
+        Arc::new(FakeWalk),
+    )]);
     h.settle();
     assert!(h.app.model().subtree_search);
     assert!(
