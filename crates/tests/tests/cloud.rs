@@ -1,4 +1,4 @@
-//! Acceptance (issue 21): providers as plugins, SFTP and the clouds.
+//! Acceptance (issue 21): providers as plugins, the clouds.
 //!
 //! The kernel's side is proven on every OS with the in-memory provider in
 //! its native mode: a move within one account, and one across two buckets
@@ -6,7 +6,7 @@
 //! while a copy to the local disk streams every byte; the side panel's
 //! *Add connection…* opens the plugin's dialogue, and a connection's row
 //! connects and removes through its menu, the secret in the keychain and
-//! never in `rick.toml`; the four plugins load through the host like the
+//! never in `rick.toml`; the three plugins load through the host like the
 //! others. Against the containers (`RICK_S3_ENDPOINT` and friends, set by
 //! CI on Linux; skipped with a note elsewhere) a 100 MB upload streams
 //! with progress and, cancelled half-way, leaves no object, and the
@@ -259,10 +259,10 @@ fn install(plugins_dir: &Path, stem: &str) {
 }
 
 #[test]
-fn the_four_plugins_load_through_the_host_with_a_provider_and_a_connector_each() {
+fn the_three_plugins_load_through_the_host_with_a_provider_and_a_connector_each() {
     let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
     let plugins = dir.path().join("plugins");
-    for stem in ["ext_vfs_sftp", "ext_vfs_s3", "ext_vfs_azure", "ext_vfs_gcs"] {
+    for stem in ["ext_vfs_s3", "ext_vfs_azure", "ext_vfs_gcs"] {
         install(&plugins, stem);
     }
     let fake = Arc::new(Fake::new().unwrap_or_else(|e| panic!("{e}")));
@@ -273,7 +273,7 @@ fn the_four_plugins_load_through_the_host_with_a_provider_and_a_connector_each()
     });
     let mut ids: Vec<&str> = host.plugins().iter().map(|p| p.id.as_str()).collect();
     ids.sort_unstable();
-    assert_eq!(ids, ["vfs-azure", "vfs-gcs", "vfs-s3", "vfs-sftp"]);
+    assert_eq!(ids, ["vfs-azure", "vfs-gcs", "vfs-s3"]);
     for plugin in host.plugins() {
         assert_eq!(plugin.status, PluginStatus::Loaded, "{plugin:?}");
         assert_eq!(plugin.points, Points::PROVIDER, "{}", plugin.id);
@@ -284,14 +284,14 @@ fn the_four_plugins_load_through_the_host_with_a_provider_and_a_connector_each()
     }
     let mut providers: Vec<&str> = registry.providers().iter().map(|p| p.id().0).collect();
     providers.sort_unstable();
-    assert_eq!(providers, ["azure", "gcs", "s3", "sftp"]);
+    assert_eq!(providers, ["azure", "gcs", "s3"]);
     let mut titles: Vec<String> = registry
         .connectors()
         .iter()
         .map(|c| c.schema().title.get())
         .collect();
     titles.sort_unstable();
-    assert_eq!(titles, ["Azure Blob", "Google Cloud Storage", "S3", "SFTP"]);
+    assert_eq!(titles, ["Azure Blob", "Google Cloud Storage", "S3"]);
     for connector in registry.connectors() {
         assert!(
             connector.schema().secret_fields().next().is_some(),

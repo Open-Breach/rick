@@ -3,7 +3,7 @@
 use std::fmt;
 use std::sync::{Mutex, PoisonError};
 
-/// Which extension provides a tree: `"local"`, `"archive"`, `"sftp"`, `"s3"`,
+/// Which extension provides a tree: `"local"`, `"archive"`, `"ssh"`, `"s3"`,
 /// `"trash"`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct ProviderId(pub &'static str);
@@ -124,7 +124,7 @@ mod tests {
 
     #[test]
     fn ids_display_their_name() {
-        assert_eq!(ProviderId("sftp").to_string(), "sftp");
+        assert_eq!(ProviderId("ssh").to_string(), "ssh");
         assert_eq!(ProviderId::LOCAL, ProviderId("local"));
         assert_eq!(ProviderId::ARCHIVE.to_string(), "archive");
         assert_eq!(ProviderId::RICK.to_string(), "rick");

@@ -9,6 +9,27 @@ the pull request that brought the change.
 
 ### Added
 
+- Dragging out of Rick reaches the desktop: a file dragged past the window
+  is handed to the platform's drag source as `file://` URIs once the ghost
+  is off the screen, through an `NSDraggingSession` on macOS (the first
+  file's icon under the cursor), OLE's `DoDragDrop` with a `CF_HDROP` on
+  Windows, a `wl_data_source` on Wayland and an XDND source on X11, each
+  from the window `winit` describes through its raw handles; the receiver
+  decides between move and copy, and Rick's pointer is put right when the
+  drag ends, since the backend never sees the button come up (#25).
+- A drop from another application lands where it was dropped: the platform
+  supplies the cursor position the backend leaves out (the cursor over the
+  window on Windows and X11, the mouse location in the view on macOS, the
+  data device's motion on Wayland), so a file dropped on a folder row goes
+  into that folder; without a position the drop lands in the focused pane's
+  folder as before. On Wayland, where `winit` 0.30 receives no drops at
+  all, Rick's own `wl_data_device` now takes them (#25).
+- `BENCHMARKS.md` carries the five-run numbers of every benchmark 0.2
+  added and the macOS targets re-measured and tightened towards the spec's
+  numbers where the runner now meets them (the listing's first batch and
+  the PDF's first frame are back at the spec's); the two the runners fell
+  short of, cancelling on macOS and the fixture on Windows, follow what
+  the runners do (#25).
 - The preview pane is Rick's only viewer (#50): it lays out every kind
   of content a previewer returns itself, so a folder, archive or disk
   image shows its file list in the explorer's columns with the stats line
@@ -152,21 +173,19 @@ the pull request that brought the change.
   `.svn` directory changes; the SVN group (Update, Commit, Revert, Log,
   Add) in the context menu and the palette inside a working copy, run
   through the `svn` command line.
-- Providers as plugins, SFTP and the clouds: `ext-vfs-sftp` (remote hosts
-  over SSH through russh and russh-sftp, a move within a host a remote
-  rename), `ext-vfs-s3` (S3, R2, MinIO and other S3-compatible stores),
-  `ext-vfs-azure` (Azure Blob) and `ext-vfs-gcs` (Google Cloud Storage),
-  each with its connections as the rows of the side panel's Network or
-  Cloud section, *Add connection…* on the section header and the *Add…*
-  row with a dialogue per provider, and *Connect*, *Disconnect* and
-  *Remove connection* on a row. Connections live in `[[connections]]`
-  tables of `rick.toml`; passwords, keys and secret keys in the platform
-  keychain through the new `platform::Secrets` (Secret Service, Keychain,
-  Credential Manager). A move or copy inside one account runs on the
-  service (`CopyObject`, *Copy Blob*, `Rewrite`) and streams nothing
-  through the machine, within a bucket or across two buckets of the
-  account; uploads stream in parts and a cancelled one leaves no object
-  (#21).
+- Providers as plugins, the clouds: `ext-vfs-s3` (S3, R2, MinIO and other
+  S3-compatible stores), `ext-vfs-azure` (Azure Blob) and `ext-vfs-gcs`
+  (Google Cloud Storage), each with its connections as the rows of the
+  side panel's Network or Cloud section, *Add connection…* on the section
+  header and the *Add…* row with a dialogue per provider, and *Connect*,
+  *Disconnect* and *Remove connection* on a row. Connections live in
+  `[[connections]]` tables of `rick.toml`; passwords, keys and secret keys
+  in the platform keychain through the new `platform::Secrets` (Secret
+  Service, Keychain, Credential Manager). A move or copy inside one
+  account runs on the service (`CopyObject`, *Copy Blob*, `Rewrite`) and
+  streams nothing through the machine, within a bucket or across two
+  buckets of the account; uploads stream in parts and a cancelled one
+  leaves no object (#21).
 - The action plugins of milestone 6, every one in `plugins/` of the
   archives (#23): `action-compress` packs the selection into a zip next to
   it, or into a zip, tar.gz, tar.zst, 7z, tar, tar.xz, tar.bz2 or a single
@@ -347,6 +366,8 @@ the pull request that brought the change.
 
 ### Removed
 
+- `ext-vfs-sftp`, superseded by `ext-ssh` before release (it never
+  shipped; #48).
 - The environment variables `RICK_PDFIUM_DIR` and `RICK_SOFFICE`: the
   library paths are the plugins' settings, which development and CI write
   instead (#50).
@@ -357,7 +378,6 @@ the pull request that brought the change.
   shortcut table dispatch to the actions (#23).
 - The 0.1 Recent feed (`recent.toml`, the watches and the scan at start),
   replaced by the system's recently-used list.
-
 
 ## [0.1.0] - 2026-11-06
 

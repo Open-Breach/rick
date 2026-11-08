@@ -73,7 +73,7 @@ pub const CLOUD_PROVIDERS: &[&str] = &["s3", "azure", "gcs"];
 /// Provider ids that count as network providers: host-addressed
 /// connections, listed under Network beside the mounted shares, one row
 /// per connection the provider lists at its root.
-pub const NETWORK_PROVIDERS: &[&str] = &["sftp", "ssh"];
+pub const NETWORK_PROVIDERS: &[&str] = &["ssh"];
 
 /// The six virtual locations.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]

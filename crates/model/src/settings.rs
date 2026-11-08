@@ -103,7 +103,7 @@ pub struct Settings {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(default)]
 pub struct ConnectionEntry {
-    /// The provider id: `s3`, `azure`, `gcs`, `sftp`.
+    /// The provider id: `s3`, `azure`, `gcs`, `ssh`.
     pub provider: String,
     /// The name the user gave the connection; unique within the provider.
     pub name: String,
@@ -664,8 +664,8 @@ mod tests {
             Location::new(ProviderId("local"), "C:\\Users\\me")
         );
         assert_eq!(
-            parse_location("sftp:/srv"),
-            Location::new(ProviderId::intern("sftp"), "/srv")
+            parse_location("ssh:/srv"),
+            Location::new(ProviderId::intern("ssh"), "/srv")
         );
         let text = Location::new(ProviderId("local"), "C:\\x").to_string();
         assert_eq!(parse_location(&text).path.to_string(), "C:\\x");

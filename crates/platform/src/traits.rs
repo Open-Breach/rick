@@ -2,9 +2,11 @@
 
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::SystemTime;
 
 use async_trait::async_trait;
+use raw_window_handle::{RawDisplayHandle, RawWindowHandle};
 use types::Error;
 
 use crate::perms::Permissions;
@@ -444,22 +446,110 @@ pub trait Chrome: Send + Sync {
     fn window_chrome(&self) -> WindowChrome;
 }
 
+/// The window a drag starts from or a drop lands in, as the windowing
+/// backend describes it: `winit`'s raw window and display handles, and the
+/// window's scale. Only the thread that runs the window's event loop may
+/// use it, which is the thread every [`DragSource`] and [`DropTarget`]
+/// method is called on.
+#[derive(Debug, Clone, Copy)]
+pub struct WindowRef {
+    /// The window: an `NSView` on macOS, an `HWND` on Windows, a
+    /// `wl_surface` or an X11 window id on Linux.
+    pub window: RawWindowHandle,
+    /// The display the window is on: the `wl_display`, the X11 display.
+    pub display: RawDisplayHandle,
+    /// Physical pixels per logical point of the window, for the backends
+    /// that report positions in pixels (X11).
+    pub scale: f32,
+}
+
+/// A position inside a window, in logical points from its top-left corner,
+/// the coordinates egui works in.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Point {
+    /// From the left edge.
+    pub x: f32,
+    /// From the top edge.
+    pub y: f32,
+}
+
 /// Starting a drag the rest of the desktop can receive: the half of
-/// drag-and-drop the windowing backend does not do for Rick. Receiving a
-/// drop is the backend's (`winit` hands egui the hovered and dropped files
-/// on every platform); starting one is this trait's.
+/// drag-and-drop the windowing backend does not do for Rick. An
+/// `NSDraggingSession` on macOS, OLE's `DoDragDrop` with a `CF_HDROP` on
+/// Windows, a `wl_data_source` on Wayland and an XDND source on X11, each
+/// from the window `winit` hands out through its raw window handle.
+///
+/// The drag carries the items' `file://` URIs and the receiver decides what
+/// to do with them. The windowing backend never sees the button come up
+/// after a drag it did not run, so the UI polls
+/// [`DragSource::drag_in_progress`] and puts its pointer state right when
+/// the drag ends. Every method is called on the thread that runs the
+/// window's event loop.
 pub trait DragSource: Send + Sync {
-    /// Starts a platform drag carrying `paths` as `file://` URIs, so another
-    /// application or another Rick process can take them when the cursor
-    /// leaves the window. Returns once the drag has been handed to the
-    /// platform; the drop itself is the receiver's business.
+    /// Tells the platform the window drags may start from, once the window
+    /// exists. Where starting a drag needs something only seen before the
+    /// drag (on Wayland, the serial of the button press that started it),
+    /// this is where the platform starts listening for it. `wake` asks the
+    /// UI for a frame; the platform calls it, from any thread, when a drag
+    /// it watches has news the UI would otherwise not hear of (a drag from
+    /// outside entering a Wayland window while the pointer is quiet).
+    fn attach(&self, window: &WindowRef, wake: Arc<dyn Fn() + Send + Sync>);
+
+    /// Starts a platform drag of `paths` from `window`, as `file://` URIs,
+    /// so another application or another Rick process can take them when
+    /// the cursor leaves the window. Returns once the drag is the
+    /// platform's: on Windows, where `DoDragDrop` runs its own loop, that is
+    /// when the drag has ended; elsewhere the drag goes on in the event
+    /// loop and [`drag_in_progress`](Self::drag_in_progress) says when it
+    /// has ended.
     ///
     /// # Errors
     ///
-    /// `Error::Unsupported`, with the reason, where the platform gives Rick no
-    /// way to start one from the window it has (see QUESTIONS.md); the UI
-    /// then keeps the drag inside the window.
-    fn start_drag(&self, paths: &[PathBuf]) -> Result<(), Error>;
+    /// `Error::Unsupported`, with the reason, when the platform gives Rick no
+    /// way to start one from this window (no display connection, no button
+    /// press seen, a window handle of another backend); the UI then keeps
+    /// the drag inside the window.
+    fn start_drag(&self, window: &WindowRef, paths: &[PathBuf]) -> Result<(), Error>;
+
+    /// Whether a drag started through [`start_drag`](Self::start_drag) is
+    /// still running. Polled every frame while one is, so the platform can
+    /// do what the drag needs in between (answer the receiver's request for
+    /// the data, move the XDND source along).
+    fn drag_in_progress(&self) -> bool;
+}
+
+/// Files another application drags over or drops on a window, as far as the
+/// platform receives them itself. Empty where the windowing backend does
+/// that and hands them to egui as hovered and dropped files (macOS, Windows,
+/// X11); on Wayland, where `winit` 0.30 has no drop target, the platform's
+/// own data device fills these.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct IncomingFiles {
+    /// A drag from outside is over one of the windows, its files perhaps
+    /// not read yet; the UI keeps asking while this holds.
+    pub hovering: bool,
+    /// The files of the drag over the window right now, once read.
+    pub hovered: Vec<PathBuf>,
+    /// The files dropped on the window since the last call.
+    pub dropped: Vec<PathBuf>,
+}
+
+/// The receiving half of a drag from outside the process: where the cursor
+/// is, which the windowing backend reports with no position, and the files
+/// themselves where the backend reports nothing at all. Every method is
+/// called on the thread that runs the window's event loop.
+pub trait DropTarget: Send + Sync {
+    /// The files a drag from outside hovers over or dropped on Rick's
+    /// windows, where the platform tracks them itself (see
+    /// [`IncomingFiles`]). Cheap; polled every frame.
+    fn incoming_files(&self) -> IncomingFiles;
+
+    /// Where the cursor of a drag from outside is over `window` right now,
+    /// for the files the backend or [`incoming_files`](Self::incoming_files)
+    /// reports as hovered or dropped. `None` where the platform cannot tell:
+    /// the UI then lets the drop land in the focused pane's folder, as the
+    /// spec's Drag and drop table says.
+    fn drop_position(&self, window: &WindowRef) -> Option<Point>;
 }
 
 /// The platform keychain: secrets by a stable key, never in a TOML file.
@@ -505,6 +595,7 @@ pub trait Platform:
     + Clipboard
     + Chrome
     + DragSource
+    + DropTarget
     + Volumes
     + StandardFolders
     + RecentlyUsed
@@ -524,6 +615,7 @@ impl<
         + Clipboard
         + Chrome
         + DragSource
+        + DropTarget
         + Volumes
         + StandardFolders
         + RecentlyUsed

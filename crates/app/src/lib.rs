@@ -2076,7 +2076,7 @@ impl App {
     /// Writes `preview_always` for the connection `name` of `provider`
     /// into `rick.toml` and tells the connector; a source without a
     /// connection entry (a host of `~/.ssh/config`) gets one that carries
-    /// the switch alone (QUESTIONS.md 191).
+    /// the switch alone (QUESTIONS.md 195).
     fn set_preview_always(&mut self, provider: ProviderId, name: &str, on: bool) {
         let mut connections = self.model.settings.connections.clone();
         let index = connections

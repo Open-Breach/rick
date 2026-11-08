@@ -132,7 +132,7 @@ runs:
         mkdir -p "$dest"
         curl -sSL "https://github.com/bblanchon/pdfium-binaries/releases/latest/download/$asset.tgz" | tar xz -C "$dest"
         # The library file, and the config directory the setting goes into,
-        # as platform::ConfigDir computes it (QUESTIONS.md 188).
+        # as platform::ConfigDir computes it (QUESTIONS.md 192).
         case "$RUNNER_OS" in
           Windows) lib="$dest/bin/pdfium.dll"; config="$(cygpath -u "$APPDATA")/Rick"; lib_setting="$(cygpath -m "$lib")" ;;
           macOS)   lib="$dest/lib/libpdfium.dylib"; config="$HOME/Library/Application Support/Rick"; lib_setting="$lib" ;;

@@ -1221,7 +1221,7 @@ fn add_row(
                 let text = match section {
                     Section::Machine => "Drives appear here as the system mounts them.",
                     Section::Network => {
-                        "Connections are created by a network provider plugin, such as ext-vfs-sftp; none is installed."
+                        "Connections are created by a network provider plugin, such as ext-ssh; none is installed."
                     }
                     Section::Cloud => {
                         "Accounts are created by a cloud provider plugin; none is installed."
