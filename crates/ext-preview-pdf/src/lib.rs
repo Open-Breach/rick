@@ -881,7 +881,7 @@ mod tests {
         assert!(candidates.contains(&PathBuf::from("/usr/lib").join(&name)));
         // The setting alone, for a machine without the library.
         let only = Library::new(None, None).with_search(Search::SettingOnly);
-        assert!(only.candidates().is_empty());
+        assert_eq!(only.candidates(), Vec::<PathBuf>::new());
         let Err(missing) = only.bind() else {
             panic!("nothing to bind to");
         };

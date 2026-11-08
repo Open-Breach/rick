@@ -1153,7 +1153,7 @@ fn markdown_csv_and_a_zip_are_laid_out_by_the_pane_itself() {
         panic!("{:?}", slot.content_drawn());
     };
     assert_eq!(rows, 4, "docs, docs/readme.txt, a.txt, secret.bin");
-    assert!(!stats.is_empty());
+    assert_ne!(stats, "");
     assert!(in_pane(&harness, "readme.txt") >= 1);
     assert!(
         in_pane(&harness, "Date modified") >= 1,
