@@ -1,5 +1,6 @@
-//! Reading the archive: its format, its index, the heads of chosen
-//! entries, and the one-pass extraction under the archive-safety rules.
+//! Reading the archive: its format, its index together with the heads of
+//! chosen entries in one streaming pass, and the one-pass extraction under
+//! the archive-safety rules.
 //!
 //! The crate reads tar (plain, gzip, xz, bzip2, zstd) and zip with the
 //! `tar` and `zip` crates itself, so it depends on no other plugin
@@ -14,6 +15,8 @@ use std::fmt::Write as _;
 use std::fs::File;
 use std::io::{self, BufReader, Read};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use types::{CancelToken, Error};
 
@@ -280,15 +283,40 @@ fn read_up_to<R: Read>(source: &mut R, buf: &mut [u8]) -> io::Result<usize> {
     Ok(filled)
 }
 
-fn tar_reader(path: &Path, codec: Codec) -> Result<Box<dyn Read>, Error> {
-    let file = BufReader::with_capacity(1 << 16, File::open(path).map_err(io_read)?);
-    Ok(match codec {
+/// A reader that counts the bytes read through it: the compressed stream
+/// behind a decoder, for progress against the file's size.
+struct Counting<R> {
+    inner: R,
+    read: Arc<AtomicU64>,
+}
+
+impl<R: Read> Read for Counting<R> {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        let got = self.inner.read(buf)?;
+        self.read.fetch_add(got as u64, Ordering::Relaxed);
+        Ok(got)
+    }
+}
+
+/// The decoded tar stream of `path` and the counter of the compressed
+/// bytes read from the file so far.
+fn tar_reader(path: &Path, codec: Codec) -> Result<(Box<dyn Read>, Arc<AtomicU64>), Error> {
+    let read = Arc::new(AtomicU64::new(0));
+    let file = BufReader::with_capacity(
+        1 << 16,
+        Counting {
+            inner: File::open(path).map_err(io_read)?,
+            read: Arc::clone(&read),
+        },
+    );
+    let reader: Box<dyn Read> = match codec {
         Codec::Plain => Box::new(file),
         Codec::Gzip => Box::new(flate2::read::MultiGzDecoder::new(file)),
         Codec::Xz => Box::new(liblzma::read::XzDecoder::new_multi_decoder(file)),
         Codec::Bzip2 => Box::new(bzip2::read::MultiBzDecoder::new(file)),
         Codec::Zstd => Box::new(zstd::stream::read::Decoder::new(file).map_err(io_read)?),
-    })
+    };
+    Ok((reader, read))
 }
 
 /// Whether to go on after an entry.
@@ -313,18 +341,26 @@ pub fn visit(
     format: Format,
     f: &mut dyn FnMut(&Item, &mut dyn Read) -> Result<Visit, Error>,
 ) -> Result<(), Error> {
+    visit_counting(path, format, &mut |item, reader, _| f(item, reader))
+}
+
+/// What [`visit_counting`] calls per entry: the entry, a reader over its
+/// contents, and the bytes of the file read so far.
+type CountingVisitor<'a> = dyn FnMut(&Item, &mut dyn Read, u64) -> Result<Visit, Error> + 'a;
+
+/// [`visit`] with the bytes of the file read so far as a third argument:
+/// the compressed stream behind a tar's decoder, the compressed sizes of
+/// the entries passed for a zip, which is read by seeking.
+fn visit_counting(path: &Path, format: Format, f: &mut CountingVisitor<'_>) -> Result<(), Error> {
     match format {
         Format::Tar(codec) => visit_tar(path, codec, f),
         Format::Zip => visit_zip(path, f),
     }
 }
 
-fn visit_tar(
-    path: &Path,
-    codec: Codec,
-    f: &mut dyn FnMut(&Item, &mut dyn Read) -> Result<Visit, Error>,
-) -> Result<(), Error> {
-    let mut archive = tar::Archive::new(tar_reader(path, codec)?);
+fn visit_tar(path: &Path, codec: Codec, f: &mut CountingVisitor<'_>) -> Result<(), Error> {
+    let (reader, read) = tar_reader(path, codec)?;
+    let mut archive = tar::Archive::new(reader);
     let mut count = 0usize;
     for entry in archive.entries().map_err(io_read)? {
         let mut entry = entry.map_err(io_read)?;
@@ -366,17 +402,14 @@ fn visit_tar(
             link,
             hostile,
         };
-        if f(&item, &mut entry)? == Visit::Stop {
+        if f(&item, &mut entry, read.load(Ordering::Relaxed))? == Visit::Stop {
             return Ok(());
         }
     }
     Ok(())
 }
 
-fn visit_zip(
-    path: &Path,
-    f: &mut dyn FnMut(&Item, &mut dyn Read) -> Result<Visit, Error>,
-) -> Result<(), Error> {
+fn visit_zip(path: &Path, f: &mut CountingVisitor<'_>) -> Result<(), Error> {
     let file = File::open(path).map_err(io_read)?;
     let mut archive = zip::ZipArchive::new(file).map_err(zip_error)?;
     if archive.len() > MAX_ENTRIES {
@@ -384,8 +417,10 @@ fn visit_zip(
             "more than {MAX_ENTRIES} entries"
         ))));
     }
+    let mut passed: u64 = 0;
     for i in 0..archive.len() {
         let mut entry = archive.by_index(i).map_err(zip_error)?;
+        passed = passed.saturating_add(entry.compressed_size());
         let (normalised, hostile) = normalise(entry.name_raw());
         if normalised.is_empty() {
             continue;
@@ -421,7 +456,7 @@ fn visit_zip(
             link,
             hostile,
         };
-        if f(&item, &mut entry)? == Visit::Stop {
+        if f(&item, &mut entry, passed)? == Visit::Stop {
             return Ok(());
         }
     }
@@ -439,11 +474,45 @@ fn zip_error(error: zip::result::ZipError) -> Error {
 ///
 /// # Errors
 ///
-/// The errors of [`visit`].
+/// The errors of [`scan`].
 pub fn index(path: &Path, format: Format) -> Result<Index, Error> {
+    scan(
+        path,
+        format,
+        &CancelToken::new(),
+        &mut |_| {},
+        &mut |_, _| Ok(()),
+    )
+}
+
+/// Reads the archive's table of contents in one streaming pass, handing
+/// every file entry and a reader over its contents to `probe` on the way,
+/// so the first bytes of the files that matter (ELF headers, desktop
+/// entries, icon headers, shebangs) are read in the same sweep. `cancel`
+/// is checked between entries; `progress` is told the bytes of the file
+/// read so far, against which the caller sets the file's size.
+///
+/// # Errors
+///
+/// `Error::Cancelled` when `cancel` fires; what `probe` returns; the
+/// errors of [`visit`].
+pub fn scan(
+    path: &Path,
+    format: Format,
+    cancel: &CancelToken,
+    progress: &mut OnProgress<'_>,
+    probe: &mut dyn FnMut(&Item, &mut dyn Read) -> Result<(), Error>,
+) -> Result<Index, Error> {
     let mut items = Vec::new();
-    visit(path, format, &mut |item, _| {
+    visit_counting(path, format, &mut |item, reader, read| {
+        if cancel.is_cancelled() {
+            return Err(Error::Cancelled);
+        }
         items.push(item.clone());
+        if item.kind == ItemKind::File && !item.hostile {
+            probe(item, reader)?;
+        }
+        progress(read);
         Ok(Visit::Next)
     })?;
     let total_size = items.iter().map(|i| i.size).sum();

@@ -448,6 +448,7 @@ fn the_elf_reader_reads_the_tiny_programs() {
 }
 
 #[test]
+#[allow(clippy::too_many_lines)]
 fn detection_answers_the_five_questions_for_each_fixture() {
     let h = harness();
     let detect = |f: Fixture| {
@@ -820,6 +821,67 @@ fn the_icon_field_is_one_list_of_the_archives_icons() {
         "{:?}",
         field(&form, "icon")
     );
+}
+
+/// Detection reads the archive in one streaming pass: the index and the
+/// heads it collects are what the two passes (the index, then the heads
+/// over it) collected, with byte progress against the file and a cancel
+/// between entries.
+#[test]
+fn the_single_pass_reads_what_the_two_passes_did() {
+    let h = harness();
+    for fixture in Fixture::ALL {
+        let path = h.archive(fixture);
+        let name = fixture.file_name();
+        let format = Format::detect(path).unwrap_or_else(|e| panic!("{name}: {e}"));
+        // The two passes as they were.
+        let index = archive::index(path, format).unwrap_or_else(|e| panic!("{name}: {e}"));
+        let mut heads = detect::Heads::default();
+        archive::visit(path, format, &mut |item, reader| {
+            if item.kind == ItemKind::File && !item.hostile {
+                heads.probe(item, reader)?;
+            }
+            Ok(archive::Visit::Next)
+        })
+        .unwrap_or_else(|e| panic!("{name}: {e}"));
+        // The one pass.
+        let mut reports: Vec<u64> = Vec::new();
+        let (one_index, one_heads) =
+            detect::read_archive(path, format, &CancelToken::new(), &mut |done| {
+                reports.push(done);
+            })
+            .unwrap_or_else(|e| panic!("{name}: {e}"));
+        assert_eq!(one_index, index, "{name}");
+        assert_eq!(one_heads, heads, "{name}");
+        assert!(
+            !heads.elves.is_empty() || fixture == Fixture::Source,
+            "{name}"
+        );
+        // Progress: a report per entry, in bytes of the file, never above
+        // its size.
+        let size = fs::metadata(path).unwrap_or_else(|e| panic!("{e}")).len();
+        assert_eq!(reports.len(), index.items.len(), "{name}");
+        assert!(
+            reports.windows(2).all(|w| w[0] <= w[1]),
+            "{name}: {reports:?}"
+        );
+        assert!(
+            reports
+                .last()
+                .is_some_and(|last| *last > 0 && *last <= size),
+            "{name}: {reports:?} against {size}"
+        );
+        // Cancelled before the first entry: nothing comes back.
+        let cancel = CancelToken::new();
+        cancel.cancel();
+        assert!(
+            matches!(
+                detect::detect_with(path, &cancel, &mut |_| {}),
+                Err(Error::Cancelled)
+            ),
+            "{name}"
+        );
+    }
 }
 
 #[test]

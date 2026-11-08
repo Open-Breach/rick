@@ -219,7 +219,7 @@ pub enum Fixture {
 }
 
 impl Fixture {
-    /// Every fixture, in the spec's order, the JetBrains one last.
+    /// Every fixture, in the spec's order, the `JetBrains` one last.
     pub const ALL: [Self; 11] = [
         Self::GuiWithDesktop,
         Self::GuiNoDesktop,

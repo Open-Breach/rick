@@ -1,7 +1,8 @@
-//! Detection: the archive's index and the heads of its candidate files
-//! answer the spec's five questions (source or prebuilt, main executable,
-//! GUI or CLI, icon, name and version) and fill the install form with
-//! defaults. Headers and text only; nothing from the archive runs.
+//! Detection: the archive's index and the heads of its candidate files,
+//! read together in one streaming pass, answer the spec's five questions
+//! (source or prebuilt, main executable, GUI or CLI, icon, name and
+//! version) and fill the install form with defaults. Headers and text
+//! only; nothing from the archive runs.
 
 use std::cmp::Ordering;
 use std::collections::HashMap;
@@ -9,9 +10,9 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use types::Error;
+use types::{CancelToken, Error};
 
-use crate::archive::{self, Format, Index, ItemKind, Visit};
+use crate::archive::{self, Format, Index, Item, OnProgress};
 use crate::desktop::{self, DesktopEntry};
 use crate::elf::{self, Elf};
 use crate::record::Kind;
@@ -229,13 +230,64 @@ impl Detected {
     }
 }
 
-/// What one pass over the archive read of its files.
-#[derive(Default)]
-struct Heads {
-    elves: HashMap<String, Elf>,
-    desktops: HashMap<String, String>,
-    icons: HashMap<String, Option<(u32, u32)>>,
-    shebangs: Vec<String>,
+/// What the pass over the archive read of its files, by the entries' full
+/// paths (the top-level folder is only known once the pass is over).
+#[derive(Debug, Default, PartialEq, Eq)]
+pub(crate) struct Heads {
+    /// The executables, with what their headers say.
+    pub(crate) elves: HashMap<String, Elf>,
+    /// The desktop entries' text.
+    pub(crate) desktops: HashMap<String, String>,
+    /// The PNG and SVG files, with the raster's size when read.
+    pub(crate) icons: HashMap<String, Option<(u32, u32)>>,
+    /// The shebang scripts, in archive order.
+    pub(crate) shebangs: Vec<String>,
+}
+
+impl Heads {
+    /// Reads what matters of one file entry: a desktop entry's text, a PNG
+    /// header, an ELF header with its dynamic section, or a shebang.
+    pub(crate) fn probe(&mut self, item: &Item, reader: &mut dyn Read) -> Result<(), Error> {
+        let name = item.name();
+        if name.to_ascii_lowercase().ends_with(".desktop") {
+            let mut text = Vec::new();
+            reader
+                .take(TEXT_MAX)
+                .read_to_end(&mut text)
+                .map_err(crate::error::io_read)?;
+            self.desktops.insert(
+                item.path.clone(),
+                String::from_utf8_lossy(&text).into_owned(),
+            );
+            return Ok(());
+        }
+        if is_icon_name(name).is_some() {
+            let mut head = [0u8; 24];
+            let got = read_up_to(reader, &mut head)?;
+            self.icons.insert(item.path.clone(), png_size(&head[..got]));
+            return Ok(());
+        }
+        if is_library_name(name) || item.size < 2 {
+            return Ok(());
+        }
+        let mut head = [0u8; 4];
+        let got = read_up_to(reader, &mut head)?;
+        if got == 4 && elf::is_elf(&head) && item.size >= 52 {
+            let mut bytes = head.to_vec();
+            reader
+                .take(ELF_HEAD - 4)
+                .read_to_end(&mut bytes)
+                .map_err(crate::error::io_read)?;
+            if let Some(elf) = elf::read_bytes(&bytes)
+                && elf.is_executable()
+            {
+                self.elves.insert(item.path.clone(), elf);
+            }
+        } else if got >= 2 && &head[..2] == b"#!" {
+            self.shebangs.push(item.path.clone());
+        }
+        Ok(())
+    }
 }
 
 fn is_icon_name(name: &str) -> Option<&'static str> {
@@ -322,57 +374,20 @@ impl IconSignals {
     }
 }
 
-/// Reads the heads of the files that matter in one pass.
-fn read_heads(archive: &Path, format: Format, index: &Index) -> Result<Heads, Error> {
+/// Reads the archive once: its index and the heads of the files that
+/// matter, with `cancel` checked between entries and `progress` told the
+/// bytes of the file read so far.
+pub(crate) fn read_archive(
+    path: &Path,
+    format: Format,
+    cancel: &CancelToken,
+    progress: &mut OnProgress<'_>,
+) -> Result<(Index, Heads), Error> {
     let mut heads = Heads::default();
-    archive::visit(archive, format, &mut |item, reader| {
-        if item.kind != ItemKind::File || item.hostile {
-            return Ok(Visit::Next);
-        }
-        let Some(rel) = index.relative(&item.path) else {
-            return Ok(Visit::Next);
-        };
-        let name = item.name();
-        let lower = name.to_ascii_lowercase();
-        if lower.ends_with(".desktop") {
-            let mut text = Vec::new();
-            reader
-                .take(TEXT_MAX)
-                .read_to_end(&mut text)
-                .map_err(crate::error::io_read)?;
-            heads
-                .desktops
-                .insert(rel.to_owned(), String::from_utf8_lossy(&text).into_owned());
-            return Ok(Visit::Next);
-        }
-        if is_icon_name(name).is_some() {
-            let mut head = [0u8; 24];
-            let got = read_up_to(reader, &mut head)?;
-            heads.icons.insert(rel.to_owned(), png_size(&head[..got]));
-            return Ok(Visit::Next);
-        }
-        if is_library_name(name) || item.size < 2 {
-            return Ok(Visit::Next);
-        }
-        let mut head = [0u8; 4];
-        let got = read_up_to(reader, &mut head)?;
-        if got == 4 && elf::is_elf(&head) && item.size >= 52 {
-            let mut bytes = head.to_vec();
-            reader
-                .take(ELF_HEAD - 4)
-                .read_to_end(&mut bytes)
-                .map_err(crate::error::io_read)?;
-            if let Some(elf) = elf::read_bytes(&bytes)
-                && elf.is_executable()
-            {
-                heads.elves.insert(rel.to_owned(), elf);
-            }
-        } else if got >= 2 && &head[..2] == b"#!" && rel.starts_with("bin/") {
-            heads.shebangs.push(rel.to_owned());
-        }
-        Ok(Visit::Next)
+    let index = archive::scan(path, format, cancel, progress, &mut |item, reader| {
+        heads.probe(item, reader)
     })?;
-    Ok(heads)
+    Ok((index, heads))
 }
 
 fn read_up_to(reader: &mut dyn Read, buf: &mut [u8]) -> Result<usize, Error> {
@@ -388,16 +403,34 @@ fn read_up_to(reader: &mut dyn Read, buf: &mut [u8]) -> Result<usize, Error> {
     Ok(filled)
 }
 
-/// Detects what the archive at `path` is and proposes the form's defaults.
+/// Detects what the archive at `path` is and proposes the form's defaults,
+/// reading the whole archive without a cancel or progress; the actions use
+/// [`detect_with`] from a job.
 ///
 /// # Errors
 ///
 /// The errors of reading the archive.
-#[allow(clippy::too_many_lines)]
 pub fn detect(path: &Path) -> Result<Detected, Error> {
+    detect_with(path, &CancelToken::new(), &mut |_| {})
+}
+
+/// Detects what the archive at `path` is and proposes the form's defaults.
+/// The archive is read in one streaming pass: `cancel` is checked between
+/// entries and `progress` is told the bytes of the file read so far.
+///
+/// # Errors
+///
+/// `Error::Cancelled` when `cancel` fires; the errors of reading the
+/// archive.
+#[allow(clippy::too_many_lines)]
+pub fn detect_with(
+    path: &Path,
+    cancel: &CancelToken,
+    progress: &mut OnProgress<'_>,
+) -> Result<Detected, Error> {
     let format = Format::detect(path)?;
-    let index = Arc::new(archive::index(path, format)?);
-    let heads = read_heads(path, format, &index)?;
+    let (index, heads) = read_archive(path, format, cancel, progress)?;
+    let index = Arc::new(index);
 
     let hostile: Vec<String> = index
         .items
@@ -411,7 +444,7 @@ pub fn detect(path: &Path) -> Result<Detected, Error> {
         .iter()
         .filter_map(|i| {
             let rel = index.relative(&i.path)?;
-            heads.elves.get(rel).map(|elf| Candidate {
+            heads.elves.get(&i.path).map(|elf| Candidate {
                 rel: rel.to_owned(),
                 elf: elf.clone(),
             })
@@ -431,11 +464,17 @@ pub fn detect(path: &Path) -> Result<Detected, Error> {
             .any(|f| SOURCE_MARKERS.contains(f) || *f == "src");
 
     let desktop = {
-        let mut paths: Vec<&String> = heads.desktops.keys().collect();
-        paths.sort_by_key(|p| (p.matches('/').count(), (*p).clone()));
-        paths.first().map(|rel| ShippedDesktop {
-            rel: (*rel).clone(),
-            entry: DesktopEntry::parse(&heads.desktops[*rel]),
+        // The shallowest desktop entry, by its path inside the version
+        // folder; a hostile or top-level-folder entry has none.
+        let mut paths: Vec<(&str, &String)> = heads
+            .desktops
+            .iter()
+            .filter_map(|(path, text)| index.relative(path).map(|rel| (rel, text)))
+            .collect();
+        paths.sort_by_key(|(rel, _)| (rel.matches('/').count(), (*rel).to_owned()));
+        paths.first().map(|(rel, text)| ShippedDesktop {
+            rel: (*rel).to_owned(),
+            entry: DesktopEntry::parse(text),
         })
     };
 
@@ -534,7 +573,7 @@ pub fn detect(path: &Path) -> Result<Detected, Error> {
             Some(IconFile {
                 rel: rel.to_owned(),
                 ext: ext.to_owned(),
-                size: heads.icons.get(rel).copied().flatten(),
+                size: heads.icons.get(&i.path).copied().flatten(),
                 bytes: i.size,
             })
         })
@@ -566,7 +605,14 @@ pub fn detect(path: &Path) -> Result<Detected, Error> {
         .iter()
         .filter(|c| c.rel.strip_prefix("bin/").is_some_and(|r| !r.contains('/')))
         .map(|c| c.rel.clone())
-        .chain(heads.shebangs.iter().cloned())
+        .chain(
+            heads
+                .shebangs
+                .iter()
+                .filter_map(|path| index.relative(path))
+                .filter(|rel| rel.starts_with("bin/"))
+                .map(str::to_owned),
+        )
         .collect();
     bins.sort();
     bins.dedup();
