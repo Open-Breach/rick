@@ -453,16 +453,37 @@ fn the_decorator_answers_pending_first_then_publishes_and_then_from_cache() {
         "{panel:?}"
     );
     assert!(decorator.panel(&entries(&[dir.path()])[0]).is_none());
+}
 
-    // A folder with a change inside rolls it up.
+#[test]
+fn a_folder_with_a_change_inside_rolls_it_up() {
+    let Some((_dir, work)) = repo() else {
+        return;
+    };
     fs::write(work.join("sub/inner.txt"), "changed\n").unwrap_or_else(|e| panic!("{e}"));
-    decorator.invalidate(&loc(&work.join(".svn")));
+    let h = harness();
+    let decorator = h
+        .registry
+        .decorators()
+        .first()
+        .cloned()
+        .unwrap_or_else(|| panic!("decorator"));
     h.snapshot(&work);
-    let again = decorator.decorate(&batch, &ctx);
-    assert_eq!(again[1].1.badge.map(|b| b.glyph), Some("•"));
+    let ctx = DecorateCtx::new(loc(&work), CancelToken::new(), h.jobs.clone(), |_| {});
+    let batch = entries(&[&work.join("tracked.txt"), &work.join("sub")]);
+    let decorated = decorator.decorate(&batch, &ctx);
+    assert_eq!(decorated[0].1.badge, None, "tracked.txt is unchanged");
+    assert_eq!(decorated[1].1.badge.map(|b| b.glyph), Some("•"));
     assert!(
-        again[1].1.tint.is_none(),
+        decorated[1].1.tint.is_none(),
         "a roll-up keeps the name's colour"
+    );
+    assert!(
+        decorated[1]
+            .1
+            .cells
+            .iter()
+            .any(|(_, c)| *c == CellValue::Text("Changes inside".into()))
     );
 }
 
