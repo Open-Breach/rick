@@ -9,6 +9,18 @@ the pull request that brought the change.
 
 ### Added
 
+- `ext-preview-3d`, the 3D model previewer, as a plugin in `plugins/`:
+  STL (ASCII and binary), OBJ (materials read for their colour) and 3MF
+  (units and build transforms honoured) files render through wgpu into the
+  preview frame as a shaded solid over a ground grid; dragging orbits, the
+  wheel zooms, a double-click resets the view, and the view is kept per
+  file while it is open. The status bar shows the format, the triangle
+  count, the bounding box in millimetres and, for OBJ, the object count;
+  File info adds the 3MF unit and metadata. A model over the triangle
+  budget (`triangle_budget` in `preview-3d.toml`, 2 000 000 by default) is
+  decimated for the preview and the status bar says so; without a graphics
+  adapter the preview shows the facts and says rendering is unavailable
+  (#19).
 - `ext-installer`, the tarball installer of `specs/ext-installer.md`, as a
   plugin (#44): *Install as application…* on a tar (gz, xz, bz2, zst) or
   zip archive reads its index and the headers of its programs to tell a
@@ -31,7 +43,7 @@ the pull request that brought the change.
   *Forget* and *Remove staging folder*. Linux only: the plugin loads on
   every platform and hides its actions elsewhere; system-wide installs
   show as unavailable until the privileged helper's milestone. The
-  extension API is version 8: `ActionOutcome::Navigate` takes a pane to a
+  extension API is version 9: `ActionOutcome::Navigate` takes a pane to a
   location and `platform::Elevate` runs a program as the administrator
   (`pkexec` on Linux).
 - Search as plugins (#22): `ext-search-walk` carries the subdirectory
@@ -188,6 +200,12 @@ the pull request that brought the change.
 
 ### Changed
 
+- The extension API is at version 8: a previewer can claim the pointer over
+  its content as `PreviewControl::Pointer` controls (a drag, the wheel, a
+  double-click), which the preview pane and the viewer hand to `set_control`
+  as `ControlValue::Delta` or `Pressed` instead of panning, scrolling or
+  switching to 1:1; a control change keeps the last frame on screen until
+  the next one is rendered (#19).
 - The extension API is at version 7: `Provider` gained `transfer()` behind
   `NATIVE_TRANSFER`, `Capabilities` gained `REMOTE` and the registry takes a
   `Connector` per network provider (#21).

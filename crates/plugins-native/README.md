@@ -117,7 +117,7 @@ writes `plugins/<id>/plugin.toml` beside a copy of the library:
 id = "hello"
 name = "Hello"
 version = "0.2.0-dev"
-api_version = 8
+api_version = 9
 points = ["action"]
 platforms = ["linux", "macos", "windows"]
 toolchain = "rustc 1.97.0 (2d8144b78 2026-07-07)"

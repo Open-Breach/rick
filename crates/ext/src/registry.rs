@@ -133,9 +133,11 @@ use crate::search::SearchIndex;
 /// [`SettingValue`] (QUESTIONS.md 123–126); 7 `Provider` gained `transfer`
 /// behind `NATIVE_TRANSFER`, `Capabilities` gained `REMOTE`, and the registry
 /// takes a [`Connector`] per network provider (QUESTIONS.md 135–137); 8
-/// `ActionOutcome` gained `Navigate` and `platform` gained `Elevate`
-/// (QUESTIONS.md 145–146).
-pub const API_VERSION: u32 = 8;
+/// `PreviewControl` gained `Pointer` (a drag, the wheel or a double-click
+/// over the content handed to the document) and `ControlValue` gained
+/// `Delta` (QUESTIONS.md 142); 9 `ActionOutcome` gained `Navigate` and
+/// `platform` gained `Elevate` (QUESTIONS.md 149–150).
+pub const API_VERSION: u32 = 9;
 
 bitflags::bitflags! {
     /// The extension points an extension fills, as its manifest declares

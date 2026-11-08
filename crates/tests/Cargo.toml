@@ -57,6 +57,8 @@ ext-action-compress = { workspace = true }
 ext-action-compare = { workspace = true }
 ext-action-terminal = { workspace = true }
 ext-action-rename = { workspace = true }
+# The 3D previewer plugin of issue 19, the same way.
+ext-preview-3d = { workspace = true }
 # The tarball installer of issue 44, with its generated fixture archives.
 ext-installer = { workspace = true, features = ["fixtures"] }
 plugins-native = { workspace = true }

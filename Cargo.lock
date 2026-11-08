@@ -2045,6 +2045,29 @@ dependencies = [
 ]
 
 [[package]]
+name = "ext-preview-3d"
+version = "0.2.0-dev"
+dependencies = [
+ "bytemuck",
+ "ext",
+ "flate2",
+ "platform",
+ "pollster 0.4.0",
+ "roxmltree",
+ "runtime",
+ "stl_io",
+ "tempfile",
+ "thiserror 2.0.21",
+ "tobj",
+ "toml 0.9.12+spec-1.1.0",
+ "tracing",
+ "types",
+ "vfs-local",
+ "wgpu",
+ "zip",
+]
+
+[[package]]
 name = "ext-preview-archive"
 version = "0.2.0-dev"
 dependencies = [
@@ -6683,6 +6706,7 @@ dependencies = [
  "ext-action-terminal",
  "ext-git",
  "ext-installer",
+ "ext-preview-3d",
  "ext-preview-archive",
  "ext-preview-code",
  "ext-preview-csv",
@@ -7630,6 +7654,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a2eb9349b6444b326872e140eb1cf5e7c522154d69e7a0ffb0fb81c06b37543f"
 
 [[package]]
+name = "stl_io"
+version = "0.11.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "567641995c51a3b8befddb13e1826187bcf7eb7ca8d13746bfd1cc5a22e89fa8"
+
+[[package]]
 name = "strict-num"
 version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7767,6 +7797,7 @@ dependencies = [
  "ext-action-terminal",
  "ext-git",
  "ext-installer",
+ "ext-preview-3d",
  "ext-preview-archive",
  "ext-preview-code",
  "ext-preview-csv",
@@ -7918,6 +7949,12 @@ name = "tinyvec"
 version = "1.13.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "fd3ca314f692efd6c868f8408f53fe444634a845f96c028b97d35f6a1f79f0ee"
+
+[[package]]
+name = "tobj"
+version = "4.0.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6eb8e04167c1c0c76b5de63226fd733485ad63ef71e40de31e16272f47b099e2"
 
 [[package]]
 name = "tokio"
