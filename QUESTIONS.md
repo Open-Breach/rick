@@ -1721,8 +1721,10 @@ Once answered, an entry keeps its number and gains a dated decision line.
 
 141. (issue 21) The acceptance names containers for Linux CI and "where
     Docker is available" for the other runners.
-    Assumed: tier 1 and the Linux x64 job of tier 2 start MinIO, Azurite,
-    fake-gcs-server and atmoz/sftp with `docker run`
+    Assumed: tier 1 and the Linux x64 job of tier 2 start MinIO (Bitnami's
+    frozen `bitnamilegacy/minio:2025.7.23-debian-12-r5`, since MinIO's
+    community edition is source only and Docker Hub's `minio/minio` is
+    gone), Azurite, fake-gcs-server and atmoz/sftp with `docker run`
     (`.github/scripts/containers.sh`), name them to the tests through
     `RICK_S3_ENDPOINT` and friends and set `RICK_REQUIRE_CONTAINERS`, so a
     round trip that would skip for a missing variable fails there; the

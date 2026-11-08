@@ -9,9 +9,12 @@
 # they create; the containers die with the job.
 set -euo pipefail
 
+# MinIO's community edition is source only since 2025 and Docker Hub's
+# minio/minio is gone; Bitnami's frozen build of the last release is the
+# MinIO that still pulls, pinned since the legacy repository never moves.
 docker run -d --name rick-minio -p 9000:9000 \
   -e MINIO_ROOT_USER=minioadmin -e MINIO_ROOT_PASSWORD=minioadmin \
-  minio/minio server /data
+  bitnamilegacy/minio:2025.7.23-debian-12-r5
 docker run -d --name rick-azurite -p 10000:10000 \
   mcr.microsoft.com/azure-storage/azurite azurite-blob --blobHost 0.0.0.0 --skipApiVersionCheck
 docker run -d --name rick-gcs -p 4443:4443 \
