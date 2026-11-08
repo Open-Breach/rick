@@ -4738,10 +4738,13 @@ version = "0.2.0-dev"
 dependencies = [
  "ext",
  "futures",
+ "globset",
  "platform",
+ "regex",
  "runtime",
  "tempfile",
  "tokio",
+ "toml 0.9.12+spec-1.1.0",
  "tracing",
  "types",
  "vfs",

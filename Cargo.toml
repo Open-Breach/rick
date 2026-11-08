@@ -83,6 +83,15 @@ gstreamer-app = "0.25"
 gstreamer-audio = "0.25"
 gstreamer-video = "0.25"
 gstreamer-pbutils = "0.25"
+# Select by pattern (glob and regular expression) in the core actions,
+# bulk rename's find and replace; the text diff of `ext-action-compare`;
+# the console of `ext-action-terminal` (a pseudo-terminal and the parser
+# of its escape sequences).
+globset = "0.4"
+regex = "1"
+similar = "2"
+portable-pty = "0.9"
+vte = "0.15"
 anyhow = "1"
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 eframe = "0.36"
