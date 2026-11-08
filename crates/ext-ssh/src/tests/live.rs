@@ -1066,11 +1066,11 @@ fn identity_files_passphrases_keyboard_interactive_and_passwords_authenticate() 
 #[cfg(unix)]
 #[test]
 fn the_agent_authenticates_when_it_holds_a_key() {
+    use futures::StreamExt as _;
+
     if !unix_shell_or_skip() {
         return;
     }
-    use futures::StreamExt as _;
-
     let home = remote_home();
     runtime::block_on(async {
         let identity = fake_sshd::test_key(12);
@@ -1122,11 +1122,11 @@ fn the_agent_authenticates_when_it_holds_a_key() {
 
 #[test]
 fn the_console_opens_a_shell_in_the_folder_and_the_terminal_gets_the_command() {
+    use ext::Console as _;
+
     if !unix_shell_or_skip() {
         return;
     }
-    use ext::Console as _;
-
     let home = remote_home();
     let world = World::new(trust_and_save);
     world.remember("box", "password", "rickpass");

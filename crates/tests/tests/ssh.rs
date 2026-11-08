@@ -1229,11 +1229,11 @@ fn press_escape(harness: &mut egui_kittest::Harness<'_, ui_egui::RickUi>) {
 // the host-key dialogue.
 #[allow(clippy::too_many_lines)]
 fn host_rows_offer_the_ssh_actions_and_the_host_key_dialogue_asks_before_connecting() {
+    use egui_kittest::kittest::Queryable as _;
+
     if !unix_shell_or_skip() {
         return;
     }
-    use egui_kittest::kittest::Queryable as _;
-
     let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
     let home = remote_home();
     let server = start_server(home.path());
@@ -1384,11 +1384,11 @@ fn host_rows_offer_the_ssh_actions_and_the_host_key_dialogue_asks_before_connect
 // One scenario start to finish; splitting it would repeat the server.
 #[allow(clippy::too_many_lines)]
 fn a_connection_that_fails_shows_a_banner_with_retry_not_a_dialogue() {
+    use egui_kittest::kittest::Queryable as _;
+
     if !unix_shell_or_skip() {
         return;
     }
-    use egui_kittest::kittest::Queryable as _;
-
     let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
     let home = remote_home();
     // A port nothing listens on yet.
