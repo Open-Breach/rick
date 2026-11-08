@@ -126,6 +126,9 @@ runs:
       shell: pwsh
       run: |
         choco install -y --no-progress svn
+        # The installer puts its bin directory on the machine's PATH, which
+        # the steps after this one do not see; they see GITHUB_PATH.
+        echo "C:\Program Files (x86)\Subversion\bin" >> $env:GITHUB_PATH
         echo "RICK_REQUIRE_SVN=1" >> $env:GITHUB_ENV
         Set-Service WSearch -StartupType Automatic
         Start-Service WSearch

@@ -45,7 +45,7 @@ jobs:
       # the point of the matrix.
       fail-fast: false
       matrix:
-        os: [macos-latest]
+        os: [windows-latest]
     runs-on: ${{ matrix.os }}
     # The Windows runner spends about 15 minutes on the steps and several
     # more saving the cache, which the shared libraries and the plugin
@@ -65,80 +65,42 @@ jobs:
         with: { ref: "${{ env.CHECKOUT_REF }}" }
       - uses: ./.github/actions/setup
         with: { components: "rustfmt, clippy", system: test }
-      - run: cargo fmt --check
-      # No Unicode symbol character is used as an icon (SPEC.md "Icons").
-      - run: "! grep -rnP '(*UTF8)[\\x{2190}-\\x{2BFF}\\x{1F300}-\\x{1FAFF}]' crates/ui-egui/src"
-        if: matrix.os == 'ubuntu-24.04'
-      - run: cargo clippy --workspace --all-targets ${{ env.RICK_WS_FEATURES }} -- -D warnings
-      # Issues 21 and 34: the provider plugins' round trips run against
-      # MinIO, Azurite, fake-gcs-server and the sshd containers on Linux x64,
-      # where Docker is; macOS, Windows and Linux arm64 run the plugins' unit
-      # tests and skip the round trips with a note.
-      - name: storage and ssh containers
-        if: matrix.os == 'ubuntu-24.04'
-        run: .github/scripts/containers.sh
-      # Linux runs the tests with Tracker and Baloo indexing a fixture
-      # directory on a private session bus; macOS and Windows have their
-      # platform index on the runner (issue 22).
-      # Every test binary runs even after one fails, so one run of the
-      # matrix names every failure of a platform, not the first.
-      - run: .github/scripts/with-indexers.sh cargo test --workspace --no-fail-fast ${{ env.RICK_WS_FEATURES }}
-        if: runner.os == 'Linux'
-      # Diagnostic (throwaway branch): run the actions tests alone, one at
-      # a time, and sample the process when a test hangs.
-      - name: actions tests with a stack sample
-        if: runner.os != 'Linux'
-        shell: bash
+      # Diagnostic (throwaway branch): is a new file under the fixture
+      # directory indexed by Windows Search at all, and how soon, asked
+      # through the index's own OLE DB provider rather than Rick.
+      - name: windows search indexing probe
+        shell: pwsh
         run: |
-          cargo test --workspace --no-run
-          bin=$(ls -t target/debug/deps/actions-* | grep -v '\.d$' | head -1)
-          echo "running $bin"
-          RUST_BACKTRACE=1 RUST_LOG=debug "$bin" --test-threads=1 --nocapture &
-          pid=$!
-          for i in $(seq 1 75); do sleep 2; kill -0 $pid 2>/dev/null || break; done
-          if kill -0 $pid 2>/dev/null; then
-            echo "::group::sample of the hung test process"
-            sample $pid 3 -file "$RUNNER_TEMP/sample.txt" || true
-            sed -n '1,600p' "$RUNNER_TEMP/sample.txt"
-            echo "::endgroup::"
-            kill -9 $pid
-            exit 1
-          fi
-          wait $pid
-      # Issue 16: the bundle, target/debug/bundle/ with the binary, the kernel
-      # dylibs, libstd and plugins/<id>/ per plugin, and the host loading
-      # them from it. The same whole-workspace build as the tests: a smaller
-      # package set would rewrite the shared libraries (QUESTIONS.md 81).
-      - run: cargo xtask bundle ${{ env.RICK_WS_FEATURES }}
-      # Every plugin built for this platform loads through --list-plugins;
-      # the connectors for the other platforms are not bundled (issue 22).
-      - name: list plugins
-        shell: bash
-        run: .github/scripts/check-plugins.sh target/debug/bundle
-      - run: cargo doc --no-deps ${{ env.RICK_WS_FEATURES }}
-        env: { RUSTDOCFLAGS: "-D warnings" }
-      # The two integration tests on the 200k fixture that are not timings:
-      # a new search text cancels the running walk (close-out A), and a
-      # job's progress events stay at twenty a second (0.2 milestone 2). In
-      # release, as their fixture asks, on Linux x64, where the fixture
-      # takes a minute; what they check is not the platform's. The timed
-      # tests on the fixture are bench.yml's.
-      - name: integration tests on the 200k fixture
-        if: matrix.os == 'ubuntu-24.04'
-        run: cargo test -p tests --release ${{ env.RICK_TESTS_FEATURES }} --test closeout --test side_panel -- --ignored --nocapture --test-threads=1 a_new_text_cancels_the_running_walk_on_the_200k_fixture progress_over_the_200k_fixture_is_throttled_to_twenty_events_a_second
-        env: { TMP: "${{ runner.temp }}", TEMP: "${{ runner.temp }}", TMPDIR: "${{ runner.temp }}" }
-      # Screenshots of the chrome for the pull request, through wgpu on the
-      # runner's software adapter: lavapipe on Linux x64, Metal on macOS.
-      # Not on Windows: the dx12 software adapter (WARP) on the runner
-      # crashed the test process once in four runs (run 42314323512), and
-      # a screenshot step that fails by chance would block a release.
-      - name: screenshots
-        if: matrix.os == 'ubuntu-24.04' || runner.os == 'macOS'
-        shell: bash
-        run: |
-          if [ "$RUNNER_OS" = "Linux" ]; then sudo apt-get install -y mesa-vulkan-drivers; fi
-          cargo test -p tests --release ${{ env.RICK_TESTS_FEATURES }} --features screenshots --test screenshots -- --ignored --nocapture
-        env: { TMP: "${{ runner.temp }}", TEMP: "${{ runner.temp }}", TMPDIR: "${{ runner.temp }}", WGPU_BACKEND: "${{ runner.os == 'macOS' && 'metal' || 'vulkan' }}" }
+          Get-Service WSearch | Format-List Name, Status, StartType
+          $fixture = $env:RICK_SEARCH_FIXTURE
+          $stem = "ricksearchprobe$([DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds())"
+          $file = Join-Path $fixture "$stem.txt"
+          Set-Content -Path $file -Value "indexed by the probe"
+          $conn = New-Object System.Data.OleDb.OleDbConnection("Provider=Search.CollatorDSO;Extended Properties='Application=Windows';")
+          $conn.Open()
+          $sw = [Diagnostics.Stopwatch]::StartNew()
+          $found = $false
+          while ($sw.Elapsed.TotalSeconds -lt 600) {
+            $cmd = $conn.CreateCommand()
+            $cmd.CommandText = "SELECT System.ItemPathDisplay FROM SystemIndex WHERE System.FileName LIKE '$stem%'"
+            $r = $cmd.ExecuteReader()
+            while ($r.Read()) { $found = $true; Write-Host "found: $($r[0]) after $($sw.Elapsed)" }
+            $r.Close()
+            if ($found) { break }
+            Start-Sleep -Seconds 10
+          }
+          $cmd = $conn.CreateCommand()
+          $cmd.CommandText = "SELECT TOP 5 System.ItemPathDisplay FROM SystemIndex WHERE SCOPE='file:$fixture'"
+          $r = $cmd.ExecuteReader(); $n = 0
+          while ($r.Read()) { $n++; Write-Host "in scope: $($r[0])" }
+          $r.Close()
+          Write-Host "items under the fixture scope: $n"
+          $cmd.CommandText = "SELECT TOP 3 System.ItemPathDisplay FROM SystemIndex WHERE SCOPE='file:$env:USERPROFILE'"
+          $r = $cmd.ExecuteReader(); $n = 0
+          while ($r.Read()) { $n++; Write-Host "under the profile: $($r[0])" }
+          $r.Close()
+          Write-Host "profile items sampled: $n"
+          if (-not $found) { Write-Host "::warning::the file was not indexed within ten minutes" }
       - uses: actions/upload-artifact@v4
         if: always() && (matrix.os == 'ubuntu-24.04' || runner.os == 'macOS')
         with:

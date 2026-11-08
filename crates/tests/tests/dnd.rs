@@ -903,7 +903,7 @@ fn an_external_drop_with_a_position_lands_on_the_row_under_it() {
         .drag()
         .unwrap_or_else(|| panic!("an external drag"));
     assert!(
-        matches!(&view.target, Some(Target::Folder { to, .. }) if to.path.to_string_lossy().ends_with("/sub")),
+        matches!(&view.target, Some(Target::Folder { to, .. }) if to.path.file_name() == Some(b"sub".as_slice())),
         "{view:?}"
     );
     harness.input_mut().hovered_files.clear();
