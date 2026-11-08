@@ -138,6 +138,12 @@ hmac = "0.12"
 sha2 = "0.10"
 # HMAC-SHA1 for the hashed entries of `known_hosts` in the SSH plugin.
 sha1 = { version = "0.10", default-features = false }
+# Localisation (`ext::i18n`): Fluent messages, language identifiers, the
+# negotiation of the system language against the bundled ones, and the
+# system language itself.
+fluent-bundle = "0.16"
+unic-langid = "0.9"
+sys-locale = "0.3"
 hex = "0.4"
 base64 = "0.22"
 percent-encoding = "2"

@@ -25,10 +25,17 @@ through the `Prompts` the registry lends (`Registry::prompts`): a choice
 or a secret, shown by the shell as a dialogue and answered by id. The
 `terminal` module is the terminal emulator (`Screen` over `vte`) the
 console pane draws, so a plugin can open a console on a stream of its own
-(`View::Console`). It contains traits and plain data only, no
-implementation beyond the registry, the emulator and the `plugin!` macro
-that declares a plugin library's entry point, and it re-exports `platform`
-and `runtime` so an extension depends on `ext` and `types` alone. It is built as a Rust
+(`View::Console`). Every string an extension shows goes through the `t!` lookup
+(`i18n`): Fluent files the extension bundles and hands to
+`Registry::translations`, the kernel's own from `locales/`, the language
+the user chose or the system's, English as the fallback, and a file in the
+configuration directory overriding any of it; a label the registry keeps
+(a setting's, a connection field's, an info section's) is a `Text` key read
+live, so a language change relabels it too. It contains traits and plain
+data only, no implementation beyond the registry, the lookup, the emulator
+and the `plugin!` macro that declares a plugin library's entry point, and
+it re-exports `platform` and `runtime` so an extension depends on `ext`
+and `types` alone. It is built as a Rust
 dylib that the binary and every plugin library share, so the traits cross
 the library boundary as themselves (QUESTIONS.md 81). It depends on
 `types`, `runtime` and `platform`; `vfs`, `vfs-local`, `plugins-native` and

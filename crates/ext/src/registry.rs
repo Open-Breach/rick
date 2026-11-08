@@ -598,6 +598,17 @@ impl Registry {
         self.settings.push(schema);
     }
 
+    /// Hands the extension's translation files to the lookup
+    /// ([`crate::i18n`]): one `(language tag, Fluent source)` pair per
+    /// language, `include_str!`'d from the crate's `locales/` directory.
+    /// Every key the extension uses in [`t!`](crate::t) comes from here, and
+    /// English is the one language every key must have.
+    pub fn translations(&mut self, files: &[(&str, &str)]) {
+        for (language, source) in files {
+            crate::i18n::add_bundled(language, source);
+        }
+    }
+
     /// The points filled so far: the kinds of contribution registered.
     #[must_use]
     pub fn points(&self) -> Points {

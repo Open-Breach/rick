@@ -25,6 +25,11 @@
 //! *Connect*, *Disconnect* and *Remove* on its rows in the side panel
 //! ([`connection`]).
 //!
+//! Every string an extension shows the user goes through [`t!`] with a
+//! Fluent key ([`i18n`]): the extension bundles its translation files and
+//! hands them to [`Registry::translations`], and a label the registry keeps
+//! (a setting's, a connection field's) is a [`Text`] key read live.
+//!
 //! Each module's documentation carries a worked example of its extension
 //! point; [`registry`] shows how one extension contributes to two of them,
 //! and [`plugin`](mod@plugin) how a plugin library exports its extension to the host.
@@ -42,6 +47,7 @@ pub mod action;
 pub mod connection;
 pub mod decorator;
 pub mod form;
+pub mod i18n;
 pub mod plugin;
 pub mod preview;
 pub mod provider;
@@ -63,6 +69,7 @@ pub use decorator::{
 };
 pub use form::{Field, FieldKind, Form, Preview, PreviewRow, Value, Values};
 pub use futures::stream::BoxStream;
+pub use i18n::Text;
 pub use preview::{
     Block, Content, ControlId, ControlValue, Document, Frame, Gesture, Grid, Icon, Image,
     InfoSection, Inline, Listing, ListingEntry, PreviewControl, PreviewDoc, Previewer, Reads,
