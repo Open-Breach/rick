@@ -22,9 +22,9 @@ use types::Error;
 use crate::Native;
 use crate::time::parse_iso8601;
 use crate::traits::{
-    Application, Chrome, ConfigDir, ControlsSide, DragSource, Elevate, ElevatedOutput, OpenWith,
-    Properties, PropertiesOutcome, RecentItem, RecentlyUsed, StandardFolder, StandardFolders,
-    Terminal, Trash, TrashedItem, Volume, VolumeKind, Volumes, WindowChrome,
+    Application, Chrome, ConfigDir, ControlsSide, DragSource, Elevate, ElevatedOutput, ImageFormat,
+    Mount, OpenWith, Properties, PropertiesOutcome, RecentItem, RecentlyUsed, StandardFolder,
+    StandardFolders, Terminal, Trash, TrashedItem, Volume, VolumeKind, Volumes, WindowChrome,
 };
 use crate::trash_record::{self, TRASH_FILE};
 
@@ -248,6 +248,107 @@ fn volume_kind(mount_point: &Path, fs_type: &str) -> VolumeKind {
     } else {
         VolumeKind::Fixed
     }
+}
+
+impl Mount for Native {
+    /// DMG, ISO and raw images, through `hdiutil attach`.
+    fn mountable(&self) -> &'static [ImageFormat] {
+        crate::NATIVE_MOUNTABLE
+    }
+
+    /// `hdiutil attach -plist`: the image's file systems are mounted under
+    /// `/Volumes`, and the first mount point the property list names is
+    /// the volume returned; `diskutil eject` on it detaches the image.
+    fn mount_image(&self, path: &Path) -> Result<Volume, Error> {
+        let path = std::path::absolute(path).map_err(Error::from_io)?;
+        let name = path
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let format = ImageFormat::for_name(&name)
+            .filter(|f| crate::NATIVE_MOUNTABLE.contains(f))
+            .ok_or(Error::Unsupported(
+                "macOS mounts DMG, ISO and raw disk images only",
+            ))?;
+        let output = Command::new("hdiutil")
+            .args(["attach", "-plist"])
+            .arg(&path)
+            .stdin(Stdio::null())
+            .output()
+            .map_err(Error::from_io)?;
+        if !output.status.success() {
+            let said = String::from_utf8_lossy(&output.stderr);
+            let said = said.trim();
+            return Err(Error::Io(io::Error::other(if said.is_empty() {
+                format!("hdiutil exited with {}", output.status)
+            } else {
+                said.to_owned()
+            })));
+        }
+        let text = String::from_utf8_lossy(&output.stdout);
+        let mount_point = plist_mount_points(&text)
+            .into_iter()
+            .next()
+            .ok_or_else(|| {
+                Error::Io(io::Error::other(
+                    "hdiutil attach mounted no file system of the image",
+                ))
+            })?;
+        if let Ok(volumes) = self.volumes()
+            && let Some(volume) = volumes.into_iter().find(|v| v.mount_point == mount_point)
+        {
+            return Ok(volume);
+        }
+        let fs_type = fs_type_of(&mount_point);
+        let (total, free) =
+            crate::volumes::space(&mount_point).map_or((None, None), |(t, f)| (Some(t), Some(f)));
+        Ok(Volume {
+            name: mount_point
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or(name),
+            mount_point,
+            kind: if format == ImageFormat::Iso {
+                VolumeKind::Optical
+            } else {
+                VolumeKind::Removable
+            },
+            fs_type,
+            device: None,
+            total,
+            free,
+        })
+    }
+}
+
+/// The `mount-point` strings of `hdiutil attach -plist`'s output, in
+/// order: one per file system the image carries.
+fn plist_mount_points(text: &str) -> Vec<PathBuf> {
+    const KEY: &str = "<key>mount-point</key>";
+    let mut out = Vec::new();
+    let mut rest = text;
+    while let Some(at) = rest.find(KEY) {
+        rest = &rest[at + KEY.len()..];
+        let Some(start) = rest.find("<string>") else {
+            break;
+        };
+        let after = &rest[start + "<string>".len()..];
+        let Some(end) = after.find("</string>") else {
+            break;
+        };
+        out.push(PathBuf::from(xml_unescape(&after[..end])));
+        rest = &after[end..];
+    }
+    out
+}
+
+/// The five XML entities a property list escapes, undone.
+fn xml_unescape(text: &str) -> String {
+    text.replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&quot;", "\"")
+        .replace("&apos;", "'")
+        .replace("&amp;", "&")
 }
 
 impl StandardFolders for Native {
@@ -581,6 +682,20 @@ impl DragSource for Native {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn hdiutil_property_lists_name_their_mount_points() {
+        let text = "<plist><dict><key>system-entities</key><array><dict><key>dev-entry</key><string>/dev/disk4</string></dict><dict><key>content-hint</key><string>Apple_HFS</string><key>dev-entry</key><string>/dev/disk4s2</string><key>mount-point</key><string>/Volumes/Tom &amp; Jerry</string></dict></array></dict></plist>";
+        assert_eq!(
+            plist_mount_points(text),
+            [PathBuf::from("/Volumes/Tom & Jerry")]
+        );
+        assert!(plist_mount_points("<plist/>").is_empty());
+        assert!(matches!(
+            Native.mount_image(Path::new("/tmp/disk.vhdx")),
+            Err(Error::Unsupported(_))
+        ));
+    }
 
     #[test]
     fn mdfind_lines_give_a_path_and_a_time() {

@@ -47,9 +47,9 @@ use windows::core::{GUID, Interface, PCWSTR, PWSTR, w};
 use crate::Native;
 use crate::fs::windows::{filetime, io_error, wide};
 use crate::traits::{
-    Application, Chrome, ConfigDir, ControlsSide, DragSource, Elevate, ElevatedOutput, OpenWith,
-    Properties, PropertiesOutcome, RecentItem, RecentlyUsed, StandardFolder, StandardFolders,
-    Terminal, Trash, TrashedItem, Volume, VolumeKind, Volumes, WindowChrome,
+    Application, Chrome, ConfigDir, ControlsSide, DragSource, Elevate, ElevatedOutput, ImageFormat,
+    Mount, OpenWith, Properties, PropertiesOutcome, RecentItem, RecentlyUsed, StandardFolder,
+    StandardFolders, Terminal, Trash, TrashedItem, Volume, VolumeKind, Volumes, WindowChrome,
 };
 
 /// `System.Recycle.DeletedFrom`: the folder a recycled item came from.
@@ -512,6 +512,97 @@ fn known_folder(id: &GUID) -> Option<PathBuf> {
     // exactly once by `take_string`.
     let path = unsafe { SHGetKnownFolderPath(id, KF_FLAG_DEFAULT, None) }.ok()?;
     take_string(path).map(PathBuf::from)
+}
+
+impl Mount for Native {
+    /// ISO, VHD and VHDX, through `Mount-DiskImage`.
+    fn mountable(&self) -> &'static [ImageFormat] {
+        crate::NATIVE_MOUNTABLE
+    }
+
+    /// `Mount-DiskImage` through PowerShell: an ISO becomes a virtual DVD
+    /// drive, a VHD or VHDX a disk whose partitions get drive letters; the
+    /// first drive letter is the volume returned.
+    fn mount_image(&self, path: &Path) -> Result<Volume, Error> {
+        let path = std::path::absolute(path).map_err(Error::from_io)?;
+        let name = path
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let format = ImageFormat::for_name(&name)
+            .filter(|f| crate::NATIVE_MOUNTABLE.contains(f))
+            .ok_or(Error::Unsupported(
+                "Windows mounts ISO, VHD and VHDX images only",
+            ))?;
+        // A single-quoted PowerShell string: the quote doubled, nothing
+        // else interpreted. No double quotes anywhere in the script, so the
+        // command line reaches PowerShell as written.
+        let quoted = path.to_string_lossy().replace('\'', "''");
+        let script = format!(
+            "$ErrorActionPreference = 'Stop'; \
+             $image = Mount-DiskImage -ImagePath '{quoted}' -PassThru; \
+             $volumes = if ($image.StorageType -eq 1) {{ $image | Get-Volume }} \
+             else {{ $image | Get-Disk | Get-Partition | Get-Volume }}; \
+             $volumes | Where-Object {{ $_.DriveLetter }} | ForEach-Object {{ $_.DriveLetter.ToString() }}"
+        );
+        let output = std::process::Command::new("powershell.exe")
+            .args([
+                "-NoProfile",
+                "-NonInteractive",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-Command",
+                &script,
+            ])
+            .stdin(Stdio::null())
+            .output()
+            .map_err(Error::from_io)?;
+        if !output.status.success() {
+            let said = String::from_utf8_lossy(&output.stderr);
+            let said = said.trim();
+            return Err(Error::Io(io::Error::other(if said.is_empty() {
+                format!("Mount-DiskImage exited with {}", output.status)
+            } else {
+                said.to_owned()
+            })));
+        }
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let letter = stdout
+            .lines()
+            .map(str::trim)
+            .filter_map(|line| {
+                let mut chars = line.chars();
+                match (chars.next(), chars.next()) {
+                    (Some(c), None) if c.is_ascii_alphabetic() => Some(c.to_ascii_uppercase()),
+                    _ => None,
+                }
+            })
+            .next()
+            .ok_or_else(|| {
+                Error::Io(io::Error::other(
+                    "Mount-DiskImage gave the image no drive letter",
+                ))
+            })?;
+        let mount_point = PathBuf::from(format!("{letter}:\\"));
+        if let Ok(volumes) = self.volumes()
+            && let Some(volume) = volumes.into_iter().find(|v| v.mount_point == mount_point)
+        {
+            return Ok(volume);
+        }
+        Ok(Volume {
+            name: format!("{letter}:"),
+            mount_point,
+            kind: if format == ImageFormat::Iso {
+                VolumeKind::Optical
+            } else {
+                VolumeKind::Removable
+            },
+            fs_type: String::new(),
+            device: None,
+            total: None,
+            free: None,
+        })
+    }
 }
 
 impl StandardFolders for Native {

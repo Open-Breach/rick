@@ -3,8 +3,10 @@
 //! Other crates program against the traits here and never against an
 //! operating system: [`Trash`], [`OpenWith`], [`Terminal`], [`Elevate`],
 //! [`Properties`], [`ConfigDir`], [`NativeDialogs`], [`Clipboard`],
-//! [`Chrome`], [`DragSource`], [`Volumes`], [`StandardFolders`],
-//! [`RecentlyUsed`] and [`Secrets`], bundled as [`Platform`]. [`Native`] is the real
+//! [`Chrome`], [`DragSource`], [`Volumes`], [`Mount`] (a disk image mounted
+//! through the OS: `udisksctl loop-setup`, `hdiutil attach`,
+//! `Mount-DiskImage`), [`StandardFolders`], [`RecentlyUsed`] and
+//! [`Secrets`], bundled as [`Platform`]. [`Native`] is the real
 //! implementation for the OS the binary runs on; [`Fake`] is the one tests
 //! use, with a private trash directory and recorded calls.
 //!
@@ -65,12 +67,33 @@ pub use perms::{
 pub use time::iso8601;
 pub use traits::{
     Application, Chrome, Clipboard, ConfigDir, ControlsSide, DialogFilter, DragSource, Elevate,
-    ElevatedOutput, NativeDialogs, OpenWith, Platform, Properties, PropertiesOutcome, RecentItem,
-    RecentlyUsed, Secrets, StandardFolder, StandardFolders, Terminal, Trash, TrashedItem, Volume,
-    VolumeKind, Volumes, WindowChrome,
+    ElevatedOutput, ImageFormat, Mount, NativeDialogs, OpenWith, Platform, Properties,
+    PropertiesOutcome, RecentItem, RecentlyUsed, Secrets, StandardFolder, StandardFolders,
+    Terminal, Trash, TrashedItem, Volume, VolumeKind, Volumes, WindowChrome,
 };
 pub use trash_record::TRASH_FILE;
 use types::Error;
+
+/// The disk-image formats this operating system mounts natively, as
+/// [`Mount::mountable`] answers for [`Native`] and the [`Fake`] by default:
+/// ISO, VHD and VHDX on Windows, DMG, ISO and raw images on macOS, ISO and
+/// raw images on Linux.
+pub const NATIVE_MOUNTABLE: &[ImageFormat] = native_mountable();
+
+const fn native_mountable() -> &'static [ImageFormat] {
+    #[cfg(target_os = "linux")]
+    {
+        &[ImageFormat::Iso, ImageFormat::Img]
+    }
+    #[cfg(target_os = "macos")]
+    {
+        &[ImageFormat::Dmg, ImageFormat::Iso, ImageFormat::Img]
+    }
+    #[cfg(windows)]
+    {
+        &[ImageFormat::Iso, ImageFormat::Vhd, ImageFormat::Vhdx]
+    }
+}
 
 /// Whether the platform has a properties dialogue of its own
 /// ([`Properties::show`] opens it): Windows and macOS. Rick's own dialogue
