@@ -35,8 +35,10 @@ use std::future::Future;
 use std::sync::OnceLock;
 
 pub mod compute;
+mod conflict;
 mod job;
 
+pub use conflict::{ConflictWaker, Conflicts, name_of};
 pub use job::{JobCtx, JobEvent, JobHandle, JobRunner, PROGRESS_EVERY, PauseGate, ProgressSink};
 /// Re-exported so callers can name the channel types in [`JobHandle`] and
 /// [`JobRunner::with_events`] without depending on `tokio` themselves.
