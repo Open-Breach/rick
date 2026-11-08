@@ -1002,7 +1002,7 @@ fn leaving_the_window_hands_the_drag_to_the_platform() {
     press(&mut harness, from, egui::PointerButton::Primary);
     // A drag inside the window first, then one move past its edge.
     move_to(&mut harness, from, egui::pos2(4.0, from.y));
-    assert!(fake.dragged().is_empty());
+    assert_eq!(fake.dragged(), [] as [Vec<String>; 0]);
     harness.event(egui::Event::PointerMoved(egui::pos2(-40.0, from.y)));
     harness.step();
     assert!(fake.dragged().is_empty(), "the ghost-free frame goes first");
@@ -1046,7 +1046,7 @@ fn without_a_backend_window_the_drag_stays_inside() {
     move_to(&mut harness, from, egui::pos2(-40.0, from.y));
     harness.step();
     harness.step();
-    assert!(fake.dragged().is_empty());
+    assert_eq!(fake.dragged(), [] as [Vec<String>; 0]);
     assert!(harness.state().drag().is_some());
     release(
         &mut harness,
