@@ -87,6 +87,14 @@ jobs:
       # a note without the RICK_* variables and fail instead here.
       - name: storage and sftp containers
         run: .github/scripts/containers.sh
+      # Issue 24: a permission change the user may not make runs in the
+      # privileged helper through pkexec; no desktop here shows polkit's
+      # prompt, so a stand-in runs the helper through the runner's sudo and
+      # the elevation test (crates/rick/tests/perms.rs) runs for real.
+      - name: polkit stand-in
+        run: |
+          sudo install -m 755 .github/scripts/fake-pkexec.sh /usr/local/bin/pkexec
+          echo "RICK_ELEVATE_FIXTURE=1" >> "$GITHUB_ENV"
       # With Tracker and Baloo indexing a fixture directory on a private
       # session bus, so the two connectors answer through their real
       # services (issue 22).
