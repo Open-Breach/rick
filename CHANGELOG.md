@@ -9,6 +9,17 @@ the pull request that brought the change.
 
 ### Added
 
+- Permissions in Properties (#24): Properties on a local entry shows and
+  edits its owner, group and mode bits (`rwx` for user, group and other,
+  setuid, setgid and sticky, with the octal beside them) and the access
+  control list of its file system (POSIX and NFSv4 ACLs on Linux, macOS
+  ACLs, NTFS permissions with the trustees and the standard rights on
+  Windows); *Apply to enclosed items* changes a folder's contents too,
+  files and folders chosen separately; every change is one job with
+  progress and one undo step, whatever it touched. What the user may not
+  change goes to `rick-perms`, the privileged helper beside the binary,
+  through the platform's prompt (polkit, Authorization Services, User
+  Account Control) once per job, so Rick itself never runs elevated.
 - `ext-ssh`, SSH hosts browsed over a shell (#34): every host of
   `~/.ssh/config` (with its `Include`s, `HostName`, `User`, `Port`,
   `IdentityFile` and `ProxyJump` honoured) and every host added in the
@@ -232,6 +243,10 @@ the pull request that brought the change.
 
 ### Changed
 
+- Properties is Rick's own dialogue on every platform; on Windows and
+  macOS *System properties…* opens the platform's own as before (#24).
+- `platform::Elevate` runs a command as the administrator on macOS and
+  Windows too, not Linux alone (#24).
 - The extension API is at version 10: the registry lends `Prompts` to
   extensions, `Previewer` gained `reads()` (`Reads::Whole` or
   `Reads::Prefix`), `Provider` gained `open_read_at()` and

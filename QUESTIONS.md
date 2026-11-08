@@ -2023,3 +2023,94 @@ Once answered, an entry keeps its number and gains a dated decision line.
     a skip a failure. The macOS runner's sshd is not enabled (Remote Login
     is an interactive setting), so the `bsd` profile is proven by the
     command tests with BSD `stat -f` output.
+
+170. (issue 24) The spec's *Inspect* opens "the Windows Properties dialogue,
+    the macOS Get Info window, and on Linux Rick's own properties
+    dialogue", while the issue has Properties edit ownership, mode bits and
+    ACLs, an NTFS ACL entry added and removed on Windows among them, which
+    the system dialogues cannot be driven to.
+    Assumed: Properties is Rick's own dialogue on every platform, the
+    general rows above the Permissions section, and on Windows and macOS a
+    *System properties…* button opens the platform's own dialogue as
+    before. The dialogue follows the entry: a change sends the new state
+    back while it is open.
+
+171. (issue 24) "ACLs where the file system has them (POSIX ACLs, NFSv4
+    ACLs, NTFS ACLs on Windows with a trustee list)"; macOS has ACLs of its
+    own the issue does not name.
+    Assumed: one `Acl` type with a flavour per file system, read and
+    written by `platform::Permissions`: POSIX ACLs through the
+    `system.posix_acl_access` and `system.posix_acl_default` attributes
+    (the minimal list derived from the mode when none is stored, and
+    removed again when the list is reduced to its three base entries),
+    NFSv4 ACLs through `system.nfs4_acl` (shown and reduced in the
+    dialogue, new entries written with the server's tools since the `who`
+    forms and masks are the server's), macOS ACLs through `acl_to_text`
+    and `acl_from_text` (allow or deny, user or group, the permission
+    words `chmod +a` takes), NTFS discretionary ACLs through the security
+    API (allow or deny per trustee, the standard rights as checkboxes, the
+    raw mask shown, inherited entries greyed out and left to the parent,
+    inheritance blockable). No ACL library is linked.
+
+172. (issue 24) "Changes that need elevation ask through a new
+    `platform::Elevate` trait (polkit on Linux, Authorization Services on
+    macOS, UAC via a helper on Windows) and run only the privileged step
+    elevated"; the installer (issue 44) had added `Elevate` for Linux.
+    Assumed: the privileged step is `rick-perms`, a second binary beside
+    `rick` that reads a request file (the entries and their changes),
+    records what each had and applies them with the same platform code,
+    and prints the reply; a job applies every entry unprivileged first and
+    hands the ones refused to the helper in one call, so the user sees one
+    prompt per job. `Elevate::run_elevated` reaches `pkexec` on Linux,
+    `osascript … with administrator privileges` on macOS (Authorization
+    Services' own prompt) and `ShellExecuteEx` with `runas` on Windows,
+    where an elevated process shares no pipes, so the arguments get
+    `--output <file>` and the file comes back as the output; a program run
+    elevated honours that flag. `RICK_PERMS_HELPER` names the helper for
+    packagers who keep it elsewhere; a test binary finds it one directory
+    up from `deps/`.
+
+173. (issue 24) "Apply recursively with separate choices for files and
+    folders".
+    Assumed: the folder's dialogue has *Apply to enclosed items* with
+    *Files* and *Folders* boxes: which kinds the one change applies to
+    inside, the target folder itself always included; folders are walked
+    without following links. A mode that would lock folders out is the
+    user's choice, as `chmod -R` leaves it.
+
+174. (issue 24) "Every change a job with undo where the previous state was
+    captured".
+    Assumed: the job records each entry's owner, group, mode and ACL before
+    it changes it, the helper reports the same for the entries it changed,
+    and the whole job is one step on the undo stack; undo and redo run as
+    jobs of their own and may need the helper again, which prompts again.
+    An entry that fails is reported in a notification and the rest goes
+    on; nothing elevated runs when no entry was refused.
+
+175. (issue 24) "An elevation-needed change on a root-owned fixture prompts
+    (Linux CI with a polkit fake) and succeeds".
+    Assumed: the test job of tier 1 installs `.github/scripts/fake-pkexec.sh`
+    as `/usr/local/bin/pkexec`, which runs the program through the
+    runner's passwordless `sudo`, and sets `RICK_ELEVATE_FIXTURE`, under
+    which `crates/rick/tests/perms.rs` makes a file root's with `sudo`,
+    changes its mode through the job (refused, then the helper as root)
+    and undoes it; elsewhere that test prints a note and passes. The fake
+    platform runs the helper as the current user when a test asks
+    (`Fake::set_elevate_runs`), for the protocol round trip.
+
+176. (issue 24) Where the owner and group lists come from.
+    Assumed: `/etc/passwd` and `/etc/group` on Linux (a name typed resolves
+    through the C library, so LDAP and the like work by name), Open
+    Directory through `getpwent` and `getgrent` on macOS (the `_` service
+    accounts left out), the Net API's local users and groups plus the
+    well-known trustees (Everyone, Authenticated Users, SYSTEM,
+    Administrators, Users) on Windows; a name typed into the dialogue is
+    resolved when the change is applied.
+
+177. (issue 24) `Capabilities::PERMISSIONS` exists and the local provider
+    sets it, but `Provider` has no permission methods and the ssh spec says
+    the flag stays off there.
+    Assumed: permissions are the platform's business for local entries;
+    the Permissions section appears for a local entry only, every other
+    entry's Properties shows the general rows. A provider-level API waits
+    for a provider that wants it.
