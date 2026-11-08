@@ -592,7 +592,20 @@ fn a_100_mb_upload_streams_with_progress_and_cancelled_half_way_leaves_no_object
         peaks.len() >= 2,
         "progress was reported along the way: {peaks:?}"
     );
-    assert_eq!(peaks.last().copied(), Some(100 * 1024 * 1024));
+    // The job reports its item count right after the copy, and reports
+    // closer together than the runtime's window go out as the last one
+    // (`runtime::PROGRESS_EVERY`), so the final byte count is seen unless
+    // the item count took its window; then that count is the complete one.
+    let last = d.events.iter().rev().find_map(|e| match e {
+        Event::JobProgress { progress, .. } => Some(progress.clone()),
+        _ => None,
+    });
+    match last {
+        Some(types::Progress::Items { done, total }) => {
+            assert_eq!(Some(done), total, "the job's final item count is complete");
+        }
+        _ => assert_eq!(peaks.last().copied(), Some(100 * 1024 * 1024)),
+    }
     for event in &d.events {
         if let Event::JobDone { result: Err(e), .. } = event {
             panic!("the upload job failed: {e}");
