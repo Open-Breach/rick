@@ -80,9 +80,11 @@ jobs:
       # Linux runs the tests with Tracker and Baloo indexing a fixture
       # directory on a private session bus; macOS and Windows have their
       # platform index on the runner (issue 22).
-      - run: .github/scripts/with-indexers.sh cargo test --workspace ${{ env.RICK_WS_FEATURES }}
+      # Every test binary runs even after one fails, so one run of the
+      # matrix names every failure of a platform, not the first.
+      - run: .github/scripts/with-indexers.sh cargo test --workspace --no-fail-fast ${{ env.RICK_WS_FEATURES }}
         if: runner.os == 'Linux'
-      - run: cargo test --workspace ${{ env.RICK_WS_FEATURES }}
+      - run: cargo test --workspace --no-fail-fast ${{ env.RICK_WS_FEATURES }}
         if: runner.os != 'Linux'
       # Issue 16: the bundle, target/debug/bundle/ with the binary, the kernel
       # dylibs, libstd and plugins/<id>/ per plugin, and the host loading
