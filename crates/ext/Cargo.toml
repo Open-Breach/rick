@@ -22,6 +22,10 @@ futures = { workspace = true }
 semver = { workspace = true }
 smallvec = { workspace = true }
 tokio = { workspace = true, features = ["io-util"] }
+# The terminal emulator behind the console pane (`terminal`): the parser of
+# the escape sequences a shell writes, shared by every plugin that attaches
+# a stream to the pane (the local console, a shell over SSH).
+vte = { workspace = true }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["io-util"] }

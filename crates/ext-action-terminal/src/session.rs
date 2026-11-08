@@ -11,11 +11,10 @@ use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
+use ext::terminal::Screen;
 use ext::{Console, ConsoleWaker};
 use portable_pty::{Child, CommandBuilder, MasterPty, PtySize};
 use types::Error;
-
-use crate::screen::Screen;
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     // Plain state; a panic elsewhere leaves it usable.
@@ -105,7 +104,7 @@ impl Session {
     fn start_reader(self: &Arc<Self>, mut reader: Box<dyn Read + Send>) {
         let weak = Arc::downgrade(self);
         ext::runtime::handle().spawn_blocking(move || {
-            let mut parser = vte::Parser::new();
+            let mut parser = ext::terminal::vte::Parser::new();
             let mut buffer = vec![0u8; 64 * 1024];
             loop {
                 let read = match reader.read(&mut buffer) {

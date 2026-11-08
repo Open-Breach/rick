@@ -2,8 +2,8 @@
 //! terminal when the setting says so.
 //!
 //! [`Session`] runs the user's shell in a pseudo-terminal and keeps its
-//! output as a [`Screen`] of cells through a small terminal emulator; the
-//! UI draws the screen and writes what is typed. The action returns the
+//! output as a [`Screen`] of cells through the kernel's terminal emulator
+//! ([`ext::terminal`]); the UI draws the screen and writes what is typed. The action returns the
 //! session as an [`ext::View::Console`], and the application opens the tab.
 //! The setting `console` of `action-terminal.toml` (`embedded` or
 //! `system`) picks the system terminal instead, through
@@ -17,7 +17,6 @@
 // allowance (QUESTIONS.md 82).
 #![deny(unsafe_code)]
 
-pub mod screen;
 pub mod session;
 
 use std::path::PathBuf;
@@ -31,7 +30,7 @@ use ext::{
 };
 use types::{Error, ExtId, Location, ProviderId};
 
-pub use screen::Screen;
+pub use ext::terminal::Screen;
 pub use session::Session;
 
 /// The extension id, and the name of its settings file.

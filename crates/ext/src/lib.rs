@@ -47,6 +47,7 @@ pub mod preview;
 pub mod provider;
 pub mod registry;
 pub mod search;
+pub mod terminal;
 pub mod view;
 
 pub use action::{
