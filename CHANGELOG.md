@@ -26,7 +26,10 @@ the pull request that brought the change.
   all, Rick's own `wl_data_device` now takes them (#25).
 - `BENCHMARKS.md` carries the five-run numbers of every benchmark 0.2
   added and the macOS targets re-measured and tightened towards the spec's
-  numbers where the runner now meets them (#25).
+  numbers where the runner now meets them (the listing's first batch and
+  the PDF's first frame are back at the spec's); the two the runners fell
+  short of, cancelling on macOS and the fixture on Windows, follow what
+  the runners do (#25).
 
 - The viewer: Enter or a double-click opens a previewable file in a viewer
   tab of the pane, a dock tab like any other (split, dock, tear out). Left

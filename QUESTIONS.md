@@ -1440,4 +1440,8 @@ Once answered, an entry keeps its number and gains a dated decision line.
     workflow (viewer-frame, plugin-load, archive-zip-first, office-convert,
     waveform, zip-first, csv-window, previewers-frame) are filled from the
     same run, with the provisional macOS and Windows targets of
-    `plugin-load` and `archive-zip-first` set by the same rule.
+    `plugin-load` and `archive-zip-first` set by the same rule. Two targets
+    had to loosen by that rule rather than tighten, since the runner did
+    not meet them: cancelling the sparse copy on macOS (80 ms, was 50 ms)
+    and the fixture on Windows (45 s, was the spec's 30 s, QUESTIONS.md 5's
+    Defender case); `BENCHMARKS.md` says why beside each table.
