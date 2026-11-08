@@ -30,7 +30,7 @@ multiple-versions = "warn"
 deny = [
     { crate = "runtime", wrappers = ["platform", "ext", "vfs", "vfs-local", "vfs-rick", "model", "ops", "app", "ui-egui", "rick", "tests"] },
     { crate = "platform", wrappers = ["ext", "vfs", "vfs-local", "vfs-rick", "model", "ops", "app", "ui-egui", "rick", "tests"] },
-    { crate = "ext", wrappers = ["vfs", "vfs-local", "vfs-rick", "model", "ops", "app", "ui-egui", "rick", "tests", "ext-preview-text", "ext-preview-code", "ext-preview-image", "ext-preview-pdf", "ext-preview-office", "ext-preview-media", "ext-preview-archive", "ext-preview-csv", "ext-preview-hex", "ext-git", "ext-svn", "ext-vfs-trash", "ext-vfs-archive", "ext-search-walk", "ext-search-windows", "ext-search-spotlight", "ext-search-tracker", "ext-search-baloo", "ext-vfs-sftp", "ext-vfs-s3", "ext-vfs-azure", "ext-vfs-gcs", "plugins-native", "plugin-probe", "plugin-panic"] },
+    { crate = "ext", wrappers = ["vfs", "vfs-local", "vfs-rick", "model", "ops", "app", "ui-egui", "rick", "tests", "ext-preview-text", "ext-preview-code", "ext-preview-image", "ext-preview-pdf", "ext-preview-office", "ext-preview-media", "ext-preview-archive", "ext-preview-csv", "ext-preview-hex", "ext-git", "ext-svn", "ext-vfs-trash", "ext-vfs-archive", "ext-search-walk", "ext-search-windows", "ext-search-spotlight", "ext-search-tracker", "ext-search-baloo", "ext-vfs-sftp", "ext-vfs-s3", "ext-vfs-azure", "ext-vfs-gcs", "ext-action-compress", "ext-action-compare", "ext-action-terminal", "ext-action-rename", "plugins-native", "plugin-probe", "plugin-panic"] },
     { crate = "vfs", wrappers = ["vfs-local", "vfs-rick", "ops", "app", "ui-egui", "rick", "tests"] },
     { crate = "vfs-local", wrappers = ["vfs-rick", "ops", "app", "ui-egui", "rick", "tests"] },
     { crate = "vfs-rick", wrappers = ["ops", "app", "ui-egui", "rick", "tests"] },
@@ -51,12 +51,20 @@ deny = [
     { crate = "ext-preview-hex", wrappers = ["rick", "tests"] },
     { crate = "ext-git", wrappers = ["rick", "tests"] },
     { crate = "ext-vfs-trash", wrappers = ["rick", "tests"] },
-    { crate = "ext-vfs-archive", wrappers = ["rick", "tests"] },
+    # The compress plugin writes and reads archives through the archive
+    # provider's crate (QUESTIONS.md 127).
+    { crate = "ext-vfs-archive", wrappers = ["rick", "tests", "ext-action-compress"] },
     # The provider plugins of issue 21: SFTP and the three clouds.
     { crate = "ext-vfs-sftp", wrappers = ["rick", "tests"] },
     { crate = "ext-vfs-s3", wrappers = ["rick", "tests"] },
     { crate = "ext-vfs-azure", wrappers = ["rick", "tests"] },
     { crate = "ext-vfs-gcs", wrappers = ["rick", "tests"] },
+    # The action plugins of issue 23: loaded from `plugins/` by the host;
+    # the binary compiles one in only behind its opt-in feature.
+    { crate = "ext-action-compress", wrappers = ["rick", "tests"] },
+    { crate = "ext-action-compare", wrappers = ["rick", "tests"] },
+    { crate = "ext-action-terminal", wrappers = ["rick", "tests"] },
+    { crate = "ext-action-rename", wrappers = ["rick", "tests"] },
     # The previewer plugins of issue 18: loaded from `plugins/` by the host;
     # the binary compiles one in only behind its opt-in feature.
     { crate = "ext-preview-office", wrappers = ["rick", "tests"] },

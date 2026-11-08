@@ -18,7 +18,7 @@ fn open(path: &Path) -> Result<ZipArchive<File>, Error> {
     ZipArchive::new(file).map_err(ext_error)
 }
 
-fn time_of(dt: Option<zip::DateTime>) -> Option<std::time::SystemTime> {
+pub(crate) fn time_of(dt: Option<zip::DateTime>) -> Option<std::time::SystemTime> {
     let dt = dt?;
     civil_time(
         i64::from(dt.year()),
@@ -81,7 +81,7 @@ pub fn copy_out(path: &Path, inner: &[u8], sink: &mut dyn Write) -> Result<(), E
     Ok(())
 }
 
-fn options(modified: std::time::SystemTime, mode: Option<u32>) -> SimpleFileOptions {
+pub(crate) fn options(modified: std::time::SystemTime, mode: Option<u32>) -> SimpleFileOptions {
     let mut options = SimpleFileOptions::default()
         .compression_method(CompressionMethod::Deflated)
         .large_file(true);

@@ -103,6 +103,12 @@ pub const DISK: &str = ph::HARD_DRIVE;
 pub const DISC: &str = ph::DISC;
 /// The side panel's tree follows the focused pane.
 pub const LINKED: &str = ph::LINK_SIMPLE;
+/// A console tab.
+pub const TERMINAL: &str = ph::TERMINAL_WINDOW;
+/// A compare tab, and the arrow between the two folders compared.
+pub const COMPARE: &str = ph::ARROWS_LEFT_RIGHT;
+/// The Browse… button of a folder field.
+pub const BROWSE: &str = ph::FOLDER_OPEN;
 /// The side panel's tree is unlinked.
 pub const UNLINKED: &str = ph::LINK_SIMPLE_BREAK;
 /// Open containing folder.

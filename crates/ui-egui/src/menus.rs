@@ -123,6 +123,10 @@ pub fn context_for(cx: &PaneCx<'_>, only: Option<Entry>) -> ActionCtx {
         location: cx.tab.location.clone(),
         selection,
         invoked_from: Invocation::ContextMenu,
+        other: cx
+            .app
+            .action_ctx(cx.pane, Invocation::ContextMenu)
+            .and_then(|c| c.other),
     }
 }
 
@@ -132,8 +136,11 @@ const GROUPS: &[(&str, &[&str])] = &[
         "Open",
         &[
             "core.open_default",
+            "core.open_with",
             "core.open_containing",
             "core.open_containing_tab",
+            "terminal.console",
+            "compare.compare",
             "core.pin",
             "core.unpin",
         ],
@@ -144,13 +151,29 @@ const GROUPS: &[(&str, &[&str])] = &[
             "core.cut",
             "core.copy",
             "core.paste",
+            "core.paste_link",
             "core.duplicate",
             "core.rename",
+            "rename.bulk",
         ],
     ),
     ("Delete", &["core.trash", "core.delete"]),
     ("Create", &["core.new_folder", "core.new_file"]),
-    ("Share", &["core.copy_path", "core.reveal"]),
+    (
+        "Share",
+        &[
+            "core.copy_name",
+            "core.copy_path",
+            "core.copy_path_and_name",
+            "core.create_link",
+            "compress.compress",
+            "compress.compress_as",
+            "compress.extract_here",
+            "compress.extract_folder",
+            "compress.extract_to",
+            "core.reveal",
+        ],
+    ),
 ];
 
 /// The context menu for `entry` (or the empty area when `None`): the

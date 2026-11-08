@@ -6,7 +6,8 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use ext::platform::Platform;
 use ext::{
-    Connection, ConnectionField, ConnectionSchema, Connector, FieldKind, async_trait, secret_key,
+    Connection, ConnectionField, ConnectionFieldKind, ConnectionSchema, Connector, async_trait,
+    secret_key,
 };
 use types::{Error, ProviderId};
 
@@ -35,7 +36,7 @@ pub fn schema() -> ConnectionSchema {
             ConnectionField {
                 key: field::PROJECT,
                 label: "Project",
-                kind: FieldKind::Text {
+                kind: ConnectionFieldKind::Text {
                     default: String::new(),
                 },
                 required: true,
@@ -43,13 +44,13 @@ pub fn schema() -> ConnectionSchema {
             ConnectionField {
                 key: field::KEY,
                 label: "Service account key (JSON, or its file)",
-                kind: FieldKind::Secret,
+                kind: ConnectionFieldKind::Secret,
                 required: false,
             },
             ConnectionField {
                 key: field::ENDPOINT,
                 label: "Endpoint (empty for Google)",
-                kind: FieldKind::Text {
+                kind: ConnectionFieldKind::Text {
                     default: String::new(),
                 },
                 required: false,

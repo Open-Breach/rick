@@ -15,7 +15,7 @@ use crate::io_error;
 use crate::rewrite::{Edit, Plan};
 
 /// The tar's byte stream, decompressed when `codec` says so.
-fn stream(path: &Path, codec: Option<Codec>) -> Result<Box<dyn Read + Send>, Error> {
+pub(crate) fn stream(path: &Path, codec: Option<Codec>) -> Result<Box<dyn Read + Send>, Error> {
     let file = File::open(path).map_err(Error::from_io)?;
     let reader: Box<dyn Read + Send> = Box::new(io::BufReader::with_capacity(1 << 20, file));
     match codec {
@@ -81,7 +81,12 @@ pub fn copy_out(
 }
 
 /// A header for a new entry.
-fn header(kind: tar::EntryType, size: u64, modified: SystemTime, mode: u32) -> tar::Header {
+pub(crate) fn header(
+    kind: tar::EntryType,
+    size: u64,
+    modified: SystemTime,
+    mode: u32,
+) -> tar::Header {
     let mut header = tar::Header::new_gnu();
     header.set_entry_type(kind);
     header.set_size(size);

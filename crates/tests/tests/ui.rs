@@ -56,10 +56,15 @@ fn guard(name: &'static str, limit: Duration) -> impl Drop {
 fn harness(start: &Path) -> Harness<'static, RickUi> {
     let fake = Arc::new(Fake::new().unwrap_or_else(|e| panic!("{e}")));
     let host = Arc::new(EguiHost::new());
+    // The two action plugins whose shortcuts the spec's tables bind.
+    let extensions: Vec<Arc<dyn ext::Extension>> = vec![
+        Arc::new(ext_action_rename::RenameExtension::new()),
+        Arc::new(ext_action_terminal::TerminalExtension::new()),
+    ];
     let app = app::App::new(app::Config {
         platform: fake.clone(),
         ui: host.clone(),
-        extensions: Vec::new(),
+        extensions,
         config_dir: Some(fake.config_dir()),
         start: Some(local(start)),
     });
@@ -117,19 +122,19 @@ fn spec_rows() -> Vec<(&'static str, Intent)> {
         // Selection
         ("Mod+A", Intent::SelectAll),
         ("Mod+Shift+A", Intent::InvertSelection),
-        ("Mod+Shift+S", Intent::SelectByPattern),
+        ("Mod+Shift+S", action("core.select_pattern")),
         ("Space", Intent::ToggleFocused),
         ("Escape", Intent::Escape),
         // File operations
         ("Mod+C", action("core.copy")),
         ("Mod+X", action("core.cut")),
         ("Mod+V", action("core.paste")),
-        ("Mod+Shift+V", Intent::PasteAsLink),
+        ("Mod+Shift+V", action("core.paste_link")),
         ("Mod+D", action("core.duplicate")),
         ("Delete", action("core.trash")),
         ("Shift+Delete", action("core.delete")),
         ("F2", action("core.rename")),
-        ("Mod+F2", Intent::BulkRename),
+        ("Mod+F2", action("rename.bulk")),
         ("Mod+N", Intent::NewWindow),
         ("Mod+Shift+N", action("core.new_folder")),
         ("Mod+Shift+C", action("core.copy_path_and_name")),
@@ -140,7 +145,7 @@ fn spec_rows() -> Vec<(&'static str, Intent)> {
         ("Mod+Z", Intent::Undo),
         ("Mod+Shift+Z", Intent::Redo),
         ("Mod+Y", Intent::Redo),
-        ("Mod+O", Intent::OpenWith),
+        ("Mod+O", action("core.open_with")),
         ("Mod+Shift+O", action("core.reveal")),
         // Tabs and panes
         ("Mod+T", Intent::NewTab),
@@ -171,7 +176,7 @@ fn spec_rows() -> Vec<(&'static str, Intent)> {
         // Issue A gives Mod+Shift+F to Search in subdirectories (QUESTIONS.md).
         ("Mod+Shift+F", Intent::ToggleSubtree),
         ("Mod+Shift+I", Intent::ToggleInspector),
-        ("Mod+`", Intent::Console),
+        ("Mod+`", action("terminal.console")),
         ("Mod+,", Intent::Settings),
         ("Mod+Shift+1", Intent::ViewList),
         ("Mod+Shift+2", Intent::ViewDetails),
@@ -251,6 +256,23 @@ fn every_shortcut_in_the_spec_table_reaches_its_intent() {
         // Leave dialogs, the palette and windows the shortcut may have opened.
         harness.key_press(egui::Key::Escape);
         harness.step();
+        // A console tab the row opened takes the keyboard: close it, so the
+        // next row reaches the explorer.
+        let views: Vec<model::TabId> = {
+            let model = harness.state().app().model();
+            model
+                .panes()
+                .flat_map(|(_, pane)| pane.tabs().iter().copied())
+                .filter(|id| model.tab(*id).is_some_and(|t| t.kind.is_view()))
+                .collect()
+        };
+        for tab in views {
+            let mut events = Vec::new();
+            harness
+                .state_mut()
+                .app_mut()
+                .handle(app::Command::CloseTab(tab), &mut events);
+        }
         settle(&mut harness);
     }
     assert!(missed.is_empty(), "{}", missed.join("\n"));

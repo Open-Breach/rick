@@ -8,7 +8,7 @@
 //! the application calls when the list changes or the user picks
 //! *Connect*, *Disconnect* or *Remove* on a row. The application owns the
 //! list: the non-secret fields go into `rick.toml`, a field of
-//! [`FieldKind::Secret`] into the platform keychain under
+//! [`ConnectionFieldKind::Secret`] into the platform keychain under
 //! [`secret_key`], and the connector is handed the list through
 //! [`Connector::update`] at start and after every change. The connector
 //! reads a secret through `platform::Secrets` when it needs one, never
@@ -23,7 +23,7 @@
 //! use std::sync::{Arc, Mutex};
 //!
 //! use ext::{
-//!     Connection, ConnectionField, ConnectionSchema, Connector, FieldKind, async_trait,
+//!     Connection, ConnectionField, ConnectionSchema, Connector, ConnectionFieldKind, async_trait,
 //!     secret_key,
 //! };
 //! use types::{Error, ProviderId};
@@ -60,8 +60,8 @@
 //!     schema: ConnectionSchema {
 //!         title: "Demo",
 //!         fields: vec![
-//!             ConnectionField { key: "host", label: "Host", kind: FieldKind::Text { default: String::new() }, required: true },
-//!             ConnectionField { key: "token", label: "Token", kind: FieldKind::Secret, required: false },
+//!             ConnectionField { key: "host", label: "Host", kind: ConnectionFieldKind::Text { default: String::new() }, required: true },
+//!             ConnectionField { key: "token", label: "Token", kind: ConnectionFieldKind::Secret, required: false },
 //!         ],
 //!     },
 //!     connections: Mutex::new(Vec::new()),
@@ -86,7 +86,7 @@ use types::{Error, ProviderId};
 
 /// How a field of the *Add connection…* dialogue is edited and stored.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum FieldKind {
+pub enum ConnectionFieldKind {
     /// A line of text, kept in `rick.toml`.
     Text {
         /// The value the dialogue starts with.
@@ -122,7 +122,7 @@ pub struct ConnectionField {
     /// The label in the dialogue.
     pub label: &'static str,
     /// How it is edited and stored.
-    pub kind: FieldKind,
+    pub kind: ConnectionFieldKind,
     /// Whether the dialogue refuses an empty value.
     pub required: bool,
 }
@@ -142,7 +142,7 @@ impl ConnectionSchema {
     pub fn secret_fields(&self) -> impl Iterator<Item = &'static str> + '_ {
         self.fields
             .iter()
-            .filter(|f| f.kind == FieldKind::Secret)
+            .filter(|f| f.kind == ConnectionFieldKind::Secret)
             .map(|f| f.key)
     }
 

@@ -465,6 +465,11 @@ impl Provider for SftpProvider {
                     ));
                 }
             }
+            LinkKind::Junction | LinkKind::Shortcut => {
+                return Err(Error::Unsupported(
+                    "junctions and shortcuts are Windows links; an SFTP server has none",
+                ));
+            }
         }
         let attrs = live.sftp.symlink_metadata(&link_path).await.map_err(map)?;
         let link = attrs.is_symlink().then(|| (target_text.clone(), false));

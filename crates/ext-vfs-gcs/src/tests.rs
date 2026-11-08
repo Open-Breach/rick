@@ -1,6 +1,8 @@
 use std::sync::Arc;
 
-use ext::{Capabilities, Connector as _, Extension as _, FieldKind, Provider as _, Registry};
+use ext::{
+    Capabilities, ConnectionFieldKind, Connector as _, Extension as _, Provider as _, Registry,
+};
 use platform::Fake;
 use types::{EntryKind, Location};
 
@@ -141,7 +143,7 @@ fn the_schema_and_the_extension_register() {
     assert!(schema.field("project").is_some_and(|f| f.required));
     assert!(matches!(
         schema.field("key").map(|f| &f.kind),
-        Some(FieldKind::Secret)
+        Some(ConnectionFieldKind::Secret)
     ));
     let ext = GcsExtension::new();
     assert_eq!(ext.manifest().id, ID);

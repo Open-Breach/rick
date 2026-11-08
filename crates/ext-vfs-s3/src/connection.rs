@@ -6,7 +6,8 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use ext::platform::Platform;
 use ext::{
-    Connection, ConnectionField, ConnectionSchema, Connector, FieldKind, async_trait, secret_key,
+    Connection, ConnectionField, ConnectionFieldKind, ConnectionSchema, Connector, async_trait,
+    secret_key,
 };
 use types::{Error, ProviderId};
 
@@ -37,7 +38,7 @@ pub fn schema() -> ConnectionSchema {
             ConnectionField {
                 key: field::ENDPOINT,
                 label: "Endpoint (empty for AWS)",
-                kind: FieldKind::Text {
+                kind: ConnectionFieldKind::Text {
                     default: String::new(),
                 },
                 required: false,
@@ -45,7 +46,7 @@ pub fn schema() -> ConnectionSchema {
             ConnectionField {
                 key: field::REGION,
                 label: "Region",
-                kind: FieldKind::Text {
+                kind: ConnectionFieldKind::Text {
                     default: "us-east-1".to_owned(),
                 },
                 required: false,
@@ -53,7 +54,7 @@ pub fn schema() -> ConnectionSchema {
             ConnectionField {
                 key: field::ACCESS_KEY,
                 label: "Access key",
-                kind: FieldKind::Text {
+                kind: ConnectionFieldKind::Text {
                     default: String::new(),
                 },
                 required: true,
@@ -61,13 +62,13 @@ pub fn schema() -> ConnectionSchema {
             ConnectionField {
                 key: field::SECRET_KEY,
                 label: "Secret key",
-                kind: FieldKind::Secret,
+                kind: ConnectionFieldKind::Secret,
                 required: true,
             },
             ConnectionField {
                 key: field::PATH_STYLE,
                 label: "Path-style addressing",
-                kind: FieldKind::Bool { default: true },
+                kind: ConnectionFieldKind::Bool { default: true },
                 required: false,
             },
         ],

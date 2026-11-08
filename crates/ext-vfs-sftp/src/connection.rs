@@ -8,7 +8,8 @@ use std::time::Duration;
 
 use ext::platform::Platform;
 use ext::{
-    Connection, ConnectionField, ConnectionSchema, Connector, FieldKind, async_trait, secret_key,
+    Connection, ConnectionField, ConnectionFieldKind, ConnectionSchema, Connector, async_trait,
+    secret_key,
 };
 use russh::client;
 use russh::keys::{HashAlg, PrivateKeyWithHashAlg, PublicKeyOrCertificate};
@@ -50,7 +51,7 @@ pub fn schema() -> ConnectionSchema {
             ConnectionField {
                 key: field::HOST,
                 label: "Host",
-                kind: FieldKind::Text {
+                kind: ConnectionFieldKind::Text {
                     default: String::new(),
                 },
                 required: true,
@@ -58,7 +59,7 @@ pub fn schema() -> ConnectionSchema {
             ConnectionField {
                 key: field::PORT,
                 label: "Port",
-                kind: FieldKind::Integer {
+                kind: ConnectionFieldKind::Integer {
                     default: 22,
                     min: 1,
                     max: 65535,
@@ -68,7 +69,7 @@ pub fn schema() -> ConnectionSchema {
             ConnectionField {
                 key: field::USER,
                 label: "User",
-                kind: FieldKind::Text {
+                kind: ConnectionFieldKind::Text {
                     default: String::new(),
                 },
                 required: true,
@@ -76,25 +77,25 @@ pub fn schema() -> ConnectionSchema {
             ConnectionField {
                 key: field::KEY_FILE,
                 label: "Private key file",
-                kind: FieldKind::Path,
+                kind: ConnectionFieldKind::Path,
                 required: false,
             },
             ConnectionField {
                 key: field::PASSPHRASE,
                 label: "Key passphrase",
-                kind: FieldKind::Secret,
+                kind: ConnectionFieldKind::Secret,
                 required: false,
             },
             ConnectionField {
                 key: field::PASSWORD,
                 label: "Password",
-                kind: FieldKind::Secret,
+                kind: ConnectionFieldKind::Secret,
                 required: false,
             },
             ConnectionField {
                 key: field::FOLDER,
                 label: "Remote folder",
-                kind: FieldKind::Text {
+                kind: ConnectionFieldKind::Text {
                     default: String::new(),
                 },
                 required: false,

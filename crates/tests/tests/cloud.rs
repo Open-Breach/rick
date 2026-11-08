@@ -43,6 +43,9 @@ impl ext::UiHost for Scripted {
         Some(default.to_owned())
     }
     fn show(&self, _title: &str, _text: &str) {}
+    fn form(&self, form: ext::Form) -> Option<ext::Values> {
+        Some(form.defaults())
+    }
 }
 
 /// An application over `fake` with `extensions` besides the core, driven

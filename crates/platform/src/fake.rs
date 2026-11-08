@@ -11,10 +11,16 @@ use tempfile::TempDir;
 use types::Error;
 
 use crate::traits::{
-    Chrome, Clipboard, ConfigDir, ControlsSide, DialogFilter, DragSource, NativeDialogs, OpenWith,
-    Properties, PropertiesOutcome, RecentItem, RecentlyUsed, Secrets, StandardFolder,
-    StandardFolders, Trash, TrashedItem, Volume, Volumes, WindowChrome,
+    Application, Chrome, Clipboard, ConfigDir, ControlsSide, DialogFilter, DragSource,
+    NativeDialogs, OpenWith, Properties, PropertiesOutcome, RecentItem, RecentlyUsed, Secrets,
+    StandardFolder, StandardFolders, Terminal, Trash, TrashedItem, Volume, Volumes, WindowChrome,
 };
+
+/// The applications the fake offers for every file, the default first.
+pub const FAKE_APPLICATIONS: [(&str, &str); 2] = [
+    ("Fake Editor", "fake-editor"),
+    ("Fake Viewer", "fake-viewer"),
+];
 
 /// The standard folders the fake creates under its home, so the side
 /// panel's default places have rows to show.
@@ -40,6 +46,8 @@ pub struct Fake {
     /// trashed after a restore does not land on another item's path.
     trashed_count: Mutex<u64>,
     opened: Mutex<Vec<PathBuf>>,
+    opened_with: Mutex<Vec<(PathBuf, Application)>>,
+    terminals: Mutex<Vec<(PathBuf, Option<Vec<String>>)>>,
     revealed: Mutex<Vec<PathBuf>>,
     clipboard: Mutex<Option<String>>,
     dragged: Mutex<Vec<Vec<String>>>,
@@ -87,6 +95,8 @@ impl Fake {
             items: Mutex::new(Vec::new()),
             trashed_count: Mutex::new(0),
             opened: Mutex::new(Vec::new()),
+            opened_with: Mutex::new(Vec::new()),
+            terminals: Mutex::new(Vec::new()),
             revealed: Mutex::new(Vec::new()),
             clipboard: Mutex::new(None),
             dragged: Mutex::new(Vec::new()),
@@ -97,6 +107,20 @@ impl Fake {
             unlistable: Mutex::new(false),
             secrets: Mutex::new(std::collections::BTreeMap::new()),
         })
+    }
+
+    /// Paths and applications handed to [`OpenWith::open_with`], oldest
+    /// first.
+    #[must_use]
+    pub fn opened_with(&self) -> Vec<(PathBuf, Application)> {
+        lock(&self.opened_with).clone()
+    }
+
+    /// The folders and commands handed to [`Terminal::open_terminal`],
+    /// oldest first.
+    #[must_use]
+    pub fn terminals(&self) -> Vec<(PathBuf, Option<Vec<String>>)> {
+        lock(&self.terminals).clone()
     }
 
     /// Paths handed to [`OpenWith::open`], oldest first.
@@ -321,6 +345,30 @@ impl OpenWith for Fake {
 
     fn reveal(&self, path: &Path) -> Result<(), Error> {
         lock(&self.revealed).push(path.to_path_buf());
+        Ok(())
+    }
+
+    /// [`FAKE_APPLICATIONS`] for every entry that exists.
+    fn applications(&self, path: &Path) -> Result<Vec<Application>, Error> {
+        fs::symlink_metadata(path).map_err(Error::from_io)?;
+        Ok(FAKE_APPLICATIONS
+            .iter()
+            .map(|(name, id)| Application {
+                name: (*name).to_owned(),
+                id: (*id).to_owned(),
+            })
+            .collect())
+    }
+
+    fn open_with(&self, path: &Path, app: &Application) -> Result<(), Error> {
+        lock(&self.opened_with).push((path.to_path_buf(), app.clone()));
+        Ok(())
+    }
+}
+
+impl Terminal for Fake {
+    fn open_terminal(&self, dir: &Path, command: Option<&[String]>) -> Result<(), Error> {
+        lock(&self.terminals).push((dir.to_path_buf(), command.map(<[String]>::to_vec)));
         Ok(())
     }
 }

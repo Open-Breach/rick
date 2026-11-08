@@ -127,10 +127,13 @@ use crate::search::SearchIndex;
 /// and `Icon` gained `Rendered` (QUESTIONS.md 103); 5 `Filter` gained
 /// `NoHidden` and `SkipNames`, what the subtree walk takes from the pane
 /// and the settings, and `SearchScope` gained `covers` (QUESTIONS.md 119);
-/// 6 `Capabilities` gained `NATIVE_TRANSFER` and `REMOTE`, `Provider`
-/// gained `transfer`, and the registry takes a [`Connector`] per network
-/// provider (QUESTIONS.md 123–125).
-pub const API_VERSION: u32 = 6;
+/// 6 `UiHost` gained `form`, `ActionOutcome` gained `Select` and `View`,
+/// `ActionCtx` gained `other`, `LinkKind` gained `Junction` and `Shortcut`
+/// with their capabilities, `JobCtx` gained `conflicts`, and settings gained
+/// [`SettingValue`] (QUESTIONS.md 123–126); 7 `Provider` gained `transfer`
+/// behind `NATIVE_TRANSFER`, `Capabilities` gained `REMOTE`, and the registry
+/// takes a [`Connector`] per network provider (QUESTIONS.md 135–137).
+pub const API_VERSION: u32 = 7;
 
 bitflags::bitflags! {
     /// The extension points an extension fills, as its manifest declares
@@ -304,6 +307,38 @@ pub enum SettingKind {
         /// Index into `options` when unset.
         default: usize,
     },
+}
+
+/// The stored value of a setting, as the extension's TOML file holds it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SettingValue {
+    /// A checkbox.
+    Bool(bool),
+    /// A text field.
+    Text(String),
+    /// A whole number.
+    Integer(i64),
+    /// The chosen option of a choice, by its text.
+    Choice(String),
+}
+
+impl SettingKind {
+    /// The value a setting has when its file does not name one.
+    #[must_use]
+    pub fn default_value(&self) -> SettingValue {
+        match self {
+            Self::Bool { default } => SettingValue::Bool(*default),
+            Self::Text { default } => SettingValue::Text(default.clone()),
+            Self::Integer { default, .. } => SettingValue::Integer(*default),
+            Self::Choice { options, default } => SettingValue::Choice(
+                options
+                    .get(*default)
+                    .or(options.first())
+                    .map(|o| (*o).to_owned())
+                    .unwrap_or_default(),
+            ),
+        }
+    }
 }
 
 /// One setting of an extension.

@@ -1,6 +1,8 @@
 use std::sync::Arc;
 
-use ext::{Capabilities, Connector as _, Extension as _, FieldKind, Provider as _, Registry};
+use ext::{
+    Capabilities, ConnectionFieldKind, Connector as _, Extension as _, Provider as _, Registry,
+};
 use platform::Fake;
 use types::{EntryKind, Location};
 
@@ -132,7 +134,7 @@ fn the_schema_and_the_extension_register() {
     assert!(schema.field("account").is_some_and(|f| f.required));
     assert!(matches!(
         schema.field("endpoint").map(|f| &f.kind),
-        Some(FieldKind::Text { .. })
+        Some(ConnectionFieldKind::Text { .. })
     ));
     let ext = AzureExtension::new();
     assert_eq!(ext.manifest().id, ID);

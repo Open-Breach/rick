@@ -123,6 +123,48 @@ pub fn symlink(target: &Path, at: &Path) -> io::Result<()> {
     imp::symlink(target, at)
 }
 
+/// The Unix permission bits of an entry (`0o755`), where the platform has
+/// them; `None` on Windows.
+///
+/// # Errors
+///
+/// The I/O error reading the entry's metadata.
+pub fn unix_mode(path: &Path) -> io::Result<Option<u32>> {
+    imp::unix_mode(path)
+}
+
+/// Sets the Unix permission bits of an entry, where the platform has them;
+/// nothing happens on Windows.
+///
+/// # Errors
+///
+/// The I/O error setting the permissions.
+pub fn set_unix_mode(path: &Path, mode: u32) -> io::Result<()> {
+    imp::set_unix_mode(path, mode)
+}
+
+/// Whether the platform has NTFS directory junctions and `.lnk` shortcuts
+/// besides symbolic links: Windows.
+pub const HAS_WINDOWS_LINKS: bool = cfg!(windows);
+
+/// Creates a directory junction at `at` pointing to the folder `target`.
+///
+/// # Errors
+///
+/// `Unsupported` outside Windows; the I/O error otherwise.
+pub fn junction(target: &Path, at: &Path) -> io::Result<()> {
+    imp::junction(target, at)
+}
+
+/// Creates a `.lnk` shortcut file at `at` pointing to `target`.
+///
+/// # Errors
+///
+/// `Unsupported` outside Windows; the I/O error otherwise.
+pub fn shortcut(target: &Path, at: &Path) -> io::Result<()> {
+    imp::shortcut(target, at)
+}
+
 /// Which path [`copy_file`] took.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CopyMethod {

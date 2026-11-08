@@ -26,7 +26,9 @@
     clippy::cast_possible_wrap
 )]
 
+pub mod compare;
 pub mod conflict;
+pub mod console;
 pub mod dnd;
 pub mod dock;
 pub mod format;

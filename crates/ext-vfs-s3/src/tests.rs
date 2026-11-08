@@ -1,6 +1,8 @@
 use std::sync::Arc;
 
-use ext::{Capabilities, Connector as _, Extension as _, FieldKind, Provider as _, Registry};
+use ext::{
+    Capabilities, ConnectionFieldKind, Connector as _, Extension as _, Provider as _, Registry,
+};
 use platform::Fake;
 use types::{EntryKind, Location};
 
@@ -159,7 +161,7 @@ fn the_schema_names_the_fields_and_the_secret() {
     assert!(schema.field("access_key").is_some_and(|f| f.required));
     assert!(matches!(
         schema.field("path_style").map(|f| &f.kind),
-        Some(FieldKind::Bool { default: true })
+        Some(ConnectionFieldKind::Bool { default: true })
     ));
 }
 

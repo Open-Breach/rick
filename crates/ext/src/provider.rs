@@ -145,10 +145,14 @@ bitflags::bitflags! {
         /// progress. `ops` calls [`Provider::transfer`] first where it is
         /// set.
         const NATIVE_TRANSFER = 256;
+        /// `link` with [`LinkKind::Junction`] is available (NTFS).
+        const JUNCTION = 512;
+        /// `link` with [`LinkKind::Shortcut`] is available (Windows `.lnk`).
+        const SHORTCUT = 1024;
         /// The entries live behind a network: the kernel treats the
         /// location as a remote-latency mount (SPEC.md "Network file
         /// systems"), with no eager stat and no thumbnails by default.
-        const REMOTE = 512;
+        const REMOTE = 2048;
     }
 }
 
@@ -206,6 +210,33 @@ pub enum LinkKind {
     Symbolic,
     /// A hard link to the same entry.
     Hard,
+    /// An NTFS directory junction; Windows only, folders only.
+    Junction,
+    /// A classic `.lnk` shortcut file; Windows only.
+    Shortcut,
+}
+
+impl LinkKind {
+    /// The name shown in menus and dialogues.
+    #[must_use]
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Symbolic => "Symbolic link",
+            Self::Hard => "Hard link",
+            Self::Junction => "Directory junction",
+            Self::Shortcut => "Shortcut (.lnk)",
+        }
+    }
+
+    /// The capability a provider needs for this kind.
+    #[must_use]
+    pub fn capability(self) -> Capabilities {
+        match self {
+            Self::Symbolic | Self::Hard => Capabilities::SYMLINK,
+            Self::Junction => Capabilities::JUNCTION,
+            Self::Shortcut => Capabilities::SHORTCUT,
+        }
+    }
 }
 
 /// How to copy.

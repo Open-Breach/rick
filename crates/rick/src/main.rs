@@ -70,6 +70,14 @@ fn built_ins() -> Vec<Arc<dyn ext::Extension>> {
     extensions.push(Arc::new(ext_vfs_azure::AzureExtension::new()));
     #[cfg(feature = "vfs-gcs")]
     extensions.push(Arc::new(ext_vfs_gcs::GcsExtension::new()));
+    #[cfg(feature = "action-compress")]
+    extensions.push(Arc::new(ext_action_compress::CompressExtension::new()));
+    #[cfg(feature = "action-compare")]
+    extensions.push(Arc::new(ext_action_compare::CompareExtension::new()));
+    #[cfg(feature = "action-terminal")]
+    extensions.push(Arc::new(ext_action_terminal::TerminalExtension::new()));
+    #[cfg(feature = "action-rename")]
+    extensions.push(Arc::new(ext_action_rename::RenameExtension::new()));
     extensions
 }
 

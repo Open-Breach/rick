@@ -3,7 +3,12 @@
 //! [`Core`] is the built-in [`Extension`] that registers them: copy, cut and
 //! paste, duplicate, move to trash, delete permanently, rename, new file, new
 //! folder, copy path, open with the system default, open in the system file
-//! manager, open containing folder, pin to side panel and unpin. Navigation,
+//! manager, open containing folder, pin to side panel and unpin; and, since
+//! 0.2, Open with… (the platform's applications for the type or any
+//! program, remembered per type in `core.toml`), Paste as link and Create
+//! link… (a symbolic link, or a junction or a `.lnk` shortcut where the
+//! provider offers them) and Select by pattern (a glob or a regular
+//! expression, replacing or adding to the selection). Navigation,
 //! selection and view commands are `Command`s the application handles
 //! directly, as is a drag and drop's [`transfer`], which is not an action
 //! but runs the same jobs. Restore and Empty trash belong to the trash
@@ -42,10 +47,13 @@ mod conflict;
 mod containing;
 mod create;
 mod edit;
+mod link;
 mod open;
+mod open_with;
 mod pin;
 mod remove;
 mod schedule;
+mod select;
 mod transfer;
 
 use std::path::PathBuf;
@@ -61,8 +69,10 @@ use vfs::Mounts;
 
 pub use clipboard::{ClipMode, Clipboard};
 pub use conflict::{ConflictWaker, Conflicts};
+pub use open_with::FILE as OPEN_WITH_FILE;
 pub use pin::{PinStore, pin_command, unpin_command};
 pub use schedule::{Lease, ScheduleWaker, Scheduler, VolumeKey, volume_key, volume_keys};
+pub use select::{Matcher, matcher};
 pub use transfer::{TransferKind, transfer};
 /// Whether the context's location is a virtual one: a view or an overview
 /// of `vfs-rick`, which no file operation can write to.
@@ -207,6 +217,10 @@ impl Extension for Core {
         reg.action(Arc::new(containing::OpenContainingInTab));
         reg.action(Arc::new(pin::Pin(Arc::clone(s))));
         reg.action(Arc::new(pin::Unpin(Arc::clone(s))));
+        reg.action(Arc::new(open_with::OpenWith(Arc::clone(s))));
+        reg.action(Arc::new(link::PasteAsLink(Arc::clone(s))));
+        reg.action(Arc::new(link::CreateLink(Arc::clone(s))));
+        reg.action(Arc::new(select::SelectByPattern));
         Ok(())
     }
 }

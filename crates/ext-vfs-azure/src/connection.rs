@@ -6,7 +6,8 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use ext::platform::Platform;
 use ext::{
-    Connection, ConnectionField, ConnectionSchema, Connector, FieldKind, async_trait, secret_key,
+    Connection, ConnectionField, ConnectionFieldKind, ConnectionSchema, Connector, async_trait,
+    secret_key,
 };
 use types::{Error, ProviderId};
 
@@ -33,7 +34,7 @@ pub fn schema() -> ConnectionSchema {
             ConnectionField {
                 key: field::ACCOUNT,
                 label: "Storage account",
-                kind: FieldKind::Text {
+                kind: ConnectionFieldKind::Text {
                     default: String::new(),
                 },
                 required: true,
@@ -41,13 +42,13 @@ pub fn schema() -> ConnectionSchema {
             ConnectionField {
                 key: field::KEY,
                 label: "Account key",
-                kind: FieldKind::Secret,
+                kind: ConnectionFieldKind::Secret,
                 required: true,
             },
             ConnectionField {
                 key: field::ENDPOINT,
                 label: "Endpoint (empty for Azure)",
-                kind: FieldKind::Text {
+                kind: ConnectionFieldKind::Text {
                     default: String::new(),
                 },
                 required: false,

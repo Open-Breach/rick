@@ -1,6 +1,8 @@
 use std::sync::Arc;
 
-use ext::{Capabilities, Connector as _, Extension as _, FieldKind, Provider as _, Registry};
+use ext::{
+    Capabilities, ConnectionFieldKind, Connector as _, Extension as _, Provider as _, Registry,
+};
 use futures::StreamExt as _;
 use platform::Fake;
 use russh_sftp::protocol::FileAttributes;
@@ -85,11 +87,11 @@ fn the_schema_names_the_fields_and_the_secrets() {
     assert!(
         schema
             .field("key_file")
-            .is_some_and(|f| f.kind == FieldKind::Path)
+            .is_some_and(|f| f.kind == ConnectionFieldKind::Path)
     );
     assert!(matches!(
         schema.field("port").map(|f| &f.kind),
-        Some(FieldKind::Integer { default: 22, .. })
+        Some(ConnectionFieldKind::Integer { default: 22, .. })
     ));
 }
 

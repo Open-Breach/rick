@@ -43,6 +43,10 @@ ext-vfs-sftp = { path = "crates/ext-vfs-sftp" }
 ext-vfs-s3 = { path = "crates/ext-vfs-s3" }
 ext-vfs-azure = { path = "crates/ext-vfs-azure" }
 ext-vfs-gcs = { path = "crates/ext-vfs-gcs" }
+ext-action-compress = { path = "crates/ext-action-compress" }
+ext-action-compare = { path = "crates/ext-action-compare" }
+ext-action-terminal = { path = "crates/ext-action-terminal" }
+ext-action-rename = { path = "crates/ext-action-rename" }
 plugins-native = { path = "crates/plugins-native" }
 plugin-probe = { path = "crates/plugin-probe" }
 plugin-panic = { path = "crates/plugin-panic" }
@@ -95,6 +99,15 @@ gstreamer-app = "0.25"
 gstreamer-audio = "0.25"
 gstreamer-video = "0.25"
 gstreamer-pbutils = "0.25"
+# Select by pattern (glob and regular expression) in the core actions,
+# bulk rename's find and replace; the text diff of `ext-action-compare`;
+# the console of `ext-action-terminal` (a pseudo-terminal and the parser
+# of its escape sequences).
+globset = "0.4"
+regex = "1"
+similar = "2"
+portable-pty = "0.9"
+vte = "0.15"
 anyhow = "1"
 # The platform keychain (SPEC.md "Package layout": `Secrets`, 0.2).
 keyring = "4"
@@ -145,6 +158,8 @@ tokio = { version = "1", default-features = false }
 toml = "0.9"
 tracing = "0.1"
 windows = "0.62"
+# NTFS directory junctions for Create link / Paste as link on Windows.
+junction = "2"
 
 [workspace.lints.clippy]
 pedantic = { level = "warn", priority = -1 }

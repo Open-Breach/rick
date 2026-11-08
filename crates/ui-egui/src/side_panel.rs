@@ -25,7 +25,7 @@ use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use app::{App, Command, ConnectionOp};
-use ext::{ConnectionField, Connector, FieldKind, Level};
+use ext::{ConnectionField, ConnectionFieldKind, Connector, Level};
 use model::{PaneId, Place, Section, SidePanel, SidePanelChange, Volume, VolumeKind, WindowId};
 use types::{Entry, Location, ProviderId};
 use vfs_rick::Virtual;
@@ -88,10 +88,10 @@ impl ConnectionDialog {
                 .iter()
                 .map(|field| {
                     let value = match &field.kind {
-                        FieldKind::Text { default } => default.clone(),
-                        FieldKind::Integer { default, .. } => default.to_string(),
-                        FieldKind::Bool { default } => default.to_string(),
-                        FieldKind::Path | FieldKind::Secret => String::new(),
+                        ConnectionFieldKind::Text { default } => default.clone(),
+                        ConnectionFieldKind::Integer { default, .. } => default.to_string(),
+                        ConnectionFieldKind::Bool { default } => default.to_string(),
+                        ConnectionFieldKind::Path | ConnectionFieldKind::Secret => String::new(),
                     };
                     (field.clone(), value)
                 })
@@ -127,7 +127,7 @@ impl ConnectionDialog {
                 }
                 continue;
             }
-            if let FieldKind::Integer { min, max, .. } = field.kind {
+            if let ConnectionFieldKind::Integer { min, max, .. } = field.kind {
                 match value.parse::<i64>() {
                     Ok(n) if (min..=max).contains(&n) => {}
                     _ => {
@@ -381,22 +381,22 @@ fn connection_dialog(
                         };
                         ui.label(label);
                         match &field.kind {
-                            FieldKind::Secret => {
+                            ConnectionFieldKind::Secret => {
                                 ui.add(
                                     egui::TextEdit::singleline(value)
                                         .password(true)
                                         .desired_width(260.0),
                                 );
                             }
-                            FieldKind::Bool { .. } => {
+                            ConnectionFieldKind::Bool { .. } => {
                                 let mut on = value == "true";
                                 if ui.checkbox(&mut on, "").changed() {
                                     *value = on.to_string();
                                 }
                             }
-                            FieldKind::Text { .. }
-                            | FieldKind::Integer { .. }
-                            | FieldKind::Path => {
+                            ConnectionFieldKind::Text { .. }
+                            | ConnectionFieldKind::Integer { .. }
+                            | ConnectionFieldKind::Path => {
                                 ui.add(egui::TextEdit::singleline(value).desired_width(260.0));
                             }
                         }

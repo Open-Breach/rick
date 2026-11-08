@@ -34,6 +34,9 @@ impl UiHost for Scripted {
             .clone()
     }
     fn show(&self, _title: &str, _text: &str) {}
+    fn form(&self, form: ext::Form) -> Option<ext::Values> {
+        Some(form.defaults())
+    }
 }
 
 fn local(path: &Path) -> Location {
@@ -1489,10 +1492,10 @@ mod net {
     use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
     use ext::{
-        API_VERSION, Capabilities, ChangeStream, Connection, ConnectionField, ConnectionSchema,
-        Connector, CopyOptions, EntryStream, Extension, FieldKind, LinkKind, ListOptions, Manifest,
-        Platforms, Points, Provider, ReadHandle, Registry, RemoveMode, Version, WriteHandle,
-        WriteOptions, async_trait,
+        API_VERSION, Capabilities, ChangeStream, Connection, ConnectionField, ConnectionFieldKind,
+        ConnectionSchema, Connector, CopyOptions, EntryStream, Extension, LinkKind, ListOptions,
+        Manifest, Platforms, Points, Provider, ReadHandle, Registry, RemoveMode, Version,
+        WriteHandle, WriteOptions, async_trait,
     };
     use futures::StreamExt as _;
     use futures::stream;
@@ -1523,7 +1526,7 @@ mod net {
                         ConnectionField {
                             key: "host",
                             label: "Host",
-                            kind: FieldKind::Text {
+                            kind: ConnectionFieldKind::Text {
                                 default: String::new(),
                             },
                             required: true,
@@ -1531,7 +1534,7 @@ mod net {
                         ConnectionField {
                             key: "port",
                             label: "Port",
-                            kind: FieldKind::Integer {
+                            kind: ConnectionFieldKind::Integer {
                                 default: 22,
                                 min: 1,
                                 max: 65535,
@@ -1541,7 +1544,7 @@ mod net {
                         ConnectionField {
                             key: "password",
                             label: "Password",
-                            kind: FieldKind::Secret,
+                            kind: ConnectionFieldKind::Secret,
                             required: false,
                         },
                     ],

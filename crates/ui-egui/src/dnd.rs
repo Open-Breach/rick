@@ -622,6 +622,7 @@ impl Dnd {
                             location: tab.location.clone(),
                             selection: items.clone(),
                             invoked_from: ext::Invocation::Menu,
+                            other: None,
                         },
                     });
                 }
