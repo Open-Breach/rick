@@ -29,9 +29,9 @@ Target user: someone who normally installs via the package manager or Flatpak an
 Detection reads the archive index and, where needed, the headers of candidate files. It answers five questions and fills the dialog with its best guess for each.
 
 1. **Source or prebuilt?** The presence of `configure`, `Makefile`, `CMakeLists.txt`, `Cargo.toml`, `meson.build`, `setup.py` or similar together with no compiled executables means source. Refuse: "This archive contains source code and needs to be compiled; Rick can't install it."
-2. **Main executable.** Best signal: a `.desktop` file shipped in the archive — its `Exec` line names the binary. Otherwise: files whose first bytes are the ELF magic (never trust permission bits alone), excluding shared libraries (`.so*`); prefer a binary at the top level or in `bin/` whose name matches the archive or top-level folder. If several candidates remain, the dialog shows the list and the user picks.
+2. **Main executable.** Best signal: a `.desktop` file shipped in the archive — its `Exec` line names the binary. Otherwise: files whose first bytes are the ELF magic (never trust permission bits alone), excluding shared libraries (`.so*`); prefer a binary at the top level or in `bin/` whose name matches the archive or top-level folder. A name matches when its stem is a word of the app name or a suffix of the app id (`rider` matches `JetBrains Rider` and `jetbrains-rider`). When several candidates remain, a matching binary wins; a helper never wins by alphabetical order. If several candidates remain, the dialog shows the list and the user picks.
 3. **Kind: GUI or CLI.** A `.desktop` file or icon files mean GUI. Otherwise read the main binary's dynamic dependencies: links against X11, Wayland, GTK, Qt or similar mean GUI. A `bin/` folder with several binaries and no icons means toolchain.
-4. **Icon.** From the `.desktop` file's `Icon` line if present; else a PNG or SVG named like the app; else the largest raster icon under an `icons/`, `resources/` or `share/` folder; else none (the dialog offers a file picker).
+4. **Icon.** From the `.desktop` file's `Icon` line if present; else a PNG or SVG named like the app, with the same name rule as the executable; else the largest raster icon under an `icons/`, `resources/` or `share/` folder; else none. Every PNG and SVG in the archive stays available as a choice; the rule only decides which one is preselected.
 5. **Name and version.** From the `.desktop` `Name`, the archive filename (version digits parsed with a conservative pattern), or the top-level folder name. The archive filename with version digits masked is kept as the *source pattern* for later update matching.
 
 **Bonus check:** the ELF machine type of the main executable is compared with the running machine. A mismatch (e.g. an aarch64 build on x86\_64) is flagged before anything is extracted.
@@ -55,6 +55,8 @@ System-wide installs run the write steps through a small privileged helper invok
 
 Before extraction, free space at the destination is checked against the archive's uncompressed size.
 
+**Detection is a job.** Install as application returns at once. A job *Reading archive…* with byte progress over the compressed stream and a cancel button reads the archive in a single streaming pass, collecting the entry index and the first bytes of candidate files together. The dialog opens when the job finishes; cancelling leaves nothing behind. A gzip tar of several gigabytes must not freeze the window.
+
 ## Install dialog
 
 Opened by the Action **Install as application** on an archive (context menu and command palette). Fields, all prefilled by detection and all editable:
@@ -62,10 +64,12 @@ Opened by the Action **Install as application** on an archive (context menu and 
 - Name, app id, version
 - Kind: GUI application / command-line tool
 - Main executable (dropdown of candidates)
-- Icon (preview, with file picker)
+- Icon: one list, `(none)` then every PNG and SVG in the archive with path and pixel size, best first, the best one preselected when detection trusts it
 - Category (short list; shown for GUI only)
 - Commands to link on the PATH (GUI: one, named after the app id; toolchain: the `bin/` contents, all ticked by default). For toolchains the alternative is "add the bin folder to PATH" (see PATH mode under Desktop integration)
 - Scope: user space (recommended) / system-wide
+
+Switching the kind recomputes the main executable, icon and command defaults. For a GUI application the default is one command named after the app id; for a toolchain the `bin/` contents.
 
 **Modes:** *New install* when nothing matches. *Update* when the archive matches an installed app (see Updates), showing "\<Name> \<old> is installed — update to \<new>?". If the detected version is lower than the installed one, the dialog says so and asks to confirm a **downgrade**. If matching fails but the user knows it is the same app, a dropdown "This is an update of…" lists installed apps.
 
@@ -142,7 +146,7 @@ The dialog also states that the app's own settings and data, for instance under 
 
 ## Installed Apps view
 
-A virtual view provided by the plugin, opened from the command palette and the app menu (a side-panel entry can follow the side-panel rework). One row per record: icon, name, version, kind, scope, install date, and state. Actions per row: Open folder, Launch, Update from archive…, Revert to previous version, Edit launcher (name, icon, category, StartupWMClass), Uninstall.
+A virtual view provided by the plugin, opened from the command palette and the app menu (the burger menu lists it under *Installer*; a side-panel entry can follow the side-panel rework). One row per record: icon, name, version, kind, scope, install date, and state. Actions per row: Open folder, Launch, Update from archive…, Revert to previous version, Edit launcher (name, icon, category, StartupWMClass), Uninstall.
 
 **Messy states** are shown, not errored: *version folder missing*, *desktop entry missing*, *symlink broken*, *record found but current symlink dangling*. Each offers **Repair** (rewrite what is missing from the record) or **Forget** (delete the record only).
 
