@@ -109,6 +109,7 @@ use semver::Version;
 use types::{Error, ExtId};
 
 use crate::action::Action;
+use crate::connection::Connector;
 use crate::decorator::Decorator;
 use crate::preview::Previewer;
 use crate::provider::{Capabilities, Provider};
@@ -123,8 +124,11 @@ use crate::search::SearchIndex;
 /// ([`plugin`](mod@crate::plugin)) and their manifest file; 4
 /// `PreviewDoc` gained `content` (file listings, grids and documents the
 /// UI lays out), `Transport` gained volume, speed, frame step and loop,
-/// and `Icon` gained `Rendered` (QUESTIONS.md 103).
-pub const API_VERSION: u32 = 4;
+/// and `Icon` gained `Rendered` (QUESTIONS.md 103); 5 `Capabilities`
+/// gained `NATIVE_TRANSFER` and `REMOTE`, `Provider` gained `transfer`,
+/// and the registry takes a [`Connector`] per network provider
+/// (QUESTIONS.md 118–120).
+pub const API_VERSION: u32 = 5;
 
 bitflags::bitflags! {
     /// The extension points an extension fills, as its manifest declares
@@ -360,6 +364,8 @@ pub struct Registry {
     providers: Vec<Arc<dyn Provider>>,
     /// Virtual locations, `rick://<name>`, by name.
     views: Vec<(String, Arc<dyn Provider>)>,
+    /// The connectors of the network providers.
+    connectors: Vec<Arc<dyn Connector>>,
     decorators: Vec<Arc<dyn Decorator>>,
     actions: Vec<Arc<dyn Action>>,
     previewers: Vec<Arc<dyn Previewer>>,
@@ -377,6 +383,7 @@ impl Default for Registry {
             failure: None,
             providers: Vec::new(),
             views: Vec::new(),
+            connectors: Vec::new(),
             decorators: Vec::new(),
             actions: Vec::new(),
             previewers: Vec::new(),
@@ -463,6 +470,7 @@ impl Registry {
         self.manifests.push(manifest.clone());
         self.providers.append(&mut staging.providers);
         self.views.append(&mut staging.views);
+        self.connectors.append(&mut staging.connectors);
         self.decorators.append(&mut staging.decorators);
         self.actions.append(&mut staging.actions);
         self.previewers.append(&mut staging.previewers);
@@ -484,6 +492,14 @@ impl Registry {
     /// as a `Points::PROVIDER` contribution.
     pub fn view(&mut self, name: impl Into<String>, p: Arc<dyn Provider>) {
         self.views.push((name.into(), p));
+    }
+
+    /// Registers the connector of a network provider: the fields of its
+    /// *Add connection…* dialogue and the calls behind *Connect*,
+    /// *Disconnect* and *Remove* on its rows. A connector counts as a
+    /// `Points::PROVIDER` contribution, like the provider it belongs to.
+    pub fn connector(&mut self, c: Arc<dyn Connector>) {
+        self.connectors.push(c);
     }
 
     /// Registers a decorator.
@@ -518,7 +534,7 @@ impl Registry {
         let mut points = Points::empty();
         points.set(
             Points::PROVIDER,
-            !self.providers.is_empty() || !self.views.is_empty(),
+            !self.providers.is_empty() || !self.views.is_empty() || !self.connectors.is_empty(),
         );
         points.set(Points::DECORATOR, !self.decorators.is_empty());
         points.set(Points::ACTION, !self.actions.is_empty());
@@ -532,6 +548,7 @@ impl Registry {
     pub fn absorb(&mut self, other: &Registry) {
         self.providers.extend(other.providers.iter().cloned());
         self.views.extend(other.views.iter().cloned());
+        self.connectors.extend(other.connectors.iter().cloned());
         self.decorators.extend(other.decorators.iter().cloned());
         self.actions.extend(other.actions.iter().cloned());
         self.previewers.extend(other.previewers.iter().cloned());
@@ -577,6 +594,18 @@ impl Registry {
         &self.views
     }
 
+    /// Registered connectors, in registration order.
+    #[must_use]
+    pub fn connectors(&self) -> &[Arc<dyn Connector>] {
+        &self.connectors
+    }
+
+    /// The connector of `provider`, if a network provider registered one.
+    #[must_use]
+    pub fn connector_of(&self, provider: types::ProviderId) -> Option<&Arc<dyn Connector>> {
+        self.connectors.iter().find(|c| c.provider() == provider)
+    }
+
     /// Registered decorators, in registration order.
     #[must_use]
     pub fn decorators(&self) -> &[Arc<dyn Decorator>] {
@@ -619,6 +648,7 @@ impl std::fmt::Debug for Registry {
                 "views",
                 &self.views.iter().map(|(n, _)| n).collect::<Vec<_>>(),
             )
+            .field("connectors", &self.connectors.len())
             .field("decorators", &self.decorators.len())
             .field("actions", &self.actions.len())
             .field("previewers", &self.previewers.len())
