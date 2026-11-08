@@ -30,7 +30,7 @@
 use ext::t;
 use std::collections::HashMap;
 use std::ops::Range;
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 
 use egui::text::{LayoutJob, TextFormat};
 use egui::{Align2, Color32, FontId, Rect, TextStyle, TextureHandle, TextureOptions, pos2, vec2};
@@ -40,7 +40,7 @@ use ext::{
 };
 use model::{PaneId, TextPreview};
 use runtime::oneshot;
-use types::{EntryId, Error};
+use types::{Entry, EntryId, Error};
 
 use crate::icons;
 
@@ -274,6 +274,9 @@ pub struct Slot {
     /// A remote file above the size cap for whole-file previews: its size
     /// and the cap; the pane offers *Preview anyway*.
     capped: Option<(u64, u64)>,
+    /// No previewer claims the file: the pane shows the placeholder, and
+    /// this says whether a disabled plugin would claim it.
+    placeholder: Option<Placeholder>,
     /// Control changes made while the document was out rendering.
     queued: Vec<(ControlId, ControlValue)>,
     /// Rasters at actual pixels instead of fitted to the pane.
@@ -332,6 +335,7 @@ impl Slot {
         self.page = 0;
         self.error = None;
         self.capped = None;
+        self.placeholder = None;
         self.prefix = None;
         self.textures.clear();
         self.text = None;
@@ -349,6 +353,12 @@ impl Slot {
     #[must_use]
     pub fn capped(&self) -> Option<(u64, u64)> {
         self.capped
+    }
+
+    /// The placeholder shown because no previewer claims the file, if so.
+    #[must_use]
+    pub fn placeholder(&self) -> Option<&Placeholder> {
+        self.placeholder.as_ref()
     }
 
     /// Whether a render is in flight.
@@ -791,7 +801,22 @@ impl Previews {
             slot.reset(entry);
         }
         slot.capped = None;
+        slot.placeholder = None;
         slot.error = Some(error.to_string());
+    }
+
+    /// No previewer claims `pane`'s selection, about `entry`: the pane
+    /// shows the placeholder; `plugin` names a disabled plugin that would
+    /// claim it, when there is one.
+    pub fn none(&mut self, pane: PaneId, plugin: Option<String>, entry: Option<EntryId>) {
+        let slot = self.slot(pane);
+        if slot.entry != entry {
+            slot.reset(entry);
+        }
+        slot.doc = None;
+        slot.error = None;
+        slot.capped = None;
+        slot.placeholder = Some(Placeholder { plugin });
     }
 
     /// The document just opened for `pane` shows the first `served` bytes
@@ -809,6 +834,7 @@ impl Previews {
         }
         slot.doc = None;
         slot.error = None;
+        slot.placeholder = None;
         slot.capped = Some((size, cap));
     }
 
@@ -826,18 +852,26 @@ impl Previews {
     /// Draws `pane`'s content into the space the caller allocated: the
     /// frame fitted to it, text scrolling inside it, or a placeholder; a
     /// prefix of a remote file ends in a *Load more* bar and a file above
-    /// the cap shows its facts and *Preview anyway*. Returns what a button
-    /// of those asked for.
+    /// the cap shows its facts and *Preview anyway*; a file no previewer
+    /// claims shows `entry`'s facts, its type icon and whether a plugin is
+    /// there. Returns what a button of those asked for.
     pub fn content(
         &mut self,
         ui: &mut egui::Ui,
         pane: PaneId,
         target: Option<EntryId>,
+        entry: Option<&Entry>,
         text_settings: TextPreview,
     ) -> Option<PreviewAct> {
         let slot = self.slot(pane);
         if let Some((size, cap)) = slot.capped.filter(|_| target.is_some()) {
             return capped_message(ui, size, cap);
+        }
+        if let Some(placeholder) = slot.placeholder.as_ref().filter(|_| target.is_some())
+            && let Some(entry) = entry.filter(|e| Some(e.id) == target)
+        {
+            draw_placeholder(ui, entry, placeholder.plugin.as_deref(), SystemTime::now());
+            return None;
         }
         let mut act = None;
         if let Some((served, total)) = slot.prefix.filter(|_| slot.doc.is_some()) {
@@ -920,28 +954,103 @@ impl Previews {
             slot.drawn = drawn;
             slot.h_scroll = h_scroll;
             slot.frame_rect = Some(body);
-        } else if let Some(error) = &slot.error {
-            ui.add(
-                egui::Label::new(
-                    egui::RichText::new(t!("preview-failed", error = error.as_str()))
-                        .color(ui.visuals().warn_fg_color),
-                )
-                .wrap(),
-            );
-        } else if target.is_some() {
-            ui.horizontal(|ui| {
-                ui.spinner();
-                ui.weak(if slot.has_doc() {
-                    "Rendering…"
-                } else {
-                    "Opening…"
-                });
-            });
         } else {
-            ui.weak(t!("inspector-select-a-file-to-preview"));
+            draw_waiting(ui, slot, target.is_some());
         }
         act
     }
+}
+
+/// What the pane shows while it has no frame to draw: the error that
+/// stopped the preview, a spinner while it opens or renders, or the hint
+/// to select a file.
+fn draw_waiting(ui: &mut egui::Ui, slot: &Slot, selected: bool) {
+    if let Some(error) = &slot.error {
+        ui.add(
+            egui::Label::new(
+                egui::RichText::new(t!("preview-failed", error = error.as_str()))
+                    .color(ui.visuals().warn_fg_color),
+            )
+            .wrap(),
+        );
+    } else if selected {
+        ui.horizontal(|ui| {
+            ui.spinner();
+            ui.weak(if slot.has_doc() {
+                "Rendering…"
+            } else {
+                "Opening…"
+            });
+        });
+    } else {
+        ui.weak(t!("inspector-select-a-file-to-preview"));
+    }
+}
+
+/// Why the pane shows its placeholder instead of a preview: no previewer
+/// claims the file.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Placeholder {
+    /// A disabled previewer plugin whose manifest claims the file's type,
+    /// by id: the line reads *Plugin available*; `None` reads *No plugin
+    /// available*.
+    pub plugin: Option<String>,
+}
+
+/// The rows of the File info section the pane builds itself for a file no
+/// previewer describes: name, type, size, modified.
+#[must_use]
+pub fn file_info_rows(entry: &Entry, now: SystemTime) -> Vec<(String, String)> {
+    let (_, modified) = crate::format::date(entry.modified, now);
+    vec![
+        (t!("preview-name"), entry.name.clone()),
+        (t!("preview-type"), model::type_of(entry)),
+        (t!("preview-size"), crate::format::size(entry.size)),
+        (t!("preview-modified"), modified),
+    ]
+}
+
+/// The placeholder of SPEC.md's *No previewer*: the File info rows at the
+/// top, the file-type icon the list uses drawn large and centred in the
+/// space below, and under it one plain line of small text, *Plugin
+/// available* or *No plugin available*. Nothing in it is clickable.
+fn draw_placeholder(ui: &mut egui::Ui, entry: &Entry, plugin: Option<&str>, now: SystemTime) {
+    let whole = ui.available_rect_before_wrap();
+    let section = crate::inspector::Section {
+        id: "file",
+        title: t!("preview-file-info"),
+        glyph: icons::INFO,
+        rows: file_info_rows(entry, now),
+    };
+    crate::inspector::section_rows(ui, &section, None, whole.height() * 0.5);
+    let rest = ui.available_rect_before_wrap();
+    let glyph = icons::for_entry(entry);
+    let line = if plugin.is_some() {
+        t!("preview-plugin-available")
+    } else {
+        t!("preview-no-plugin-available")
+    };
+    let icon_size = (rest.height() * 0.4).clamp(24.0, 96.0);
+    let line_h = ui.text_style_height(&TextStyle::Small) + 4.0;
+    let gap = 8.0;
+    let top = rest.center().y - (icon_size + gap + line_h) / 2.0;
+    let weak = ui.visuals().weak_text_color();
+    ui.put(
+        Rect::from_center_size(
+            pos2(rest.center().x, top + icon_size / 2.0),
+            vec2(rest.width(), icon_size + 4.0),
+        ),
+        egui::Label::new(egui::RichText::new(glyph).size(icon_size).color(weak)).selectable(false),
+    );
+    ui.put(
+        Rect::from_center_size(
+            pos2(rest.center().x, top + icon_size + gap + line_h / 2.0),
+            vec2(rest.width(), line_h),
+        ),
+        egui::Label::new(egui::RichText::new(line).small().color(weak))
+            .selectable(false)
+            .truncate(),
+    );
 }
 
 /// What a button of the preview's own asked for.

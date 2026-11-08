@@ -502,13 +502,24 @@ pub enum Event {
         /// The document.
         doc: Box<dyn PreviewDoc>,
     },
-    /// No preview could be opened for the pane's selection: no previewer
-    /// claimed the file, or opening it failed.
+    /// No preview could be opened for the pane's selection: a previewer
+    /// claimed the file and failed to open it.
     PreviewFailed {
         /// The pane.
         pane: PaneId,
         /// Why.
         error: Error,
+    },
+    /// No previewer claims the pane's selection; the pane shows the
+    /// placeholder of SPEC.md's *No previewer*: the file's facts, its type
+    /// icon and one line saying whether a plugin for the type is there.
+    PreviewNone {
+        /// The pane.
+        pane: PaneId,
+        /// A previewer plugin in the plugins directory whose manifest
+        /// claims the file's type but which is disabled, by id: *Plugin
+        /// available*. `None`: *No plugin available*.
+        plugin: Option<String>,
     },
     /// The preview just opened for the pane shows a prefix of a file on a
     /// remote provider; the pane offers *Load more*
@@ -644,6 +655,11 @@ impl fmt::Debug for Event {
                 .debug_struct("PreviewFailed")
                 .field("pane", pane)
                 .field("error", error)
+                .finish(),
+            Self::PreviewNone { pane, plugin } => f
+                .debug_struct("PreviewNone")
+                .field("pane", pane)
+                .field("plugin", plugin)
                 .finish(),
             Self::PreviewPrefix {
                 pane,

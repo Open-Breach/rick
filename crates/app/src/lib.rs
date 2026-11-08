@@ -258,6 +258,11 @@ enum Msg {
         request: PermissionRequest,
         result: Result<Applied, Error>,
     },
+    /// No previewer claims the pane's file.
+    PreviewNone {
+        pane: PaneId,
+        generation: u64,
+    },
     /// A remote file's preview was held behind the size cap.
     PreviewCapped {
         pane: PaneId,
@@ -877,6 +882,33 @@ impl App {
     #[must_use]
     pub fn plugins(&self) -> &[Plugin] {
         &self.plugins
+    }
+
+    /// The id of a disabled plugin in the plugins directory whose manifest
+    /// says its previewers claim files named like `name` (by any suffix
+    /// after a dot, so `a.tar.gz` finds a plugin that claims `tar.gz` or
+    /// `gz`): the answer to *Plugin available* in the preview pane's
+    /// placeholder, from the manifests alone (SPEC.md, Preview, *No
+    /// previewer*).
+    #[must_use]
+    pub fn disabled_plugin_for(&self, name: &str) -> Option<String> {
+        let lower = name.to_ascii_lowercase();
+        let suffixes: Vec<&str> = lower
+            .char_indices()
+            .filter(|(_, c)| *c == '.')
+            .map(|(i, _)| &lower[i + 1..])
+            .filter(|s| !s.is_empty())
+            .collect();
+        self.plugins
+            .iter()
+            .filter(|plugin| plugin.status == PluginStatus::Disabled)
+            .find(|plugin| {
+                plugin
+                    .previews
+                    .iter()
+                    .any(|claimed| suffixes.iter().any(|s| claimed.eq_ignore_ascii_case(s)))
+            })
+            .map(|plugin| plugin.id.clone())
     }
 
     /// The values of the settings extensions declared
@@ -3178,6 +3210,16 @@ impl App {
                     });
                 }
             }
+            Msg::PreviewNone { pane, generation } => {
+                if let Some(job) = self
+                    .preview
+                    .get(&pane)
+                    .filter(|job| job.generation == generation)
+                {
+                    let plugin = self.disabled_plugin_for(&job.full.name);
+                    events.push(Event::PreviewNone { pane, plugin });
+                }
+            }
             Msg::PreviewCapped {
                 pane,
                 generation,
@@ -3556,7 +3598,10 @@ impl App {
                             return Ok(());
                         }
                         Some(previewer) => previewer.open(&loc, provider, job.cancel.clone()).await,
-                        None => Err(Error::Unsupported("no previewer for this file")),
+                        None => {
+                            tx.send(Msg::PreviewNone { pane, generation });
+                            return Ok(());
+                        }
                     };
                     if job.cancel.is_cancelled() {
                         return Err(Error::Cancelled);

@@ -208,7 +208,13 @@ pub fn show(
     );
     inner.set_clip_rect(content.intersect(ui.clip_rect()));
     match view.pane {
-        Some(pane) => match previews.content(&mut inner, pane, view.target, view.text_settings) {
+        Some(pane) => match previews.content(
+            &mut inner,
+            pane,
+            view.target,
+            view.entry,
+            view.text_settings,
+        ) {
             Some(PreviewAct::LoadMore) => {
                 requests.push(Request::Command(Command::PreviewMore(pane)));
             }

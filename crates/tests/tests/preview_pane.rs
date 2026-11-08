@@ -878,3 +878,120 @@ fn the_git_badge_appears_only_inside_a_work_tree() {
     assert_eq!(badges, ["file"]);
     assert!(harness.query_by_label(icons::BRANCH).is_none());
 }
+
+/// Selects `name` and steps until the pane shows its placeholder for it.
+fn select_unclaimed(harness: &mut Harness<'_, RickUi>, name: &str) {
+    let pane = harness.state().app().model().focused;
+    let id = harness
+        .state()
+        .app()
+        .model()
+        .active_tab(pane)
+        .and_then(|(_, t)| t.listing.rows().find(|e| e.name == name).map(|e| e.id))
+        .unwrap_or_else(|| panic!("no entry {name}"));
+    harness.state_mut().app_mut().handle(
+        app::Command::Select {
+            pane,
+            change: SelectionChange::Set(vec![id]),
+        },
+        &mut Vec::new(),
+    );
+    let started = Instant::now();
+    loop {
+        harness.step();
+        let slot = harness.state().previews().get(pane);
+        if slot.is_some_and(|s| s.placeholder().is_some() || s.error().is_some()) {
+            break;
+        }
+        assert!(
+            started.elapsed() < Duration::from_secs(20),
+            "{name}: no placeholder: {slot:?}"
+        );
+        std::thread::sleep(Duration::from_millis(2));
+    }
+    harness.step();
+    harness.step();
+}
+
+/// Issue 50, *No previewer*: a file nobody claims shows the placeholder
+/// (its facts, the type icon, one line), never a hex dump; the line reads
+/// *No plugin available* when no plugin claims the type and *Plugin
+/// available* when a disabled plugin's manifest does.
+#[test]
+fn a_file_no_previewer_claims_shows_the_placeholder_with_the_right_line() {
+    let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+    fs::write(dir.path().join("blob.xyz"), [0u8, 1, 2, 3, 255, 254])
+        .unwrap_or_else(|e| panic!("{e}"));
+    fs::write(dir.path().join("notes.abc"), b"abc\0").unwrap_or_else(|e| panic!("{e}"));
+    let fake = Arc::new(Fake::new().unwrap_or_else(|e| panic!("{e}")));
+    let mut harness = window(
+        &fake,
+        dir.path(),
+        egui::vec2(1100.0, 700.0),
+        340.0,
+        previewers(),
+    );
+    // A disabled plugin in the plugins directory whose manifest claims
+    // `.abc`, as the binary would have reported it.
+    harness.state_mut().app_mut().set_plugins(vec![app::Plugin {
+        id: "preview-abc".to_owned(),
+        name: "ABC preview".to_owned(),
+        version: "0.2.0".to_owned(),
+        points: ext::Points::PREVIEWER,
+        previews: vec!["abc".to_owned()],
+        status: app::PluginStatus::Disabled,
+        path: dir.path().join("plugins").join("preview-abc"),
+    }]);
+    let pane = harness.state().app().model().focused;
+
+    select_unclaimed(&mut harness, "blob.xyz");
+    let slot = harness
+        .state()
+        .previews()
+        .get(pane)
+        .unwrap_or_else(|| panic!("slot"));
+    assert_eq!(
+        slot.placeholder().map(|p| p.plugin.clone()),
+        Some(None),
+        "no plugin claims .xyz"
+    );
+    assert!(!slot.has_frame(), "no hex dump, no frame at all");
+    assert!(slot.text_view().is_none());
+    assert!(slot.error().is_none(), "not an error either");
+    harness.get_by_label("No plugin available");
+    assert!(harness.query_by_label("Plugin available").is_none());
+    // The facts at the top: the File info rows the pane builds itself (the
+    // name and the size are in the list too, so the pane's copies are the
+    // ones looked for).
+    let pane_rect = harness
+        .state()
+        .inspector_rect()
+        .unwrap_or_else(|| panic!("pane"));
+    for label in ["blob.xyz", "6 B", "XYZ"] {
+        assert!(
+            harness
+                .get_all_by_label(label)
+                .any(|node| pane_rect.contains(node.rect().center())),
+            "{label} in the pane's File info rows"
+        );
+    }
+    assert_eq!(harness.state().preview_status(), "XYZ");
+    assert!(
+        harness.state().preview_badges().is_empty(),
+        "no previewer, no section badge"
+    );
+
+    select_unclaimed(&mut harness, "notes.abc");
+    let slot = harness
+        .state()
+        .previews()
+        .get(pane)
+        .unwrap_or_else(|| panic!("slot"));
+    assert_eq!(
+        slot.placeholder().map(|p| p.plugin.clone()),
+        Some(Some("preview-abc".to_owned())),
+        "the disabled plugin claims .abc"
+    );
+    harness.get_by_label("Plugin available");
+    assert!(harness.query_by_label("No plugin available").is_none());
+}

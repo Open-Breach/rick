@@ -863,6 +863,10 @@ impl RickUi {
                     let entry = self.preview_entry(pane);
                     self.previews.failed(pane, &error, entry);
                 }
+                Event::PreviewNone { pane, plugin } => {
+                    let entry = self.preview_entry(pane);
+                    self.previews.none(pane, plugin, entry);
+                }
                 Event::PreviewPrefix {
                     pane,
                     served,

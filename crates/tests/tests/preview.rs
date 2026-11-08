@@ -389,8 +389,10 @@ fn the_app_opens_a_preview_for_the_selection() {
     );
     settle(&mut app, &mut events);
     assert!(
-        events.iter().any(|e| matches!(e, Event::PreviewFailed { pane: p, error: Error::Unsupported(_) } if *p == pane)),
-        "{events:?}"
+        events
+            .iter()
+            .any(|e| matches!(e, Event::PreviewNone { pane: p, plugin: None } if *p == pane)),
+        "no previewer claims it, and no disabled plugin would: {events:?}"
     );
     assert!(
         app.model().jobs.is_empty(),
