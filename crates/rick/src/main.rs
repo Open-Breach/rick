@@ -122,8 +122,10 @@ fn main() -> anyhow::Result<()> {
     let config_dir = platform.config_dir();
     let built_ins = built_ins();
     // The question queue the plugins ask the user through (a host key, a
-    // passphrase): one for the plugins and the app alike.
+    // passphrase), and the settings they declared: one of each for the
+    // plugins and the app alike.
     let prompts = ext::Prompts::new();
+    let ext_settings = Arc::new(app::ExtSettings::new(&config_dir));
 
     // The plugins: beside the binary and per user, minus the ids rick.toml
     // disables. A settings file that does not read leaves every plugin
@@ -139,6 +141,7 @@ fn main() -> anyhow::Result<()> {
             .collect(),
         platform: Some(platform.clone()),
         prompts: Some(Arc::clone(&prompts)),
+        settings: Some(Arc::clone(&ext_settings) as Arc<dyn ext::SettingsStore>),
     });
     if list_plugins {
         write!(std::io::stdout().lock(), "{}", table(host.plugins()))
@@ -153,7 +156,7 @@ fn main() -> anyhow::Result<()> {
     Box::leak(Box::new(host));
 
     let ui = Arc::new(ui_egui::EguiHost::new());
-    let mut app = app::App::with_prompts(
+    let mut app = app::App::with_services(
         app::Config {
             platform,
             ui: ui.clone(),
@@ -163,6 +166,7 @@ fn main() -> anyhow::Result<()> {
                 .map(|p| Location::new(vfs_local::PROVIDER_ID, platform::paths::from_path(&p))),
         },
         prompts,
+        ext_settings,
     );
     app.set_plugins(rows);
     ui_egui::run("Rick", VERSION, app, ui).context("the window could not be opened")

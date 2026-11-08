@@ -1,10 +1,17 @@
 //! PDF previews through pdfium: pages rendered to the requested width, page
 //! navigation, and each page's text as it is shown.
 //!
-//! pdfium is a dynamic library the previewer binds at first use: from the
-//! directory in `RICK_PDFIUM_DIR`, then next to the executable, then the
-//! system. Without it the previewer still claims PDF files and `open` fails
-//! with a message saying what to install, which the inspector shows.
+//! pdfium is a dynamic library the previewer binds lazily, on the first
+//! PDF it is asked to show, the way SPEC.md's *Third-party libraries*
+//! says: from the `library` setting of `preview-pdf.toml` when it is set,
+//! then beside the binary and in the plugins directory, then the
+//! platform's usual library directories and the system loader; the first
+//! hit is written back into the setting through the host's
+//! [`SettingsStore`], so the user sees and can change where Rick looks. No
+//! environment variable is read. Without the library the previewer still
+//! claims PDF files and `open` returns a document whose content is
+//! [`Content::MissingLibrary`]: the pane shows the file's facts, the
+//! download for this platform, *Browse…* and *Retry*.
 //!
 //! pdfium is not thread-safe and its documents cannot be sent between
 //! threads, so a document is parsed from its bytes on every render; pdfium
@@ -13,32 +20,39 @@
 
 #![forbid(unsafe_code)]
 
-use std::path::PathBuf;
-use std::sync::{Arc, OnceLock};
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex, PoisonError};
 
 use ext::Text;
+use ext::platform::DialogFilter;
+
 use ext::{
-    API_VERSION, Capabilities, ControlId, ControlValue, Extension, Frame, Icon, InfoSection,
-    Manifest, Platforms, Points, PreviewControl, PreviewDoc, Previewer, Provider, Registry,
-    RenderRequest, TextLayer, Transport, Version, async_trait,
+    API_VERSION, Capabilities, Content, ControlId, ControlValue, Extension, Frame, Icon,
+    InfoSection, Manifest, MissingLibrary, Platforms, Points, PreviewControl, PreviewDoc,
+    Previewer, Provider, Registry, RenderRequest, SettingField, SettingKind, SettingValue,
+    SettingsSchema, SettingsStore, TextBlock, TextLayer, Transport, Version, async_trait,
 };
 use pdfium_render::prelude::*;
 use types::{CancelToken, Entry, Error, ExtId, Location};
 
-/// The extension id.
+/// The extension id, and the name of its settings file.
 pub const ID: ExtId = ExtId("preview-pdf");
 
-/// The environment variable naming the directory that holds the pdfium
-/// library.
-pub const LIBRARY_DIR_VAR: &str = "RICK_PDFIUM_DIR";
+/// The setting that holds the path of the pdfium library (a file, or the
+/// directory it is in), in `preview-pdf.toml`.
+pub const LIBRARY_SETTING: &str = "library";
+
+/// Where the pdfium builds are downloaded from.
+pub const DOWNLOADS: &str = "https://github.com/bblanchon/pdfium-binaries/releases";
 
 /// Files above this are not opened.
 pub const MAX_BYTES: usize = 1024 * 1024 * 1024;
 
-/// The extension: registers [`PdfPreviewer`].
+/// The extension: registers [`PdfPreviewer`] and the `library` setting.
 #[derive(Debug)]
 pub struct PdfPreview {
     manifest: Manifest,
+    search: Search,
 }
 
 impl Default for PdfPreview {
@@ -51,7 +65,15 @@ impl PdfPreview {
     /// The extension with its manifest.
     #[must_use]
     pub fn new() -> Self {
+        Self::with_search(Search::Everywhere)
+    }
+
+    /// The extension looking for pdfium in `search` only: the tests' way
+    /// of standing on a machine without the library.
+    #[must_use]
+    pub fn with_search(search: Search) -> Self {
         Self {
+            search,
             manifest: Manifest {
                 id: ID,
                 name: "PDF preview",
@@ -73,63 +95,412 @@ impl Extension for PdfPreview {
 
     fn register(&self, reg: &mut Registry) -> Result<(), Error> {
         reg.translations(&[("en", include_str!("../locales/en.ftl"))]);
-        reg.previewer(Arc::new(PdfPreviewer));
+        reg.settings(settings_schema());
+        let library = Library::new(
+            reg.settings_store().cloned(),
+            reg.platform().map(|platform| platform.config_dir()),
+        )
+        .with_search(self.search);
+        reg.previewer(Arc::new(PdfPreviewer::new(Arc::new(library))));
         Ok(())
     }
 }
 
-/// Previews PDF files.
-#[derive(Debug, Default)]
-pub struct PdfPreviewer;
-
-static PDFIUM: OnceLock<Result<Pdfium, String>> = OnceLock::new();
-
-/// The directories searched for the library, in order.
-fn library_dirs() -> Vec<PathBuf> {
-    let mut dirs = Vec::new();
-    if let Some(dir) = std::env::var_os(LIBRARY_DIR_VAR) {
-        dirs.push(PathBuf::from(dir));
+/// The settings the Settings window shows for `preview-pdf.toml`: the
+/// library's path.
+#[must_use]
+pub fn settings_schema() -> SettingsSchema {
+    SettingsSchema {
+        ext: ID,
+        fields: vec![SettingField {
+            key: LIBRARY_SETTING,
+            label: Text("preview-pdf-library"),
+            kind: SettingKind::Text {
+                default: String::new(),
+            },
+        }],
     }
-    if let Ok(exe) = std::env::current_exe()
-        && let Some(dir) = exe.parent()
-    {
-        dirs.push(dir.to_path_buf());
+}
+
+/// Where the previewer may look for pdfium.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Search {
+    /// The setting, beside the binary, the plugins directory, the
+    /// platform's library directories and the system loader.
+    #[default]
+    Everywhere,
+    /// The setting alone: how the tests stand on a machine without the
+    /// library whatever the machine has.
+    SettingOnly,
+}
+
+/// The pdfium library: where it is looked for and, once found, the
+/// binding, shared by every document.
+pub struct Library {
+    settings: Option<Arc<dyn SettingsStore>>,
+    config_dir: Option<PathBuf>,
+    search: Search,
+    bound: Mutex<Option<Arc<Pdfium>>>,
+}
+
+impl std::fmt::Debug for Library {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Library")
+            .field("search", &self.search)
+            .field("bound", &self.lock().is_some())
+            .finish_non_exhaustive()
+    }
+}
+
+impl Default for Library {
+    fn default() -> Self {
+        Self::new(None, None)
+    }
+}
+
+/// The usual library directories of the three platforms, checked as plain
+/// paths whatever the current one is (an absent directory is simply
+/// absent), the way the Office previewer checks its program directories.
+fn system_dirs() -> Vec<PathBuf> {
+    let mut dirs = vec![
+        PathBuf::from("/usr/local/lib"),
+        PathBuf::from("/usr/lib"),
+        PathBuf::from("/usr/lib64"),
+        PathBuf::from("/usr/lib/x86_64-linux-gnu"),
+        PathBuf::from("/usr/lib/aarch64-linux-gnu"),
+        PathBuf::from("/opt/homebrew/lib"),
+        PathBuf::from("/Library/Frameworks/pdfium"),
+    ];
+    for var in ["ProgramFiles", "LOCALAPPDATA", "SystemRoot"] {
+        if let Some(base) = std::env::var_os(var) {
+            let base = PathBuf::from(base);
+            dirs.push(base.join("pdfium"));
+            if var == "SystemRoot" {
+                dirs.push(base.join("System32"));
+            }
+        }
     }
     dirs
 }
 
-/// The bound library, or why it is not there.
-fn pdfium() -> Result<&'static Pdfium, Error> {
-    PDFIUM
-        .get_or_init(|| {
-            let mut tried = Vec::new();
-            for dir in library_dirs() {
-                let path = Pdfium::pdfium_platform_library_name_at_path(&dir);
-                match Pdfium::bind_to_library(&path) {
-                    Ok(bindings) => return Ok(Pdfium::new(bindings)),
-                    Err(error) => tried.push(format!("{}: {error}", path.display())),
-                }
-            }
-            match Pdfium::bind_to_system_library() {
-                Ok(bindings) => Ok(Pdfium::new(bindings)),
-                Err(error) => {
-                    tried.push(format!("system library: {error}"));
-                    Err(tried.join("; "))
-                }
-            }
-        })
-        .as_ref()
-        .map_err(|_| Error::Unsupported("pdfium not found: set RICK_PDFIUM_DIR to its directory"))
+/// The pdfium download for this machine: the asset name of the official
+/// builds.
+fn download_asset() -> String {
+    let os = match std::env::consts::OS {
+        "macos" => "mac",
+        "windows" => "win",
+        other => other,
+    };
+    let arch = match std::env::consts::ARCH {
+        "x86_64" => "x64",
+        "aarch64" => "arm64",
+        other => other,
+    };
+    format!("pdfium-{os}-{arch}.tgz")
 }
 
-/// Whether the pdfium library can be bound on this machine.
+impl Library {
+    /// A library looked for everywhere, writing the hit back into
+    /// `settings` when the host lent them; `config_dir` holds the per-user
+    /// plugins directory.
+    #[must_use]
+    pub fn new(settings: Option<Arc<dyn SettingsStore>>, config_dir: Option<PathBuf>) -> Self {
+        Self {
+            settings,
+            config_dir,
+            search: Search::Everywhere,
+            bound: Mutex::new(None),
+        }
+    }
+
+    /// The same library, looked for in `search`.
+    #[must_use]
+    pub fn with_search(mut self, search: Search) -> Self {
+        self.search = search;
+        self
+    }
+
+    fn lock(&self) -> std::sync::MutexGuard<'_, Option<Arc<Pdfium>>> {
+        self.bound.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// The `library` setting as a path, when it is set.
+    #[must_use]
+    pub fn setting(&self) -> Option<PathBuf> {
+        match self.settings.as_ref()?.get(ID, LIBRARY_SETTING)? {
+            SettingValue::Text(text) if !text.trim().is_empty() => Some(PathBuf::from(text.trim())),
+            _ => None,
+        }
+    }
+
+    /// The library file a path names: itself, or the platform's library
+    /// name inside it when it is a directory.
+    fn file_at(path: &Path) -> PathBuf {
+        if path.is_dir() {
+            Pdfium::pdfium_platform_library_name_at_path(path)
+        } else {
+            path.to_path_buf()
+        }
+    }
+
+    /// The files tried, in order: the setting, beside the binary, the
+    /// plugins directories, the platform's library directories.
+    #[must_use]
+    pub fn candidates(&self) -> Vec<PathBuf> {
+        let mut out = Vec::new();
+        if let Some(setting) = self.setting() {
+            out.push(Self::file_at(&setting));
+        }
+        if self.search == Search::SettingOnly {
+            return out;
+        }
+        let mut dirs = Vec::new();
+        if let Ok(exe) = std::env::current_exe()
+            && let Some(dir) = exe.parent()
+        {
+            dirs.push(dir.to_path_buf());
+            dirs.push(dir.join("plugins"));
+            dirs.push(dir.join("plugins").join(ID.0));
+        }
+        if let Some(config) = &self.config_dir {
+            dirs.push(config.join("plugins"));
+            dirs.push(config.join("plugins").join(ID.0));
+        }
+        dirs.extend(system_dirs());
+        for dir in dirs {
+            let file = Pdfium::pdfium_platform_library_name_at_path(&dir);
+            if !out.contains(&file) {
+                out.push(file);
+            }
+        }
+        out
+    }
+
+    /// The bound library, binding it on the first call: the candidates in
+    /// order, then the system loader; the first hit goes into the setting.
+    ///
+    /// # Errors
+    ///
+    /// What the pane shows when nothing binds; the next call looks again.
+    pub fn bind(&self) -> Result<Arc<Pdfium>, MissingLibrary> {
+        if let Some(bound) = self.lock().as_ref() {
+            return Ok(Arc::clone(bound));
+        }
+        let mut tried = Vec::new();
+        let setting = self.setting();
+        for path in self.candidates() {
+            if !path.is_file() {
+                tried.push(format!("{}: not there", path.display()));
+                continue;
+            }
+            match Pdfium::bind_to_library(&path) {
+                Ok(bindings) => {
+                    let pdfium = Arc::new(Pdfium::new(bindings));
+                    *self.lock() = Some(Arc::clone(&pdfium));
+                    if setting.as_deref() != Some(path.as_path())
+                        && let Some(settings) = &self.settings
+                        && let Err(error) = settings.set(
+                            ID,
+                            LIBRARY_SETTING,
+                            SettingValue::Text(path.display().to_string()),
+                        )
+                    {
+                        tracing::warn!(%error, "the pdfium path was not written to the setting");
+                    }
+                    tracing::info!(path = %path.display(), "pdfium bound");
+                    return Ok(pdfium);
+                }
+                Err(error) => tried.push(format!("{}: {error}", path.display())),
+            }
+        }
+        if self.search == Search::Everywhere {
+            match Pdfium::bind_to_system_library() {
+                Ok(bindings) => {
+                    let pdfium = Arc::new(Pdfium::new(bindings));
+                    *self.lock() = Some(Arc::clone(&pdfium));
+                    tracing::info!("pdfium bound from the system loader");
+                    return Ok(pdfium);
+                }
+                Err(error) => tried.push(format!("the system loader: {error}")),
+            }
+        }
+        Err(self.missing(tried.join(
+            "
+",
+        )))
+    }
+
+    /// Whether the library binds on this machine.
+    #[must_use]
+    pub fn available(&self) -> bool {
+        self.bind().is_ok()
+    }
+
+    /// The message for a library that is not there: the download for this
+    /// platform, the setting *Browse…* fills, and `detail` on where it was
+    /// looked for.
+    #[must_use]
+    pub fn missing(&self, detail: String) -> MissingLibrary {
+        MissingLibrary {
+            name: "pdfium".to_owned(),
+            install: DOWNLOADS.to_owned(),
+            setting: (ID, LIBRARY_SETTING),
+            filters: vec![DialogFilter {
+                name: "pdfium library",
+                extensions: &["so", "dylib", "dll"],
+            }],
+            detail: format!(
+                "Download {} from the address above, unpack it and put {} beside the rick                  binary, or browse to it.
+Looked in:
+{detail}",
+                download_asset(),
+                Pdfium::pdfium_platform_library_name().to_string_lossy()
+            ),
+        }
+    }
+}
+
+/// Previews PDF files.
+pub struct PdfPreviewer {
+    library: Arc<Library>,
+}
+
+impl std::fmt::Debug for PdfPreviewer {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PdfPreviewer")
+            .field("library", &self.library)
+            .finish()
+    }
+}
+
+impl Default for PdfPreviewer {
+    fn default() -> Self {
+        Self::new(Arc::new(Library::default()))
+    }
+}
+
+impl PdfPreviewer {
+    /// A previewer binding pdfium through `library`.
+    #[must_use]
+    pub fn new(library: Arc<Library>) -> Self {
+        Self { library }
+    }
+
+    /// Where the previewer looks for pdfium.
+    #[must_use]
+    pub fn library(&self) -> &Arc<Library> {
+        &self.library
+    }
+}
+
+/// Whether the pdfium library can be bound on this machine, looked for
+/// everywhere but the setting.
 #[must_use]
 pub fn available() -> bool {
-    pdfium().is_ok()
+    Library::default().available()
+}
+
+/// The document shown for a PDF while pdfium is missing: the file's facts
+/// and the message the pane lays out, with the text as the fallback.
+pub struct MissingDoc {
+    missing: Arc<MissingLibrary>,
+    name: String,
+    size: Option<u64>,
+}
+
+impl std::fmt::Debug for MissingDoc {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("MissingDoc")
+            .field("name", &self.name)
+            .field("library", &self.missing.name)
+            .finish_non_exhaustive()
+    }
+}
+
+impl MissingDoc {
+    /// The document for the file `name` of `size` bytes.
+    #[must_use]
+    pub fn new(missing: MissingLibrary, name: String, size: Option<u64>) -> Self {
+        Self {
+            missing: Arc::new(missing),
+            name,
+            size,
+        }
+    }
+}
+
+impl PreviewDoc for MissingDoc {
+    fn pages(&self) -> Option<usize> {
+        None
+    }
+
+    fn render(&mut self, page: usize, _req: RenderRequest) -> Result<Frame, Error> {
+        if page != 0 {
+            return Err(Error::NotFound);
+        }
+        Ok(Frame::Text(TextBlock {
+            text: format!(
+                "{} is needed to show this file and was not found.
+{}
+
+{}",
+                self.missing.name, self.missing.install, self.missing.detail
+            ),
+            language: None,
+            spans: Vec::new(),
+        }))
+    }
+
+    fn text_layer(&self) -> Option<&TextLayer> {
+        None
+    }
+
+    fn content(&self) -> Option<Content> {
+        Some(Content::MissingLibrary(Arc::clone(&self.missing)))
+    }
+
+    fn sections(&self) -> Vec<InfoSection> {
+        let mut rows = vec![("Name".to_owned(), self.name.clone())];
+        if let Some(size) = self.size {
+            rows.push(("Size".to_owned(), format_size(size)));
+        }
+        rows.push((
+            "Preview".to_owned(),
+            format!("{} not found", self.missing.name),
+        ));
+        vec![InfoSection {
+            id: "file",
+            title: Text("preview-pdf-file-info"),
+            icon: Icon::Info,
+            rows,
+        }]
+    }
+
+    fn status(&self) -> Vec<String> {
+        let mut status = vec!["PDF".to_owned()];
+        if let Some(size) = self.size {
+            status.push(format_size(size));
+        }
+        status.push(format!("{} not found", self.missing.name));
+        status
+    }
+
+    fn controls(&self) -> Vec<PreviewControl> {
+        Vec::new()
+    }
+
+    fn set_control(&mut self, _id: ControlId, _value: ControlValue) -> Result<(), Error> {
+        Err(Error::Unsupported("nothing to control without the library"))
+    }
+
+    fn transport(&mut self) -> Option<&mut dyn Transport> {
+        None
+    }
 }
 
 /// An opened PDF.
 pub struct PdfDoc {
+    pdfium: Arc<Pdfium>,
     bytes: Arc<[u8]>,
     pages: usize,
     layer: TextLayer,
@@ -162,14 +533,13 @@ fn pixels(size: f64, scale: f64) -> Pixels {
 }
 
 impl PdfDoc {
-    /// Parses the document once for its page count and metadata.
+    /// Parses the document once for its page count and metadata, through
+    /// the bound `pdfium`.
     ///
     /// # Errors
     ///
-    /// `Error::Unsupported` without pdfium, `Error::Io` for a file pdfium
-    /// cannot read.
-    pub fn new(bytes: Vec<u8>) -> Result<Self, Error> {
-        let pdfium = pdfium()?;
+    /// `Error::Io` for a file pdfium cannot read.
+    pub fn new(pdfium: Arc<Pdfium>, bytes: Vec<u8>) -> Result<Self, Error> {
         let document = pdfium
             .load_pdf_from_byte_slice(&bytes, None)
             .map_err(pdf_error)?;
@@ -202,6 +572,7 @@ impl PdfDoc {
         info.push(("Size".to_owned(), format_size(bytes.len() as u64)));
         drop(document);
         Ok(Self {
+            pdfium,
             bytes: bytes.into(),
             pages,
             layer: TextLayer {
@@ -221,8 +592,8 @@ impl PreviewDoc for PdfDoc {
         if page >= self.pages {
             return Err(Error::NotFound);
         }
-        let pdfium = pdfium()?;
-        let document = pdfium
+        let document = self
+            .pdfium
             .load_pdf_from_byte_slice(&self.bytes, None)
             .map_err(pdf_error)?;
         let index = PdfPageIndex::try_from(page).map_err(|_| Error::NotFound)?;
@@ -343,7 +714,20 @@ impl Previewer for PdfPreviewer {
         if bytes.len() > MAX_BYTES {
             return Err(Error::Unsupported("PDF larger than 1 GiB"));
         }
-        Ok(Box::new(PdfDoc::new(bytes)?))
+        // The library is resolved here, on the first file shown, never at
+        // start; a miss is looked up again on every file (and *Retry*).
+        let library = Arc::clone(&self.library);
+        let size = bytes.len() as u64;
+        let name = loc
+            .path
+            .file_name()
+            .map(|n| String::from_utf8_lossy(n).into_owned())
+            .unwrap_or_default();
+        ext::blocking(move || match library.bind() {
+            Ok(pdfium) => Ok(Box::new(PdfDoc::new(pdfium, bytes)?) as Box<dyn PreviewDoc>),
+            Err(missing) => Ok(Box::new(MissingDoc::new(missing, name, Some(size)))),
+        })
+        .await
     }
 }
 
@@ -433,7 +817,7 @@ mod tests {
 
     #[test]
     fn scores_pdf_by_header_then_name() {
-        let p = PdfPreviewer;
+        let p = PdfPreviewer::default();
         assert_eq!(p.score(&entry("doc.bin"), b"%PDF-1.7\n"), 200);
         assert_eq!(p.score(&entry("doc.pdf"), b"garbage"), 60);
         assert_eq!(p.score(&entry("doc.txt"), b"garbage"), 0);
@@ -450,18 +834,110 @@ mod tests {
         );
     }
 
-    /// Needs pdfium: see `LIBRARY_DIR_VAR`. The acceptance run in CI has it.
+    /// A store of one extension's values in memory, for the tests.
+    #[derive(Default)]
+    struct Memory(Mutex<Vec<(String, SettingValue)>>);
+
+    impl SettingsStore for Memory {
+        fn get(&self, ext: ExtId, key: &str) -> Option<SettingValue> {
+            assert_eq!(ext, ID);
+            self.0
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .iter()
+                .find(|(k, _)| k == key)
+                .map(|(_, v)| v.clone())
+        }
+        fn set(&self, ext: ExtId, key: &str, value: SettingValue) -> Result<(), Error> {
+            assert_eq!(ext, ID);
+            let mut values = self.0.lock().unwrap_or_else(PoisonError::into_inner);
+            values.retain(|(k, _)| k != key);
+            values.push((key.to_owned(), value));
+            Ok(())
+        }
+    }
+
     #[test]
-    fn pages_render_and_carry_their_text() {
-        if !available() {
-            eprintln!("pdfium not available; set {LIBRARY_DIR_VAR}");
+    fn the_setting_comes_first_then_the_binary_and_plugin_directories() {
+        let store = Arc::new(Memory::default());
+        store
+            .set(
+                ID,
+                LIBRARY_SETTING,
+                SettingValue::Text("/opt/pdf/libx.so".into()),
+            )
+            .unwrap_or_else(|e| panic!("{e}"));
+        let config = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+        let library = Library::new(
+            Some(store as Arc<dyn SettingsStore>),
+            Some(config.path().to_path_buf()),
+        );
+        let candidates = library.candidates();
+        assert_eq!(candidates[0], PathBuf::from("/opt/pdf/libx.so"));
+        let exe_dir = std::env::current_exe()
+            .ok()
+            .and_then(|e| e.parent().map(Path::to_path_buf))
+            .unwrap_or_else(|| panic!("exe"));
+        let name = Pdfium::pdfium_platform_library_name();
+        assert_eq!(candidates[1], exe_dir.join(&name), "beside the binary");
+        assert_eq!(candidates[2], exe_dir.join("plugins").join(&name));
+        assert!(candidates.contains(&config.path().join("plugins").join(&name)));
+        assert!(candidates.contains(&PathBuf::from("/usr/lib").join(&name)));
+        // The setting alone, for a machine without the library.
+        let only = Library::new(None, None).with_search(Search::SettingOnly);
+        assert!(only.candidates().is_empty());
+        let Err(missing) = only.bind() else {
+            panic!("nothing to bind to");
+        };
+        assert_eq!(missing.name, "pdfium");
+        assert_eq!(missing.setting, (ID, LIBRARY_SETTING));
+        assert!(missing.install.starts_with("https://"));
+        assert!(missing.detail.contains("pdfium-"), "{}", missing.detail);
+        assert_eq!(missing.filters[0].extensions, ["so", "dylib", "dll"]);
+    }
+
+    #[test]
+    fn a_setting_naming_a_directory_means_the_library_inside_it() {
+        let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+        let store = Arc::new(Memory::default());
+        store
+            .set(
+                ID,
+                LIBRARY_SETTING,
+                SettingValue::Text(dir.path().display().to_string()),
+            )
+            .unwrap_or_else(|e| panic!("{e}"));
+        let library = Library::new(Some(store as Arc<dyn SettingsStore>), None)
+            .with_search(Search::SettingOnly);
+        assert_eq!(
+            library.candidates(),
+            [Pdfium::pdfium_platform_library_name_at_path(dir.path())]
+        );
+    }
+
+    /// Needs pdfium beside the test binary, in the platform's library
+    /// directories or in the system loader's path. The acceptance run in
+    /// CI has it beside the binary and writes the setting back.
+    #[test]
+    fn pages_render_and_carry_their_text_and_the_hit_is_written_to_the_setting() {
+        let store = Arc::new(Memory::default());
+        let library = Library::new(Some(Arc::clone(&store) as Arc<dyn SettingsStore>), None);
+        let Ok(pdfium) = library.bind() else {
+            eprintln!("pdfium not available; the render is not checked here");
             assert!(
                 std::env::var_os("RICK_REQUIRE_PDFIUM").is_none(),
                 "pdfium required but not found"
             );
             return;
+        };
+        // Found by its path (not the system loader): the setting now says
+        // where, and the next look starts there.
+        if let Some(SettingValue::Text(path)) = store.get(ID, LIBRARY_SETTING) {
+            assert!(Path::new(&path).is_file(), "{path}");
+            assert_eq!(library.candidates()[0], PathBuf::from(path));
         }
-        let mut doc = PdfDoc::new(sample_pdf(5)).unwrap_or_else(|e| panic!("{e}"));
+        assert!(library.available(), "bound once, bound for good");
+        let mut doc = PdfDoc::new(pdfium, sample_pdf(5)).unwrap_or_else(|e| panic!("{e}"));
         assert_eq!(doc.pages(), Some(5));
         let sections = doc.sections();
         assert_eq!(sections.len(), 1);

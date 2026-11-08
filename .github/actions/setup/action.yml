@@ -33,8 +33,13 @@ inputs:
     default: test
   pdfium:
     description: >-
-      Bind pdfium for the PDF previewer: the release binary for this runner
-      in RICK_PDFIUM_DIR, with RICK_REQUIRE_PDFIUM set so its tests fail
+      Bind pdfium for the PDF previewer (issue 50, no environment variable):
+      the release binary for this runner is copied beside the test binaries
+      (target/<profile>/deps/, where a previewer looks "beside the binary"
+      when the tests run it with their temporary config directory) and its
+      path is written into the PDF previewer's setting file in the runner's
+      config directory (preview-pdf.toml, which the rick binary and `cargo
+      xtask bundle` read), with RICK_REQUIRE_PDFIUM set so the tests fail
       rather than skip when the binding is missing.
     required: false
     default: "true"
@@ -126,9 +131,24 @@ runs:
         fi
         mkdir -p "$dest"
         curl -sSL "https://github.com/bblanchon/pdfium-binaries/releases/latest/download/$asset.tgz" | tar xz -C "$dest"
-        if [ "$RUNNER_OS" = "Windows" ]; then
-          echo "RICK_PDFIUM_DIR=$(cygpath -w "$dest/bin")" >> "$GITHUB_ENV"
-        else
-          echo "RICK_PDFIUM_DIR=$dest/lib" >> "$GITHUB_ENV"
-        fi
+        # The library file, and the config directory the setting goes into,
+        # as platform::ConfigDir computes it (QUESTIONS.md 188).
+        case "$RUNNER_OS" in
+          Windows) lib="$dest/bin/pdfium.dll"; config="$(cygpath -u "$APPDATA")/Rick"; lib_setting="$(cygpath -m "$lib")" ;;
+          macOS)   lib="$dest/lib/libpdfium.dylib"; config="$HOME/Library/Application Support/Rick"; lib_setting="$lib" ;;
+          *)       lib="$dest/lib/libpdfium.so"; config="${XDG_CONFIG_HOME:-$HOME/.config}/rick"; lib_setting="$lib" ;;
+        esac
+        test -f "$lib" || { echo "no pdfium library in $dest"; exit 1; }
+        # Beside every test binary: the tests run with a temporary config
+        # directory and find the library the way a user without the setting
+        # would, beside the binary.
+        for profile in debug release; do
+          mkdir -p "$GITHUB_WORKSPACE/target/$profile/deps"
+          cp "$lib" "$GITHUB_WORKSPACE/target/$profile/deps/"
+          cp "$lib" "$GITHUB_WORKSPACE/target/$profile/"
+        done
+        # The setting, for the rick binary and the bundle.
+        mkdir -p "$config"
+        printf 'library = "%s"\n' "$lib_setting" > "$config/preview-pdf.toml"
+        cat "$config/preview-pdf.toml"
         echo "RICK_REQUIRE_PDFIUM=1" >> "$GITHUB_ENV"

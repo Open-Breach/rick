@@ -77,6 +77,7 @@ fn the_probe_registers_and_its_job_runs_on_the_host_runtime() {
         &fixture("plugin_probe"),
         Arc::new(platform::Native::new()),
         None,
+        None,
     )
     .unwrap_or_else(|e| panic!("{e}"));
     assert_eq!(loaded.manifest().id.0, "probe");
@@ -138,6 +139,7 @@ fn a_plugin_that_panics_while_registering_is_caught_and_the_host_carries_on() {
         &fixture("plugin_panic"),
         Arc::new(platform::Native::new()),
         None,
+        None,
     ) {
         Err(error) => error,
         Ok(loaded) => panic!("loaded {loaded:?}"),
@@ -151,6 +153,7 @@ fn a_plugin_that_panics_while_registering_is_caught_and_the_host_carries_on() {
         &fixture("plugin_probe"),
         Arc::new(platform::Native::new()),
         None,
+        None,
     )
     .unwrap_or_else(|e| panic!("{e}"));
     assert_eq!(loaded.manifest().id.0, "probe");
@@ -160,7 +163,7 @@ fn a_plugin_that_panics_while_registering_is_caught_and_the_host_carries_on() {
 fn a_missing_or_foreign_library_is_an_open_error() {
     let missing = std::env::temp_dir().join("no-such-plugin.so");
     assert!(matches!(
-        load_library(&missing, Arc::new(platform::Native::new()), None),
+        load_library(&missing, Arc::new(platform::Native::new()), None, None),
         Err(LoadError::Open(_))
     ));
 }

@@ -82,6 +82,7 @@ fn load_plugins() -> &'static Host {
         compiled_in: Vec::new(),
         platform: None,
         prompts: None,
+        settings: None,
     });
     for (_, id) in PLUGINS {
         let row = host
@@ -421,7 +422,7 @@ fn a_docx_converts_within_5_s_when_libreoffice_is_present() {
         return;
     }
     let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
-    let previewer: Arc<dyn Previewer> = Arc::new(ext_preview_office::OfficePreviewer);
+    let previewer: Arc<dyn Previewer> = Arc::new(ext_preview_office::OfficePreviewer::default());
     let provider = provider();
     // One conversion to start LibreOffice's profile, which the first run of
     // a fresh install pays once.

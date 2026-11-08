@@ -58,6 +58,7 @@ pub fn describe(path: &Path) -> Result<PluginToml, LoadError> {
         path,
         std::sync::Arc::new(ext::platform::Native::new()),
         None,
+        None,
     )?;
     let stem = crate_stem(path);
     Ok(PluginToml::describe(

@@ -244,6 +244,16 @@ pub fn show(
             Some(PreviewAct::PreviewAnyway) => {
                 requests.push(Request::Command(Command::PreviewAnyway(pane)));
             }
+            Some(PreviewAct::Retry) => {
+                requests.push(Request::Command(Command::PreviewRetry(pane)));
+            }
+            Some(PreviewAct::Browse { setting, filters }) => {
+                requests.push(Request::BrowseLibrary {
+                    pane,
+                    setting,
+                    filters,
+                });
+            }
             None => {}
         },
         None => {

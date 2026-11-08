@@ -193,6 +193,17 @@ pub enum Request {
     RenameLayout(String),
     /// Close a window; the last one closes the application.
     CloseWindow(WindowId),
+    /// The preview pane's *Browse…* for a missing third-party library:
+    /// open the platform's file dialogue, store the chosen file into the
+    /// previewer's setting and open the preview again.
+    BrowseLibrary {
+        /// The pane whose preview asked.
+        pane: PaneId,
+        /// The extension and the key of the setting that holds the path.
+        setting: (types::ExtId, &'static str),
+        /// What the dialogue filters for.
+        filters: Vec<platform::DialogFilter>,
+    },
     /// Open the side panel's Edit… dialogue for a place.
     EditPlace {
         /// The row's index.
@@ -366,6 +377,13 @@ pub struct RickUi {
     inspector_width: f32,
     /// The Properties dialogue, open or not.
     properties: properties::PropertiesDialog,
+    /// The file dialogue a preview's *Browse…* opened for a missing
+    /// library: the pane, the setting the choice goes into, the answer.
+    library_browse: Option<(
+        PaneId,
+        (types::ExtId, &'static str),
+        runtime::oneshot::Receiver<Vec<std::path::PathBuf>>,
+    )>,
     /// Read-only texts actions asked to show, each in its own window.
     texts: Vec<TextWindow>,
     next_text: u64,
@@ -541,6 +559,7 @@ impl RickUi {
             inspector_state: inspector::PaneState::default(),
             inspector_width,
             properties: properties::PropertiesDialog::default(),
+            library_browse: None,
             texts: Vec::new(),
             next_text: 0,
             thumbnails: Thumbnails::default(),
@@ -1165,6 +1184,11 @@ impl RickUi {
                         });
                     }
                     Request::CloseWindow(window) => self.close_window(window, ctx),
+                    Request::BrowseLibrary {
+                        pane,
+                        setting,
+                        filters,
+                    } => self.browse_library(pane, setting, filters),
                     Request::EditPlace { index, title, icon } => {
                         side_panel::begin_edit(&mut self.side, index, title, icon);
                     }
@@ -1966,6 +1990,52 @@ impl RickUi {
                 self.open_entry(pane, id);
             }
             _ => self.run_action(ActionId("core.open_default"), pane, Invocation::Shortcut),
+        }
+    }
+
+    /// Opens the platform's file dialogue for a missing library's file; the
+    /// answer is polled each frame ([`poll_library_browse`](Self::poll_library_browse)).
+    fn browse_library(
+        &mut self,
+        pane: PaneId,
+        setting: (types::ExtId, &'static str),
+        filters: Vec<platform::DialogFilter>,
+    ) {
+        if self.library_browse.is_some() {
+            return;
+        }
+        let platform = Arc::clone(self.app.platform());
+        let title = t!("preview-library-choose", name = setting.0.0);
+        let (tx, rx) = runtime::oneshot::channel();
+        runtime::handle().spawn(async move {
+            let _ = tx.send(platform.pick_files(&title, &filters).await);
+        });
+        self.library_browse = Some((pane, setting, rx));
+    }
+
+    /// A file the *Browse…* dialogue picked goes into the previewer's
+    /// setting, and the preview opens again.
+    fn poll_library_browse(&mut self, ctx: &egui::Context) {
+        let Some((pane, (ext, key), rx)) = self.library_browse.as_mut() else {
+            return;
+        };
+        match rx.try_recv() {
+            Ok(files) => {
+                let (pane, ext, key) = (*pane, *ext, *key);
+                self.library_browse = None;
+                if let Some(path) = files.into_iter().next() {
+                    self.handle(Command::ExtSetting {
+                        ext: ext.0.to_owned(),
+                        key: key.to_owned(),
+                        value: ext::SettingValue::Text(path.display().to_string()),
+                    });
+                    self.handle(Command::PreviewRetry(pane));
+                }
+            }
+            Err(runtime::oneshot::error::TryRecvError::Closed) => self.library_browse = None,
+            Err(runtime::oneshot::error::TryRecvError::Empty) => {
+                ctx.request_repaint_after(Duration::from_millis(100));
+            }
         }
     }
 
@@ -3099,6 +3169,7 @@ impl RickUi {
                 .begin_frame(ctx, after, &mut self.tabs, &mut self.requests);
         }
         self.resolve_pending_selects();
+        self.poll_library_browse(ctx);
         self.handle_keys(ctx, window);
         self.apply_requests(ctx);
         // A closed console or comparison takes its view with it; dropping a

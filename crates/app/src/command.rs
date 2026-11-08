@@ -304,6 +304,9 @@ pub enum Command {
     /// A remote file held behind the size cap (`Event::PreviewCapped`):
     /// open the preview whatever its size.
     PreviewAnyway(PaneId),
+    /// Open the pane's preview again, as it is: *Retry* on a missing
+    /// third-party library, after it was installed or its setting changed.
+    PreviewRetry(PaneId),
     /// The pane's *Copy*: put the whole text of the file the pane previews
     /// on the clipboard as text, through `platform::Clipboard`: the whole
     /// file (read again as a job, not the window the pane has loaded), the

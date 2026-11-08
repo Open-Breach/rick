@@ -15,7 +15,7 @@ use image::{DynamicImage, ImageFormat, Rgba, RgbaImage};
 use model::SelectionChange;
 use platform::{ConfigDir, Fake};
 use tests::local;
-use types::{CancelToken, Entry, EntryId, Error};
+use types::{CancelToken, Entry, EntryId};
 use ui_egui::keys::Intent;
 use ui_egui::{EguiHost, RickUi};
 

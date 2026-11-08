@@ -330,7 +330,6 @@ fn extension_settings(
                     let current = app
                         .ext_settings()
                         .get(schema.ext.0, field.key)
-                        .cloned()
                         .unwrap_or_else(|| field.kind.default_value());
                     ui.label(field.label.get());
                     let new_value = match (&field.kind, &current) {

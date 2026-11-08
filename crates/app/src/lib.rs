@@ -548,8 +548,9 @@ pub struct App {
     exit: bool,
     /// The plugins the host found, for the Extensions screen.
     plugins: Vec<Plugin>,
-    /// The values of the settings extensions declared, one TOML file each.
-    ext_settings: ExtSettings,
+    /// The values of the settings extensions declared, one TOML file each;
+    /// shared with the extensions through the registry.
+    ext_settings: Arc<ExtSettings>,
     /// The title-row search box's index search in flight.
     index_search: Option<IndexJob>,
     /// The entry the Properties dialogue shows, while it is open: a change
@@ -574,10 +575,27 @@ impl App {
     /// through: the binary makes one and lends it to the plugins it loads
     /// before the application exists, so their questions reach the same
     /// dialogues.
+    #[must_use]
+    pub fn with_prompts(config: Config, prompts: Arc<Prompts>) -> Self {
+        let dir = config
+            .config_dir
+            .clone()
+            .unwrap_or_else(|| config.platform.config_dir());
+        Self::with_services(config, prompts, Arc::new(ExtSettings::new(&dir)))
+    }
+
+    /// [`with_prompts`](Self::with_prompts) with the extension settings
+    /// store the binary created before the plugin host ran, so the plugins
+    /// loaded there and the extensions compiled in read and write the same
+    /// values.
     // Start-up is one straight line: registry, settings, session, loop.
     #[allow(clippy::too_many_lines)]
     #[must_use]
-    pub fn with_prompts(config: Config, prompts: Arc<Prompts>) -> Self {
+    pub fn with_services(
+        config: Config,
+        prompts: Arc<Prompts>,
+        ext_settings: Arc<ExtSettings>,
+    ) -> Self {
         let Config {
             platform,
             ui,
@@ -588,7 +606,8 @@ impl App {
         let mut pending = Vec::new();
 
         let mut registry = Registry::with_platform(Arc::clone(&platform) as Arc<dyn Platform>)
-            .with_prompts(Arc::clone(&prompts));
+            .with_prompts(Arc::clone(&prompts))
+            .with_settings_store(Arc::clone(&ext_settings) as Arc<dyn ext::SettingsStore>);
         let mounts = Arc::new(Mounts::new());
         let trash: Arc<dyn platform::Trash> = Arc::clone(&platform) as Arc<dyn platform::Trash>;
         mounts.mount(Arc::new(LocalProvider::new(trash)));
@@ -645,7 +664,7 @@ impl App {
         network_providers.sort();
 
         let config_dir = config_dir.unwrap_or_else(|| platform.config_dir());
-        let ext_settings = ExtSettings::load(&config_dir, registry.settings_schemas());
+        ext_settings.load(registry.settings_schemas());
         let settings_path = config_dir.join(SETTINGS_FILE);
         let places_path = config_dir.join(PLACES_FILE);
         let (places, seeded) = match places::load(&places_path) {
@@ -1466,6 +1485,7 @@ impl App {
                     self.restart_preview(pane);
                 }
             }
+            Command::PreviewRetry(pane) => self.restart_preview(pane),
             Command::PreviewCopy(pane) => self.copy_preview_text(pane),
             Command::TabOrder { pane, order } => {
                 self.model.set_tab_order(pane, order);

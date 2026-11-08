@@ -1275,3 +1275,173 @@ fn copy_puts_the_whole_text_on_the_clipboard_and_the_raw_source_for_markdown() {
         harness.state().preview_toolbar()
     );
 }
+
+/// Issue 50, *Third-party libraries*: with pdfium out of reach a PDF shows
+/// the in-pane message with *Browse…* and *Retry*; browsing to the library
+/// stores its path in `preview-pdf.toml` and the PDF renders; setting the
+/// path by hand and pressing *Retry* does the same; and a previewer that
+/// finds the library by itself writes the hit back into the setting.
+#[test]
+fn a_missing_pdfium_shows_the_message_and_browsing_to_it_stores_the_setting() {
+    let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+    fs::write(dir.path().join("paper.pdf"), media::pdf(2, 300, 400))
+        .unwrap_or_else(|e| panic!("{e}"));
+    let fake = Arc::new(Fake::new().unwrap_or_else(|e| panic!("{e}")));
+    // The previewer looks in its setting alone: a machine without pdfium.
+    let mut harness = window(
+        &fake,
+        dir.path(),
+        egui::vec2(1100.0, 700.0),
+        360.0,
+        vec![Arc::new(ext_preview_pdf::PdfPreview::with_search(
+            ext_preview_pdf::Search::SettingOnly,
+        ))],
+    );
+    let pane = harness.state().app().model().focused;
+    select(&mut harness, "paper.pdf");
+    let slot = harness
+        .state()
+        .previews()
+        .get(pane)
+        .unwrap_or_else(|| panic!("slot"));
+    let Some(ext::Content::MissingLibrary(missing)) = slot.content() else {
+        panic!("the message, not a preview: {slot:?}");
+    };
+    assert_eq!(missing.name, "pdfium");
+    assert_eq!(
+        missing.setting,
+        (ext_preview_pdf::ID, ext_preview_pdf::LIBRARY_SETTING)
+    );
+    assert!(slot.pages().is_none(), "nothing rendered");
+    assert!(in_pane(&harness, "Browse…") >= 1, "the Browse… button");
+    assert!(in_pane(&harness, "Retry") >= 1, "the Retry button");
+    assert!(
+        in_pane(&harness, "paper.pdf") >= 1,
+        "the file's information"
+    );
+    assert!(
+        harness
+            .state()
+            .preview_status()
+            .contains("pdfium not found"),
+        "{}",
+        harness.state().preview_status()
+    );
+    let settings_file = fake.config_dir().join("preview-pdf.toml");
+    assert!(!settings_file.exists(), "nothing written for a miss");
+
+    // The library, where this machine has one.
+    let Some(library) = ext_preview_pdf::Library::default()
+        .candidates()
+        .into_iter()
+        .find(|path| path.is_file())
+    else {
+        eprintln!("no pdfium library on this machine; Browse… and the write-back are not checked");
+        assert!(
+            std::env::var_os("RICK_REQUIRE_PDFIUM").is_none(),
+            "pdfium required but not found"
+        );
+        return;
+    };
+
+    // Browse… to it: the choice goes into the setting and the PDF renders.
+    fake.answer_files(vec![library.clone()]);
+    click_in_pane(&mut harness, "Browse…");
+    let rendered = |harness: &Harness<'_, RickUi>| {
+        harness
+            .state()
+            .previews()
+            .get(pane)
+            .is_some_and(|s| s.pages() == Some(2) && s.frame_size(0).is_some())
+    };
+    let started = Instant::now();
+    while !rendered(&harness) {
+        settle(&mut harness);
+        assert!(
+            started.elapsed() < Duration::from_secs(20),
+            "the PDF did not render after Browse…: {:?}",
+            harness.state().previews().get(pane)
+        );
+    }
+    let text = fs::read_to_string(&settings_file).unwrap_or_else(|e| panic!("{e}"));
+    assert!(
+        text.contains(&format!("library = \"{}\"", library.display())),
+        "{text}"
+    );
+    assert_eq!(
+        toolbar_item(&harness, "Next page"),
+        None,
+        "the pager is there"
+    );
+
+    // Retry after the setting was put right by hand: a second window
+    // without the library, the setting set as the Settings screen would,
+    // then Retry.
+    drop(harness);
+    let fake = Arc::new(Fake::new().unwrap_or_else(|e| panic!("{e}")));
+    let mut harness = window(
+        &fake,
+        dir.path(),
+        egui::vec2(1100.0, 700.0),
+        360.0,
+        vec![Arc::new(ext_preview_pdf::PdfPreview::with_search(
+            ext_preview_pdf::Search::SettingOnly,
+        ))],
+    );
+    let pane = harness.state().app().model().focused;
+    select(&mut harness, "paper.pdf");
+    assert!(matches!(
+        harness
+            .state()
+            .previews()
+            .get(pane)
+            .and_then(|s| s.content()),
+        Some(ext::Content::MissingLibrary(_))
+    ));
+    harness.state_mut().app_mut().handle(
+        app::Command::ExtSetting {
+            ext: ext_preview_pdf::ID.0.to_owned(),
+            key: ext_preview_pdf::LIBRARY_SETTING.to_owned(),
+            value: ext::SettingValue::Text(library.display().to_string()),
+        },
+        &mut Vec::new(),
+    );
+    click_in_pane(&mut harness, "Retry");
+    let started = Instant::now();
+    while !rendered(&harness) {
+        settle(&mut harness);
+        assert!(
+            started.elapsed() < Duration::from_secs(20),
+            "the PDF did not render after Retry"
+        );
+    }
+
+    // A previewer that looks everywhere finds the library by itself and
+    // writes where into the setting.
+    drop(harness);
+    let fake = Arc::new(Fake::new().unwrap_or_else(|e| panic!("{e}")));
+    let mut harness = window(
+        &fake,
+        dir.path(),
+        egui::vec2(1100.0, 700.0),
+        360.0,
+        vec![Arc::new(ext_preview_pdf::PdfPreview::new())],
+    );
+    let pane = harness.state().app().model().focused;
+    select(&mut harness, "paper.pdf");
+    let started = Instant::now();
+    while !rendered(&harness) {
+        settle(&mut harness);
+        assert!(started.elapsed() < Duration::from_secs(20), "no render");
+    }
+    let text = fs::read_to_string(fake.config_dir().join("preview-pdf.toml"))
+        .unwrap_or_else(|e| panic!("the setting was not written back: {e}"));
+    assert!(text.contains("library = \""), "{text}");
+    let written = text
+        .lines()
+        .find_map(|l| l.strip_prefix("library = \""))
+        .and_then(|rest| rest.strip_suffix('"'))
+        .map(Path::new)
+        .unwrap_or_else(|| panic!("{text}"));
+    assert!(written.is_file(), "{}", written.display());
+}

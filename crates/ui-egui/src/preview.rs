@@ -913,8 +913,15 @@ impl Previews {
             let body = ui.available_rect_before_wrap();
             slot.frame_rect = Some(body);
             ui.set_clip_rect(body.intersect(ui.clip_rect()));
-            content::draw(ui, &content, &mut slot.content_state, SystemTime::now());
-            return act;
+            let sections = slot.sections.clone();
+            return content::draw(
+                ui,
+                &content,
+                &sections,
+                &mut slot.content_state,
+                SystemTime::now(),
+            )
+            .or(act);
         }
         let ctx = ui.ctx().clone();
         let body = ui.available_rect_before_wrap();
@@ -1113,12 +1120,22 @@ fn draw_placeholder(ui: &mut egui::Ui, entry: &Entry, plugin: Option<&str>, now:
 }
 
 /// What a button of the preview's own asked for.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PreviewAct {
     /// Serve the next chunk of a remote file shown as a prefix.
     LoadMore,
     /// Open a remote file above the size cap whatever its size.
     PreviewAnyway,
+    /// Open the preview again: a missing library may be there now.
+    Retry,
+    /// Ask for the file of a missing library with a file dialogue and
+    /// store the choice into the previewer's setting, then open again.
+    Browse {
+        /// The extension and the key of the setting that holds the path.
+        setting: (types::ExtId, &'static str),
+        /// What the dialogue filters for.
+        filters: Vec<platform::DialogFilter>,
+    },
 }
 
 /// The *Load more* bar at the foot of a prefix: takes its row off the

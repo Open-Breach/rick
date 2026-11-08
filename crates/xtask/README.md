@@ -5,7 +5,8 @@
 workspace with its examples and lays out `target/<profile>/bundle/`
 (QUESTIONS.md 84): the
 `rick` binary, the kernel dylibs `types`, `runtime` and `ext` and the
-`libstd` they need beside it, pdfium when `RICK_PDFIUM_DIR` names it, and
+`libstd` they need beside it, pdfium when the PDF previewer's `library`
+setting (`preview-pdf.toml` in the config directory) names it, and
 `plugins/<id>/plugin.toml` with the library for every plugin crate (an
 `ext-*` member built as a `cdylib`), so that running `rick` from there finds
 every plugin with nothing copied by hand; the release workflow archives the
