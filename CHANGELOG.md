@@ -9,6 +9,15 @@ the pull request that brought the change.
 
 ### Added
 
+- The burger menu lists the actions extensions put in the application
+  menu (`Action::app_menu`, extension API 14): after the Layouts submenu,
+  one submenu per extension with the actions that apply to the focused
+  pane; the installer's *Installed Apps…* is the first (#59).
+- An action can open its form when a job of its finishes
+  (`ActionOutcome::Later`, `FormLater`, `Continuation`,
+  `UiHost::form_later`; extension API 14): the application shows the form
+  and runs the rest of the action with its values, the egui shell as its
+  one dialogue through `Command::Continue` (#59).
 - `ext-preview-markup` (#51): one plugin with three previewers for the
   structured text formats, each rendered by default with the *Rendered*
   toggle to the source: Markdown through `pulldown-cmark` and HTML through
@@ -340,6 +349,23 @@ the pull request that brought the change.
 
 ### Changed
 
+- The extension API is at version 14: `ActionOutcome` gained `Later`,
+  `UiHost` `form_later` and `Action` `app_menu` (#59).
+- The installer reads an archive as the job *Reading archive…*, in one
+  streaming pass with byte progress over the compressed stream and a
+  cancel button, and opens the install form when the job finishes;
+  *Install as application…* returns at once, so a gzip tar of several
+  gigabytes no longer freezes the window (#59).
+- The installer's detection names the app by a word of the app name or a
+  suffix of the app id, so `bin/rider` and `bin/rider.svg` are found in a
+  JetBrains tarball where `fsnotifier` won by alphabetical order; among
+  several candidates a matching binary wins and a helper never does, a
+  toolchain whose commands are all equal opens the form on "(choose one)",
+  every PNG and SVG in the archive is offered in one Icon list with the
+  best preselected only when detection trusts it (the icon file field is
+  gone), and the command defaults follow the chosen kind: a GUI
+  application links one command named after the app id at the main
+  executable, a toolchain its `bin/` contents (#59).
 - The extension API is at version 13: `platform` gained `Mount` (which
   disk-image formats this OS mounts, and mounting one through it) and the
   `sevenzip` binding of the 7-Zip library; `ext-preview-code` highlights
