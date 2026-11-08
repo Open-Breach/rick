@@ -165,7 +165,10 @@ fn the_other_filters_narrow_what_the_walk_reports() {
         names(vec![Filter::ModifiedAfter(SystemTime::UNIX_EPOCH)]).len(),
         3
     );
-    assert!(names(vec![Filter::ModifiedBefore(SystemTime::UNIX_EPOCH)]).is_empty());
+    assert_eq!(
+        names(vec![Filter::ModifiedBefore(SystemTime::UNIX_EPOCH)]),
+        [] as [String; 0]
+    );
     assert_eq!(
         names(vec![
             Filter::Extension("txt".into()),

@@ -315,7 +315,7 @@ mod tests {
         values.set("e", Value::Check(true));
         assert_eq!(values.text("a"), "bye");
         assert!(values.check("e"));
-        assert!(form.preview_rows(&values).is_empty());
+        assert_eq!(form.preview_rows(&values), [] as [PreviewRow; 0]);
         assert!(format!("{form:?}").contains("preview: false"));
     }
 }

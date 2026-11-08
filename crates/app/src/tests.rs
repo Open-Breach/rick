@@ -946,7 +946,7 @@ fn without_a_subtree_index_the_toggle_is_absent_and_a_search_ends_with_a_notice(
     let mut h = harness();
     h.settle();
     assert!(!h.app.model().subtree_search);
-    assert!(h.app.model().search_indexes.is_empty());
+    assert_eq!(h.app.model().search_indexes, [] as [types::ExtId; 0]);
     let pane = h.app.model().focused;
     h.send(Command::Subtree { pane, on: true });
     h.send(Command::Filter {
@@ -963,7 +963,7 @@ fn without_a_subtree_index_the_toggle_is_absent_and_a_search_ends_with_a_notice(
         "{events:?}"
     );
     assert!(!h.app.is_busy());
-    assert!(h.names().is_empty());
+    assert_eq!(h.names(), [] as [String; 0]);
 }
 
 #[test]
@@ -1524,7 +1524,7 @@ fn the_title_row_search_asks_every_available_index_and_lists_each_hit_once() {
     let mut names: Vec<&str> = search.hits.iter().map(|e| e.name.as_str()).collect();
     names.sort_unstable();
     assert_eq!(names, ["foo.rs", "foo.txt", "foobar.md"], "{search:?}");
-    assert!(search.errors.is_empty());
+    assert_eq!(search.errors, [] as [String; 0]);
     assert_eq!(first.queries(), ["foo"]);
     assert_eq!(second.queries(), ["foo"]);
     let events = h.take_events();
@@ -1582,7 +1582,7 @@ fn the_title_row_search_asks_every_available_index_and_lists_each_hit_once() {
     assert_eq!(h.app.model().search_indexes, [ExtId("fake-two")]);
     second.available.store(false, Ordering::SeqCst);
     h.app.poll(&mut h.events);
-    assert!(h.app.model().search_indexes.is_empty());
+    assert_eq!(h.app.model().search_indexes, [] as [types::ExtId; 0]);
     h.send(Command::IndexSearch { text: "foo".into() });
     assert!(h.app.model().index_search.done);
     h.settle();

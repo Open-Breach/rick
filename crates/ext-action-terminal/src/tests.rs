@@ -104,7 +104,7 @@ fn the_console_opens_at_the_location_and_runs_pwd() {
     assert!(shown, "the working directory did not appear:\n{text}");
     assert_eq!(screen.cols, 100);
     assert_eq!(screen.rows, 30);
-    assert!(!console.title().is_empty());
+    assert_ne!(console.title(), "");
     // Leaving the shell ends the session.
     console.write(b"exit\r\n");
     assert!(

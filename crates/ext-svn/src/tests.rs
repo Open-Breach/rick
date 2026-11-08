@@ -237,7 +237,7 @@ fn the_snapshot_reads_revision_urls_commit_and_statuses() {
         .as_ref()
         .unwrap_or_else(|| panic!("commit"));
     assert_eq!(commit.revision, 1);
-    assert!(!commit.author.is_empty());
+    assert_ne!(commit.author, "");
     assert_eq!(commit.date.len(), 10, "{}", commit.date);
     assert_eq!(
         snapshot.status_of("tracked.txt"),
@@ -324,8 +324,8 @@ fn the_xml_readers_cover_every_status_without_svn() {
         FileStatus::Unversioned,
         FileStatus::Contains,
     ] {
-        assert!(!status.glyph().is_empty());
-        assert!(!status.label().is_empty());
+        assert_ne!(status.glyph(), "");
+        assert_ne!(status.label(), "");
     }
 }
 
