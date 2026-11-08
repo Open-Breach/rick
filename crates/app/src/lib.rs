@@ -75,6 +75,9 @@ pub mod settings;
 
 pub use command::{Command, ConnectionOp, Event, PropertiesInfo, TransferMode};
 pub use ext_settings::ExtSettings;
+/// What the Hash dialogue draws with (the format, the rendering, the
+/// Verify logic), re-exported for the UI.
+pub use ops::hash;
 /// What a `Command::SetPermissions` carries, re-exported for the UI.
 pub use ops::{PermissionRequest, Recursion};
 pub use places::{PLACES_FILE, defaults as default_places, virtual_icon};
@@ -1396,6 +1399,14 @@ impl App {
             }
             Command::ShowProperties(pane) => self.show_properties(pane, events),
             Command::PropertiesClosed => self.properties_shown = None,
+            Command::HashFormat(format) => {
+                if let Err(error) = ops::hash::remember(&*self.platform, format) {
+                    events.push(Event::Notify {
+                        level: Level::Error,
+                        text: format!("Hash format: {error}"),
+                    });
+                }
+            }
             Command::SystemProperties(pane) => self.system_properties(pane, events),
             Command::SetPermissions { pane, request } => self.set_permissions(pane, request),
             Command::RefreshVolumes => self.enumerate_volumes(),
@@ -2230,6 +2241,7 @@ impl App {
                 ActionOutcome::Done
                 | ActionOutcome::Select(_)
                 | ActionOutcome::View(_)
+                | ActionOutcome::Hashes(_)
                 | ActionOutcome::Navigate(_),
             ) => {}
             Err(error) => events.push(Event::Notify {
@@ -2480,6 +2492,11 @@ impl App {
                     events.push(Event::ViewOpened { pane, tab, view });
                 }
             }
+            Ok(ActionOutcome::Hashes(hashes)) => events.push(Event::HashesOpened {
+                pane,
+                hashes,
+                format: ops::hash::remembered(&*self.platform),
+            }),
             Ok(ActionOutcome::Navigate(to)) => {
                 self.dispatch(Command::Navigate { pane, to }, events);
             }

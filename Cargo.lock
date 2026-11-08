@@ -657,6 +657,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "blake3"
+version = "1.8.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6d9e454fc11f76977dc803893aff6304ed33d6a26efae8696573bea74baa27ae"
+dependencies = [
+ "arrayvec",
+ "cc",
+ "cfg-if",
+ "constant_time_eq 0.4.2",
+ "cpufeatures 0.3.1",
+]
+
+[[package]]
 name = "block-buffer"
 version = "0.10.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1050,6 +1063,12 @@ name = "const-oid"
 version = "0.10.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a6ef517f0926dd24a1582492c791b6a4818a4d94e789a334894aa15b0d12f55c"
+
+[[package]]
+name = "constant_time_eq"
+version = "0.4.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3d52eff69cd5e647efe296129160853a42795992097e8af39800e1060caeea9b"
 
 [[package]]
 name = "constant_time_eq"
@@ -5087,6 +5106,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4facc753ae494aeb6e3c22f839b158aebd4f9270f55cd3c79906c45476c47ab4"
 
 [[package]]
+name = "md-5"
+version = "0.10.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d89e7ee0cfbedfc4da3340218492196241d89eefb6dab27de5df917a6d2e78cf"
+dependencies = [
+ "cfg-if",
+ "digest 0.10.7",
+]
+
+[[package]]
 name = "md5"
 version = "0.8.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5800,12 +5829,18 @@ checksum = "7e036b411754132fd6b74e94b74e9a13c5cf606fa93d1885c35860d3060820b1"
 name = "ops"
 version = "0.2.0-dev"
 dependencies = [
+ "base64 0.22.1",
+ "blake3",
  "ext",
  "futures",
  "globset",
+ "hex",
+ "md-5",
  "platform",
  "regex",
  "runtime",
+ "sha1 0.10.7",
+ "sha2 0.10.9",
  "tempfile",
  "tokio",
  "toml 0.9.12+spec-1.1.0",
@@ -7837,6 +7872,7 @@ name = "tests"
 version = "0.2.0-dev"
 dependencies = [
  "app",
+ "blake3",
  "egui",
  "egui_kittest",
  "ext",
@@ -7871,7 +7907,9 @@ dependencies = [
  "futures",
  "hadris-fs",
  "hadris-iso",
+ "hex",
  "image",
+ "md-5",
  "model",
  "ops",
  "platform",
@@ -7880,10 +7918,13 @@ dependencies = [
  "plugins-native",
  "runtime",
  "sevenz-rust2",
+ "sha1 0.10.7",
+ "sha2 0.10.9",
  "tar",
  "tempfile",
  "thiserror 2.0.21",
  "tokio",
+ "toml 0.9.12+spec-1.1.0",
  "tracing",
  "tracing-subscriber",
  "types",
@@ -9791,7 +9832,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "23f17fbc870bfac28c6228aed7d6e6df352e26bf7015c4313727e16a7a01ce5e"
 dependencies = [
  "aes",
- "constant_time_eq",
+ "constant_time_eq 0.6.1",
  "crc32fast",
  "flate2",
  "getrandom 0.4.3",

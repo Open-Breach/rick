@@ -4,7 +4,8 @@
 (`Provider`, `Decorator`, `Action`, `Previewer`, `SearchIndex`), the data they
 exchange (`Capabilities`, `ListOptions`, `FsChange`, `Decoration`, `ActionCtx`,
 `PreviewDoc`, `Frame`, `Content` with its `Listing`, `Grid` and `Document`,
-`Transport`, `Query` and friends), the `Manifest` every extension
+`Transport`, `Query` and friends, and the slots an action fills from a job,
+`Compare` for a tab and `Hashes` for the Hash dialogue), the `Manifest` every extension
 declares, the `Extension` trait that registers contributions, and the
 `Registry` that collects them and refuses manifests of another API version.
 The registry is also the extension context: the host builds it with

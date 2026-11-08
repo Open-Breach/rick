@@ -33,6 +33,7 @@ pub mod dnd;
 pub mod dock;
 pub mod format;
 pub mod frame;
+pub mod hash;
 pub mod host;
 pub mod icons;
 pub mod inline;

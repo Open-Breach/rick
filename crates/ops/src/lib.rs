@@ -7,8 +7,10 @@
 //! 0.2, Open with… (the platform's applications for the type or any
 //! program, remembered per type in `core.toml`), Paste as link and Create
 //! link… (a symbolic link, or a junction or a `.lnk` shortcut where the
-//! provider offers them) and Select by pattern (a glob or a regular
-//! expression, replacing or adding to the selection). Navigation,
+//! provider offers them), Select by pattern (a glob or a regular
+//! expression, replacing or adding to the selection) and Compute hash…
+//! (MD5, SHA-1, SHA-256 and BLAKE3 of the selected files in one read each,
+//! for the Hash dialogue; [`hash`]). Navigation,
 //! selection and view commands are `Command`s the application handles
 //! directly, as is a drag and drop's [`transfer`], which is not an action
 //! but runs the same jobs. Restore and Empty trash belong to the trash
@@ -45,8 +47,10 @@
 mod clipboard;
 mod conflict;
 mod containing;
+mod core_toml;
 mod create;
 mod edit;
+pub mod hash;
 mod link;
 mod open;
 mod open_with;
@@ -224,6 +228,7 @@ impl Extension for Core {
         reg.action(Arc::new(link::PasteAsLink(Arc::clone(s))));
         reg.action(Arc::new(link::CreateLink(Arc::clone(s))));
         reg.action(Arc::new(select::SelectByPattern));
+        reg.action(Arc::new(hash::Hash(Arc::clone(s))));
         Ok(())
     }
 }

@@ -287,10 +287,26 @@ pub fn context_menu(
         });
     }
 
-    // Info.
+    // Info: Compute hash… above Properties, when every selected entry is
+    // a file; it is not in `GROUPS`, which end with Share.
     if !action_ctx.selection.is_empty() {
         if any {
             ui.separator();
+        }
+        if let Some(action) = actions.iter().find(|a| a.id().0 == "core.hash")
+            && action.availability(action_ctx) == Availability::Enabled
+        {
+            let mut button = egui::Button::new(action.label());
+            if let Some(text) = cx.keys.text_for(Intent::Action(action.id())) {
+                button = button.shortcut_text(text);
+            }
+            if ui.add(button).clicked() {
+                cx.requests.push(Request::RunAction {
+                    action: action.id(),
+                    ctx: action_ctx.clone(),
+                });
+                ui.close();
+            }
         }
         let mut button = egui::Button::new(t!("properties"));
         if let Some(text) = cx.keys.text_for(Intent::Inspect) {

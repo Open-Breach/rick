@@ -197,6 +197,7 @@ action-open-with = Open with…
 action-paste-as-link = Paste as link
 action-create-link = Create link…
 action-select-by-pattern = Select by pattern…
+action-compute-hash = Compute hash…
 reason-select-something-first = select something first
 reason-select-an-entry-first = select an entry first
 reason-nothing-to-paste = nothing to paste
@@ -207,3 +208,21 @@ link-symbolic = Symbolic link
 link-hard = Hard link
 link-junction = Directory junction
 link-shortcut = Shortcut (.lnk)
+
+# The Hash dialogue (Compute hash…): one row per algorithm, Copy all, the
+# format toggle and the Verify field.
+hash-title = Hash — { $name }
+hash-hashing = Hashing…
+hash-cancelled = Cancelled
+hash-failed = Could not hash: { $error }
+hash-copy = Copy
+hash-copy-all = Copy all
+hash-format = Format
+hash-format-hex = Lowercase hex
+hash-format-hex-upper = Uppercase hex
+hash-format-base64 = Base64
+hash-verify = Verify
+hash-verify-hint = Paste the expected hash
+hash-match = Match
+hash-mismatch = Mismatch
+hash-unrecognised-length = Unrecognised length
