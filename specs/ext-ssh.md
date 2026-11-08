@@ -37,7 +37,7 @@ Hosts come from two sources, merged into one list and shown in the side panel's 
 
 The Network section lists each host as its own row (the `ssh` provider's root entries, the way the Cloud section lists a cloud provider's accounts), not one row for the provider; `vfs-rick`'s `NETWORK_PROVIDERS` names `ssh`. Rows follow the side-panel rules of `SPEC.md`: a Phosphor icon, click opens the host's default directory in the current tab, middle-click, Ctrl-click and *Open in new tab* open a new tab, no current-location highlight. The row's context menu offers *Connect*, *Disconnect*, *Open console*, *Open in external terminal*, and for Rick-defined hosts *Edit…* and *Remove*. The section's *Add…* opens the host editor.
 
-**Host editor** fields: alias, host name, port (default 22), user, default directory (default: the remote home), identity file (optional), jump host (optional, picked from the host list), *Remember password in the OS keychain*, preview size cap override (optional).
+**Host editor** fields: alias, host name, port (default 22), user, default directory (default: the remote home), identity file (optional), jump host (optional, picked from the host list), *Remember password in the OS keychain*, preview size cap override (optional), *Always preview* (off by default; ignores the cap on this host).
 
 Locations are `Location { provider: "ssh", path: "/<alias>/<remote path>" }`; the provider's root lists the hosts as folders.
 
@@ -109,7 +109,7 @@ Both actions appear in the context menu of a remote folder and of a host row in 
 Previewers declare whether they need the **whole file** or can work on a **prefix**.
 
 - Prefix previewers (text, code, Markdown, CSV): the provider serves the first chunk (default 256 KiB) and the preview pane shows a *Load more* control at the end.
-- Whole-file previewers (image, PDF, media): subject to a **size cap**, default 4 MiB, applied by the preview frame when the provider is `REMOTE`. Above the cap the pane shows the file-info badges and a *Preview anyway* button. The cap is a global setting with a per-host override for slow links.
+- Whole-file previewers (image, PDF, media): subject to a **size cap**, default 4 MiB, applied by the preview frame when the provider is `REMOTE`. Above the cap the pane shows the file-info badges and two buttons: *Preview anyway*, for this file once, and *Always preview on <host>*, which sets the host's `preview_always` and switches the cap off for that host from then on. The cap is a global setting with a per-host size override for slow links; `preview_always` is the per-host switch that ignores both, reversible in the host editor and in the host row's context menu (see `SPEC.md`, Preview, *Remote sources*). Prefix previewers are unaffected by either.
 - A file pulled for a preview goes to a temporary file that is removed when the tab closes.
 
 ## Configuration
@@ -129,6 +129,7 @@ default_dir = "/volume1"
 identity_file = "~/.ssh/id_ed25519"
 remember_password = false
 preview_size_cap_mib = 1
+preview_always = false
 
 [[ssh.hosts]]
 alias = "prod-db"
@@ -153,5 +154,5 @@ Against Docker containers in CI: an OpenSSH server on Debian (`gnu`), on Alpine 
 6. A host behind a bastion, and one behind a two-hop chain, browse and transfer exactly like a direct host; each hop gets its own host-key check; two targets behind one bastion share its connection.
 7. A same-host move of a large tree produces no traffic through Rick (asserted by counting bytes through `open_read`); a copy from the host to the local disk streams with progress and cancels cleanly.
 8. Both console actions open in the browsed folder, including on a jump-host target; *Open console here* is present only once the console pane exists.
-9. A 1 GiB remote text file previews at once with *Load more*; a 50 MiB image shows the cap message and loads on *Preview anyway*.
+9. A 1 GiB remote text file previews at once with *Load more*; a 50 MiB image shows the cap message and loads on *Preview anyway*; *Always preview on <host>* loads it, writes `preview_always = true` for the host, and the next large image on that host previews without the message, while the same image on another host still shows it.
 10. Removing `ext-ssh` from the plugins folder leaves Rick fully functional with an empty Network section.
