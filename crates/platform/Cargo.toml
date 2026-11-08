@@ -22,6 +22,9 @@ tokio = { workspace = true, features = ["net", "time", "io-util"] }
 tempfile = { workspace = true }
 thiserror = { workspace = true }
 toml = { workspace = true }
+# The 7-Zip library behind the disk images (`sevenzip`), loaded at run
+# time from the plugins directory or a known install.
+libloading = { workspace = true }
 tracing = { workspace = true }
 # The platform keychain behind `Secrets`: one store per operating system,
 # chosen by the crate itself (Secret Service over zbus on Linux, Keychain

@@ -16,7 +16,10 @@
 //! [`VPath`](types::VPath) and [`std::path::Path`]; [`agent`] opens the
 //! SSH agent's socket, a Unix socket or the OpenSSH named pipe; [`perms`]
 //! reads and changes an entry's owner, group, mode bits and ACL, and
-//! speaks to `rick-perms`, the helper that does so as the administrator.
+//! speaks to `rick-perms`, the helper that does so as the administrator;
+//! [`sevenzip`] binds the 7-Zip library (`7z.so`, `7z.dll`) at run time
+//! for the disk images the archive plugins browse, the one place its
+//! `unsafe` lives.
 //!
 //! Where the OS keeps the original paths of trashed items to itself
 //! (macOS), the trash lists Rick's own record of what it trashed instead,
@@ -39,6 +42,7 @@ pub mod fs;
 pub mod paths;
 pub mod perms;
 pub mod secrets;
+pub mod sevenzip;
 // The Linux trash formats dates and macOS parses them (Spotlight's
 // last-used dates); the Properties rows format them everywhere.
 #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
