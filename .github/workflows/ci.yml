@@ -71,7 +71,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: ./.github/actions/setup
-        with: { components: clippy, system: build, pdfium: "false" }
+        with: { components: clippy, system: build, pdfium: "false", sevenzip: "false" }
       - run: cargo clippy --workspace --all-targets ${{ env.RICK_WS_FEATURES }} -- -D warnings
       # Shares clippy's check artifacts, so it costs seconds here.
       - run: cargo doc --no-deps ${{ env.RICK_WS_FEATURES }}

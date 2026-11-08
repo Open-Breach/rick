@@ -54,8 +54,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with: { ref: "${{ github.event_name == 'schedule' && 'dev' || '' }}" }
+      # No 7-Zip library here: the benchmarks measure no disk image.
       - uses: ./.github/actions/setup
-        with: { system: test }
+        with: { system: test, sevenzip: "false" }
       # The hardware line, as the runner reports it: GitHub's image name and
       # version, then the CPU, core count and memory the OS sees.
       - name: hardware
