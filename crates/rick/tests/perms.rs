@@ -5,11 +5,15 @@
 //! refuses and the helper, run as root through `pkexec`, makes.
 
 use std::path::Path;
+#[cfg(unix)]
 use std::process::Command;
+#[cfg(unix)]
 use std::sync::Arc;
 
 use platform::perms::{self, helper};
-use platform::{Fake, PermissionChange, Permissions as _, Platform, Principal};
+use platform::{Fake, PermissionChange, Permissions as _};
+#[cfg(unix)]
+use platform::{Platform, Principal};
 
 /// The helper this build produced.
 fn built_helper() -> &'static Path {
@@ -75,6 +79,7 @@ fn the_helper_is_found_beside_the_binary_or_one_directory_up() {
 
 /// Runs `sudo` for the fixture; `None` when the runner has no passwordless
 /// sudo.
+#[cfg(unix)]
 fn sudo(args: &[&str]) -> Option<()> {
     Command::new("sudo")
         .arg("-n")
@@ -85,6 +90,7 @@ fn sudo(args: &[&str]) -> Option<()> {
         .map(|_| ())
 }
 
+#[cfg(unix)]
 fn mode_of(path: &Path) -> u32 {
     use std::os::unix::fs::PermissionsExt as _;
     std::fs::symlink_metadata(path)

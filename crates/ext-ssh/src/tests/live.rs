@@ -25,10 +25,13 @@ use crate::profile::Profile;
 use crate::provider::SshProvider;
 use crate::{PROVIDER_ID, location};
 
-/// An SSH agent that holds whatever keys the test adds.
+/// An SSH agent that holds whatever keys the test adds; it serves over a
+/// Unix socket, so only the Unix test runs it.
+#[cfg(unix)]
 #[derive(Clone)]
 struct Agent;
 
+#[cfg(unix)]
 impl russh::keys::agent::server::Agent for Agent {}
 
 /// A UI host that answers nothing: the actions under test ask nothing.

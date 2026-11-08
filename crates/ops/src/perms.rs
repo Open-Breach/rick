@@ -355,6 +355,7 @@ impl UndoCommand for PermissionsCommand {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(unix)]
     use platform::Fake;
 
     fn request(
@@ -517,6 +518,7 @@ mod tests {
     }
 
     /// Waits for every job of `jobs` to finish.
+    #[cfg(unix)]
     fn wait_idle(jobs: &JobRunner) {
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
         while !jobs.running().is_empty() {
