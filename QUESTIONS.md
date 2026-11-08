@@ -2075,8 +2075,11 @@ Once answered, an entry keeps its number and gains a dated decision line.
     Assumed: the folder's dialogue has *Apply to enclosed items* with
     *Files* and *Folders* boxes: which kinds the one change applies to
     inside, the target folder itself always included; folders are walked
-    without following links. A mode that would lock folders out is the
-    user's choice, as `chmod -R` leaves it.
+    without following links, and every folder is changed after what is
+    inside it, the target last, so a mode without the execute bit still
+    reaches the contents (undo restores in the reverse order for the same
+    reason). Locking folders out is otherwise the user's choice, as
+    `chmod -R` leaves it.
 
 174. (issue 24) "Every change a job with undo where the previous state was
     captured".

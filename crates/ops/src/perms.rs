@@ -117,27 +117,29 @@ pub fn spawn_items(
     })
 }
 
-/// The entries a request applies to, each with its change: the targets,
-/// and inside a target folder every entry of the kinds asked for, folders
-/// walked depth first without following links.
+/// The entries a request applies to, each with its change: inside a
+/// target folder every entry of the kinds asked for, the deepest first and
+/// a folder after what is inside it, and the target itself last, so a folder
+/// that loses its execute bit is changed only once its contents are done
+/// and the change reaches them. Links are not followed.
 fn expand(
     request: &PermissionRequest,
     cancel: &CancelToken,
 ) -> Result<Vec<(PathBuf, PermissionChange)>, Error> {
     let mut items = Vec::new();
     for target in &request.targets {
-        items.push((target.clone(), request.change.clone()));
-        let Some(recursion) = request.recursive else {
-            continue;
-        };
-        let meta = std::fs::symlink_metadata(target).map_err(Error::from_io)?;
-        if meta.is_dir() {
-            walk(target, recursion, &request.change, cancel, &mut items)?;
+        if let Some(recursion) = request.recursive {
+            let meta = std::fs::symlink_metadata(target).map_err(Error::from_io)?;
+            if meta.is_dir() {
+                walk(target, recursion, &request.change, cancel, &mut items)?;
+            }
         }
+        items.push((target.clone(), request.change.clone()));
     }
     Ok(items)
 }
 
+/// The entries inside `dir`, post-order: every folder after its contents.
 fn walk(
     dir: &Path,
     recursion: Recursion,
@@ -145,8 +147,12 @@ fn walk(
     cancel: &CancelToken,
     items: &mut Vec<(PathBuf, PermissionChange)>,
 ) -> Result<(), Error> {
-    let mut pending = vec![dir.to_path_buf()];
-    while let Some(dir) = pending.pop() {
+    // Depth first, and every entry remembered with its depth, so that a
+    // stable sort by depth puts the deepest first and a folder after what
+    // it holds.
+    let mut found: Vec<(usize, bool, PathBuf)> = Vec::new();
+    let mut pending = vec![(dir.to_path_buf(), 1usize)];
+    while let Some((dir, depth)) = pending.pop() {
         if cancel.is_cancelled() {
             return Err(Error::Cancelled);
         }
@@ -159,15 +165,26 @@ fn walk(
             let path = entry.path();
             let kind = entry.file_type().map_err(Error::from_io)?;
             if kind.is_dir() {
-                if recursion.folders {
-                    items.push((path.clone(), change.clone()));
-                }
-                pending.push(path);
-            } else if recursion.files {
-                items.push((path, change.clone()));
+                found.push((depth, true, path.clone()));
+                pending.push((path, depth + 1));
+            } else {
+                found.push((depth, false, path));
             }
         }
     }
+    found.sort_by_key(|(depth, _, _)| std::cmp::Reverse(*depth));
+    items.extend(
+        found
+            .into_iter()
+            .filter(|(_, is_dir, _)| {
+                if *is_dir {
+                    recursion.folders
+                } else {
+                    recursion.files
+                }
+            })
+            .map(|(_, _, path)| (path, change.clone())),
+    );
     Ok(())
 }
 
@@ -429,6 +446,54 @@ mod tests {
         wait_idle(&jobs);
         assert_eq!(mode_of(&root.join("a.txt")), 0o600);
         assert_eq!(mode_of(&root), 0o600);
+    }
+
+    #[test]
+    fn a_folder_is_changed_after_its_contents_and_the_target_last() {
+        let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+        let root = dir.path().join("tree");
+        std::fs::create_dir_all(root.join("sub").join("deeper")).unwrap_or_else(|e| panic!("{e}"));
+        std::fs::write(root.join("a.txt"), b"a").unwrap_or_else(|e| panic!("{e}"));
+        std::fs::write(root.join("sub").join("deeper").join("c.txt"), b"c")
+            .unwrap_or_else(|e| panic!("{e}"));
+        let r = request(
+            vec![root.clone()],
+            0o700,
+            Some(Recursion {
+                files: true,
+                folders: true,
+            }),
+        );
+        let items = expand(&r, &CancelToken::new()).unwrap_or_else(|e| panic!("{e}"));
+        let paths: Vec<&Path> = items.iter().map(|(p, _)| p.as_path()).collect();
+        let at = |p: &Path| {
+            paths
+                .iter()
+                .position(|q| *q == p)
+                .unwrap_or_else(|| panic!("{p:?}"))
+        };
+        assert_eq!(paths.len(), 5);
+        assert_eq!(
+            *paths.last().unwrap_or_else(|| panic!("empty")),
+            root.as_path()
+        );
+        assert!(
+            at(&root.join("sub").join("deeper").join("c.txt"))
+                < at(&root.join("sub").join("deeper"))
+        );
+        assert!(at(&root.join("sub").join("deeper")) < at(&root.join("sub")));
+        assert!(at(&root.join("a.txt")) < at(&root));
+        // Folders left out are still walked for their files.
+        let r = request(
+            vec![root.clone()],
+            0o600,
+            Some(Recursion {
+                files: true,
+                folders: false,
+            }),
+        );
+        let items = expand(&r, &CancelToken::new()).unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(items.len(), 3, "{items:?}");
     }
 
     #[cfg(unix)]
