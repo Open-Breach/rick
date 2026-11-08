@@ -141,10 +141,20 @@ struct Handler {
 impl client::Handler for Handler {
     type Error = russh::Error;
 
-    async fn check_server_key(
+    fn check_server_key(
         &mut self,
         server_public_key: &PublicKeyOrCertificate,
-    ) -> Result<bool, Self::Error> {
+    ) -> impl Future<Output = Result<bool, Self::Error>> + Send {
+        std::future::ready(Ok(self.verify(server_public_key)))
+    }
+}
+
+impl Handler {
+    /// The host-key decision of [`client::Handler::check_server_key`]: a
+    /// known key passes, an unknown one is learnt and recorded, a changed
+    /// one or an unreadable `known_hosts` is refused with the reason kept
+    /// for the connector to report. Nothing here awaits.
+    fn verify(&mut self, server_public_key: &PublicKeyOrCertificate) -> bool {
         let key = match server_public_key {
             PublicKeyOrCertificate::PublicKey { key, .. } => key.clone(),
             PublicKeyOrCertificate::Certificate(cert) => cert.public_key().clone().into(),
@@ -156,7 +166,7 @@ impl client::Handler for Handler {
             Ok(false)
         };
         match known {
-            Ok(true) => Ok(true),
+            Ok(true) => true,
             Ok(false) => {
                 info!(host = %self.host, port = self.port, %fingerprint, "new host key learnt");
                 if let Some(dir) = self.known_hosts.parent() {
@@ -170,7 +180,7 @@ impl client::Handler for Handler {
                 ) {
                     warn!(%error, "host key not recorded");
                 }
-                Ok(true)
+                true
             }
             Err(russh::keys::Error::KeyChanged { line }) => {
                 lock(&self.check).refused = Some(format!(
@@ -179,11 +189,11 @@ impl client::Handler for Handler {
                     self.port,
                     self.known_hosts.display()
                 ));
-                Ok(false)
+                false
             }
             Err(error) => {
                 lock(&self.check).refused = Some(format!("known_hosts could not be read: {error}"));
-                Ok(false)
+                false
             }
         }
     }
@@ -451,8 +461,7 @@ impl Connector for SftpConnections {
         self.conn(name).is_ok_and(|conn| {
             conn.live
                 .try_lock()
-                .ok()
-                .is_some_and(|slot| slot.as_ref().is_some_and(|live| live.is_open()))
+                .is_ok_and(|slot| slot.as_ref().is_some_and(|live| live.is_open()))
         })
     }
 }

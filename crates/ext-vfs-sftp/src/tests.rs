@@ -1,8 +1,6 @@
 use std::sync::Arc;
 
-use ext::{
-    Capabilities, ConnectionFieldKind, Connector as _, Extension as _, Provider as _, Registry,
-};
+use ext::{Capabilities, ConnectionFieldKind, Registry};
 use futures::StreamExt as _;
 use platform::Fake;
 use russh_sftp::protocol::FileAttributes;
