@@ -151,8 +151,9 @@ runs:
       shell: bash
       run: |
         # The runner image carries 7-Zip; its 7z.dll and License.txt are
-        # what the installer puts there.
-        dir="$(cygpath -u "$ProgramFiles")/7-Zip"
+        # what the installer puts there. Git Bash on the runner has the
+        # variable in upper case only (`$ProgramFiles` is empty there).
+        dir="$(cygpath -u "${PROGRAMFILES:-${ProgramFiles:-C:\\Program Files}}")/7-Zip"
         if [ ! -f "$dir/7z.dll" ]; then
           .github/scripts/sevenzip.sh "$(cygpath -u "$RUNNER_TEMP")/sevenzip"
           dir="$(cygpath -u "$RUNNER_TEMP")/sevenzip"
