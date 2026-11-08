@@ -161,8 +161,9 @@ use crate::search::SearchIndex;
 /// 202–207); 14 an action opens its form when a job of its finishes:
 /// `ActionOutcome` gained `Later` with the [`FormLater`](crate::FormLater)
 /// a job fills, `UiHost` gained `form_later` and the
-/// [`Continuation`](crate::Continuation) it runs with the values
-/// (QUESTIONS.md 211).
+/// [`Continuation`](crate::Continuation) it runs with the values; and
+/// `Action` gained `app_menu`, whether the action is listed in the
+/// application menu under its extension (QUESTIONS.md 210–211).
 pub const API_VERSION: u32 = 14;
 
 bitflags::bitflags! {

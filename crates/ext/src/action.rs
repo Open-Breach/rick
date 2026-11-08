@@ -589,6 +589,17 @@ pub trait Action: Send + Sync + 'static {
     /// Where the action appears.
     fn group(&self) -> ActionGroup;
 
+    /// Whether the action belongs in the application menu (the burger
+    /// menu) too, under its extension's submenu: an action that opens a
+    /// view of its own, which no selection leads to, like the installer's
+    /// Installed Apps. It is listed there when [`availability`] says
+    /// `Enabled` for the focused pane, like everywhere else.
+    ///
+    /// [`availability`]: Action::availability
+    fn app_menu(&self) -> bool {
+        false
+    }
+
     /// The shortcut bound unless the user rebinds it.
     fn default_shortcut(&self) -> Option<Shortcut>;
 
