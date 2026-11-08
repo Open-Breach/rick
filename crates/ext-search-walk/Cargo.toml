@@ -1,0 +1,25 @@
+[package]
+name = "ext-search-walk"
+version.workspace = true
+description = "Rick's subdirectory search: the ignore crate's parallel walker as a SearchIndex under the pane's location, behind the filter bar's Search in subdirectories."
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+# A plugin: a `cdylib` the host loads from `plugins/search-walk/`, and an
+# `rlib` for the binary's opt-in `search-walk` feature and the tests.
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+types = { workspace = true }
+ext = { workspace = true }
+futures = { workspace = true }
+ignore = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+
+[lints]
+workspace = true

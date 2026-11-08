@@ -33,6 +33,12 @@ ext-preview-office = { path = "crates/ext-preview-office" }
 ext-preview-media = { path = "crates/ext-preview-media" }
 ext-preview-archive = { path = "crates/ext-preview-archive" }
 ext-preview-csv = { path = "crates/ext-preview-csv" }
+ext-search-walk = { path = "crates/ext-search-walk" }
+ext-search-windows = { path = "crates/ext-search-windows" }
+ext-search-spotlight = { path = "crates/ext-search-spotlight" }
+ext-search-tracker = { path = "crates/ext-search-tracker" }
+ext-search-baloo = { path = "crates/ext-search-baloo" }
+ext-svn = { path = "crates/ext-svn" }
 plugins-native = { path = "crates/plugins-native" }
 plugin-probe = { path = "crates/plugin-probe" }
 plugin-panic = { path = "crates/plugin-panic" }
@@ -77,6 +83,8 @@ csv = "1"
 memchr = "2"
 pulldown-cmark = { version = "0.13", default-features = false }
 html-escape = "0.3"
+# The subdirectory search plugin's parallel walker (issue 22).
+ignore = "0.4"
 id3 = { version = "1", default-features = false }
 gstreamer = "0.25"
 gstreamer-app = "0.25"
