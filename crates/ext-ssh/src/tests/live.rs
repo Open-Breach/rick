@@ -152,6 +152,17 @@ fn trust_and_save(q: &Question) -> Answer {
     }
 }
 
+/// Whether this machine can stand in for a remote host: the in-process
+/// server runs its commands through `sh`, and the plugin serves Unix-like
+/// hosts only, so on Windows the tests against it say so and stop.
+fn unix_shell_or_skip() -> bool {
+    if std::env::consts::OS == "windows" {
+        eprintln!("no Unix shell on Windows; the in-process server's tests are not run here");
+        return false;
+    }
+    true
+}
+
 /// A "remote home" with the awkward names of the acceptance test.
 fn remote_home() -> tempfile::TempDir {
     let home = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
@@ -201,6 +212,9 @@ fn at(alias: &str, path: &str) -> Location {
 // One scenario start to finish; splitting it would repeat the server.
 #[allow(clippy::too_many_lines)]
 fn against_the_server_browse_read_write_rename_delete_and_transfer_round_trip() {
+    if !unix_shell_or_skip() {
+        return;
+    }
     let home = remote_home();
     let world = World::new(trust_and_save);
     world.remember("box", "password", "rickpass");
@@ -286,7 +300,13 @@ fn against_the_server_browse_read_write_rename_delete_and_transfer_round_trip() 
         assert_eq!(plain.size, Some(5));
         assert!(plain.modified.is_some());
         let home_text = home.path().to_string_lossy();
-        assert_eq!(plain.path.to_string(), format!("/box{home_text}/plain.txt"));
+        // The host names its paths canonically: /private/var/… on macOS
+        // for a /var/… home.
+        let canonical = std::fs::canonicalize(home.path())
+            .unwrap_or_else(|_| home.path().to_path_buf())
+            .to_string_lossy()
+            .into_owned();
+        assert_eq!(plain.path.to_string(), format!("/box{canonical}/plain.txt"));
         let folder = visible
             .iter()
             .find(|e| e.name == "folder")
@@ -520,6 +540,9 @@ fn against_the_server_browse_read_write_rename_delete_and_transfer_round_trip() 
 
 #[test]
 fn eleven_channels_open_a_second_connection_and_a_closed_one_is_replaced() {
+    if !unix_shell_or_skip() {
+        return;
+    }
     let home = remote_home();
     let world = World::new(trust_and_save);
     world.remember("box", "password", "rickpass");
@@ -576,6 +599,9 @@ fn eleven_channels_open_a_second_connection_and_a_closed_one_is_replaced() {
 // One scenario start to finish; splitting it would repeat the server.
 #[allow(clippy::too_many_lines)]
 fn a_host_behind_a_bastion_and_a_two_hop_chain_browse_like_a_direct_one() {
+    if !unix_shell_or_skip() {
+        return;
+    }
     let home = remote_home();
     let world = World::new(trust_and_save);
     for alias in ["bastion", "hop", "target", "other"] {
@@ -693,6 +719,9 @@ fn a_host_behind_a_bastion_and_a_two_hop_chain_browse_like_a_direct_one() {
 // One scenario start to finish; splitting it would repeat the server.
 #[allow(clippy::too_many_lines)]
 fn host_keys_are_never_trusted_silently() {
+    if !unix_shell_or_skip() {
+        return;
+    }
     let home = remote_home();
     runtime::block_on(async {
         let server = FakeSshd::start(
@@ -846,6 +875,9 @@ fn host_keys_are_never_trusted_silently() {
 // One scenario start to finish; splitting it would repeat the server.
 #[allow(clippy::too_many_lines)]
 fn identity_files_passphrases_keyboard_interactive_and_passwords_authenticate() {
+    if !unix_shell_or_skip() {
+        return;
+    }
     let home = remote_home();
     runtime::block_on(async {
         let identity = fake_sshd::test_key(11);
@@ -1034,6 +1066,9 @@ fn identity_files_passphrases_keyboard_interactive_and_passwords_authenticate() 
 #[cfg(unix)]
 #[test]
 fn the_agent_authenticates_when_it_holds_a_key() {
+    if !unix_shell_or_skip() {
+        return;
+    }
     use futures::StreamExt as _;
 
     let home = remote_home();
@@ -1087,6 +1122,9 @@ fn the_agent_authenticates_when_it_holds_a_key() {
 
 #[test]
 fn the_console_opens_a_shell_in_the_folder_and_the_terminal_gets_the_command() {
+    if !unix_shell_or_skip() {
+        return;
+    }
     use ext::Console as _;
 
     let home = remote_home();
