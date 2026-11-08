@@ -1065,12 +1065,16 @@ impl RickUi {
         {
             return;
         }
+        // An open menu owns the keyboard: Escape closes it, nothing else —
+        // not even the side panel, whose row the menu may belong to.
+        if egui::Popup::is_any_open(ctx) {
+            return;
+        }
         if self.side.focused() && self.side.handle_keys(ctx, &self.app, &mut self.requests) {
             return;
         }
         let search_active = self.windows.get(&window).is_some_and(|w| w.search.active());
-        // An open menu owns the keyboard: Escape closes it, nothing else.
-        if search_active || ctx.egui_wants_keyboard_input() || egui::Popup::is_any_open(ctx) {
+        if search_active || ctx.egui_wants_keyboard_input() {
             return;
         }
         let in_viewer = self.in_viewer(pane);
