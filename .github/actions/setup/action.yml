@@ -11,13 +11,19 @@ inputs:
     default: ""
   system:
     description: >-
-      The Linux packages (issue 18). "build" installs the GStreamer
+      The system packages (issue 18). "build" installs the GStreamer
       development files the media previewer's gstreamer feature compiles
       against. "test" adds the GStreamer codec plug-ins and LibreOffice and
       sets RICK_REQUIRE_GSTREAMER and RICK_REQUIRE_LIBREOFFICE, so their
-      tests fail rather than skip when either is missing. "none" installs
-      nothing. Ignored on macOS and Windows, whose runners have neither and
-      skip those tests with a note.
+      tests fail rather than skip when either is missing; and, for
+      milestone 5 (issue 22), Subversion on every runner with
+      RICK_REQUIRE_SVN set, Tracker and Baloo on Linux (their tests run
+      through .github/scripts/with-indexers.sh), and the Windows Search
+      service started on Windows, with RICK_SEARCH_FIXTURE naming a
+      directory under the home the platform index covers and
+      RICK_REQUIRE_SPOTLIGHT or RICK_REQUIRE_WINDOWS_SEARCH set. "none"
+      installs nothing. The GStreamer and LibreOffice parts are Linux only;
+      macOS and Windows skip those tests with a note.
     required: false
     default: test
   pdfium:
@@ -54,6 +60,35 @@ runs:
           libreoffice-writer libreoffice-calc libreoffice-impress
         echo "RICK_REQUIRE_GSTREAMER=1" >> "$GITHUB_ENV"
         echo "RICK_REQUIRE_LIBREOFFICE=1" >> "$GITHUB_ENV"
+    - name: subversion and the linux indexers
+      if: runner.os == 'Linux' && inputs.system == 'test'
+      shell: bash
+      run: |
+        sudo apt-get install -y --no-install-recommends subversion dbus tracker tracker-miner-fs
+        sudo apt-get install -y --no-install-recommends baloo-kf6 || sudo apt-get install -y --no-install-recommends baloo-kf5
+        echo "RICK_REQUIRE_SVN=1" >> "$GITHUB_ENV"
+    - name: subversion and spotlight
+      if: runner.os == 'macOS' && inputs.system == 'test'
+      shell: bash
+      run: |
+        brew install subversion
+        echo "RICK_REQUIRE_SVN=1" >> "$GITHUB_ENV"
+        mkdir -p "$HOME/rick-search-fixture"
+        echo "RICK_SEARCH_FIXTURE=$HOME/rick-search-fixture" >> "$GITHUB_ENV"
+        echo "RICK_REQUIRE_SPOTLIGHT=1" >> "$GITHUB_ENV"
+        mdutil -s / || true
+    - name: subversion and windows search
+      if: runner.os == 'Windows' && inputs.system == 'test'
+      shell: pwsh
+      run: |
+        choco install -y --no-progress svn
+        echo "RICK_REQUIRE_SVN=1" >> $env:GITHUB_ENV
+        Set-Service WSearch -StartupType Automatic
+        Start-Service WSearch
+        Get-Service WSearch
+        New-Item -ItemType Directory -Force -Path "$env:USERPROFILE\rick-search-fixture" | Out-Null
+        echo "RICK_SEARCH_FIXTURE=$env:USERPROFILE\rick-search-fixture" >> $env:GITHUB_ENV
+        echo "RICK_REQUIRE_WINDOWS_SEARCH=1" >> $env:GITHUB_ENV
     - name: pdfium
       if: inputs.pdfium == 'true'
       shell: bash

@@ -70,30 +70,23 @@ jobs:
       - run: "! grep -rnP '(*UTF8)[\\x{2190}-\\x{2BFF}\\x{1F300}-\\x{1FAFF}]' crates/ui-egui/src"
         if: matrix.os == 'ubuntu-latest'
       - run: cargo clippy --workspace --all-targets ${{ env.RICK_WS_FEATURES }} -- -D warnings
+      # Linux runs the tests with Tracker and Baloo indexing a fixture
+      # directory on a private session bus; macOS and Windows have their
+      # platform index on the runner (issue 22).
+      - run: .github/scripts/with-indexers.sh cargo test --workspace ${{ env.RICK_WS_FEATURES }}
+        if: runner.os == 'Linux'
       - run: cargo test --workspace ${{ env.RICK_WS_FEATURES }}
+        if: runner.os != 'Linux'
       # Issue 16: the bundle, target/debug/bundle/ with the binary, the kernel
       # dylibs, libstd and plugins/<id>/ per plugin, and the host loading
       # them from it. The same whole-workspace build as the tests: a smaller
       # package set would rewrite the shared libraries (QUESTIONS.md 81).
       - run: cargo xtask bundle ${{ env.RICK_WS_FEATURES }}
-      # Every plugin loads through --list-plugins.
+      # Every plugin built for this platform loads through --list-plugins;
+      # the connectors for the other platforms are not bundled (issue 22).
       - name: list plugins
         shell: bash
-        run: |
-          exe=""
-          if [ "$RUNNER_OS" = "Windows" ]; then exe=".exe"; fi
-          ls -l target/debug/bundle target/debug/bundle/plugins
-          for id in git vfs-trash vfs-archive preview-archive preview-csv preview-media preview-office preview-hex; do
-            test -f "target/debug/bundle/plugins/$id/plugin.toml" || { echo "no plugin.toml for $id"; exit 1; }
-          done
-          out="$("./target/debug/bundle/rick$exe" --list-plugins)"
-          echo "$out"
-          echo "$out" | grep -E '^git +Git +[^ ]+ +decorator, action +loaded +' || { echo "git plugin not loaded"; exit 1; }
-          echo "$out" | grep -E '^vfs-trash +Trash +[^ ]+ +provider, decorator, action +loaded +' || { echo "trash plugin not loaded"; exit 1; }
-          echo "$out" | grep -E '^vfs-archive +Archives +[^ ]+ +provider +loaded +' || { echo "archive plugin not loaded"; exit 1; }
-          for id in preview-archive preview-csv preview-media preview-office preview-hex; do
-            echo "$out" | grep -E "^$id +[^ ].* +previewer +loaded +" || { echo "$id plugin not loaded"; exit 1; }
-          done
+        run: .github/scripts/check-plugins.sh target/debug/bundle
       - run: cargo doc --no-deps ${{ env.RICK_WS_FEATURES }}
         env: { RUSTDOCFLAGS: "-D warnings" }
       # The two integration tests on the 200k fixture that are not timings:
