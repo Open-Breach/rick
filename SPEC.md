@@ -75,15 +75,32 @@ Each cloud is its own plugin implementing `Provider` directly, so a user install
 | RAR | Yes | Yes | No | `unrar`; creation is not licensable |
 | gzip, zstd, xz/LZMA, bzip2, LZ4, Brotli, Snappy (single file) | — | Decompress | Compress | Preview by streaming decompression |
 
+Enter on an archive enters it in the current tab by default; the setting `archives.on_open` can hand it to the system instead (see *Opening files* under General behaviour).
+
+### Disk images
+
+Disk images are browsed exactly like archives — listed in the preview pane on selection, entered on Enter, the same `archives.on_open` setting — read-only, through `ext-vfs-archive` and `ext-preview-archive`, without mounting anything. The list is pinned; WIM and SquashFS are out.
+
+| Format | Browse in place | Reader | *Mount* through the OS |
+| --- | --- | --- | --- |
+| ISO (ISO 9660, UDF) | Yes | Native, as today | Windows, macOS, Linux |
+| Raw IMG | Yes | 7-Zip library | macOS, Linux |
+| DMG | Yes | 7-Zip library | macOS |
+| VHD, VHDX | Yes | 7-Zip library | Windows |
+| VMDK, VDI, QCOW2 | Yes | 7-Zip library | — |
+
+The 7-Zip library (`7z.so` / `7z.dll`, LGPL) is bundled in the plugins directory and loaded dynamically as *Third-party libraries* describes; it parses the image containers and the file systems inside them (FAT, NTFS, ext, HFS+, APFS, ISO), which no mature Rust crate does. The formats the native crates already read keep their readers. The *Mount* action and *Eject* are specified under *Disk images and Mount* in General behaviour.
+
 ### Preview support
 
 | Category | Formats | How |
 | --- | --- | --- |
 | Text | Any text file, encoding detected | Native text view |
-| CSV | CSV, TSV | Virtualised grid |
-| Code | JavaScript, TypeScript, Java, Rust, C#, F#, VB, C, C++, Perl, PHP, JSON, XML, YAML, HTML, Markdown | Syntax highlighting (syntect); Markdown and HTML also rendered |
+| CSV | CSV, TSV | Virtualised grid, delimiter sniffed, first row as header; the source one toggle away (`ext-preview-markup`) |
+| Markup | Markdown, HTML | Rendered by default, the source one toggle away (`ext-preview-markup`). HTML is a basic reader — headings, paragraphs, lists, links, images, tables — with no browser engine, no JavaScript and no CSS fidelity |
+| Code | JavaScript, TypeScript, Java, Rust, C#, F#, VB, C, C++, Perl, PHP, JSON, XML, YAML, HTML, Markdown | Syntax highlighting (syntect); for Markdown and HTML this is the source view the markup previewer toggles to, and what shows when that plugin is disabled |
 | PDF | PDF | pdfium-render, page by page, text layer for search and selection |
-| Office | DOCX, XLSX, PPTX, ODT, ODS, ODP | Converted to PDF by LibreOffice headless when it is installed (never bundled), then the PDF path; without it, metadata and a hint to install LibreOffice |
+| Office | DOCX, XLSX, PPTX, ODT, ODS, ODP | Converted to PDF by LibreOffice headless when it is installed (never bundled), then the PDF path; without it, the missing-library message of *Third-party libraries* |
 | Images | JPEG, PNG, WebP, BMP, GIF (animated) | `image` crate, downscaled to the pane, EXIF shown |
 | Audio | MP3, WAV | Waveform and playback |
 | Video | MP4, AVI | GStreamer on all platforms, hardware-decoded where available, frames to texture |
@@ -218,11 +235,12 @@ Entries that do not apply are hidden rather than greyed: each Action's `availabi
 
 ### Preview
 
-The preview is its own tab, not part of any explorer tab. It docks and moves like every other tab (right of the explorer by default, or below, or torn out to a second monitor), and there is one of it. In 0.1 it is a panel on the right of the window, toggled with "Toggle preview pane"; it becomes a dock tab together with the viewer in 0.2.
+The preview is its own tab, not part of any explorer tab. It docks and moves like every other tab (right of the explorer by default, or below, or torn out to a second monitor), and there is one of it. In 0.1 it is a panel on the right of the window, toggled with "Toggle preview pane"; in 0.2 it becomes a dock tab. **It is Rick's only viewer.** There is no full-size viewer, no viewer tab and no second preview: every file of every type, audio and video included, is shown in this one pane, which the selection updates in place, and no previewer and no command may open another pane, tab or window to show a file. Enter and a double-click never preview a file; they open it (see *Opening files* under General behaviour).
 
 - It follows focus: it always shows the selection of whichever explorer tab was last focused. Select a file in tab A, switch to tab B and select a file there, and the preview switches to that file.
 - Space on a file or folder opens the preview tab if it is closed and shows the entry; Space again closes it. While open, moving the selection updates it live.
-- A file shows its contents through the Previewer registered for its type (see Supported scope); a folder, or an archive such as a zip, 7z or tar, shows its contents as a read-only file list in the same columns as the explorer, with a stats line; subfolders expand in place, so a user can look inside without navigating or extracting.
+- A file shows its contents through the Previewer registered for its type (see Supported scope); a folder, or an archive or disk image such as a zip, 7z, tar or ISO, shows its contents as a read-only file list in the same columns as the explorer, with a stats line; subfolders expand in place, so a user can look inside without navigating or extracting.
+- Every kind of content a previewer can return is laid out by the pane itself: text and raster frames, the file list of a folder or archive, the grid of a CSV file and the rendered document of a Markdown or HTML file. A previewer's textual fallback is for a pane that cannot show the richer form, never the normal case.
 - Rendering is asynchronous and cancellable: a quick selection sweep never blocks the list, and a preview that takes longer shows a placeholder first.
 
 **Pane layout.** The content is the point of the pane; everything else is one row. Top to bottom: the toolbar, the pinned info panel when one is pinned, the content, and a one-line status bar. The pane shows no heading of its own — the dock tab's label is enough — and the word "Inspector" appears nowhere in it.
@@ -230,7 +248,8 @@ The preview is its own tab, not part of any explorer tab. It docks and moves lik
 **Toolbar.** One row, tab-height, three parts:
 
 - **Left:** the file-type icon of the current entry (Phosphor), and nothing else — no file name.
-- **Middle:** the active previewer's controls, so the row changes with the content. Text and code: line numbers, word wrap, and pretty print when the format supports it. Images: Fit and 1:1. Paged documents: previous page, `n / N`, next page. Media: the transport. Controls come from two sources — the kind of document (text layer, pages, raster) supplies the standard ones, and the previewer's `controls()` adds its own, such as pretty print.
+- **Middle:** the active previewer's controls, so the row changes with the content. Text and code: line numbers, word wrap, and pretty print when the format supports it. Markdown, HTML and CSV: *Rendered*, a toggle between the rendered view (on for every newly shown file) and the source. Images: Fit and 1:1. Paged documents: previous page, `n / N`, next page. Media: the transport. Controls come from two sources — the kind of document (text layer, pages, raster) supplies the standard ones, and the previewer's `controls()` adds its own, such as pretty print.
+- **Copy** (`COPY`), in the middle group of every text-based preview — text, code, Markdown, HTML, CSV: it puts the whole file's text on the clipboard as text, the raw source for the rendered formats, and never the file itself. The whole file, not the window the pane has loaded.
 - **Right:** one **info badge** per section available for this file — File info, EXIF, Git, media stream details, whatever applies — then the close button. A section that does not apply has no badge. Sections come from the previewer's `sections()` and from the Decorators' `panel()` contributions (Git's branch and last commit, for example).
 
 **Info badges.** Hovering a badge shows its section as an overlay card over the content, like a tooltip; moving away closes it. Clicking a badge pins it: the section becomes a panel between the toolbar and the content, pushing the content down, and the badge stays highlighted until it is clicked again. One section is pinned at a time; pinning another replaces it. The pin is remembered per content kind — `pages` (anything with `pages()`), `text` (a text layer, no pages), `image` (a raster frame), `other` (no previewer, a decorator section only) — and persists across files and restarts, so a pinned EXIF stays pinned while arrowing through photos. Each section is a key–value list, searchable when long, with copy on every row.
@@ -240,6 +259,8 @@ The preview is its own tab, not part of any explorer tab. It docks and moves lik
 **Width.** The content never sets the pane's width. The pane is sized by the dock layout and the user's divider alone; the previewer is asked to render at the pane's width, a page or image wider than that is scaled down to fit (keeping its aspect ratio, never enlarged above 100%), and long text lines scroll sideways inside the pane. Nothing drawn in the pane may request a minimum width beyond a small fixed floor, so a wide PDF page shrinks rather than pushing the divider.
 
 **Status bar.** The bottom of the pane is a single line of small text with the previewer's `status()` facts, separated by `·`: language, encoding and line count for text and code; dimensions, format and file size for an image; page count and file size for a PDF; duration and codec for media. It never wraps; when the pane is too narrow it truncates with an ellipsis.
+
+**No previewer.** When no previewer claims the file the pane shows a placeholder, not a hex dump: the File info section as a key–value list at the top (name, type, size, modified), the file-type icon — the same Phosphor icon the list uses, drawn large — centred in the space below it, and under the icon one line of small text: *Plugin available* when a previewer plugin in the plugins directory claims the file's type but is disabled, *No plugin available* otherwise. The line is plain text; nothing in it is clickable, and enabling or fetching a plugin from here waits until plugin distribution is decided. The host answers "available" from the manifests alone, without loading a disabled plugin: a plugin's manifest lists the file extensions its previewers claim. The hex view (`ext-preview-hex`) is not an automatic fallback: it claims no file on its own and is chosen per type in settings like any other previewer.
 
 ### Menu
 
@@ -280,28 +301,21 @@ The remaining menu entries will be specified later.
 
 **Media metadata.** Image, audio and video previews put the basics in the pane's status bar — dimensions or duration, file size, format, colour depth or codec — and the rest behind info badges: a File info section with the camera, date taken and exposure for photos, an EXIF section with every EXIF tag (via `kamadak-exif`; IPTC and XMP when a reader without a system library is adopted), ID3 or Vorbis tags for audio, and stream details for video. Each is a searchable key-value list with copy, shown on hover and pinned on click as the Preview section describes.
 
-**Audio and video.** Media files play inside the preview: play/pause (Space while the preview has focus), a seek bar with elapsed and total time, volume, and for video the frames drawn into the pane with a fit/1:1 toggle like images. Audio shows a waveform and cover art when present. Playback starts on demand, not on selection, stops when the selection changes, and decoding runs through GStreamer on every platform, one code path, with the runtime bundled on macOS and Windows.
+**Audio and video.** Media files play inside the preview pane, like every other file: selecting one shows it there — the first frame or the waveform, the transport in the pane's toolbar — and nothing opens elsewhere. Play/pause (Space while the preview has focus), a seek bar with elapsed and total time, volume, and for video the frames drawn into the pane with a fit/1:1 toggle like images. Audio shows a waveform and cover art when present. Playback starts on demand, not on selection, stops when the selection changes, and decoding runs through GStreamer on every platform, one code path, with the runtime bundled on macOS and Windows.
 
 **Previews are modules.** Every preview is an extension exposing one or more Previewers, as the architecture section describes, and each ships as its own module that a user can enable or disable. One module may cover several related types, but the split follows who needs it, not the file type: a plain-text previewer is part of the core, while syntax highlighting, pretty print, PDF, Office, images, audio and video are separate modules, so a user who is not a programmer never loads the code tooling. When several previewers match a file, the highest score wins and the user can override the choice per type in settings.
 
-Proposed modules: preview-text (core), preview-code (highlighting, pretty print), preview-pdf, preview-office, preview-image, preview-media (audio, video), preview-archive (folder and archive listing).
+Proposed modules: preview-text (core), preview-code (highlighting, pretty print), preview-pdf, preview-office, preview-image, preview-media (audio, video), preview-archive (folder, archive and disk-image listing), preview-markup (rendered Markdown and HTML, the CSV grid), preview-hex.
 
 **Extensions as installable packages.** Modules are not only switchable, they are physically separate: each is a package in a known plugins directory that can be removed from the disk or simply never loaded, and the core binary carries only the local file system, the text, code, image and PDF previewers and the core actions (see Package layout). A package holds a manifest (id, version, API version, the extension points it fills, the platforms it supports, the toolchain it was built with) plus its code as a native dynamic library — a WASM module later; the loader reads the manifests at start, registers each plugin's contributions, and defers heavy initialisation until a matching file or action is first needed. The Extensions screen (0.2) lists what was found with enable and disable.
 
+**Third-party libraries.** Some plugins need a library Rick does not build: pdfium for PDF, LibreOffice for Office, GStreamer for audio and video, the 7-Zip library for disk images. Two classes. *Bundled:* a library small enough to ship and licensed for it travels with Rick — beside the binary, as pdfium does today, or in the plugins directory beside its plugin, as the 7-Zip library (`7z.so` / `7z.dll`, LGPL, loaded dynamically) will. *System:* one too large to ship is found on the machine — LibreOffice; GStreamer on Linux, where the runtime is not bundled. In both classes the path to the library is a setting of the plugin, stored in the plugin's own TOML settings file, and Rick reads no environment variable for it: `RICK_PDFIUM_DIR`, `RICK_SOFFICE` and any other override of that kind go, and development and CI write the setting instead. The plugin resolves its library lazily, on the first file it is asked to show, in this order: the setting when it is set, the directory of the binary and the plugins directory, then the usual install locations of the current platform (the `PATH` for a program); the first hit is written back into the setting, so the user can see and change where Rick looks. Nothing is probed at start. When nothing is found, the preview pane shows the file's information and, in place of the content, a message that names the library, gives the command or download that installs it on this platform, offers *Browse…* (a file dialogue whose choice is stored in the setting) and *Retry*. The Extensions screen does not mirror this state for now.
+
+**Opening files.** Enter or a double-click on a file opens it; nothing opens a viewer, because the preview pane is the only one. A folder navigates. An archive or a disk image (see *Disk images and Mount*) enters the file as a read-only location in the current tab through its provider; that is the default of the setting `archives.on_open` (`enter`), whose other value, `system`, hands the file to the OS default application instead. Every other file opens with the OS default application. Mod+Enter opens with the OS default application whatever the file and the setting, and *Open with…* stays in the context menu for all of them. Rick never writes to a file it shows; editing is the job of an external application via Open with.
+
+**Disk images and Mount.** A disk image is browsed like an archive: selecting it lists its contents in the preview pane, Enter enters it (above), and nothing is mounted for that — the provider reads the image file itself. The formats and the readers are in the Disk images table under Supported scope. *Mount* is an Action in the context menu of a disk-image file, and so also in the command palette, that hands the file to the operating system's own mount mechanism and nothing else: `Mount-DiskImage` on Windows (ISO, VHD, VHDX), `hdiutil attach` on macOS (DMG, ISO, IMG), `udisksctl loop-setup` on Linux (ISO and raw IMG), with a clear error when udisks is not installed. Rick ships no other mounting path (no qemu-nbd, no FUSE), and the action is hidden on a file the current OS cannot mount. The mounted image appears as a removable volume in the side panel's This Machine, and that row's *Eject* unmounts it; there is no separate Unmount action. The `platform` crate gains a `Mount` trait for this (which formats this OS mounts, mount a file), and the action lives in `ext-action-core`.
+
 **Extension store.** Later. The Extensions screen grows update and remove, and browses a store of available packages: a signed index hosted by the project, with official modules (the preview set above, Git, archives, object storage) and third-party ones. Install downloads the package for the current platform, verifies its signature and hash, and activates it without a restart. Store entries declare the permissions they need (file system scope, network, process spawn); the user sees them before installing.
-
-**Viewer.** The full-size counterpart of the preview pane. Enter or a double-click on a file of a previewable type opens it in the viewer rather than in an external application (a setting flips that default per type); Ctrl+Enter forces the external application. The viewer opens as a tab in the current pane, so it can be split, docked or torn out into its own window like any other tab, and a window-mode viewer fills the screen with F11. It uses the same previewer modules as the preview pane, with the full feature set unlocked:
-
-- **Navigation.** Left and Right, or PageUp and PageDown, step to the previous and next file of the same folder in the list's current sort and filter, so the viewer doubles as a slideshow; Home and End jump to the first and last; the title shows name and position ("12 of 240").
-- **Pages.** For paged content (PDF, Office, multi-page TIFF) a page strip on the side, a page counter with direct entry, and continuous or single-page scrolling.
-- **Zoom.** Fit, fit width, 1:1 and free zoom (Ctrl+scroll, Ctrl+plus and minus, Ctrl+0 to reset), with panning by drag or scroll; the zoom level is remembered per type.
-- **Find.** Ctrl+F searches the text layer of text, code, PDF and Office content, with match count, next and previous, and highlights in place.
-- **Media.** Audio and video get full transport: seek bar, volume, playback speed, frame step, loop, and a keyboard set matching common players (Space, J, K, L, arrows).
-- **Info.** The media info bar from the preview is available as a collapsible side panel, with all metadata.
-- **Actions.** The viewer exposes the same Action registry as the list, so the current file can be renamed, trashed, copied, opened with or pinned from inside the viewer, and the list stays in sync.
-- **Unsupported types.** Falls back to a hex view with ASCII column for anything no previewer claims.
-
-The viewer never writes to the file; editing is the job of an external application via Open with.
 
 ## Functions
 
@@ -434,7 +448,7 @@ One Cargo workspace, one crate per concern, grouped by layer. Kernel crates carr
 
 - `types` — paths, entries, mime, errors, capability flags; no I/O, no async runtime and no dependency on any other Rick crate. It may use the small ecosystem crates it needs (`bitflags`, `thiserror`), nothing heavier.
 - `runtime` — job system, cancellation, progress, thread pools, event bus.
-- `platform` — per-OS code behind one trait set: trash, links and junctions, elevation, system properties dialogue, file associations, mounts. In 0.1 the set is `Trash` (trash, list, restore, remove one item, empty), `OpenWith` (`open` with the default application, `reveal` in the system file manager), `Properties` (the native dialogue on Windows and macOS, label/value rows on Linux), `NativeDialogs` (async, through `rfd`, the XDG portal on Linux), `Clipboard` and `ConfigDir`; elevation, file associations and mounts come later. 0.2 adds `Secrets` (store, get and remove a secret by a stable key in the platform keychain: Secret Service on Linux, Keychain on macOS, Credential Manager on Windows, a fake for tests) and `Terminal` (launch the user's terminal emulator with a command), both introduced by `ext-ssh` and reused by the cloud providers and `ext-action-terminal`. The three RustSec "unmaintained" notices on `rfd`'s D-Bus dependencies are accepted in deny.toml with the reason recorded, to be dropped when `rfd` moves on.
+- `platform` — per-OS code behind one trait set: trash, links and junctions, elevation, system properties dialogue, file associations, mounts. In 0.1 the set is `Trash` (trash, list, restore, remove one item, empty), `OpenWith` (`open` with the default application, `reveal` in the system file manager), `Properties` (the native dialogue on Windows and macOS, label/value rows on Linux), `NativeDialogs` (async, through `rfd`, the XDG portal on Linux), `Clipboard` and `ConfigDir`; elevation, file associations and mounts come later. 0.2 adds `Secrets` (store, get and remove a secret by a stable key in the platform keychain: Secret Service on Linux, Keychain on macOS, Credential Manager on Windows, a fake for tests) and `Terminal` (launch the user's terminal emulator with a command), both introduced by `ext-ssh` and reused by the cloud providers and `ext-action-terminal`, and `Mount` (which disk-image formats this OS mounts natively, and mount one through the OS: `Mount-DiskImage`, `hdiutil attach`, `udisksctl loop-setup`), used by the *Mount* action. The three RustSec "unmaintained" notices on `rfd`'s D-Bus dependencies are accepted in deny.toml with the reason recorded, to be dropped when `rfd` moves on.
 - `ext` — the five extension traits, the registry, manifests and the extension context.
 - `vfs` — the mount table that routes a path to its `Provider`, and cross-provider copy and move.
 - `vfs-local` — the local filesystem provider: listing, statx, watching, copy and reflink.
@@ -446,7 +460,7 @@ One Cargo workspace, one crate per concern, grouped by layer. Kernel crates carr
 
 **Providers** (`ext-vfs-*`)
 
-- `ext-vfs-archive` — zip, tar family, 7z, RAR read-only, single-file codecs.
+- `ext-vfs-archive` — zip, tar family, 7z, RAR read-only, single-file codecs, ISO 9660 and UDF; and the disk images of the Disk images table (raw IMG, DMG, VHD, VHDX, VMDK, VDI, QCOW2) read-only through the bundled 7-Zip library.
 - `ext-vfs-s3` — S3, R2, MinIO and other S3-compatible stores, one endpoint setting.
 - `ext-vfs-azure` — Azure Blob.
 - `ext-vfs-gcs` — Google Cloud Storage.
@@ -464,17 +478,17 @@ One Cargo workspace, one crate per concern, grouped by layer. Kernel crates carr
 - `ext-preview-text` — plain text, encodings, huge-file windowing, pretty print.
 - `ext-preview-code` — syntax highlighting via syntect, on top of text.
 - `ext-preview-image` — raster and SVG decode, EXIF, IPTC, XMP.
-- `ext-preview-pdf` — pdfium-render; pdfium is a dynamic library that every build and release places beside the binary (`RICK_PDFIUM_DIR` overrides for development).
+- `ext-preview-pdf` — pdfium-render; pdfium is a dynamic library that every build and release places beside the binary, found as *Third-party libraries* describes (a setting, no environment variable).
 - `ext-preview-office` — LibreOffice headless to PDF, then the PDF path.
 - `ext-preview-media` — audio and video via GStreamer, ID3 and stream info.
-- `ext-preview-archive` — listing of an archive's contents without mounting it.
-- `ext-preview-csv` — CSV and TSV as a virtualised grid.
+- `ext-preview-archive` — listing of an archive's or disk image's contents without mounting it.
+- `ext-preview-markup` — one plugin for the three structured text formats: Markdown and HTML rendered, CSV and TSV as a virtualised grid, each with the *Rendered* toggle to the source. Supersedes `ext-preview-csv` and takes the Markdown and HTML rendering out of `ext-preview-code`.
 - `ext-preview-3d` — STL, OBJ and 3MF meshes rendered through wgpu.
-- `ext-preview-hex` — the fallback hex view.
+- `ext-preview-hex` — the hex view; claims no file on its own, chosen per type in settings.
 
 **Actions** (`ext-action-*`)
 
-- `ext-action-core` — the built-in operations list: clipboard, trash, rename, new, link, select, view and sort commands.
+- `ext-action-core` — the built-in operations list: clipboard, trash, rename, new, link, select, view and sort commands, and *Mount* for disk images through `platform::Mount`.
 - `ext-action-compress` — compress and extract.
 - `ext-action-compare` — file and folder diff.
 - `ext-action-terminal` — open console, open in system file manager.
@@ -746,7 +760,7 @@ pub trait Action: Send + Sync + 'static {
 pub trait UndoCommand: Send { fn undo(&self, jobs: &JobRunner) -> Result<(), Error>; fn redo(&self, jobs: &JobRunner) -> Result<(), Error>; fn label(&self) -> String; }
 ```
 
-**Previewer** — turns an entry into something the inspector or viewer can show:
+**Previewer** — turns an entry into something the preview pane can show:
 
 ```rust
 pub trait Previewer: Send + Sync + 'static {
@@ -881,8 +895,8 @@ The default `default_shortcut` of every built-in Action. **Mod** is Ctrl on Linu
 
 | Shortcut | Action |
 | --- | --- |
-| Enter | Open (folder: navigate; previewable file: viewer; other: system default) |
-| Mod+Enter | Open with system default, bypassing the viewer |
+| Enter | Open (folder: navigate; archive or disk image: enter it, or the system default when `archives.on_open` is `system`; other: system default) |
+| Mod+Enter | Open with the system default application, whatever the file and the setting |
 | Backspace, Alt+Left | Back |
 | Alt+Right | Forward |
 | Alt+Up | Go to parent |
@@ -964,22 +978,11 @@ The default `default_shortcut` of every built-in Action. **Mod** is Ctrl on Linu
 | Mod+Alt+N / S / M / T | Sort by name / size / modified / type |
 | Mod+Alt+G | Clear grouping |
 
-**Viewer**
+**Preview pane** (while it has focus)
 
 | Shortcut | Action |
 | --- | --- |
-| F11 | Fullscreen |
-| Escape | Leave fullscreen / close viewer |
-| Left / Right, PageUp / PageDown | Previous / next item or page |
-| Home / End | First / last |
-| Mod+0 | Zoom to fit |
-| Mod+1 | Actual size |
-| Mod+2 | Fit width |
-| Mod+Plus / Minus | Zoom in / out |
-| Space | Play / pause |
-| J / K / L | Rewind / pause / fast-forward |
-| Mod+F | Find in text layer |
-| I | Toggle info panel |
+| Space | Play / pause media |
 
 Always open the **Keyboard shortcuts** screen from the menu to see the live table; this one is the source for defaults, not the running state.
 
@@ -1019,15 +1022,17 @@ The smallest Rick worth using every day. Everything in this list ships; nothing 
 
 1. **Plugin host and the split.** `plugins-native` loads plugins from the plugins directory at start: each plugin is one native dynamic library beside a manifest file, discovered by scanning the directory, loaded through one `extern "C"` entry point that receives the `Registry`. The manifest (TOML) carries id, name, version, `api_version`, the extension points filled, the platforms supported, and the toolchain the library was built with; the host refuses a plugin whose `api_version` or toolchain does not match and says so in the Extensions screen. Plugins are built from this workspace as `cdylib` crates with the same toolchain, so a workspace build produces the binary plus every plugin in the plugins directory with nothing to install by hand; the mechanism that lets a plugin and the host share one copy of `ext`, `types` and `runtime` (dynamic linking of the kernel crates, or a C-ABI vtable) is the implementer's call, recorded in `QUESTIONS.md`. **Compiled in:** the local provider, the text, code, image and PDF previewers, and `ext-action-core`. **Plugins:** everything else, starting with `ext-git`, which moves out of the binary in this milestone to prove the host. The **Extensions screen** lists the plugins found, with name, version, the points they fill, and enable/disable (a disabled plugin stays on disk and is not loaded on the next start); no store, no download, no update. The plugins directory sits beside the binary and in the per-user config directory; per-user wins on an id clash. Distribution and signing stay open.
 2. **Side panel rework.** The side panel as the GUI section now specifies it: the editable Places list with its Favorites, Recent and Trash views, the This Machine, Network and Cloud sections with their overviews, live mount and hot-plug updates, Eject, open in new tab, the drop rule (a folder becomes a place, files are refused, no file operation anywhere in the panel), collapsible sections without an indent guide, no current-location highlight, the Tree section removed, and the operations area with its larger layout, per-row progress bars and per-volume job scheduling. In this milestone the Trash view lists the platform trash with restore and empty as 0.1's section did, moved into the tab; `ext-vfs-trash` (milestone 5) later turns it into a full browsable location. Network lists mounted shares only; discovery is not part of this milestone. Cloud appears once the first cloud provider plugin exists (milestone 5). The side-panel Recent feed of 0.1 (watches plus a bounded scan) is replaced by the system's recently-used list.
-3. **Viewer.** The full-size viewer of the GUI section: Enter opens previewable files in a viewer tab, F11 fullscreen, folder navigation as a slideshow, pages, zoom, find, media transport, info panel, the Action registry inside the viewer, hex fallback. Compiled in, since it is a frame for the previewers rather than a feature of its own.
-4. **Previewers as plugins:** `ext-preview-office` (LibreOffice when installed), `ext-preview-media` (GStreamer, bundled runtime on macOS and Windows), `ext-preview-archive` (listing without mounting), `ext-preview-csv` (virtualised grid), rendered Markdown and HTML in `ext-preview-code`, `ext-preview-hex`, and `ext-preview-3d` (below).
-5. **Providers as plugins:** `ext-vfs-archive` (zip, tar family, 7z, RAR read-only, single-file codecs) with ISO images browsed the same way, `ext-vfs-trash` (the Trash view becomes a full browsable location with restore and empty), `ext-ssh` (remote hosts over SSH through shell commands, no SFTP; hosts from `~/.ssh/config` and Rick's own in the Network section; jump hosts; console actions; its own spec in [`specs/ext-ssh.md`](specs/ext-ssh.md), which also brings the `platform::Secrets` keychain trait and the `REMOTE` capability the cloud plugins reuse), and one plugin per cloud — `ext-vfs-s3` (S3, R2 and S3-compatibles), `ext-vfs-azure`, `ext-vfs-gcs` — each with `NATIVE_TRANSFER` so moves and copies inside an account run on the service. The Network section of the side panel gains discovered shares, connect, mount and unmount.
+3. **Viewer — withdrawn.** A full-size viewer was never wanted; the item was a misunderstanding, and the preview pane is Rick's only viewer (see Preview). The viewer built as milestone 3 (#29) is removed again by the preview-pane corrections below, together with its hex fallback, its shortcuts and the per-type "open in viewer" setting.
+4. **Previewers as plugins:** `ext-preview-office` (LibreOffice when installed), `ext-preview-media` (GStreamer, bundled runtime on macOS and Windows), `ext-preview-archive` (listing without mounting), `ext-preview-markup` (rendered Markdown and HTML and the CSV grid in one plugin, replacing `ext-preview-csv` and the rendering that sat in `ext-preview-code`), `ext-preview-hex`, and `ext-preview-3d` (below).
+5. **Providers as plugins:** `ext-vfs-archive` (zip, tar family, 7z, RAR read-only, single-file codecs) with ISO images browsed the same way and, through the bundled 7-Zip library, the disk images of the Disk images table, `ext-vfs-trash` (the Trash view becomes a full browsable location with restore and empty), `ext-ssh` (remote hosts over SSH through shell commands, no SFTP; hosts from `~/.ssh/config` and Rick's own in the Network section; jump hosts; console actions; its own spec in [`specs/ext-ssh.md`](specs/ext-ssh.md), which also brings the `platform::Secrets` keychain trait and the `REMOTE` capability the cloud plugins reuse), and one plugin per cloud — `ext-vfs-s3` (S3, R2 and S3-compatibles), `ext-vfs-azure`, `ext-vfs-gcs` — each with `NATIVE_TRANSFER` so moves and copies inside an account run on the service. The Network section of the side panel gains discovered shares, connect, mount and unmount.
 6. **Search and decorators as plugins:** `ext-search-walk` behind the subtree search, then `ext-search-windows`, `ext-search-spotlight`, `ext-search-tracker` and `ext-search-baloo` feeding the title-row search box; `ext-svn` beside `ext-git`.
 7. **Actions as plugins:** `ext-action-compress` (compress, extract here, extract to), `ext-action-compare` (file and folder diff), `ext-action-terminal` (open console, with an embedded console pane), `ext-action-rename` (bulk rename with pattern, numbering, find and replace, preview), plus Open with… chooser, Paste as link and Select by pattern in `ext-action-core`.
 8. **Permission management** in Properties (owner, group, mode bits, ACLs, recursive apply, elevation through the platform), and **localisation**: the `t!` lookup gains translation files and a language setting, English remains the fallback.
 9. **Platform drag source and drop position.** Close 0.1's drag-and-drop gap: a native drag source per platform (an `NSDraggingSession` on macOS, `DoDragDrop` on Windows, a Wayland data source and XDND on Linux) through the `platform::DragSource` hook, and the cursor position of an incoming drop where the backend can give it, so a drop from outside lands where it was dropped. The macOS benchmarks that run against measured targets are re-measured and tightened towards the spec's numbers as the work allows.
 
-**Not in 0.2:** the WASM host, the extension store and downloads, plugin signing, `ext-deco-fs`, TFVC. During 0.2 the workspace version is `0.2.0-dev`; the milestones merge to `main` behind CI on all three OSes as in 0.1, and 0.2.0 is tagged when milestone 9 is in.
+**Preview-pane corrections (2026-11-08).** Two issues, part of 0.2, after the milestones above that they touch. The first, on the core: the viewer comes out and Enter opens files as *Opening files* says; the pane lays out every `Content` kind itself (file list, grid, document) instead of falling back to text; the *No previewer* placeholder; the *Copy* control; third-party libraries resolved through a setting with the in-pane message (pdfium and LibreOffice first, the 7-Zip library and GStreamer as their plugins follow); the `archives.on_open` setting. The second, on the plugins: `ext-preview-markup`; disk images in `ext-vfs-archive` and `ext-preview-archive` through the 7-Zip library; `platform::Mount` and the *Mount* action with *Eject* as its unmount.
+
+**Not in 0.2:** the WASM host, the extension store and downloads, plugin signing, `ext-deco-fs`, TFVC. During 0.2 the workspace version is `0.2.0-dev`; the milestones merge to `main` behind CI on all three OSes as in 0.1, and 0.2.0 is tagged when milestone 9 and the preview-pane corrections are in.
 
 **3D models.** A previewer for STL, OBJ and 3MF, for people who print. The mesh is parsed natively (`stl_io`, `tobj`, a small 3MF reader over its zip and XML) and rendered through wgpu into the preview frame as a shaded solid with a neutral material and a ground grid; drag orbits, wheel zooms, double-click resets the view, and the view is remembered per file while it stays open. The status bar shows triangle count, bounding box in millimetres and, for OBJ, the number of objects; the File info section adds the units declared by 3MF. Models beyond a configurable triangle budget decimate for the preview and say so. Ships as `ext-preview-3d`, a plugin.
 
