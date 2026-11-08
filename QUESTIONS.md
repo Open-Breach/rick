@@ -2580,3 +2580,71 @@ Once answered, an entry keeps its number and gains a dated decision line.
     user's choice in their lists, prefilled by detection for the detected
     kind. A form whose fields react to another field is a later API
     question.
+
+213. (0.2.0 release, 2026-11-08) CHANGELOG.md's release heading carries
+    "the date of the tag", and the tag is made only after the dev → main
+    pull request is reviewed and tier 2 has passed, which may be a later
+    day than the one the release branch was prepared on.
+    Assumed: `## [0.2.0] - 2026-11-08`, the day of preparation, stays
+    unless Serge asks for the tag's day before the batch merges; the
+    release body is this section either way.
+
+214. (0.2.0 release, 2026-11-08) The 0.1.0 section opens with a
+    one-paragraph summary before "### Added"; the instructions for the
+    0.2.0 section name the heading, the new Unreleased heading and the
+    link references.
+    Assumed: the 0.2.0 section gets the same one-paragraph summary, since
+    the section is the release body. The entries stay as they were except
+    for two corrections as a record: the API-8 entry no longer names the
+    viewer #56 withdrew, and the #18 entry lists the three previewers that
+    ship, its CSV grid and rendered Markdown and HTML having been
+    superseded by `ext-preview-markup` (#51).
+
+215. (0.2.0 release, 2026-11-08) specs/ext-installer.md names its target
+    version twice: in the overview list ("Target version: 0.3.") and under
+    "Settled questions" ("Target version: 0.3 (system integration)").
+    Assumed: both now say it ships with 0.2 (Linux only); the `rick
+    install <archive>` command line of "Other ways in" stays a 0.3 item.
+
+216. (0.2.0 release, 2026-11-08) After the version bump, `0.2.0-dev` is
+    still named in SPEC.md ("During 0.2 the workspace version is
+    0.2.0-dev"), in the example manifest of crates/plugins-native/README.md
+    and in the changelog's #16 entry, beside the doc comment and the test
+    fixture in crates/plugins-native/src/manifest.rs.
+    Assumed: all are records or examples and stay; SPEC.md's sentence is
+    not one of the two authorised edits.
+
+217. (0.2.0 release, 2026-11-08) The README's "Release archives" paragraph
+    was checked against the plugins `cargo xtask bundle` lays out (the
+    `ext-*` cdylib crates, as .github/scripts/check-plugins.sh lists
+    them): the SSH, S3, Azure Blob and Google Cloud Storage providers and
+    the hex and 3D previewers were missing and are added. The extension
+    point table's Provider row still says "SFTP", which `ext-ssh`
+    replaced.
+    Assumed: the table row is not among the listed edits and stays for a
+    follow-up.
+
+218. (0.2.0 release, 2026-11-08) Tier 2's first runs on the 0.2 content
+    failed in two tests on timing, not on the platform: the SSH host test
+    read rick.toml right after `settle()` while the settings saver, a task
+    of the runtime that `settle` does not wait for, had not written it
+    (Linux arm64), and the cloud upload test expected the copy's final
+    byte count as the job's last progress report, while the transfer job
+    reports its item count right after the copy and reports closer
+    together than `runtime::PROGRESS_EVERY` go out as the last one (Linux
+    x64; the "upload ends short" of issue 21's tier 1 runs).
+    Assumed: both are assumptions of the tests, not defects: the tests
+    read the settings file until it holds the expected text
+    (`tests::read_until`) and accept a complete item count as the job's
+    final report; the coalescing stays as the side panel specifies it,
+    twenty reports a second per job.
+
+219. (0.2.0 release, 2026-11-08) Building the 7-Zip library from the
+    pinned sources on macOS fails under Apple clang 17: the mac makefile
+    compiles with -Weverything -Werror, and every new compiler brings new
+    warnings (-Wc++-keyword on the arm64 assembly macros,
+    -Wimplicit-void-ptr-cast in LzmaEnc.c).
+    Assumed: on macOS the library builds with -Wall -Wextra and without
+    -Werror, through the makefile's own variables; the Linux build keeps
+    the gcc flags as the makefile has them, and the pinned release and
+    its checksums are unchanged.
