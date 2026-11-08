@@ -47,9 +47,9 @@ use windows::core::{GUID, Interface, PCWSTR, PWSTR, w};
 use crate::Native;
 use crate::fs::windows::{filetime, io_error, wide};
 use crate::traits::{
-    Application, Chrome, ConfigDir, ControlsSide, DragSource, OpenWith, Properties,
-    PropertiesOutcome, RecentItem, RecentlyUsed, StandardFolder, StandardFolders, Terminal, Trash,
-    TrashedItem, Volume, VolumeKind, Volumes, WindowChrome,
+    Application, Chrome, ConfigDir, ControlsSide, DragSource, Elevate, ElevatedOutput, OpenWith,
+    Properties, PropertiesOutcome, RecentItem, RecentlyUsed, StandardFolder, StandardFolders,
+    Terminal, Trash, TrashedItem, Volume, VolumeKind, Volumes, WindowChrome,
 };
 
 /// `System.Recycle.DeletedFrom`: the folder a recycled item came from.
@@ -734,6 +734,20 @@ impl OpenWith for Native {
 fn on_path(program: &str) -> bool {
     std::env::var_os("PATH")
         .is_some_and(|path| std::env::split_paths(&path).any(|dir| dir.join(program).is_file()))
+}
+
+impl Elevate for Native {
+    /// Not offered on Windows in this version: the installer that needs it
+    /// is Linux only (`specs/ext-installer.md`).
+    fn run_elevated(
+        &self,
+        _program: &Path,
+        _args: &[std::ffi::OsString],
+    ) -> Result<ElevatedOutput, Error> {
+        Err(Error::Unsupported(
+            "running a command as the administrator is not implemented on this platform",
+        ))
+    }
 }
 
 impl Terminal for Native {

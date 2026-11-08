@@ -1,6 +1,7 @@
 //! The platform tests run against: a private trash directory, recorded
 //! calls and canned dialogue answers.
 
+use std::ffi::OsString;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard, PoisonError};
@@ -11,9 +12,10 @@ use tempfile::TempDir;
 use types::Error;
 
 use crate::traits::{
-    Application, Chrome, Clipboard, ConfigDir, ControlsSide, DialogFilter, DragSource,
-    NativeDialogs, OpenWith, Properties, PropertiesOutcome, RecentItem, RecentlyUsed, Secrets,
-    StandardFolder, StandardFolders, Terminal, Trash, TrashedItem, Volume, Volumes, WindowChrome,
+    Application, Chrome, Clipboard, ConfigDir, ControlsSide, DialogFilter, DragSource, Elevate,
+    ElevatedOutput, NativeDialogs, OpenWith, Properties, PropertiesOutcome, RecentItem,
+    RecentlyUsed, Secrets, StandardFolder, StandardFolders, Terminal, Trash, TrashedItem, Volume,
+    Volumes, WindowChrome,
 };
 
 /// The applications the fake offers for every file, the default first.
@@ -48,6 +50,8 @@ pub struct Fake {
     opened: Mutex<Vec<PathBuf>>,
     opened_with: Mutex<Vec<(PathBuf, Application)>>,
     terminals: Mutex<Vec<(PathBuf, Option<Vec<String>>)>>,
+    /// The programs handed to [`Elevate::run_elevated`]; nothing runs.
+    elevated: Mutex<Vec<(PathBuf, Vec<OsString>)>>,
     revealed: Mutex<Vec<PathBuf>>,
     clipboard: Mutex<Option<String>>,
     dragged: Mutex<Vec<Vec<String>>>,
@@ -97,6 +101,7 @@ impl Fake {
             opened: Mutex::new(Vec::new()),
             opened_with: Mutex::new(Vec::new()),
             terminals: Mutex::new(Vec::new()),
+            elevated: Mutex::new(Vec::new()),
             revealed: Mutex::new(Vec::new()),
             clipboard: Mutex::new(None),
             dragged: Mutex::new(Vec::new()),
@@ -121,6 +126,13 @@ impl Fake {
     #[must_use]
     pub fn terminals(&self) -> Vec<(PathBuf, Option<Vec<String>>)> {
         lock(&self.terminals).clone()
+    }
+
+    /// The programs and arguments handed to [`Elevate::run_elevated`],
+    /// oldest first; the fake runs none of them.
+    #[must_use]
+    pub fn elevated(&self) -> Vec<(PathBuf, Vec<OsString>)> {
+        lock(&self.elevated).clone()
     }
 
     /// Paths handed to [`OpenWith::open`], oldest first.
@@ -370,6 +382,17 @@ impl Terminal for Fake {
     fn open_terminal(&self, dir: &Path, command: Option<&[String]>) -> Result<(), Error> {
         lock(&self.terminals).push((dir.to_path_buf(), command.map(<[String]>::to_vec)));
         Ok(())
+    }
+}
+
+impl Elevate for Fake {
+    /// Records the call and reports success without running anything.
+    fn run_elevated(&self, program: &Path, args: &[OsString]) -> Result<ElevatedOutput, Error> {
+        lock(&self.elevated).push((program.to_path_buf(), args.to_vec()));
+        Ok(ElevatedOutput {
+            code: Some(0),
+            ..ElevatedOutput::default()
+        })
     }
 }
 

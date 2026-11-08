@@ -1,10 +1,10 @@
 //! Every line of per-OS code in Rick, behind one trait set.
 //!
 //! Other crates program against the traits here and never against an
-//! operating system: [`Trash`], [`OpenWith`], [`Terminal`], [`Properties`],
-//! [`ConfigDir`], [`NativeDialogs`], [`Clipboard`], [`Chrome`],
-//! [`DragSource`], [`Volumes`], [`StandardFolders`], [`RecentlyUsed`] and
-//! [`Secrets`], bundled as [`Platform`]. [`Native`] is the real
+//! operating system: [`Trash`], [`OpenWith`], [`Terminal`], [`Elevate`],
+//! [`Properties`], [`ConfigDir`], [`NativeDialogs`], [`Clipboard`],
+//! [`Chrome`], [`DragSource`], [`Volumes`], [`StandardFolders`],
+//! [`RecentlyUsed`] and [`Secrets`], bundled as [`Platform`]. [`Native`] is the real
 //! implementation for the OS the binary runs on; [`Fake`] is the one tests
 //! use, with a private trash directory and recorded calls.
 //!
@@ -54,10 +54,10 @@ compile_error!("Rick supports Linux, macOS and Windows");
 pub use async_trait::async_trait;
 pub use fake::{FAKE_APPLICATIONS, FAKE_STANDARD_FOLDERS, Fake};
 pub use traits::{
-    Application, Chrome, Clipboard, ConfigDir, ControlsSide, DialogFilter, DragSource,
-    NativeDialogs, OpenWith, Platform, Properties, PropertiesOutcome, RecentItem, RecentlyUsed,
-    Secrets, StandardFolder, StandardFolders, Terminal, Trash, TrashedItem, Volume, VolumeKind,
-    Volumes, WindowChrome,
+    Application, Chrome, Clipboard, ConfigDir, ControlsSide, DialogFilter, DragSource, Elevate,
+    ElevatedOutput, NativeDialogs, OpenWith, Platform, Properties, PropertiesOutcome, RecentItem,
+    RecentlyUsed, Secrets, StandardFolder, StandardFolders, Terminal, Trash, TrashedItem, Volume,
+    VolumeKind, Volumes, WindowChrome,
 };
 pub use trash_record::TRASH_FILE;
 use types::Error;

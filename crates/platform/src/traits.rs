@@ -1,5 +1,6 @@
 //! The trait set the rest of Rick programs against.
 
+use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
@@ -301,6 +302,42 @@ pub trait Terminal: Send + Sync {
     fn open_terminal(&self, dir: &Path, command: Option<&[String]>) -> Result<(), Error>;
 }
 
+/// What a command run elevated produced.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct ElevatedOutput {
+    /// The exit code, when the process ended by itself.
+    pub code: Option<i32>,
+    /// What it wrote to standard output.
+    pub stdout: Vec<u8>,
+    /// What it wrote to standard error.
+    pub stderr: Vec<u8>,
+}
+
+impl ElevatedOutput {
+    /// Whether the command ended with exit code 0.
+    #[must_use]
+    pub fn success(&self) -> bool {
+        self.code == Some(0)
+    }
+}
+
+/// Running one command as the administrator through the platform's own
+/// prompt, for the few steps that need it (the privileged helper of a
+/// system-wide install): `pkexec` and its polkit prompt on Linux. Rick
+/// itself never runs elevated; the program does, and it is a helper that
+/// validates its input.
+pub trait Elevate: Send + Sync {
+    /// Runs `program` with `args` elevated and waits for it to end.
+    ///
+    /// # Errors
+    ///
+    /// `Error::Unsupported` where the platform offers no prompt (no
+    /// `pkexec`; macOS and Windows in this version);
+    /// `Error::PermissionDenied` when the user dismissed the prompt or is
+    /// not allowed; otherwise the error from starting the program.
+    fn run_elevated(&self, program: &Path, args: &[OsString]) -> Result<ElevatedOutput, Error>;
+}
+
 /// What showing properties did.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PropertiesOutcome {
@@ -452,6 +489,7 @@ pub trait Platform:
     Trash
     + OpenWith
     + Terminal
+    + Elevate
     + Properties
     + ConfigDir
     + NativeDialogs
@@ -469,6 +507,7 @@ impl<
     T: Trash
         + OpenWith
         + Terminal
+        + Elevate
         + Properties
         + ConfigDir
         + NativeDialogs
