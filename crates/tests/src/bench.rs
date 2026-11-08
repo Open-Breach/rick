@@ -198,6 +198,12 @@ pub const BENCHMARKS: &[Benchmark] = &[
         macos: us(16_600),
         windows: us(16_600),
     },
+    Benchmark {
+        key: "3d-first",
+        linux: ms(300),
+        macos: ms(300),
+        windows: ms(300),
+    },
 ];
 
 /// The benchmark named `key`.

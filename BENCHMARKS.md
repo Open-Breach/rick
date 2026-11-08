@@ -440,3 +440,22 @@ measured by the bench workflow.
 | Linux | 16.6 ms | — | — |
 | macOS | 16.6 ms | — | — |
 | Windows | 16.6 ms | — | — |
+
+### `3d-first` — a 500 000-triangle binary STL opened and its first frame rendered
+
+Issue 19's target: 300 ms from opening the file to the first frame, for
+each of its fixtures (a 12-triangle STL, a 500 000-triangle binary STL, an
+OBJ with three objects, a 3MF in millimetres); the heaviest, the binary
+STL, is the one recorded, the other three are held to the same 300 ms in
+the test. Test: `each_fixture_shows_a_frame_within_300_ms` in
+`preview_3d.rs`, rendered at 800 × 600 through wgpu on the runner's
+software adapter (lavapipe on Linux, WARP on Windows; macOS skips with a
+note when it has no adapter), the device opened once before the runs. Not
+yet measured by the bench workflow; the local development machine opened
+and rendered the fixture in 140–200 ms on lavapipe.
+
+| OS | Target | Median | Worst |
+| --- | --- | --- | --- |
+| Linux | 300 ms | — | — |
+| macOS | 300 ms | — | — |
+| Windows | 300 ms | — | — |
