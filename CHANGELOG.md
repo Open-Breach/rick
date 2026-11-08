@@ -9,6 +9,31 @@ the pull request that brought the change.
 
 ### Added
 
+- `ext-installer`, the tarball installer of `specs/ext-installer.md`, as a
+  plugin (#44): *Install as application…* on a tar (gz, xz, bz2, zst) or
+  zip archive reads its index and the headers of its programs to tell a
+  prebuilt GUI app from a command-line toolchain and a source tree, guess
+  the main executable, icon, name and version, and check the ELF machine
+  type against the machine, then shows a form with every guess editable
+  and a summary of what will be written; the install extracts into a
+  staging folder under the archive-safety rules (no path escapes, no
+  outside-pointing links, no special entries, set-uid stripped, nothing
+  run), lands in `~/.local/opt/<app-id>/<version>/` behind a `current`
+  symlink, writes `rick-install.toml` beside it and the desktop entry,
+  icon and command symlinks through `current`, or the PATH-mode file
+  `~/.config/rick/path.sh` for toolchains. An archive matching an
+  installed app opens the form in update mode, with a downgrade warning;
+  one previous version is kept and *Revert* flips back. The Installed
+  Apps view, `rick://apps`, lists the records with version, kind, scope,
+  state and commands and offers *Open install folder*, *Launch*, *Update
+  from archive…*, *Revert to previous version*, *Edit launcher…*,
+  *Uninstall…* (exactly the record's files and the app folder), *Repair*,
+  *Forget* and *Remove staging folder*. Linux only: the plugin loads on
+  every platform and hides its actions elsewhere; system-wide installs
+  show as unavailable until the privileged helper's milestone. The
+  extension API is version 8: `ActionOutcome::Navigate` takes a pane to a
+  location and `platform::Elevate` runs a program as the administrator
+  (`pkexec` on Linux).
 - Search as plugins (#22): `ext-search-walk` carries the subdirectory
   search of the filter bar, the same walk as 0.1's behind the
   `SearchIndex` point, and the filter bar shows its toggle only while it
