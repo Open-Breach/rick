@@ -583,6 +583,11 @@ fn a_100_mb_upload_streams_with_progress_and_cancelled_half_way_leaves_no_object
         "progress was reported along the way: {peaks:?}"
     );
     assert_eq!(peaks.last().copied(), Some(100 * 1024 * 1024));
+    for event in &d.events {
+        if let Event::JobDone { result: Err(e), .. } = event {
+            panic!("the upload job failed: {e}");
+        }
+    }
     let uploaded = runtime::block_on(provider.stat(&at(&format!("/test/{bucket}/big.bin"))))
         .unwrap_or_else(|e| panic!("stat: {e}"));
     assert_eq!(uploaded.size, Some(100 * 1024 * 1024));

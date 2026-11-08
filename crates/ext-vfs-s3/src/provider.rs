@@ -12,10 +12,10 @@ use ext::{
 };
 use futures::{StreamExt, stream};
 use tokio::io::{AsyncReadExt, AsyncWrite};
-use tracing::debug;
+use tracing::{debug, warn};
 use types::{Attrs, CancelToken, Entry, EntryId, EntryKind, Error, Location, Progress, VPath};
 
-use crate::client::{Object, S3Client};
+use crate::client::{Object, S3Client, message};
 use crate::connection::S3Connections;
 use crate::{PROVIDER_ID, Place};
 
@@ -639,6 +639,11 @@ impl Upload {
     }
 }
 
+/// The size of the part just recorded, for the log line.
+fn data_len(sizes: &[usize]) -> usize {
+    sizes.last().copied().unwrap_or(0)
+}
+
 /// The number of the part after `done` parts; the service takes 10 000.
 fn part_number(done: usize) -> Result<u32, Error> {
     u32::try_from(done + 1)
@@ -649,6 +654,9 @@ fn part_number(done: usize) -> Result<u32, Error> {
 
 /// Reads the pipe into parts and uploads them; a pipe that closes before
 /// `finished` was set is a dropped writer, and the upload is abandoned.
+/// Once the service has assembled the object, its size is checked against
+/// the bytes that went in: a part the service lost on the way is an error
+/// and the short object is removed, never left behind as the copy.
 async fn upload(
     client: &S3Client,
     bucket: &str,
@@ -659,6 +667,8 @@ async fn upload(
     let mut buffer: Vec<u8> = Vec::with_capacity(PART.min(PIPE));
     let mut upload_id: Option<String> = None;
     let mut parts: Vec<(u32, String)> = Vec::new();
+    let mut sizes: Vec<usize> = Vec::new();
+    let mut streamed: u64 = 0;
     let mut chunk = vec![0u8; 256 * 1024];
     let outcome: Result<(), Error> = async {
         loop {
@@ -667,6 +677,7 @@ async fn upload(
                 break;
             }
             buffer.extend_from_slice(&chunk[..read]);
+            streamed += read as u64;
             if buffer.len() >= PART {
                 let id = if let Some(id) = &upload_id {
                     id.clone()
@@ -677,7 +688,9 @@ async fn upload(
                 };
                 let data = Bytes::from(std::mem::take(&mut buffer));
                 let number = part_number(parts.len())?;
+                sizes.push(data.len());
                 let etag = client.upload_part(bucket, key, &id, number, data).await?;
+                debug!(%key, number, size = data_len(&sizes), %etag, "part uploaded");
                 parts.push((number, etag));
             }
         }
@@ -693,6 +706,7 @@ async fn upload(
             Some(id) => {
                 if !buffer.is_empty() {
                     let number = part_number(parts.len())?;
+                    sizes.push(buffer.len());
                     let etag = client
                         .upload_part(
                             bucket,
@@ -702,9 +716,32 @@ async fn upload(
                             Bytes::from(std::mem::take(&mut buffer)),
                         )
                         .await?;
+                    debug!(%key, number, size = data_len(&sizes), %etag, "last part uploaded");
                     parts.push((number, etag));
                 }
-                client.complete_multipart(bucket, key, id, &parts).await
+                client.complete_multipart(bucket, key, id, &parts).await?;
+                let kept = client.head(bucket, key).await?.size;
+                if kept != streamed {
+                    let described: Vec<String> = parts
+                        .iter()
+                        .zip(&sizes)
+                        .map(|((number, etag), size)| format!("{number}: {size} bytes, {etag}"))
+                        .collect();
+                    warn!(
+                        %key,
+                        kept,
+                        streamed,
+                        parts = %described.join("; "),
+                        "the service assembled a shorter object than was sent; removing it"
+                    );
+                    let _ = client.delete(bucket, key).await;
+                    return Err(message(format!(
+                        "{key}: the service kept {kept} of {streamed} bytes from {} parts ({})",
+                        parts.len(),
+                        described.join("; ")
+                    )));
+                }
+                Ok(())
             }
         }
     }
