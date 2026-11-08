@@ -123,12 +123,14 @@ use crate::search::SearchIndex;
 /// ([`plugin`](mod@crate::plugin)) and their manifest file; 4
 /// `PreviewDoc` gained `content` (file listings, grids and documents the
 /// UI lays out), `Transport` gained volume, speed, frame step and loop,
-/// and `Icon` gained `Rendered` (QUESTIONS.md 103); 5 `UiHost` gained
+/// and `Icon` gained `Rendered` (QUESTIONS.md 103); 5 `Filter` gained
+/// `NoHidden` and `SkipNames`, what the subtree walk takes from the pane
+/// and the settings, and `SearchScope` gained `covers` (QUESTIONS.md 119); 6 `UiHost` gained
 /// `form`, `ActionOutcome` gained `Select` and `View`, `ActionCtx` gained
 /// `other`, `LinkKind` gained `Junction` and `Shortcut` with their
 /// capabilities, `JobCtx` gained `conflicts`, and settings gained
-/// [`SettingValue`] (QUESTIONS.md 118–121).
-pub const API_VERSION: u32 = 5;
+/// [`SettingValue`] (QUESTIONS.md 123–126).
+pub const API_VERSION: u32 = 6;
 
 bitflags::bitflags! {
     /// The extension points an extension fills, as its manifest declares

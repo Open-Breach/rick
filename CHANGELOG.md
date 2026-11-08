@@ -9,6 +9,25 @@ the pull request that brought the change.
 
 ### Added
 
+- Search as plugins (#22): `ext-search-walk` carries the subdirectory
+  search of the filter bar, the same walk as 0.1's behind the
+  `SearchIndex` point, and the filter bar shows its toggle only while it
+  is loaded; `ext-search-windows`, `ext-search-spotlight`,
+  `ext-search-tracker` and `ext-search-baloo` connect the title-row
+  search box to the platform's index, each detecting its service at
+  start and every ten seconds, so the box lists the index's hits with
+  their folders after the current location's matches once the text has
+  stood for a moment, Enter on a hit goes to its folder and selects it,
+  and without an index the box searches the current location alone as
+  before. The bundle and the release archives carry only the connector
+  of their platform.
+- `ext-svn`, Subversion beside Git (#22): status badges with Subversion's
+  letters, an SVN column, a roll-up mark on folders with changes inside,
+  and the revision, URL and last commit in the info panel, read through
+  `svn status` and `svn info` and cached until the working copy or its
+  `.svn` directory changes; the SVN group (Update, Commit, Revert, Log,
+  Add) in the context menu and the palette inside a working copy, run
+  through the `svn` command line.
 - The action plugins of milestone 6, every one in `plugins/` of the
   archives (#23): `action-compress` packs the selection into a zip next to
   it, or into a zip, tar.gz, tar.zst, 7z, tar, tar.xz, tar.bz2 or a single
@@ -129,7 +148,7 @@ the pull request that brought the change.
 
 ### Changed
 
-- The extension API is version 5: actions show forms with a live preview
+- The extension API is version 6: actions show forms with a live preview
   (`UiHost::form`), open a console or a comparison in a tab
   (`ActionOutcome::View`) or change the selection (`ActionOutcome::Select`),
   see the other pane's location, and make junctions and shortcuts where
@@ -137,6 +156,9 @@ the pull request that brought the change.
   so a plugin's job asks the same dialogue as a copy; the platform knows
   the applications for a file, opens with one, and opens the user's
   terminal (#23).
+- The extension API is at version 5: `Filter` gained `NoHidden` and
+  `SkipNames`, the two things the subdirectory search takes from the pane
+  and `rick.toml`, and `SearchScope` gained `covers` (#22).
 - The preview is a dock tab: one Preview tab per window, right of the
   explorer by default, docked below or torn out at will, following the
   focus across panes and windows; its toolbar, badges, pinned section and

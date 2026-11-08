@@ -35,6 +35,15 @@ ext-preview-office = { workspace = true }
 ext-preview-media = { workspace = true }
 ext-preview-archive = { workspace = true, features = ["fixtures"] }
 ext-preview-csv = { workspace = true }
+# Milestone 5 (issue 22): the subdirectory search, the four index
+# connectors (each tested against its real service only where the runner
+# has it) and Subversion.
+ext-search-walk = { workspace = true }
+ext-search-windows = { workspace = true }
+ext-search-spotlight = { workspace = true }
+ext-search-tracker = { workspace = true }
+ext-search-baloo = { workspace = true }
+ext-svn = { workspace = true }
 # The action plugins of issue 23: linked for the headless acceptance tests
 # and built as library files beside the test binaries for the host.
 ext-action-compress = { workspace = true }

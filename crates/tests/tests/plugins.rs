@@ -515,6 +515,118 @@ fn the_extensions_screen_lists_the_plugins_and_its_toggle_writes_the_setting() {
     drop(host);
 }
 
+/// The six plugins of milestone 5 (issue 22) load through the host on the
+/// platforms their manifests name, with the points their manifests
+/// declare, and are refused elsewhere with the reason; loaded into an
+/// app, the walk gives the filter bar its toggle and the SVN group is
+/// registered.
+#[test]
+fn the_search_and_svn_plugins_load_on_their_platforms() {
+    let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+    let plugins = dir.path().join("plugins");
+    let expected = [
+        (
+            "ext_search_walk",
+            "search-walk",
+            Platforms::ALL,
+            ext::Points::SEARCH_INDEX,
+        ),
+        (
+            "ext_search_windows",
+            "search-windows",
+            Platforms::WINDOWS,
+            ext::Points::SEARCH_INDEX,
+        ),
+        (
+            "ext_search_spotlight",
+            "search-spotlight",
+            Platforms::MACOS,
+            ext::Points::SEARCH_INDEX,
+        ),
+        (
+            "ext_search_tracker",
+            "search-tracker",
+            Platforms::LINUX,
+            ext::Points::SEARCH_INDEX,
+        ),
+        (
+            "ext_search_baloo",
+            "search-baloo",
+            Platforms::LINUX,
+            ext::Points::SEARCH_INDEX,
+        ),
+        (
+            "ext_svn",
+            "svn",
+            Platforms::ALL,
+            ext::Points::DECORATOR | ext::Points::ACTION,
+        ),
+    ];
+    for (stem, _, _, _) in &expected {
+        install(&plugins, stem, |_| {});
+    }
+    let host = Host::load(&options(vec![(Source::BesideBinary, plugins)]));
+    assert_eq!(host.plugins().len(), expected.len(), "{:?}", host.plugins());
+    let mut loaded = 0;
+    for (_, id, platforms, points) in &expected {
+        let row = host
+            .plugins()
+            .iter()
+            .find(|p| p.id == *id)
+            .unwrap_or_else(|| panic!("no row for {id}: {:?}", host.plugins()));
+        assert_eq!(row.points, *points, "{id}");
+        if platforms.contains(Platforms::current()) {
+            assert_eq!(row.status, PluginStatus::Loaded, "{id}");
+            loaded += 1;
+        } else {
+            refused_with(&host, id, "built for");
+        }
+    }
+    assert_eq!(host.extensions().len(), loaded);
+
+    let fake = Arc::new(Fake::new().unwrap_or_else(|e| panic!("{e}")));
+    let ui = Arc::new(EguiHost::new());
+    let mut events = Vec::new();
+    let mut app = App::new(Config {
+        platform: fake.clone(),
+        ui,
+        extensions: host.extensions(),
+        config_dir: Some(fake.config_dir()),
+        start: Some(local(dir.path())),
+    });
+    settle(&mut app, &mut events);
+    assert!(app.model().subtree_search, "the walk is registered");
+    let svn_actions: Vec<&str> = app
+        .registry()
+        .actions()
+        .iter()
+        .filter(|a| a.group() == ActionGroup::Extension("SVN"))
+        .map(|a| a.id().0)
+        .collect();
+    assert_eq!(
+        svn_actions,
+        [
+            "svn.update",
+            "svn.commit",
+            "svn.revert",
+            "svn.log",
+            "svn.add"
+        ]
+    );
+    // The platform connectors of this OS are registered; whether their
+    // services run decides what the box asks (search.rs).
+    let indexes: Vec<&str> = app
+        .registry()
+        .search_indexes()
+        .iter()
+        .map(|i| i.id().0)
+        .collect();
+    assert!(indexes.contains(&"search-walk"), "{indexes:?}");
+    assert_eq!(indexes.len(), loaded - 1, "{indexes:?}");
+    drop(app);
+    drop(host);
+}
+
 #[test]
 #[ignore = "timing; run with --ignored in release"]
 fn loading_the_git_plugin_adds_at_most_50_ms_to_startup() {

@@ -15,7 +15,7 @@ crate-type = ["cdylib", "rlib"]
 types = { workspace = true }
 ext = { workspace = true }
 # The archive writers and the one-pass extractor live with the archive
-# provider, so the zip, tar and 7z code exists once (QUESTIONS.md 122).
+# provider, so the zip, tar and 7z code exists once (QUESTIONS.md 127).
 ext-vfs-archive = { workspace = true }
 tracing = { workspace = true }
 

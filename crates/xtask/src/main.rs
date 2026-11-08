@@ -9,10 +9,13 @@
 //! `gstreamer/lib/`, on Windows the DLLs beside the binary and the
 //! elements into `gstreamer-1.0/`; Linux uses the system's), and
 //! `plugins/<id>/plugin.toml` with the library for every plugin crate (an
-//! `ext-*` member built as a `cdylib`). `--features` is handed to the
-//! build as is (`--features ext-preview-media/gstreamer` turns playback
-//! on). Running `rick` from there finds every plugin with nothing copied
-//! by hand, and the release workflow archives the same directory.
+//! `ext-*` member built as a `cdylib`) whose manifest names this platform;
+//! a plugin built for other platforms only (the Spotlight connector on
+//! Linux) is left out and said so (QUESTIONS.md 121). `--features` is
+//! handed to the build as is (`--features ext-preview-media/gstreamer`
+//! turns playback on). Running `rick` from there finds every plugin with
+//! nothing copied by hand, and the release workflow archives the same
+//! directory.
 //!
 //! The task builds with `--workspace --exclude xtask --lib --bins
 //! --examples` (every library, binary and example of every member but this
@@ -28,6 +31,8 @@ type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 
 const KERNEL_DYLIBS: [&str; 3] = ["types", "runtime", "ext"];
 const PDFIUM_FILES: [&str; 3] = ["libpdfium.so", "libpdfium.dylib", "pdfium.dll"];
+/// The manifest helper's exit code for a plugin built for other platforms.
+const NOT_FOR_THIS_PLATFORM: i32 = 3;
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -126,6 +131,15 @@ fn bundle(args: &[String]) -> Result<()> {
             .arg(&library)
             .arg(&plugins_dir)
             .output()?;
+        if output.status.code() == Some(NOT_FOR_THIS_PLATFORM) {
+            println!(
+                "plugin from {crate_name}: {}; not bundled",
+                String::from_utf8_lossy(&output.stderr)
+                    .trim()
+                    .trim_start_matches("rick-plugin-manifest: ")
+            );
+            continue;
+        }
         if !output.status.success() {
             return Err(format!(
                 "{} failed for {}: {}",

@@ -86,8 +86,8 @@ use std::time::Duration;
 
 use ext::{
     ActionCtx, ActionOutcome, Availability, DecorateCtx, Decoration, Decorator, Depth, Extension,
-    FsChange, Invocation, Level, ListOptions, Points, PreviewDoc, Previewer, Registry, UiHost,
-    UndoCommand,
+    Filter, FsChange, Invocation, Level, ListOptions, Points, PreviewDoc, Previewer, Query,
+    QueryKind, Registry, SearchIndex, SearchScope, UiHost, UndoCommand,
 };
 use futures::StreamExt;
 use model::{
@@ -99,7 +99,8 @@ use platform::{Platform, TrashedItem};
 use runtime::{JobEvent, JobRunner, mpsc};
 use tracing::{debug, warn};
 use types::{
-    CancelToken, Entry, EntryId, EntryKind, Error, JobId, Location, Progress, ProviderId, VPath,
+    CancelToken, Entry, EntryId, EntryKind, Error, ExtId, JobId, Location, Progress, ProviderId,
+    VPath,
 };
 use vfs::Mounts;
 use vfs_local::LocalProvider;
@@ -251,6 +252,22 @@ enum Msg {
         location: Option<Location>,
         previewable: bool,
     },
+    /// The pause after the search box's last keystroke is over: ask the
+    /// indexes.
+    IndexSearchStart {
+        generation: u64,
+    },
+    /// A search index answered a batch of the title-row search.
+    IndexHits {
+        generation: u64,
+        batch: Vec<Entry>,
+    },
+    /// A search index finished answering the title-row search.
+    IndexDone {
+        generation: u64,
+        index: ExtId,
+        result: Result<(), Error>,
+    },
     /// The trash was listed.
     Trash(Result<Vec<TrashedItem>, Error>),
     /// The cloud providers' roots were listed.
@@ -267,6 +284,9 @@ const POLL_EVERY: Duration = Duration::from_secs(3);
 /// How long one [`App::poll`] may spend applying messages before it leaves
 /// the rest to the next one.
 const POLL_BUDGET: Duration = Duration::from_millis(8);
+/// How long the title-row search box's text must stand before the search
+/// indexes are asked, so a typist does not start a query per keystroke.
+const INDEX_SEARCH_AFTER: Duration = Duration::from_millis(150);
 /// How many of this process's own settings writes are remembered, so the
 /// watcher's report of each is told from an edit.
 const RECENT_SAVES: usize = 16;
@@ -367,6 +387,15 @@ struct Child {
     buffer: Option<Vec<Entry>>,
 }
 
+/// The title-row search box's running index search: one job per index,
+/// cancelled together when the text changes.
+struct IndexJob {
+    generation: u64,
+    cancels: Vec<CancelToken>,
+    /// Indexes still to answer.
+    pending: usize,
+}
+
 /// A pane's running or finished listing and its watch.
 struct Live {
     key: ListKey,
@@ -456,6 +485,10 @@ pub struct App {
     plugins: Vec<Plugin>,
     /// The values of the settings extensions declared, one TOML file each.
     ext_settings: ExtSettings,
+    /// The title-row search box's index search in flight.
+    index_search: Option<IndexJob>,
+    /// Numbers the index searches, so a superseded one's hits are dropped.
+    index_generation: u64,
 }
 
 impl App {
@@ -610,6 +643,16 @@ impl App {
         model.set_places(places);
         model.cloud_providers = cloud_providers;
         model.network_providers = network_providers;
+        // The search indexes: a walk gives the filter bar its subtree
+        // toggle, the platform's indexes feed the title-row search box.
+        model.subtree_search = registry
+            .search_indexes()
+            .iter()
+            .any(|index| matches!(index.scope(), SearchScope::Under(_)));
+        model.search_indexes = available_indexes(&registry)
+            .iter()
+            .map(|index| index.id())
+            .collect();
         let (tx, rx) = mpsc::unbounded_channel();
         let settings_saver = settings::saver(settings_path.clone());
         let layouts = session::layouts(&layouts_dir);
@@ -674,6 +717,8 @@ impl App {
             exit: false,
             plugins: Vec::new(),
             ext_settings,
+            index_search: None,
+            index_generation: 0,
         };
         app.watch_settings();
         if seeded {
@@ -1135,6 +1180,7 @@ impl App {
                     Self::selection_cleared(pane, before, events);
                 }
             }
+            Command::IndexSearch { text } => self.index_search(&text, events),
             Command::TreeExpand { pane, id } => {
                 if self.model.tree_expand(pane, id) {
                     let location = self
@@ -1309,6 +1355,7 @@ impl App {
     pub fn poll(&mut self, events: &mut Vec<Event>) -> usize {
         let started = std::time::Instant::now();
         events.append(&mut self.pending);
+        self.sync_search_indexes();
         let mut handled = 0;
         loop {
             let before = handled;
@@ -2167,24 +2214,66 @@ impl App {
     }
 
     /// Starts the subtree search of `key` as a job the operations area
-    /// shows; the matches stream into the pane's listing like a listing's
-    /// batches, and a change of text or location cancels it.
+    /// shows, through the search index whose scope is `Under` the
+    /// location (the `ext-search-walk` plugin; QUESTIONS.md 118): the
+    /// matches stream into the pane's listing like a listing's batches, and
+    /// a change of text or location cancels it. The pane's hidden toggle
+    /// and the `[search] ignore` list travel as the query's filters.
     fn search(&mut self, pane: PaneId, key: ListKey, generation: u64, text: &str) {
-        let tx = self.mailbox.clone();
         let location = key.location.clone();
-        let opts = vfs_local::search::SearchOptions {
+        let index = self
+            .registry
+            .search_indexes()
+            .iter()
+            .find(|index| {
+                let scope = index.scope();
+                matches!(scope, SearchScope::Under(_))
+                    && scope.covers(&location)
+                    && index.availability() == Availability::Enabled
+            })
+            .cloned();
+        let Some(index) = index else {
+            self.pending.push(Event::Notify {
+                level: Level::Error,
+                text: format!(
+                    "No subdirectory search for {location}: the search-walk plugin is not loaded"
+                ),
+            });
+            self.model.listing_done(pane);
+            self.live.insert(
+                pane,
+                Live {
+                    key,
+                    generation,
+                    cancel: CancelToken::new(),
+                    complete: true,
+                    buffer: None,
+                    decorators: Vec::new(),
+                    redecorate_scheduled: false,
+                    children: BTreeMap::new(),
+                },
+            );
+            return;
+        };
+        let tx = self.mailbox.clone();
+        let mut filters = vec![Filter::SkipNames(self.model.settings.search.ignore.clone())];
+        if !key.opts.hidden {
+            filters.push(Filter::NoHidden);
+        }
+        let query = Query {
             text: text.to_owned(),
-            hidden: key.opts.hidden,
-            ignore: self.model.settings.search.ignore.clone(),
+            root: Some(location.clone()),
+            kind: QueryKind::Name,
+            filters,
         };
         let handle = self.jobs.spawn_named(
             format!("Search {text} in {location}"),
             move |job| async move {
-                let mut stream = vfs_local::search::search(&location, opts, job.cancel.clone());
+                let mut stream = index.query(&query, job.cancel.clone());
                 let mut count = 0u64;
                 let result = async {
                     while let Some(batch) = stream.next().await {
-                        let batch = batch?;
+                        let batch: Vec<Entry> = batch?.into_iter().map(|hit| hit.entry).collect();
                         count += batch.len() as u64;
                         job.progress.report(Progress::Items {
                             done: count,
@@ -2222,6 +2311,120 @@ impl App {
                 children: BTreeMap::new(),
             },
         );
+    }
+
+    /// Keeps the model's list of available search indexes current: a
+    /// connector detects its service at start and when it appears or
+    /// disappears, and the title-row search box follows.
+    fn sync_search_indexes(&mut self) {
+        let available: Vec<ExtId> = available_indexes(&self.registry)
+            .iter()
+            .map(|index| index.id())
+            .collect();
+        if available != self.model.search_indexes {
+            debug!(?available, "search indexes available");
+            self.model.search_indexes = available;
+        }
+    }
+
+    /// The title-row search box's text changed: cancel the running index
+    /// search, start over for `text` after [`INDEX_SEARCH_AFTER`], or end
+    /// the search when the text is empty.
+    fn index_search(&mut self, text: &str, events: &mut Vec<Event>) {
+        if let Some(job) = self.index_search.take() {
+            for cancel in job.cancels {
+                cancel.cancel();
+            }
+        }
+        self.index_generation += 1;
+        let generation = self.index_generation;
+        let text = text.trim().to_owned();
+        let same = self.model.index_search.text == text;
+        self.model.index_search.start(text.clone());
+        if text.is_empty() {
+            if !same {
+                events.push(Event::IndexSearched {
+                    batch: Vec::new(),
+                    done: true,
+                });
+            }
+            return;
+        }
+        if available_indexes(&self.registry).is_empty() {
+            self.model.index_search.done = true;
+            return;
+        }
+        self.index_search = Some(IndexJob {
+            generation,
+            cancels: Vec::new(),
+            pending: 0,
+        });
+        let tx = self.mailbox.clone();
+        runtime::handle().spawn(async move {
+            tokio::time::sleep(INDEX_SEARCH_AFTER).await;
+            tx.send(Msg::IndexSearchStart { generation });
+        });
+    }
+
+    /// The pause after the last keystroke passed: one job per available
+    /// index, each streaming its hits into the model.
+    fn index_search_start(&mut self, generation: u64) {
+        let Some(job) = self.index_search.as_mut() else {
+            return;
+        };
+        if job.generation != generation {
+            return;
+        }
+        let text = self.model.index_search.text.clone();
+        let indexes = available_indexes(&self.registry);
+        if indexes.is_empty() {
+            self.index_search = None;
+            self.model.index_search.done = true;
+            return;
+        }
+        job.pending = indexes.len();
+        let query = Query {
+            text: text.clone(),
+            root: None,
+            kind: QueryKind::Name,
+            filters: Vec::new(),
+        };
+        let mut cancels = Vec::new();
+        let mut ids = Vec::new();
+        for index in indexes {
+            let tx = self.mailbox.clone();
+            let query = query.clone();
+            let id = index.id();
+            let handle = self.jobs.spawn_named(
+                format!("Search {text} in {}", id.0),
+                move |job| async move {
+                    let mut stream = index.query(&query, job.cancel.clone());
+                    let result = async {
+                        while let Some(batch) = stream.next().await {
+                            let batch: Vec<Entry> =
+                                batch?.into_iter().map(|hit| hit.entry).collect();
+                            if !tx.send(Msg::IndexHits { generation, batch }) {
+                                break;
+                            }
+                        }
+                        Ok(())
+                    }
+                    .await;
+                    tx.send(Msg::IndexDone {
+                        generation,
+                        index: id,
+                        result: result.as_ref().copied().map_err(Error::replicate),
+                    });
+                    result
+                },
+            );
+            ids.push(handle.id);
+            cancels.push(handle.cancel);
+        }
+        self.internal.extend(ids);
+        if let Some(job) = self.index_search.as_mut() {
+            job.cancels = cancels;
+        }
     }
 
     /// Watches `location` for a pane's decorators and asks for a
@@ -2389,6 +2592,46 @@ impl App {
                 generation,
                 change,
             } => self.change(pane, generation, change, events),
+            Msg::IndexSearchStart { generation } => self.index_search_start(generation),
+            Msg::IndexHits { generation, batch } => {
+                if self.index_search.as_ref().map(|j| j.generation) != Some(generation) {
+                    return;
+                }
+                let batch = self.model.index_search.extend(batch);
+                if !batch.is_empty() {
+                    events.push(Event::IndexSearched { batch, done: false });
+                }
+            }
+            Msg::IndexDone {
+                generation,
+                index,
+                result,
+            } => {
+                let Some(job) = self.index_search.as_mut() else {
+                    return;
+                };
+                if job.generation != generation {
+                    return;
+                }
+                if let Err(error) = result
+                    && !matches!(error, Error::Cancelled)
+                {
+                    warn!(index = index.0, %error, "search index failed");
+                    self.model
+                        .index_search
+                        .errors
+                        .push(format!("{}: {error}", index.0));
+                }
+                job.pending = job.pending.saturating_sub(1);
+                if job.pending == 0 {
+                    self.index_search = None;
+                    self.model.index_search.done = true;
+                    events.push(Event::IndexSearched {
+                        batch: Vec::new(),
+                        done: true,
+                    });
+                }
+            }
             Msg::Settings(Ok(settings)) => {
                 if self.recent_saves.contains(&settings) {
                     // Our own write coming back through the watcher; an
@@ -2935,6 +3178,21 @@ impl App {
             }
         });
     }
+}
+
+/// The search indexes the title-row search box queries: every registered
+/// one whose service is there and whose scope is the whole machine. A walk
+/// scoped `Under` a root answers the filter bar instead (QUESTIONS.md 118).
+fn available_indexes(registry: &Registry) -> Vec<Arc<dyn SearchIndex>> {
+    registry
+        .search_indexes()
+        .iter()
+        .filter(|index| {
+            index.scope() == SearchScope::Everywhere
+                && index.availability() == Availability::Enabled
+        })
+        .cloned()
+        .collect()
 }
 
 /// Polls a location its provider cannot watch: its `stat` every

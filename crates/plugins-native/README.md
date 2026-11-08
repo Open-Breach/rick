@@ -117,7 +117,7 @@ writes `plugins/<id>/plugin.toml` beside a copy of the library:
 id = "hello"
 name = "Hello"
 version = "0.2.0-dev"
-api_version = 4
+api_version = 5
 points = ["action"]
 platforms = ["linux", "macos", "windows"]
 toolchain = "rustc 1.97.0 (2d8144b78 2026-07-07)"
@@ -131,7 +131,9 @@ windows = "ext_hello.dll"
 The host refuses the plugin when `api_version` is not its own, when
 `toolchain` is not the exact `rustc -V` line it was built with, when
 `platforms` leaves out the current one, or when the library's manifest
-disagrees with the file. Add the crate to `deny.toml` (`wrappers = ["rick",
+disagrees with the file; `cargo xtask bundle` leaves out a plugin whose
+`platforms` name other operating systems only, so a bundle carries the
+plugins of its own platform (QUESTIONS.md 121). Add the crate to `deny.toml` (`wrappers = ["rick",
 "tests"]`) like `ext-git`.
 
 **Where it goes.** `cargo xtask bundle` puts the plugin under

@@ -7,7 +7,7 @@
 //! asks about an existing name through the job's conflict queue, the same
 //! dialogue a copy uses, and a folder over a folder merges. The archives
 //! are written by [`ext_vfs_archive::create`] and read by
-//! [`ext_vfs_archive::extract`] (QUESTIONS.md 122), on the blocking pool.
+//! [`ext_vfs_archive::extract`] (QUESTIONS.md 127), on the blocking pool.
 //!
 //! The crate builds as a `cdylib` the plugin host loads from
 //! `plugins/action-compress/` and as an `rlib` for the binary's opt-in

@@ -1,0 +1,25 @@
+[package]
+name = "ext-search-baloo"
+version.workspace = true
+description = "Rick's Baloo search connector: the KDE file index queried through baloosearch, feeding the title-row search box on Linux."
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+# A plugin: a `cdylib` the host loads from `plugins/search-baloo/`, and an
+# `rlib` for the binary's opt-in `search-baloo` feature and the tests.
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+types = { workspace = true }
+ext = { workspace = true }
+futures = { workspace = true }
+tokio = { workspace = true, features = ["time"] }
+tracing = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+
+[lints]
+workspace = true
