@@ -515,7 +515,11 @@ fn real_service(name: &str, index: &dyn SearchIndex, probe: bool) {
     let stem = format!("ricksearch{stamp}");
     let file = fixture.join(format!("{stem}.txt"));
     fs::write(&file, "indexed by rick's test\n").unwrap_or_else(|e| panic!("{e}"));
-    let deadline = Instant::now() + Duration::from_secs(90);
+    // Five minutes: the Windows runner's index is started by CI's setup
+    // and crawls its scopes while the build loads the machine, so a new
+    // file can take minutes to show; Spotlight and the Linux indexers
+    // answer within seconds.
+    let deadline = Instant::now() + Duration::from_secs(300);
     let started = Instant::now();
     loop {
         let hits = collect(&stem, Some(fixture.clone())).unwrap_or_else(|e| panic!("{name}: {e}"));
@@ -530,7 +534,7 @@ fn real_service(name: &str, index: &dyn SearchIndex, probe: bool) {
         }
         assert!(
             Instant::now() < deadline,
-            "{name} did not index {} within 90 s",
+            "{name} did not index {} within five minutes",
             file.display()
         );
         std::thread::sleep(Duration::from_secs(1));
