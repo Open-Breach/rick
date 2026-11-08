@@ -508,6 +508,11 @@ fn add_connection_opens_the_dialogue_and_a_row_connects_and_removes_from_its_men
 // One scenario against one store, start to finish.
 #[allow(clippy::too_many_lines)]
 fn a_100_mb_upload_streams_with_progress_and_cancelled_half_way_leaves_no_object() {
+    // The kernel's and the plugin's log lines go with a failure's output.
+    let _ = tracing_subscriber::fmt()
+        .with_env_filter("vfs=debug,ext_vfs_s3=debug")
+        .with_test_writer()
+        .try_init();
     let Ok(endpoint) = std::env::var("RICK_S3_ENDPOINT") else {
         eprintln!("RICK_S3_ENDPOINT is not set: no S3 store to test against; skipped");
         assert!(

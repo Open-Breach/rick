@@ -2,7 +2,7 @@
 //! folders below those.
 
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::SystemTime;
 
 use bytes::Bytes;
@@ -616,6 +616,9 @@ impl Provider for S3Provider {
 struct Upload {
     pipe: tokio::io::DuplexStream,
     finished: Arc<AtomicBool>,
+    /// The bytes the pipe accepted from the writer, for the task to
+    /// compare with what it read out.
+    accepted: Arc<AtomicU64>,
     done: tokio::sync::oneshot::Receiver<Result<(), Error>>,
     closed: bool,
 }
@@ -624,15 +627,18 @@ impl Upload {
     fn start(client: Arc<S3Client>, bucket: String, key: String) -> Self {
         let (ours, theirs) = tokio::io::duplex(PIPE);
         let finished = Arc::new(AtomicBool::new(false));
+        let accepted = Arc::new(AtomicU64::new(0));
         let (tx, done) = tokio::sync::oneshot::channel();
         let flag = Arc::clone(&finished);
+        let count = Arc::clone(&accepted);
         ext::runtime::handle().spawn(async move {
-            let result = upload(&client, &bucket, &key, theirs, &flag).await;
+            let result = upload(&client, &bucket, &key, theirs, &flag, &count).await;
             let _ = tx.send(result);
         });
         Self {
             pipe: ours,
             finished,
+            accepted,
             done,
             closed: false,
         }
@@ -663,6 +669,7 @@ async fn upload(
     key: &str,
     mut pipe: tokio::io::DuplexStream,
     finished: &AtomicBool,
+    accepted: &AtomicU64,
 ) -> Result<(), Error> {
     let mut buffer: Vec<u8> = Vec::with_capacity(PART.min(PIPE));
     let mut upload_id: Option<String> = None;
@@ -696,6 +703,12 @@ async fn upload(
         }
         if !finished.load(Ordering::SeqCst) {
             return Err(Error::Cancelled);
+        }
+        let written = accepted.load(Ordering::SeqCst);
+        if written != streamed {
+            return Err(message(format!(
+                "{key}: the pipe accepted {written} bytes from the writer but handed {streamed} to the upload"
+            )));
         }
         match &upload_id {
             None => {
@@ -761,7 +774,11 @@ impl AsyncWrite for Upload {
         cx: &mut std::task::Context<'_>,
         buf: &[u8],
     ) -> std::task::Poll<std::io::Result<usize>> {
-        std::pin::Pin::new(&mut self.pipe).poll_write(cx, buf)
+        let polled = std::pin::Pin::new(&mut self.pipe).poll_write(cx, buf);
+        if let std::task::Poll::Ready(Ok(n)) = &polled {
+            self.accepted.fetch_add(*n as u64, Ordering::SeqCst);
+        }
+        polled
     }
 
     fn poll_flush(
