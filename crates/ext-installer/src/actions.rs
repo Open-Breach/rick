@@ -231,10 +231,12 @@ pub fn matching(scan: &Scan, detected: &Detected) -> Option<Installed> {
         .cloned()
 }
 
-/// The commands the archive offers to link: the `bin/` contents of a
-/// toolchain, or one named after the app id for everything else.
-fn offered_commands(detected: &Detected, id: &str, main: &str) -> Vec<CommandLink> {
-    if detected.bins.is_empty() {
+/// The commands the archive offers to link for `kind`: one named after
+/// the app id pointing at the main executable for a GUI application, the
+/// `bin/` contents for a toolchain (or the same one command when it has
+/// no `bin/`).
+fn offered_commands(detected: &Detected, kind: Kind, id: &str, main: &str) -> Vec<CommandLink> {
+    if kind == Kind::Gui || detected.bins.is_empty() {
         return vec![CommandLink {
             name: id.to_owned(),
             target: main.to_owned(),
@@ -488,13 +490,21 @@ pub fn assemble(
     } else {
         PathMode::Symlinks
     };
-    let offered = offered_commands(detected, &id, main.as_deref().unwrap_or(""));
-    let commands: Vec<CommandLink> = offered
-        .iter()
-        .enumerate()
-        .filter(|(i, _)| CMD_KEYS.get(*i).is_some_and(|k| values.check(k)))
-        .map(|(_, c)| c.clone())
-        .collect();
+    // The command defaults follow the chosen kind. The checkboxes were
+    // laid out for the detected kind; when the user switched the kind they
+    // no longer describe the offer and the kind's defaults are taken
+    // whole, which the summary rows show (QUESTIONS.md 212).
+    let offered = offered_commands(detected, kind, &id, main.as_deref().unwrap_or(""));
+    let commands: Vec<CommandLink> = if kind == detected.kind {
+        offered
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| CMD_KEYS.get(*i).is_some_and(|k| values.check(k)))
+            .map(|(_, c)| c.clone())
+            .collect()
+    } else {
+        offered
+    };
     let bin_dir = detected
         .bins
         .first()
@@ -731,14 +741,19 @@ pub fn install_form(
             "editable later in Installed Apps",
         ));
     let main = detected.main_rel().unwrap_or("");
-    let offered = offered_commands(detected, &id, main);
+    let offered = offered_commands(detected, detected.kind, &id, main);
     for (i, command) in offered.iter().enumerate() {
         let Some(key) = CMD_KEYS.get(i) else {
             break;
         };
+        let target = if command.target.is_empty() {
+            "<main executable>"
+        } else {
+            &command.target
+        };
         form = form.field(Field::check(
             key,
-            format!("Link command {} → current/{}", command.name, command.target),
+            format!("Link command {} → current/{target}", command.name),
             true,
         ));
     }

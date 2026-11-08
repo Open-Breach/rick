@@ -655,6 +655,107 @@ fn a_helper_sorting_before_the_launcher_does_not_win() {
     assert!(detected.icon_trusted);
 }
 
+/// The field `key` of a form.
+fn field<'a>(form: &'a Form, key: &str) -> &'a ext::FieldKind {
+    &form
+        .fields
+        .iter()
+        .find(|f| f.key == key)
+        .unwrap_or_else(|| panic!("no field {key} in {form:?}"))
+        .kind
+}
+
+/// The command defaults follow the chosen kind: a GUI application links
+/// one command named after the app id at the main executable, a
+/// toolchain its `bin/` contents, whichever kind detection proposed.
+#[test]
+#[allow(clippy::too_many_lines)]
+fn the_form_defaults_follow_the_kind() {
+    if !supported() {
+        return;
+    }
+    let h = harness();
+    let layout = h.layout();
+    h.install(Fixture::JetBrains, Vec::new());
+    let form = h.ui.last_form();
+    assert!(matches!(
+        field(&form, "kind"),
+        ext::FieldKind::Choice { selected: 0, .. }
+    ));
+    assert!(matches!(
+        field(&form, "exe"),
+        ext::FieldKind::Choice { options, selected: 0 } if options[0] == "bin/app"
+    ));
+    let commands: Vec<&ext::Field> = form
+        .fields
+        .iter()
+        .filter(|f| f.key.starts_with("cmd"))
+        .collect();
+    assert_eq!(commands.len(), 1, "{commands:?}");
+    assert_eq!(
+        commands[0].label,
+        "Link command vendor-app → current/bin/app"
+    );
+    // What was written: one link named after the id, the desktop entry
+    // running the chosen executable through current.
+    let record = h.record("vendor-app");
+    assert_eq!(record.kind, Kind::Gui);
+    assert_eq!(record.main_executable, "bin/app");
+    assert_eq!(record.commands(), vec!["vendor-app"]);
+    let expected = layout.current("vendor-app").join("bin/app");
+    assert_eq!(
+        fs::read_link(layout.bin_dir().join("vendor-app")).ok(),
+        Some(expected.clone())
+    );
+    assert!(
+        fs::symlink_metadata(layout.bin_dir().join("fsnotifier")).is_err(),
+        "a helper is not linked"
+    );
+    let desktop =
+        fs::read_to_string(layout.desktop_path("vendor-app")).unwrap_or_else(|e| panic!("{e}"));
+    let entry = desktop::DesktopEntry::parse(&desktop);
+    assert_eq!(
+        entry.get("Exec"),
+        Some(format!("\"{}\"", expected.display()).as_str()),
+        "{desktop}"
+    );
+    assert_eq!(entry.get("Icon"), Some("vendor-app"));
+    assert!(layout.icon_path("vendor-app", "scalable", "svg").is_file());
+    // Switched to a command-line tool in the dialogue, the summary lists
+    // the bin/ contents and no desktop entry.
+    let mut values = form.defaults();
+    values.set("kind", Value::Choice(1));
+    let rows = form.preview_rows(&values);
+    let linked: Vec<&str> = rows
+        .iter()
+        .filter(|r| r.from == "Command")
+        .map(|r| r.to.as_str())
+        .collect();
+    assert_eq!(linked.len(), 6, "{linked:?}");
+    assert!(
+        linked
+            .iter()
+            .any(|l| l.ends_with("fsnotifier → current/bin/fsnotifier")),
+        "{linked:?}"
+    );
+    assert!(rows.iter().all(|r| r.from != "Desktop entry"), "{rows:?}");
+    // And a toolchain installed as a GUI application links one command
+    // named after its id at the executable the user picked.
+    h.install(
+        Fixture::Toolchain,
+        vec![("kind", Value::Choice(0)), ("exe", Value::Choice(2))],
+    );
+    let record = h.record("fixtool");
+    assert_eq!(record.kind, Kind::Gui);
+    assert_eq!(record.main_executable, "bin/fixb");
+    assert_eq!(record.commands(), vec!["fixtool"]);
+    assert_eq!(
+        fs::read_link(layout.bin_dir().join("fixtool")).ok(),
+        Some(layout.current("fixtool").join("bin/fixb"))
+    );
+    assert!(layout.desktop_path("fixtool").is_file());
+}
+
 #[test]
 fn the_name_rule_takes_a_word_of_the_name_or_a_suffix_of_the_id() {
     let names = ["JetBrains Rider", "JetBrains Rider"];
