@@ -298,7 +298,6 @@ fn every_fixture_opens_with_the_right_previewer_by_sniff() {
                 assert!(matches!(frame, Frame::Text(_)), "{name}: text fallback");
             }
             "preview-office" => {
-                assert!(content.is_none(), "{name}");
                 let status = doc.status();
                 assert!(
                     ext_preview_office::Kind::ALL
@@ -312,12 +311,23 @@ fn every_fixture_opens_with_the_right_previewer_by_sniff() {
                     "{name}: {rows:?}"
                 );
                 match frame {
-                    Frame::Rgba { .. } => assert_eq!(doc.pages(), Some(2), "{name}"),
-                    Frame::Text(block) => assert!(
-                        block.text.contains("LibreOffice") || block.text.contains("pdfium"),
-                        "{name}: {}",
-                        block.text
-                    ),
+                    Frame::Rgba { .. } => {
+                        assert!(content.is_none(), "{name}");
+                        assert_eq!(doc.pages(), Some(2), "{name}");
+                    }
+                    // Without LibreOffice or pdfium the pane gets the
+                    // missing-library message with Browse… and Retry.
+                    Frame::Text(block) => {
+                        let Some(Content::MissingLibrary(missing)) = content else {
+                            panic!("{name}: no missing-library content: {}", block.text);
+                        };
+                        assert!(
+                            missing.name == "LibreOffice" || missing.name == "pdfium",
+                            "{name}: {}",
+                            missing.name
+                        );
+                        assert!(block.text.contains(&missing.name), "{name}: {}", block.text);
+                    }
                     Frame::External(id) => panic!("{name}: external texture {id:?}"),
                 }
             }
