@@ -45,7 +45,7 @@ jobs:
       # the point of the matrix.
       fail-fast: false
       matrix:
-        os: [ubuntu-24.04, ubuntu-24.04-arm, macos-latest, windows-latest]
+        os: [macos-latest]
     runs-on: ${{ matrix.os }}
     # The Windows runner spends about 15 minutes on the steps and several
     # more saving the cache, which the shared libraries and the plugin
@@ -84,8 +84,27 @@ jobs:
       # matrix names every failure of a platform, not the first.
       - run: .github/scripts/with-indexers.sh cargo test --workspace --no-fail-fast ${{ env.RICK_WS_FEATURES }}
         if: runner.os == 'Linux'
-      - run: cargo test --workspace --no-fail-fast ${{ env.RICK_WS_FEATURES }}
+      # Diagnostic (throwaway branch): run the actions tests alone, one at
+      # a time, and sample the process when a test hangs.
+      - name: actions tests with a stack sample
         if: runner.os != 'Linux'
+        shell: bash
+        run: |
+          cargo test --workspace --no-run
+          bin=$(ls -t target/debug/deps/actions-* | grep -v '\.d$' | head -1)
+          echo "running $bin"
+          RUST_BACKTRACE=1 RUST_LOG=debug "$bin" --test-threads=1 --nocapture &
+          pid=$!
+          for i in $(seq 1 75); do sleep 2; kill -0 $pid 2>/dev/null || break; done
+          if kill -0 $pid 2>/dev/null; then
+            echo "::group::sample of the hung test process"
+            sample $pid 3 -file "$RUNNER_TEMP/sample.txt" || true
+            sed -n '1,600p' "$RUNNER_TEMP/sample.txt"
+            echo "::endgroup::"
+            kill -9 $pid
+            exit 1
+          fi
+          wait $pid
       # Issue 16: the bundle, target/debug/bundle/ with the binary, the kernel
       # dylibs, libstd and plugins/<id>/ per plugin, and the host loading
       # them from it. The same whole-workspace build as the tests: a smaller
