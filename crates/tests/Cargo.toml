@@ -57,6 +57,8 @@ ext-action-compress = { workspace = true }
 ext-action-compare = { workspace = true }
 ext-action-terminal = { workspace = true }
 ext-action-rename = { workspace = true }
+# The 3D previewer plugin of issue 19, the same way.
+ext-preview-3d = { workspace = true }
 plugins-native = { workspace = true }
 # The fixture plugins, built as library files beside the test binaries and
 # loaded from there; never named in the test code.

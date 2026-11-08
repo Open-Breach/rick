@@ -17,10 +17,11 @@ path = "src/main.rs"
 # providers, `preview-hex` and the five `search-*` connectors compile a
 # plugin in instead of loading it from `plugins/`; default off, since the
 # plugins directory is where they live in 0.2. The four previewer plugins
-# of issue 18 and the four action plugins of issue 23 have the same opt-in
-# features; `gstreamer` turns playback on in the media previewer, wherever
-# it is built (the plugin's own feature of that name; off by default so a
-# build without the GStreamer development files still builds every crate).
+# of issue 18, the 3D previewer of issue 19 and the four action plugins of
+# issue 23 have the same opt-in features; `gstreamer` turns playback on in
+# the media previewer, wherever it is built (the plugin's own feature of
+# that name; off by default so a build without the GStreamer development
+# files still builds every crate).
 [features]
 default = ["preview-text", "preview-code", "preview-image", "preview-pdf"]
 preview-text = ["dep:ext-preview-text"]
@@ -32,6 +33,7 @@ preview-office = ["dep:ext-preview-office"]
 preview-media = ["dep:ext-preview-media"]
 preview-archive = ["dep:ext-preview-archive"]
 preview-csv = ["dep:ext-preview-csv"]
+preview-3d = ["dep:ext-preview-3d"]
 gstreamer = ["preview-media", "ext-preview-media/gstreamer"]
 git = ["dep:ext-git"]
 svn = ["dep:ext-svn"]
@@ -85,6 +87,7 @@ ext-search-windows = { workspace = true, optional = true }
 ext-search-spotlight = { workspace = true, optional = true }
 ext-search-tracker = { workspace = true, optional = true }
 ext-search-baloo = { workspace = true, optional = true }
+ext-preview-3d = { workspace = true, optional = true }
 anyhow = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
