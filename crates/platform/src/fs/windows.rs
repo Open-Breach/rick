@@ -392,6 +392,17 @@ pub(super) fn symlink(target: &Path, at: &Path) -> io::Result<()> {
     }
 }
 
+// Windows has no Unix permission bits; the signatures match the Unix ones.
+#[allow(clippy::unnecessary_wraps)]
+pub(super) fn unix_mode(_path: &Path) -> io::Result<Option<u32>> {
+    Ok(None)
+}
+
+#[allow(clippy::unnecessary_wraps)]
+pub(super) fn set_unix_mode(_path: &Path, _mode: u32) -> io::Result<()> {
+    Ok(())
+}
+
 /// An NTFS directory junction, through the `junction` crate's reparse
 /// point.
 pub(super) fn junction(target: &Path, at: &Path) -> io::Result<()> {

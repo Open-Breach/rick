@@ -10,7 +10,7 @@ use crate::index::{Item, civil_time, normalize};
 use crate::{ext_error, io_error};
 
 /// An MS-DOS date and time, as RAR headers carry it.
-fn dos_time(time: u32) -> Option<std::time::SystemTime> {
+pub(crate) fn dos_time(time: u32) -> Option<std::time::SystemTime> {
     civil_time(
         i64::from((time >> 25) & 0x7f) + 1980,
         (time >> 21) & 0x0f,
