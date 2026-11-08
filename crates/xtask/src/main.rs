@@ -354,3 +354,5 @@ fn dylib(name: &str) -> String {
         std::env::consts::DLL_SUFFIX
     )
 }
+
+// A code change for the tier 1 timing check of issue 35; deleted with its branch.
