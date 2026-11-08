@@ -63,9 +63,10 @@ pub use decorator::{
 pub use form::{Field, FieldKind, Form, Preview, PreviewRow, Value, Values};
 pub use futures::stream::BoxStream;
 pub use preview::{
-    Block, Content, ControlId, ControlValue, Document, Frame, Grid, Icon, Image, InfoSection,
-    Inline, Listing, ListingEntry, PreviewControl, PreviewDoc, Previewer, RenderRequest, Style,
-    TextBlock, TextLayer, TextSpan, TextureId, Transport, blocking, read_bytes,
+    Block, Content, ControlId, ControlValue, Document, Frame, Gesture, Grid, Icon, Image,
+    InfoSection, Inline, Listing, ListingEntry, PreviewControl, PreviewDoc, Previewer,
+    RenderRequest, Style, TextBlock, TextLayer, TextSpan, TextureId, Transport, blocking,
+    read_bytes,
 };
 pub use provider::{
     Capabilities, ChangeStream, CopyOptions, Depth, EntryStream, FsChange, LinkKind, ListOptions,

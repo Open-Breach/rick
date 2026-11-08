@@ -914,6 +914,8 @@ fn toolbar(
                     acts.push(Act::Control(id, ControlValue::Pressed));
                 }
             }
+            // Pointer gestures are the frame's, not the toolbar's.
+            PreviewControl::Pointer { .. } => {}
         }
     }
 }
@@ -1168,25 +1170,43 @@ fn draw_single(
         acts.push(Act::Zoom(Zoom::Free((factor * delta).clamp(0.05, 32.0))));
     }
     let pad = ((rect.size() - size) / 2.0).max(egui::Vec2::ZERO);
+    // A document that claims the drag, the wheel or a double-click (a 3D
+    // view's orbit, zoom and reset) gets them; the pane pans and scrolls
+    // with what is left.
+    let source = slot.scroll_source();
+    let claims = slot.claims_pointer();
     let output = egui::ScrollArea::both()
         .id_salt(("viewer-frame", page))
         .auto_shrink([false, false])
-        .scroll_source(egui::scroll_area::ScrollSource::ALL)
+        .scroll_source(source)
         .on_drag_cursor(egui::CursorIcon::Grabbing)
         .show(ui, |ui| {
             ui.add_space(pad.y);
             ui.horizontal(|ui| {
                 ui.add_space(pad.x);
-                ui.add(egui::Image::from_texture(&texture).fit_to_exact_size(size))
+                let image = ui.add(egui::Image::from_texture(&texture).fit_to_exact_size(size));
+                // Under one stable id, so a drag survives the frame being
+                // rendered again under it.
+                if claims {
+                    ui.interact(
+                        image.rect,
+                        ui.id().with("gestures"),
+                        egui::Sense::click_and_drag(),
+                    )
+                } else {
+                    image
+                }
             })
             .inner
         });
     if output.inner.hovered()
         && !output.inner.dragged()
+        && source.drag != egui::scroll_area::DragScroll::Never
         && (size.x > rect.width() || size.y > rect.height())
     {
         ctx.set_cursor_icon(egui::CursorIcon::Grab);
     }
+    slot.forward_gestures(ui, &output.inner);
 }
 
 /// The layout of the continuous view: the pages' widths and heights from
