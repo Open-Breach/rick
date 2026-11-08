@@ -2251,7 +2251,24 @@ Once answered, an entry keeps its number and gains a dated decision line.
     and the fixture on Windows (45 s, was the spec's 30 s, QUESTIONS.md 5's
     Defender case); `BENCHMARKS.md` says why beside each table.
 
-189. (issue 50) "The manifest gains the list of file extensions a plugin's
+189. (issue 54) The Compute hash paragraph puts the format toggle and the
+    Verify field under the rows of a dialogue and says a selection of
+    several files shows one block per file, without saying whether each
+    block has its own toggle and field or the dialogue has one of each.
+    Assumed: one format toggle and one Verify field for the whole dialogue,
+    under the blocks; the format applies to every block, and the pasted
+    value is compared against every block's rows of its length, since a
+    download page's hash belongs to one of the files and the dialogue shows
+    which. Each block keeps its own *Copy all*, which copies that file's
+    four lines.
+190. (issue 54) The paragraph hides Compute hash on folders and says what
+    it hashes are files; it does not say what a symbolic link in the
+    selection is. Assumed: the entry shows only when every selected entry
+    is a plain file (`EntryKind::File`), so a symlink, whatever it points
+    at, hides it like a folder does; following links to their targets can
+    come with a spec change.
+
+191. (issue 50) "The manifest gains the list of file extensions a plugin's
     previewers claim so the host answers from manifests without loading the
     plugin"; the spec does not say how a multi-part suffix (`tar.gz`) or a
     name without an extension is matched.
@@ -2264,7 +2281,7 @@ Once answered, an entry keeps its number and gains a dated decision line.
     the workspace lists the extensions its `score` claims by name; the hex
     view lists none. The extension API is version 12.
 
-190. (issue 50) The spec's four content kinds for the pinned info section
+192. (issue 50) The spec's four content kinds for the pinned info section
     are `pages`, `text`, `image` and `other`; a file list, a grid and a
     rendered document are none of these by name.
     Assumed: they count as `text`, since each of their documents carries a
@@ -2279,7 +2296,7 @@ Once answered, an entry keeps its number and gains a dated decision line.
     the pane and never above their own size, and a link opens with the
     system when it is an `http`, `https` or `mailto` address.
 
-191. (issue 50) "If a plugin has no way to read or write its own declared
+193. (issue 50) "If a plugin has no way to read or write its own declared
     settings today, add the smallest accessor on the extension context".
     Assumed: the extension context is the registry, which now lends a
     `SettingsStore` (`get` and `set` of a `SettingValue` by extension id and
@@ -2293,7 +2310,7 @@ Once answered, an entry keeps its number and gains a dated decision line.
     `Options` of the plugin host carry the store; `App::with_services`
     takes it. Part of API 12.
 
-192. (issue 50) "Development and CI write the setting instead" of
+194. (issue 50) "Development and CI write the setting instead" of
     `RICK_PDFIUM_DIR`, while the tests run every `App` over a temporary
     config directory of the fake platform, where no setting file is.
     Assumed: the CI setup action and the release workflow write
@@ -2309,7 +2326,7 @@ Once answered, an entry keeps its number and gains a dated decision line.
     test keeps running the check binary beside the unpacked `rick` with no
     setting at all. `RICK_REQUIRE_PDFIUM` stays, as the issue allows.
 
-193. (issue 50) "*Browse…* (a file dialogue through `UiHost`, the choice
+195. (issue 50) "*Browse…* (a file dialogue through `UiHost`, the choice
     stored in the setting)", while `UiHost` has prompt, confirm, show and
     form, every one a synchronous answer-queue dialogue, and the platform
     already has the asynchronous file dialogues (`NativeDialogs`).
@@ -2319,7 +2336,7 @@ Once answered, an entry keeps its number and gains a dated decision line.
     previewer's setting through `Command::ExtSetting` and opens the preview
     again (`Command::PreviewRetry`). No `UiHost` method was added.
 
-194. (issue 50) The Office previewer renders through its own pdfium
+196. (issue 50) The Office previewer renders through its own pdfium
     binding (QUESTIONS.md 104), which also needs the library's path.
     Assumed: one setting for one library: the Office plugin reads the PDF
     previewer's `library` setting through the `SettingsStore` and looks in
@@ -2329,7 +2346,7 @@ Once answered, an entry keeps its number and gains a dated decision line.
     with the `PATH` and the platforms' install directories after the
     setting, beside the binary and the plugins directory.
 
-195. (issue 50) The issue writes `preview_always = true` "for that SSH host
+197. (issue 50) The issue writes `preview_always = true` "for that SSH host
     (`[[ssh.hosts]]`)", while Rick's hosts are `[[connections]]` tables
     (QUESTIONS.md 163) and a host of `~/.ssh/config` has no table at all,
     being read-only in Rick.
@@ -2344,7 +2361,7 @@ Once answered, an entry keeps its number and gains a dated decision line.
     the cap when it is on. Cloud accounts have no editor yet, so their
     rows get the menu entry only once their schema has the field.
 
-196. (issue 50) *Copy* "puts the whole file's text on the clipboard"; the
+198. (issue 50) *Copy* "puts the whole file's text on the clipboard"; the
     spec says nothing about a file too large to hold as text, nor about
     the encoding.
     Assumed: the file is read again as a job up to 256 MiB (`COPY_LIMIT`),
@@ -2356,7 +2373,7 @@ Once answered, an entry keeps its number and gains a dated decision line.
     CSV, not a file list (whose text layer is the listing's dump) and not a
     paged document.
 
-197. (issue 50) *No previewer* when a previewer claims the file but fails
+199. (issue 50) *No previewer* when a previewer claims the file but fails
     to open it.
     Assumed: the placeholder is for a file no previewer claims, which the
     application now reports as `Event::PreviewNone` (with the disabled
@@ -2364,7 +2381,7 @@ Once answered, an entry keeps its number and gains a dated decision line.
     claims a file and fails keeps `Event::PreviewFailed` and the error
     line, since the type is known and the failure is the news.
 
-198. (issue 50) How a test stands on a machine without pdfium or
+200. (issue 50) How a test stands on a machine without pdfium or
     LibreOffice when CI has both beside the binary.
     Assumed: `PdfPreview::with_search(Search::SettingOnly)` and the Office
     plugin's `Lookup::with_search` restrict the search to the setting, the
@@ -2372,7 +2389,7 @@ Once answered, an entry keeps its number and gains a dated decision line.
     uses it and then browses to the real library where the machine has
     one.
 
-199. (issue 50) Space "while the preview has focus" plays or pauses, while
+201. (issue 50) Space "while the preview has focus" plays or pauses, while
     Space in a list toggles the focused entry.
     Assumed: the Preview pane table of the shortcut screen has one row,
     *Play / pause media* (`preview.play`, Space), live while the Preview

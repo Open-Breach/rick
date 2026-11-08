@@ -34,7 +34,6 @@ use crate::inline::{EditKind, RowEdit};
 use crate::keys::{Direction, Intent, KeyMap};
 use crate::operations::Operations;
 use crate::preview::Previews;
-use crate::properties;
 use crate::search::{Pick, SearchBox};
 use crate::settings_ui::ShortcutsScreen;
 use crate::side_panel::SidePanelState;
@@ -43,6 +42,7 @@ use crate::{compare, console};
 use crate::{
     conflict, frame, icons, inspector, menus, pane, paths, question, settings_ui, side_panel,
 };
+use crate::{hash, properties};
 
 /// Per-tab view state that is the UI's business, not the model's.
 #[derive(Debug, Default)]
@@ -389,6 +389,8 @@ pub struct RickUi {
     /// The file dialogue a preview's *Browse…* opened for a missing
     /// library, while it is open.
     library_browse: Option<LibraryBrowse>,
+    /// The Hash dialogue, open or not.
+    hash: hash::HashDialog,
     /// Read-only texts actions asked to show, each in its own window.
     texts: Vec<TextWindow>,
     next_text: u64,
@@ -571,6 +573,7 @@ impl RickUi {
             inspector_width,
             properties: properties::PropertiesDialog::default(),
             library_browse: None,
+            hash: hash::HashDialog::default(),
             texts: Vec::new(),
             next_text: 0,
             thumbnails: Thumbnails::default(),
@@ -655,6 +658,12 @@ impl RickUi {
     /// The Properties dialogue, for the tests.
     pub fn properties(&self) -> &properties::PropertiesDialog {
         &self.properties
+    }
+
+    /// The Hash dialogue, for the tests.
+    #[must_use]
+    pub fn hash_dialog(&self) -> &hash::HashDialog {
+        &self.hash
     }
 
     #[must_use]
@@ -925,6 +934,7 @@ impl RickUi {
                 }
                 Event::Notify { level, text } => self.toast(level, text),
                 Event::Properties(info) => self.properties.open(*info),
+                Event::HashesOpened { hashes, format, .. } => self.hash.open(hashes, format),
                 Event::PreviewReady { pane, doc } => {
                     let entry = self.preview_entry(pane);
                     self.previews.ready(pane, doc, entry);
@@ -3294,6 +3304,7 @@ impl RickUi {
             );
             settings_ui::about_window(ctx, &mut self.about_open, &self.version);
             self.properties.show(ctx, &mut self.requests);
+            self.hash.show(ctx, &self.app, &mut self.requests);
             self.show_texts(ctx);
             self.show_toasts(ctx);
             self.apply_requests(ctx);

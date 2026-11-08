@@ -7,7 +7,13 @@ the system default, open the containing folder, pin to side panel and unpin;
 each follows the provider's capabilities at the pane's location, so Paste,
 Rename and the rest hide where nothing can be written and Move to trash
 where there is no trash, and in the virtual locations of `vfs-rick` the
-actions that do not apply hide themselves. Restore, Restore trash items and
+actions that do not apply hide themselves. Compute hash… (`hash`) reads
+every selected file once through its provider in 1 MiB chunks and feeds
+each chunk to MD5, SHA-1, SHA-256 and BLAKE3 in one job with byte progress
+and cancel, filling an `ext::Hashes` slot the Hash dialogue polls; the
+module's pure functions render a digest in the remembered format (`[hash]
+format` in `core.toml`), read a pasted value back and tell the algorithms
+of its length apart for the Verify field. Restore, Restore trash items and
 Empty trash belong to the trash provider plugin, `ext-vfs-trash`. It also
 holds `transfer`, the move-or-copy job a drag and drop runs, which hands a
 selection whose source and target share one provider instance with

@@ -459,13 +459,14 @@ fn copy_path_open_and_reveal_go_to_the_platform() {
 #[test]
 fn every_action_has_an_id_label_and_core_group() {
     let h = harness();
-    assert_eq!(h.registry.actions().len(), 22);
+    assert_eq!(h.registry.actions().len(), 23);
     for action in h.registry.actions() {
         assert!(action.id().0.starts_with("core."), "{}", action.id().0);
         assert_ne!(action.label(), "");
         assert_eq!(action.group(), ext::ActionGroup::Core);
-        // Pin, Unpin and Open containing folder have no shortcut in the
-        // spec's tables; New file lost Mod+N to New window (QUESTIONS.md 66).
+        // Pin, Unpin, Open containing folder and Compute hash have no
+        // shortcut in the spec's tables; New file lost Mod+N to New window
+        // (QUESTIONS.md 66).
         let unbound = matches!(
             action.id().0,
             "core.pin"
@@ -474,6 +475,7 @@ fn every_action_has_an_id_label_and_core_group() {
                 | "core.open_containing"
                 | "core.open_containing_tab"
                 | "core.create_link"
+                | "core.hash"
         );
         assert_eq!(
             action.default_shortcut().is_some(),

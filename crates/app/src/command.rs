@@ -3,6 +3,7 @@
 use std::fmt;
 
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use ext::{ActionCtx, ActionId, Decoration, FsChange, Level, PreviewDoc};
 use model::{
@@ -336,6 +337,9 @@ pub enum Command {
     ShowProperties(PaneId),
     /// The Properties dialogue closed; a later change does not report back.
     PropertiesClosed,
+    /// The Hash dialogue's format toggle changed: remember the format as
+    /// `[hash] format` in `core.toml`, so the next dialogue opens with it.
+    HashFormat(ops::hash::Format),
     /// Open the platform's own properties dialogue (Windows Properties,
     /// macOS Get Info) on the pane's selected entry.
     SystemProperties(PaneId),
@@ -606,6 +610,16 @@ pub enum Event {
     },
     /// What `Command::ShowProperties` found: the dialogue's contents.
     Properties(Box<PropertiesInfo>),
+    /// Compute hash started on the pane's selection: open the Hash
+    /// dialogue on the slot, which the job fills file by file.
+    HashesOpened {
+        /// The pane.
+        pane: PaneId,
+        /// The files' names and, as they arrive, their digests.
+        hashes: Arc<ext::Hashes>,
+        /// The format remembered in `core.toml`, for the toggle.
+        format: ops::hash::Format,
+    },
 }
 
 /// What the Properties dialogue shows for one entry.
@@ -630,6 +644,21 @@ pub struct PropertiesInfo {
     pub native: bool,
 }
 
+/// A `debug_struct` of `name` with the pane and one more field: the shape
+/// of most pane events.
+fn pane_struct(
+    f: &mut fmt::Formatter<'_>,
+    name: &str,
+    pane: PaneId,
+    field: &str,
+    value: &dyn fmt::Debug,
+) -> fmt::Result {
+    f.debug_struct(name)
+        .field("pane", &pane)
+        .field(field, value)
+        .finish()
+}
+
 impl fmt::Debug for Event {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -639,16 +668,10 @@ impl fmt::Debug for Event {
                 .field("batch", &batch.len())
                 .field("done", done)
                 .finish(),
-            Self::Changed { pane, change } => f
-                .debug_struct("Changed")
-                .field("pane", pane)
-                .field("change", change)
-                .finish(),
-            Self::Decorated { pane, items } => f
-                .debug_struct("Decorated")
-                .field("pane", pane)
-                .field("items", &items.len())
-                .finish(),
+            Self::Changed { pane, change } => pane_struct(f, "Changed", *pane, "change", change),
+            Self::Decorated { pane, items } => {
+                pane_struct(f, "Decorated", *pane, "items", &items.len())
+            }
             Self::JobProgress { id, progress } => f
                 .debug_struct("JobProgress")
                 .field("id", id)
@@ -664,11 +687,9 @@ impl fmt::Debug for Event {
                 .field("batch", &batch.len())
                 .field("done", done)
                 .finish(),
-            Self::SelectionChanged { pane, ids } => f
-                .debug_struct("SelectionChanged")
-                .field("pane", pane)
-                .field("ids", ids)
-                .finish(),
+            Self::SelectionChanged { pane, ids } => {
+                pane_struct(f, "SelectionChanged", *pane, "ids", ids)
+            }
             Self::PreviewReady { pane, .. } => f
                 .debug_struct("PreviewReady")
                 .field("pane", pane)
@@ -679,16 +700,12 @@ impl fmt::Debug for Event {
                 .field("size", size)
                 .field("frame", &frame.is_some())
                 .finish(),
-            Self::PreviewFailed { pane, error } => f
-                .debug_struct("PreviewFailed")
-                .field("pane", pane)
-                .field("error", error)
-                .finish(),
-            Self::PreviewNone { pane, plugin } => f
-                .debug_struct("PreviewNone")
-                .field("pane", pane)
-                .field("plugin", plugin)
-                .finish(),
+            Self::PreviewFailed { pane, error } => {
+                pane_struct(f, "PreviewFailed", *pane, "error", error)
+            }
+            Self::PreviewNone { pane, plugin } => {
+                pane_struct(f, "PreviewNone", *pane, "plugin", plugin)
+            }
             Self::PreviewPrefix {
                 pane,
                 served,
@@ -728,6 +745,16 @@ impl fmt::Debug for Event {
                 .debug_struct("Notify")
                 .field("level", level)
                 .field("text", text)
+                .finish(),
+            Self::HashesOpened {
+                pane,
+                hashes,
+                format,
+            } => f
+                .debug_struct("HashesOpened")
+                .field("pane", pane)
+                .field("hashes", hashes)
+                .field("format", format)
                 .finish(),
         }
     }

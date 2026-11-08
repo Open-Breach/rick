@@ -4,18 +4,20 @@
 (`Provider`, `Decorator`, `Action`, `Previewer`, `SearchIndex`), the data they
 exchange (`Capabilities`, `ListOptions`, `FsChange`, `Decoration`, `ActionCtx`,
 `PreviewDoc`, `Frame`, `Content` with its `Listing`, `Grid`, `Document`
-and `MissingLibrary`, `Transport`, `Query` and friends), the `Manifest`
-every extension declares (with `previews`, the file extensions its
-previewers claim, so the host can say a disabled plugin is available for a
-file without loading it), the `Extension` trait that registers
-contributions, and the `Registry` that collects them and refuses manifests
-of another API version. The registry is also the extension context: the
-host builds it with `Registry::with_platform`, so an extension takes the
-platform services (trash, config directory, dialogues) from
-`Registry::platform` while it registers, reads and writes the settings it
-declared through the `SettingsStore` of `Registry::settings_store` (a
-previewer keeps the path of the third-party library it found there), a
-provider serving a virtual location, `rick://<name>`,
+and `MissingLibrary`, `Transport`, `Query` and friends, and the slots an
+action fills from a job, `Compare` for a tab and `Hashes` for the Hash
+dialogue), the `Manifest` every extension declares (with `previews`, the
+file extensions its previewers claim, so the host can say a disabled
+plugin is available for a file without loading it), the `Extension` trait
+that registers contributions, and the `Registry` that collects them and
+refuses manifests of another API version. The registry is also the
+extension context: the host builds it with `Registry::with_platform`, so
+an extension takes the platform services (trash, config directory,
+dialogues) from `Registry::platform` while it registers, reads and writes
+the settings it declared through the `SettingsStore` of
+`Registry::settings_store` (a previewer keeps the path of the third-party
+library it found there), a provider serving a virtual location,
+`rick://<name>`,
 registers it with `Registry::view`, and a provider reached over a network
 registers a `Connector` beside itself (`Registry::connector`): the fields of
 its *Add connection…* dialogue and the calls behind *Connect*, *Disconnect*

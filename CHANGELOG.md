@@ -9,6 +9,17 @@ the pull request that brought the change.
 
 ### Added
 
+- Compute hash… in the Info group of a file's context menu, above
+  Properties, and `core.hash` in the palette: MD5, SHA-1, SHA-256 and
+  BLAKE3 of the selected files, each read once through its provider in
+  1 MiB chunks so a remote file is hashed like a local one, as one job with
+  byte progress and Cancel. The Hash dialogue opens at once and fills in: a
+  block per file with a row per algorithm (the value in a read-only
+  monospace field, Copy), Copy all, a format toggle (lower-case hex,
+  upper-case hex, Base64; remembered as `[hash] format` in `core.toml`)
+  that re-renders without recomputing, and a Verify field compared live
+  against every row of the pasted length — green *Match*, red *Mismatch*,
+  or *Unrecognised length*. Hidden on folders; no shortcut (#54).
 - Dragging out of Rick reaches the desktop: a file dragged past the window
   is handed to the platform's drag source as `file://` URIs once the ghost
   is off the screen, through an `NSDraggingSession` on macOS (the first

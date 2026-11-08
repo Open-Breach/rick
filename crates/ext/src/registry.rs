@@ -155,7 +155,7 @@ use crate::search::SearchIndex;
 /// [`SettingsStore`] so a plugin reads and writes its own declared
 /// settings, `Content` gained `MissingLibrary` for a third-party library a
 /// previewer cannot find, and `Provider` gained `remote_preview_always`
-/// (QUESTIONS.md 189–195).
+/// (QUESTIONS.md 191–197).
 pub const API_VERSION: u32 = 12;
 
 bitflags::bitflags! {
