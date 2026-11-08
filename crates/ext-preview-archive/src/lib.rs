@@ -189,7 +189,7 @@ impl Format {
             Self::Tar(Compression::Lz4) => "tar.lz4",
             Self::SevenZ => "7z",
             Self::Rar => "RAR",
-            Self::Iso => "ISO 9660",
+            Self::Iso | Self::Disk(ImageFormat::Iso) => "ISO 9660",
             Self::Disk(ImageFormat::Img) => "raw disk image",
             Self::Disk(ImageFormat::Dmg) => "DMG",
             Self::Disk(ImageFormat::Vhd) => "VHD",
@@ -197,7 +197,6 @@ impl Format {
             Self::Disk(ImageFormat::Vmdk) => "VMDK",
             Self::Disk(ImageFormat::Vdi) => "VDI",
             Self::Disk(ImageFormat::Qcow2) => "QCOW2",
-            Self::Disk(ImageFormat::Iso) => "ISO 9660",
         }
     }
 }
@@ -297,10 +296,8 @@ pub fn detect(name: &str, sniff: &[u8]) -> Option<(Format, u8)> {
             .then_some((Format::Tar(Compression::Bzip2), 120));
     } else if sniff.starts_with(b"\x04\x22\x4D\x18") {
         return named(&["tar.lz4", "tlz4"]).then_some((Format::Tar(Compression::Lz4), 120));
-    } else if let Some(image) = disk_by_magic(sniff) {
-        Some(Format::Disk(image))
     } else {
-        None
+        disk_by_magic(sniff).map(Format::Disk)
     };
     if let Some(format) = by_magic {
         return Some((format, 150));
