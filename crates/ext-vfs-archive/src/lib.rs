@@ -206,6 +206,17 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
+/// The entries of the archive at `path`, read now by its format: what a
+/// listing answers from, for a caller that wants the sizes before it
+/// extracts (`ext-action-compress`). Blocking.
+///
+/// # Errors
+///
+/// `Unsupported` when the file is no archive; the I/O or library error.
+pub fn index(path: &Path) -> Result<Index, Error> {
+    read_index(path)
+}
+
 /// The entries of the archive at `path`, read by its format.
 fn read_index(path: &Path) -> Result<Index, Error> {
     let format = Format::detect(path)?;

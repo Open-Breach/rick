@@ -1,0 +1,30 @@
+[package]
+name = "ext-action-compress"
+version.workspace = true
+description = "Rick's compress and extract actions: zip, tar.gz, tar.zst, 7z and more next to the selection; extract here, into a folder named after the archive or to a chosen folder; as a plugin."
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+# A plugin: a `cdylib` the host loads from `plugins/action-compress/`, and
+# an `rlib` for the binary's opt-in `action-compress` feature and the tests.
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+types = { workspace = true }
+ext = { workspace = true }
+# The archive writers and the one-pass extractor live with the archive
+# provider, so the zip, tar and 7z code exists once (QUESTIONS.md 122).
+ext-vfs-archive = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+runtime = { workspace = true }
+platform = { workspace = true }
+vfs-local = { workspace = true }
+tempfile = { workspace = true }
+zip = { workspace = true }
+
+[lints]
+workspace = true
