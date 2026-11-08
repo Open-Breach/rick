@@ -1505,7 +1505,7 @@ mod net {
         Attrs, CancelToken, Entry, EntryId, EntryKind, Error, ExtId, Location, ProviderId,
     };
 
-    pub(super) const ID: ProviderId = ProviderId("sftp");
+    pub(super) const ID: ProviderId = ProviderId("ssh");
 
     #[derive(Default)]
     pub(super) struct Stub {
@@ -1726,7 +1726,7 @@ fn a_connection_keeps_its_secret_in_the_keychain_and_the_rest_in_the_settings() 
     let settings_path = h.fake.config_dir().join(SETTINGS_FILE);
     let text = fs::read_to_string(&settings_path).unwrap_or_else(|e| panic!("{e}"));
     assert!(text.contains("[[connections]]"), "{text}");
-    assert!(text.contains("provider = \"sftp\""), "{text}");
+    assert!(text.contains("provider = \"ssh\""), "{text}");
     assert!(text.contains("name = \"nas\""), "{text}");
     assert!(text.contains("host = \"10.0.0.2\""), "{text}");
     assert!(
@@ -1735,10 +1735,7 @@ fn a_connection_keeps_its_secret_in_the_keychain_and_the_rest_in_the_settings() 
     );
     assert!(!text.contains("stray"), "{text}");
     assert_eq!(
-        h.fake
-            .secrets()
-            .get("sftp/nas/password")
-            .map(String::as_str),
+        h.fake.secrets().get("ssh/nas/password").map(String::as_str),
         Some("hunter2")
     );
     {
