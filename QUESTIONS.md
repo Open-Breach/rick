@@ -1644,6 +1644,8 @@ Once answered, an entry keeps its number and gains a dated decision line.
     beside the one the files use; `copy` within a host streams through the
     machine (the protocol has no copy) and `transfer` answers `Unsupported`
     for a copy, so the kernel's path takes it; a move is a remote rename.
+    Decided (2026-11-08): `ext-ssh` replaces it; `ext-vfs-sftp` removed in
+    this PR.
 
 136. (issue 21) The issue wants connections in `rick.toml` with secrets in
     the keychain and connect, disconnect and remove on the row's menu, and
