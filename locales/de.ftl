@@ -134,3 +134,20 @@ deny = Verweigern
 properties-apply-to-enclosed-items = Auf enthaltene Einträge anwenden
 properties-system-properties = Systemeigenschaften…
 properties-applying = Wird angewendet…
+
+# Der Prüfsummen-Dialog (Prüfsumme berechnen…)
+hash-title = Prüfsumme — { $name }
+hash-hashing = Berechne…
+hash-cancelled = Abgebrochen
+hash-failed = Prüfsumme konnte nicht berechnet werden: { $error }
+hash-copy = Kopieren
+hash-copy-all = Alle kopieren
+hash-format = Format
+hash-format-hex = Hex, Kleinbuchstaben
+hash-format-hex-upper = Hex, Großbuchstaben
+hash-format-base64 = Base64
+hash-verify = Prüfen
+hash-verify-hint = Erwartete Prüfsumme einfügen
+hash-match = Stimmt überein
+hash-mismatch = Stimmt nicht überein
+hash-unrecognised-length = Unbekannte Länge
