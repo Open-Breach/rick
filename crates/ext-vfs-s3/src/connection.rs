@@ -4,6 +4,7 @@
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
+use ext::Text;
 use ext::platform::Platform;
 use ext::{
     Connection, ConnectionField, ConnectionFieldKind, ConnectionSchema, Connector, async_trait,
@@ -33,11 +34,11 @@ pub mod field {
 #[must_use]
 pub fn schema() -> ConnectionSchema {
     ConnectionSchema {
-        title: "S3",
+        title: Text("s3-s3"),
         fields: vec![
             ConnectionField {
                 key: field::ENDPOINT,
-                label: "Endpoint (empty for AWS)",
+                label: Text("s3-endpoint-empty-for-aws"),
                 kind: ConnectionFieldKind::Text {
                     default: String::new(),
                 },
@@ -45,7 +46,7 @@ pub fn schema() -> ConnectionSchema {
             },
             ConnectionField {
                 key: field::REGION,
-                label: "Region",
+                label: Text("s3-region"),
                 kind: ConnectionFieldKind::Text {
                     default: "us-east-1".to_owned(),
                 },
@@ -53,7 +54,7 @@ pub fn schema() -> ConnectionSchema {
             },
             ConnectionField {
                 key: field::ACCESS_KEY,
-                label: "Access key",
+                label: Text("s3-access-key"),
                 kind: ConnectionFieldKind::Text {
                     default: String::new(),
                 },
@@ -61,13 +62,13 @@ pub fn schema() -> ConnectionSchema {
             },
             ConnectionField {
                 key: field::SECRET_KEY,
-                label: "Secret key",
+                label: Text("s3-secret-key"),
                 kind: ConnectionFieldKind::Secret,
                 required: true,
             },
             ConnectionField {
                 key: field::PATH_STYLE,
-                label: "Path-style addressing",
+                label: Text("s3-path-style-addressing"),
                 kind: ConnectionFieldKind::Bool { default: true },
                 required: false,
             },
@@ -164,8 +165,8 @@ impl Connector for S3Connections {
         PROVIDER_ID
     }
 
-    fn schema(&self) -> &ConnectionSchema {
-        &self.schema
+    fn schema(&self) -> ConnectionSchema {
+        self.schema.clone()
     }
 
     /// Keeps the client of a connection whose settings did not change,

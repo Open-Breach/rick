@@ -5,6 +5,7 @@
 //! folder). Everything long runs as a job; the form is one dialogue per
 //! action run, as the UI host's protocol asks.
 
+use ext::t;
 use std::collections::HashMap;
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
@@ -640,27 +641,32 @@ pub fn install_form(
     let mut form = Form::new(
         title,
         if matched.is_some() {
-            "Update"
+            t!("installer-update")
         } else {
-            "Install"
+            t!("installer-install")
         },
     )
     .field(Field::text(
         K_NAME,
-        "Name",
+        t!("installer-name"),
         &detected.name,
         "The name in the launcher",
     ))
-    .field(Field::text(K_ID, "App id", &id, "lowercase-with-hyphens"))
+    .field(Field::text(
+        K_ID,
+        t!("installer-app-id"),
+        &id,
+        "lowercase-with-hyphens",
+    ))
     .field(Field::text(
         K_VERSION,
-        "Version",
+        t!("installer-version"),
         &detected.version,
         "as the archive names it",
     ))
     .field(Field::choice(
         K_KIND,
-        "Kind",
+        t!("installer-kind"),
         vec!["GUI application".to_owned(), "Command-line tool".to_owned()],
         usize::from(detected.kind == Kind::Cli),
     ));
@@ -680,7 +686,7 @@ pub fn install_form(
     };
     form = form.field(Field::choice(
         K_EXE,
-        "Main executable",
+        t!("installer-main-executable"),
         exe_options,
         exe_selected,
     ));
@@ -692,13 +698,13 @@ pub fn install_form(
     form = form
         .field(Field::choice(
             K_ICON,
-            "Icon",
+            t!("installer-icon"),
             icon_options,
             usize::from(!detected.icons.is_empty()),
         ))
         .field(Field::text(
             K_ICON_FILE,
-            "Icon file",
+            t!("installer-icon-file"),
             "",
             "a PNG or SVG path, instead of the choice above",
         ));
@@ -714,13 +720,13 @@ pub fn install_form(
     form = form
         .field(Field::choice(
             K_CATEGORY,
-            "Category (GUI)",
+            t!("installer-category-gui"),
             CATEGORIES.iter().map(|c| (*c).to_owned()).collect(),
             category_index,
         ))
         .field(Field::text(
             K_WM_CLASS,
-            "StartupWMClass (GUI)",
+            t!("installer-startupwmclass-gui"),
             detected.wm_class().unwrap_or_default(),
             "editable later in Installed Apps",
         ));
@@ -749,7 +755,7 @@ pub fn install_form(
     form = form
         .field(Field::choice(
             K_PATH_MODE,
-            "Commands (CLI)",
+            t!("installer-commands-cli"),
             vec![
                 format!("Symlinks in {}", layout.bin_dir().display()),
                 "Add the bin folder to the PATH of new shells".to_owned(),
@@ -758,13 +764,13 @@ pub fn install_form(
         ))
         .field(Field::text(
             K_ENV,
-            "Variable (PATH mode)",
+            t!("installer-variable-path-mode"),
             "",
             "JAVA_HOME, pointing at the version folder",
         ))
         .field(Field::choice(
             K_SCOPE,
-            "Scope",
+            t!("installer-scope"),
             vec![
                 "User space (recommended)".to_owned(),
                 "System-wide (unavailable: the privileged helper is not part of this version)"
@@ -774,7 +780,7 @@ pub fn install_form(
         ))
         .field(Field::text(
             K_SHA,
-            "Expected SHA-256",
+            t!("installer-expected-sha-256"),
             "",
             "optional; the hash the vendor publishes",
         ));
@@ -790,7 +796,7 @@ pub fn install_form(
             .map_or(0, |i| i + 1);
         form = form.field(Field::choice(
             K_UPDATE_OF,
-            "This is an update of…",
+            t!("installer-this-is-an-update-of"),
             update_options,
             selected,
         ));
@@ -798,10 +804,14 @@ pub fn install_form(
     form = form
         .field(Field::check(
             K_OVERWRITE,
-            "Overwrite command links and desktop entries Rick did not create",
+            t!("installer-overwrite-command-links-and-desktop-entries"),
             false,
         ))
-        .field(Field::check(K_DOWNGRADE, "Allow downgrade", false));
+        .field(Field::check(
+            K_DOWNGRADE,
+            t!("installer-allow-downgrade"),
+            false,
+        ));
     let preview_detected = Arc::clone(detected);
     let preview_scan = scan.clone();
     let preview_layout = layout.clone();
@@ -891,8 +901,8 @@ impl Action for Install {
     fn id(&self) -> ActionId {
         INSTALL
     }
-    fn label(&self) -> &'static str {
-        "Install as application…"
+    fn label(&self) -> String {
+        t!("installer-install-as-application")
     }
     fn group(&self) -> ActionGroup {
         GROUP
@@ -930,8 +940,8 @@ impl Action for Apps {
     fn id(&self) -> ActionId {
         APPS
     }
-    fn label(&self) -> &'static str {
-        "Installed apps"
+    fn label(&self) -> String {
+        t!("installer-installed-apps")
     }
     fn group(&self) -> ActionGroup {
         GROUP
@@ -975,8 +985,8 @@ impl Action for OpenFolder {
     fn id(&self) -> ActionId {
         OPEN_FOLDER
     }
-    fn label(&self) -> &'static str {
-        "Open install folder"
+    fn label(&self) -> String {
+        t!("installer-open-install-folder")
     }
     fn group(&self) -> ActionGroup {
         GROUP
@@ -1012,8 +1022,8 @@ impl Action for Launch {
     fn id(&self) -> ActionId {
         LAUNCH
     }
-    fn label(&self) -> &'static str {
-        "Launch"
+    fn label(&self) -> String {
+        t!("installer-launch")
     }
     fn group(&self) -> ActionGroup {
         GROUP
@@ -1047,8 +1057,8 @@ impl Action for Update {
     fn id(&self) -> ActionId {
         UPDATE
     }
-    fn label(&self) -> &'static str {
-        "Update from archive…"
+    fn label(&self) -> String {
+        t!("installer-update-from-archive")
     }
     fn group(&self) -> ActionGroup {
         GROUP
@@ -1107,8 +1117,8 @@ impl Action for Revert {
     fn id(&self) -> ActionId {
         REVERT
     }
-    fn label(&self) -> &'static str {
-        "Revert to previous version"
+    fn label(&self) -> String {
+        t!("installer-revert-to-previous-version")
     }
     fn group(&self) -> ActionGroup {
         GROUP
@@ -1121,7 +1131,7 @@ impl Action for Revert {
             None => Availability::Hidden,
             Some(installed) => match &installed.record.previous_version {
                 Some(previous) if installed.dir.join(previous).is_dir() => Availability::Enabled,
-                _ => Availability::Disabled("no previous version is kept"),
+                _ => Availability::Disabled(t!("installer-no-previous-version-is-kept")),
             },
         }
     }
@@ -1153,8 +1163,8 @@ impl Action for EditLauncher {
     fn id(&self) -> ActionId {
         EDIT_LAUNCHER
     }
-    fn label(&self) -> &'static str {
-        "Edit launcher…"
+    fn label(&self) -> String {
+        t!("installer-edit-launcher")
     }
     fn group(&self) -> ActionGroup {
         GROUP
@@ -1191,22 +1201,27 @@ impl Action for EditLauncher {
             format!("Edit launcher of {}", installed.record.name),
             "Save",
         )
-        .field(Field::text(K_NAME, "Name", &installed.record.name, ""))
+        .field(Field::text(
+            K_NAME,
+            t!("installer-name"),
+            &installed.record.name,
+            "",
+        ))
         .field(Field::text(
             K_ICON_FILE,
-            "Icon file",
+            t!("installer-icon-file"),
             "",
             "a PNG or SVG path, to replace the icon",
         ))
         .field(Field::choice(
             K_CATEGORY,
-            "Category",
+            t!("installer-category"),
             CATEGORIES.iter().map(|c| (*c).to_owned()).collect(),
             category_index,
         ))
         .field(Field::text(
             K_WM_CLASS,
-            "StartupWMClass",
+            t!("installer-startupwmclass"),
             installed
                 .record
                 .startup_wm_class
@@ -1240,8 +1255,8 @@ impl Action for Uninstall {
     fn id(&self) -> ActionId {
         UNINSTALL
     }
-    fn label(&self) -> &'static str {
-        "Uninstall…"
+    fn label(&self) -> String {
+        t!("installer-uninstall")
     }
     fn group(&self) -> ActionGroup {
         GROUP
@@ -1288,7 +1303,7 @@ impl Action for Uninstall {
                 "\nThis is the last PATH-mode toolchain: the line Rick added to ~/.profile is removed too.",
             );
         }
-        if !ui.confirm("Uninstall", &text) {
+        if !ui.confirm(&t!("installer-uninstall-2"), &text) {
             return Ok(ActionOutcome::Done);
         }
         let name = format!("Uninstall {}", installed.record.name);
@@ -1307,8 +1322,8 @@ impl Action for Repair {
     fn id(&self) -> ActionId {
         REPAIR
     }
-    fn label(&self) -> &'static str {
-        "Repair"
+    fn label(&self) -> String {
+        t!("installer-repair")
     }
     fn group(&self) -> ActionGroup {
         GROUP
@@ -1320,7 +1335,7 @@ impl Action for Repair {
         match row_availability(&self.0, ctx) {
             None => Availability::Hidden,
             Some(installed) if installed.problems.is_empty() => {
-                Availability::Disabled("nothing to repair")
+                Availability::Disabled(t!("installer-nothing-to-repair"))
             }
             Some(_) => Availability::Enabled,
         }
@@ -1352,8 +1367,8 @@ impl Action for Forget {
     fn id(&self) -> ActionId {
         FORGET
     }
-    fn label(&self) -> &'static str {
-        "Forget"
+    fn label(&self) -> String {
+        t!("installer-forget")
     }
     fn group(&self) -> ActionGroup {
         GROUP
@@ -1397,8 +1412,8 @@ impl Action for RemoveStaging {
     fn id(&self) -> ActionId {
         REMOVE_STAGING
     }
-    fn label(&self) -> &'static str {
-        "Remove staging folder"
+    fn label(&self) -> String {
+        t!("installer-remove-staging-folder")
     }
     fn group(&self) -> ActionGroup {
         GROUP

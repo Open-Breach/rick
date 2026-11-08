@@ -42,6 +42,7 @@ pub use settings::{
 pub use tree::{Tree, TreeRow};
 use types::{
     Conflict, ConflictId, Entry, EntryId, EntryKind, ExtId, JobId, Location, Progress, ProviderId,
+    Question, QuestionId,
 };
 
 /// Identity of a tab, unique within one model.
@@ -371,6 +372,10 @@ pub struct Tab {
     /// A note for the status line: why the tab is not where the session
     /// left it. Cleared by the next navigation.
     pub note: Option<String>,
+    /// Why the location could not be listed, shown as a banner with
+    /// *Retry* over the empty list (a connection that failed, a folder that
+    /// refused); cleared by the next listing that works.
+    pub failure: Option<String>,
     /// The title of a console or compare tab, as the action named it; the
     /// other kinds are titled from their location.
     pub title: Option<String>,
@@ -398,6 +403,7 @@ impl Tab {
             tree: Tree::default(),
             scroll: 0.0,
             note: None,
+            failure: None,
             title: None,
         }
     }
@@ -663,6 +669,9 @@ pub struct Model {
     /// Name conflicts jobs wait on, oldest first; the UI asks about the
     /// first.
     pub conflicts: Vec<Conflict>,
+    /// Questions extensions wait on (a host key to trust, a passphrase),
+    /// oldest first; the UI asks the first.
+    pub questions: Vec<Question>,
     /// The side panel's Places list.
     pub places: Places,
     /// The mounted volumes: the machine's drives and the network mounts.
@@ -718,6 +727,7 @@ impl Model {
             focused_window: WindowId(0),
             jobs: BTreeMap::new(),
             conflicts: Vec::new(),
+            questions: Vec::new(),
             places: Places::default(),
             volumes: Vec::new(),
             cloud_providers: Vec::new(),
@@ -1891,6 +1901,18 @@ impl Model {
         }
     }
 
+    /// Records why the pane's active tab's listing failed, for the banner
+    /// with *Retry*; `None` clears it.
+    pub fn listing_failed(&mut self, pane: PaneId, why: Option<String>) -> bool {
+        match self.active_tab_mut(pane) {
+            Some((_, tab)) => {
+                tab.failure = why;
+                true
+            }
+            None => false,
+        }
+    }
+
     /// Applies a change notification to the pane's active tab. Returns
     /// `false` for [`FsChange::Rescan`], which needs a fresh listing.
     pub fn apply_change(&mut self, pane: PaneId, change: FsChange) -> bool {
@@ -2022,6 +2044,20 @@ impl Model {
         let before = self.conflicts.len();
         self.conflicts.retain(|c| c.id != id);
         before != self.conflicts.len()
+    }
+
+    /// Records a question an extension waits on.
+    pub fn question_opened(&mut self, question: Question) {
+        if !self.questions.iter().any(|q| q.id == question.id) {
+            self.questions.push(question);
+        }
+    }
+
+    /// Forgets an answered question. Returns whether it was open.
+    pub fn question_closed(&mut self, id: QuestionId) -> bool {
+        let before = self.questions.len();
+        self.questions.retain(|q| q.id != id);
+        before != self.questions.len()
     }
 
     /// Forgets a finished job.

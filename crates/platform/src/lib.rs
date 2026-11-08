@@ -11,7 +11,10 @@
 //! The [`fs`] module holds the filesystem fast paths the local provider
 //! needs and no portable API offers: the bulk directory reader, the native
 //! copy, allocated sizes and extent sharing. [`paths`] converts between
-//! [`VPath`](types::VPath) and [`std::path::Path`].
+//! [`VPath`](types::VPath) and [`std::path::Path`]; [`agent`] opens the
+//! SSH agent's socket, a Unix socket or the OpenSSH named pipe; [`perms`]
+//! reads and changes an entry's owner, group, mode bits and ACL, and
+//! speaks to `rick-perms`, the helper that does so as the administrator.
 //!
 //! Where the OS keeps the original paths of trashed items to itself
 //! (macOS), the trash lists Rick's own record of what it trashed instead,
@@ -26,14 +29,16 @@
 // The point of this crate: FFI to the OS lives here and nowhere else.
 #![allow(unsafe_code)]
 
+pub mod agent;
 mod clipboard;
 mod dialogs;
 mod fake;
 pub mod fs;
 pub mod paths;
+pub mod perms;
 pub mod secrets;
-// Only the Linux trash and properties format dates; macOS parses them
-// (Spotlight's last-used dates) and Windows does neither so far.
+// The Linux trash formats dates and macOS parses them (Spotlight's
+// last-used dates); the Properties rows format them everywhere.
 #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 mod time;
 mod traits;
@@ -53,6 +58,11 @@ compile_error!("Rick supports Linux, macOS and Windows");
 
 pub use async_trait::async_trait;
 pub use fake::{FAKE_APPLICATIONS, FAKE_STANDARD_FOLDERS, Fake};
+pub use perms::{
+    Acl, DarwinAce, FilePermissions, Nfs4Ace, Nfs4Kind, NtAce, PermissionChange, Permissions,
+    PosixAce, PosixTag, Principal, PrincipalKind, Principals,
+};
+pub use time::iso8601;
 pub use traits::{
     Application, Chrome, Clipboard, ConfigDir, ControlsSide, DialogFilter, DragSource, Elevate,
     ElevatedOutput, NativeDialogs, OpenWith, Platform, Properties, PropertiesOutcome, RecentItem,
@@ -61,6 +71,11 @@ pub use traits::{
 };
 pub use trash_record::TRASH_FILE;
 use types::Error;
+
+/// Whether the platform has a properties dialogue of its own
+/// ([`Properties::show`] opens it): Windows and macOS. Rick's own dialogue
+/// offers it as *System properties…* there.
+pub const NATIVE_PROPERTIES: bool = cfg!(any(windows, target_os = "macos"));
 
 /// The platform the binary runs on.
 ///

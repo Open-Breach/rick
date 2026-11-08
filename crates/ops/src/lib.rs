@@ -50,12 +50,14 @@ mod edit;
 mod link;
 mod open;
 mod open_with;
+pub mod perms;
 mod pin;
 mod remove;
 mod schedule;
 mod select;
 mod transfer;
 
+use ext::t;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
@@ -70,6 +72,7 @@ use vfs::Mounts;
 pub use clipboard::{ClipMode, Clipboard};
 pub use conflict::{ConflictWaker, Conflicts};
 pub use open_with::FILE as OPEN_WITH_FILE;
+pub use perms::{Applied, PermissionRequest, PermissionsCommand, Recursion};
 pub use pin::{PinStore, pin_command, unpin_command};
 pub use schedule::{Lease, ScheduleWaker, Scheduler, VolumeKey, volume_key, volume_keys};
 pub use select::{Matcher, matcher};
@@ -94,7 +97,7 @@ fn needs_entries(ctx: &ActionCtx) -> Availability {
     if is_trash(ctx) {
         Availability::Hidden
     } else if ctx.selection.is_empty() {
-        Availability::Disabled("select something first")
+        Availability::Disabled(t!("reason-select-something-first"))
     } else {
         Availability::Enabled
     }

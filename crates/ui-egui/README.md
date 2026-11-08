@@ -1,6 +1,8 @@
 # ui-egui
 
-`ui-egui` is the only crate that knows egui. It renders every window from
+`ui-egui` is the only crate that knows egui. Every text it shows goes
+through the `t!` lookup with a key of `locales/en.ftl`, which
+`.github/scripts/check-strings.py` enforces in CI. It renders every window from
 the `model` the `app` owns, the first as eframe's root viewport and the
 others as viewports of their own drawn in the same frame: the window frame
 with its shadow and resize grips where the system draws none, the title row
@@ -25,9 +27,12 @@ as drive tables in the pane) with the operations area at its foot (a header
 with the running count and an overall bar, one row per job with its progress
 bar, bytes or items done of total, throughput and remaining time, the
 *Waiting* state, pause, resume and cancel, a height that grows with the jobs
-up to a cap), the conflict dialogue, the context menu and command palette
+up to a cap), the conflict dialogue, the question dialogue an extension asks through, the
+Properties dialogue (the general rows and, for a local entry, its owner,
+group, mode bits and ACL edited in place, applied to the enclosed entries
+too when asked), the context menu and command palette
 built from the action registry, the keyboard shortcut table, the Settings
-and Keyboard shortcuts screens, and drag and drop of entries: rows are drag
+(the language row among the rows) and Keyboard shortcuts screens, and drag and drop of entries: rows are drag
 sources, folders, pane space, breadcrumb segments and tab headers are drop
 zones with the ghost, the live indicator and spring-loading in between (a
 pane at the Trash view trashes what lands in it); the side panel is never a

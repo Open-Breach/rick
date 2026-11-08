@@ -4,6 +4,7 @@
 //! symbolic link, a directory junction and a `.lnk` shortcut. Undo removes
 //! the links.
 
+use ext::t;
 use std::sync::Arc;
 
 use ext::{
@@ -41,7 +42,7 @@ fn choose_kind(ui: &dyn UiHost, kinds: &[LinkKind], title: &str) -> Option<LinkK
             let form = Form::new(title, "Create").field(Field::choice(
                 "kind",
                 "Kind of link",
-                many.iter().map(|k| k.label().to_owned()).collect(),
+                many.iter().map(|k| k.label()).collect(),
                 0,
             ));
             let values = ui.form(form)?;
@@ -197,8 +198,8 @@ impl Action for PasteAsLink {
     fn id(&self) -> ActionId {
         ActionId("core.paste_link")
     }
-    fn label(&self) -> &'static str {
-        "Paste as link"
+    fn label(&self) -> String {
+        t!("action-paste-as-link")
     }
     fn group(&self) -> ActionGroup {
         ActionGroup::Core
@@ -219,7 +220,7 @@ impl Action for PasteAsLink {
         if self.0.clipboard().is_some() {
             Availability::Enabled
         } else {
-            Availability::Disabled("nothing to paste")
+            Availability::Disabled(t!("reason-nothing-to-paste"))
         }
     }
     fn run(
@@ -249,8 +250,8 @@ impl Action for CreateLink {
     fn id(&self) -> ActionId {
         ActionId("core.create_link")
     }
-    fn label(&self) -> &'static str {
-        "Create link…"
+    fn label(&self) -> String {
+        t!("action-create-link")
     }
     fn group(&self) -> ActionGroup {
         ActionGroup::Core
@@ -289,7 +290,7 @@ impl Action for CreateLink {
             form = form.field(Field::choice(
                 "kind",
                 "Kind of link",
-                kinds.iter().map(|k| k.label().to_owned()).collect(),
+                kinds.iter().map(|k| k.label()).collect(),
                 0,
             ));
         }

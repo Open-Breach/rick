@@ -4,6 +4,7 @@
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
+use ext::Text;
 use ext::platform::Platform;
 use ext::{
     Connection, ConnectionField, ConnectionFieldKind, ConnectionSchema, Connector, async_trait,
@@ -29,11 +30,11 @@ pub mod field {
 #[must_use]
 pub fn schema() -> ConnectionSchema {
     ConnectionSchema {
-        title: "Azure Blob",
+        title: Text("azure-azure-blob"),
         fields: vec![
             ConnectionField {
                 key: field::ACCOUNT,
-                label: "Storage account",
+                label: Text("azure-storage-account"),
                 kind: ConnectionFieldKind::Text {
                     default: String::new(),
                 },
@@ -41,13 +42,13 @@ pub fn schema() -> ConnectionSchema {
             },
             ConnectionField {
                 key: field::KEY,
-                label: "Account key",
+                label: Text("azure-account-key"),
                 kind: ConnectionFieldKind::Secret,
                 required: true,
             },
             ConnectionField {
                 key: field::ENDPOINT,
-                label: "Endpoint (empty for Azure)",
+                label: Text("azure-endpoint-empty-for-azure"),
                 kind: ConnectionFieldKind::Text {
                     default: String::new(),
                 },
@@ -144,8 +145,8 @@ impl Connector for AzureConnections {
         PROVIDER_ID
     }
 
-    fn schema(&self) -> &ConnectionSchema {
-        &self.schema
+    fn schema(&self) -> ConnectionSchema {
+        self.schema.clone()
     }
 
     /// Keeps the client of a connection whose settings did not change,

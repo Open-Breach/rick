@@ -18,6 +18,7 @@
 
 pub mod plan;
 
+use ext::t;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -73,6 +74,10 @@ impl Extension for RenameExtension {
     }
 
     fn register(&self, reg: &mut Registry) -> Result<(), Error> {
+        reg.translations(&[
+            ("en", include_str!("../locales/en.ftl")),
+            ("de", include_str!("../locales/de.ftl")),
+        ]);
         reg.action(Arc::new(BulkRename));
         Ok(())
     }
@@ -129,8 +134,8 @@ impl Action for BulkRename {
     fn id(&self) -> ActionId {
         BULK
     }
-    fn label(&self) -> &'static str {
-        "Bulk rename…"
+    fn label(&self) -> String {
+        t!("rename-bulk-rename")
     }
     fn group(&self) -> ActionGroup {
         ActionGroup::Core
@@ -151,7 +156,7 @@ impl Action for BulkRename {
             return Availability::Hidden;
         }
         if ctx.selection.is_empty() {
-            Availability::Disabled("select the entries to rename first")
+            Availability::Disabled(t!("rename-select-the-entries-to-rename-first"))
         } else {
             Availability::Enabled
         }
@@ -171,26 +176,48 @@ impl Action for BulkRename {
         let entries = ctx.selection.clone();
         let preview_entries = entries.clone();
         let preview_folder = folder.clone();
-        let form = Form::new(format!("Rename {} entries", entries.len()), "Rename")
-            .field(Field::text(
-                "pattern",
-                "Pattern",
-                "{name}{ext}",
-                "{name}, {ext}, {n}, {n:4}, {date}",
-            ))
-            .field(Field::text("find", "Find", "", "text to replace"))
-            .field(Field::text("replace", "Replace with", "", "$1 for a group"))
-            .field(Field::check("regex", "Find is a regular expression", false))
-            .field(Field::choice(
-                "case",
-                "Case",
-                Case::OPTIONS.iter().map(|o| (*o).to_owned()).collect(),
-                0,
-            ))
-            .field(Field::text("start", "Numbering starts at", "1", ""))
-            .preview(Arc::new(move |values: &Values| {
-                preview(&preview_entries, Some(&preview_folder), values)
-            }));
+        let form = Form::new(
+            format!("Rename {} entries", entries.len()),
+            t!("rename-rename"),
+        )
+        .field(Field::text(
+            "pattern",
+            t!("rename-pattern"),
+            "{name}{ext}",
+            "{name}, {ext}, {n}, {n:4}, {date}",
+        ))
+        .field(Field::text(
+            "find",
+            t!("rename-find"),
+            "",
+            "text to replace",
+        ))
+        .field(Field::text(
+            "replace",
+            t!("rename-replace-with"),
+            "",
+            "$1 for a group",
+        ))
+        .field(Field::check(
+            "regex",
+            t!("rename-find-is-a-regular-expression"),
+            false,
+        ))
+        .field(Field::choice(
+            "case",
+            t!("rename-case"),
+            Case::OPTIONS.iter().map(|o| (*o).to_owned()).collect(),
+            0,
+        ))
+        .field(Field::text(
+            "start",
+            t!("rename-numbering-starts-at"),
+            "1",
+            "",
+        ))
+        .preview(Arc::new(move |values: &Values| {
+            preview(&preview_entries, Some(&preview_folder), values)
+        }));
         let Some(values) = ui.form(form) else {
             return Ok(ActionOutcome::Done);
         };

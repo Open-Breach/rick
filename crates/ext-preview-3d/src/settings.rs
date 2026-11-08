@@ -6,7 +6,7 @@
 
 use std::path::Path;
 
-use ext::{SettingField, SettingKind, SettingsSchema};
+use ext::{SettingField, SettingKind, SettingsSchema, Text};
 
 /// The extension's settings file, in the config directory.
 pub const FILE: &str = "preview-3d.toml";
@@ -26,7 +26,7 @@ pub fn schema() -> SettingsSchema {
         ext: crate::ID,
         fields: vec![SettingField {
             key: KEY,
-            label: "Triangle budget for previews",
+            label: Text("preview-3d-triangle-budget-for-previews"),
             kind: SettingKind::Integer {
                 default: i64::try_from(DEFAULT_BUDGET).unwrap_or(i64::MAX),
                 min: MIN_BUDGET,

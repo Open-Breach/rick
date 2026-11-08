@@ -1897,3 +1897,291 @@ Once answered, an entry keeps its number and gains a dated decision line.
     Assumed: the manifest declares nothing of the kind yet; the crate's
     README and docs name the paths it writes, and the field comes with
     the extension security model.
+
+159. (issue 34) The host-key dialogues, the passphrase and the password
+    prompt are asked from inside the plugin while a listing or a copy runs,
+    but the API's prompts (`UiHost::confirm`, `prompt`, `form`) are
+    synchronous calls meant for an action on the UI thread; nothing lets a
+    provider's asynchronous operation ask the user and wait for the answer.
+    Assumed: a `Prompts` queue in `runtime` beside `Conflicts`, lent to
+    extensions through `Registry::prompts`: an extension asks with
+    `Prompts::ask`, `choose` or `secret` and awaits; the kernel publishes
+    the question as `Event::Question`, the UI shows one modal dialogue at a
+    time, the oldest first, and answers through `Command::AnswerQuestion`,
+    a dismissed dialogue answering *Cancelled*. The extension API is at
+    version 10 for this and the three points below.
+
+160. (issue 34) *Open console here* attaches "an externally supplied PTY
+    stream" to the console pane that `ext-action-terminal` owns, but a
+    plugin cannot depend on another plugin, and the terminal emulator was
+    that plugin's private module.
+    Assumed: the emulator (`Screen` and the `vte` parser) moved into the
+    kernel as `ext::terminal`, where both plugins use it; the SSH console
+    is an `ActionOutcome::View(View::Console)` over a PTY `shell` channel
+    of the pooled connection, so no second login happens, and
+    `ext-action-terminal` is unchanged in behaviour.
+
+161. (issue 34) "Previewers declare whether they need the whole file or
+    can work on a prefix", the prefix served by the provider and the cap
+    "applied by the preview frame when the provider is REMOTE", with "a
+    temporary file that is removed when the tab closes".
+    Assumed: `Previewer::reads()` answers `Reads::Whole` (the default) or
+    `Reads::Prefix` (text, code, CSV and hex; Markdown has no previewer of
+    its own); for a `REMOTE` provider the kernel hands a prefix previewer a
+    provider whose reads stop at 256 KiB (`app::REMOTE_PREFIX_CHUNK`),
+    shows *Load more* under the preview with the bytes served, and each
+    *Load more* adds another chunk; a whole-file previewer's file above
+    the cap shows the badges and *Preview anyway* instead. The cap is the
+    provider's `remote_preview_cap(loc)` (the host's
+    `preview_size_cap_mib`, then the `ssh.toml` setting), the kernel's
+    4 MiB (`app::REMOTE_PREVIEW_CAP`) when the provider names none.
+    `Provider::open_read_at(loc, offset)` reads from an offset (`tail -c
+    +N` here; the default reads and discards). Nothing is spooled to a
+    temporary file by the kernel: the previewers read through the
+    provider, and the ones that need a path (Office, media) keep their
+    own temporary copies as they do for archives.
+
+162. (issue 34) The host editor offers "jump host (optional, picked from
+    the host list)" and Rick's hosts "are created and edited from the
+    Network section", but `Connector::schema` returned a borrowed, static
+    schema of text fields and the side panel had *Add connection…* only.
+    Assumed: `Connector::schema(&self) -> ConnectionSchema` is owned and
+    computed per call, so the jump field lists the hosts known now;
+    `ConnectionFieldKind::Choice { options, default }` draws a combo box;
+    `Command::EditConnection` and the row item *Edit…* open the same
+    dialogue filled in, for Rick's own connections only (a host of
+    `~/.ssh/config` is read-only in Rick, so its row has neither *Edit…*
+    nor *Remove connection*). The other provider plugins return a clone
+    of their schema.
+
+163. (issue 34) The configuration section keeps Rick's hosts as
+    `[[ssh.hosts]]` and the three settings under `[ssh]` in `rick.toml`,
+    while issue 21 made the connections of every network provider
+    `[[connections]]` tables of `rick.toml` and issue 23 put an
+    extension's settings in its own TOML file.
+    Assumed: Rick's hosts are `[[connections]]` tables with
+    `provider = "ssh"`, the alias as `name` and the spec's fields (`host`,
+    `port`, `user`, `default_dir`, `identity_file`, `jump`,
+    `remember_password`, `preview_size_cap_mib`), so the host editor is
+    the connection dialogue every network provider has, with *Edit…*; the
+    three settings (`read_openssh_config`, `idle_timeout_minutes`,
+    `preview_size_cap_mib`) live in `ssh.toml` and appear in Settings like
+    every extension's. The keys are the spec's; the tables moved.
+
+164. (issue 34) What `ssh:/<alias>` lists and how a remote path is kept in
+    a location.
+    Assumed: `ssh:/<alias>` is the host's default directory, the remote
+    home when the host names none, resolved once per connection with
+    `pwd`; every location below carries the remote path as absolute bytes,
+    so a folder outside the default directory is reached by typing its
+    path and names that are no UTF-8 survive. The rows of the provider's
+    root are synthesised from the configuration without connecting.
+
+165. (issue 34) "Secrets live only in the OS keychain", without the keys.
+    Assumed: `ssh/<alias>/password` and `ssh/<alias>/passphrase` through
+    `ext::secret_key`, the scheme of the other network providers; the
+    editor's *Remember password in the OS keychain* stores the password
+    typed there, the passphrase dialogue's *Remember in the keychain* box
+    the passphrase, and a secret typed when nothing is remembered serves
+    the one connection; *Remove connection* removes both keys.
+
+166. (issue 34) "disk usage: `df -P` for the status bar", but the status
+    bar shows no disk usage for any provider yet.
+    Assumed: `SshProvider::disk_usage` runs `df -P` and parses it, and no
+    kernel slot asks for it until the status bar grows one for every
+    provider.
+
+167. (issue 34) "Connection errors surface in the tab as a banner with
+    Retry, never as a modal dialogue": a listing that failed was a toast.
+    Assumed: the tab gained `failure`, set by the kernel for any provider's
+    listing error and cleared by the next listing that works, drawn as a
+    banner over the empty list with *Retry* (`Command::Refresh`); the toast
+    is gone for listing errors. A failed connection is a listing error.
+
+168. (issue 34) The `busybox` profile lists with "`ls -lan` where
+    `find -printf` is missing", but `ls -lan` has no stable layout (the
+    date changes with the file's age) and splits a name on its spaces and
+    newlines, which the acceptance requires to survive.
+    Assumed: `busybox` and `bsd` list through a shell loop over the
+    directory's names (`for f in * .[!.]* ..?*`) that runs `stat -c` or
+    `stat -f` on each and prints NUL-separated records: slower than one
+    `find`, byte-exact. `uname`, `stat`, `find -printf`, `head -c`,
+    `tail -c` and `busybox` itself are probed once per host.
+
+169. (issue 34) The acceptance names Docker containers for Linux CI and
+    the macOS runner's own sshd for `bsd`; the sandbox the plugin was built
+    in has neither Docker nor an sshd.
+    Assumed: an SSH server in the test process (`ext_ssh::fake_sshd`, the
+    server side of `russh`, behind the `fake-sshd` feature; a deterministic
+    host key, password, public-key and keyboard-interactive login,
+    `MaxSessions`, `direct-tcpip` for a bastion) runs the plugin's own
+    tests and the acceptance tests in `tests` on every OS; tier 1 and the
+    Linux x64 job of tier 2 also build the `gnu` (Debian) and `busybox`
+    (Alpine) sshd images and the bastion network from
+    `.github/scripts/containers.sh` and name them through
+    `RICK_SSH_GNU_PORT` and friends, with `RICK_REQUIRE_CONTAINERS` making
+    a skip a failure. The macOS runner's sshd is not enabled (Remote Login
+    is an interactive setting), so the `bsd` profile is proven by the
+    command tests with BSD `stat -f` output.
+
+170. (issue 24) The spec's *Inspect* opens "the Windows Properties dialogue,
+    the macOS Get Info window, and on Linux Rick's own properties
+    dialogue", while the issue has Properties edit ownership, mode bits and
+    ACLs, an NTFS ACL entry added and removed on Windows among them, which
+    the system dialogues cannot be driven to.
+    Assumed: Properties is Rick's own dialogue on every platform, the
+    general rows above the Permissions section, and on Windows and macOS a
+    *System properties…* button opens the platform's own dialogue as
+    before. The dialogue follows the entry: a change sends the new state
+    back while it is open.
+
+171. (issue 24) "ACLs where the file system has them (POSIX ACLs, NFSv4
+    ACLs, NTFS ACLs on Windows with a trustee list)"; macOS has ACLs of its
+    own the issue does not name.
+    Assumed: one `Acl` type with a flavour per file system, read and
+    written by `platform::Permissions`: POSIX ACLs through the
+    `system.posix_acl_access` and `system.posix_acl_default` attributes
+    (the minimal list derived from the mode when none is stored, and
+    removed again when the list is reduced to its three base entries),
+    NFSv4 ACLs through `system.nfs4_acl` (shown and reduced in the
+    dialogue, new entries written with the server's tools since the `who`
+    forms and masks are the server's), macOS ACLs through `acl_to_text`
+    and `acl_from_text` (allow or deny, user or group, the permission
+    words `chmod +a` takes), NTFS discretionary ACLs through the security
+    API (allow or deny per trustee, the standard rights as checkboxes, the
+    raw mask shown, inherited entries greyed out and left to the parent,
+    inheritance blockable). No ACL library is linked.
+
+172. (issue 24) "Changes that need elevation ask through a new
+    `platform::Elevate` trait (polkit on Linux, Authorization Services on
+    macOS, UAC via a helper on Windows) and run only the privileged step
+    elevated"; the installer (issue 44) had added `Elevate` for Linux.
+    Assumed: the privileged step is `rick-perms`, a second binary beside
+    `rick` that reads a request file (the entries and their changes),
+    records what each had and applies them with the same platform code,
+    and prints the reply; a job applies every entry unprivileged first and
+    hands the ones refused to the helper in one call, so the user sees one
+    prompt per job. `Elevate::run_elevated` reaches `pkexec` on Linux,
+    `osascript … with administrator privileges` on macOS (Authorization
+    Services' own prompt) and `ShellExecuteEx` with `runas` on Windows,
+    where an elevated process shares no pipes, so the arguments get
+    `--output <file>` and the file comes back as the output; a program run
+    elevated honours that flag. `RICK_PERMS_HELPER` names the helper for
+    packagers who keep it elsewhere; a test binary finds it one directory
+    up from `deps/`.
+
+173. (issue 24) "Apply recursively with separate choices for files and
+    folders".
+    Assumed: the folder's dialogue has *Apply to enclosed items* with
+    *Files* and *Folders* boxes: which kinds the one change applies to
+    inside, the target folder itself always included; folders are walked
+    without following links, and every folder is changed after what is
+    inside it, the target last, so a mode without the execute bit still
+    reaches the contents (undo restores in the reverse order for the same
+    reason). Locking folders out is otherwise the user's choice, as
+    `chmod -R` leaves it.
+
+174. (issue 24) "Every change a job with undo where the previous state was
+    captured".
+    Assumed: the job records each entry's owner, group, mode and ACL before
+    it changes it, the helper reports the same for the entries it changed,
+    and the whole job is one step on the undo stack; undo and redo run as
+    jobs of their own and may need the helper again, which prompts again.
+    An entry that fails is reported in a notification and the rest goes
+    on; nothing elevated runs when no entry was refused.
+
+175. (issue 24) "An elevation-needed change on a root-owned fixture prompts
+    (Linux CI with a polkit fake) and succeeds".
+    Assumed: the test job of tier 1 installs `.github/scripts/fake-pkexec.sh`
+    as `/usr/local/bin/pkexec`, which runs the program through the
+    runner's passwordless `sudo`, and sets `RICK_ELEVATE_FIXTURE`, under
+    which `crates/rick/tests/perms.rs` makes a file root's with `sudo`,
+    changes its mode through the job (refused, then the helper as root)
+    and undoes it; elsewhere that test prints a note and passes. The fake
+    platform runs the helper as the current user when a test asks
+    (`Fake::set_elevate_runs`), for the protocol round trip.
+
+176. (issue 24) Where the owner and group lists come from.
+    Assumed: `/etc/passwd` and `/etc/group` on Linux (a name typed resolves
+    through the C library, so LDAP and the like work by name), Open
+    Directory through `getpwent` and `getgrent` on macOS (the `_` service
+    accounts left out), the Net API's local users and groups plus the
+    well-known trustees (Everyone, Authenticated Users, SYSTEM,
+    Administrators, Users) on Windows; a name typed into the dialogue is
+    resolved when the change is applied.
+
+177. (issue 24) `Capabilities::PERMISSIONS` exists and the local provider
+    sets it, but `Provider` has no permission methods and the ssh spec says
+    the flag stays off there.
+    Assumed: permissions are the platform's business for local entries;
+    the Permissions section appears for a local entry only, every other
+    entry's Properties shows the general rows. A provider-level API waits
+    for a provider that wants it.
+
+178. (issue 24) "User-facing strings still go through one `t!` lookup
+    function from the start" (SPEC.md "Language"), and the issue has the
+    lookup read Fluent files; the spec names no crate for it, and every
+    plugin's strings must go through the same one.
+    Assumed: the lookup is `ext::i18n` with the `ext::t!` macro, in the
+    dylib the binary and every plugin share, so one bundle per language
+    serves the kernel and the plugins alike; `ext` gained `fluent-bundle`
+    for it. The strings of the crates below `ext` (`platform`'s error texts,
+    `types`' error display) stay English, as do the texts the issue does
+    not name: error messages and the reasons in `Error::Unsupported`, job
+    and undo labels ("Copy 3 items"), the bodies of confirmations that
+    carry data, the status bar's facts and the rows' keys of the info
+    sections; a later pass can move them the same way.
+
+179. (issue 24) A label an extension hands the registry once (a setting's,
+    a connection field's, a connection schema's title, an info section's,
+    a decorator column's) was a `&'static str`; a language applied live
+    cannot relabel it.
+    Assumed: those labels are `ext::Text`, a Fluent key read every time it
+    is shown, so they follow a language change too; `Action::label` and
+    `Availability::Disabled` return a `String` built with `t!` on each call.
+    The extension API is at version 11 for it.
+
+180. (issue 24) Where a plugin's translations live and how they reach the
+    lookup.
+    Assumed: `crates/<plugin>/locales/<lang>.ftl`, bundled with
+    `include_str!` and handed to `Registry::translations` while the plugin
+    registers; the keys carry the plugin's prefix (`git-commit`,
+    `ssh-open-console-here`) so one bundle holds every plugin's messages;
+    English is the one language every key must have. The names of the
+    extension groups (Git, SVN, SSH, Trash, Installer) and the option texts
+    of a `Choice` setting are values, not translated.
+
+181. (issue 24) "A CI check fails on a user-facing string literal outside
+    `t!` (a lint or a grep over ui-egui)".
+    Assumed: `.github/scripts/check-strings.py`, run by the `fmt` job and
+    by a test, reads the non-test code of `crates/ui-egui/src` and reports
+    a string literal with letters handed to a widget or a window title
+    (`ui.label("…")`, `egui::Button::new("…")`, `.on_hover_text("…")`, the
+    shell's toast); `t!("…")` on the line is the key, and `// i18n: ok`
+    exempts a glyph, a unit or a format of numbers. Text a helper function
+    returns was moved into `t!` by hand, since no grep sees it.
+
+182. (issue 24) The German proof.
+    Assumed: `locales/de.ftl` translates the Settings screen in full, the
+    burger and context menus with every core action and the reasons a core
+    action is greyed out, the Properties dialogue's permission words, and
+    the plugins with actions in the context menus translate those actions
+    in their own `de.ftl` (Git, SVN, SSH, the trash, compress, compare,
+    rename, the console, the installer); everything else falls back to
+    English, which is what the issue asks of the rest.
+
+183. (issue 24) "A language setting (system default, or a listed language)".
+    Assumed: `language` in `rick.toml`, `None` for the system's; the
+    Settings row lists *System default* and every language that has
+    messages under the name its own file gives it (`language-name`). The
+    system's language is `sys-locale`'s list, negotiated against the bundled
+    languages by whole tag, then by language alone (`de-CH` finds `de`),
+    English when nothing matches; `fluent-langneg` was not used, since it
+    speaks ICU's locale type. A file `locales/<lang>.ftl` in the
+    configuration directory overrides the bundled messages of that language
+    key by key, read at start.
+
+184. (issue 24) Fluent wraps placeables in Unicode isolation marks.
+    Assumed: off (`set_use_isolating(false)`), since egui draws the marks as
+    boxes; a key nobody wrote comes back as itself, so a missing translation
+    is a visible text or key, never a panic.

@@ -1,6 +1,7 @@
 //! One tab's content: toolbar with path bar, the file view, and the foot
 //! with the status line and the filter.
 
+use ext::t;
 use std::fmt::Write as _;
 
 use app::Command;
@@ -18,10 +19,35 @@ pub fn show(ui: &mut egui::Ui, cx: &mut PaneCx<'_>) {
     egui::Panel::top(egui::Id::new(("toolbar", cx.tab_id)))
         .show_separator_line(false)
         .show(ui, |ui| toolbar(ui, cx));
+    if cx.tab.failure.is_some() {
+        egui::Panel::top(egui::Id::new(("failure", cx.tab_id)))
+            .show_separator_line(true)
+            .show(ui, |ui| failure_banner(ui, cx));
+    }
     egui::Panel::bottom(egui::Id::new(("foot", cx.tab_id)))
         .show_separator_line(true)
         .show(ui, |ui| foot(ui, cx));
     egui::CentralPanel::no_frame().show(ui, |ui| views::show(ui, cx));
+}
+
+/// The banner over a list that could not be read: why, and *Retry*, which
+/// lists the location again. A connection error is never a modal dialogue.
+fn failure_banner(ui: &mut egui::Ui, cx: &mut PaneCx<'_>) {
+    let Some(failure) = cx.tab.failure.as_deref() else {
+        return;
+    };
+    ui.horizontal(|ui| {
+        ui.label(
+            egui::RichText::new(format!("{} {failure}", icons::FAILED))
+                .color(ui.visuals().warn_fg_color),
+        );
+        ui.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
+            if ui.button(t!("retry")).clicked() {
+                cx.requests
+                    .push(Request::Command(Command::Refresh(cx.pane)));
+            }
+        });
+    });
 }
 
 fn intent(cx: &mut PaneCx<'_>, intent: Intent) {
@@ -104,19 +130,20 @@ fn remember(cx: &mut PaneCx<'_>, group: &'static str, rect: egui::Rect) {
 }
 
 fn left_group(ui: &mut egui::Ui, cx: &mut PaneCx<'_>) {
-    let back = icon_button(ui, icons::BACK, !cx.tab.history.back.is_empty()).on_hover_text("Back");
+    let back = icon_button(ui, icons::BACK, !cx.tab.history.back.is_empty())
+        .on_hover_text(t!("pane-back"));
     remember(cx, "left", back.rect);
     if back.clicked() {
         intent(cx, Intent::Back);
     }
     let forward = icon_button(ui, icons::FORWARD, !cx.tab.history.forward.is_empty())
-        .on_hover_text("Forward");
+        .on_hover_text(t!("pane-forward"));
     remember(cx, "left", forward.rect);
     if forward.clicked() {
         intent(cx, Intent::Forward);
     }
     let has_parent = cx.tab_ui.crumbs_of(&cx.tab.location).len() >= 2;
-    let up = icon_button(ui, icons::UP, has_parent).on_hover_text("Parent directory");
+    let up = icon_button(ui, icons::UP, has_parent).on_hover_text(t!("pane-parent-directory"));
     remember(cx, "left", up.rect);
     if up.clicked() {
         intent(cx, Intent::Parent);
@@ -125,7 +152,7 @@ fn left_group(ui: &mut egui::Ui, cx: &mut PaneCx<'_>) {
 
 /// View mode dropdown, hidden-files toggle and refresh, right to left.
 fn right_group(ui: &mut egui::Ui, cx: &mut PaneCx<'_>) {
-    let refresh = icon_button(ui, icons::REFRESH, true).on_hover_text("Refresh");
+    let refresh = icon_button(ui, icons::REFRESH, true).on_hover_text(t!("pane-refresh"));
     remember(cx, "right", refresh.rect);
     if refresh.clicked() {
         intent(cx, Intent::Refresh);
@@ -194,7 +221,7 @@ fn view_mode_dropdown(ui: &mut egui::Ui, cx: &mut PaneCx<'_>) {
             };
             let clicked = ui
                 .add_enabled(available, egui::Button::new(marked))
-                .on_disabled_hover_text("Not implemented yet")
+                .on_disabled_hover_text(t!("pane-not-implemented-yet"))
                 .clicked();
             if clicked {
                 cx.requests.push(Request::Command(Command::SetView {
@@ -206,7 +233,7 @@ fn view_mode_dropdown(ui: &mut egui::Ui, cx: &mut PaneCx<'_>) {
         }
     });
     remember(cx, "right", response.response.rect);
-    response.response.on_hover_text("View mode");
+    response.response.on_hover_text(t!("pane-view-mode"));
 }
 
 /// The path bar in `rect`: the breadcrumb, or the text field while editing.
@@ -313,7 +340,7 @@ fn breadcrumb(ui: &mut egui::Ui, cx: &mut PaneCx<'_>, rect: egui::Rect) {
                 }
             }
         });
-        response.response.on_hover_text("Hidden ancestors");
+        response.response.on_hover_text(t!("pane-hidden-ancestors"));
         ui.weak(icons::SEGMENT);
     }
     let room_for_last = (available - (used - widths[last])).max(24.0);
@@ -357,7 +384,7 @@ fn breadcrumb(ui: &mut egui::Ui, cx: &mut PaneCx<'_>, rect: egui::Rect) {
     // before it switches to editing.
     let copy = ui
         .add(egui::Button::new(icons::COPY).frame(false))
-        .on_hover_text("Copy path");
+        .on_hover_text(t!("pane-copy-path"));
     if copy.clicked() {
         cx.requests.push(Request::RunAction {
             action: ext::ActionId("core.copy_path"),
@@ -419,7 +446,7 @@ fn foot(ui: &mut egui::Ui, cx: &mut PaneCx<'_>) {
             if !cx.tab.filter.is_empty()
                 && ui
                     .small_button(icons::CLOSE)
-                    .on_hover_text("Clear filter")
+                    .on_hover_text(t!("pane-clear-filter"))
                     .clicked()
             {
                 cx.requests.push(Request::Command(Command::Filter {

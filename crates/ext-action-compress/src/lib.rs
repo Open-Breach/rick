@@ -68,6 +68,10 @@ impl Extension for CompressExtension {
     }
 
     fn register(&self, reg: &mut Registry) -> Result<(), Error> {
+        reg.translations(&[
+            ("en", include_str!("../locales/en.ftl")),
+            ("de", include_str!("../locales/de.ftl")),
+        ]);
         for action in actions::all() {
             reg.action(action);
         }

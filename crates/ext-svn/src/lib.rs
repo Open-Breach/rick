@@ -23,10 +23,12 @@
 pub mod actions;
 pub mod wc;
 
+use ext::t;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, PoisonError};
 
+use ext::Text;
 use ext::{
     API_VERSION, Badge, Capabilities, CellValue, ColumnDef, ColumnId, DecorateCtx, Decoration,
     Decorator, Extension, Manifest, PanelSection, Platforms, Points, Registry, Version,
@@ -43,7 +45,7 @@ pub const STATUS_COLUMN: ColumnId = ColumnId("svn.status");
 
 const COLUMNS: [ColumnDef; 1] = [ColumnDef {
     id: STATUS_COLUMN,
-    label: "SVN",
+    label: Text("svn-svn"),
 }];
 
 /// The OS path of a local location; `None` for other providers.
@@ -100,6 +102,10 @@ impl Extension for SvnExtension {
     }
 
     fn register(&self, reg: &mut Registry) -> Result<(), Error> {
+        reg.translations(&[
+            ("en", include_str!("../locales/en.ftl")),
+            ("de", include_str!("../locales/de.ftl")),
+        ]);
         reg.decorator(Arc::new(SvnDecorator::new(Arc::clone(&self.copies))));
         let shared = Arc::new(actions::Shared {
             copies: Arc::clone(&self.copies),
@@ -300,7 +306,7 @@ impl Decorator for SvnDecorator {
             .map_or("Unchanged", FileStatus::label);
         rows.push(("Status".to_owned(), status.to_owned()));
         Some(PanelSection {
-            title: "SVN".to_owned(),
+            title: t!("svn-svn"),
             rows,
         })
     }

@@ -4,6 +4,7 @@
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
+use ext::Text;
 use ext::platform::Platform;
 use ext::{
     Connection, ConnectionField, ConnectionFieldKind, ConnectionSchema, Connector, async_trait,
@@ -31,11 +32,11 @@ pub mod field {
 #[must_use]
 pub fn schema() -> ConnectionSchema {
     ConnectionSchema {
-        title: "Google Cloud Storage",
+        title: Text("gcs-google-cloud-storage"),
         fields: vec![
             ConnectionField {
                 key: field::PROJECT,
-                label: "Project",
+                label: Text("gcs-project"),
                 kind: ConnectionFieldKind::Text {
                     default: String::new(),
                 },
@@ -43,13 +44,13 @@ pub fn schema() -> ConnectionSchema {
             },
             ConnectionField {
                 key: field::KEY,
-                label: "Service account key (JSON, or its file)",
+                label: Text("gcs-service-account-key-json-or-its"),
                 kind: ConnectionFieldKind::Secret,
                 required: false,
             },
             ConnectionField {
                 key: field::ENDPOINT,
-                label: "Endpoint (empty for Google)",
+                label: Text("gcs-endpoint-empty-for-google"),
                 kind: ConnectionFieldKind::Text {
                     default: String::new(),
                 },
@@ -156,8 +157,8 @@ impl Connector for GcsConnections {
         PROVIDER_ID
     }
 
-    fn schema(&self) -> &ConnectionSchema {
-        &self.schema
+    fn schema(&self) -> ConnectionSchema {
+        self.schema.clone()
     }
 
     /// Keeps the client of a connection whose settings did not change,

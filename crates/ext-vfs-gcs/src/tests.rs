@@ -136,7 +136,7 @@ fn a_service_account_signs_a_jwt_and_a_token_parses() {
 #[test]
 fn the_schema_and_the_extension_register() {
     let schema = schema();
-    assert_eq!(schema.title, "Google Cloud Storage");
+    assert_eq!(schema.title.key(), "gcs-google-cloud-storage");
     assert_eq!(schema.secret_fields().collect::<Vec<_>>(), ["key"]);
     assert!(schema.field("project").is_some_and(|f| f.required));
     assert!(matches!(

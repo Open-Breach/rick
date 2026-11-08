@@ -373,7 +373,7 @@ fn the_decorator_answers_pending_first_then_publishes_and_then_from_cache() {
     assert!(decorator.applies_to(&loc(&work)));
     assert!(!decorator.applies_to(&loc(dir.path())));
     assert_eq!(decorator.columns().len(), 1);
-    assert_eq!(decorator.columns()[0].label, "SVN");
+    assert_eq!(decorator.columns()[0].label.key(), "svn-svn");
     assert_eq!(
         decorator.invalidates_on(&loc(&work.join("sub"))),
         [loc(&work.join(".svn"))]
@@ -433,7 +433,7 @@ fn the_decorator_answers_pending_first_then_publishes_and_then_from_cache() {
     let panel = decorator
         .panel(&batch[0])
         .unwrap_or_else(|| panic!("panel"));
-    assert_eq!(panel.title, "SVN");
+    assert_eq!(panel.title, ext::t!("svn-svn"));
     assert!(
         panel.rows.iter().any(|(k, v)| k == "Revision" && v == "r1"),
         "{panel:?}"

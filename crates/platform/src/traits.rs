@@ -7,6 +7,8 @@ use std::time::SystemTime;
 use async_trait::async_trait;
 use types::Error;
 
+use crate::perms::Permissions;
+
 /// An entry in the trash, with enough to put it back.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TrashedItem {
@@ -327,14 +329,20 @@ impl ElevatedOutput {
 /// itself never runs elevated; the program does, and it is a helper that
 /// validates its input.
 pub trait Elevate: Send + Sync {
-    /// Runs `program` with `args` elevated and waits for it to end.
+    /// Runs `program` with `args` elevated and waits for it to end: through
+    /// `pkexec` and its polkit prompt on Linux, Authorization Services on
+    /// macOS, User Account Control on Windows. An elevated process on
+    /// Windows shares no pipes with this one, so there the arguments get
+    /// `--output <file>` appended and the file's contents come back as the
+    /// standard output: a program run this way must honour that flag, as
+    /// `rick-perms` does.
     ///
     /// # Errors
     ///
     /// `Error::Unsupported` where the platform offers no prompt (no
-    /// `pkexec`; macOS and Windows in this version);
-    /// `Error::PermissionDenied` when the user dismissed the prompt or is
-    /// not allowed; otherwise the error from starting the program.
+    /// `pkexec` on Linux); `Error::PermissionDenied` when the user dismissed
+    /// the prompt or is not allowed; otherwise the error from starting the
+    /// program.
     fn run_elevated(&self, program: &Path, args: &[OsString]) -> Result<ElevatedOutput, Error>;
 }
 
@@ -491,6 +499,7 @@ pub trait Platform:
     + Terminal
     + Elevate
     + Properties
+    + Permissions
     + ConfigDir
     + NativeDialogs
     + Clipboard
@@ -509,6 +518,7 @@ impl<
         + Terminal
         + Elevate
         + Properties
+        + Permissions
         + ConfigDir
         + NativeDialogs
         + Clipboard

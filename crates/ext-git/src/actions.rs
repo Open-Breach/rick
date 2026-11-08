@@ -1,6 +1,7 @@
 //! The "Git" action group: each action runs the `git` command line in the
 //! work tree as a job, then drops the cached status so the badges follow.
 
+use ext::t;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::Arc;
@@ -153,15 +154,15 @@ macro_rules! git_action {
     };
 }
 
-git_action!(Commit, "git.commit", "Commit", None);
-git_action!(Stash, "git.stash", "Stash", None);
-git_action!(StashPop, "git.stash_pop", "Stash pop", None);
-git_action!(Pull, "git.pull", "Pull", None);
-git_action!(Push, "git.push", "Push", None);
-git_action!(CheckoutBranch, "git.checkout", "Checkout branch", None);
-git_action!(DiscardChanges, "git.discard", "Discard changes", None);
-git_action!(ShowLog, "git.log", "Show log", None);
-git_action!(Blame, "git.blame", "Blame", None);
+git_action!(Commit, "git.commit", "git-commit", None);
+git_action!(Stash, "git.stash", "git-stash", None);
+git_action!(StashPop, "git.stash_pop", "git-stash-pop", None);
+git_action!(Pull, "git.pull", "git-pull", None);
+git_action!(Push, "git.push", "git-push", None);
+git_action!(CheckoutBranch, "git.checkout", "git-checkout-branch", None);
+git_action!(DiscardChanges, "git.discard", "git-discard-changes", None);
+git_action!(ShowLog, "git.log", "git-show-log", None);
+git_action!(Blame, "git.blame", "git-blame", None);
 
 /// The common parts of the trait, with the per-action pieces as closures.
 macro_rules! impl_action {
@@ -170,8 +171,8 @@ macro_rules! impl_action {
             fn id(&self) -> ActionId {
                 Self::id_label().0
             }
-            fn label(&self) -> &'static str {
-                Self::id_label().1
+            fn label(&self) -> String {
+                ext::t!(Self::id_label().1)
             }
             fn group(&self) -> ActionGroup {
                 GROUP
@@ -209,7 +210,7 @@ macro_rules! impl_action {
 fn needs_selection(repos: &Repos, ctx: &ActionCtx) -> Availability {
     match inside(repos, ctx) {
         Availability::Enabled if ctx.selection.is_empty() => {
-            Availability::Disabled("select the files first")
+            Availability::Disabled(t!("git-select-the-files-first"))
         }
         other => other,
     }
@@ -220,9 +221,9 @@ fn needs_one_file(repos: &Repos, ctx: &ActionCtx) -> Availability {
     match inside(repos, ctx) {
         Availability::Enabled => match ctx.selection.as_slice() {
             [one] if one.kind == types::EntryKind::File => Availability::Enabled,
-            [_] => Availability::Disabled("blame works on a file"),
-            [] => Availability::Disabled("select a file first"),
-            _ => Availability::Disabled("select one file"),
+            [_] => Availability::Disabled(t!("git-blame-works-on-a-file")),
+            [] => Availability::Disabled(t!("git-select-a-file-first")),
+            _ => Availability::Disabled(t!("git-select-one-file")),
         },
         other => other,
     }
@@ -231,7 +232,7 @@ fn needs_one_file(repos: &Repos, ctx: &ActionCtx) -> Availability {
 impl_action!(Commit,
     availability: inside,
     run: |shared, jobs, ui, root, ctx| {
-        let Some(message) = ui.prompt("Commit message", "") else {
+        let Some(message) = ui.prompt(&t!("git-commit-message"), "") else {
             return Ok(ActionOutcome::Done);
         };
         if message.trim().is_empty() {
@@ -295,7 +296,7 @@ impl_action!(CheckoutBranch,
             .snapshot(&root)
             .and_then(|s| s.branch.clone())
             .unwrap_or_default();
-        let Some(branch) = ui.prompt("Checkout branch", &current) else {
+        let Some(branch) = ui.prompt(&t!("git-checkout-branch"), &current) else {
             return Ok(ActionOutcome::Done);
         };
         let branch = branch.trim().to_owned();
@@ -311,7 +312,7 @@ impl_action!(DiscardChanges,
     run: |shared, jobs, ui, root, ctx| {
         let paths = rela_paths(&root, &ctx.selection);
         let what = if paths.len() == 1 { paths[0].clone() } else { format!("{} items", paths.len()) };
-        if !ui.confirm("Discard changes", &format!("Discard the changes to {what}? This cannot be undone.")) {
+        if !ui.confirm(&t!("git-discard-changes"), &format!("Discard the changes to {what}? This cannot be undone.")) {
             return Ok(ActionOutcome::Done);
         }
         let repos = Arc::clone(&shared.repos);
@@ -337,7 +338,7 @@ impl_action!(ShowLog,
             args.extend(paths);
         }
         let log = git(&root, &args).map_err(to_error)?;
-        ui.show("Git log", if log.is_empty() { "No commits yet." } else { &log });
+        ui.show(&t!("git-git-log"), if log.is_empty() { "No commits yet." } else { &log });
         Ok(ActionOutcome::Done)
     }
 );

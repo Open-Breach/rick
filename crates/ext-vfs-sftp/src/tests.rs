@@ -78,7 +78,7 @@ fn entries_take_kind_size_times_and_flags_from_the_attributes() {
 #[test]
 fn the_schema_names_the_fields_and_the_secrets() {
     let schema = schema();
-    assert_eq!(schema.title, "SFTP");
+    assert_eq!(schema.title.key(), "sftp-sftp");
     let secrets: Vec<&str> = schema.secret_fields().collect();
     assert_eq!(secrets, ["passphrase", "password"]);
     assert!(schema.field("host").is_some_and(|f| f.required));
@@ -108,7 +108,7 @@ fn the_extension_registers_a_provider_and_a_connector_with_the_platform() {
     let connector = registry
         .connector_of(PROVIDER_ID)
         .unwrap_or_else(|| panic!("connector"));
-    assert_eq!(connector.schema().title, "SFTP");
+    assert_eq!(connector.schema().title.key(), "sftp-sftp");
     let provider = &registry.providers()[0];
     assert_eq!(provider.id(), PROVIDER_ID);
     assert_eq!(

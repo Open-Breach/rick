@@ -2,6 +2,7 @@
 //! any executable, with the choice remembered per file type in
 //! `core.toml` (Mod+O).
 
+use ext::t;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -88,8 +89,8 @@ impl Action for OpenWith {
     fn id(&self) -> ActionId {
         ActionId("core.open_with")
     }
-    fn label(&self) -> &'static str {
-        "Open with…"
+    fn label(&self) -> String {
+        t!("action-open-with")
     }
     fn group(&self) -> ActionGroup {
         ActionGroup::Core
@@ -108,7 +109,7 @@ impl Action for OpenWith {
                     .iter()
                     .all(|e| e.id.provider == vfs_local::PROVIDER_ID) =>
             {
-                Availability::Disabled("only local files open in another program")
+                Availability::Disabled(t!("reason-only-local-files-open-elsewhere"))
             }
             other => other,
         }

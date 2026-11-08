@@ -1,5 +1,9 @@
 //! A small terminal emulator: the screen of cells a shell's output paints,
-//! driven by the `vte` parser.
+//! driven by the `vte` parser. It is the emulation behind the console pane
+//! ([`Console`](crate::Console)): a plugin that has a byte stream from a
+//! shell, a pseudo-terminal on this machine or a `shell` channel over SSH,
+//! feeds the bytes to a [`Screen`] and hands the pane a `Console` that
+//! snapshots it, so the pane draws any shell the same way.
 //!
 //! Enough of VT100 through xterm for a shell, an editor and a pager:
 //! cursor movement, erasing, inserting and deleting lines and characters,
@@ -11,10 +15,30 @@
 //! cell. The answers a program asks for (the cursor position, the device
 //! attributes) are queued in [`Screen::take_responses`] for the session to
 //! send back.
+//!
+//! # Worked example
+//!
+//! Feeding a shell's output and reading the screen back.
+//!
+//! ```
+//! use ext::terminal::Screen;
+//!
+//! let mut screen = Screen::new(20, 3);
+//! let mut parser = ext::terminal::vte::Parser::new();
+//! parser.advance(&mut screen, b"$ ls\r\n\x1b[1;34mdocs\x1b[m  notes.txt");
+//! assert_eq!(screen.text(), "$ ls\ndocs  notes.txt");
+//! let snapshot = screen.snapshot(0);
+//! assert_eq!(snapshot.cursor, Some((15, 1)));
+//! assert_eq!(snapshot.cells[20].fg, ext::TermColor::Indexed(4));
+//! ```
 
 use std::collections::VecDeque;
 
-use ext::{Cell, CellStyle, TermColor};
+/// The parser of the escape sequences, re-exported so a plugin drives a
+/// [`Screen`] with the parser the screen was built for.
+pub use vte;
+
+use crate::view::{Cell, CellStyle, TermColor};
 
 /// Lines of history kept above the screen.
 pub const SCROLLBACK: usize = 10_000;
@@ -157,7 +181,7 @@ impl Screen {
     /// The screen as the UI draws it, scrolled back `scrolled_back` lines
     /// into the history (clamped to what there is).
     #[must_use]
-    pub fn snapshot(&self, scrolled_back: usize) -> ext::Screen {
+    pub fn snapshot(&self, scrolled_back: usize) -> crate::view::Screen {
         let back = scrolled_back.min(self.scrollback.len());
         let mut cells = Vec::with_capacity(self.cols * self.rows);
         let history_start = self.scrollback.len() - back;
@@ -178,7 +202,7 @@ impl Screen {
                 u16::try_from(self.row).unwrap_or(u16::MAX),
             )
         });
-        ext::Screen {
+        crate::view::Screen {
             cols: u16::try_from(self.cols).unwrap_or(u16::MAX),
             rows: u16::try_from(self.rows).unwrap_or(u16::MAX),
             cells,

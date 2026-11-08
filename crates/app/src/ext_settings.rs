@@ -124,6 +124,7 @@ impl ExtSettings {
 mod tests {
     use super::*;
     use ext::SettingField;
+    use ext::Text;
     use types::ExtId;
 
     fn schema() -> SettingsSchema {
@@ -132,7 +133,7 @@ mod tests {
             fields: vec![
                 SettingField {
                     key: "console",
-                    label: "Console",
+                    label: Text("Console"),
                     kind: SettingKind::Choice {
                         options: vec!["embedded", "system"],
                         default: 0,
@@ -140,7 +141,7 @@ mod tests {
                 },
                 SettingField {
                     key: "limit",
-                    label: "Limit",
+                    label: Text("Limit"),
                     kind: SettingKind::Integer {
                         default: 5,
                         min: 1,

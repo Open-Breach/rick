@@ -28,6 +28,7 @@
 //! 1:1, and a control change keeps the last frame on screen, marked stale,
 //! until the next render lands, so an orbit never drops to a spinner.
 
+use ext::t;
 use std::collections::HashMap;
 use std::ops::Range;
 use std::time::Duration;
@@ -268,6 +269,12 @@ pub struct Slot {
     status: Vec<String>,
     controls: Vec<PreviewControl>,
     error: Option<String>,
+    /// The document shows a prefix of a remote file: the bytes served and
+    /// the file's size; the pane offers *Load more*.
+    prefix: Option<(u64, Option<u64>)>,
+    /// A remote file above the size cap for whole-file previews: its size
+    /// and the cap; the pane offers *Preview anyway*.
+    capped: Option<(u64, u64)>,
     /// Control changes made while the document was out rendering.
     queued: Vec<(ControlId, ControlValue)>,
     /// Rasters at actual pixels instead of fitted to the pane.
@@ -325,9 +332,24 @@ impl Slot {
         self.take_facts(&*doc);
         self.page = 0;
         self.error = None;
+        self.capped = None;
+        self.prefix = None;
         self.textures.clear();
         self.text = None;
         self.doc = Some(doc);
+    }
+
+    /// The prefix the document shows of a remote file, as the bytes served
+    /// and the file's size, when it shows one.
+    #[must_use]
+    pub fn prefix(&self) -> Option<(u64, Option<u64>)> {
+        self.prefix
+    }
+
+    /// The size and the cap of a remote file held behind *Preview anyway*.
+    #[must_use]
+    pub fn capped(&self) -> Option<(u64, u64)> {
+        self.capped
     }
 
     /// Whether a render is in flight.
@@ -769,7 +791,26 @@ impl Previews {
         if slot.entry != entry {
             slot.reset(entry);
         }
+        slot.capped = None;
         slot.error = Some(error.to_string());
+    }
+
+    /// The document just opened for `pane` shows the first `served` bytes
+    /// of a remote file of `total` bytes.
+    pub fn prefix(&mut self, pane: PaneId, served: u64, total: Option<u64>) {
+        self.slot(pane).prefix = Some((served, total));
+    }
+
+    /// `pane`'s selection is a remote file of `size` bytes above `cap`,
+    /// about `entry`; nothing opens until *Preview anyway*.
+    pub fn capped(&mut self, pane: PaneId, size: u64, cap: u64, entry: Option<EntryId>) {
+        let slot = self.slot(pane);
+        if slot.entry != entry {
+            slot.reset(entry);
+        }
+        slot.doc = None;
+        slot.error = None;
+        slot.capped = Some((size, cap));
     }
 
     /// Brings `pane`'s slot up to date with the entry the app is following:
@@ -799,15 +840,25 @@ impl Previews {
     }
 
     /// Draws `pane`'s content into the space the caller allocated: the
-    /// frame fitted to it, text scrolling inside it, or a placeholder.
+    /// frame fitted to it, text scrolling inside it, or a placeholder; a
+    /// prefix of a remote file ends in a *Load more* bar and a file above
+    /// the cap shows its facts and *Preview anyway*. Returns what a button
+    /// of those asked for.
     pub fn content(
         &mut self,
         ui: &mut egui::Ui,
         pane: PaneId,
         target: Option<EntryId>,
         text_settings: TextPreview,
-    ) {
+    ) -> Option<PreviewAct> {
         let slot = self.slot(pane);
+        if let Some((size, cap)) = slot.capped.filter(|_| target.is_some()) {
+            return capped_message(ui, size, cap);
+        }
+        let mut act = None;
+        if let Some((served, total)) = slot.prefix.filter(|_| slot.doc.is_some()) {
+            act = prefix_bar(ui, served, total);
+        }
         let ctx = ui.ctx().clone();
         let body = ui.available_rect_before_wrap();
         let ppp = ctx.pixels_per_point();
@@ -888,7 +939,7 @@ impl Previews {
         } else if let Some(error) = &slot.error {
             ui.add(
                 egui::Label::new(
-                    egui::RichText::new(format!("No preview: {error}"))
+                    egui::RichText::new(t!("preview-failed", error = error.as_str()))
                         .color(ui.visuals().warn_fg_color),
                 )
                 .wrap(),
@@ -903,9 +954,69 @@ impl Previews {
                 });
             });
         } else {
-            ui.weak("Select a file to preview it");
+            ui.weak(t!("inspector-select-a-file-to-preview"));
         }
+        act
     }
+}
+
+/// What a button of the preview's own asked for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PreviewAct {
+    /// Serve the next chunk of a remote file shown as a prefix.
+    LoadMore,
+    /// Open a remote file above the size cap whatever its size.
+    PreviewAnyway,
+}
+
+/// The *Load more* bar at the foot of a prefix: takes its row off the
+/// bottom of the space, so the content gets what is left above it.
+pub fn prefix_bar(ui: &mut egui::Ui, served: u64, total: Option<u64>) -> Option<PreviewAct> {
+    let whole = ui.available_rect_before_wrap();
+    let bar_h = ui.text_style_height(&egui::TextStyle::Body) + 10.0;
+    let bar = Rect::from_min_max(pos2(whole.left(), whole.bottom() - bar_h), whole.max);
+    let mut foot = ui.new_child(
+        egui::UiBuilder::new()
+            .max_rect(bar)
+            .layout(egui::Layout::left_to_right(egui::Align::Center)),
+    );
+    foot.add_space(6.0);
+    foot.weak(match total {
+        Some(total) => format!(
+            "Showing the first {} of {}",
+            crate::format::size(Some(served)),
+            crate::format::size(Some(total))
+        ),
+        None => format!("Showing the first {}", crate::format::size(Some(served))),
+    });
+    let act = foot
+        .button(t!("preview-load-more"))
+        .clicked()
+        .then_some(PreviewAct::LoadMore);
+    ui.set_max_height((whole.height() - bar_h).max(0.0));
+    act
+}
+
+/// The cap message: the file's size against the cap and *Preview anyway*.
+pub fn capped_message(ui: &mut egui::Ui, size: u64, cap: u64) -> Option<PreviewAct> {
+    let mut act = None;
+    ui.add_space(12.0);
+    ui.vertical_centered(|ui| {
+        ui.label(
+            egui::RichText::new(format!(
+                "{} on a remote host, above the {} preview cap",
+                crate::format::size(Some(size)),
+                crate::format::size(Some(cap))
+            ))
+            .strong(),
+        );
+        ui.weak(t!("preview-the-whole-file-would-be"));
+        ui.add_space(6.0);
+        if ui.button(t!("preview-preview-anyway")).clicked() {
+            act = Some(PreviewAct::PreviewAnyway);
+        }
+    });
+    act
 }
 
 /// Points to pixels, rounded up to the [`QUANTUM`].

@@ -111,7 +111,7 @@ fn an_ascii_cube_parses_to_twelve_triangles_of_ten_millimetres() {
         ["STL (ASCII)", "12 triangles", "10 × 10 × 10 mm"]
     );
     let sections = doc.sections();
-    assert_eq!(sections[0].title, "File info");
+    assert_eq!(sections[0].title.key(), "preview-3d-file-info");
     assert!(
         sections[0]
             .rows

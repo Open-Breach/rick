@@ -9,6 +9,7 @@
 //! reports its geometry, its side panel, its tab order and split fractions
 //! and its tabs' scroll offsets to the app, which keeps them in the session.
 
+use ext::t;
 use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant, SystemTime};
@@ -21,7 +22,7 @@ use model::{
     Column, Density, DockTarget, Geometry, IconSize, JobState, PaneId, PanelSide, SelectionChange,
     SettingsChange, SidePanelChange, SortDir, Tab, TabId, TabKind, Theme, ViewMode, WindowId,
 };
-use platform::{ControlsSide, PropertiesOutcome};
+use platform::ControlsSide;
 use types::{EntryId, Location};
 
 use crate::console::ConsoleUi;
@@ -32,13 +33,16 @@ use crate::inline::{EditKind, RowEdit};
 use crate::keys::{Direction, Intent, KeyMap};
 use crate::operations::Operations;
 use crate::preview::Previews;
+use crate::properties;
 use crate::search::{Pick, SearchBox};
 use crate::settings_ui::ShortcutsScreen;
 use crate::side_panel::SidePanelState;
 use crate::thumbs::Thumbnails;
 use crate::viewer::{self, ViewerCx, ViewerState, Zoom};
 use crate::{compare, console};
-use crate::{conflict, frame, icons, inspector, menus, pane, paths, settings_ui, side_panel};
+use crate::{
+    conflict, frame, icons, inspector, menus, pane, paths, question, settings_ui, side_panel,
+};
 
 /// Per-tab view state that is the UI's business, not the model's.
 #[derive(Debug, Default)]
@@ -208,6 +212,8 @@ pub enum Request {
     },
     /// Open the side panel's *Add connection…* dialogue of a provider.
     AddConnection(types::ProviderId),
+    /// Open the side panel's *Edit…* dialogue of a connection.
+    EditConnection(types::ProviderId, String),
 }
 
 /// What a tab's widgets see.
@@ -366,7 +372,8 @@ pub struct RickUi {
     inspector_state: inspector::PaneState,
     /// The width the Preview tab's pane opens at, in points.
     inspector_width: f32,
-    properties: Option<(String, Vec<(String, String)>)>,
+    /// The Properties dialogue, open or not.
+    properties: properties::PropertiesDialog,
     /// Read-only texts actions asked to show, each in its own window.
     texts: Vec<TextWindow>,
     next_text: u64,
@@ -393,6 +400,8 @@ pub struct RickUi {
     side: SidePanelState,
     /// The conflict dialogue's text field and checkbox.
     conflict: conflict::DialogState,
+    /// The question dialogue's secret field and checkbox.
+    question: question::DialogState,
     /// Set while the inline editor commits through the action, so the shell
     /// runs the action instead of starting another edit.
     inline_commit: bool,
@@ -451,7 +460,7 @@ fn tab_strip_style(egui_style: &egui::Style) -> egui_dock::Style {
 /// An icon-only toggle; the fill weight marks it active.
 fn toggle_icon(glyph: &str, on: bool) -> egui::Button<'static> {
     let text = if on {
-        egui::RichText::new(glyph).family(egui::FontFamily::Name("phosphor-fill".into()))
+        egui::RichText::new(glyph).family(egui::FontFamily::Name(t!("shell-phosphor-fill").into()))
     } else {
         egui::RichText::new(glyph)
     };
@@ -545,7 +554,7 @@ impl RickUi {
             version: env!("CARGO_PKG_VERSION").to_owned(),
             inspector_state: inspector::PaneState::default(),
             inspector_width,
-            properties: None,
+            properties: properties::PropertiesDialog::default(),
             texts: Vec::new(),
             next_text: 0,
             thumbnails: Thumbnails::default(),
@@ -560,6 +569,7 @@ impl RickUi {
             operations: Operations::default(),
             side: SidePanelState::default(),
             conflict: conflict::DialogState::default(),
+            question: question::DialogState::default(),
             inline_commit: false,
             applied: None,
             now: SystemTime::now(),
@@ -627,6 +637,12 @@ impl RickUi {
 
     /// Where the preview pane's parts were in the last frame, for tests.
     #[must_use]
+    /// The Properties dialogue, for the tests.
+    pub fn properties(&self) -> &properties::PropertiesDialog {
+        &self.properties
+    }
+
+    #[must_use]
     pub fn preview_rects(&self) -> inspector::PaneRects {
         self.inspector_state.rects
     }
@@ -669,6 +685,11 @@ impl RickUi {
     #[must_use]
     pub fn settings_open(&self) -> bool {
         self.settings_open
+    }
+
+    /// Opens the Settings window, as the menu does; for the tests.
+    pub fn open_settings(&mut self) {
+        self.settings_open = true;
     }
 
     /// Whether the Keyboard shortcuts screen is open.
@@ -868,6 +889,7 @@ impl RickUi {
                     self.thumbnails.arrived(&self.ctx, id, size, frame);
                 }
                 Event::Notify { level, text } => self.toast(level, text),
+                Event::Properties(info) => self.properties.open(*info),
                 Event::PreviewReady { pane, doc } => {
                     let entry = self.preview_entry(pane);
                     self.previews.ready(pane, doc, entry);
@@ -875,6 +897,15 @@ impl RickUi {
                 Event::PreviewFailed { pane, error } => {
                     let entry = self.preview_entry(pane);
                     self.previews.failed(pane, &error, entry);
+                }
+                Event::PreviewPrefix {
+                    pane,
+                    served,
+                    total,
+                } => self.previews.prefix(pane, served, total),
+                Event::PreviewCapped { pane, size, cap } => {
+                    let entry = self.preview_entry(pane);
+                    self.previews.capped(pane, size, cap, entry);
                 }
                 Event::ViewOpened { tab, view, .. } => {
                     if let ext::View::Console(console) = &view {
@@ -1045,15 +1076,20 @@ impl RickUi {
             || self.name_prompt.is_some()
             || self.shortcuts.rebinding.is_some()
             || !self.app.model().conflicts.is_empty()
+            || !self.app.model().questions.is_empty()
         {
+            return;
+        }
+        // An open menu owns the keyboard: Escape closes it, nothing else —
+        // not even the side panel, whose row the menu may belong to.
+        if egui::Popup::is_any_open(ctx) {
             return;
         }
         if self.side.focused() && self.side.handle_keys(ctx, &self.app, &mut self.requests) {
             return;
         }
         let search_active = self.windows.get(&window).is_some_and(|w| w.search.active());
-        // An open menu owns the keyboard: Escape closes it, nothing else.
-        if search_active || ctx.egui_wants_keyboard_input() || egui::Popup::is_any_open(ctx) {
+        if search_active || ctx.egui_wants_keyboard_input() {
             return;
         }
         let in_viewer = self.in_viewer(pane);
@@ -1178,6 +1214,14 @@ impl RickUi {
                     }
                     Request::AddConnection(provider) => {
                         side_panel::begin_connection(&mut self.side, &self.app, provider);
+                    }
+                    Request::EditConnection(provider, name) => {
+                        side_panel::begin_edit_connection(
+                            &mut self.side,
+                            &self.app,
+                            provider,
+                            &name,
+                        );
                     }
                 }
             }
@@ -2123,22 +2167,11 @@ impl RickUi {
         }
     }
 
+    /// Properties on the selection: the application reads the entry and
+    /// answers with `Event::Properties`, which opens the dialogue.
     fn inspect(&mut self, pane: PaneId) {
-        let Some(ctx) = self.app.action_ctx(pane, Invocation::Shortcut) else {
-            return;
-        };
-        let Some(entry) = ctx.selection.first() else {
-            self.toast(Level::Info, "Select an entry to inspect");
-            return;
-        };
-        let Ok(path) = platform::paths::to_path(&entry.path) else {
-            return;
-        };
-        match self.app.platform().show(&path) {
-            Ok(PropertiesOutcome::Native) => {}
-            Ok(PropertiesOutcome::Rows(rows)) => self.properties = Some((entry.name.clone(), rows)),
-            Err(error) => self.toast(Level::Error, format!("Properties: {error}")),
-        }
+        self.requests
+            .push(Request::Command(Command::ShowProperties(pane)));
     }
 
     fn step_tab(&mut self, pane: PaneId, by: isize) {
@@ -2373,7 +2406,7 @@ impl RickUi {
         if !chrome.native_controls {
             if right
                 .add(egui::Button::new(icons::CLOSE).frame(false))
-                .on_hover_text("Close")
+                .on_hover_text(t!("close"))
                 .clicked()
             {
                 self.requests.push(Request::CloseWindow(window));
@@ -2386,14 +2419,18 @@ impl RickUi {
             };
             if right
                 .add(egui::Button::new(glyph).frame(false))
-                .on_hover_text(if maximized { "Restore" } else { "Maximise" })
+                .on_hover_text(if maximized {
+                    t!("shell-restore")
+                } else {
+                    t!("shell-maximise")
+                })
                 .clicked()
             {
                 ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(!maximized));
             }
             if right
                 .add(egui::Button::new(icons::MINIMISE).frame(false))
-                .on_hover_text("Minimise")
+                .on_hover_text(t!("shell-minimise"))
                 .clicked()
             {
                 ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true));
@@ -2403,7 +2440,7 @@ impl RickUi {
         let preview_open = self.app.model().preview_tab(window).is_some();
         if right
             .add(toggle_icon(icons::PREVIEW, preview_open))
-            .on_hover_text("Toggle preview pane")
+            .on_hover_text(t!("shell-toggle-preview-pane"))
             .clicked()
         {
             self.requests.push(Request::Intent {
@@ -2418,7 +2455,7 @@ impl RickUi {
             .is_none_or(|w| w.side_panel.visible);
         if right
             .add(toggle_icon(icons::SIDE_PANEL, side_visible))
-            .on_hover_text("Toggle side panel")
+            .on_hover_text(t!("shell-toggle-side-panel"))
             .clicked()
         {
             self.requests.push(Request::Intent {
@@ -2543,7 +2580,7 @@ impl RickUi {
         }
         let mut outcome: Option<bool> = None;
         let wide = matches!(dialog.ask, Ask::Form(_));
-        let modal = egui::Modal::new(egui::Id::new("ask")).show(ctx, |ui| {
+        let modal = egui::Modal::new(egui::Id::new(t!("shell-ask"))).show(ctx, |ui| {
             ui.set_width(if wide { 560.0 } else { 360.0 });
             match &dialog.ask {
                 Ask::Form(form) => {
@@ -2605,7 +2642,7 @@ impl RickUi {
                                             }
                                             if ui
                                                 .button(icons::BROWSE)
-                                                .on_hover_text("Browse…")
+                                                .on_hover_text(t!("shell-browse"))
                                                 .clicked()
                                             {
                                                 browse = Some(field.key);
@@ -2743,7 +2780,7 @@ impl RickUi {
                 {
                     outcome = Some(true);
                 }
-                if ui.button("Cancel").clicked() {
+                if ui.button(t!("cancel")).clicked() {
                     outcome = Some(false);
                 }
             });
@@ -2785,11 +2822,11 @@ impl RickUi {
             NameFor::SaveLayout => "Save layout as".to_owned(),
             NameFor::RenameLayout(name) => format!("Rename layout {name}"),
         };
-        let modal = egui::Modal::new(egui::Id::new("layout-name")).show(ctx, |ui| {
+        let modal = egui::Modal::new(egui::Id::new(t!("shell-layout-name"))).show(ctx, |ui| {
             ui.set_width(360.0);
             ui.heading(title);
             let output = egui::TextEdit::singleline(&mut prompt.input)
-                .hint_text("Layout name")
+                .hint_text(t!("shell-layout-name-2"))
                 .desired_width(f32::INFINITY)
                 .show(ui);
             if prompt.focus {
@@ -2810,10 +2847,10 @@ impl RickUi {
             }
             ui.add_space(8.0);
             ui.horizontal(|ui| {
-                if ui.button("OK").clicked() {
+                if ui.button(t!("ok")).clicked() {
                     outcome = Some(true);
                 }
-                if ui.button("Cancel").clicked() {
+                if ui.button(t!("cancel")).clicked() {
                     outcome = Some(false);
                 }
             });
@@ -3014,7 +3051,7 @@ impl TabViewer for Viewer<'_> {
                 Some(ext::View::Compare(compare)) => compare::show(ui, compare, self.requests),
                 None => {
                     ui.centered_and_justified(|ui| {
-                        ui.weak("This tab's content is gone; close it.");
+                        ui.weak(t!("shell-this-tab-s-content-is"));
                     });
                 }
             }
@@ -3341,6 +3378,7 @@ impl RickUi {
         if self.is_front(ctx, window) {
             self.show_dialog(ctx);
             conflict::show(ctx, &self.app, &mut self.conflict, &mut self.requests);
+            question::show(ctx, &self.app, &mut self.question, &mut self.requests);
             self.show_name_prompt(ctx);
             settings_ui::settings_window(
                 ctx,
@@ -3358,7 +3396,7 @@ impl RickUi {
                 &mut self.requests,
             );
             settings_ui::about_window(ctx, &mut self.about_open, &self.version);
-            settings_ui::properties_window(ctx, &mut self.properties);
+            self.properties.show(ctx, &mut self.requests);
             self.show_texts(ctx);
             self.show_toasts(ctx);
             self.apply_requests(ctx);
@@ -3524,14 +3562,14 @@ pub fn virtual_icon(which: vfs_rick::Virtual) -> &'static str {
 
 /// Sort directions and columns are used by the palette's labels.
 #[must_use]
-pub fn column_label(column: Column) -> &'static str {
+pub fn column_label(column: Column) -> String {
     match column {
-        Column::Name => "name",
-        Column::Type => "type",
-        Column::Modified => "modified",
-        Column::Created => "created",
-        Column::Accessed => "accessed",
-        Column::Size => "size",
-        Column::Items => "items",
+        Column::Name => t!("column-name-lower"),
+        Column::Type => t!("column-type-lower"),
+        Column::Modified => t!("column-modified-lower"),
+        Column::Created => t!("column-created-lower"),
+        Column::Accessed => t!("column-accessed-lower"),
+        Column::Size => t!("column-size-lower"),
+        Column::Items => t!("column-items-lower"),
     }
 }

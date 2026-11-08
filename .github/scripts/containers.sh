@@ -7,6 +7,14 @@
 # that would skip for a missing variable fail instead, so a container that
 # did not come up is a red run, not a quiet skip. The tests clean up what
 # they create; the containers die with the job.
+#
+# Issue 34 adds the SSH plugin's hosts: an OpenSSH server on Debian (the
+# `gnu` profile) and one on Alpine (`busybox`), both published on
+# localhost, and a bastion network where `rick-ssh-hop` and
+# `rick-ssh-target` are reachable only through `rick-ssh-bastion`, so the
+# jump-host tests cross one and two hops. The job's key pair (plain and
+# passphrase-protected) is authorized on every host, and an ssh-agent holds
+# the plain key for the agent test.
 set -euo pipefail
 
 # MinIO's community edition is source only since 2025 and Docker Hub's
@@ -51,7 +59,52 @@ until (exec 3<>/dev/tcp/127.0.0.1/2222) 2>/dev/null; do
 done
 echo "sftp is up"
 
+# The SSH hosts (issue 34): two images built from .github/docker, the key
+# pair the tests authenticate with, and the bastion network.
+keys="$RUNNER_TEMP/rick-ssh-keys"
+mkdir -p "$keys"
+ssh-keygen -q -t ed25519 -N '' -f "$keys/id_ed25519"
+ssh-keygen -q -t ed25519 -N 'rickphrase' -f "$keys/id_locked"
+cp "$keys/id_ed25519.pub" "$keys/id.pub"
+cp "$keys/id_locked.pub" "$keys/locked.pub"
+chmod 644 "$keys"/*.pub
+docker build -q -t rick-sshd-gnu .github/docker/sshd-gnu
+docker build -q -t rick-sshd-busybox .github/docker/sshd-busybox
+docker network create rick-ssh
+docker run -d --name rick-ssh-gnu --network rick-ssh -p 2223:22 -v "$keys:/keys:ro" rick-sshd-gnu
+docker run -d --name rick-ssh-busybox -p 2224:22 -v "$keys:/keys:ro" rick-sshd-busybox
+docker run -d --name rick-ssh-bastion --network rick-ssh -p 2225:22 -v "$keys:/keys:ro" rick-sshd-gnu
+docker run -d --name rick-ssh-hop --network rick-ssh -v "$keys:/keys:ro" rick-sshd-gnu
+docker run -d --name rick-ssh-target --network rick-ssh -v "$keys:/keys:ro" rick-sshd-busybox
+for port in 2223 2224 2225; do
+  tries=60
+  until (exec 3<>/dev/tcp/127.0.0.1/$port) 2>/dev/null; do
+    tries=$((tries - 1))
+    if [ "$tries" -le 0 ]; then
+      echo "sshd on $port did not come up"
+      docker ps -a
+      exit 1
+    fi
+    sleep 1
+  done
+  echo "sshd on $port is up"
+done
+# An agent holding the plain key, for the agent authentication test.
+eval "$(ssh-agent -s)" > /dev/null
+ssh-add -q "$keys/id_ed25519"
+echo "SSH_AUTH_SOCK=$SSH_AUTH_SOCK" >> "$GITHUB_ENV"
+
 {
+  echo "RICK_SSH_GNU_PORT=2223"
+  echo "RICK_SSH_BUSYBOX_PORT=2224"
+  echo "RICK_SSH_BASTION_PORT=2225"
+  echo "RICK_SSH_HOP=rick-ssh-hop"
+  echo "RICK_SSH_TARGET=rick-ssh-target"
+  echo "RICK_SSH_USER=rick"
+  echo "RICK_SSH_PASSWORD=rickpass"
+  echo "RICK_SSH_KEY_FILE=$keys/id_ed25519"
+  echo "RICK_SSH_LOCKED_KEY_FILE=$keys/id_locked"
+  echo "RICK_SSH_PASSPHRASE=rickphrase"
   echo "RICK_S3_ENDPOINT=http://127.0.0.1:9000"
   echo "RICK_S3_ACCESS_KEY=minioadmin"
   echo "RICK_S3_SECRET_KEY=minioadmin"

@@ -27,6 +27,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime};
 
+use ext::Text;
 use ext::{
     API_VERSION, Capabilities, Content, ControlId, ControlValue, Extension, Frame, Icon,
     InfoSection, Listing, ListingEntry, Manifest, Platforms, Points, PreviewControl, PreviewDoc,
@@ -89,6 +90,7 @@ impl Extension for ArchivePreview {
     }
 
     fn register(&self, reg: &mut Registry) -> Result<(), Error> {
+        reg.translations(&[("en", include_str!("../locales/en.ftl"))]);
         reg.previewer(Arc::new(ArchivePreviewer));
         Ok(())
     }
@@ -779,7 +781,7 @@ impl PreviewDoc for ArchiveDoc {
         }
         vec![InfoSection {
             id: "file",
-            title: "File info",
+            title: Text("preview-archive-file-info"),
             icon: Icon::Info,
             rows,
         }]

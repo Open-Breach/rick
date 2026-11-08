@@ -73,8 +73,10 @@ mod places;
 mod session;
 pub mod settings;
 
-pub use command::{Command, ConnectionOp, Event, TransferMode};
+pub use command::{Command, ConnectionOp, Event, PropertiesInfo, TransferMode};
 pub use ext_settings::ExtSettings;
+/// What a `Command::SetPermissions` carries, re-exported for the UI.
+pub use ops::{PermissionRequest, Recursion};
 pub use places::{PLACES_FILE, defaults as default_places, virtual_icon};
 pub use session::{LAYOUTS_DIR, SAVE_INTERVAL, SESSION_FILE};
 pub use settings::SETTINGS_FILE;
@@ -85,16 +87,17 @@ use std::sync::{Arc, Mutex, PoisonError, RwLock};
 use std::time::Duration;
 
 use ext::{
-    ActionCtx, ActionOutcome, Availability, DecorateCtx, Decoration, Decorator, Depth, Extension,
-    Filter, FsChange, Invocation, Level, ListOptions, Points, PreviewDoc, Previewer, Query,
-    QueryKind, Registry, SearchIndex, SearchScope, UiHost, UndoCommand,
+    ActionCtx, ActionOutcome, Availability, Capabilities, DecorateCtx, Decoration, Decorator,
+    Depth, Extension, Filter, FsChange, Invocation, Level, ListOptions, Points, PreviewDoc,
+    Previewer, Prompts, Query, QueryKind, Reads, Registry, SearchIndex, SearchScope, UiHost,
+    UndoCommand,
 };
 use futures::StreamExt;
 use model::{
     Column, ConnectionEntry, JobState, Model, PaneId, Place, SelectionChange, Session, Settings,
     SettingsChange, SortDir, TabId, Volume,
 };
-use ops::{Conflicts, PinStore, Scheduler};
+use ops::{Applied, Conflicts, PermissionsCommand, PinStore, Scheduler};
 use platform::{Platform, TrashedItem};
 use runtime::{JobEvent, JobRunner, mpsc};
 use tracing::{debug, warn};
@@ -204,6 +207,9 @@ enum Msg {
         pane: PaneId,
         generation: u64,
         result: Result<Box<dyn PreviewDoc>, Error>,
+        /// The bytes served and the file's size, when the previewer got a
+        /// prefix of a remote file.
+        prefix: Option<(u64, Option<u64>)>,
     },
     /// A decorator finished a batch late.
     Decorated {
@@ -238,6 +244,24 @@ enum Msg {
     },
     /// A job asked about a name conflict.
     Conflicts,
+    /// An extension asked the user a question.
+    Prompts,
+    /// `Command::ShowProperties` read the entry.
+    Properties(Box<Result<PropertiesInfo, Error>>),
+    /// A permission job ended.
+    PermissionsApplied {
+        pane: PaneId,
+        label: String,
+        request: PermissionRequest,
+        result: Result<Applied, Error>,
+    },
+    /// A remote file's preview was held behind the size cap.
+    PreviewCapped {
+        pane: PaneId,
+        generation: u64,
+        size: u64,
+        cap: u64,
+    },
     /// A job started waiting for its volume, or stopped.
     Schedule,
     /// The mounted volumes were enumerated.
@@ -297,6 +321,19 @@ const INDEX_SEARCH_AFTER: Duration = Duration::from_millis(150);
 /// How many of this process's own settings writes are remembered, so the
 /// watcher's report of each is told from an edit.
 const RECENT_SAVES: usize = 16;
+/// How much of a file on a remote provider a prefix previewer is served at
+/// first, and per *Load more* (`specs/ext-ssh.md`, "Previews over SSH").
+pub const REMOTE_PREFIX_CHUNK: u64 = 256 * 1024;
+/// The size above which a whole-file previewer waits for *Preview anyway*
+/// on a remote provider, unless the provider names another cap.
+pub const REMOTE_PREVIEW_CAP: u64 = 4 * 1024 * 1024;
+
+/// The kernel's English messages, `locales/en.ftl` of the repository:
+/// every key of the shell, the dialogues, the menus and the core actions.
+pub const LOCALE_EN: &str = include_str!("../../../locales/en.ftl");
+/// The kernel's German messages, `locales/de.ftl`: the Settings screen and
+/// the context menus at least, the rest falling back to English.
+pub const LOCALE_DE: &str = include_str!("../../../locales/de.ftl");
 
 /// The pinned list as the pin actions see it. The list itself lives in the
 /// model's settings, which `App` owns; the bridge keeps a copy for the
@@ -373,6 +410,9 @@ impl PinStore for PinBridge {
 /// file for every pane whose active tab is a viewer.
 struct PreviewJob {
     entry: EntryId,
+    /// The entry itself, so the preview can open again with more served
+    /// or the cap lifted.
+    full: Entry,
     generation: u64,
     cancel: CancelToken,
 }
@@ -428,6 +468,9 @@ pub struct App {
     ui: Arc<dyn UiHost>,
     pins: Arc<PinBridge>,
     conflicts: Arc<Conflicts>,
+    /// Where extensions ask the user a question (a host key, a passphrase);
+    /// the UI answers through [`Command::AnswerQuestion`].
+    prompts: Arc<Prompts>,
     /// The per-volume queue the copy and move jobs go through.
     scheduler: Arc<Scheduler>,
     /// The jobs shown as *Waiting* right now.
@@ -460,6 +503,10 @@ pub struct App {
     preview: BTreeMap<PaneId, PreviewJob>,
     /// Numbers the preview jobs, so a late answer is told from the current.
     preview_generation: u64,
+    /// How many times *Load more* was pressed for the entry a pane previews.
+    preview_more: BTreeMap<PaneId, (EntryId, u32)>,
+    /// The entry a pane previews whatever its size, after *Preview anyway*.
+    preview_force: BTreeMap<PaneId, EntryId>,
     /// Thumbnails being rendered, so a cell asked for twice renders once.
     thumbnails: BTreeSet<(EntryId, u32)>,
     /// Events from start-up, delivered on the first poll.
@@ -494,6 +541,9 @@ pub struct App {
     ext_settings: ExtSettings,
     /// The title-row search box's index search in flight.
     index_search: Option<IndexJob>,
+    /// The entry the Properties dialogue shows, while it is open: a change
+    /// to it reports the new state through `Event::Properties`.
+    properties_shown: Option<(PaneId, PathBuf)>,
     /// Numbers the index searches, so a superseded one's hits are dropped.
     index_generation: u64,
 }
@@ -504,10 +554,19 @@ impl App {
     /// provider over them, reads the settings and places files and starts
     /// watching the settings, restores the session or the start layout,
     /// starts the side panel's feeds, and lists every active tab's location.
+    #[must_use]
+    pub fn new(config: Config) -> Self {
+        Self::with_prompts(config, Prompts::new())
+    }
+
+    /// [`App::new`] with the question queue the extensions ask the user
+    /// through: the binary makes one and lends it to the plugins it loads
+    /// before the application exists, so their questions reach the same
+    /// dialogues.
     // Start-up is one straight line: registry, settings, session, loop.
     #[allow(clippy::too_many_lines)]
     #[must_use]
-    pub fn new(config: Config) -> Self {
+    pub fn with_prompts(config: Config, prompts: Arc<Prompts>) -> Self {
         let Config {
             platform,
             ui,
@@ -517,7 +576,8 @@ impl App {
         } = config;
         let mut pending = Vec::new();
 
-        let mut registry = Registry::with_platform(Arc::clone(&platform) as Arc<dyn Platform>);
+        let mut registry = Registry::with_platform(Arc::clone(&platform) as Arc<dyn Platform>)
+            .with_prompts(Arc::clone(&prompts));
         let mounts = Arc::new(Mounts::new());
         let trash: Arc<dyn platform::Trash> = Arc::clone(&platform) as Arc<dyn platform::Trash>;
         mounts.mount(Arc::new(LocalProvider::new(trash)));
@@ -602,6 +662,12 @@ impl App {
                 Settings::default()
             }
         };
+        // The kernel's own translations, the user's overrides in the
+        // configuration directory, and the language the settings name.
+        ext::i18n::add_bundled("en", LOCALE_EN);
+        ext::i18n::add_bundled("de", LOCALE_DE);
+        ext::i18n::load_overrides(&config_dir);
+        ext::i18n::set_language(settings.language.as_deref());
         pins.sync(&settings.pinned);
         for connector in registry.connectors() {
             connector.update(connections_of(&settings, connector.provider()));
@@ -686,6 +752,12 @@ impl App {
                 tx.send(Msg::Schedule);
             }));
         }
+        {
+            let tx = mailbox.clone();
+            prompts.set_waker(Arc::new(move || {
+                tx.send(Msg::Prompts);
+            }));
+        }
         let mut app = Self {
             model,
             mounts,
@@ -694,6 +766,7 @@ impl App {
             ui,
             pins,
             conflicts,
+            prompts,
             scheduler,
             waiting: BTreeSet::new(),
             rick,
@@ -713,6 +786,8 @@ impl App {
             recent_saves: VecDeque::new(),
             preview: BTreeMap::new(),
             preview_generation: 0,
+            preview_more: BTreeMap::new(),
+            preview_force: BTreeMap::new(),
             thumbnails: BTreeSet::new(),
             pending,
             places_saver,
@@ -728,6 +803,7 @@ impl App {
             plugins: Vec::new(),
             ext_settings,
             index_search: None,
+            properties_shown: None,
             index_generation: 0,
         };
         app.watch_settings();
@@ -751,6 +827,13 @@ impl App {
     #[must_use]
     pub fn conflicts(&self) -> &Arc<Conflicts> {
         &self.conflicts
+    }
+
+    /// Where extensions ask the user a question; the UI answers through
+    /// [`Command::AnswerQuestion`], a test through [`Prompts::answer_with`].
+    #[must_use]
+    pub fn prompts(&self) -> &Arc<Prompts> {
+        &self.prompts
     }
 
     /// The session the model is right now.
@@ -1242,7 +1325,12 @@ impl App {
                 provider,
                 name,
                 values,
-            } => self.add_connection(provider, &name, values, events),
+            } => self.add_connection(provider, &name, values, false, events),
+            Command::EditConnection {
+                provider,
+                name,
+                values,
+            } => self.add_connection(provider, &name, values, true, events),
             Command::Connection { provider, name, op } => {
                 self.connection_op(provider, &name, op, events);
             }
@@ -1300,6 +1388,16 @@ impl App {
                 }
                 self.model.conflict_closed(id);
             }
+            Command::AnswerQuestion { id, answer } => {
+                if !self.prompts.answer(id, answer) {
+                    debug!(%id, "nobody waits on this question");
+                }
+                self.model.question_closed(id);
+            }
+            Command::ShowProperties(pane) => self.show_properties(pane, events),
+            Command::PropertiesClosed => self.properties_shown = None,
+            Command::SystemProperties(pane) => self.system_properties(pane, events),
+            Command::SetPermissions { pane, request } => self.set_permissions(pane, request),
             Command::RefreshVolumes => self.enumerate_volumes(),
             Command::Undo => self.undo(events),
             Command::Redo => self.redo(events),
@@ -1313,6 +1411,24 @@ impl App {
                 }
             }
             Command::Thumbnail { pane, id, size } => self.thumbnail(pane, id, size),
+            Command::PreviewMore(pane) => {
+                if let Some(job) = self.preview.get(&pane) {
+                    let id = job.entry;
+                    let count = self
+                        .preview_more
+                        .get(&pane)
+                        .filter(|(e, _)| *e == id)
+                        .map_or(0, |(_, n)| *n);
+                    self.preview_more.insert(pane, (id, count + 1));
+                    self.restart_preview(pane);
+                }
+            }
+            Command::PreviewAnyway(pane) => {
+                if let Some(job) = self.preview.get(&pane) {
+                    self.preview_force.insert(pane, job.entry);
+                    self.restart_preview(pane);
+                }
+            }
             Command::TabOrder { pane, order } => {
                 self.model.set_tab_order(pane, order);
             }
@@ -1674,13 +1790,16 @@ impl App {
         }
     }
 
-    /// Adds a connection: the secret fields go to the keychain as a job,
-    /// the rest follow through [`Msg::ConnectionSaved`] once they are in.
+    /// Adds a connection, or with `editing` replaces one: the secret fields
+    /// go to the keychain as a job, the rest follow through
+    /// [`Msg::ConnectionSaved`] once they are in. An edit that gives no
+    /// value for a secret keeps the keychain's.
     fn add_connection(
         &mut self,
         provider: ProviderId,
         name: &str,
         values: Vec<(String, String)>,
+        editing: bool,
         events: &mut Vec<Event>,
     ) {
         let Some(connector) = self.registry.connector_of(provider).cloned() else {
@@ -1698,13 +1817,17 @@ impl App {
             });
             return;
         }
-        if connections_of(&self.model.settings, provider)
+        let exists = connections_of(&self.model.settings, provider)
             .iter()
-            .any(|c| c.name == name)
-        {
+            .any(|c| c.name == name);
+        if exists != editing {
             events.push(Event::Notify {
                 level: Level::Error,
-                text: format!("A {} connection called {name} exists already", provider.0),
+                text: if editing {
+                    format!("No {} connection called {name} to edit", provider.0)
+                } else {
+                    format!("A {} connection called {name} exists already", provider.0)
+                },
             });
             return;
         }
@@ -1736,9 +1859,13 @@ impl App {
             .iter()
             .filter(|f| f.required)
             .find(|f| match f.kind {
-                ext::ConnectionFieldKind::Secret => !secrets
-                    .iter()
-                    .any(|(k, _)| k == &ext::secret_key(provider, &name, f.key)),
+                // An edit keeps the secret it has when none is typed.
+                ext::ConnectionFieldKind::Secret => {
+                    !editing
+                        && !secrets
+                            .iter()
+                            .any(|(k, _)| k == &ext::secret_key(provider, &name, f.key))
+                }
                 _ => !entry.settings.contains_key(f.key),
             })
         {
@@ -2119,6 +2246,9 @@ impl App {
         let mut settings = self.model.settings.clone();
         let pinned_before = settings.pinned.clone();
         settings.apply(change);
+        if settings.language != self.model.settings.language {
+            ext::i18n::set_language(settings.language.as_deref());
+        }
         self.pins.sync(&settings.pinned);
         self.model.apply_settings(settings.clone());
         if settings.pinned != pinned_before {
@@ -2131,6 +2261,129 @@ impl App {
         // The saver lives as long as the runtime; a closed channel means
         // the process is going down.
         let _ = self.settings_saver.send(settings);
+    }
+
+    /// Reads the selected entry's properties off the UI thread and answers
+    /// with `Event::Properties`.
+    fn show_properties(&mut self, pane: PaneId, events: &mut Vec<Event>) {
+        let Some(ctx) = self.action_ctx(pane, Invocation::Shortcut) else {
+            return;
+        };
+        let Some(entry) = ctx.selection.first().cloned() else {
+            events.push(Event::Notify {
+                level: Level::Info,
+                text: "Select an entry to inspect".to_owned(),
+            });
+            return;
+        };
+        let path = (entry.id.provider == vfs_local::PROVIDER_ID)
+            .then(|| platform::paths::to_path(&entry.path).ok())
+            .flatten();
+        self.properties_shown = path.clone().map(|path| (pane, path));
+        let platform = Arc::clone(&self.platform);
+        let tx = self.mailbox.clone();
+        let location = ctx.location.clone();
+        runtime::handle().spawn_blocking(move || {
+            let info = read_properties(&*platform, pane, entry, path, &location);
+            tx.send(Msg::Properties(Box::new(info)));
+        });
+    }
+
+    /// Opens the platform's own dialogue on the selected entry.
+    fn system_properties(&mut self, pane: PaneId, events: &mut Vec<Event>) {
+        let Some(ctx) = self.action_ctx(pane, Invocation::Shortcut) else {
+            return;
+        };
+        let Some(entry) = ctx.selection.first() else {
+            return;
+        };
+        let Ok(path) = platform::paths::to_path(&entry.path) else {
+            return;
+        };
+        if let Err(error) = self.platform.show(&path) {
+            events.push(Event::Notify {
+                level: Level::Error,
+                text: format!("Properties: {error}"),
+            });
+        }
+    }
+
+    /// Starts the permission job and waits for its outcome in the
+    /// background.
+    fn set_permissions(&mut self, pane: PaneId, request: PermissionRequest) {
+        let label = ops::perms::label(&request);
+        let handle = ops::perms::spawn(
+            &self.jobs,
+            Arc::clone(&self.platform),
+            label.clone(),
+            request.clone(),
+        );
+        self.pane_jobs.insert(handle.id, pane);
+        let tx = self.mailbox.clone();
+        runtime::handle().spawn(async move {
+            let result = handle
+                .result
+                .await
+                .unwrap_or_else(|_| Err(Error::Cancelled));
+            tx.send(Msg::PermissionsApplied {
+                pane,
+                label,
+                request,
+                result,
+            });
+        });
+    }
+
+    /// A permission job ended: the step goes on the undo stack, what failed
+    /// is reported, and an open dialogue on one of the entries sees the
+    /// new state.
+    fn permissions_applied(
+        &mut self,
+        pane: PaneId,
+        label: String,
+        request: &PermissionRequest,
+        result: Result<Applied, Error>,
+        events: &mut Vec<Event>,
+    ) {
+        match result {
+            Ok(applied) => {
+                if let Some((path, why)) = applied.failed.first() {
+                    let name = path.file_name().map_or_else(
+                        || path.display().to_string(),
+                        |n| n.to_string_lossy().into_owned(),
+                    );
+                    let text = if applied.failed.len() == 1 {
+                        format!("{label}: {name} was not changed: {why}")
+                    } else {
+                        format!(
+                            "{label}: {} entries were not changed; {name}: {why}",
+                            applied.failed.len()
+                        )
+                    };
+                    events.push(Event::Notify {
+                        level: Level::Warning,
+                        text,
+                    });
+                }
+                let command =
+                    PermissionsCommand::new(Arc::clone(&self.platform), label, request, &applied);
+                if !command.is_empty() {
+                    self.undo.push(Box::new(command));
+                    self.redo.clear();
+                }
+            }
+            Err(Error::Cancelled) => {}
+            Err(error) => events.push(Event::Notify {
+                level: Level::Error,
+                text: format!("{label}: {error}"),
+            }),
+        }
+        if let Some((shown, path)) = &self.properties_shown
+            && *shown == pane
+            && request.targets.iter().any(|t| t == path)
+        {
+            self.show_properties(pane, events);
+        }
     }
 
     fn selection_len(&self, pane: PaneId) -> usize {
@@ -2895,6 +3148,9 @@ impl App {
                 }
                 if settings != self.model.settings {
                     debug!("settings file changed");
+                    if settings.language != self.model.settings.language {
+                        ext::i18n::set_language(settings.language.as_deref());
+                    }
                     self.pins.sync(&settings.pinned);
                     let connections_changed =
                         settings.connections != self.model.settings.connections;
@@ -2925,6 +3181,7 @@ impl App {
                 pane,
                 generation,
                 result,
+                prefix,
             } => {
                 if self
                     .preview
@@ -2933,10 +3190,32 @@ impl App {
                 {
                     return;
                 }
+                let opened = result.is_ok();
                 events.push(match result {
                     Ok(doc) => Event::PreviewReady { pane, doc },
                     Err(error) => Event::PreviewFailed { pane, error },
                 });
+                if let Some((served, total)) = prefix.filter(|_| opened) {
+                    events.push(Event::PreviewPrefix {
+                        pane,
+                        served,
+                        total,
+                    });
+                }
+            }
+            Msg::PreviewCapped {
+                pane,
+                generation,
+                size,
+                cap,
+            } => {
+                if self
+                    .preview
+                    .get(&pane)
+                    .is_some_and(|job| job.generation == generation)
+                {
+                    events.push(Event::PreviewCapped { pane, size, cap });
+                }
             }
             Msg::Decorated {
                 pane,
@@ -3022,6 +3301,33 @@ impl App {
                     events.push(Event::Conflict(conflict));
                 }
             }
+            Msg::Prompts => {
+                for question in self.prompts.take_new() {
+                    self.model.question_opened(question.clone());
+                    events.push(Event::Question(question));
+                }
+            }
+            Msg::Properties(result) => match *result {
+                Ok(info) => {
+                    // A dialogue closed in the meantime takes no answer.
+                    if self.properties_shown.as_ref().is_some_and(|(pane, path)| {
+                        *pane == info.pane && Some(path) == info.path.as_ref()
+                    }) || info.path.is_none()
+                    {
+                        events.push(Event::Properties(Box::new(info)));
+                    }
+                }
+                Err(error) => events.push(Event::Notify {
+                    level: Level::Error,
+                    text: format!("Properties: {error}"),
+                }),
+            },
+            Msg::PermissionsApplied {
+                pane,
+                label,
+                request,
+                result,
+            } => self.permissions_applied(pane, label, &request, result, events),
             Msg::Schedule => self.sync_waiting(),
             Msg::Volumes(Ok(volumes)) => {
                 if volumes != self.model.volumes {
@@ -3205,12 +3511,26 @@ impl App {
         }
     }
 
+    /// Opens the pane's preview again for the entry it shows: after *Load
+    /// more* or *Preview anyway*.
+    fn restart_preview(&mut self, pane: PaneId) {
+        if let Some(job) = self.preview.remove(&pane) {
+            job.cancel.cancel();
+            self.start_preview(pane, job.full);
+        }
+    }
+
     /// Opens `entry` for `pane` through the best-scoring previewer as a
     /// job, answered by [`Event::PreviewReady`] or [`Event::PreviewFailed`].
+    /// On a remote provider a prefix previewer is served the first chunk
+    /// (and one more per *Load more*), reported through
+    /// [`Event::PreviewPrefix`], and a whole-file previewer waits behind
+    /// the size cap ([`Event::PreviewCapped`]) until *Preview anyway*.
     fn start_preview(&mut self, pane: PaneId, entry: Entry) {
         self.preview_generation += 1;
         let generation = self.preview_generation;
         let loc = Location::new(entry.id.provider, entry.path.clone());
+        let job_entry = entry.clone();
         let provider = match self.mounts.resolve(&loc) {
             Ok(provider) => provider,
             Err(error) => {
@@ -3219,6 +3539,7 @@ impl App {
                     pane,
                     PreviewJob {
                         entry: entry.id,
+                        full: job_entry,
                         generation,
                         cancel: CancelToken::new(),
                     },
@@ -3226,6 +3547,16 @@ impl App {
                 return;
             }
         };
+        let remote = provider.capabilities(&loc).contains(Capabilities::REMOTE);
+        let cap = provider
+            .remote_preview_cap(&loc)
+            .unwrap_or(REMOTE_PREVIEW_CAP);
+        let more = self
+            .preview_more
+            .get(&pane)
+            .filter(|(id, _)| *id == entry.id)
+            .map_or(0, |(_, n)| *n);
+        let force = self.preview_force.get(&pane) == Some(&entry.id);
         let previewers: Vec<Arc<dyn Previewer>> = self.registry.previewers().to_vec();
         let tx = self.mailbox.clone();
         let id = entry.id;
@@ -3239,7 +3570,31 @@ impl App {
                         .filter(|(score, _)| *score > 0)
                         .max_by_key(|(score, _)| *score)
                         .map(|(_, p)| Arc::clone(p));
+                    let mut prefix = None;
                     let result = match best {
+                        Some(previewer) if remote && previewer.reads() == Reads::Prefix => {
+                            let limit = REMOTE_PREFIX_CHUNK * (u64::from(more) + 1);
+                            if entry.size.is_none_or(|size| size > limit) {
+                                prefix =
+                                    Some((entry.size.map_or(limit, |s| s.min(limit)), entry.size));
+                            }
+                            let limited: Arc<dyn ext::Provider> = Arc::new(Prefixed {
+                                inner: provider,
+                                limit,
+                            });
+                            previewer.open(&loc, limited, job.cancel.clone()).await
+                        }
+                        Some(_)
+                            if remote && !force && entry.size.is_some_and(|size| size > cap) =>
+                        {
+                            tx.send(Msg::PreviewCapped {
+                                pane,
+                                generation,
+                                size: entry.size.unwrap_or(0),
+                                cap,
+                            });
+                            return Ok(());
+                        }
                         Some(previewer) => previewer.open(&loc, provider, job.cancel.clone()).await,
                         None => Err(Error::Unsupported("no previewer for this file")),
                     };
@@ -3250,6 +3605,7 @@ impl App {
                         pane,
                         generation,
                         result,
+                        prefix,
                     });
                     Ok(())
                 });
@@ -3258,6 +3614,7 @@ impl App {
             pane,
             PreviewJob {
                 entry: id,
+                full: job_entry,
                 generation,
                 cancel: handle.cancel,
             },
@@ -3280,12 +3637,16 @@ impl App {
         live.complete = true;
         let buffered = live.buffer.take();
         let location = live.key.location.clone();
-        if let Err(error) = result {
-            events.push(Event::Notify {
-                level: Level::Error,
-                text: format!("Listing {location}: {error}"),
-            });
-        }
+        // A failure is the tab's banner with *Retry*, never a dialogue
+        // (`specs/ext-ssh.md`, "Connections"); a listing that works clears
+        // it.
+        self.model.listing_failed(
+            pane,
+            result
+                .as_ref()
+                .err()
+                .map(|error| format!("{location} could not be listed: {error}")),
+        );
         let batch = match buffered {
             Some(entries) if result.is_ok() => {
                 let before = self.selected_ids(pane);
@@ -3642,6 +4003,165 @@ fn repair(mounts: &Mounts, home: &Location, session: &mut Session) {
             ));
             tab.location = home.clone();
         }
+    }
+}
+
+/// A provider whose reads stop after `limit` bytes: what a prefix
+/// previewer is handed for a file on a remote provider, so a 1 GiB log
+/// previews from its first chunk. Everything else goes to the provider
+/// itself.
+/// The contents of the Properties dialogue for `entry`: the general rows,
+/// and the permissions of a local entry the platform can read them of.
+fn read_properties(
+    platform: &dyn Platform,
+    pane: PaneId,
+    entry: Entry,
+    path: Option<PathBuf>,
+    location: &Location,
+) -> Result<PropertiesInfo, Error> {
+    let kind = match &entry.kind {
+        types::EntryKind::File => "File",
+        types::EntryKind::Dir => "Folder",
+        types::EntryKind::Symlink { .. } => "Symbolic link",
+        types::EntryKind::Other => "Special file",
+    };
+    let mut rows = vec![
+        ("Name".to_owned(), entry.name.clone()),
+        ("Type".to_owned(), kind.to_owned()),
+        (
+            "Location".to_owned(),
+            path.as_ref()
+                .and_then(|p| p.parent())
+                .map_or_else(|| location.to_string(), |p| p.display().to_string()),
+        ),
+    ];
+    if let Some(mime) = &entry.mime {
+        rows.push(("Media type".to_owned(), mime.as_str().to_owned()));
+    }
+    if let Some(size) = entry.size {
+        rows.push(("Size".to_owned(), format!("{size} bytes")));
+    }
+    if let Some(path) = &path
+        && let Ok(allocated) = platform::fs::allocated_size(path)
+    {
+        rows.push(("On disk".to_owned(), format!("{allocated} bytes")));
+    }
+    for (label, time) in [
+        ("Modified", entry.modified),
+        ("Accessed", entry.accessed),
+        ("Created", entry.created),
+    ] {
+        if let Some(time) = time {
+            rows.push((label.to_owned(), platform::iso8601(time)));
+        }
+    }
+    if let types::EntryKind::Symlink { target, broken } = &entry.kind {
+        let mut text = target.to_string();
+        if *broken {
+            text.push_str(" (missing)");
+        }
+        rows.push(("Target".to_owned(), text));
+    }
+    let permissions = match &path {
+        Some(path) => match platform.permissions(path) {
+            Ok(permissions) => Some(permissions),
+            Err(Error::Unsupported(_)) => None,
+            Err(error) => return Err(error),
+        },
+        None => None,
+    };
+    let principals = if permissions.is_some() {
+        platform.principals().unwrap_or_default()
+    } else {
+        platform::Principals::default()
+    };
+    Ok(PropertiesInfo {
+        pane,
+        entry,
+        path,
+        rows,
+        permissions,
+        principals,
+        native: platform::NATIVE_PROPERTIES,
+    })
+}
+
+struct Prefixed {
+    inner: Arc<dyn ext::Provider>,
+    limit: u64,
+}
+
+impl std::fmt::Debug for Prefixed {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Prefixed")
+            .field("limit", &self.limit)
+            .finish_non_exhaustive()
+    }
+}
+
+#[ext::async_trait]
+impl ext::Provider for Prefixed {
+    fn id(&self) -> ProviderId {
+        self.inner.id()
+    }
+    fn capabilities(&self, loc: &Location) -> Capabilities {
+        self.inner.capabilities(loc)
+    }
+    fn list(&self, loc: &Location, opts: ListOptions, cancel: CancelToken) -> ext::EntryStream {
+        self.inner.list(loc, opts, cancel)
+    }
+    async fn stat(&self, loc: &Location) -> Result<Entry, Error> {
+        self.inner.stat(loc).await
+    }
+    async fn open_read(&self, loc: &Location) -> Result<ext::ReadHandle, Error> {
+        use tokio::io::AsyncReadExt as _;
+        let reader = self.inner.open_read(loc).await?;
+        Ok(Box::new(reader.take(self.limit)))
+    }
+    async fn open_read_at(&self, loc: &Location, offset: u64) -> Result<ext::ReadHandle, Error> {
+        use tokio::io::AsyncReadExt as _;
+        let reader = self.inner.open_read_at(loc, offset).await?;
+        Ok(Box::new(reader.take(self.limit.saturating_sub(offset))))
+    }
+    async fn open_write(
+        &self,
+        loc: &Location,
+        opts: ext::WriteOptions,
+    ) -> Result<ext::WriteHandle, Error> {
+        self.inner.open_write(loc, opts).await
+    }
+    async fn create_dir(&self, loc: &Location) -> Result<Entry, Error> {
+        self.inner.create_dir(loc).await
+    }
+    async fn rename(&self, from: &Location, to: &Location) -> Result<Entry, Error> {
+        self.inner.rename(from, to).await
+    }
+    async fn remove(&self, loc: &Location, mode: ext::RemoveMode) -> Result<(), Error> {
+        self.inner.remove(loc, mode).await
+    }
+    async fn link(
+        &self,
+        target: &Location,
+        at: &Location,
+        kind: ext::LinkKind,
+    ) -> Result<Entry, Error> {
+        self.inner.link(target, at, kind).await
+    }
+    async fn copy(
+        &self,
+        from: &Location,
+        to: &Location,
+        opts: ext::CopyOptions,
+        progress: ext::ProgressSink,
+        cancel: CancelToken,
+    ) -> Result<(), Error> {
+        self.inner.copy(from, to, opts, progress, cancel).await
+    }
+    fn remote_preview_cap(&self, loc: &Location) -> Option<u64> {
+        self.inner.remote_preview_cap(loc)
+    }
+    fn watch(&self, loc: &Location) -> Result<ext::ChangeStream, Error> {
+        self.inner.watch(loc)
     }
 }
 

@@ -14,10 +14,11 @@
 use std::ops::Range;
 use std::sync::Arc;
 
+use ext::Text;
 use ext::{
     API_VERSION, Capabilities, Content, ControlId, ControlValue, Extension, Frame, Grid, Icon,
     InfoSection, Manifest, Platforms, Points, PreviewControl, PreviewDoc, Previewer, Provider,
-    Registry, RenderRequest, TextBlock, TextLayer, Transport, Version, async_trait,
+    Reads, Registry, RenderRequest, TextBlock, TextLayer, Transport, Version, async_trait,
 };
 use types::{CancelToken, Entry, Error, ExtId, Location};
 
@@ -74,6 +75,7 @@ impl Extension for CsvPreview {
     }
 
     fn register(&self, reg: &mut Registry) -> Result<(), Error> {
+        reg.translations(&[("en", include_str!("../locales/en.ftl"))]);
         reg.previewer(Arc::new(CsvPreviewer));
         Ok(())
     }
@@ -493,7 +495,7 @@ impl PreviewDoc for CsvDoc {
         }
         vec![InfoSection {
             id: "file",
-            title: "File info",
+            title: Text("preview-csv-file-info"),
             icon: Icon::Info,
             rows,
         }]
@@ -531,6 +533,12 @@ impl PreviewDoc for CsvDoc {
 impl Previewer for CsvPreviewer {
     fn id(&self) -> ExtId {
         ID
+    }
+
+    /// The start of a file is enough: a remote file is served as a prefix
+    /// with *Load more*.
+    fn reads(&self) -> Reads {
+        Reads::Prefix
     }
 
     fn score(&self, entry: &Entry, sniff: &[u8]) -> u8 {

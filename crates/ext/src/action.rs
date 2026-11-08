@@ -14,7 +14,7 @@
 //! ```
 //! use ext::{
 //!     Action, ActionCtx, ActionGroup, ActionId, ActionOutcome, Availability, Form, Invocation,
-//!     Key, Level, Modifiers, PaneId, Shortcut, UiHost, Values,
+//!     Key, Level, Modifiers, PaneId, Shortcut, UiHost, Values, t,
 //! };
 //! use runtime::JobRunner;
 //! use std::sync::Mutex;
@@ -27,8 +27,8 @@
 //!         ActionId("demo.count")
 //!     }
 //!
-//!     fn label(&self) -> &str {
-//!         "Count selection"
+//!     fn label(&self) -> String {
+//!         t!("count-selection")
 //!     }
 //!
 //!     fn group(&self) -> ActionGroup {
@@ -41,7 +41,7 @@
 //!
 //!     fn availability(&self, ctx: &ActionCtx) -> Availability {
 //!         if ctx.selection.is_empty() {
-//!             Availability::Disabled("select something first")
+//!             Availability::Disabled(t!("select-something-first"))
 //!         } else {
 //!             Availability::Enabled
 //!         }
@@ -118,12 +118,13 @@ pub enum ActionGroup {
 }
 
 /// Whether an action can run for the current context.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Availability {
     /// Not shown at all.
     Hidden,
-    /// Shown greyed out, with the reason as tooltip.
-    Disabled(&'static str),
+    /// Shown greyed out, with the reason as tooltip, in the language in
+    /// use.
+    Disabled(String),
     /// Ready to run.
     Enabled,
 }
@@ -441,8 +442,9 @@ pub trait Action: Send + Sync + 'static {
     /// Unique id.
     fn id(&self) -> ActionId;
 
-    /// Text shown in menus and the palette.
-    fn label(&self) -> &str;
+    /// Text shown in menus and the palette, in the language in use:
+    /// `t!("count-selection")`.
+    fn label(&self) -> String;
 
     /// Where the action appears.
     fn group(&self) -> ActionGroup;

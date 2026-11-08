@@ -893,7 +893,7 @@ impl SearchIndex for FakeIndex {
         if self.available.load(Ordering::SeqCst) {
             Availability::Enabled
         } else {
-            Availability::Disabled("service gone")
+            Availability::Disabled("service gone".to_owned())
         }
     }
     fn scope(&self) -> SearchScope {
@@ -1489,6 +1489,7 @@ fn open_navigates_into_a_folder_and_opens_a_file_with_the_default() {
 /// A network provider stub for the connection tests: its root lists the
 /// connections its connector was handed, everything else is unsupported.
 mod net {
+    use ext::Text;
     use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
     use ext::{
@@ -1521,11 +1522,11 @@ mod net {
         pub(super) fn new() -> Arc<Self> {
             Arc::new(Self {
                 schema: Some(ConnectionSchema {
-                    title: "Stub",
+                    title: Text("Stub"),
                     fields: vec![
                         ConnectionField {
                             key: "host",
-                            label: "Host",
+                            label: Text("Host"),
                             kind: ConnectionFieldKind::Text {
                                 default: String::new(),
                             },
@@ -1533,7 +1534,7 @@ mod net {
                         },
                         ConnectionField {
                             key: "port",
-                            label: "Port",
+                            label: Text("Port"),
                             kind: ConnectionFieldKind::Integer {
                                 default: 22,
                                 min: 1,
@@ -1543,7 +1544,7 @@ mod net {
                         },
                         ConnectionField {
                             key: "password",
-                            label: "Password",
+                            label: Text("Password"),
                             kind: ConnectionFieldKind::Secret,
                             required: false,
                         },
@@ -1559,8 +1560,8 @@ mod net {
         fn provider(&self) -> ProviderId {
             ID
         }
-        fn schema(&self) -> &ConnectionSchema {
-            self.schema.as_ref().unwrap_or_else(|| unreachable!())
+        fn schema(&self) -> ConnectionSchema {
+            self.schema.clone().unwrap_or_else(|| unreachable!())
         }
         fn update(&self, connections: Vec<Connection>) {
             let names: Vec<String> = connections.iter().map(|c| c.name.clone()).collect();

@@ -440,7 +440,7 @@ fn copy_path_open_and_reveal_go_to_the_platform() {
     );
     assert_eq!(
         h.action("core.copy_name").availability(&h.ctx(&dir, &[])),
-        Availability::Disabled("select something first")
+        Availability::Disabled(ext::t!("reason-select-something-first"))
     );
 
     h.run("core.open_default", h.ctx(&dir, &refs));

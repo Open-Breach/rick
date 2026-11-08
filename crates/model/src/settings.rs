@@ -65,6 +65,9 @@ pub struct Settings {
     pub density: Density,
     /// Accent colour as `#rrggbb`, or the theme's own.
     pub accent: Option<String>,
+    /// The language of the user interface as a tag (`de`), or `None` for
+    /// the system's; applied live, English the fallback for a missing key.
+    pub language: Option<String>,
     /// Rebound shortcuts: action id to shortcut text, e.g. `"core.copy" =
     /// "Mod+C"`. Actions not listed keep their default.
     pub shortcuts: BTreeMap<String, String>,
@@ -454,6 +457,7 @@ impl Default for Settings {
             viewer: Viewer::default(),
             plugins: Plugins::default(),
             connections: Vec::new(),
+            language: None,
         }
     }
 }
@@ -481,6 +485,8 @@ pub enum SettingsChange {
     Density(Density),
     /// Accent colour, `None` for the theme's own.
     Accent(Option<String>),
+    /// The language, `None` for the system's.
+    Language(Option<String>),
     /// Rebind an action; `None` restores its default.
     Shortcut {
         /// The action id.
@@ -545,6 +551,7 @@ impl Settings {
             SettingsChange::Theme(v) => self.theme = v,
             SettingsChange::FontSize(v) => self.font_size = v,
             SettingsChange::Density(v) => self.density = v,
+            SettingsChange::Language(v) => self.language = v,
             SettingsChange::Accent(v) => self.accent = v,
             SettingsChange::Shortcut { action, binding } => match binding {
                 Some(binding) => {

@@ -115,7 +115,7 @@
 use async_trait::async_trait;
 use futures::stream::BoxStream;
 use runtime::ProgressSink;
-use tokio::io::{AsyncRead, AsyncWrite};
+use tokio::io::{AsyncRead, AsyncReadExt as _, AsyncWrite};
 use types::{CancelToken, Entry, EntryId, Error, Location, ProviderId};
 
 bitflags::bitflags! {
@@ -217,14 +217,14 @@ pub enum LinkKind {
 }
 
 impl LinkKind {
-    /// The name shown in menus and dialogues.
+    /// The name shown in menus and dialogues, in the language in use.
     #[must_use]
-    pub fn label(self) -> &'static str {
+    pub fn label(self) -> String {
         match self {
-            Self::Symbolic => "Symbolic link",
-            Self::Hard => "Hard link",
-            Self::Junction => "Directory junction",
-            Self::Shortcut => "Shortcut (.lnk)",
+            Self::Symbolic => crate::t!("link-symbolic"),
+            Self::Hard => crate::t!("link-hard"),
+            Self::Junction => crate::t!("link-junction"),
+            Self::Shortcut => crate::t!("link-shortcut"),
         }
     }
 
@@ -299,6 +299,24 @@ pub trait Provider: Send + Sync + 'static {
     /// Opens the entry for reading from the start.
     async fn open_read(&self, loc: &Location) -> Result<ReadHandle, Error>;
 
+    /// Opens the entry for reading from byte `offset` on: what `SEEK`
+    /// promises. The default opens from the start and discards the first
+    /// `offset` bytes; a provider with a cheaper way (a `tail -c +N` on a
+    /// remote host) overrides it.
+    ///
+    /// # Errors
+    ///
+    /// As [`open_read`](Self::open_read), or the error of discarding.
+    async fn open_read_at(&self, loc: &Location, offset: u64) -> Result<ReadHandle, Error> {
+        let mut reader = self.open_read(loc).await?;
+        if offset > 0 {
+            tokio::io::copy(&mut (&mut reader).take(offset), &mut tokio::io::sink())
+                .await
+                .map_err(Error::from_io)?;
+        }
+        Ok(reader)
+    }
+
     /// Opens or creates the entry for writing from the start.
     async fn open_write(&self, loc: &Location, opts: WriteOptions) -> Result<WriteHandle, Error>;
 
@@ -354,6 +372,16 @@ pub trait Provider: Send + Sync + 'static {
         Err(Error::Unsupported(
             "this provider moves and copies through the kernel",
         ))
+    }
+
+    /// The size in bytes above which a whole-file previewer is held behind
+    /// *Preview anyway* for an entry at `loc`, for a provider with
+    /// [`Capabilities::REMOTE`]: a per-host override of the kernel's
+    /// default, 4 MiB (`specs/ext-ssh.md`, "Previews over SSH"). `None`,
+    /// the default, leaves the kernel's default in force.
+    fn remote_preview_cap(&self, loc: &Location) -> Option<u64> {
+        let _ = loc;
+        None
     }
 
     /// Change notifications for one location, if `WATCH` is set.

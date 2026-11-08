@@ -24,10 +24,12 @@ pub mod markdown;
 
 use std::sync::{Arc, LazyLock};
 
+use ext::Text;
 use ext::{
     API_VERSION, Capabilities, Content, ControlId, ControlValue, Document, Extension, Frame, Icon,
     InfoSection, Manifest, Platforms, Points, PreviewControl, PreviewDoc, Previewer, Provider,
-    Registry, RenderRequest, TextBlock, TextLayer, TextSpan, Transport, Version, async_trait,
+    Reads, Registry, RenderRequest, TextBlock, TextLayer, TextSpan, Transport, Version,
+    async_trait,
 };
 use syntect::easy::HighlightLines;
 use syntect::highlighting::{FontStyle, Theme, ThemeSet};
@@ -170,6 +172,7 @@ impl Extension for CodePreview {
     }
 
     fn register(&self, reg: &mut Registry) -> Result<(), Error> {
+        reg.translations(&[("en", include_str!("../locales/en.ftl"))]);
         reg.previewer(Arc::new(CodePreviewer));
         Ok(())
     }
@@ -665,7 +668,7 @@ impl PreviewDoc for CodeDoc {
         }
         vec![InfoSection {
             id: "file",
-            title: "File info",
+            title: Text("preview-code-file-info"),
             icon: Icon::Info,
             rows,
         }]
@@ -731,6 +734,12 @@ impl PreviewDoc for CodeDoc {
 impl Previewer for CodePreviewer {
     fn id(&self) -> ExtId {
         ID
+    }
+
+    /// The start of a file is enough: a remote file is served as a prefix
+    /// with *Load more*.
+    fn reads(&self) -> Reads {
+        Reads::Prefix
     }
 
     fn score(&self, entry: &Entry, sniff: &[u8]) -> u8 {
@@ -978,7 +987,10 @@ mod tests {
         let doc = CodeDoc::new("a.rs", b"fn a() {}\r\nfn b() {}\r\n", false, Some(2048));
         let sections = doc.sections();
         assert_eq!(sections.len(), 1);
-        assert_eq!((sections[0].id, sections[0].title), ("file", "File info"));
+        assert_eq!(
+            (sections[0].id, sections[0].title.key()),
+            ("file", "preview-code-file-info")
+        );
         let row = |key: &str| {
             sections[0]
                 .rows

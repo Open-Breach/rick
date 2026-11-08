@@ -580,7 +580,7 @@ pub fn details(ui: &mut egui::Ui, cx: &mut PaneCx<'_>) {
         }
         for def in &extra {
             row.col(|ui| {
-                ui.strong(def.label);
+                ui.strong(def.label.get());
                 header_separator(ui);
             });
         }

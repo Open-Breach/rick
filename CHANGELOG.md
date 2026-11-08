@@ -9,6 +9,58 @@ the pull request that brought the change.
 
 ### Added
 
+- Localisation (#24): every text of the shell, the dialogues, the menus,
+  the core actions and the plugins goes through the `t!` lookup over Fluent
+  files bundled in the binary (`locales/` for the kernel, each plugin's
+  own), overridable key by key from `locales/<lang>.ftl` in the
+  configuration directory; the *Language* setting (system default, or a
+  listed language) applies live, English is the fallback for any missing
+  key, and German is the first other language, for the Settings screen,
+  the context menus with their actions and the Properties dialogue. A CI
+  check fails on a user-facing string literal outside `t!` in the egui UI.
+- Permissions in Properties (#24): Properties on a local entry shows and
+  edits its owner, group and mode bits (`rwx` for user, group and other,
+  setuid, setgid and sticky, with the octal beside them) and the access
+  control list of its file system (POSIX and NFSv4 ACLs on Linux, macOS
+  ACLs, NTFS permissions with the trustees and the standard rights on
+  Windows); *Apply to enclosed items* changes a folder's contents too,
+  files and folders chosen separately; every change is one job with
+  progress and one undo step, whatever it touched. What the user may not
+  change goes to `rick-perms`, the privileged helper beside the binary,
+  through the platform's prompt (polkit, Authorization Services, User
+  Account Control) once per job, so Rick itself never runs elevated.
+- `ext-ssh`, SSH hosts browsed over a shell (#34): every host of
+  `~/.ssh/config` (with its `Include`s, `HostName`, `User`, `Port`,
+  `IdentityFile` and `ProxyJump` honoured) and every host added in the
+  Network section's editor is a row of that section that opens its default
+  directory; browsing, stat, read, read from an offset, write, mkdir,
+  rename, delete and symlink targets run as commands on `exec` channels
+  through `russh`, never SFTP, with the host probed once for its command
+  profile (`gnu`, `bsd`, `busybox`) and listings streamed as NUL-separated
+  records so any name survives; a same-host copy or move runs on the host
+  as `cp -a` or `mv` and streams nothing. Authentication tries the agent,
+  the identity files (a passphrase is asked for) and then
+  keyboard-interactive and a password, with the secrets in the platform
+  keychain; host keys follow `known_hosts` with OpenSSH semantics (hashed
+  entries, `@revoked`, port-qualified names) and an unknown or changed key
+  asks in a dialogue, nothing trusted silently. Connections pool per host
+  with a second one at the server's session limit, close after the idle
+  timeout and come back on the next operation; jump hosts chain hop by
+  hop over `direct-tcpip` channels, a bastion shared by every target behind
+  it; a connection that fails is a banner with *Retry* in the tab. *Open
+  console here* opens the console pane on a PTY channel of the existing
+  connection and *Open in external terminal* runs `ssh <alias>` in the
+  user's terminal. Previews over a remote host serve a prefix with *Load
+  more* to the text-like previewers and hold a large file behind a size
+  cap with *Preview anyway*, the cap a setting with a per-host override.
+  Three settings in `ssh.toml`; Windows hosts, port forwarding and
+  mounting are out.
+- Questions from extensions (#34): an extension working off the UI thread
+  asks the user through `Prompts` (a choice or a secret with *Remember*)
+  and the shell shows one modal dialogue at a time, the oldest first.
+- *Edit…* on a connection row of the Network and Cloud sections opens the
+  connection's dialogue filled in; a choice field draws a combo box (#34).
+
 - `ext-preview-3d`, the 3D model previewer, as a plugin in `plugins/`:
   STL (ASCII and binary), OBJ (materials read for their colour) and 3MF
   (units and build transforms honoured) files render through wgpu into the
@@ -200,6 +252,25 @@ the pull request that brought the change.
 
 ### Changed
 
+- The extension API is at version 11: `Action::label` returns a `String`
+  and `Availability::Disabled` carries one, both built with `t!`; the
+  labels the registry keeps (`SettingField`, `ConnectionField`,
+  `ConnectionSchema`, `InfoSection`, `ColumnDef`) are `Text` keys read
+  live; the registry takes an extension's translation files through
+  `Registry::translations` (#24).
+- Properties is Rick's own dialogue on every platform; on Windows and
+  macOS *System properties…* opens the platform's own as before (#24).
+- `platform::Elevate` runs a command as the administrator on macOS and
+  Windows too, not Linux alone (#24).
+- The extension API is at version 10: the registry lends `Prompts` to
+  extensions, `Previewer` gained `reads()` (`Reads::Whole` or
+  `Reads::Prefix`), `Provider` gained `open_read_at()` and
+  `remote_preview_cap()`, `Connector::schema()` returns an owned schema
+  with `ConnectionFieldKind::Choice`, and the terminal emulator moved from
+  `ext-action-terminal` into `ext::terminal` so a plugin can open a console
+  on its own stream (#34).
+- A listing that fails is a banner with *Retry* over the empty list, not a
+  toast (#34).
 - The extension API is at version 8: a previewer can claim the pointer over
   its content as `PreviewControl::Pointer` controls (a drag, the wheel, a
   double-click), which the preview pane and the viewer hand to `set_control`

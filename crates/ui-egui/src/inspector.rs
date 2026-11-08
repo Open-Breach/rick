@@ -18,12 +18,13 @@
 
 use app::{App, Command};
 use egui::{Align, Rect, pos2, vec2};
+use ext::t;
 use ext::{ControlValue, PreviewControl};
 use model::{PaneId, SettingsChange, TextPreview};
 use types::{Entry, EntryId};
 
 use crate::icons;
-use crate::preview::{Previews, Slot};
+use crate::preview::{PreviewAct, Previews, Slot};
 use crate::shell::Request;
 
 /// The toolbar's height: a tab's.
@@ -101,7 +102,7 @@ pub(crate) fn sections_for(app: &App, slot: Option<&Slot>, entry: Option<&Entry>
         .iter()
         .map(|s| Section {
             id: s.id,
-            title: s.title.to_owned(),
+            title: s.title.get(),
             glyph: icons::for_icon(s.icon),
             rows: s.rows.clone(),
         })
@@ -207,9 +208,17 @@ pub fn show(
     );
     inner.set_clip_rect(content.intersect(ui.clip_rect()));
     match view.pane {
-        Some(pane) => previews.content(&mut inner, pane, view.target, view.text_settings),
+        Some(pane) => match previews.content(&mut inner, pane, view.target, view.text_settings) {
+            Some(PreviewAct::LoadMore) => {
+                requests.push(Request::Command(Command::PreviewMore(pane)));
+            }
+            Some(PreviewAct::PreviewAnyway) => {
+                requests.push(Request::Command(Command::PreviewAnyway(pane)));
+            }
+            None => {}
+        },
         None => {
-            inner.weak("Select a file to preview it");
+            inner.weak(t!("inspector-select-a-file-to-preview"));
         }
     }
     separator(ui, width);
@@ -536,7 +545,7 @@ pub(crate) fn section_rows(
             ui.add_space(4.0);
             ui.add_sized(
                 vec2(width - 8.0, ui.spacing().interact_size.y),
-                egui::TextEdit::singleline(filter).hint_text("Search"),
+                egui::TextEdit::singleline(filter).hint_text(t!("inspector-search")),
             );
             ui.add_space(2.0);
             filter.trim().to_lowercase()
@@ -563,7 +572,7 @@ pub(crate) fn section_rows(
                 section_row(ui, width, key_w, key, value);
             }
             if section.rows.is_empty() {
-                ui.weak("Nothing to show");
+                ui.weak(t!("inspector-nothing-to-show"));
             }
         });
 }
@@ -593,7 +602,7 @@ fn section_row(ui: &mut egui::Ui, width: f32, key_w: f32, key: &str, value: &str
     );
     if row
         .add(egui::Button::new(egui::RichText::new(icons::COPY).small()).frame(false))
-        .on_hover_text("Copy")
+        .on_hover_text(t!("inspector-copy"))
         .clicked()
     {
         row.ctx().copy_text(value.to_owned());

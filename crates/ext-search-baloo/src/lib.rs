@@ -25,6 +25,7 @@ pub mod backend;
 pub mod hits;
 pub mod service;
 
+use ext::t;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Weak};
 use std::time::Duration;
@@ -87,6 +88,7 @@ impl Extension for BalooExtension {
     }
 
     fn register(&self, reg: &mut Registry) -> Result<(), Error> {
+        reg.translations(&[("en", include_str!("../locales/en.ftl"))]);
         reg.search_index(Arc::new(BalooIndex::new(Arc::new(Process))));
         Ok(())
     }
@@ -217,9 +219,9 @@ impl SearchIndex for BalooIndex {
         if self.state.available() {
             Availability::Enabled
         } else if self.state.probed() {
-            Availability::Disabled("Baloo is not running")
+            Availability::Disabled(t!("search-baloo-baloo-is-not-running"))
         } else {
-            Availability::Disabled("Baloo has not answered yet")
+            Availability::Disabled(t!("search-baloo-baloo-has-not-answered-yet"))
         }
     }
 
