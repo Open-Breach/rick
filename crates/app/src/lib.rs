@@ -85,9 +85,10 @@ use std::sync::{Arc, Mutex, PoisonError, RwLock};
 use std::time::Duration;
 
 use ext::{
-    ActionCtx, ActionOutcome, Availability, DecorateCtx, Decoration, Decorator, Depth, Extension,
-    Filter, FsChange, Invocation, Level, ListOptions, Points, PreviewDoc, Previewer, Query,
-    QueryKind, Registry, SearchIndex, SearchScope, UiHost, UndoCommand,
+    ActionCtx, ActionOutcome, Availability, Capabilities, DecorateCtx, Decoration, Decorator,
+    Depth, Extension, Filter, FsChange, Invocation, Level, ListOptions, Points, PreviewDoc,
+    Previewer, Prompts, Query, QueryKind, Reads, Registry, SearchIndex, SearchScope, UiHost,
+    UndoCommand,
 };
 use futures::StreamExt;
 use model::{
@@ -204,6 +205,9 @@ enum Msg {
         pane: PaneId,
         generation: u64,
         result: Result<Box<dyn PreviewDoc>, Error>,
+        /// The bytes served and the file's size, when the previewer got a
+        /// prefix of a remote file.
+        prefix: Option<(u64, Option<u64>)>,
     },
     /// A decorator finished a batch late.
     Decorated {
@@ -238,6 +242,15 @@ enum Msg {
     },
     /// A job asked about a name conflict.
     Conflicts,
+    /// An extension asked the user a question.
+    Prompts,
+    /// A remote file's preview was held behind the size cap.
+    PreviewCapped {
+        pane: PaneId,
+        generation: u64,
+        size: u64,
+        cap: u64,
+    },
     /// A job started waiting for its volume, or stopped.
     Schedule,
     /// The mounted volumes were enumerated.
@@ -297,6 +310,12 @@ const INDEX_SEARCH_AFTER: Duration = Duration::from_millis(150);
 /// How many of this process's own settings writes are remembered, so the
 /// watcher's report of each is told from an edit.
 const RECENT_SAVES: usize = 16;
+/// How much of a file on a remote provider a prefix previewer is served at
+/// first, and per *Load more* (`specs/ext-ssh.md`, "Previews over SSH").
+pub const REMOTE_PREFIX_CHUNK: u64 = 256 * 1024;
+/// The size above which a whole-file previewer waits for *Preview anyway*
+/// on a remote provider, unless the provider names another cap.
+pub const REMOTE_PREVIEW_CAP: u64 = 4 * 1024 * 1024;
 
 /// The pinned list as the pin actions see it. The list itself lives in the
 /// model's settings, which `App` owns; the bridge keeps a copy for the
@@ -373,6 +392,9 @@ impl PinStore for PinBridge {
 /// file for every pane whose active tab is a viewer.
 struct PreviewJob {
     entry: EntryId,
+    /// The entry itself, so the preview can open again with more served
+    /// or the cap lifted.
+    full: Entry,
     generation: u64,
     cancel: CancelToken,
 }
@@ -428,6 +450,9 @@ pub struct App {
     ui: Arc<dyn UiHost>,
     pins: Arc<PinBridge>,
     conflicts: Arc<Conflicts>,
+    /// Where extensions ask the user a question (a host key, a passphrase);
+    /// the UI answers through [`Command::AnswerQuestion`].
+    prompts: Arc<Prompts>,
     /// The per-volume queue the copy and move jobs go through.
     scheduler: Arc<Scheduler>,
     /// The jobs shown as *Waiting* right now.
@@ -460,6 +485,10 @@ pub struct App {
     preview: BTreeMap<PaneId, PreviewJob>,
     /// Numbers the preview jobs, so a late answer is told from the current.
     preview_generation: u64,
+    /// How many times *Load more* was pressed for the entry a pane previews.
+    preview_more: BTreeMap<PaneId, (EntryId, u32)>,
+    /// The entry a pane previews whatever its size, after *Preview anyway*.
+    preview_force: BTreeMap<PaneId, EntryId>,
     /// Thumbnails being rendered, so a cell asked for twice renders once.
     thumbnails: BTreeSet<(EntryId, u32)>,
     /// Events from start-up, delivered on the first poll.
@@ -504,10 +533,19 @@ impl App {
     /// provider over them, reads the settings and places files and starts
     /// watching the settings, restores the session or the start layout,
     /// starts the side panel's feeds, and lists every active tab's location.
+    #[must_use]
+    pub fn new(config: Config) -> Self {
+        Self::with_prompts(config, Prompts::new())
+    }
+
+    /// [`App::new`] with the question queue the extensions ask the user
+    /// through: the binary makes one and lends it to the plugins it loads
+    /// before the application exists, so their questions reach the same
+    /// dialogues.
     // Start-up is one straight line: registry, settings, session, loop.
     #[allow(clippy::too_many_lines)]
     #[must_use]
-    pub fn new(config: Config) -> Self {
+    pub fn with_prompts(config: Config, prompts: Arc<Prompts>) -> Self {
         let Config {
             platform,
             ui,
@@ -517,7 +555,8 @@ impl App {
         } = config;
         let mut pending = Vec::new();
 
-        let mut registry = Registry::with_platform(Arc::clone(&platform) as Arc<dyn Platform>);
+        let mut registry = Registry::with_platform(Arc::clone(&platform) as Arc<dyn Platform>)
+            .with_prompts(Arc::clone(&prompts));
         let mounts = Arc::new(Mounts::new());
         let trash: Arc<dyn platform::Trash> = Arc::clone(&platform) as Arc<dyn platform::Trash>;
         mounts.mount(Arc::new(LocalProvider::new(trash)));
@@ -686,6 +725,12 @@ impl App {
                 tx.send(Msg::Schedule);
             }));
         }
+        {
+            let tx = mailbox.clone();
+            prompts.set_waker(Arc::new(move || {
+                tx.send(Msg::Prompts);
+            }));
+        }
         let mut app = Self {
             model,
             mounts,
@@ -694,6 +739,7 @@ impl App {
             ui,
             pins,
             conflicts,
+            prompts,
             scheduler,
             waiting: BTreeSet::new(),
             rick,
@@ -713,6 +759,8 @@ impl App {
             recent_saves: VecDeque::new(),
             preview: BTreeMap::new(),
             preview_generation: 0,
+            preview_more: BTreeMap::new(),
+            preview_force: BTreeMap::new(),
             thumbnails: BTreeSet::new(),
             pending,
             places_saver,
@@ -751,6 +799,13 @@ impl App {
     #[must_use]
     pub fn conflicts(&self) -> &Arc<Conflicts> {
         &self.conflicts
+    }
+
+    /// Where extensions ask the user a question; the UI answers through
+    /// [`Command::AnswerQuestion`], a test through [`Prompts::answer_with`].
+    #[must_use]
+    pub fn prompts(&self) -> &Arc<Prompts> {
+        &self.prompts
     }
 
     /// The session the model is right now.
@@ -1242,7 +1297,12 @@ impl App {
                 provider,
                 name,
                 values,
-            } => self.add_connection(provider, &name, values, events),
+            } => self.add_connection(provider, &name, values, false, events),
+            Command::EditConnection {
+                provider,
+                name,
+                values,
+            } => self.add_connection(provider, &name, values, true, events),
             Command::Connection { provider, name, op } => {
                 self.connection_op(provider, &name, op, events);
             }
@@ -1300,6 +1360,12 @@ impl App {
                 }
                 self.model.conflict_closed(id);
             }
+            Command::AnswerQuestion { id, answer } => {
+                if !self.prompts.answer(id, answer) {
+                    debug!(%id, "nobody waits on this question");
+                }
+                self.model.question_closed(id);
+            }
             Command::RefreshVolumes => self.enumerate_volumes(),
             Command::Undo => self.undo(events),
             Command::Redo => self.redo(events),
@@ -1313,6 +1379,24 @@ impl App {
                 }
             }
             Command::Thumbnail { pane, id, size } => self.thumbnail(pane, id, size),
+            Command::PreviewMore(pane) => {
+                if let Some(job) = self.preview.get(&pane) {
+                    let id = job.entry;
+                    let count = self
+                        .preview_more
+                        .get(&pane)
+                        .filter(|(e, _)| *e == id)
+                        .map_or(0, |(_, n)| *n);
+                    self.preview_more.insert(pane, (id, count + 1));
+                    self.restart_preview(pane);
+                }
+            }
+            Command::PreviewAnyway(pane) => {
+                if let Some(job) = self.preview.get(&pane) {
+                    self.preview_force.insert(pane, job.entry);
+                    self.restart_preview(pane);
+                }
+            }
             Command::TabOrder { pane, order } => {
                 self.model.set_tab_order(pane, order);
             }
@@ -1674,13 +1758,16 @@ impl App {
         }
     }
 
-    /// Adds a connection: the secret fields go to the keychain as a job,
-    /// the rest follow through [`Msg::ConnectionSaved`] once they are in.
+    /// Adds a connection, or with `editing` replaces one: the secret fields
+    /// go to the keychain as a job, the rest follow through
+    /// [`Msg::ConnectionSaved`] once they are in. An edit that gives no
+    /// value for a secret keeps the keychain's.
     fn add_connection(
         &mut self,
         provider: ProviderId,
         name: &str,
         values: Vec<(String, String)>,
+        editing: bool,
         events: &mut Vec<Event>,
     ) {
         let Some(connector) = self.registry.connector_of(provider).cloned() else {
@@ -1698,13 +1785,17 @@ impl App {
             });
             return;
         }
-        if connections_of(&self.model.settings, provider)
+        let exists = connections_of(&self.model.settings, provider)
             .iter()
-            .any(|c| c.name == name)
-        {
+            .any(|c| c.name == name);
+        if exists != editing {
             events.push(Event::Notify {
                 level: Level::Error,
-                text: format!("A {} connection called {name} exists already", provider.0),
+                text: if editing {
+                    format!("No {} connection called {name} to edit", provider.0)
+                } else {
+                    format!("A {} connection called {name} exists already", provider.0)
+                },
             });
             return;
         }
@@ -1736,9 +1827,13 @@ impl App {
             .iter()
             .filter(|f| f.required)
             .find(|f| match f.kind {
-                ext::ConnectionFieldKind::Secret => !secrets
-                    .iter()
-                    .any(|(k, _)| k == &ext::secret_key(provider, &name, f.key)),
+                // An edit keeps the secret it has when none is typed.
+                ext::ConnectionFieldKind::Secret => {
+                    !editing
+                        && !secrets
+                            .iter()
+                            .any(|(k, _)| k == &ext::secret_key(provider, &name, f.key))
+                }
                 _ => !entry.settings.contains_key(f.key),
             })
         {
@@ -2925,6 +3020,7 @@ impl App {
                 pane,
                 generation,
                 result,
+                prefix,
             } => {
                 if self
                     .preview
@@ -2933,10 +3029,32 @@ impl App {
                 {
                     return;
                 }
+                let opened = result.is_ok();
                 events.push(match result {
                     Ok(doc) => Event::PreviewReady { pane, doc },
                     Err(error) => Event::PreviewFailed { pane, error },
                 });
+                if let Some((served, total)) = prefix.filter(|_| opened) {
+                    events.push(Event::PreviewPrefix {
+                        pane,
+                        served,
+                        total,
+                    });
+                }
+            }
+            Msg::PreviewCapped {
+                pane,
+                generation,
+                size,
+                cap,
+            } => {
+                if self
+                    .preview
+                    .get(&pane)
+                    .is_some_and(|job| job.generation == generation)
+                {
+                    events.push(Event::PreviewCapped { pane, size, cap });
+                }
             }
             Msg::Decorated {
                 pane,
@@ -3020,6 +3138,12 @@ impl App {
                 for conflict in self.conflicts.take_new() {
                     self.model.conflict_opened(conflict.clone());
                     events.push(Event::Conflict(conflict));
+                }
+            }
+            Msg::Prompts => {
+                for question in self.prompts.take_new() {
+                    self.model.question_opened(question.clone());
+                    events.push(Event::Question(question));
                 }
             }
             Msg::Schedule => self.sync_waiting(),
@@ -3205,12 +3329,26 @@ impl App {
         }
     }
 
+    /// Opens the pane's preview again for the entry it shows: after *Load
+    /// more* or *Preview anyway*.
+    fn restart_preview(&mut self, pane: PaneId) {
+        if let Some(job) = self.preview.remove(&pane) {
+            job.cancel.cancel();
+            self.start_preview(pane, job.full);
+        }
+    }
+
     /// Opens `entry` for `pane` through the best-scoring previewer as a
     /// job, answered by [`Event::PreviewReady`] or [`Event::PreviewFailed`].
+    /// On a remote provider a prefix previewer is served the first chunk
+    /// (and one more per *Load more*), reported through
+    /// [`Event::PreviewPrefix`], and a whole-file previewer waits behind
+    /// the size cap ([`Event::PreviewCapped`]) until *Preview anyway*.
     fn start_preview(&mut self, pane: PaneId, entry: Entry) {
         self.preview_generation += 1;
         let generation = self.preview_generation;
         let loc = Location::new(entry.id.provider, entry.path.clone());
+        let job_entry = entry.clone();
         let provider = match self.mounts.resolve(&loc) {
             Ok(provider) => provider,
             Err(error) => {
@@ -3219,6 +3357,7 @@ impl App {
                     pane,
                     PreviewJob {
                         entry: entry.id,
+                        full: job_entry,
                         generation,
                         cancel: CancelToken::new(),
                     },
@@ -3226,6 +3365,16 @@ impl App {
                 return;
             }
         };
+        let remote = provider.capabilities(&loc).contains(Capabilities::REMOTE);
+        let cap = provider
+            .remote_preview_cap(&loc)
+            .unwrap_or(REMOTE_PREVIEW_CAP);
+        let more = self
+            .preview_more
+            .get(&pane)
+            .filter(|(id, _)| *id == entry.id)
+            .map_or(0, |(_, n)| *n);
+        let force = self.preview_force.get(&pane) == Some(&entry.id);
         let previewers: Vec<Arc<dyn Previewer>> = self.registry.previewers().to_vec();
         let tx = self.mailbox.clone();
         let id = entry.id;
@@ -3239,7 +3388,31 @@ impl App {
                         .filter(|(score, _)| *score > 0)
                         .max_by_key(|(score, _)| *score)
                         .map(|(_, p)| Arc::clone(p));
+                    let mut prefix = None;
                     let result = match best {
+                        Some(previewer) if remote && previewer.reads() == Reads::Prefix => {
+                            let limit = REMOTE_PREFIX_CHUNK * (u64::from(more) + 1);
+                            if entry.size.is_none_or(|size| size > limit) {
+                                prefix =
+                                    Some((entry.size.map_or(limit, |s| s.min(limit)), entry.size));
+                            }
+                            let limited: Arc<dyn ext::Provider> = Arc::new(Prefixed {
+                                inner: provider,
+                                limit,
+                            });
+                            previewer.open(&loc, limited, job.cancel.clone()).await
+                        }
+                        Some(_)
+                            if remote && !force && entry.size.is_some_and(|size| size > cap) =>
+                        {
+                            tx.send(Msg::PreviewCapped {
+                                pane,
+                                generation,
+                                size: entry.size.unwrap_or(0),
+                                cap,
+                            });
+                            return Ok(());
+                        }
                         Some(previewer) => previewer.open(&loc, provider, job.cancel.clone()).await,
                         None => Err(Error::Unsupported("no previewer for this file")),
                     };
@@ -3250,6 +3423,7 @@ impl App {
                         pane,
                         generation,
                         result,
+                        prefix,
                     });
                     Ok(())
                 });
@@ -3258,6 +3432,7 @@ impl App {
             pane,
             PreviewJob {
                 entry: id,
+                full: job_entry,
                 generation,
                 cancel: handle.cancel,
             },
@@ -3280,12 +3455,16 @@ impl App {
         live.complete = true;
         let buffered = live.buffer.take();
         let location = live.key.location.clone();
-        if let Err(error) = result {
-            events.push(Event::Notify {
-                level: Level::Error,
-                text: format!("Listing {location}: {error}"),
-            });
-        }
+        // A failure is the tab's banner with *Retry*, never a dialogue
+        // (`specs/ext-ssh.md`, "Connections"); a listing that works clears
+        // it.
+        self.model.listing_failed(
+            pane,
+            result
+                .as_ref()
+                .err()
+                .map(|error| format!("{location} could not be listed: {error}")),
+        );
         let batch = match buffered {
             Some(entries) if result.is_ok() => {
                 let before = self.selected_ids(pane);
@@ -3642,6 +3821,89 @@ fn repair(mounts: &Mounts, home: &Location, session: &mut Session) {
             ));
             tab.location = home.clone();
         }
+    }
+}
+
+/// A provider whose reads stop after `limit` bytes: what a prefix
+/// previewer is handed for a file on a remote provider, so a 1 GiB log
+/// previews from its first chunk. Everything else goes to the provider
+/// itself.
+struct Prefixed {
+    inner: Arc<dyn ext::Provider>,
+    limit: u64,
+}
+
+impl std::fmt::Debug for Prefixed {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Prefixed")
+            .field("limit", &self.limit)
+            .finish_non_exhaustive()
+    }
+}
+
+#[ext::async_trait]
+impl ext::Provider for Prefixed {
+    fn id(&self) -> ProviderId {
+        self.inner.id()
+    }
+    fn capabilities(&self, loc: &Location) -> Capabilities {
+        self.inner.capabilities(loc)
+    }
+    fn list(&self, loc: &Location, opts: ListOptions, cancel: CancelToken) -> ext::EntryStream {
+        self.inner.list(loc, opts, cancel)
+    }
+    async fn stat(&self, loc: &Location) -> Result<Entry, Error> {
+        self.inner.stat(loc).await
+    }
+    async fn open_read(&self, loc: &Location) -> Result<ext::ReadHandle, Error> {
+        use tokio::io::AsyncReadExt as _;
+        let reader = self.inner.open_read(loc).await?;
+        Ok(Box::new(reader.take(self.limit)))
+    }
+    async fn open_read_at(&self, loc: &Location, offset: u64) -> Result<ext::ReadHandle, Error> {
+        use tokio::io::AsyncReadExt as _;
+        let reader = self.inner.open_read_at(loc, offset).await?;
+        Ok(Box::new(reader.take(self.limit.saturating_sub(offset))))
+    }
+    async fn open_write(
+        &self,
+        loc: &Location,
+        opts: ext::WriteOptions,
+    ) -> Result<ext::WriteHandle, Error> {
+        self.inner.open_write(loc, opts).await
+    }
+    async fn create_dir(&self, loc: &Location) -> Result<Entry, Error> {
+        self.inner.create_dir(loc).await
+    }
+    async fn rename(&self, from: &Location, to: &Location) -> Result<Entry, Error> {
+        self.inner.rename(from, to).await
+    }
+    async fn remove(&self, loc: &Location, mode: ext::RemoveMode) -> Result<(), Error> {
+        self.inner.remove(loc, mode).await
+    }
+    async fn link(
+        &self,
+        target: &Location,
+        at: &Location,
+        kind: ext::LinkKind,
+    ) -> Result<Entry, Error> {
+        self.inner.link(target, at, kind).await
+    }
+    async fn copy(
+        &self,
+        from: &Location,
+        to: &Location,
+        opts: ext::CopyOptions,
+        progress: ext::ProgressSink,
+        cancel: CancelToken,
+    ) -> Result<(), Error> {
+        self.inner.copy(from, to, opts, progress, cancel).await
+    }
+    fn remote_preview_cap(&self, loc: &Location) -> Option<u64> {
+        self.inner.remote_preview_cap(loc)
+    }
+    fn watch(&self, loc: &Location) -> Result<ext::ChangeStream, Error> {
+        self.inner.watch(loc)
     }
 }
 

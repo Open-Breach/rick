@@ -10,8 +10,8 @@ use model::{
     SidePanelChange, SortDir, SplitDir, TabId, ViewMode, WindowId,
 };
 use types::{
-    Conflict, ConflictAnswer, ConflictId, Entry, EntryId, Error, JobId, Location, Progress,
-    ProviderId,
+    Answer, Conflict, ConflictAnswer, ConflictId, Entry, EntryId, Error, JobId, Location, Progress,
+    ProviderId, Question, QuestionId,
 };
 
 /// Whether a transfer moves or copies, or asks on drop.
@@ -193,6 +193,19 @@ pub enum Command {
         /// left out.
         values: Vec<(String, String)>,
     },
+    /// Change a connection of a network or cloud provider, as its *Edit…*
+    /// dialogue filled it in: the non-secret fields replace the ones in
+    /// `rick.toml`, a secret given replaces the one in the keychain and a
+    /// secret left out keeps it.
+    EditConnection {
+        /// The provider.
+        provider: ProviderId,
+        /// The connection's name, which the dialogue cannot change.
+        name: String,
+        /// The field values by key, secrets included; an empty value is
+        /// left out.
+        values: Vec<(String, String)>,
+    },
     /// Connect, disconnect or remove a connection of a network or cloud
     /// provider.
     Connection {
@@ -258,6 +271,14 @@ pub enum Command {
         /// Skip, overwrite, rename, cancel; for this item or all remaining.
         answer: ConflictAnswer,
     },
+    /// Answer the question dialogue of a waiting extension: the host key to
+    /// trust, the passphrase or password typed, or the dismissal.
+    AnswerQuestion {
+        /// The question.
+        id: QuestionId,
+        /// The answer.
+        answer: Answer,
+    },
     /// Enumerate the mounted volumes again.
     RefreshVolumes,
     /// Revert the last reversible operation.
@@ -275,6 +296,12 @@ pub enum Command {
         /// The new value.
         value: ext::SettingValue,
     },
+    /// A remote file shown as a prefix (`Event::PreviewPrefix`): serve the
+    /// next chunk too and open the preview again.
+    PreviewMore(PaneId),
+    /// A remote file held behind the size cap (`Event::PreviewCapped`):
+    /// open the preview whatever its size.
+    PreviewAnyway(PaneId),
     /// Render a thumbnail of an entry of the pane's listing at `size`
     /// pixels square, through the previewer that claims it; answered by
     /// [`Event::Thumbnail`].
@@ -462,6 +489,28 @@ pub enum Event {
         /// Why.
         error: Error,
     },
+    /// The preview just opened for the pane shows a prefix of a file on a
+    /// remote provider; the pane offers *Load more*
+    /// (`specs/ext-ssh.md`, "Previews over SSH").
+    PreviewPrefix {
+        /// The pane.
+        pane: PaneId,
+        /// How many bytes the previewer was served.
+        served: u64,
+        /// The file's size, when known.
+        total: Option<u64>,
+    },
+    /// The pane's selection is a file on a remote provider above the size
+    /// cap for whole-file previews; the pane shows the file's facts and
+    /// *Preview anyway*.
+    PreviewCapped {
+        /// The pane.
+        pane: PaneId,
+        /// The file's size.
+        size: u64,
+        /// The cap it is above.
+        cap: u64,
+    },
     /// A thumbnail finished: the frame, or `None` when no previewer claims
     /// the entry or the render failed.
     Thumbnail {
@@ -475,6 +524,9 @@ pub enum Event {
     /// A job met an existing name and waits for the conflict dialogue's
     /// answer; the conflict is in the model until it is resolved.
     Conflict(Conflict),
+    /// An extension asked the user something and waits for the answer; the
+    /// question is in the model until it is answered.
+    Question(Question),
     /// An action opened a view in a new tab of the pane, which the model
     /// already holds; the UI draws `view` in it.
     ViewOpened {
@@ -548,7 +600,24 @@ impl fmt::Debug for Event {
                 .field("pane", pane)
                 .field("error", error)
                 .finish(),
+            Self::PreviewPrefix {
+                pane,
+                served,
+                total,
+            } => f
+                .debug_struct("PreviewPrefix")
+                .field("pane", pane)
+                .field("served", served)
+                .field("total", total)
+                .finish(),
+            Self::PreviewCapped { pane, size, cap } => f
+                .debug_struct("PreviewCapped")
+                .field("pane", pane)
+                .field("size", size)
+                .field("cap", cap)
+                .finish(),
             Self::Conflict(conflict) => f.debug_tuple("Conflict").field(&conflict.id).finish(),
+            Self::Question(question) => f.debug_tuple("Question").field(&question.id).finish(),
             Self::ViewOpened { pane, tab, view } => f
                 .debug_struct("ViewOpened")
                 .field("pane", pane)
