@@ -45,6 +45,7 @@
 mod clipboard;
 mod conflict;
 mod containing;
+mod core_toml;
 mod create;
 mod edit;
 mod link;

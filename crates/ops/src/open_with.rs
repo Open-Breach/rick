@@ -17,7 +17,7 @@ use types::Error;
 use crate::{State, local_path, location_of, needs_entries};
 
 /// The file in the config directory that remembers the choice per type.
-pub const FILE: &str = "core.toml";
+pub const FILE: &str = crate::core_toml::FILE;
 /// The table in it.
 const TABLE: &str = "open_with";
 /// The last option of the application choice.
@@ -40,43 +40,12 @@ fn type_key(path: &Path) -> String {
 
 /// The remembered choices, by type key: the application's id.
 fn remembered(file: &Path) -> toml::Table {
-    std::fs::read_to_string(file)
-        .ok()
-        .and_then(|text| text.parse::<toml::Table>().ok())
-        .and_then(|mut table| match table.remove(TABLE) {
-            Some(toml::Value::Table(inner)) => Some(inner),
-            _ => None,
-        })
-        .unwrap_or_default()
+    crate::core_toml::table(file, TABLE)
 }
 
 /// Writes one remembered choice, keeping the rest of the file.
 fn remember(file: &Path, key: &str, app: &Application) -> Result<(), Error> {
-    let mut table = std::fs::read_to_string(file)
-        .ok()
-        .and_then(|text| text.parse::<toml::Table>().ok())
-        .unwrap_or_default();
-    let inner = match table
-        .entry(TABLE.to_owned())
-        .or_insert_with(|| toml::Value::Table(toml::Table::new()))
-    {
-        toml::Value::Table(inner) => inner,
-        other => {
-            *other = toml::Value::Table(toml::Table::new());
-            match other {
-                toml::Value::Table(inner) => inner,
-                // Just assigned a table.
-                _ => return Err(Error::Unsupported("core.toml could not be updated")),
-            }
-        }
-    };
-    inner.insert(key.to_owned(), toml::Value::String(app.id.clone()));
-    let text = toml::to_string_pretty(&table)
-        .map_err(|e| Error::Io(std::io::Error::other(e.to_string())))?;
-    if let Some(parent) = file.parent() {
-        std::fs::create_dir_all(parent).map_err(Error::from_io)?;
-    }
-    std::fs::write(file, text).map_err(Error::from_io)
+    crate::core_toml::set(file, TABLE, key, toml::Value::String(app.id.clone()))
 }
 
 impl OpenWith {
