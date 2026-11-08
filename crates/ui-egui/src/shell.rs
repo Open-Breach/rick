@@ -270,8 +270,7 @@ struct TextWindow {
 
 struct Dialog {
     ask: Ask,
-    action: ActionId,
-    ctx: ActionCtx,
+    origin: DialogOrigin,
     input: String,
     focus: bool,
     /// A form's values as typed so far.
@@ -283,6 +282,19 @@ struct Dialog {
         &'static str,
         runtime::oneshot::Receiver<Option<std::path::PathBuf>>,
     )>,
+}
+
+/// Where a dialogue's answer goes.
+enum DialogOrigin {
+    /// The action runs again with the answer: the host's protocol for a
+    /// question asked on the app thread, which cannot block a frame.
+    Rerun { action: ActionId, ctx: ActionCtx },
+    /// The rest of an action whose job finished with the form: the values
+    /// go to the application, which runs it (`Command::Continue`).
+    Continue {
+        pane: PaneId,
+        then: ext::Continuation,
+    },
 }
 
 /// The file dialogue a preview's *Browse…* opened for a missing library:
@@ -1669,8 +1681,7 @@ impl RickUi {
             };
             self.dialog = Some(Dialog {
                 ask,
-                action,
-                ctx,
+                origin: DialogOrigin::Rerun { action, ctx },
                 input,
                 focus: true,
                 values,
@@ -2742,16 +2753,27 @@ impl RickUi {
         let Some(dialog) = self.dialog.take() else {
             return;
         };
-        if !ok {
-            self.host.clear_answers();
-            return;
+        match dialog.origin {
+            DialogOrigin::Rerun { action, ctx } => {
+                if !ok {
+                    self.host.clear_answers();
+                    return;
+                }
+                match dialog.ask {
+                    Ask::Prompt { .. } => self.host.answer_prompt(dialog.input),
+                    Ask::Confirm { .. } => self.host.answer_confirm(true),
+                    Ask::Form(_) => self.host.answer_form(dialog.values),
+                }
+                self.run_action_with(action, ctx);
+            }
+            DialogOrigin::Continue { pane, then } => {
+                self.handle(Command::Continue {
+                    pane,
+                    then,
+                    values: ok.then_some(dialog.values),
+                });
+            }
         }
-        match dialog.ask {
-            Ask::Prompt { .. } => self.host.answer_prompt(dialog.input),
-            Ask::Confirm { .. } => self.host.answer_confirm(true),
-            Ask::Form(_) => self.host.answer_form(dialog.values),
-        }
-        self.run_action_with(dialog.action, dialog.ctx);
     }
 
     /// The prompt for a layout name: Save layout as…, Rename….
@@ -3223,6 +3245,23 @@ impl RickUi {
         self.adopt_tabs(window);
         for (level, text) in self.host.take_notices() {
             self.toast(level, text);
+        }
+        // A form a job finished with opens as the one dialogue, once the
+        // one before it is answered.
+        if self.dialog.is_none()
+            && let Some((pane, form, then)) = self.host.take_later()
+        {
+            let values = form.defaults();
+            let rows = form.preview_rows(&values);
+            self.dialog = Some(Dialog {
+                ask: Ask::Form(form),
+                origin: DialogOrigin::Continue { pane, then },
+                input: String::new(),
+                focus: true,
+                values,
+                rows,
+                browse: None,
+            });
         }
         for (title, text) in self.host.take_shown() {
             self.next_text += 1;

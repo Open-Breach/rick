@@ -5,7 +5,12 @@
 //! availability check against the current selection, and `run`. `run` is
 //! called on the app thread and must return quickly: anything long is spawned
 //! as a job through the [`JobRunner`] it receives, and it reports
-//! [`ActionOutcome::Started`] with the job's id.
+//! [`ActionOutcome::Started`] with the job's id. An action whose form needs
+//! what a job reads first (an archive's contents) returns
+//! [`ActionOutcome::Later`] with a [`FormLater`]: the job fills it with the
+//! [`Form`] and a [`Continuation`] when it is done, the application shows the
+//! form through [`UiHost::form_later`] and runs the continuation with the
+//! values.
 //!
 //! # Worked example
 //!
@@ -91,9 +96,9 @@
 //! ```
 
 use std::fmt;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, PoisonError};
 
-use runtime::JobRunner;
+use runtime::{JobRunner, oneshot};
 use types::{Entry, Error, JobId, Location};
 
 use crate::form::{Form, Values};
@@ -179,6 +184,12 @@ pub enum ActionOutcome {
     /// does: what an action that opens a view of its own returns (the
     /// installer's Installed Apps).
     Navigate(Location),
+    /// A job of the action is reading what its form needs; the form and
+    /// the rest of the action arrive through the receiver when the job is
+    /// done. The application shows the form through
+    /// [`UiHost::form_later`] and runs the [`Continuation`] with the values.
+    /// Nothing arrives when the job fails or is cancelled.
+    Later(FormLater),
 }
 
 impl fmt::Debug for ActionOutcome {
@@ -194,7 +205,114 @@ impl fmt::Debug for ActionOutcome {
             Self::View(view) => f.debug_tuple("View").field(view).finish(),
             Self::Hashes(hashes) => f.debug_tuple("Hashes").field(hashes).finish(),
             Self::Navigate(to) => f.debug_tuple("Navigate").field(to).finish(),
+            Self::Later(_) => f.write_str("Later"),
         }
+    }
+}
+
+/// What runs on the app thread once a form asked for later is answered.
+type ContinuationFn = Box<dyn FnOnce(Option<Values>) -> Result<ActionOutcome, Error> + Send>;
+
+/// The rest of an action after a form it asked for later: what runs, on
+/// the app thread, with the form's values once the user confirmed, or
+/// with `None` when the dialogue was dismissed. It is built where the form
+/// is, inside the job that finished, and runs once; clones share that one
+/// run, so a command carrying it stays `Clone`.
+#[derive(Clone)]
+pub struct Continuation {
+    label: String,
+    run: Arc<Mutex<Option<ContinuationFn>>>,
+}
+
+impl Continuation {
+    /// The rest of the action labelled `label` (the action's label, for
+    /// the error the UI shows when it fails).
+    pub fn new(
+        label: impl Into<String>,
+        run: impl FnOnce(Option<Values>) -> Result<ActionOutcome, Error> + Send + 'static,
+    ) -> Self {
+        Self {
+            label: label.into(),
+            run: Arc::new(Mutex::new(Some(Box::new(run)))),
+        }
+    }
+
+    /// The action's label.
+    #[must_use]
+    pub fn label(&self) -> &str {
+        &self.label
+    }
+
+    /// Runs the rest of the action with the form's values, `None` when the
+    /// dialogue was dismissed. The second run finds nothing left to do.
+    ///
+    /// # Errors
+    ///
+    /// What the action's rest returns; `Error::Unsupported` when it ran
+    /// already.
+    pub fn run(&self, values: Option<Values>) -> Result<ActionOutcome, Error> {
+        let run = self
+            .run
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .take();
+        match run {
+            Some(run) => run(values),
+            None => Err(Error::Unsupported("the rest of the action ran already")),
+        }
+    }
+}
+
+impl fmt::Debug for Continuation {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Continuation")
+            .field("label", &self.label)
+            .finish_non_exhaustive()
+    }
+}
+
+/// Where a job sends the form it read the contents for, with the rest of
+/// the action; dropping it unfilled (the job failed or was cancelled)
+/// shows nothing.
+pub type FormLaterSender = oneshot::Sender<(Form, Continuation)>;
+
+/// A form an action shows once a job of its finishes, with the rest of the
+/// action: the receiving end of [`FormLater::channel`], carried by
+/// [`ActionOutcome::Later`] and watched by the application.
+#[derive(Debug)]
+pub struct FormLater(oneshot::Receiver<(Form, Continuation)>);
+
+/// What a look at a [`FormLater`] finds.
+#[derive(Debug)]
+pub enum FormLaterState {
+    /// The job is still at work.
+    Pending,
+    /// The form and the rest of the action arrived.
+    Ready(Form, Continuation),
+    /// Nothing will arrive: the job failed or was cancelled.
+    Gone,
+}
+
+impl FormLater {
+    /// A sender for the job and the receiver for the outcome.
+    #[must_use]
+    pub fn channel() -> (FormLaterSender, Self) {
+        let (tx, rx) = oneshot::channel();
+        (tx, Self(rx))
+    }
+
+    /// What has arrived so far, without waiting.
+    pub fn try_take(&mut self) -> FormLaterState {
+        match self.0.try_recv() {
+            Ok((form, then)) => FormLaterState::Ready(form, then),
+            Err(oneshot::error::TryRecvError::Empty) => FormLaterState::Pending,
+            Err(oneshot::error::TryRecvError::Closed) => FormLaterState::Gone,
+        }
+    }
+
+    /// Waits for the form; `None` when the job failed or was cancelled.
+    pub async fn wait(self) -> Option<(Form, Continuation)> {
+        self.0.await.ok()
     }
 }
 
@@ -440,6 +558,23 @@ pub trait UiHost: Send + Sync {
     /// host that cannot block runs the action again with the values once
     /// the user confirmed, the way it does for `prompt`.
     fn form(&self, form: Form) -> Option<Values>;
+
+    /// Shows the form a job of an action finished with, and runs the rest
+    /// of the action with its values. A host that blocks shows the form at
+    /// once and returns the continuation's outcome; a host that cannot
+    /// block keeps the form and the continuation for its next frame,
+    /// returns `None`, and hands the values to the application later,
+    /// which runs the continuation (`app`'s `Command::Continue`). `pane` is
+    /// where the action ran.
+    fn form_later(
+        &self,
+        pane: PaneId,
+        form: Form,
+        then: Continuation,
+    ) -> Option<Result<ActionOutcome, Error>> {
+        let _ = pane;
+        Some(then.run(self.form(form)))
+    }
 }
 
 /// A command the user can invoke.

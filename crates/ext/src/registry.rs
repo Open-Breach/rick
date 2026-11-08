@@ -158,8 +158,12 @@ use crate::search::SearchIndex;
 /// (QUESTIONS.md 191–197); 13 `platform` gained `Mount` (which disk
 /// images this OS mounts, and mounting one through it) and the `sevenzip`
 /// binding of the 7-Zip library behind the disk images (QUESTIONS.md
-/// 202–207).
-pub const API_VERSION: u32 = 13;
+/// 202–207); 14 an action opens its form when a job of its finishes:
+/// `ActionOutcome` gained `Later` with the [`FormLater`](crate::FormLater)
+/// a job fills, `UiHost` gained `form_later` and the
+/// [`Continuation`](crate::Continuation) it runs with the values
+/// (QUESTIONS.md 211).
+pub const API_VERSION: u32 = 14;
 
 bitflags::bitflags! {
     /// The extension points an extension fills, as its manifest declares
