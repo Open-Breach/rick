@@ -1,4 +1,3 @@
-#[cfg(unix)]
 use std::fs;
 use std::path::Path;
 use std::sync::Arc;
@@ -69,11 +68,22 @@ fn the_probe_decides_availability_and_follows_the_service() {
     assert_eq!(index.id(), ID);
 }
 
-// The tool prints `/`-rooted paths, which a Windows path cannot stand in
-// for; the connector never runs there.
-#[cfg(unix)]
+/// The tool prints `/`-rooted paths, which a Windows path cannot stand in
+/// for; the connector never runs there, so the tests on files of this
+/// machine say so and stop.
+fn rooted_paths_or_skip() -> bool {
+    if std::env::consts::OS == "windows" {
+        eprintln!("Windows paths are not `/`-rooted; the hits on disk are not checked here");
+        return false;
+    }
+    true
+}
+
 #[test]
 fn a_query_runs_the_tool_and_streams_the_hits_that_are_on_disk() {
+    if !rooted_paths_or_skip() {
+        return;
+    }
     let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
     let root = dir.path();
     fs::create_dir_all(root.join("sub/.hidden")).unwrap_or_else(|e| panic!("{e}"));
@@ -191,9 +201,11 @@ fn a_failing_tool_yields_one_error_and_noise_lines_are_ignored() {
     );
 }
 
-#[cfg(unix)]
 #[test]
 fn the_hits_stop_at_the_cap() {
+    if !rooted_paths_or_skip() {
+        return;
+    }
     let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
     let paths: Vec<std::path::PathBuf> = (0..MAX_HITS + 20)
         .map(|i| {
