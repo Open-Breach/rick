@@ -2525,3 +2525,58 @@ Once answered, an entry keeps its number and gains a dated decision line.
     the daemon answers, so the test fails rather than skips there. The
     action itself, its availability per platform and the volume's
     appearance and Eject in This Machine are tested through the `Fake`.
+
+210. (installer follow-up, 2026-11-08) specs/ext-installer.md lists the
+    Installed Apps view "in the burger menu under *Installer*", and
+    SPEC.md's burger menu holds the kernel's global entries only, with no
+    hook for an extension's action (question 150 left the menu without
+    extension groups).
+    Assumed: `Action::app_menu(&self) -> bool`, false unless overridden,
+    joins the extension API (version 14): the burger menu lists, after
+    the Layouts submenu and a separator, every action whose `app_menu` is
+    true and whose availability is Enabled for the focused pane's context
+    (`Invocation::Menu`), the core ones directly and the rest under one
+    submenu per `ActionGroup::Extension` name, each running through the
+    same `RunAction` request as the context menu. The installer's
+    *Installed Apps…* is the one action that opts in; the per-row actions
+    of the view and *Install as application…* need a selection and stay
+    out. SPEC.md's burger menu section is not edited; the hook is
+    recorded here for the next spec pass.
+
+211. (installer follow-up, 2026-11-08) specs/ext-installer.md "Detection
+    is a job" wants the install form to open when the job reading the
+    archive finishes, while a form could only be opened from inside
+    `Action::run`, on the app thread, and SPEC.md's rule is that the UI
+    emits commands, the application handles them and publishes events.
+    Assumed: the smallest hook is on the outcome side. `ActionOutcome`
+    gains `Later(FormLater)`, the receiving end of a channel the job
+    fills with the `Form` and a `Continuation` (the rest of the action,
+    `FnOnce(Option<Values>) -> Result<ActionOutcome, Error>`) when it is
+    done, and nothing when it fails or is cancelled; the application
+    keeps the receivers, looks at them on every poll and hands a form
+    that arrived to `UiHost::form_later(pane, form, then)`, which a
+    blocking host (the headless tests) answers at once, returning the
+    continuation's outcome, and the egui host queues, showing the form
+    as its one dialogue and sending `Command::Continue { pane, then,
+    values }` (`None` when dismissed), which the application runs like an
+    action's outcome. The continuation runs once and its clones share
+    that run, so `Command` stays `Clone`. No `Event` carries the form: a
+    form travels through the `UiHost` today too, and the application,
+    not the UI, runs the rest. Extension API 14.
+
+212. (installer follow-up, 2026-11-08) specs/ext-installer.md says
+    "switching the kind recomputes the main executable, icon and command
+    defaults", and `ext::Form` is data the UI lays out once: a field's
+    value cannot change the other fields, only the preview is recomputed
+    from the values as they are typed.
+    Assumed: the defaults are derived in `assemble`, the preview and the
+    plan: the chosen kind decides the commands (a GUI application links
+    one command named after the app id at the chosen main executable, a
+    toolchain its `bin/` contents) and whether a desktop entry and an
+    icon are written, and the summary rows show the result. The command
+    checkboxes are laid out for the detected kind; when the chosen kind
+    differs they no longer describe the offer and the chosen kind's
+    defaults are taken whole. The main executable and the icon stay the
+    user's choice in their lists, prefilled by detection for the detected
+    kind. A form whose fields react to another field is a later API
+    question.

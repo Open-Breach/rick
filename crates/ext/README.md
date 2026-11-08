@@ -4,9 +4,13 @@
 (`Provider`, `Decorator`, `Action`, `Previewer`, `SearchIndex`), the data they
 exchange (`Capabilities`, `ListOptions`, `FsChange`, `Decoration`, `ActionCtx`,
 `PreviewDoc`, `Frame`, `Content` with its `Listing`, `Grid`, `Document`
-and `MissingLibrary`, `Transport`, `Query` and friends, and the slots an
+and `MissingLibrary`, `Transport`, `Query` and friends, the slots an
 action fills from a job, `Compare` for a tab and `Hashes` for the Hash
-dialogue), the `Manifest` every extension declares (with `previews`, the
+dialogue, and `FormLater` with its `Continuation`, the form an action
+opens when a job of its finishes and the rest of the action the
+application runs with the values through `UiHost::form_later`; an
+action's `app_menu` puts it in the burger menu under its extension), the
+`Manifest` every extension declares (with `previews`, the
 file extensions its previewers claim, so the host can say a disabled
 plugin is available for a file without loading it), the `Extension` trait
 that registers contributions, and the `Registry` that collects them and
