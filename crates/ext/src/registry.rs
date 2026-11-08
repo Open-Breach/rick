@@ -135,8 +135,9 @@ use crate::search::SearchIndex;
 /// takes a [`Connector`] per network provider (QUESTIONS.md 135–137); 8
 /// `PreviewControl` gained `Pointer` (a drag, the wheel or a double-click
 /// over the content handed to the document) and `ControlValue` gained
-/// `Delta` (QUESTIONS.md 142).
-pub const API_VERSION: u32 = 8;
+/// `Delta` (QUESTIONS.md 142); 9 `ActionOutcome` gained `Navigate` and
+/// `platform` gained `Elevate` (QUESTIONS.md 149–150).
+pub const API_VERSION: u32 = 9;
 
 bitflags::bitflags! {
     /// The extension points an extension fills, as its manifest declares

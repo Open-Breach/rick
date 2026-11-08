@@ -4,8 +4,9 @@
 # `rick --list-plugins` reports it loaded with the points its manifest
 # declares; a plugin built for another platform only (the Spotlight
 # connector on Linux) is not there at all, since the bundler leaves it out
-# (QUESTIONS.md 121). The action plugins of issue 23 load everywhere. Used
-# by the ci, full and release workflows.
+# (QUESTIONS.md 121). The action plugins of issue 23 and the installer of
+# issue 44 load everywhere; the installer's actions hide off Linux. Used by
+# the ci, full and release workflows.
 #
 #   check-plugins.sh <dir>    the directory holding rick and plugins/
 set -euo pipefail
@@ -36,6 +37,7 @@ everywhere=(
   "action-compare|Compare|action"
   "action-terminal|Console|action"
   "action-rename|Bulk rename|action"
+  "installer|Installer|provider, decorator, action"
 )
 case "${RUNNER_OS:-$(uname -s)}" in
   Linux)   here=("search-tracker|Tracker|search-index" "search-baloo|Baloo|search-index")

@@ -48,6 +48,7 @@ ext-action-compare = { path = "crates/ext-action-compare" }
 ext-action-terminal = { path = "crates/ext-action-terminal" }
 ext-action-rename = { path = "crates/ext-action-rename" }
 ext-preview-3d = { path = "crates/ext-preview-3d" }
+ext-installer = { path = "crates/ext-installer" }
 plugins-native = { path = "crates/plugins-native" }
 plugin-probe = { path = "crates/plugin-probe" }
 plugin-panic = { path = "crates/plugin-panic" }

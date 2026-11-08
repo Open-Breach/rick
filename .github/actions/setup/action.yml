@@ -74,6 +74,10 @@ runs:
         sudo apt-get install -y --no-install-recommends subversion dbus tracker tracker-miner-fs
         sudo apt-get install -y --no-install-recommends baloo-kf6 || sudo apt-get install -y --no-install-recommends baloo-kf5
         echo "RICK_REQUIRE_SVN=1" >> "$GITHUB_ENV"
+        # Issue 44: desktop-file-validate checks every desktop entry the
+        # installer writes; its tests fail rather than skip without it here.
+        sudo apt-get install -y --no-install-recommends desktop-file-utils
+        echo "RICK_REQUIRE_DESKTOP_FILE_VALIDATE=1" >> "$GITHUB_ENV"
     - name: subversion and spotlight
       if: runner.os == 'macOS' && inputs.system == 'test'
       shell: bash

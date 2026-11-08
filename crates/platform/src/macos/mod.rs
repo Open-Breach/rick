@@ -22,9 +22,9 @@ use types::Error;
 use crate::Native;
 use crate::time::parse_iso8601;
 use crate::traits::{
-    Application, Chrome, ConfigDir, ControlsSide, DragSource, OpenWith, Properties,
-    PropertiesOutcome, RecentItem, RecentlyUsed, StandardFolder, StandardFolders, Terminal, Trash,
-    TrashedItem, Volume, VolumeKind, Volumes, WindowChrome,
+    Application, Chrome, ConfigDir, ControlsSide, DragSource, Elevate, ElevatedOutput, OpenWith,
+    Properties, PropertiesOutcome, RecentItem, RecentlyUsed, StandardFolder, StandardFolders,
+    Terminal, Trash, TrashedItem, Volume, VolumeKind, Volumes, WindowChrome,
 };
 use crate::trash_record::{self, TRASH_FILE};
 
@@ -421,6 +421,20 @@ impl OpenWith for Native {
         let mut args: Vec<&std::ffi::OsStr> = words.map(std::ffi::OsStr::new).collect();
         args.push(path.as_os_str());
         run_detached(program, &args)
+    }
+}
+
+impl Elevate for Native {
+    /// Not offered on macOS in this version: the installer that needs it
+    /// is Linux only (`specs/ext-installer.md`).
+    fn run_elevated(
+        &self,
+        _program: &Path,
+        _args: &[std::ffi::OsString],
+    ) -> Result<ElevatedOutput, Error> {
+        Err(Error::Unsupported(
+            "running a command as the administrator is not implemented on this platform",
+        ))
     }
 }
 

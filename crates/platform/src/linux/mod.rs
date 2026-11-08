@@ -1,10 +1,11 @@
 //! Linux: the XDG trash specification, `xdg-open` and the desktop files of
 //! the MIME databases for Open with, `$TERMINAL` or a known emulator for
-//! the terminal, Rick's own properties rows, `$XDG_CONFIG_HOME/rick`, the
+//! the terminal, `pkexec` for a command run as root, Rick's own properties rows, `$XDG_CONFIG_HOME/rick`, the
 //! mount table from `/proc/mounts` with `udisksctl` for ejecting, XDG
 //! user-dirs and `recently-used.xbel`.
 
 mod apps;
+mod elevate;
 mod terminal;
 mod trash;
 mod user;
@@ -20,9 +21,9 @@ use types::Error;
 use crate::Native;
 use crate::time::iso8601;
 use crate::traits::{
-    Application, Chrome, ConfigDir, ControlsSide, DragSource, OpenWith, Properties,
-    PropertiesOutcome, RecentItem, RecentlyUsed, StandardFolder, StandardFolders, Terminal, Trash,
-    TrashedItem, Volume, Volumes, WindowChrome,
+    Application, Chrome, ConfigDir, ControlsSide, DragSource, Elevate, ElevatedOutput, OpenWith,
+    Properties, PropertiesOutcome, RecentItem, RecentlyUsed, StandardFolder, StandardFolders,
+    Terminal, Trash, TrashedItem, Volume, Volumes, WindowChrome,
 };
 
 impl Trash for Native {
@@ -128,6 +129,16 @@ impl OpenWith for Native {
 impl Terminal for Native {
     fn open_terminal(&self, dir: &Path, command: Option<&[String]>) -> Result<(), Error> {
         terminal::open(dir, command)
+    }
+}
+
+impl Elevate for Native {
+    fn run_elevated(
+        &self,
+        program: &Path,
+        args: &[std::ffi::OsString],
+    ) -> Result<ElevatedOutput, Error> {
+        elevate::run(program, args)
     }
 }
 

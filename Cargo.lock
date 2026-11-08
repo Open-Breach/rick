@@ -2019,6 +2019,32 @@ dependencies = [
 ]
 
 [[package]]
+name = "ext-installer"
+version = "0.2.0-dev"
+dependencies = [
+ "bzip2",
+ "chrono",
+ "ext",
+ "ext-installer",
+ "flate2",
+ "futures",
+ "liblzma",
+ "platform",
+ "runtime",
+ "serde",
+ "sha2 0.10.9",
+ "tar",
+ "tempfile",
+ "thiserror 2.0.21",
+ "tokio",
+ "toml 0.9.12+spec-1.1.0",
+ "tracing",
+ "types",
+ "zip",
+ "zstd",
+]
+
+[[package]]
 name = "ext-preview-3d"
 version = "0.2.0-dev"
 dependencies = [
@@ -6679,6 +6705,7 @@ dependencies = [
  "ext-action-rename",
  "ext-action-terminal",
  "ext-git",
+ "ext-installer",
  "ext-preview-3d",
  "ext-preview-archive",
  "ext-preview-code",
@@ -7769,6 +7796,7 @@ dependencies = [
  "ext-action-rename",
  "ext-action-terminal",
  "ext-git",
+ "ext-installer",
  "ext-preview-3d",
  "ext-preview-archive",
  "ext-preview-code",

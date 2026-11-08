@@ -1780,3 +1780,120 @@ Once answered, an entry keeps its number and gains a dated decision line.
     release on the development machine, most of it the parse. The
     triangle count shown stays the file's; the status bar adds "decimated
     to N triangles for the preview" and File info the budget.
+
+146. (issue 44) The issue puts the install locations at
+    `~/.local/share/rick/apps/<id>/<version>/` and `/opt/rick/apps/…` and
+    asks for "the spec's exact paths and rules"; specs/ext-installer.md
+    puts them at `~/.local/opt/<app-id>/<version>/` and
+    `/opt/<app-id>/<version>/`, with `~/.local/bin`, the applications and
+    hicolor directories beside them.
+    Assumed: the spec's paths.
+
+147. (issue 44) The issue says an update "keeps previous versions until the
+    user removes them"; the spec keeps exactly one previous version, not
+    configurable (its settled questions).
+    Assumed: one previous version is kept, anything older is deleted when
+    an update lands, and Revert flips to the one kept.
+
+148. (issue 44) The issue says "uninstall is undoable while the previous
+    version's folder still exists"; the spec's uninstall deletes the app
+    folder with every version folder and the record, and nothing outside
+    the record's list, so nothing of the app remains to undo from.
+    Assumed: Uninstall asks first, listing exactly what goes and that the
+    app's settings stay, and is not on the undo stack; Revert in the view
+    is the way back while the app is installed.
+
+149. (issue 44) "Elevation for system-wide installs goes through
+    `platform::Elevate` from #24": the repository has no pull request 24
+    and `platform` had no such trait; the spec makes the privileged helper
+    its own milestone and shows the Scope choice as unavailable until it
+    exists.
+    Assumed: `platform::Elevate` is added now as the hook the issue names,
+    one method that runs a program as the administrator and waits for it,
+    through `pkexec` and the polkit prompt on Linux, `Unsupported` on
+    macOS and Windows, recorded by the Fake; nothing calls it yet. The
+    form offers "System-wide (unavailable: the privileged helper is not
+    part of this version)", and choosing it is a problem row; the helper,
+    its plan file and the elevated path are the next milestone.
+
+150. (issue 44) The spec opens the Installed Apps view "from the command
+    palette and the app menu", the issue puts `rick://apps` "in the Places
+    list", and no kernel path let an action take a pane to a location.
+    Assumed: `ActionOutcome::Navigate(Location)` joins the extension API
+    (API version 9, together with `Elevate`): the application dispatches
+    it as a `Navigate` command, and *Installed apps* in the Installer group
+    of the palette and the context menu returns it, as does *Open install
+    folder*. The Places list is the user's own file, seeded from the
+    kernel's defaults, which cannot name a plugin; a `rick:apps` place can
+    be added in places.toml, and a side-panel entry for views waits for a
+    kernel hook. The burger menu lists no extension groups today.
+
+151. (issue 44) "Dropping an archive onto the Installed Apps view opens the
+    same dialog", while the spec says the plugin needs only two generic
+    hooks, an action opening a dialogue and a job with progress; a drop
+    onto a virtual location is a no-op in the UI, and a provider has no
+    way to open a dialogue.
+    Assumed: the drop target is left out; the dialog opens from the
+    context menu and the palette on the archive; `rick install <archive>`
+    is 0.3's command line.
+
+152. (issue 44) Off Linux the issue wants the plugin to "report
+    'unsupported on this platform' for its actions" and its actions
+    "hidden".
+    Assumed: both. The actions' availability is Hidden, a run by id
+    answers `Unsupported("unsupported on this platform")`, and the view's
+    listing answers the same error.
+
+153. (issue 44) The issue cites the spec file's "Acceptance section"; the
+    spec has the "Test fixtures" table instead.
+    Assumed: the table's ten fixtures plus the issue's own list are the
+    acceptance tests: the crate's tests cover every fixture row and the
+    round trip, `crates/tests/tests/installer.rs` the round trip through
+    the application with the filesystem diff and the plugin loading
+    through the host.
+
+154. (issue 44) The UI host answers one dialogue per action run and runs
+    the action again once the user confirmed; detection must have happened
+    before the form is built.
+    Assumed: detection runs on the app thread when the action runs (a
+    compressed tar's index means one pass over the stream) and is cached
+    per archive by size and modification time, so the re-run with the
+    answer is instant; collisions and a downgrade are problem rows of the
+    one form, cleared by the `Overwrite` and `Allow downgrade` checkboxes,
+    instead of a second question; *Update from archive…* asks for the
+    archive's path with `prompt` and remembers it until the form is
+    answered, so its re-run goes straight to the form.
+
+155. (issue 44) An update leaves the desktop entry, icon and symlinks
+    alone "unless the main executable's relative path changed, in which
+    case the symlinks are updated".
+    Assumed: the desktop entry's `Exec` is rewritten in that case too: it
+    names the main executable through `current`, and a stale path is the
+    vanishing-launcher problem the spec avoids.
+
+156. (issue 44) The view's row shows "icon, name, version…", and the icon
+    field of the dialog has "a file picker"; a Form has text, check,
+    choice and folder fields, and a row's glyph is the kernel's.
+    Assumed: the row shows the folder glyph, the version, kind, scope,
+    state and commands in columns and the record's facts in the info
+    panel; the form's icon is a choice of the archive's icon files plus a
+    text field for a path of one's own, the file picker being a later
+    sibling of the folder field.
+
+157. (issue 44) Archive safety says hostile entries are "rejected" and
+    links and special entries "skipped", and the hostile fixture expects
+    "entries rejected or skipped" within one install.
+    Assumed: an entry whose path is absolute, carries `..` or a NUL, a
+    duplicate name, an outside-pointing link and a special entry are each
+    left out and listed in the install summary, and the install goes on
+    with the rest; only a source tree, a wrong architecture, a checksum
+    mismatch and a missing main executable refuse the whole install.
+
+158. (issue 44) The spec has the plugin declare "in its manifest that it
+    writes outside the browsed location (`~/.local/opt`, `~/.local/share`,
+    `~/.local/bin`) and may invoke `pkexec`; a good first real test of the
+    declarative permission model"; the extension manifest has no such
+    field, and the permission model is among the spec's open questions.
+    Assumed: the manifest declares nothing of the kind yet; the crate's
+    README and docs name the paths it writes, and the field comes with
+    the extension security model.

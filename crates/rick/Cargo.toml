@@ -17,11 +17,11 @@ path = "src/main.rs"
 # providers, `preview-hex` and the five `search-*` connectors compile a
 # plugin in instead of loading it from `plugins/`; default off, since the
 # plugins directory is where they live in 0.2. The four previewer plugins
-# of issue 18, the 3D previewer of issue 19 and the four action plugins of
-# issue 23 have the same opt-in features; `gstreamer` turns playback on in
-# the media previewer, wherever it is built (the plugin's own feature of
-# that name; off by default so a build without the GStreamer development
-# files still builds every crate).
+# of issue 18, the 3D previewer of issue 19, the four action plugins of
+# issue 23 and the installer of issue 44 have the same opt-in features;
+# `gstreamer` turns playback on in the media previewer, wherever it is
+# built (the plugin's own feature of that name; off by default so a build
+# without the GStreamer development files still builds every crate).
 [features]
 default = ["preview-text", "preview-code", "preview-image", "preview-pdf"]
 preview-text = ["dep:ext-preview-text"]
@@ -52,6 +52,7 @@ action-compress = ["dep:ext-action-compress"]
 action-compare = ["dep:ext-action-compare"]
 action-terminal = ["dep:ext-action-terminal"]
 action-rename = ["dep:ext-action-rename"]
+installer = ["dep:ext-installer"]
 
 [dependencies]
 types = { workspace = true }
@@ -77,6 +78,7 @@ ext-action-compress = { workspace = true, optional = true }
 ext-action-compare = { workspace = true, optional = true }
 ext-action-terminal = { workspace = true, optional = true }
 ext-action-rename = { workspace = true, optional = true }
+ext-installer = { workspace = true, optional = true }
 ext-preview-office = { workspace = true, optional = true }
 ext-preview-media = { workspace = true, optional = true }
 ext-preview-archive = { workspace = true, optional = true }
