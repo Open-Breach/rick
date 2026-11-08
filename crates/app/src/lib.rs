@@ -73,7 +73,7 @@ mod places;
 mod session;
 pub mod settings;
 
-pub use command::{Command, Event, TransferMode};
+pub use command::{Command, ConnectionOp, Event, TransferMode};
 pub use ext_settings::ExtSettings;
 pub use places::{PLACES_FILE, defaults as default_places, virtual_icon};
 pub use session::{LAYOUTS_DIR, SAVE_INTERVAL, SESSION_FILE};
@@ -91,8 +91,8 @@ use ext::{
 };
 use futures::StreamExt;
 use model::{
-    Column, JobState, Model, PaneId, Place, SelectionChange, Session, Settings, SettingsChange,
-    SortDir, TabId, Volume,
+    Column, ConnectionEntry, JobState, Model, PaneId, Place, SelectionChange, Session, Settings,
+    SettingsChange, SortDir, TabId, Volume,
 };
 use ops::{Conflicts, PinStore, Scheduler};
 use platform::{Platform, TrashedItem};
@@ -272,6 +272,13 @@ enum Msg {
     Trash(Result<Vec<TrashedItem>, Error>),
     /// The cloud providers' roots were listed.
     Cloud(Vec<Entry>),
+    /// The network providers' roots were listed.
+    Network(Vec<Entry>),
+    /// A new connection's secrets are in the keychain: write the rest.
+    ConnectionSaved(ConnectionEntry),
+    /// A connection of this provider was connected or disconnected: its
+    /// rows may read differently.
+    ConnectionChanged(ProviderId),
 }
 
 /// How long changes are collected before the decorators run again.
@@ -596,6 +603,9 @@ impl App {
             }
         };
         pins.sync(&settings.pinned);
+        for connector in registry.connectors() {
+            connector.update(connections_of(&settings, connector.provider()));
+        }
 
         let home = Location::new(
             vfs_local::PROVIDER_ID,
@@ -727,6 +737,7 @@ impl App {
         app.poll_volumes();
         app.refresh_trash();
         app.refresh_cloud();
+        app.refresh_network();
         let mut events = Vec::new();
         app.sync_panes(&mut events);
         app.sync_preview();
@@ -1227,6 +1238,14 @@ impl App {
                 }
             }
             Command::Eject(mount_point) => self.eject(&mount_point, events),
+            Command::AddConnection {
+                provider,
+                name,
+                values,
+            } => self.add_connection(provider, &name, values, events),
+            Command::Connection { provider, name, op } => {
+                self.connection_op(provider, &name, op, events);
+            }
             Command::Run { action, ctx } => self.run(action, ctx, events),
             Command::NewTab(location) => {
                 let recent = Virtual::of(&location) == Some(Virtual::Recent);
@@ -1601,25 +1620,252 @@ impl App {
         if self.model.cloud_providers.is_empty() {
             return;
         }
+        self.refresh_overview(Virtual::Cloud);
+    }
+
+    /// Lists the network providers' roots for the side panel's Network
+    /// rows, as an internal job.
+    fn refresh_network(&mut self) {
+        if self.model.network_providers.is_empty() {
+            return;
+        }
+        self.refresh_overview(Virtual::Network);
+    }
+
+    /// Lists an overview through the `rick://` provider and hands the rows
+    /// to the model: the Cloud rows as they are, the Network rows without
+    /// the mounted shares, which the volumes list already.
+    fn refresh_overview(&mut self, which: Virtual) {
         let provider: Arc<dyn ext::Provider> = Arc::clone(&self.rick) as Arc<dyn ext::Provider>;
         let tx = self.mailbox.clone();
-        let handle = self.jobs.spawn_named("List cloud", move |job| async move {
-            let location = Virtual::Cloud.location();
-            let mut stream = provider.list(&location, ListOptions::default(), job.cancel.clone());
-            let mut entries = Vec::new();
-            while let Some(batch) = stream.next().await {
-                match batch {
-                    Ok(batch) => entries.extend(batch),
-                    Err(error) => {
-                        debug!(%error, "cloud roots not listed");
-                        break;
+        let handle =
+            self.jobs
+                .spawn_named(format!("List {}", which.title()), move |job| async move {
+                    let location = which.location();
+                    let mut stream =
+                        provider.list(&location, ListOptions::default(), job.cancel.clone());
+                    let mut entries = Vec::new();
+                    while let Some(batch) = stream.next().await {
+                        match batch {
+                            Ok(batch) => entries.extend(batch),
+                            Err(error) => {
+                                debug!(%error, overview = which.name(), "roots not listed");
+                                break;
+                            }
+                        }
                     }
+                    tx.send(match which {
+                        Virtual::Network => Msg::Network(provider_rows(entries)),
+                        _ => Msg::Cloud(entries),
+                    });
+                    Ok(())
+                });
+        self.internal.insert(handle.id);
+    }
+
+    /// Lists the rows of the section `provider` belongs to again.
+    fn refresh_rows_of(&mut self, provider: ProviderId) {
+        if vfs_rick::is_cloud_provider(provider) {
+            self.rick.changed(Virtual::Cloud);
+            self.refresh_cloud();
+        } else {
+            self.rick.changed(Virtual::Network);
+            self.refresh_network();
+        }
+    }
+
+    /// Adds a connection: the secret fields go to the keychain as a job,
+    /// the rest follow through [`Msg::ConnectionSaved`] once they are in.
+    fn add_connection(
+        &mut self,
+        provider: ProviderId,
+        name: &str,
+        values: Vec<(String, String)>,
+        events: &mut Vec<Event>,
+    ) {
+        let Some(connector) = self.registry.connector_of(provider).cloned() else {
+            events.push(Event::Notify {
+                level: Level::Error,
+                text: format!("No connections for provider {provider}"),
+            });
+            return;
+        };
+        let name = name.trim().to_owned();
+        if name.is_empty() || name.contains(['/', '\\']) {
+            events.push(Event::Notify {
+                level: Level::Error,
+                text: "A connection needs a name without slashes".to_owned(),
+            });
+            return;
+        }
+        if connections_of(&self.model.settings, provider)
+            .iter()
+            .any(|c| c.name == name)
+        {
+            events.push(Event::Notify {
+                level: Level::Error,
+                text: format!("A {} connection called {name} exists already", provider.0),
+            });
+            return;
+        }
+        let schema = connector.schema().clone();
+        let mut entry = ConnectionEntry {
+            provider: provider.0.to_owned(),
+            name: name.clone(),
+            settings: std::collections::BTreeMap::new(),
+        };
+        let mut secrets: Vec<(String, String)> = Vec::new();
+        for (key, value) in values {
+            if value.is_empty() {
+                continue;
+            }
+            match schema.field(&key).map(|f| &f.kind) {
+                Some(ext::ConnectionFieldKind::Secret) => {
+                    secrets.push((ext::secret_key(provider, &name, &key), value));
+                }
+                Some(_) => {
+                    entry.settings.insert(key, value);
+                }
+                None => {
+                    debug!(key, "connection field the schema does not name; dropped");
                 }
             }
-            tx.send(Msg::Cloud(entries));
-            Ok(())
-        });
-        self.internal.insert(handle.id);
+        }
+        if let Some(missing) = schema
+            .fields
+            .iter()
+            .filter(|f| f.required)
+            .find(|f| match f.kind {
+                ext::ConnectionFieldKind::Secret => !secrets
+                    .iter()
+                    .any(|(k, _)| k == &ext::secret_key(provider, &name, f.key)),
+                _ => !entry.settings.contains_key(f.key),
+            })
+        {
+            events.push(Event::Notify {
+                level: Level::Error,
+                text: format!("{} needs a value", missing.label),
+            });
+            return;
+        }
+        let platform = Arc::clone(&self.platform);
+        let tx = self.mailbox.clone();
+        let handle =
+            self.jobs
+                .spawn_named(format!("Add connection {name}"), move |_job| async move {
+                    let stored = runtime::handle()
+                        .spawn_blocking(move || {
+                            for (key, value) in &secrets {
+                                platform.store_secret(key, value)?;
+                            }
+                            Ok::<(), Error>(())
+                        })
+                        .await
+                        .unwrap_or_else(|join| Err(Error::Io(std::io::Error::other(join))));
+                    stored?;
+                    tx.send(Msg::ConnectionSaved(entry));
+                    Ok(())
+                });
+        self.pane_jobs.insert(handle.id, self.model.focused);
+    }
+
+    /// The secrets are in: writes the connection to the settings, tells
+    /// the connector and lists the section's rows again.
+    fn connection_saved(&mut self, entry: ConnectionEntry) {
+        let provider = ProviderId::intern(&entry.provider);
+        let mut connections = self.model.settings.connections.clone();
+        connections.retain(|c| !(c.provider == entry.provider && c.name == entry.name));
+        connections.push(entry);
+        self.save_connections(connections);
+        self.push_connections(provider);
+        self.refresh_rows_of(provider);
+    }
+
+    /// Connect, disconnect or remove a connection.
+    fn connection_op(
+        &mut self,
+        provider: ProviderId,
+        name: &str,
+        op: ConnectionOp,
+        events: &mut Vec<Event>,
+    ) {
+        let Some(connector) = self.registry.connector_of(provider).cloned() else {
+            events.push(Event::Notify {
+                level: Level::Error,
+                text: format!("No connections for provider {provider}"),
+            });
+            return;
+        };
+        match op {
+            ConnectionOp::Connect => {
+                let name = name.to_owned();
+                let tx = self.mailbox.clone();
+                let handle =
+                    self.jobs
+                        .spawn_named(format!("Connect {name}"), move |job| async move {
+                            job.progress
+                                .report(Progress::Message(format!("Connecting to {name}")));
+                            let result = connector.connect(&name).await;
+                            tx.send(Msg::ConnectionChanged(provider));
+                            result
+                        });
+                self.pane_jobs.insert(handle.id, self.model.focused);
+            }
+            ConnectionOp::Disconnect => {
+                connector.disconnect(name);
+                self.refresh_rows_of(provider);
+            }
+            ConnectionOp::Remove => {
+                let keys: Vec<String> = connector
+                    .schema()
+                    .secret_fields()
+                    .map(|field| ext::secret_key(provider, name, field))
+                    .collect();
+                connector.disconnect(name);
+                let mut connections = self.model.settings.connections.clone();
+                connections.retain(|c| !(c.provider == provider.0 && c.name == name));
+                self.save_connections(connections);
+                self.push_connections(provider);
+                let platform = Arc::clone(&self.platform);
+                let label = name.to_owned();
+                let handle = self.jobs.spawn_named(
+                    format!("Remove connection {label}"),
+                    move |_job| async move {
+                        runtime::handle()
+                            .spawn_blocking(move || {
+                                for key in &keys {
+                                    platform.remove_secret(key)?;
+                                }
+                                Ok::<(), Error>(())
+                            })
+                            .await
+                            .unwrap_or_else(|join| Err(Error::Io(std::io::Error::other(join))))
+                    },
+                );
+                self.pane_jobs.insert(handle.id, self.model.focused);
+                self.refresh_rows_of(provider);
+            }
+        }
+    }
+
+    /// Replaces the connections in the settings and saves the file.
+    fn save_connections(&mut self, connections: Vec<ConnectionEntry>) {
+        let mut settings = self.model.settings.clone();
+        settings.connections = connections;
+        self.model.apply_settings(settings.clone());
+        self.recent_saves.push_back(settings.clone());
+        while self.recent_saves.len() > RECENT_SAVES {
+            self.recent_saves.pop_front();
+        }
+        let _ = self.settings_saver.send(settings);
+    }
+
+    /// Hands `provider`'s connector the connections as the settings have
+    /// them now.
+    fn push_connections(&self, provider: ProviderId) {
+        if let Some(connector) = self.registry.connector_of(provider) {
+            connector.update(connections_of(&self.model.settings, provider));
+        }
     }
 
     /// Lists the children of an expanded folder of a pane in Tree view,
@@ -2642,7 +2888,21 @@ impl App {
                 if settings != self.model.settings {
                     debug!("settings file changed");
                     self.pins.sync(&settings.pinned);
+                    let connections_changed =
+                        settings.connections != self.model.settings.connections;
                     self.model.apply_settings(settings);
+                    if connections_changed {
+                        let providers: Vec<ProviderId> = self
+                            .registry
+                            .connectors()
+                            .iter()
+                            .map(|c| c.provider())
+                            .collect();
+                        for provider in providers {
+                            self.push_connections(provider);
+                            self.refresh_rows_of(provider);
+                        }
+                    }
                     self.sync_panes(events);
                 }
             }
@@ -2801,6 +3061,11 @@ impl App {
             Msg::Cloud(entries) => {
                 self.model.cloud = entries;
             }
+            Msg::Network(entries) => {
+                self.model.network = entries;
+            }
+            Msg::ConnectionSaved(entry) => self.connection_saved(entry),
+            Msg::ConnectionChanged(provider) => self.refresh_rows_of(provider),
             Msg::Invalidate { pane, generation } => {
                 if self
                     .live
@@ -2841,6 +3106,20 @@ impl App {
             });
             return;
         };
+        // A remote-latency provider thumbnails nothing by default (SPEC.md
+        // "Network file systems").
+        if provider
+            .capabilities(&loc)
+            .contains(ext::Capabilities::REMOTE)
+        {
+            self.thumbnails.remove(&(id, size));
+            self.pending.push(Event::Thumbnail {
+                id,
+                size,
+                frame: None,
+            });
+            return;
+        }
         let previewers: Vec<Arc<dyn Previewer>> = self.registry.previewers().to_vec();
         let dark = self.model.settings.theme != model::Theme::Light;
         let tx = self.mailbox.clone();
@@ -3015,14 +3294,27 @@ impl App {
                 Vec::new()
             }
         };
-        // The Cloud overview's rows are the side panel's Cloud rows too.
-        if result.is_ok() && Virtual::of(&location) == Some(Virtual::Cloud) {
-            let rows: Vec<Entry> = self
-                .model
-                .active_tab(pane)
-                .map(|(_, tab)| tab.listing.entries().to_vec())
-                .unwrap_or_default();
-            self.model.cloud = rows;
+        // The Cloud overview's rows are the side panel's Cloud rows too, and
+        // the Network overview's provider rows its Network rows (the
+        // mounted shares are the volumes' own rows).
+        match (result, Virtual::of(&location)) {
+            (Ok(()), Some(Virtual::Cloud)) => {
+                let rows: Vec<Entry> = self
+                    .model
+                    .active_tab(pane)
+                    .map(|(_, tab)| tab.listing.entries().to_vec())
+                    .unwrap_or_default();
+                self.model.cloud = rows;
+            }
+            (Ok(()), Some(Virtual::Network)) => {
+                let rows: Vec<Entry> = self
+                    .model
+                    .active_tab(pane)
+                    .map(|(_, tab)| tab.listing.entries().to_vec())
+                    .unwrap_or_default();
+                self.model.network = provider_rows(rows);
+            }
+            _ => {}
         }
         // Tree view: the expanded folders list their children again, swapped
         // in at once where they were listed before.
@@ -3343,6 +3635,25 @@ fn repair(mounts: &Mounts, home: &Location, session: &mut Session) {
             tab.location = home.clone();
         }
     }
+}
+
+/// The connections of `provider` as the settings hold them, for its
+/// connector.
+fn connections_of(settings: &Settings, provider: ProviderId) -> Vec<ext::Connection> {
+    settings
+        .connections
+        .iter()
+        .filter(|c| c.provider == provider.0)
+        .map(ConnectionEntry::to_connection)
+        .collect()
+}
+
+/// The rows of the Network overview that are a provider's, not a mounted
+/// share's: the side panel draws the shares from the volumes.
+fn provider_rows(rows: Vec<Entry>) -> Vec<Entry> {
+    rows.into_iter()
+        .filter(|e| e.id.provider != vfs_local::PROVIDER_ID)
+        .collect()
 }
 
 /// Whether moving or copying `source` into `to` would change nothing: the

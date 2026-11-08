@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use ext::{
     Action, ActionCtx, ActionGroup, ActionId, ActionOutcome, Availability, Capabilities,
-    CopyOptions, Key, Modifiers, RemoveMode, Shortcut, UiHost, UndoCommand,
+    CopyOptions, Key, Modifiers, RemoveMode, Shortcut, TransferMode, UiHost, UndoCommand,
 };
 use runtime::{JobCtx, JobRunner};
 use types::{EntryKind, Error, Location, Progress};
@@ -275,34 +275,15 @@ pub(crate) fn spawn_copies(
     name: String,
     pairs: Vec<(Location, Location)>,
 ) -> runtime::JobHandle<()> {
-    jobs.spawn_pausable(name.clone(), move |job| async move {
-        let keys = schedule::volume_keys(&mounts, &pairs).await;
-        let _lease = scheduler.acquire(&job, &name, keys).await;
-        let total = pairs.len() as u64;
-        let mut policy = Policy::default();
-        for (done, (from, to)) in pairs.iter().enumerate() {
-            job.pause.wait().await;
-            job.progress.report(Progress::Items {
-                done: done as u64,
-                total: Some(total),
-            });
-            let remaining = total - done as u64 - 1;
-            match policy
-                .land(&conflicts, &job, &mounts, from, to, remaining)
-                .await?
-            {
-                Landing::Skip => {}
-                Landing::At { to, overwrite } => {
-                    copy_one(&mounts, &job, from, &to, overwrite).await?;
-                }
-            }
-        }
-        job.progress.report(Progress::Items {
-            done: total,
-            total: Some(total),
-        });
-        Ok(())
-    })
+    spawn_transfer(
+        jobs,
+        mounts,
+        conflicts,
+        scheduler,
+        name,
+        pairs,
+        TransferMode::Copy,
+    )
 }
 
 /// Spawns a job that moves every pair in order, asking about existing
@@ -315,11 +296,41 @@ pub(crate) fn spawn_moves(
     name: String,
     pairs: Vec<(Location, Location)>,
 ) {
+    spawn_transfer(
+        jobs,
+        mounts,
+        conflicts,
+        scheduler,
+        name,
+        pairs,
+        TransferMode::Move,
+    );
+}
+
+/// The job behind [`spawn_copies`] and [`spawn_moves`]: every pair in
+/// order, each landed through the conflict policy. Pairs whose source and
+/// target share one provider instance with `NATIVE_TRANSFER`, and that
+/// land under their own name without overwriting, are handed to the
+/// provider's `transfer` in one batch per target folder, so a move inside
+/// an object-storage account or a remote rename never streams through the
+/// machine; a provider that answers `Unsupported` for the mode (an SFTP
+/// server copies nothing by itself) gets the kernel's path for those
+/// items. Everything else goes through [`copy_one`] and [`move_one`].
+fn spawn_transfer(
+    jobs: &JobRunner,
+    mounts: Arc<Mounts>,
+    conflicts: Arc<Conflicts>,
+    scheduler: Arc<Scheduler>,
+    name: String,
+    pairs: Vec<(Location, Location)>,
+    mode: TransferMode,
+) -> runtime::JobHandle<()> {
     jobs.spawn_pausable(name.clone(), move |job| async move {
         let keys = schedule::volume_keys(&mounts, &pairs).await;
         let _lease = scheduler.acquire(&job, &name, keys).await;
         let total = pairs.len() as u64;
         let mut policy = Policy::default();
+        let mut batch = Batch::default();
         for (done, (from, to)) in pairs.iter().enumerate() {
             job.pause.wait().await;
             job.progress.report(Progress::Items {
@@ -327,22 +338,120 @@ pub(crate) fn spawn_moves(
                 total: Some(total),
             });
             let remaining = total - done as u64 - 1;
-            match policy
+            let Landing::At { to, overwrite } = policy
                 .land(&conflicts, &job, &mounts, from, to, remaining)
                 .await?
-            {
-                Landing::Skip => {}
-                Landing::At { to, overwrite } => {
-                    move_one(&mounts, &job, from, &to, overwrite).await?;
+            else {
+                continue;
+            };
+            if !overwrite && let Some((provider, dir)) = native_target(&mounts, from, &to) {
+                if !batch.takes(&dir) {
+                    batch.flush(&mounts, &job, mode).await?;
                 }
+                batch.push(provider, dir, from.clone());
+                continue;
             }
+            batch.flush(&mounts, &job, mode).await?;
+            one(&mounts, &job, from, &to, overwrite, mode).await?;
         }
+        batch.flush(&mounts, &job, mode).await?;
         job.progress.report(Progress::Items {
             done: total,
             total: Some(total),
         });
         Ok(())
-    });
+    })
+}
+
+/// Copies or moves one pair through the kernel's path.
+async fn one(
+    mounts: &Mounts,
+    job: &JobCtx,
+    from: &Location,
+    to: &Location,
+    overwrite: bool,
+    mode: TransferMode,
+) -> Result<(), Error> {
+    match mode {
+        TransferMode::Copy => copy_one(mounts, job, from, to, overwrite).await,
+        TransferMode::Move => move_one(mounts, job, from, to, overwrite).await,
+    }
+}
+
+/// The provider and the target folder of a pair the provider can transfer
+/// itself: `from` and `to` resolve to the same provider instance, the
+/// provider has `NATIVE_TRANSFER` at both ends, and `to` keeps the
+/// source's name, since `transfer` puts every item under its own name.
+fn native_target(
+    mounts: &Mounts,
+    from: &Location,
+    to: &Location,
+) -> Option<(Arc<dyn ext::Provider>, Location)> {
+    let (Ok(src), Ok(dst)) = (mounts.resolve(from), mounts.resolve(to)) else {
+        return None;
+    };
+    if !Arc::ptr_eq(&src, &dst) || from.path.file_name() != to.path.file_name() {
+        return None;
+    }
+    let dir = Location::new(to.provider, parent(&to.path));
+    let native = Capabilities::NATIVE_TRANSFER;
+    if !src.capabilities(from).contains(native) || !src.capabilities(&dir).contains(native) {
+        return None;
+    }
+    Some((src, dir))
+}
+
+/// The items waiting for one `transfer` call: all for one provider
+/// instance and one target folder.
+#[derive(Default)]
+struct Batch {
+    target: Option<(Arc<dyn ext::Provider>, Location)>,
+    items: Vec<Location>,
+}
+
+impl Batch {
+    /// Whether an item for `dir` can join the batch as it is.
+    fn takes(&self, dir: &Location) -> bool {
+        self.target.as_ref().is_none_or(|(_, d)| d == dir)
+    }
+
+    fn push(&mut self, provider: Arc<dyn ext::Provider>, dir: Location, item: Location) {
+        if self.target.is_none() {
+            self.target = Some((provider, dir));
+        }
+        self.items.push(item);
+    }
+
+    /// Hands the batch to the provider and empties it; items the provider
+    /// has no native path for go through the kernel's path one by one.
+    async fn flush(
+        &mut self,
+        mounts: &Mounts,
+        job: &JobCtx,
+        mode: TransferMode,
+    ) -> Result<(), Error> {
+        let Some((provider, dir)) = self.target.take() else {
+            return Ok(());
+        };
+        let items = std::mem::take(&mut self.items);
+        match provider
+            .transfer(&items, &dir, mode, job.progress.clone(), job.cancel.clone())
+            .await
+        {
+            Ok(()) => Ok(()),
+            Err(Error::Unsupported(reason)) => {
+                tracing::debug!(reason, ?mode, "no native transfer; the kernel's path");
+                for from in &items {
+                    job.pause.wait().await;
+                    let name = from.path.file_name().unwrap_or_default();
+                    let to = crate::inside(&dir, name);
+                    one(mounts, job, from, &to, false, mode).await?;
+                }
+                Ok(())
+            }
+            Err(error) => Err(error),
+        }
+    }
 }
 
 impl UndoCommand for MoveCommand {

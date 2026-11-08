@@ -3,8 +3,8 @@
 //! Other crates program against the traits here and never against an
 //! operating system: [`Trash`], [`OpenWith`], [`Terminal`], [`Properties`],
 //! [`ConfigDir`], [`NativeDialogs`], [`Clipboard`], [`Chrome`],
-//! [`DragSource`], [`Volumes`], [`StandardFolders`] and [`RecentlyUsed`],
-//! bundled as [`Platform`]. [`Native`] is the real
+//! [`DragSource`], [`Volumes`], [`StandardFolders`], [`RecentlyUsed`] and
+//! [`Secrets`], bundled as [`Platform`]. [`Native`] is the real
 //! implementation for the OS the binary runs on; [`Fake`] is the one tests
 //! use, with a private trash directory and recorded calls.
 //!
@@ -15,7 +15,9 @@
 //!
 //! Where the OS keeps the original paths of trashed items to itself
 //! (macOS), the trash lists Rick's own record of what it trashed instead,
-//! kept in [`trash_record`] under the config directory.
+//! kept in [`trash_record`] under the config directory. [`Secrets`] is the
+//! platform keychain through the `keyring` crate ([`secrets`]): Secret
+//! Service on Linux, Keychain on macOS, Credential Manager on Windows.
 //!
 //! This is the only crate allowed `unsafe` and `cfg(target_os)`. Every
 //! `unsafe` block carries a `// SAFETY:` comment. The [`Clipboard`] is text
@@ -29,6 +31,7 @@ mod dialogs;
 mod fake;
 pub mod fs;
 pub mod paths;
+pub mod secrets;
 // Only the Linux trash and properties format dates; macOS parses them
 // (Spotlight's last-used dates) and Windows does neither so far.
 #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
@@ -53,10 +56,11 @@ pub use fake::{FAKE_APPLICATIONS, FAKE_STANDARD_FOLDERS, Fake};
 pub use traits::{
     Application, Chrome, Clipboard, ConfigDir, ControlsSide, DialogFilter, DragSource,
     NativeDialogs, OpenWith, Platform, Properties, PropertiesOutcome, RecentItem, RecentlyUsed,
-    StandardFolder, StandardFolders, Terminal, Trash, TrashedItem, Volume, VolumeKind, Volumes,
-    WindowChrome,
+    Secrets, StandardFolder, StandardFolders, Terminal, Trash, TrashedItem, Volume, VolumeKind,
+    Volumes, WindowChrome,
 };
 pub use trash_record::TRASH_FILE;
+use types::Error;
 
 /// The platform the binary runs on.
 ///
@@ -70,6 +74,20 @@ impl Native {
     #[must_use]
     pub const fn new() -> Self {
         Self
+    }
+}
+
+impl Secrets for Native {
+    fn store_secret(&self, key: &str, secret: &str) -> Result<(), Error> {
+        secrets::store(key, secret)
+    }
+
+    fn get_secret(&self, key: &str) -> Result<Option<String>, Error> {
+        secrets::get(key)
+    }
+
+    fn remove_secret(&self, key: &str) -> Result<(), Error> {
+        secrets::remove(key)
     }
 }
 

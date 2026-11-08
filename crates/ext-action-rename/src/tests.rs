@@ -5,8 +5,7 @@ use std::time::{Duration, Instant};
 
 use ext::platform::Fake;
 use ext::{
-    Action as _, ActionCtx, ActionOutcome, Availability, Invocation, Level, PaneId, Provider,
-    Registry, UiHost,
+    ActionCtx, ActionOutcome, Availability, Invocation, Level, PaneId, Provider, Registry, UiHost,
 };
 use runtime::JobRunner;
 use types::{Entry, Location};

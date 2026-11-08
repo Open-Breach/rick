@@ -946,7 +946,7 @@ fn without_a_subtree_index_the_toggle_is_absent_and_a_search_ends_with_a_notice(
     let mut h = harness();
     h.settle();
     assert!(!h.app.model().subtree_search);
-    assert!(h.app.model().search_indexes.is_empty());
+    assert_eq!(h.app.model().search_indexes, Vec::<ExtId>::new());
     let pane = h.app.model().focused;
     h.send(Command::Subtree { pane, on: true });
     h.send(Command::Filter {
@@ -963,7 +963,7 @@ fn without_a_subtree_index_the_toggle_is_absent_and_a_search_ends_with_a_notice(
         "{events:?}"
     );
     assert!(!h.app.is_busy());
-    assert!(h.names().is_empty());
+    assert_eq!(h.names(), Vec::<String>::new());
 }
 
 #[test]
@@ -1486,6 +1486,345 @@ fn open_navigates_into_a_folder_and_opens_a_file_with_the_default() {
     assert_eq!(h.fake.opened().len(), 1, "a folder opens nothing outside");
 }
 
+/// A network provider stub for the connection tests: its root lists the
+/// connections its connector was handed, everything else is unsupported.
+mod net {
+    use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+
+    use ext::{
+        API_VERSION, Capabilities, ChangeStream, Connection, ConnectionField, ConnectionFieldKind,
+        ConnectionSchema, Connector, CopyOptions, EntryStream, Extension, LinkKind, ListOptions,
+        Manifest, Platforms, Points, Provider, ReadHandle, Registry, RemoveMode, Version,
+        WriteHandle, WriteOptions, async_trait,
+    };
+    use futures::StreamExt as _;
+    use futures::stream;
+    use runtime::ProgressSink;
+    use types::{
+        Attrs, CancelToken, Entry, EntryId, EntryKind, Error, ExtId, Location, ProviderId,
+    };
+
+    pub(super) const ID: ProviderId = ProviderId("sftp");
+
+    #[derive(Default)]
+    pub(super) struct Stub {
+        pub(super) connections: Mutex<Vec<Connection>>,
+        pub(super) connected: Mutex<Vec<String>>,
+        schema: Option<ConnectionSchema>,
+    }
+
+    fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
+        m.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    impl Stub {
+        pub(super) fn new() -> Arc<Self> {
+            Arc::new(Self {
+                schema: Some(ConnectionSchema {
+                    title: "Stub",
+                    fields: vec![
+                        ConnectionField {
+                            key: "host",
+                            label: "Host",
+                            kind: ConnectionFieldKind::Text {
+                                default: String::new(),
+                            },
+                            required: true,
+                        },
+                        ConnectionField {
+                            key: "port",
+                            label: "Port",
+                            kind: ConnectionFieldKind::Integer {
+                                default: 22,
+                                min: 1,
+                                max: 65535,
+                            },
+                            required: false,
+                        },
+                        ConnectionField {
+                            key: "password",
+                            label: "Password",
+                            kind: ConnectionFieldKind::Secret,
+                            required: false,
+                        },
+                    ],
+                }),
+                ..Self::default()
+            })
+        }
+    }
+
+    #[async_trait]
+    impl Connector for Stub {
+        fn provider(&self) -> ProviderId {
+            ID
+        }
+        fn schema(&self) -> &ConnectionSchema {
+            self.schema.as_ref().unwrap_or_else(|| unreachable!())
+        }
+        fn update(&self, connections: Vec<Connection>) {
+            let names: Vec<String> = connections.iter().map(|c| c.name.clone()).collect();
+            lock(&self.connected).retain(|n| names.contains(n));
+            *lock(&self.connections) = connections;
+        }
+        async fn connect(&self, name: &str) -> Result<(), Error> {
+            if !lock(&self.connections).iter().any(|c| c.name == name) {
+                return Err(Error::NotFound);
+            }
+            lock(&self.connected).push(name.to_owned());
+            Ok(())
+        }
+        fn disconnect(&self, name: &str) {
+            lock(&self.connected).retain(|n| n != name);
+        }
+        fn is_connected(&self, name: &str) -> bool {
+            lock(&self.connected).iter().any(|n| n == name)
+        }
+    }
+
+    #[async_trait]
+    impl Provider for Stub {
+        fn id(&self) -> ProviderId {
+            ID
+        }
+        fn capabilities(&self, _loc: &Location) -> Capabilities {
+            Capabilities::REMOTE
+        }
+        fn list(&self, loc: &Location, _opts: ListOptions, _cancel: CancelToken) -> EntryStream {
+            if loc.path.as_bytes() != b"/" {
+                return stream::once(async { Err(Error::NotFound) }).boxed();
+            }
+            let entries: Vec<Entry> = lock(&self.connections)
+                .iter()
+                .map(|c| Entry {
+                    id: EntryId::new(ID, u128::from(c.name.len() as u64)),
+                    name: c.name.clone(),
+                    path: format!("/{}", c.name).into(),
+                    kind: EntryKind::Dir,
+                    size: None,
+                    created: None,
+                    modified: None,
+                    accessed: None,
+                    attrs: Attrs::empty(),
+                    mime: None,
+                })
+                .collect();
+            stream::once(async move { Ok(entries) }).boxed()
+        }
+        async fn stat(&self, _loc: &Location) -> Result<Entry, Error> {
+            Err(Error::NotFound)
+        }
+        async fn open_read(&self, _loc: &Location) -> Result<ReadHandle, Error> {
+            Err(Error::Unsupported("stub"))
+        }
+        async fn open_write(&self, _l: &Location, _o: WriteOptions) -> Result<WriteHandle, Error> {
+            Err(Error::Unsupported("stub"))
+        }
+        async fn create_dir(&self, _loc: &Location) -> Result<Entry, Error> {
+            Err(Error::Unsupported("stub"))
+        }
+        async fn rename(&self, _f: &Location, _t: &Location) -> Result<Entry, Error> {
+            Err(Error::Unsupported("stub"))
+        }
+        async fn remove(&self, _loc: &Location, _mode: RemoveMode) -> Result<(), Error> {
+            Err(Error::Unsupported("stub"))
+        }
+        async fn link(&self, _t: &Location, _a: &Location, _k: LinkKind) -> Result<Entry, Error> {
+            Err(Error::Unsupported("stub"))
+        }
+        async fn copy(
+            &self,
+            _f: &Location,
+            _t: &Location,
+            _o: CopyOptions,
+            _p: ProgressSink,
+            _c: CancelToken,
+        ) -> Result<(), Error> {
+            Err(Error::Unsupported("stub"))
+        }
+        fn watch(&self, _loc: &Location) -> Result<ChangeStream, Error> {
+            Err(Error::Unsupported("stub"))
+        }
+    }
+
+    pub(super) struct StubExtension {
+        manifest: Manifest,
+        pub(super) stub: Arc<Stub>,
+    }
+
+    impl StubExtension {
+        pub(super) fn new(stub: Arc<Stub>) -> Self {
+            Self {
+                manifest: Manifest {
+                    id: ExtId("stub-net"),
+                    name: "Stub network provider",
+                    version: Version::new(0, 1, 0),
+                    api_version: API_VERSION,
+                    requires: Capabilities::empty(),
+                    points: Points::PROVIDER,
+                    platforms: Platforms::ALL,
+                },
+                stub,
+            }
+        }
+    }
+
+    impl Extension for StubExtension {
+        fn manifest(&self) -> &Manifest {
+            &self.manifest
+        }
+        fn register(&self, reg: &mut Registry) -> Result<(), Error> {
+            reg.provider(Arc::clone(&self.stub) as Arc<dyn Provider>);
+            reg.connector(Arc::clone(&self.stub) as Arc<dyn Connector>);
+            Ok(())
+        }
+    }
+}
+
+/// Acceptance (issue 21): a connection's secret goes to the platform
+/// keychain and never into `rick.toml`, its other fields into
+/// `[[connections]]`; the connector is handed the list; the Network rows
+/// follow; a second connection of the same name is refused; Connect marks
+/// it connected and Remove forgets the entry and its secret.
+#[test]
+// One scenario, start to finish: add, refuse twice, connect, disconnect, remove.
+#[allow(clippy::too_many_lines)]
+fn a_connection_keeps_its_secret_in_the_keychain_and_the_rest_in_the_settings() {
+    let root = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+    let fake = Arc::new(Fake::new().unwrap_or_else(|e| panic!("{e}")));
+    let stub = net::Stub::new();
+    let app = App::new(Config {
+        platform: fake.clone(),
+        ui: Arc::new(Scripted::default()),
+        extensions: vec![Arc::new(net::StubExtension::new(Arc::clone(&stub)))],
+        config_dir: Some(fake.config_dir()),
+        start: Some(local(root.path())),
+    });
+    let mut h = Harness {
+        root,
+        fake,
+        ui: Arc::new(Scripted::default()),
+        app,
+        events: Vec::new(),
+    };
+    h.settle();
+    assert_eq!(h.app.model().network_providers, [net::ID]);
+    assert_eq!(h.app.model().network, Vec::<Entry>::new());
+
+    h.send(Command::AddConnection {
+        provider: net::ID,
+        name: "nas".into(),
+        values: vec![
+            ("host".into(), "10.0.0.2".into()),
+            ("port".into(), String::new()),
+            ("password".into(), "hunter2".into()),
+            ("stray".into(), "dropped".into()),
+        ],
+    });
+    h.settle();
+    let settings_path = h.fake.config_dir().join(SETTINGS_FILE);
+    let text = fs::read_to_string(&settings_path).unwrap_or_else(|e| panic!("{e}"));
+    assert!(text.contains("[[connections]]"), "{text}");
+    assert!(text.contains("provider = \"sftp\""), "{text}");
+    assert!(text.contains("name = \"nas\""), "{text}");
+    assert!(text.contains("host = \"10.0.0.2\""), "{text}");
+    assert!(
+        !text.contains("hunter2"),
+        "the secret is not in the file: {text}"
+    );
+    assert!(!text.contains("stray"), "{text}");
+    assert_eq!(
+        h.fake
+            .secrets()
+            .get("sftp/nas/password")
+            .map(String::as_str),
+        Some("hunter2")
+    );
+    {
+        let handed = stub
+            .connections
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone();
+        assert_eq!(handed.len(), 1);
+        assert_eq!(handed[0].name, "nas");
+        assert_eq!(handed[0].get("host"), Some("10.0.0.2"));
+        assert_eq!(
+            handed[0].get("password"),
+            None,
+            "the connector gets no secret"
+        );
+    }
+    let rows: Vec<String> = h
+        .app
+        .model()
+        .network
+        .iter()
+        .map(|e| e.name.clone())
+        .collect();
+    assert_eq!(rows, ["nas"]);
+
+    // The same name again is refused with a notice and changes nothing.
+    h.take_events();
+    h.send(Command::AddConnection {
+        provider: net::ID,
+        name: "nas".into(),
+        values: vec![("host".into(), "other".into())],
+    });
+    h.settle();
+    assert!(
+        h.take_events()
+            .iter()
+            .any(|e| matches!(e, Event::Notify { level: Level::Error, text } if text.contains("exists already"))),
+    );
+    assert_eq!(h.app.model().settings.connections.len(), 1);
+
+    // A required field left empty is refused too.
+    h.send(Command::AddConnection {
+        provider: net::ID,
+        name: "second".into(),
+        values: vec![("password".into(), "x".into())],
+    });
+    h.settle();
+    assert_eq!(h.app.model().settings.connections.len(), 1);
+    assert_eq!(h.fake.secrets().len(), 1);
+
+    // Connect runs as a job and marks the connection connected.
+    h.send(Command::Connection {
+        provider: net::ID,
+        name: "nas".into(),
+        op: super::ConnectionOp::Connect,
+    });
+    h.settle();
+    assert!(ext::Connector::is_connected(&*stub, "nas"));
+    h.send(Command::Connection {
+        provider: net::ID,
+        name: "nas".into(),
+        op: super::ConnectionOp::Disconnect,
+    });
+    h.settle();
+    assert!(!ext::Connector::is_connected(&*stub, "nas"));
+
+    // Remove forgets the entry, the secret and the row.
+    h.send(Command::Connection {
+        provider: net::ID,
+        name: "nas".into(),
+        op: super::ConnectionOp::Remove,
+    });
+    h.settle();
+    let text = fs::read_to_string(&settings_path).unwrap_or_else(|e| panic!("{e}"));
+    assert!(!text.contains("nas"), "{text}");
+    assert!(h.fake.secrets().is_empty());
+    assert!(
+        stub.connections
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .is_empty()
+    );
+    assert_eq!(h.app.model().network, Vec::<Entry>::new());
+    drop(h.ui);
+}
+
 /// The title-row search box asks every available index once the text has
 /// stood for a moment, lists each hit once, follows the availability of
 /// the indexes, and an empty text ends the search.
@@ -1524,7 +1863,7 @@ fn the_title_row_search_asks_every_available_index_and_lists_each_hit_once() {
     let mut names: Vec<&str> = search.hits.iter().map(|e| e.name.as_str()).collect();
     names.sort_unstable();
     assert_eq!(names, ["foo.rs", "foo.txt", "foobar.md"], "{search:?}");
-    assert!(search.errors.is_empty());
+    assert_eq!(search.errors, Vec::<String>::new());
     assert_eq!(first.queries(), ["foo"]);
     assert_eq!(second.queries(), ["foo"]);
     let events = h.take_events();
@@ -1582,7 +1921,7 @@ fn the_title_row_search_asks_every_available_index_and_lists_each_hit_once() {
     assert_eq!(h.app.model().search_indexes, [ExtId("fake-two")]);
     second.available.store(false, Ordering::SeqCst);
     h.app.poll(&mut h.events);
-    assert!(h.app.model().search_indexes.is_empty());
+    assert_eq!(h.app.model().search_indexes, Vec::<ExtId>::new());
     h.send(Command::IndexSearch { text: "foo".into() });
     assert!(h.app.model().index_search.done);
     h.settle();

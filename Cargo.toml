@@ -39,6 +39,10 @@ ext-search-spotlight = { path = "crates/ext-search-spotlight" }
 ext-search-tracker = { path = "crates/ext-search-tracker" }
 ext-search-baloo = { path = "crates/ext-search-baloo" }
 ext-svn = { path = "crates/ext-svn" }
+ext-vfs-sftp = { path = "crates/ext-vfs-sftp" }
+ext-vfs-s3 = { path = "crates/ext-vfs-s3" }
+ext-vfs-azure = { path = "crates/ext-vfs-azure" }
+ext-vfs-gcs = { path = "crates/ext-vfs-gcs" }
 ext-action-compress = { path = "crates/ext-action-compress" }
 ext-action-compare = { path = "crates/ext-action-compare" }
 ext-action-terminal = { path = "crates/ext-action-terminal" }
@@ -105,6 +109,26 @@ similar = "2"
 portable-pty = "0.9"
 vte = "0.15"
 anyhow = "1"
+# The platform keychain (SPEC.md "Package layout": `Secrets`, 0.2).
+keyring = "4"
+# The provider plugins of issue 21. SFTP through russh and russh-sftp,
+# with ring as the one crypto library of the process (the cloud plugins'
+# TLS uses it too), no aws-lc; the clouds through reqwest over rustls with
+# ring, streaming bodies, and the small signing crates: HMAC-SHA256 for
+# SigV4 and Azure's SharedKey, ring's RSA for the GCS service-account JWT.
+russh = { version = "0.65", default-features = false, features = ["ring", "flate2", "rsa"] }
+russh-sftp = "3"
+reqwest = { version = "0.13", default-features = false, features = ["rustls-no-provider", "stream", "http2"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12", "logging"] }
+ring = "0.17"
+tokio-util = { version = "0.7", default-features = false, features = ["io"] }
+bytes = "1"
+hmac = "0.12"
+sha2 = "0.10"
+hex = "0.4"
+base64 = "0.22"
+percent-encoding = "2"
+url = "2"
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 eframe = "0.36"
 egui = "0.36"

@@ -1,0 +1,37 @@
+[package]
+name = "ext-vfs-gcs"
+version.workspace = true
+description = "Rick's Google Cloud Storage provider: projects as locations, buckets as top-level folders and object name prefixes as folders below them, with Rewrite on the service for moves and copies inside a project."
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+# A plugin: a `cdylib` the host loads from `plugins/vfs-gcs/`, and an
+# `rlib` for the binary's opt-in `vfs-gcs` feature and the tests.
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+types = { workspace = true }
+ext = { workspace = true }
+futures = { workspace = true }
+tokio = { workspace = true, features = ["io-util", "sync", "time"] }
+tokio-util = { workspace = true }
+tracing = { workspace = true }
+reqwest = { workspace = true }
+rustls = { workspace = true }
+ring = { workspace = true }
+bytes = { workspace = true }
+base64 = { workspace = true }
+percent-encoding = { workspace = true }
+url = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+chrono = { workspace = true }
+
+[dev-dependencies]
+runtime = { workspace = true }
+platform = { workspace = true }
+
+[lints]
+workspace = true

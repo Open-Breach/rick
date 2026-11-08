@@ -18,6 +18,10 @@ tempfile = { workspace = true }
 thiserror = { workspace = true }
 toml = { workspace = true }
 tracing = { workspace = true }
+# The platform keychain behind `Secrets`: one store per operating system,
+# chosen by the crate itself (Secret Service over zbus on Linux, Keychain
+# on macOS, the Credential Manager on Windows).
+keyring = { workspace = true }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 libc = { workspace = true }

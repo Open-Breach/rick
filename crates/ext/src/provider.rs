@@ -5,6 +5,10 @@
 //! paints the first screen before the walk finishes, and it implements the
 //! native fast path for same-provider copies; cross-provider copies are
 //! composed by `vfs` from [`Provider::open_read`] and [`Provider::open_write`].
+//! A provider whose service can move or copy a selection by itself (an
+//! object store's copy API, a remote rename) sets
+//! [`Capabilities::NATIVE_TRANSFER`] and answers [`Provider::transfer`];
+//! the default answers `Unsupported` and the kernel does the work.
 //!
 //! # Worked example
 //!
@@ -136,13 +140,29 @@ bitflags::bitflags! {
         /// Entries carry permission bits the user may change.
         const PERMISSIONS = 128;
         /// Copy and move between two locations of this provider instance
-        /// happen on the provider's side.
+        /// happen on the provider's side (server-side copy, remote rename):
+        /// nothing streams through the machine and the job only tracks
+        /// progress. `ops` calls [`Provider::transfer`] first where it is
+        /// set.
         const NATIVE_TRANSFER = 256;
         /// `link` with [`LinkKind::Junction`] is available (NTFS).
         const JUNCTION = 512;
         /// `link` with [`LinkKind::Shortcut`] is available (Windows `.lnk`).
         const SHORTCUT = 1024;
+        /// The entries live behind a network: the kernel treats the
+        /// location as a remote-latency mount (SPEC.md "Network file
+        /// systems"), with no eager stat and no thumbnails by default.
+        const REMOTE = 2048;
     }
+}
+
+/// Whether a [`Provider::transfer`] moves or copies.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum TransferMode {
+    /// The items end up at the target and are gone from the source.
+    Move,
+    /// The items are duplicated at the target.
+    Copy,
 }
 
 /// How deep a listing goes.
@@ -305,6 +325,36 @@ pub trait Provider: Send + Sync + 'static {
         progress: ProgressSink,
         cancel: CancelToken,
     ) -> Result<(), Error>;
+
+    /// Moves or copies a whole selection within this provider instance on
+    /// the provider's side, if `NATIVE_TRANSFER` is set: the object store's
+    /// copy API across buckets of one account, a remote rename over SSH.
+    /// Every item lands in `to` under its own name. The provider submits
+    /// the operation, reports progress as the service exposes it and
+    /// honours `cancel` where the service allows. `ops` calls this first
+    /// when source and target share a provider instance with the
+    /// capability and falls back to `rename`, `copy` and the streamed path
+    /// when it answers `Error::Unsupported`, which the default does, and
+    /// which a provider answers for a mode it has no native path for (an
+    /// SFTP server renames but cannot copy).
+    ///
+    /// # Errors
+    ///
+    /// `Error::Unsupported` when there is no native path for `mode` here;
+    /// `Error::Cancelled` when cancelled; the service's error otherwise.
+    async fn transfer(
+        &self,
+        items: &[Location],
+        to: &Location,
+        mode: TransferMode,
+        progress: ProgressSink,
+        cancel: CancelToken,
+    ) -> Result<(), Error> {
+        let _ = (items, to, mode, progress, cancel);
+        Err(Error::Unsupported(
+            "this provider moves and copies through the kernel",
+        ))
+    }
 
     /// Change notifications for one location, if `WATCH` is set.
     ///

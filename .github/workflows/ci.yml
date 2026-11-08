@@ -77,11 +77,16 @@ jobs:
     needs: [changes, fmt]
     if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
       - uses: ./.github/actions/setup
         with: { system: test }
+      # Issue 21: the provider plugins' round trips run against MinIO,
+      # Azurite, fake-gcs-server and an sshd container; the tests skip with
+      # a note without the RICK_* variables and fail instead here.
+      - name: storage and sftp containers
+        run: .github/scripts/containers.sh
       # With Tracker and Baloo indexing a fixture directory on a private
       # session bus, so the two connectors answer through their real
       # services (issue 22).

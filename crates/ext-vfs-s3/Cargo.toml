@@ -1,0 +1,37 @@
+[package]
+name = "ext-vfs-s3"
+version.workspace = true
+description = "Rick's S3 provider: Amazon S3, Cloudflare R2, MinIO and other S3-compatible stores as locations, buckets as folders and key prefixes as folders below them, with server-side copies for moves and copies inside an account."
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+# A plugin: a `cdylib` the host loads from `plugins/vfs-s3/`, and an
+# `rlib` for the binary's opt-in `vfs-s3` feature and the tests.
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+types = { workspace = true }
+ext = { workspace = true }
+futures = { workspace = true }
+tokio = { workspace = true, features = ["io-util", "sync", "time"] }
+tokio-util = { workspace = true }
+tracing = { workspace = true }
+reqwest = { workspace = true }
+rustls = { workspace = true }
+bytes = { workspace = true }
+hmac = { workspace = true }
+sha2 = { workspace = true }
+hex = { workspace = true }
+percent-encoding = { workspace = true }
+url = { workspace = true }
+roxmltree = { workspace = true }
+chrono = { workspace = true }
+
+[dev-dependencies]
+runtime = { workspace = true }
+platform = { workspace = true }
+
+[lints]
+workspace = true

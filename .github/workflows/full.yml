@@ -70,6 +70,13 @@ jobs:
       - run: "! grep -rnP '(*UTF8)[\\x{2190}-\\x{2BFF}\\x{1F300}-\\x{1FAFF}]' crates/ui-egui/src"
         if: matrix.os == 'ubuntu-latest'
       - run: cargo clippy --workspace --all-targets ${{ env.RICK_WS_FEATURES }} -- -D warnings
+      # Issue 21: the provider plugins' round trips run against MinIO,
+      # Azurite, fake-gcs-server and an sshd container on Linux x64, where
+      # Docker is; macOS, Windows and Linux arm64 run the plugins' unit tests
+      # and skip the round trips with a note.
+      - name: storage and sftp containers
+        if: matrix.os == 'ubuntu-latest'
+        run: .github/scripts/containers.sh
       # Linux runs the tests with Tracker and Baloo indexing a fixture
       # directory on a private session bus; macOS and Windows have their
       # platform index on the runner (issue 22).

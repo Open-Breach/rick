@@ -13,11 +13,11 @@ name = "rick"
 path = "src/main.rs"
 
 # Built-in extensions are features, default-on; a lean build turns them off.
-# `git`, `svn`, `vfs-trash`, `vfs-archive`, `preview-hex` and the five
-# `search-*` connectors compile a plugin in instead of loading it from
-# `plugins/`; default off, since the plugins directory is where they live
-# in 0.2. The four previewer plugins of issue 18 and the four action
-# plugins of issue 23 have the same opt-in
+# `git`, `svn`, `vfs-trash`, `vfs-archive`, `vfs-sftp`, the three cloud
+# providers, `preview-hex` and the five `search-*` connectors compile a
+# plugin in instead of loading it from `plugins/`; default off, since the
+# plugins directory is where they live in 0.2. The four previewer plugins
+# of issue 18 and the four action plugins of issue 23 have the same opt-in
 # features; `gstreamer` turns playback on in the media previewer, wherever
 # it is built (the plugin's own feature of that name; off by default so a
 # build without the GStreamer development files still builds every crate).
@@ -42,6 +42,10 @@ search-windows = ["dep:ext-search-windows"]
 search-spotlight = ["dep:ext-search-spotlight"]
 search-tracker = ["dep:ext-search-tracker"]
 search-baloo = ["dep:ext-search-baloo"]
+vfs-sftp = ["dep:ext-vfs-sftp"]
+vfs-s3 = ["dep:ext-vfs-s3"]
+vfs-azure = ["dep:ext-vfs-azure"]
+vfs-gcs = ["dep:ext-vfs-gcs"]
 action-compress = ["dep:ext-action-compress"]
 action-compare = ["dep:ext-action-compare"]
 action-terminal = ["dep:ext-action-terminal"]
@@ -63,6 +67,10 @@ ext-preview-hex = { workspace = true, optional = true }
 ext-git = { workspace = true, optional = true }
 ext-vfs-trash = { workspace = true, optional = true }
 ext-vfs-archive = { workspace = true, optional = true }
+ext-vfs-sftp = { workspace = true, optional = true }
+ext-vfs-s3 = { workspace = true, optional = true }
+ext-vfs-azure = { workspace = true, optional = true }
+ext-vfs-gcs = { workspace = true, optional = true }
 ext-action-compress = { workspace = true, optional = true }
 ext-action-compare = { workspace = true, optional = true }
 ext-action-terminal = { workspace = true, optional = true }

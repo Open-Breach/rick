@@ -12,7 +12,7 @@ use types::Error;
 
 use crate::traits::{
     Application, Chrome, Clipboard, ConfigDir, ControlsSide, DialogFilter, DragSource,
-    NativeDialogs, OpenWith, Properties, PropertiesOutcome, RecentItem, RecentlyUsed,
+    NativeDialogs, OpenWith, Properties, PropertiesOutcome, RecentItem, RecentlyUsed, Secrets,
     StandardFolder, StandardFolders, Terminal, Trash, TrashedItem, Volume, Volumes, WindowChrome,
 };
 
@@ -36,7 +36,8 @@ pub const FAKE_STANDARD_FOLDERS: [StandardFolder; 3] = [
 /// with the `Fake`; opening and revealing are recorded instead of launching
 /// anything; dialogues answer what the test told them to; the volumes and
 /// the recently-used list are what the test registered; the standard
-/// folders are the directories under the fake's home.
+/// folders are the directories under the fake's home; the secrets live in
+/// a map the test can read back.
 #[derive(Debug)]
 pub struct Fake {
     dir: TempDir,
@@ -56,6 +57,8 @@ pub struct Fake {
     recent: Mutex<Vec<RecentItem>>,
     /// `list` answers `Unsupported`, as the macOS trash does.
     unlistable: Mutex<bool>,
+    /// The keychain: secrets by key.
+    secrets: Mutex<std::collections::BTreeMap<String, String>>,
 }
 
 #[derive(Debug, Default)]
@@ -102,6 +105,7 @@ impl Fake {
             ejected: Mutex::new(Vec::new()),
             recent: Mutex::new(Vec::new()),
             unlistable: Mutex::new(false),
+            secrets: Mutex::new(std::collections::BTreeMap::new()),
         })
     }
 
@@ -187,6 +191,29 @@ impl Fake {
     /// test's stand-in for the system's list.
     pub fn set_recent(&self, items: Vec<RecentItem>) {
         *lock(&self.recent) = items;
+    }
+
+    /// Every secret in the fake keychain, by key: what a test checks never
+    /// reached a file.
+    #[must_use]
+    pub fn secrets(&self) -> std::collections::BTreeMap<String, String> {
+        lock(&self.secrets).clone()
+    }
+}
+
+impl Secrets for Fake {
+    fn store_secret(&self, key: &str, secret: &str) -> Result<(), Error> {
+        lock(&self.secrets).insert(key.to_owned(), secret.to_owned());
+        Ok(())
+    }
+
+    fn get_secret(&self, key: &str) -> Result<Option<String>, Error> {
+        Ok(lock(&self.secrets).get(key).cloned())
+    }
+
+    fn remove_secret(&self, key: &str) -> Result<(), Error> {
+        lock(&self.secrets).remove(key);
+        Ok(())
     }
 }
 
@@ -444,6 +471,28 @@ mod tests {
             fake.trash(&work.path().join("nope")),
             Err(Error::NotFound)
         ));
+    }
+
+    #[test]
+    fn secrets_are_kept_in_memory_by_key() {
+        let fake = Fake::new().unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(fake.get_secret("s3/work/secret_key").ok(), Some(None));
+        fake.store_secret("s3/work/secret_key", "hunter2")
+            .unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(
+            fake.get_secret("s3/work/secret_key")
+                .ok()
+                .flatten()
+                .as_deref(),
+            Some("hunter2")
+        );
+        assert_eq!(fake.secrets().len(), 1);
+        fake.remove_secret("s3/work/secret_key")
+            .unwrap_or_else(|e| panic!("{e}"));
+        fake.remove_secret("s3/work/secret_key")
+            .unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(fake.get_secret("s3/work/secret_key").ok(), Some(None));
+        assert!(fake.secrets().is_empty());
     }
 
     #[test]

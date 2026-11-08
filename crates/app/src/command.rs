@@ -11,6 +11,7 @@ use model::{
 };
 use types::{
     Conflict, ConflictAnswer, ConflictId, Entry, EntryId, Error, JobId, Location, Progress,
+    ProviderId,
 };
 
 /// Whether a transfer moves or copies, or asks on drop.
@@ -23,6 +24,18 @@ pub enum TransferMode {
     /// Ask with the move/copy/cancel prompt first; the UI answers it and
     /// sends `Move` or `Copy` in its place.
     Ask,
+}
+
+/// What the context menu of a connection row in the side panel does.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConnectionOp {
+    /// Open or verify the connection now, as a job, so a wrong password is
+    /// reported at once.
+    Connect,
+    /// Drop its session; the next operation connects again.
+    Disconnect,
+    /// Forget it: out of `rick.toml`, its secrets out of the keychain.
+    Remove,
 }
 
 /// What the UI asks the application to do. The UI never touches the model;
@@ -166,6 +179,30 @@ pub enum Command {
     },
     /// Eject the removable volume mounted at this path, as a job.
     Eject(PathBuf),
+    /// Add a connection of a network or cloud provider, as its *Add
+    /// connection…* dialogue filled it in: the fields of
+    /// [`ConnectionFieldKind::Secret`](ext::ConnectionFieldKind::Secret) go into the platform
+    /// keychain (as a job, since a keychain may ask to be unlocked), the
+    /// rest into `rick.toml`, and the provider's connector is told.
+    AddConnection {
+        /// The provider.
+        provider: ProviderId,
+        /// The connection's name, unique within the provider.
+        name: String,
+        /// The field values by key, secrets included; an empty value is
+        /// left out.
+        values: Vec<(String, String)>,
+    },
+    /// Connect, disconnect or remove a connection of a network or cloud
+    /// provider.
+    Connection {
+        /// The provider.
+        provider: ProviderId,
+        /// The connection's name.
+        name: String,
+        /// What to do.
+        op: ConnectionOp,
+    },
     /// Run an action on a context, usually from
     /// [`App::action_ctx`](crate::App::action_ctx).
     Run {

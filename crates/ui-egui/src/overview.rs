@@ -70,10 +70,10 @@ pub fn show(ui: &mut egui::Ui, cx: &mut PaneCx<'_>, which: Virtual) {
     if entries.is_empty() && cx.tab.listing.complete {
         let text = match which {
             Virtual::Network => {
-                "No network file system is mounted. Add… in the side panel creates a connection once a network provider is installed."
+                "No network file system is mounted and no connection is configured. Add connection… in the side panel's Network section creates one."
             }
             Virtual::Cloud => {
-                "No cloud account is configured. Add… in the side panel creates one once a cloud provider is installed."
+                "No cloud account is configured. Add connection… in the side panel's Cloud section creates one."
             }
             _ => "No drive is mounted.",
         };
@@ -83,7 +83,25 @@ pub fn show(ui: &mut egui::Ui, cx: &mut PaneCx<'_>, which: Virtual) {
     egui::ScrollArea::vertical()
         .auto_shrink([false, false])
         .show(ui, |ui| match which {
-            Virtual::Cloud => cloud_table(ui, cx, &entries),
+            Virtual::Cloud => cloud_table(ui, cx, &entries, icons::CLOUD),
+            Virtual::Network => {
+                // The mounted shares as drives, then the connections of the
+                // network providers as the Cloud overview lists accounts.
+                let (volumes, connections): (Vec<Entry>, Vec<Entry>) = entries
+                    .into_iter()
+                    .partition(|e| e.id.provider == vfs_local::PROVIDER_ID);
+                if !volumes.is_empty() {
+                    drive_table(ui, cx, &volumes);
+                }
+                if !connections.is_empty() {
+                    if !volumes.is_empty() {
+                        ui.add_space(12.0);
+                    }
+                    ui.strong("Connections");
+                    ui.add_space(4.0);
+                    cloud_table(ui, cx, &connections, icons::NETWORK);
+                }
+            }
             _ => drive_table(ui, cx, &entries),
         });
 }
@@ -158,9 +176,10 @@ fn drive_table(ui: &mut egui::Ui, cx: &mut PaneCx<'_>, entries: &[Entry]) {
     });
 }
 
-/// The Cloud overview: one row per account or container.
-fn cloud_table(ui: &mut egui::Ui, cx: &mut PaneCx<'_>, entries: &[Entry]) {
-    let grid = egui::Grid::new(("overview", cx.tab_id))
+/// The Cloud overview, and the connections of the Network overview: one
+/// row per account or connection.
+fn cloud_table(ui: &mut egui::Ui, cx: &mut PaneCx<'_>, entries: &[Entry], glyph: &str) {
+    let grid = egui::Grid::new(("overview-accounts", cx.tab_id))
         .striped(true)
         .num_columns(3)
         .spacing(egui::vec2(16.0, 6.0));
@@ -172,8 +191,7 @@ fn cloud_table(ui: &mut egui::Ui, cx: &mut PaneCx<'_>, entries: &[Entry]) {
         for entry in entries {
             let selected = cx.tab.selection.contains(&entry.id);
             let response = ui.add(
-                egui::Button::selectable(selected, format!("{} {}", icons::CLOUD, entry.name))
-                    .truncate(),
+                egui::Button::selectable(selected, format!("{glyph} {}", entry.name)).truncate(),
             );
             row_interaction(cx, entry, &response);
             ui.label(entry.id.provider.to_string());

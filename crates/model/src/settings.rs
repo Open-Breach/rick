@@ -86,6 +86,39 @@ pub struct Settings {
     pub viewer: Viewer,
     /// Plugins: which of them not to load.
     pub plugins: Plugins,
+    /// The network and cloud connections, one `[[connections]]` table
+    /// each: the provider, the name and the non-secret fields. The
+    /// secrets are in the platform keychain, never here.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub connections: Vec<ConnectionEntry>,
+}
+
+/// One `[[connections]]` table of `rick.toml`: a connection of a network
+/// or cloud provider plugin with its non-secret fields inline, so a file
+/// reads `provider = "s3"`, `name = "work"`, `endpoint = "…"`. A password
+/// or key lives in the platform keychain under the plugin's key.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(default)]
+pub struct ConnectionEntry {
+    /// The provider id: `s3`, `azure`, `gcs`, `sftp`.
+    pub provider: String,
+    /// The name the user gave the connection; unique within the provider.
+    pub name: String,
+    /// The non-secret fields by key, inline in the table.
+    #[serde(flatten)]
+    pub settings: BTreeMap<String, String>,
+}
+
+impl ConnectionEntry {
+    /// The entry as the extension API hands it to the provider's
+    /// connector: the name and the fields.
+    #[must_use]
+    pub fn to_connection(&self) -> ext::Connection {
+        ext::Connection {
+            name: self.name.clone(),
+            settings: self.settings.clone(),
+        }
+    }
 }
 
 /// The `[viewer]` table.
@@ -420,6 +453,7 @@ impl Default for Settings {
             search: Search::default(),
             viewer: Viewer::default(),
             plugins: Plugins::default(),
+            connections: Vec::new(),
         }
     }
 }
@@ -601,6 +635,36 @@ mod tests {
             "a dot-file has no extension"
         );
         assert!(!s.viewer.opens_externally("pdf"));
+    }
+
+    #[test]
+    fn connections_round_trip_as_tables_with_their_fields_inline() {
+        let mut s = Settings::default();
+        s.connections.push(ConnectionEntry {
+            provider: "s3".into(),
+            name: "work".into(),
+            settings: BTreeMap::from([
+                ("endpoint".to_owned(), "http://127.0.0.1:9000".to_owned()),
+                ("access_key".to_owned(), "minio".to_owned()),
+            ]),
+        });
+        let text = toml::to_string(&s).unwrap_or_else(|e| panic!("{e}"));
+        assert!(text.contains("[[connections]]"), "{text}");
+        assert!(text.contains("provider = \"s3\""), "{text}");
+        assert!(
+            text.contains("endpoint = \"http://127.0.0.1:9000\""),
+            "{text}"
+        );
+        let back: Settings = toml::from_str(&text).unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(back, s);
+        assert_eq!(
+            back.connections[0].to_connection().get("access_key"),
+            Some("minio")
+        );
+        assert_eq!(back.connections[0].to_connection().get("missing"), None);
+        // No connection, no table.
+        let text = toml::to_string(&Settings::default()).unwrap_or_else(|e| panic!("{e}"));
+        assert!(!text.contains("connections"), "{text}");
     }
 
     #[test]

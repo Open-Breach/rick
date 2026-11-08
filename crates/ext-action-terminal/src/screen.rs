@@ -930,7 +930,7 @@ mod tests {
         assert_eq!(screen.snapshot(0).cursor, None);
         feed(&mut screen, b"\x1b[?25h\x1b[2;4H\x1b[6n\x1b[c");
         assert_eq!(screen.take_responses(), b"\x1b[2;4R\x1b[?62;22c");
-        assert!(screen.take_responses().is_empty());
+        assert_eq!(screen.take_responses(), b"");
         let before = screen.generation();
         feed(&mut screen, b"x");
         assert!(screen.generation() > before);

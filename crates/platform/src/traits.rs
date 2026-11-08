@@ -417,6 +417,36 @@ pub trait DragSource: Send + Sync {
     fn start_drag(&self, paths: &[PathBuf]) -> Result<(), Error>;
 }
 
+/// The platform keychain: secrets by a stable key, never in a TOML file.
+/// Secret Service on Linux, Keychain on macOS, Credential Manager on
+/// Windows; the fake keeps them in memory. The key is the caller's: the
+/// connection plugins use `<provider>/<connection>/<field>`.
+pub trait Secrets: Send + Sync {
+    /// Stores `secret` under `key`, replacing what was there.
+    ///
+    /// # Errors
+    ///
+    /// `Error::Unsupported` when no keychain is reachable (no Secret Service
+    /// on the bus); otherwise the platform error.
+    fn store_secret(&self, key: &str, secret: &str) -> Result<(), Error>;
+
+    /// The secret stored under `key`, or `None` when there is none.
+    ///
+    /// # Errors
+    ///
+    /// `Error::Unsupported` when no keychain is reachable; otherwise the
+    /// platform error.
+    fn get_secret(&self, key: &str) -> Result<Option<String>, Error>;
+
+    /// Forgets the secret under `key`; a key without a secret is fine.
+    ///
+    /// # Errors
+    ///
+    /// `Error::Unsupported` when no keychain is reachable; otherwise the
+    /// platform error.
+    fn remove_secret(&self, key: &str) -> Result<(), Error>;
+}
+
 /// All platform services behind one object.
 pub trait Platform:
     Trash
@@ -431,6 +461,7 @@ pub trait Platform:
     + Volumes
     + StandardFolders
     + RecentlyUsed
+    + Secrets
 {
 }
 
@@ -446,7 +477,8 @@ impl<
         + DragSource
         + Volumes
         + StandardFolders
-        + RecentlyUsed,
+        + RecentlyUsed
+        + Secrets,
 > Platform for T
 {
 }

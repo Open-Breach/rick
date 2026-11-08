@@ -974,6 +974,376 @@ fn virtual_locations_hide_the_actions_that_do_not_apply() {
     assert!(!super::is_trash(&favorites_ctx));
 }
 
+/// An in-memory provider with `NATIVE_TRANSFER`: files by path, a
+/// `transfer` that moves or copies the keys itself and records the call,
+/// and an `open_read` that counts the bytes handed out, so a test can
+/// prove a transfer streamed nothing. Copies answer `Unsupported` when
+/// `copies` is off, as an SFTP server would.
+mod native {
+    use std::collections::BTreeMap;
+    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+
+    use ext::{
+        Capabilities, ChangeStream, CopyOptions, EntryStream, LinkKind, ListOptions, Provider,
+        ReadHandle, RemoveMode, TransferMode, WriteHandle, WriteOptions, async_trait,
+    };
+    use futures::StreamExt as _;
+    use futures::stream;
+    use runtime::ProgressSink;
+    use types::{
+        Attrs, CancelToken, Entry, EntryId, EntryKind, Error, Location, Progress, ProviderId, VPath,
+    };
+
+    pub(super) const ID: ProviderId = ProviderId("store");
+
+    pub(super) struct Native {
+        files: Mutex<BTreeMap<String, Vec<u8>>>,
+        copies: bool,
+        /// Bytes handed out through `open_read`.
+        pub(super) read_bytes: Arc<AtomicU64>,
+        /// Every `transfer` call: the mode, the items, the target folder.
+        pub(super) transfers: Mutex<Vec<(TransferMode, Vec<String>, String)>>,
+    }
+
+    fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
+        m.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    fn key(loc: &Location) -> String {
+        loc.path.to_string_lossy().trim_end_matches('/').to_owned()
+    }
+
+    impl Native {
+        pub(super) fn new(copies: bool, files: &[(&str, &[u8])]) -> Arc<Self> {
+            Arc::new(Self {
+                files: Mutex::new(
+                    files
+                        .iter()
+                        .map(|(p, b)| ((*p).to_owned(), b.to_vec()))
+                        .collect(),
+                ),
+                copies,
+                read_bytes: Arc::new(AtomicU64::new(0)),
+                transfers: Mutex::new(Vec::new()),
+            })
+        }
+
+        pub(super) fn paths(&self) -> Vec<String> {
+            lock(&self.files).keys().cloned().collect()
+        }
+
+        fn entry(path: &str, size: Option<u64>) -> Entry {
+            Entry {
+                id: EntryId::new(ID, u128::from(path.len() as u64)),
+                name: path.rsplit('/').next().unwrap_or(path).to_owned(),
+                path: VPath::from(path),
+                kind: if size.is_some() {
+                    EntryKind::File
+                } else {
+                    EntryKind::Dir
+                },
+                size,
+                created: None,
+                modified: None,
+                accessed: None,
+                attrs: Attrs::empty(),
+                mime: None,
+            }
+        }
+    }
+
+    /// A reader that adds what it hands out to the provider's count.
+    struct Counted {
+        inner: std::io::Cursor<Vec<u8>>,
+        count: Arc<AtomicU64>,
+    }
+
+    impl tokio::io::AsyncRead for Counted {
+        fn poll_read(
+            mut self: std::pin::Pin<&mut Self>,
+            _cx: &mut std::task::Context<'_>,
+            buf: &mut tokio::io::ReadBuf<'_>,
+        ) -> std::task::Poll<std::io::Result<()>> {
+            let n = std::io::Read::read(&mut self.inner, buf.initialize_unfilled())?;
+            buf.advance(n);
+            self.count.fetch_add(n as u64, Ordering::SeqCst);
+            std::task::Poll::Ready(Ok(()))
+        }
+    }
+
+    #[async_trait]
+    impl Provider for Native {
+        fn id(&self) -> ProviderId {
+            ID
+        }
+        fn capabilities(&self, _loc: &Location) -> Capabilities {
+            Capabilities::WRITE | Capabilities::NATIVE_TRANSFER | Capabilities::REMOTE
+        }
+        fn list(&self, loc: &Location, _opts: ListOptions, _cancel: CancelToken) -> EntryStream {
+            let dir = key(loc);
+            let entries: Vec<Entry> = lock(&self.files)
+                .iter()
+                .filter(|(p, _)| p.rsplit_once('/').is_some_and(|(parent, _)| parent == dir))
+                .map(|(p, b)| Self::entry(p, Some(b.len() as u64)))
+                .collect();
+            stream::once(async move { Ok(entries) }).boxed()
+        }
+        async fn stat(&self, loc: &Location) -> Result<Entry, Error> {
+            let path = key(loc);
+            let files = lock(&self.files);
+            if let Some(bytes) = files.get(&path) {
+                return Ok(Self::entry(&path, Some(bytes.len() as u64)));
+            }
+            let prefix = format!("{path}/");
+            if path.is_empty() || files.keys().any(|k| k.starts_with(&prefix)) {
+                return Ok(Self::entry(&path, None));
+            }
+            Err(Error::NotFound)
+        }
+        async fn open_read(&self, loc: &Location) -> Result<ReadHandle, Error> {
+            let bytes = lock(&self.files)
+                .get(&key(loc))
+                .cloned()
+                .ok_or(Error::NotFound)?;
+            Ok(Box::new(Counted {
+                inner: std::io::Cursor::new(bytes),
+                count: Arc::clone(&self.read_bytes),
+            }))
+        }
+        async fn open_write(
+            &self,
+            loc: &Location,
+            _opts: WriteOptions,
+        ) -> Result<WriteHandle, Error> {
+            lock(&self.files).insert(key(loc), Vec::new());
+            Ok(Box::new(tokio::io::sink()))
+        }
+        async fn create_dir(&self, loc: &Location) -> Result<Entry, Error> {
+            Ok(Self::entry(&key(loc), None))
+        }
+        async fn rename(&self, _from: &Location, _to: &Location) -> Result<Entry, Error> {
+            Err(Error::Unsupported("no rename in the store"))
+        }
+        async fn remove(&self, loc: &Location, _mode: RemoveMode) -> Result<(), Error> {
+            let path = key(loc);
+            let prefix = format!("{path}/");
+            lock(&self.files).retain(|k, _| *k != path && !k.starts_with(&prefix));
+            Ok(())
+        }
+        async fn link(&self, _t: &Location, _at: &Location, _k: LinkKind) -> Result<Entry, Error> {
+            Err(Error::Unsupported("no links in the store"))
+        }
+        async fn copy(
+            &self,
+            from: &Location,
+            to: &Location,
+            _opts: CopyOptions,
+            progress: ProgressSink,
+            _cancel: CancelToken,
+        ) -> Result<(), Error> {
+            let bytes = lock(&self.files)
+                .get(&key(from))
+                .cloned()
+                .ok_or(Error::NotFound)?;
+            let total = bytes.len() as u64;
+            lock(&self.files).insert(key(to), bytes);
+            progress.report(Progress::Bytes {
+                done: total,
+                total: Some(total),
+            });
+            Ok(())
+        }
+        async fn transfer(
+            &self,
+            items: &[Location],
+            to: &Location,
+            mode: TransferMode,
+            _progress: ProgressSink,
+            _cancel: CancelToken,
+        ) -> Result<(), Error> {
+            if mode == TransferMode::Copy && !self.copies {
+                return Err(Error::Unsupported("the store cannot copy by itself"));
+            }
+            lock(&self.transfers).push((mode, items.iter().map(key).collect(), key(to)));
+            let dir = key(to);
+            let mut files = lock(&self.files);
+            for item in items {
+                let from = key(item);
+                let name = from.rsplit('/').next().unwrap_or(&from).to_owned();
+                let moved: Vec<(String, Vec<u8>)> = files
+                    .iter()
+                    .filter(|(k, _)| **k == from || k.starts_with(&format!("{from}/")))
+                    .map(|(k, v)| (k.clone(), v.clone()))
+                    .collect();
+                for (k, v) in moved {
+                    let rest = &k[from.len()..];
+                    files.insert(format!("{dir}/{name}{rest}"), v);
+                    if mode == TransferMode::Move {
+                        files.remove(&k);
+                    }
+                }
+            }
+            Ok(())
+        }
+        fn watch(&self, _loc: &Location) -> Result<ChangeStream, Error> {
+            Err(Error::Unsupported("no watches in the store"))
+        }
+    }
+}
+
+/// Acceptance (issue 21): a move or copy within one provider instance
+/// with `NATIVE_TRANSFER` goes through the provider's `transfer`, in one
+/// call per target folder, and streams nothing through `open_read`; the
+/// undo of the move goes back the same way.
+#[test]
+fn a_transfer_within_a_native_provider_streams_nothing() {
+    let h = harness();
+    let store = native::Native::new(
+        true,
+        &[
+            ("/bucket/a.bin", &[1u8; 4096][..]),
+            ("/bucket/tree/inner.bin", &[2u8; 2048][..]),
+            ("/other/.keep", b""),
+        ],
+    );
+    h.mounts.mount(Arc::clone(&store) as Arc<dyn ext::Provider>);
+    let loc = |path: &str| Location::new(native::ID, path);
+
+    let outcome = super::transfer(
+        &h.jobs,
+        Arc::clone(&h.mounts),
+        Arc::clone(&h.conflicts),
+        Arc::clone(&h.scheduler),
+        &[loc("/bucket/a.bin"), loc("/bucket/tree")],
+        &loc("/other"),
+        TransferKind::Move,
+    )
+    .unwrap_or_else(|e| panic!("{e}"));
+    h.settle();
+    let ActionOutcome::Undoable(command) = outcome else {
+        panic!("{outcome:?}");
+    };
+    assert_eq!(
+        store.paths(),
+        ["/other/.keep", "/other/a.bin", "/other/tree/inner.bin"]
+    );
+    {
+        let transfers = store
+            .transfers
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        assert_eq!(
+            *transfers,
+            [(
+                ext::TransferMode::Move,
+                vec!["/bucket/a.bin".to_owned(), "/bucket/tree".to_owned()],
+                "/other".to_owned()
+            )],
+            "one call for the whole selection"
+        );
+    }
+    assert_eq!(
+        store.read_bytes.load(std::sync::atomic::Ordering::SeqCst),
+        0,
+        "nothing streamed through the machine"
+    );
+
+    // The undo moves back natively too: the items of one target folder
+    // in one call.
+    command.undo(&h.jobs).unwrap_or_else(|e| panic!("{e}"));
+    h.settle();
+    assert_eq!(
+        store.paths(),
+        ["/bucket/a.bin", "/bucket/tree/inner.bin", "/other/.keep"]
+    );
+    assert_eq!(
+        store
+            .transfers
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .len(),
+        2
+    );
+    assert_eq!(
+        store.read_bytes.load(std::sync::atomic::Ordering::SeqCst),
+        0
+    );
+
+    // A copy goes the same way.
+    let outcome = super::transfer(
+        &h.jobs,
+        Arc::clone(&h.mounts),
+        Arc::clone(&h.conflicts),
+        Arc::clone(&h.scheduler),
+        &[loc("/bucket/a.bin")],
+        &loc("/other"),
+        TransferKind::Copy,
+    )
+    .unwrap_or_else(|e| panic!("{e}"));
+    h.settle();
+    assert!(matches!(outcome, ActionOutcome::Started(_)), "{outcome:?}");
+    assert!(store.paths().contains(&"/other/a.bin".to_owned()));
+    assert!(store.paths().contains(&"/bucket/a.bin".to_owned()));
+    assert_eq!(
+        store.read_bytes.load(std::sync::atomic::Ordering::SeqCst),
+        0
+    );
+}
+
+/// A provider that answers `Unsupported` for a mode (an SFTP server
+/// renames but cannot copy) gets the kernel's path for it; a transfer to
+/// another provider is never native.
+#[test]
+fn a_mode_the_provider_cannot_transfer_falls_back_to_the_kernel() {
+    let h = harness();
+    let store = native::Native::new(false, &[("/bucket/a.bin", &[7u8; 1024][..])]);
+    h.mounts.mount(Arc::clone(&store) as Arc<dyn ext::Provider>);
+    let loc = |path: &str| Location::new(native::ID, path);
+    super::transfer(
+        &h.jobs,
+        Arc::clone(&h.mounts),
+        Arc::clone(&h.conflicts),
+        Arc::clone(&h.scheduler),
+        &[loc("/bucket/a.bin")],
+        &loc("/other"),
+        TransferKind::Copy,
+    )
+    .unwrap_or_else(|e| panic!("{e}"));
+    h.settle();
+    assert_eq!(store.paths(), ["/bucket/a.bin", "/other/a.bin"]);
+    assert!(
+        store
+            .transfers
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .is_empty(),
+        "the refused call is not recorded as a transfer"
+    );
+
+    // Into the local disk: the streamed path, every byte read.
+    let dst = h.dir.path().join("down");
+    fs::create_dir_all(&dst).unwrap_or_else(|e| panic!("{e}"));
+    super::transfer(
+        &h.jobs,
+        Arc::clone(&h.mounts),
+        Arc::clone(&h.conflicts),
+        Arc::clone(&h.scheduler),
+        &[loc("/bucket/a.bin")],
+        &tests_local(&dst),
+        TransferKind::Copy,
+    )
+    .unwrap_or_else(|e| panic!("{e}"));
+    h.settle();
+    assert_eq!(
+        fs::read(dst.join("a.bin")).map(|b| b.len()).ok(),
+        Some(1024)
+    );
+    assert_eq!(
+        store.read_bytes.load(std::sync::atomic::Ordering::SeqCst),
+        1024
+    );
+}
 #[test]
 fn open_with_lists_the_platforms_applications_and_remembers_the_choice() {
     let h = harness();

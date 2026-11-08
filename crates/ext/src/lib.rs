@@ -19,7 +19,11 @@
 //! version. The registry is also the extension context: it lends the
 //! host's [`platform`] services ([`Registry::platform`]) to an extension
 //! while it registers, and takes a provider for a virtual location,
-//! `rick://<name>`, through [`Registry::view`].
+//! `rick://<name>`, through [`Registry::view`]. A provider reached over a
+//! network registers a [`Connector`] beside itself ([`Registry::connector`]):
+//! the fields of its *Add connection…* dialogue and the calls behind
+//! *Connect*, *Disconnect* and *Remove* on its rows in the side panel
+//! ([`connection`]).
 //!
 //! Each module's documentation carries a worked example of its extension
 //! point; [`registry`] shows how one extension contributes to two of them,
@@ -35,6 +39,7 @@
 #![allow(clippy::module_name_repetitions)]
 
 pub mod action;
+pub mod connection;
 pub mod decorator;
 pub mod form;
 pub mod plugin;
@@ -49,6 +54,9 @@ pub use action::{
     Modifiers, PaneId, Selector, Shortcut, ShortcutParseError, UiHost, UndoCommand,
 };
 pub use async_trait::async_trait;
+pub use connection::{
+    Connection, ConnectionField, ConnectionFieldKind, ConnectionSchema, Connector, secret_key,
+};
 pub use decorator::{
     Badge, CellValue, Color, ColumnDef, ColumnId, DecorateCtx, Decoration, Decorator, PanelSection,
 };
@@ -61,7 +69,7 @@ pub use preview::{
 };
 pub use provider::{
     Capabilities, ChangeStream, CopyOptions, Depth, EntryStream, FsChange, LinkKind, ListOptions,
-    Provider, ReadHandle, RemoveMode, WriteHandle, WriteOptions,
+    Provider, ReadHandle, RemoveMode, TransferMode, WriteHandle, WriteOptions,
 };
 pub use registry::{
     API_VERSION, Extension, Manifest, Platforms, Points, Registry, SettingField, SettingKind,

@@ -1625,3 +1625,115 @@ Once answered, an entry keeps its number and gains a dated decision line.
     under `ext-action-terminal`, the issue says it "stays".
     Assumed: it stays `core.reveal` in the built-in core actions, so it
     works without the plugin; the terminal plugin holds Open console only.
+
+135. (issue 21) SPEC.md's milestone 5 and package layout replaced
+    `ext-vfs-sftp` with `ext-ssh` (`specs/ext-ssh.md`, shell commands over
+    `exec` channels, no SFTP); the issue, written against db17a20, asks for
+    `ext-vfs-sftp` through russh and russh-sftp, and so does the task.
+    Assumed: `ext-vfs-sftp` as the issue says, on the pieces the ssh spec
+    introduces for both (`platform::Secrets`, `Capabilities::REMOTE`, the
+    Network section's one row per connection), so `ext-ssh` lands on the
+    same foundations when its turn comes. Its connection dialogue asks for
+    host, port, user, key file, key passphrase, password and the remote
+    folder the connection opens at (the login folder when empty). Host keys
+    follow `~/.ssh/known_hosts` with OpenSSH semantics through russh: an
+    unknown host is learnt and recorded with a log line, a changed key is
+    refused with its fingerprint; the ssh spec's two dialogues, agent
+    authentication, jump hosts and `~/.ssh/config` are `ext-ssh`'s. The
+    listing streams packet by packet through a raw SFTP session of its own
+    beside the one the files use; `copy` within a host streams through the
+    machine (the protocol has no copy) and `transfer` answers `Unsupported`
+    for a copy, so the kernel's path takes it; a move is a remote rename.
+
+136. (issue 21) The issue wants connections in `rick.toml` with secrets in
+    the keychain and connect, disconnect and remove on the row's menu, and
+    a plugin depends on `ext` and `types` only (Module rules 2): it can
+    neither write `rick.toml` nor draw a dialogue, and the `Provider`
+    contract has no connections.
+    Assumed: `ext` gains the connection contract (API version 7): a
+    `Connector` a network provider registers beside its provider
+    (`Registry::connector`, part of the provider point) with a
+    `ConnectionSchema` (the dialogue's fields: text, integer, bool, path,
+    secret), `update` (the connections as the application keeps them, at
+    start and after every change), `connect`, `disconnect` and
+    `is_connected`. The application owns the list: the non-secret fields
+    are `[[connections]]` tables of `rick.toml` with `provider`, `name`
+    and the fields inline, a `Secret` field goes to the keychain under
+    `<provider>/<connection>/<field>` as a job (a keychain may ask to be
+    unlocked) before the table is written, and the connector is handed the
+    list; `Remove` deletes the table and the keys. The side panel builds
+    the *Add connection…* dialogue from the schema (the name, then the
+    fields, secrets masked), offered in the section header's context menu
+    per plugin and by the *Add…* row of an empty section; a connection
+    row's menu offers *Connect* or *Disconnect* and *Remove connection*.
+    The Network section lists what the network providers list at their
+    roots, as Cloud does (87); `vfs-rick` keeps the id lists of 87 for
+    which section a provider belongs to.
+
+137. (issue 21) `transfer()` joins the `Provider` trait as the spec writes
+    it, and the trait's other implementers (local, archive, trash, the
+    tests' providers) have no native transfer.
+    Assumed: a default body answering `Unsupported`, so every provider
+    keeps compiling; `ops` lands each pair through the conflict policy as
+    before and hands the provider, in one call per target folder, the
+    items whose source and target resolve to the same provider instance
+    with `NATIVE_TRANSFER` at both ends, land under their own name and
+    overwrite nothing; a provider that answers `Unsupported` (SFTP for a
+    copy) gets the kernel's path for those items, any other error fails
+    the job. Overwrites and renamed landings keep the kernel's path. The
+    undo of a move goes back the same way.
+
+138. (issue 21) Folders in an object store, and the spec's "no rename".
+    Assumed: a folder is a zero-byte object whose key ends in `/` (the
+    consoles' convention), listed through the service's delimiter as a
+    common prefix and never shown as a file; a folder's `stat` is a
+    one-key listing under its prefix; deleting a folder deletes every
+    object under it, deleting a bucket or container empties it first; the
+    bucket level offers `WRITE` (a new folder there is a new bucket) and
+    nothing moves into it natively. `RENAME` is not set, so F2 hides, and
+    a move within the account is the service's copy per object then a
+    delete, across buckets or containers of the account too; across two
+    connections the kernel streams. S3's `CopyObject` stops at 5 GB per
+    object, the service's limit; a larger object needs `UploadPartCopy`,
+    left for when someone has one. Uploads stream in 8 MiB parts, blocks
+    or chunks through a pipe to an upload task; dropping the writer before
+    `shutdown` aborts the S3 multipart upload, leaves Azure's blocks
+    uncommitted and abandons the GCS session, so a cancelled copy leaves
+    no object. The GCS connection's secret is the service account's key
+    file, its JSON or its path, exchanged for a bearer token through a
+    JWT signed with ring; no key means unauthenticated requests, which an
+    emulator takes. Downloads are streamed `GET`s; readers do not seek.
+
+139. (issue 21) The kernel's tokio runtime was built with its time driver
+    only; russh and reqwest need the I/O driver.
+    Assumed: `runtime` enables it (`enable_io`), the one runtime of the
+    process driving the network providers' sockets too (81).
+
+140. (issue 21) "Remote-latency behaviour (no eager stat, no thumbnails by
+    default)" for the network providers.
+    Assumed: `Capabilities::REMOTE` as the ssh spec names it; the kernel
+    answers `Thumbnail` with nothing for an entry of a provider with it,
+    and the connection rows of the side panel are synthesised without
+    connecting (a connection's `stat` and the root listing never touch
+    the network), so a panel full of connections opens nothing until one
+    is clicked or *Connect* is picked. The preview size caps of the ssh
+    spec are not built here.
+
+141. (issue 21) The acceptance names containers for Linux CI and "where
+    Docker is available" for the other runners.
+    Assumed: tier 1 and the Linux x64 job of tier 2 start MinIO (Bitnami's
+    frozen `bitnamilegacy/minio:2025.7.23-debian-12-r5`, since MinIO's
+    community edition is source only and Docker Hub's `minio/minio` is
+    gone), Azurite, fake-gcs-server and atmoz/sftp with `docker run`
+    (`.github/scripts/containers.sh`), name them to the tests through
+    `RICK_S3_ENDPOINT` and friends and set `RICK_REQUIRE_CONTAINERS`, so a
+    round trip that would skip for a missing variable fails there; the
+    plugins' round trips live in their crates' unit tests, the kernel
+    pipeline (a 100 MB upload with progress, cancelled half-way leaving no
+    object) in `tests`; macOS, Windows and Linux arm64 skip them with a
+    note. The sshd container's user is chrooted, so the connection's
+    folder is its writable `upload`. The in-account byte counter runs on
+    every OS through the in-memory provider's native mode, and the
+    plugins' own round trips assert the moves land without the machine
+    reading the objects.
+
