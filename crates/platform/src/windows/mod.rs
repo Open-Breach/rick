@@ -2,8 +2,11 @@
 //! shell Properties dialogue, `%APPDATA%\Rick`, the drives from
 //! `GetLogicalDrives` with `GetVolumeInformationW` and `GetDiskFreeSpaceExW`
 //! and ejected through `DeviceIoControl`, the known folders through
-//! `SHGetKnownFolderPath`, and the Recent folder's shortcuts resolved with
-//! `IShellLinkW`.
+//! `SHGetKnownFolderPath`, the Recent folder's shortcuts resolved with
+//! `IShellLinkW`, and drag and drop through OLE's `DoDragDrop` and the
+//! cursor position.
+
+mod drag;
 
 use std::ffi::c_void;
 use std::fs;
@@ -43,9 +46,9 @@ use windows::core::{GUID, Interface, PCWSTR, PWSTR, w};
 use crate::Native;
 use crate::fs::windows::{filetime, io_error, wide};
 use crate::traits::{
-    Chrome, ConfigDir, ControlsSide, DragSource, OpenWith, Properties, PropertiesOutcome,
-    RecentItem, RecentlyUsed, StandardFolder, StandardFolders, Trash, TrashedItem, Volume,
-    VolumeKind, Volumes, WindowChrome,
+    Chrome, ConfigDir, ControlsSide, DragSource, DropTarget, IncomingFiles, OpenWith, Point,
+    Properties, PropertiesOutcome, RecentItem, RecentlyUsed, StandardFolder, StandardFolders,
+    Trash, TrashedItem, Volume, VolumeKind, Volumes, WindowChrome, WindowRef,
 };
 
 /// `System.Recycle.DeletedFrom`: the folder a recycled item came from.
@@ -669,15 +672,29 @@ impl Chrome for Native {
 }
 
 impl DragSource for Native {
-    /// Not available yet: OLE's `DoDragDrop` must run on the thread that owns
-    /// the window and pumps its messages while the drag lasts, with an
-    /// `IDropSource` of Rick's own; `eframe` 0.36 owns that loop and gives
-    /// Rick no hook into it, exposing drop reception only (QUESTIONS.md).
-    fn start_drag(&self, paths: &[PathBuf]) -> Result<(), Error> {
-        let uris: Vec<String> = paths.iter().map(|p| crate::paths::file_uri(p)).collect();
-        tracing::debug!(?uris, "platform drag not started");
-        Err(Error::Unsupported(
-            "starting a drag needs OLE's DoDragDrop on the window's message loop, which eframe owns",
-        ))
+    /// Nothing to prepare: OLE is initialised for the window's thread by
+    /// winit.
+    fn attach(&self, _window: &WindowRef, _wake: std::sync::Arc<dyn Fn() + Send + Sync>) {}
+
+    /// `DoDragDrop` with the files as a `CF_HDROP`, offering copy, move and
+    /// link; returns when the drag has ended, since OLE runs its loop here.
+    fn start_drag(&self, window: &WindowRef, paths: &[PathBuf]) -> Result<(), Error> {
+        drag::start_drag(window, paths)
+    }
+
+    fn drag_in_progress(&self) -> bool {
+        drag::drag_in_progress()
+    }
+}
+
+impl DropTarget for Native {
+    /// winit's drop target receives the drops and hands them to egui.
+    fn incoming_files(&self) -> IncomingFiles {
+        IncomingFiles::default()
+    }
+
+    /// The cursor over the window's client area, at the window's DPI.
+    fn drop_position(&self, window: &WindowRef) -> Option<Point> {
+        drag::drop_position(window)
     }
 }

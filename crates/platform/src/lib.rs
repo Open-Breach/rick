@@ -2,10 +2,18 @@
 //!
 //! Other crates program against the traits here and never against an
 //! operating system: [`Trash`], [`OpenWith`], [`Properties`], [`ConfigDir`],
-//! [`NativeDialogs`], [`Clipboard`], [`Chrome`], [`DragSource`], [`Volumes`],
-//! [`StandardFolders`] and [`RecentlyUsed`], bundled as [`Platform`]. [`Native`] is the real
-//! implementation for the OS the binary runs on; [`Fake`] is the one tests
-//! use, with a private trash directory and recorded calls.
+//! [`NativeDialogs`], [`Clipboard`], [`Chrome`], [`DragSource`],
+//! [`DropTarget`], [`Volumes`], [`StandardFolders`] and [`RecentlyUsed`],
+//! bundled as [`Platform`]. [`Native`] is the real implementation for the OS
+//! the binary runs on; [`Fake`] is the one tests use, with a private trash
+//! directory and recorded calls.
+//!
+//! Drag and drop across processes is split between the windowing backend
+//! and this crate: `winit` receives drops on macOS, Windows and X11 and
+//! hands them to egui without a cursor position, so [`DropTarget`] supplies
+//! the position (and, on Wayland, where `winit` 0.30 receives nothing, the
+//! files too); [`DragSource`] starts the drag the other way, from the
+//! window the backend describes through a [`WindowRef`] of raw handles.
 //!
 //! The [`fs`] module holds the filesystem fast paths the local provider
 //! needs and no portable API offers: the bulk directory reader, the native
@@ -25,6 +33,10 @@
 
 mod clipboard;
 mod dialogs;
+// The URI list is written and read on Linux only; macOS and Windows hand
+// the OS paths and get paths back. The tests exercise it everywhere.
+#[cfg_attr(not(any(target_os = "linux", test)), allow(dead_code))]
+mod dnd;
 mod fake;
 pub mod fs;
 pub mod paths;
@@ -49,10 +61,14 @@ compile_error!("Rick supports Linux, macOS and Windows");
 
 pub use async_trait::async_trait;
 pub use fake::{FAKE_STANDARD_FOLDERS, Fake};
+/// Re-exported so the UI can build a [`WindowRef`] from the handles its
+/// windowing backend gives out without depending on the crate itself.
+pub use raw_window_handle;
 pub use traits::{
-    Chrome, Clipboard, ConfigDir, ControlsSide, DialogFilter, DragSource, NativeDialogs, OpenWith,
-    Platform, Properties, PropertiesOutcome, RecentItem, RecentlyUsed, StandardFolder,
-    StandardFolders, Trash, TrashedItem, Volume, VolumeKind, Volumes, WindowChrome,
+    Chrome, Clipboard, ConfigDir, ControlsSide, DialogFilter, DragSource, DropTarget,
+    IncomingFiles, NativeDialogs, OpenWith, Platform, Point, Properties, PropertiesOutcome,
+    RecentItem, RecentlyUsed, StandardFolder, StandardFolders, Trash, TrashedItem, Volume,
+    VolumeKind, Volumes, WindowChrome, WindowRef,
 };
 pub use trash_record::TRASH_FILE;
 

@@ -100,6 +100,8 @@ libloading = "0.8"
 notify = "8"
 objc2 = "0.6"
 objc2-foundation = { version = "0.3", default-features = false }
+objc2-app-kit = { version = "0.3", default-features = false }
+raw-window-handle = "0.6"
 rayon = "1"
 rfd = { version = "0.16", default-features = false }
 rustix = { version = "1", default-features = false }
@@ -112,7 +114,16 @@ thiserror = "2"
 tokio = { version = "1", default-features = false }
 toml = "0.9"
 tracing = "0.1"
+# The Linux drag source and drop target (issue 25): the Wayland data device
+# over winit's own libwayland connection, the XDND messages over an X11
+# connection of Rick's own. Both match what winit links: wayland-client's
+# system backend without dlopen, x11rb's Rust connection.
+wayland-client = { version = "0.31", features = ["system"] }
+wayland-backend = { version = "0.3", features = ["client_system"] }
+x11rb = "0.13"
 windows = "0.62"
+# Named directly for the `implement` macro, which spells out its paths.
+windows-core = "0.62"
 
 [workspace.lints.clippy]
 pedantic = { level = "warn", priority = -1 }
