@@ -5,11 +5,14 @@
 workspace with its examples and lays out `target/<profile>/bundle/`
 (QUESTIONS.md 84): the
 `rick` binary, the kernel dylibs `types`, `runtime` and `ext` and the
-`libstd` they need beside it, pdfium when `RICK_PDFIUM_DIR` names it, and
+`libstd` they need beside it, pdfium when `RICK_PDFIUM_DIR` names it,
 `plugins/<id>/plugin.toml` with the library for every plugin crate (an
-`ext-*` member built as a `cdylib`), so that running `rick` from there finds
-every plugin with nothing copied by hand; the release workflow archives the
-same directory. It depends on `serde_json` only and on no kernel crate: it
+`ext-*` member built as a `cdylib`), and the 7-Zip library with its licence
+into `plugins/vfs-archive/` beside the archive plugin when
+`RICK_SEVENZIP_DIR` names the directory holding it
+(`.github/scripts/sevenzip.sh` fills one), so that running `rick` from
+there finds every plugin with nothing copied by hand; the release workflow
+archives the same directory. It depends on `serde_json` only and on no kernel crate: it
 drives `cargo build --workspace --exclude xtask --lib --bins --examples`
 and the workspace's own
 `rick-plugin-manifest` helper, since a build of a smaller package set would

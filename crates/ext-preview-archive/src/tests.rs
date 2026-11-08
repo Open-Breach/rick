@@ -573,11 +573,15 @@ fn open_lists_through_the_provider_and_renders_text() {
     assert_eq!(doc.pages(), None);
 }
 
-/// The 7-Zip library from the usual locations, for the disk-image tests;
-/// `None` with a note otherwise, a failure where CI requires it.
+/// The 7-Zip library for the disk-image tests: the one CI put in
+/// `RICK_SEVENZIP_DIR` (test infrastructure; the plugin itself reads no
+/// environment variable), else the platform's usual locations; `None`
+/// with a note otherwise, a failure where CI requires it.
 fn sevenzip_library() -> Option<std::path::PathBuf> {
-    let found = ext::platform::sevenzip::usual_locations()
+    let found = std::env::var_os("RICK_SEVENZIP_DIR")
+        .map(|dir| std::path::PathBuf::from(dir).join(ext::platform::sevenzip::LIBRARY_FILE))
         .into_iter()
+        .chain(ext::platform::sevenzip::usual_locations())
         .find(|p| p.is_file());
     if found.is_none() {
         eprintln!("no 7-Zip library on this machine; the disk image tests are skipped");
@@ -641,9 +645,9 @@ fn disk_images_are_detected_by_signature_or_name() {
 fn every_disk_image_fixture_lists_its_files_through_the_library() {
     use ext::platform::ImageFormat;
     use ext_vfs_archive::fixtures as disks;
-    if sevenzip_library().is_none() {
+    let Some(library) = sevenzip_library() else {
         return;
-    }
+    };
     let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
     let fat = disks::fat12_image();
     let fixtures = [
@@ -654,7 +658,10 @@ fn every_disk_image_fixture_lists_its_files_through_the_library() {
     ];
     let fake = Arc::new(platform::Fake::new().unwrap_or_else(|e| panic!("{e}")));
     let provider: Arc<dyn Provider> = Arc::new(vfs_local::LocalProvider::new(fake.clone()));
-    let previewer = ArchivePreviewer::new(Arc::new(Resolver::new(Some(fake))));
+    let previewer = ArchivePreviewer::new(Arc::new(Resolver::with_locations(
+        Some(fake),
+        vec![library],
+    )));
     for (name, bytes, image) in fixtures {
         let path = write(dir.path(), name, &bytes);
         let listed = list(previewer.resolver(), &path, Format::Disk(image), &limit())

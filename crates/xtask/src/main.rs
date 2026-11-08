@@ -7,9 +7,13 @@
 //! when `RICK_PDFIUM_DIR` names it, the GStreamer runtime when
 //! `RICK_GSTREAMER_DIR` names it (QUESTIONS.md 106: on macOS into
 //! `gstreamer/lib/`, on Windows the DLLs beside the binary and the
-//! elements into `gstreamer-1.0/`; Linux uses the system's), and
+//! elements into `gstreamer-1.0/`; Linux uses the system's),
 //! `plugins/<id>/plugin.toml` with the library for every plugin crate (an
-//! `ext-*` member built as a `cdylib`) whose manifest names this platform;
+//! `ext-*` member built as a `cdylib`) whose manifest names this platform,
+//! and the 7-Zip library (`7z.so` / `7z.dll`, LGPL) with its licence into
+//! `plugins/vfs-archive/` beside the archive plugin when
+//! `RICK_SEVENZIP_DIR` names the directory holding it (SPEC.md
+//! "Third-party libraries"; `.github/scripts/sevenzip.sh` fills one);
 //! a plugin built for other platforms only (the Spotlight connector on
 //! Linux) is left out and said so (QUESTIONS.md 121). `--features` is
 //! handed to the build as is (`--features ext-preview-media/gstreamer`
@@ -31,6 +35,12 @@ type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 
 const KERNEL_DYLIBS: [&str; 3] = ["types", "runtime", "ext"];
 const PDFIUM_FILES: [&str; 3] = ["libpdfium.so", "libpdfium.dylib", "pdfium.dll"];
+/// The 7-Zip library's names, and the plugin it travels beside.
+const SEVENZIP_FILES: [&str; 2] = ["7z.so", "7z.dll"];
+const SEVENZIP_PLUGIN: &str = "vfs-archive";
+/// The licence file beside the library in `RICK_SEVENZIP_DIR`, and its
+/// name in the bundle.
+const SEVENZIP_LICENSE: (&str, &str) = ("License.txt", "7-Zip-License.txt");
 /// The manifest helper's exit code for a plugin built for other platforms.
 const NOT_FOR_THIS_PLATFORM: i32 = 3;
 
@@ -158,7 +168,34 @@ fn bundle(args: &[String]) -> Result<()> {
             plugins_dir.join(&id).display()
         );
     }
+    match std::env::var_os("RICK_SEVENZIP_DIR") {
+        Some(dir) => sevenzip(Path::new(&dir), &plugins_dir)?,
+        None => println!("7-zip: RICK_SEVENZIP_DIR not set; the library is not bundled"),
+    }
     println!("bundle: {}", out.display());
+    Ok(())
+}
+
+/// Copies the 7-Zip library and its licence from `dir` into the archive
+/// plugin's folder, where the plugin looks for it first after its setting.
+fn sevenzip(dir: &Path, plugins_dir: &Path) -> Result<()> {
+    let target = plugins_dir.join(SEVENZIP_PLUGIN);
+    std::fs::create_dir_all(&target)?;
+    let library = SEVENZIP_FILES
+        .iter()
+        .map(|file| dir.join(file))
+        .find(|path| path.is_file())
+        .ok_or_else(|| format!("no {} in {}", SEVENZIP_FILES.join(" or "), dir.display()))?;
+    copy(&library, &target)?;
+    let (source, name) = SEVENZIP_LICENSE;
+    let license = dir.join(source);
+    if license.is_file() {
+        std::fs::copy(&license, target.join(name))
+            .map_err(|e| format!("copying {}: {e}", license.display()))?;
+    } else {
+        println!("7-zip: no {source} beside the library; the licence is not bundled");
+    }
+    println!("7-zip: {} into {}", library.display(), target.display());
     Ok(())
 }
 

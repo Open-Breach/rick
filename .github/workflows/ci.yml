@@ -116,7 +116,8 @@ jobs:
       # workspace (QUESTIONS.md 81).
       - run: cargo xtask bundle ${{ env.RICK_WS_FEATURES }}
       # Every plugin built for this platform loads through --list-plugins;
-      # the connectors for the other platforms are not bundled (issue 22).
+      # the connectors for the other platforms are not bundled (issue 22);
+      # the 7-Zip library sits beside the archive plugin (issue 51).
       - name: list plugins
         run: .github/scripts/check-plugins.sh target/debug/bundle
   tier1:

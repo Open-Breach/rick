@@ -1578,11 +1578,12 @@ impl Archive {
 mod tests {
     use super::*;
 
-    /// The library, from the usual locations or `RICK_SEVENZIP_LIBRARY`,
-    /// for the tests that need it; `None` with a note otherwise.
+    /// The library for the tests that need it: the one CI put in
+    /// `RICK_SEVENZIP_DIR` (test infrastructure), else the usual
+    /// locations; `None` with a note otherwise.
     fn library() -> Option<Arc<SevenZip>> {
-        let path = std::env::var_os("RICK_SEVENZIP_LIBRARY")
-            .map(PathBuf::from)
+        let path = std::env::var_os("RICK_SEVENZIP_DIR")
+            .map(|dir| PathBuf::from(dir).join(LIBRARY_FILE))
             .into_iter()
             .chain(usual_locations())
             .find(|p| p.is_file());

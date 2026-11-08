@@ -2,9 +2,10 @@ name: setup
 description: >-
   The Rust toolchain of rust-toolchain.toml with the requested components,
   the cargo cache, the Linux system packages the previewers need, the
-  software graphics adapter the 3D previewer's tests render on, and pdfium
-  for the PDF previewer. Shared by the ci, full and bench workflows (issue
-  35); release.yml has its own steps.
+  software graphics adapter the 3D previewer's tests render on, pdfium
+  for the PDF previewer and the 7-Zip library for the disk images. Shared
+  by the ci, full and bench workflows (issue 35); release.yml has its own
+  steps.
 inputs:
   components:
     description: Toolchain components to add, comma-separated (rustfmt, clippy).
@@ -36,6 +37,17 @@ inputs:
       Bind pdfium for the PDF previewer: the release binary for this runner
       in RICK_PDFIUM_DIR, with RICK_REQUIRE_PDFIUM set so its tests fail
       rather than skip when the binding is missing.
+    required: false
+    default: "true"
+  sevenzip:
+    description: >-
+      The 7-Zip library the disk images are read with (issue 51), in
+      RICK_SEVENZIP_DIR for `cargo xtask bundle` and the tests, with
+      RICK_REQUIRE_SEVENZIP set so the disk-image tests fail rather than
+      skip without it: the distribution's 7zip package on Linux, the
+      runner's 7-Zip installation on Windows, 7z.so built from the pinned
+      sources on macOS (cached per release and architecture); see
+      .github/scripts/sevenzip.sh.
     required: false
     default: "true"
 runs:
@@ -106,6 +118,42 @@ runs:
       if: runner.os == 'Windows' && inputs.system == 'test'
       shell: bash
       run: echo "RICK_REQUIRE_WGPU=1" >> "$GITHUB_ENV"
+    - name: 7-zip library (linux)
+      if: inputs.sevenzip == 'true' && runner.os == 'Linux'
+      shell: bash
+      run: |
+        .github/scripts/sevenzip.sh "$RUNNER_TEMP/sevenzip"
+        echo "RICK_SEVENZIP_DIR=$RUNNER_TEMP/sevenzip" >> "$GITHUB_ENV"
+        echo "RICK_REQUIRE_SEVENZIP=1" >> "$GITHUB_ENV"
+    - name: 7-zip library (windows)
+      if: inputs.sevenzip == 'true' && runner.os == 'Windows'
+      shell: bash
+      run: |
+        # The runner image carries 7-Zip; its 7z.dll and License.txt are
+        # what the installer puts there.
+        dir="$(cygpath -u "$ProgramFiles")/7-Zip"
+        if [ ! -f "$dir/7z.dll" ]; then
+          .github/scripts/sevenzip.sh "$(cygpath -u "$RUNNER_TEMP")/sevenzip"
+          dir="$(cygpath -u "$RUNNER_TEMP")/sevenzip"
+        fi
+        echo "RICK_SEVENZIP_DIR=$(cygpath -w "$dir")" >> "$GITHUB_ENV"
+        echo "RICK_REQUIRE_SEVENZIP=1" >> "$GITHUB_ENV"
+    - name: 7-zip library cache (macos)
+      if: inputs.sevenzip == 'true' && runner.os == 'macOS'
+      id: sevenzip-cache
+      uses: actions/cache@v4
+      with:
+        path: ${{ runner.temp }}/sevenzip
+        key: sevenzip-25.01-${{ runner.os }}-${{ runner.arch }}
+    - name: 7-zip library (macos)
+      if: inputs.sevenzip == 'true' && runner.os == 'macOS'
+      shell: bash
+      run: |
+        if [ "${{ steps.sevenzip-cache.outputs.cache-hit }}" != "true" ]; then
+          .github/scripts/sevenzip.sh "$RUNNER_TEMP/sevenzip"
+        fi
+        echo "RICK_SEVENZIP_DIR=$RUNNER_TEMP/sevenzip" >> "$GITHUB_ENV"
+        echo "RICK_REQUIRE_SEVENZIP=1" >> "$GITHUB_ENV"
     - name: pdfium
       if: inputs.pdfium == 'true'
       shell: bash

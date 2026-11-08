@@ -776,11 +776,15 @@ fn extraction_skips_what_the_caller_says_and_refuses_climbing_paths() {
     assert!(!out.exists());
 }
 
-/// The 7-Zip library, from the usual locations, for the tests that need
-/// it; `None` with a note otherwise, a failure where CI requires it.
+/// The 7-Zip library for the tests that need it: the one CI put in
+/// `RICK_SEVENZIP_DIR` (test infrastructure; the plugin itself reads no
+/// environment variable), else the platform's usual locations; `None`
+/// with a note otherwise, a failure where CI requires it.
 fn sevenzip_library() -> Option<PathBuf> {
-    let found = ext::platform::sevenzip::usual_locations()
+    let found = std::env::var_os("RICK_SEVENZIP_DIR")
+        .map(|dir| PathBuf::from(dir).join(ext::platform::sevenzip::LIBRARY_FILE))
         .into_iter()
+        .chain(ext::platform::sevenzip::usual_locations())
         .find(|p| p.is_file());
     if found.is_none() {
         eprintln!("no 7-Zip library on this machine; the disk image tests are skipped");
@@ -832,7 +836,10 @@ fn disk_images_list_and_read_through_the_library_and_the_setting_remembers_it() 
     };
     let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
     let fake = Arc::new(platform::Fake::new().unwrap_or_else(|e| panic!("{e}")));
-    let resolver = Arc::new(Resolver::new(Some(fake.clone())));
+    let resolver = Arc::new(Resolver::with_locations(
+        Some(fake.clone()),
+        vec![library.clone()],
+    ));
     let provider = ArchiveProvider::with_resolver(Arc::clone(&resolver));
     assert!(!resolver.is_loaded(), "nothing is probed at start");
     for (path, format) in disk_fixtures(dir.path()) {
