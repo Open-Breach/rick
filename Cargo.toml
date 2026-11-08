@@ -35,6 +35,7 @@ ext-preview-archive = { path = "crates/ext-preview-archive" }
 ext-preview-csv = { path = "crates/ext-preview-csv" }
 ext-vfs-sftp = { path = "crates/ext-vfs-sftp" }
 ext-vfs-s3 = { path = "crates/ext-vfs-s3" }
+ext-vfs-azure = { path = "crates/ext-vfs-azure" }
 plugins-native = { path = "crates/plugins-native" }
 plugin-probe = { path = "crates/plugin-probe" }
 plugin-panic = { path = "crates/plugin-panic" }
