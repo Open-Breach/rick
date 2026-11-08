@@ -106,6 +106,9 @@ fn bundle(args: &[String]) -> Result<()> {
     std::fs::create_dir_all(&plugins_dir)?;
 
     copy(&profile_dir.join(exe("rick")), &out)?;
+    // The privileged helper lives beside the binary, where Rick looks for
+    // it (`platform::perms::helper_path`).
+    copy(&profile_dir.join(exe("rick-perms")), &out)?;
     for name in KERNEL_DYLIBS {
         copy(&profile_dir.join(dylib(name)), &out)?;
     }
