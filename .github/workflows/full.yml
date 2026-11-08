@@ -27,7 +27,7 @@ env:
   CHECKOUT_REF: ${{ github.event_name == 'schedule' && 'dev' || '' }}
 jobs:
   changes:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 5
     outputs:
       code: ${{ steps.filter.outputs.code }}
@@ -45,7 +45,7 @@ jobs:
       # the point of the matrix.
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, ubuntu-24.04-arm, macos-latest, windows-latest]
+        os: [ubuntu-24.04, ubuntu-24.04-arm, macos-latest, windows-latest]
     runs-on: ${{ matrix.os }}
     # The Windows runner spends about 15 minutes on the steps and several
     # more saving the cache, which the shared libraries and the plugin
@@ -68,14 +68,14 @@ jobs:
       - run: cargo fmt --check
       # No Unicode symbol character is used as an icon (SPEC.md "Icons").
       - run: "! grep -rnP '(*UTF8)[\\x{2190}-\\x{2BFF}\\x{1F300}-\\x{1FAFF}]' crates/ui-egui/src"
-        if: matrix.os == 'ubuntu-latest'
+        if: matrix.os == 'ubuntu-24.04'
       - run: cargo clippy --workspace --all-targets ${{ env.RICK_WS_FEATURES }} -- -D warnings
       # Issues 21 and 34: the provider plugins' round trips run against
       # MinIO, Azurite, fake-gcs-server and the sshd containers on Linux x64,
       # where Docker is; macOS, Windows and Linux arm64 run the plugins' unit
       # tests and skip the round trips with a note.
       - name: storage and ssh containers
-        if: matrix.os == 'ubuntu-latest'
+        if: matrix.os == 'ubuntu-24.04'
         run: .github/scripts/containers.sh
       # Linux runs the tests with Tracker and Baloo indexing a fixture
       # directory on a private session bus; macOS and Windows have their
@@ -103,7 +103,7 @@ jobs:
       # takes a minute; what they check is not the platform's. The timed
       # tests on the fixture are bench.yml's.
       - name: integration tests on the 200k fixture
-        if: matrix.os == 'ubuntu-latest'
+        if: matrix.os == 'ubuntu-24.04'
         run: cargo test -p tests --release ${{ env.RICK_TESTS_FEATURES }} --test closeout --test side_panel -- --ignored --nocapture --test-threads=1 a_new_text_cancels_the_running_walk_on_the_200k_fixture progress_over_the_200k_fixture_is_throttled_to_twenty_events_a_second
         env: { TMP: "${{ runner.temp }}", TEMP: "${{ runner.temp }}", TMPDIR: "${{ runner.temp }}" }
       # Screenshots of the chrome for the pull request, through wgpu on the
@@ -112,14 +112,14 @@ jobs:
       # crashed the test process once in four runs (run 42314323512), and
       # a screenshot step that fails by chance would block a release.
       - name: screenshots
-        if: matrix.os == 'ubuntu-latest' || runner.os == 'macOS'
+        if: matrix.os == 'ubuntu-24.04' || runner.os == 'macOS'
         shell: bash
         run: |
           if [ "$RUNNER_OS" = "Linux" ]; then sudo apt-get install -y mesa-vulkan-drivers; fi
           cargo test -p tests --release ${{ env.RICK_TESTS_FEATURES }} --features screenshots --test screenshots -- --ignored --nocapture
         env: { TMP: "${{ runner.temp }}", TEMP: "${{ runner.temp }}", TMPDIR: "${{ runner.temp }}", WGPU_BACKEND: "${{ runner.os == 'macOS' && 'metal' || 'vulkan' }}" }
       - uses: actions/upload-artifact@v4
-        if: always() && (matrix.os == 'ubuntu-latest' || runner.os == 'macOS')
+        if: always() && (matrix.os == 'ubuntu-24.04' || runner.os == 'macOS')
         with:
           name: screenshots-${{ runner.os }}
           path: target/screenshots/
@@ -127,7 +127,7 @@ jobs:
   deny:
     needs: changes
     if: needs.changes.outputs.code == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
@@ -139,7 +139,7 @@ jobs:
     # was skipped for a docs-only change, red on any failure.
     needs: [changes, check, deny]
     if: always()
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
       - env: { RESULTS: "${{ toJSON(needs) }}" }
