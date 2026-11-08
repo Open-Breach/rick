@@ -483,9 +483,9 @@ mod tests {
         assert_eq!(detect(16), &[Algorithm::Md5]);
         assert_eq!(detect(20), &[Algorithm::Sha1]);
         assert_eq!(detect(32), &[Algorithm::Sha256, Algorithm::Blake3]);
-        assert!(detect(0).is_empty());
-        assert!(detect(5).is_empty());
-        assert!(detect(64).is_empty());
+        assert_eq!(detect(0), [] as [Algorithm; 0]);
+        assert_eq!(detect(5), [] as [Algorithm; 0]);
+        assert_eq!(detect(64), [] as [Algorithm; 0]);
     }
 
     #[test]
