@@ -30,7 +30,11 @@ bar, bytes or items done of total, throughput and remaining time, the
 up to a cap), the conflict dialogue, the question dialogue an extension asks through, the
 Properties dialogue (the general rows and, for a local entry, its owner,
 group, mode bits and ACL edited in place, applied to the enclosed entries
-too when asked), the context menu and command palette
+too when asked), the Hash dialogue (a block per selected file with the
+MD5, SHA-1, SHA-256 and BLAKE3 rows, each with a read-only monospace value
+and Copy, then Copy all; byte progress and Cancel while the job runs; the
+format toggle and the Verify field, compared live against every row of
+the pasted length), the context menu and command palette
 built from the action registry, the keyboard shortcut table, the Settings
 (the language row among the rows) and Keyboard shortcuts screens, and drag and drop of entries: rows are drag
 sources, folders, pane space, breadcrumb segments and tab headers are drop

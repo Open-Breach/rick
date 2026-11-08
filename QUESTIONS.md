@@ -2250,3 +2250,21 @@ Once answered, an entry keeps its number and gains a dated decision line.
     not meet them: cancelling the sparse copy on macOS (80 ms, was 50 ms)
     and the fixture on Windows (45 s, was the spec's 30 s, QUESTIONS.md 5's
     Defender case); `BENCHMARKS.md` says why beside each table.
+
+189. (issue 54) The Compute hash paragraph puts the format toggle and the
+    Verify field under the rows of a dialogue and says a selection of
+    several files shows one block per file, without saying whether each
+    block has its own toggle and field or the dialogue has one of each.
+    Assumed: one format toggle and one Verify field for the whole dialogue,
+    under the blocks; the format applies to every block, and the pasted
+    value is compared against every block's rows of its length, since a
+    download page's hash belongs to one of the files and the dialogue shows
+    which. Each block keeps its own *Copy all*, which copies that file's
+    four lines.
+190. (issue 54) The paragraph hides Compute hash on folders and says what
+    it hashes are files; it does not say what a symbolic link in the
+    selection is. Assumed: the entry shows only when every selected entry
+    is a plain file (`EntryKind::File`), so a symlink, whatever it points
+    at, hides it like a folder does; following links to their targets can
+    come with a spec change.
+
