@@ -2098,8 +2098,13 @@ impl App {
                     text: format!("Copying {what}; a copy cannot be undone"),
                 });
             }
-            // A transfer moves or copies; it selects and opens nothing.
-            Ok(ActionOutcome::Done | ActionOutcome::Select(_) | ActionOutcome::View(_)) => {}
+            // A transfer moves or copies; it selects, opens and navigates nothing.
+            Ok(
+                ActionOutcome::Done
+                | ActionOutcome::Select(_)
+                | ActionOutcome::View(_)
+                | ActionOutcome::Navigate(_),
+            ) => {}
             Err(error) => events.push(Event::Notify {
                 level: Level::Error,
                 text: format!("Transfer: {error}"),
@@ -2221,6 +2226,9 @@ impl App {
                 if let Some(tab) = self.model.open_view(pane, kind, location, view.title()) {
                     events.push(Event::ViewOpened { pane, tab, view });
                 }
+            }
+            Ok(ActionOutcome::Navigate(to)) => {
+                self.dispatch(Command::Navigate { pane, to }, events);
             }
             Err(error) => events.push(Event::Notify {
                 level: Level::Error,

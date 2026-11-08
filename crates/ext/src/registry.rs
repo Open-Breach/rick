@@ -132,8 +132,10 @@ use crate::search::SearchIndex;
 /// with their capabilities, `JobCtx` gained `conflicts`, and settings gained
 /// [`SettingValue`] (QUESTIONS.md 123–126); 7 `Provider` gained `transfer`
 /// behind `NATIVE_TRANSFER`, `Capabilities` gained `REMOTE`, and the registry
-/// takes a [`Connector`] per network provider (QUESTIONS.md 135–137).
-pub const API_VERSION: u32 = 7;
+/// takes a [`Connector`] per network provider (QUESTIONS.md 135–137); 8
+/// `ActionOutcome` gained `Navigate` and `platform` gained `Elevate`
+/// (QUESTIONS.md 145–146).
+pub const API_VERSION: u32 = 8;
 
 bitflags::bitflags! {
     /// The extension points an extension fills, as its manifest declares

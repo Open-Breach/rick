@@ -170,6 +170,10 @@ pub enum ActionOutcome {
     Select(Selector),
     /// Open this in a tab of its own, next to the pane's active tab.
     View(View),
+    /// Take the pane to this location, as a click on a side-panel row
+    /// does: what an action that opens a view of its own returns (the
+    /// installer's Installed Apps).
+    Navigate(Location),
 }
 
 impl fmt::Debug for ActionOutcome {
@@ -183,6 +187,7 @@ impl fmt::Debug for ActionOutcome {
                 .field("replace", &selector.replace)
                 .finish_non_exhaustive(),
             Self::View(view) => f.debug_tuple("View").field(view).finish(),
+            Self::Navigate(to) => f.debug_tuple("Navigate").field(to).finish(),
         }
     }
 }
