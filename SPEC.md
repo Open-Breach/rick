@@ -1036,6 +1036,7 @@ The smallest Rick worth using every day. Everything in this list ships; nothing 
 Some plugins are specified in their own file under `specs/`, so they can be handed to an implementer on their own. Each is binding in the same way as this document; where one disagrees with this document, the question goes to `QUESTIONS.md`.
 
 - [`specs/ext-ssh.md`](specs/ext-ssh.md) — `ext-ssh`, remote hosts over SSH: a Provider driven by shell commands on `exec` channels (no SFTP) with per-host command profiles for GNU, BSD and BusyBox userlands, hosts from `~/.ssh/config` plus Rick's own in the Network section, agent, key and password authentication with secrets in the OS keychain, `known_hosts` dialogues, jump hosts and chains, pooled connections, same-host `cp`/`mv` through `NATIVE_TRANSFER`, *Open console here* and *Open in external terminal*, prefix and size-capped previews. Unix-like hosts only. Milestone 5 of 0.2, in place of `ext-vfs-sftp`.
+- [`specs/ext-installer.md`](specs/ext-installer.md) — `ext-installer`, the tarball installer: *Install as application* on a tar or zip archive, versioned layout with a `current` symlink, desktop entry, icon and commands on the PATH, user-space or system-wide scope, update with one previous version kept, revert, uninstall, repair, and an Installed Apps view. Linux only. Target version 0.3. It extracts with the tar and zip crates itself, so it has no dependency on `ext-vfs-archive` and no ordering constraint within 0.2.
 
 ### Still open
 
