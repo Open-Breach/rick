@@ -13,7 +13,11 @@
 //! rewrites the archive into a temporary file beside it and renames it over
 //! the original, under a lock per archive, inside the job that asked.
 //! RAR and the disc images are read-only and their capabilities say so;
-//! `watch` is `Unsupported` and the kernel polls the archive file.
+//! `watch` is `Unsupported` and the kernel polls the archive file. The
+//! disk images of the Disk images table (raw, DMG, VHD, VHDX, VMDK, VDI,
+//! QCOW2) are read through the 7-Zip library ([`diskimage`]), found as
+//! [`library`] describes: a setting, the bundle, the platform's usual
+//! places; ISO 9660 and UDF keep the native readers.
 //!
 //! An archive inside an archive is a file, not a location (QUESTIONS.md
 //! 89). The crate builds as a `cdylib` the plugin host loads from
@@ -29,10 +33,13 @@
 
 pub mod bridge;
 pub mod create;
+pub mod diskimage;
 pub mod extract;
+pub mod fixtures;
 pub mod format;
 mod image;
 pub mod index;
+pub mod library;
 mod rar;
 mod rewrite;
 mod sevenz;
@@ -61,6 +68,8 @@ use types::{
 
 pub use format::{Codec, Format};
 pub use index::{Index, Item};
+use library::settings_schema;
+pub use library::{LIBRARY_SETTING, MissingLibrary, Resolver};
 use rewrite::{Edit, Plan};
 
 /// The extension id.
@@ -194,11 +203,12 @@ struct Cached {
 }
 
 /// The provider's state, shared with the writers it hands out.
-#[derive(Default)]
 struct Inner {
     cache: Mutex<HashMap<PathBuf, Cached>>,
     /// One lock per archive: rewrites of one file go one after the other.
     locks: Mutex<HashMap<PathBuf, Arc<Mutex<()>>>>,
+    /// The 7-Zip library behind the disk images, resolved on first use.
+    resolver: Arc<Resolver>,
 }
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -208,17 +218,18 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
 
 /// The entries of the archive at `path`, read now by its format: what a
 /// listing answers from, for a caller that wants the sizes before it
-/// extracts (`ext-action-compress`). Blocking.
+/// extracts (`ext-action-compress`). Blocking. A disk image is read with
+/// the 7-Zip library of the process-wide [`Resolver::shared`].
 ///
 /// # Errors
 ///
 /// `Unsupported` when the file is no archive; the I/O or library error.
 pub fn index(path: &Path) -> Result<Index, Error> {
-    read_index(path)
+    read_index(&Resolver::shared(), path)
 }
 
 /// The entries of the archive at `path`, read by its format.
-fn read_index(path: &Path) -> Result<Index, Error> {
+fn read_index(resolver: &Resolver, path: &Path) -> Result<Index, Error> {
     let format = Format::detect(path)?;
     let items = match format {
         Format::Zip => zipfmt::index(path)?,
@@ -226,6 +237,7 @@ fn read_index(path: &Path) -> Result<Index, Error> {
         Format::SevenZ => sevenz::index(path)?,
         Format::Rar => rar::index(path)?,
         Format::Image => image::index(path)?,
+        Format::Disk(image) => diskimage::index(resolver, path, image)?,
         Format::Single(codec) => single::index(path, codec),
     };
     Ok(Index::new(format, items))
@@ -233,13 +245,20 @@ fn read_index(path: &Path) -> Result<Index, Error> {
 
 /// Writes the entry at `inner` of the archive at `path`, decompressed,
 /// into `sink`.
-fn copy_out(path: &Path, format: Format, inner: &[u8], sink: &mut dyn Write) -> Result<(), Error> {
+fn copy_out(
+    resolver: &Resolver,
+    path: &Path,
+    format: Format,
+    inner: &[u8],
+    sink: &mut dyn Write,
+) -> Result<(), Error> {
     match format {
         Format::Zip => zipfmt::copy_out(path, inner, sink),
         Format::Tar(codec) => tarfmt::copy_out(path, codec, inner, sink),
         Format::SevenZ => sevenz::copy_out(path, inner, sink),
         Format::Rar => rar::copy_out(path, inner, sink),
         Format::Image => image::copy_out(path, inner, sink),
+        Format::Disk(image) => diskimage::copy_out(resolver, path, image, inner, sink),
         Format::Single(codec) => single::copy_out(path, codec, inner, sink),
     }
 }
@@ -272,7 +291,7 @@ impl Inner {
         let span = tracing::info_span!("vfs_archive.index", path = %archive.display());
         let index = {
             let _enter = span.enter();
-            Arc::new(read_index(archive)?)
+            Arc::new(read_index(&self.resolver, archive)?)
         };
         lock(&self.cache).insert(
             archive.to_path_buf(),
@@ -308,7 +327,7 @@ impl Inner {
                 Format::Zip => zipfmt::rewrite(&split.archive, &mut out, plan)?,
                 Format::Tar(codec) => tarfmt::rewrite(&split.archive, codec, &mut out, plan)?,
                 Format::SevenZ => sevenz::rewrite(&split.archive, &mut out, plan)?,
-                Format::Rar | Format::Image | Format::Single(_) => {
+                Format::Rar | Format::Image | Format::Disk(_) | Format::Single(_) => {
                     return Err(Error::Unsupported("this archive format is read-only"));
                 }
             }
@@ -325,9 +344,14 @@ impl Inner {
 }
 
 /// Archives browsed in place.
-#[derive(Default)]
 pub struct ArchiveProvider {
     inner: Arc<Inner>,
+}
+
+impl Default for ArchiveProvider {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl std::fmt::Debug for ArchiveProvider {
@@ -339,10 +363,31 @@ impl std::fmt::Debug for ArchiveProvider {
 }
 
 impl ArchiveProvider {
-    /// A provider with an empty cache.
+    /// A provider with an empty cache, reading disk images with the
+    /// process-wide library resolver (no setting).
     #[must_use]
     pub fn new() -> Self {
-        Self::default()
+        Self::with_resolver(Resolver::shared())
+    }
+
+    /// A provider whose disk images are read with the library `resolver`
+    /// finds: the one the extension builds over the host's platform, so
+    /// the setting is read and written.
+    #[must_use]
+    pub fn with_resolver(resolver: Arc<Resolver>) -> Self {
+        Self {
+            inner: Arc::new(Inner {
+                cache: Mutex::new(HashMap::new()),
+                locks: Mutex::new(HashMap::new()),
+                resolver,
+            }),
+        }
+    }
+
+    /// The library resolver the provider reads disk images with.
+    #[must_use]
+    pub fn resolver(&self) -> &Arc<Resolver> {
+        &self.inner.resolver
     }
 
     /// The index of an archive, read on the blocking pool when needed.
@@ -500,8 +545,9 @@ impl Provider for ArchiveProvider {
             return Err(Error::Unsupported("a folder has no contents to read"));
         }
         let format = index.format();
+        let resolver = Arc::clone(&self.inner.resolver);
         Ok(bridge::reader(move |sink| {
-            copy_out(&split.archive, format, &split.inner, sink)
+            copy_out(&resolver, &split.archive, format, &split.inner, sink)
                 .map_err(|error| io::Error::other(error.to_string()))
         }))
     }
@@ -624,7 +670,13 @@ impl Provider for ArchiveProvider {
         let inner = Arc::clone(&self.inner);
         ext::blocking(move || {
             let mut temp = tempfile::NamedTempFile::new().map_err(Error::from_io)?;
-            copy_out(&source.archive, format, &source.inner, temp.as_file_mut())?;
+            copy_out(
+                &inner.resolver,
+                &source.archive,
+                format,
+                &source.inner,
+                temp.as_file_mut(),
+            )?;
             temp.as_file_mut().flush().map_err(Error::from_io)?;
             if cancel.is_cancelled() {
                 return Err(Error::Cancelled);
@@ -762,8 +814,14 @@ impl Extension for ArchiveExtension {
         &self.manifest
     }
 
+    /// The provider, with the 7-Zip library resolved through the host's
+    /// platform (the setting in its config directory), and the setting
+    /// that names the library.
     fn register(&self, reg: &mut Registry) -> Result<(), Error> {
-        reg.provider(Arc::new(ArchiveProvider::new()));
+        reg.translations(&[("en", include_str!("../locales/en.ftl"))]);
+        let resolver = Arc::new(Resolver::new(reg.platform().cloned()));
+        reg.provider(Arc::new(ArchiveProvider::with_resolver(resolver)));
+        reg.settings(settings_schema());
         Ok(())
     }
 }

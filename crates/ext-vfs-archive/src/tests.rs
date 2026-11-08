@@ -775,3 +775,200 @@ fn extraction_skips_what_the_caller_says_and_refuses_climbing_paths() {
     assert!(matches!(result, Err(Error::Cancelled)));
     assert!(!out.exists());
 }
+
+/// The 7-Zip library, from the usual locations, for the tests that need
+/// it; `None` with a note otherwise, a failure where CI requires it.
+fn sevenzip_library() -> Option<PathBuf> {
+    let found = ext::platform::sevenzip::usual_locations()
+        .into_iter()
+        .find(|p| p.is_file());
+    if found.is_none() {
+        eprintln!("no 7-Zip library on this machine; the disk image tests are skipped");
+        assert!(
+            std::env::var_os("RICK_REQUIRE_SEVENZIP").is_none(),
+            "the 7-Zip library is required here but was not found"
+        );
+    }
+    found
+}
+
+/// Every disk-image fixture: the FAT file system raw and in its three
+/// containers.
+fn disk_fixtures(dir: &Path) -> Vec<(PathBuf, Format)> {
+    use ext::platform::ImageFormat;
+    let fat = crate::fixtures::fat12_image();
+    let files = [
+        ("floppy.img", fat.clone(), Format::Disk(ImageFormat::Img)),
+        (
+            "disk.vhd",
+            crate::fixtures::vhd_fixed(&fat),
+            Format::Disk(ImageFormat::Vhd),
+        ),
+        (
+            "disk.vhdx",
+            crate::fixtures::vhdx(&fat),
+            Format::Disk(ImageFormat::Vhdx),
+        ),
+        (
+            "disk.qcow2",
+            crate::fixtures::qcow2(&fat),
+            Format::Disk(ImageFormat::Qcow2),
+        ),
+    ];
+    files
+        .into_iter()
+        .map(|(name, bytes, format)| {
+            let path = dir.join(name);
+            fs::write(&path, bytes).unwrap_or_else(|e| panic!("{e}"));
+            (path, format)
+        })
+        .collect()
+}
+
+#[test]
+fn disk_images_list_and_read_through_the_library_and_the_setting_remembers_it() {
+    let Some(library) = sevenzip_library() else {
+        return;
+    };
+    let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+    let fake = Arc::new(platform::Fake::new().unwrap_or_else(|e| panic!("{e}")));
+    let resolver = Arc::new(Resolver::new(Some(fake.clone())));
+    let provider = ArchiveProvider::with_resolver(Arc::clone(&resolver));
+    assert!(!resolver.is_loaded(), "nothing is probed at start");
+    for (path, format) in disk_fixtures(dir.path()) {
+        let name = path.file_name().unwrap_or_default().to_string_lossy();
+        assert_eq!(Format::detect(&path).ok(), Some(format), "{name}");
+        let root = list(&provider, &loc(&path, ""), Depth::One);
+        assert_eq!(names(&root), ["DOCS", "HELLO.TXT"], "{name}");
+        let hello = root
+            .iter()
+            .find(|e| e.name == "HELLO.TXT")
+            .unwrap_or_else(|| panic!("{name}: hello"));
+        assert_eq!(hello.kind, EntryKind::File, "{name}");
+        assert_eq!(
+            hello.size,
+            Some(crate::fixtures::HELLO.len() as u64),
+            "{name}"
+        );
+        assert!(hello.modified.is_some(), "{name}: FAT dates come through");
+        let docs = list(&provider, &loc(&path, "DOCS"), Depth::One);
+        assert_eq!(names(&docs), ["README.TXT"], "{name}");
+        assert_eq!(
+            read(&provider, &loc(&path, "HELLO.TXT")),
+            crate::fixtures::HELLO,
+            "{name}"
+        );
+        assert_eq!(
+            read(&provider, &loc(&path, "DOCS/README.TXT")),
+            crate::fixtures::README,
+            "{name}"
+        );
+        let all = list(&provider, &loc(&path, ""), Depth::Unlimited);
+        assert_eq!(names(&all), ["DOCS", "HELLO.TXT", "README.TXT"], "{name}");
+        // Read-only: no writes, and the capabilities say so.
+        assert!(provider.capabilities(&loc(&path, "")).is_empty(), "{name}");
+        assert!(matches!(
+            runtime::block_on(provider.create_dir(&loc(&path, "new"))),
+            Err(Error::Unsupported(_))
+        ));
+        assert!(matches!(
+            stat(&provider, &loc(&path, "missing.txt")),
+            Err(Error::NotFound)
+        ));
+        let root_entry = stat(&provider, &loc(&path, "")).unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(root_entry.kind, EntryKind::Dir);
+    }
+    // The first hit was written back into the setting.
+    assert!(resolver.is_loaded());
+    assert_eq!(resolver.setting().as_deref(), Some(library.as_path()));
+    let settings =
+        fs::read_to_string(ext::platform::ConfigDir::config_dir(&*fake).join("vfs-archive.toml"))
+            .unwrap_or_else(|e| panic!("{e}"));
+    assert!(settings.contains("sevenzip_library"), "{settings}");
+    // The settings the extension declares name the same key.
+    let schema = crate::library::settings_schema();
+    assert_eq!(schema.ext, ID);
+    assert_eq!(schema.fields[0].key, LIBRARY_SETTING);
+}
+
+#[test]
+fn a_missing_library_says_how_to_install_it_and_browsing_to_it_stores_the_path() {
+    let fake = Arc::new(platform::Fake::new().unwrap_or_else(|e| panic!("{e}")));
+    let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+    // A machine without the library: nowhere to look but an empty folder.
+    let resolver = Resolver::with_locations(
+        Some(fake.clone()),
+        vec![dir.path().join(ext::platform::sevenzip::LIBRARY_FILE)],
+    );
+    let error = resolver
+        .library()
+        .err()
+        .unwrap_or_else(|| panic!("the library was found"));
+    let message = error.to_string();
+    assert!(message.contains("7-Zip library"), "{message}");
+    assert!(
+        message.contains(ext::platform::sevenzip::LIBRARY_FILE),
+        "{message}"
+    );
+    assert!(
+        message.contains(ext::platform::sevenzip::install_hint()),
+        "{message}"
+    );
+    assert!(message.contains(LIBRARY_SETTING), "{message}");
+    assert!(
+        message.contains(&dir.path().display().to_string()),
+        "{message}"
+    );
+    let Error::Extension { ext, source } = &error else {
+        panic!("{error}");
+    };
+    assert_eq!(*ext, ID);
+    assert!(source.downcast_ref::<MissingLibrary>().is_some());
+    // A disk image shows the same message in place of its listing.
+    let fat = dir.path().join("floppy.img");
+    fs::write(&fat, crate::fixtures::fat12_image()).unwrap_or_else(|e| panic!("{e}"));
+    let provider = ArchiveProvider::with_resolver(Arc::new(Resolver::with_locations(
+        Some(fake.clone()),
+        Vec::new(),
+    )));
+    let listed = runtime::block_on(async {
+        let mut stream = provider.list(
+            &loc(&fat, ""),
+            ListOptions {
+                hidden: false,
+                system: false,
+                depth: Depth::One,
+            },
+            CancelToken::new(),
+        );
+        stream.next().await
+    });
+    let missing = match &listed {
+        Some(Err(Error::Extension { source, .. })) => {
+            source.downcast_ref::<MissingLibrary>().is_some()
+        }
+        _ => false,
+    };
+    assert!(missing, "{listed:?}");
+    let Some(library) = sevenzip_library() else {
+        return;
+    };
+    // Browse… chose the library: the path is stored and used from then on.
+    let loaded = resolver
+        .set_library(&library)
+        .unwrap_or_else(|e| panic!("{e}"));
+    assert!(loaded.format("FAT").is_some());
+    assert_eq!(resolver.setting().as_deref(), Some(library.as_path()));
+    resolver.forget();
+    assert!(!resolver.is_loaded());
+    assert!(
+        resolver.library().is_ok(),
+        "the setting names the library now"
+    );
+    // A file that is not the library is refused and the setting kept.
+    let text = dir.path().join("text.so");
+    fs::write(&text, b"not a library").unwrap_or_else(|e| panic!("{e}"));
+    assert!(resolver.set_library(&text).is_err());
+    assert_eq!(resolver.setting().as_deref(), Some(library.as_path()));
+    assert!(format!("{resolver:?}").contains("Resolver"));
+}

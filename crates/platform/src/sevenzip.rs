@@ -1220,7 +1220,8 @@ impl SevenZip {
 
     /// Opens `stream` (a file's, or an item's from [`Archive::sub_stream`])
     /// as an archive of `format`. The stream must start at the archive:
-    /// no signature scan.
+    /// no signature scan. It is rewound first, so one stream can be
+    /// offered to several handlers in turn.
     ///
     /// # Errors
     ///
@@ -1231,6 +1232,7 @@ impl SevenZip {
         stream: Stream,
         format: &Format,
     ) -> Result<Archive, SevenZipError> {
+        stream.rewind()?;
         let handler = self.handler(format)?;
         let callback = OpenCallback::new();
         let max_check_start_position: u64 = 0;
@@ -1278,8 +1280,19 @@ fn check(call: &'static str, code: Hresult) -> Result<(), SevenZipError> {
 }
 
 /// A seekable input stream the library can open: a file of ours, or an
-/// item's content handed out by a handler.
+/// item's content handed out by a handler. Cloning adds a reference to
+/// the same object, so one stream can be offered to several handlers in
+/// turn; each seeks to the start itself.
 pub struct Stream(ComPtr);
+
+impl Clone for Stream {
+    fn clone(&self) -> Self {
+        // SAFETY: a live COM object this stream holds a reference to; the
+        // clone's reference is released by its own `Drop`.
+        unsafe { add_ref(self.0.0) };
+        Self(ComPtr(self.0.0))
+    }
+}
 
 impl Stream {
     /// A stream over the file at `path`.
@@ -1289,6 +1302,17 @@ impl Stream {
     /// The I/O error from opening the file.
     pub fn file(path: &Path) -> Result<Self, SevenZipError> {
         Ok(Self(FileStream::new(File::open(path)?)))
+    }
+
+    /// Seeks to the start: what a handler expects when it is offered a
+    /// stream another handler has read from.
+    fn rewind(&self) -> Result<(), SevenZipError> {
+        let mut position: u64 = 0;
+        // SAFETY: a live `IInStream` and a valid out-pointer.
+        check("IInStream::Seek", unsafe {
+            let vtbl = *self.0.0.cast::<*const IInStreamVtbl>();
+            ((*vtbl).seek)(self.0.0, 0, 0, &raw mut position)
+        })
     }
 }
 
