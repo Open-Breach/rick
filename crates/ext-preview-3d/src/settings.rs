@@ -2,7 +2,7 @@
 //! Settings screen renders and writes to the extension's own TOML file in
 //! the config directory, `preview-3d.toml`, and read from that file at
 //! every open, so a change takes effect for the next file (QUESTIONS.md
-//! 136).
+//! 143).
 
 use std::path::Path;
 
