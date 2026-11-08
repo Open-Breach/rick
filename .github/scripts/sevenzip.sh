@@ -53,13 +53,14 @@ build_from_source() {
   case "$os" in
     macOS|Darwin)
       if [ "$(uname -m)" = "arm64" ]; then mak=cmpl_mac_arm64.mak; else mak=cmpl_mac_x64.mak; fi
-      # The mac makefile compiles with -Weverything -Werror. Apple clang 17
-      # added -Wc++-keyword, which fires on the `and` instruction in the
-      # arm64 assembly macros (Asm/arm64/7zAsm.S) and on nothing 7-Zip
-      # meant; an older clang does not know the flag, so unknown warning
-      # options are not errors either. Everything else stays as the
-      # makefile has it.
-      make_vars=("CFLAGS_WARN=-Weverything -Wfatal-errors -Wno-poison-system-directories -Wno-unknown-warning-option -Wno-c++-keyword") ;;
+      # The mac makefile compiles with -Weverything -Werror, so every
+      # warning a newer Apple clang adds stops the build: clang 17 brought
+      # -Wc++-keyword on the `and` mnemonic in the arm64 assembly macros
+      # and -Wimplicit-void-ptr-cast in LzmaEnc.c. The warnings are the
+      # library's, not Rick's, so on macOS the build keeps -Wall -Wextra
+      # and drops -Werror and -Weverything; the two variables are the
+      # makefile's own (7zip_gcc.mak, warn_clang_mac.mak).
+      make_vars=("CFLAGS_WARN_WALL=-Wall -Wextra" "CFLAGS_WARN=-Wno-poison-system-directories") ;;
     *) mak=cmpl_gcc.mak ;;
   esac
   (cd "$work/CPP/7zip/Bundles/Format7zF" && make -j"$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 4)" -f "../../$mak" "${make_vars[@]}" > "$work/build.log" 2>&1) \
