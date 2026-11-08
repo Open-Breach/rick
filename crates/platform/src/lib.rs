@@ -11,7 +11,8 @@
 //! The [`fs`] module holds the filesystem fast paths the local provider
 //! needs and no portable API offers: the bulk directory reader, the native
 //! copy, allocated sizes and extent sharing. [`paths`] converts between
-//! [`VPath`](types::VPath) and [`std::path::Path`].
+//! [`VPath`](types::VPath) and [`std::path::Path`]; [`agent`] opens the
+//! SSH agent's socket, a Unix socket or the OpenSSH named pipe.
 //!
 //! Where the OS keeps the original paths of trashed items to itself
 //! (macOS), the trash lists Rick's own record of what it trashed instead,
@@ -26,6 +27,7 @@
 // The point of this crate: FFI to the OS lives here and nowhere else.
 #![allow(unsafe_code)]
 
+pub mod agent;
 mod clipboard;
 mod dialogs;
 mod fake;

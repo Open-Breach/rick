@@ -14,7 +14,9 @@ folders, the fixed directories under the macOS home), `RecentlyUsed` (the
 XDG `recently-used.xbel`, Spotlight's last-used dates, the Recent folder's
 shortcuts) and `Secrets` (a secret by a stable key in the platform keychain
 through the `keyring` crate: Secret Service, Keychain, Credential Manager;
-the fake keeps them in memory), implemented for Linux (XDG trash, `xdg-open`), macOS
+the fake keeps them in memory) and the `agent` module that opens the SSH
+agent's socket (`SSH_AUTH_SOCK`, or OpenSSH's named pipe on Windows),
+implemented for Linux (XDG trash, `xdg-open`), macOS
 (`NSFileManager`, `open`) and Windows (`IFileOperation`, `ShellExecute`), plus
 a `Fake` for tests. It also owns the
 filesystem fast paths other crates program against: the bulk directory reader
