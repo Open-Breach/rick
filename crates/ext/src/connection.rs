@@ -112,6 +112,15 @@ pub enum ConnectionFieldKind {
     /// A password, key or token: typed masked, kept in the platform
     /// keychain under [`secret_key`], never in a file.
     Secret,
+    /// One of a list, kept in `rick.toml` as the option's text; an empty
+    /// option means none. The options are computed when the schema is
+    /// asked for, so they can name the other connections (a jump host).
+    Choice {
+        /// The options, in display order.
+        options: Vec<String>,
+        /// Index into `options` of the one the dialogue starts with.
+        default: usize,
+    },
 }
 
 /// One field of a provider's connection dialogue.

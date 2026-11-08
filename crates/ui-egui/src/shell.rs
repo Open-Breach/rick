@@ -38,7 +38,9 @@ use crate::side_panel::SidePanelState;
 use crate::thumbs::Thumbnails;
 use crate::viewer::{self, ViewerCx, ViewerState, Zoom};
 use crate::{compare, console};
-use crate::{conflict, frame, icons, inspector, menus, pane, paths, settings_ui, side_panel};
+use crate::{
+    conflict, frame, icons, inspector, menus, pane, paths, question, settings_ui, side_panel,
+};
 
 /// Per-tab view state that is the UI's business, not the model's.
 #[derive(Debug, Default)]
@@ -208,6 +210,8 @@ pub enum Request {
     },
     /// Open the side panel's *Add connection…* dialogue of a provider.
     AddConnection(types::ProviderId),
+    /// Open the side panel's *Edit…* dialogue of a connection.
+    EditConnection(types::ProviderId, String),
 }
 
 /// What a tab's widgets see.
@@ -393,6 +397,8 @@ pub struct RickUi {
     side: SidePanelState,
     /// The conflict dialogue's text field and checkbox.
     conflict: conflict::DialogState,
+    /// The question dialogue's secret field and checkbox.
+    question: question::DialogState,
     /// Set while the inline editor commits through the action, so the shell
     /// runs the action instead of starting another edit.
     inline_commit: bool,
@@ -560,6 +566,7 @@ impl RickUi {
             operations: Operations::default(),
             side: SidePanelState::default(),
             conflict: conflict::DialogState::default(),
+            question: question::DialogState::default(),
             inline_commit: false,
             applied: None,
             now: SystemTime::now(),
@@ -876,6 +883,15 @@ impl RickUi {
                     let entry = self.preview_entry(pane);
                     self.previews.failed(pane, &error, entry);
                 }
+                Event::PreviewPrefix {
+                    pane,
+                    served,
+                    total,
+                } => self.previews.prefix(pane, served, total),
+                Event::PreviewCapped { pane, size, cap } => {
+                    let entry = self.preview_entry(pane);
+                    self.previews.capped(pane, size, cap, entry);
+                }
                 Event::ViewOpened { tab, view, .. } => {
                     if let ext::View::Console(console) = &view {
                         let ctx = self.ctx.clone();
@@ -1045,6 +1061,7 @@ impl RickUi {
             || self.name_prompt.is_some()
             || self.shortcuts.rebinding.is_some()
             || !self.app.model().conflicts.is_empty()
+            || !self.app.model().questions.is_empty()
         {
             return;
         }
@@ -1178,6 +1195,14 @@ impl RickUi {
                     }
                     Request::AddConnection(provider) => {
                         side_panel::begin_connection(&mut self.side, &self.app, provider);
+                    }
+                    Request::EditConnection(provider, name) => {
+                        side_panel::begin_edit_connection(
+                            &mut self.side,
+                            &self.app,
+                            provider,
+                            &name,
+                        );
                     }
                 }
             }
@@ -3341,6 +3366,7 @@ impl RickUi {
         if self.is_front(ctx, window) {
             self.show_dialog(ctx);
             conflict::show(ctx, &self.app, &mut self.conflict, &mut self.requests);
+            question::show(ctx, &self.app, &mut self.question, &mut self.requests);
             self.show_name_prompt(ctx);
             settings_ui::settings_window(
                 ctx,

@@ -18,10 +18,35 @@ pub fn show(ui: &mut egui::Ui, cx: &mut PaneCx<'_>) {
     egui::Panel::top(egui::Id::new(("toolbar", cx.tab_id)))
         .show_separator_line(false)
         .show(ui, |ui| toolbar(ui, cx));
+    if cx.tab.failure.is_some() {
+        egui::Panel::top(egui::Id::new(("failure", cx.tab_id)))
+            .show_separator_line(true)
+            .show(ui, |ui| failure_banner(ui, cx));
+    }
     egui::Panel::bottom(egui::Id::new(("foot", cx.tab_id)))
         .show_separator_line(true)
         .show(ui, |ui| foot(ui, cx));
     egui::CentralPanel::no_frame().show(ui, |ui| views::show(ui, cx));
+}
+
+/// The banner over a list that could not be read: why, and *Retry*, which
+/// lists the location again. A connection error is never a modal dialogue.
+fn failure_banner(ui: &mut egui::Ui, cx: &mut PaneCx<'_>) {
+    let Some(failure) = cx.tab.failure.as_deref() else {
+        return;
+    };
+    ui.horizontal(|ui| {
+        ui.label(
+            egui::RichText::new(format!("{} {failure}", icons::FAILED))
+                .color(ui.visuals().warn_fg_color),
+        );
+        ui.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
+            if ui.button("Retry").clicked() {
+                cx.requests
+                    .push(Request::Command(Command::Refresh(cx.pane)));
+            }
+        });
+    });
 }
 
 fn intent(cx: &mut PaneCx<'_>, intent: Intent) {

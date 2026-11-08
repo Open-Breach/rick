@@ -23,7 +23,7 @@ use model::{PaneId, SettingsChange, TextPreview};
 use types::{Entry, EntryId};
 
 use crate::icons;
-use crate::preview::{Previews, Slot};
+use crate::preview::{PreviewAct, Previews, Slot};
 use crate::shell::Request;
 
 /// The toolbar's height: a tab's.
@@ -207,7 +207,15 @@ pub fn show(
     );
     inner.set_clip_rect(content.intersect(ui.clip_rect()));
     match view.pane {
-        Some(pane) => previews.content(&mut inner, pane, view.target, view.text_settings),
+        Some(pane) => match previews.content(&mut inner, pane, view.target, view.text_settings) {
+            Some(PreviewAct::LoadMore) => {
+                requests.push(Request::Command(Command::PreviewMore(pane)));
+            }
+            Some(PreviewAct::PreviewAnyway) => {
+                requests.push(Request::Command(Command::PreviewAnyway(pane)));
+            }
+            None => {}
+        },
         None => {
             inner.weak("Select a file to preview it");
         }

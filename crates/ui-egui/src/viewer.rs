@@ -1036,6 +1036,22 @@ fn draw_content(
     let slot = &mut *v.slot;
     state.frame_size = None;
     state.drawn_highlights = 0;
+    if let Some((size, cap)) = slot.capped().filter(|_| entry.is_some()) {
+        if crate::preview::capped_message(&mut inner, size, cap)
+            == Some(crate::preview::PreviewAct::PreviewAnyway)
+        {
+            cx.requests
+                .push(Request::Command(Command::PreviewAnyway(cx.pane)));
+        }
+        return;
+    }
+    if let Some((served, total)) = slot.prefix().filter(|_| slot.has_doc())
+        && crate::preview::prefix_bar(&mut inner, served, total)
+            == Some(crate::preview::PreviewAct::LoadMore)
+    {
+        cx.requests
+            .push(Request::Command(Command::PreviewMore(cx.pane)));
+    }
     if slot.is_text() {
         draw_text_content(&mut inner, cx, state, slot);
         return;

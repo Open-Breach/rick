@@ -25,7 +25,10 @@ use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use app::{App, Command, ConnectionOp};
-use ext::{ConnectionField, ConnectionFieldKind, Connector, Level};
+use ext::{
+    ActionCtx, ActionGroup, Availability, ConnectionField, ConnectionFieldKind, Connector,
+    Invocation, Level,
+};
 use model::{PaneId, Place, Section, SidePanel, SidePanelChange, Volume, VolumeKind, WindowId};
 use types::{Entry, Location, ProviderId};
 use vfs_rick::Virtual;
@@ -57,7 +60,8 @@ pub struct PlaceEdit {
     focus: bool,
 }
 
-/// The *Add connection…* dialogue of a network or cloud provider.
+/// The *Add connection…* and *Edit…* dialogue of a network or cloud
+/// provider.
 #[derive(Debug, Clone)]
 pub struct ConnectionDialog {
     /// The provider the connection is for.
@@ -67,10 +71,13 @@ pub struct ConnectionDialog {
     /// The connection's name as typed.
     pub name: String,
     /// The fields with their values as typed; a `Bool` holds `true` or
-    /// `false`.
+    /// `false`, a `Choice` the chosen option's text.
     pub values: Vec<(ConnectionField, String)>,
     /// What stopped the last OK.
     pub error: Option<String>,
+    /// Editing an existing connection: the name is fixed and a secret left
+    /// empty keeps the one in the keychain.
+    pub editing: bool,
     focus: bool,
 }
 
@@ -91,14 +98,35 @@ impl ConnectionDialog {
                         ConnectionFieldKind::Text { default } => default.clone(),
                         ConnectionFieldKind::Integer { default, .. } => default.to_string(),
                         ConnectionFieldKind::Bool { default } => default.to_string(),
+                        ConnectionFieldKind::Choice { options, default } => {
+                            options.get(*default).cloned().unwrap_or_default()
+                        }
                         ConnectionFieldKind::Path | ConnectionFieldKind::Secret => String::new(),
                     };
                     (field.clone(), value)
                 })
                 .collect(),
             error: None,
+            editing: false,
             focus: true,
         }
+    }
+
+    /// The *Edit…* dialogue for the connection `entry` of `connector`: the
+    /// name fixed, the fields as the settings hold them, the secrets empty
+    /// (an empty secret keeps the keychain's).
+    #[must_use]
+    pub fn edit(connector: &dyn Connector, entry: &model::ConnectionEntry) -> Self {
+        let mut dialog = Self::new(connector);
+        dialog.name.clone_from(&entry.name);
+        dialog.editing = true;
+        for (field, value) in &mut dialog.values {
+            if field.kind == ConnectionFieldKind::Secret {
+                continue;
+            }
+            *value = entry.settings.get(field.key).cloned().unwrap_or_default();
+        }
+        dialog
     }
 
     /// The command OK sends.
@@ -115,14 +143,15 @@ impl ConnectionDialog {
         if name.contains(['/', '\\']) {
             return Err("The name cannot contain a slash".to_owned());
         }
-        if taken.iter().any(|t| t == name) {
+        if !self.editing && taken.iter().any(|t| t == name) {
             return Err(format!("A connection called {name} exists already"));
         }
         let mut values = Vec::with_capacity(self.values.len());
         for (field, value) in &self.values {
             let value = value.trim();
             if value.is_empty() {
-                if field.required {
+                // An edited connection keeps the secret it has.
+                if field.required && !(self.editing && field.kind == ConnectionFieldKind::Secret) {
                     return Err(format!("{} needs a value", field.label));
                 }
                 continue;
@@ -140,11 +169,19 @@ impl ConnectionDialog {
             }
             values.push((field.key.to_owned(), value.to_owned()));
         }
-        Ok(Command::AddConnection {
-            provider: self.provider,
-            name: name.to_owned(),
-            values,
-        })
+        if self.editing {
+            Ok(Command::EditConnection {
+                provider: self.provider,
+                name: name.to_owned(),
+                values,
+            })
+        } else {
+            Ok(Command::AddConnection {
+                provider: self.provider,
+                name: name.to_owned(),
+                values,
+            })
+        }
     }
 }
 
@@ -329,6 +366,40 @@ pub fn begin_connection(state: &mut SidePanelState, app: &App, provider: Provide
     }
 }
 
+/// Opens the *Edit…* dialogue of the connection `name` of `provider`; the
+/// shell calls this for `Request::EditConnection`.
+pub fn begin_edit_connection(
+    state: &mut SidePanelState,
+    app: &App,
+    provider: ProviderId,
+    name: &str,
+) {
+    let Some(connector) = app.registry().connector_of(provider) else {
+        return;
+    };
+    let Some(entry) = app
+        .model()
+        .settings
+        .connections
+        .iter()
+        .find(|c| c.provider == provider.0 && c.name == name)
+    else {
+        return;
+    };
+    state.connection = Some(ConnectionDialog::edit(&**connector, entry));
+}
+
+/// Whether the application keeps a connection `name` of `provider` in its
+/// settings: those rows can be edited and removed; a row the provider lists
+/// from elsewhere (a host of `~/.ssh/config`) cannot.
+fn is_rick_connection(app: &App, provider: ProviderId, name: &str) -> bool {
+    app.model()
+        .settings
+        .connections
+        .iter()
+        .any(|c| c.provider == provider.0 && c.name == name)
+}
+
 /// The names of `provider`'s connections, which a new one cannot take.
 fn connection_names(app: &App, provider: ProviderId) -> Vec<String> {
     app.model()
@@ -354,7 +425,12 @@ fn connection_dialog(
     let taken = connection_names(app, dialog.provider);
     let mut open = true;
     let mut done: Option<bool> = None;
-    egui::Window::new(format!("Add {} connection", dialog.title))
+    let title = if dialog.editing {
+        format!("Edit {} connection", dialog.title)
+    } else {
+        format!("Add {} connection", dialog.title)
+    };
+    egui::Window::new(title)
         .id(egui::Id::new("add-connection"))
         .collapsible(false)
         .resizable(false)
@@ -366,40 +442,18 @@ fn connection_dialog(
                 .spacing(egui::vec2(12.0, 6.0))
                 .show(ui, |ui| {
                     ui.label("Name");
-                    let name =
-                        ui.add(egui::TextEdit::singleline(&mut dialog.name).desired_width(260.0));
+                    let name = ui.add_enabled(
+                        !dialog.editing,
+                        egui::TextEdit::singleline(&mut dialog.name).desired_width(260.0),
+                    );
                     if dialog.focus {
                         name.request_focus();
                         dialog.focus = false;
                     }
                     ui.end_row();
+                    let editing = dialog.editing;
                     for (field, value) in &mut dialog.values {
-                        let label = if field.required {
-                            format!("{} *", field.label)
-                        } else {
-                            field.label.to_owned()
-                        };
-                        ui.label(label);
-                        match &field.kind {
-                            ConnectionFieldKind::Secret => {
-                                ui.add(
-                                    egui::TextEdit::singleline(value)
-                                        .password(true)
-                                        .desired_width(260.0),
-                                );
-                            }
-                            ConnectionFieldKind::Bool { .. } => {
-                                let mut on = value == "true";
-                                if ui.checkbox(&mut on, "").changed() {
-                                    *value = on.to_string();
-                                }
-                            }
-                            ConnectionFieldKind::Text { .. }
-                            | ConnectionFieldKind::Integer { .. }
-                            | ConnectionFieldKind::Path => {
-                                ui.add(egui::TextEdit::singleline(value).desired_width(260.0));
-                            }
-                        }
+                        connection_field(ui, field, value, editing);
                         ui.end_row();
                     }
                 });
@@ -434,6 +488,63 @@ fn connection_dialog(
     }
 }
 
+/// One row of the connection dialogue: the label, then the field as its
+/// kind asks: a masked text for a secret (left empty while editing, it
+/// keeps the keychain's), a checkbox, a combo box for a choice, a text
+/// field for the rest.
+fn connection_field(ui: &mut egui::Ui, field: &ConnectionField, value: &mut String, editing: bool) {
+    let label = if field.required {
+        format!("{} *", field.label)
+    } else {
+        field.label.to_owned()
+    };
+    ui.label(label);
+    match &field.kind {
+        ConnectionFieldKind::Secret => {
+            let hint = if editing { "(unchanged)" } else { "" };
+            ui.add(
+                egui::TextEdit::singleline(value)
+                    .password(true)
+                    .hint_text(hint)
+                    .desired_width(260.0),
+            );
+        }
+        ConnectionFieldKind::Bool { .. } => {
+            let mut on = value == "true";
+            if ui.checkbox(&mut on, "").changed() {
+                *value = on.to_string();
+            }
+        }
+        ConnectionFieldKind::Choice { options, .. } => {
+            let shown = if value.is_empty() {
+                "(none)"
+            } else {
+                value.as_str()
+            };
+            egui::ComboBox::from_id_salt(("add-connection-choice", field.key))
+                .selected_text(shown.to_owned())
+                .width(260.0)
+                .show_ui(ui, |ui| {
+                    for option in options {
+                        let label = if option.is_empty() {
+                            "(none)"
+                        } else {
+                            option.as_str()
+                        };
+                        if ui.selectable_label(value == option, label).clicked() {
+                            value.clone_from(option);
+                        }
+                    }
+                });
+        }
+        ConnectionFieldKind::Text { .. }
+        | ConnectionFieldKind::Integer { .. }
+        | ConnectionFieldKind::Path => {
+            ui.add(egui::TextEdit::singleline(value).desired_width(260.0));
+        }
+    }
+}
+
 /// The *Add connection…* entries of a section's menu, one per provider
 /// plugin of the section.
 fn add_connection_items(
@@ -457,12 +568,14 @@ fn add_connection_items(
 }
 
 /// The context-menu entries of a connection row: *Connect* or
-/// *Disconnect*, and *Remove connection*.
+/// *Disconnect*, and for a connection the application keeps *Edit…* and
+/// *Remove connection*.
 fn connection_items(
     ui: &mut egui::Ui,
     requests: &mut Vec<Request>,
     connector: &dyn Connector,
     name: &str,
+    editable: bool,
 ) {
     let provider = connector.provider();
     if connector.is_connected(name) {
@@ -485,6 +598,13 @@ fn connection_items(
         }));
         ui.close();
     }
+    if !editable {
+        return;
+    }
+    if ui.button(format!("{} Edit…", icons::EDIT)).clicked() {
+        requests.push(Request::EditConnection(provider, name.to_owned()));
+        ui.close();
+    }
     if ui
         .button(format!("{} Remove connection", icons::TRASH))
         .clicked()
@@ -495,6 +615,44 @@ fn connection_items(
             op: ConnectionOp::Remove,
         }));
         ui.close();
+    }
+}
+
+/// The entries of the extension groups whose actions apply to a row's
+/// location, as the context menu of a folder would list them: *Open console
+/// here* and *Open in external terminal* on an SSH host.
+fn row_actions(ui: &mut egui::Ui, app: &App, requests: &mut Vec<Request>, ctx: &ActionCtx) {
+    let actions = app.registry().actions();
+    let mut groups: Vec<&'static str> = actions
+        .iter()
+        .filter_map(|a| match a.group() {
+            ActionGroup::Extension(name) => Some(name),
+            ActionGroup::Core => None,
+        })
+        .collect();
+    groups.sort_unstable();
+    groups.dedup();
+    for group in groups {
+        let members: Vec<_> = actions
+            .iter()
+            .filter(|a| {
+                a.group() == ActionGroup::Extension(group)
+                    && a.availability(ctx) == Availability::Enabled
+            })
+            .collect();
+        if members.is_empty() {
+            continue;
+        }
+        ui.separator();
+        for action in members {
+            if ui.button(action.label()).clicked() {
+                requests.push(Request::RunAction {
+                    action: action.id(),
+                    ctx: ctx.clone(),
+                });
+                ui.close();
+            }
+        }
     }
 }
 
@@ -534,10 +692,19 @@ fn provider_row(
         .frame(false)
         .truncate();
     let connection = connection_of(app, entry);
+    let action_ctx = ActionCtx {
+        pane,
+        location: location.clone(),
+        selection: Vec::new(),
+        invoked_from: Invocation::ContextMenu,
+        other: None,
+    };
     let mut extra = |ui: &mut egui::Ui, requests: &mut Vec<Request>| {
         if let Some((connector, name)) = &connection {
-            connection_items(ui, requests, &***connector, name);
+            let editable = is_rick_connection(app, connector.provider(), name);
+            connection_items(ui, requests, &***connector, name, editable);
         }
+        row_actions(ui, app, requests, &action_ctx);
     };
     let response = location_row(
         ui,
