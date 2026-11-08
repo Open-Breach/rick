@@ -9,6 +9,45 @@ the pull request that brought the change.
 
 ### Added
 
+- `ext-preview-markup` (#51): one plugin with three previewers for the
+  structured text formats, each rendered by default with the *Rendered*
+  toggle to the source: Markdown through `pulldown-cmark` and HTML through
+  the basic reader (headings, paragraphs, lists, links, images, tables; no
+  browser engine, no JavaScript, no CSS fidelity) as documents the pane lays
+  out, with images read from the file's own folder; CSV and TSV as the
+  virtualised grid with the delimiter sniffed and the first row as header.
+  The source behind the toggle is the code previewer's highlighted text for
+  Markdown and HTML and the raw text for CSV, and it is the text layer the
+  pane's Copy reads. The previewers score above `ext-preview-code` for
+  their extensions, so disabling the plugin leaves highlighted source for
+  `.md` and `.html` and plain text for `.csv`.
+- Disk images (#51): raw IMG, DMG, VHD, VHDX, VMDK, VDI and QCOW2 browse
+  like archives, read-only, in `ext-vfs-archive` (Enter enters the image
+  as a location, files inside read and copy out) and `ext-preview-archive`
+  (the file list in the pane on selection, with the layout and volume
+  label in File info), through the 7-Zip library (`7z.so` / `7z.dll`,
+  LGPL) loaded dynamically from `platform::sevenzip`, which parses the
+  containers, the partition tables and the file systems inside (FAT, NTFS,
+  ext, HFS+, APFS, UDF, ISO), one folder per partition as 7-Zip names them;
+  ISO 9660 and UDF keep the native readers. The library is bundled beside
+  the archive plugin in `plugins/vfs-archive/` with its licence (built from
+  the pinned sources on Linux and macOS, the pinned installer's `7z.dll`
+  on Windows) and resolved lazily on the first image shown: the
+  `sevenzip_library` setting of `vfs-archive.toml`, then the bundle, then
+  the platform's usual installs, the first hit written back into the
+  setting; when nothing is found the preview shows a message naming the
+  library, how to install it on this platform and the setting, and
+  browsing to the library stores its path.
+- *Mount* (#51): in the context menu of a disk-image file, and so in the
+  command palette, hands the file to the operating system's own mount
+  mechanism through `platform::Mount` and nothing else: `udisksctl
+  loop-setup` and `mount` on Linux (ISO and raw images), `hdiutil attach`
+  on macOS (DMG, ISO, raw), `Mount-DiskImage` on Windows (ISO, VHD, VHDX);
+  the action hides itself on a file the current OS cannot mount, the
+  mounted image appears as a removable volume in This Machine through the
+  live volume watch, and that row's *Eject* unmounts it (deleting the loop
+  device on Linux). No qemu-nbd, no FUSE, no Unmount action.
+
 - Localisation (#24): every text of the shell, the dialogues, the menus,
   the core actions and the plugins goes through the `t!` lookup over Fluent
   files bundled in the binary (`locales/` for the kernel, each plugin's
@@ -252,6 +291,13 @@ the pull request that brought the change.
 
 ### Changed
 
+- The extension API is at version 12: `platform` gained `Mount` (which
+  disk-image formats this OS mounts, and mounting one through it) and the
+  `sevenzip` binding of the 7-Zip library; `ext-preview-code` highlights
+  Markdown and HTML as source only, the rendering having moved to
+  `ext-preview-markup` (#51).
+- Eject on Linux releases the loop device of a mounted disk image after
+  unmounting it (#51).
 - The extension API is at version 11: `Action::label` returns a `String`
   and `Availability::Disabled` carries one, both built with `t!`; the
   labels the registry keeps (`SettingField`, `ConnectionField`,
@@ -322,6 +368,8 @@ the pull request that brought the change.
 
 ### Removed
 
+- `ext-preview-csv`, superseded by the CSV previewer of `ext-preview-markup`
+  (#51).
 - The "not part of version 0.1" notices of Select by pattern, Paste as
   link, Bulk rename, Open with… and Open console; the five rows of the
   shortcut table dispatch to the actions (#23).

@@ -2185,3 +2185,139 @@ Once answered, an entry keeps its number and gains a dated decision line.
     Assumed: off (`set_use_isolating(false)`), since egui draws the marks as
     boxes; a key nobody wrote comes back as itself, so a missing translation
     is a visible text or key, never a panic.
+
+185. (issue 51) The issue builds on #50, "which is merged into `dev`"; when
+    this task started, `dev` carried #50's spec change (71fc5e6, 65e064a)
+    and none of its code: no Rendered toggle in the pane, no Copy control,
+    no manifest field for the extensions a plugin claims, no
+    `archives.on_open` setting, no library-resolution pattern and no
+    in-pane library message. Re-opening #50's items is out of this issue's
+    scope.
+    Assumed: #51 is implemented on `dev` as it is, against what the
+    extension API offers today, in a way #50 can wire up without redoing
+    it: the markup previewers carry the Rendered toggle as a
+    `PreviewControl::Toggle` with `Icon::Rendered` (the pane's generic
+    toggle handling shows it), on for every newly shown file, and keep
+    the raw source as their text layer for #50's Copy; the extensions a
+    plugin claims are the public constant `ext_preview_markup::EXTENSIONS`
+    (and the archive plugins' `detect`), for #50's manifest field to list;
+    a disk image enters on Enter through the archive provider's existing
+    path, which #50's `archives.on_open` governs the day it lands; the
+    7-Zip library follows the *Third-party libraries* order with the
+    setting, the write-back and `Browse…`/`Retry` as calls
+    (`Resolver::set_library`, `Resolver::forget`), and the missing library
+    is an `Error::Extension` carrying `ext_vfs_archive::MissingLibrary`,
+    whose message names the library, the install command for this
+    platform, the setting and where Rick looked, which the pane shows
+    today as the preview's error and #50's pane lays out with its two
+    buttons. The acceptance lines that need #50's pane or setting (the
+    `archives.on_open = "system"` branch) are tested with #50.
+
+186. (issue 51) "The `unsafe` needed to call the library stays in
+    `platform` or behind the smallest wrapper the Architecture rules
+    allow — record the choice".
+    Assumed: in `platform`, as `platform::sevenzip`: the `libloading` load,
+    the COM-style virtual tables the library is called through
+    (`IInArchive`, `IInArchiveGetStream`) and the three objects it calls
+    back into (an `IInStream` over a file, the open callback, the extract
+    callback with its `ISequentialOutStream`), each `unsafe` block with its
+    `SAFETY:` comment, behind a safe API (`SevenZip::load`, `open_file`,
+    `open_stream`, `Archive::items`, `sub_stream`, `extract`). The plugins
+    reach it through `ext::platform` and hold no `unsafe` of their own.
+    `BSTR`s are freed with the C `free` the library's Unix build allocates
+    them with (a 4-byte length prefix, `wchar_t` text) and `SysFreeString`
+    on Windows.
+
+187. (issue 51) Two plugins read disk images (`ext-vfs-archive` lists and
+    reads them, `ext-preview-archive` lists them in the pane) and the spec
+    puts a library's path in "the plugin's own TOML settings file".
+    Assumed: one setting, `sevenzip_library` in `vfs-archive.toml`, owned
+    by the archive provider, which the library travels beside; the
+    previewer reads disk images through `ext_vfs_archive::diskimage` with
+    the same `Resolver`, so it reads and writes that one setting, and
+    `ext-preview-archive` depends on `ext-vfs-archive` as the compress
+    plugin does (question 127; deny.toml names it). Both resolve lazily on
+    the first image shown, in the spec's order: the setting, then beside
+    the binary and in the plugins directories (`plugins/vfs-archive/` and
+    `plugins/` beside the binary and under the config directory), then
+    the platform's usual installs (`/usr/lib/7zip/7z.so` and the p7zip
+    paths on Linux, Homebrew and MacPorts on macOS, `C:\Program
+    Files\7-Zip\7z.dll`); the first hit is written back.
+
+188. (issue 51) How a disk image becomes a file tree: the library's
+    container handler (VHD, VHDX, VMDK, VDI, QCOW, Dmg) lists the disk as
+    one item, not the files.
+    Assumed: the walk 7-Zip's own browser does, nested through
+    `IInArchiveGetStream`: the container's main item (`kpidMainSubfile`)
+    as a stream, opened with the partition table handlers (GPT, MBR) and,
+    failing those, the file system handlers (NTFS, FAT, ext, HFS+, APFS,
+    UDF, ISO); each partition as a stream opened with the file system
+    handlers. The tree lists one folder per partition, named as 7-Zip
+    names it (`0.Basic data partition.ntfs`), with the partition's files
+    inside; a partition no handler reads is a file of its size; a raw
+    image is the disk or the file system itself, so a FAT floppy image
+    lists its files at the top. Raw images are `.img`, `.ima` and `.raw`;
+    the containers are told by their signatures where they have one
+    (VHDX, QCOW2, VMDK, a dynamic VHD, VDI) and by name otherwise (a fixed
+    VHD, DMG, raw). The spec's "no mature Rust crate" stands: nothing is
+    parsed natively.
+
+189. (issue 51) The Mount action's outcome and its undo.
+    Assumed: `platform::Mount::mount_image` returns the `Volume` the image
+    became, as `Volumes::volumes` lists it, and the action runs it as one
+    job for the selection, so the mount shows in the operations area; the
+    side panel's live volume watch (every two seconds) shows the row, and
+    nothing navigates to it. On Linux the image is set up as a loop device
+    (`-r` for an ISO), the first partition is mounted when the kernel
+    announces one, the device itself otherwise, and Eject on such a row
+    unmounts and deletes the loop device (`udisksctl loop-delete`) instead
+    of powering a drive off. On macOS `hdiutil attach -plist` names the
+    mount points and the first is the volume; on Windows the drive letter
+    the image's volume gets. A mounted VHD or VHDX shows on Windows as a
+    fixed disk, so its row has no Eject there; a mounted ISO is a virtual
+    optical drive and ejects. The formats per platform are the spec's
+    table, as `platform::NATIVE_MOUNTABLE`, and the `Fake` lets a test set
+    another platform's list, so the action's availability is tried for all
+    three on every runner.
+
+190. (issue 51) "The source one toggle away" for Markdown and HTML is the
+    code previewer's highlighted view (SPEC.md "Preview support").
+    Assumed: `ext-preview-markup` depends on `ext-preview-code` and builds
+    its document over a `CodeDoc`, so the source behind the toggle is the
+    same highlighted text the code previewer shows when the plugin is
+    disabled, with the pretty-print toggle offered while the source is
+    shown; the dependency is the kind question 127 allows. The CSV grid
+    keeps question 107's behaviour: the delimiter sniffed over the first
+    twenty records, the first row a header unless all its cells read as
+    numbers, up to 256 MiB indexed, the raw text up to 1 MiB as the source
+    and the text layer (a file over 1 MiB is cut there; Copy's "whole
+    file" for such a file is #50's pane to resolve).
+
+191. (issue 51) Where the bundled 7-Zip library comes from on each
+    platform, and its licence.
+    Assumed: `cargo xtask bundle` copies `7z.so` or `7z.dll` and
+    `License.txt` from `RICK_SEVENZIP_DIR` into `plugins/vfs-archive/`
+    (the licence as `7-Zip-License.txt`), the way pdfium comes from
+    `RICK_PDFIUM_DIR`; `.github/scripts/sevenzip.sh` fills that directory:
+    for the release archives from the pinned 7-Zip 25.01 sources on Linux
+    and macOS (`make -f ../../cmpl_gcc.mak` and `cmpl_mac_arm64.mak` in
+    `CPP/7zip/Bundles/Format7zF`, as 7-Zip's DOC/readme.txt says) and from
+    the pinned installer's `7z.dll` on Windows, every download checked
+    against its SHA-256; for the tests, Ubuntu's `7zip` package on Linux,
+    the runner's 7-Zip on Windows and the same source build, cached, on
+    macOS. The release archive carries the licence at its root beside
+    THIRD-PARTY-LICENSES.md as well. `RICK_SEVENZIP_DIR` is a build and
+    test variable; the plugin reads no environment variable. The macOS
+    source build could not be run in this task's environment and is
+    verified by tier 2.
+
+192. (issue 51) "Integration test on Linux x64 where udisks is available
+    in CI, otherwise a fake Mount".
+    Assumed: `crates/tests/tests/mount_linux.rs` mounts a generated ISO
+    through `platform::Native`, finds it among the volumes, reads a file
+    from it and ejects it, and runs where `udisksctl status` answers;
+    `.github/actions/setup` installs udisks2 with a polkit rule allowing
+    the runner user the udisks2 actions and sets `RICK_REQUIRE_UDISKS` when
+    the daemon answers, so the test fails rather than skips there. The
+    action itself, its availability per platform and the volume's
+    appearance and Eject in This Machine are tested through the `Fake`.
