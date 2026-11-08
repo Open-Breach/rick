@@ -9,6 +9,8 @@ use model::{
     Column, Dock, DockTarget, Geometry, PaneId, Place, SelectionChange, SettingsChange,
     SidePanelChange, SortDir, SplitDir, TabId, ViewMode, WindowId,
 };
+use ops::PermissionRequest;
+use platform::{FilePermissions, Principals};
 use types::{
     Answer, Conflict, ConflictAnswer, ConflictId, Entry, EntryId, Error, JobId, Location, Progress,
     ProviderId, Question, QuestionId,
@@ -302,6 +304,25 @@ pub enum Command {
     /// A remote file held behind the size cap (`Event::PreviewCapped`):
     /// open the preview whatever its size.
     PreviewAnyway(PaneId),
+    /// Open Properties on the pane's selected entry: the general rows and,
+    /// for a local entry, its owner, group, mode bits and ACL; answered by
+    /// `Event::Properties`, and again after a change while the dialogue is
+    /// open.
+    ShowProperties(PaneId),
+    /// The Properties dialogue closed; a later change does not report back.
+    PropertiesClosed,
+    /// Open the platform's own properties dialogue (Windows Properties,
+    /// macOS Get Info) on the pane's selected entry.
+    SystemProperties(PaneId),
+    /// Change the ownership, mode bits or ACL of entries, as the Properties
+    /// dialogue asks: one job with progress, one undo step, and the
+    /// privileged helper for what the user may not change by themselves.
+    SetPermissions {
+        /// The pane the entries are listed in, refreshed when the job ends.
+        pane: PaneId,
+        /// What to change, on which entries, and how deep.
+        request: PermissionRequest,
+    },
     /// Render a thumbnail of an entry of the pane's listing at `size`
     /// pixels square, through the previewer that claims it; answered by
     /// [`Event::Thumbnail`].
@@ -544,6 +565,30 @@ pub enum Event {
         /// The text.
         text: String,
     },
+    /// What `Command::ShowProperties` found: the dialogue's contents.
+    Properties(Box<PropertiesInfo>),
+}
+
+/// What the Properties dialogue shows for one entry.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PropertiesInfo {
+    /// The pane the entry is listed in.
+    pub pane: PaneId,
+    /// The entry.
+    pub entry: Entry,
+    /// The entry as a path on this machine, for a local entry: what the
+    /// permissions and the platform's dialogue work on.
+    pub path: Option<PathBuf>,
+    /// The general rows: name, type, location, size, dates, link target.
+    pub rows: Vec<(String, String)>,
+    /// The owner, group, mode bits and ACL, for a local entry the platform
+    /// could read them of.
+    pub permissions: Option<FilePermissions>,
+    /// The users and groups to choose from.
+    pub principals: Principals,
+    /// Whether the platform has a dialogue of its own to offer
+    /// (`Command::SystemProperties`).
+    pub native: bool,
 }
 
 impl fmt::Debug for Event {
@@ -618,6 +663,11 @@ impl fmt::Debug for Event {
                 .finish(),
             Self::Conflict(conflict) => f.debug_tuple("Conflict").field(&conflict.id).finish(),
             Self::Question(question) => f.debug_tuple("Question").field(&question.id).finish(),
+            Self::Properties(info) => f
+                .debug_struct("Properties")
+                .field("entry", &info.entry.name)
+                .field("permissions", &info.permissions.is_some())
+                .finish(),
             Self::ViewOpened { pane, tab, view } => f
                 .debug_struct("ViewOpened")
                 .field("pane", pane)

@@ -73,8 +73,10 @@ mod places;
 mod session;
 pub mod settings;
 
-pub use command::{Command, ConnectionOp, Event, TransferMode};
+pub use command::{Command, ConnectionOp, Event, PropertiesInfo, TransferMode};
 pub use ext_settings::ExtSettings;
+/// What a `Command::SetPermissions` carries, re-exported for the UI.
+pub use ops::{PermissionRequest, Recursion};
 pub use places::{PLACES_FILE, defaults as default_places, virtual_icon};
 pub use session::{LAYOUTS_DIR, SAVE_INTERVAL, SESSION_FILE};
 pub use settings::SETTINGS_FILE;
@@ -95,7 +97,7 @@ use model::{
     Column, ConnectionEntry, JobState, Model, PaneId, Place, SelectionChange, Session, Settings,
     SettingsChange, SortDir, TabId, Volume,
 };
-use ops::{Conflicts, PinStore, Scheduler};
+use ops::{Applied, Conflicts, PermissionsCommand, PinStore, Scheduler};
 use platform::{Platform, TrashedItem};
 use runtime::{JobEvent, JobRunner, mpsc};
 use tracing::{debug, warn};
@@ -244,6 +246,15 @@ enum Msg {
     Conflicts,
     /// An extension asked the user a question.
     Prompts,
+    /// `Command::ShowProperties` read the entry.
+    Properties(Box<Result<PropertiesInfo, Error>>),
+    /// A permission job ended.
+    PermissionsApplied {
+        pane: PaneId,
+        label: String,
+        request: PermissionRequest,
+        result: Result<Applied, Error>,
+    },
     /// A remote file's preview was held behind the size cap.
     PreviewCapped {
         pane: PaneId,
@@ -523,6 +534,9 @@ pub struct App {
     ext_settings: ExtSettings,
     /// The title-row search box's index search in flight.
     index_search: Option<IndexJob>,
+    /// The entry the Properties dialogue shows, while it is open: a change
+    /// to it reports the new state through `Event::Properties`.
+    properties_shown: Option<(PaneId, PathBuf)>,
     /// Numbers the index searches, so a superseded one's hits are dropped.
     index_generation: u64,
 }
@@ -776,6 +790,7 @@ impl App {
             plugins: Vec::new(),
             ext_settings,
             index_search: None,
+            properties_shown: None,
             index_generation: 0,
         };
         app.watch_settings();
@@ -1366,6 +1381,10 @@ impl App {
                 }
                 self.model.question_closed(id);
             }
+            Command::ShowProperties(pane) => self.show_properties(pane, events),
+            Command::PropertiesClosed => self.properties_shown = None,
+            Command::SystemProperties(pane) => self.system_properties(pane, events),
+            Command::SetPermissions { pane, request } => self.set_permissions(pane, request),
             Command::RefreshVolumes => self.enumerate_volumes(),
             Command::Undo => self.undo(events),
             Command::Redo => self.redo(events),
@@ -2226,6 +2245,129 @@ impl App {
         // The saver lives as long as the runtime; a closed channel means
         // the process is going down.
         let _ = self.settings_saver.send(settings);
+    }
+
+    /// Reads the selected entry's properties off the UI thread and answers
+    /// with `Event::Properties`.
+    fn show_properties(&mut self, pane: PaneId, events: &mut Vec<Event>) {
+        let Some(ctx) = self.action_ctx(pane, Invocation::Shortcut) else {
+            return;
+        };
+        let Some(entry) = ctx.selection.first().cloned() else {
+            events.push(Event::Notify {
+                level: Level::Info,
+                text: "Select an entry to inspect".to_owned(),
+            });
+            return;
+        };
+        let path = (entry.id.provider == vfs_local::PROVIDER_ID)
+            .then(|| platform::paths::to_path(&entry.path).ok())
+            .flatten();
+        self.properties_shown = path.clone().map(|path| (pane, path));
+        let platform = Arc::clone(&self.platform);
+        let tx = self.mailbox.clone();
+        let location = ctx.location.clone();
+        runtime::handle().spawn_blocking(move || {
+            let info = read_properties(&*platform, pane, entry, path, &location);
+            tx.send(Msg::Properties(Box::new(info)));
+        });
+    }
+
+    /// Opens the platform's own dialogue on the selected entry.
+    fn system_properties(&mut self, pane: PaneId, events: &mut Vec<Event>) {
+        let Some(ctx) = self.action_ctx(pane, Invocation::Shortcut) else {
+            return;
+        };
+        let Some(entry) = ctx.selection.first() else {
+            return;
+        };
+        let Ok(path) = platform::paths::to_path(&entry.path) else {
+            return;
+        };
+        if let Err(error) = self.platform.show(&path) {
+            events.push(Event::Notify {
+                level: Level::Error,
+                text: format!("Properties: {error}"),
+            });
+        }
+    }
+
+    /// Starts the permission job and waits for its outcome in the
+    /// background.
+    fn set_permissions(&mut self, pane: PaneId, request: PermissionRequest) {
+        let label = ops::perms::label(&request);
+        let handle = ops::perms::spawn(
+            &self.jobs,
+            Arc::clone(&self.platform),
+            label.clone(),
+            request.clone(),
+        );
+        self.pane_jobs.insert(handle.id, pane);
+        let tx = self.mailbox.clone();
+        runtime::handle().spawn(async move {
+            let result = handle
+                .result
+                .await
+                .unwrap_or_else(|_| Err(Error::Cancelled));
+            tx.send(Msg::PermissionsApplied {
+                pane,
+                label,
+                request,
+                result,
+            });
+        });
+    }
+
+    /// A permission job ended: the step goes on the undo stack, what failed
+    /// is reported, and an open dialogue on one of the entries sees the
+    /// new state.
+    fn permissions_applied(
+        &mut self,
+        pane: PaneId,
+        label: String,
+        request: &PermissionRequest,
+        result: Result<Applied, Error>,
+        events: &mut Vec<Event>,
+    ) {
+        match result {
+            Ok(applied) => {
+                if let Some((path, why)) = applied.failed.first() {
+                    let name = path.file_name().map_or_else(
+                        || path.display().to_string(),
+                        |n| n.to_string_lossy().into_owned(),
+                    );
+                    let text = if applied.failed.len() == 1 {
+                        format!("{label}: {name} was not changed: {why}")
+                    } else {
+                        format!(
+                            "{label}: {} entries were not changed; {name}: {why}",
+                            applied.failed.len()
+                        )
+                    };
+                    events.push(Event::Notify {
+                        level: Level::Warning,
+                        text,
+                    });
+                }
+                let command =
+                    PermissionsCommand::new(Arc::clone(&self.platform), label, request, &applied);
+                if !command.is_empty() {
+                    self.undo.push(Box::new(command));
+                    self.redo.clear();
+                }
+            }
+            Err(Error::Cancelled) => {}
+            Err(error) => events.push(Event::Notify {
+                level: Level::Error,
+                text: format!("{label}: {error}"),
+            }),
+        }
+        if let Some((shown, path)) = &self.properties_shown
+            && *shown == pane
+            && request.targets.iter().any(|t| t == path)
+        {
+            self.show_properties(pane, events);
+        }
     }
 
     fn selection_len(&self, pane: PaneId) -> usize {
@@ -3146,6 +3288,27 @@ impl App {
                     events.push(Event::Question(question));
                 }
             }
+            Msg::Properties(result) => match *result {
+                Ok(info) => {
+                    // A dialogue closed in the meantime takes no answer.
+                    if self.properties_shown.as_ref().is_some_and(|(pane, path)| {
+                        *pane == info.pane && Some(path) == info.path.as_ref()
+                    }) || info.path.is_none()
+                    {
+                        events.push(Event::Properties(Box::new(info)));
+                    }
+                }
+                Err(error) => events.push(Event::Notify {
+                    level: Level::Error,
+                    text: format!("Properties: {error}"),
+                }),
+            },
+            Msg::PermissionsApplied {
+                pane,
+                label,
+                request,
+                result,
+            } => self.permissions_applied(pane, label, &request, result, events),
             Msg::Schedule => self.sync_waiting(),
             Msg::Volumes(Ok(volumes)) => {
                 if volumes != self.model.volumes {
@@ -3828,6 +3991,82 @@ fn repair(mounts: &Mounts, home: &Location, session: &mut Session) {
 /// previewer is handed for a file on a remote provider, so a 1 GiB log
 /// previews from its first chunk. Everything else goes to the provider
 /// itself.
+/// The contents of the Properties dialogue for `entry`: the general rows,
+/// and the permissions of a local entry the platform can read them of.
+fn read_properties(
+    platform: &dyn Platform,
+    pane: PaneId,
+    entry: Entry,
+    path: Option<PathBuf>,
+    location: &Location,
+) -> Result<PropertiesInfo, Error> {
+    let kind = match &entry.kind {
+        types::EntryKind::File => "File",
+        types::EntryKind::Dir => "Folder",
+        types::EntryKind::Symlink { .. } => "Symbolic link",
+        types::EntryKind::Other => "Special file",
+    };
+    let mut rows = vec![
+        ("Name".to_owned(), entry.name.clone()),
+        ("Type".to_owned(), kind.to_owned()),
+        (
+            "Location".to_owned(),
+            path.as_ref()
+                .and_then(|p| p.parent())
+                .map_or_else(|| location.to_string(), |p| p.display().to_string()),
+        ),
+    ];
+    if let Some(mime) = &entry.mime {
+        rows.push(("Media type".to_owned(), mime.as_str().to_owned()));
+    }
+    if let Some(size) = entry.size {
+        rows.push(("Size".to_owned(), format!("{size} bytes")));
+    }
+    if let Some(path) = &path
+        && let Ok(allocated) = platform::fs::allocated_size(path)
+    {
+        rows.push(("On disk".to_owned(), format!("{allocated} bytes")));
+    }
+    for (label, time) in [
+        ("Modified", entry.modified),
+        ("Accessed", entry.accessed),
+        ("Created", entry.created),
+    ] {
+        if let Some(time) = time {
+            rows.push((label.to_owned(), platform::iso8601(time)));
+        }
+    }
+    if let types::EntryKind::Symlink { target, broken } = &entry.kind {
+        let mut text = target.to_string();
+        if *broken {
+            text.push_str(" (missing)");
+        }
+        rows.push(("Target".to_owned(), text));
+    }
+    let permissions = match &path {
+        Some(path) => match platform.permissions(path) {
+            Ok(permissions) => Some(permissions),
+            Err(Error::Unsupported(_)) => None,
+            Err(error) => return Err(error),
+        },
+        None => None,
+    };
+    let principals = if permissions.is_some() {
+        platform.principals().unwrap_or_default()
+    } else {
+        platform::Principals::default()
+    };
+    Ok(PropertiesInfo {
+        pane,
+        entry,
+        path,
+        rows,
+        permissions,
+        principals,
+        native: platform::NATIVE_PROPERTIES,
+    })
+}
+
 struct Prefixed {
     inner: Arc<dyn ext::Provider>,
     limit: u64,
