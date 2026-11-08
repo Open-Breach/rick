@@ -257,20 +257,6 @@ toggling wrap and three scroll frames. Test:
 | macOS | 16.6 ms | 0.8 ms | 2.0 ms |
 | Windows | 16.6 ms | 1.3 ms | 1.4 ms |
 
-### `viewer-frame` — stepping through 50 images in the viewer
-
-Spec target: 16.6 ms for every frame (Viewer, milestone 3 of 0.2); the
-worst UI frame while the viewer steps through 50 images with Right, the
-decodes running off the UI thread. Test:
-`stepping_through_fifty_images_keeps_every_frame_under_the_budget` in
-`viewer.rs`. First measured by the bench workflow in the 0.2 run.
-
-| OS | Target | Median | Worst |
-| --- | --- | --- | --- |
-| Linux | 16.6 ms | 1.2 ms | 1.3 ms |
-| macOS | 16.6 ms | 2.5 ms | 11.0 ms |
-| Windows | 16.6 ms | 1.2 ms | 1.8 ms |
-
 ### `startup` — startup to the first frame
 
 No spec target; the targets are median × 2 on each OS, rounded up: 10.4,

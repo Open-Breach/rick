@@ -384,6 +384,16 @@ pub trait Provider: Send + Sync + 'static {
         None
     }
 
+    /// Whether the source holding `loc` (one SSH host, one cloud account)
+    /// has *Always preview* on: its `preview_always` switch, set from the
+    /// cap message or the source's editor, after which no whole-file
+    /// preview there is held behind the cap (SPEC.md, Preview, *Remote
+    /// sources*). `false`, the default, leaves the cap in force.
+    fn remote_preview_always(&self, loc: &Location) -> bool {
+        let _ = loc;
+        false
+    }
+
     /// Change notifications for one location, if `WATCH` is set.
     ///
     /// # Errors

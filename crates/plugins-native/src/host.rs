@@ -61,6 +61,9 @@ pub struct Plugin {
     pub version: String,
     /// The points the manifest lists.
     pub points: Points,
+    /// The file name extensions its previewers claim, as the manifest
+    /// lists them.
+    pub previews: Vec<String>,
     /// The plugin's directory.
     pub dir: PathBuf,
     /// Which plugins directory it was found in.
@@ -88,6 +91,10 @@ pub struct Options {
     /// (`ext::Registry::prompts`); none when `None`, so a plugin that must
     /// ask refuses instead.
     pub prompts: Option<Arc<ext::Prompts>>,
+    /// The settings values lent to every plugin while it registers
+    /// (`ext::Registry::settings_store`); none when `None`, so a plugin
+    /// works with its defaults and remembers nothing.
+    pub settings: Option<Arc<dyn ext::SettingsStore>>,
 }
 
 impl std::fmt::Debug for Options {
@@ -98,6 +105,7 @@ impl std::fmt::Debug for Options {
             .field("compiled_in", &self.compiled_in)
             .field("platform", &self.platform.is_some())
             .field("prompts", &self.prompts.is_some())
+            .field("settings", &self.settings.is_some())
             .finish()
     }
 }
@@ -238,6 +246,7 @@ fn process(
                     name: String::new(),
                     version: String::new(),
                     points: Points::empty(),
+                    previews: Vec::new(),
                     dir: candidate.dir,
                     source: candidate.source,
                     status: PluginStatus::Refused(error.to_string()),
@@ -269,6 +278,7 @@ fn process(
             name: toml.name.clone(),
             version: toml.version.clone(),
             points: toml.points().unwrap_or_default(),
+            previews: toml.previews.clone(),
             dir: candidate.dir,
             source: candidate.source,
             status,
@@ -326,8 +336,13 @@ fn check_and_load(
     if options.disabled.contains(&toml.id) {
         return Ok(None);
     }
-    let loaded = load_library(&path, options.platform(), options.prompts.clone())
-        .map_err(|e| e.to_string())?;
+    let loaded = load_library(
+        &path,
+        options.platform(),
+        options.prompts.clone(),
+        options.settings.clone(),
+    )
+    .map_err(|e| e.to_string())?;
     let manifest = loaded.manifest();
     if manifest.id.0 != toml.id {
         return Err(format!(

@@ -14,11 +14,13 @@ title, the folders above an archive as local segments and the archive and
 its contents on the archive provider), file list (details, tree, list or
 icon view, only the visible rows laid out, names edited in place for
 Rename, New file and New folder) and status line with the subtree-search
-toggle, the Preview tab (toolbar, info badges, content, status bar; one per
-window, following the focused explorer, docked and torn out like any tab),
-the viewer tabs (one file full size with the folder behind it as a
-slideshow: zoom, pages with a strip, find in the text layer, the info panel,
-the actions menu, the transport bar, fullscreen), the side panel (the
+toggle, the Preview tab (toolbar with the media transport and *Copy*, info
+badges, content, status bar; one per window, following the focused
+explorer, docked and torn out like any tab; Rick's only viewer, laying out
+every kind of content a previewer returns itself in `content.rs`: a file
+list in the explorer's columns, a grid, a rendered document, and the
+message for a missing third-party library with *Browse…* and *Retry*; the
+placeholder for a file no previewer claims), the side panel (the
 editable Places list with its drag reorder, Edit… dialogue
 and keyboard, Favorites, Recent and the Trash view among the places; the
 This Machine, Network and Cloud sections with their utilisation bars, Eject

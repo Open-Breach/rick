@@ -84,6 +84,7 @@
 //!     requires: Capabilities::empty(),
 //!     points: Points::DECORATOR | Points::ACTION,
 //!     platforms: Platforms::ALL,
+//!     previews: &[],
 //! };
 //!
 //! let mut registry = Registry::new();
@@ -148,8 +149,14 @@ use crate::search::SearchIndex;
 /// `Availability::Disabled` carries one, the labels the registry keeps
 /// (`SettingField`, `ConnectionField`, `ConnectionSchema`, `InfoSection`,
 /// `ColumnDef`) are [`Text`](crate::Text) keys, and the registry takes an
-/// extension's translation files (QUESTIONS.md 178–181).
-pub const API_VERSION: u32 = 11;
+/// extension's translation files (QUESTIONS.md 178–181); 12 the preview
+/// pane became the only viewer (issue 50): [`Manifest`] gained `previews`,
+/// the file extensions a plugin's previewers claim, the registry lends a
+/// [`SettingsStore`] so a plugin reads and writes its own declared
+/// settings, `Content` gained `MissingLibrary` for a third-party library a
+/// previewer cannot find, and `Provider` gained `remote_preview_always`
+/// (QUESTIONS.md 191–197).
+pub const API_VERSION: u32 = 12;
 
 bitflags::bitflags! {
     /// The extension points an extension fills, as its manifest declares
@@ -292,6 +299,13 @@ pub struct Manifest {
     /// The operating systems it runs on; the plugin host refuses the
     /// plugin elsewhere.
     pub platforms: Platforms,
+    /// The file name extensions the extension's previewers claim, lower
+    /// case without the dot (`"pdf"`, `"tar.gz"`), so the host can say
+    /// *Plugin available* for a file of such a type from the manifest
+    /// alone, without loading a disabled plugin. Empty for an extension
+    /// without previewers, and for a previewer that claims no file by its
+    /// name (the hex view, chosen per type in settings).
+    pub previews: &'static [&'static str],
 }
 
 /// How a setting is edited and stored.
@@ -368,6 +382,26 @@ pub struct SettingField {
     pub kind: SettingKind,
 }
 
+/// The values of the settings extensions declare ([`SettingsSchema`]), as
+/// the host keeps them in each extension's own TOML file: how an extension
+/// reads and writes its own settings while it runs (issue 50: a previewer
+/// stores the path of the third-party library it found). The registry
+/// lends it like the platform services ([`Registry::settings_store`]); an
+/// extension keeps the handle from `register` and asks lazily, since the
+/// values are read after every extension has declared its schema.
+pub trait SettingsStore: Send + Sync {
+    /// The value of `key` of the extension `ext`: the file's, else the
+    /// schema's default; `None` when no schema declares it.
+    fn get(&self, ext: ExtId, key: &str) -> Option<SettingValue>;
+
+    /// Stores `value` for `key` of `ext` and writes the extension's file.
+    ///
+    /// # Errors
+    ///
+    /// The I/O error of writing the file.
+    fn set(&self, ext: ExtId, key: &str, value: SettingValue) -> Result<(), Error>;
+}
+
 /// The settings an extension exposes; rendered in the Settings screen and
 /// stored in the extension's own TOML file.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -413,6 +447,8 @@ pub struct Registry {
     platform: Option<Arc<dyn Platform>>,
     /// The question queue of the host, when it lent one.
     prompts: Option<Arc<Prompts>>,
+    /// The settings values of the host, when it lent them.
+    settings_store: Option<Arc<dyn SettingsStore>>,
     extensions: Vec<ExtId>,
     manifests: Vec<Manifest>,
     failure: Option<String>,
@@ -434,6 +470,7 @@ impl Default for Registry {
             kernel: kernel_id(),
             platform: None,
             prompts: None,
+            settings_store: None,
             extensions: Vec::new(),
             manifests: Vec::new(),
             failure: None,
@@ -474,6 +511,22 @@ impl Registry {
     pub fn with_prompts(mut self, prompts: Arc<Prompts>) -> Self {
         self.prompts = Some(prompts);
         self
+    }
+
+    /// The same registry, lending `store` as well: where an extension reads
+    /// and writes the settings it declared, after registration.
+    #[must_use]
+    pub fn with_settings_store(mut self, store: Arc<dyn SettingsStore>) -> Self {
+        self.settings_store = Some(store);
+        self
+    }
+
+    /// The settings values the host lent, for an extension's `register` to
+    /// keep: `None` in a registry built with [`new`](Self::new), when an
+    /// extension works with its schema's defaults and remembers nothing.
+    #[must_use]
+    pub fn settings_store(&self) -> Option<&Arc<dyn SettingsStore>> {
+        self.settings_store.as_ref()
     }
 
     /// The platform services the host lent, for an extension's `register`:
@@ -533,6 +586,7 @@ impl Registry {
         let mut staging = Registry {
             platform: self.platform.clone(),
             prompts: self.prompts.clone(),
+            settings_store: self.settings_store.clone(),
             ..Registry::default()
         };
         ext.register(&mut staging)?;
@@ -776,6 +830,7 @@ mod tests {
             requires: Capabilities::empty(),
             points: Points::empty(),
             platforms: Platforms::ALL,
+            previews: &[],
         }));
         assert!(matches!(result, Err(Error::Unsupported(_))));
         assert_eq!(registry.extensions(), [] as [ExtId; 0]);
@@ -831,6 +886,7 @@ mod tests {
             requires: Capabilities::empty(),
             points: Points::ACTION,
             platforms: Platforms::ALL,
+            previews: &[],
         };
         assert!(matches!(
             registry.load(&Undeclared(manifest.clone())),

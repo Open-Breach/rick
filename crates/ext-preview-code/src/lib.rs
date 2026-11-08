@@ -85,6 +85,13 @@ const LANGUAGES: &[(&str, &str)] = &[
     ("sql", "sql"),
 ];
 
+/// The file name extensions the manifest claims: the keys of [`LANGUAGES`].
+const PREVIEWS: &[&str] = &[
+    "js", "mjs", "cjs", "jsx", "ts", "tsx", "java", "rs", "cs", "fs", "fsx", "vb", "c", "h", "cpp",
+    "cc", "cxx", "hpp", "hh", "pl", "pm", "php", "json", "xml", "yaml", "yml", "html", "htm", "md",
+    "markdown", "toml", "sh", "bash", "py", "rb", "go", "css", "sql",
+];
+
 static SYNTAXES: LazyLock<SyntaxSet> = LazyLock::new(SyntaxSet::load_defaults_newlines);
 static THEMES: LazyLock<ThemeSet> = LazyLock::new(ThemeSet::load_defaults);
 
@@ -161,6 +168,7 @@ impl CodePreview {
                 requires: Capabilities::empty(),
                 points: Points::PREVIEWER,
                 platforms: Platforms::ALL,
+                previews: PREVIEWS,
             },
         }
     }

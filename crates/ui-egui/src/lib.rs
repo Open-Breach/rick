@@ -29,6 +29,7 @@
 pub mod compare;
 pub mod conflict;
 pub mod console;
+pub mod content;
 pub mod dnd;
 pub mod dock;
 pub mod format;
@@ -53,7 +54,6 @@ pub mod settings_ui;
 pub mod shell;
 pub mod side_panel;
 pub mod thumbs;
-pub mod viewer;
 pub mod views;
 
 use std::sync::Arc;

@@ -9,7 +9,7 @@ the requested size, a shaded solid in a neutral material over a ground
 grid, and reads it back as an RGBA frame the host uploads, so the plugin
 never touches egui. The document claims three pointer gestures as
 `PreviewControl::Pointer` controls, orbit by drag, zoom by wheel and reset
-by double-click, which the pane and the viewer forward through
+by double-click, which the preview pane forwards through
 `set_control` with no 3D code of their own; the view lives in the document
 and so is kept per file while it is open. The status bar shows the format,
 the triangle count, the bounding box in millimetres and, for OBJ, the

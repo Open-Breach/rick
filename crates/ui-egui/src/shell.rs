@@ -38,7 +38,6 @@ use crate::search::{Pick, SearchBox};
 use crate::settings_ui::ShortcutsScreen;
 use crate::side_panel::SidePanelState;
 use crate::thumbs::Thumbnails;
-use crate::viewer::{self, ViewerCx, ViewerState, Zoom};
 use crate::{compare, console};
 use crate::{
     conflict, frame, icons, inspector, menus, pane, paths, question, settings_ui, side_panel,
@@ -195,12 +194,16 @@ pub enum Request {
     RenameLayout(String),
     /// Close a window; the last one closes the application.
     CloseWindow(WindowId),
-    /// A viewer tab fills the screen, or stops filling it.
-    ViewerFullscreen {
-        /// The viewer tab.
-        tab: TabId,
-        /// On or off.
-        on: bool,
+    /// The preview pane's *Browse…* for a missing third-party library:
+    /// open the platform's file dialogue, store the chosen file into the
+    /// previewer's setting and open the preview again.
+    BrowseLibrary {
+        /// The pane whose preview asked.
+        pane: PaneId,
+        /// The extension and the key of the setting that holds the path.
+        setting: (types::ExtId, &'static str),
+        /// What the dialogue filters for.
+        filters: Vec<platform::DialogFilter>,
     },
     /// Open the side panel's Edit… dialogue for a place.
     EditPlace {
@@ -280,6 +283,14 @@ struct Dialog {
         &'static str,
         runtime::oneshot::Receiver<Option<std::path::PathBuf>>,
     )>,
+}
+
+/// The file dialogue a preview's *Browse…* opened for a missing library:
+/// the pane that asked, the setting the choice goes into, the answer.
+struct LibraryBrowse {
+    pane: PaneId,
+    setting: (types::ExtId, &'static str),
+    answer: runtime::oneshot::Receiver<Vec<std::path::PathBuf>>,
 }
 
 /// What a name typed into the name prompt is for.
@@ -375,6 +386,9 @@ pub struct RickUi {
     inspector_width: f32,
     /// The Properties dialogue, open or not.
     properties: properties::PropertiesDialog,
+    /// The file dialogue a preview's *Browse…* opened for a missing
+    /// library, while it is open.
+    library_browse: Option<LibraryBrowse>,
     /// The Hash dialogue, open or not.
     hash: hash::HashDialog,
     /// Read-only texts actions asked to show, each in its own window.
@@ -385,16 +399,10 @@ pub struct RickUi {
     /// The egui context, for uploading textures outside a frame callback.
     ctx: egui::Context,
     previews: Previews,
-    /// Each viewer tab's own state.
-    viewers: HashMap<TabId, ViewerState>,
     /// The views actions opened (a console, a comparison), by their tab.
     views: HashMap<TabId, ext::View>,
     /// Each console tab's own state.
     consoles: HashMap<TabId, ConsoleUi>,
-    /// The zoom remembered per file type, for the viewers, this session.
-    zoom_memory: HashMap<String, Zoom>,
-    /// The viewer tab filling the screen, if one does.
-    fullscreen: Option<TabId>,
     closed_tabs: Vec<Location>,
     /// The operations area's rows: rates and when each job ended.
     operations: Operations,
@@ -564,17 +572,15 @@ impl RickUi {
             inspector_state: inspector::PaneState::default(),
             inspector_width,
             properties: properties::PropertiesDialog::default(),
+            library_browse: None,
             hash: hash::HashDialog::default(),
             texts: Vec::new(),
             next_text: 0,
             thumbnails: Thumbnails::default(),
             ctx: ctx.clone(),
             previews: Previews::default(),
-            viewers: HashMap::new(),
             views: HashMap::new(),
             consoles: HashMap::new(),
-            zoom_memory: HashMap::new(),
-            fullscreen: None,
             closed_tabs: Vec::new(),
             operations: Operations::default(),
             side: SidePanelState::default(),
@@ -895,24 +901,6 @@ impl RickUi {
         &self.previews
     }
 
-    /// A viewer tab's state, for tests.
-    #[must_use]
-    pub fn viewer(&self, tab: TabId) -> Option<&ViewerState> {
-        self.viewers.get(&tab)
-    }
-
-    /// The viewer tab filling the screen, for tests.
-    #[must_use]
-    pub fn viewer_fullscreen(&self) -> Option<TabId> {
-        self.fullscreen
-    }
-
-    /// The zoom remembered for a file type this session, for tests.
-    #[must_use]
-    pub fn zoom_for(&self, name: &str) -> Option<Zoom> {
-        self.zoom_memory.get(&viewer::type_key(name)).copied()
-    }
-
     /// Whether the application is closing.
     #[must_use]
     pub fn quitting(&self) -> bool {
@@ -955,14 +943,23 @@ impl RickUi {
                     let entry = self.preview_entry(pane);
                     self.previews.failed(pane, &error, entry);
                 }
+                Event::PreviewNone { pane, plugin } => {
+                    let entry = self.preview_entry(pane);
+                    self.previews.none(pane, plugin, entry);
+                }
                 Event::PreviewPrefix {
                     pane,
                     served,
                     total,
                 } => self.previews.prefix(pane, served, total),
-                Event::PreviewCapped { pane, size, cap } => {
+                Event::PreviewCapped {
+                    pane,
+                    size,
+                    cap,
+                    source,
+                } => {
                     let entry = self.preview_entry(pane);
-                    self.previews.capped(pane, size, cap, entry);
+                    self.previews.capped(pane, size, cap, source, entry);
                 }
                 Event::ViewOpened { tab, view, .. } => {
                     if let ext::View::Console(console) = &view {
@@ -1000,19 +997,9 @@ impl RickUi {
         });
     }
 
-    /// The entry the app is previewing in `pane`, if any: the Preview tab's
-    /// or a viewer tab's.
+    /// The entry the app is previewing in `pane`, if any: the Preview tab's.
     fn preview_entry(&self, pane: PaneId) -> Option<EntryId> {
         self.app.preview_entry(pane)
-    }
-
-    /// Whether the pane's active tab is a viewer, which takes the Viewer
-    /// shortcut table.
-    fn in_viewer(&self, pane: PaneId) -> bool {
-        self.app
-            .model()
-            .active_tab(pane)
-            .is_some_and(|(_, tab)| tab.kind == TabKind::Viewer)
     }
 
     fn handle(&mut self, command: Command) {
@@ -1149,13 +1136,15 @@ impl RickUi {
         if search_active || ctx.egui_wants_keyboard_input() {
             return;
         }
-        let in_viewer = self.in_viewer(pane);
         let filter_text = self
             .app
             .model()
             .active_tab(pane)
             .map(|(_, tab)| tab.filter.clone())
             .unwrap_or_default();
+        // The Preview tab has the focus: its own table (Space plays) comes
+        // first.
+        let in_preview = crate::dock::shows_preview(self.app.model(), self.focused_in(window));
         let mut intents = Vec::new();
         let mut typed = String::new();
         let mut backspace = false;
@@ -1171,14 +1160,13 @@ impl RickUi {
                     if *key == egui::Key::Backspace
                         && modifiers.is_none()
                         && !filter_text.is_empty()
-                        && !in_viewer
                     {
                         backspace = true;
                         return false;
                     }
                     match self
                         .keys
-                        .match_key(*modifiers, *key, *physical_key, in_viewer)
+                        .match_key(*modifiers, *key, *physical_key, in_preview)
                     {
                         Some(intent) => {
                             intents.push(intent);
@@ -1187,14 +1175,11 @@ impl RickUi {
                         None => true,
                     }
                 }
-                // Type-to-filter; a viewer has no list and its letters
-                // (J, K, L, I) are shortcuts.
+                // Type-to-filter.
                 egui::Event::Text(text)
                     if text.chars().all(|c| !c.is_control() && !c.is_whitespace()) =>
                 {
-                    if !in_viewer {
-                        typed.push_str(text);
-                    }
+                    typed.push_str(text);
                     false
                 }
                 _ => true,
@@ -1265,7 +1250,11 @@ impl RickUi {
                         });
                     }
                     Request::CloseWindow(window) => self.close_window(window, ctx),
-                    Request::ViewerFullscreen { tab, on } => self.set_fullscreen(ctx, tab, on),
+                    Request::BrowseLibrary {
+                        pane,
+                        setting,
+                        filters,
+                    } => self.browse_library(pane, setting, filters),
                     Request::EditPlace { index, title, icon } => {
                         side_panel::begin_edit(&mut self.side, index, title, icon);
                     }
@@ -1282,27 +1271,6 @@ impl RickUi {
                     }
                 }
             }
-        }
-    }
-
-    /// A viewer fills the screen, or stops: the window goes fullscreen with
-    /// it and draws nothing but the viewer, and the viewer's pane takes the
-    /// keyboard.
-    fn set_fullscreen(&mut self, ctx: &egui::Context, tab: TabId, on: bool) {
-        if on {
-            if self
-                .app
-                .model()
-                .tab(tab)
-                .is_none_or(|t| t.kind != TabKind::Viewer)
-            {
-                return;
-            }
-            self.fullscreen = Some(tab);
-            self.handle(Command::ActivateTab(tab));
-            ctx.send_viewport_cmd(ViewportCommand::Fullscreen(true));
-        } else if self.fullscreen.take().is_some() {
-            ctx.send_viewport_cmd(ViewportCommand::Fullscreen(false));
         }
     }
 
@@ -1625,10 +1593,8 @@ impl RickUi {
 
     /// Whether the shell handles an action itself rather than running it:
     /// the three inline edits (QUESTIONS.md 26) and Open containing folder
-    /// (QUESTIONS.md 19). A viewer has no list to edit in, so its rename
-    /// and new entries go through the action's own prompt.
+    /// (QUESTIONS.md 19).
     fn intercept(&mut self, action: ActionId, ctx: &ActionCtx) -> bool {
-        let in_viewer = self.in_viewer(ctx.pane);
         match action.0 {
             // Rename with several selected is the bulk rename, when the
             // rename plugin is loaded.
@@ -1636,25 +1602,21 @@ impl RickUi {
                 self.run_action_with(ActionId("rename.bulk"), ctx.clone());
                 true
             }
-            "core.rename" if !self.inline_commit && !in_viewer && ctx.selection.len() == 1 => {
+            "core.rename" if !self.inline_commit && ctx.selection.len() == 1 => {
                 self.requests.push(Request::StartEdit {
                     pane: ctx.pane,
                     kind: EditKind::Rename(ctx.selection[0].id),
                 });
                 true
             }
-            "core.new_file"
-                if !self.inline_commit && !in_viewer && self.writable(&ctx.location) =>
-            {
+            "core.new_file" if !self.inline_commit && self.writable(&ctx.location) => {
                 self.requests.push(Request::StartEdit {
                     pane: ctx.pane,
                     kind: EditKind::NewFile,
                 });
                 true
             }
-            "core.new_folder"
-                if !self.inline_commit && !in_viewer && self.writable(&ctx.location) =>
-            {
+            "core.new_folder" if !self.inline_commit && self.writable(&ctx.location) => {
                 self.requests.push(Request::StartEdit {
                     pane: ctx.pane,
                     kind: EditKind::NewFolder,
@@ -1719,8 +1681,8 @@ impl RickUi {
     }
 
     /// Opens an entry: a trashed item is restored; otherwise the app
-    /// decides: a folder or an archive navigates, a previewable file goes to
-    /// the viewer, anything else to the system default.
+    /// decides: a folder or an archive navigates, anything else goes to the
+    /// system default application.
     fn open_entry(&mut self, pane: PaneId, id: EntryId) {
         let Some((_, tab)) = self.app.model().active_tab(pane) else {
             return;
@@ -1756,9 +1718,6 @@ impl RickUi {
             .model()
             .window_of(pane)
             .unwrap_or(self.app.model().focused_window);
-        if self.dispatch_viewer(intent, pane, ctx) {
-            return;
-        }
         match intent {
             Intent::Action(action) => self.run_action(action, pane, Invocation::Shortcut),
             Intent::Open => self.open_selection(pane),
@@ -1804,6 +1763,9 @@ impl RickUi {
                 pane,
                 change: SelectionChange::Invert,
             }),
+            Intent::PreviewPlay => {
+                inspector::play_pause(&mut self.previews, self.app.preview_pane());
+            }
             Intent::ToggleFocused => {
                 let cursor = self
                     .app
@@ -2062,134 +2024,7 @@ impl RickUi {
                     change: SidePanelChange::Visible(!visible),
                 });
             }
-            // The Viewer table outside a viewer tab: nothing to do.
-            Intent::ViewerPrev
-            | Intent::ViewerNext
-            | Intent::ViewerPageUp
-            | Intent::ViewerPageDown
-            | Intent::ViewerFirst
-            | Intent::ViewerLast
-            | Intent::ViewerFit
-            | Intent::ViewerActual
-            | Intent::ViewerFitWidth
-            | Intent::ViewerZoomIn
-            | Intent::ViewerZoomOut
-            | Intent::ViewerPlay
-            | Intent::ViewerRewind
-            | Intent::ViewerPause
-            | Intent::ViewerForward
-            | Intent::ViewerFind
-            | Intent::ViewerInfo => {}
         }
-    }
-
-    /// The intents a viewer tab takes when it is the pane's active tab: its
-    /// own table, Escape (leave fullscreen, then close) and F11. Returns
-    /// whether the intent was one of them.
-    // One arm per row of the Viewer table.
-    #[allow(clippy::too_many_lines)]
-    fn dispatch_viewer(&mut self, intent: Intent, pane: PaneId, ctx: &egui::Context) -> bool {
-        let Some((tab_id, tab)) = self
-            .app
-            .model()
-            .active_tab(pane)
-            .filter(|(_, tab)| tab.kind == TabKind::Viewer)
-        else {
-            return false;
-        };
-        let fullscreen = self.fullscreen == Some(tab_id);
-        let state = self.viewers.entry(tab_id).or_default();
-        let slot = self.previews.get_mut(pane);
-        let entry = viewer::shown(tab).cloned();
-        let mut v = ViewerCx {
-            state,
-            slot,
-            zoom_memory: &mut self.zoom_memory,
-            fullscreen,
-        };
-        let select = |id: Option<EntryId>| {
-            id.map(|id| Command::Select {
-                pane,
-                change: SelectionChange::Set(vec![id]),
-            })
-        };
-        let mut command = None;
-        match intent {
-            Intent::ViewerPrev => command = select(viewer::step(tab, viewer::Step::By(-1))),
-            Intent::ViewerNext => command = select(viewer::step(tab, viewer::Step::By(1))),
-            Intent::ViewerFirst => command = select(viewer::step(tab, viewer::Step::First)),
-            Intent::ViewerLast => command = select(viewer::step(tab, viewer::Step::Last)),
-            Intent::ViewerPageUp | Intent::ViewerPageDown => {
-                let by = if intent == Intent::ViewerPageUp {
-                    -1
-                } else {
-                    1
-                };
-                let pages = v.slot.pages().unwrap_or(1);
-                let target = v.slot.page as isize + by;
-                if pages > 1 && (0..pages as isize).contains(&target) {
-                    viewer::go_to_page(&mut v, target as usize);
-                } else {
-                    command = select(viewer::step(tab, viewer::Step::By(by)));
-                }
-            }
-            Intent::ViewerFit => viewer::set_zoom(&mut v, entry.as_ref(), Zoom::Fit),
-            Intent::ViewerActual => viewer::set_zoom(&mut v, entry.as_ref(), Zoom::Actual),
-            Intent::ViewerFitWidth => viewer::set_zoom(&mut v, entry.as_ref(), Zoom::FitWidth),
-            Intent::ViewerZoomIn => {
-                let zoom = viewer::zoom_step(v.state, 1.25);
-                viewer::set_zoom(&mut v, entry.as_ref(), zoom);
-            }
-            Intent::ViewerZoomOut => {
-                let zoom = viewer::zoom_step(v.state, 0.8);
-                viewer::set_zoom(&mut v, entry.as_ref(), zoom);
-            }
-            Intent::ViewerPlay => {
-                if let Some(t) = v.slot.transport() {
-                    if t.playing() {
-                        t.pause();
-                    } else {
-                        t.play();
-                    }
-                }
-            }
-            Intent::ViewerPause => {
-                if let Some(t) = v.slot.transport() {
-                    t.pause();
-                }
-            }
-            Intent::ViewerRewind => viewer::seek_by(v.slot, viewer::SEEK_STEP, true),
-            Intent::ViewerForward => viewer::seek_by(v.slot, viewer::SEEK_STEP, false),
-            Intent::ViewerFind => {
-                let find = v.state.find.get_or_insert_with(Default::default);
-                find.focus = true;
-            }
-            Intent::ViewerInfo => v.state.info_open = !v.state.info_open,
-            Intent::Fullscreen => {
-                self.requests.push(Request::ViewerFullscreen {
-                    tab: tab_id,
-                    on: !fullscreen,
-                });
-            }
-            Intent::Escape => {
-                if fullscreen {
-                    self.requests.push(Request::ViewerFullscreen {
-                        tab: tab_id,
-                        on: false,
-                    });
-                } else {
-                    self.closed_tabs.push(tab.location.clone());
-                    self.requests
-                        .push(Request::Command(Command::CloseTab(tab_id)));
-                }
-            }
-            _ => return false,
-        }
-        if let Some(command) = command {
-            self.handle(command);
-        }
-        let _ = ctx;
-        true
     }
 
     /// The tab order of a pane as its window's dock shows it.
@@ -2214,13 +2049,63 @@ impl RickUi {
                 }
             }
             // One entry: a folder or an archive navigates, a file goes to the
-            // viewer or the system application, a trashed item is restored;
-            // several entries all go to the system (or back out of the trash).
+            // system application, a trashed item is restored; several entries
+            // all go to the system (or back out of the trash).
             [one] => {
                 let id = one.id;
                 self.open_entry(pane, id);
             }
             _ => self.run_action(ActionId("core.open_default"), pane, Invocation::Shortcut),
+        }
+    }
+
+    /// Opens the platform's file dialogue for a missing library's file; the
+    /// answer is polled each frame ([`poll_library_browse`](Self::poll_library_browse)).
+    fn browse_library(
+        &mut self,
+        pane: PaneId,
+        setting: (types::ExtId, &'static str),
+        filters: Vec<platform::DialogFilter>,
+    ) {
+        if self.library_browse.is_some() {
+            return;
+        }
+        let platform = Arc::clone(self.app.platform());
+        let title = t!("preview-library-choose", name = setting.0.0);
+        let (tx, rx) = runtime::oneshot::channel();
+        runtime::handle().spawn(async move {
+            let _ = tx.send(platform.pick_files(&title, &filters).await);
+        });
+        self.library_browse = Some(LibraryBrowse {
+            pane,
+            setting,
+            answer: rx,
+        });
+    }
+
+    /// A file the *Browse…* dialogue picked goes into the previewer's
+    /// setting, and the preview opens again.
+    fn poll_library_browse(&mut self, ctx: &egui::Context) {
+        let Some(browse) = self.library_browse.as_mut() else {
+            return;
+        };
+        match browse.answer.try_recv() {
+            Ok(files) => {
+                let (pane, (ext, key)) = (browse.pane, browse.setting);
+                self.library_browse = None;
+                if let Some(path) = files.into_iter().next() {
+                    self.handle(Command::ExtSetting {
+                        ext: ext.0.to_owned(),
+                        key: key.to_owned(),
+                        value: ext::SettingValue::Text(path.display().to_string()),
+                    });
+                    self.handle(Command::PreviewRetry(pane));
+                }
+            }
+            Err(runtime::oneshot::error::TryRecvError::Closed) => self.library_browse = None,
+            Err(runtime::oneshot::error::TryRecvError::Empty) => {
+                ctx.request_repaint_after(Duration::from_millis(100));
+            }
         }
     }
 
@@ -2978,20 +2863,14 @@ struct Viewer<'a> {
     shift: bool,
     /// The pane keyboard input goes to in this window.
     focused: PaneId,
-    /// The previews, for the Preview tab and the viewers.
+    /// The previews, for the Preview tab.
     previews: &'a mut Previews,
     /// The Preview tab's own state.
     inspector_state: &'a mut inspector::PaneState,
-    /// Each viewer tab's state.
-    viewers: &'a mut HashMap<TabId, ViewerState>,
     /// The views actions opened, by tab.
     views: &'a HashMap<TabId, ext::View>,
     /// Each console tab's state.
     consoles: &'a mut HashMap<TabId, ConsoleUi>,
-    /// The zoom remembered per file type.
-    zoom_memory: &'a mut HashMap<String, Zoom>,
-    /// The viewer tab filling the screen.
-    fullscreen: Option<TabId>,
 }
 
 impl TabViewer for Viewer<'_> {
@@ -3006,7 +2885,6 @@ impl TabViewer for Viewer<'_> {
             || "?".into(),
             |t| match t.kind {
                 TabKind::Preview => format!("{} Preview", icons::PREVIEW).into(),
-                TabKind::Viewer => viewer::title(t).into(),
                 TabKind::Console => format!(
                     "{} {}",
                     icons::TERMINAL,
@@ -3131,18 +3009,6 @@ impl TabViewer for Viewer<'_> {
             thumbnails: self.thumbnails,
             dnd: self.dnd,
         };
-        if state.kind == TabKind::Viewer {
-            let target = self.app.preview_entry(pane);
-            let slot = self.previews.sync_mut(ui.ctx(), pane, target);
-            let mut v = ViewerCx {
-                state: self.viewers.entry(*tab).or_default(),
-                slot,
-                zoom_memory: self.zoom_memory,
-                fullscreen: self.fullscreen == Some(*tab),
-            };
-            viewer::show(ui, &mut cx, &mut v);
-            return;
-        }
         pane::show(ui, &mut cx);
     }
 
@@ -3209,11 +3075,8 @@ impl RickUi {
                 focused,
                 previews: &mut self.previews,
                 inspector_state: &mut self.inspector_state,
-                viewers: &mut self.viewers,
                 views: &self.views,
                 consoles: &mut self.consoles,
-                zoom_memory: &mut self.zoom_memory,
-                fullscreen: self.fullscreen,
             };
             DockArea::new(&mut w.dock.state)
                 .id(dock_id)
@@ -3383,39 +3246,14 @@ impl RickUi {
             );
         }
         self.resolve_pending_selects();
+        self.poll_library_browse(ctx);
         self.handle_keys(ctx, window);
         self.apply_requests(ctx);
-        // Viewer tabs that went took their state with them; a fullscreen
-        // viewer that closed leaves the screen.
-        let model = self.app.model();
-        self.viewers.retain(|tab, _| model.tab(*tab).is_some());
         // A closed console or comparison takes its view with it; dropping a
         // console ends its shell.
+        let model = self.app.model();
         self.views.retain(|tab, _| model.tab(*tab).is_some());
         self.consoles.retain(|tab, _| model.tab(*tab).is_some());
-        if self.fullscreen.is_some_and(|tab| model.tab(tab).is_none()) {
-            self.set_fullscreen(ctx, TabId(0), false);
-        }
-
-        // A viewer filling the screen: nothing but it.
-        if let Some(tab) = self.fullscreen
-            && self
-                .app
-                .model()
-                .pane_of(tab)
-                .and_then(|p| self.app.model().window_of(p))
-                == Some(window)
-        {
-            if let Some(w) = self.windows.get_mut(&window) {
-                w.window_frame = None;
-                w.content = Some(ui.max_rect());
-            }
-            self.fullscreen_viewer(ui, tab);
-            self.apply_requests(ctx);
-            self.report_viewport(ctx, window);
-            self.apply_requests(ctx);
-            return;
-        }
 
         // Rick's own window frame where the system draws none; the panels
         // go inside it.
@@ -3484,49 +3322,6 @@ impl RickUi {
             w.dock.rebuild(self.app.model());
             w.dock.take_order(self.app.model());
         }
-    }
-
-    /// Draws the viewer `tab` over the whole window: its fullscreen.
-    fn fullscreen_viewer(&mut self, ui: &mut egui::Ui, tab: TabId) {
-        let model = self.app.model();
-        let Some(pane) = model.pane_of(tab) else {
-            return;
-        };
-        let Some(state) = model.tab(tab) else {
-            return;
-        };
-        let Some(window) = model.window_of(pane) else {
-            return;
-        };
-        let Some(w) = self.windows.get_mut(&window) else {
-            return;
-        };
-        let tab_ui = self
-            .tabs
-            .entry(tab)
-            .or_insert_with(|| TabUi::for_tab(state));
-        let mut cx = PaneCx {
-            app: &self.app,
-            pane,
-            tab_id: tab,
-            tab: state,
-            tab_ui,
-            requests: &mut self.requests,
-            keys: &self.keys,
-            now: self.now,
-            focused: true,
-            thumbnails: &mut self.thumbnails,
-            dnd: &mut w.dnd,
-        };
-        let target = self.app.preview_entry(pane);
-        let slot = self.previews.sync_mut(ui.ctx(), pane, target);
-        let mut v = ViewerCx {
-            state: self.viewers.entry(tab).or_default(),
-            slot,
-            zoom_memory: &mut self.zoom_memory,
-            fullscreen: true,
-        };
-        egui::CentralPanel::default().show(ui, |ui| viewer::show(ui, &mut cx, &mut v));
     }
 
     /// Keeps the windows in step with the model: the root viewport follows

@@ -768,6 +768,7 @@ impl IndexExtension {
                 requires: Capabilities::empty(),
                 points: Points::SEARCH_INDEX,
                 platforms: Platforms::ALL,
+                previews: &[],
             },
             index,
         })
@@ -1664,6 +1665,7 @@ mod net {
                     requires: Capabilities::empty(),
                     points: Points::PROVIDER,
                     platforms: Platforms::ALL,
+                    previews: &[],
                 },
                 stub,
             }

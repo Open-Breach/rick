@@ -113,8 +113,8 @@ pub fn crate_stem(path: &Path) -> String {
 
 /// Opens the library at `path`, calls its entry point (named after the
 /// library's file: `libext_git.so` exports `rick_plugin_register_ext_git`)
-/// with a fresh registry lending `platform` and `prompts` and returns the plugin with its
-/// contributions.
+/// with a fresh registry lending `platform`, `prompts` and `settings` and
+/// returns the plugin with its contributions.
 ///
 /// The caller has checked the plugin's manifest file first: the toolchain
 /// and the API version are what make the library's entry point safe to
@@ -130,6 +130,7 @@ pub fn load_library(
     path: &Path,
     platform: Arc<dyn Platform>,
     prompts: Option<Arc<ext::Prompts>>,
+    settings: Option<Arc<dyn ext::SettingsStore>>,
 ) -> Result<Loaded, LoadError> {
     debug!(path = %path.display(), "loading");
     // SAFETY: loading runs the library's initialisers. A Rust cdylib built
@@ -140,6 +141,9 @@ pub fn load_library(
     let mut registry = Registry::with_platform(platform);
     if let Some(prompts) = prompts {
         registry = registry.with_prompts(prompts);
+    }
+    if let Some(settings) = settings {
+        registry = registry.with_settings_store(settings);
     }
     let status = {
         // SAFETY: `EntryPoint` is the signature `ext::plugin!` declares for

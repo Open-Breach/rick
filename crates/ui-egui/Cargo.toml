@@ -20,6 +20,7 @@ eframe = { workspace = true }
 egui = { workspace = true }
 egui_dock = { workspace = true }
 egui_extras = { workspace = true }
+image = { workspace = true }
 tracing = { workspace = true }
 egui-phosphor = { version = "0.14", features = ["fill"] }
 

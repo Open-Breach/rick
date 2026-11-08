@@ -108,6 +108,7 @@ impl InstallerExtension {
                 requires: Capabilities::empty(),
                 points: Points::PROVIDER | Points::DECORATOR | Points::ACTION,
                 platforms: Platforms::ALL,
+                previews: &[],
             },
         }
     }

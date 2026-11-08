@@ -101,6 +101,12 @@ pub const USB: &str = ph::USB;
 pub const DISK: &str = ph::HARD_DRIVE;
 /// An optical disc.
 pub const DISC: &str = ph::DISC;
+/// An encrypted entry of an archive listing.
+pub const LOCK: &str = ph::LOCK;
+/// The rendered view of markup, as opposed to its source.
+pub const RENDERED: &str = ph::ARTICLE;
+/// The media transport's volume.
+pub const VOLUME: &str = ph::SPEAKER_HIGH;
 /// The side panel's tree follows the focused pane.
 pub const LINKED: &str = ph::LINK_SIMPLE;
 /// A console tab.
@@ -162,30 +168,6 @@ pub const ZOOM_IN: &str = ph::MAGNIFYING_GLASS_PLUS;
 pub const ZOOM_OUT: &str = ph::MAGNIFYING_GLASS_MINUS;
 /// A wrapped line's continuation mark in the gutter.
 pub const CONTINUATION: &str = ph::ARROW_ELBOW_DOWN_RIGHT;
-/// Fit a frame to the width of the viewer.
-pub const FIT_WIDTH: &str = ph::ARROWS_OUT_LINE_HORIZONTAL;
-/// The viewer's find.
-pub const FIND: &str = ph::MAGNIFYING_GLASS;
-/// The viewer's info panel.
-pub const INFO_PANEL: &str = ph::SIDEBAR_SIMPLE;
-/// The viewer's actions menu.
-pub const ACTIONS: &str = ph::DOTS_THREE_OUTLINE_VERTICAL;
-/// The viewer filling the screen.
-pub const FULLSCREEN: &str = ph::ARROWS_OUT_SIMPLE;
-/// The viewer leaving the screen.
-pub const LEAVE_FULLSCREEN: &str = ph::ARROWS_IN_SIMPLE;
-/// Pages stacked in one scroll.
-pub const CONTINUOUS: &str = ph::ROWS;
-/// One page at a time.
-pub const SINGLE_PAGE: &str = ph::SQUARE;
-/// The previous match or page.
-pub const PREVIOUS: &str = ph::CARET_UP;
-/// The next match or page.
-pub const NEXT: &str = ph::CARET_DOWN;
-/// Rewind.
-pub const REWIND: &str = ph::REWIND;
-/// Fast-forward.
-pub const FAST_FORWARD: &str = ph::FAST_FORWARD;
 
 /// The Phosphor icons a place can be given, by name, as the Edit… dialogue
 /// offers them: the folder kinds first, then what people keep one click
@@ -262,6 +244,7 @@ pub fn for_icon(icon: ext::Icon) -> &'static str {
         ext::Icon::Rotate => ROTATE,
         ext::Icon::ZoomIn => ZOOM_IN,
         ext::Icon::ZoomOut => ZOOM_OUT,
+        ext::Icon::Rendered => RENDERED,
         // `Tag`, and whatever later versions add.
         _ => TAG,
     }
@@ -396,18 +379,6 @@ mod tests {
         ZOOM_IN,
         ZOOM_OUT,
         CONTINUATION,
-        FIT_WIDTH,
-        FIND,
-        INFO_PANEL,
-        ACTIONS,
-        FULLSCREEN,
-        LEAVE_FULLSCREEN,
-        CONTINUOUS,
-        SINGLE_PAGE,
-        PREVIOUS,
-        NEXT,
-        REWIND,
-        FAST_FORWARD,
         DONE,
         FAILED,
         TREE_CLOSED,
@@ -415,6 +386,9 @@ mod tests {
         FOLDER_OPEN,
         PAUSE,
         PLAY,
+        LOCK,
+        RENDERED,
+        VOLUME,
         SUBTREE,
         USB,
         DISK,

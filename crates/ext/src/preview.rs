@@ -400,6 +400,10 @@ pub enum Content {
     Grid(Arc<dyn Grid>),
     /// A document of headings, paragraphs, lists, code, tables and images.
     Document(Arc<Document>),
+    /// Nothing to show yet: the previewer needs a third-party library it
+    /// could not find; the pane shows the file's information, the message
+    /// and *Browse…* and *Retry* (SPEC.md, *Third-party libraries*).
+    MissingLibrary(Arc<MissingLibrary>),
 }
 
 impl std::fmt::Debug for Content {
@@ -412,8 +416,32 @@ impl std::fmt::Debug for Content {
                 .field("rows", &grid.rows())
                 .finish(),
             Self::Document(document) => f.debug_tuple("Document").field(document).finish(),
+            Self::MissingLibrary(missing) => {
+                f.debug_tuple("MissingLibrary").field(missing).finish()
+            }
         }
     }
+}
+
+/// A third-party library a previewer needs and could not find: pdfium,
+/// LibreOffice. The pane names it, shows how to install it on this
+/// platform, and offers *Browse…*, whose choice it stores into `setting`
+/// through the host's [`SettingsStore`](crate::SettingsStore), and *Retry*,
+/// which opens the preview again.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MissingLibrary {
+    /// The library's name: `"pdfium"`, `"LibreOffice"`.
+    pub name: String,
+    /// What installs it on this platform: a command to run, or an address
+    /// to download it from.
+    pub install: String,
+    /// The setting that holds its path: the extension and the key the
+    /// extension declared ([`SettingKind::Text`](crate::SettingKind::Text)).
+    pub setting: (ExtId, &'static str),
+    /// What *Browse…* looks for: the library file's type.
+    pub filters: Vec<platform::DialogFilter>,
+    /// Where the previewer looked, for the curious.
+    pub detail: String,
 }
 
 /// A read-only file list, as an archive previewer produces it: the
@@ -568,7 +596,7 @@ pub struct Image {
     pub data: Option<Arc<[u8]>>,
 }
 
-/// An opened document the preview pane or viewer shows.
+/// An opened document the preview pane shows.
 pub trait PreviewDoc: Send {
     /// Number of pages; `None` for a single surface.
     fn pages(&self) -> Option<usize>;
@@ -634,7 +662,7 @@ pub enum Reads {
     Prefix,
 }
 
-/// Turns an entry into something the inspector or viewer can show.
+/// Turns an entry into something the preview pane can show.
 #[async_trait]
 pub trait Previewer: Send + Sync + 'static {
     /// The extension this previewer belongs to.

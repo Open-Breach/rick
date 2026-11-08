@@ -136,6 +136,9 @@ pub struct Plugin {
     pub version: String,
     /// The extension points its manifest lists.
     pub points: Points,
+    /// The file name extensions its previewers claim, as its manifest
+    /// lists them, lower case without the dot.
+    pub previews: Vec<String>,
     /// Loaded, disabled or refused.
     pub status: PluginStatus,
     /// The plugin's directory.
@@ -258,6 +261,15 @@ enum Msg {
         request: PermissionRequest,
         result: Result<Applied, Error>,
     },
+    /// No previewer claims the pane's file.
+    PreviewNone {
+        pane: PaneId,
+        generation: u64,
+    },
+    /// The pane's *Copy* read the file: its text, for the clipboard.
+    PreviewText {
+        result: Result<String, Error>,
+    },
     /// A remote file's preview was held behind the size cap.
     PreviewCapped {
         pane: PaneId,
@@ -270,14 +282,12 @@ enum Msg {
     /// The mounted volumes were enumerated.
     Volumes(Result<Vec<Volume>, Error>),
     /// Open's job answered: the archive provider browses the file as a
-    /// location (navigate there), a previewer claims it (a viewer tab), or
-    /// neither (the system default).
+    /// location (navigate there), or does not (the system default).
     Opened {
         pane: PaneId,
         tab: TabId,
         entry: Entry,
         location: Option<Location>,
-        previewable: bool,
     },
     /// The pause after the search box's last keystroke is over: ask the
     /// indexes.
@@ -330,6 +340,12 @@ pub const REMOTE_PREFIX_CHUNK: u64 = 256 * 1024;
 /// The size above which a whole-file previewer waits for *Preview anyway*
 /// on a remote provider, unless the provider names another cap.
 pub const REMOTE_PREVIEW_CAP: u64 = 4 * 1024 * 1024;
+/// The largest file the preview pane's *Copy* puts on the clipboard.
+pub const COPY_LIMIT: usize = 256 * 1024 * 1024;
+/// The connection field that switches the preview size cap off for one
+/// source (SPEC.md, Preview, *Remote sources*): `preview_always = true`
+/// in the source's `[[connections]]` table.
+pub const PREVIEW_ALWAYS: &str = "preview_always";
 
 /// The kernel's English messages, `locales/en.ftl` of the repository:
 /// every key of the shell, the dialogues, the menus and the core actions.
@@ -408,9 +424,8 @@ impl PinStore for PinBridge {
     }
 }
 
-/// The document a pane shows and the job that opens it: the Preview tab's
-/// file for the pane of the explorer tab it follows, and a viewer tab's
-/// file for every pane whose active tab is a viewer.
+/// The document the Preview tab shows and the job that opens it, by the
+/// pane of the explorer tab the preview follows.
 struct PreviewJob {
     entry: EntryId,
     /// The entry itself, so the preview can open again with more served
@@ -540,8 +555,9 @@ pub struct App {
     exit: bool,
     /// The plugins the host found, for the Extensions screen.
     plugins: Vec<Plugin>,
-    /// The values of the settings extensions declared, one TOML file each.
-    ext_settings: ExtSettings,
+    /// The values of the settings extensions declared, one TOML file each;
+    /// shared with the extensions through the registry.
+    ext_settings: Arc<ExtSettings>,
     /// The title-row search box's index search in flight.
     index_search: Option<IndexJob>,
     /// The entry the Properties dialogue shows, while it is open: a change
@@ -566,10 +582,27 @@ impl App {
     /// through: the binary makes one and lends it to the plugins it loads
     /// before the application exists, so their questions reach the same
     /// dialogues.
+    #[must_use]
+    pub fn with_prompts(config: Config, prompts: Arc<Prompts>) -> Self {
+        let dir = config
+            .config_dir
+            .clone()
+            .unwrap_or_else(|| config.platform.config_dir());
+        Self::with_services(config, prompts, Arc::new(ExtSettings::new(&dir)))
+    }
+
+    /// [`with_prompts`](Self::with_prompts) with the extension settings
+    /// store the binary created before the plugin host ran, so the plugins
+    /// loaded there and the extensions compiled in read and write the same
+    /// values.
     // Start-up is one straight line: registry, settings, session, loop.
     #[allow(clippy::too_many_lines)]
     #[must_use]
-    pub fn with_prompts(config: Config, prompts: Arc<Prompts>) -> Self {
+    pub fn with_services(
+        config: Config,
+        prompts: Arc<Prompts>,
+        ext_settings: Arc<ExtSettings>,
+    ) -> Self {
         let Config {
             platform,
             ui,
@@ -580,7 +613,8 @@ impl App {
         let mut pending = Vec::new();
 
         let mut registry = Registry::with_platform(Arc::clone(&platform) as Arc<dyn Platform>)
-            .with_prompts(Arc::clone(&prompts));
+            .with_prompts(Arc::clone(&prompts))
+            .with_settings_store(Arc::clone(&ext_settings) as Arc<dyn ext::SettingsStore>);
         let mounts = Arc::new(Mounts::new());
         let trash: Arc<dyn platform::Trash> = Arc::clone(&platform) as Arc<dyn platform::Trash>;
         mounts.mount(Arc::new(LocalProvider::new(trash)));
@@ -637,7 +671,7 @@ impl App {
         network_providers.sort();
 
         let config_dir = config_dir.unwrap_or_else(|| platform.config_dir());
-        let ext_settings = ExtSettings::load(&config_dir, registry.settings_schemas());
+        ext_settings.load(registry.settings_schemas());
         let settings_path = config_dir.join(SETTINGS_FILE);
         let places_path = config_dir.join(PLACES_FILE);
         let (places, seeded) = match places::load(&places_path) {
@@ -882,6 +916,33 @@ impl App {
         &self.plugins
     }
 
+    /// The id of a disabled plugin in the plugins directory whose manifest
+    /// says its previewers claim files named like `name` (by any suffix
+    /// after a dot, so `a.tar.gz` finds a plugin that claims `tar.gz` or
+    /// `gz`): the answer to *Plugin available* in the preview pane's
+    /// placeholder, from the manifests alone (SPEC.md, Preview, *No
+    /// previewer*).
+    #[must_use]
+    pub fn disabled_plugin_for(&self, name: &str) -> Option<String> {
+        let lower = name.to_ascii_lowercase();
+        let suffixes: Vec<&str> = lower
+            .char_indices()
+            .filter(|(_, c)| *c == '.')
+            .map(|(i, _)| &lower[i + 1..])
+            .filter(|s| !s.is_empty())
+            .collect();
+        self.plugins
+            .iter()
+            .filter(|plugin| plugin.status == PluginStatus::Disabled)
+            .find(|plugin| {
+                plugin
+                    .previews
+                    .iter()
+                    .any(|claimed| suffixes.iter().any(|s| claimed.eq_ignore_ascii_case(s)))
+            })
+            .map(|plugin| plugin.id.clone())
+    }
+
     /// The values of the settings extensions declared
     /// ([`Registry::settings_schemas`]), which the Settings screen edits
     /// through [`Command::ExtSetting`].
@@ -1046,8 +1107,7 @@ impl App {
     }
 
     /// The entry a pane is opening or showing: the Preview tab's file when
-    /// `pane` holds the explorer tab the preview follows, a viewer tab's
-    /// file when the pane's active tab is a viewer. The
+    /// `pane` holds the explorer tab the preview follows. The
     /// [`Event::PreviewReady`] and [`Event::PreviewFailed`] for the pane
     /// are about it.
     #[must_use]
@@ -1440,6 +1500,12 @@ impl App {
                     self.restart_preview(pane);
                 }
             }
+            Command::PreviewAlways(pane) => self.preview_always(pane),
+            Command::SetPreviewAlways { provider, name, on } => {
+                self.set_preview_always(provider, &name, on);
+            }
+            Command::PreviewRetry(pane) => self.restart_preview(pane),
+            Command::PreviewCopy(pane) => self.copy_preview_text(pane),
             Command::TabOrder { pane, order } => {
                 self.model.set_tab_order(pane, order);
             }
@@ -1986,6 +2052,64 @@ impl App {
         }
     }
 
+    /// The connection (one SSH host, one cloud account) an entry is on:
+    /// the first component of its path, for a provider that keeps
+    /// connections as the folders at its root.
+    fn source_of(&self, entry: &Entry) -> Option<String> {
+        self.registry.connector_of(entry.id.provider)?;
+        let bytes = entry.path.as_bytes();
+        let trimmed = bytes
+            .strip_prefix(b"/")
+            .or_else(|| bytes.strip_prefix(b"\\"))
+            .unwrap_or(bytes);
+        let first = trimmed
+            .split(|b| matches!(b, b'/' | b'\\'))
+            .next()
+            .filter(|first| !first.is_empty())?;
+        Some(String::from_utf8_lossy(first).into_owned())
+    }
+
+    /// *Always preview on <source>*: the switch goes on for the source of
+    /// the pane's file, and the file opens.
+    fn preview_always(&mut self, pane: PaneId) {
+        let Some(job) = self.preview.get(&pane) else {
+            return;
+        };
+        let (provider, entry) = (job.full.id.provider, job.entry);
+        let Some(source) = self.source_of(&job.full) else {
+            return;
+        };
+        self.set_preview_always(provider, &source, true);
+        self.preview_force.insert(pane, entry);
+        self.restart_preview(pane);
+    }
+
+    /// Writes `preview_always` for the connection `name` of `provider`
+    /// into `rick.toml` and tells the connector; a source without a
+    /// connection entry (a host of `~/.ssh/config`) gets one that carries
+    /// the switch alone (QUESTIONS.md 197).
+    fn set_preview_always(&mut self, provider: ProviderId, name: &str, on: bool) {
+        let mut connections = self.model.settings.connections.clone();
+        let index = connections
+            .iter()
+            .position(|c| c.provider == provider.0 && c.name == name)
+            .unwrap_or_else(|| {
+                connections.push(ConnectionEntry {
+                    provider: provider.0.to_owned(),
+                    name: name.to_owned(),
+                    settings: std::collections::BTreeMap::new(),
+                });
+                connections.len() - 1
+            });
+        if let Some(entry) = connections.get_mut(index) {
+            entry
+                .settings
+                .insert(PREVIEW_ALWAYS.to_owned(), on.to_string());
+        }
+        self.save_connections(connections);
+        self.push_connections(provider);
+    }
+
     /// Replaces the connections in the settings and saves the file.
     fn save_connections(&mut self, connections: Vec<ConnectionEntry>) {
         let mut settings = self.model.settings.clone();
@@ -2065,12 +2189,12 @@ impl App {
         }
     }
 
-    /// Opens an entry: a folder navigates; a local file is first offered to
+    /// Opens an entry as *Opening files* says (SPEC.md): a folder
+    /// navigates; a local archive enters as a read-only location through
     /// the archive provider, which says in an internal job whether it
-    /// browses the file as a location. Otherwise the same job reads the
-    /// file's first bytes, and a previewer that claims them opens a viewer
-    /// tab, unless `[viewer] external` names the type; the system default
-    /// takes the rest.
+    /// browses the file, unless `archives.on_open` is `system`; every other
+    /// file goes to the system default application. Nothing opens a
+    /// viewer: the preview pane is the only one.
     fn open(&mut self, pane: PaneId, id: EntryId, events: &mut Vec<Event>) {
         let Some((tab_id, tab)) = self.model.active_tab(pane) else {
             return;
@@ -2086,59 +2210,35 @@ impl App {
             self.dispatch(Command::Navigate { pane, to }, events);
             return;
         }
-        let archive = (tab.location.provider == ProviderId::LOCAL)
+        let archive = (tab.location.provider == ProviderId::LOCAL
+            && self.model.settings.archives.on_open == model::OnOpen::Enter)
             .then(|| self.mounts.provider(ProviderId::ARCHIVE))
             .flatten();
-        let loc = tab.location_of(&entry);
-        let previewers: Vec<Arc<dyn Previewer>> =
-            if self.model.settings.viewer.opens_externally(&entry.name) {
-                Vec::new()
-            } else {
-                self.registry.previewers().to_vec()
-            };
-        let sniff = self
-            .mounts
-            .resolve(&loc)
-            .ok()
-            .filter(|_| !previewers.is_empty());
-        if archive.is_none() && sniff.is_none() {
+        let Some(archive) = archive else {
             self.open_default(pane, entry, events);
             return;
-        }
+        };
         let tx = self.mailbox.clone();
         let inside = Location::new(ProviderId::ARCHIVE, entry.path.clone());
         let handle = self
             .jobs
             .spawn_named(format!("Open {}", entry.name), move |job| async move {
-                let location = match archive {
-                    Some(archive) => match archive.stat(&inside).await {
-                        Ok(root) if root.kind == EntryKind::Dir => Some(inside),
-                        Ok(_) => None,
-                        Err(error) => {
-                            debug!(%inside, %error, "not an archive to browse");
-                            None
-                        }
-                    },
-                    None => None,
-                };
-                let previewable = match (&location, sniff) {
-                    (None, Some(provider)) => {
-                        match ext::read_bytes(&*provider, &loc, Some(4096), &job.cancel).await {
-                            Ok(bytes) => previewers.iter().any(|p| p.score(&entry, &bytes) > 0),
-                            Err(error) => {
-                                debug!(%error, "open: no sniff; the system application takes it");
-                                false
-                            }
-                        }
+                let location = match archive.stat(&inside).await {
+                    Ok(root) if root.kind == EntryKind::Dir => Some(inside),
+                    Ok(_) => None,
+                    Err(error) => {
+                        debug!(%inside, %error, "not an archive to browse");
+                        None
                     }
-                    _ => false,
                 };
+                if job.cancel.is_cancelled() {
+                    return Err(Error::Cancelled);
+                }
                 tx.send(Msg::Opened {
                     pane,
                     tab: tab_id,
                     entry,
                     location,
-                    previewable,
                 });
                 Ok(())
             });
@@ -3220,6 +3320,36 @@ impl App {
                     });
                 }
             }
+            Msg::PreviewText { result } => {
+                let outcome = result.and_then(|text| self.platform.set_text(&text).map(|()| text));
+                match outcome {
+                    Ok(text) => events.push(Event::Notify {
+                        level: Level::Info,
+                        text: ext::t!("preview-copied", count = text.chars().count()),
+                    }),
+                    Err(Error::Unsupported(_)) => events.push(Event::Notify {
+                        level: Level::Error,
+                        text: ext::t!(
+                            "preview-copy-too-large",
+                            limit = format!("{} MiB", COPY_LIMIT / (1024 * 1024))
+                        ),
+                    }),
+                    Err(error) => events.push(Event::Notify {
+                        level: Level::Error,
+                        text: format!("Copy failed: {error}"),
+                    }),
+                }
+            }
+            Msg::PreviewNone { pane, generation } => {
+                if let Some(job) = self
+                    .preview
+                    .get(&pane)
+                    .filter(|job| job.generation == generation)
+                {
+                    let plugin = self.disabled_plugin_for(&job.full.name);
+                    events.push(Event::PreviewNone { pane, plugin });
+                }
+            }
             Msg::PreviewCapped {
                 pane,
                 generation,
@@ -3231,7 +3361,16 @@ impl App {
                     .get(&pane)
                     .is_some_and(|job| job.generation == generation)
                 {
-                    events.push(Event::PreviewCapped { pane, size, cap });
+                    let source = self
+                        .preview
+                        .get(&pane)
+                        .and_then(|job| self.source_of(&job.full));
+                    events.push(Event::PreviewCapped {
+                        pane,
+                        size,
+                        cap,
+                        source,
+                    });
                 }
             }
             Msg::Decorated {
@@ -3360,7 +3499,6 @@ impl App {
                 tab,
                 entry,
                 location,
-                previewable,
             } => {
                 // The pane may have moved on since; then the answer is moot.
                 if self.model.active_tab(pane).map(|(id, _)| id) != Some(tab) {
@@ -3369,11 +3507,6 @@ impl App {
                 match location {
                     Some(to) => {
                         self.dispatch(Command::Navigate { pane, to }, events);
-                    }
-                    None if previewable => {
-                        self.model.open_viewer(pane, entry.id);
-                        self.sync_panes(events);
-                        self.sync_preview();
                     }
                     None => self.open_default(pane, entry, events),
                 }
@@ -3492,23 +3625,14 @@ impl App {
     }
 
     fn sync_preview(&mut self) {
-        // What each pane shows: the Preview tab's file is the single
-        // selected one of the explorer tab it follows, a viewer pane's is
-        // its own selection. A pane's active tab is one or the other.
+        // The Preview tab's file is the single selected one of the explorer
+        // tab it follows, shown in that tab's pane.
         let mut wanted: BTreeMap<PaneId, Entry> = BTreeMap::new();
         if let Some(tab) = self.model.preview_follows()
             && let Some(pane) = self.model.pane_of(tab)
             && let Some(entry) = self.model.tab(tab).and_then(single_file)
         {
             wanted.insert(pane, entry);
-        }
-        for pane in self.model.all_panes() {
-            if let Some((_, tab)) = self.model.active_tab(pane)
-                && tab.kind == model::TabKind::Viewer
-                && let Some(entry) = single_file(tab)
-            {
-                wanted.insert(pane, entry);
-            }
         }
         let stale: Vec<PaneId> = self
             .preview
@@ -3526,6 +3650,40 @@ impl App {
                 self.start_preview(pane, entry);
             }
         }
+    }
+
+    /// Reads the whole file the pane previews and puts its text on the
+    /// clipboard: a job, answered by [`Msg::PreviewText`]. The bytes are
+    /// decoded by their byte-order mark (UTF-8, UTF-16) and as UTF-8
+    /// otherwise, lossily; a file above [`COPY_LIMIT`] is refused with a
+    /// notification.
+    fn copy_preview_text(&mut self, pane: PaneId) {
+        let Some(job) = self.preview.get(&pane) else {
+            return;
+        };
+        let entry = job.full.clone();
+        let loc = Location::new(entry.id.provider, entry.path.clone());
+        let Ok(provider) = self.mounts.resolve(&loc) else {
+            return;
+        };
+        let tx = self.mailbox.clone();
+        let handle = self
+            .jobs
+            .spawn_named(format!("Copy {}", entry.name), move |job| async move {
+                let result = async {
+                    let bytes =
+                        ext::read_bytes(&*provider, &loc, Some(COPY_LIMIT + 1), &job.cancel)
+                            .await?;
+                    if bytes.len() > COPY_LIMIT {
+                        return Err(Error::Unsupported("the file is larger than the copy limit"));
+                    }
+                    Ok(decode_text(&bytes))
+                }
+                .await;
+                tx.send(Msg::PreviewText { result });
+                Ok(())
+            });
+        self.internal.insert(handle.id);
     }
 
     /// Opens the pane's preview again for the entry it shows: after *Load
@@ -3568,6 +3726,8 @@ impl App {
         let cap = provider
             .remote_preview_cap(&loc)
             .unwrap_or(REMOTE_PREVIEW_CAP);
+        // The source's *Always preview* switch takes the cap off there.
+        let always = remote && provider.remote_preview_always(&loc);
         let more = self
             .preview_more
             .get(&pane)
@@ -3602,7 +3762,10 @@ impl App {
                             previewer.open(&loc, limited, job.cancel.clone()).await
                         }
                         Some(_)
-                            if remote && !force && entry.size.is_some_and(|size| size > cap) =>
+                            if remote
+                                && !force
+                                && !always
+                                && entry.size.is_some_and(|size| size > cap) =>
                         {
                             tx.send(Msg::PreviewCapped {
                                 pane,
@@ -3613,7 +3776,10 @@ impl App {
                             return Ok(());
                         }
                         Some(previewer) => previewer.open(&loc, provider, job.cancel.clone()).await,
-                        None => Err(Error::Unsupported("no previewer for this file")),
+                        None => {
+                            tx.send(Msg::PreviewNone { pane, generation });
+                            return Ok(());
+                        }
                     };
                     if job.cancel.is_cancelled() {
                         return Err(Error::Cancelled);
@@ -3941,8 +4107,20 @@ where
     tx
 }
 
+/// The text of a file's bytes for the clipboard: by its byte-order mark
+/// when it has one (UTF-8, UTF-16), as UTF-8 otherwise, with anything that
+/// is no UTF-8 replaced.
+#[must_use]
+pub fn decode_text(bytes: &[u8]) -> String {
+    if let Some((encoding, bom)) = encoding_rs::Encoding::for_bom(bytes) {
+        let (text, _, _) = encoding.decode(&bytes[bom..]);
+        return text.into_owned();
+    }
+    String::from_utf8_lossy(bytes).into_owned()
+}
+
 /// The tab's one selected entry, when exactly one is selected and it is not
-/// a folder: what a preview or a viewer shows.
+/// a folder: what the preview shows.
 fn single_file(tab: &model::Tab) -> Option<Entry> {
     let mut selected = tab.selected();
     let first = selected.next()?;
@@ -4176,6 +4354,9 @@ impl ext::Provider for Prefixed {
     }
     fn remote_preview_cap(&self, loc: &Location) -> Option<u64> {
         self.inner.remote_preview_cap(loc)
+    }
+    fn remote_preview_always(&self, loc: &Location) -> bool {
+        self.inner.remote_preview_always(loc)
     }
     fn watch(&self, loc: &Location) -> Result<ext::ChangeStream, Error> {
         self.inner.watch(loc)

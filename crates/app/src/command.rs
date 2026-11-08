@@ -53,14 +53,14 @@ pub enum Command {
         /// Where to go.
         to: Location,
     },
-    /// Open an entry of the pane's active tab: a folder navigates the pane
-    /// to it; a local file the archive provider can browse navigates into
-    /// it as a location (`archive:` with the archive as a breadcrumb
-    /// segment); any other file opens in a viewer tab of the pane when a
-    /// previewer claims it, and with the system's default application
-    /// otherwise or when its type is listed in `[viewer] external`. The
-    /// archive check and the scoring read the file as a job, so the result
-    /// follows a moment later.
+    /// Open an entry of the pane's active tab, as *Opening files* says: a
+    /// folder navigates the pane to it; a local file the archive provider
+    /// can browse navigates into it as a location (`archive:` with the
+    /// archive as a breadcrumb segment) unless the setting
+    /// `archives.on_open` is `system`; every other file opens with the
+    /// system's default application. Nothing opens a viewer: the preview
+    /// pane is the only one. The archive check reads the file as a job, so
+    /// the result follows a moment later.
     Open {
         /// The pane.
         pane: PaneId,
@@ -305,6 +305,31 @@ pub enum Command {
     /// A remote file held behind the size cap (`Event::PreviewCapped`):
     /// open the preview whatever its size.
     PreviewAnyway(PaneId),
+    /// The cap message's *Always preview on <source>*: switch the cap off
+    /// for the source (one SSH host, one cloud account) that holds the
+    /// pane's file, `preview_always = true` in its connection, then open
+    /// the file.
+    PreviewAlways(PaneId),
+    /// Turn a source's *Always preview* on or off: the connection row's
+    /// context menu in the Network or Cloud section. A source Rick cannot
+    /// edit (a host of `~/.ssh/config`) gets a connection entry that
+    /// carries the switch alone.
+    SetPreviewAlways {
+        /// The provider.
+        provider: ProviderId,
+        /// The connection's name.
+        name: String,
+        /// On or off.
+        on: bool,
+    },
+    /// Open the pane's preview again, as it is: *Retry* on a missing
+    /// third-party library, after it was installed or its setting changed.
+    PreviewRetry(PaneId),
+    /// The pane's *Copy*: put the whole text of the file the pane previews
+    /// on the clipboard as text, through `platform::Clipboard`: the whole
+    /// file (read again as a job, not the window the pane has loaded), the
+    /// raw source for a rendered format, never the file itself.
+    PreviewCopy(PaneId),
     /// Open Properties on the pane's selected entry: the general rows and,
     /// for a local entry, its owner, group, mode bits and ACL; answered by
     /// `Event::Properties`, and again after a change while the dialogue is
@@ -506,13 +531,24 @@ pub enum Event {
         /// The document.
         doc: Box<dyn PreviewDoc>,
     },
-    /// No preview could be opened for the pane's selection: no previewer
-    /// claimed the file, or opening it failed.
+    /// No preview could be opened for the pane's selection: a previewer
+    /// claimed the file and failed to open it.
     PreviewFailed {
         /// The pane.
         pane: PaneId,
         /// Why.
         error: Error,
+    },
+    /// No previewer claims the pane's selection; the pane shows the
+    /// placeholder of SPEC.md's *No previewer*: the file's facts, its type
+    /// icon and one line saying whether a plugin for the type is there.
+    PreviewNone {
+        /// The pane.
+        pane: PaneId,
+        /// A previewer plugin in the plugins directory whose manifest
+        /// claims the file's type but which is disabled, by id: *Plugin
+        /// available*. `None`: *No plugin available*.
+        plugin: Option<String>,
     },
     /// The preview just opened for the pane shows a prefix of a file on a
     /// remote provider; the pane offers *Load more*
@@ -535,6 +571,9 @@ pub enum Event {
         size: u64,
         /// The cap it is above.
         cap: u64,
+        /// The source the file is on, when its provider keeps connections:
+        /// the host or account *Always preview on <source>* names.
+        source: Option<String>,
     },
     /// A thumbnail finished: the frame, or `None` when no previewer claims
     /// the entry or the render failed.
@@ -605,6 +644,21 @@ pub struct PropertiesInfo {
     pub native: bool,
 }
 
+/// A `debug_struct` of `name` with the pane and one more field: the shape
+/// of most pane events.
+fn pane_struct(
+    f: &mut fmt::Formatter<'_>,
+    name: &str,
+    pane: PaneId,
+    field: &str,
+    value: &dyn fmt::Debug,
+) -> fmt::Result {
+    f.debug_struct(name)
+        .field("pane", &pane)
+        .field(field, value)
+        .finish()
+}
+
 impl fmt::Debug for Event {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -614,16 +668,10 @@ impl fmt::Debug for Event {
                 .field("batch", &batch.len())
                 .field("done", done)
                 .finish(),
-            Self::Changed { pane, change } => f
-                .debug_struct("Changed")
-                .field("pane", pane)
-                .field("change", change)
-                .finish(),
-            Self::Decorated { pane, items } => f
-                .debug_struct("Decorated")
-                .field("pane", pane)
-                .field("items", &items.len())
-                .finish(),
+            Self::Changed { pane, change } => pane_struct(f, "Changed", *pane, "change", change),
+            Self::Decorated { pane, items } => {
+                pane_struct(f, "Decorated", *pane, "items", &items.len())
+            }
             Self::JobProgress { id, progress } => f
                 .debug_struct("JobProgress")
                 .field("id", id)
@@ -639,11 +687,9 @@ impl fmt::Debug for Event {
                 .field("batch", &batch.len())
                 .field("done", done)
                 .finish(),
-            Self::SelectionChanged { pane, ids } => f
-                .debug_struct("SelectionChanged")
-                .field("pane", pane)
-                .field("ids", ids)
-                .finish(),
+            Self::SelectionChanged { pane, ids } => {
+                pane_struct(f, "SelectionChanged", *pane, "ids", ids)
+            }
             Self::PreviewReady { pane, .. } => f
                 .debug_struct("PreviewReady")
                 .field("pane", pane)
@@ -654,11 +700,12 @@ impl fmt::Debug for Event {
                 .field("size", size)
                 .field("frame", &frame.is_some())
                 .finish(),
-            Self::PreviewFailed { pane, error } => f
-                .debug_struct("PreviewFailed")
-                .field("pane", pane)
-                .field("error", error)
-                .finish(),
+            Self::PreviewFailed { pane, error } => {
+                pane_struct(f, "PreviewFailed", *pane, "error", error)
+            }
+            Self::PreviewNone { pane, plugin } => {
+                pane_struct(f, "PreviewNone", *pane, "plugin", plugin)
+            }
             Self::PreviewPrefix {
                 pane,
                 served,
@@ -669,11 +716,17 @@ impl fmt::Debug for Event {
                 .field("served", served)
                 .field("total", total)
                 .finish(),
-            Self::PreviewCapped { pane, size, cap } => f
+            Self::PreviewCapped {
+                pane,
+                size,
+                cap,
+                source,
+            } => f
                 .debug_struct("PreviewCapped")
                 .field("pane", pane)
                 .field("size", size)
                 .field("cap", cap)
+                .field("source", source)
                 .finish(),
             Self::Conflict(conflict) => f.debug_tuple("Conflict").field(&conflict.id).finish(),
             Self::Question(question) => f.debug_tuple("Question").field(&question.id).finish(),

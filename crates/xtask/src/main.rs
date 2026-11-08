@@ -4,7 +4,8 @@
 //! `bundle [--release] [--features <spec>]` builds the whole workspace and
 //! lays out `target/<profile>/bundle/` (QUESTIONS.md 84): the `rick`
 //! binary, the kernel dylibs and the `libstd` they need beside it, pdfium
-//! when `RICK_PDFIUM_DIR` names it, the GStreamer runtime when
+//! when the PDF previewer's `library` setting (`preview-pdf.toml` in the
+//! config directory) names it, the GStreamer runtime when
 //! `RICK_GSTREAMER_DIR` names it (QUESTIONS.md 106: on macOS into
 //! `gstreamer/lib/`, on Windows the DLLs beside the binary and the
 //! elements into `gstreamer-1.0/`; Linux uses the system's), and
@@ -115,14 +116,7 @@ fn bundle(args: &[String]) -> Result<()> {
     for lib in libstd(&cargo)? {
         copy(&lib, &out)?;
     }
-    if let Some(dir) = std::env::var_os("RICK_PDFIUM_DIR") {
-        for file in PDFIUM_FILES {
-            let path = Path::new(&dir).join(file);
-            if path.is_file() {
-                copy(&path, &out)?;
-            }
-        }
-    }
+    pdfium(&out)?;
     if let Some(dir) = std::env::var_os("RICK_GSTREAMER_DIR") {
         gstreamer(Path::new(&dir), &out)?;
     }
@@ -160,6 +154,74 @@ fn bundle(args: &[String]) -> Result<()> {
     }
     println!("bundle: {}", out.display());
     Ok(())
+}
+
+/// Copies the pdfium library the PDF previewer's setting names into the
+/// bundle, beside the binary; says so when the setting is unset or names
+/// nothing that is there.
+fn pdfium(out: &Path) -> Result<()> {
+    match pdfium_setting() {
+        Some(path) if path.is_file() => copy(&path, out),
+        Some(path) if path.is_dir() => {
+            for file in PDFIUM_FILES {
+                let candidate = path.join(file);
+                if candidate.is_file() {
+                    copy(&candidate, out)?;
+                }
+            }
+            Ok(())
+        }
+        Some(path) => {
+            println!(
+                "pdfium: the PDF previewer's setting names {}, which is not there; not bundled",
+                path.display()
+            );
+            Ok(())
+        }
+        None => {
+            println!(
+                "pdfium: no `library` in {}; not bundled (set it in Rick's settings, or write \
+                 the file, to ship the library beside the binary)",
+                config_dir().join("preview-pdf.toml").display()
+            );
+            Ok(())
+        }
+    }
+}
+
+/// Rick's config directory on this machine, as `platform::ConfigDir`
+/// computes it: `$XDG_CONFIG_HOME/rick` (or `~/.config/rick`) on Linux,
+/// `~/Library/Application Support/Rick` on macOS, `%APPDATA%\Rick` on
+/// Windows.
+fn config_dir() -> PathBuf {
+    let home = std::env::var_os("HOME")
+        .or_else(|| std::env::var_os("USERPROFILE"))
+        .map_or_else(|| PathBuf::from("."), PathBuf::from);
+    match std::env::consts::OS {
+        "macos" => home
+            .join("Library")
+            .join("Application Support")
+            .join("Rick"),
+        "windows" => std::env::var_os("APPDATA")
+            .map_or_else(|| home.join("AppData").join("Roaming"), PathBuf::from)
+            .join("Rick"),
+        _ => std::env::var_os("XDG_CONFIG_HOME")
+            .map_or_else(|| home.join(".config"), PathBuf::from)
+            .join("rick"),
+    }
+}
+
+/// The PDF previewer's `library` setting: the path the user (or CI) wrote
+/// into `preview-pdf.toml`, a file or the directory holding it.
+fn pdfium_setting() -> Option<PathBuf> {
+    let text = std::fs::read_to_string(config_dir().join("preview-pdf.toml")).ok()?;
+    let line = text
+        .lines()
+        .map(str::trim)
+        .find(|line| line.starts_with("library"))?;
+    let (_, value) = line.split_once('=')?;
+    let value = value.trim().trim_matches(|c| c == '"' || c == '\'');
+    (!value.is_empty()).then(|| PathBuf::from(value))
 }
 
 /// Copies the GStreamer runtime at `dir` into the bundle, in the layout the

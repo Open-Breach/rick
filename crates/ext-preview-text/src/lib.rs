@@ -75,6 +75,7 @@ impl TextPreview {
                 requires: Capabilities::empty(),
                 points: Points::PREVIEWER,
                 platforms: Platforms::ALL,
+                previews: TEXT_EXTENSIONS,
             },
         }
     }

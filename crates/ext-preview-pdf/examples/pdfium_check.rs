@@ -2,11 +2,11 @@
 //!
 //! It generates a three-page PDF, opens it through [`ext_preview_pdf::PdfDoc`]
 //! and renders the first page, then prints the page count and the frame
-//! size. pdfium is found the way the previewer finds it: `RICK_PDFIUM_DIR`,
-//! then beside this executable, then the system. The release smoke test
-//! copies this binary next to the unpacked `rick` and runs it with the
-//! variable unset, which shows the library shipped in the archive is the one
-//! that loads.
+//! size. pdfium is found the way the previewer finds it without a setting:
+//! beside this executable, the plugins directory, the platform's library
+//! directories, then the system loader. The release smoke test copies this
+//! binary next to the unpacked `rick` and runs it, which shows the library
+//! shipped in the archive is the one that loads.
 //!
 //! ```text
 //! cargo run -p ext-preview-pdf --example pdfium_check
@@ -16,10 +16,13 @@ use std::io::Write as _;
 use std::process::ExitCode;
 
 use ext::{Frame, PreviewDoc, RenderRequest};
-use ext_preview_pdf::{PdfDoc, sample_pdf};
+use ext_preview_pdf::{Library, PdfDoc, sample_pdf};
 
 fn run() -> Result<String, String> {
-    let mut doc = PdfDoc::new(sample_pdf(3)).map_err(|e| format!("open: {e}"))?;
+    let pdfium = Library::default()
+        .bind()
+        .map_err(|missing| format!("bind: {}", missing.detail))?;
+    let mut doc = PdfDoc::new(pdfium, sample_pdf(3)).map_err(|e| format!("open: {e}"))?;
     let pages = doc.pages().ok_or("the PDF reports no pages")?;
     let frame = doc
         .render(

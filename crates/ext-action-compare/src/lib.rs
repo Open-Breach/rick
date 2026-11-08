@@ -63,6 +63,7 @@ impl CompareExtension {
                 requires: Capabilities::empty(),
                 points: Points::ACTION,
                 platforms: Platforms::ALL,
+                previews: &[],
             },
         }
     }

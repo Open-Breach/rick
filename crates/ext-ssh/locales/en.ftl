@@ -16,3 +16,4 @@ ssh-jump-host = Jump host
 ssh-password = Password
 ssh-remember-password-in-the-os-keychain = Remember password in the OS keychain
 ssh-preview-size-cap-mib-0-for = Preview size cap (MiB, 0 for the default)
+ssh-always-preview = Always preview (no size cap on this host)

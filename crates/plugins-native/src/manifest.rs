@@ -10,9 +10,10 @@
 //! id = "git"
 //! name = "Git"
 //! version = "0.2.0-dev"
-//! api_version = 9
+//! api_version = 12
 //! points = ["decorator", "action"]
 //! platforms = ["linux", "macos", "windows"]
+//! previews = []
 //! toolchain = "rustc 1.97.0 (2d8144b78 2026-07-07)"
 //!
 //! [library]
@@ -114,6 +115,11 @@ pub struct PluginToml {
     pub points: Vec<String>,
     /// The platforms it runs on, by name.
     pub platforms: Vec<String>,
+    /// The file name extensions its previewers claim, lower case without
+    /// the dot; what the host answers *Plugin available* from without
+    /// loading the plugin. Absent in a manifest written before API 12.
+    #[serde(default)]
+    pub previews: Vec<String>,
     /// The exact `rustc -V` line of the compiler that built the library.
     pub toolchain: String,
     /// The library's file name per platform.
@@ -142,6 +148,7 @@ impl PluginToml {
                 .iter()
                 .map(|n| (*n).to_owned())
                 .collect(),
+            previews: manifest.previews.iter().map(|n| (*n).to_owned()).collect(),
             toolchain: toolchain.to_owned(),
             library: Library::for_crate(crate_name),
         }
@@ -227,8 +234,10 @@ mod tests {
             requires: Capabilities::empty(),
             points: Points::DECORATOR | Points::ACTION,
             platforms: Platforms::ALL,
+            previews: &["pdf", "tar.gz"],
         };
         let toml = PluginToml::describe(&manifest, "ext-git", "rustc 1.97.0 (abc 2026-07-07)");
+        assert_eq!(toml.previews, ["pdf", "tar.gz"]);
         assert_eq!(toml.library.linux, "libext_git.so");
         assert_eq!(toml.library.macos, "libext_git.dylib");
         assert_eq!(toml.library.windows, "ext_git.dll");
@@ -264,6 +273,10 @@ mod tests {
         std::fs::write(&path, "id = \"x\"\nname = \"x\"\nversion = \"1\"\napi_version = 1\npoints = [\"wizard\"]\nplatforms = [\"linux\"]\ntoolchain = \"t\"\n[library]\nlinux = \"a\"\nmacos = \"b\"\nwindows = \"c\"\n")
             .unwrap_or_else(|e| panic!("{e}"));
         let parsed = PluginToml::read(&path).unwrap_or_else(|e| panic!("{e}"));
+        assert!(
+            parsed.previews.is_empty(),
+            "an older manifest names no previews"
+        );
         assert!(matches!(parsed.points(), Err(ManifestError::UnknownPoint(p)) if p == "wizard"));
         assert_eq!(parsed.library.for_os("macos"), Some("b"));
         assert_eq!(parsed.library.for_os("plan9"), None);

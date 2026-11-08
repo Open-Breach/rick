@@ -40,6 +40,7 @@
 //!             requires: Capabilities::empty(),
 //!             points: Points::empty(),
 //!             platforms: Platforms::ALL,
+//!             previews: &[],
 //!         })
 //!     }
 //! }
@@ -201,6 +202,7 @@ mod tests {
             requires: Capabilities::empty(),
             points: Points::empty(),
             platforms: Platforms::ALL,
+            previews: &[],
         }
     }
 
