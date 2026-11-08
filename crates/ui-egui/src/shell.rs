@@ -1778,7 +1778,11 @@ impl RickUi {
                 }
             }
             Intent::ToggleSubtree => {
-                if let Some((tab_id, tab)) = self.app.model().active_tab(pane) {
+                // Without a subdirectory search index there is nothing to
+                // walk, and the filter bar shows no toggle either.
+                if self.app.model().subtree_search
+                    && let Some((tab_id, tab)) = self.app.model().active_tab(pane)
+                {
                     let on = !tab.subtree;
                     self.handle(Command::Subtree { pane, on });
                     if on {
@@ -2430,10 +2434,27 @@ impl RickUi {
             &recents,
             window.0,
         );
+        // The indexes are asked for the text once it changed, and told
+        // when the box is cleared; without an available index there is
+        // nothing to ask and 0.1's search of the current location stands.
+        if let Some(text) = w.search.take_query() {
+            let model = self.app.model();
+            if text != model.index_search.text
+                && (!model.search_indexes.is_empty() || text.is_empty())
+            {
+                self.requests
+                    .push(Request::Command(Command::IndexSearch { text }));
+            }
+        }
         match pick {
             Some(Pick::Intent(intent)) => self.requests.push(Request::Intent {
                 intent,
                 pane: focused,
+            }),
+            Some(Pick::Hit(entry)) => self.requests.push(Request::OpenContaining {
+                pane: focused,
+                entry,
+                new_tab: false,
             }),
             Some(Pick::Entry { index, id }) => {
                 if let Some((tab_id, _)) = self.app.model().active_tab(focused) {

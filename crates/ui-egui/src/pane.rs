@@ -424,20 +424,23 @@ fn foot(ui: &mut egui::Ui, cx: &mut PaneCx<'_>) {
                     text: String::new(),
                 }));
             }
-            // Search in subdirectories: the filter text matches the subtree.
-            let subtree = ui
-                .add(
-                    egui::Button::new(icons::SUBTREE)
-                        .small()
-                        .selected(cx.tab.subtree),
-                )
-                .on_hover_text(if cx.tab.subtree {
-                    "Searching in subdirectories; click to filter this folder only"
-                } else {
-                    "Search in subdirectories"
-                });
-            if subtree.clicked() {
-                intent(cx, Intent::ToggleSubtree);
+            // Search in subdirectories: the filter text matches the
+            // subtree, when a search index that walks one is loaded.
+            if cx.app.model().subtree_search {
+                let subtree = ui
+                    .add(
+                        egui::Button::new(icons::SUBTREE)
+                            .small()
+                            .selected(cx.tab.subtree),
+                    )
+                    .on_hover_text(if cx.tab.subtree {
+                        "Searching in subdirectories; click to filter this folder only"
+                    } else {
+                        "Search in subdirectories"
+                    });
+                if subtree.clicked() {
+                    intent(cx, Intent::ToggleSubtree);
+                }
             }
             let mut text = cx.tab.filter.clone();
             let output = egui::TextEdit::singleline(&mut text)

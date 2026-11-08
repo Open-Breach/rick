@@ -1,0 +1,29 @@
+[package]
+name = "ext-svn"
+version.workspace = true
+description = "Rick's Subversion extension: status badges, folder roll-ups and the revision in the info panel as a Decorator, and the SVN action group, through the svn command line."
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+# A plugin: a `cdylib` the host loads from `plugins/svn/`, and an `rlib`
+# for the binary's opt-in `svn` feature and the tests.
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+types = { workspace = true }
+ext = { workspace = true }
+roxmltree = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+runtime = { workspace = true }
+tokio = { workspace = true, features = ["sync"] }
+vfs-local = { workspace = true }
+platform = { workspace = true }
+tempfile = { workspace = true }
+
+[lints]
+workspace = true

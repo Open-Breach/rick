@@ -1756,6 +1756,82 @@ dependencies = [
 ]
 
 [[package]]
+name = "ext-search-baloo"
+version = "0.2.0-dev"
+dependencies = [
+ "ext",
+ "futures",
+ "tempfile",
+ "tokio",
+ "tracing",
+ "types",
+]
+
+[[package]]
+name = "ext-search-spotlight"
+version = "0.2.0-dev"
+dependencies = [
+ "ext",
+ "futures",
+ "tempfile",
+ "tokio",
+ "tracing",
+ "types",
+]
+
+[[package]]
+name = "ext-search-tracker"
+version = "0.2.0-dev"
+dependencies = [
+ "ext",
+ "futures",
+ "tempfile",
+ "tokio",
+ "tracing",
+ "types",
+]
+
+[[package]]
+name = "ext-search-walk"
+version = "0.2.0-dev"
+dependencies = [
+ "ext",
+ "futures",
+ "ignore",
+ "tempfile",
+ "tracing",
+ "types",
+]
+
+[[package]]
+name = "ext-search-windows"
+version = "0.2.0-dev"
+dependencies = [
+ "ext",
+ "futures",
+ "tempfile",
+ "tokio",
+ "tracing",
+ "types",
+]
+
+[[package]]
+name = "ext-svn"
+version = "0.2.0-dev"
+dependencies = [
+ "ext",
+ "platform",
+ "roxmltree",
+ "runtime",
+ "tempfile",
+ "thiserror 2.0.21",
+ "tokio",
+ "tracing",
+ "types",
+ "vfs-local",
+]
+
+[[package]]
 name = "ext-vfs-archive"
 version = "0.2.0-dev"
 dependencies = [
@@ -5415,6 +5491,12 @@ dependencies = [
  "ext-preview-office",
  "ext-preview-pdf",
  "ext-preview-text",
+ "ext-search-baloo",
+ "ext-search-spotlight",
+ "ext-search-tracker",
+ "ext-search-walk",
+ "ext-search-windows",
+ "ext-svn",
  "ext-vfs-archive",
  "ext-vfs-trash",
  "platform",
@@ -5989,6 +6071,12 @@ dependencies = [
  "ext-preview-office",
  "ext-preview-pdf",
  "ext-preview-text",
+ "ext-search-baloo",
+ "ext-search-spotlight",
+ "ext-search-tracker",
+ "ext-search-walk",
+ "ext-search-windows",
+ "ext-svn",
  "ext-vfs-archive",
  "ext-vfs-trash",
  "futures",
@@ -6556,7 +6644,6 @@ dependencies = [
  "async-trait",
  "ext",
  "futures",
- "ignore",
  "notify",
  "platform",
  "runtime",

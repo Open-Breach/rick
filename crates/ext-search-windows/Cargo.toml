@@ -1,0 +1,25 @@
+[package]
+name = "ext-search-windows"
+version.workspace = true
+description = "Rick's Windows Search connector: the system index queried with Windows Search SQL over OLE DB, feeding the title-row search box on Windows."
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+# A plugin: a `cdylib` the host loads from `plugins/search-windows/`, and an
+# `rlib` for the binary's opt-in `search-windows` feature and the tests.
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+types = { workspace = true }
+ext = { workspace = true }
+futures = { workspace = true }
+tokio = { workspace = true, features = ["time"] }
+tracing = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+
+[lints]
+workspace = true

@@ -9,6 +9,32 @@ the pull request that brought the change.
 
 ### Added
 
+- Search as plugins (#22): `ext-search-walk` carries the subdirectory
+  search of the filter bar, the same walk as 0.1's behind the
+  `SearchIndex` point, and the filter bar shows its toggle only while it
+  is loaded; `ext-search-windows`, `ext-search-spotlight`,
+  `ext-search-tracker` and `ext-search-baloo` connect the title-row
+  search box to the platform's index, each detecting its service at
+  start and every ten seconds, so the box lists the index's hits with
+  their folders after the current location's matches once the text has
+  stood for a moment, Enter on a hit goes to its folder and selects it,
+  and without an index the box searches the current location alone as
+  before. The bundle and the release archives carry only the connector
+  of their platform.
+- `ext-svn`, Subversion beside Git (#22): status badges with Subversion's
+  letters, an SVN column, a roll-up mark on folders with changes inside,
+  and the revision, URL and last commit in the info panel, read through
+  `svn status` and `svn info` and cached until the working copy or its
+  `.svn` directory changes; the SVN group (Update, Commit, Revert, Log,
+  Add) in the context menu and the palette inside a working copy, run
+  through the `svn` command line.
+
+### Changed
+
+- The extension API is at version 5: `Filter` gained `NoHidden` and
+  `SkipNames`, the two things the subdirectory search takes from the pane
+  and `rick.toml`, and `SearchScope` gained `covers` (#22).
+
 - The viewer: Enter or a double-click opens a previewable file in a viewer
   tab of the pane, a dock tab like any other (split, dock, tear out). Left
   and Right step through the folder's files in the list's order with the

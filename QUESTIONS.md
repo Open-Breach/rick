@@ -1382,3 +1382,97 @@ Once answered, an entry keeps its number and gains a dated decision line.
     tag's bench summary; the three-OS gate before `main` is kept by tier 2,
     which runs the tests, the bundle and the plugin loading on the full
     matrix, without the timings.
+
+118. (issue 22) The spec's Indexed search says a search box "appears on the
+    toolbar" when the platform has an index and is "absent, not greyed
+    out" without one, while the Window chrome puts one search box in the
+    title row that is also the command palette and, in 0.1, searches the
+    current location by name. It also says index results show "in the
+    list with their paths", while the issue has the title-row box "show
+    results with their paths" and the acceptance has the box list the
+    hits. And `SearchIndex::scope` is `Everywhere | Under(Location)` with
+    no argument, while the issue asks the walk plugin to have "scope =
+    Under(location)".
+    Assumed: the title-row box stays, whatever the platform has; what an
+    index adds is a second group of rows in its dropdown, after the
+    current location's matches: every available index is queried with the
+    text (root `None`, names only) once the text has stood for 150 ms, and
+    each hit lists once with its folder as the hint, errors and a
+    "searching" row below. Picking a hit does what Open containing folder
+    does: the pane goes to the hit's folder and selects it there; it does
+    not open the file. Two kinds of index share the trait: a platform
+    index has scope `Everywhere` and feeds the box; the walk has scope
+    `Under` the local provider's root (a `Location` with an empty path,
+    which `SearchScope::covers` reads as the provider's whole tree) and
+    answers only a query with a root, which the filter bar's *Search in
+    subdirectories* sends with the pane's location. The filter bar shows
+    its toggle only while an `Under` index is registered, and a subtree
+    search without one ends with a notice. The pane's listing is not
+    touched by the box.
+
+119. (issue 22) The walk of 0.1 took the pane's hidden toggle and the
+    `[search] ignore` list of `rick.toml`, and `Query` carries neither.
+    Assumed: `Filter` gained `NoHidden` (leave hidden entries out and
+    never descend into a hidden directory) and `SkipNames` (never descend
+    into or report these names), both narrowing a query as the other
+    filters do, and `SearchScope` gained `covers`; `API_VERSION` is 5. The
+    ignore list stays in `rick.toml` and reaches the walk through the
+    query, since no plugin reads its own settings file yet. A platform
+    connector applies both, and the size, extension and date filters, to
+    the hits its service returns, below the query's root when it has one.
+
+120. (issue 22) The issue names the services' interfaces (Windows Search
+    "via ISearchQueryHelper/OLE DB", Tracker "SPARQL over D-Bus", Baloo
+    "baloosearch or D-Bus") and asks for a fake service beside the real
+    one; a plugin may not use `unsafe`, which the COM interfaces need, and
+    the kernel has no D-Bus library.
+    Assumed: every connector drives a command line through one `Service`
+    trait (`output` for the probe, `stream` for a query's lines), the
+    real one a child process read on the blocking pool and killed on
+    cancel, the tests' one canned output. Windows Search runs its SQL
+    through a PowerShell script over an ADODB connection to the
+    `Search.CollatorDSO` OLE DB provider; Tracker sends its SPARQL to the
+    miner's D-Bus endpoint through `tracker3 sparql --dbus-service`;
+    Spotlight runs `mdfind`; Baloo runs `baloosearch` (the `6`-suffixed
+    tools first). "Detected at start and on change" is a probe at
+    construction and every ten seconds after (`sc.exe query WSearch`,
+    `mdutil -s /`, the bus name's owner through `gdbus` or `busctl`,
+    `balooctl status`); an index whose service is installed but not
+    running is not available, so Tracker is never started by a query.
+    Every hit is looked up on disk for its entry and id, hits that are
+    gone are dropped, and a query stops at 500 hits. The real-service
+    tests run where the runner has the service: Windows Search on
+    Windows (the setup action starts the service), Spotlight on macOS,
+    Tracker and Baloo on Linux inside a private session bus with the
+    indexers over a fixture directory (`.github/scripts/with-indexers.sh`,
+    both installed by apt in under half a minute); elsewhere they print a
+    note and pass, and `RICK_REQUIRE_<SERVICE>` makes them fail instead.
+
+121. (issue 22) The bundler put every `ext-*` library into `plugins/`,
+    and the host refused one whose manifest left the platform out; the
+    first platform-specific plugins would have shipped three refused rows
+    on every platform.
+    Assumed: `rick-plugin-manifest` exits with code 3 for a plugin whose
+    manifest leaves this platform out and `cargo xtask bundle` leaves it
+    out of the bundle, saying so; the release archives carry only the
+    connector of their platform, and `.github/scripts/check-plugins.sh`
+    checks the per-platform set.
+
+122. (issue 22) The spec's `ext-svn` row names "Update, Commit, Revert,
+    Log actions" and the issue adds Add; the "revision in the info panel"
+    does not say which revision a mixed-revision working copy shows.
+    Assumed: the group is Update, Commit, Revert, Log and Add, as the
+    issue says. The panel shows the working copy root's revision as `svn
+    info` reports it, with the relative URL, the repository root and the
+    last commit the root knows of; a commit made in the working copy
+    shows after an update, as in Subversion itself. Commit adds the
+    selected files that are not versioned yet before committing the
+    selection, Revert takes `svn revert -R` on the selection after a
+    confirmation and leaves unversioned files alone, Update and Log act
+    on the selection when there is one and the whole working copy
+    otherwise, and the badges use Subversion's own status letters
+    (`C` conflict, `!` missing, `?` unversioned). The tests generate a
+    repository with `svnadmin`; where the command line is missing they
+    skip with a note unless `RICK_REQUIRE_SVN` is set, which the setup
+    action does after installing Subversion.
+

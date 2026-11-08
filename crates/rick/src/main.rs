@@ -50,6 +50,18 @@ fn built_ins() -> Vec<Arc<dyn ext::Extension>> {
     extensions.push(Arc::new(ext_vfs_trash::TrashExtension::new()));
     #[cfg(feature = "vfs-archive")]
     extensions.push(Arc::new(ext_vfs_archive::ArchiveExtension::new()));
+    #[cfg(feature = "svn")]
+    extensions.push(Arc::new(ext_svn::SvnExtension::new()));
+    #[cfg(feature = "search-walk")]
+    extensions.push(Arc::new(ext_search_walk::WalkExtension::new()));
+    #[cfg(feature = "search-windows")]
+    extensions.push(Arc::new(ext_search_windows::WindowsSearchExtension::new()));
+    #[cfg(feature = "search-spotlight")]
+    extensions.push(Arc::new(ext_search_spotlight::SpotlightExtension::new()));
+    #[cfg(feature = "search-tracker")]
+    extensions.push(Arc::new(ext_search_tracker::TrackerExtension::new()));
+    #[cfg(feature = "search-baloo")]
+    extensions.push(Arc::new(ext_search_baloo::BalooExtension::new()));
     extensions
 }
 
