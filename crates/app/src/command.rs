@@ -304,6 +304,11 @@ pub enum Command {
     /// A remote file held behind the size cap (`Event::PreviewCapped`):
     /// open the preview whatever its size.
     PreviewAnyway(PaneId),
+    /// The pane's *Copy*: put the whole text of the file the pane previews
+    /// on the clipboard as text, through `platform::Clipboard`: the whole
+    /// file (read again as a job, not the window the pane has loaded), the
+    /// raw source for a rendered format, never the file itself.
+    PreviewCopy(PaneId),
     /// Open Properties on the pane's selected entry: the general rows and,
     /// for a local entry, its owner, group, mode bits and ACL; answered by
     /// `Event::Properties`, and again after a change while the dialogue is

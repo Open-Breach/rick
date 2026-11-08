@@ -21,7 +21,7 @@ use std::time::Duration;
 use app::{App, Command};
 use egui::{Align, Rect, pos2, vec2};
 use ext::t;
-use ext::{ControlValue, PreviewControl};
+use ext::{Content, ControlValue, PreviewControl};
 use model::{PaneId, SettingsChange, TextPreview};
 use types::{Entry, EntryId};
 
@@ -134,6 +134,8 @@ enum Act {
     PlayPause,
     /// The transport: jump to a position.
     Seek(Duration),
+    /// Copy the whole file's text to the clipboard.
+    Copy,
     Close,
 }
 
@@ -167,6 +169,9 @@ struct View<'a> {
     sections: Vec<Section>,
     pinned: Option<usize>,
     status: Vec<String>,
+    /// Whether the preview has a text layer to copy: text, code, Markdown,
+    /// HTML, CSV; never a file list or a paged document.
+    copy: bool,
     /// The media transport, when the document is media.
     transport: Option<TransportView>,
 }
@@ -248,10 +253,20 @@ pub fn show(
     separator(ui, width);
     status_bar(ui, width, status_h, &view, state);
 
-    // What the toolbar asked for.
+    apply_acts(acts, view.pane, previews, requests)
+}
+
+/// Applies what the toolbar asked for; returns whether the close button
+/// was pressed.
+fn apply_acts(
+    acts: Vec<Act>,
+    pane: Option<PaneId>,
+    previews: &mut Previews,
+    requests: &mut Vec<Request>,
+) -> bool {
     let mut close = false;
     for act in acts {
-        match (act, view.pane) {
+        match (act, pane) {
             (Act::Setting(change), _) => {
                 requests.push(Request::Command(Command::Settings(change)));
             }
@@ -278,13 +293,17 @@ pub fn show(
                     transport.seek(to);
                 }
             }
+            (Act::Copy, Some(pane)) => {
+                requests.push(Request::Command(Command::PreviewCopy(pane)));
+            }
             (Act::Close, _) => close = true,
             (
                 Act::Page(_)
                 | Act::ActualSize(_)
                 | Act::Control(..)
                 | Act::PlayPause
-                | Act::Seek(_),
+                | Act::Seek(_)
+                | Act::Copy,
                 None,
             ) => {}
         }
@@ -330,6 +349,11 @@ fn collect<'a>(ui: &egui::Ui, app: &'a App, previews: &mut Previews) -> View<'a>
         .pinned
         .get(kind)
         .and_then(|id| sections.iter().position(|s| s.id == id));
+    let copy = slot.is_some_and(|s| {
+        s.text_layer().is_some()
+            && s.pages().is_none()
+            && !matches!(s.content(), Some(Content::Listing(_)))
+    });
     let mut view = View {
         pane,
         target,
@@ -347,6 +371,7 @@ fn collect<'a>(ui: &egui::Ui, app: &'a App, previews: &mut Previews) -> View<'a>
         sections,
         pinned,
         status: slot.map(|s| s.status().to_vec()).unwrap_or_default(),
+        copy,
         transport: None,
     };
     view.transport = pane
@@ -495,6 +520,11 @@ fn toolbar(
     previewer_controls(&mut left, view, state, acts);
     if let Some(transport) = view.transport {
         transport_controls(&mut left, transport, state, acts);
+    }
+    // Copy closes the middle group of every text-based preview: the whole
+    // file's text, the raw source of a rendered one, never the file.
+    if view.copy && button(&mut left, state, icons::COPY, &t!("inspector-copy"), true) {
+        acts.push(Act::Copy);
     }
 }
 

@@ -263,6 +263,10 @@ enum Msg {
         pane: PaneId,
         generation: u64,
     },
+    /// The pane's *Copy* read the file: its text, for the clipboard.
+    PreviewText {
+        result: Result<String, Error>,
+    },
     /// A remote file's preview was held behind the size cap.
     PreviewCapped {
         pane: PaneId,
@@ -333,6 +337,8 @@ pub const REMOTE_PREFIX_CHUNK: u64 = 256 * 1024;
 /// The size above which a whole-file previewer waits for *Preview anyway*
 /// on a remote provider, unless the provider names another cap.
 pub const REMOTE_PREVIEW_CAP: u64 = 4 * 1024 * 1024;
+/// The largest file the preview pane's *Copy* puts on the clipboard.
+pub const COPY_LIMIT: usize = 256 * 1024 * 1024;
 
 /// The kernel's English messages, `locales/en.ftl` of the repository:
 /// every key of the shell, the dialogues, the menus and the core actions.
@@ -1460,6 +1466,7 @@ impl App {
                     self.restart_preview(pane);
                 }
             }
+            Command::PreviewCopy(pane) => self.copy_preview_text(pane),
             Command::TabOrder { pane, order } => {
                 self.model.set_tab_order(pane, order);
             }
@@ -3210,6 +3217,26 @@ impl App {
                     });
                 }
             }
+            Msg::PreviewText { result } => {
+                let outcome = result.and_then(|text| self.platform.set_text(&text).map(|()| text));
+                match outcome {
+                    Ok(text) => events.push(Event::Notify {
+                        level: Level::Info,
+                        text: ext::t!("preview-copied", count = text.chars().count()),
+                    }),
+                    Err(Error::Unsupported(_)) => events.push(Event::Notify {
+                        level: Level::Error,
+                        text: ext::t!(
+                            "preview-copy-too-large",
+                            limit = format!("{} MiB", COPY_LIMIT / (1024 * 1024))
+                        ),
+                    }),
+                    Err(error) => events.push(Event::Notify {
+                        level: Level::Error,
+                        text: format!("Copy failed: {error}"),
+                    }),
+                }
+            }
             Msg::PreviewNone { pane, generation } => {
                 if let Some(job) = self
                     .preview
@@ -3511,6 +3538,40 @@ impl App {
                 self.start_preview(pane, entry);
             }
         }
+    }
+
+    /// Reads the whole file the pane previews and puts its text on the
+    /// clipboard: a job, answered by [`Msg::PreviewText`]. The bytes are
+    /// decoded by their byte-order mark (UTF-8, UTF-16) and as UTF-8
+    /// otherwise, lossily; a file above [`COPY_LIMIT`] is refused with a
+    /// notification.
+    fn copy_preview_text(&mut self, pane: PaneId) {
+        let Some(job) = self.preview.get(&pane) else {
+            return;
+        };
+        let entry = job.full.clone();
+        let loc = Location::new(entry.id.provider, entry.path.clone());
+        let Ok(provider) = self.mounts.resolve(&loc) else {
+            return;
+        };
+        let tx = self.mailbox.clone();
+        let handle = self
+            .jobs
+            .spawn_named(format!("Copy {}", entry.name), move |job| async move {
+                let result = async {
+                    let bytes =
+                        ext::read_bytes(&*provider, &loc, Some(COPY_LIMIT + 1), &job.cancel)
+                            .await?;
+                    if bytes.len() > COPY_LIMIT {
+                        return Err(Error::Unsupported("the file is larger than the copy limit"));
+                    }
+                    Ok(decode_text(&bytes))
+                }
+                .await;
+                tx.send(Msg::PreviewText { result });
+                Ok(())
+            });
+        self.internal.insert(handle.id);
     }
 
     /// Opens the pane's preview again for the entry it shows: after *Load
@@ -3927,6 +3988,18 @@ where
         }
     });
     tx
+}
+
+/// The text of a file's bytes for the clipboard: by its byte-order mark
+/// when it has one (UTF-8, UTF-16), as UTF-8 otherwise, with anything that
+/// is no UTF-8 replaced.
+#[must_use]
+pub fn decode_text(bytes: &[u8]) -> String {
+    if let Some((encoding, bom)) = encoding_rs::Encoding::for_bom(bytes) {
+        let (text, _, _) = encoding.decode(&bytes[bom..]);
+        return text.into_owned();
+    }
+    String::from_utf8_lossy(bytes).into_owned()
 }
 
 /// The tab's one selected entry, when exactly one is selected and it is not

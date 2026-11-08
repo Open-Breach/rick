@@ -12,7 +12,7 @@ use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable as _;
 use ext::Extension;
 use model::SelectionChange;
-use platform::{ConfigDir, Fake};
+use platform::{Clipboard as _, ConfigDir, Fake};
 use tests::{local, media};
 use ui_egui::keys::Intent;
 use ui_egui::{EguiHost, RickUi, icons};
@@ -237,7 +237,11 @@ fn a_text_file_shows_its_toolbar_and_status_and_wrap_is_remembered() {
         .iter()
         .map(|i| i.label.as_str())
         .collect();
-    assert_eq!(labels, ["File", "Line numbers", "Word wrap"]);
+    assert_eq!(
+        labels,
+        ["File", "Line numbers", "Word wrap", "Copy"],
+        "the text controls, then Copy closing the middle group"
+    );
     assert_eq!(toolbar_item(&harness, "Line numbers"), Some(true));
     assert_eq!(toolbar_item(&harness, "Word wrap"), Some(false));
     assert_eq!(
@@ -1165,4 +1169,109 @@ fn markdown_csv_and_a_zip_are_laid_out_by_the_pane_itself() {
         Some(ui_egui::content::Drawn::Listing { rows: 3, .. })
     ));
     assert_eq!(in_pane(&harness, "readme.txt"), 0);
+}
+
+/// Issue 50, *Copy*: the button puts the whole file's text on the
+/// clipboard, beyond the window the pane loaded; for Markdown the raw
+/// source; a file list has no Copy.
+#[test]
+fn copy_puts_the_whole_text_on_the_clipboard_and_the_raw_source_for_markdown() {
+    let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+    let code = "fn main() {\n    println!(\"hi\");\n}\n";
+    fs::write(dir.path().join("main.rs"), code).unwrap_or_else(|e| panic!("{e}"));
+    // Past the 1 MiB window the text previewer loads.
+    let line = "the quick brown fox jumps over the lazy dog, again and again\n";
+    let mut big = String::new();
+    while big.len() < 1_200_000 {
+        big.push_str(line);
+    }
+    fs::write(dir.path().join("big.log"), &big).unwrap_or_else(|e| panic!("{e}"));
+    fs::write(dir.path().join("README.md"), README).unwrap_or_else(|e| panic!("{e}"));
+    fs::write(
+        dir.path().join("bundle.zip"),
+        ext_preview_archive::fixtures::sample_zip(),
+    )
+    .unwrap_or_else(|e| panic!("{e}"));
+    let fake = Arc::new(Fake::new().unwrap_or_else(|e| panic!("{e}")));
+    let mut harness = window(
+        &fake,
+        dir.path(),
+        egui::vec2(1200.0, 760.0),
+        420.0,
+        content_previewers(),
+    );
+    let wait_clipboard = |harness: &mut Harness<'_, RickUi>, fake: &Fake| -> String {
+        let started = Instant::now();
+        loop {
+            settle(harness);
+            if let Some(text) = fake.clipboard_text() {
+                return text;
+            }
+            assert!(
+                started.elapsed() < Duration::from_secs(10),
+                "nothing copied"
+            );
+        }
+    };
+
+    // A code file: its full text.
+    select(&mut harness, "main.rs");
+    let pane = harness.state().app().model().focused;
+    click_in_pane(&mut harness, icons::COPY);
+    assert_eq!(wait_clipboard(&mut harness, &fake), code);
+
+    // Past the loaded window: the whole file all the same.
+    fake.set_text("").unwrap_or_else(|e| panic!("{e}"));
+    select(&mut harness, "big.log");
+    assert!(
+        harness
+            .state()
+            .previews()
+            .get(pane)
+            .and_then(|s| s.text_layer())
+            .is_some_and(|l| l.pages[0].len() < big.len()),
+        "the pane loaded a window, not the file"
+    );
+    click_in_pane(&mut harness, icons::COPY);
+    let started = Instant::now();
+    loop {
+        settle(&mut harness);
+        if fake.clipboard_text().is_some_and(|t| t.len() == big.len()) {
+            break;
+        }
+        assert!(
+            started.elapsed() < Duration::from_secs(10),
+            "the whole file: {:?}",
+            fake.clipboard_text().map(|t| t.len())
+        );
+    }
+    assert_eq!(fake.clipboard_text().as_deref(), Some(big.as_str()));
+
+    // Markdown: the raw source, not the rendered document.
+    fake.set_text("").unwrap_or_else(|e| panic!("{e}"));
+    select(&mut harness, "README.md");
+    click_in_pane(&mut harness, icons::COPY);
+    let started = Instant::now();
+    loop {
+        settle(&mut harness);
+        if fake.clipboard_text().as_deref() == Some(README) {
+            break;
+        }
+        assert!(
+            started.elapsed() < Duration::from_secs(10),
+            "the raw source: {:?}",
+            fake.clipboard_text()
+        );
+    }
+
+    select(&mut harness, "bundle.zip");
+    assert!(
+        !harness
+            .state()
+            .preview_toolbar()
+            .iter()
+            .any(|item| item.label == "Copy"),
+        "a file list has no Copy: {:?}",
+        harness.state().preview_toolbar()
+    );
 }
