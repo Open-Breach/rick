@@ -34,6 +34,7 @@ ext-preview-media = { path = "crates/ext-preview-media" }
 ext-preview-archive = { path = "crates/ext-preview-archive" }
 ext-preview-csv = { path = "crates/ext-preview-csv" }
 ext-vfs-sftp = { path = "crates/ext-vfs-sftp" }
+ext-vfs-s3 = { path = "crates/ext-vfs-s3" }
 plugins-native = { path = "crates/plugins-native" }
 plugin-probe = { path = "crates/plugin-probe" }
 plugin-panic = { path = "crates/plugin-panic" }
@@ -94,6 +95,17 @@ keyring = "4"
 # SigV4 and Azure's SharedKey, ring's RSA for the GCS service-account JWT.
 russh = { version = "0.65", default-features = false, features = ["ring", "flate2", "rsa"] }
 russh-sftp = "3"
+reqwest = { version = "0.13", default-features = false, features = ["rustls-no-provider", "stream", "http2"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12", "logging"] }
+ring = "0.17"
+tokio-util = { version = "0.7", default-features = false, features = ["io"] }
+bytes = "1"
+hmac = "0.12"
+sha2 = "0.10"
+hex = "0.4"
+base64 = "0.22"
+percent-encoding = "2"
+url = "2"
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 eframe = "0.36"
 egui = "0.36"
