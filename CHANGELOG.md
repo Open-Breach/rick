@@ -9,6 +9,41 @@ the pull request that brought the change.
 
 ### Added
 
+- The preview pane is Rick's only viewer (#50): it lays out every kind
+  of content a previewer returns itself, so a folder, archive or disk
+  image shows its file list in the explorer's columns with the stats line
+  and folding in place, a CSV file its grid with a header row, and a
+  Markdown or HTML file its rendered document (headings, paragraphs,
+  styled text, links, lists, code, quotes, tables, pictures, rules), with
+  the *Rendered* toggle to the highlighted source; audio and video show
+  in the pane with the transport in the toolbar (play or pause, seek, the
+  times, volume; Space plays while the pane has the focus), playback on
+  demand. *Copy* in the middle group of every text-based preview puts
+  the whole file's text on the clipboard, the raw source for a rendered
+  format. A file no previewer claims shows a placeholder, not a hex dump:
+  its facts, its type icon and *Plugin available* or *No plugin
+  available*, answered from the plugin manifests, which now list the
+  file extensions a plugin's previewers claim. Enter and a double-click
+  open a file: a folder navigates, an archive enters in the current tab
+  unless the new setting `archives.on_open` (a row in Settings) is
+  `system`, everything else goes to the system's default application;
+  Mod+Enter always does.
+- Third-party libraries through a setting (#50): the PDF previewer's
+  `library` (`preview-pdf.toml`) and the Office previewer's `soffice`
+  (`preview-office.toml`) name pdfium and LibreOffice; each is resolved
+  lazily on the first file shown, from the setting, then beside the
+  binary and the plugins directory, then the platform's usual places,
+  and the first hit is written back into the setting. When nothing is
+  found the pane shows the file's information and a message naming the
+  library with the install command or download for this platform,
+  *Browse…* (a file dialogue, the choice stored in the setting) and
+  *Retry*. CI and `cargo xtask bundle` read and write the setting.
+- *Always preview on <host>* beside *Preview anyway* in the cap message
+  of a large file on a remote source (#50): it loads the file and sets
+  `preview_always` for that SSH host, after which the cap no longer
+  applies there; the same switch is a checkbox in the host editor and an
+  entry in the host row's context menu in Network, and works for a host
+  of `~/.ssh/config` too.
 - Localisation (#24): every text of the shell, the dialogues, the menus,
   the core actions and the plugins goes through the `t!` lookup over Fluent
   files bundled in the binary (`locales/` for the kernel, each plugin's
@@ -236,6 +271,12 @@ the pull request that brought the change.
 
 ### Changed
 
+- The extension API is at version 12 (#50): `Manifest` gained `previews`,
+  the registry lends a `SettingsStore` so a plugin reads and writes its
+  own declared settings, `Content` gained `MissingLibrary`, and `Provider`
+  gained `remote_preview_always`.
+- `ext-preview-hex` claims no file by itself any more: its score is 0 for
+  every file and it is chosen per type in settings (#50).
 - The extension API is at version 11: `Action::label` returns a `String`
   and `Availability::Disabled` carries one, both built with `t!`; the
   labels the registry keeps (`SettingField`, `ConnectionField`,
@@ -306,6 +347,11 @@ the pull request that brought the change.
 
 ### Removed
 
+- The environment variables `RICK_PDFIUM_DIR` and `RICK_SOFFICE`: the
+  library paths are the plugins' settings, which development and CI write
+  instead (#50).
+- The viewer of 0.2 milestone 3 (#29), withdrawn before any release: the
+  preview pane is the only viewer, and Enter opens files (#50).
 - The "not part of version 0.1" notices of Select by pattern, Paste as
   link, Bulk rename, Open with… and Open console; the five rows of the
   shortcut table dispatch to the actions (#23).

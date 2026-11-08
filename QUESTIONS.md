@@ -2185,3 +2185,133 @@ Once answered, an entry keeps its number and gains a dated decision line.
     Assumed: off (`set_use_isolating(false)`), since egui draws the marks as
     boxes; a key nobody wrote comes back as itself, so a missing translation
     is a visible text or key, never a panic.
+
+185. (issue 50) "The manifest gains the list of file extensions a plugin's
+    previewers claim so the host answers from manifests without loading the
+    plugin"; the spec does not say how a multi-part suffix (`tar.gz`) or a
+    name without an extension is matched.
+    Assumed: `Manifest::previews` is a list of lower-case extensions
+    without the dot, multi-part ones allowed (`"tar.gz"`), written to
+    `plugin.toml` as `previews` (absent in a manifest written before API
+    12, read as empty); the host says *Plugin available* when any suffix
+    after a dot of the file's name equals one of them, case-insensitively,
+    for a plugin whose status is *disabled* only. Every previewer plugin of
+    the workspace lists the extensions its `score` claims by name; the hex
+    view lists none. The extension API is version 12.
+
+186. (issue 50) The spec's four content kinds for the pinned info section
+    are `pages`, `text`, `image` and `other`; a file list, a grid and a
+    rendered document are none of these by name.
+    Assumed: they count as `text`, since each of their documents carries a
+    text layer (the listing's dump, the raw CSV, the source), so a pin
+    made on a Markdown file holds for a CSV and a text file alike. The
+    layout lives in `ui-egui/content.rs`: the listing is one table in the
+    explorer's columns plus *Compressed* when the format records it, a
+    collapsed directory hides the rows deeper than it until its depth comes
+    back, the grid lays out at most 200 columns and says how many more
+    there are, a document's pictures are decoded by the `image` crate in
+    the UI crate (the first dependency on it there) and drawn no wider than
+    the pane and never above their own size, and a link opens with the
+    system when it is an `http`, `https` or `mailto` address.
+
+187. (issue 50) "If a plugin has no way to read or write its own declared
+    settings today, add the smallest accessor on the extension context".
+    Assumed: the extension context is the registry, which now lends a
+    `SettingsStore` (`get` and `set` of a `SettingValue` by extension id and
+    key) the way it lends the platform services and the question queue;
+    the application's `ExtSettings` is that store, shared behind an `Arc`
+    and created by the binary before the plugin host loads, so a plugin
+    loaded there and an extension compiled in read and write the same
+    values and the Settings screen shows what a plugin wrote back. The
+    values are read once every extension has declared its schema, which
+    is why a plugin keeps the handle from `register` and asks lazily. The
+    `Options` of the plugin host carry the store; `App::with_services`
+    takes it. Part of API 12.
+
+188. (issue 50) "Development and CI write the setting instead" of
+    `RICK_PDFIUM_DIR`, while the tests run every `App` over a temporary
+    config directory of the fake platform, where no setting file is.
+    Assumed: the CI setup action and the release workflow write
+    `library = "<path>"` into `preview-pdf.toml` of the runner's config
+    directory (`$XDG_CONFIG_HOME/rick` or `~/.config/rick`,
+    `~/Library/Application Support/Rick`, `%APPDATA%\Rick`), which the
+    `rick` binary and `cargo xtask bundle` read; and the setup action also
+    copies the library beside the test binaries (`target/<profile>/deps/`
+    and `target/<profile>/`), which is the spec's second place to look, so
+    the tests find it the way a user without the setting would. The
+    bundler copies pdfium from the setting (a file, or the directory
+    holding it) and says so when the setting is unset; the release smoke
+    test keeps running the check binary beside the unpacked `rick` with no
+    setting at all. `RICK_REQUIRE_PDFIUM` stays, as the issue allows.
+
+189. (issue 50) "*Browse…* (a file dialogue through `UiHost`, the choice
+    stored in the setting)", while `UiHost` has prompt, confirm, show and
+    form, every one a synchronous answer-queue dialogue, and the platform
+    already has the asynchronous file dialogues (`NativeDialogs`).
+    Assumed: *Browse…* opens `platform::NativeDialogs::pick_files` the way
+    the side panel's folder *Browse…* does, with the filters the previewer
+    names in `MissingLibrary`; the shell stores the chosen file into the
+    previewer's setting through `Command::ExtSetting` and opens the preview
+    again (`Command::PreviewRetry`). No `UiHost` method was added.
+
+190. (issue 50) The Office previewer renders through its own pdfium
+    binding (QUESTIONS.md 104), which also needs the library's path.
+    Assumed: one setting for one library: the Office plugin reads the PDF
+    previewer's `library` setting through the `SettingsStore` and looks in
+    the same places, but never writes it; its message for a missing pdfium
+    points *Browse…* at the PDF previewer's setting. The Office plugin's
+    own setting is `soffice` (the program, or the directory it is in),
+    with the `PATH` and the platforms' install directories after the
+    setting, beside the binary and the plugins directory.
+
+191. (issue 50) The issue writes `preview_always = true` "for that SSH host
+    (`[[ssh.hosts]]`)", while Rick's hosts are `[[connections]]` tables
+    (QUESTIONS.md 163) and a host of `~/.ssh/config` has no table at all,
+    being read-only in Rick.
+    Assumed: the switch is the connection field `preview_always` of the
+    `[[connections]]` table (`provider = "ssh"`), a checkbox in the host
+    editor; for a configuration host the application writes a
+    `[[connections]]` entry that carries the switch alone (and a cap
+    override, when one is set), which `Hosts` merges onto the
+    configuration host of that alias instead of hiding it, so *Always
+    preview on <host>* and the row's menu work for every host in Network.
+    `Provider::remote_preview_always` reports the switch; the kernel skips
+    the cap when it is on. Cloud accounts have no editor yet, so their
+    rows get the menu entry only once their schema has the field.
+
+192. (issue 50) *Copy* "puts the whole file's text on the clipboard"; the
+    spec says nothing about a file too large to hold as text, nor about
+    the encoding.
+    Assumed: the file is read again as a job up to 256 MiB (`COPY_LIMIT`),
+    decoded by its byte-order mark (UTF-8, UTF-16) and as UTF-8 otherwise
+    with invalid sequences replaced, and put on the clipboard through
+    `platform::Clipboard`, with a notification of the character count; a
+    larger file is refused with a notification. The button shows for a
+    preview with a text layer and no pages: text, code, Markdown, HTML and
+    CSV, not a file list (whose text layer is the listing's dump) and not a
+    paged document.
+
+193. (issue 50) *No previewer* when a previewer claims the file but fails
+    to open it.
+    Assumed: the placeholder is for a file no previewer claims, which the
+    application now reports as `Event::PreviewNone` (with the disabled
+    plugin that would claim it, from the plugin rows); a previewer that
+    claims a file and fails keeps `Event::PreviewFailed` and the error
+    line, since the type is known and the failure is the news.
+
+194. (issue 50) How a test stands on a machine without pdfium or
+    LibreOffice when CI has both beside the binary.
+    Assumed: `PdfPreview::with_search(Search::SettingOnly)` and the Office
+    plugin's `Lookup::with_search` restrict the search to the setting, the
+    one place a test controls; the acceptance test of the in-pane message
+    uses it and then browses to the real library where the machine has
+    one.
+
+195. (issue 50) Space "while the preview has focus" plays or pauses, while
+    Space in a list toggles the focused entry.
+    Assumed: the Preview pane table of the shortcut screen has one row,
+    *Play / pause media* (`preview.play`, Space), live while the Preview
+    tab has the focus and tried before the other tables there; it is not
+    bound in an explorer. The transport in the toolbar is play or pause, a
+    seek bar with elapsed and total time and a volume slider; speed, frame
+    step and loop of `Transport` have no control in the pane.

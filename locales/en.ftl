@@ -74,6 +74,7 @@ preview-browse = Browse…
 preview-retry = Retry
 preview-library-choose = Choose the { $name } file
 preview-pause = Pause
+preview-volume = Volume
 preview-copied = Copied { $count } characters
 preview-copy-too-large = The file is larger than { $limit }; nothing was copied
 preview-more-columns = +{ $count } more columns

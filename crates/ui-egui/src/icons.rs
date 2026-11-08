@@ -105,6 +105,8 @@ pub const DISC: &str = ph::DISC;
 pub const LOCK: &str = ph::LOCK;
 /// The rendered view of markup, as opposed to its source.
 pub const RENDERED: &str = ph::ARTICLE;
+/// The media transport's volume.
+pub const VOLUME: &str = ph::SPEAKER_HIGH;
 /// The side panel's tree follows the focused pane.
 pub const LINKED: &str = ph::LINK_SIMPLE;
 /// A console tab.
@@ -386,6 +388,7 @@ mod tests {
         PLAY,
         LOCK,
         RENDERED,
+        VOLUME,
         SUBTREE,
         USB,
         DISK,

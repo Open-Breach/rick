@@ -134,17 +134,20 @@ enum Act {
     PlayPause,
     /// The transport: jump to a position.
     Seek(Duration),
+    /// The transport: set the volume, 0.0 to 1.0.
+    Volume(f32),
     /// Copy the whole file's text to the clipboard.
     Copy,
     Close,
 }
 
 /// The transport's facts for the toolbar, read from the document.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 struct TransportView {
     playing: bool,
     position: Duration,
     duration: Option<Duration>,
+    volume: f32,
 }
 
 /// Everything the pane draws from, gathered before drawing so the slot is
@@ -306,6 +309,11 @@ fn apply_acts(
                     transport.seek(to);
                 }
             }
+            (Act::Volume(volume), Some(pane)) => {
+                if let Some(transport) = previews.get_mut(pane).transport() {
+                    transport.set_volume(volume);
+                }
+            }
             (Act::Copy, Some(pane)) => {
                 requests.push(Request::Command(Command::PreviewCopy(pane)));
             }
@@ -316,6 +324,7 @@ fn apply_acts(
                 | Act::Control(..)
                 | Act::PlayPause
                 | Act::Seek(_)
+                | Act::Volume(_)
                 | Act::Copy,
                 None,
             ) => {}
@@ -394,6 +403,7 @@ fn collect<'a>(ui: &egui::Ui, app: &'a App, previews: &mut Previews) -> View<'a>
             playing: t.playing(),
             position: t.position(),
             duration: t.duration(),
+            volume: t.volume(),
         });
     view
 }
@@ -445,6 +455,18 @@ fn transport_controls(
         )
         .selectable(false),
     );
+    // The volume, a short slider behind the speaker glyph.
+    ui.add(egui::Label::new(egui::RichText::new(icons::VOLUME).size(15.0)).selectable(false))
+        .on_hover_text(t!("preview-volume"));
+    let mut volume = transport.volume.clamp(0.0, 1.0);
+    ui.spacing_mut().slider_width = 56.0;
+    if ui
+        .add(egui::Slider::new(&mut volume, 0.0..=1.0).show_value(false))
+        .on_hover_text(t!("preview-volume"))
+        .changed()
+    {
+        acts.push(Act::Volume(volume));
+    }
     if transport.playing {
         ui.ctx().request_repaint_after(Duration::from_millis(100));
     }
