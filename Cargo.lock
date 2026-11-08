@@ -8369,6 +8369,7 @@ dependencies = [
  "egui_extras",
  "egui_kittest",
  "ext",
+ "image",
  "model",
  "platform",
  "runtime",

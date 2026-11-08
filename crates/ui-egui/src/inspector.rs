@@ -16,6 +16,8 @@
 //! Nothing here asks for width: the pane is as wide as the dock makes it,
 //! labels truncate, rows clip, and the content is fitted or scrolled.
 
+use std::time::Duration;
+
 use app::{App, Command};
 use egui::{Align, Rect, pos2, vec2};
 use ext::t;
@@ -128,11 +130,25 @@ enum Act {
     Page(isize),
     ActualSize(bool),
     Control(ext::ControlId, ControlValue),
+    /// The transport: play or pause.
+    PlayPause,
+    /// The transport: jump to a position.
+    Seek(Duration),
     Close,
+}
+
+/// The transport's facts for the toolbar, read from the document.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct TransportView {
+    playing: bool,
+    position: Duration,
+    duration: Option<Duration>,
 }
 
 /// Everything the pane draws from, gathered before drawing so the slot is
 /// not borrowed while the widgets run.
+// The kinds of content are independent flags, not states of one machine.
+#[allow(clippy::struct_excessive_bools)]
 struct View<'a> {
     /// The pane whose selection is shown, when an explorer tab is followed.
     pane: Option<PaneId>,
@@ -151,6 +167,8 @@ struct View<'a> {
     sections: Vec<Section>,
     pinned: Option<usize>,
     status: Vec<String>,
+    /// The media transport, when the document is media.
+    transport: Option<TransportView>,
 }
 
 /// Draws the pane for the selection of the explorer tab the preview
@@ -246,11 +264,44 @@ pub fn show(
             (Act::Control(id, value), Some(pane)) => {
                 previews.get_mut(pane).set_control(id, value);
             }
+            (Act::PlayPause, Some(pane)) => {
+                if let Some(transport) = previews.get_mut(pane).transport() {
+                    if transport.playing() {
+                        transport.pause();
+                    } else {
+                        transport.play();
+                    }
+                }
+            }
+            (Act::Seek(to), Some(pane)) => {
+                if let Some(transport) = previews.get_mut(pane).transport() {
+                    transport.seek(to);
+                }
+            }
             (Act::Close, _) => close = true,
-            (Act::Page(_) | Act::ActualSize(_) | Act::Control(..), None) => {}
+            (
+                Act::Page(_)
+                | Act::ActualSize(_)
+                | Act::Control(..)
+                | Act::PlayPause
+                | Act::Seek(_),
+                None,
+            ) => {}
         }
     }
     close
+}
+
+/// Plays or pauses the media the pane shows, if any: Space while the
+/// preview pane has the focus.
+pub fn play_pause(previews: &mut Previews, pane: Option<PaneId>) {
+    if let Some(transport) = pane.and_then(|pane| previews.get_mut(pane).transport()) {
+        if transport.playing() {
+            transport.pause();
+        } else {
+            transport.play();
+        }
+    }
 }
 
 /// Gathers what the pane shows: the followed explorer tab's selection, the
@@ -279,7 +330,7 @@ fn collect<'a>(ui: &egui::Ui, app: &'a App, previews: &mut Previews) -> View<'a>
         .pinned
         .get(kind)
         .and_then(|id| sections.iter().position(|s| s.id == id));
-    View {
+    let mut view = View {
         pane,
         target,
         entry,
@@ -296,6 +347,68 @@ fn collect<'a>(ui: &egui::Ui, app: &'a App, previews: &mut Previews) -> View<'a>
         sections,
         pinned,
         status: slot.map(|s| s.status().to_vec()).unwrap_or_default(),
+        transport: None,
+    };
+    view.transport = pane
+        .filter(|_| target.is_some())
+        .and_then(|pane| previews.get_mut(pane).transport())
+        .map(|t| TransportView {
+            playing: t.playing(),
+            position: t.position(),
+            duration: t.duration(),
+        });
+    view
+}
+
+/// `m:ss`, or `h:mm:ss` from an hour on.
+fn clock(d: Duration) -> String {
+    let secs = d.as_secs();
+    let (h, m, s) = (secs / 3600, secs % 3600 / 60, secs % 60);
+    if h > 0 {
+        format!("{h}:{m:02}:{s:02}")
+    } else {
+        format!("{m}:{s:02}")
+    }
+}
+
+/// The transport in the toolbar's middle group: play or pause, a seek bar
+/// and the elapsed and total time (SPEC.md, Preview, *Toolbar*: "Media:
+/// the transport").
+fn transport_controls(
+    ui: &mut egui::Ui,
+    transport: TransportView,
+    state: &mut PaneState,
+    acts: &mut Vec<Act>,
+) {
+    let (glyph, label) = if transport.playing {
+        (icons::PAUSE, t!("preview-pause"))
+    } else {
+        (icons::PLAY, t!("preview-play"))
+    };
+    if button(ui, state, glyph, &label, true) {
+        acts.push(Act::PlayPause);
+    }
+    let total = transport.duration.map_or(0.0, |d| d.as_secs_f64());
+    let mut at = transport.position.as_secs_f64().min(total.max(0.0));
+    let width = (ui.available_width() - 160.0).clamp(40.0, 240.0);
+    ui.spacing_mut().slider_width = width;
+    let slider = ui.add(
+        egui::Slider::new(&mut at, 0.0..=total.max(0.001))
+            .show_value(false)
+            .trailing_fill(true),
+    );
+    if slider.changed() {
+        acts.push(Act::Seek(Duration::from_secs_f64(at.max(0.0))));
+    }
+    let total_text = transport.duration.map_or_else(|| "–:––".to_owned(), clock); // i18n: ok
+    ui.add(
+        egui::Label::new(
+            egui::RichText::new(format!("{} / {total_text}", clock(transport.position))).small(),
+        )
+        .selectable(false),
+    );
+    if transport.playing {
+        ui.ctx().request_repaint_after(Duration::from_millis(100));
     }
 }
 
@@ -380,6 +493,9 @@ fn toolbar(
     }
     standard_controls(&mut left, view, state, acts);
     previewer_controls(&mut left, view, state, acts);
+    if let Some(transport) = view.transport {
+        transport_controls(&mut left, transport, state, acts);
+    }
 }
 
 /// The badges, right to left so the first section ends up leftmost.

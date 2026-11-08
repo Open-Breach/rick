@@ -1057,6 +1057,9 @@ impl RickUi {
             .active_tab(pane)
             .map(|(_, tab)| tab.filter.clone())
             .unwrap_or_default();
+        // The Preview tab has the focus: its own table (Space plays) comes
+        // first.
+        let in_preview = crate::dock::shows_preview(self.app.model(), self.focused_in(window));
         let mut intents = Vec::new();
         let mut typed = String::new();
         let mut backspace = false;
@@ -1076,7 +1079,10 @@ impl RickUi {
                         backspace = true;
                         return false;
                     }
-                    match self.keys.match_key(*modifiers, *key, *physical_key) {
+                    match self
+                        .keys
+                        .match_key(*modifiers, *key, *physical_key, in_preview)
+                    {
                         Some(intent) => {
                             intents.push(intent);
                             false
@@ -1667,6 +1673,9 @@ impl RickUi {
                 pane,
                 change: SelectionChange::Invert,
             }),
+            Intent::PreviewPlay => {
+                inspector::play_pause(&mut self.previews, self.app.preview_pane());
+            }
             Intent::ToggleFocused => {
                 let cursor = self
                     .app

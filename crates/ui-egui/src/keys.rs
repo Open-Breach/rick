@@ -56,6 +56,8 @@ pub enum Intent {
     InvertSelection,
     /// Toggle the focused entry in the selection.
     ToggleFocused,
+    /// Preview pane: play or pause the media it shows.
+    PreviewPlay,
     /// Clear the selection, or the filter when one is set.
     Escape,
     /// System properties of the selection.
@@ -206,6 +208,9 @@ const TABS: &str = "Tabs and panes";
 const VIEW: &str = "View";
 const WINDOW: &str = "Window";
 const LIST: &str = "List";
+/// The preview pane's own table: bound while the Preview tab has the
+/// focus, where its rows win over the list's.
+pub const PREVIEW: &str = "Preview pane";
 
 /// Every intent the UI handles itself, with the spec's default bindings.
 /// File operations are not here: they come from the action registry.
@@ -280,6 +285,13 @@ pub const UI_INTENTS: &[IntentSpec] = &[
         "sel.toggle",
         "Toggle selection of the focused entry",
         SEL,
+        &["Space"],
+    ),
+    spec(
+        Intent::PreviewPlay,
+        "preview.play",
+        "Play / pause media",
+        PREVIEW,
         &["Space"],
     ),
     spec(
@@ -712,6 +724,15 @@ pub struct Binding {
     pub shortcut: Shortcut,
     /// What they do.
     pub intent: Intent,
+    /// A row of the Preview pane table: live only while the Preview tab
+    /// has the focus, where it wins over any other row of the same keys.
+    pub preview: bool,
+}
+
+/// Whether an intent is a row of the Preview pane table.
+#[must_use]
+pub fn is_preview(intent: Intent) -> bool {
+    intent.spec().is_some_and(|s| s.group == PREVIEW)
 }
 
 /// The live shortcut table: defaults with the user's rebindings applied.
@@ -754,9 +775,11 @@ impl KeyMap {
         let bindings = defaults
             .into_iter()
             .flat_map(|(intent, shortcuts)| {
-                shortcuts
-                    .into_iter()
-                    .map(move |shortcut| Binding { shortcut, intent })
+                shortcuts.into_iter().map(move |shortcut| Binding {
+                    shortcut,
+                    intent,
+                    preview: is_preview(intent),
+                })
             })
             .collect();
         Self { bindings }
@@ -782,38 +805,63 @@ impl KeyMap {
         self.shortcuts_for(intent).next().map(|s| s.text())
     }
 
-    /// What this shortcut does, if anything.
+    /// What this shortcut does in an explorer, if anything.
     #[must_use]
     pub fn lookup(&self, shortcut: Shortcut) -> Option<Intent> {
-        self.bindings
-            .iter()
-            .find(|b| b.shortcut == shortcut)
-            .map(|b| b.intent)
+        self.lookup_in(shortcut, false)
+    }
+
+    /// What this shortcut does, in the preview pane or an explorer: in the
+    /// preview pane its own table is tried first; in an explorer that
+    /// table is not bound.
+    #[must_use]
+    pub fn lookup_in(&self, shortcut: Shortcut, in_preview: bool) -> Option<Intent> {
+        if in_preview {
+            self.bindings
+                .iter()
+                .filter(|b| b.preview)
+                .chain(self.bindings.iter().filter(|b| !b.preview))
+                .find(|b| b.shortcut == shortcut)
+                .map(|b| b.intent)
+        } else {
+            self.bindings
+                .iter()
+                .find(|b| !b.preview && b.shortcut == shortcut)
+                .map(|b| b.intent)
+        }
     }
 
     /// What a key press does: the logical key is tried first, then the
     /// physical one, so `Mod+Shift+1` works where Shift+1 types `!`.
+    /// `in_preview` says whether the Preview tab takes the keys.
     #[must_use]
     pub fn match_key(
         &self,
         modifiers: egui::Modifiers,
         key: egui::Key,
         physical: Option<egui::Key>,
+        in_preview: bool,
     ) -> Option<Intent> {
         let mods = from_egui_modifiers(modifiers);
         from_egui_key(key)
             .and_then(|key| {
-                self.lookup(Shortcut {
-                    modifiers: mods,
-                    key,
-                })
+                self.lookup_in(
+                    Shortcut {
+                        modifiers: mods,
+                        key,
+                    },
+                    in_preview,
+                )
             })
             .or_else(|| {
                 physical.and_then(from_egui_key).and_then(|key| {
-                    self.lookup(Shortcut {
-                        modifiers: mods,
-                        key,
-                    })
+                    self.lookup_in(
+                        Shortcut {
+                            modifiers: mods,
+                            key,
+                        },
+                        in_preview,
+                    )
                 })
             })
     }
@@ -1010,23 +1058,51 @@ mod tests {
     }
 
     #[test]
+    fn the_preview_pane_table_is_live_in_the_preview_pane_only() {
+        let map = KeyMap::new(&Registry::new(), &Settings::default());
+        let key = |text: &str| -> Shortcut { text.parse().unwrap_or_else(|e| panic!("{e}")) };
+        // In an explorer Space toggles the selection.
+        assert_eq!(map.lookup(key("Space")), Some(Intent::ToggleFocused));
+        assert_eq!(
+            map.lookup_in(key("Space"), false),
+            Some(Intent::ToggleFocused)
+        );
+        // In the preview pane it plays or pauses; everything else stays.
+        assert_eq!(map.lookup_in(key("Space"), true), Some(Intent::PreviewPlay));
+        assert_eq!(map.lookup_in(key("Mod+W"), true), Some(Intent::CloseTab));
+        assert_eq!(
+            map.match_key(egui::Modifiers::NONE, egui::Key::Space, None, true),
+            Some(Intent::PreviewPlay)
+        );
+        assert_eq!(
+            map.match_key(egui::Modifiers::NONE, egui::Key::Space, None, false),
+            Some(Intent::ToggleFocused)
+        );
+    }
+
+    #[test]
     fn physical_keys_match_when_shift_changes_the_logical_one() {
         let map = KeyMap::new(&Registry::new(), &Settings::default());
         let mods = egui::Modifiers::COMMAND.plus(egui::Modifiers::SHIFT);
         assert_eq!(
-            map.match_key(mods, egui::Key::Exclamationmark, Some(egui::Key::Num1)),
+            map.match_key(
+                mods,
+                egui::Key::Exclamationmark,
+                Some(egui::Key::Num1),
+                false
+            ),
             Some(Intent::ViewList)
         );
         assert_eq!(
-            map.match_key(mods, egui::Key::Pipe, Some(egui::Key::Backslash)),
+            map.match_key(mods, egui::Key::Pipe, Some(egui::Key::Backslash), false),
             Some(Intent::SplitDown)
         );
         assert_eq!(
-            map.match_key(egui::Modifiers::NONE, egui::Key::F5, None),
+            map.match_key(egui::Modifiers::NONE, egui::Key::F5, None, false),
             Some(Intent::Refresh)
         );
         assert_eq!(
-            map.match_key(egui::Modifiers::ALT, egui::Key::F5, None),
+            map.match_key(egui::Modifiers::ALT, egui::Key::F5, None, false),
             None
         );
     }

@@ -995,3 +995,174 @@ fn a_file_no_previewer_claims_shows_the_placeholder_with_the_right_line() {
     harness.get_by_label("Plugin available");
     assert!(harness.query_by_label("No plugin available").is_none());
 }
+
+/// The four built-in previewers plus the CSV and archive previewer plugins,
+/// linked in for the content layout tests.
+fn content_previewers() -> Vec<Arc<dyn Extension>> {
+    let mut all = previewers();
+    all.push(Arc::new(ext_preview_csv::CsvPreview::new()));
+    all.push(Arc::new(ext_preview_archive::ArchivePreview::new()));
+    all
+}
+
+/// The labels inside the pane with this exact text.
+fn in_pane(harness: &Harness<'_, RickUi>, label: &str) -> usize {
+    let pane_rect = harness
+        .state()
+        .inspector_rect()
+        .unwrap_or_else(|| panic!("pane"));
+    harness
+        .query_all_by_label(label)
+        .filter(|node| pane_rect.contains(node.rect().center()))
+        .count()
+}
+
+const README: &str = "# Title\n\nA paragraph with *emphasis*, **strong** and a [link](https://example.org/).\n\n- one\n- two\n\n```rust\nfn main() {}\n```\n\n| A | B |\n|---|---|\n| 1 | 2 |\n\n---\n\n## The end\n";
+
+/// Issue 50: `README.md` reaches the pane as a document laid out by the
+/// pane, with the *Rendered* toggle on, and the toggle shows the
+/// highlighted source; a `.csv` is a grid with a header row; a zip is its
+/// file list in the explorer's columns with the stats line, folding in
+/// place.
+#[test]
+fn markdown_csv_and_a_zip_are_laid_out_by_the_pane_itself() {
+    let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+    fs::write(dir.path().join("README.md"), README).unwrap_or_else(|e| panic!("{e}"));
+    fs::write(dir.path().join("data.csv"), "name,age\nAda,36\nAlan,41\n")
+        .unwrap_or_else(|e| panic!("{e}"));
+    fs::write(
+        dir.path().join("bundle.zip"),
+        ext_preview_archive::fixtures::sample_zip(),
+    )
+    .unwrap_or_else(|e| panic!("{e}"));
+    let fake = Arc::new(Fake::new().unwrap_or_else(|e| panic!("{e}")));
+    let mut harness = window(
+        &fake,
+        dir.path(),
+        egui::vec2(1200.0, 760.0),
+        420.0,
+        content_previewers(),
+    );
+    let pane = harness.state().app().model().focused;
+
+    // The document: laid out by the pane, not the textual fallback.
+    select(&mut harness, "README.md");
+    let slot = harness
+        .state()
+        .previews()
+        .get(pane)
+        .unwrap_or_else(|| panic!("slot"));
+    assert!(
+        matches!(slot.content(), Some(ext::Content::Document(_))),
+        "a document: {slot:?}"
+    );
+    assert!(slot.text_view().is_none(), "not the source");
+    assert!(
+        matches!(slot.content_drawn(), ui_egui::content::Drawn::Document { blocks } if *blocks == 7),
+        "{:?}",
+        slot.content_drawn()
+    );
+    assert_eq!(
+        toolbar_item(&harness, "Rendered"),
+        Some(true),
+        "on for a new file"
+    );
+    assert!(in_pane(&harness, "Title") >= 1, "the heading is laid out");
+    assert!(in_pane(&harness, "link") >= 1, "the link is laid out");
+    assert_eq!(in_pane(&harness, "# Title"), 0, "no raw source");
+
+    // The toggle: the highlighted source instead.
+    click_in_pane(&mut harness, icons::RENDERED);
+    settle(&mut harness);
+    let started = Instant::now();
+    loop {
+        harness.step();
+        if harness
+            .state()
+            .previews()
+            .get(pane)
+            .is_some_and(|s| s.text_view().is_some())
+        {
+            break;
+        }
+        assert!(
+            started.elapsed() < Duration::from_secs(10),
+            "no source view"
+        );
+    }
+    assert_eq!(toolbar_item(&harness, "Rendered"), Some(false));
+    let slot = harness
+        .state()
+        .previews()
+        .get(pane)
+        .unwrap_or_else(|| panic!("slot"));
+    assert!(slot.content().is_none());
+    assert!(
+        slot.text_view()
+            .is_some_and(|v| v.text().starts_with("# Title")),
+        "the raw source"
+    );
+    // And back.
+    click_in_pane(&mut harness, icons::RENDERED);
+    settle(&mut harness);
+    assert_eq!(toolbar_item(&harness, "Rendered"), Some(true));
+    assert!(matches!(
+        harness
+            .state()
+            .previews()
+            .get(pane)
+            .and_then(|s| s.content()),
+        Some(ext::Content::Document(_))
+    ));
+
+    // The grid: a header row and the rows.
+    select(&mut harness, "data.csv");
+    let slot = harness
+        .state()
+        .previews()
+        .get(pane)
+        .unwrap_or_else(|| panic!("slot"));
+    assert!(matches!(slot.content(), Some(ext::Content::Grid(_))));
+    assert_eq!(
+        *slot.content_drawn(),
+        ui_egui::content::Drawn::Grid {
+            header: vec!["name".to_owned(), "age".to_owned()],
+            rows: 2,
+        }
+    );
+    assert!(in_pane(&harness, "name") >= 1);
+    assert!(in_pane(&harness, "Ada") >= 1);
+    assert!(in_pane(&harness, "41") >= 1);
+
+    // The listing: the explorer's columns, the stats line, folding.
+    select(&mut harness, "bundle.zip");
+    let slot = harness
+        .state()
+        .previews()
+        .get(pane)
+        .unwrap_or_else(|| panic!("slot"));
+    assert!(matches!(slot.content(), Some(ext::Content::Listing(_))));
+    let ui_egui::content::Drawn::Listing { rows, stats } = slot.content_drawn().clone() else {
+        panic!("{:?}", slot.content_drawn());
+    };
+    assert_eq!(rows, 4, "docs, docs/readme.txt, a.txt, secret.bin");
+    assert!(!stats.is_empty());
+    assert!(in_pane(&harness, "readme.txt") >= 1);
+    assert!(
+        in_pane(&harness, "Date modified") >= 1,
+        "the explorer's columns"
+    );
+    assert!(in_pane(&harness, &stats) >= 1, "the stats line");
+    // Folding docs hides its contents.
+    click_in_pane(&mut harness, icons::TREE_OPEN);
+    settle(&mut harness);
+    assert!(matches!(
+        harness
+            .state()
+            .previews()
+            .get(pane)
+            .map(|s| s.content_drawn().clone()),
+        Some(ui_egui::content::Drawn::Listing { rows: 3, .. })
+    ));
+    assert_eq!(in_pane(&harness, "readme.txt"), 0);
+}

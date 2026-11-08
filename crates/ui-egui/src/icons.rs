@@ -101,6 +101,10 @@ pub const USB: &str = ph::USB;
 pub const DISK: &str = ph::HARD_DRIVE;
 /// An optical disc.
 pub const DISC: &str = ph::DISC;
+/// An encrypted entry of an archive listing.
+pub const LOCK: &str = ph::LOCK;
+/// The rendered view of markup, as opposed to its source.
+pub const RENDERED: &str = ph::ARTICLE;
 /// The side panel's tree follows the focused pane.
 pub const LINKED: &str = ph::LINK_SIMPLE;
 /// A console tab.
@@ -238,6 +242,7 @@ pub fn for_icon(icon: ext::Icon) -> &'static str {
         ext::Icon::Rotate => ROTATE,
         ext::Icon::ZoomIn => ZOOM_IN,
         ext::Icon::ZoomOut => ZOOM_OUT,
+        ext::Icon::Rendered => RENDERED,
         // `Tag`, and whatever later versions add.
         _ => TAG,
     }
@@ -379,6 +384,8 @@ mod tests {
         FOLDER_OPEN,
         PAUSE,
         PLAY,
+        LOCK,
+        RENDERED,
         SUBTREE,
         USB,
         DISK,

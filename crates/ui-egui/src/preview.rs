@@ -35,14 +35,14 @@ use std::time::{Duration, SystemTime};
 use egui::text::{LayoutJob, TextFormat};
 use egui::{Align2, Color32, FontId, Rect, TextStyle, TextureHandle, TextureOptions, pos2, vec2};
 use ext::{
-    ControlId, ControlValue, Frame, Gesture, InfoSection, PreviewControl, PreviewDoc,
+    Content, ControlId, ControlValue, Frame, Gesture, InfoSection, PreviewControl, PreviewDoc,
     RenderRequest, TextBlock, TextLayer, Transport,
 };
 use model::{PaneId, TextPreview};
 use runtime::oneshot;
 use types::{Entry, EntryId, Error};
 
-use crate::icons;
+use crate::{content, icons};
 
 type Rendered = (Box<dyn PreviewDoc>, Result<Frame, Error>);
 
@@ -260,6 +260,12 @@ pub struct Slot {
     tick: u64,
     /// The laid-out text frame and the theme it was rendered for.
     text: Option<(bool, TextView)>,
+    /// Content the pane lays out itself (a file list, a grid, a
+    /// document), when the document offers it; the frame is not rendered
+    /// then.
+    content: Option<Content>,
+    /// The layout state of that content: folds, picture textures.
+    content_state: content::State,
     /// The page shown, zero-based.
     pub page: usize,
     pages: Option<usize>,
@@ -315,6 +321,7 @@ impl Slot {
         self.sections = doc.sections();
         self.status = doc.status();
         self.controls = doc.controls();
+        self.content = doc.content();
         // The layer grows as pages render; copy it when it changed.
         let size = |layer: &TextLayer| {
             (
@@ -339,6 +346,7 @@ impl Slot {
         self.prefix = None;
         self.textures.clear();
         self.text = None;
+        self.content_state = content::State::default();
         self.doc = Some(doc);
     }
 
@@ -367,10 +375,30 @@ impl Slot {
         self.pending.is_some()
     }
 
-    /// Whether a frame has been shown for the current document.
+    /// Whether a frame has been shown for the current document, or the
+    /// pane lays its content out itself.
     #[must_use]
     pub fn has_frame(&self) -> bool {
-        !self.textures.is_empty() || self.text.is_some()
+        !self.textures.is_empty() || self.text.is_some() || self.content.is_some()
+    }
+
+    /// The content the pane lays out itself for the document, when it
+    /// offers one: a file list, a grid or a document.
+    #[must_use]
+    pub fn content(&self) -> Option<&Content> {
+        self.content.as_ref()
+    }
+
+    /// What the content layout drew in the last frame.
+    #[must_use]
+    pub fn content_drawn(&self) -> &content::Drawn {
+        &self.content_state.drawn
+    }
+
+    /// The content layout's state, for the tests: what is folded.
+    #[must_use]
+    pub fn content_state(&self) -> &content::State {
+        &self.content_state
     }
 
     /// Whether a document is open or on its way.
@@ -505,6 +533,7 @@ impl Slot {
                 }
                 self.controls = doc.controls();
                 self.sections = doc.sections();
+                self.content = doc.content();
                 self.outdate();
             }
             None if self.pending.is_some() => self.queued.push((id, value)),
@@ -877,6 +906,16 @@ impl Previews {
         if let Some((served, total)) = slot.prefix.filter(|_| slot.doc.is_some()) {
             act = prefix_bar(ui, served, total);
         }
+        // Content the pane lays out itself needs no frame.
+        if let Some(content) = slot.content.clone() {
+            slot.drawn.clear();
+            slot.h_scroll = false;
+            let body = ui.available_rect_before_wrap();
+            slot.frame_rect = Some(body);
+            ui.set_clip_rect(body.intersect(ui.clip_rect()));
+            content::draw(ui, &content, &mut slot.content_state, SystemTime::now());
+            return act;
+        }
         let ctx = ui.ctx().clone();
         let body = ui.available_rect_before_wrap();
         let ppp = ctx.pixels_per_point();
@@ -898,57 +937,8 @@ impl Previews {
         slot.h_scroll = false;
         slot.frame_rect = None;
         ui.set_clip_rect(body.intersect(ui.clip_rect()));
-        if let Some((texture, (w, h))) = shown {
-            let native = vec2(w as f32 / ppp, h as f32 / ppp);
-            // The gestures the document claims are sensed under one stable id,
-            // so a drag survives the frame being rendered again under it.
-            let gestures = slot
-                .claims_pointer()
-                .then(|| egui::Id::new(("preview-frame", pane)));
-            if slot.actual_size && slot.is_raster() {
-                // Actual pixels: pan by dragging the picture or with the
-                // wheel, scrollbars either way; a document that claims the
-                // drag or the wheel gets them instead.
-                let source = slot.scroll_source();
-                let output = egui::ScrollArea::both()
-                    .auto_shrink([false, false])
-                    .scroll_source(source)
-                    .on_drag_cursor(egui::CursorIcon::Grabbing)
-                    .show(ui, |ui| {
-                        let image =
-                            ui.add(egui::Image::from_texture(&texture).fit_to_exact_size(native));
-                        match gestures {
-                            Some(id) => ui.interact(image.rect, id, egui::Sense::click_and_drag()),
-                            None => image,
-                        }
-                    });
-                if output.inner.hovered()
-                    && !output.inner.dragged()
-                    && source.drag != egui::scroll_area::DragScroll::Never
-                {
-                    ctx.set_cursor_icon(egui::CursorIcon::Grab);
-                }
-                slot.pan = output.state.offset;
-                slot.frame_rect = Some(output.inner.rect.intersect(output.inner_rect));
-                slot.forward_gestures(ui, &output.inner);
-            } else {
-                let scale = (body.width() / native.x)
-                    .min(body.height() / native.y)
-                    .min(1.0);
-                let size = native * scale;
-                // Centred in the content both ways.
-                let rect = Rect::from_center_size(body.center(), size);
-                let response = ui.put(
-                    rect,
-                    egui::Image::from_texture(&texture).fit_to_exact_size(size),
-                );
-                let response = match gestures {
-                    Some(id) => ui.interact(response.rect, id, egui::Sense::click_and_drag()),
-                    None => response,
-                };
-                slot.frame_rect = Some(response.rect);
-                slot.forward_gestures(ui, &response);
-            }
+        if let Some((texture, size)) = shown {
+            draw_texture(ui, slot, pane, body, &texture, size, ppp);
         } else if let Some((_, view)) = slot.text.as_mut() {
             let (drawn, h_scroll) = draw_text(ui, view, TextOptions::from_settings(text_settings));
             slot.drawn = drawn;
@@ -958,6 +948,75 @@ impl Previews {
             draw_waiting(ui, slot, target.is_some());
         }
         act
+    }
+}
+
+/// Draws a rendered frame into `body`: fitted and centred, or at actual
+/// pixels in a scroll area that pans; the gestures the document claims go
+/// to it. While media plays, every frame is rendered again.
+fn draw_texture(
+    ui: &mut egui::Ui,
+    slot: &mut Slot,
+    pane: PaneId,
+    body: Rect,
+    texture: &TextureHandle,
+    (w, h): (u32, u32),
+    ppp: f32,
+) {
+    let ctx = ui.ctx().clone();
+    let native = vec2(w as f32 / ppp, h as f32 / ppp);
+    // The gestures the document claims are sensed under one stable id,
+    // so a drag survives the frame being rendered again under it.
+    let gestures = slot
+        .claims_pointer()
+        .then(|| egui::Id::new(("preview-frame", pane)));
+    if slot.actual_size && slot.is_raster() {
+        // Actual pixels: pan by dragging the picture or with the
+        // wheel, scrollbars either way; a document that claims the
+        // drag or the wheel gets them instead.
+        let source = slot.scroll_source();
+        let output = egui::ScrollArea::both()
+            .auto_shrink([false, false])
+            .scroll_source(source)
+            .on_drag_cursor(egui::CursorIcon::Grabbing)
+            .show(ui, |ui| {
+                let image = ui.add(egui::Image::from_texture(texture).fit_to_exact_size(native));
+                match gestures {
+                    Some(id) => ui.interact(image.rect, id, egui::Sense::click_and_drag()),
+                    None => image,
+                }
+            });
+        if output.inner.hovered()
+            && !output.inner.dragged()
+            && source.drag != egui::scroll_area::DragScroll::Never
+        {
+            ctx.set_cursor_icon(egui::CursorIcon::Grab);
+        }
+        slot.pan = output.state.offset;
+        slot.frame_rect = Some(output.inner.rect.intersect(output.inner_rect));
+        slot.forward_gestures(ui, &output.inner);
+    } else {
+        let scale = (body.width() / native.x)
+            .min(body.height() / native.y)
+            .min(1.0);
+        let size = native * scale;
+        // Centred in the content both ways.
+        let rect = Rect::from_center_size(body.center(), size);
+        let response = ui.put(
+            rect,
+            egui::Image::from_texture(texture).fit_to_exact_size(size),
+        );
+        let response = match gestures {
+            Some(id) => ui.interact(response.rect, id, egui::Sense::click_and_drag()),
+            None => response,
+        };
+        slot.frame_rect = Some(response.rect);
+        slot.forward_gestures(ui, &response);
+    }
+    // Media plays: every frame is rendered again while it does.
+    if slot.transport().is_some_and(|t| t.playing()) {
+        slot.outdate();
+        ctx.request_repaint_after(Duration::from_millis(16));
     }
 }
 
