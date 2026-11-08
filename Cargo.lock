@@ -1663,6 +1663,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "ext-preview-hex"
+version = "0.2.0-dev"
+dependencies = [
+ "ext",
+ "platform",
+ "runtime",
+ "tempfile",
+ "tracing",
+ "types",
+ "vfs-local",
+]
+
+[[package]]
 name = "ext-preview-image"
 version = "0.2.0-dev"
 dependencies = [
@@ -5396,6 +5409,7 @@ dependencies = [
  "ext-preview-archive",
  "ext-preview-code",
  "ext-preview-csv",
+ "ext-preview-hex",
  "ext-preview-image",
  "ext-preview-media",
  "ext-preview-office",
@@ -5969,6 +5983,7 @@ dependencies = [
  "ext-preview-archive",
  "ext-preview-code",
  "ext-preview-csv",
+ "ext-preview-hex",
  "ext-preview-image",
  "ext-preview-media",
  "ext-preview-office",

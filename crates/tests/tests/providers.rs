@@ -346,7 +346,9 @@ fn a_tar_zst_opens_a_file_inside_for_preview() {
     assert_eq!(d.names(), ["readme.txt"]);
     let text = d.preview_text("readme.txt");
     assert_eq!(text, "hello from inside the tar.zst\n");
-    // A plain file opens with the system default, not as a location.
+    // A plain file is no location: the text previewer claims it, so it opens
+    // in a viewer tab of the pane (issue 17), not with the system default,
+    // which takes the files no previewer claims.
     d.step(Command::Navigate {
         pane: d.pane,
         to: local(dir.path()),
@@ -359,7 +361,12 @@ fn a_tar_zst_opens_a_file_inside_for_preview() {
         id: plain,
     });
     assert_eq!(d.tab().location, local(dir.path()));
-    assert_eq!(d.fake.opened(), [dir.path().join("plain.txt")]);
+    assert_eq!(d.tab().kind, model::TabKind::Viewer, "a viewer tab opened");
+    assert_eq!(
+        d.fake.opened(),
+        Vec::<PathBuf>::new(),
+        "nothing opened outside"
+    );
 }
 
 #[test]

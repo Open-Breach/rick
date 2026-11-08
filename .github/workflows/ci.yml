@@ -79,8 +79,8 @@ jobs:
       - run: cargo test --workspace ${{ env.RICK_WS_FEATURES }}
       # Issue 16: the bundle, target/debug/bundle/ with the binary, the kernel
       # dylibs, libstd and plugins/<id>/ per plugin, and the host loading
-      # them from it (issue 18 adds the four previewers, issue 20 the archive
-      # and trash providers). The same whole-workspace build as the tests: a
+      # them from it (issue 17 adds the hex fallback previewer, issue 18 the
+      # four previewers, issue 20 the archive and trash providers). The same whole-workspace build as the tests: a
       # smaller package set would rewrite the shared libraries
       # (QUESTIONS.md 81).
       - run: cargo xtask bundle ${{ env.RICK_WS_FEATURES }}
@@ -91,7 +91,7 @@ jobs:
           exe=""
           if [ "$RUNNER_OS" = "Windows" ]; then exe=".exe"; fi
           ls -l target/debug/bundle target/debug/bundle/plugins
-          for id in git vfs-trash vfs-archive preview-archive preview-csv preview-media preview-office; do
+          for id in git vfs-trash vfs-archive preview-archive preview-csv preview-media preview-office preview-hex; do
             test -f "target/debug/bundle/plugins/$id/plugin.toml" || { echo "no plugin.toml for $id"; exit 1; }
           done
           out="$("./target/debug/bundle/rick$exe" --list-plugins)"
@@ -99,7 +99,7 @@ jobs:
           echo "$out" | grep -E '^git +Git +[^ ]+ +decorator, action +loaded +' || { echo "git plugin not loaded"; exit 1; }
           echo "$out" | grep -E '^vfs-trash +Trash +[^ ]+ +provider, decorator, action +loaded +' || { echo "trash plugin not loaded"; exit 1; }
           echo "$out" | grep -E '^vfs-archive +Archives +[^ ]+ +provider +loaded +' || { echo "archive plugin not loaded"; exit 1; }
-          for id in preview-archive preview-csv preview-media preview-office; do
+          for id in preview-archive preview-csv preview-media preview-office preview-hex; do
             echo "$out" | grep -E "^$id +[^ ].* +previewer +loaded +" || { echo "$id plugin not loaded"; exit 1; }
           done
       # The acceptance benchmarks, each asserting the target of the runner's
@@ -139,6 +139,9 @@ jobs:
         env: { TMP: "${{ runner.temp }}", TEMP: "${{ runner.temp }}", TMPDIR: "${{ runner.temp }}" }
       # Preview pane: 200 000 wrapped lines, the worst frame.
       - run: cargo test -p tests --release ${{ env.RICK_TESTS_FEATURES }} --test preview_pane -- --ignored --nocapture
+        env: { TMP: "${{ runner.temp }}", TEMP: "${{ runner.temp }}", TMPDIR: "${{ runner.temp }}" }
+      # Viewer (0.2 milestone 3): the worst frame stepping through 50 images.
+      - run: cargo test -p tests --release --test viewer -- --ignored --nocapture
         env: { TMP: "${{ runner.temp }}", TEMP: "${{ runner.temp }}", TMPDIR: "${{ runner.temp }}" }
       # Release: startup to the first frame.
       - run: cargo test -p tests --release ${{ env.RICK_TESTS_FEATURES }} --test startup -- --ignored --nocapture

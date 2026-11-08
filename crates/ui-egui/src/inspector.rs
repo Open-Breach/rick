@@ -1,9 +1,11 @@
-//! The preview pane: the content is the point of it, everything else is one
-//! row. Top to bottom: a toolbar (the entry's file-type icon, the controls
-//! for this kind of content and the previewer's own, info badges, close), the
-//! pinned info section when one is pinned, the content, and a one-line
-//! status bar in the file list's status size. The pane shows no heading: the word "Inspector" appears
-//! nowhere in it.
+//! The Preview tab's content: the content is the point of it, everything
+//! else is one row. Top to bottom: a toolbar (the entry's file-type icon,
+//! the controls for this kind of content and the previewer's own, info
+//! badges, close), the pinned info section when one is pinned, the content,
+//! and a one-line status bar in the file list's status size. The pane shows
+//! no heading: the dock tab's label is enough, and the word "Inspector"
+//! appears nowhere in it. It shows the selection of the explorer tab the
+//! preview follows ([`App::preview_pane`]), whichever window that is in.
 //!
 //! Info badges come from the previewer's sections and from the decorators'
 //! panels. Hovering one shows its rows as an overlay; clicking pins it as a
@@ -21,7 +23,7 @@ use model::{PaneId, SettingsChange, TextPreview};
 use types::{Entry, EntryId};
 
 use crate::icons;
-use crate::preview::Previews;
+use crate::preview::{Previews, Slot};
 use crate::shell::Request;
 
 /// The toolbar's height: a tab's.
@@ -30,8 +32,7 @@ pub const TOOLBAR_HEIGHT: f32 = 30.0;
 const SEARCHABLE_FROM: usize = 20;
 /// A pinned panel takes at most this share of the pane's height.
 const PANEL_SHARE: f32 = 0.45;
-/// The least width the pane lays anything out in; what the pane asks the
-/// dock for at most.
+/// The least width the pane lays anything out in; the dock sizes it.
 pub const MIN_WIDTH: f32 = 96.0;
 
 /// Where the pane's parts were drawn in the last frame, for tests.
@@ -82,12 +83,42 @@ pub struct PaneState {
     pub status: String,
 }
 
-/// An info section as the pane shows it, from either source.
-struct Section {
-    id: &'static str,
-    title: String,
-    glyph: &'static str,
-    rows: Vec<(String, String)>,
+/// An info section as the pane shows it, from either source: the
+/// previewer's sections and the decorators' panels.
+pub(crate) struct Section {
+    pub(crate) id: &'static str,
+    pub(crate) title: String,
+    pub(crate) glyph: &'static str,
+    pub(crate) rows: Vec<(String, String)>,
+}
+
+/// The info sections for a document and its entry: the previewer's, then
+/// one per decorator with a panel for the entry.
+pub(crate) fn sections_for(app: &App, slot: Option<&Slot>, entry: Option<&Entry>) -> Vec<Section> {
+    let mut sections: Vec<Section> = slot
+        .map(Slot::sections)
+        .unwrap_or_default()
+        .iter()
+        .map(|s| Section {
+            id: s.id,
+            title: s.title.to_owned(),
+            glyph: icons::for_icon(s.icon),
+            rows: s.rows.clone(),
+        })
+        .collect();
+    if let Some(entry) = entry {
+        for decorator in app.registry().decorators() {
+            if let Some(panel) = decorator.panel(entry) {
+                sections.push(Section {
+                    id: decorator.id().0,
+                    title: panel.title,
+                    glyph: icons::for_decorator(decorator.id().0),
+                    rows: panel.rows,
+                });
+            }
+        }
+    }
+    sections
 }
 
 /// What a toolbar control asked for.
@@ -102,6 +133,8 @@ enum Act {
 /// Everything the pane draws from, gathered before drawing so the slot is
 /// not borrowed while the widgets run.
 struct View<'a> {
+    /// The pane whose selection is shown, when an explorer tab is followed.
+    pane: Option<PaneId>,
     target: Option<EntryId>,
     entry: Option<&'a Entry>,
     selected: usize,
@@ -119,12 +152,11 @@ struct View<'a> {
     status: Vec<String>,
 }
 
-/// Draws the pane for `pane`'s selection. Returns `true` when the close
-/// button was pressed.
+/// Draws the pane for the selection of the explorer tab the preview
+/// follows. Returns `true` when the close button was pressed.
 pub fn show(
     ui: &mut egui::Ui,
     app: &App,
-    pane: PaneId,
     previews: &mut Previews,
     state: &mut PaneState,
     requests: &mut Vec<Request>,
@@ -134,7 +166,7 @@ pub fn show(
     ui.set_clip_rect(ui.max_rect().intersect(ui.clip_rect()));
     ui.spacing_mut().item_spacing.y = 0.0;
 
-    let view = collect(ui, app, pane, previews);
+    let view = collect(ui, app, previews);
 
     // Toolbar.
     let (row, _) = ui.allocate_exact_size(vec2(width, TOOLBAR_HEIGHT), egui::Sense::hover());
@@ -174,87 +206,81 @@ pub fn show(
             .layout(egui::Layout::top_down(Align::Min)),
     );
     inner.set_clip_rect(content.intersect(ui.clip_rect()));
-    previews.content(&mut inner, pane, view.target, view.text_settings);
+    match view.pane {
+        Some(pane) => previews.content(&mut inner, pane, view.target, view.text_settings),
+        None => {
+            inner.weak("Select a file to preview it");
+        }
+    }
     separator(ui, width);
     status_bar(ui, width, status_h, &view, state);
 
     // What the toolbar asked for.
     let mut close = false;
     for act in acts {
-        match act {
-            Act::Setting(change) => requests.push(Request::Command(Command::Settings(change))),
-            Act::Page(delta) => {
+        match (act, view.pane) {
+            (Act::Setting(change), _) => {
+                requests.push(Request::Command(Command::Settings(change)));
+            }
+            (Act::Page(delta), Some(pane)) => {
                 let slot = previews.get_mut(pane);
                 let last = slot.pages().unwrap_or(1).saturating_sub(1);
                 slot.page = slot.page.saturating_add_signed(delta).min(last);
             }
-            Act::ActualSize(on) => previews.get_mut(pane).actual_size = on,
-            Act::Control(id, value) => previews.get_mut(pane).set_control(id, value),
-            Act::Close => close = true,
+            (Act::ActualSize(on), Some(pane)) => previews.get_mut(pane).actual_size = on,
+            (Act::Control(id, value), Some(pane)) => {
+                previews.get_mut(pane).set_control(id, value);
+            }
+            (Act::Close, _) => close = true,
+            (Act::Page(_) | Act::ActualSize(_) | Act::Control(..), None) => {}
         }
     }
     close
 }
 
-/// Gathers what the pane shows: the slot's facts, the selection and the
-/// decorators' sections.
-fn collect<'a>(ui: &egui::Ui, app: &'a App, pane: PaneId, previews: &mut Previews) -> View<'a> {
+/// Gathers what the pane shows: the followed explorer tab's selection, the
+/// slot's facts and the decorators' sections.
+fn collect<'a>(ui: &egui::Ui, app: &'a App, previews: &mut Previews) -> View<'a> {
+    let pane = app.preview_pane();
     let target = app
         .preview_target()
-        .filter(|(p, _)| *p == pane)
+        .filter(|(p, _)| Some(*p) == pane)
         .map(|(_, id)| id);
-    let tab = app.model().active_tab(pane).map(|(_, tab)| tab);
+    let tab = app
+        .model()
+        .preview_follows()
+        .and_then(|id| app.model().tab(id));
     let selected: Vec<&Entry> = tab.map(|t| t.selected().collect()).unwrap_or_default();
     let entry = match (target, selected.as_slice()) {
         (Some(id), [one]) if one.id == id => Some(*one),
         _ => None,
     };
     let settings = &app.model().settings;
-    let slot = previews.sync(ui.ctx(), pane, target);
-    let kind = slot.kind().unwrap_or("other");
-    let mut sections: Vec<Section> = slot
-        .sections()
-        .iter()
-        .map(|s| Section {
-            id: s.id,
-            title: s.title.to_owned(),
-            glyph: icons::for_icon(s.icon),
-            rows: s.rows.clone(),
-        })
-        .collect();
-    if let Some(entry) = entry {
-        for decorator in app.registry().decorators() {
-            if let Some(panel) = decorator.panel(entry) {
-                sections.push(Section {
-                    id: decorator.id().0,
-                    title: panel.title,
-                    glyph: icons::for_decorator(decorator.id().0),
-                    rows: panel.rows,
-                });
-            }
-        }
-    }
+    let slot: Option<&Slot> = pane.map(|pane| previews.sync(ui.ctx(), pane, target));
+    let kind = slot.and_then(Slot::kind).unwrap_or("other");
+    let sections = sections_for(app, slot, entry);
     let pinned = settings
         .preview
         .pinned
         .get(kind)
         .and_then(|id| sections.iter().position(|s| s.id == id));
     View {
+        pane,
         target,
         entry,
         selected: selected.len(),
         entries: tab.map(|t| t.listing.len()),
         kind,
-        is_text: slot.is_text(),
-        is_raster: slot.is_raster(),
-        actual_size: slot.actual_size,
-        pages: slot.pages(),
-        shown_page: slot.page,
+        is_text: slot.is_some_and(Slot::is_text),
+        is_raster: slot.is_some_and(Slot::is_raster),
+        actual_size: slot.is_some_and(|s| s.actual_size),
+        pages: slot.and_then(Slot::pages),
+        shown_page: slot.map_or(0, |s| s.page),
         text_settings: settings.preview.text,
-        controls: slot.controls().to_vec(),
+        controls: slot.map(|s| s.controls().to_vec()).unwrap_or_default(),
         sections,
         pinned,
-        status: slot.status().to_vec(),
+        status: slot.map(|s| s.status().to_vec()).unwrap_or_default(),
     }
 }
 
@@ -496,7 +522,12 @@ fn icon_button(ui: &mut egui::Ui, glyph: &str, label: &str, on: Option<bool>) ->
 
 /// A section's rows as a key–value list: searchable when long, copy on
 /// every row, scrolling past `max_h`. Values truncate to the width.
-fn section_rows(ui: &mut egui::Ui, section: &Section, filter: Option<&mut String>, max_h: f32) {
+pub(crate) fn section_rows(
+    ui: &mut egui::Ui,
+    section: &Section,
+    filter: Option<&mut String>,
+    max_h: f32,
+) {
     let width = ui.available_width();
     let needle = match filter {
         Some(filter) if section.rows.len() > SEARCHABLE_FROM => {

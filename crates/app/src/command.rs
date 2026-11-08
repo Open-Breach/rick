@@ -37,10 +37,14 @@ pub enum Command {
         /// Where to go.
         to: Location,
     },
-    /// Open an entry of the pane's listing: a folder navigates into it, a
-    /// local file the archive provider can browse navigates into it as a
-    /// location (`archive:` with the archive as a breadcrumb segment), any
-    /// other file opens with the system default (`core.open_default`).
+    /// Open an entry of the pane's active tab: a folder navigates the pane
+    /// to it; a local file the archive provider can browse navigates into
+    /// it as a location (`archive:` with the archive as a breadcrumb
+    /// segment); any other file opens in a viewer tab of the pane when a
+    /// previewer claims it, and with the system's default application
+    /// otherwise or when its type is listed in `[viewer] external`. The
+    /// archive check and the scoring read the file as a job, so the result
+    /// follows a moment later.
     Open {
         /// The pane.
         pane: PaneId,
@@ -181,6 +185,16 @@ pub enum Command {
         tab: TabId,
         /// Where it goes.
         to: DockTarget,
+    },
+    /// Open the window's Preview tab, in a new pane right of every other,
+    /// or close it when it is open. The preview is one tab per window that
+    /// follows the focus; it docks and tears out like any other tab.
+    TogglePreview {
+        /// The window.
+        window: WindowId,
+        /// The share of the width the existing panes keep when the tab
+        /// opens; display state the UI works out from its size.
+        fraction: f32,
     },
     /// Cancel a running job.
     CancelJob(JobId),

@@ -95,7 +95,9 @@ use ops::{Conflicts, PinStore, Scheduler};
 use platform::{Platform, TrashedItem};
 use runtime::{JobEvent, JobRunner, mpsc};
 use tracing::{debug, warn};
-use types::{CancelToken, Entry, EntryId, Error, JobId, Location, Progress, ProviderId, VPath};
+use types::{
+    CancelToken, Entry, EntryId, EntryKind, Error, JobId, Location, Progress, ProviderId, VPath,
+};
 use vfs::Mounts;
 use vfs_local::LocalProvider;
 use vfs_rick::{RickProvider, Virtual};
@@ -236,13 +238,15 @@ enum Msg {
     Schedule,
     /// The mounted volumes were enumerated.
     Volumes(Result<Vec<Volume>, Error>),
-    /// The archive provider answered whether a file opens as a location:
-    /// navigate there, or open the entry with the system default.
+    /// Open's job answered: the archive provider browses the file as a
+    /// location (navigate there), a previewer claims it (a viewer tab), or
+    /// neither (the system default).
     Opened {
         pane: PaneId,
         tab: TabId,
         entry: Entry,
         location: Option<Location>,
+        previewable: bool,
     },
     /// The trash was listed.
     Trash(Result<Vec<TrashedItem>, Error>),
@@ -334,22 +338,13 @@ impl PinStore for PinBridge {
     }
 }
 
-/// Which selection the preview follows and the job opening it.
-struct PreviewState {
-    /// The focused pane and its single selected file, when there is one.
-    target: Option<(PaneId, EntryId)>,
+/// The document a pane shows and the job that opens it: the Preview tab's
+/// file for the pane of the explorer tab it follows, and a viewer tab's
+/// file for every pane whose active tab is a viewer.
+struct PreviewJob {
+    entry: EntryId,
     generation: u64,
     cancel: CancelToken,
-}
-
-impl Default for PreviewState {
-    fn default() -> Self {
-        Self {
-            target: None,
-            generation: 0,
-            cancel: CancelToken::new(),
-        }
-    }
 }
 
 /// What a pane's listing was started for; a different key means relist.
@@ -422,7 +417,10 @@ pub struct App {
     /// What this process wrote lately: a reload that matches one is the
     /// watcher reporting our own write, not an edit to pick up.
     recent_saves: VecDeque<Settings>,
-    preview: PreviewState,
+    /// The previews being opened or shown, by pane.
+    preview: BTreeMap<PaneId, PreviewJob>,
+    /// Numbers the preview jobs, so a late answer is told from the current.
+    preview_generation: u64,
     /// Thumbnails being rendered, so a cell asked for twice renders once.
     thumbnails: BTreeSet<(EntryId, u32)>,
     /// Events from start-up, delivered on the first poll.
@@ -652,7 +650,8 @@ impl App {
             settings_watch: CancelToken::new(),
             settings_saver,
             recent_saves: VecDeque::new(),
-            preview: PreviewState::default(),
+            preview: BTreeMap::new(),
+            preview_generation: 0,
             thumbnails: BTreeSet::new(),
             pending,
             places_saver,
@@ -877,12 +876,34 @@ impl App {
         self.layouts = session::layouts(&self.layouts_dir);
     }
 
-    /// The entry the preview follows: the focused pane's single selected
-    /// file, if any. The next [`Event::PreviewReady`] or
+    /// The entry the preview shows: the single selected file of the
+    /// explorer tab last focused ([`Model::preview_follows`]), with the pane
+    /// holding that tab. The next [`Event::PreviewReady`] or
     /// [`Event::PreviewFailed`] for that pane is about it.
     #[must_use]
     pub fn preview_target(&self) -> Option<(PaneId, EntryId)> {
-        self.preview.target
+        let pane = self.preview_pane()?;
+        self.preview.get(&pane).map(|job| (pane, job.entry))
+    }
+
+    /// The entry a pane is opening or showing: the Preview tab's file when
+    /// `pane` holds the explorer tab the preview follows, a viewer tab's
+    /// file when the pane's active tab is a viewer. The
+    /// [`Event::PreviewReady`] and [`Event::PreviewFailed`] for the pane
+    /// are about it.
+    #[must_use]
+    pub fn preview_entry(&self, pane: PaneId) -> Option<EntryId> {
+        self.preview.get(&pane).map(|job| job.entry)
+    }
+
+    /// The pane holding the explorer tab the preview follows, whose
+    /// selection the Preview tab shows; `None` while no explorer tab has
+    /// had the focus.
+    #[must_use]
+    pub fn preview_pane(&self) -> Option<PaneId> {
+        self.model
+            .preview_follows()
+            .and_then(|tab| self.model.pane_of(tab))
     }
 
     /// The model the UI renders from.
@@ -951,9 +972,13 @@ impl App {
     }
 
     /// The context an action gets for `pane`: its location and selection.
+    /// `None` when the pane shows the Preview tab, which has neither.
     #[must_use]
     pub fn action_ctx(&self, pane: PaneId, invoked_from: Invocation) -> Option<ActionCtx> {
         let (_, tab) = self.model.active_tab(pane)?;
+        if tab.kind == model::TabKind::Preview {
+            return None;
+        }
         Some(ActionCtx {
             pane,
             location: tab.location.clone(),
@@ -1145,6 +1170,14 @@ impl App {
             Command::MoveTab { tab, to } => {
                 self.model.move_tab(tab, to);
             }
+            Command::TogglePreview { window, fraction } => match self.model.preview_tab(window) {
+                Some(tab) => {
+                    self.model.close_tab(tab);
+                }
+                None => {
+                    self.model.open_preview(window, fraction);
+                }
+            },
             Command::CancelJob(id) => {
                 self.jobs.cancel(id);
             }
@@ -1560,16 +1593,21 @@ impl App {
 
     /// Opens an entry: a folder navigates; a local file is first offered to
     /// the archive provider, which says in an internal job whether it
-    /// browses the file as a location, and opens with the system default
-    /// otherwise.
+    /// browses the file as a location. Otherwise the same job reads the
+    /// file's first bytes, and a previewer that claims them opens a viewer
+    /// tab, unless `[viewer] external` names the type; the system default
+    /// takes the rest.
     fn open(&mut self, pane: PaneId, id: EntryId, events: &mut Vec<Event>) {
         let Some((tab_id, tab)) = self.model.active_tab(pane) else {
             return;
         };
+        if tab.kind == model::TabKind::Preview {
+            return;
+        }
         let Some(entry) = tab.entry(id).cloned() else {
             return;
         };
-        if entry.kind == types::EntryKind::Dir {
+        if entry.kind == EntryKind::Dir {
             let to = tab.location_of(&entry);
             self.dispatch(Command::Navigate { pane, to }, events);
             return;
@@ -1577,31 +1615,59 @@ impl App {
         let archive = (tab.location.provider == ProviderId::LOCAL)
             .then(|| self.mounts.provider(ProviderId::ARCHIVE))
             .flatten();
-        let Some(archive) = archive else {
+        let loc = tab.location_of(&entry);
+        let previewers: Vec<Arc<dyn Previewer>> =
+            if self.model.settings.viewer.opens_externally(&entry.name) {
+                Vec::new()
+            } else {
+                self.registry.previewers().to_vec()
+            };
+        let sniff = self
+            .mounts
+            .resolve(&loc)
+            .ok()
+            .filter(|_| !previewers.is_empty());
+        if archive.is_none() && sniff.is_none() {
             self.open_default(pane, entry, events);
             return;
-        };
+        }
         let tx = self.mailbox.clone();
         let inside = Location::new(ProviderId::ARCHIVE, entry.path.clone());
-        let handle =
-            self.jobs
-                .spawn_named(format!("Open {}", entry.name), move |_job| async move {
-                    let location = match archive.stat(&inside).await {
-                        Ok(root) if root.kind == types::EntryKind::Dir => Some(inside),
+        let handle = self
+            .jobs
+            .spawn_named(format!("Open {}", entry.name), move |job| async move {
+                let location = match archive {
+                    Some(archive) => match archive.stat(&inside).await {
+                        Ok(root) if root.kind == EntryKind::Dir => Some(inside),
                         Ok(_) => None,
                         Err(error) => {
                             debug!(%inside, %error, "not an archive to browse");
                             None
                         }
-                    };
-                    tx.send(Msg::Opened {
-                        pane,
-                        tab: tab_id,
-                        entry,
-                        location,
-                    });
-                    Ok(())
+                    },
+                    None => None,
+                };
+                let previewable = match (&location, sniff) {
+                    (None, Some(provider)) => {
+                        match ext::read_bytes(&*provider, &loc, Some(4096), &job.cancel).await {
+                            Ok(bytes) => previewers.iter().any(|p| p.score(&entry, &bytes) > 0),
+                            Err(error) => {
+                                debug!(%error, "open: no sniff; the system application takes it");
+                                false
+                            }
+                        }
+                    }
+                    _ => false,
+                };
+                tx.send(Msg::Opened {
+                    pane,
+                    tab: tab_id,
+                    entry,
+                    location,
+                    previewable,
                 });
+                Ok(())
+            });
         self.internal.insert(handle.id);
     }
 
@@ -1812,6 +1878,10 @@ impl App {
 
     fn list_key(&self, pane: PaneId) -> Option<ListKey> {
         let (tab, state) = self.model.active_tab(pane)?;
+        // The preview lists nothing of its own.
+        if state.kind == model::TabKind::Preview {
+            return None;
+        }
         Some(ListKey {
             tab,
             location: state.location.clone(),
@@ -2270,8 +2340,10 @@ impl App {
                 generation,
                 result,
             } => {
-                if generation != self.preview.generation
-                    || self.preview.target.map(|(p, _)| p) != Some(pane)
+                if self
+                    .preview
+                    .get(&pane)
+                    .is_none_or(|job| job.generation != generation)
                 {
                     return;
                 }
@@ -2379,6 +2451,7 @@ impl App {
                 tab,
                 entry,
                 location,
+                previewable,
             } => {
                 // The pane may have moved on since; then the answer is moot.
                 if self.model.active_tab(pane).map(|(id, _)| id) != Some(tab) {
@@ -2387,6 +2460,11 @@ impl App {
                 match location {
                     Some(to) => {
                         self.dispatch(Command::Navigate { pane, to }, events);
+                    }
+                    None if previewable => {
+                        self.model.open_viewer(pane, entry.id);
+                        self.sync_panes(events);
+                        self.sync_preview();
                     }
                     None => self.open_default(pane, entry, events),
                 }
@@ -2486,39 +2564,66 @@ impl App {
     }
 
     fn sync_preview(&mut self) {
-        let focused = self.model.focused;
-        let want = self.model.active_tab(focused).and_then(|(_, tab)| {
-            let mut selected = tab.selected();
-            let first = selected.next()?;
-            if selected.next().is_some() || first.kind != types::EntryKind::File {
-                return None;
-            }
-            Some((first.clone(), tab.location.provider))
-        });
-        let target = want.as_ref().map(|(entry, _)| (focused, entry.id));
-        if target == self.preview.target {
-            return;
+        // What each pane shows: the Preview tab's file is the single
+        // selected one of the explorer tab it follows, a viewer pane's is
+        // its own selection. A pane's active tab is one or the other.
+        let mut wanted: BTreeMap<PaneId, Entry> = BTreeMap::new();
+        if let Some(tab) = self.model.preview_follows()
+            && let Some(pane) = self.model.pane_of(tab)
+            && let Some(entry) = self.model.tab(tab).and_then(single_file)
+        {
+            wanted.insert(pane, entry);
         }
-        self.preview.cancel.cancel();
-        self.preview.generation += 1;
-        self.preview.target = target;
-        let Some((entry, provider_id)) = want else {
-            return;
-        };
-        let loc = Location::new(provider_id, entry.path.clone());
+        for pane in self.model.all_panes() {
+            if let Some((_, tab)) = self.model.active_tab(pane)
+                && tab.kind == model::TabKind::Viewer
+                && let Some(entry) = single_file(tab)
+            {
+                wanted.insert(pane, entry);
+            }
+        }
+        let stale: Vec<PaneId> = self
+            .preview
+            .iter()
+            .filter(|(pane, job)| wanted.get(pane).is_none_or(|e| e.id != job.entry))
+            .map(|(pane, _)| *pane)
+            .collect();
+        for pane in stale {
+            if let Some(job) = self.preview.remove(&pane) {
+                job.cancel.cancel();
+            }
+        }
+        for (pane, entry) in wanted {
+            if !self.preview.contains_key(&pane) {
+                self.start_preview(pane, entry);
+            }
+        }
+    }
+
+    /// Opens `entry` for `pane` through the best-scoring previewer as a
+    /// job, answered by [`Event::PreviewReady`] or [`Event::PreviewFailed`].
+    fn start_preview(&mut self, pane: PaneId, entry: Entry) {
+        self.preview_generation += 1;
+        let generation = self.preview_generation;
+        let loc = Location::new(entry.id.provider, entry.path.clone());
         let provider = match self.mounts.resolve(&loc) {
             Ok(provider) => provider,
             Err(error) => {
-                self.pending.push(Event::PreviewFailed {
-                    pane: focused,
-                    error,
-                });
+                self.pending.push(Event::PreviewFailed { pane, error });
+                self.preview.insert(
+                    pane,
+                    PreviewJob {
+                        entry: entry.id,
+                        generation,
+                        cancel: CancelToken::new(),
+                    },
+                );
                 return;
             }
         };
         let previewers: Vec<Arc<dyn Previewer>> = self.registry.previewers().to_vec();
         let tx = self.mailbox.clone();
-        let generation = self.preview.generation;
+        let id = entry.id;
         let handle =
             self.jobs
                 .spawn_named(format!("Preview {}", entry.name), move |job| async move {
@@ -2537,14 +2642,21 @@ impl App {
                         return Err(Error::Cancelled);
                     }
                     tx.send(Msg::Preview {
-                        pane: focused,
+                        pane,
                         generation,
                         result,
                     });
                     Ok(())
                 });
         self.internal.insert(handle.id);
-        self.preview.cancel = handle.cancel;
+        self.preview.insert(
+            pane,
+            PreviewJob {
+                entry: id,
+                generation,
+                cancel: handle.cancel,
+            },
+        );
     }
 
     fn list_done(
@@ -2816,6 +2928,17 @@ where
         }
     });
     tx
+}
+
+/// The tab's one selected entry, when exactly one is selected and it is not
+/// a folder: what a preview or a viewer shows.
+fn single_file(tab: &model::Tab) -> Option<Entry> {
+    let mut selected = tab.selected();
+    let first = selected.next()?;
+    if selected.next().is_some() || first.kind == EntryKind::Dir {
+        return None;
+    }
+    Some(first.clone())
 }
 
 /// The top of the volume or provider `path` sits on: `/`, `C:\`, or the

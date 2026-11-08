@@ -9,6 +9,26 @@ the pull request that brought the change.
 
 ### Added
 
+- The viewer: Enter or a double-click opens a previewable file in a viewer
+  tab of the pane, a dock tab like any other (split, dock, tear out). Left
+  and Right step through the folder's files in the list's order with the
+  position in the title; Home and End go to the ends; PageUp and PageDown
+  step pages, then files. Fit, fit width, 1:1 and free zoom (Mod+scroll,
+  Mod+Plus and Minus, Mod+0, Mod+1, Mod+2) with panning, the zoom
+  remembered per file type for the session; a page strip with thumbnails, a
+  page counter with direct entry and single or continuous scrolling for
+  paged content; Mod+F finds in the text layer with the match count, next
+  and previous and highlights in place; I opens the info panel with every
+  section; the Action registry on the file from a menu and the shortcuts; a
+  transport bar for media (Space, J, K, L); F11 fills the screen, Escape
+  leaves it and then closes the tab. A file no previewer claims says so;
+  `[viewer] external` in `rick.toml` (a row in Settings) names the types
+  that open with the system application instead, and Mod+Enter always does
+  (#17).
+- `ext-preview-hex`, the fallback previewer, as a plugin in `plugins/`:
+  anything no other previewer claims shows as a hex dump with an ASCII
+  column, the first mebibyte of a large file, laid out row by row as it
+  scrolls (#17).
 - Archives browsed in place, as the plugin `ext-vfs-archive`: Enter or a
   double-click on a zip (DEFLATE, zstd), a tar (plain, gz, zst, xz, bz2,
   lz4), a 7z, a RAR, an ISO 9660 or UDF image or a single compressed file
@@ -84,6 +104,11 @@ the pull request that brought the change.
 
 ### Changed
 
+- The preview is a dock tab: one Preview tab per window, right of the
+  explorer by default, docked below or torn out at will, following the
+  focus across panes and windows; its toolbar, badges, pinned section and
+  status bar are unchanged. Mod+Shift+I and the title row's toggle open and
+  close it, and the session brings it back where it was (#17).
 - The extension API is version 4: a preview document can hand the pane
   structured content (a file listing, a grid, a document) beside its
   frames, a transport has volume, speed, frame step and loop, and a plugin

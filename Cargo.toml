@@ -25,6 +25,7 @@ ext-preview-text = { path = "crates/ext-preview-text" }
 ext-preview-code = { path = "crates/ext-preview-code" }
 ext-preview-image = { path = "crates/ext-preview-image" }
 ext-preview-pdf = { path = "crates/ext-preview-pdf" }
+ext-preview-hex = { path = "crates/ext-preview-hex" }
 ext-git = { path = "crates/ext-git" }
 ext-vfs-trash = { path = "crates/ext-vfs-trash" }
 ext-vfs-archive = { path = "crates/ext-vfs-archive" }

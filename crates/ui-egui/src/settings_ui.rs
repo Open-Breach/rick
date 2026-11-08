@@ -150,6 +150,41 @@ pub fn settings_window(
                     }
                     ui.end_row();
 
+                    ui.label("Open outside the viewer");
+                    ui.horizontal(|ui| {
+                        // The types that go to the system application; typed
+                        // as a list and saved when the field is left.
+                        let id = ui.make_persistent_id("viewer-external");
+                        let saved = settings.viewer.external.join(", ");
+                        let mut text: String = ui
+                            .data(|d| d.get_temp::<String>(id))
+                            .unwrap_or_else(|| saved.clone());
+                        let output = egui::TextEdit::singleline(&mut text)
+                            .hint_text("Extensions, e.g. docx, xlsx")
+                            .desired_width(220.0)
+                            .show(ui);
+                        if output.response.has_focus() {
+                            ui.data_mut(|d| d.insert_temp(id, text.clone()));
+                        } else if output.response.lost_focus() {
+                            ui.data_mut(|d| d.remove::<String>(id));
+                            let types: Vec<String> =
+                                text.split([',', ' ']).map(str::to_owned).collect();
+                            if types
+                                .iter()
+                                .map(|t| t.trim().trim_start_matches('.').to_ascii_lowercase())
+                                .filter(|t| !t.is_empty())
+                                .ne(settings.viewer.external.iter().cloned())
+                            {
+                                change(SettingsChange::ViewerExternal(types));
+                            }
+                        }
+                    })
+                    .response
+                    .on_hover_text(
+                        "Files of these types open with the system's default application instead of the viewer",
+                    );
+                    ui.end_row();
+
                     ui.label("Spring-loading delay");
                     let mut delay = settings.drag.spring_delay_ms;
                     if ui

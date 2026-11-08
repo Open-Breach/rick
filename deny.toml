@@ -27,7 +27,7 @@ multiple-versions = "warn"
 deny = [
     { crate = "runtime", wrappers = ["platform", "ext", "vfs", "vfs-local", "vfs-rick", "model", "ops", "app", "ui-egui", "rick", "tests"] },
     { crate = "platform", wrappers = ["ext", "vfs", "vfs-local", "vfs-rick", "model", "ops", "app", "ui-egui", "rick", "tests"] },
-    { crate = "ext", wrappers = ["vfs", "vfs-local", "vfs-rick", "model", "ops", "app", "ui-egui", "rick", "tests", "ext-preview-text", "ext-preview-code", "ext-preview-image", "ext-preview-pdf", "ext-preview-office", "ext-preview-media", "ext-preview-archive", "ext-preview-csv", "ext-git", "ext-vfs-trash", "ext-vfs-archive", "plugins-native", "plugin-probe", "plugin-panic"] },
+    { crate = "ext", wrappers = ["vfs", "vfs-local", "vfs-rick", "model", "ops", "app", "ui-egui", "rick", "tests", "ext-preview-text", "ext-preview-code", "ext-preview-image", "ext-preview-pdf", "ext-preview-office", "ext-preview-media", "ext-preview-archive", "ext-preview-csv", "ext-preview-hex", "ext-git", "ext-vfs-trash", "ext-vfs-archive", "plugins-native", "plugin-probe", "plugin-panic"] },
     { crate = "vfs", wrappers = ["vfs-local", "vfs-rick", "ops", "app", "ui-egui", "rick", "tests"] },
     { crate = "vfs-local", wrappers = ["vfs-rick", "ops", "app", "ui-egui", "rick", "tests"] },
     { crate = "vfs-rick", wrappers = ["ops", "app", "ui-egui", "rick", "tests"] },
@@ -45,6 +45,7 @@ deny = [
     { crate = "ext-preview-code", wrappers = ["rick", "tests"] },
     { crate = "ext-preview-image", wrappers = ["rick", "tests"] },
     { crate = "ext-preview-pdf", wrappers = ["rick", "tests"] },
+    { crate = "ext-preview-hex", wrappers = ["rick", "tests"] },
     { crate = "ext-git", wrappers = ["rick", "tests"] },
     { crate = "ext-vfs-trash", wrappers = ["rick", "tests"] },
     { crate = "ext-vfs-archive", wrappers = ["rick", "tests"] },

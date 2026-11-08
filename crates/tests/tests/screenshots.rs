@@ -399,6 +399,84 @@ fn screenshots_of_the_preview_pane() {
     shoot(&mut harness, "preview-pdf-narrow-pane");
 }
 
+/// Issue 17: the Preview tab docked below the explorer and torn out into a
+/// window of its own, and the viewer on a photo, with its info panel, and
+/// on a PDF with the page strip.
+#[test]
+#[ignore = "needs a wgpu adapter; CI runs it and uploads the images"]
+fn screenshots_of_the_preview_tab_and_the_viewer() {
+    use model::{DockTarget, Side};
+    let (_dir, root) = preview_tree();
+
+    // The Preview tab docked below the explorer.
+    let mut harness = shell(&root, egui::vec2(1280.0, 800.0));
+    preview(&mut harness, "IMG_1200.jpg");
+    let model = harness.state().app().model();
+    let pane = model.focused;
+    let preview_tab = model
+        .preview_tab(model.focused_window)
+        .unwrap_or_else(|| panic!("preview tab"));
+    harness.state_mut().app_mut().handle(
+        app::Command::MoveTab {
+            tab: preview_tab,
+            to: DockTarget::Beside {
+                pane,
+                side: Side::Bottom,
+            },
+        },
+        &mut Vec::new(),
+    );
+    settle(&mut harness);
+    shoot(&mut harness, "preview-tab-docked-below");
+
+    // Torn out: the window that holds only the Preview tab.
+    harness.state_mut().app_mut().handle(
+        app::Command::MoveTab {
+            tab: preview_tab,
+            to: DockTarget::NewWindow,
+        },
+        &mut Vec::new(),
+    );
+    settle(&mut harness);
+    shoot(&mut harness, "preview-tab-torn-out");
+
+    // The viewer on the photo, with the info panel open.
+    let mut harness = shell(&root, egui::vec2(1280.0, 800.0));
+    select_named(&mut harness, "IMG_1200.jpg");
+    harness.key_press(egui::Key::Enter);
+    step_until(&mut harness, Duration::from_secs(20), |h| {
+        let model = h.state().app().model();
+        model
+            .active_tab(model.focused)
+            .is_some_and(|(_, tab)| tab.kind == model::TabKind::Viewer)
+            && h.state()
+                .previews()
+                .get(model.focused)
+                .is_some_and(|s| s.has_frame())
+    });
+    harness.key_press(egui::Key::I);
+    settle(&mut harness);
+    shoot(&mut harness, "viewer-photo-info-panel");
+
+    // The viewer on the PDF: the page strip and the pager.
+    harness.key_press(egui::Key::Escape);
+    settle(&mut harness);
+    select_named(&mut harness, "map-a3.pdf");
+    harness.key_press(egui::Key::Enter);
+    step_until(&mut harness, Duration::from_secs(20), |h| {
+        let model = h.state().app().model();
+        model
+            .active_tab(model.focused)
+            .is_some_and(|(_, tab)| tab.kind == model::TabKind::Viewer)
+            && h.state()
+                .previews()
+                .get(model.focused)
+                .is_some_and(|s| s.has_frame())
+    });
+    settle(&mut harness);
+    shoot(&mut harness, "viewer-pdf");
+}
+
 /// Steps frames until `done` holds, within `limit`.
 fn step_until(
     harness: &mut Harness<'_, RickUi>,

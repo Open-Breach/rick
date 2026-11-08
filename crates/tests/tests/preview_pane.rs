@@ -1,7 +1,7 @@
-//! Acceptance (preview pane layout): the pane's toolbar, status bar and info
-//! badges; wrap, line numbers and pretty print; the pinned section per
-//! content kind surviving files and restarts; the pane's width never set by
-//! its content; and the Git badge only inside a work tree.
+//! Acceptance (preview pane layout): the Preview tab's toolbar, status bar
+//! and info badges; wrap, line numbers and pretty print; the pinned section
+//! per content kind surviving files and restarts; the pane's width never set
+//! by its content; and the Git badge only inside a work tree.
 
 use std::fs;
 use std::path::Path;
@@ -28,7 +28,7 @@ fn previewers() -> Vec<Arc<dyn Extension>> {
 }
 
 /// A window on `start`, sharing `fake` (and so its settings file) with
-/// earlier windows, with the preview pane `pane_width` wide and open.
+/// earlier windows, with the Preview tab open in a pane `pane_width` wide.
 fn window(
     fake: &Arc<Fake>,
     start: &Path,
@@ -53,8 +53,12 @@ fn window(
             ui
         });
     settle(&mut harness);
-    let pane = harness.state().app().model().focused;
-    harness.state_mut().queue(Intent::ToggleInspector, pane);
+    // A restored session brings the Preview tab back; open it otherwise.
+    if !harness.state().inspector_open() {
+        let pane = harness.state().app().model().focused;
+        harness.state_mut().queue(Intent::ToggleInspector, pane);
+        harness.step();
+    }
     harness.step();
     harness.step();
     assert!(harness.state().inspector_open());
@@ -355,7 +359,7 @@ fn wrap_off_scrolls_sideways_and_wrap_on_breaks_at_the_pane_width() {
         .preview_rects()
         .content
         .unwrap_or_else(|| panic!("content"));
-    assert!(content.width() <= 300.0, "{content:?}");
+    assert!(content.width() <= 304.0, "{content:?}");
     let first = slot
         .drawn_lines()
         .iter()
@@ -611,7 +615,8 @@ fn wide_frames_fit_a_narrow_pane_instead_of_widening_it() {
     );
     let pane = harness.state().app().model().focused;
     let pane_width = harness.state().inspector_rect().map_or(0.0, |r| r.width());
-    assert!((pane_width - 300.0).abs() < 1.0, "{pane_width}");
+    // The dock's divider and its rounding take a few points.
+    assert!((pane_width - 300.0).abs() < 4.0, "{pane_width}");
 
     let check = |harness: &mut Harness<'_, RickUi>, name: &str| {
         select(harness, name);
@@ -620,8 +625,8 @@ fn wide_frames_fit_a_narrow_pane_instead_of_widening_it() {
         }
         let width = harness.state().inspector_rect().map_or(0.0, |r| r.width());
         assert!(
-            (width - 300.0).abs() < 1.0,
-            "{name}: the pane is {width} wide"
+            (width - pane_width).abs() < 0.5,
+            "{name}: the pane is {width} wide, it opened {pane_width} wide"
         );
         let slot = harness
             .state()
@@ -632,7 +637,7 @@ fn wide_frames_fit_a_narrow_pane_instead_of_widening_it() {
         let frame = slot
             .frame_rect()
             .unwrap_or_else(|| panic!("{name}: no frame rect"));
-        assert!(frame.width() <= 300.0 + 0.5, "{name}: frame {frame:?}");
+        assert!(frame.width() <= width + 0.5, "{name}: frame {frame:?}");
         let content = harness
             .state()
             .preview_rects()

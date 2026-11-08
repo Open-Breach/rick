@@ -12,8 +12,12 @@ title, the folders above an archive as local segments and the archive and
 its contents on the archive provider), file list (details, tree, list or
 icon view, only the visible rows laid out, names edited in place for
 Rename, New file and New folder) and status line with the subtree-search
-toggle, the preview pane (toolbar, info badges, content, status bar), the
-side panel (the editable Places list with its drag reorder, Edit… dialogue
+toggle, the Preview tab (toolbar, info badges, content, status bar; one per
+window, following the focused explorer, docked and torn out like any tab),
+the viewer tabs (one file full size with the folder behind it as a
+slideshow: zoom, pages with a strip, find in the text layer, the info panel,
+the actions menu, the transport bar, fullscreen), the side panel (the
+editable Places list with its drag reorder, Edit… dialogue
 and keyboard, Favorites, Recent and the Trash view among the places; the
 This Machine, Network and Cloud sections with their utilisation bars, Eject
 and Add… rows, folding without an indent guide; the section overviews drawn

@@ -13,19 +13,20 @@ name = "rick"
 path = "src/main.rs"
 
 # Built-in extensions are features, default-on; a lean build turns them off.
-# `git`, `vfs-trash` and `vfs-archive` compile a plugin in instead of
-# loading it from `plugins/`; default off, since the plugins directory is
-# where they live in 0.2. The four previewer plugins of issue 18 have the
-# same opt-in features; `gstreamer` turns playback on in the media
-# previewer, wherever it is built (the plugin's own feature of that name;
-# off by default so a build without the GStreamer development files still
-# builds every crate).
+# `git`, `vfs-trash`, `vfs-archive` and `preview-hex` compile a plugin in
+# instead of loading it from `plugins/`; default off, since the plugins
+# directory is where they live in 0.2. The four previewer plugins of issue
+# 18 have the same opt-in features; `gstreamer` turns playback on in the
+# media previewer, wherever it is built (the plugin's own feature of that
+# name; off by default so a build without the GStreamer development files
+# still builds every crate).
 [features]
 default = ["preview-text", "preview-code", "preview-image", "preview-pdf"]
 preview-text = ["dep:ext-preview-text"]
 preview-code = ["dep:ext-preview-code"]
 preview-image = ["dep:ext-preview-image"]
 preview-pdf = ["dep:ext-preview-pdf"]
+preview-hex = ["dep:ext-preview-hex"]
 preview-office = ["dep:ext-preview-office"]
 preview-media = ["dep:ext-preview-media"]
 preview-archive = ["dep:ext-preview-archive"]
@@ -47,6 +48,7 @@ ext-preview-text = { workspace = true, optional = true }
 ext-preview-code = { workspace = true, optional = true }
 ext-preview-image = { workspace = true, optional = true }
 ext-preview-pdf = { workspace = true, optional = true }
+ext-preview-hex = { workspace = true, optional = true }
 ext-git = { workspace = true, optional = true }
 ext-vfs-trash = { workspace = true, optional = true }
 ext-vfs-archive = { workspace = true, optional = true }
