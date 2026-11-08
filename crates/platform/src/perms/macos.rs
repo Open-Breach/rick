@@ -203,7 +203,7 @@ fn uuid_of(id: u32, group: bool) -> Option<String> {
 /// The text form: a `!#acl 1` header, then one entry per line as
 /// `user|group:UUID:name:id:allow|deny:perm,perm,…`.
 pub(super) mod text {
-    use super::*;
+    use super::{DarwinAce, Error, Principal, io, uuid_of};
 
     const HEADER: &str = "!#acl 1";
 

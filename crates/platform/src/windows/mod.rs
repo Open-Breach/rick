@@ -785,7 +785,7 @@ impl Elevate for Native {
         // SAFETY: `info` is fully initialised and the strings outlive the call.
         if let Err(error) = unsafe { ShellExecuteExW(&raw mut info) } {
             // ERROR_CANCELLED: the user said no to the prompt.
-            if error.code().0 as u32 & 0xFFFF == 1223 {
+            if error.code().0.cast_unsigned() & 0xFFFF == 1223 {
                 return Err(Error::PermissionDenied);
             }
             return Err(Error::Io(io_error(error)));
