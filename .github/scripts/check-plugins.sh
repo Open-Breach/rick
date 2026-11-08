@@ -30,6 +30,7 @@ everywhere=(
   "preview-media|[^|]*|previewer"
   "preview-office|[^|]*|previewer"
   "preview-hex|[^|]*|previewer"
+  "preview-3d|[^|]*|previewer"
   "search-walk|Subdirectory search|search-index"
   "action-compress|Compress and extract|action"
   "action-compare|Compare|action"

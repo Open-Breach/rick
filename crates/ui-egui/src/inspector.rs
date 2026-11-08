@@ -466,6 +466,8 @@ fn previewer_controls(
                     acts.push(Act::Control(*id, ControlValue::Pressed));
                 }
             }
+            // Pointer gestures are the frame's, not the toolbar's.
+            PreviewControl::Pointer { .. } => {}
         }
     }
 }

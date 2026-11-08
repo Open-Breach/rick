@@ -1,7 +1,8 @@
 name: setup
 description: >-
   The Rust toolchain of rust-toolchain.toml with the requested components,
-  the cargo cache, the Linux system packages the previewers need, and pdfium
+  the cargo cache, the Linux system packages the previewers need, the
+  software graphics adapter the 3D previewer's tests render on, and pdfium
   for the PDF previewer. Shared by the ci, full and bench workflows (issue
   35); release.yml has its own steps.
 inputs:
@@ -13,9 +14,10 @@ inputs:
     description: >-
       The system packages (issue 18). "build" installs the GStreamer
       development files the media previewer's gstreamer feature compiles
-      against. "test" adds the GStreamer codec plug-ins and LibreOffice and
-      sets RICK_REQUIRE_GSTREAMER and RICK_REQUIRE_LIBREOFFICE, so their
-      tests fail rather than skip when either is missing; and, for
+      against. "test" adds the GStreamer codec plug-ins, LibreOffice and
+      lavapipe, Mesa's software Vulkan driver, and sets
+      RICK_REQUIRE_GSTREAMER, RICK_REQUIRE_LIBREOFFICE and RICK_REQUIRE_WGPU,
+      so their tests fail rather than skip when any is missing; and, for
       milestone 5 (issue 22), Subversion on every runner with
       RICK_REQUIRE_SVN set, Tracker and Baloo on Linux (their tests run
       through .github/scripts/with-indexers.sh), and the Windows Search
@@ -23,7 +25,10 @@ inputs:
       directory under the home the platform index covers and
       RICK_REQUIRE_SPOTLIGHT or RICK_REQUIRE_WINDOWS_SEARCH set. "none"
       installs nothing. The GStreamer and LibreOffice parts are Linux only;
-      macOS and Windows skip those tests with a note.
+      macOS and Windows skip those tests with a note. On Windows "test" also
+      sets RICK_REQUIRE_WGPU, since the dx12 software adapter (WARP) is part
+      of the system; the 3D previewer's tests skip with a note on a macOS
+      runner without a graphics adapter (issue 19).
     required: false
     default: test
   pdfium:
@@ -50,16 +55,18 @@ runs:
         sudo apt-get update
         sudo apt-get install -y --no-install-recommends \
           libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev
-    - name: gstreamer plug-ins and libreoffice
+    - name: gstreamer plug-ins, libreoffice and lavapipe
       if: runner.os == 'Linux' && inputs.system == 'test'
       shell: bash
       run: |
         sudo apt-get install -y --no-install-recommends \
           gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-plugins-bad \
           gstreamer1.0-plugins-ugly gstreamer1.0-libav \
-          libreoffice-writer libreoffice-calc libreoffice-impress
+          libreoffice-writer libreoffice-calc libreoffice-impress \
+          mesa-vulkan-drivers
         echo "RICK_REQUIRE_GSTREAMER=1" >> "$GITHUB_ENV"
         echo "RICK_REQUIRE_LIBREOFFICE=1" >> "$GITHUB_ENV"
+        echo "RICK_REQUIRE_WGPU=1" >> "$GITHUB_ENV"
     - name: subversion and the linux indexers
       if: runner.os == 'Linux' && inputs.system == 'test'
       shell: bash
@@ -89,6 +96,12 @@ runs:
         New-Item -ItemType Directory -Force -Path "$env:USERPROFILE\rick-search-fixture" | Out-Null
         echo "RICK_SEARCH_FIXTURE=$env:USERPROFILE\rick-search-fixture" >> $env:GITHUB_ENV
         echo "RICK_REQUIRE_WINDOWS_SEARCH=1" >> $env:GITHUB_ENV
+    # Issue 19: the 3D previewer renders on WARP, Windows' software adapter,
+    # which wgpu's dx12 backend finds by itself; the tests must not skip.
+    - name: software graphics adapter required
+      if: runner.os == 'Windows' && inputs.system == 'test'
+      shell: bash
+      run: echo "RICK_REQUIRE_WGPU=1" >> "$GITHUB_ENV"
     - name: pdfium
       if: inputs.pdfium == 'true'
       shell: bash

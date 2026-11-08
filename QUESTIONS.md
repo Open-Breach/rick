@@ -1737,3 +1737,46 @@ Once answered, an entry keeps its number and gains a dated decision line.
     plugins' own round trips assert the moves land without the machine
     reading the objects.
 
+142. (issue 19) The spec's 3D previewer is orbited by drag, zoomed by the
+    wheel and reset by a double-click, and the issue asks for them to
+    arrive through `set_control` so that the viewer and the preview pane
+    need no 3D code; `PreviewControl` (toggle, button) and `ControlValue`
+    (bool, pressed) cannot carry a pointer gesture.
+    Assumed: API version 5 adds `PreviewControl::Pointer { id, gesture,
+    label }` with `Gesture::{Drag, Wheel, DoubleClick}` and
+    `ControlValue::Delta { x, y }` in points. A pane forwards a gesture
+    the document declares to `set_control` instead of its own pan, scroll
+    or 1:1 (the modifier wheel stays the viewer's zoom), draws nothing in
+    the toolbar for it, and keeps the frame rendered before a control
+    change on screen until the next render lands, so an orbit never drops
+    to a spinner; before, every control change cleared the frames.
+
+143. (issue 19) "Models beyond a configurable triangle budget" (the issue:
+    "setting, default 2 M"): how a plugin's setting reaches it.
+    Assumed: the plugin declares the schema (`triangle_budget`, an integer
+    from 1 000 to 20 000 000) and, as milestone 6's extension settings have
+    it (the Settings screen writes `<id>.toml`, an extension reads its own
+    file), reads `preview-3d.toml` in the config directory through the
+    platform the registry lends it, at every open, so a change takes effect
+    for the next file; a value outside the bounds is clamped as the
+    application clamps every integer setting. A budget above what the
+    device's largest buffer holds is capped there.
+
+144. (issue 19) The status bar shows "bounding box in millimetres", while
+    STL and OBJ carry no unit, and the spec says nothing about which way
+    is up.
+    Assumed: STL and OBJ coordinates are millimetres, the convention of
+    slicers; a 3MF's declared unit (micron, millimeter, centimeter, inch,
+    foot, meter) converts and is shown as declared in File info; Z is up
+    for all three formats and the ground grid lies under the model's
+    lowest point.
+
+145. (issue 19) "decimate for the preview and say so" names no method.
+    Assumed: vertex clustering on a uniform grid over the bounding box,
+    the finest grid resolution (bisection, up to 4096 cells a side) whose
+    result fits the budget, every corner snapped to its cell's centre and
+    collapsed triangles dropped; one pass per step and no allocation. A
+    3 000 000-triangle binary STL opened, parsed and decimated in 2.3 s in
+    release on the development machine, most of it the parse. The
+    triangle count shown stays the file's; the status bar adds "decimated
+    to N triangles for the preview" and File info the budget.
