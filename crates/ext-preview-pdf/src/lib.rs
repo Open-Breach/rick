@@ -199,6 +199,21 @@ fn download_asset() -> String {
     format!("pdfium-{os}-{arch}.tgz")
 }
 
+/// The library behind a binding attempt. pdfium-render keeps one set of
+/// bindings per process: once anything has bound pdfium (this previewer, the Office previewer, an earlier
+/// search), a new binding is refused with
+/// `PdfiumLibraryBindingsAlreadyInitialized`, and `Pdfium::default()` then
+/// hands out the bound library without loading anything.
+fn pdfium_from(
+    bound: Result<Box<dyn PdfiumLibraryBindings>, PdfiumError>,
+) -> Result<Pdfium, PdfiumError> {
+    match bound {
+        Ok(bindings) => Ok(Pdfium::new(bindings)),
+        Err(PdfiumError::PdfiumLibraryBindingsAlreadyInitialized) => Ok(Pdfium::default()),
+        Err(error) => Err(error),
+    }
+}
+
 impl Library {
     /// A library looked for everywhere, writing the hit back into
     /// `settings` when the host lent them; `config_dir` holds the per-user
@@ -293,9 +308,9 @@ impl Library {
                 tried.push(format!("{}: not there", path.display()));
                 continue;
             }
-            match Pdfium::bind_to_library(&path) {
-                Ok(bindings) => {
-                    let pdfium = Arc::new(Pdfium::new(bindings));
+            match pdfium_from(Pdfium::bind_to_library(&path)) {
+                Ok(pdfium) => {
+                    let pdfium = Arc::new(pdfium);
                     *self.lock() = Some(Arc::clone(&pdfium));
                     if setting.as_deref() != Some(path.as_path())
                         && let Some(settings) = &self.settings
@@ -314,9 +329,9 @@ impl Library {
             }
         }
         if self.search == Search::Everywhere {
-            match Pdfium::bind_to_system_library() {
-                Ok(bindings) => {
-                    let pdfium = Arc::new(Pdfium::new(bindings));
+            match pdfium_from(Pdfium::bind_to_system_library()) {
+                Ok(pdfium) => {
+                    let pdfium = Arc::new(pdfium);
                     *self.lock() = Some(Arc::clone(&pdfium));
                     tracing::info!("pdfium bound from the system loader");
                     return Ok(pdfium);
