@@ -554,6 +554,7 @@ fn screenshots_of_the_side_panel_and_list() {
         extensions: vec![
             Arc::new(ext_preview_text::TextPreview::new()),
             Arc::new(ext_preview_image::ImagePreview::new()),
+            Arc::new(ext_vfs_trash::TrashExtension::new()),
         ],
         config_dir: Some(fake.config_dir()),
         start: Some(local(&deep)),
@@ -600,9 +601,7 @@ fn screenshots_of_the_side_panel_and_list() {
         .queue(Intent::Action(ext::ActionId("core.trash")), pane);
     harness.step();
     settle(&mut harness);
-    step_until(&mut harness, Duration::from_secs(5), |h| {
-        h.state().app().model().trash.items.len() == 2
-    });
+    // The Trash view, served by the trash plugin, with the two items.
     harness.state_mut().app_mut().handle(
         app::Command::Navigate {
             pane,
@@ -611,6 +610,13 @@ fn screenshots_of_the_side_panel_and_list() {
         &mut Vec::new(),
     );
     settle(&mut harness);
+    step_until(&mut harness, Duration::from_secs(5), |h| {
+        h.state()
+            .app()
+            .model()
+            .active_tab(pane)
+            .is_some_and(|(_, t)| t.listing.len() == 2)
+    });
     harness.step();
     shoot(&mut harness, "trash-view-with-items");
     harness

@@ -8,5 +8,10 @@ committed, the `bench` module with the acceptance benchmarks' targets per
 operating system, which `BENCHMARKS.md` documents, the `media` module that
 writes a photo with EXIF and a PDF, and the `mem` module, an in-memory
 `Provider` under any id with a settable delay per copied file, the tests'
-stand-in for a cloud provider. It is the top of the dependency graph and may
-depend on every other crate in the workspace; nothing depends on it.
+stand-in for a cloud provider. The previewer plugins are dependencies so
+that their fixture generators are at hand and their library files are
+built beside the test binaries, from where the tests install them into a
+temporary plugins directory and load them through the host; the
+`gstreamer` feature turns the media previewer's playback on for the media
+tests. It is the top of the dependency graph and may depend on every other
+crate in the workspace; nothing depends on it.

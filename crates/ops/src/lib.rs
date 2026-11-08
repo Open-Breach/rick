@@ -3,10 +3,16 @@
 //! [`Core`] is the built-in [`Extension`] that registers them: copy, cut and
 //! paste, duplicate, move to trash, delete permanently, rename, new file, new
 //! folder, copy path, open with the system default, open in the system file
-//! manager, open containing folder, restore, restore trash items, empty
-//! trash, pin to side panel and unpin. Navigation, selection and view
-//! commands are `Command`s the application handles directly, as is a drag
-//! and drop's [`transfer`], which is not an action but runs the same jobs.
+//! manager, open containing folder, pin to side panel and unpin. Navigation,
+//! selection and view commands are `Command`s the application handles
+//! directly, as is a drag and drop's [`transfer`], which is not an action
+//! but runs the same jobs. Restore and Empty trash belong to the trash
+//! provider plugin, `ext-vfs-trash`, which serves the Trash view.
+//!
+//! An action's availability follows the provider's capabilities at the
+//! pane's location: Paste, Duplicate, Rename, New file and New folder need
+//! `WRITE`, Move to trash needs `TRASH`, so a read-only archive or the
+//! Trash view hides them instead of failing.
 //!
 //! Every operation that touches the filesystem runs as a job on the
 //! [`JobRunner`](runtime::JobRunner) the action receives, so `run` returns at
@@ -41,7 +47,6 @@ mod pin;
 mod remove;
 mod schedule;
 mod transfer;
-mod trash;
 
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
@@ -59,13 +64,18 @@ pub use conflict::{ConflictWaker, Conflicts};
 pub use pin::{PinStore, pin_command, unpin_command};
 pub use schedule::{Lease, ScheduleWaker, Scheduler, VolumeKey, volume_key, volume_keys};
 pub use transfer::{TransferKind, transfer};
-pub use trash::{TrashStore, is_trash, trash_entry, trash_location};
-
 /// Whether the context's location is a virtual one: a view or an overview
 /// of `vfs-rick`, which no file operation can write to.
 #[must_use]
 pub fn is_virtual(ctx: &ActionCtx) -> bool {
     ctx.location.provider == vfs_rick::PROVIDER_ID
+}
+
+/// Whether the context stands for the Trash view, whose entries are
+/// trashed items rather than files to operate on.
+#[must_use]
+pub fn is_trash(ctx: &ActionCtx) -> bool {
+    vfs_rick::is_trash(&ctx.location)
 }
 
 /// Enabled with a selection, disabled without one, hidden in the Trash
@@ -75,16 +85,6 @@ fn needs_entries(ctx: &ActionCtx) -> Availability {
         Availability::Hidden
     } else if ctx.selection.is_empty() {
         Availability::Disabled("select something first")
-    } else {
-        Availability::Enabled
-    }
-}
-
-/// Enabled where the location can be written to: hidden in the virtual
-/// locations.
-fn needs_writable_location(ctx: &ActionCtx) -> Availability {
-    if is_virtual(ctx) {
-        Availability::Hidden
     } else {
         Availability::Enabled
     }
@@ -101,7 +101,6 @@ struct State {
     mounts: Arc<Mounts>,
     platform: Arc<dyn Platform>,
     pins: Arc<dyn PinStore>,
-    trash: Arc<dyn TrashStore>,
     conflicts: Arc<Conflicts>,
     scheduler: Arc<Scheduler>,
     // Actions run on the app thread one at a time; the lock is for the
@@ -115,19 +114,35 @@ impl State {
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
     }
+
+    /// What the provider can do at `loc`; nothing when none is mounted.
+    fn capabilities(&self, loc: &Location) -> Capabilities {
+        self.mounts
+            .resolve(loc)
+            .map(|p| p.capabilities(loc))
+            .unwrap_or_default()
+    }
+
+    /// `Hidden` unless the provider at `loc` offers `needed`.
+    fn needs(&self, loc: &Location, needed: Capabilities) -> Availability {
+        if self.capabilities(loc).contains(needed) {
+            Availability::Enabled
+        } else {
+            Availability::Hidden
+        }
+    }
 }
 
 impl Core {
     /// The core operations over `mounts`, trashing and opening through
-    /// `platform`, pinning into `pins`, remembering trashed items in
-    /// `trash`, asking about name conflicts through `conflicts`, queueing
-    /// copies and moves per volume through `scheduler`.
+    /// `platform`, pinning into `pins`, asking about name conflicts through
+    /// `conflicts`, queueing copies and moves per volume through
+    /// `scheduler`.
     #[must_use]
     pub fn new(
         mounts: Arc<Mounts>,
         platform: Arc<dyn Platform>,
         pins: Arc<dyn PinStore>,
-        trash: Arc<dyn TrashStore>,
         conflicts: Arc<Conflicts>,
         scheduler: Arc<Scheduler>,
     ) -> Self {
@@ -145,7 +160,6 @@ impl Core {
                 mounts,
                 platform,
                 pins,
-                trash,
                 conflicts,
                 scheduler,
                 clipboard: Mutex::new(None),
@@ -191,10 +205,6 @@ impl Extension for Core {
         reg.action(Arc::new(open::Reveal(Arc::clone(s))));
         reg.action(Arc::new(containing::OpenContaining));
         reg.action(Arc::new(containing::OpenContainingInTab));
-        reg.action(Arc::new(trash::Restore(Arc::clone(s))));
-        reg.action(Arc::new(trash::RestoreTrash(Arc::clone(s))));
-        reg.action(Arc::new(trash::EmptyTrash(Arc::clone(s))));
-        reg.action(Arc::new(trash::PurgeTrash(Arc::clone(s))));
         reg.action(Arc::new(pin::Pin(Arc::clone(s))));
         reg.action(Arc::new(pin::Unpin(Arc::clone(s))));
         Ok(())

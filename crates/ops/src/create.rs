@@ -3,8 +3,8 @@
 use std::sync::Arc;
 
 use ext::{
-    Action, ActionCtx, ActionGroup, ActionId, ActionOutcome, Availability, Key, Modifiers,
-    RemoveMode, Shortcut, UiHost, UndoCommand, WriteOptions,
+    Action, ActionCtx, ActionGroup, ActionId, ActionOutcome, Availability, Capabilities, Key,
+    Modifiers, RemoveMode, Shortcut, UiHost, UndoCommand, WriteOptions,
 };
 use runtime::JobRunner;
 use tokio::io::AsyncWriteExt;
@@ -12,7 +12,7 @@ use types::{Error, Location};
 use vfs::Mounts;
 
 use crate::edit::parent;
-use crate::{State, inside, location_of, needs_writable_location};
+use crate::{State, inside, location_of};
 
 /// Renames the one selected entry.
 pub(crate) struct Rename(pub(crate) Arc<State>);
@@ -34,8 +34,9 @@ impl Action for Rename {
         })
     }
     fn availability(&self, ctx: &ActionCtx) -> Availability {
-        if needs_writable_location(ctx) == Availability::Hidden {
-            return Availability::Hidden;
+        match self.0.needs(&ctx.location, Capabilities::WRITE) {
+            Availability::Enabled => {}
+            hidden => return hidden,
         }
         match ctx.selection.len() {
             1 => Availability::Enabled,
@@ -209,7 +210,7 @@ impl Action for NewFile {
         None
     }
     fn availability(&self, ctx: &ActionCtx) -> Availability {
-        needs_writable_location(ctx)
+        self.0.needs(&ctx.location, Capabilities::WRITE)
     }
     fn run(
         &self,
@@ -249,7 +250,7 @@ impl Action for NewFolder {
         })
     }
     fn availability(&self, ctx: &ActionCtx) -> Availability {
-        needs_writable_location(ctx)
+        self.0.needs(&ctx.location, Capabilities::WRITE)
     }
     fn run(
         &self,

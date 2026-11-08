@@ -81,9 +81,21 @@ pub struct TabUi {
     pub edit: Option<RowEdit>,
     /// The last plain click on a row and when, for the slow second click.
     pub last_click: Option<(EntryId, f64)>,
+    /// The breadcrumbs of the location drawn last, so the filesystem is
+    /// asked where an archive begins once per location, not per frame.
+    pub crumbs: Option<(Location, Vec<paths::Crumb>)>,
 }
 
 impl TabUi {
+    /// The breadcrumbs of `location`, computed when it is not the one
+    /// cached.
+    pub fn crumbs_of(&mut self, location: &Location) -> &[paths::Crumb] {
+        if self.crumbs.as_ref().is_none_or(|(l, _)| l != location) {
+            self.crumbs = Some((location.clone(), paths::crumbs(location)));
+        }
+        self.crumbs.as_ref().map_or(&[], |(_, c)| c.as_slice())
+    }
+
     /// The view state of a tab the model holds: a restored scroll offset
     /// waits for the listing.
     fn for_tab(tab: &Tab) -> Self {
@@ -1385,14 +1397,11 @@ impl RickUi {
 
     fn run_action(&mut self, action: ActionId, pane: PaneId, invoked_from: Invocation) {
         if let Some(ctx) = self.app.action_ctx(pane, invoked_from) {
-            // In the Trash view the Delete key deletes for good and Enter
-            // restores: the view's own operations take the keys.
-            let action = if vfs_rick::is_trash(&ctx.location) {
-                match action.0 {
-                    "core.trash" | "core.delete" => ActionId("core.purge_trash"),
-                    "core.open_default" => ActionId("core.restore_trash"),
-                    _ => action,
-                }
+            // In the Trash view Enter restores through the trash plugin's
+            // action; the Delete key deletes for good through the view's
+            // own `remove`, as the core action does everywhere.
+            let action = if vfs_rick::is_trash(&ctx.location) && action.0 == "core.open_default" {
+                ActionId("trash.restore_items")
             } else {
                 action
             };
@@ -1473,6 +1482,15 @@ impl RickUi {
         });
     }
 
+    /// Whether the provider at `location` takes new entries: the inline
+    /// edits start only where New file and New folder can finish.
+    fn writable(&self, location: &Location) -> bool {
+        self.app
+            .mounts()
+            .resolve(location)
+            .is_ok_and(|p| p.capabilities(location).contains(ext::Capabilities::WRITE))
+    }
+
     /// Whether the shell handles an action itself rather than running it:
     /// the three inline edits (QUESTIONS.md 26) and Open containing folder
     /// (QUESTIONS.md 19). A viewer has no list to edit in, so its rename
@@ -1487,14 +1505,18 @@ impl RickUi {
                 });
                 true
             }
-            "core.new_file" if !self.inline_commit && !in_viewer && !ops::is_trash(ctx) => {
+            "core.new_file"
+                if !self.inline_commit && !in_viewer && self.writable(&ctx.location) =>
+            {
                 self.requests.push(Request::StartEdit {
                     pane: ctx.pane,
                     kind: EditKind::NewFile,
                 });
                 true
             }
-            "core.new_folder" if !self.inline_commit && !in_viewer && !ops::is_trash(ctx) => {
+            "core.new_folder"
+                if !self.inline_commit && !in_viewer && self.writable(&ctx.location) =>
+            {
                 self.requests.push(Request::StartEdit {
                     pane: ctx.pane,
                     kind: EditKind::NewFolder,
@@ -1542,13 +1564,15 @@ impl RickUi {
         }
     }
 
-    /// Opens an entry: a folder navigates, a file goes to the viewer or the
-    /// system's default application, as the app decides.
+    /// Opens an entry: a trashed item is restored; otherwise the app
+    /// decides: a folder or an archive navigates, a previewable file goes to
+    /// the viewer, anything else to the system default.
     fn open_entry(&mut self, pane: PaneId, id: EntryId) {
         let Some((_, tab)) = self.app.model().active_tab(pane) else {
             return;
         };
-        // A trashed item opens nowhere; Enter and a double-click restore it.
+        // A trashed item opens nowhere; Enter and a double-click restore it
+        // through the trash plugin's action.
         if vfs_rick::is_trash(&tab.location) {
             let Some(entry) = tab.entry(id).cloned() else {
                 return;
@@ -1559,7 +1583,7 @@ impl RickUi {
                 selection: vec![entry],
                 invoked_from: Invocation::Shortcut,
             };
-            self.run_action_with(ActionId("core.restore_trash"), ctx);
+            self.run_action_with(ActionId("trash.restore_items"), ctx);
             return;
         }
         self.handle(Command::Open { pane, id });
@@ -1591,24 +1615,26 @@ impl RickUi {
             Intent::Forward => self.handle(Command::Forward(pane)),
             Intent::Refresh => self.handle(Command::Refresh(pane)),
             Intent::Parent => {
-                if let Some((_, tab)) = self.app.model().active_tab(pane)
-                    && let Some(parent) = paths::parent(&tab.location.path)
-                {
-                    let to = Location::new(tab.location.provider, parent);
-                    self.handle(Command::Navigate { pane, to });
+                if let Some((tab_id, tab)) = self.app.model().active_tab(pane) {
+                    let location = tab.location.clone();
+                    let to = paths::parent_of(self.tab_ui(tab_id).crumbs_of(&location));
+                    if let Some(to) = to {
+                        self.handle(Command::Navigate { pane, to });
+                    }
                 }
             }
             Intent::Root => {
-                if let Some((_, tab)) = self.app.model().active_tab(pane)
-                    && let Some(root) = paths::root(&tab.location.path)
-                {
-                    let to = Location::new(tab.location.provider, root);
-                    self.handle(Command::Navigate { pane, to });
+                if let Some((tab_id, tab)) = self.app.model().active_tab(pane) {
+                    let location = tab.location.clone();
+                    let to = paths::root_of(self.tab_ui(tab_id).crumbs_of(&location));
+                    if let Some(to) = to {
+                        self.handle(Command::Navigate { pane, to });
+                    }
                 }
             }
             Intent::FocusPath => {
                 if let Some((tab_id, tab)) = self.app.model().active_tab(pane) {
-                    let text = tab.location.path.to_string_lossy().into_owned();
+                    let text = paths::text_of(&tab.location);
                     let tab_ui = self.tab_ui(tab_id);
                     tab_ui.path_edit = Some(text);
                     tab_ui.focus_path = true;
@@ -2040,9 +2066,9 @@ impl RickUi {
                     self.open_entry(pane, id);
                 }
             }
-            // One entry: a folder navigates, a file goes to the viewer or
-            // the system application, a trashed item is restored; several
-            // entries all go to the system (or back out of the trash).
+            // One entry: a folder or an archive navigates, a file goes to the
+            // viewer or the system application, a trashed item is restored;
+            // several entries all go to the system (or back out of the trash).
             [one] => {
                 let id = one.id;
                 self.open_entry(pane, id);
@@ -2633,17 +2659,11 @@ impl TabViewer for Viewer<'_> {
                 TabKind::Viewer => viewer::title(t).into(),
                 TabKind::Explorer => {
                     // A folder icon for local folders, a view's own for a
-                    // virtual location, the provider's otherwise.
-                    if let Some(which) = vfs_rick::Virtual::of(&t.location) {
-                        format!("{} {}", virtual_icon(which), which.title()).into()
-                    } else {
-                        let icon = if t.location.provider.0 == "local" {
-                            icons::FOLDER
-                        } else {
-                            icons::PROVIDER
-                        };
-                        format!("{icon} {}", paths::title(&t.location.path)).into()
-                    }
+                    // virtual location, the archive's for an archive, the
+                    // provider's otherwise.
+                    let icon = vfs_rick::Virtual::of(&t.location)
+                        .map_or_else(|| paths::location_icon(&t.location), virtual_icon);
+                    format!("{icon} {}", paths::title_of(&t.location)).into()
                 }
             },
         )
@@ -2667,11 +2687,14 @@ impl TabViewer for Viewer<'_> {
             let highlight = self.dnd.zone(Zone {
                 key: egui::Id::new(("dnd-tab", tab.0)),
                 rect: response.rect,
-                target: Target::Folder {
-                    to: state.location.clone(),
-                    device: crate::dnd::listing_device(state),
-                    spring: Some(Spring::Tab(*tab)),
-                },
+                target: crate::dnd::into_pane(
+                    state,
+                    Target::Folder {
+                        to: state.location.clone(),
+                        device: crate::dnd::listing_device(state),
+                        spring: Some(Spring::Tab(*tab)),
+                    },
+                ),
             });
             if highlight {
                 let painter = response.ctx.layer_painter(response.layer_id);

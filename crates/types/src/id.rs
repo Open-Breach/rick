@@ -9,6 +9,16 @@ use std::sync::{Mutex, PoisonError};
 pub struct ProviderId(pub &'static str);
 
 impl ProviderId {
+    /// The local filesystem, the provider every OS path belongs to.
+    pub const LOCAL: Self = Self("local");
+    /// Archives browsed in place: a location whose path is the OS path of
+    /// the archive file followed by the path inside it.
+    pub const ARCHIVE: Self = Self("archive");
+    /// Rick's own virtual locations, `rick://trash`, `rick://favorites` and
+    /// the like: one provider whose first-level directories are the views
+    /// extensions register (`ext::Registry::view`).
+    pub const RICK: Self = Self("rick");
+
     /// The id for a provider name read at run time, from a settings file
     /// say. The name is interned: the first call for a name leaks one copy
     /// of it, every later call returns that copy, so the set of leaked
@@ -115,6 +125,9 @@ mod tests {
     #[test]
     fn ids_display_their_name() {
         assert_eq!(ProviderId("sftp").to_string(), "sftp");
+        assert_eq!(ProviderId::LOCAL, ProviderId("local"));
+        assert_eq!(ProviderId::ARCHIVE.to_string(), "archive");
+        assert_eq!(ProviderId::RICK.to_string(), "rick");
         assert_eq!(ExtId("git").to_string(), "git");
         assert_eq!(JobId(7).to_string(), "job#7");
     }

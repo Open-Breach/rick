@@ -38,10 +38,12 @@ pub enum Command {
         to: Location,
     },
     /// Open an entry of the pane's active tab: a folder navigates the pane
-    /// to it; a file opens in a viewer tab of the pane when a previewer
-    /// claims it, and with the system's default application otherwise or
-    /// when its type is listed in `[viewer] external`. Scoring reads the
-    /// file's first bytes as a job, so the viewer tab or the application
+    /// to it; a local file the archive provider can browse navigates into
+    /// it as a location (`archive:` with the archive as a breadcrumb
+    /// segment); any other file opens in a viewer tab of the pane when a
+    /// previewer claims it, and with the system's default application
+    /// otherwise or when its type is listed in `[viewer] external`. The
+    /// archive check and the scoring read the file as a job, so the result
     /// follows a moment later.
     Open {
         /// The pane.
@@ -209,8 +211,6 @@ pub enum Command {
         /// Skip, overwrite, rename, cancel; for this item or all remaining.
         answer: ConflictAnswer,
     },
-    /// List the trash again.
-    RefreshTrash,
     /// Enumerate the mounted volumes again.
     RefreshVolumes,
     /// Revert the last reversible operation.

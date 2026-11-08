@@ -1,13 +1,18 @@
 //! Rick's build tasks, run as `cargo xtask <task>` through the alias in
 //! `.cargo/config.toml`.
 //!
-//! `bundle [--release]` builds the whole workspace and lays out
-//! `target/<profile>/bundle/` (QUESTIONS.md 84): the `rick` binary, the kernel dylibs and the
-//! `libstd` they need beside it, pdfium when `RICK_PDFIUM_DIR` names it,
-//! and `plugins/<id>/plugin.toml` with the library for every plugin crate
-//! (an `ext-*` member built as a `cdylib`). Running `rick` from there finds
-//! every plugin with nothing copied by hand, and the release workflow
-//! archives the same directory.
+//! `bundle [--release] [--features <spec>]` builds the whole workspace and
+//! lays out `target/<profile>/bundle/` (QUESTIONS.md 84): the `rick`
+//! binary, the kernel dylibs and the `libstd` they need beside it, pdfium
+//! when `RICK_PDFIUM_DIR` names it, the GStreamer runtime when
+//! `RICK_GSTREAMER_DIR` names it (QUESTIONS.md 106: on macOS into
+//! `gstreamer/lib/`, on Windows the DLLs beside the binary and the
+//! elements into `gstreamer-1.0/`; Linux uses the system's), and
+//! `plugins/<id>/plugin.toml` with the library for every plugin crate (an
+//! `ext-*` member built as a `cdylib`). `--features` is handed to the
+//! build as is (`--features ext-preview-media/gstreamer` turns playback
+//! on). Running `rick` from there finds every plugin with nothing copied
+//! by hand, and the release workflow archives the same directory.
 //!
 //! The task builds with `--workspace --exclude xtask --lib --bins
 //! --examples` (every library, binary and example of every member but this
@@ -28,7 +33,7 @@ fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let outcome = match args.first().map(String::as_str) {
         Some("bundle") => bundle(&args[1..]),
-        _ => Err("usage: cargo xtask bundle [--release]".into()),
+        _ => Err("usage: cargo xtask bundle [--release] [--features <spec>]".into()),
     };
     match outcome {
         Ok(()) => ExitCode::SUCCESS,
@@ -42,9 +47,18 @@ fn main() -> ExitCode {
 
 fn bundle(args: &[String]) -> Result<()> {
     let mut release = false;
-    for arg in args {
+    let mut features: Option<String> = None;
+    let mut args = args.iter();
+    while let Some(arg) = args.next() {
         match arg.as_str() {
             "--release" => release = true,
+            "--features" => {
+                features = Some(
+                    args.next()
+                        .ok_or("--features takes the features to enable")?
+                        .clone(),
+                );
+            }
             other => return Err(format!("unknown argument {other}").into()),
         }
     }
@@ -69,6 +83,9 @@ fn bundle(args: &[String]) -> Result<()> {
     ]);
     if release {
         build.arg("--release");
+    }
+    if let Some(features) = &features {
+        build.args(["--features", features]);
     }
     run(&mut build)?;
 
@@ -98,6 +115,9 @@ fn bundle(args: &[String]) -> Result<()> {
             }
         }
     }
+    if let Some(dir) = std::env::var_os("RICK_GSTREAMER_DIR") {
+        gstreamer(Path::new(&dir), &out)?;
+    }
 
     let helper = profile_dir.join(exe("rick-plugin-manifest"));
     for crate_name in &meta.plugin_crates {
@@ -123,6 +143,98 @@ fn bundle(args: &[String]) -> Result<()> {
     }
     println!("bundle: {}", out.display());
     Ok(())
+}
+
+/// Copies the GStreamer runtime at `dir` into the bundle, in the layout the
+/// media previewer looks in (QUESTIONS.md 106). macOS: the libraries into
+/// `gstreamer/lib/`, the elements into `gstreamer/lib/gstreamer-1.0/`, the
+/// plugin scanner into `gstreamer/libexec/gstreamer-1.0/`; the official
+/// framework names its libraries through `@rpath`, which the binary and
+/// the media plugin point there. Windows: the DLLs beside the binary,
+/// where every DLL the process loads is searched for, the elements into
+/// `gstreamer-1.0/`. Linux uses the system GStreamer and copies nothing.
+fn gstreamer(dir: &Path, out: &Path) -> Result<()> {
+    let (lib_dir, plugin_dir, scanner) = match std::env::consts::OS {
+        "macos" => (
+            Some((dir.join("lib"), out.join("gstreamer").join("lib"), "dylib")),
+            (
+                dir.join("lib").join("gstreamer-1.0"),
+                out.join("gstreamer").join("lib").join("gstreamer-1.0"),
+            ),
+            Some((
+                dir.join("libexec")
+                    .join("gstreamer-1.0")
+                    .join("gst-plugin-scanner"),
+                out.join("gstreamer").join("libexec").join("gstreamer-1.0"),
+            )),
+        ),
+        "windows" => (
+            Some((dir.join("bin"), out.to_path_buf(), "dll")),
+            (
+                dir.join("lib").join("gstreamer-1.0"),
+                out.join("gstreamer-1.0"),
+            ),
+            None,
+        ),
+        other => {
+            println!("gstreamer: {other} uses the system runtime; nothing bundled");
+            return Ok(());
+        }
+    };
+    let mut count = 0;
+    if let Some((from, to, suffix)) = lib_dir {
+        count += copy_matching(&from, &to, |name| {
+            Path::new(name)
+                .extension()
+                .is_some_and(|e| e.eq_ignore_ascii_case(suffix))
+        })?;
+    }
+    let (from, to) = plugin_dir;
+    count += copy_matching(&from, &to, |name| {
+        Path::new(name).extension().is_some_and(|e| {
+            e.eq_ignore_ascii_case("dylib")
+                || e.eq_ignore_ascii_case("so")
+                || e.eq_ignore_ascii_case("dll")
+        })
+    })?;
+    if let Some((from, to)) = scanner
+        && from.is_file()
+    {
+        std::fs::create_dir_all(&to)?;
+        copy(&from, &to)?;
+        count += 1;
+    }
+    if count == 0 {
+        return Err(format!("no GStreamer runtime files found under {}", dir.display()).into());
+    }
+    println!("gstreamer: {count} files from {}", dir.display());
+    Ok(())
+}
+
+/// Copies the regular files of `from` whose name `keep` accepts into `to`
+/// (created), skipping symbolic links (the framework's version-less
+/// aliases, which would double the size); returns how many.
+fn copy_matching(from: &Path, to: &Path, keep: impl Fn(&str) -> bool) -> Result<usize> {
+    let entries = match std::fs::read_dir(from) {
+        Ok(entries) => entries,
+        Err(error) => {
+            println!("gstreamer: {}: {error}; skipped", from.display());
+            return Ok(0);
+        }
+    };
+    std::fs::create_dir_all(to)?;
+    let mut count = 0;
+    for entry in entries.filter_map(std::result::Result::ok) {
+        let path = entry.path();
+        let name = entry.file_name().to_string_lossy().into_owned();
+        let meta = std::fs::symlink_metadata(&path)?;
+        if meta.file_type().is_symlink() || !meta.is_file() || !keep(&name) {
+            continue;
+        }
+        copy(&path, to)?;
+        count += 1;
+    }
+    Ok(count)
 }
 
 /// What `cargo metadata` tells about the workspace.

@@ -33,6 +33,9 @@ fn harness_with(
     extensions: Vec<Arc<dyn Extension>>,
 ) -> Harness<'static, RickUi> {
     let host = Arc::new(EguiHost::new());
+    // The Trash view is the trash plugin's (issue 20).
+    let mut extensions = extensions;
+    extensions.push(Arc::new(ext_vfs_trash::TrashExtension::new()));
     let app = app::App::new(app::Config {
         platform: fake,
         ui: host.clone(),
@@ -862,10 +865,14 @@ fn the_trash_view_lists_restores_undoes_and_empties() {
         row_names(h) == ["b.txt"]
     }));
 
-    // Empty trash lives in the view's menu, asks first, then empties.
+    // Empty trash lives in the view's menu, in the trash plugin's own
+    // group, asks first, then empties.
     let rect = pane_rect(&harness);
     let empty_space = egui::pos2(rect.center().x, rect.bottom() - 80.0);
     click_at(&mut harness, empty_space, egui::PointerButton::Secondary);
+    harness.get_by_label_contains("Trash ⏵").hover();
+    harness.step();
+    harness.step();
     harness.get_by_label("Empty trash").click();
     harness.step();
     harness.step();
@@ -881,47 +888,17 @@ fn the_trash_view_lists_restores_undoes_and_empties() {
         h.state().app().model().trash.items.is_empty() && row_names(h).is_empty()
     }));
     assert_eq!(fake.list().map(|l| l.len()).ok(), Some(0));
-    // Away from the view the entry is hidden: the folder's menu has New
-    // folder and no trash group (the finished job's row still says Empty
-    // trash in the operations area, so count what the menu adds).
+    // Away from the view the group is hidden: the folder's menu has New
+    // folder and no Trash group.
     let focused = pane(&harness);
     command(&mut harness, app::Command::Back(focused));
     settle(&mut harness);
-    let before = harness.query_all_by_label("Empty trash").count();
     click_at(&mut harness, empty_space, egui::PointerButton::Secondary);
     harness.step();
     harness.get_by_label_contains("New folder");
-    assert_eq!(harness.query_all_by_label("Empty trash").count(), before);
+    assert!(harness.query_by_label_contains("Trash ⏵").is_none());
     harness.key_press(egui::Key::Escape);
     harness.step();
-}
-
-/// Where the platform cannot list its trash (macOS), the view shows what
-/// Rick trashed, in this and earlier sessions.
-#[test]
-fn an_unlistable_trash_shows_ricks_own_record_across_sessions() {
-    let dir = tree();
-    let fake = Arc::new(Fake::new().unwrap_or_else(|e| panic!("{e}")));
-    fake.set_trash_unlistable(true);
-    let config = dir.path().join("config");
-    {
-        let mut harness = harness_with(dir.path(), &config, fake.clone(), Vec::new());
-        select(&mut harness, "c.txt");
-        run(&mut harness, "core.trash");
-        settle(&mut harness);
-        assert!(step_until(&mut harness, Duration::from_secs(5), |h| {
-            h.state().app().model().trash.items.len() == 1
-        }));
-        assert!(!harness.state().app().model().trash.listed);
-        let record = config.join(app::TRASH_FILE);
-        assert!(step_until(&mut harness, Duration::from_secs(3), |_| {
-            fs::read_to_string(&record).is_ok_and(|t| t.contains("c.txt"))
-        }));
-    }
-    let mut harness = harness_with(dir.path(), &config, fake, Vec::new());
-    click_row(&mut harness, "Trash", egui::PointerButton::Primary);
-    settle(&mut harness);
-    assert_eq!(row_names(&harness), ["c.txt"]);
 }
 
 #[test]

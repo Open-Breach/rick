@@ -8,7 +8,13 @@
 //!
 //! The [`Registry`] collects the contributions and refuses a manifest whose
 //! `api_version` is not [`API_VERSION`], so a plugin built against another
-//! contract is reported instead of misbehaving.
+//! contract is reported instead of misbehaving. It is also the extension
+//! context: the host builds it with [`Registry::with_platform`], and an
+//! extension that needs the platform services (the trash, the config
+//! directory, the dialogues) takes them from [`Registry::platform`] while it
+//! registers. A provider can serve a virtual location, `rick://<name>`,
+//! through [`Registry::view`]; the kernel's `rick` provider routes the
+//! location's subtree to it.
 //!
 //! # Worked example
 //!
@@ -98,6 +104,7 @@
 use std::fmt;
 use std::sync::Arc;
 
+use platform::Platform;
 use semver::Version;
 use types::{Error, ExtId};
 
@@ -113,8 +120,11 @@ use crate::search::SearchIndex;
 /// History: 1 the first contract; 2 `PreviewDoc::info` became `sections`,
 /// with `status`, `controls` and `set_control` added; 3 [`Manifest`] gained
 /// `points` and `platforms`, and plugin libraries gained their entry point
-/// ([`plugin`](mod@crate::plugin)) and their manifest file.
-pub const API_VERSION: u32 = 3;
+/// ([`plugin`](mod@crate::plugin)) and their manifest file; 4
+/// `PreviewDoc` gained `content` (file listings, grids and documents the
+/// UI lays out), `Transport` gained volume, speed, frame step and loop,
+/// and `Icon` gained `Rendered` (QUESTIONS.md 103).
+pub const API_VERSION: u32 = 4;
 
 bitflags::bitflags! {
     /// The extension points an extension fills, as its manifest declares
@@ -337,14 +347,19 @@ pub(crate) fn kernel_id() -> usize {
     std::ptr::from_ref(&KERNEL) as usize
 }
 
-/// Collects contributions from extensions.
+/// Collects contributions from extensions, and carries the platform
+/// services the host lends them.
 pub struct Registry {
     /// The kernel the registry was created in, as [`kernel_id`] gives it.
     kernel: usize,
+    /// The platform services of the host, when it lent them.
+    platform: Option<Arc<dyn Platform>>,
     extensions: Vec<ExtId>,
     manifests: Vec<Manifest>,
     failure: Option<String>,
     providers: Vec<Arc<dyn Provider>>,
+    /// Virtual locations, `rick://<name>`, by name.
+    views: Vec<(String, Arc<dyn Provider>)>,
     decorators: Vec<Arc<dyn Decorator>>,
     actions: Vec<Arc<dyn Action>>,
     previewers: Vec<Arc<dyn Previewer>>,
@@ -356,10 +371,12 @@ impl Default for Registry {
     fn default() -> Self {
         Self {
             kernel: kernel_id(),
+            platform: None,
             extensions: Vec::new(),
             manifests: Vec::new(),
             failure: None,
             providers: Vec::new(),
+            views: Vec::new(),
             decorators: Vec::new(),
             actions: Vec::new(),
             previewers: Vec::new(),
@@ -370,10 +387,30 @@ impl Default for Registry {
 }
 
 impl Registry {
-    /// An empty registry.
+    /// An empty registry without platform services: for tests and for
+    /// extensions that need none.
     #[must_use]
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// An empty registry lending `platform` to the extensions it loads.
+    #[must_use]
+    pub fn with_platform(platform: Arc<dyn Platform>) -> Self {
+        Self {
+            platform: Some(platform),
+            ..Self::default()
+        }
+    }
+
+    /// The platform services the host lent, for an extension's `register`:
+    /// the trash, open-with, the config directory, the native dialogues.
+    /// `None` in a registry built with [`new`](Self::new); an extension
+    /// that cannot do without them fails its registration with
+    /// `Error::Unsupported` and says so.
+    #[must_use]
+    pub fn platform(&self) -> Option<&Arc<dyn Platform>> {
+        self.platform.as_ref()
     }
 
     /// Whether the registry was created by this copy of the kernel: `false`
@@ -412,7 +449,10 @@ impl Registry {
         if self.extensions.contains(&manifest.id) {
             return Err(Error::Unsupported("extension id already loaded"));
         }
-        let mut staging = Registry::default();
+        let mut staging = Registry {
+            platform: self.platform.clone(),
+            ..Registry::default()
+        };
         ext.register(&mut staging)?;
         if !manifest.points.contains(staging.points()) {
             return Err(Error::Unsupported(
@@ -422,6 +462,7 @@ impl Registry {
         self.extensions.push(manifest.id);
         self.manifests.push(manifest.clone());
         self.providers.append(&mut staging.providers);
+        self.views.append(&mut staging.views);
         self.decorators.append(&mut staging.decorators);
         self.actions.append(&mut staging.actions);
         self.previewers.append(&mut staging.previewers);
@@ -433,6 +474,16 @@ impl Registry {
     /// Registers a provider.
     pub fn provider(&mut self, p: Arc<dyn Provider>) {
         self.providers.push(p);
+    }
+
+    /// Registers a virtual location: `rick://<name>`, served by `p`. The
+    /// kernel's `rick` provider hands `p` every location under
+    /// `/<name>` with the full path, so the entries `p` lists carry
+    /// paths that start with `/<name>` and the provider id
+    /// `ProviderId::RICK`; `p`'s own `id` is not consulted. A view counts
+    /// as a `Points::PROVIDER` contribution.
+    pub fn view(&mut self, name: impl Into<String>, p: Arc<dyn Provider>) {
+        self.views.push((name.into(), p));
     }
 
     /// Registers a decorator.
@@ -465,7 +516,10 @@ impl Registry {
     #[must_use]
     pub fn points(&self) -> Points {
         let mut points = Points::empty();
-        points.set(Points::PROVIDER, !self.providers.is_empty());
+        points.set(
+            Points::PROVIDER,
+            !self.providers.is_empty() || !self.views.is_empty(),
+        );
         points.set(Points::DECORATOR, !self.decorators.is_empty());
         points.set(Points::ACTION, !self.actions.is_empty());
         points.set(Points::PREVIEWER, !self.previewers.is_empty());
@@ -477,6 +531,7 @@ impl Registry {
     /// registry of its own per plugin and the application absorbs it.
     pub fn absorb(&mut self, other: &Registry) {
         self.providers.extend(other.providers.iter().cloned());
+        self.views.extend(other.views.iter().cloned());
         self.decorators.extend(other.decorators.iter().cloned());
         self.actions.extend(other.actions.iter().cloned());
         self.previewers.extend(other.previewers.iter().cloned());
@@ -515,6 +570,13 @@ impl Registry {
         &self.providers
     }
 
+    /// Registered virtual locations, name and provider, in registration
+    /// order.
+    #[must_use]
+    pub fn views(&self) -> &[(String, Arc<dyn Provider>)] {
+        &self.views
+    }
+
     /// Registered decorators, in registration order.
     #[must_use]
     pub fn decorators(&self) -> &[Arc<dyn Decorator>] {
@@ -551,7 +613,12 @@ impl std::fmt::Debug for Registry {
         f.debug_struct("Registry")
             .field("extensions", &self.extensions)
             .field("manifests", &self.manifests.len())
+            .field("platform", &self.platform.is_some())
             .field("providers", &self.providers.len())
+            .field(
+                "views",
+                &self.views.iter().map(|(n, _)| n).collect::<Vec<_>>(),
+            )
             .field("decorators", &self.decorators.len())
             .field("actions", &self.actions.len())
             .field("previewers", &self.previewers.len())

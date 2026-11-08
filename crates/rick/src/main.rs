@@ -36,8 +36,20 @@ fn built_ins() -> Vec<Arc<dyn ext::Extension>> {
     extensions.push(Arc::new(ext_preview_pdf::PdfPreview::new()));
     #[cfg(feature = "preview-hex")]
     extensions.push(Arc::new(ext_preview_hex::HexPreview::new()));
+    #[cfg(feature = "preview-office")]
+    extensions.push(Arc::new(ext_preview_office::OfficePreview::new()));
+    #[cfg(feature = "preview-media")]
+    extensions.push(Arc::new(ext_preview_media::MediaPreview::new()));
+    #[cfg(feature = "preview-archive")]
+    extensions.push(Arc::new(ext_preview_archive::ArchivePreview::new()));
+    #[cfg(feature = "preview-csv")]
+    extensions.push(Arc::new(ext_preview_csv::CsvPreview::new()));
     #[cfg(feature = "git")]
     extensions.push(Arc::new(ext_git::GitExtension::new()));
+    #[cfg(feature = "vfs-trash")]
+    extensions.push(Arc::new(ext_vfs_trash::TrashExtension::new()));
+    #[cfg(feature = "vfs-archive")]
+    extensions.push(Arc::new(ext_vfs_archive::ArchiveExtension::new()));
     extensions
 }
 
@@ -88,6 +100,7 @@ fn main() -> anyhow::Result<()> {
             .iter()
             .map(|e| e.manifest().id.0.to_owned())
             .collect(),
+        platform: Some(platform.clone()),
     });
     if list_plugins {
         write!(std::io::stdout().lock(), "{}", table(host.plugins()))

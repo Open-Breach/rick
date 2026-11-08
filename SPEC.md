@@ -63,7 +63,7 @@ NFS v3/v4, SMB/CIFS, CephFS, GlusterFS, SSHFS (FUSE) and 9p are mounted by the O
 | Azure Blob | `ext-vfs-azure` | Containers as top-level folders |
 | Google Cloud Storage | `ext-vfs-gcs` | Buckets as top-level folders |
 
-Each cloud is its own plugin implementing `Provider` directly, so a user installs only the clouds they use; there is no shared object-storage crate — the overlap (prefix-to-folder mapping, chunked upload, credential storage) is small, and a shared crate may be extracted later if the second plugin shows real duplication. Object stores have no change notifications (polling). Download and upload are ordinary cross-provider copies to and from the local provider, streamed through the machine. **Transfers inside one account never pass through the machine:** a copy or move between two locations of the same provider instance — within a bucket, or across two buckets or containers of the same account — is submitted to the service as a server-side operation (S3 `CopyObject`, Azure's asynchronous Copy Blob, GCS `Rewrite`; move adds a delete), and Rick's job only tracks its progress, polling where the service reports it and cancelling where the service allows. This is the `NATIVE_TRANSFER` capability of the Provider contract, not cloud-specific code: SFTP gets its server-side rename through the same hook.
+Each cloud is its own plugin implementing `Provider` directly, so a user installs only the clouds they use; there is no shared object-storage crate — the overlap (prefix-to-folder mapping, chunked upload, credential storage) is small, and a shared crate may be extracted later if the second plugin shows real duplication. Object stores have no change notifications (polling). Download and upload are ordinary cross-provider copies to and from the local provider, streamed through the machine. **Transfers inside one account never pass through the machine:** a copy or move between two locations of the same provider instance — within a bucket, or across two buckets or containers of the same account — is submitted to the service as a server-side operation (S3 `CopyObject`, Azure's asynchronous Copy Blob, GCS `Rewrite`; move adds a delete), and Rick's job only tracks its progress, polling where the service reports it and cancelling where the service allows. This is the `NATIVE_TRANSFER` capability of the Provider contract, not cloud-specific code: `ext-ssh` runs its same-host `cp` and `mv` through the same hook.
 
 ### Archives and compression
 
@@ -143,7 +143,7 @@ Editing Places: a folder dragged from a file list and dropped on the list is add
 
 **This Machine.** Every drive connected to the machine, fixed and removable, in one list whatever the platform (mount points on Linux and macOS, drive letters on Windows). Each row shows the drive's name and its utilisation as a percentage with a small bar. Clicking a row opens the drive's root; clicking the header opens the This Machine overview, a virtual location with the full drive table: name, mount point or drive letter, file system, total, used, free, utilisation bar and whether the drive is removable. Removable drives offer *Eject* in the row's context menu and in the overview. The list follows mounts, unmounts and hot-plug live; there is no manual refresh.
 
-**Network.** Anything addressed by a host name. For now it lists the network file systems already mounted on the system (an SMB mount, an NFS export) and, once `ext-vfs-sftp` exists, SFTP connections; *Add…* creates a connection. Clicking a row opens its root; the header opens the Network overview. The list follows mounts and unmounts live. Discovery of hosts and shares on the local network is not part of this rework (see Version 0.2).
+**Network.** Anything addressed by a host name. For now it lists the network file systems already mounted on the system (an SMB mount, an NFS export) and, once `ext-ssh` exists, one row per SSH host (`specs/ext-ssh.md`); *Add…* creates a connection. Clicking a row opens its root; the header opens the Network overview. The list follows mounts and unmounts live. Discovery of hosts and shares on the local network is not part of this rework (see Version 0.2).
 
 **Cloud.** Anything addressed by an account: the object-storage providers contributed by plugins (`ext-vfs-s3`, `ext-vfs-azure`, `ext-vfs-gcs`), one row per configured account or container. Clicking a row opens its root; the header opens the Cloud overview. Shown with *Add…* while a cloud plugin is loaded and no account is configured; hidden entirely while no cloud provider plugin is loaded.
 
@@ -409,7 +409,7 @@ All five live in `ext`, each small enough for one screen, each returning data or
 
 | Point | Answers | Contract |
 | --- | --- | --- |
-| Provider | Where files come from: local, archive, SFTP, object storage | list streamed in chunks, stat, open, watch, copy, delete, plus a capability set (trash, rename, reflink, watch) |
+| Provider | Where files come from: local, archive, SSH, object storage | list streamed in chunks, stat, open, watch, copy, delete, plus a capability set (trash, rename, reflink, watch) |
 | Decorator | Status on entries or a directory: git badges, sync state, extra columns | interested(dir) as a cheap gate; decorate(visible entries or directory) as a cancellable batch job; invalidates\_on(dir) names the file events that make it stale |
 | Action | A function for a selection or location | id, label, enabled(ctx), run(ctx) as a job, placement (menu group, palette, shortcut) |
 | Previewer | Rendering a file type | score(mime, path); open(source) returns a Preview with pages, render(page, size) to RGBA frames, a text layer and metadata |
@@ -434,7 +434,7 @@ One Cargo workspace, one crate per concern, grouped by layer. Kernel crates carr
 
 - `types` — paths, entries, mime, errors, capability flags; no I/O, no async runtime and no dependency on any other Rick crate. It may use the small ecosystem crates it needs (`bitflags`, `thiserror`), nothing heavier.
 - `runtime` — job system, cancellation, progress, thread pools, event bus.
-- `platform` — per-OS code behind one trait set: trash, links and junctions, elevation, system properties dialogue, file associations, mounts. In 0.1 the set is `Trash` (trash, list, restore, remove one item, empty), `OpenWith` (`open` with the default application, `reveal` in the system file manager), `Properties` (the native dialogue on Windows and macOS, label/value rows on Linux), `NativeDialogs` (async, through `rfd`, the XDG portal on Linux), `Clipboard` and `ConfigDir`; elevation, file associations and mounts come later. The three RustSec "unmaintained" notices on `rfd`'s D-Bus dependencies are accepted in deny.toml with the reason recorded, to be dropped when `rfd` moves on.
+- `platform` — per-OS code behind one trait set: trash, links and junctions, elevation, system properties dialogue, file associations, mounts. In 0.1 the set is `Trash` (trash, list, restore, remove one item, empty), `OpenWith` (`open` with the default application, `reveal` in the system file manager), `Properties` (the native dialogue on Windows and macOS, label/value rows on Linux), `NativeDialogs` (async, through `rfd`, the XDG portal on Linux), `Clipboard` and `ConfigDir`; elevation, file associations and mounts come later. 0.2 adds `Secrets` (store, get and remove a secret by a stable key in the platform keychain: Secret Service on Linux, Keychain on macOS, Credential Manager on Windows, a fake for tests) and `Terminal` (launch the user's terminal emulator with a command), both introduced by `ext-ssh` and reused by the cloud providers and `ext-action-terminal`. The three RustSec "unmaintained" notices on `rfd`'s D-Bus dependencies are accepted in deny.toml with the reason recorded, to be dropped when `rfd` moves on.
 - `ext` — the five extension traits, the registry, manifests and the extension context.
 - `vfs` — the mount table that routes a path to its `Provider`, and cross-provider copy and move.
 - `vfs-local` — the local filesystem provider: listing, statx, watching, copy and reflink.
@@ -450,7 +450,7 @@ One Cargo workspace, one crate per concern, grouped by layer. Kernel crates carr
 - `ext-vfs-s3` — S3, R2, MinIO and other S3-compatible stores, one endpoint setting.
 - `ext-vfs-azure` — Azure Blob.
 - `ext-vfs-gcs` — Google Cloud Storage.
-- `ext-vfs-sftp` — SSH and SFTP.
+- `ext-ssh` — remote hosts over SSH, one plugin with several contributions like `ext-git`: a Provider driven by shell commands over `exec` channels (no SFTP), the hosts of `~/.ssh/config` and Rick's own in the Network section, and the *Open console here* and *Open in external terminal* actions. Specified in [`specs/ext-ssh.md`](specs/ext-ssh.md).
 - `ext-vfs-trash` — the trash as a browsable location with restore.
 
 **Decorators** (`ext-deco-*`)
@@ -547,7 +547,7 @@ The supporting types the signatures name without defining them here (`ListOption
 **Value types** (crate `types`, no I/O):
 
 ```rust
-/// Which extension provides a tree. "local", "archive", "sftp", "s3", "trash".
+/// Which extension provides a tree. "local", "archive", "ssh", "s3", "trash".
 pub struct ProviderId(pub &'static str);
 
 /// Identity of an extension, as declared in its manifest. "git", "preview-pdf".
@@ -671,7 +671,7 @@ pub trait Provider: Send + Sync + 'static {
 
     /// Moves or copies a whole selection within this provider instance on the
     /// provider's side, if NATIVE_TRANSFER is set: the object store's copy
-    /// API across buckets of one account, SFTP's remote rename. The provider
+    /// API across buckets of one account, `ext-ssh`'s remote `cp` and `mv`. The provider
     /// submits the operation, reports progress as the service exposes it and
     /// honours `cancel` where the service allows. `ops` calls this first when
     /// source and target share a provider instance and falls back to
@@ -1021,7 +1021,7 @@ The smallest Rick worth using every day. Everything in this list ships; nothing 
 2. **Side panel rework.** The side panel as the GUI section now specifies it: the editable Places list with its Favorites, Recent and Trash views, the This Machine, Network and Cloud sections with their overviews, live mount and hot-plug updates, Eject, open in new tab, the drop rule (a folder becomes a place, files are refused, no file operation anywhere in the panel), collapsible sections without an indent guide, no current-location highlight, the Tree section removed, and the operations area with its larger layout, per-row progress bars and per-volume job scheduling. In this milestone the Trash view lists the platform trash with restore and empty as 0.1's section did, moved into the tab; `ext-vfs-trash` (milestone 5) later turns it into a full browsable location. Network lists mounted shares only; discovery is not part of this milestone. Cloud appears once the first cloud provider plugin exists (milestone 5). The side-panel Recent feed of 0.1 (watches plus a bounded scan) is replaced by the system's recently-used list.
 3. **Viewer.** The full-size viewer of the GUI section: Enter opens previewable files in a viewer tab, F11 fullscreen, folder navigation as a slideshow, pages, zoom, find, media transport, info panel, the Action registry inside the viewer, hex fallback. Compiled in, since it is a frame for the previewers rather than a feature of its own.
 4. **Previewers as plugins:** `ext-preview-office` (LibreOffice when installed), `ext-preview-media` (GStreamer, bundled runtime on macOS and Windows), `ext-preview-archive` (listing without mounting), `ext-preview-csv` (virtualised grid), rendered Markdown and HTML in `ext-preview-code`, `ext-preview-hex`, and `ext-preview-3d` (below).
-5. **Providers as plugins:** `ext-vfs-archive` (zip, tar family, 7z, RAR read-only, single-file codecs) with ISO images browsed the same way, `ext-vfs-trash` (the Trash view becomes a full browsable location with restore and empty), `ext-vfs-sftp`, and one plugin per cloud — `ext-vfs-s3` (S3, R2 and S3-compatibles), `ext-vfs-azure`, `ext-vfs-gcs` — each with `NATIVE_TRANSFER` so moves and copies inside an account run on the service. The Network section of the side panel gains discovered shares, connect, mount and unmount.
+5. **Providers as plugins:** `ext-vfs-archive` (zip, tar family, 7z, RAR read-only, single-file codecs) with ISO images browsed the same way, `ext-vfs-trash` (the Trash view becomes a full browsable location with restore and empty), `ext-ssh` (remote hosts over SSH through shell commands, no SFTP; hosts from `~/.ssh/config` and Rick's own in the Network section; jump hosts; console actions; its own spec in [`specs/ext-ssh.md`](specs/ext-ssh.md), which also brings the `platform::Secrets` keychain trait and the `REMOTE` capability the cloud plugins reuse), and one plugin per cloud — `ext-vfs-s3` (S3, R2 and S3-compatibles), `ext-vfs-azure`, `ext-vfs-gcs` — each with `NATIVE_TRANSFER` so moves and copies inside an account run on the service. The Network section of the side panel gains discovered shares, connect, mount and unmount.
 6. **Search and decorators as plugins:** `ext-search-walk` behind the subtree search, then `ext-search-windows`, `ext-search-spotlight`, `ext-search-tracker` and `ext-search-baloo` feeding the title-row search box; `ext-svn` beside `ext-git`.
 7. **Actions as plugins:** `ext-action-compress` (compress, extract here, extract to), `ext-action-compare` (file and folder diff), `ext-action-terminal` (open console, with an embedded console pane), `ext-action-rename` (bulk rename with pattern, numbering, find and replace, preview), plus Open with… chooser, Paste as link and Select by pattern in `ext-action-core`.
 8. **Permission management** in Properties (owner, group, mode bits, ACLs, recursive apply, elevation through the platform), and **localisation**: the `t!` lookup gains translation files and a language setting, English remains the fallback.
@@ -1030,6 +1030,12 @@ The smallest Rick worth using every day. Everything in this list ships; nothing 
 **Not in 0.2:** the WASM host, the extension store and downloads, plugin signing, `ext-deco-fs`, TFVC. During 0.2 the workspace version is `0.2.0-dev`; the milestones merge to `main` behind CI on all three OSes as in 0.1, and 0.2.0 is tagged when milestone 9 is in.
 
 **3D models.** A previewer for STL, OBJ and 3MF, for people who print. The mesh is parsed natively (`stl_io`, `tobj`, a small 3MF reader over its zip and XML) and rendered through wgpu into the preview frame as a shaded solid with a neutral material and a ground grid; drag orbits, wheel zooms, double-click resets the view, and the view is remembered per file while it stays open. The status bar shows triangle count, bounding box in millimetres and, for OBJ, the number of objects; the File info section adds the units declared by 3MF. Models beyond a configurable triangle budget decimate for the preview and say so. Ships as `ext-preview-3d`, a plugin.
+
+### Separate specs
+
+Some plugins are specified in their own file under `specs/`, so they can be handed to an implementer on their own. Each is binding in the same way as this document; where one disagrees with this document, the question goes to `QUESTIONS.md`.
+
+- [`specs/ext-ssh.md`](specs/ext-ssh.md) — `ext-ssh`, remote hosts over SSH: a Provider driven by shell commands on `exec` channels (no SFTP) with per-host command profiles for GNU, BSD and BusyBox userlands, hosts from `~/.ssh/config` plus Rick's own in the Network section, agent, key and password authentication with secrets in the OS keychain, `known_hosts` dialogues, jump hosts and chains, pooled connections, same-host `cp`/`mv` through `NATIVE_TRANSFER`, *Open console here* and *Open in external terminal*, prefix and size-capped previews. Unix-like hosts only. Milestone 5 of 0.2, in place of `ext-vfs-sftp`.
 
 ### Still open
 

@@ -2,8 +2,10 @@ name: release
 # On a `v*` tag: a release build on every OS, one archive per platform with
 # the bundle `cargo xtask bundle --release` lays out — the binary, the kernel
 # dylibs and libstd it shares with the plugins, the pdfium library beside it
-# (SPEC.md: pdfium ships beside the binary) and `plugins/` with every plugin
-# (QUESTIONS.md 81) — plus LICENSE, README, CHANGELOG and the third-party
+# (SPEC.md: pdfium ships beside the binary), the GStreamer runtime on macOS
+# and Windows (SPEC.md: bundled there, the system's on Linux; QUESTIONS.md
+# 89) and `plugins/` with every plugin (QUESTIONS.md 81) — plus LICENSE,
+# README, CHANGELOG and the third-party
 # licenses; a smoke test of every archive; then a GitHub Release with the archives, their
 # SHA-256 sums and the tag's changelog section as its body. A tag with a
 # pre-release suffix (v0.1.0-rc1) makes a draft pre-release; a plain tag
@@ -24,6 +26,9 @@ permissions:
 env:
   CARGO_TERM_COLOR: always
   TAG: ${{ inputs.tag || github.ref_name }}
+  # The GStreamer release whose official macOS and Windows packages the
+  # archives bundle; Linux builds against the system packages.
+  GSTREAMER_VERSION: "1.28.8"
 jobs:
   licenses:
     runs-on: ubuntu-latest
@@ -56,6 +61,50 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
+      # GStreamer for the media previewer (issue 18). Linux: the system
+      # packages, development files for the build and the codec plug-ins
+      # for the smoke test; the archive relies on the user's GStreamer.
+      # macOS and Windows: the official runtime and development packages,
+      # installed where their installers put them; the runtime is copied
+      # into the bundle (RICK_GSTREAMER_DIR, QUESTIONS.md 106). The new
+      # Windows installer is one Inno Setup executable per architecture.
+      - name: gstreamer (linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev \
+            gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-plugins-bad \
+            gstreamer1.0-plugins-ugly gstreamer1.0-libav
+      - name: gstreamer (macos)
+        if: runner.os == 'macOS'
+        run: |
+          set -euo pipefail
+          base="https://gstreamer.freedesktop.org/data/pkg/osx/$GSTREAMER_VERSION"
+          for pkg in gstreamer-1.0 gstreamer-1.0-devel; do
+            curl -sSL -o "$RUNNER_TEMP/$pkg.pkg" "$base/$pkg-$GSTREAMER_VERSION-universal.pkg"
+            sudo installer -pkg "$RUNNER_TEMP/$pkg.pkg" -target /
+          done
+          framework="/Library/Frameworks/GStreamer.framework/Versions/1.0"
+          echo "PKG_CONFIG_PATH=$framework/lib/pkgconfig" >> "$GITHUB_ENV"
+          echo "RICK_GSTREAMER_DIR=$framework" >> "$GITHUB_ENV"
+          echo "$framework/bin" >> "$GITHUB_PATH"
+      - name: gstreamer (windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $base = "https://gstreamer.freedesktop.org/data/pkg/windows/$env:GSTREAMER_VERSION/msvc"
+          $installer = "$env:RUNNER_TEMP\gstreamer.exe"
+          Invoke-WebRequest -Uri "$base/gstreamer-1.0-msvc-x86_64-$env:GSTREAMER_VERSION.exe" -OutFile $installer
+          $root = "C:\gstreamer\1.0\msvc_x86_64"
+          Start-Process -FilePath $installer -ArgumentList "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/TYPE=full", "/DIR=$root" -Wait
+          if (-not (Test-Path "$root\lib\pkgconfig\gstreamer-1.0.pc")) {
+            Get-ChildItem $root -Recurse -Depth 2 | Select-Object -First 50 FullName
+            throw "the GStreamer installer did not put the development files under $root"
+          }
+          "PKG_CONFIG_PATH=$root\lib\pkgconfig" | Out-File -FilePath $env:GITHUB_ENV -Append
+          "RICK_GSTREAMER_DIR=$root" | Out-File -FilePath $env:GITHUB_ENV -Append
+          "$root\bin" | Out-File -FilePath $env:GITHUB_PATH -Append
       # The version is the tag's; its release part must be the workspace's,
       # so `rick --version` and the archive name agree. During a cycle the
       # workspace carries a `-dev` suffix, which a dry run may keep.
@@ -90,10 +139,25 @@ jobs:
             echo "RICK_PDFIUM_DIR=$dest/lib" >> "$GITHUB_ENV"
           fi
       # The bundle: binary, kernel dylibs, libstd, pdfium (from
-      # RICK_PDFIUM_DIR) and plugins/, from one build of every library,
-      # binary and example in the workspace, the previewer's pdfium_check
-      # example for the smoke test among them.
-      - run: cargo xtask bundle --release
+      # RICK_PDFIUM_DIR), the GStreamer runtime (from RICK_GSTREAMER_DIR on
+      # macOS and Windows) and plugins/, from one build of every library,
+      # binary and example in the workspace with the media previewer's
+      # playback on, the previewer's pdfium_check example for the smoke
+      # test among them.
+      - run: cargo xtask bundle --release --features ext-preview-media/gstreamer
+      # The official macOS libraries are universal; the archive is for
+      # Apple silicon, so the other half goes.
+      - name: thin the gstreamer libraries
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          set -euo pipefail
+          find target/release/bundle/gstreamer -type f \( -name '*.dylib' -o -name 'gst-plugin-scanner' \) | while read -r file; do
+            if lipo -info "$file" 2>/dev/null | grep -q "arm64"; then
+              lipo -thin arm64 "$file" -output "$file.thin" 2>/dev/null && mv "$file.thin" "$file" || true
+            fi
+          done
+          du -sh target/release/bundle/gstreamer
       - uses: actions/download-artifact@v4
         with: { name: third-party-licenses }
       - name: package
@@ -150,6 +214,13 @@ jobs:
     runs-on: ${{ matrix.os }}
     timeout-minutes: 15
     steps:
+      # The Linux archives use the system GStreamer: the media plugin links
+      # it and loads only where it is installed, as a user's desktop has it.
+      - name: gstreamer (linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libgstreamer1.0-0 libgstreamer-plugins-base1.0-0 gstreamer1.0-plugins-good
       - uses: actions/download-artifact@v4
         with: { name: "archive-${{ matrix.platform }}", path: dist }
       - uses: actions/download-artifact@v4
@@ -175,6 +246,14 @@ jobs:
             test -f "$file" || { echo "missing $file"; exit 1; }
           done
           test -f libpdfium.so || test -f libpdfium.dylib || test -f pdfium.dll || { echo "no pdfium library beside the binary"; exit 1; }
+          # The GStreamer runtime the media previewer plays through, bundled
+          # on macOS and Windows (QUESTIONS.md 106).
+          case "${{ runner.os }}" in
+            macOS) test -f gstreamer/lib/libgstreamer-1.0.0.dylib || { echo "no bundled GStreamer"; exit 1; }
+                   ls gstreamer/lib/gstreamer-1.0 | head -5 ;;
+            Windows) test -f gstreamer-1.0-0.dll || { echo "no bundled GStreamer"; exit 1; }
+                     ls gstreamer-1.0 | head -5 ;;
+          esac
           # The kernel dylibs and libstd the binary shares with the plugins.
           ls -1 | grep -Eq '^(lib)?std-' || { echo "no libstd beside the binary"; exit 1; }
           ls -1 | grep -Eq '^(lib)?ext\.' || { echo "no ext library beside the binary"; exit 1; }
@@ -184,13 +263,23 @@ jobs:
           out="$("./rick$exe" --version)"
           echo "rick --version: $out"
           echo "$out" | grep -Eq "^${version%%-*}(-[0-9A-Za-z.]+)? \([0-9a-f]{7,}\)$" || { echo "unexpected version line"; exit 1; }
-          # The Git and hex plugins, bundled and loaded from plugins/.
-          test -f plugins/git/plugin.toml || { echo "no plugins/git/plugin.toml"; exit 1; }
-          test -f plugins/preview-hex/plugin.toml || { echo "no plugins/preview-hex/plugin.toml"; exit 1; }
+          # The plugins, bundled and loaded from plugins/<id>/: Git, the
+          # archive and trash providers of issue 20, the four previewers of
+          # issue 18 and the hex fallback of issue 17. The media previewer
+          # loading on macOS and Windows
+          # shows the bundled GStreamer runtime resolves; on Linux the
+          # runner's system GStreamer does.
+          for id in git vfs-trash vfs-archive preview-archive preview-csv preview-media preview-office preview-hex; do
+            test -f "plugins/$id/plugin.toml" || { echo "no plugins/$id/plugin.toml"; exit 1; }
+          done
           plugins="$("./rick$exe" --list-plugins)"
           echo "$plugins"
           echo "$plugins" | grep -Eq '^git +Git +[^ ]+ +decorator, action +loaded +' || { echo "git plugin not loaded"; exit 1; }
-          echo "$plugins" | grep -Eq '^preview-hex +Hex preview +[^ ]+ +previewer +loaded +' || { echo "hex plugin not loaded"; exit 1; }
+          echo "$plugins" | grep -Eq '^vfs-trash +Trash +[^ ]+ +provider, decorator, action +loaded +' || { echo "trash plugin not loaded"; exit 1; }
+          echo "$plugins" | grep -Eq '^vfs-archive +Archives +[^ ]+ +provider +loaded +' || { echo "archive plugin not loaded"; exit 1; }
+          for id in preview-archive preview-csv preview-media preview-office preview-hex; do
+            echo "$plugins" | grep -Eq "^$id +[^ ].* +previewer +loaded +" || { echo "$id plugin not loaded"; exit 1; }
+          done
           # pdfium from beside the binary: the previewer's test binary, copied
           # next to rick, with RICK_PDFIUM_DIR unset and no system pdfium. The
           # example has no run path of its own, so the library path names the
@@ -220,7 +309,7 @@ jobs:
           python3 .github/scripts/changelog-section.py "$TAG" CHANGELOG.md > body.md
           {
             echo
-            echo "Archives: the \`rick\` binary with the shared kernel libraries, libstd and the pdfium library beside it, \`plugins/\` with the Git and hex-preview plugins, LICENSE, README, CHANGELOG and THIRD-PARTY-LICENSES; \`SHA256SUMS.txt\` has the checksums. Not signed or notarised (see README, Try it)."
+            echo "Archives: the \`rick\` binary with the shared kernel libraries, libstd and the pdfium library beside it, \`plugins/\` with the Git, Office, media, archive, CSV and hex-preview plugins, the GStreamer runtime on macOS and Windows (Linux uses the system's: install the gstreamer1.0 plug-in packages for playback), LICENSE, README, CHANGELOG and THIRD-PARTY-LICENSES; \`SHA256SUMS.txt\` has the checksums. Not signed or notarised (see README, Try it)."
           } >> body.md
           cat body.md
       - uses: softprops/action-gh-release@v2

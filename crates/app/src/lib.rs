@@ -21,10 +21,13 @@
 //! The app also feeds the side panel: the Places list from `places.toml`
 //! (seeded from the standard folders on the first start), the mounted
 //! volumes polled through the platform, the cloud providers' rows, and the
-//! trash's contents after every operation; it mounts the `rick://` provider
-//! whose views the panel opens and tells it when they changed; it routes
-//! the name conflicts copy and move jobs ask about to the UI and back, and
-//! shows a job queued behind another on its volume as *Waiting*.
+//! trash's count after every operation; it mounts the `rick://` provider
+//! whose views the panel opens, hands it the views extensions registered
+//! and tells it when they changed; it routes the name conflicts copy and
+//! move jobs ask about to the UI and back, and shows a job queued behind
+//! another on its volume as *Waiting*. A location whose provider cannot
+//! watch it (an archive) is polled instead: its `stat` every few seconds, a
+//! change of size or time listing it again.
 //!
 //! The session (every window, pane and tab, see [`model::Session`]) is
 //! written to `session.toml` after every change, at most once per second,
@@ -67,13 +70,11 @@ mod command;
 mod places;
 mod session;
 pub mod settings;
-mod trash;
 
 pub use command::{Command, Event, TransferMode};
 pub use places::{PLACES_FILE, defaults as default_places, virtual_icon};
 pub use session::{LAYOUTS_DIR, SAVE_INTERVAL, SESSION_FILE};
 pub use settings::SETTINGS_FILE;
-pub use trash::TRASH_FILE;
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::path::{Path, PathBuf};
@@ -90,12 +91,13 @@ use model::{
     Column, JobState, Model, PaneId, Place, Session, Settings, SettingsChange, SortDir, TabId,
     Volume,
 };
-use ops::{Conflicts, PinStore, Scheduler, TrashStore};
+use ops::{Conflicts, PinStore, Scheduler};
 use platform::{Platform, TrashedItem};
 use runtime::{JobEvent, JobRunner, mpsc};
 use tracing::{debug, warn};
-use trash::TrashBridge;
-use types::{CancelToken, Entry, EntryId, EntryKind, Error, JobId, Location, Progress, VPath};
+use types::{
+    CancelToken, Entry, EntryId, EntryKind, Error, JobId, Location, Progress, ProviderId, VPath,
+};
 use vfs::Mounts;
 use vfs_local::LocalProvider;
 use vfs_rick::{RickProvider, Virtual};
@@ -199,12 +201,6 @@ enum Msg {
         generation: u64,
         result: Result<Box<dyn PreviewDoc>, Error>,
     },
-    /// Open scored a file through the previewers.
-    Opened {
-        pane: PaneId,
-        id: EntryId,
-        previewable: bool,
-    },
     /// A decorator finished a batch late.
     Decorated {
         pane: PaneId,
@@ -242,6 +238,16 @@ enum Msg {
     Schedule,
     /// The mounted volumes were enumerated.
     Volumes(Result<Vec<Volume>, Error>),
+    /// Open's job answered: the archive provider browses the file as a
+    /// location (navigate there), a previewer claims it (a viewer tab), or
+    /// neither (the system default).
+    Opened {
+        pane: PaneId,
+        tab: TabId,
+        entry: Entry,
+        location: Option<Location>,
+        previewable: bool,
+    },
     /// The trash was listed.
     Trash(Result<Vec<TrashedItem>, Error>),
     /// The cloud providers' roots were listed.
@@ -253,6 +259,8 @@ const REDECORATE_AFTER: Duration = Duration::from_millis(150);
 /// How often the mounted volumes are enumerated again, so a drive that is
 /// plugged in or a share that is mounted shows up without a user action.
 const VOLUMES_EVERY: Duration = Duration::from_secs(2);
+/// How often a location its provider cannot watch is checked for a change.
+const POLL_EVERY: Duration = Duration::from_secs(3);
 /// How long one [`App::poll`] may spend applying messages before it leaves
 /// the rest to the next one.
 const POLL_BUDGET: Duration = Duration::from_millis(8);
@@ -380,7 +388,6 @@ pub struct App {
     platform: Arc<dyn Platform>,
     ui: Arc<dyn UiHost>,
     pins: Arc<PinBridge>,
-    trash: Arc<TrashBridge>,
     conflicts: Arc<Conflicts>,
     /// The per-volume queue the copy and move jobs go through.
     scheduler: Arc<Scheduler>,
@@ -418,12 +425,13 @@ pub struct App {
     thumbnails: BTreeSet<(EntryId, u32)>,
     /// Events from start-up, delivered on the first poll.
     pending: Vec<Event>,
-    /// Writes `trash.toml`, latest snapshot wins.
-    trash_saver: mpsc::UnboundedSender<Vec<TrashedItem>>,
     /// Writes `places.toml`, latest snapshot wins.
     places_saver: mpsc::UnboundedSender<Vec<Place>>,
     /// Stops the volume poll.
     volumes_watch: CancelToken,
+    /// Rung to make every polled location check for a change now; see
+    /// [`poll_location`].
+    poke: runtime::watch::Sender<u64>,
     /// The user's home, where a tab opens when its own location is gone.
     home: Location,
     /// Writes `session.toml`, debounced.
@@ -464,19 +472,17 @@ impl App {
         } = config;
         let mut pending = Vec::new();
 
-        let mut registry = Registry::new();
+        let mut registry = Registry::with_platform(Arc::clone(&platform) as Arc<dyn Platform>);
         let mounts = Arc::new(Mounts::new());
         let trash: Arc<dyn platform::Trash> = Arc::clone(&platform) as Arc<dyn platform::Trash>;
         mounts.mount(Arc::new(LocalProvider::new(trash)));
         let pins = Arc::new(PinBridge::default());
-        let trash = Arc::new(TrashBridge::default());
         let conflicts = Conflicts::new();
         let scheduler = Scheduler::new();
         let core = ops::Core::new(
             Arc::clone(&mounts),
             Arc::clone(&platform),
             Arc::clone(&pins) as Arc<dyn PinStore>,
-            Arc::clone(&trash) as Arc<dyn TrashStore>,
             Arc::clone(&conflicts),
             Arc::clone(&scheduler),
         );
@@ -494,13 +500,17 @@ impl App {
             mounts.mount(Arc::clone(provider));
         }
         // The virtual locations go on top of every provider, since the
-        // Network and Cloud overviews list the others' roots.
+        // Network and Cloud overviews list the others' roots; the views
+        // extensions registered (the Trash view of the trash plugin) are
+        // served through it.
         let rick = Arc::new(RickProvider::new(
             Arc::clone(&platform),
             Arc::clone(&pins) as Arc<dyn vfs_rick::Favorites>,
-            Arc::clone(&trash) as Arc<dyn vfs_rick::TrashRecord>,
             Arc::clone(&mounts),
         ));
+        for (name, provider) in registry.views() {
+            rick.add_view(name, Arc::clone(provider));
+        }
         mounts.mount(Arc::clone(&rick) as Arc<dyn ext::Provider>);
         let mut cloud_providers: Vec<types::ProviderId> = mounts
             .ids()
@@ -517,10 +527,6 @@ impl App {
 
         let config_dir = config_dir.unwrap_or_else(|| platform.config_dir());
         let settings_path = config_dir.join(SETTINGS_FILE);
-        match trash::load(&config_dir.join(TRASH_FILE)) {
-            Ok(items) => trash.set(items),
-            Err(error) => warn!(%error, "trash record not read"),
-        }
         let places_path = config_dir.join(PLACES_FILE);
         let (places, seeded) = match places::load(&places_path) {
             Ok(Some(places)) => (places, false),
@@ -599,10 +605,6 @@ impl App {
         let (tx, rx) = mpsc::unbounded_channel();
         let settings_saver = settings::saver(settings_path.clone());
         let layouts = session::layouts(&layouts_dir);
-        let trash_saver = {
-            let path = config_dir.join(TRASH_FILE);
-            saver(move |items: &Vec<TrashedItem>| trash::save(&path, items))
-        };
         let places_saver = {
             let path = places_path;
             saver(move |places: &Vec<Place>| places::save(&path, places))
@@ -630,7 +632,6 @@ impl App {
             platform,
             ui,
             pins,
-            trash,
             conflicts,
             scheduler,
             waiting: BTreeSet::new(),
@@ -653,9 +654,9 @@ impl App {
             preview_generation: 0,
             thumbnails: BTreeSet::new(),
             pending,
-            trash_saver,
             places_saver,
             volumes_watch: CancelToken::new(),
+            poke: runtime::watch::channel(0).0,
             home,
             session_saver: session::Saver::new(session_path),
             last_sent: None,
@@ -994,7 +995,6 @@ impl App {
         self.dispatch(command, events);
         self.sync_panes(events);
         self.sync_preview();
-        self.drain_trash();
         self.sync_session();
     }
 
@@ -1200,7 +1200,6 @@ impl App {
                 }
                 self.model.conflict_closed(id);
             }
-            Command::RefreshTrash => self.refresh_trash(),
             Command::RefreshVolumes => self.enumerate_volumes(),
             Command::Undo => self.undo(events),
             Command::Redo => self.redo(events),
@@ -1290,7 +1289,6 @@ impl App {
         }
         if handled > 0 {
             self.sync_preview();
-            self.drain_trash();
             self.sync_session();
         }
         handled
@@ -1383,20 +1381,14 @@ impl App {
         self.pins.sync(&pinned);
     }
 
-    /// Writes the trash record when an action changed it, and shows it in
-    /// the model where the platform cannot list its trash.
-    fn drain_trash(&mut self) {
-        if !self.trash.take_dirty() {
-            return;
-        }
-        let items = self.trash.items();
-        if !self.model.trash.listed {
-            self.model.trash.set(items.clone(), false);
-        }
-        let _ = self.trash_saver.send(items);
+    /// Makes every polled location check for a change now, after an
+    /// operation that may have changed it.
+    fn poll_now(&self) {
+        self.poke.send_modify(|n| *n += 1);
     }
 
-    /// Lists the trash again, off the loop's thread.
+    /// Lists the trash again, off the loop's thread, for the Places row's
+    /// count; a change makes the Trash view list again too.
     fn refresh_trash(&mut self) {
         let platform = Arc::clone(&self.platform);
         let tx = self.mailbox.clone();
@@ -1599,6 +1591,101 @@ impl App {
         }
     }
 
+    /// Opens an entry: a folder navigates; a local file is first offered to
+    /// the archive provider, which says in an internal job whether it
+    /// browses the file as a location. Otherwise the same job reads the
+    /// file's first bytes, and a previewer that claims them opens a viewer
+    /// tab, unless `[viewer] external` names the type; the system default
+    /// takes the rest.
+    fn open(&mut self, pane: PaneId, id: EntryId, events: &mut Vec<Event>) {
+        let Some((tab_id, tab)) = self.model.active_tab(pane) else {
+            return;
+        };
+        if tab.kind == model::TabKind::Preview {
+            return;
+        }
+        let Some(entry) = tab.entry(id).cloned() else {
+            return;
+        };
+        if entry.kind == EntryKind::Dir {
+            let to = tab.location_of(&entry);
+            self.dispatch(Command::Navigate { pane, to }, events);
+            return;
+        }
+        let archive = (tab.location.provider == ProviderId::LOCAL)
+            .then(|| self.mounts.provider(ProviderId::ARCHIVE))
+            .flatten();
+        let loc = tab.location_of(&entry);
+        let previewers: Vec<Arc<dyn Previewer>> =
+            if self.model.settings.viewer.opens_externally(&entry.name) {
+                Vec::new()
+            } else {
+                self.registry.previewers().to_vec()
+            };
+        let sniff = self
+            .mounts
+            .resolve(&loc)
+            .ok()
+            .filter(|_| !previewers.is_empty());
+        if archive.is_none() && sniff.is_none() {
+            self.open_default(pane, entry, events);
+            return;
+        }
+        let tx = self.mailbox.clone();
+        let inside = Location::new(ProviderId::ARCHIVE, entry.path.clone());
+        let handle = self
+            .jobs
+            .spawn_named(format!("Open {}", entry.name), move |job| async move {
+                let location = match archive {
+                    Some(archive) => match archive.stat(&inside).await {
+                        Ok(root) if root.kind == EntryKind::Dir => Some(inside),
+                        Ok(_) => None,
+                        Err(error) => {
+                            debug!(%inside, %error, "not an archive to browse");
+                            None
+                        }
+                    },
+                    None => None,
+                };
+                let previewable = match (&location, sniff) {
+                    (None, Some(provider)) => {
+                        match ext::read_bytes(&*provider, &loc, Some(4096), &job.cancel).await {
+                            Ok(bytes) => previewers.iter().any(|p| p.score(&entry, &bytes) > 0),
+                            Err(error) => {
+                                debug!(%error, "open: no sniff; the system application takes it");
+                                false
+                            }
+                        }
+                    }
+                    _ => false,
+                };
+                tx.send(Msg::Opened {
+                    pane,
+                    tab: tab_id,
+                    entry,
+                    location,
+                    previewable,
+                });
+                Ok(())
+            });
+        self.internal.insert(handle.id);
+    }
+
+    /// Opens an entry with the system default application, through the
+    /// core action, from the pane's location.
+    fn open_default(&mut self, pane: PaneId, entry: Entry, events: &mut Vec<Event>) {
+        let Some((_, tab)) = self.model.active_tab(pane) else {
+            return;
+        };
+        let ctx = ActionCtx {
+            pane,
+            location: tab.location.clone(),
+            selection: vec![entry],
+            invoked_from: Invocation::Shortcut,
+        };
+        self.run(ext::ActionId("core.open_default"), ctx, events);
+    }
+
     /// Runs a freshly built undoable command and puts it on the undo log.
     fn apply_undoable(&mut self, command: Box<dyn UndoCommand>, events: &mut Vec<Event>) {
         match command.redo(&self.jobs) {
@@ -1773,7 +1860,6 @@ impl App {
             }),
         }
         self.drain_pins();
-        self.drain_trash();
         self.attribute(pane, events);
     }
 
@@ -1903,6 +1989,7 @@ impl App {
         let tx = self.mailbox.clone();
         let location = key.location.clone();
         let opts = key.opts;
+        let poke = self.poke.clone();
         let handle = self
             .jobs
             .spawn_named(format!("List {location}"), move |job| async move {
@@ -1929,7 +2016,23 @@ impl App {
                             }
                         });
                     }
-                    Err(error) => debug!(%location, %error, "no watch"),
+                    Err(error) => {
+                        debug!(%location, %error, "no watch; polling");
+                        let tx = tx.clone();
+                        poll_location(
+                            Arc::clone(&provider),
+                            location.clone(),
+                            job.cancel.clone(),
+                            &poke,
+                            move |change| {
+                                tx.send(Msg::Change {
+                                    pane,
+                                    generation,
+                                    change,
+                                })
+                            },
+                        );
+                    }
                 }
                 let result = async {
                     let mut stream = provider.list(&location, opts, job.cancel.clone());
@@ -2249,23 +2352,6 @@ impl App {
                     Err(error) => Event::PreviewFailed { pane, error },
                 });
             }
-            Msg::Opened {
-                pane,
-                id,
-                previewable,
-            } => {
-                if previewable {
-                    self.model.open_viewer(pane, id);
-                } else if let Some(entry) = self
-                    .model
-                    .active_tab(pane)
-                    .and_then(|(_, tab)| tab.entry(id).cloned())
-                {
-                    self.open_default(pane, entry, events);
-                }
-                self.sync_panes(events);
-                self.sync_preview();
-            }
             Msg::Decorated {
                 pane,
                 generation,
@@ -2360,25 +2446,38 @@ impl App {
                 }
             }
             Msg::Volumes(Err(error)) => debug!(%error, "volumes not enumerated"),
+            Msg::Opened {
+                pane,
+                tab,
+                entry,
+                location,
+                previewable,
+            } => {
+                // The pane may have moved on since; then the answer is moot.
+                if self.model.active_tab(pane).map(|(id, _)| id) != Some(tab) {
+                    return;
+                }
+                match location {
+                    Some(to) => {
+                        self.dispatch(Command::Navigate { pane, to }, events);
+                    }
+                    None if previewable => {
+                        self.model.open_viewer(pane, entry.id);
+                        self.sync_panes(events);
+                        self.sync_preview();
+                    }
+                    None => self.open_default(pane, entry, events),
+                }
+            }
             Msg::Trash(Ok(items)) => {
-                self.trash.prune();
                 let changed = self.model.trash.items != items || !self.model.trash.listed;
                 self.model.trash.set(items, true);
                 if changed {
                     self.rick.changed(Virtual::Trash);
                 }
             }
-            Msg::Trash(Err(Error::Unsupported(_))) => {
-                let items = self.trash.items();
-                let changed = self.model.trash.items != items;
-                self.model.trash.set(items, false);
-                if changed {
-                    self.rick.changed(Virtual::Trash);
-                }
-            }
             Msg::Trash(Err(error)) => {
                 warn!(%error, "trash not listed");
-                self.model.trash.set(self.trash.items(), false);
                 self.model.trash.error = Some(error.to_string());
             }
             Msg::Cloud(entries) => {
@@ -2560,74 +2659,6 @@ impl App {
         );
     }
 
-    /// Open: a folder navigates the pane; a file opens in a viewer tab when
-    /// a previewer claims it, which a job finds out by reading its first
-    /// bytes, and with the system's default application otherwise or when
-    /// `[viewer] external` names its type.
-    fn open(&mut self, pane: PaneId, id: EntryId, events: &mut Vec<Event>) {
-        let Some((_, tab)) = self.model.active_tab(pane) else {
-            return;
-        };
-        if tab.kind == model::TabKind::Preview {
-            return;
-        }
-        let Some(entry) = tab.entry(id).cloned() else {
-            return;
-        };
-        if entry.kind == EntryKind::Dir {
-            let to = tab.location_of(&entry);
-            let before = self.selection_len(pane);
-            if self.model.navigate(pane, to).is_some() {
-                Self::selection_cleared(pane, before, events);
-            }
-            return;
-        }
-        let loc = tab.location_of(&entry);
-        let provider = self.mounts.resolve(&loc).ok();
-        let externally = self.model.settings.viewer.opens_externally(&entry.name);
-        let (Some(provider), false, false) =
-            (provider, externally, self.registry.previewers().is_empty())
-        else {
-            self.open_default(pane, entry, events);
-            return;
-        };
-        let previewers: Vec<Arc<dyn Previewer>> = self.registry.previewers().to_vec();
-        let tx = self.mailbox.clone();
-        let handle = self
-            .jobs
-            .spawn_named(format!("Open {}", entry.name), move |job| async move {
-                let previewable =
-                    match ext::read_bytes(&*provider, &loc, Some(4096), &job.cancel).await {
-                        Ok(sniff) => previewers.iter().any(|p| p.score(&entry, &sniff) > 0),
-                        Err(error) => {
-                            debug!(%error, "open: no sniff; the system application takes it");
-                            false
-                        }
-                    };
-                tx.send(Msg::Opened {
-                    pane,
-                    id,
-                    previewable,
-                });
-                Ok(())
-            });
-        self.internal.insert(handle.id);
-    }
-
-    /// Runs `core.open_default` on one entry of the pane.
-    fn open_default(&mut self, pane: PaneId, entry: Entry, events: &mut Vec<Event>) {
-        let Some((_, tab)) = self.model.active_tab(pane) else {
-            return;
-        };
-        let ctx = ActionCtx {
-            pane,
-            location: tab.location.clone(),
-            selection: vec![entry],
-            invoked_from: Invocation::Shortcut,
-        };
-        self.run(ext::ActionId("core.open_default"), ctx, events);
-    }
-
     fn list_done(
         &mut self,
         pane: PaneId,
@@ -2767,9 +2798,11 @@ impl App {
                 events.push(Event::JobDone { id, result });
                 if let Some(pane) = self.pane_jobs.remove(&id) {
                     self.refresh(pane);
-                    // An operation may have trashed, restored or emptied.
+                    // An operation may have trashed, restored or emptied:
+                    // the Places row's count and the Trash view follow, and
+                    // every pane on a polled location checks again now.
                     self.refresh_trash();
-                    self.drain_trash();
+                    self.poll_now();
                 }
             }
         }
@@ -2829,6 +2862,46 @@ impl App {
     }
 }
 
+/// Polls a location its provider cannot watch: its `stat` every
+/// [`POLL_EVERY`], and at once when `poke` is rung, reporting
+/// [`FsChange::Rescan`] through `report` when the entry's size or times
+/// changed (a view counts its items in `size`; an archive is its file).
+/// Stops with `cancel`, or when `report` says the loop is gone.
+fn poll_location(
+    provider: Arc<dyn ext::Provider>,
+    location: Location,
+    cancel: CancelToken,
+    poke: &runtime::watch::Sender<u64>,
+    report: impl Fn(FsChange) -> bool + Send + 'static,
+) {
+    let mut poke = poke.subscribe();
+    runtime::handle().spawn(async move {
+        let marker = |entry: &Entry| (entry.size, entry.modified, entry.created);
+        let mut last = provider.stat(&location).await.ok().map(|e| marker(&e));
+        loop {
+            tokio::select! {
+                () = cancel.cancelled() => break,
+                () = tokio::time::sleep(POLL_EVERY) => {}
+                changed = poke.changed() => {
+                    if changed.is_err() {
+                        break;
+                    }
+                }
+            }
+            if cancel.is_cancelled() {
+                break;
+            }
+            let now = provider.stat(&location).await.ok().map(|e| marker(&e));
+            if now != last {
+                last = now;
+                if !report(FsChange::Rescan) {
+                    break;
+                }
+            }
+        }
+    });
+}
+
 /// A writer that saves every snapshot sent to it, in order, off the
 /// caller's thread; only the latest of a burst is written.
 fn saver<T, F>(write: F) -> mpsc::UnboundedSender<T>
@@ -2880,9 +2953,11 @@ pub fn top_of(path: &VPath) -> VPath {
 }
 
 /// Puts every tab of a restored session somewhere that exists: a location
-/// whose provider is not mounted opens at Home, a local folder that is gone
-/// opens at its nearest existing ancestor, each with a note for the status
-/// line. Locations on other providers are taken as they are.
+/// whose provider is not mounted opens at Home; a local folder that is gone
+/// opens at its nearest existing
+/// ancestor, and so does an archive location whose archive is gone, as a
+/// local folder; each with a note for the status line. Locations on other
+/// providers are taken as they are.
 fn repair(mounts: &Mounts, home: &Location, session: &mut Session) {
     for tab in session
         .windows
@@ -2898,13 +2973,19 @@ fn repair(mounts: &Mounts, home: &Location, session: &mut Session) {
             tab.location = home.clone();
             continue;
         }
-        if tab.location.provider != vfs_local::PROVIDER_ID {
+        let archive = tab.location.provider == ProviderId::ARCHIVE;
+        if tab.location.provider != ProviderId::LOCAL && !archive {
             continue;
         }
         let Ok(path) = platform::paths::to_path(&tab.location.path) else {
             continue;
         };
-        if path.is_dir() {
+        if path.is_dir() && !archive {
+            continue;
+        }
+        if archive && path.ancestors().any(std::path::Path::is_file) {
+            // The archive is still there; what is inside it is its own
+            // listing's business.
             continue;
         }
         let mut ancestor = path.parent();

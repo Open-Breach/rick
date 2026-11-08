@@ -3,8 +3,8 @@
 use std::sync::Arc;
 
 use ext::{
-    Action, ActionCtx, ActionGroup, ActionId, ActionOutcome, Availability, CopyOptions, Key,
-    Modifiers, RemoveMode, Shortcut, UiHost, UndoCommand,
+    Action, ActionCtx, ActionGroup, ActionId, ActionOutcome, Availability, Capabilities,
+    CopyOptions, Key, Modifiers, RemoveMode, Shortcut, UiHost, UndoCommand,
 };
 use runtime::{JobCtx, JobRunner};
 use types::{EntryKind, Error, Location, Progress};
@@ -13,9 +13,7 @@ use vfs::Mounts;
 use crate::clipboard::{ClipMode, Clipboard};
 use crate::conflict::{Conflicts, Landing, Policy};
 use crate::schedule::{self, Scheduler};
-use crate::{
-    State, describe, file_name, inside, location_of, needs_entries, needs_writable_location,
-};
+use crate::{State, describe, file_name, inside, location_of, needs_entries};
 
 /// Puts the selection on the clipboard for copying.
 pub(crate) struct Copy(pub(crate) Arc<State>);
@@ -109,9 +107,11 @@ impl Action for Paste {
         })
     }
     fn availability(&self, ctx: &ActionCtx) -> Availability {
-        if needs_writable_location(ctx) == Availability::Hidden {
-            Availability::Hidden
-        } else if self
+        match self.0.needs(&ctx.location, Capabilities::WRITE) {
+            Availability::Enabled => {}
+            hidden => return hidden,
+        }
+        if self
             .0
             .clipboard()
             .as_ref()
@@ -417,7 +417,10 @@ impl Action for Duplicate {
         })
     }
     fn availability(&self, ctx: &ActionCtx) -> Availability {
-        needs_entries(ctx)
+        match self.0.needs(&ctx.location, Capabilities::WRITE) {
+            Availability::Enabled => needs_entries(ctx),
+            hidden => hidden,
+        }
     }
     fn run(
         &self,

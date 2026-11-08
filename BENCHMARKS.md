@@ -292,6 +292,21 @@ twice that until the bench workflow measures them.
 | macOS | 100 ms | — | — |
 | Windows | 100 ms | — | — |
 
+### `archive-zip-first` — the first batch of a 10 000-entry zip
+
+Issue 20: the archive provider reading a 10 000-entry zip's central
+directory, building its index and handing the root listing's first batch to
+the stream, measured from `list` to the batch's arrival with a cold cache;
+the issue asks for 50 ms. Test: `a_10_000_entry_zip_lists_its_first_batch_within_50_ms`
+in `providers.rs`. macOS and Windows carry a provisional target of twice
+that until the bench workflow measures them.
+
+| OS | Target | Median | Worst |
+| --- | --- | --- | --- |
+| Linux | 50 ms | — | — |
+| macOS | 100 ms | — | — |
+| Windows | 100 ms | — | — |
+
 ### `tree-first` — the tree view's first children on the 200k fixture
 
 Spec target: 50 ms for the first screen after expanding a folder (close-out
@@ -350,3 +365,75 @@ also runs in the ordinary test suite.
 | Linux | 5 ms | 0.6 ms | 1.5 ms |
 | macOS | 15 ms | 6.2 ms | 7.5 ms |
 | Windows | 5 ms | 2.1 ms | 2.4 ms |
+
+### `office-convert` — a three-page DOCX converted by LibreOffice and its first page rendered
+
+Issue 18's target: 5 s when LibreOffice is present. Test:
+`a_docx_converts_within_5_s_when_libreoffice_is_present` in
+`previewers.rs`, measured on Linux only (CI installs LibreOffice there;
+macOS and Windows skip with a note). The first conversion of a fresh
+LibreOffice profile is paid once before the runs. Not yet measured by the
+bench workflow; the local development machine converted the fixture in
+1.2–1.7 s.
+
+| OS | Target | Median | Worst |
+| --- | --- | --- | --- |
+| Linux | 5 s | — | — |
+| macOS | 5 s | — | — |
+| Windows | 5 s | — | — |
+
+### `waveform` — a 3-minute MP3 opened and its waveform drawn
+
+Issue 18's target: 500 ms, from opening the file to the waveform picture
+(the Discoverer, the preroll and the decode of the whole file to peaks).
+Test: `an_mp4_plays_and_seeks_and_a_3_minute_mp3_gets_its_waveform_within_500_ms`
+in `previewers.rs`, with the `gstreamer` feature (Linux CI). Not yet
+measured by the bench workflow; the decode alone took 315–325 ms on the
+local development machine.
+
+| OS | Target | Median | Worst |
+| --- | --- | --- | --- |
+| Linux | 500 ms | — | — |
+| macOS | 500 ms | — | — |
+| Windows | 500 ms | — | — |
+
+### `zip-first` — the first screen of a 10 000-entry zip
+
+Issue 18's target: 100 ms from opening the file to the first rows of the
+listing. Test: `a_10000_entry_zip_lists_its_first_screen_within_100_ms` in
+`previewers.rs`. Not yet measured by the bench workflow.
+
+| OS | Target | Median | Worst |
+| --- | --- | --- | --- |
+| Linux | 100 ms | — | — |
+| macOS | 100 ms | — | — |
+| Windows | 100 ms | — | — |
+
+### `csv-window` — a screen of rows anywhere in a 1 000 000-row CSV
+
+Issue 18 asks the CSV grid to scroll at the frame budget; what the grid
+costs a scrolling frame is the window of rows it asks for, so the worst of
+fifty 60-row windows over the file is held to 16.6 ms. Test:
+`a_million_row_csv_answers_any_window_within_a_frame` in `previewers.rs`,
+which also prints the time to open and index the file. Not yet measured by
+the bench workflow.
+
+| OS | Target | Median | Worst |
+| --- | --- | --- | --- |
+| Linux | 16.6 ms | — | — |
+| macOS | 16.6 ms | — | — |
+| Windows | 16.6 ms | — | — |
+
+### `previewers-frame` — worst UI frame while the previewer plugins decode
+
+Spec target: 16.6 ms (no UI frame over the budget while a decode runs
+elsewhere). Test: `no_ui_frame_over_16_ms_while_the_previewers_decode` in
+`previewers.rs`: every fixture of the milestone is selected in turn in the
+preview pane, LibreOffice and GStreamer included where they are. Not yet
+measured by the bench workflow.
+
+| OS | Target | Median | Worst |
+| --- | --- | --- | --- |
+| Linux | 16.6 ms | — | — |
+| macOS | 16.6 ms | — | — |
+| Windows | 16.6 ms | — | — |
