@@ -29,7 +29,7 @@ pub fn fat12_image() -> Vec<u8> {
     b[14..16].copy_from_slice(&1u16.to_le_bytes()); // reserved sectors
     b[16] = 2; // FATs
     b[17..19].copy_from_slice(&16u16.to_le_bytes()); // root entries
-    b[19..21].copy_from_slice(&(SECTORS as u16).to_le_bytes());
+    b[19..21].copy_from_slice(&u16::try_from(SECTORS).unwrap_or(0).to_le_bytes());
     b[21] = 0xF8; // media
     b[22..24].copy_from_slice(&1u16.to_le_bytes()); // sectors per FAT
     b[24..26].copy_from_slice(&32u16.to_le_bytes()); // sectors per track
@@ -84,12 +84,13 @@ pub fn fat12_image() -> Vec<u8> {
 /// Sets a 12-bit FAT entry.
 fn fat12_set(fat: &mut [u8], cluster: u16, value: u16) {
     let at = usize::from(cluster) + usize::from(cluster) / 2;
-    if cluster % 2 == 0 {
-        fat[at] = (value & 0xFF) as u8;
-        fat[at + 1] = (fat[at + 1] & 0xF0) | ((value >> 8) & 0x0F) as u8;
+    let [low, high] = value.to_le_bytes();
+    if cluster.is_multiple_of(2) {
+        fat[at] = low;
+        fat[at + 1] = (fat[at + 1] & 0xF0) | (high & 0x0F);
     } else {
-        fat[at] = (fat[at] & 0x0F) | ((value << 4) & 0xF0) as u8;
-        fat[at + 1] = (value >> 4) as u8;
+        fat[at] = (fat[at] & 0x0F) | (low << 4);
+        fat[at + 1] = (high << 4) | (low >> 4);
     }
 }
 
@@ -160,6 +161,7 @@ pub fn crc32c(bytes: &[u8]) -> u32 {
 }
 
 const MIB: usize = 1 << 20;
+const MIB_U32: u32 = 1 << 20;
 
 /// `raw` (at most 1 MiB, a multiple of 512) as a VHDX: the file type
 /// identifier, two headers, two region tables, an empty log, the metadata
@@ -167,7 +169,7 @@ const MIB: usize = 1 << 20;
 /// block allocation table with one present block, and that block. 5 MiB.
 #[must_use]
 pub fn vhdx(raw: &[u8]) -> Vec<u8> {
-    assert!(raw.len() <= MIB && raw.len() % SECTOR == 0);
+    assert!(raw.len() <= MIB && raw.len().is_multiple_of(SECTOR));
     let mut out = vec![0u8; 5 * MIB];
     // The file type identifier.
     out[0..8].copy_from_slice(b"vhdxfile");
@@ -182,7 +184,7 @@ pub fn vhdx(raw: &[u8]) -> Vec<u8> {
     header[0x20..0x30].copy_from_slice(&[0x33; 16]); // data write guid
     // The log guid stays zero: no log to replay.
     header[0x42..0x44].copy_from_slice(&1u16.to_le_bytes()); // version
-    header[0x44..0x48].copy_from_slice(&(MIB as u32).to_le_bytes()); // log length
+    header[0x44..0x48].copy_from_slice(&MIB_U32.to_le_bytes()); // log length
     header[0x48..0x50].copy_from_slice(&(MIB as u64).to_le_bytes()); // log offset
     let crc = crc32c(&header);
     header[4..8].copy_from_slice(&crc.to_le_bytes());
@@ -212,15 +214,27 @@ pub fn vhdx(raw: &[u8]) -> Vec<u8> {
         let at = 0x10 + 0x20 * i;
         region[at..at + 16].copy_from_slice(guid);
         region[at + 0x10..at + 0x18].copy_from_slice(&offset.to_le_bytes());
-        region[at + 0x18..at + 0x1C].copy_from_slice(&(MIB as u32).to_le_bytes());
+        region[at + 0x18..at + 0x1C].copy_from_slice(&MIB_U32.to_le_bytes());
         region[at + 0x1C..at + 0x20].copy_from_slice(&1u32.to_le_bytes()); // required
     }
     let crc = crc32c(&region);
     region[4..8].copy_from_slice(&crc.to_le_bytes());
     out[192 * 1024..256 * 1024].copy_from_slice(&region);
     out[256 * 1024..320 * 1024].copy_from_slice(&region);
-    // The metadata region at 2 MiB: the table, then the items from 64 KiB in.
-    let meta = 2 * MIB;
+    vhdx_metadata(&mut out, 2 * MIB, raw.len());
+    // The BAT at 3 MiB: one payload block, fully present, at 4 MiB.
+    let bat = 3 * MIB;
+    let entry: u64 = (4u64 << 20) | 6;
+    out[bat..bat + 8].copy_from_slice(&entry.to_le_bytes());
+    // The block.
+    out[4 * MIB..4 * MIB + raw.len()].copy_from_slice(raw);
+    out
+}
+
+/// Writes the VHDX metadata region at `meta`: the table, then the items
+/// from 64 KiB in: file parameters (1 MiB blocks), the virtual disk size,
+/// the disk id, the logical and physical sector sizes.
+fn vhdx_metadata(out: &mut [u8], meta: usize, virtual_size: usize) {
     out[meta..meta + 8].copy_from_slice(b"metadata");
     let items: [([u8; 16], Vec<u8>, u32); 5] = [
         // File parameters: block size 1 MiB, no flags.
@@ -229,7 +243,7 @@ pub fn vhdx(raw: &[u8]) -> Vec<u8> {
                 0x37, 0x67, 0xa1, 0xca, 0x36, 0xfa, 0x43, 0x4d, 0xb3, 0xb6, 0x33, 0xf0, 0xaa, 0x44,
                 0xe7, 0x6b,
             ],
-            [(MIB as u32).to_le_bytes(), 0u32.to_le_bytes()].concat(),
+            [MIB_U32.to_le_bytes(), 0u32.to_le_bytes()].concat(),
             4,
         ),
         // Virtual disk size.
@@ -238,7 +252,7 @@ pub fn vhdx(raw: &[u8]) -> Vec<u8> {
                 0x24, 0x42, 0xa5, 0x2f, 0x1b, 0xcd, 0x76, 0x48, 0xb2, 0x11, 0x5d, 0xbe, 0xd8, 0x3b,
                 0xf4, 0xb8,
             ],
-            (raw.len() as u64).to_le_bytes().to_vec(),
+            (virtual_size as u64).to_le_bytes().to_vec(),
             6,
         ),
         // Virtual disk id.
@@ -269,25 +283,20 @@ pub fn vhdx(raw: &[u8]) -> Vec<u8> {
             6,
         ),
     ];
-    out[meta + 10..meta + 12].copy_from_slice(&(items.len() as u16).to_le_bytes());
+    out[meta + 10..meta + 12]
+        .copy_from_slice(&u16::try_from(items.len()).unwrap_or(0).to_le_bytes());
     let mut data_at = 64 * 1024u32;
     for (i, (guid, data, flags)) in items.iter().enumerate() {
         let at = meta + 32 + 32 * i;
         out[at..at + 16].copy_from_slice(guid);
         out[at + 0x10..at + 0x14].copy_from_slice(&data_at.to_le_bytes());
-        out[at + 0x14..at + 0x18].copy_from_slice(&(data.len() as u32).to_le_bytes());
+        out[at + 0x14..at + 0x18]
+            .copy_from_slice(&u32::try_from(data.len()).unwrap_or(0).to_le_bytes());
         out[at + 0x18..at + 0x1C].copy_from_slice(&flags.to_le_bytes());
         let start = meta + data_at as usize;
         out[start..start + data.len()].copy_from_slice(data);
         data_at += 64;
     }
-    // The BAT at 3 MiB: one payload block, fully present, at 4 MiB.
-    let bat = 3 * MIB;
-    let entry: u64 = (4u64 << 20) | 6;
-    out[bat..bat + 8].copy_from_slice(&entry.to_le_bytes());
-    // The block.
-    out[4 * MIB..4 * MIB + raw.len()].copy_from_slice(raw);
-    out
 }
 
 /// `raw` (at most 64 KiB) as a QCOW2 image, version 3 with 64 KiB

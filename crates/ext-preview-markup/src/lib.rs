@@ -1,6 +1,6 @@
 //! The three structured text formats, rendered: Markdown and HTML as a
 //! [`Document`] of headings, paragraphs, lists, code, tables, links and
-//! images ([`markdown`], [`html`]), CSV and TSV as a virtualised [`Grid`]
+//! images ([`markdown`], [`html`]), CSV and TSV as a virtualised [`Grid`](ext::Grid)
 //! ([`csv`]). Each previewer renders by default and carries the *Rendered*
 //! toggle ([`RENDERED`]), on for every newly shown file, to the source: the
 //! highlighted text of `ext-preview-code` for Markdown and HTML, the raw
@@ -292,7 +292,7 @@ impl PreviewDoc for MarkupDoc {
     fn status(&self) -> Vec<String> {
         let mut status = self.source.status();
         if let Some(first) = status.first_mut() {
-            *first = self.markup.name().to_owned();
+            self.markup.name().clone_into(first);
         }
         status
     }

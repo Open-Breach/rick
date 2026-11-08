@@ -85,6 +85,7 @@ impl std::fmt::Debug for Resolver {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Resolver")
             .field("platform", &self.platform.is_some())
+            .field("locations", &self.locations)
             .field("loaded", &lock(&self.cache).is_some())
             .finish()
     }

@@ -244,24 +244,21 @@ pub fn visit(
 ) -> Result<Facts, Error> {
     let library = resolver.library()?;
     let mut facts = Facts::default();
-    match container_handler(format) {
-        Some(handler) => {
-            let container = library.format(handler).ok_or_else(|| {
-                ext_error_text(format!(
-                    "the 7-Zip library at {} has no {handler} handler",
-                    library.path().display()
-                ))
-            })?;
-            let archive = library.open_file(path, container).map_err(library_error)?;
-            walk(&library, &archive, b"", 0, &mut facts, visit)?;
-        }
-        None => {
-            let stream = Stream::file(path).map_err(library_error)?;
-            if open_inside(&library, &stream, ON_A_DISK, b"", 0, &mut facts, visit)?.is_none() {
-                return Err(ext_error_text(
-                    "no partition table or file system the 7-Zip library knows".to_owned(),
-                ));
-            }
+    if let Some(handler) = container_handler(format) {
+        let container = library.format(handler).ok_or_else(|| {
+            ext_error_text(format!(
+                "the 7-Zip library at {} has no {handler} handler",
+                library.path().display()
+            ))
+        })?;
+        let archive = library.open_file(path, container).map_err(library_error)?;
+        walk(&library, &archive, b"", 0, &mut facts, visit)?;
+    } else {
+        let stream = Stream::file(path).map_err(library_error)?;
+        if open_inside(&library, &stream, ON_A_DISK, b"", 0, &mut facts, visit)?.is_none() {
+            return Err(ext_error_text(
+                "no partition table or file system the 7-Zip library knows".to_owned(),
+            ));
         }
     }
     Ok(facts)

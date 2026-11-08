@@ -216,7 +216,7 @@ impl Format {
             Self::Tar(Some(_)) => "compressed tar",
             Self::SevenZ => "7z",
             Self::Rar => "RAR",
-            Self::Image => "disc image",
+            Self::Image | Self::Disk(ImageFormat::Iso) => "disc image",
             Self::Disk(ImageFormat::Img) => "raw disk image",
             Self::Disk(ImageFormat::Dmg) => "DMG image",
             Self::Disk(ImageFormat::Vhd) => "VHD image",
@@ -224,7 +224,6 @@ impl Format {
             Self::Disk(ImageFormat::Vmdk) => "VMDK image",
             Self::Disk(ImageFormat::Vdi) => "VDI image",
             Self::Disk(ImageFormat::Qcow2) => "QCOW2 image",
-            Self::Disk(ImageFormat::Iso) => "disc image",
             Self::Single(_) => "compressed file",
         }
     }
