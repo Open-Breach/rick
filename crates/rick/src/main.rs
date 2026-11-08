@@ -66,6 +66,8 @@ fn built_ins() -> Vec<Arc<dyn ext::Extension>> {
     extensions.push(Arc::new(ext_search_baloo::BalooExtension::new()));
     #[cfg(feature = "vfs-sftp")]
     extensions.push(Arc::new(ext_vfs_sftp::SftpExtension::new()));
+    #[cfg(feature = "ssh")]
+    extensions.push(Arc::new(ext_ssh::SshExtension::new()));
     #[cfg(feature = "vfs-s3")]
     extensions.push(Arc::new(ext_vfs_s3::S3Extension::new()));
     #[cfg(feature = "vfs-azure")]

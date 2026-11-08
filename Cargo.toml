@@ -40,6 +40,7 @@ ext-search-tracker = { path = "crates/ext-search-tracker" }
 ext-search-baloo = { path = "crates/ext-search-baloo" }
 ext-svn = { path = "crates/ext-svn" }
 ext-vfs-sftp = { path = "crates/ext-vfs-sftp" }
+ext-ssh = { path = "crates/ext-ssh" }
 ext-vfs-s3 = { path = "crates/ext-vfs-s3" }
 ext-vfs-azure = { path = "crates/ext-vfs-azure" }
 ext-vfs-gcs = { path = "crates/ext-vfs-gcs" }
@@ -135,6 +136,8 @@ tokio-util = { version = "0.7", default-features = false, features = ["io"] }
 bytes = "1"
 hmac = "0.12"
 sha2 = "0.10"
+# HMAC-SHA1 for the hashed entries of `known_hosts` in the SSH plugin.
+sha1 = { version = "0.10", default-features = false }
 hex = "0.4"
 base64 = "0.22"
 percent-encoding = "2"
