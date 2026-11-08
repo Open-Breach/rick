@@ -330,13 +330,13 @@ impl CsvDoc {
         } else {
             (1..=first.len()).map(|n| format!("Column {n}")).collect()
         };
-        let fallback_end = text
-            .char_indices()
-            .map(|(i, _)| i)
-            .take_while(|&i| i <= FALLBACK_TEXT)
-            .last()
-            .unwrap_or(0)
-            .min(text.len());
+        // The raw text up to the fallback limit, cut at a character
+        // boundary: the source the toggle shows and the text layer Copy
+        // reads, the whole file when it fits.
+        let mut fallback_end = text.len().min(FALLBACK_TEXT);
+        while !text.is_char_boundary(fallback_end) {
+            fallback_end -= 1;
+        }
         let fallback = text[..fallback_end].to_owned();
         Self {
             table: Arc::new(Table {

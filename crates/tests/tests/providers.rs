@@ -16,8 +16,8 @@ use std::time::{Duration, Instant};
 
 use app::{App, Command, Config, Event, TransferMode};
 use ext::{
-    ActionId, Capabilities, Frame, Invocation, Level, ListOptions, Provider, RenderRequest, UiHost,
-    WriteOptions,
+    ActionId, Capabilities, Content, Frame, Invocation, Level, ListOptions, Provider,
+    RenderRequest, UiHost, WriteOptions,
 };
 use ext_vfs_archive::ArchiveProvider;
 use futures::StreamExt;
@@ -67,6 +67,10 @@ struct Driver {
 impl Driver {
     fn new(start: &Path, extensions: Vec<Arc<dyn ext::Extension>>) -> Self {
         let fake = Arc::new(Fake::new().unwrap_or_else(|e| panic!("{e}")));
+        Self::with_fake(fake, start, extensions)
+    }
+
+    fn with_fake(fake: Arc<Fake>, start: &Path, extensions: Vec<Arc<dyn ext::Extension>>) -> Self {
         let ui = Arc::new(Scripted::default());
         let app = App::new(Config {
             platform: fake.clone(),
@@ -151,6 +155,33 @@ impl Driver {
             pane: self.pane,
             change: SelectionChange::Set(vec![id]),
         })
+    }
+
+    /// The preview's outcome for the selected file: the document, or the
+    /// error the pane shows; waits for the preview job when the selection
+    /// settled before it answered.
+    fn preview(&mut self, name: &str) -> Result<Box<dyn ext::PreviewDoc>, types::Error> {
+        let mut events = self.select(name);
+        let deadline = Instant::now() + Duration::from_secs(30);
+        loop {
+            let mut outcome = None;
+            for event in events.drain(..) {
+                match event {
+                    Event::PreviewReady { doc, .. } => outcome = Some(Ok(doc)),
+                    Event::PreviewFailed { error, .. } => outcome = Some(Err(error)),
+                    _ => {}
+                }
+            }
+            if let Some(outcome) = outcome {
+                return outcome;
+            }
+            assert!(Instant::now() < deadline, "no preview of {name}");
+            runtime::block_on(async {
+                let _ =
+                    tokio::time::timeout(Duration::from_millis(100), self.app.tick(&mut events))
+                        .await;
+            });
+        }
     }
 
     /// The text the preview rendered for the selected file.
@@ -639,4 +670,237 @@ fn both_plugins_load_through_the_host() {
     );
     drop(app);
     drop(host);
+}
+
+/// The 7-Zip library for the disk-image tests: the one CI put in
+/// `RICK_SEVENZIP_DIR` (test infrastructure; the plugins read no
+/// environment variable), else the platform's usual locations; `None` with
+/// a note otherwise, a failure where CI requires it.
+fn sevenzip_library() -> Option<PathBuf> {
+    let found = std::env::var_os("RICK_SEVENZIP_DIR")
+        .map(|dir| PathBuf::from(dir).join(platform::sevenzip::LIBRARY_FILE))
+        .into_iter()
+        .chain(platform::sevenzip::usual_locations())
+        .find(|p| p.is_file());
+    if found.is_none() {
+        eprintln!("no 7-Zip library on this machine; the disk image tests are skipped");
+        assert!(
+            std::env::var_os("RICK_REQUIRE_SEVENZIP").is_none(),
+            "the 7-Zip library is required here but was not found"
+        );
+    }
+    found
+}
+
+/// Names the library in the archive plugin's setting, as a user who
+/// browsed to it would have, so the plugins registered through the app
+/// find it wherever CI put it.
+fn name_the_library(config_dir: &Path, library: &Path) {
+    fs::create_dir_all(config_dir).unwrap_or_else(|e| panic!("{e}"));
+    fs::write(
+        config_dir.join("vfs-archive.toml"),
+        format!(
+            "{} = {:?}\n",
+            ext_vfs_archive::LIBRARY_SETTING,
+            library.display().to_string()
+        ),
+    )
+    .unwrap_or_else(|e| panic!("{e}"));
+}
+
+/// The archive provider and previewer, with the text previewer for the
+/// files inside.
+fn archive_plugins() -> Vec<Arc<dyn ext::Extension>> {
+    vec![
+        Arc::new(ext_vfs_archive::ArchiveExtension::new()),
+        Arc::new(ext_preview_archive::ArchivePreview::new()),
+        Arc::new(ext_preview_text::TextPreview::new()),
+    ]
+}
+
+/// Issue 51: a zip, an ISO, a VHDX and a QCOW2 each list their contents in
+/// the pane when selected and open as read-only locations on Enter. (The
+/// `archives.on_open = "system"` branch is issue 50's setting and is
+/// tested with it.)
+#[test]
+fn disk_images_list_in_the_pane_on_selection_and_open_as_read_only_locations_on_enter() {
+    use ext_vfs_archive::fixtures as disks;
+    let Some(library) = sevenzip_library() else {
+        return;
+    };
+    let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+    let fat = disks::fat12_image();
+    let mut zip = Vec::new();
+    {
+        let mut writer = zip::ZipWriter::new(std::io::Cursor::new(&mut zip));
+        let options = zip::write::SimpleFileOptions::default();
+        writer
+            .start_file("docs/readme.txt", options)
+            .unwrap_or_else(|e| panic!("{e}"));
+        writer
+            .write_all(b"in the zip")
+            .unwrap_or_else(|e| panic!("{e}"));
+        writer
+            .start_file("top.txt", options)
+            .unwrap_or_else(|e| panic!("{e}"));
+        writer.write_all(b"top").unwrap_or_else(|e| panic!("{e}"));
+        writer.finish().unwrap_or_else(|e| panic!("{e}"));
+    }
+    fs::write(dir.path().join("files.zip"), &zip).unwrap_or_else(|e| panic!("{e}"));
+    iso(&dir.path().join("disc.iso"));
+    fs::write(dir.path().join("disk.vhdx"), disks::vhdx(&fat)).unwrap_or_else(|e| panic!("{e}"));
+    fs::write(dir.path().join("disk.qcow2"), disks::qcow2(&fat)).unwrap_or_else(|e| panic!("{e}"));
+    // (name, the root's names, a file inside and its contents)
+    let fixtures: [(&str, &[&str], &str, &[u8]); 4] = [
+        ("files.zip", &["docs", "top.txt"], "top.txt", b"top"),
+        ("disc.iso", &["README", "docs"], "README", b"top"),
+        (
+            "disk.vhdx",
+            &["DOCS", "HELLO.TXT"],
+            "HELLO.TXT",
+            disks::HELLO,
+        ),
+        (
+            "disk.qcow2",
+            &["DOCS", "HELLO.TXT"],
+            "HELLO.TXT",
+            disks::HELLO,
+        ),
+    ];
+    let fake = Arc::new(Fake::new().unwrap_or_else(|e| panic!("{e}")));
+    name_the_library(&fake.config_dir(), &library);
+    let mut d = Driver::with_fake(fake, dir.path(), archive_plugins());
+    for (name, root, file, contents) in fixtures {
+        // Selected: the file list in the pane.
+        let doc = d.preview(name).unwrap_or_else(|e| panic!("{name}: {e}"));
+        let Some(Content::Listing(listing)) = doc.content() else {
+            panic!("{name}: no listing in the pane");
+        };
+        let mut top: Vec<&str> = listing
+            .entries
+            .iter()
+            .filter(|e| e.depth == 0)
+            .map(|e| e.name.as_str())
+            .collect();
+        top.sort_unstable();
+        assert_eq!(top, root, "{name}");
+        // Enter: the image is a read-only location of the archive provider.
+        let id = d.id_of(name);
+        d.step(Command::Open { pane: d.pane, id });
+        assert_eq!(d.tab().location.provider, ProviderId::ARCHIVE, "{name}");
+        assert_eq!(d.names(), root, "{name}");
+        let provider = d
+            .app
+            .mounts()
+            .provider(ProviderId::ARCHIVE)
+            .unwrap_or_else(|| panic!("archive provider"));
+        assert!(
+            !provider
+                .capabilities(&d.tab().location)
+                .contains(ext::Capabilities::WRITE)
+                || name == "files.zip",
+            "{name}: read-only"
+        );
+        assert_eq!(d.preview_text(file).as_bytes(), contents, "{name}");
+        // Back to the folder for the next one.
+        d.step(Command::Navigate {
+            pane: d.pane,
+            to: local(dir.path()),
+        });
+    }
+}
+
+/// An extension that registers the archive previewer over a resolver of
+/// the test's choosing: a machine where the library is where the test
+/// says, or nowhere.
+struct PreviewerWith(ext::Manifest, Arc<ext_vfs_archive::Resolver>);
+
+impl ext::Extension for PreviewerWith {
+    fn manifest(&self) -> &ext::Manifest {
+        &self.0
+    }
+    fn register(&self, reg: &mut ext::Registry) -> Result<(), types::Error> {
+        reg.previewer(Arc::new(ext_preview_archive::ArchivePreviewer::new(
+            Arc::clone(&self.1),
+        )));
+        Ok(())
+    }
+}
+
+/// Issue 51: with the 7-Zip library moved away, selecting a VHDX produces
+/// the in-pane instructions (the library's name, how to install it, the
+/// setting); browsing to the library stores its path and the listing
+/// appears.
+#[test]
+fn a_vhdx_without_the_library_shows_the_instructions_and_browsing_to_it_lists() {
+    use ext_vfs_archive::fixtures as disks;
+    let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+    fs::write(
+        dir.path().join("disk.vhdx"),
+        disks::vhdx(&disks::fat12_image()),
+    )
+    .unwrap_or_else(|e| panic!("{e}"));
+    let fake = Arc::new(Fake::new().unwrap_or_else(|e| panic!("{e}")));
+    let nowhere = dir.path().join("no-library-here");
+    let resolver = Arc::new(ext_vfs_archive::Resolver::with_locations(
+        Some(fake.clone()),
+        vec![nowhere.join(platform::sevenzip::LIBRARY_FILE)],
+    ));
+    let previewer = PreviewerWith(
+        ext::Manifest {
+            id: types::ExtId("test-preview-archive"),
+            name: "Archive preview over a chosen resolver",
+            version: ext::Version::new(0, 1, 0),
+            api_version: ext::API_VERSION,
+            requires: ext::Capabilities::empty(),
+            points: ext::Points::PREVIEWER,
+            platforms: ext::Platforms::ALL,
+        },
+        Arc::clone(&resolver),
+    );
+    // A second file, so selecting the image is a change the pane follows.
+    fs::write(dir.path().join("notes.txt"), "plain").unwrap_or_else(|e| panic!("{e}"));
+    let mut d = Driver::with_fake(fake.clone(), dir.path(), vec![Arc::new(previewer)]);
+    d.select("notes.txt");
+    let error = d
+        .preview("disk.vhdx")
+        .err()
+        .unwrap_or_else(|| panic!("listed without the library"));
+    let message = error.to_string();
+    assert!(message.contains("7-Zip library"), "{message}");
+    assert!(
+        message.contains(platform::sevenzip::LIBRARY_FILE),
+        "{message}"
+    );
+    assert!(
+        message.contains(platform::sevenzip::install_hint()),
+        "{message}"
+    );
+    assert!(
+        message.contains(ext_vfs_archive::LIBRARY_SETTING),
+        "{message}"
+    );
+    let Some(library) = sevenzip_library() else {
+        return;
+    };
+    // Browse… chose the library: the setting holds its path and the
+    // listing appears on the next selection.
+    resolver
+        .set_library(&library)
+        .unwrap_or_else(|e| panic!("{e}"));
+    let settings = fs::read_to_string(fake.config_dir().join("vfs-archive.toml"))
+        .unwrap_or_else(|e| panic!("{e}"));
+    assert!(
+        settings.contains(&library.display().to_string()),
+        "{settings}"
+    );
+    // The pane's Retry opens the file again; here the selection moves away
+    // and back.
+    d.select("notes.txt");
+    let doc = d.preview("disk.vhdx").unwrap_or_else(|e| panic!("{e}"));
+    assert!(
+        matches!(doc.content(), Some(Content::Listing(l)) if l.entries.len() == 3),
+        "{:?}",
+        doc.content()
+    );
 }

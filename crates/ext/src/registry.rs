@@ -148,8 +148,11 @@ use crate::search::SearchIndex;
 /// `Availability::Disabled` carries one, the labels the registry keeps
 /// (`SettingField`, `ConnectionField`, `ConnectionSchema`, `InfoSection`,
 /// `ColumnDef`) are [`Text`](crate::Text) keys, and the registry takes an
-/// extension's translation files (QUESTIONS.md 178–181).
-pub const API_VERSION: u32 = 11;
+/// extension's translation files (QUESTIONS.md 178–181); 12 `platform`
+/// gained `Mount` (which disk images this OS mounts, and mounting one
+/// through it) and the `sevenzip` binding of the 7-Zip library behind the
+/// disk images (QUESTIONS.md 185–190).
+pub const API_VERSION: u32 = 12;
 
 bitflags::bitflags! {
     /// The extension points an extension fills, as its manifest declares

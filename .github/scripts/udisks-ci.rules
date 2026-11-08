@@ -1,0 +1,9 @@
+// CI only (issue 51): the runner user may set up loop devices and mount
+// them through udisks2 without a desktop session, so the real mount test
+// (crates/tests/tests/mount_linux.rs) runs; installed by
+// .github/actions/setup as /etc/polkit-1/rules.d/50-rick-ci.rules.
+polkit.addRule(function(action, subject) {
+  if (action.id.indexOf("org.freedesktop.udisks2.") == 0 && subject.user == "runner") {
+    return polkit.Result.YES;
+  }
+});

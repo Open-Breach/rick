@@ -796,3 +796,140 @@ fn no_ui_frame_over_16_ms_while_the_previewers_decode() {
     }
     tests::bench::record("previewers-frame", &samples);
 }
+
+/// The plugins installed into a fresh plugins directory and loaded by a
+/// host with `disabled` switched off, as `[plugins] disabled` in
+/// `rick.toml` does.
+fn load_plugins_disabling(disabled: &[&str]) -> &'static Host {
+    let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+    let plugins = dir.path().join("plugins");
+    for (stem, _) in PLUGINS {
+        install(&plugins, stem);
+    }
+    let host = Host::load(&Options {
+        dirs: vec![(Source::BesideBinary, plugins)],
+        disabled: disabled.iter().map(|d| (*d).to_owned()).collect(),
+        compiled_in: Vec::new(),
+        platform: None,
+        prompts: None,
+    });
+    let _ = dir.keep();
+    Box::leak(Box::new(host))
+}
+
+/// Issue 51: `README.md`, `page.html` and `data.csv` render by default from
+/// the markup plugin, toggle to the source, and fall back to highlighted
+/// source (`.md`, `.html`) and plain text (`.csv`) when the plugin is
+/// disabled.
+#[test]
+fn the_markup_previewers_render_by_default_and_fall_back_to_source_without_the_plugin() {
+    use ext::{ControlValue, PreviewControl};
+
+    let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+    let files = [
+        ("README.md", ALL_MARKDOWN.as_bytes(), "document"),
+        (
+            "page.html",
+            &b"<html><body><h1>Hi</h1><p>Text <b>bold</b></p></body></html>"[..],
+            "document",
+        ),
+        ("data.csv", &b"name,age\nAda,36\nAlan,41\n"[..], "grid"),
+    ];
+    for (name, bytes, _) in &files {
+        fs::write(dir.path().join(name), bytes).unwrap_or_else(|e| panic!("{e}"));
+    }
+    let provider = provider();
+    let req = RenderRequest {
+        width: 300,
+        height: 200,
+        scale: 1.0,
+        dark: false,
+    };
+
+    // With the plugin: rendered by default, the Rendered toggle leads to
+    // the source, the text layer carries the raw text for Copy.
+    let with = previewers(load_plugins());
+    for (name, bytes, kind) in &files {
+        let path = dir.path().join(name);
+        let (entry, sniff) = sniff(&provider, &path);
+        let picked = best(&with, &entry, &sniff).unwrap_or_else(|| panic!("{name}: no previewer"));
+        assert_eq!(picked.id().0, "preview-markup", "{name}");
+        let mut doc = open(picked, &provider, &path);
+        match (*kind, doc.content()) {
+            ("document", Some(Content::Document(d))) => assert!(!d.blocks.is_empty(), "{name}"),
+            ("grid", Some(Content::Grid(g))) => assert_eq!(g.header()[0], "name", "{name}"),
+            (_, other) => panic!("{name}: {other:?}"),
+        }
+        let controls = doc.controls();
+        let Some(PreviewControl::Toggle {
+            id,
+            on: true,
+            label,
+            ..
+        }) = controls.first()
+        else {
+            panic!("{name}: no Rendered toggle on: {controls:?}");
+        };
+        assert_eq!(*label, "Rendered", "{name}");
+        let source = String::from_utf8_lossy(bytes).into_owned();
+        assert_eq!(
+            doc.text_layer().map(|l| l.pages[0].as_str()),
+            Some(source.as_str()),
+            "{name}: the raw source is the text layer"
+        );
+        doc.set_control(*id, ControlValue::Bool(false))
+            .unwrap_or_else(|e| panic!("{name}: {e}"));
+        assert!(doc.content().is_none(), "{name}: the source shows instead");
+        let Frame::Text(block) = doc.render(0, req).unwrap_or_else(|e| panic!("{name}: {e}"))
+        else {
+            panic!("{name}: not text");
+        };
+        assert_eq!(block.text, source, "{name}");
+        if *kind == "document" {
+            assert!(!block.spans.is_empty(), "{name}: highlighted source");
+        }
+    }
+
+    // With the plugin disabled in the host: the code previewer's
+    // highlighted source for Markdown and HTML, plain text for CSV, and no
+    // content to lay out.
+    let without = previewers(load_plugins_disabling(&["preview-markup"]));
+    assert!(
+        without.iter().all(|p| p.id().0 != "preview-markup"),
+        "the disabled plugin registers nothing"
+    );
+    for (name, bytes, kind) in &files {
+        let path = dir.path().join(name);
+        let (entry, sniff) = sniff(&provider, &path);
+        let picked =
+            best(&without, &entry, &sniff).unwrap_or_else(|| panic!("{name}: no previewer"));
+        let expected = if *kind == "document" {
+            "preview-code"
+        } else {
+            "preview-text"
+        };
+        assert_eq!(picked.id().0, expected, "{name}");
+        let mut doc = open(picked, &provider, &path);
+        assert!(doc.content().is_none(), "{name}: nothing rendered");
+        assert!(
+            !doc.controls().iter().any(|c| matches!(
+                c,
+                PreviewControl::Toggle {
+                    label: "Rendered",
+                    ..
+                }
+            )),
+            "{name}: no Rendered toggle without the plugin"
+        );
+        let Frame::Text(block) = doc.render(0, req).unwrap_or_else(|e| panic!("{name}: {e}"))
+        else {
+            panic!("{name}: not text");
+        };
+        assert_eq!(block.text, String::from_utf8_lossy(bytes), "{name}");
+        if *kind == "document" {
+            assert!(!block.spans.is_empty(), "{name}: highlighted source");
+        } else {
+            assert!(block.spans.is_empty(), "{name}: plain text");
+        }
+    }
+}

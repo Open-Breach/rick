@@ -90,6 +90,19 @@ runs:
         # installer writes; its tests fail rather than skip without it here.
         sudo apt-get install -y --no-install-recommends desktop-file-utils
         echo "RICK_REQUIRE_DESKTOP_FILE_VALIDATE=1" >> "$GITHUB_ENV"
+        # Issue 51: udisks2 with a polkit rule for the runner, so the real
+        # mount of an ISO through `udisksctl loop-setup` runs
+        # (crates/tests/tests/mount_linux.rs); where the daemon does not
+        # answer the test skips with a note instead.
+        sudo apt-get install -y --no-install-recommends udisks2
+        sudo install -D -m 644 .github/scripts/udisks-ci.rules /etc/polkit-1/rules.d/50-rick-ci.rules
+        sudo systemctl restart polkit 2>/dev/null || true
+        sudo systemctl start udisks2 2>/dev/null || true
+        if udisksctl status > /dev/null 2>&1; then
+          echo "RICK_REQUIRE_UDISKS=1" >> "$GITHUB_ENV"
+        else
+          echo "udisks does not answer on this runner; the real mount test skips"
+        fi
     - name: subversion and spotlight
       if: runner.os == 'macOS' && inputs.system == 'test'
       shell: bash
