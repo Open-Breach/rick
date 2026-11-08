@@ -7845,6 +7845,7 @@ dependencies = [
  "ext-search-tracker",
  "ext-search-walk",
  "ext-search-windows",
+ "ext-ssh",
  "ext-svn",
  "ext-vfs-archive",
  "ext-vfs-azure",

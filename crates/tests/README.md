@@ -12,7 +12,9 @@ stand-in for a cloud provider, with a native-transfer mode that counts the
 bytes read through `open_read`, so a test proves an in-account move
 streamed nothing. The provider plugins of issue 21 are dependencies too,
 for the acceptance tests that load them through the host and drive them
-against the containers CI starts (`RICK_S3_ENDPOINT` and friends). The previewer plugins are dependencies so
+against the containers CI starts (`RICK_S3_ENDPOINT` and friends), and
+`ext-ssh` with its `fake-sshd` feature, the SSH server in the test process
+that the SSH acceptance tests run against on every OS. The previewer plugins are dependencies so
 that their fixture generators are at hand and their library files are
 built beside the test binaries, from where the tests install them into a
 temporary plugins directory and load them through the host; the

@@ -32,6 +32,9 @@ ext-vfs-archive = { workspace = true }
 # the acceptance tests against the containers and built as library files
 # beside the test binaries for the host to load.
 ext-vfs-sftp = { workspace = true }
+# The SSH plugin of issue 34, with the SSH server in the test process
+# that its acceptance tests run against on every OS.
+ext-ssh = { workspace = true, features = ["fake-sshd"] }
 ext-vfs-s3 = { workspace = true }
 ext-vfs-azure = { workspace = true }
 ext-vfs-gcs = { workspace = true }
