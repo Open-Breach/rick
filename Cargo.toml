@@ -113,6 +113,8 @@ tokio = { version = "1", default-features = false }
 toml = "0.9"
 tracing = "0.1"
 windows = "0.62"
+# NTFS directory junctions for Create link / Paste as link on Windows.
+junction = "2"
 
 [workspace.lints.clippy]
 pedantic = { level = "warn", priority = -1 }

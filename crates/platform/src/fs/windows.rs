@@ -392,6 +392,24 @@ pub(super) fn symlink(target: &Path, at: &Path) -> io::Result<()> {
     }
 }
 
+/// An NTFS directory junction, through the `junction` crate's reparse
+/// point.
+pub(super) fn junction(target: &Path, at: &Path) -> io::Result<()> {
+    let target = std::path::absolute(target)?;
+    if !target.is_dir() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "a junction points to a folder",
+        ));
+    }
+    junction::create(&target, at)
+}
+
+/// A `.lnk` shortcut through the shell link object.
+pub(super) fn shortcut(target: &Path, at: &Path) -> io::Result<()> {
+    crate::windows::create_shortcut(target, at)
+}
+
 pub(super) fn allocated_size(path: &Path) -> io::Result<u64> {
     let wide = wide(path);
     let mut high = 0u32;

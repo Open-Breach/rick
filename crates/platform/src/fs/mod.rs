@@ -123,6 +123,28 @@ pub fn symlink(target: &Path, at: &Path) -> io::Result<()> {
     imp::symlink(target, at)
 }
 
+/// Whether the platform has NTFS directory junctions and `.lnk` shortcuts
+/// besides symbolic links: Windows.
+pub const HAS_WINDOWS_LINKS: bool = cfg!(windows);
+
+/// Creates a directory junction at `at` pointing to the folder `target`.
+///
+/// # Errors
+///
+/// `Unsupported` outside Windows; the I/O error otherwise.
+pub fn junction(target: &Path, at: &Path) -> io::Result<()> {
+    imp::junction(target, at)
+}
+
+/// Creates a `.lnk` shortcut file at `at` pointing to `target`.
+///
+/// # Errors
+///
+/// `Unsupported` outside Windows; the I/O error otherwise.
+pub fn shortcut(target: &Path, at: &Path) -> io::Result<()> {
+    imp::shortcut(target, at)
+}
+
 /// Which path [`copy_file`] took.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CopyMethod {

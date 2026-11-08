@@ -329,6 +329,20 @@ pub(super) fn symlink(target: &Path, at: &Path) -> io::Result<()> {
     unix::symlink(target, at)
 }
 
+pub(super) fn junction(_target: &Path, _at: &Path) -> io::Result<()> {
+    Err(io::Error::new(
+        io::ErrorKind::Unsupported,
+        "directory junctions exist on Windows only",
+    ))
+}
+
+pub(super) fn shortcut(_target: &Path, _at: &Path) -> io::Result<()> {
+    Err(io::Error::new(
+        io::ErrorKind::Unsupported,
+        ".lnk shortcuts exist on Windows only",
+    ))
+}
+
 pub(super) fn allocated_size(path: &Path) -> io::Result<u64> {
     unix::allocated_size(path)
 }

@@ -1,6 +1,7 @@
 //! macOS: `NSFileManager` trash with Rick's own record of what it trashed
 //! (the system keeps the original paths in Finder's `.DS_Store`, which has
-//! no public reader), `open`, Finder's Get Info window,
+//! no public reader), `open` and Launch Services' application list for
+//! Open with, Terminal.app, Finder's Get Info window,
 //! `~/Library/Application Support/Rick`, the mounted volumes from
 //! `NSFileManager.mountedVolumeURLs` ejected through `diskutil`, the
 //! standard directories under the home, and Spotlight's last-used dates
@@ -12,15 +13,18 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::SystemTime;
 
-use objc2_foundation::{NSFileManager, NSString, NSURL, NSVolumeEnumerationOptions};
+use std::ffi::c_void;
+
+use objc2::rc::Retained;
+use objc2_foundation::{NSArray, NSFileManager, NSString, NSURL, NSVolumeEnumerationOptions};
 use types::Error;
 
 use crate::Native;
 use crate::time::parse_iso8601;
 use crate::traits::{
-    Chrome, ConfigDir, ControlsSide, DragSource, OpenWith, Properties, PropertiesOutcome,
-    RecentItem, RecentlyUsed, StandardFolder, StandardFolders, Trash, TrashedItem, Volume,
-    VolumeKind, Volumes, WindowChrome,
+    Application, Chrome, ConfigDir, ControlsSide, DragSource, OpenWith, Properties,
+    PropertiesOutcome, RecentItem, RecentlyUsed, StandardFolder, StandardFolders, Terminal, Trash,
+    TrashedItem, Volume, VolumeKind, Volumes, WindowChrome,
 };
 use crate::trash_record::{self, TRASH_FILE};
 
@@ -326,6 +330,26 @@ fn run_detached(program: &str, args: &[&std::ffi::OsStr]) -> Result<(), Error> {
         .map_err(Error::from_io)
 }
 
+#[link(name = "CoreServices", kind = "framework")]
+unsafe extern "C" {
+    /// Launch Services: every application that can open the URL, the
+    /// default first. The URL is a `CFURLRef`, the result a `CFArrayRef`
+    /// of `CFURLRef`s the caller owns, or null.
+    fn LSCopyApplicationURLsForURL(in_url: *const c_void, in_role_mask: u32) -> *mut c_void;
+}
+
+/// `kLSRolesAll`.
+const LS_ROLES_ALL: u32 = 0xFFFF_FFFF;
+
+/// The display name of an application bundle: its file name without
+/// `.app`.
+fn app_name(bundle: &Path) -> String {
+    bundle.file_stem().map_or_else(
+        || bundle.display().to_string(),
+        |s| s.to_string_lossy().into_owned(),
+    )
+}
+
 impl OpenWith for Native {
     fn open(&self, path: &Path) -> Result<(), Error> {
         let path = std::path::absolute(path).map_err(Error::from_io)?;
@@ -335,6 +359,102 @@ impl OpenWith for Native {
     fn reveal(&self, path: &Path) -> Result<(), Error> {
         let path = std::path::absolute(path).map_err(Error::from_io)?;
         run_detached("open", &[std::ffi::OsStr::new("-R"), path.as_os_str()])
+    }
+
+    fn applications(&self, path: &Path) -> Result<Vec<Application>, Error> {
+        let path = std::path::absolute(path).map_err(Error::from_io)?;
+        fs::symlink_metadata(&path).map_err(Error::from_io)?;
+        let url = NSURL::fileURLWithPath(&NSString::from_str(utf8(&path)?));
+        // SAFETY: `NSURL` is toll-free bridged to `CFURLRef`, so the
+        // object's pointer is a valid `CFURLRef` for the call, which does
+        // not keep it; the result follows the Copy rule (one retain the
+        // caller owns) and is a `CFArrayRef` of `CFURLRef`s, bridged to
+        // `NSArray<NSURL>`, which `Retained::from_raw` takes ownership of.
+        let array: Option<Retained<NSArray<NSURL>>> = unsafe {
+            let raw = LSCopyApplicationURLsForURL(Retained::as_ptr(&url).cast(), LS_ROLES_ALL);
+            if raw.is_null() {
+                None
+            } else {
+                Retained::from_raw(raw.cast())
+            }
+        };
+        let Some(array) = array else {
+            return Ok(Vec::new());
+        };
+        let mut out = Vec::new();
+        for i in 0..array.count() {
+            let app = array.objectAtIndex(i);
+            let Some(bundle) = app.path().map(|s| PathBuf::from(s.to_string())) else {
+                continue;
+            };
+            let id = bundle.to_string_lossy().into_owned();
+            if out.iter().any(|a: &Application| a.id == id) {
+                continue;
+            }
+            out.push(Application {
+                name: app_name(&bundle),
+                id,
+            });
+        }
+        Ok(out)
+    }
+
+    fn open_with(&self, path: &Path, app: &Application) -> Result<(), Error> {
+        let path = std::path::absolute(path).map_err(Error::from_io)?;
+        let is_bundle = Path::new(app.id.trim_end_matches('/'))
+            .extension()
+            .is_some_and(|e| e.eq_ignore_ascii_case("app"));
+        if is_bundle {
+            return run_detached(
+                "open",
+                &[
+                    std::ffi::OsStr::new("-a"),
+                    std::ffi::OsStr::new(&app.id),
+                    path.as_os_str(),
+                ],
+            );
+        }
+        let mut words = app.id.split_whitespace();
+        let program = words
+            .next()
+            .ok_or(Error::Unsupported("no application named"))?;
+        let mut args: Vec<&std::ffi::OsStr> = words.map(std::ffi::OsStr::new).collect();
+        args.push(path.as_os_str());
+        run_detached(program, &args)
+    }
+}
+
+impl Terminal for Native {
+    fn open_terminal(&self, dir: &Path, command: Option<&[String]>) -> Result<(), Error> {
+        let dir = std::path::absolute(dir).map_err(Error::from_io)?;
+        let Some(command) = command.filter(|c| !c.is_empty()) else {
+            return run_detached(
+                "open",
+                &[
+                    std::ffi::OsStr::new("-a"),
+                    std::ffi::OsStr::new("Terminal"),
+                    dir.as_os_str(),
+                ],
+            );
+        };
+        let quote = |text: &str| format!("'{}'", text.replace('\'', "'\\''"));
+        let line = std::iter::once(format!("cd {}", quote(utf8(&dir)?)))
+            .chain(std::iter::once(
+                command
+                    .iter()
+                    .map(|w| quote(w))
+                    .collect::<Vec<_>>()
+                    .join(" "),
+            ))
+            .collect::<Vec<_>>()
+            .join(" && ");
+        let escaped = line.replace('\\', "\\\\").replace('"', "\\\"");
+        let script =
+            format!("tell application \"Terminal\"\nactivate\ndo script \"{escaped}\"\nend tell");
+        run_detached(
+            "osascript",
+            &[std::ffi::OsStr::new("-e"), std::ffi::OsStr::new(&script)],
+        )
     }
 }
 
