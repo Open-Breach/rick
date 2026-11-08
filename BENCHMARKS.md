@@ -452,7 +452,8 @@ the test. Test: `each_fixture_shows_a_frame_within_300_ms` in
 software adapter (lavapipe on Linux, WARP on Windows; macOS skips with a
 note when it has no adapter), the device opened once before the runs. Not
 yet measured by the bench workflow; the local development machine opened
-and rendered the fixture in 140–200 ms on lavapipe.
+and rendered the fixture in 261 ms on lavapipe (the other three fixtures
+in 8–24 ms).
 
 | OS | Target | Median | Worst |
 | --- | --- | --- | --- |

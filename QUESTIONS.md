@@ -1775,7 +1775,8 @@ Once answered, an entry keeps its number and gains a dated decision line.
     Assumed: vertex clustering on a uniform grid over the bounding box,
     the finest grid resolution (bisection, up to 4096 cells a side) whose
     result fits the budget, every corner snapped to its cell's centre and
-    collapsed triangles dropped; one pass per step and no allocation, so
-    a 3 000 000-triangle model decimates in well under a second. The
+    collapsed triangles dropped; one pass per step and no allocation. A
+    3 000 000-triangle binary STL opened, parsed and decimated in 2.3 s in
+    release on the development machine, most of it the parse. The
     triangle count shown stays the file's; the status bar adds "decimated
     to N triangles for the preview" and File info the budget.
