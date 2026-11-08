@@ -223,10 +223,17 @@ fn against_the_server_browse_read_write_rename_delete_and_transfer_round_trip() 
             .await
             .unwrap_or_else(|e| panic!("connect: {e}"));
         assert!(world.connector.is_connected("box"));
+        // The fake server runs this machine's `sh`: GNU on Linux and in
+        // Git Bash, BSD on macOS.
+        let local = if std::env::consts::OS == "macos" {
+            Profile::Bsd
+        } else {
+            Profile::Gnu
+        };
         assert_eq!(
             world.pool.profile("box").await.ok(),
-            Some(Profile::Gnu),
-            "the local userland is GNU"
+            Some(local),
+            "the local userland"
         );
         // The unknown host key was asked about once and saved.
         let questions = world.questions();
