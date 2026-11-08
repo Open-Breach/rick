@@ -6,7 +6,8 @@ use std::time::{Duration, SystemTime};
 
 /// Formats `time` as `YYYY-MM-DDTHH:MM:SS` in UTC. Times before 1970 render
 /// as the epoch.
-pub(crate) fn iso8601(time: SystemTime) -> String {
+#[must_use]
+pub fn iso8601(time: SystemTime) -> String {
     let secs = time
         .duration_since(SystemTime::UNIX_EPOCH)
         .map_or(0, |d| d.as_secs());

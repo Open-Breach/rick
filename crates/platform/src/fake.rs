@@ -11,6 +11,9 @@ use async_trait::async_trait;
 use tempfile::TempDir;
 use types::Error;
 
+use crate::perms::{
+    FilePermissions, PermissionChange, Permissions, Principal, PrincipalKind, Principals,
+};
 use crate::traits::{
     Application, Chrome, Clipboard, ConfigDir, ControlsSide, DialogFilter, DragSource, Elevate,
     ElevatedOutput, NativeDialogs, OpenWith, Properties, PropertiesOutcome, RecentItem,
@@ -393,6 +396,26 @@ impl Elevate for Fake {
             code: Some(0),
             ..ElevatedOutput::default()
         })
+    }
+}
+
+impl Permissions for Fake {
+    /// The real entry's permissions: the fake's temporary directory is a
+    /// real one, and the acceptance tests change modes on it.
+    fn permissions(&self, path: &Path) -> Result<FilePermissions, Error> {
+        crate::Native.permissions(path)
+    }
+
+    fn set_permissions(&self, path: &Path, change: &PermissionChange) -> Result<(), Error> {
+        crate::Native.set_permissions(path, change)
+    }
+
+    fn principals(&self) -> Result<Principals, Error> {
+        crate::Native.principals()
+    }
+
+    fn principal(&self, name: &str, kind: PrincipalKind) -> Result<Principal, Error> {
+        crate::Native.principal(name, kind)
     }
 }
 

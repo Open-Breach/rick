@@ -1,6 +1,14 @@
 # platform
 
-`platform` holds every line of per-OS code in Rick behind one trait set:
+`platform` holds every line of per-OS code in Rick behind one trait set
+(`Permissions`: an entry's owner, group, mode bits and ACL — POSIX and
+NFSv4 through extended attributes, macOS's own through `acl_to_text`,
+NTFS through the security API — read and changed, with the users and
+groups to choose from; `Elevate`: one command run as the administrator
+through `pkexec`, Authorization Services or User Account Control, which
+`perms::helper` uses for `rick-perms`, the helper that applies a permission
+change the user may not make by themselves and reports what the entries
+had):
 `Trash` (trash, restore, list, remove, empty; on macOS `list` is Rick's own
 record of what it trashed, `trash.toml` in the config directory, since the
 system keeps the original paths to itself), `OpenWith`, `Properties`,

@@ -14,6 +14,8 @@ async-trait = { workspace = true }
 rayon = { workspace = true }
 rfd = { workspace = true, features = ["xdg-portal", "tokio"] }
 serde = { workspace = true }
+# The request and reply of `rick-perms`, the privileged helper (`perms::helper`).
+serde_json = { workspace = true }
 # The SSH agent's socket (`agent`): a Unix socket on Linux and macOS, the
 # OpenSSH agent's named pipe on Windows, opened on the one runtime.
 tokio = { workspace = true, features = ["net", "time", "io-util"] }
@@ -40,7 +42,11 @@ rustix = { workspace = true, features = ["fs", "process", "std"] }
 junction = { workspace = true }
 windows = { workspace = true, features = [
     "Win32_Foundation",
+    "Win32_NetworkManagement_NetManagement",
     "Win32_Security",
+    "Win32_Security_Authorization",
+    "Win32_System_Memory",
+    "Win32_System_Threading",
     "Win32_Storage_FileSystem",
     "Win32_System_Com",
     "Win32_System_IO",

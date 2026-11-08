@@ -7,6 +7,8 @@ use std::time::SystemTime;
 use async_trait::async_trait;
 use types::Error;
 
+use crate::perms::Permissions;
+
 /// An entry in the trash, with enough to put it back.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TrashedItem {
@@ -491,6 +493,7 @@ pub trait Platform:
     + Terminal
     + Elevate
     + Properties
+    + Permissions
     + ConfigDir
     + NativeDialogs
     + Clipboard
@@ -509,6 +512,7 @@ impl<
         + Terminal
         + Elevate
         + Properties
+        + Permissions
         + ConfigDir
         + NativeDialogs
         + Clipboard
