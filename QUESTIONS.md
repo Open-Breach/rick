@@ -1897,3 +1897,129 @@ Once answered, an entry keeps its number and gains a dated decision line.
     Assumed: the manifest declares nothing of the kind yet; the crate's
     README and docs name the paths it writes, and the field comes with
     the extension security model.
+
+159. (issue 34) The host-key dialogues, the passphrase and the password
+    prompt are asked from inside the plugin while a listing or a copy runs,
+    but the API's prompts (`UiHost::confirm`, `prompt`, `form`) are
+    synchronous calls meant for an action on the UI thread; nothing lets a
+    provider's asynchronous operation ask the user and wait for the answer.
+    Assumed: a `Prompts` queue in `runtime` beside `Conflicts`, lent to
+    extensions through `Registry::prompts`: an extension asks with
+    `Prompts::ask`, `choose` or `secret` and awaits; the kernel publishes
+    the question as `Event::Question`, the UI shows one modal dialogue at a
+    time, the oldest first, and answers through `Command::AnswerQuestion`,
+    a dismissed dialogue answering *Cancelled*. The extension API is at
+    version 10 for this and the three points below.
+
+160. (issue 34) *Open console here* attaches "an externally supplied PTY
+    stream" to the console pane that `ext-action-terminal` owns, but a
+    plugin cannot depend on another plugin, and the terminal emulator was
+    that plugin's private module.
+    Assumed: the emulator (`Screen` and the `vte` parser) moved into the
+    kernel as `ext::terminal`, where both plugins use it; the SSH console
+    is an `ActionOutcome::View(View::Console)` over a PTY `shell` channel
+    of the pooled connection, so no second login happens, and
+    `ext-action-terminal` is unchanged in behaviour.
+
+161. (issue 34) "Previewers declare whether they need the whole file or
+    can work on a prefix", the prefix served by the provider and the cap
+    "applied by the preview frame when the provider is REMOTE", with "a
+    temporary file that is removed when the tab closes".
+    Assumed: `Previewer::reads()` answers `Reads::Whole` (the default) or
+    `Reads::Prefix` (text, code, CSV and hex; Markdown has no previewer of
+    its own); for a `REMOTE` provider the kernel hands a prefix previewer a
+    provider whose reads stop at 256 KiB (`app::REMOTE_PREFIX_CHUNK`),
+    shows *Load more* under the preview with the bytes served, and each
+    *Load more* adds another chunk; a whole-file previewer's file above
+    the cap shows the badges and *Preview anyway* instead. The cap is the
+    provider's `remote_preview_cap(loc)` (the host's
+    `preview_size_cap_mib`, then the `ssh.toml` setting), the kernel's
+    4 MiB (`app::REMOTE_PREVIEW_CAP`) when the provider names none.
+    `Provider::open_read_at(loc, offset)` reads from an offset (`tail -c
+    +N` here; the default reads and discards). Nothing is spooled to a
+    temporary file by the kernel: the previewers read through the
+    provider, and the ones that need a path (Office, media) keep their
+    own temporary copies as they do for archives.
+
+162. (issue 34) The host editor offers "jump host (optional, picked from
+    the host list)" and Rick's hosts "are created and edited from the
+    Network section", but `Connector::schema` returned a borrowed, static
+    schema of text fields and the side panel had *Add connection…* only.
+    Assumed: `Connector::schema(&self) -> ConnectionSchema` is owned and
+    computed per call, so the jump field lists the hosts known now;
+    `ConnectionFieldKind::Choice { options, default }` draws a combo box;
+    `Command::EditConnection` and the row item *Edit…* open the same
+    dialogue filled in, for Rick's own connections only (a host of
+    `~/.ssh/config` is read-only in Rick, so its row has neither *Edit…*
+    nor *Remove connection*). The other provider plugins return a clone
+    of their schema.
+
+163. (issue 34) The configuration section keeps Rick's hosts as
+    `[[ssh.hosts]]` and the three settings under `[ssh]` in `rick.toml`,
+    while issue 21 made the connections of every network provider
+    `[[connections]]` tables of `rick.toml` and issue 23 put an
+    extension's settings in its own TOML file.
+    Assumed: Rick's hosts are `[[connections]]` tables with
+    `provider = "ssh"`, the alias as `name` and the spec's fields (`host`,
+    `port`, `user`, `default_dir`, `identity_file`, `jump`,
+    `remember_password`, `preview_size_cap_mib`), so the host editor is
+    the connection dialogue every network provider has, with *Edit…*; the
+    three settings (`read_openssh_config`, `idle_timeout_minutes`,
+    `preview_size_cap_mib`) live in `ssh.toml` and appear in Settings like
+    every extension's. The keys are the spec's; the tables moved.
+
+164. (issue 34) What `ssh:/<alias>` lists and how a remote path is kept in
+    a location.
+    Assumed: `ssh:/<alias>` is the host's default directory, the remote
+    home when the host names none, resolved once per connection with
+    `pwd`; every location below carries the remote path as absolute bytes,
+    so a folder outside the default directory is reached by typing its
+    path and names that are no UTF-8 survive. The rows of the provider's
+    root are synthesised from the configuration without connecting.
+
+165. (issue 34) "Secrets live only in the OS keychain", without the keys.
+    Assumed: `ssh/<alias>/password` and `ssh/<alias>/passphrase` through
+    `ext::secret_key`, the scheme of the other network providers; the
+    editor's *Remember password in the OS keychain* stores the password
+    typed there, the passphrase dialogue's *Remember in the keychain* box
+    the passphrase, and a secret typed when nothing is remembered serves
+    the one connection; *Remove connection* removes both keys.
+
+166. (issue 34) "disk usage: `df -P` for the status bar", but the status
+    bar shows no disk usage for any provider yet.
+    Assumed: `SshProvider::disk_usage` runs `df -P` and parses it, and no
+    kernel slot asks for it until the status bar grows one for every
+    provider.
+
+167. (issue 34) "Connection errors surface in the tab as a banner with
+    Retry, never as a modal dialogue": a listing that failed was a toast.
+    Assumed: the tab gained `failure`, set by the kernel for any provider's
+    listing error and cleared by the next listing that works, drawn as a
+    banner over the empty list with *Retry* (`Command::Refresh`); the toast
+    is gone for listing errors. A failed connection is a listing error.
+
+168. (issue 34) The `busybox` profile lists with "`ls -lan` where
+    `find -printf` is missing", but `ls -lan` has no stable layout (the
+    date changes with the file's age) and splits a name on its spaces and
+    newlines, which the acceptance requires to survive.
+    Assumed: `busybox` and `bsd` list through a shell loop over the
+    directory's names (`for f in * .[!.]* ..?*`) that runs `stat -c` or
+    `stat -f` on each and prints NUL-separated records: slower than one
+    `find`, byte-exact. `uname`, `stat`, `find -printf`, `head -c`,
+    `tail -c` and `busybox` itself are probed once per host.
+
+169. (issue 34) The acceptance names Docker containers for Linux CI and
+    the macOS runner's own sshd for `bsd`; the sandbox the plugin was built
+    in has neither Docker nor an sshd.
+    Assumed: an SSH server in the test process (`ext_ssh::fake_sshd`, the
+    server side of `russh`, behind the `fake-sshd` feature; a deterministic
+    host key, password, public-key and keyboard-interactive login,
+    `MaxSessions`, `direct-tcpip` for a bastion) runs the plugin's own
+    tests and the acceptance tests in `tests` on every OS; tier 1 and the
+    Linux x64 job of tier 2 also build the `gnu` (Debian) and `busybox`
+    (Alpine) sshd images and the bastion network from
+    `.github/scripts/containers.sh` and name them through
+    `RICK_SSH_GNU_PORT` and friends, with `RICK_REQUIRE_CONTAINERS` making
+    a skip a failure. The macOS runner's sshd is not enabled (Remote Login
+    is an interactive setting), so the `bsd` profile is proven by the
+    command tests with BSD `stat -f` output.
