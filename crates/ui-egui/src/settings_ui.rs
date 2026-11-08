@@ -676,31 +676,3 @@ pub fn extensions_window(
             );
         });
 }
-
-/// The properties rows Rick shows itself where the platform has no
-/// dialogue.
-pub fn properties_window(
-    ctx: &egui::Context,
-    properties: &mut Option<(String, Vec<(String, String)>)>,
-) {
-    let Some((title, rows)) = properties.as_ref() else {
-        return;
-    };
-    let mut open = true;
-    egui::Window::new(format!("Properties of {title}"))
-        .open(&mut open)
-        .show(ctx, |ui| {
-            egui::Grid::new("properties-grid")
-                .num_columns(2)
-                .show(ui, |ui| {
-                    for (key, value) in rows {
-                        ui.weak(key);
-                        ui.label(value);
-                        ui.end_row();
-                    }
-                });
-        });
-    if !open {
-        *properties = None;
-    }
-}

@@ -25,7 +25,10 @@ as drive tables in the pane) with the operations area at its foot (a header
 with the running count and an overall bar, one row per job with its progress
 bar, bytes or items done of total, throughput and remaining time, the
 *Waiting* state, pause, resume and cancel, a height that grows with the jobs
-up to a cap), the conflict dialogue, the context menu and command palette
+up to a cap), the conflict dialogue, the question dialogue an extension asks through, the
+Properties dialogue (the general rows and, for a local entry, its owner,
+group, mode bits and ACL edited in place, applied to the enclosed entries
+too when asked), the context menu and command palette
 built from the action registry, the keyboard shortcut table, the Settings
 and Keyboard shortcuts screens, and drag and drop of entries: rows are drag
 sources, folders, pane space, breadcrumb segments and tab headers are drop

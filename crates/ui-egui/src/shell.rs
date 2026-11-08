@@ -21,7 +21,7 @@ use model::{
     Column, Density, DockTarget, Geometry, IconSize, JobState, PaneId, PanelSide, SelectionChange,
     SettingsChange, SidePanelChange, SortDir, Tab, TabId, TabKind, Theme, ViewMode, WindowId,
 };
-use platform::{ControlsSide, PropertiesOutcome};
+use platform::ControlsSide;
 use types::{EntryId, Location};
 
 use crate::console::ConsoleUi;
@@ -32,6 +32,7 @@ use crate::inline::{EditKind, RowEdit};
 use crate::keys::{Direction, Intent, KeyMap};
 use crate::operations::Operations;
 use crate::preview::Previews;
+use crate::properties;
 use crate::search::{Pick, SearchBox};
 use crate::settings_ui::ShortcutsScreen;
 use crate::side_panel::SidePanelState;
@@ -370,7 +371,8 @@ pub struct RickUi {
     inspector_state: inspector::PaneState,
     /// The width the Preview tab's pane opens at, in points.
     inspector_width: f32,
-    properties: Option<(String, Vec<(String, String)>)>,
+    /// The Properties dialogue, open or not.
+    properties: properties::PropertiesDialog,
     /// Read-only texts actions asked to show, each in its own window.
     texts: Vec<TextWindow>,
     next_text: u64,
@@ -551,7 +553,7 @@ impl RickUi {
             version: env!("CARGO_PKG_VERSION").to_owned(),
             inspector_state: inspector::PaneState::default(),
             inspector_width,
-            properties: None,
+            properties: properties::PropertiesDialog::default(),
             texts: Vec::new(),
             next_text: 0,
             thumbnails: Thumbnails::default(),
@@ -633,6 +635,12 @@ impl RickUi {
     }
 
     /// Where the preview pane's parts were in the last frame, for tests.
+    #[must_use]
+    /// The Properties dialogue, for the tests.
+    pub fn properties(&self) -> &properties::PropertiesDialog {
+        &self.properties
+    }
+
     #[must_use]
     pub fn preview_rects(&self) -> inspector::PaneRects {
         self.inspector_state.rects
@@ -875,6 +883,7 @@ impl RickUi {
                     self.thumbnails.arrived(&self.ctx, id, size, frame);
                 }
                 Event::Notify { level, text } => self.toast(level, text),
+                Event::Properties(info) => self.properties.open(*info),
                 Event::PreviewReady { pane, doc } => {
                     let entry = self.preview_entry(pane);
                     self.previews.ready(pane, doc, entry);
@@ -2152,22 +2161,11 @@ impl RickUi {
         }
     }
 
+    /// Properties on the selection: the application reads the entry and
+    /// answers with `Event::Properties`, which opens the dialogue.
     fn inspect(&mut self, pane: PaneId) {
-        let Some(ctx) = self.app.action_ctx(pane, Invocation::Shortcut) else {
-            return;
-        };
-        let Some(entry) = ctx.selection.first() else {
-            self.toast(Level::Info, "Select an entry to inspect");
-            return;
-        };
-        let Ok(path) = platform::paths::to_path(&entry.path) else {
-            return;
-        };
-        match self.app.platform().show(&path) {
-            Ok(PropertiesOutcome::Native) => {}
-            Ok(PropertiesOutcome::Rows(rows)) => self.properties = Some((entry.name.clone(), rows)),
-            Err(error) => self.toast(Level::Error, format!("Properties: {error}")),
-        }
+        self.requests
+            .push(Request::Command(Command::ShowProperties(pane)));
     }
 
     fn step_tab(&mut self, pane: PaneId, by: isize) {
@@ -3388,7 +3386,7 @@ impl RickUi {
                 &mut self.requests,
             );
             settings_ui::about_window(ctx, &mut self.about_open, &self.version);
-            settings_ui::properties_window(ctx, &mut self.properties);
+            self.properties.show(ctx, &mut self.requests);
             self.show_texts(ctx);
             self.show_toasts(ctx);
             self.apply_requests(ctx);
