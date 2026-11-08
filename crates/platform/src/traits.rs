@@ -160,13 +160,13 @@ pub enum ImageFormat {
     Img,
     /// An Apple disk image, `.dmg`.
     Dmg,
-    /// A Virtual PC or Hyper-V disk, `.vhd`.
+    /// A Virtual PC or `Hyper-V` disk, `.vhd`.
     Vhd,
-    /// A Hyper-V disk, `.vhdx`.
+    /// A `Hyper-V` disk, `.vhdx`.
     Vhdx,
-    /// A VMware disk, `.vmdk`.
+    /// A `VMware` disk, `.vmdk`.
     Vmdk,
-    /// A VirtualBox disk, `.vdi`.
+    /// A `VirtualBox` disk, `.vdi`.
     Vdi,
     /// A QEMU copy-on-write disk, `.qcow2` or `.qcow`.
     Qcow2,

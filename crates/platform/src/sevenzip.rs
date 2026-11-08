@@ -41,7 +41,7 @@ pub const LIBRARY_FILE: &str = if cfg!(windows) { "7z.dll" } else { "7z.so" };
 
 /// Where the platform's usual installations put the library, in the
 /// order they are tried: the distribution packages (`7zip`, `p7zip`) on
-/// Linux, Homebrew and MacPorts on macOS, the 7-Zip installer on Windows.
+/// Linux, Homebrew and `MacPorts` on macOS, the 7-Zip installer on Windows.
 #[must_use]
 pub fn usual_locations() -> Vec<PathBuf> {
     #[cfg(target_os = "linux")]
@@ -367,7 +367,6 @@ impl PropVariant {
     /// cleared by `Drop`.
     fn value(&self) -> Option<Value> {
         match self.vt {
-            VT_EMPTY => None,
             VT_BSTR => {
                 let bstr = self.bstr()?;
                 // SAFETY: `bstr` came from the library's `GetProperty`.
@@ -386,6 +385,7 @@ impl PropVariant {
                     SystemTime::UNIX_EPOCH + Duration::from_nanos(unix.saturating_mul(100)),
                 ))
             }
+            // `VT_EMPTY`, and any type this binding has no use for.
             _ => None,
         }
     }
@@ -661,7 +661,7 @@ unsafe extern "system" fn file_stream_release(this: *mut c_void) -> u32 {
     let left = stream.refs.fetch_sub(1, Ordering::AcqRel) - 1;
     if left == 0 {
         // SAFETY: the last reference is gone; the box was leaked by
-        // `FileStream::new` and nobody else points at it.
+        // `FileStream::create` and nobody else points at it.
         drop(unsafe { Box::from_raw(this.cast::<FileStream>()) });
     }
     left
@@ -679,9 +679,8 @@ unsafe extern "system" fn file_stream_read(
         unsafe {
             let stream = &mut *this.cast::<FileStream>();
             let buffer = std::slice::from_raw_parts_mut(data.cast::<u8>(), size as usize);
-            let read = match stream.file.read(buffer) {
-                Ok(read) => read,
-                Err(_) => return E_FAIL,
+            let Ok(read) = stream.file.read(buffer) else {
+                return E_FAIL;
             };
             if !processed.is_null() {
                 *processed = u32::try_from(read).unwrap_or(u32::MAX);
@@ -725,7 +724,7 @@ unsafe extern "system" fn file_stream_seek(
 
 impl FileStream {
     /// A stream over `file`, as a COM object with one reference.
-    fn new(file: File) -> ComPtr {
+    fn create(file: File) -> ComPtr {
         let stream = Box::new(Self {
             vtbl: &raw const FILE_STREAM_VTBL,
             refs: AtomicU32::new(1),
@@ -773,7 +772,7 @@ unsafe extern "system" fn open_callback_release(this: *mut c_void) -> u32 {
     let left = callback.refs.fetch_sub(1, Ordering::AcqRel) - 1;
     if left == 0 {
         // SAFETY: the last reference is gone; the box was leaked by
-        // `OpenCallback::new`.
+        // `OpenCallback::create`.
         drop(unsafe { Box::from_raw(this.cast::<OpenCallback>()) });
     }
     left
@@ -788,7 +787,8 @@ unsafe extern "system" fn open_callback_progress(
 }
 
 impl OpenCallback {
-    fn new() -> ComPtr {
+    /// The callback as a COM object with one reference.
+    fn create() -> ComPtr {
         let callback = Box::new(Self {
             vtbl: &raw const OPEN_CALLBACK_VTBL,
             refs: AtomicU32::new(1),
@@ -839,7 +839,7 @@ unsafe extern "system" fn out_stream_release(this: *mut c_void) -> u32 {
     let left = stream.refs.fetch_sub(1, Ordering::AcqRel) - 1;
     if left == 0 {
         // SAFETY: the last reference is gone; the box was leaked by
-        // `OutStream::new`.
+        // `OutStream::create`.
         drop(unsafe { Box::from_raw(this.cast::<OutStream>()) });
     }
     left
@@ -879,7 +879,8 @@ unsafe extern "system" fn out_stream_write(
 }
 
 impl OutStream {
-    fn new(sink: *mut (dyn Write + 'static)) -> ComPtr {
+    /// The stream over `sink` as a COM object with one reference.
+    fn create(sink: *mut (dyn Write + 'static)) -> ComPtr {
         let stream = Box::new(Self {
             vtbl: &raw const OUT_STREAM_VTBL,
             refs: AtomicU32::new(1),
@@ -948,7 +949,7 @@ unsafe extern "system" fn extract_callback_release(this: *mut c_void) -> u32 {
     let left = callback.refs.fetch_sub(1, Ordering::AcqRel) - 1;
     if left == 0 {
         // SAFETY: the last reference is gone; the box was leaked by
-        // `ExtractCallback::new`.
+        // `ExtractCallback::create`.
         drop(unsafe { Box::from_raw(this.cast::<ExtractCallback>()) });
     }
     left
@@ -1006,7 +1007,8 @@ unsafe extern "system" fn extract_callback_set_result(this: *mut c_void, result:
 }
 
 impl ExtractCallback {
-    fn new(index: u32, out: *mut c_void) -> ComPtr {
+    /// The callback as a COM object with one reference.
+    fn create(index: u32, out: *mut c_void) -> ComPtr {
         let callback = Box::new(Self {
             vtbl: &raw const EXTRACT_CALLBACK_VTBL,
             refs: AtomicU32::new(1),
@@ -1214,7 +1216,7 @@ impl SevenZip {
         format: &Format,
     ) -> Result<Archive, SevenZipError> {
         let file = File::open(path)?;
-        let stream = Stream(FileStream::new(file));
+        let stream = Stream(FileStream::create(file));
         self.open_stream(stream, format)
     }
 
@@ -1234,7 +1236,7 @@ impl SevenZip {
     ) -> Result<Archive, SevenZipError> {
         stream.rewind()?;
         let handler = self.handler(format)?;
-        let callback = OpenCallback::new();
+        let callback = OpenCallback::create();
         let max_check_start_position: u64 = 0;
         // SAFETY: `handler` is an `IInArchive`; the stream and callback are
         // live COM objects the handler may keep references to (it adds
@@ -1301,7 +1303,7 @@ impl Stream {
     ///
     /// The I/O error from opening the file.
     pub fn file(path: &Path) -> Result<Self, SevenZipError> {
-        Ok(Self(FileStream::new(File::open(path)?)))
+        Ok(Self(FileStream::create(File::open(path)?)))
     }
 
     /// Seeks to the start: what a handler expects when it is offered a
@@ -1537,14 +1539,17 @@ impl Archive {
         // SAFETY: the sink pointer is used only by the output stream's
         // `Write` during the `Extract` call below, which borrows `sink`
         // for its whole duration, and is cleared before this function
-        // returns; the lifetime is erased for the `'static` object only.
+        // returns; the lifetime is erased for the `'static` object only. A
+        // cast cannot change a trait object's lifetime, so this is the one
+        // transmute of the binding.
+        #[allow(clippy::transmute_ptr_to_ptr)]
         let erased: *mut (dyn Write + 'static) = unsafe {
             std::mem::transmute::<*mut (dyn Write + '_), *mut (dyn Write + 'static)>(
                 std::ptr::from_mut::<dyn Write>(sink),
             )
         };
-        let out = OutStream::new(erased);
-        let callback = ExtractCallback::new(index, out.0);
+        let out = OutStream::create(erased);
+        let callback = ExtractCallback::create(index, out.0);
         let indices = [index];
         // SAFETY: a live handler; the indices outlive the call; the
         // callback is a live COM object.

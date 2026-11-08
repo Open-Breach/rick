@@ -718,7 +718,7 @@ mod tests {
         assert_eq!(mounted.name, "disc");
         assert_eq!(mounted.kind, VolumeKind::Optical);
         assert!(mounted.mount_point.is_dir());
-        assert_eq!(fake.mounted(), [image.clone()]);
+        assert_eq!(fake.mounted(), std::slice::from_ref(&image));
         assert_eq!(fake.volumes().map(|v| v.len()).ok(), Some(1));
         fake.eject(&mounted).unwrap_or_else(|e| panic!("{e}"));
         assert_eq!(fake.volumes().map(|v| v.len()).ok(), Some(0));

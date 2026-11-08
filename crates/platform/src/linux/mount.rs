@@ -69,8 +69,8 @@ fn parse_mount_point(output: &str) -> Option<PathBuf> {
     trimmed.is_dir().then_some(trimmed)
 }
 
-/// The mount point of an `AlreadyMounted` error: `Device /dev/loop3 is
-/// already mounted at `/media/me/DISC'.`
+/// The mount point of an `AlreadyMounted` error, which udisks quotes
+/// between a backtick and an apostrophe after "already mounted at".
 fn parse_already_mounted(message: &str) -> Option<PathBuf> {
     let start = message.find("already mounted at `")? + "already mounted at `".len();
     let end = message[start..].find('\'')? + start;
@@ -140,18 +140,17 @@ pub(super) fn mount(path: &Path) -> Result<Volume, Error> {
         Ok(output) => parse_mount_point(&output),
         Err(error) => {
             let message = error.to_string();
-            match parse_already_mounted(&message) {
-                // The desktop mounted the loop device as soon as it appeared.
-                Some(mount_point) => Some(mount_point),
-                None => {
-                    // Leave no loop device behind.
-                    let _ = udisksctl(&[
-                        std::ffi::OsStr::new("loop-delete"),
-                        std::ffi::OsStr::new("-b"),
-                        std::ffi::OsStr::new(&device),
-                    ]);
-                    return Err(error);
-                }
+            // The desktop may have mounted the loop device as soon as it
+            // appeared; anything else leaves no loop device behind.
+            if let Some(mount_point) = parse_already_mounted(&message) {
+                Some(mount_point)
+            } else {
+                let _ = udisksctl(&[
+                    std::ffi::OsStr::new("loop-delete"),
+                    std::ffi::OsStr::new("-b"),
+                    std::ffi::OsStr::new(&device),
+                ]);
+                return Err(error);
             }
         }
     };
