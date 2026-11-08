@@ -794,7 +794,7 @@ fn a_disk_image_without_the_library_says_what_to_install_and_browsing_to_it_list
         "{:?}",
         doc.status()
     );
-    assert!(doc.controls().is_empty());
+    assert_eq!(doc.controls().len(), 0);
     assert!(list(&resolver, &path, Format::Disk(ImageFormat::Vhdx), &limit()).is_err());
     assert!(
         store

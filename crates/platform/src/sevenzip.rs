@@ -1689,7 +1689,7 @@ mod tests {
         assert_eq!(PropVariant::empty().value(), None);
         assert_eq!(operation_result_text(2), "data error");
         assert_eq!(LIBRARY_FILE, if cfg!(windows) { "7z.dll" } else { "7z.so" });
-        assert!(!install_hint().is_empty());
+        assert_ne!(install_hint(), "");
         assert!(!usual_locations().is_empty() || cfg!(windows));
     }
 
