@@ -52,14 +52,14 @@ pub enum Command {
         /// Where to go.
         to: Location,
     },
-    /// Open an entry of the pane's active tab: a folder navigates the pane
-    /// to it; a local file the archive provider can browse navigates into
-    /// it as a location (`archive:` with the archive as a breadcrumb
-    /// segment); any other file opens in a viewer tab of the pane when a
-    /// previewer claims it, and with the system's default application
-    /// otherwise or when its type is listed in `[viewer] external`. The
-    /// archive check and the scoring read the file as a job, so the result
-    /// follows a moment later.
+    /// Open an entry of the pane's active tab, as *Opening files* says: a
+    /// folder navigates the pane to it; a local file the archive provider
+    /// can browse navigates into it as a location (`archive:` with the
+    /// archive as a breadcrumb segment) unless the setting
+    /// `archives.on_open` is `system`; every other file opens with the
+    /// system's default application. Nothing opens a viewer: the preview
+    /// pane is the only one. The archive check reads the file as a job, so
+    /// the result follows a moment later.
     Open {
         /// The pane.
         pane: PaneId,

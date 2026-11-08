@@ -1,14 +1,13 @@
-//! The documents the Preview tab and the viewer tabs show: one slot per
-//! pane holding the opened document, the frames it rendered as textures,
-//! and the render in flight.
+//! The documents the Preview tab shows: one slot per pane holding the
+//! opened document, the frames it rendered as textures, and the render in
+//! flight.
 //!
 //! Rendering decodes pixels, so it never runs on the UI thread: the slot
 //! hands its document to a blocking task on the runtime and takes it back
 //! with the frame through a channel it polls each frame, showing the last
 //! frame or a placeholder meanwhile. Frames are cached per page, size and
-//! theme ([`RenderKey`]), a bounded number of them, so a viewer can show the
-//! pages in view and the thumbnails of its page strip from one document;
-//! the Preview tab asks for one frame at a time and keeps the last.
+//! theme ([`RenderKey`]), a bounded number of them, so paging back shows
+//! the page at once; the pane asks for one frame at a time.
 //!
 //! Text frames are laid out here, only the visible lines of them: with wrap
 //! off each line is one row and the view scrolls both ways; with wrap on
@@ -55,8 +54,8 @@ pub const QUANTUM: f32 = 64.0;
 /// take as one texture.
 pub const MAX_ACTUAL: u32 = 8192;
 
-/// How many rendered frames a slot keeps: the pages and the strip
-/// thumbnails a viewer has in view, with room to scroll.
+/// How many rendered frames a slot keeps: the pages of a document paged
+/// through, so going back costs nothing.
 const CACHE: usize = 32;
 
 /// A tab counts as this many columns.
@@ -816,21 +815,6 @@ impl Previews {
     /// Brings `pane`'s slot up to date with the entry the app is following:
     /// clears it when that changed and takes back a finished render.
     pub fn sync(&mut self, ctx: &egui::Context, pane: PaneId, target: Option<EntryId>) -> &Slot {
-        let slot = self.slot(pane);
-        if slot.entry != target {
-            slot.reset(target);
-        }
-        slot.poll(ctx, pane);
-        slot
-    }
-
-    /// [`sync`](Self::sync), with the slot open for the viewer's drawing.
-    pub fn sync_mut(
-        &mut self,
-        ctx: &egui::Context,
-        pane: PaneId,
-        target: Option<EntryId>,
-    ) -> &mut Slot {
         let slot = self.slot(pane);
         if slot.entry != target {
             slot.reset(target);

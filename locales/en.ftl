@@ -86,8 +86,9 @@ settings-descending = Descending
 settings-side-panel = Side panel
 settings-show = Show
 settings-start-with = Start with
-settings-open-outside-the-viewer = Open outside the viewer
-settings-extensions-e-g-docx-xlsx = Extensions, e.g. docx, xlsx
+settings-opening-an-archive = Opening an archive
+settings-archives-enter = Enter it
+settings-archives-system = Open with the system application
 settings-spring-loading-delay = Spring-loading delay
 settings-after-a-drag = After a drag
 settings-theme = Theme
@@ -120,13 +121,6 @@ panel-drop-a-folder-here-to = Drop a folder here to add a place.
 panel-edit-place = Edit place
 panel-title = Title
 panel-icon = Icon
-viewer-actions = Actions
-viewer-zoom-relative-to-fit = Zoom, relative to Fit
-viewer-pages = Pages
-viewer-find = Find
-viewer-no-preview-for-this-file = No preview for this file
-viewer-rendering = Rendering…
-viewer-no-information = No information
 
 # The list columns, as the Settings screen and the column headers name them,
 # and in lower case for the sort labels of the palette.

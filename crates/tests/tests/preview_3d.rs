@@ -1,7 +1,7 @@
 //! Acceptance (issue 19): the 3D previewer plugin. It loads through the
 //! host and claims the fixtures by sniff over the other previewers; the
 //! pointer gestures a document declares reach it through `set_control`
-//! from the preview pane and from the viewer, with no 3D code in either;
+//! from the preview pane, with no 3D code in it;
 //! the preview keeps its frame while it orbits; a 12-triangle STL, a
 //! 500 000-triangle binary STL, an OBJ with three objects and a 3MF in
 //! millimetres each show a frame within 300 ms (release; recorded as
@@ -24,7 +24,7 @@ use ext::{
     Registry, RenderRequest, TextLayer, Transport, Version, async_trait,
 };
 use ext_preview_3d::fixtures;
-use model::{SelectionChange, TabKind};
+use model::SelectionChange;
 use platform::{ConfigDir, Fake};
 use plugins_native::{Host, Library, MANIFEST_FILE, Options, PluginStatus, PluginToml, Source};
 use tests::local;
@@ -506,26 +506,6 @@ fn select(harness: &mut Harness<'_, RickUi>, name: &str) {
     wait_frame(harness, name);
 }
 
-/// Opens `name` in a viewer tab with Enter and waits for its frame.
-fn open_in_viewer(harness: &mut Harness<'_, RickUi>, name: &str) {
-    select(harness, name);
-    harness.key_press(egui::Key::Enter);
-    let started = Instant::now();
-    loop {
-        harness.step();
-        let model = harness.state().app().model();
-        let viewer = model
-            .active_tab(model.focused)
-            .is_some_and(|(_, tab)| tab.kind == TabKind::Viewer);
-        if viewer {
-            break;
-        }
-        assert!(started.elapsed() < Duration::from_secs(10), "no viewer tab");
-        std::thread::sleep(Duration::from_millis(2));
-    }
-    wait_frame(harness, name);
-}
-
 /// Where the current frame is drawn.
 fn frame_centre(harness: &Harness<'_, RickUi>) -> egui::Pos2 {
     let pane = harness.state().app().model().focused;
@@ -535,17 +515,6 @@ fn frame_centre(harness: &Harness<'_, RickUi>) -> egui::Pos2 {
         .get(pane)
         .and_then(ui_egui::preview::Slot::frame_rect)
         .map_or_else(|| panic!("no frame rect"), |r| r.center())
-}
-
-/// The rectangle of the focused pane.
-fn pane_centre(harness: &Harness<'_, RickUi>) -> egui::Pos2 {
-    let pane = harness.state().app().model().focused;
-    harness
-        .state()
-        .pane_rects()
-        .into_iter()
-        .find(|(id, _)| *id == pane)
-        .map_or_else(|| panic!("no pane rect"), |(_, rect)| rect.center())
 }
 
 fn button(harness: &mut Harness<'_, RickUi>, pos: egui::Pos2, pressed: bool) {
@@ -617,7 +586,7 @@ fn received(log: &Mutex<Vec<(ControlId, ControlValue)>>) -> (egui::Vec2, egui::V
 }
 
 #[test]
-fn pointer_gestures_reach_the_document_from_the_preview_pane_and_the_viewer() {
+fn pointer_gestures_reach_the_document_from_the_preview_pane() {
     let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
     fs::write(dir.path().join("spin.gst"), b"spin").unwrap_or_else(|e| panic!("{e}"));
     let log = Arc::new(Mutex::new(Vec::new()));
@@ -687,39 +656,6 @@ fn pointer_gestures_reach_the_document_from_the_preview_pane_and_the_viewer() {
         "the double-click did not switch to 1:1"
     );
     wait_frame(&mut harness, "after the gestures");
-
-    // The viewer: the same three, with the pane's own zoom untouched.
-    log.lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-        .clear();
-    open_in_viewer(&mut harness, "spin.gst");
-    let centre = pane_centre(&harness);
-    drag(&mut harness, centre, centre + egui::vec2(70.0, -40.0));
-    wait_idle(&mut harness);
-    wheel(&mut harness, centre, -32.0);
-    wait_idle(&mut harness);
-    double_click(&mut harness, centre);
-    wait_idle(&mut harness);
-    let (dragged, wheeled, presses) = received(&log);
-    assert!(
-        dragged.x > 50.0 && dragged.y < -25.0,
-        "the viewer forwarded the drag: {dragged:?}"
-    );
-    assert!(
-        wheeled.y < -25.0,
-        "the viewer forwarded the wheel: {wheeled:?}"
-    );
-    assert_eq!(presses, 1, "the viewer forwarded the double-click");
-    let model = harness.state().app().model();
-    let tab = model
-        .active_tab(model.focused)
-        .map_or_else(|| panic!("tab"), |(id, _)| id);
-    let zoom = harness.state().viewer(tab).map(|v| v.zoom);
-    assert_eq!(
-        zoom,
-        Some(ui_egui::viewer::Zoom::Fit),
-        "the wheel without a modifier is not the viewer's zoom"
-    );
 }
 
 #[test]

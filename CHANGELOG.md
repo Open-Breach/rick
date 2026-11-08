@@ -157,22 +157,6 @@ the pull request that brought the change.
   to the selection (#23).
 - Settings an extension declares appear in the Settings window and are
   kept in the extension's own TOML file in the config directory (#23).
-- The viewer: Enter or a double-click opens a previewable file in a viewer
-  tab of the pane, a dock tab like any other (split, dock, tear out). Left
-  and Right step through the folder's files in the list's order with the
-  position in the title; Home and End go to the ends; PageUp and PageDown
-  step pages, then files. Fit, fit width, 1:1 and free zoom (Mod+scroll,
-  Mod+Plus and Minus, Mod+0, Mod+1, Mod+2) with panning, the zoom
-  remembered per file type for the session; a page strip with thumbnails, a
-  page counter with direct entry and single or continuous scrolling for
-  paged content; Mod+F finds in the text layer with the match count, next
-  and previous and highlights in place; I opens the info panel with every
-  section; the Action registry on the file from a menu and the shortcuts; a
-  transport bar for media (Space, J, K, L); F11 fills the screen, Escape
-  leaves it and then closes the tab. A file no previewer claims says so;
-  `[viewer] external` in `rick.toml` (a row in Settings) names the types
-  that open with the system application instead, and Mod+Enter always does
-  (#17).
 - `ext-preview-hex`, the fallback previewer, as a plugin in `plugins/`:
   anything no other previewer claims shows as a hex dump with an ASCII
   column, the first mebibyte of a large file, laid out row by row as it

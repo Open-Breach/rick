@@ -4,7 +4,7 @@ use app::{App, Command, PluginStatus};
 use ext::t;
 use ext::{Registry, Shortcut};
 use model::{
-    AfterDrag, Column, Density, PanelSide, SettingsChange, SidePanelChange, SortDir, Theme,
+    AfterDrag, Column, Density, OnOpen, PanelSide, SettingsChange, SidePanelChange, SortDir, Theme,
     WindowId,
 };
 
@@ -101,8 +101,16 @@ pub fn settings_window(
                                 SortDir::Descending => "Descending",
                             })
                             .show_ui(ui, |ui| {
-                                ui.selectable_value(&mut dir, SortDir::Ascending, t!("settings-ascending"));
-                                ui.selectable_value(&mut dir, SortDir::Descending, t!("settings-descending"));
+                                ui.selectable_value(
+                                    &mut dir,
+                                    SortDir::Ascending,
+                                    t!("settings-ascending"),
+                                );
+                                ui.selectable_value(
+                                    &mut dir,
+                                    SortDir::Descending,
+                                    t!("settings-descending"),
+                                );
                             });
                         if by != settings.sort_by || dir != settings.sort_dir {
                             change(SettingsChange::Sort(by, dir));
@@ -124,7 +132,11 @@ pub fn settings_window(
                             })
                             .show_ui(ui, |ui| {
                                 ui.selectable_value(&mut side, PanelSide::Left, t!("compare-left"));
-                                ui.selectable_value(&mut side, PanelSide::Right, t!("compare-right"));
+                                ui.selectable_value(
+                                    &mut side,
+                                    PanelSide::Right,
+                                    t!("compare-right"),
+                                );
                             });
                         if side != side_panel.side {
                             panel(SidePanelChange::Side(side));
@@ -152,45 +164,28 @@ pub fn settings_window(
                     }
                     ui.end_row();
 
-                    ui.label(t!("settings-open-outside-the-viewer"));
-                    ui.horizontal(|ui| {
-                        // The types that go to the system application; typed
-                        // as a list and saved when the field is left.
-                        let id = ui.make_persistent_id("viewer-external");
-                        let saved = settings.viewer.external.join(", ");
-                        let mut text: String = ui
-                            .data(|d| d.get_temp::<String>(id))
-                            .unwrap_or_else(|| saved.clone());
-                        let output = egui::TextEdit::singleline(&mut text)
-                            .hint_text(t!("settings-extensions-e-g-docx-xlsx"))
-                            .desired_width(220.0)
-                            .show(ui);
-                        if output.response.has_focus() {
-                            ui.data_mut(|d| d.insert_temp(id, text.clone()));
-                        } else if output.response.lost_focus() {
-                            ui.data_mut(|d| d.remove::<String>(id));
-                            let types: Vec<String> =
-                                text.split([',', ' ']).map(str::to_owned).collect();
-                            if types
-                                .iter()
-                                .map(|t| t.trim().trim_start_matches('.').to_ascii_lowercase())
-                                .filter(|t| !t.is_empty())
-                                .ne(settings.viewer.external.iter().cloned())
-                            {
-                                change(SettingsChange::ViewerExternal(types));
-                            }
-                        }
-                    })
-                    .response
-                    .on_hover_text(
-                        "Files of these types open with the system's default application instead of the viewer",
-                    );
+                    ui.label(t!("settings-opening-an-archive"));
+                    let on_open = settings.archives.on_open;
+                    let mut picked = on_open;
+                    let name = |o: OnOpen| match o {
+                        OnOpen::Enter => t!("settings-archives-enter"),
+                        OnOpen::System => t!("settings-archives-system"),
+                    };
+                    egui::ComboBox::from_id_salt("archives-on-open")
+                        .selected_text(name(on_open))
+                        .show_ui(ui, |ui| {
+                            ui.selectable_value(&mut picked, OnOpen::Enter, name(OnOpen::Enter));
+                            ui.selectable_value(&mut picked, OnOpen::System, name(OnOpen::System));
+                        });
+                    if picked != on_open {
+                        change(SettingsChange::ArchivesOnOpen(picked));
+                    }
                     ui.end_row();
 
                     ui.label(t!("settings-spring-loading-delay"));
                     let mut delay = settings.drag.spring_delay_ms;
                     if ui
-                        .add(egui::Slider::new(&mut delay, 200..=3000).suffix(" ms"))  // i18n: ok
+                        .add(egui::Slider::new(&mut delay, 200..=3000).suffix(" ms")) // i18n: ok
                         .changed()
                     {
                         change(SettingsChange::SpringDelay(delay));
@@ -250,7 +245,7 @@ pub fn settings_window(
                     ui.label(t!("settings-font-size"));
                     let mut size = settings.font_size;
                     if ui
-                        .add(egui::Slider::new(&mut size, 9..=24).suffix(" pt"))  // i18n: ok
+                        .add(egui::Slider::new(&mut size, 9..=24).suffix(" pt")) // i18n: ok
                         .changed()
                     {
                         change(SettingsChange::FontSize(size));
@@ -286,7 +281,9 @@ pub fn settings_window(
                                 color.b()
                             ))));
                         }
-                        if settings.accent.is_some() && ui.small_button(t!("settings-theme-default")).clicked() {
+                        if settings.accent.is_some()
+                            && ui.small_button(t!("settings-theme-default")).clicked()
+                        {
                             change(SettingsChange::Accent(None));
                         }
                     });

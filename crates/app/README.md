@@ -3,11 +3,8 @@
 `app` is the command loop: it receives `Command`s from the UI, mutates the
 `model`, runs listings and watches as jobs, forwards job progress, and emits
 `Event`s; the UI never touches the model directly. It opens the preview of
-the followed explorer's selection and every viewer tab's file through the
-best-scoring previewer, and decides what `Open` does with a file (a viewer
-tab when a previewer claims it, the system application otherwise or when the
-`[viewer] external` setting names its type) by reading its first bytes as a
-job. It owns the undo/redo log of
+the followed explorer's selection through the best-scoring previewer, the
+preview pane being Rick's only viewer. It owns the undo/redo log of
 reversible commands, the extension `Registry` the actions come from, the
 TOML settings file with its watcher (the `language` setting among them: it
 registers the kernel's `locales/en.ftl` and `de.ftl` with the `t!` lookup,

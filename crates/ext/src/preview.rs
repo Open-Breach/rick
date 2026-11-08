@@ -568,7 +568,7 @@ pub struct Image {
     pub data: Option<Arc<[u8]>>,
 }
 
-/// An opened document the preview pane or viewer shows.
+/// An opened document the preview pane shows.
 pub trait PreviewDoc: Send {
     /// Number of pages; `None` for a single surface.
     fn pages(&self) -> Option<usize>;
@@ -634,7 +634,7 @@ pub enum Reads {
     Prefix,
 }
 
-/// Turns an entry into something the inspector or viewer can show.
+/// Turns an entry into something the preview pane can show.
 #[async_trait]
 pub trait Previewer: Send + Sync + 'static {
     /// The extension this previewer belongs to.

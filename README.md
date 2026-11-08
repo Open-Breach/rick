@@ -4,7 +4,7 @@
 
 Rick is a lens into your files. Point it at a folder and you see what's what: what every file is, what's inside it, what changed, what's where. Then you move things, rename things, sort things out, without ever leaving the window. One tool, written in Rust, identical on Linux, macOS and Windows, and built from modules so it only carries what *you* need.
 
-> Status: 0.1.0 is out, on all three platforms at once, as plain archives from the [Releases page](https://github.com/Open-Breach/rick/releases). 0.2 is under way: the native plugin host is in, so every non-essential feature becomes a file you can drop in or remove; the first providers are plugins — archives, ISO and UDF images browsed in place, and the Trash as a location — as are the Office, media, archive and CSV previewers and the compress, compare, console and bulk-rename actions; the viewer is in; 3D models, SSH and cloud providers and search connectors follow — the plan is in [SPEC.md](SPEC.md) under "Version 0.2 — scope". Star the repo, watch it, and come along for the ride.
+> Status: 0.1.0 is out, on all three platforms at once, as plain archives from the [Releases page](https://github.com/Open-Breach/rick/releases). 0.2 is under way: the native plugin host is in, so every non-essential feature becomes a file you can drop in or remove; the first providers are plugins — archives, ISO and UDF images browsed in place, and the Trash as a location — as are the Office, media, archive and CSV previewers and the compress, compare, console and bulk-rename actions; 3D models, SSH and cloud providers and search connectors follow — the plan is in [SPEC.md](SPEC.md) under "Version 0.2 — scope". Star the repo, watch it, and come along for the ride.
 
 > **Use with caution.** Rick is written largely by an AI coding agent working from [SPEC.md](SPEC.md), with human review, a strict test gate and CI on all three platforms. That makes it fast to build and easy to audit, but it is still young software whose entire purpose is to move, rename and delete your files. Until 1.0, run it on data you have backed up, prefer *Move to trash* over *Delete permanently*, and treat every release as a preview. If it does something surprising, that's a bug: please report it.
 
@@ -12,7 +12,7 @@ Rick is a lens into your files. Point it at a folder and you see what's what: wh
 
 Most file managers show you names in a column and leave the rest to a dozen other programs: an image viewer, a PDF reader, an archive tool, a Git client, something to mount an ISO. Rick's job is to make that pile of tools unnecessary.
 
-Select a file and the preview pane shows it. Press Enter and the viewer opens it full size. No app launch, no switching windows:
+Select a file and the preview pane shows it, whatever it is: the pane is Rick's only viewer. Press Enter to open it with the application the system has for it. No app launch to look at a file, no switching windows:
 
 - **An image** opens scaled to fit, with 1:1, pan and zoom, EXIF and the camera data one click away.
 - **A Git repository** shows its status on every entry: badges, branch, ahead and behind, folder roll-ups. Commit, stash, pull, push, checkout and blame are in the right-click menu, only when you're inside a repo.
