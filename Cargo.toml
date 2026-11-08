@@ -33,6 +33,7 @@ ext-preview-office = { path = "crates/ext-preview-office" }
 ext-preview-media = { path = "crates/ext-preview-media" }
 ext-preview-archive = { path = "crates/ext-preview-archive" }
 ext-preview-csv = { path = "crates/ext-preview-csv" }
+ext-vfs-sftp = { path = "crates/ext-vfs-sftp" }
 plugins-native = { path = "crates/plugins-native" }
 plugin-probe = { path = "crates/plugin-probe" }
 plugin-panic = { path = "crates/plugin-panic" }
@@ -86,6 +87,13 @@ gstreamer-pbutils = "0.25"
 anyhow = "1"
 # The platform keychain (SPEC.md "Package layout": `Secrets`, 0.2).
 keyring = "4"
+# The provider plugins of issue 21. SFTP through russh and russh-sftp,
+# with ring as the one crypto library of the process (the cloud plugins'
+# TLS uses it too), no aws-lc; the clouds through reqwest over rustls with
+# ring, streaming bodies, and the small signing crates: HMAC-SHA256 for
+# SigV4 and Azure's SharedKey, ring's RSA for the GCS service-account JWT.
+russh = { version = "0.65", default-features = false, features = ["ring", "flate2", "rsa"] }
+russh-sftp = "3"
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 eframe = "0.36"
 egui = "0.36"
