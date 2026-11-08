@@ -10,9 +10,11 @@ backend), `Volumes` (every mounted volume with its file system and space,
 from `/proc/mounts` and sysfs, `NSFileManager.mountedVolumeURLs`, or
 `GetLogicalDrives`, and ejecting removable media through `udisksctl`,
 `diskutil` or `DeviceIoControl`), `StandardFolders` (XDG user-dirs, the known
-folders, the fixed directories under the macOS home) and `RecentlyUsed` (the
+folders, the fixed directories under the macOS home), `RecentlyUsed` (the
 XDG `recently-used.xbel`, Spotlight's last-used dates, the Recent folder's
-shortcuts), implemented for Linux (XDG trash, `xdg-open`), macOS
+shortcuts) and `Secrets` (a secret by a stable key in the platform keychain
+through the `keyring` crate: Secret Service, Keychain, Credential Manager;
+the fake keeps them in memory), implemented for Linux (XDG trash, `xdg-open`), macOS
 (`NSFileManager`, `open`) and Windows (`IFileOperation`, `ShellExecute`), plus
 a `Fake` for tests. It also owns the
 filesystem fast paths other crates program against: the bulk directory reader

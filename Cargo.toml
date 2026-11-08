@@ -84,6 +84,8 @@ gstreamer-audio = "0.25"
 gstreamer-video = "0.25"
 gstreamer-pbutils = "0.25"
 anyhow = "1"
+# The platform keychain (SPEC.md "Package layout": `Secrets`, 0.2).
+keyring = "4"
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 eframe = "0.36"
 egui = "0.36"
