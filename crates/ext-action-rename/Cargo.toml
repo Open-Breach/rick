@@ -1,0 +1,28 @@
+[package]
+name = "ext-action-rename"
+version.workspace = true
+description = "Rick's bulk rename: a pattern with {name}, {ext}, {n} and {date}, find and replace with regular expressions, case changes, a live preview with clash detection, one undoable job; as a plugin."
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+# A plugin: a `cdylib` the host loads from `plugins/action-rename/`, and
+# an `rlib` for the binary's opt-in `action-rename` feature and the tests.
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+types = { workspace = true }
+ext = { workspace = true }
+regex = { workspace = true }
+chrono = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+runtime = { workspace = true }
+platform = { workspace = true }
+vfs-local = { workspace = true }
+tempfile = { workspace = true }
+
+[lints]
+workspace = true

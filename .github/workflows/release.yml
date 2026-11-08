@@ -269,7 +269,7 @@ jobs:
           # loading on macOS and Windows
           # shows the bundled GStreamer runtime resolves; on Linux the
           # runner's system GStreamer does.
-          for id in git vfs-trash vfs-archive preview-archive preview-csv preview-media preview-office preview-hex; do
+          for id in git vfs-trash vfs-archive preview-archive preview-csv preview-media preview-office preview-hex action-compress action-compare action-terminal action-rename; do
             test -f "plugins/$id/plugin.toml" || { echo "no plugins/$id/plugin.toml"; exit 1; }
           done
           plugins="$("./rick$exe" --list-plugins)"
@@ -279,6 +279,9 @@ jobs:
           echo "$plugins" | grep -Eq '^vfs-archive +Archives +[^ ]+ +provider +loaded +' || { echo "archive plugin not loaded"; exit 1; }
           for id in preview-archive preview-csv preview-media preview-office preview-hex; do
             echo "$plugins" | grep -Eq "^$id +[^ ].* +previewer +loaded +" || { echo "$id plugin not loaded"; exit 1; }
+          done
+          for id in action-compress action-compare action-terminal action-rename; do
+            echo "$plugins" | grep -Eq "^$id +[^ ].* +action +loaded +" || { echo "$id plugin not loaded"; exit 1; }
           done
           # pdfium from beside the binary: the previewer's test binary, copied
           # next to rick, with RICK_PDFIUM_DIR unset and no system pdfium. The

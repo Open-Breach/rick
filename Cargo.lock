@@ -1625,6 +1625,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "ext-action-rename"
+version = "0.2.0-dev"
+dependencies = [
+ "chrono",
+ "ext",
+ "platform",
+ "regex",
+ "runtime",
+ "tempfile",
+ "tracing",
+ "types",
+ "vfs-local",
+]
+
+[[package]]
 name = "ext-action-terminal"
 version = "0.2.0-dev"
 dependencies = [
@@ -5513,6 +5528,10 @@ dependencies = [
  "anyhow",
  "app",
  "ext",
+ "ext-action-compare",
+ "ext-action-compress",
+ "ext-action-rename",
+ "ext-action-terminal",
  "ext-git",
  "ext-preview-archive",
  "ext-preview-code",
@@ -6120,6 +6139,10 @@ dependencies = [
  "egui",
  "egui_kittest",
  "ext",
+ "ext-action-compare",
+ "ext-action-compress",
+ "ext-action-rename",
+ "ext-action-terminal",
  "ext-git",
  "ext-preview-archive",
  "ext-preview-code",

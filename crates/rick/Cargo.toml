@@ -16,10 +16,10 @@ path = "src/main.rs"
 # `git`, `vfs-trash`, `vfs-archive` and `preview-hex` compile a plugin in
 # instead of loading it from `plugins/`; default off, since the plugins
 # directory is where they live in 0.2. The four previewer plugins of issue
-# 18 have the same opt-in features; `gstreamer` turns playback on in the
-# media previewer, wherever it is built (the plugin's own feature of that
-# name; off by default so a build without the GStreamer development files
-# still builds every crate).
+# 18 and the four action plugins of issue 23 have the same opt-in
+# features; `gstreamer` turns playback on in the media previewer, wherever
+# it is built (the plugin's own feature of that name; off by default so a
+# build without the GStreamer development files still builds every crate).
 [features]
 default = ["preview-text", "preview-code", "preview-image", "preview-pdf"]
 preview-text = ["dep:ext-preview-text"]
@@ -35,6 +35,10 @@ gstreamer = ["preview-media", "ext-preview-media/gstreamer"]
 git = ["dep:ext-git"]
 vfs-trash = ["dep:ext-vfs-trash"]
 vfs-archive = ["dep:ext-vfs-archive"]
+action-compress = ["dep:ext-action-compress"]
+action-compare = ["dep:ext-action-compare"]
+action-terminal = ["dep:ext-action-terminal"]
+action-rename = ["dep:ext-action-rename"]
 
 [dependencies]
 types = { workspace = true }
@@ -52,6 +56,10 @@ ext-preview-hex = { workspace = true, optional = true }
 ext-git = { workspace = true, optional = true }
 ext-vfs-trash = { workspace = true, optional = true }
 ext-vfs-archive = { workspace = true, optional = true }
+ext-action-compress = { workspace = true, optional = true }
+ext-action-compare = { workspace = true, optional = true }
+ext-action-terminal = { workspace = true, optional = true }
+ext-action-rename = { workspace = true, optional = true }
 ext-preview-office = { workspace = true, optional = true }
 ext-preview-media = { workspace = true, optional = true }
 ext-preview-archive = { workspace = true, optional = true }
