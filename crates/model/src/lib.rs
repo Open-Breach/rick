@@ -6,7 +6,7 @@
 //! [`Listing`] with its sort, group, filter and selection, the [`ViewMode`]
 //! with the [`Tree`] state of expanded folders and the scroll offset, plus
 //! the job table, the side panel's data (the [`Places`], the volumes, the
-//! cloud rows, the [`TrashView`]), the name conflicts jobs wait on and the
+//! cloud and network rows, the [`TrashView`]), the name conflicts jobs wait on and the
 //! [`Settings`] snapshot. All windows share the one model, so a job
 //! started in one shows in every other. It applies listing batches and
 //! filesystem changes and derives the visible rows; it performs no I/O.
@@ -35,9 +35,9 @@ pub use session::{
     DockSession, Geometry, PaneSession, Session, TabSession, WindowSession, parse_entry_id,
 };
 pub use settings::{
-    AfterDrag, Density, Drag, LAST_SESSION, PanelSide, Plugins, Preview, Search, Section,
-    SessionSettings, Settings, SettingsChange, SidePanel, SidePanelChange, TextPreview, Theme,
-    Viewer, parse_location,
+    AfterDrag, ConnectionEntry, Density, Drag, LAST_SESSION, PanelSide, Plugins, Preview, Search,
+    Section, SessionSettings, Settings, SettingsChange, SidePanel, SidePanelChange, TextPreview,
+    Theme, Viewer, parse_location,
 };
 pub use tree::{Tree, TreeRow};
 use types::{
@@ -594,9 +594,12 @@ pub struct Model {
     /// The cloud rows: what the cloud providers list at their roots, their
     /// accounts or containers.
     pub cloud: Vec<Entry>,
-    /// The network providers mounted, sorted; each adds a root row to the
-    /// Network section.
+    /// The network providers mounted, sorted; the Network section lists
+    /// what they list at their roots.
     pub network_providers: Vec<ProviderId>,
+    /// The network rows: what the network providers list at their roots,
+    /// their connections; the mounted network volumes are in `volumes`.
+    pub network: Vec<Entry>,
     /// The trash's contents.
     pub trash: TrashView,
     /// The settings snapshot.
@@ -632,6 +635,7 @@ impl Model {
             cloud_providers: Vec::new(),
             cloud: Vec::new(),
             network_providers: Vec::new(),
+            network: Vec::new(),
             trash: TrashView::default(),
             settings,
             preview_follows: None,

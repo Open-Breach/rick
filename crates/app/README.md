@@ -23,7 +23,12 @@ in `ops` see it through the `PinStore` bridge it hands them. It feeds the
 side panel — the Places list from `places.toml`, seeded from the standard
 folders on the first start and edited through `PlaceAdd`, `PlaceRemove`,
 `PlaceMove` and `PlaceEdit`; the mounted volumes polled through the
-platform, with `Eject` as a job; the cloud providers' rows; and the trash's
+platform, with `Eject` as a job; the cloud and network providers' rows, one
+per connection; the connections themselves (`AddConnection`, `Connection`
+with connect, disconnect and remove), whose non-secret fields are
+`[[connections]]` tables of `rick.toml` and whose secrets go to the
+platform keychain as a job before the table is written, the provider's
+`Connector` told after every change; and the trash's
 count after every operation — mounts the `rick://` provider of `vfs-rick`
 over every other provider, hands it the views extensions registered (the
 Trash view of `ext-vfs-trash`) and tells it when a view's contents changed,
