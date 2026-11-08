@@ -78,6 +78,8 @@ fn built_ins() -> Vec<Arc<dyn ext::Extension>> {
     extensions.push(Arc::new(ext_action_terminal::TerminalExtension::new()));
     #[cfg(feature = "action-rename")]
     extensions.push(Arc::new(ext_action_rename::RenameExtension::new()));
+    #[cfg(feature = "installer")]
+    extensions.push(Arc::new(ext_installer::InstallerExtension::new()));
     extensions
 }
 

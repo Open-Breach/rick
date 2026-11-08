@@ -47,6 +47,7 @@ ext-action-compress = { path = "crates/ext-action-compress" }
 ext-action-compare = { path = "crates/ext-action-compare" }
 ext-action-terminal = { path = "crates/ext-action-terminal" }
 ext-action-rename = { path = "crates/ext-action-rename" }
+ext-installer = { path = "crates/ext-installer" }
 plugins-native = { path = "crates/plugins-native" }
 plugin-probe = { path = "crates/plugin-probe" }
 plugin-panic = { path = "crates/plugin-panic" }
