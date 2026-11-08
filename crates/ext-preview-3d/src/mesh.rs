@@ -196,7 +196,9 @@ impl Mesh {
     fn kept(&self, grid: u32) -> usize {
         let size = self.cell_size(grid);
         self.vertices
-            .chunks_exact(3)
+            .as_chunks::<3>()
+            .0
+            .iter()
             .filter(|corners| {
                 let a = self.cell(corners[0].position, size, grid);
                 let b = self.cell(corners[1].position, size, grid);
@@ -225,7 +227,7 @@ impl Mesh {
             out
         };
         let mut out = Self::with_capacity(self.kept(grid));
-        for corners in self.vertices.chunks_exact(3) {
+        for corners in self.vertices.as_chunks::<3>().0 {
             let a = self.cell(corners[0].position, size, grid);
             let b = self.cell(corners[1].position, size, grid);
             let c = self.cell(corners[2].position, size, grid);

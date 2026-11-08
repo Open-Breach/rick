@@ -104,7 +104,7 @@ pub fn parse<S: BuildHasher>(
                 *positions.get(at + 2)?,
             ])
         };
-        for face in model.mesh.indices.chunks_exact(3) {
+        for face in model.mesh.indices.as_chunks::<3>().0 {
             if let (Some(a), Some(b), Some(c)) = (corner(face[0]), corner(face[1]), corner(face[2]))
             {
                 mesh.push([a, b, c], color);
