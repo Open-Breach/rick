@@ -599,7 +599,7 @@ fn a_10000_entry_zip_lists_its_first_screen_within_100_ms() {
     let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
     let path = dir.path().join("many.zip");
     fs::write(&path, archives::big_zip(10_000)).unwrap_or_else(|e| panic!("{e}"));
-    let previewer: Arc<dyn Previewer> = Arc::new(ext_preview_archive::ArchivePreviewer);
+    let previewer: Arc<dyn Previewer> = Arc::new(ext_preview_archive::ArchivePreviewer::default());
     let provider = provider();
     let mut samples = Vec::new();
     for _ in 0..tests::bench::runs() {

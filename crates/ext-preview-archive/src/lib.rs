@@ -1,6 +1,8 @@
 //! Archive previews: the contents of a zip, tar (plain or compressed with
-//! gzip, zstd, xz, bzip2 or lz4), 7z, RAR or ISO 9660 file as a read-only
-//! file list, without extracting anything.
+//! gzip, zstd, xz, bzip2 or lz4), 7z, RAR or ISO 9660 file, or of a disk
+//! image (raw, DMG, VHD, VHDX, VMDK, VDI, QCOW2, through the 7-Zip library
+//! the archive provider finds), as a read-only file list, without
+//! extracting or mounting anything.
 //!
 //! `open` reads the archive's directory (or walks a tar's headers, skipping
 //! the data) on the blocking pool, builds an [`ext::Listing`] in explorer
@@ -10,10 +12,15 @@
 //! names and marked; an archive whose directory itself is encrypted (7z
 //! and RAR with encrypted headers) lists nothing and says so (QUESTIONS.md
 //! 88). The status bar shows the entry count, the compressed and
-//! uncompressed sizes and the format.
+//! uncompressed sizes and the format. A disk image without the 7-Zip
+//! library fails to open with the message that names the library and how
+//! to install it ([`ext_vfs_archive::MissingLibrary`]), which the pane
+//! shows in place of the listing; browsing to the library stores its path
+//! in the archive provider's setting, shared by both plugins.
 
 #![deny(unsafe_code)]
 
+mod disk;
 pub mod fixtures;
 mod iso;
 mod rar;
@@ -28,12 +35,14 @@ use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime};
 
 use ext::Text;
+use ext::platform::ImageFormat;
 use ext::{
     API_VERSION, Capabilities, Content, ControlId, ControlValue, Extension, Frame, Icon,
     InfoSection, Listing, ListingEntry, Manifest, Platforms, Points, PreviewControl, PreviewDoc,
     Previewer, Provider, Registry, RenderRequest, TextBlock, TextLayer, Transport, Version,
     async_trait,
 };
+pub use ext_vfs_archive::Resolver;
 use types::{CancelToken, Entry, EntryKind, Error, ExtId, Location};
 
 /// The extension id.
@@ -89,18 +98,47 @@ impl Extension for ArchivePreview {
         &self.manifest
     }
 
+    /// The previewer, its disk images read with the 7-Zip library found
+    /// through the host's platform (the archive provider's setting).
     fn register(&self, reg: &mut Registry) -> Result<(), Error> {
         reg.translations(&[("en", include_str!("../locales/en.ftl"))]);
-        reg.previewer(Arc::new(ArchivePreviewer));
+        reg.previewer(Arc::new(ArchivePreviewer::new(Arc::new(Resolver::new(
+            reg.platform().cloned(),
+        )))));
         Ok(())
     }
 }
 
 ext::plugin!(|| Arc::new(ArchivePreview::new()) as Arc<dyn Extension>);
 
-/// Previews archives.
-#[derive(Debug, Default)]
-pub struct ArchivePreviewer;
+/// Previews archives and disk images.
+#[derive(Debug)]
+pub struct ArchivePreviewer {
+    resolver: Arc<Resolver>,
+}
+
+impl Default for ArchivePreviewer {
+    /// A previewer finding the 7-Zip library without a setting: the
+    /// bundle and the platform's usual places.
+    fn default() -> Self {
+        Self::new(Resolver::shared())
+    }
+}
+
+impl ArchivePreviewer {
+    /// A previewer whose disk images are read with the library `resolver`
+    /// finds.
+    #[must_use]
+    pub fn new(resolver: Arc<Resolver>) -> Self {
+        Self { resolver }
+    }
+
+    /// The library resolver.
+    #[must_use]
+    pub fn resolver(&self) -> &Arc<Resolver> {
+        &self.resolver
+    }
+}
 
 /// How a tar is compressed, if at all.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -130,8 +168,11 @@ pub enum Format {
     SevenZ,
     /// RAR 4 and 5.
     Rar,
-    /// An ISO 9660 disc image.
+    /// An ISO 9660 disc image, through the native reader.
     Iso,
+    /// A disk image of the Disk images table, through the 7-Zip library;
+    /// never [`ImageFormat::Iso`].
+    Disk(ImageFormat),
 }
 
 impl Format {
@@ -149,7 +190,37 @@ impl Format {
             Self::SevenZ => "7z",
             Self::Rar => "RAR",
             Self::Iso => "ISO 9660",
+            Self::Disk(ImageFormat::Img) => "raw disk image",
+            Self::Disk(ImageFormat::Dmg) => "DMG",
+            Self::Disk(ImageFormat::Vhd) => "VHD",
+            Self::Disk(ImageFormat::Vhdx) => "VHDX",
+            Self::Disk(ImageFormat::Vmdk) => "VMDK",
+            Self::Disk(ImageFormat::Vdi) => "VDI",
+            Self::Disk(ImageFormat::Qcow2) => "QCOW2",
+            Self::Disk(ImageFormat::Iso) => "ISO 9660",
         }
+    }
+}
+
+/// The disk-image container whose signature `sniff` starts with: VHDX,
+/// QCOW2, VMDK, a dynamic VHD, VDI. A fixed VHD's footer, a DMG's trailer
+/// and a raw image carry nothing at the start.
+fn disk_by_magic(sniff: &[u8]) -> Option<ImageFormat> {
+    if sniff.starts_with(b"vhdxfile") {
+        Some(ImageFormat::Vhdx)
+    } else if sniff.starts_with(b"QFI\xfb") {
+        Some(ImageFormat::Qcow2)
+    } else if sniff.starts_with(b"KDMV") || sniff.starts_with(b"# Disk DescriptorFile") {
+        Some(ImageFormat::Vmdk)
+    } else if sniff.starts_with(b"conectix") {
+        Some(ImageFormat::Vhd)
+    } else if sniff.starts_with(b"<<< ")
+        && sniff.len() >= 0x44
+        && sniff[0x40..0x44] == [0x7f, 0x10, 0xda, 0xbe]
+    {
+        Some(ImageFormat::Vdi)
+    } else {
+        None
     }
 }
 
@@ -226,11 +297,18 @@ pub fn detect(name: &str, sniff: &[u8]) -> Option<(Format, u8)> {
             .then_some((Format::Tar(Compression::Bzip2), 120));
     } else if sniff.starts_with(b"\x04\x22\x4D\x18") {
         return named(&["tar.lz4", "tlz4"]).then_some((Format::Tar(Compression::Lz4), 120));
+    } else if let Some(image) = disk_by_magic(sniff) {
+        Some(Format::Disk(image))
     } else {
         None
     };
     if let Some(format) = by_magic {
         return Some((format, 150));
+    }
+    // A disk image whose name is all there is: a fixed VHD, a DMG, a raw
+    // image; the library checks the content on `open`.
+    if let Some(image) = ImageFormat::for_name(name).filter(|f| *f != ImageFormat::Iso) {
+        return Some((Format::Disk(image), 120));
     }
     let by_name = if named(&["zip", "jar", "war", "ear", "apk", "epub", "xpi"]) {
         Format::Zip
@@ -593,19 +671,27 @@ fn local_path(loc: &Location) -> Option<PathBuf> {
     (loc.provider.0 == "local").then(|| PathBuf::from(loc.path.to_string_lossy().into_owned()))
 }
 
-/// Lists the archive at `path` as `format`.
+/// Lists the archive at `path` as `format`; a disk image is read with the
+/// 7-Zip library `resolver` finds.
 ///
 /// # Errors
 ///
 /// `Error::Io` with `InvalidData` when the file is not an archive of that
-/// format, the file's own I/O error, or `Error::Cancelled`.
-pub fn list(path: &Path, format: Format, limit: &Limit) -> Result<Listed, Error> {
+/// format, the file's own I/O error, `Error::Cancelled`, or the
+/// missing-library error for a disk image without the 7-Zip library.
+pub fn list(
+    resolver: &Resolver,
+    path: &Path,
+    format: Format,
+    limit: &Limit,
+) -> Result<Listed, Error> {
     let listed = match format {
         Format::Zip => zip::list(path, limit),
         Format::Tar(compression) => tar::list(path, compression, limit),
         Format::SevenZ => sevenz::list(path, limit),
         Format::Rar => rar::list(path, limit),
         Format::Iso => iso::list(path, limit),
+        Format::Disk(image) => disk::list(resolver, path, image, limit),
     }?;
     if limit.cancel.is_cancelled() {
         return Err(Error::Cancelled);
@@ -872,8 +958,9 @@ impl Previewer for ArchivePreviewer {
         };
         let limit = Limit::standard(cancel.clone());
         let size = entry.size;
+        let resolver = Arc::clone(&self.resolver);
         let doc = ext::blocking(move || {
-            let listed = list(source.path(), format, &limit)?;
+            let listed = list(&resolver, source.path(), format, &limit)?;
             Ok(ArchiveDoc::new(format, listed, size))
         })
         .await?;
