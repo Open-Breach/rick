@@ -87,7 +87,10 @@ jobs:
       # a note without the RICK_* variables and fail instead here.
       - name: storage and sftp containers
         run: .github/scripts/containers.sh
-      - run: cargo test --workspace ${{ env.RICK_WS_FEATURES }}
+      # With Tracker and Baloo indexing a fixture directory on a private
+      # session bus, so the two connectors answer through their real
+      # services (issue 22).
+      - run: .github/scripts/with-indexers.sh cargo test --workspace ${{ env.RICK_WS_FEATURES }}
   bundle:
     needs: [changes, fmt]
     if: needs.changes.outputs.code == 'true'
@@ -101,24 +104,10 @@ jobs:
       # libstd and plugins/<id>/ per plugin, from one build of the whole
       # workspace (QUESTIONS.md 81).
       - run: cargo xtask bundle ${{ env.RICK_WS_FEATURES }}
-      # Every plugin loads through --list-plugins.
+      # Every plugin built for this platform loads through --list-plugins;
+      # the connectors for the other platforms are not bundled (issue 22).
       - name: list plugins
-        run: |
-          ls -l target/debug/bundle target/debug/bundle/plugins
-          for id in git vfs-trash vfs-archive vfs-sftp vfs-s3 vfs-azure vfs-gcs preview-archive preview-csv preview-media preview-office preview-hex; do
-            test -f "target/debug/bundle/plugins/$id/plugin.toml" || { echo "no plugin.toml for $id"; exit 1; }
-          done
-          out="$(./target/debug/bundle/rick --list-plugins)"
-          echo "$out"
-          echo "$out" | grep -E '^git +Git +[^ ]+ +decorator, action +loaded +' || { echo "git plugin not loaded"; exit 1; }
-          echo "$out" | grep -E '^vfs-trash +Trash +[^ ]+ +provider, decorator, action +loaded +' || { echo "trash plugin not loaded"; exit 1; }
-          echo "$out" | grep -E '^vfs-archive +Archives +[^ ]+ +provider +loaded +' || { echo "archive plugin not loaded"; exit 1; }
-          for id in vfs-sftp vfs-s3 vfs-azure vfs-gcs; do
-            echo "$out" | grep -E "^$id +[^ ].* +provider +loaded +" || { echo "$id plugin not loaded"; exit 1; }
-          done
-          for id in preview-archive preview-csv preview-media preview-office preview-hex; do
-            echo "$out" | grep -E "^$id +[^ ].* +previewer +loaded +" || { echo "$id plugin not loaded"; exit 1; }
-          done
+        run: .github/scripts/check-plugins.sh target/debug/bundle
   tier1:
     name: tier 1
     # The one check to require: green when every job above succeeded or was

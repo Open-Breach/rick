@@ -16,7 +16,6 @@ futures = { workspace = true }
 notify = { workspace = true }
 tokio = { workspace = true, features = ["fs", "io-util", "sync"] }
 tracing = { workspace = true }
-ignore = "0.4"
 
 [dev-dependencies]
 tempfile = { workspace = true }

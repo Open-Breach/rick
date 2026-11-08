@@ -125,6 +125,16 @@ pub enum Command {
         /// On or off.
         on: bool,
     },
+    /// The title-row search box: query every available search index for
+    /// `text` by name, after a short pause for the next keystroke, and
+    /// stream the hits into the model's [`IndexSearch`](model::IndexSearch)
+    /// with their paths; an empty text ends the search. Without an
+    /// available index the box searches the current location alone, as in
+    /// 0.1 (QUESTIONS.md 118).
+    IndexSearch {
+        /// What to look for; empty clears.
+        text: String,
+    },
     /// Tree view: expand a folder of the pane's active tab in place; its
     /// children are listed lazily on the first expand.
     TreeExpand {
@@ -413,6 +423,14 @@ pub enum Event {
         /// How it ended.
         result: Result<(), Error>,
     },
+    /// Hits of the title-row search box's index search arrived, or the
+    /// search finished; the model's `index_search` already holds them.
+    IndexSearched {
+        /// The new hits, each listed once across the indexes.
+        batch: Vec<Entry>,
+        /// Whether every index has answered.
+        done: bool,
+    },
     /// A pane's selection changed.
     SelectionChanged {
         /// The pane.
@@ -485,6 +503,11 @@ impl fmt::Debug for Event {
                 .debug_struct("JobDone")
                 .field("id", id)
                 .field("result", result)
+                .finish(),
+            Self::IndexSearched { batch, done } => f
+                .debug_struct("IndexSearched")
+                .field("batch", &batch.len())
+                .field("done", done)
                 .finish(),
             Self::SelectionChanged { pane, ids } => f
                 .debug_struct("SelectionChanged")

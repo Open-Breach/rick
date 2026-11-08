@@ -21,7 +21,7 @@
 //! it. The server's host key is checked against the user's
 //! `~/.ssh/known_hosts` with OpenSSH semantics: an unknown host is learnt
 //! and recorded, a changed key is refused with its fingerprint
-//! (QUESTIONS.md 121).
+//! (QUESTIONS.md 126).
 //!
 //! The extension takes the platform from the registry it registers with
 //! ([`Registry::platform`]), for the keychain and the home directory;

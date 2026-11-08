@@ -42,6 +42,15 @@ ext-preview-office = { workspace = true }
 ext-preview-media = { workspace = true }
 ext-preview-archive = { workspace = true, features = ["fixtures"] }
 ext-preview-csv = { workspace = true }
+# Milestone 5 (issue 22): the subdirectory search, the four index
+# connectors (each tested against its real service only where the runner
+# has it) and Subversion.
+ext-search-walk = { workspace = true }
+ext-search-windows = { workspace = true }
+ext-search-spotlight = { workspace = true }
+ext-search-tracker = { workspace = true }
+ext-search-baloo = { workspace = true }
+ext-svn = { workspace = true }
 plugins-native = { workspace = true }
 # The fixture plugins, built as library files beside the test binaries and
 # loaded from there; never named in the test code.

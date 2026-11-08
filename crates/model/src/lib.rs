@@ -41,7 +41,7 @@ pub use settings::{
 };
 pub use tree::{Tree, TreeRow};
 use types::{
-    Conflict, ConflictId, Entry, EntryId, EntryKind, JobId, Location, Progress, ProviderId,
+    Conflict, ConflictId, Entry, EntryId, EntryKind, ExtId, JobId, Location, Progress, ProviderId,
 };
 
 /// Identity of a tab, unique within one model.
@@ -568,6 +568,57 @@ pub struct Window {
     pub side_panel: SidePanel,
 }
 
+/// The title-row search box's query over the platform's search indexes and
+/// what came back so far (QUESTIONS.md 118). The box lists the current
+/// location's matches first and these hits, with their paths, after them.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IndexSearch {
+    /// The text the hits answer; empty when nothing is being searched.
+    pub text: String,
+    /// The hits in arrival order, each entry at most once.
+    pub hits: Vec<Entry>,
+    /// Every index has answered, or there was nothing to ask.
+    pub done: bool,
+    /// What the indexes that failed said, one line each.
+    pub errors: Vec<String>,
+}
+
+impl Default for IndexSearch {
+    /// Nothing searched, so nothing outstanding.
+    fn default() -> Self {
+        Self {
+            text: String::new(),
+            hits: Vec::new(),
+            done: true,
+            errors: Vec::new(),
+        }
+    }
+}
+
+impl IndexSearch {
+    /// Starts over for `text`: no hits yet; done at once when the text is
+    /// empty.
+    pub fn start(&mut self, text: String) {
+        self.done = text.is_empty();
+        self.text = text;
+        self.hits.clear();
+        self.errors.clear();
+    }
+
+    /// Takes a batch of hits, skipping entries already listed (two indexes
+    /// may know the same file); returns the ones that were new.
+    pub fn extend(&mut self, batch: Vec<Entry>) -> Vec<Entry> {
+        let mut new = Vec::new();
+        for entry in batch {
+            if self.hits.iter().all(|h| h.id != entry.id) {
+                self.hits.push(entry.clone());
+                new.push(entry);
+            }
+        }
+        new
+    }
+}
+
 /// The whole model: every window, their panes and tabs, the job table and
 /// the settings snapshot.
 #[derive(Debug, Clone)]
@@ -604,6 +655,15 @@ pub struct Model {
     pub trash: TrashView,
     /// The settings snapshot.
     pub settings: Settings,
+    /// The title-row search box's query over the search indexes.
+    pub index_search: IndexSearch,
+    /// The search indexes available right now, by extension id: the ones
+    /// the title-row search box queries. Empty when the platform has none;
+    /// the box then searches the current location alone, as in 0.1.
+    pub search_indexes: Vec<ExtId>,
+    /// A subdirectory search index is registered, so the filter bar offers
+    /// *Search in subdirectories*.
+    pub subtree_search: bool,
     /// The explorer tab the preview follows: the last one focused.
     preview_follows: Option<TabId>,
     next_pane: u64,
@@ -638,6 +698,9 @@ impl Model {
             network: Vec::new(),
             trash: TrashView::default(),
             settings,
+            index_search: IndexSearch::default(),
+            search_indexes: Vec::new(),
+            subtree_search: false,
             preview_follows: None,
             next_pane: 1,
             next_tab: 1,

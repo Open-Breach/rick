@@ -1,12 +1,19 @@
 use std::fs;
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
-use ext::{ActionId, Invocation, Level, UiHost};
+use ext::{
+    API_VERSION, ActionId, Availability, Capabilities, Extension, Filter, Invocation, Level,
+    Manifest, Platforms, Points, Query, Registry, SearchHit, SearchIndex, SearchScope, UiHost,
+    Version,
+};
+use futures::StreamExt;
+use futures::stream;
 use model::{Column, SelectionChange, SettingsChange, SortDir};
 use platform::{ConfigDir, Fake};
-use types::Location;
+use types::{Attrs, CancelToken, Entry, EntryId, EntryKind, Error, ExtId, Location, VPath};
 
 use super::{App, Command, Config, Event, SETTINGS_FILE};
 
@@ -42,6 +49,11 @@ struct Harness {
 }
 
 fn harness() -> Harness {
+    harness_with(Vec::new())
+}
+
+/// A harness with `extensions` loaded besides the core.
+fn harness_with(extensions: Vec<Arc<dyn Extension>>) -> Harness {
     let root = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
     for name in ["b.txt", "a.txt", "c.txt"] {
         fs::write(root.path().join(name), name).unwrap_or_else(|e| panic!("{e}"));
@@ -52,7 +64,7 @@ fn harness() -> Harness {
     let app = App::new(Config {
         platform: fake.clone(),
         ui: ui.clone(),
-        extensions: Vec::new(),
+        extensions,
         config_dir: Some(fake.config_dir()),
         start: Some(local(root.path())),
     });
@@ -734,10 +746,235 @@ fn tree_view_lists_children_lazily_and_keeps_them_across_a_refresh() {
     assert!(tab.tree.expanded.is_empty());
 }
 
+/// A search index that stands in for a plugin: a manifest around it and
+/// the extension that registers it.
+struct IndexExtension {
+    manifest: Manifest,
+    index: Arc<dyn SearchIndex>,
+}
+
+impl IndexExtension {
+    /// The extension around `index`, ready for a [`Config`].
+    fn around(id: &'static str, index: Arc<dyn SearchIndex>) -> Arc<dyn Extension> {
+        Arc::new(Self {
+            manifest: Manifest {
+                id: ExtId(id),
+                name: "Fake index",
+                version: Version::new(0, 1, 0),
+                api_version: API_VERSION,
+                requires: Capabilities::empty(),
+                points: Points::SEARCH_INDEX,
+                platforms: Platforms::ALL,
+            },
+            index,
+        })
+    }
+}
+
+impl Extension for IndexExtension {
+    fn manifest(&self) -> &Manifest {
+        &self.manifest
+    }
+    fn register(&self, reg: &mut Registry) -> Result<(), Error> {
+        reg.search_index(Arc::clone(&self.index));
+        Ok(())
+    }
+}
+
+/// The subdirectory walk as the `ext-search-walk` plugin provides it,
+/// small enough for this crate's tests: `Under` the local root, one batch
+/// per directory, honouring the hidden and skip filters.
+struct FakeWalk;
+
+impl SearchIndex for FakeWalk {
+    fn id(&self) -> ExtId {
+        ExtId("fake-walk")
+    }
+    fn availability(&self) -> Availability {
+        Availability::Enabled
+    }
+    fn scope(&self) -> SearchScope {
+        SearchScope::Under(Location::new(vfs_local::PROVIDER_ID, VPath::new()))
+    }
+    fn query(
+        &self,
+        q: &Query,
+        cancel: CancelToken,
+    ) -> ext::BoxStream<'static, Result<Vec<SearchHit>, Error>> {
+        let Some(root) = q.root.clone() else {
+            return stream::once(async { Err(Error::Unsupported("no root")) }).boxed();
+        };
+        let text = q.text.to_lowercase();
+        let hidden = !q.filters.contains(&Filter::NoHidden);
+        let skip: Vec<String> = q
+            .filters
+            .iter()
+            .filter_map(|f| match f {
+                Filter::SkipNames(names) => Some(names.clone()),
+                _ => None,
+            })
+            .flatten()
+            .collect();
+        let (tx, rx) = runtime::mpsc::channel(8);
+        runtime::handle().spawn_blocking(move || {
+            let start = platform::paths::to_path(&root.path).unwrap_or_default();
+            let mut dirs = vec![start];
+            while let Some(dir) = dirs.pop() {
+                if cancel.is_cancelled() {
+                    return;
+                }
+                let mut batch = Vec::new();
+                for entry in fs::read_dir(&dir).into_iter().flatten().flatten() {
+                    let name = entry.file_name().to_string_lossy().into_owned();
+                    if (!hidden && name.starts_with('.')) || skip.contains(&name) {
+                        continue;
+                    }
+                    if entry.file_type().is_ok_and(|t| t.is_dir()) {
+                        dirs.push(entry.path());
+                    }
+                    if name.to_lowercase().contains(&text)
+                        && let Ok(found) = vfs_local::entry_at(
+                            &entry.path(),
+                            &platform::paths::from_path(&entry.path()),
+                        )
+                    {
+                        batch.push(SearchHit {
+                            entry: found,
+                            snippet: None,
+                        });
+                    }
+                }
+                if !batch.is_empty() && tx.blocking_send(Ok(batch)).is_err() {
+                    return;
+                }
+            }
+        });
+        stream::unfold(rx, |mut rx| async move { rx.recv().await.map(|b| (b, rx)) }).boxed()
+    }
+}
+
+/// A platform index: a fixed list of hits, a switch for its availability
+/// and a record of the queries it was asked.
+struct FakeIndex {
+    id: &'static str,
+    available: AtomicBool,
+    hits: Vec<Entry>,
+    queries: Mutex<Vec<Query>>,
+}
+
+impl FakeIndex {
+    fn new(id: &'static str, hits: Vec<Entry>) -> Arc<Self> {
+        Arc::new(Self {
+            id,
+            available: AtomicBool::new(true),
+            hits,
+            queries: Mutex::new(Vec::new()),
+        })
+    }
+
+    fn queries(&self) -> Vec<String> {
+        self.queries
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .iter()
+            .map(|q| q.text.clone())
+            .collect()
+    }
+}
+
+impl SearchIndex for FakeIndex {
+    fn id(&self) -> ExtId {
+        ExtId(self.id)
+    }
+    fn availability(&self) -> Availability {
+        if self.available.load(Ordering::SeqCst) {
+            Availability::Enabled
+        } else {
+            Availability::Disabled("service gone")
+        }
+    }
+    fn scope(&self) -> SearchScope {
+        SearchScope::Everywhere
+    }
+    fn query(
+        &self,
+        q: &Query,
+        _cancel: CancelToken,
+    ) -> ext::BoxStream<'static, Result<Vec<SearchHit>, Error>> {
+        self.queries
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push(q.clone());
+        if q.text == "fail" {
+            return stream::once(async { Err(Error::Unsupported("the index refused")) }).boxed();
+        }
+        let hits: Vec<SearchHit> = self
+            .hits
+            .iter()
+            .filter(|e| e.name.contains(&q.text))
+            .map(|e| SearchHit {
+                entry: e.clone(),
+                snippet: None,
+            })
+            .collect();
+        stream::iter(vec![Ok(hits)]).boxed()
+    }
+}
+
+/// An entry of a fictional file for the fake indexes.
+fn hit(id: u128, path: &str) -> Entry {
+    let name = path.rsplit('/').next().unwrap_or(path).to_owned();
+    Entry {
+        id: EntryId::new(vfs_local::PROVIDER_ID, id),
+        name,
+        path: VPath::from(path),
+        kind: EntryKind::File,
+        size: None,
+        created: None,
+        modified: None,
+        accessed: None,
+        attrs: Attrs::empty(),
+        mime: None,
+    }
+}
+
 #[test]
-fn subtree_search_streams_matches_as_a_job_and_a_new_text_supersedes_it() {
+fn without_a_subtree_index_the_toggle_is_absent_and_a_search_ends_with_a_notice() {
     let mut h = harness();
     h.settle();
+    assert!(!h.app.model().subtree_search);
+    assert!(h.app.model().search_indexes.is_empty());
+    let pane = h.app.model().focused;
+    h.send(Command::Subtree { pane, on: true });
+    h.send(Command::Filter {
+        pane,
+        text: "foo".into(),
+    });
+    h.settle();
+    let events = h.take_events();
+    assert!(
+        events.iter().any(|e| matches!(
+            e,
+            Event::Notify { level: Level::Error, text } if text.contains("No subdirectory search")
+        )),
+        "{events:?}"
+    );
+    assert!(!h.app.is_busy());
+    assert!(h.names().is_empty());
+}
+
+#[test]
+fn subtree_search_streams_matches_as_a_job_and_a_new_text_supersedes_it() {
+    let mut h = harness_with(vec![IndexExtension::around(
+        "fake-walk",
+        Arc::new(FakeWalk),
+    )]);
+    h.settle();
+    assert!(h.app.model().subtree_search);
+    assert!(
+        h.app.model().search_indexes.is_empty(),
+        "a walk is not a platform index"
+    );
     let pane = h.app.model().focused;
     let mut dir = h.root.path().join("sub");
     for level in 0..20 {
@@ -1583,4 +1820,108 @@ fn a_connection_keeps_its_secret_in_the_keychain_and_the_rest_in_the_settings() 
     );
     assert!(h.app.model().network.is_empty());
     drop(h.ui);
+}
+
+/// The title-row search box asks every available index once the text has
+/// stood for a moment, lists each hit once, follows the availability of
+/// the indexes, and an empty text ends the search.
+#[test]
+fn the_title_row_search_asks_every_available_index_and_lists_each_hit_once() {
+    let first = FakeIndex::new(
+        "fake-one",
+        vec![hit(1, "/one/foo.txt"), hit(2, "/shared/foobar.md")],
+    );
+    let second = FakeIndex::new(
+        "fake-two",
+        vec![hit(2, "/shared/foobar.md"), hit(3, "/two/foo.rs")],
+    );
+    let mut h = harness_with(vec![
+        IndexExtension::around("fake-one", first.clone()),
+        IndexExtension::around("fake-two", second.clone()),
+    ]);
+    h.settle();
+    assert_eq!(
+        h.app.model().search_indexes,
+        [ExtId("fake-one"), ExtId("fake-two")]
+    );
+    assert!(h.app.model().index_search.done, "nothing asked yet");
+
+    h.send(Command::IndexSearch { text: "foo".into() });
+    assert_eq!(h.app.model().index_search.text, "foo");
+    assert!(!h.app.model().index_search.done);
+    assert!(
+        first.queries().is_empty(),
+        "the indexes wait for the pause after the keystroke"
+    );
+    assert!(wait_until(&mut h, Duration::from_secs(5), |h| {
+        h.app.model().index_search.done
+    }));
+    let search = &h.app.model().index_search;
+    let mut names: Vec<&str> = search.hits.iter().map(|e| e.name.as_str()).collect();
+    names.sort_unstable();
+    assert_eq!(names, ["foo.rs", "foo.txt", "foobar.md"], "{search:?}");
+    assert!(search.errors.is_empty());
+    assert_eq!(first.queries(), ["foo"]);
+    assert_eq!(second.queries(), ["foo"]);
+    let events = h.take_events();
+    assert!(
+        events
+            .iter()
+            .any(|e| matches!(e, Event::IndexSearched { done: true, .. })),
+        "{events:?}"
+    );
+    assert!(
+        h.app
+            .model()
+            .jobs
+            .values()
+            .all(|j| !j.name.starts_with("Search")),
+        "index queries stay out of the operations area"
+    );
+
+    // Two texts within the pause: only the last one is asked.
+    h.send(Command::IndexSearch { text: "fo".into() });
+    h.send(Command::IndexSearch {
+        text: " foobar ".into(),
+    });
+    assert!(wait_until(&mut h, Duration::from_secs(5), |h| {
+        h.app.model().index_search.done
+    }));
+    assert_eq!(first.queries(), ["foo", "foobar"]);
+    assert_eq!(h.app.model().index_search.hits.len(), 1);
+
+    // An index that fails is reported beside the others' hits.
+    h.send(Command::IndexSearch {
+        text: "fail".into(),
+    });
+    assert!(wait_until(&mut h, Duration::from_secs(5), |h| {
+        h.app.model().index_search.done
+    }));
+    let errors = &h.app.model().index_search.errors;
+    assert_eq!(errors.len(), 2, "{errors:?}");
+    assert!(
+        errors.iter().any(|e| e.starts_with("fake-one: ")),
+        "{errors:?}"
+    );
+
+    // An empty text ends the search.
+    h.send(Command::IndexSearch {
+        text: String::new(),
+    });
+    let search = &h.app.model().index_search;
+    assert!(search.done && search.text.is_empty() && search.hits.is_empty());
+
+    // The service behind an index goes away: the box follows on the next
+    // poll, and with no index left a search is done at once, unasked.
+    first.available.store(false, Ordering::SeqCst);
+    h.app.poll(&mut h.events);
+    assert_eq!(h.app.model().search_indexes, [ExtId("fake-two")]);
+    second.available.store(false, Ordering::SeqCst);
+    h.app.poll(&mut h.events);
+    assert!(h.app.model().search_indexes.is_empty());
+    h.send(Command::IndexSearch { text: "foo".into() });
+    assert!(h.app.model().index_search.done);
+    h.settle();
+    assert_eq!(first.queries().len(), 3);
+    assert_eq!(second.queries().len(), 3);
 }

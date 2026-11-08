@@ -3,8 +3,18 @@
 //! Rick builds no index of its own. A search index connects to one the
 //! platform has (Windows Search, Spotlight, Tracker, Baloo) and streams hits
 //! for a query as a cancellable job. `availability` is checked at start and
-//! when the service changes; when no index is available there is no search
-//! box.
+//! when the service changes; when no index is available the title-row
+//! search box searches the current location alone, as it did in 0.1.
+//!
+//! Two kinds of index share the trait (QUESTIONS.md 118). A platform index
+//! has [`SearchScope::Everywhere`]: it answers for the whole machine, with
+//! or without a `root`, and the title-row search box queries every
+//! available one. A walk such as `ext-search-walk` has
+//! [`SearchScope::Under`] a provider's root (an empty path stands for the
+//! provider's whole tree): it needs the query's `root` and streams the
+//! entries it finds below it, and the filter bar's *Search in
+//! subdirectories* goes through the one whose scope covers the pane's
+//! location.
 //!
 //! # Worked example
 //!
@@ -76,8 +86,25 @@ use crate::action::Availability;
 pub enum SearchScope {
     /// The whole machine.
     Everywhere,
-    /// Only below one location.
+    /// Only below one location, which every query's `root` must lie in; a
+    /// location with an empty path is the provider's whole tree.
     Under(Location),
+}
+
+impl SearchScope {
+    /// Whether a query rooted at `root` lies within this scope: always for
+    /// [`Everywhere`](Self::Everywhere); for [`Under`](Self::Under) when
+    /// the providers match and `root` is the scope's location or below it.
+    #[must_use]
+    pub fn covers(&self, root: &Location) -> bool {
+        match self {
+            Self::Everywhere => true,
+            Self::Under(under) => {
+                under.provider == root.provider
+                    && (under.path.is_empty() || root.path.is_inside(&under.path))
+            }
+        }
+    }
 }
 
 /// What a query matches against.
@@ -104,6 +131,14 @@ pub enum Filter {
     ModifiedAfter(SystemTime),
     /// Modified before this time.
     ModifiedBefore(SystemTime),
+    /// Leave hidden entries out, and never descend into a hidden directory:
+    /// the pane's hidden-files toggle, off.
+    NoHidden,
+    /// Never descend into or report an entry with one of these names: the
+    /// `[search] ignore` list of `rick.toml` (`.git`, `node_modules`,
+    /// `target`). An index that has already descended drops the hits whose
+    /// path has such a component.
+    SkipNames(Vec<String>),
 }
 
 /// A search request.
