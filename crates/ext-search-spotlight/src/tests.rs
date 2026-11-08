@@ -1,3 +1,4 @@
+#[cfg(unix)]
 use std::fs;
 use std::path::Path;
 use std::sync::Arc;
@@ -68,6 +69,9 @@ fn the_probe_decides_availability_and_follows_the_service() {
     assert_eq!(index.id(), ID);
 }
 
+// The tool prints `/`-rooted paths, which a Windows path cannot stand in
+// for; the connector never runs there.
+#[cfg(unix)]
 #[test]
 fn a_query_runs_the_tool_and_streams_the_hits_that_are_on_disk() {
     let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
@@ -187,6 +191,7 @@ fn a_failing_tool_yields_one_error_and_noise_lines_are_ignored() {
     );
 }
 
+#[cfg(unix)]
 #[test]
 fn the_hits_stop_at_the_cap() {
     let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
