@@ -14,7 +14,7 @@ crate-type = ["dylib", "rlib"]
 [dependencies]
 types = { workspace = true }
 rayon = { workspace = true }
-tokio = { workspace = true, features = ["rt-multi-thread", "sync", "macros", "time"] }
+tokio = { workspace = true, features = ["rt-multi-thread", "sync", "macros", "time", "net"] }
 tracing = { workspace = true }
 
 [lints]

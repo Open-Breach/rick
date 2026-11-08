@@ -46,9 +46,13 @@ static RUNTIME: OnceLock<tokio::runtime::Runtime> = OnceLock::new();
 
 fn runtime() -> &'static tokio::runtime::Runtime {
     RUNTIME.get_or_init(|| {
+        // Time for the jobs' timeouts and polls; I/O for the network
+        // providers (SFTP, object storage), whose sockets this runtime
+        // drives as the one runtime of the process (QUESTIONS.md 81).
         let built = tokio::runtime::Builder::new_multi_thread()
             .thread_name("rick-rt")
             .enable_time()
+            .enable_io()
             .build();
         // A process whose only runtime cannot start has nothing to run; this
         // is a startup failure of the host, not user data or filesystem

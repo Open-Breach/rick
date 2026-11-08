@@ -1,7 +1,8 @@
 # runtime
 
 `runtime` is the only crate that spawns threads. It owns the single `tokio`
-runtime of the process (`runtime::handle`, `runtime::block_on`), the
+runtime of the process (`runtime::handle`, `runtime::block_on`), with its
+time and I/O drivers on, so the network providers' sockets run on it too; the
 `JobRunner` that turns a future into a cancellable, progress-reporting `Job`
 and hands back a `JobHandle<T>` (cancel token, `watch` progress receiver,
 `oneshot` result), lists the running jobs and cancels them by `JobId`, and the
