@@ -30,6 +30,7 @@ pub fn settings_window(
     let layouts = app.layouts();
     let mut panel_changes: Vec<SidePanelChange> = Vec::new();
     let mut panel = |c: SidePanelChange| panel_changes.push(c);
+    let mut ext_changes: Vec<(String, String, ext::SettingValue)> = Vec::new();
     let mut change = |c: SettingsChange| requests.push(Request::Command(Command::Settings(c)));
     egui::Window::new("Settings")
         .open(open)
@@ -268,9 +269,101 @@ pub fn settings_window(
                     });
                     ui.end_row();
                 });
+            extension_settings(ui, app, &mut ext_changes);
         });
     for change in panel_changes {
         requests.push(Request::Command(Command::SidePanel { window, change }));
+    }
+    for (ext, key, value) in ext_changes {
+        requests.push(Request::Command(Command::ExtSetting { ext, key, value }));
+    }
+}
+
+/// The settings extensions declared ([`ext::SettingsSchema`]), one section
+/// per extension; a change is written to the extension's own TOML file.
+fn extension_settings(
+    ui: &mut egui::Ui,
+    app: &App,
+    changes: &mut Vec<(String, String, ext::SettingValue)>,
+) {
+    let schemas = app.registry().settings_schemas();
+    if schemas.iter().all(|s| s.fields.is_empty()) {
+        return;
+    }
+    ui.separator();
+    for schema in schemas {
+        if schema.fields.is_empty() {
+            continue;
+        }
+        let name = app
+            .registry()
+            .manifests()
+            .iter()
+            .find(|m| m.id == schema.ext)
+            .map_or(schema.ext.0, |m| m.name);
+        ui.strong(name);
+        egui::Grid::new(("ext-settings", schema.ext.0))
+            .num_columns(2)
+            .spacing([12.0, 6.0])
+            .show(ui, |ui| {
+                for field in &schema.fields {
+                    let current = app
+                        .ext_settings()
+                        .get(schema.ext.0, field.key)
+                        .cloned()
+                        .unwrap_or_else(|| field.kind.default_value());
+                    ui.label(field.label);
+                    let new_value = match (&field.kind, &current) {
+                        (ext::SettingKind::Bool { .. }, ext::SettingValue::Bool(on)) => {
+                            let mut on = *on;
+                            ui.checkbox(&mut on, "")
+                                .changed()
+                                .then_some(ext::SettingValue::Bool(on))
+                        }
+                        (ext::SettingKind::Text { .. }, ext::SettingValue::Text(text)) => {
+                            let mut text = text.clone();
+                            let response =
+                                ui.add(egui::TextEdit::singleline(&mut text).desired_width(200.0));
+                            (response.lost_focus() && response.changed()
+                                || response.lost_focus()
+                                    && ui.input(|i| i.key_pressed(egui::Key::Enter)))
+                            .then_some(ext::SettingValue::Text(text))
+                        }
+                        (
+                            ext::SettingKind::Integer { min, max, .. },
+                            ext::SettingValue::Integer(value),
+                        ) => {
+                            let mut value = *value;
+                            ui.add(egui::Slider::new(&mut value, *min..=*max))
+                                .changed()
+                                .then_some(ext::SettingValue::Integer(value))
+                        }
+                        (
+                            ext::SettingKind::Choice { options, .. },
+                            ext::SettingValue::Choice(chosen),
+                        ) => {
+                            let mut selected = chosen.clone();
+                            egui::ComboBox::from_id_salt(("ext-choice", schema.ext.0, field.key))
+                                .selected_text(selected.clone())
+                                .show_ui(ui, |ui| {
+                                    for option in options {
+                                        ui.selectable_value(
+                                            &mut selected,
+                                            (*option).to_owned(),
+                                            *option,
+                                        );
+                                    }
+                                });
+                            (selected != *chosen).then_some(ext::SettingValue::Choice(selected))
+                        }
+                        _ => None,
+                    };
+                    if let Some(value) = new_value {
+                        changes.push((schema.ext.0.to_owned(), field.key.to_owned(), value));
+                    }
+                    ui.end_row();
+                }
+            });
     }
 }
 

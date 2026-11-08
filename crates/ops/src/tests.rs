@@ -40,6 +40,9 @@ impl UiHost for Scripted {
             .clone()
     }
     fn show(&self, _title: &str, _text: &str) {}
+    fn form(&self, form: ext::Form) -> Option<ext::Values> {
+        Some(form.defaults())
+    }
 }
 
 /// A pinned list in memory.
@@ -151,6 +154,7 @@ impl Harness {
             location: tests_local(location),
             selection: self.entries(selection),
             invoked_from: Invocation::Palette,
+            other: None,
         }
     }
 
@@ -885,6 +889,7 @@ fn virtual_locations_hide_the_actions_that_do_not_apply() {
         location: vfs_rick::trash_location(),
         selection: entries.clone(),
         invoked_from: Invocation::ContextMenu,
+        other: None,
     };
     for hidden in [
         "core.copy",
@@ -917,6 +922,7 @@ fn virtual_locations_hide_the_actions_that_do_not_apply() {
         location: vfs_rick::Virtual::Favorites.location(),
         selection: entries,
         invoked_from: Invocation::ContextMenu,
+        other: None,
     };
     for hidden in [
         "core.paste",

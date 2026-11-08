@@ -54,24 +54,16 @@ pub enum Intent {
     SelectAll,
     /// Swap selected and unselected.
     InvertSelection,
-    /// Select by glob (not in 0.1).
-    SelectByPattern,
     /// Toggle the focused entry in the selection.
     ToggleFocused,
     /// Clear the selection, or the filter when one is set.
     Escape,
-    /// Paste as link (not in 0.1).
-    PasteAsLink,
-    /// Bulk rename (not in 0.1).
-    BulkRename,
     /// System properties of the selection.
     Inspect,
     /// Revert the last reversible operation.
     Undo,
     /// Apply the last undone operation again.
     Redo,
-    /// Open with a chosen application (not in 0.1).
-    OpenWith,
     /// A new tab at the current location.
     NewTab,
     /// Close the active tab.
@@ -112,8 +104,6 @@ pub enum Intent {
     ToggleSubtree,
     /// The preview pane on or off.
     ToggleInspector,
-    /// A console at the location (not in 0.1).
-    Console,
     /// The Settings screen.
     Settings,
     /// The Keyboard shortcuts screen.
@@ -324,13 +314,6 @@ pub const UI_INTENTS: &[IntentSpec] = &[
         &["Mod+Shift+A"],
     ),
     spec(
-        Intent::SelectByPattern,
-        "sel.pattern",
-        "Select by pattern",
-        SEL,
-        &["Mod+Shift+S"],
-    ),
-    spec(
         Intent::ToggleFocused,
         "sel.toggle",
         "Toggle selection of the focused entry",
@@ -343,20 +326,6 @@ pub const UI_INTENTS: &[IntentSpec] = &[
         "Clear selection / close filter",
         SEL,
         &["Escape"],
-    ),
-    spec(
-        Intent::PasteAsLink,
-        "ops.paste_link",
-        "Paste as link",
-        OPS,
-        &["Mod+Shift+V"],
-    ),
-    spec(
-        Intent::BulkRename,
-        "ops.bulk_rename",
-        "Bulk rename",
-        OPS,
-        &["Mod+F2"],
     ),
     spec(
         Intent::Inspect,
@@ -372,13 +341,6 @@ pub const UI_INTENTS: &[IntentSpec] = &[
         "Redo",
         OPS,
         &["Mod+Shift+Z", "Mod+Y"],
-    ),
-    spec(
-        Intent::OpenWith,
-        "ops.open_with",
-        "Open with…",
-        OPS,
-        &["Mod+O"],
     ),
     spec(Intent::NewTab, "tabs.new", "New tab", TABS, &["Mod+T"]),
     spec(
@@ -533,13 +495,6 @@ pub const UI_INTENTS: &[IntentSpec] = &[
         "Toggle preview pane",
         VIEW,
         &["Mod+Shift+I"],
-    ),
-    spec(
-        Intent::Console,
-        "view.console",
-        "Open console",
-        VIEW,
-        &["Mod+`"],
     ),
     spec(
         Intent::Settings,

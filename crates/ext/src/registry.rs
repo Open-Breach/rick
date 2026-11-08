@@ -123,8 +123,12 @@ use crate::search::SearchIndex;
 /// ([`plugin`](mod@crate::plugin)) and their manifest file; 4
 /// `PreviewDoc` gained `content` (file listings, grids and documents the
 /// UI lays out), `Transport` gained volume, speed, frame step and loop,
-/// and `Icon` gained `Rendered` (QUESTIONS.md 103).
-pub const API_VERSION: u32 = 4;
+/// and `Icon` gained `Rendered` (QUESTIONS.md 103); 5 `UiHost` gained
+/// `form`, `ActionOutcome` gained `Select` and `View`, `ActionCtx` gained
+/// `other`, `LinkKind` gained `Junction` and `Shortcut` with their
+/// capabilities, `JobCtx` gained `conflicts`, and settings gained
+/// [`SettingValue`] (QUESTIONS.md 118–121).
+pub const API_VERSION: u32 = 5;
 
 bitflags::bitflags! {
     /// The extension points an extension fills, as its manifest declares
@@ -298,6 +302,38 @@ pub enum SettingKind {
         /// Index into `options` when unset.
         default: usize,
     },
+}
+
+/// The stored value of a setting, as the extension's TOML file holds it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SettingValue {
+    /// A checkbox.
+    Bool(bool),
+    /// A text field.
+    Text(String),
+    /// A whole number.
+    Integer(i64),
+    /// The chosen option of a choice, by its text.
+    Choice(String),
+}
+
+impl SettingKind {
+    /// The value a setting has when its file does not name one.
+    #[must_use]
+    pub fn default_value(&self) -> SettingValue {
+        match self {
+            Self::Bool { default } => SettingValue::Bool(*default),
+            Self::Text { default } => SettingValue::Text(default.clone()),
+            Self::Integer { default, .. } => SettingValue::Integer(*default),
+            Self::Choice { options, default } => SettingValue::Choice(
+                options
+                    .get(*default)
+                    .or(options.first())
+                    .map(|o| (*o).to_owned())
+                    .unwrap_or_default(),
+            ),
+        }
+    }
 }
 
 /// One setting of an extension.

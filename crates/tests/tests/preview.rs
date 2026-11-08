@@ -314,6 +314,9 @@ impl UiHost for Quiet {
         None
     }
     fn show(&self, _title: &str, _text: &str) {}
+    fn form(&self, form: ext::Form) -> Option<ext::Values> {
+        Some(form.defaults())
+    }
 }
 
 /// The app follows the focused pane's single selected file.

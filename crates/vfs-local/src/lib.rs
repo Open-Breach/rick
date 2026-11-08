@@ -147,15 +147,21 @@ impl Provider for LocalProvider {
         PROVIDER_ID
     }
 
+    /// Everything a local filesystem offers; directory junctions and `.lnk`
+    /// shortcuts where the platform has them (Windows).
     fn capabilities(&self, _loc: &Location) -> Capabilities {
-        Capabilities::WRITE
+        let mut caps = Capabilities::WRITE
             | Capabilities::TRASH
             | Capabilities::RENAME
             | Capabilities::SYMLINK
             | Capabilities::REFLINK
             | Capabilities::WATCH
             | Capabilities::SEEK
-            | Capabilities::PERMISSIONS
+            | Capabilities::PERMISSIONS;
+        if platform::fs::HAS_WINDOWS_LINKS {
+            caps |= Capabilities::JUNCTION | Capabilities::SHORTCUT;
+        }
+        caps
     }
 
     fn list(&self, loc: &Location, opts: ListOptions, cancel: CancelToken) -> EntryStream {
@@ -230,6 +236,8 @@ impl Provider for LocalProvider {
         blocking(move || match kind {
             LinkKind::Symbolic => platform::fs::symlink(&target_path, &at_path),
             LinkKind::Hard => std::fs::hard_link(&target_path, &at_path),
+            LinkKind::Junction => platform::fs::junction(&target_path, &at_path),
+            LinkKind::Shortcut => platform::fs::shortcut(&target_path, &at_path),
         })
         .await?;
         self.stat(at).await
