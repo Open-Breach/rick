@@ -252,6 +252,15 @@ fn offered_commands(detected: &Detected, kind: Kind, id: &str, main: &str) -> Ve
         .collect()
 }
 
+/// The text of an icon in the form's list: its path and pixel size.
+fn icon_option(icon: &detect::IconFile) -> String {
+    match (icon.ext.as_str(), icon.size) {
+        ("svg", _) => format!("{} (scalable)", icon.rel),
+        (_, Some((w, h))) => format!("{} ({w}×{h})", icon.rel),
+        (_, None) => icon.rel.clone(),
+    }
+}
+
 /// What the form's values make of the archive: the plan when every row is
 /// fine, and the rows of the summary either way.
 #[derive(Debug, Default)]
@@ -412,18 +421,13 @@ pub fn assemble(
             .then(|| "pick the main executable".to_owned()),
     );
 
-    // Desktop entry and icon.
+    // Desktop entry and icon: the icon is one of the archive's or none.
     let mut collisions = Vec::new();
-    let icon_file = values.text(K_ICON_FILE).trim().to_owned();
-    let icon = if icon_file.is_empty() {
-        values
-            .choice(K_ICON)
-            .checked_sub(1)
-            .and_then(|i| detected.icons.get(i).cloned())
-            .map_or(IconSource::None, IconSource::Archive)
-    } else {
-        IconSource::File(layout.expand(&icon_file))
-    };
+    let icon = values
+        .choice(K_ICON)
+        .checked_sub(1)
+        .and_then(|i| detected.icons.get(i).cloned())
+        .map_or(IconSource::None, IconSource::Archive);
     let categories = CATEGORIES
         .get(values.choice(K_CATEGORY))
         .copied()
@@ -462,12 +466,6 @@ pub fn assemble(
             ),
             problem,
         );
-        let icon_problem = match &icon {
-            IconSource::File(path) if !path.is_file() => {
-                Some(format!("the icon file {} does not exist", path.display()))
-            }
-            _ => None,
-        };
         row(
             "Icon",
             match &icon {
@@ -480,7 +478,7 @@ pub fn assemble(
                 IconSource::File(path) => format!("{} → hicolor theme as {id}", path.display()),
                 IconSource::None => "none".to_owned(),
             },
-            icon_problem,
+            None,
         );
     }
 
@@ -700,24 +698,16 @@ pub fn install_form(
         exe_options,
         exe_selected,
     ));
+    // One list: (none), then every PNG and SVG of the archive, best first,
+    // the best preselected only when detection trusts it.
     let mut icon_options = vec!["(none)".to_owned()];
-    icon_options.extend(detected.icons.iter().map(|i| {
-        i.size
-            .map_or_else(|| i.rel.clone(), |(w, h)| format!("{} ({w}×{h})", i.rel))
-    }));
-    form = form
-        .field(Field::choice(
-            K_ICON,
-            t!("installer-icon"),
-            icon_options,
-            usize::from(!detected.icons.is_empty()),
-        ))
-        .field(Field::text(
-            K_ICON_FILE,
-            t!("installer-icon-file"),
-            "",
-            "a PNG or SVG path, instead of the choice above",
-        ));
+    icon_options.extend(detected.icons.iter().map(icon_option));
+    form = form.field(Field::choice(
+        K_ICON,
+        t!("installer-icon"),
+        icon_options,
+        usize::from(detected.icon_trusted && !detected.icons.is_empty()),
+    ));
     let category_index = detected
         .desktop
         .as_ref()

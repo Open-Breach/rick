@@ -756,6 +756,72 @@ fn the_form_defaults_follow_the_kind() {
     assert!(layout.desktop_path("fixtool").is_file());
 }
 
+/// The Icon field is one list: `(none)`, then every PNG and SVG of the
+/// archive with its path and pixel size, best first, the best one
+/// preselected only when detection trusts it; there is no file picker.
+#[test]
+fn the_icon_field_is_one_list_of_the_archives_icons() {
+    let h = harness();
+    let scan = crate::record::Scan::default();
+    let layout = h.layout();
+    let detected =
+        Arc::new(detect::detect(h.archive(Fixture::JetBrains)).unwrap_or_else(|e| panic!("{e}")));
+    let form = actions::install_form(&detected, &scan, &layout, None, false);
+    assert!(
+        matches!(
+            field(&form, "icon"),
+            ext::FieldKind::Choice { options, selected: 1 }
+                if *options == ["(none)", "bin/app.svg (scalable)", "bin/app.png (128×128)"]
+        ),
+        "{:?}",
+        field(&form, "icon")
+    );
+    assert!(
+        form.fields.iter().all(|f| f.key != "icon_file"),
+        "no file picker"
+    );
+    // Choosing the PNG instead puts it in the plan.
+    let mut values = form.defaults();
+    values.set("icon", Value::Choice(2));
+    let rows = form.preview_rows(&values);
+    let icon = rows
+        .iter()
+        .find(|r| r.from == "Icon")
+        .unwrap_or_else(|| panic!("no Icon row in {rows:?}"));
+    assert_eq!(icon.to, "bin/app.png → hicolor/128x128/apps/vendor-app.png");
+    assert!(icon.problem.is_none());
+
+    // A stray PNG is listed but not preselected, and does not make the
+    // archive a GUI application.
+    let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+    let path = dir.path().join("fixplain-1.0.tar.gz");
+    fs::write(
+        &path,
+        gz_tar(
+            "fixplain-1.0",
+            &[
+                ("fixplain", 0o755, &tiny_elf(this_machine(), &[])),
+                ("docs/shot.png", 0o644, &crate::fixtures::tiny_png(32)),
+            ],
+        ),
+    )
+    .unwrap_or_else(|e| panic!("{e}"));
+    let detected = Arc::new(detect::detect(&path).unwrap_or_else(|e| panic!("{e}")));
+    assert_eq!(detected.kind, Kind::Cli);
+    assert!(!detected.icon_trusted);
+    assert_eq!(detected.icons.len(), 1);
+    let form = actions::install_form(&detected, &scan, &layout, None, false);
+    assert!(
+        matches!(
+            field(&form, "icon"),
+            ext::FieldKind::Choice { options, selected: 0 }
+                if *options == ["(none)", "docs/shot.png (32×32)"]
+        ),
+        "{:?}",
+        field(&form, "icon")
+    );
+}
+
 #[test]
 fn the_name_rule_takes_a_word_of_the_name_or_a_suffix_of_the_id() {
     let names = ["JetBrains Rider", "JetBrains Rider"];
