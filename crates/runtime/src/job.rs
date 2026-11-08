@@ -11,6 +11,8 @@ use tokio::sync::{mpsc, oneshot, watch};
 use tracing::Instrument;
 use types::{CancelToken, Error, JobId, Progress};
 
+use crate::conflict::Conflicts;
+
 /// The least time between two progress events of one job. A job over
 /// hundreds of thousands of entries reports each; the event sink, and so
 /// the UI, sees at most this many reports a second per job, always the
@@ -103,6 +105,10 @@ pub struct JobCtx {
     pub progress: ProgressSink,
     /// Where a pausable job waits between steps while it is paused.
     pub pause: PauseGate,
+    /// Where the job asks about a name it would land on
+    /// ([`Conflicts::ask`]); the runner's queue, which the application
+    /// drains into its conflict dialogue.
+    pub conflicts: Arc<Conflicts>,
 }
 
 /// The pause switch of a job, as the job sees it. A job that supports
@@ -155,6 +161,8 @@ struct Inner {
     next_id: AtomicU64,
     running: Mutex<BTreeMap<JobId, Running>>,
     events: Option<mpsc::UnboundedSender<JobEvent>>,
+    /// The name-conflict queue every job of this runner asks through.
+    conflicts: Arc<Conflicts>,
 }
 
 impl Inner {
@@ -200,9 +208,17 @@ impl JobRunner {
                 next_id: AtomicU64::new(0),
                 running: Mutex::new(BTreeMap::new()),
                 events: Some(tx),
+                conflicts: Arc::default(),
             }),
         };
         (runner, rx)
+    }
+
+    /// The queue the runner's jobs ask about name conflicts through; the
+    /// application drains it into its dialogue and answers there.
+    #[must_use]
+    pub fn conflicts(&self) -> &Arc<Conflicts> {
+        &self.inner.conflicts
     }
 
     /// Starts `job` as a task on the runtime and returns its handle.
@@ -284,6 +300,7 @@ impl JobRunner {
             cancel: cancel.clone(),
             progress: ProgressSink(progress_tx),
             pause: PauseGate(pause_rx),
+            conflicts: Arc::clone(&self.inner.conflicts),
         });
         let cancelled = cancel.cancelled();
         let span = tracing::debug_span!("job", %id);

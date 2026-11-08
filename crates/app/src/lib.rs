@@ -47,6 +47,7 @@
 //!     fn confirm(&self, _: &str, _: &str) -> bool { true }
 //!     fn prompt(&self, _: &str, default: &str) -> Option<String> { Some(default.to_owned()) }
 //!     fn show(&self, _: &str, _: &str) {}
+//!     fn form(&self, form: ext::Form) -> Option<ext::Values> { Some(form.defaults()) }
 //! }
 //!
 //! let platform = Arc::new(platform::Native::new());
@@ -67,11 +68,13 @@
 #![forbid(unsafe_code)]
 
 mod command;
+mod ext_settings;
 mod places;
 mod session;
 pub mod settings;
 
 pub use command::{Command, Event, TransferMode};
+pub use ext_settings::ExtSettings;
 pub use places::{PLACES_FILE, defaults as default_places, virtual_icon};
 pub use session::{LAYOUTS_DIR, SAVE_INTERVAL, SESSION_FILE};
 pub use settings::SETTINGS_FILE;
@@ -88,8 +91,8 @@ use ext::{
 };
 use futures::StreamExt;
 use model::{
-    Column, JobState, Model, PaneId, Place, Session, Settings, SettingsChange, SortDir, TabId,
-    Volume,
+    Column, JobState, Model, PaneId, Place, SelectionChange, Session, Settings, SettingsChange,
+    SortDir, TabId, Volume,
 };
 use ops::{Conflicts, PinStore, Scheduler};
 use platform::{Platform, TrashedItem};
@@ -480,6 +483,8 @@ pub struct App {
     exit: bool,
     /// The plugins the host found, for the Extensions screen.
     plugins: Vec<Plugin>,
+    /// The values of the settings extensions declared, one TOML file each.
+    ext_settings: ExtSettings,
     /// The title-row search box's index search in flight.
     index_search: Option<IndexJob>,
     /// Numbers the index searches, so a superseded one's hits are dropped.
@@ -510,7 +515,10 @@ impl App {
         let trash: Arc<dyn platform::Trash> = Arc::clone(&platform) as Arc<dyn platform::Trash>;
         mounts.mount(Arc::new(LocalProvider::new(trash)));
         let pins = Arc::new(PinBridge::default());
-        let conflicts = Conflicts::new();
+        let (jobs, job_events) = JobRunner::with_events();
+        // The name-conflict queue is the job runner's, so a plugin's job
+        // asks through the same dialogue as the kernel's copies.
+        let conflicts = Arc::clone(jobs.conflicts());
         let scheduler = Scheduler::new();
         let core = ops::Core::new(
             Arc::clone(&mounts),
@@ -559,6 +567,7 @@ impl App {
         network_providers.sort();
 
         let config_dir = config_dir.unwrap_or_else(|| platform.config_dir());
+        let ext_settings = ExtSettings::load(&config_dir, registry.settings_schemas());
         let settings_path = config_dir.join(SETTINGS_FILE);
         let places_path = config_dir.join(PLACES_FILE);
         let (places, seeded) = match places::load(&places_path) {
@@ -644,7 +653,6 @@ impl App {
             .iter()
             .map(|index| index.id())
             .collect();
-        let (jobs, job_events) = JobRunner::with_events();
         let (tx, rx) = mpsc::unbounded_channel();
         let settings_saver = settings::saver(settings_path.clone());
         let layouts = session::layouts(&layouts_dir);
@@ -708,6 +716,7 @@ impl App {
             layouts,
             exit: false,
             plugins: Vec::new(),
+            ext_settings,
             index_search: None,
             index_generation: 0,
         };
@@ -774,6 +783,14 @@ impl App {
     #[must_use]
     pub fn plugins(&self) -> &[Plugin] {
         &self.plugins
+    }
+
+    /// The values of the settings extensions declared
+    /// ([`Registry::settings_schemas`]), which the Settings screen edits
+    /// through [`Command::ExtSetting`].
+    #[must_use]
+    pub fn ext_settings(&self) -> &ExtSettings {
+        &self.ext_settings
     }
 
     /// The saved layouts' names, sorted.
@@ -1016,12 +1033,14 @@ impl App {
         self.live.values().any(|l| !l.complete) || !self.jobs.running().is_empty()
     }
 
-    /// The context an action gets for `pane`: its location and selection.
-    /// `None` when the pane shows the Preview tab, which has neither.
+    /// The context an action gets for `pane`: its location and selection,
+    /// plus the location of the window's other explorer pane when there is
+    /// one. `None` when the pane shows the Preview tab, a console or a
+    /// comparison, which have no entries.
     #[must_use]
     pub fn action_ctx(&self, pane: PaneId, invoked_from: Invocation) -> Option<ActionCtx> {
         let (_, tab) = self.model.active_tab(pane)?;
-        if tab.kind == model::TabKind::Preview {
+        if !tab.kind.lists() {
             return None;
         }
         Some(ActionCtx {
@@ -1029,7 +1048,23 @@ impl App {
             location: tab.location.clone(),
             selection: tab.selected().cloned().collect(),
             invoked_from,
+            other: self.other_location(pane),
         })
+    }
+
+    /// The location of the first other pane of the pane's window whose
+    /// active tab is an explorer: the other side of a two-pane layout.
+    fn other_location(&self, pane: PaneId) -> Option<Location> {
+        let window = self.model.window(self.model.window_of(pane)?)?;
+        window
+            .dock
+            .panes()
+            .into_iter()
+            .filter(|p| *p != pane)
+            .find_map(|p| {
+                let (_, tab) = self.model.active_tab(p)?;
+                (tab.kind == model::TabKind::Explorer).then(|| tab.location.clone())
+            })
     }
 
     /// Handles one command: mutates the model and appends the events it
@@ -1250,6 +1285,14 @@ impl App {
             Command::Undo => self.undo(events),
             Command::Redo => self.redo(events),
             Command::Settings(change) => self.change_settings(change),
+            Command::ExtSetting { ext, key, value } => {
+                if let Err(error) = self.ext_settings.set(&ext, &key, value) {
+                    events.push(Event::Notify {
+                        level: Level::Error,
+                        text: format!("Settings of {ext} not saved: {error}"),
+                    });
+                }
+            }
             Command::Thumbnail { pane, id, size } => self.thumbnail(pane, id, size),
             Command::TabOrder { pane, order } => {
                 self.model.set_tab_order(pane, order);
@@ -1648,7 +1691,7 @@ impl App {
         let Some((tab_id, tab)) = self.model.active_tab(pane) else {
             return;
         };
-        if tab.kind == model::TabKind::Preview {
+        if !tab.kind.lists() {
             return;
         }
         let Some(entry) = tab.entry(id).cloned() else {
@@ -1729,6 +1772,7 @@ impl App {
             location: tab.location.clone(),
             selection: vec![entry],
             invoked_from: Invocation::Shortcut,
+            other: None,
         };
         self.run(ext::ActionId("core.open_default"), ctx, events);
     }
@@ -1808,7 +1852,8 @@ impl App {
                     text: format!("Copying {what}; a copy cannot be undone"),
                 });
             }
-            Ok(ActionOutcome::Done) => {}
+            // A transfer moves or copies; it selects and opens nothing.
+            Ok(ActionOutcome::Done | ActionOutcome::Select(_) | ActionOutcome::View(_)) => {}
             Err(error) => events.push(Event::Notify {
                 level: Level::Error,
                 text: format!("Transfer: {error}"),
@@ -1892,6 +1937,7 @@ impl App {
             Availability::Hidden => return,
         }
         let pane = ctx.pane;
+        let location = ctx.location.clone();
         match action.run(ctx, &self.jobs, &*self.ui) {
             Ok(ActionOutcome::Done) => {}
             Ok(ActionOutcome::Started(id)) => {
@@ -1900,6 +1946,35 @@ impl App {
             Ok(ActionOutcome::Undoable(command)) => {
                 self.undo.push(command);
                 self.redo.clear();
+            }
+            Ok(ActionOutcome::Select(selector)) => {
+                let ids: Vec<EntryId> = self
+                    .model
+                    .active_tab(pane)
+                    .map(|(_, tab)| {
+                        tab.rows()
+                            .filter(|entry| (selector.matches)(entry))
+                            .map(|entry| entry.id)
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                let change = if selector.replace {
+                    SelectionChange::Set(ids)
+                } else {
+                    SelectionChange::Add(ids)
+                };
+                if let Some(ids) = self.model.select(pane, change) {
+                    events.push(Event::SelectionChanged { pane, ids });
+                }
+            }
+            Ok(ActionOutcome::View(view)) => {
+                let kind = match &view {
+                    ext::View::Compare(_) => model::TabKind::Compare,
+                    ext::View::Console(_) => model::TabKind::Console,
+                };
+                if let Some(tab) = self.model.open_view(pane, kind, location, view.title()) {
+                    events.push(Event::ViewOpened { pane, tab, view });
+                }
             }
             Err(error) => events.push(Event::Notify {
                 level: Level::Error,
@@ -1925,8 +2000,8 @@ impl App {
 
     fn list_key(&self, pane: PaneId) -> Option<ListKey> {
         let (tab, state) = self.model.active_tab(pane)?;
-        // The preview lists nothing of its own.
-        if state.kind == model::TabKind::Preview {
+        // The preview, a console and a comparison list nothing of their own.
+        if !state.kind.lists() {
             return None;
         }
         Some(ListKey {

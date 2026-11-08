@@ -24,6 +24,7 @@ use model::{
 use platform::{ControlsSide, PropertiesOutcome};
 use types::{EntryId, Location};
 
+use crate::console::ConsoleUi;
 use crate::dnd::{Dnd, DragView, Source, Spring, Target, Zone};
 use crate::dock::DockSync;
 use crate::host::{Ask, EguiHost};
@@ -36,6 +37,7 @@ use crate::settings_ui::ShortcutsScreen;
 use crate::side_panel::SidePanelState;
 use crate::thumbs::Thumbnails;
 use crate::viewer::{self, ViewerCx, ViewerState, Zoom};
+use crate::{compare, console};
 use crate::{conflict, frame, icons, inspector, menus, pane, paths, settings_ui, side_panel};
 
 /// Per-tab view state that is the UI's business, not the model's.
@@ -260,6 +262,15 @@ struct Dialog {
     ctx: ActionCtx,
     input: String,
     focus: bool,
+    /// A form's values as typed so far.
+    values: ext::Values,
+    /// A form's preview rows for `values`.
+    rows: Vec<ext::PreviewRow>,
+    /// A folder dialogue a Browse… button opened, for the field named.
+    browse: Option<(
+        &'static str,
+        runtime::oneshot::Receiver<Option<std::path::PathBuf>>,
+    )>,
 }
 
 /// What a name typed into the name prompt is for.
@@ -364,6 +375,10 @@ pub struct RickUi {
     previews: Previews,
     /// Each viewer tab's own state.
     viewers: HashMap<TabId, ViewerState>,
+    /// The views actions opened (a console, a comparison), by their tab.
+    views: HashMap<TabId, ext::View>,
+    /// Each console tab's own state.
+    consoles: HashMap<TabId, ConsoleUi>,
     /// The zoom remembered per file type, for the viewers, this session.
     zoom_memory: HashMap<String, Zoom>,
     /// The viewer tab filling the screen, if one does.
@@ -535,6 +550,8 @@ impl RickUi {
             ctx: ctx.clone(),
             previews: Previews::default(),
             viewers: HashMap::new(),
+            views: HashMap::new(),
+            consoles: HashMap::new(),
             zoom_memory: HashMap::new(),
             fullscreen: None,
             closed_tabs: Vec::new(),
@@ -856,6 +873,14 @@ impl RickUi {
                 Event::PreviewFailed { pane, error } => {
                     let entry = self.preview_entry(pane);
                     self.previews.failed(pane, &error, entry);
+                }
+                Event::ViewOpened { tab, view, .. } => {
+                    if let ext::View::Console(console) = &view {
+                        let ctx = self.ctx.clone();
+                        console.set_waker(Arc::new(move || ctx.request_repaint()));
+                        self.consoles.entry(tab).or_default().focus_next = true;
+                    }
+                    self.views.insert(tab, view);
                 }
                 _ => {}
             }
@@ -1448,6 +1473,7 @@ impl RickUi {
             location: tab.location.clone(),
             selection,
             invoked_from: Invocation::Shortcut,
+            other: None,
         };
         self.host.answer_prompt(name.to_owned());
         self.inline_commit = true;
@@ -1498,6 +1524,12 @@ impl RickUi {
     fn intercept(&mut self, action: ActionId, ctx: &ActionCtx) -> bool {
         let in_viewer = self.in_viewer(ctx.pane);
         match action.0 {
+            // Rename with several selected is the bulk rename, when the
+            // rename plugin is loaded.
+            "core.rename" if ctx.selection.len() > 1 && self.has_action("rename.bulk") => {
+                self.run_action_with(ActionId("rename.bulk"), ctx.clone());
+                true
+            }
             "core.rename" if !self.inline_commit && !in_viewer && ctx.selection.len() == 1 => {
                 self.requests.push(Request::StartEdit {
                     pane: ctx.pane,
@@ -1541,6 +1573,11 @@ impl RickUi {
         }
     }
 
+    /// Whether the registry holds an action with this id.
+    fn has_action(&self, id: &str) -> bool {
+        self.app.registry().actions().iter().any(|a| a.id().0 == id)
+    }
+
     fn run_action_with(&mut self, action: ActionId, ctx: ActionCtx) {
         if self.intercept(action, &ctx) {
             return;
@@ -1552,7 +1589,15 @@ impl RickUi {
         if let Some(ask) = self.host.take_asked() {
             let input = match &ask {
                 Ask::Prompt { default, .. } => default.clone(),
-                Ask::Confirm { .. } => String::new(),
+                Ask::Confirm { .. } | Ask::Form(_) => String::new(),
+            };
+            let values = match &ask {
+                Ask::Form(form) => form.defaults(),
+                _ => ext::Values::default(),
+            };
+            let rows = match &ask {
+                Ask::Form(form) => form.preview_rows(&values),
+                _ => Vec::new(),
             };
             self.dialog = Some(Dialog {
                 ask,
@@ -1560,6 +1605,9 @@ impl RickUi {
                 ctx,
                 input,
                 focus: true,
+                values,
+                rows,
+                browse: None,
             });
         }
     }
@@ -1582,15 +1630,12 @@ impl RickUi {
                 location: tab.location.clone(),
                 selection: vec![entry],
                 invoked_from: Invocation::Shortcut,
+                other: None,
             };
             self.run_action_with(ActionId("trash.restore_items"), ctx);
             return;
         }
         self.handle(Command::Open { pane, id });
-    }
-
-    fn unavailable(&mut self, what: &str) {
-        self.toast(Level::Info, format!("{what} is not part of version 0.1"));
     }
 
     #[allow(clippy::too_many_lines)]
@@ -1899,14 +1944,6 @@ impl RickUi {
                     pane,
                     mode: ViewMode::Icons(order[next]),
                 });
-            }
-            Intent::SelectByPattern
-            | Intent::PasteAsLink
-            | Intent::BulkRename
-            | Intent::OpenWith
-            | Intent::Console => {
-                let label = intent.spec().map_or("This", |s| s.label);
-                self.unavailable(label);
             }
             Intent::ToggleSidePanel => {
                 let visible = self
@@ -2472,14 +2509,189 @@ impl RickUi {
         }
     }
 
+    // One dialogue, three shapes.
+    #[allow(clippy::too_many_lines)]
     fn show_dialog(&mut self, ctx: &egui::Context) {
+        let platform = Arc::clone(self.app.platform());
         let Some(dialog) = self.dialog.as_mut() else {
             return;
         };
+        // A folder the Browse… button's dialogue picked lands in its field.
+        if let Some((key, rx)) = dialog.browse.as_mut() {
+            match rx.try_recv() {
+                Ok(Some(path)) => {
+                    dialog
+                        .values
+                        .set(key, ext::Value::Text(path.display().to_string()));
+                    if let Ask::Form(form) = &dialog.ask {
+                        dialog.rows = form.preview_rows(&dialog.values);
+                    }
+                    dialog.browse = None;
+                }
+                Ok(None) | Err(runtime::oneshot::error::TryRecvError::Closed) => {
+                    dialog.browse = None;
+                }
+                Err(runtime::oneshot::error::TryRecvError::Empty) => {
+                    ctx.request_repaint_after(Duration::from_millis(100));
+                }
+            }
+        }
         let mut outcome: Option<bool> = None;
+        let wide = matches!(dialog.ask, Ask::Form(_));
         let modal = egui::Modal::new(egui::Id::new("ask")).show(ctx, |ui| {
-            ui.set_width(360.0);
+            ui.set_width(if wide { 560.0 } else { 360.0 });
             match &dialog.ask {
+                Ask::Form(form) => {
+                    ui.heading(&form.title);
+                    let mut changed = false;
+                    let mut browse: Option<&'static str> = None;
+                    egui::Grid::new("ask-form")
+                        .num_columns(2)
+                        .spacing([12.0, 6.0])
+                        .show(ui, |ui| {
+                            for (index, field) in form.fields.iter().enumerate() {
+                                ui.label(&field.label);
+                                match &field.kind {
+                                    ext::FieldKind::Text { hint, .. } => {
+                                        let mut text = dialog.values.text(field.key).to_owned();
+                                        let output = egui::TextEdit::singleline(&mut text)
+                                            .hint_text(hint)
+                                            .desired_width(f32::INFINITY)
+                                            .show(ui);
+                                        if dialog.focus && index == 0 {
+                                            output.response.request_focus();
+                                            let end = output.galley.text().len();
+                                            let mut state = output.state;
+                                            state.cursor.set_char_range(Some(
+                                                egui::text::CCursorRange::two(
+                                                    egui::text::CCursor::new(0),
+                                                    egui::text::CCursor::new(end),
+                                                ),
+                                            ));
+                                            state.store(ctx, output.response.id);
+                                        }
+                                        if output.response.changed() {
+                                            dialog.values.set(field.key, ext::Value::Text(text));
+                                            changed = true;
+                                        }
+                                        if output.response.lost_focus()
+                                            && ui.input(|i| i.key_pressed(egui::Key::Enter))
+                                        {
+                                            outcome = Some(true);
+                                        }
+                                    }
+                                    ext::FieldKind::Folder { .. } => {
+                                        ui.horizontal(|ui| {
+                                            let mut text = dialog.values.text(field.key).to_owned();
+                                            let response = ui.add(
+                                                egui::TextEdit::singleline(&mut text)
+                                                    .desired_width(ui.available_width() - 40.0),
+                                            );
+                                            if response.changed() {
+                                                dialog
+                                                    .values
+                                                    .set(field.key, ext::Value::Text(text));
+                                                changed = true;
+                                            }
+                                            if response.lost_focus()
+                                                && ui.input(|i| i.key_pressed(egui::Key::Enter))
+                                            {
+                                                outcome = Some(true);
+                                            }
+                                            if ui
+                                                .button(icons::BROWSE)
+                                                .on_hover_text("Browse…")
+                                                .clicked()
+                                            {
+                                                browse = Some(field.key);
+                                            }
+                                        });
+                                    }
+                                    ext::FieldKind::Check { .. } => {
+                                        let mut on = dialog.values.check(field.key);
+                                        if ui.checkbox(&mut on, "").changed() {
+                                            dialog.values.set(field.key, ext::Value::Check(on));
+                                            changed = true;
+                                        }
+                                    }
+                                    ext::FieldKind::Choice { options, .. } => {
+                                        let mut selected = dialog.values.choice(field.key);
+                                        let current = options
+                                            .get(selected)
+                                            .map_or("", String::as_str)
+                                            .to_owned();
+                                        egui::ComboBox::from_id_salt(("ask-choice", field.key))
+                                            .selected_text(current)
+                                            .width(ui.available_width())
+                                            .show_ui(ui, |ui| {
+                                                for (i, option) in options.iter().enumerate() {
+                                                    ui.selectable_value(&mut selected, i, option);
+                                                }
+                                            });
+                                        if selected != dialog.values.choice(field.key) {
+                                            dialog
+                                                .values
+                                                .set(field.key, ext::Value::Choice(selected));
+                                            changed = true;
+                                        }
+                                    }
+                                }
+                                ui.end_row();
+                            }
+                        });
+                    dialog.focus = false;
+                    if changed {
+                        dialog.rows = form.preview_rows(&dialog.values);
+                    }
+                    if let Some(key) = browse
+                        && dialog.browse.is_none()
+                    {
+                        let (tx, rx) = runtime::oneshot::channel();
+                        let title = format!("{} — choose a folder", form.title);
+                        let platform = Arc::clone(&platform);
+                        runtime::handle().spawn(async move {
+                            let _ = tx.send(platform.pick_folder(&title).await);
+                        });
+                        dialog.browse = Some((key, rx));
+                    }
+                    if form.preview.is_some() {
+                        ui.add_space(6.0);
+                        let problems = dialog.rows.iter().filter(|r| r.problem.is_some()).count();
+                        ui.weak(match (dialog.rows.len(), problems) {
+                            (0, _) => "Nothing to preview".to_owned(),
+                            (n, 0) => format!("{n} entries"),
+                            (n, p) => format!("{n} entries, {p} with a problem"),
+                        });
+                        let row_height = ui.text_style_height(&egui::TextStyle::Body) + 4.0;
+                        egui::ScrollArea::vertical()
+                            .max_height(240.0)
+                            .auto_shrink([false, true])
+                            .show_rows(ui, row_height, dialog.rows.len(), |ui, range| {
+                                egui::Grid::new(("ask-preview", range.start))
+                                    .num_columns(3)
+                                    .striped(true)
+                                    .min_col_width(80.0)
+                                    .show(ui, |ui| {
+                                        for row in &dialog.rows[range] {
+                                            ui.label(&row.from);
+                                            ui.label(icons::FORWARD);
+                                            match &row.problem {
+                                                Some(problem) => {
+                                                    ui.colored_label(
+                                                        ui.visuals().error_fg_color,
+                                                        format!("{} — {problem}", row.to),
+                                                    );
+                                                }
+                                                None => {
+                                                    ui.label(&row.to);
+                                                }
+                                            }
+                                            ui.end_row();
+                                        }
+                                    });
+                            });
+                    }
+                }
                 Ask::Prompt { title, .. } => {
                     ui.heading(title);
                     let output = egui::TextEdit::singleline(&mut dialog.input)
@@ -2512,14 +2724,27 @@ impl RickUi {
                 }
             }
             ui.add_space(8.0);
+            // A form with a problem in its preview cannot be confirmed.
+            let blocked = matches!(&dialog.ask, Ask::Form(form) if form.preview.is_some())
+                && dialog.rows.iter().any(|r| r.problem.is_some());
+            let ok_label = match &dialog.ask {
+                Ask::Form(form) => form.ok.as_str(),
+                _ => "OK",
+            };
             ui.horizontal(|ui| {
-                if ui.button("OK").clicked() {
+                if ui
+                    .add_enabled(!blocked, egui::Button::new(ok_label))
+                    .clicked()
+                {
                     outcome = Some(true);
                 }
                 if ui.button("Cancel").clicked() {
                     outcome = Some(false);
                 }
             });
+            if blocked && outcome == Some(true) {
+                outcome = None;
+            }
             if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
                 outcome = Some(false);
             }
@@ -2540,6 +2765,7 @@ impl RickUi {
         match dialog.ask {
             Ask::Prompt { .. } => self.host.answer_prompt(dialog.input),
             Ask::Confirm { .. } => self.host.answer_confirm(true),
+            Ask::Form(_) => self.host.answer_form(dialog.values),
         }
         self.run_action_with(dialog.action, dialog.ctx);
     }
@@ -2659,6 +2885,10 @@ struct Viewer<'a> {
     inspector_state: &'a mut inspector::PaneState,
     /// Each viewer tab's state.
     viewers: &'a mut HashMap<TabId, ViewerState>,
+    /// The views actions opened, by tab.
+    views: &'a HashMap<TabId, ext::View>,
+    /// Each console tab's state.
+    consoles: &'a mut HashMap<TabId, ConsoleUi>,
     /// The zoom remembered per file type.
     zoom_memory: &'a mut HashMap<String, Zoom>,
     /// The viewer tab filling the screen.
@@ -2678,6 +2908,18 @@ impl TabViewer for Viewer<'_> {
             |t| match t.kind {
                 TabKind::Preview => format!("{} Preview", icons::PREVIEW).into(),
                 TabKind::Viewer => viewer::title(t).into(),
+                TabKind::Console => format!(
+                    "{} {}",
+                    icons::TERMINAL,
+                    t.title.as_deref().unwrap_or("Console")
+                )
+                .into(),
+                TabKind::Compare => format!(
+                    "{} {}",
+                    icons::COMPARE,
+                    t.title.as_deref().unwrap_or("Compare")
+                )
+                .into(),
                 TabKind::Explorer => {
                     // A folder icon for local folders, a view's own for a
                     // virtual location, the archive's for an archive, the
@@ -2703,7 +2945,7 @@ impl TabViewer for Viewer<'_> {
         // the tab. The Preview tab shows no folder.
         if self.dnd.active()
             && let Some(state) = self.app.model().tab(*tab)
-            && state.kind != TabKind::Preview
+            && state.kind.lists()
         {
             let highlight = self.dnd.zone(Zone {
                 key: egui::Id::new(("dnd-tab", tab.0)),
@@ -2755,6 +2997,21 @@ impl TabViewer for Viewer<'_> {
             if close {
                 self.requests
                     .push(Request::Command(Command::CloseTab(*tab)));
+            }
+            return;
+        }
+        if state.kind.is_view() {
+            match self.views.get(tab) {
+                Some(ext::View::Console(console)) => {
+                    let state = self.consoles.entry(*tab).or_default();
+                    console::show(ui, state, console, *tab);
+                }
+                Some(ext::View::Compare(compare)) => compare::show(ui, compare, self.requests),
+                None => {
+                    ui.centered_and_justified(|ui| {
+                        ui.weak("This tab's content is gone; close it.");
+                    });
+                }
             }
             return;
         }
@@ -2854,6 +3111,8 @@ impl RickUi {
                 previews: &mut self.previews,
                 inspector_state: &mut self.inspector_state,
                 viewers: &mut self.viewers,
+                views: &self.views,
+                consoles: &mut self.consoles,
                 zoom_memory: &mut self.zoom_memory,
                 fullscreen: self.fullscreen,
             };
@@ -3024,6 +3283,10 @@ impl RickUi {
         // viewer that closed leaves the screen.
         let model = self.app.model();
         self.viewers.retain(|tab, _| model.tab(*tab).is_some());
+        // A closed console or comparison takes its view with it; dropping a
+        // console ends its shell.
+        self.views.retain(|tab, _| model.tab(*tab).is_some());
+        self.consoles.retain(|tab, _| model.tab(*tab).is_some());
         if self.fullscreen.is_some_and(|tab| model.tab(tab).is_none()) {
             self.set_fullscreen(ctx, TabId(0), false);
         }

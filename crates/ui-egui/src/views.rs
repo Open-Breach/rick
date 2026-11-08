@@ -148,6 +148,10 @@ pub fn show(ui: &mut egui::Ui, cx: &mut PaneCx<'_>) {
             location: cx.tab.location.clone(),
             selection: Vec::new(),
             invoked_from: ext::Invocation::ContextMenu,
+            other: cx
+                .app
+                .action_ctx(cx.pane, ext::Invocation::ContextMenu)
+                .and_then(|c| c.other),
         };
         background.context_menu(|ui| menus::context_menu(ui, cx, &action_ctx, None));
     }

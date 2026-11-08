@@ -1,5 +1,5 @@
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
@@ -7,7 +7,7 @@ use ext::{
     Action, ActionCtx, ActionId, ActionOutcome, Availability, Extension, Invocation, Level, PaneId,
     Registry, UiHost,
 };
-use platform::{Fake, Trash as _};
+use platform::{ConfigDir as _, Fake, Trash as _};
 use runtime::JobRunner;
 use types::{Entry, Location};
 use vfs::Mounts;
@@ -21,6 +21,14 @@ struct Scripted {
     confirm: Mutex<bool>,
     prompt: Mutex<Option<String>>,
     notices: Mutex<Vec<(Level, String)>>,
+    /// Values laid over a form's defaults; `None` dismisses the form.
+    form: Mutex<Option<Vec<(&'static str, ext::Value)>>>,
+}
+
+impl Scripted {
+    fn answer_form(&self, values: Vec<(&'static str, ext::Value)>) {
+        *self.form.lock().unwrap_or_else(PoisonError::into_inner) = Some(values);
+    }
 }
 
 impl UiHost for Scripted {
@@ -40,6 +48,18 @@ impl UiHost for Scripted {
             .clone()
     }
     fn show(&self, _title: &str, _text: &str) {}
+    fn form(&self, form: ext::Form) -> Option<ext::Values> {
+        let overrides = self
+            .form
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()?;
+        let mut values = form.defaults();
+        for (key, value) in overrides {
+            values.set(key, value);
+        }
+        Some(values)
+    }
 }
 
 /// A pinned list in memory.
@@ -112,7 +132,10 @@ fn harness() -> Harness {
         registry,
         core_clipboard: Arc::new(move || clip.clipboard()),
         jobs: JobRunner::new(),
-        ui: Scripted::default(),
+        ui: Scripted {
+            form: Mutex::new(Some(Vec::new())),
+            ..Scripted::default()
+        },
     }
 }
 
@@ -151,6 +174,7 @@ impl Harness {
             location: tests_local(location),
             selection: self.entries(selection),
             invoked_from: Invocation::Palette,
+            other: None,
         }
     }
 
@@ -435,7 +459,7 @@ fn copy_path_open_and_reveal_go_to_the_platform() {
 #[test]
 fn every_action_has_an_id_label_and_core_group() {
     let h = harness();
-    assert_eq!(h.registry.actions().len(), 18);
+    assert_eq!(h.registry.actions().len(), 22);
     for action in h.registry.actions() {
         assert!(action.id().0.starts_with("core."), "{}", action.id().0);
         assert_ne!(action.label(), "");
@@ -449,6 +473,7 @@ fn every_action_has_an_id_label_and_core_group() {
                 | "core.new_file"
                 | "core.open_containing"
                 | "core.open_containing_tab"
+                | "core.create_link"
         );
         assert_eq!(
             action.default_shortcut().is_some(),
@@ -885,6 +910,7 @@ fn virtual_locations_hide_the_actions_that_do_not_apply() {
         location: vfs_rick::trash_location(),
         selection: entries.clone(),
         invoked_from: Invocation::ContextMenu,
+        other: None,
     };
     for hidden in [
         "core.copy",
@@ -917,6 +943,7 @@ fn virtual_locations_hide_the_actions_that_do_not_apply() {
         location: vfs_rick::Virtual::Favorites.location(),
         selection: entries,
         invoked_from: Invocation::ContextMenu,
+        other: None,
     };
     for hidden in [
         "core.paste",
@@ -945,4 +972,158 @@ fn virtual_locations_hide_the_actions_that_do_not_apply() {
     }
     assert!(super::is_virtual(&favorites_ctx));
     assert!(!super::is_trash(&favorites_ctx));
+}
+
+#[test]
+fn open_with_lists_the_platforms_applications_and_remembers_the_choice() {
+    let h = harness();
+    let dir = h.dir.path().join("docs");
+    fs::create_dir_all(&dir).unwrap_or_else(|e| panic!("{e}"));
+    write(&dir.join("a.txt"), "A");
+    let action = h.action("core.open_with");
+    assert!(matches!(
+        action.availability(&h.ctx(&dir, &[])),
+        Availability::Disabled(_)
+    ));
+    // The second fake application, remembered for .txt files.
+    h.ui.answer_form(vec![
+        ("app", ext::Value::Choice(1)),
+        ("remember", ext::Value::Check(true)),
+    ]);
+    h.run("core.open_with", h.ctx(&dir, &[&dir.join("a.txt")]));
+    let opened = h.fake.opened_with();
+    assert_eq!(opened.len(), 1);
+    assert_eq!(opened[0].0, dir.join("a.txt"));
+    assert_eq!(opened[0].1.id, platform::FAKE_APPLICATIONS[1].1);
+    let file = h.fake.config_dir().join(super::OPEN_WITH_FILE);
+    let text = fs::read_to_string(&file).unwrap_or_default();
+    assert!(text.contains("txt = \"fake-viewer\""), "{text}");
+
+    // Another program, typed.
+    h.ui.answer_form(vec![
+        ("app", ext::Value::Choice(9)),
+        ("command", ext::Value::Text("/opt/tool/view --fast".into())),
+    ]);
+    h.run("core.open_with", h.ctx(&dir, &[&dir.join("a.txt")]));
+    let opened = h.fake.opened_with();
+    assert_eq!(opened.len(), 2);
+    assert_eq!(opened[1].1.id, "/opt/tool/view --fast");
+    assert_eq!(opened[1].1.name, "view");
+}
+
+#[test]
+fn paste_as_link_makes_symlinks_and_undo_removes_them() {
+    let h = harness();
+    let (src, dst) = (h.dir.path().join("src"), h.dir.path().join("dst"));
+    fs::create_dir_all(&src).unwrap_or_else(|e| panic!("{e}"));
+    fs::create_dir_all(&dst).unwrap_or_else(|e| panic!("{e}"));
+    write(&src.join("a.txt"), "A");
+    fs::create_dir(src.join("sub")).unwrap_or_else(|e| panic!("{e}"));
+    let paste_link = h.action("core.paste_link");
+    assert!(matches!(
+        paste_link.availability(&h.ctx(&dst, &[])),
+        Availability::Disabled(_)
+    ));
+    h.run(
+        "core.copy",
+        h.ctx(&src, &[&src.join("a.txt"), &src.join("sub")]),
+    );
+    let outcome = h.run("core.paste_link", h.ctx(&dst, &[]));
+    let ActionOutcome::Undoable(command) = outcome else {
+        panic!("not undoable: {outcome:?}");
+    };
+    let link = dst.join("a.txt");
+    let meta = fs::symlink_metadata(&link).unwrap_or_else(|e| panic!("{e}"));
+    assert!(meta.file_type().is_symlink(), "a symlink was pasted");
+    assert_eq!(fs::read_link(&link).ok(), Some(src.join("a.txt")));
+    assert_eq!(fs::read_to_string(&link).ok().as_deref(), Some("A"));
+    assert!(fs::symlink_metadata(dst.join("sub")).is_ok_and(|m| m.file_type().is_symlink()));
+    assert!(src.join("a.txt").is_file(), "the source stays");
+
+    // A second paste takes a numbered name.
+    h.run("core.paste_link", h.ctx(&dst, &[]));
+    assert!(fs::symlink_metadata(dst.join("a (2).txt")).is_ok());
+
+    command.undo(&h.jobs).unwrap_or_else(|e| panic!("{e}"));
+    h.settle();
+    assert!(
+        fs::symlink_metadata(&link).is_err(),
+        "undo removed the link"
+    );
+    assert!(fs::symlink_metadata(dst.join("sub")).is_err());
+    assert!(src.join("a.txt").is_file(), "undo leaves the source");
+    command.redo(&h.jobs).unwrap_or_else(|e| panic!("{e}"));
+    h.settle();
+    assert!(fs::symlink_metadata(&link).is_ok());
+
+    // Create link… into a chosen folder.
+    let elsewhere = h.dir.path().join("elsewhere");
+    fs::create_dir_all(&elsewhere).unwrap_or_else(|e| panic!("{e}"));
+    h.ui.answer_form(vec![(
+        "folder",
+        ext::Value::Text(elsewhere.display().to_string()),
+    )]);
+    let outcome = h.run("core.create_link", h.ctx(&src, &[&src.join("a.txt")]));
+    assert!(matches!(outcome, ActionOutcome::Undoable(_)));
+    assert_eq!(
+        fs::read_link(elsewhere.join("a.txt")).ok(),
+        Some(src.join("a.txt"))
+    );
+}
+
+#[test]
+fn select_by_pattern_matches_globs_and_regular_expressions() {
+    let h = harness();
+    let dir = h.dir.path().join("docs");
+    fs::create_dir_all(&dir).unwrap_or_else(|e| panic!("{e}"));
+    for name in ["report.pdf", "notes.TXT", "draft.txt", "Image.png"] {
+        write(&dir.join(name), "x");
+    }
+    let all: Vec<_> = ["report.pdf", "notes.TXT", "draft.txt", "Image.png"]
+        .iter()
+        .map(|n| dir.join(n))
+        .collect();
+    let refs: Vec<&Path> = all.iter().map(PathBuf::as_path).collect();
+    let entries = h.entries(&refs);
+    let names = |selector: &ext::Selector| -> Vec<String> {
+        entries
+            .iter()
+            .filter(|e| (selector.matches)(e))
+            .map(|e| e.name.clone())
+            .collect()
+    };
+
+    h.ui.answer_form(vec![("pattern", ext::Value::Text("*.txt".into()))]);
+    let outcome = h.run("core.select_pattern", h.ctx(&dir, &[]));
+    let ActionOutcome::Select(selector) = outcome else {
+        panic!("not a selection: {outcome:?}");
+    };
+    assert!(selector.replace);
+    assert_eq!(names(&selector), ["notes.TXT", "draft.txt"]);
+
+    h.ui.answer_form(vec![
+        ("pattern", ext::Value::Text("^[a-z]+\\.(pdf|png)$".into())),
+        ("kind", ext::Value::Choice(1)),
+        ("mode", ext::Value::Choice(1)),
+    ]);
+    let outcome = h.run("core.select_pattern", h.ctx(&dir, &[]));
+    let ActionOutcome::Select(selector) = outcome else {
+        panic!("not a selection: {outcome:?}");
+    };
+    assert!(!selector.replace);
+    assert_eq!(names(&selector), ["report.pdf"]);
+
+    // A pattern that does not parse is reported, not applied.
+    h.ui.answer_form(vec![
+        ("pattern", ext::Value::Text("(".into())),
+        ("kind", ext::Value::Choice(1)),
+    ]);
+    let action = h.action("core.select_pattern");
+    assert!(action.run(h.ctx(&dir, &[]), &h.jobs, &h.ui).is_err());
+    // An empty pattern does nothing.
+    h.ui.answer_form(vec![("pattern", ext::Value::Text("  ".into()))]);
+    assert!(matches!(
+        h.run("core.select_pattern", h.ctx(&dir, &[])),
+        ActionOutcome::Done
+    ));
 }

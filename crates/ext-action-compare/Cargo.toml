@@ -1,0 +1,27 @@
+[package]
+name = "ext-action-compare"
+version.workspace = true
+description = "Rick's Compare action: two files as a side-by-side text diff, two folders entry by entry; as a plugin."
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+# A plugin: a `cdylib` the host loads from `plugins/action-compare/`, and
+# an `rlib` for the binary's opt-in `action-compare` feature and the tests.
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+types = { workspace = true }
+ext = { workspace = true }
+similar = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+runtime = { workspace = true }
+platform = { workspace = true }
+vfs-local = { workspace = true }
+tempfile = { workspace = true }
+
+[lints]
+workspace = true

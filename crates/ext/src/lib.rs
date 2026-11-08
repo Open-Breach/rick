@@ -36,20 +36,23 @@
 
 pub mod action;
 pub mod decorator;
+pub mod form;
 pub mod plugin;
 pub mod preview;
 pub mod provider;
 pub mod registry;
 pub mod search;
+pub mod view;
 
 pub use action::{
     Action, ActionCtx, ActionGroup, ActionId, ActionOutcome, Availability, Invocation, Key, Level,
-    Modifiers, PaneId, Shortcut, ShortcutParseError, UiHost, UndoCommand,
+    Modifiers, PaneId, Selector, Shortcut, ShortcutParseError, UiHost, UndoCommand,
 };
 pub use async_trait::async_trait;
 pub use decorator::{
     Badge, CellValue, Color, ColumnDef, ColumnId, DecorateCtx, Decoration, Decorator, PanelSection,
 };
+pub use form::{Field, FieldKind, Form, Preview, PreviewRow, Value, Values};
 pub use futures::stream::BoxStream;
 pub use preview::{
     Block, Content, ControlId, ControlValue, Document, Frame, Grid, Icon, Image, InfoSection,
@@ -62,11 +65,15 @@ pub use provider::{
 };
 pub use registry::{
     API_VERSION, Extension, Manifest, Platforms, Points, Registry, SettingField, SettingKind,
-    SettingsSchema,
+    SettingValue, SettingsSchema,
 };
-pub use runtime::{JobRunner, ProgressSink};
+pub use runtime::{Conflicts, JobCtx, JobRunner, ProgressSink};
 pub use search::{Filter, Query, QueryKind, SearchHit, SearchIndex, SearchScope};
 pub use semver::Version;
+pub use view::{
+    Cell, CellStyle, Compare, Console, ConsoleWaker, Diff, FolderDiff, FolderRow, Hunk, HunkKind,
+    RowStatus, Screen, Side, TermColor, TextDiff, View,
+};
 
 /// The platform services an extension programs against (`Trash`,
 /// `OpenWith`, `ConfigDir`, `NativeDialogs`, …), re-exported so an

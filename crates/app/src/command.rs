@@ -229,6 +229,15 @@ pub enum Command {
     Redo,
     /// Change one setting and save the settings file.
     Settings(SettingsChange),
+    /// Change one setting an extension declared and save its TOML file.
+    ExtSetting {
+        /// The extension's id.
+        ext: String,
+        /// The setting's key.
+        key: String,
+        /// The new value.
+        value: ext::SettingValue,
+    },
     /// Render a thumbnail of an entry of the pane's listing at `size`
     /// pixels square, through the previewer that claims it; answered by
     /// [`Event::Thumbnail`].
@@ -429,6 +438,16 @@ pub enum Event {
     /// A job met an existing name and waits for the conflict dialogue's
     /// answer; the conflict is in the model until it is resolved.
     Conflict(Conflict),
+    /// An action opened a view in a new tab of the pane, which the model
+    /// already holds; the UI draws `view` in it.
+    ViewOpened {
+        /// The pane.
+        pane: PaneId,
+        /// The new tab.
+        tab: TabId,
+        /// What to draw.
+        view: ext::View,
+    },
     /// Something to show the user.
     Notify {
         /// How serious.
@@ -493,6 +512,12 @@ impl fmt::Debug for Event {
                 .field("error", error)
                 .finish(),
             Self::Conflict(conflict) => f.debug_tuple("Conflict").field(&conflict.id).finish(),
+            Self::ViewOpened { pane, tab, view } => f
+                .debug_struct("ViewOpened")
+                .field("pane", pane)
+                .field("tab", tab)
+                .field("view", view)
+                .finish(),
             Self::Notify { level, text } => f
                 .debug_struct("Notify")
                 .field("level", level)

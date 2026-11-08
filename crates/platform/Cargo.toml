@@ -30,6 +30,7 @@ objc2-foundation = { workspace = true, features = ["NSArray", "NSFileManager", "
 rustix = { workspace = true, features = ["fs", "process", "std"] }
 
 [target.'cfg(windows)'.dependencies]
+junction = { workspace = true }
 windows = { workspace = true, features = [
     "Win32_Foundation",
     "Win32_Security",

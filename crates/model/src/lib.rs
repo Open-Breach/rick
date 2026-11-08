@@ -69,6 +69,30 @@ pub enum TabKind {
     /// steps through the folder like a slideshow. The selection is the
     /// file shown.
     Viewer,
+    /// A terminal session an action opened at the tab's location; drawn
+    /// by the UI from the view the action returned, never restored with a
+    /// session.
+    Console,
+    /// A comparison of two files or two folders an action opened; drawn by
+    /// the UI from the view the action returned, never restored with a
+    /// session.
+    Compare,
+}
+
+impl TabKind {
+    /// Whether a tab of this kind lists entries of its own: an explorer or
+    /// a viewer.
+    #[must_use]
+    pub fn lists(self) -> bool {
+        matches!(self, Self::Explorer | Self::Viewer)
+    }
+
+    /// Whether a tab of this kind shows a view an action handed the UI,
+    /// which cannot come back with a session.
+    #[must_use]
+    pub fn is_view(self) -> bool {
+        matches!(self, Self::Console | Self::Compare)
+    }
 }
 
 /// Where a split puts the new pane.
@@ -347,6 +371,9 @@ pub struct Tab {
     /// A note for the status line: why the tab is not where the session
     /// left it. Cleared by the next navigation.
     pub note: Option<String>,
+    /// The title of a console or compare tab, as the action named it; the
+    /// other kinds are titled from their location.
+    pub title: Option<String>,
 }
 
 impl Tab {
@@ -371,6 +398,7 @@ impl Tab {
             tree: Tree::default(),
             scroll: 0.0,
             note: None,
+            title: None,
         }
     }
 
@@ -845,7 +873,13 @@ impl Model {
                 let tab = TabId(self.next_tab);
                 self.next_tab += 1;
                 let mut state = Tab::new(saved_tab.location.clone(), &self.settings);
-                state.kind = saved_tab.kind;
+                // A hand-edited file naming a console or a comparison: the
+                // view is gone, the location stays.
+                state.kind = if saved_tab.kind.is_view() {
+                    TabKind::Explorer
+                } else {
+                    saved_tab.kind
+                };
                 state.view = saved_tab.view;
                 state.sort = saved_tab.sort;
                 state.group = saved_tab.group;
@@ -970,11 +1004,19 @@ impl Model {
                     .iter()
                     .map(|pane| {
                         let pane = self.panes.get(pane);
-                        let tabs: Vec<TabId> = pane.map(|p| p.tabs.clone()).unwrap_or_default();
+                        // A console or a comparison cannot come back with
+                        // the session: its tab is left out.
+                        let tabs: Vec<TabId> = pane
+                            .map(|p| p.tabs.clone())
+                            .unwrap_or_default()
+                            .into_iter()
+                            .filter(|id| self.tabs.get(id).is_some_and(|t| !t.kind.is_view()))
+                            .collect();
                         PaneSession {
                             active: pane
                                 .and_then(Pane::active)
-                                .and_then(|a| tabs.iter().position(|t| *t == a)),
+                                .and_then(|a| tabs.iter().position(|t| *t == a))
+                                .or_else(|| (!tabs.is_empty()).then_some(0)),
                             tabs: tabs
                                 .iter()
                                 .filter_map(|id| self.tabs.get(id))
@@ -1546,6 +1588,33 @@ impl Model {
         }
         self.activate(tab);
         Some(tab)
+    }
+
+    /// Opens a tab of `kind` (a console or a comparison) titled `title` at
+    /// `location`, next to the pane's active tab and active in its place;
+    /// the UI draws it from the view the action returned. `None` when the
+    /// pane does not exist.
+    pub fn open_view(
+        &mut self,
+        pane: PaneId,
+        kind: TabKind,
+        location: Location,
+        title: String,
+    ) -> Option<TabId> {
+        let p = self.panes.get(&pane)?;
+        let at = p
+            .active
+            .and_then(|a| p.tabs.iter().position(|t| *t == a))
+            .map_or(p.tabs.len(), |i| i + 1);
+        let id = TabId(self.next_tab);
+        self.next_tab += 1;
+        let mut state = Tab::new(location, &self.settings);
+        state.kind = kind;
+        state.title = Some(title);
+        self.tabs.insert(id, state);
+        self.panes.get_mut(&pane)?.tabs.insert(at, id);
+        self.activate(id);
+        Some(id)
     }
 
     /// Opens a tab at `location` in `pane`, or in the focused pane, and makes

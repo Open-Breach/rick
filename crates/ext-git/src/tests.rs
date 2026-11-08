@@ -87,6 +87,9 @@ impl UiHost for Scripted {
             .unwrap_or_else(PoisonError::into_inner)
             .push((title.to_owned(), text.to_owned()));
     }
+    fn form(&self, form: ext::Form) -> Option<ext::Values> {
+        Some(form.defaults())
+    }
 }
 
 fn loc(path: &Path) -> Location {
@@ -116,6 +119,7 @@ fn ctx(location: &Path, selection: &[&Path]) -> ActionCtx {
         location: loc(location),
         selection: entries(selection),
         invoked_from: Invocation::ContextMenu,
+        other: None,
     }
 }
 

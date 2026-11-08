@@ -62,6 +62,14 @@ fn built_ins() -> Vec<Arc<dyn ext::Extension>> {
     extensions.push(Arc::new(ext_search_tracker::TrackerExtension::new()));
     #[cfg(feature = "search-baloo")]
     extensions.push(Arc::new(ext_search_baloo::BalooExtension::new()));
+    #[cfg(feature = "action-compress")]
+    extensions.push(Arc::new(ext_action_compress::CompressExtension::new()));
+    #[cfg(feature = "action-compare")]
+    extensions.push(Arc::new(ext_action_compare::CompareExtension::new()));
+    #[cfg(feature = "action-terminal")]
+    extensions.push(Arc::new(ext_action_terminal::TerminalExtension::new()));
+    #[cfg(feature = "action-rename")]
+    extensions.push(Arc::new(ext_action_rename::RenameExtension::new()));
     extensions
 }
 

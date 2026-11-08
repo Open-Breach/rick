@@ -273,6 +273,8 @@ fn fit_segments(widths: &[f32], separator_w: f32, chevron_w: f32, available: f32
 /// The breadcrumb: segments from the right as far as they fit, the rest
 /// folded into a chevron with a dropdown, the last one truncated when even
 /// it does not fit, and the copy button at the right end.
+// The breadcrumb's collapsing, editing and copy button in one pass.
+#[allow(clippy::too_many_lines)]
 fn breadcrumb(ui: &mut egui::Ui, cx: &mut PaneCx<'_>, rect: egui::Rect) {
     let segments: Vec<paths::Crumb> = cx.tab_ui.crumbs_of(&cx.tab.location).to_vec();
     let last = segments.len().saturating_sub(1);
@@ -364,6 +366,7 @@ fn breadcrumb(ui: &mut egui::Ui, cx: &mut PaneCx<'_>, rect: egui::Rect) {
                 location: cx.tab.location.clone(),
                 selection: Vec::new(),
                 invoked_from: ext::Invocation::Menu,
+                other: None,
             },
         });
     }

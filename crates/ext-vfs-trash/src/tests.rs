@@ -28,6 +28,9 @@ impl UiHost for Scripted {
         Some(default.to_owned())
     }
     fn show(&self, _: &str, _: &str) {}
+    fn form(&self, form: ext::Form) -> Option<ext::Values> {
+        Some(form.defaults())
+    }
 }
 
 struct Harness {
@@ -86,6 +89,7 @@ impl Harness {
             location,
             selection,
             invoked_from: Invocation::ContextMenu,
+            other: None,
         }
     }
 

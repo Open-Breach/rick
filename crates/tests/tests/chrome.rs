@@ -579,7 +579,11 @@ fn right_click_on_empty_space_opens_the_folder_menu() {
     harness.step();
     harness.step();
     harness.get_by_label_contains("New folder");
-    harness.get_by_label_contains("Paste");
+    // Paste and Paste as link are both there.
+    assert!(
+        harness.get_all_by_label_contains("Paste").count() >= 2,
+        "Paste and Paste as link"
+    );
     assert!(
         harness.query_by_label_contains("Rename").is_none(),
         "needs an item"

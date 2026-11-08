@@ -222,6 +222,34 @@ pub trait RecentlyUsed: Send + Sync {
     fn recently_used(&self) -> Result<Vec<RecentItem>, Error>;
 }
 
+/// An application the platform knows for a file type, or one the user
+/// named.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Application {
+    /// What the user sees: `Text Editor`, `Preview`, `Notepad`.
+    pub name: String,
+    /// What launches it: a desktop file's path on Linux, an application
+    /// bundle's path on macOS, an executable's path on Windows; or any
+    /// executable the user typed, on every platform.
+    pub id: String,
+}
+
+impl Application {
+    /// An application from an executable the user typed, named after it.
+    #[must_use]
+    pub fn executable(command: &str) -> Self {
+        let name = command
+            .split_whitespace()
+            .next()
+            .and_then(|program| Path::new(program).file_name())
+            .map_or_else(|| command.to_owned(), |n| n.to_string_lossy().into_owned());
+        Self {
+            name,
+            id: command.to_owned(),
+        }
+    }
+}
+
 /// Handing entries to other applications.
 pub trait OpenWith: Send + Sync {
     /// Opens the entry with the system default application.
@@ -237,6 +265,40 @@ pub trait OpenWith: Send + Sync {
     ///
     /// Fails when the platform refuses or has no file manager.
     fn reveal(&self, path: &Path) -> Result<(), Error>;
+
+    /// The applications the platform offers for the entry's type, the
+    /// default first: the desktop files registered for its MIME type on
+    /// Linux, Launch Services' list on macOS, the shell's handlers for its
+    /// extension on Windows. Empty when the platform knows none.
+    ///
+    /// # Errors
+    ///
+    /// The platform error from reading the registrations.
+    fn applications(&self, path: &Path) -> Result<Vec<Application>, Error>;
+
+    /// Opens the entry with one application: one of
+    /// [`applications`](Self::applications), or any executable the user
+    /// named ([`Application::executable`]), which is run with the entry's
+    /// path as its argument.
+    ///
+    /// # Errors
+    ///
+    /// Fails when the application cannot be started.
+    fn open_with(&self, path: &Path, app: &Application) -> Result<(), Error>;
+}
+
+/// The user's terminal emulator.
+pub trait Terminal: Send + Sync {
+    /// Opens a terminal window in `dir`, running `command` in it when one
+    /// is given and the user's shell otherwise: `$TERMINAL` or a known
+    /// emulator on Linux, Terminal.app on macOS, Windows Terminal or
+    /// `cmd` on Windows.
+    ///
+    /// # Errors
+    ///
+    /// `Error::Unsupported` when no terminal emulator is found; otherwise
+    /// the error from starting it.
+    fn open_terminal(&self, dir: &Path, command: Option<&[String]>) -> Result<(), Error>;
 }
 
 /// What showing properties did.
@@ -359,6 +421,7 @@ pub trait DragSource: Send + Sync {
 pub trait Platform:
     Trash
     + OpenWith
+    + Terminal
     + Properties
     + ConfigDir
     + NativeDialogs
@@ -374,6 +437,7 @@ pub trait Platform:
 impl<
     T: Trash
         + OpenWith
+        + Terminal
         + Properties
         + ConfigDir
         + NativeDialogs
