@@ -86,6 +86,7 @@ fn load_plugins() -> &'static Host {
         disabled: Vec::new(),
         compiled_in: Vec::new(),
         platform: None,
+        prompts: None,
     });
     for (_, id) in PLUGINS {
         let row = host

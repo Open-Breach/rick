@@ -73,8 +73,12 @@ fn logged() -> String {
 #[test]
 fn the_probe_registers_and_its_job_runs_on_the_host_runtime() {
     let _ = log();
-    let loaded = load_library(&fixture("plugin_probe"), Arc::new(platform::Native::new()))
-        .unwrap_or_else(|e| panic!("{e}"));
+    let loaded = load_library(
+        &fixture("plugin_probe"),
+        Arc::new(platform::Native::new()),
+        None,
+    )
+    .unwrap_or_else(|e| panic!("{e}"));
     assert_eq!(loaded.manifest().id.0, "probe");
     assert_eq!(loaded.manifest().name, "Probe");
     assert_eq!(loaded.contributions().previewers().len(), 1);
@@ -130,7 +134,11 @@ fn the_probe_registers_and_its_job_runs_on_the_host_runtime() {
 #[test]
 fn a_plugin_that_panics_while_registering_is_caught_and_the_host_carries_on() {
     let _ = log();
-    let error = match load_library(&fixture("plugin_panic"), Arc::new(platform::Native::new())) {
+    let error = match load_library(
+        &fixture("plugin_panic"),
+        Arc::new(platform::Native::new()),
+        None,
+    ) {
         Err(error) => error,
         Ok(loaded) => panic!("loaded {loaded:?}"),
     };
@@ -139,8 +147,12 @@ fn a_plugin_that_panics_while_registering_is_caught_and_the_host_carries_on() {
         "{error}"
     );
     // The host carries on: the next plugin loads.
-    let loaded = load_library(&fixture("plugin_probe"), Arc::new(platform::Native::new()))
-        .unwrap_or_else(|e| panic!("{e}"));
+    let loaded = load_library(
+        &fixture("plugin_probe"),
+        Arc::new(platform::Native::new()),
+        None,
+    )
+    .unwrap_or_else(|e| panic!("{e}"));
     assert_eq!(loaded.manifest().id.0, "probe");
 }
 
@@ -148,7 +160,7 @@ fn a_plugin_that_panics_while_registering_is_caught_and_the_host_carries_on() {
 fn a_missing_or_foreign_library_is_an_open_error() {
     let missing = std::env::temp_dir().join("no-such-plugin.so");
     assert!(matches!(
-        load_library(&missing, Arc::new(platform::Native::new())),
+        load_library(&missing, Arc::new(platform::Native::new()), None),
         Err(LoadError::Open(_))
     ));
 }

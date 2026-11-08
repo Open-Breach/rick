@@ -119,6 +119,9 @@ fn main() -> anyhow::Result<()> {
     let platform = Arc::new(platform::Native::new());
     let config_dir = platform.config_dir();
     let built_ins = built_ins();
+    // The question queue the plugins ask the user through (a host key, a
+    // passphrase): one for the plugins and the app alike.
+    let prompts = ext::Prompts::new();
 
     // The plugins: beside the binary and per user, minus the ids rick.toml
     // disables. A settings file that does not read leaves every plugin
@@ -133,6 +136,7 @@ fn main() -> anyhow::Result<()> {
             .map(|e| e.manifest().id.0.to_owned())
             .collect(),
         platform: Some(platform.clone()),
+        prompts: Some(Arc::clone(&prompts)),
     });
     if list_plugins {
         write!(std::io::stdout().lock(), "{}", table(host.plugins()))
@@ -147,13 +151,17 @@ fn main() -> anyhow::Result<()> {
     Box::leak(Box::new(host));
 
     let ui = Arc::new(ui_egui::EguiHost::new());
-    let mut app = app::App::new(app::Config {
-        platform,
-        ui: ui.clone(),
-        extensions,
-        config_dir: None,
-        start: start.map(|p| Location::new(vfs_local::PROVIDER_ID, platform::paths::from_path(&p))),
-    });
+    let mut app = app::App::with_prompts(
+        app::Config {
+            platform,
+            ui: ui.clone(),
+            extensions,
+            config_dir: None,
+            start: start
+                .map(|p| Location::new(vfs_local::PROVIDER_ID, platform::paths::from_path(&p))),
+        },
+        prompts,
+    );
     app.set_plugins(rows);
     ui_egui::run("Rick", VERSION, app, ui).context("the window could not be opened")
 }
