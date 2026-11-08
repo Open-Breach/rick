@@ -2101,28 +2101,10 @@ version = "0.2.0-dev"
 dependencies = [
  "encoding_rs",
  "ext",
- "html-escape",
  "platform",
- "pulldown-cmark",
  "runtime",
  "serde_json",
  "syntect",
- "tempfile",
- "tracing",
- "types",
- "vfs-local",
-]
-
-[[package]]
-name = "ext-preview-csv"
-version = "0.2.0-dev"
-dependencies = [
- "csv",
- "encoding_rs",
- "ext",
- "memchr",
- "platform",
- "runtime",
  "tempfile",
  "tracing",
  "types",
@@ -2151,6 +2133,25 @@ dependencies = [
  "jpeg-decoder",
  "kamadak-exif",
  "platform",
+ "runtime",
+ "tempfile",
+ "tracing",
+ "types",
+ "vfs-local",
+]
+
+[[package]]
+name = "ext-preview-markup"
+version = "0.2.0-dev"
+dependencies = [
+ "csv",
+ "encoding_rs",
+ "ext",
+ "ext-preview-code",
+ "html-escape",
+ "memchr",
+ "platform",
+ "pulldown-cmark",
  "runtime",
  "tempfile",
  "tracing",
@@ -6790,9 +6791,9 @@ dependencies = [
  "ext-preview-3d",
  "ext-preview-archive",
  "ext-preview-code",
- "ext-preview-csv",
  "ext-preview-hex",
  "ext-preview-image",
+ "ext-preview-markup",
  "ext-preview-media",
  "ext-preview-office",
  "ext-preview-pdf",
@@ -7905,9 +7906,9 @@ dependencies = [
  "ext-preview-3d",
  "ext-preview-archive",
  "ext-preview-code",
- "ext-preview-csv",
  "ext-preview-hex",
  "ext-preview-image",
+ "ext-preview-markup",
  "ext-preview-media",
  "ext-preview-office",
  "ext-preview-pdf",

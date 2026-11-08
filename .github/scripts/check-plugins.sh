@@ -28,7 +28,7 @@ everywhere=(
   "vfs-azure|Azure Blob|provider"
   "vfs-gcs|Google Cloud Storage|provider"
   "preview-archive|[^|]*|previewer"
-  "preview-csv|[^|]*|previewer"
+  "preview-markup|[^|]*|previewer"
   "preview-media|[^|]*|previewer"
   "preview-office|[^|]*|previewer"
   "preview-hex|[^|]*|previewer"

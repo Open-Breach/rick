@@ -302,7 +302,7 @@ jobs:
           python3 .github/scripts/changelog-section.py "$TAG" CHANGELOG.md > body.md
           {
             echo
-            echo "Archives: the \`rick\` binary with the shared kernel libraries, libstd and the pdfium library beside it, \`plugins/\` with the Git, SVN, archive, trash, Office, media, archive-preview, CSV, hex-preview and subdirectory-search plugins and the platform's search-index connector (Windows Search, Spotlight, or Tracker and Baloo), the GStreamer runtime on macOS and Windows (Linux uses the system's: install the gstreamer1.0 plug-in packages for playback), LICENSE, README, CHANGELOG and THIRD-PARTY-LICENSES; \`SHA256SUMS.txt\` has the checksums. Not signed or notarised (see README, Try it)."
+            echo "Archives: the \`rick\` binary with the shared kernel libraries, libstd and the pdfium library beside it, \`plugins/\` with the Git, SVN, archive, trash, Office, media, archive-preview, markup (Markdown, HTML, CSV), hex-preview and subdirectory-search plugins and the platform's search-index connector (Windows Search, Spotlight, or Tracker and Baloo), the GStreamer runtime on macOS and Windows (Linux uses the system's: install the gstreamer1.0 plug-in packages for playback), LICENSE, README, CHANGELOG and THIRD-PARTY-LICENSES; \`SHA256SUMS.txt\` has the checksums. Not signed or notarised (see README, Try it)."
           } >> body.md
           cat body.md
       - uses: softprops/action-gh-release@v2

@@ -1,12 +1,15 @@
-//! Acceptance (issue 18): the previewer plugins. Every plugin loads through
-//! the host; a fixture per format opens with the right previewer by sniff;
+//! Acceptance (issue 18, and issue 51 for the markup plugin): the
+//! previewer plugins. Every plugin loads through the host; a fixture per
+//! format opens with the right previewer by sniff;
 //! a DOCX converts within 5 s when LibreOffice is present (CI installs it
 //! on Linux; macOS and Windows skip with a note); an MP4 plays and seeks
 //! and a 3-minute MP3 gets its waveform within 500 ms when GStreamer is
 //! present (Linux CI); a 10 000-entry zip lists its first screen within
 //! 100 ms; a window of a 1 000 000-row CSV comes within a frame; Markdown
-//! with every element renders without panics; and no UI frame goes over
-//! 16.6 ms while any of them decodes.
+//! with every element renders without panics; the three markup previewers
+//! render by default and toggle to the source, and with the markup plugin
+//! disabled Markdown and HTML fall back to highlighted source and CSV to
+//! text; and no UI frame goes over 16.6 ms while any of them decodes.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -29,7 +32,7 @@ const PLUGINS: [(&str, &str); 4] = [
     ("ext_preview_office", "preview-office"),
     ("ext_preview_media", "preview-media"),
     ("ext_preview_archive", "preview-archive"),
-    ("ext_preview_csv", "preview-csv"),
+    ("ext_preview_markup", "preview-markup"),
 ];
 
 /// The directory the test binary runs from, where cargo puts every
@@ -175,11 +178,11 @@ fn fixtures(dir: &Path) -> Vec<Fixture> {
             fs::write(&path, bytes).unwrap_or_else(|e| panic!("{e}"));
             out.push(Fixture { path, previewer });
         };
-        put("README.md", ALL_MARKDOWN.as_bytes(), "preview-code");
+        put("README.md", ALL_MARKDOWN.as_bytes(), "preview-markup");
         put(
             "page.html",
             b"<html><body><h1>Hi</h1><p>Text <b>bold</b></p><ul><li>a</li></ul></body></html>",
-            "preview-code",
+            "preview-markup",
         );
         let tar = archives::sample_tar(4096);
         put("a.zip", &archives::sample_zip(), "preview-archive");
@@ -196,8 +199,8 @@ fn fixtures(dir: &Path) -> Vec<Fixture> {
         );
         put("a.rar", &archives::sample_rar(), "preview-archive");
         put("a.iso", &archives::sample_iso(true), "preview-archive");
-        put("data.csv", b"name,age\nAda,36\nAlan,41\n", "preview-csv");
-        put("data.tsv", b"name\tage\nAda\t36\n", "preview-csv");
+        put("data.csv", b"name,age\nAda,36\nAlan,41\n", "preview-markup");
+        put("data.tsv", b"name\tage\nAda\t36\n", "preview-markup");
         for kind in ext_preview_office::Kind::ALL {
             let name = format!("doc.{}", kind.extension());
             put(
@@ -242,7 +245,11 @@ fn fixtures(dir: &Path) -> Vec<Fixture> {
 fn the_four_previewer_plugins_load_through_the_host() {
     let host = load_plugins();
     let previewers = previewers(host);
-    assert_eq!(previewers.len(), 8, "four built-ins and four plugins");
+    assert_eq!(
+        previewers.len(),
+        10,
+        "four built-ins, three plugins with one previewer and the markup plugin's three"
+    );
     for (_, id) in PLUGINS {
         assert!(
             previewers.iter().any(|p| p.id().0 == id),
@@ -288,13 +295,23 @@ fn every_fixture_opens_with_the_right_previewer_by_sniff() {
                 assert!(matches!(frame, Frame::Text(_)), "{name}: text fallback");
                 assert_eq!(doc.status().len(), 3, "{name}: {:?}", doc.status());
             }
-            "preview-csv" => {
+            "preview-markup" if name.ends_with(".csv") || name.ends_with(".tsv") => {
                 let Some(Content::Grid(grid)) = content else {
                     panic!("{name}: no grid");
                 };
                 assert_eq!(grid.header()[0], "name", "{name}");
                 assert!(grid.rows() >= 1, "{name}");
                 assert!(matches!(frame, Frame::Text(_)), "{name}: text fallback");
+            }
+            "preview-markup" => {
+                let Some(Content::Document(document)) = content else {
+                    panic!("{name}: no document");
+                };
+                assert!(!document.blocks.is_empty(), "{name}");
+                let Frame::Text(block) = frame else {
+                    panic!("{name}: source fallback");
+                };
+                assert!(!block.spans.is_empty(), "{name}: highlighted source");
             }
             "preview-office" => {
                 assert!(content.is_none(), "{name}");
@@ -332,13 +349,6 @@ fn every_fixture_opens_with_the_right_previewer_by_sniff() {
                     "{name}"
                 );
             }
-            "preview-code" => {
-                let Some(Content::Document(document)) = content else {
-                    panic!("{name}: no document");
-                };
-                assert!(!document.blocks.is_empty(), "{name}");
-                assert!(matches!(frame, Frame::Text(_)), "{name}: source fallback");
-            }
             other => panic!("{name}: unexpected previewer {other}"),
         }
         assert_eq!(doc.sections()[0].title.get(), "File info", "{name}");
@@ -351,7 +361,7 @@ fn markdown_with_every_element_renders_without_panics() {
     let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
     let path = dir.path().join("all.md");
     fs::write(&path, ALL_MARKDOWN).unwrap_or_else(|e| panic!("{e}"));
-    let previewer: Arc<dyn Previewer> = Arc::new(ext_preview_code::CodePreviewer);
+    let previewer: Arc<dyn Previewer> = Arc::new(ext_preview_markup::MarkdownPreviewer);
     let provider = provider();
     let doc = open(&previewer, &provider, &path);
     let Some(Content::Document(document)) = doc.content() else {
@@ -639,7 +649,7 @@ fn a_million_row_csv_answers_any_window_within_a_frame() {
             .unwrap_or_else(|e| panic!("{e}"));
         }
     }
-    let previewer: Arc<dyn Previewer> = Arc::new(ext_preview_csv::CsvPreviewer);
+    let previewer: Arc<dyn Previewer> = Arc::new(ext_preview_markup::CsvPreviewer);
     let provider = provider();
     let started = Instant::now();
     let doc = open(&previewer, &provider, &path);
