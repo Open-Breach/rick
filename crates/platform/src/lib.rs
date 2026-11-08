@@ -3,12 +3,19 @@
 //! Other crates program against the traits here and never against an
 //! operating system: [`Trash`], [`OpenWith`], [`Terminal`], [`Elevate`],
 //! [`Properties`], [`ConfigDir`], [`NativeDialogs`], [`Clipboard`],
-//! [`Chrome`], [`DragSource`], [`Volumes`], [`Mount`] (a disk image mounted
-//! through the OS: `udisksctl loop-setup`, `hdiutil attach`,
-//! `Mount-DiskImage`), [`StandardFolders`], [`RecentlyUsed`] and
+//! [`Chrome`], [`DragSource`], [`DropTarget`], [`Volumes`], [`Mount`] (a
+//! disk image mounted through the OS: `udisksctl loop-setup`, `hdiutil
+//! attach`, `Mount-DiskImage`), [`StandardFolders`], [`RecentlyUsed`] and
 //! [`Secrets`], bundled as [`Platform`]. [`Native`] is the real
 //! implementation for the OS the binary runs on; [`Fake`] is the one tests
 //! use, with a private trash directory and recorded calls.
+//!
+//! Drag and drop across processes is split between the windowing backend
+//! and this crate: `winit` receives drops on macOS, Windows and X11 and
+//! hands them to egui without a cursor position, so [`DropTarget`] supplies
+//! the position (and, on Wayland, where `winit` 0.30 receives nothing, the
+//! files too); [`DragSource`] starts the drag the other way, from the
+//! window the backend describes through a [`WindowRef`] of raw handles.
 //!
 //! The [`fs`] module holds the filesystem fast paths the local provider
 //! needs and no portable API offers: the bulk directory reader, the native
@@ -37,6 +44,10 @@
 pub mod agent;
 mod clipboard;
 mod dialogs;
+// The URI list is written and read on Linux only; macOS and Windows hand
+// the OS paths and get paths back. The tests exercise it everywhere.
+#[cfg_attr(not(any(target_os = "linux", test)), allow(dead_code))]
+mod dnd;
 mod fake;
 pub mod fs;
 pub mod paths;
@@ -68,12 +79,16 @@ pub use perms::{
     Acl, DarwinAce, FilePermissions, Nfs4Ace, Nfs4Kind, NtAce, PermissionChange, Permissions,
     PosixAce, PosixTag, Principal, PrincipalKind, Principals,
 };
+/// Re-exported so the UI can build a [`WindowRef`] from the handles its
+/// windowing backend gives out without depending on the crate itself.
+pub use raw_window_handle;
 pub use time::iso8601;
 pub use traits::{
-    Application, Chrome, Clipboard, ConfigDir, ControlsSide, DialogFilter, DragSource, Elevate,
-    ElevatedOutput, ImageFormat, Mount, NativeDialogs, OpenWith, Platform, Properties,
-    PropertiesOutcome, RecentItem, RecentlyUsed, Secrets, StandardFolder, StandardFolders,
-    Terminal, Trash, TrashedItem, Volume, VolumeKind, Volumes, WindowChrome,
+    Application, Chrome, Clipboard, ConfigDir, ControlsSide, DialogFilter, DragSource, DropTarget,
+    Elevate, ElevatedOutput, ImageFormat, IncomingFiles, Mount, NativeDialogs, OpenWith, Platform,
+    Point, Properties, PropertiesOutcome, RecentItem, RecentlyUsed, Secrets, StandardFolder,
+    StandardFolders, Terminal, Trash, TrashedItem, Volume, VolumeKind, Volumes, WindowChrome,
+    WindowRef,
 };
 pub use trash_record::TRASH_FILE;
 use types::Error;

@@ -164,6 +164,7 @@ impl AzureExtension {
                 requires: Capabilities::empty(),
                 points: Points::PROVIDER,
                 platforms: Platforms::ALL,
+                previews: &[],
             },
         }
     }

@@ -3,7 +3,7 @@ use std::io::{Cursor, Write};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
-use ext::{Depth, ListOptions, Provider, Registry, RemoveMode, WriteOptions};
+use ext::{Depth, ListOptions, Provider, Registry, RemoveMode, SettingsStore, WriteOptions};
 use futures::StreamExt;
 use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 use types::{CancelToken, Entry, EntryKind, Error, Location, ProviderId};
@@ -796,6 +796,47 @@ fn sevenzip_library() -> Option<PathBuf> {
     found
 }
 
+/// A store of one extension's values in memory: the registry's
+/// `SettingsStore` for a test without the application.
+#[derive(Default)]
+struct Memory(std::sync::Mutex<Vec<(String, ext::SettingValue)>>);
+
+impl Memory {
+    fn new() -> Arc<Self> {
+        Arc::new(Self::default())
+    }
+
+    fn library(&self) -> Option<PathBuf> {
+        match SettingsStore::get(self, ID, LIBRARY_SETTING)? {
+            ext::SettingValue::Text(text) => Some(PathBuf::from(text)),
+            _ => None,
+        }
+    }
+}
+
+impl ext::SettingsStore for Memory {
+    fn get(&self, ext: types::ExtId, key: &str) -> Option<ext::SettingValue> {
+        assert_eq!(ext, ID);
+        self.0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .iter()
+            .find(|(k, _)| k == key)
+            .map(|(_, v)| v.clone())
+    }
+
+    fn set(&self, ext: types::ExtId, key: &str, value: ext::SettingValue) -> Result<(), Error> {
+        assert_eq!(ext, ID);
+        let mut values = self
+            .0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        values.retain(|(k, _)| k != key);
+        values.push((key.to_owned(), value));
+        Ok(())
+    }
+}
+
 /// Every disk-image fixture: the FAT file system raw and in its three
 /// containers.
 fn disk_fixtures(dir: &Path) -> Vec<(PathBuf, Format)> {
@@ -835,13 +876,14 @@ fn disk_images_list_and_read_through_the_library_and_the_setting_remembers_it() 
         return;
     };
     let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
-    let fake = Arc::new(platform::Fake::new().unwrap_or_else(|e| panic!("{e}")));
+    let store = Memory::new();
     let resolver = Arc::new(Resolver::with_locations(
-        Some(fake.clone()),
+        Some(Arc::clone(&store) as Arc<dyn SettingsStore>),
         vec![library.clone()],
     ));
     let provider = ArchiveProvider::with_resolver(Arc::clone(&resolver));
     assert!(!resolver.is_loaded(), "nothing is probed at start");
+    assert_eq!(store.library(), None, "and the setting is untouched");
     for (path, format) in disk_fixtures(dir.path()) {
         let name = path.file_name().unwrap_or_default().to_string_lossy();
         assert_eq!(Format::detect(&path).ok(), Some(format), "{name}");
@@ -885,13 +927,10 @@ fn disk_images_list_and_read_through_the_library_and_the_setting_remembers_it() 
         let root_entry = stat(&provider, &loc(&path, "")).unwrap_or_else(|e| panic!("{e}"));
         assert_eq!(root_entry.kind, EntryKind::Dir);
     }
-    // The first hit was written back into the setting.
+    // The first hit was written back into the setting, through the store.
     assert!(resolver.is_loaded());
     assert_eq!(resolver.setting().as_deref(), Some(library.as_path()));
-    let settings =
-        fs::read_to_string(ext::platform::ConfigDir::config_dir(&*fake).join("vfs-archive.toml"))
-            .unwrap_or_else(|e| panic!("{e}"));
-    assert!(settings.contains("sevenzip_library"), "{settings}");
+    assert_eq!(store.library().as_deref(), Some(library.as_path()));
     // The settings the extension declares name the same key.
     let schema = crate::library::settings_schema();
     assert_eq!(schema.ext, ID);
@@ -900,11 +939,11 @@ fn disk_images_list_and_read_through_the_library_and_the_setting_remembers_it() 
 
 #[test]
 fn a_missing_library_says_how_to_install_it_and_browsing_to_it_stores_the_path() {
-    let fake = Arc::new(platform::Fake::new().unwrap_or_else(|e| panic!("{e}")));
     let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
     // A machine without the library: nowhere to look but an empty folder.
+    let store = Memory::new();
     let resolver = Resolver::with_locations(
-        Some(fake.clone()),
+        Some(Arc::clone(&store) as Arc<dyn SettingsStore>),
         vec![dir.path().join(ext::platform::sevenzip::LIBRARY_FILE)],
     );
     let error = resolver
@@ -930,14 +969,26 @@ fn a_missing_library_says_how_to_install_it_and_browsing_to_it_stores_the_path()
         panic!("{error}");
     };
     assert_eq!(*ext, ID);
+    let missing = MissingLibrary::in_error(&error).unwrap_or_else(|| panic!("{error}"));
     assert!(source.downcast_ref::<MissingLibrary>().is_some());
+    // The same facts as the pane's content: the name, the install command,
+    // the setting Browse… fills and where Rick looked.
+    let pane = missing.for_pane();
+    assert_eq!(pane.name, LIBRARY_NAME);
+    assert_eq!(pane.install, ext::platform::sevenzip::install_hint());
+    assert_eq!(pane.setting, (ID, LIBRARY_SETTING));
+    assert_eq!(pane.filters.len(), 1);
+    assert!(
+        pane.detail.contains(&dir.path().display().to_string()),
+        "{}",
+        pane.detail
+    );
+    assert_eq!(store.library(), None, "nothing is written for a miss");
     // A disk image shows the same message in place of its listing.
     let fat = dir.path().join("floppy.img");
     fs::write(&fat, crate::fixtures::fat12_image()).unwrap_or_else(|e| panic!("{e}"));
-    let provider = ArchiveProvider::with_resolver(Arc::new(Resolver::with_locations(
-        Some(fake.clone()),
-        Vec::new(),
-    )));
+    let provider =
+        ArchiveProvider::with_resolver(Arc::new(Resolver::with_locations(None, Vec::new())));
     let listed = runtime::block_on(async {
         let mut stream = provider.list(
             &loc(&fat, ""),
@@ -966,6 +1017,7 @@ fn a_missing_library_says_how_to_install_it_and_browsing_to_it_stores_the_path()
         .unwrap_or_else(|e| panic!("{e}"));
     assert!(loaded.format("FAT").is_some());
     assert_eq!(resolver.setting().as_deref(), Some(library.as_path()));
+    assert_eq!(store.library().as_deref(), Some(library.as_path()));
     resolver.forget();
     assert!(!resolver.is_loaded());
     assert!(

@@ -85,8 +85,8 @@ pub struct Settings {
     pub preview: Preview,
     /// Search in subdirectories: the names the walk skips.
     pub search: Search,
-    /// The viewer: the types that open with the system application instead.
-    pub viewer: Viewer,
+    /// Archives: what Open does with one.
+    pub archives: Archives,
     /// Plugins: which of them not to load.
     pub plugins: Plugins,
     /// The network and cloud connections, one `[[connections]]` table
@@ -103,7 +103,7 @@ pub struct Settings {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(default)]
 pub struct ConnectionEntry {
-    /// The provider id: `s3`, `azure`, `gcs`, `sftp`.
+    /// The provider id: `s3`, `azure`, `gcs`, `ssh`.
     pub provider: String,
     /// The name the user gave the connection; unique within the provider.
     pub name: String,
@@ -124,30 +124,25 @@ impl ConnectionEntry {
     }
 }
 
-/// The `[viewer]` table.
+/// The `[archives]` table.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(default)]
-pub struct Viewer {
-    /// File name extensions, lower case without the dot, that Open hands to
-    /// the system's default application instead of the viewer, previewable
-    /// or not: the setting that flips the viewer's default per type.
-    pub external: Vec<String>,
+pub struct Archives {
+    /// What Enter and a double-click do with an archive or a disk image.
+    pub on_open: OnOpen,
 }
 
-impl Viewer {
-    /// Whether files named `name` open outside the viewer.
-    #[must_use]
-    pub fn opens_externally(&self, name: &str) -> bool {
-        let Some((stem, ext)) = name.rsplit_once('.') else {
-            return false;
-        };
-        !stem.is_empty()
-            && !ext.is_empty()
-            && self
-                .external
-                .iter()
-                .any(|e| e.trim_start_matches('.').eq_ignore_ascii_case(ext))
-    }
+/// What Open does with an archive or a disk image (SPEC.md, *Opening
+/// files*).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum OnOpen {
+    /// Enter it as a read-only location in the current tab, through its
+    /// provider.
+    #[default]
+    Enter,
+    /// Hand it to the system's default application, like any other file.
+    System,
 }
 
 /// The `[plugins]` table.
@@ -454,7 +449,7 @@ impl Default for Settings {
             drag: Drag::default(),
             preview: Preview::default(),
             search: Search::default(),
-            viewer: Viewer::default(),
+            archives: Archives::default(),
             plugins: Plugins::default(),
             connections: Vec::new(),
             language: None,
@@ -523,9 +518,8 @@ pub enum SettingsChange {
     },
     /// The names the subtree search skips.
     SearchIgnore(Vec<String>),
-    /// The file name extensions Open hands to the system application
-    /// instead of the viewer.
-    ViewerExternal(Vec<String>),
+    /// What Open does with an archive or a disk image.
+    ArchivesOnOpen(OnOpen),
     /// Enable or disable a plugin; takes effect on the next start.
     Plugin {
         /// The plugin id.
@@ -587,13 +581,7 @@ impl Settings {
                 }
             },
             SettingsChange::SearchIgnore(names) => self.search.ignore = names,
-            SettingsChange::ViewerExternal(types) => {
-                self.viewer.external = types
-                    .into_iter()
-                    .map(|t| t.trim().trim_start_matches('.').to_ascii_lowercase())
-                    .filter(|t| !t.is_empty())
-                    .collect();
-            }
+            SettingsChange::ArchivesOnOpen(on_open) => self.archives.on_open = on_open,
             SettingsChange::Plugin { id, enabled } => {
                 self.plugins.disabled.retain(|d| *d != id);
                 if !enabled {
@@ -621,27 +609,14 @@ mod tests {
         assert!(!s.preview.text.wrap, "wrap off");
         assert!(s.preview.pinned.is_empty());
         assert_eq!(s.search.ignore, [".git", "node_modules", "target"]);
-        assert!(
-            s.viewer.external.is_empty(),
-            "every type opens in the viewer"
-        );
+        assert_eq!(s.archives.on_open, OnOpen::Enter, "an archive is entered");
         let mut s = s;
         s.apply(SettingsChange::SearchIgnore(vec!["build".into()]));
         assert_eq!(s.search.ignore, ["build"]);
-        s.apply(SettingsChange::ViewerExternal(vec![
-            " .PDF ".into(),
-            "docx".into(),
-            String::new(),
-        ]));
-        assert_eq!(s.viewer.external, ["pdf", "docx"]);
-        assert!(s.viewer.opens_externally("paper.pdf"));
-        assert!(s.viewer.opens_externally("Paper.PDF"));
-        assert!(!s.viewer.opens_externally("paper.png"));
-        assert!(
-            !s.viewer.opens_externally(".pdf"),
-            "a dot-file has no extension"
-        );
-        assert!(!s.viewer.opens_externally("pdf"));
+        s.apply(SettingsChange::ArchivesOnOpen(OnOpen::System));
+        assert_eq!(s.archives.on_open, OnOpen::System);
+        let text = toml::to_string(&s).unwrap_or_default();
+        assert!(text.contains("[archives]\non_open = \"system\""), "{text}");
     }
 
     #[test]
@@ -689,8 +664,8 @@ mod tests {
             Location::new(ProviderId("local"), "C:\\Users\\me")
         );
         assert_eq!(
-            parse_location("sftp:/srv"),
-            Location::new(ProviderId::intern("sftp"), "/srv")
+            parse_location("ssh:/srv"),
+            Location::new(ProviderId::intern("ssh"), "/srv")
         );
         let text = Location::new(ProviderId("local"), "C:\\x").to_string();
         assert_eq!(parse_location(&text).path.to_string(), "C:\\x");

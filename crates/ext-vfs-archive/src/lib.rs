@@ -69,7 +69,7 @@ use types::{
 pub use format::{Codec, Format};
 pub use index::{Index, Item};
 use library::settings_schema;
-pub use library::{LIBRARY_SETTING, MissingLibrary, Resolver};
+pub use library::{LIBRARY_NAME, LIBRARY_SETTING, MissingLibrary, Resolver};
 use rewrite::{Edit, Plan};
 
 /// The extension id.
@@ -804,6 +804,7 @@ impl ArchiveExtension {
                 requires: Capabilities::empty(),
                 points: Points::PROVIDER,
                 platforms: Platforms::ALL,
+                previews: &[],
             },
         }
     }
@@ -814,12 +815,15 @@ impl Extension for ArchiveExtension {
         &self.manifest
     }
 
-    /// The provider, with the 7-Zip library resolved through the host's
-    /// platform (the setting in its config directory), and the setting
-    /// that names the library.
+    /// The provider, with the 7-Zip library resolved through the setting
+    /// in the store the host lends and the bundle under the host's config
+    /// directory, and the setting that names the library.
     fn register(&self, reg: &mut Registry) -> Result<(), Error> {
         reg.translations(&[("en", include_str!("../locales/en.ftl"))]);
-        let resolver = Arc::new(Resolver::new(reg.platform().cloned()));
+        let resolver = Arc::new(Resolver::new(
+            reg.settings_store().cloned(),
+            reg.platform().map(|p| p.config_dir()),
+        ));
         reg.provider(Arc::new(ArchiveProvider::with_resolver(resolver)));
         reg.settings(settings_schema());
         Ok(())

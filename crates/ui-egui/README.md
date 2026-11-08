@@ -14,11 +14,13 @@ title, the folders above an archive as local segments and the archive and
 its contents on the archive provider), file list (details, tree, list or
 icon view, only the visible rows laid out, names edited in place for
 Rename, New file and New folder) and status line with the subtree-search
-toggle, the Preview tab (toolbar, info badges, content, status bar; one per
-window, following the focused explorer, docked and torn out like any tab),
-the viewer tabs (one file full size with the folder behind it as a
-slideshow: zoom, pages with a strip, find in the text layer, the info panel,
-the actions menu, the transport bar, fullscreen), the side panel (the
+toggle, the Preview tab (toolbar with the media transport and *Copy*, info
+badges, content, status bar; one per window, following the focused
+explorer, docked and torn out like any tab; Rick's only viewer, laying out
+every kind of content a previewer returns itself in `content.rs`: a file
+list in the explorer's columns, a grid, a rendered document, and the
+message for a missing third-party library with *Browse…* and *Retry*; the
+placeholder for a file no previewer claims), the side panel (the
 editable Places list with its drag reorder, Edit… dialogue
 and keyboard, Favorites, Recent and the Trash view among the places; the
 This Machine, Network and Cloud sections with their utilisation bars, Eject
@@ -30,14 +32,22 @@ bar, bytes or items done of total, throughput and remaining time, the
 up to a cap), the conflict dialogue, the question dialogue an extension asks through, the
 Properties dialogue (the general rows and, for a local entry, its owner,
 group, mode bits and ACL edited in place, applied to the enclosed entries
-too when asked), the context menu and command palette
+too when asked), the Hash dialogue (a block per selected file with the
+MD5, SHA-1, SHA-256 and BLAKE3 rows, each with a read-only monospace value
+and Copy, then Copy all; byte progress and Cancel while the job runs; the
+format toggle and the Verify field, compared live against every row of
+the pasted length), the context menu and command palette
 built from the action registry, the keyboard shortcut table, the Settings
 (the language row among the rows) and Keyboard shortcuts screens, and drag and drop of entries: rows are drag
 sources, folders, pane space, breadcrumb segments and tab headers are drop
 zones with the ghost, the live indicator and spring-loading in between (a
 pane at the Trash view trashes what lands in it); the side panel is never a
 file-operation target, a dragged folder becomes a place at the insertion
-line and files are refused with the not-allowed indicator. It never mutates
+line and files are refused with the not-allowed indicator; a drag that
+leaves the window is handed to the platform's drag source one frame later,
+once the ghost is gone, and followed until the platform says it ended; a
+drop from outside lands where the platform says the cursor is, or in the
+focused pane's folder where it cannot say. It never mutates
 the model: everything the user does becomes a `Command` handed to `app`,
 and it re-renders from the model. It depends on `types`, `runtime`,
 `platform`, `ext`, `vfs-local` (the local provider's id, for dropped

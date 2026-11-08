@@ -1644,6 +1644,8 @@ Once answered, an entry keeps its number and gains a dated decision line.
     beside the one the files use; `copy` within a host streams through the
     machine (the protocol has no copy) and `transfer` answers `Unsupported`
     for a copy, so the kernel's path takes it; a move is a remote rename.
+    Decided (2026-11-08): `ext-ssh` replaces it; `ext-vfs-sftp` removed in
+    this PR.
 
 136. (issue 21) The issue wants connections in `rick.toml` with secrets in
     the keychain and connect, disconnect and remove on the row's menu, and
@@ -2186,34 +2188,236 @@ Once answered, an entry keeps its number and gains a dated decision line.
     boxes; a key nobody wrote comes back as itself, so a missing translation
     is a visible text or key, never a panic.
 
-185. (issue 51) The issue builds on #50, "which is merged into `dev`"; when
-    this task started, `dev` carried #50's spec change (71fc5e6, 65e064a)
-    and none of its code: no Rendered toggle in the pane, no Copy control,
-    no manifest field for the extensions a plugin claims, no
-    `archives.on_open` setting, no library-resolution pattern and no
-    in-pane library message. Re-opening #50's items is out of this issue's
-    scope.
-    Assumed: #51 is implemented on `dev` as it is, against what the
-    extension API offers today, in a way #50 can wire up without redoing
-    it: the markup previewers carry the Rendered toggle as a
-    `PreviewControl::Toggle` with `Icon::Rendered` (the pane's generic
-    toggle handling shows it), on for every newly shown file, and keep
-    the raw source as their text layer for #50's Copy; the extensions a
-    plugin claims are the public constant `ext_preview_markup::EXTENSIONS`
-    (and the archive plugins' `detect`), for #50's manifest field to list;
-    a disk image enters on Enter through the archive provider's existing
-    path, which #50's `archives.on_open` governs the day it lands; the
-    7-Zip library follows the *Third-party libraries* order with the
-    setting, the write-back and `Browse…`/`Retry` as calls
-    (`Resolver::set_library`, `Resolver::forget`), and the missing library
-    is an `Error::Extension` carrying `ext_vfs_archive::MissingLibrary`,
-    whose message names the library, the install command for this
-    platform, the setting and where Rick looked, which the pane shows
-    today as the preview's error and #50's pane lays out with its two
-    buttons. The acceptance lines that need #50's pane or setting (the
-    `archives.on_open = "system"` branch) are tested with #50.
+185. (issue 25) Question 62 assumed that `egui` 0.36 over `winit` 0.30
+    "receives hovered and dropped files on Linux (Wayland and X11), macOS
+    and Windows". It does not on Wayland: `winit` 0.30.13 implements the
+    drop target for X11 (XDND), macOS and Windows only, so a Wayland Rick
+    received nothing from outside in 0.1.
+    Assumed: on Wayland the platform receives drags from outside itself,
+    with a `wl_data_device` of its own on `winit`'s display (joined through
+    the raw display handle), reads the `text/uri-list` and hands the files
+    and the cursor position to the UI through `DropTarget::incoming_files`
+    and `DropTarget::drop_position`; on the other three backends `winit`'s
+    hovered and dropped files are kept and the platform supplies only the
+    position (`GetCursorPos` against the window, `NSEvent.mouseLocation`
+    converted into the view, `XQueryPointer` on the window). The spec's
+    "a drop arriving without a cursor position … lands in the focused
+    pane's folder" stays as the fallback wherever the position cannot be
+    had.
 
-186. (issue 51) "The `unsafe` needed to call the library stays in
+186. (issue 25) The issue asks for the drag source "via winit's raw window
+    handle". `eframe` hands out the raw window and display handles of the
+    root viewport (its `Frame`); Rick's further windows are egui viewports
+    drawn in the same frame, with no handle of their own.
+    Assumed: a drag out of a secondary window stays inside it (nothing to
+    hand the platform), and a drop into one lands in the focused pane's
+    folder, the fallback above; the root window gets both. Neither the
+    Wayland nor the X11 source shows a drag image outside the window: a
+    Wayland icon surface would need a buffer of Rick's own and XDND has no
+    image at all; macOS shows the first file's icon, Windows the system's
+    drag cursor.
+
+187. (issue 25) Once the desktop runs a drag, the windowing backend never
+    sees the button come up (`AppKit`, OLE and the compositor consume it),
+    so egui would keep the row dragged and the button down until the next
+    click.
+    Assumed: the UI forgets egui's pointer state and the dragged widget when
+    the handover succeeds and again when the platform reports the drag
+    ended (`DragSource::drag_in_progress`, polled every frame meanwhile);
+    the next press starts afresh. The handover itself happens one frame
+    after the cursor left the window, so the frame without the ghost is on
+    the screen when the desktop takes over, as the issue asks; on Windows
+    `DoDragDrop` runs its own loop and the frame that starts it ends when
+    the drag does, `winit` buffering the window's messages meanwhile.
+
+188. (issue 25) The issue asks to "re-measure the four macOS benchmarks that
+    run against measured targets" without naming them; `BENCHMARKS.md` had
+    five macOS targets above the spec's numbers (fixture, listing-first,
+    listing-complete, pdf-first, tree-first) and three with no spec number
+    (startup, cancel, session-start).
+    Assumed: the four are the listing pair, `pdf-first` and `tree-first`,
+    the ones the Released paragraph was written about; `fixture` was
+    re-measured with them. Every macOS and Windows target follows the 0.1
+    rule from the five-run bench of this branch (median × 1.5, rounded up,
+    never below the Linux target, and past the worst run where that sits
+    higher), and where that lands at or under the spec's number the spec's
+    number is the target. The 0.2 tables never measured by the bench
+    workflow (viewer-frame, plugin-load, archive-zip-first, office-convert,
+    waveform, zip-first, csv-window, previewers-frame) are filled from the
+    same run, with the provisional macOS and Windows targets of
+    `plugin-load` and `archive-zip-first` set by the same rule. Two targets
+    had to loosen by that rule rather than tighten, since the runner did
+    not meet them: cancelling the sparse copy on macOS (80 ms, was 50 ms)
+    and the fixture on Windows (45 s, was the spec's 30 s, QUESTIONS.md 5's
+    Defender case); `BENCHMARKS.md` says why beside each table.
+
+189. (issue 54) The Compute hash paragraph puts the format toggle and the
+    Verify field under the rows of a dialogue and says a selection of
+    several files shows one block per file, without saying whether each
+    block has its own toggle and field or the dialogue has one of each.
+    Assumed: one format toggle and one Verify field for the whole dialogue,
+    under the blocks; the format applies to every block, and the pasted
+    value is compared against every block's rows of its length, since a
+    download page's hash belongs to one of the files and the dialogue shows
+    which. Each block keeps its own *Copy all*, which copies that file's
+    four lines.
+190. (issue 54) The paragraph hides Compute hash on folders and says what
+    it hashes are files; it does not say what a symbolic link in the
+    selection is. Assumed: the entry shows only when every selected entry
+    is a plain file (`EntryKind::File`), so a symlink, whatever it points
+    at, hides it like a folder does; following links to their targets can
+    come with a spec change.
+
+191. (issue 50) "The manifest gains the list of file extensions a plugin's
+    previewers claim so the host answers from manifests without loading the
+    plugin"; the spec does not say how a multi-part suffix (`tar.gz`) or a
+    name without an extension is matched.
+    Assumed: `Manifest::previews` is a list of lower-case extensions
+    without the dot, multi-part ones allowed (`"tar.gz"`), written to
+    `plugin.toml` as `previews` (absent in a manifest written before API
+    12, read as empty); the host says *Plugin available* when any suffix
+    after a dot of the file's name equals one of them, case-insensitively,
+    for a plugin whose status is *disabled* only. Every previewer plugin of
+    the workspace lists the extensions its `score` claims by name; the hex
+    view lists none. The extension API is version 12.
+
+192. (issue 50) The spec's four content kinds for the pinned info section
+    are `pages`, `text`, `image` and `other`; a file list, a grid and a
+    rendered document are none of these by name.
+    Assumed: they count as `text`, since each of their documents carries a
+    text layer (the listing's dump, the raw CSV, the source), so a pin
+    made on a Markdown file holds for a CSV and a text file alike. The
+    layout lives in `ui-egui/content.rs`: the listing is one table in the
+    explorer's columns plus *Compressed* when the format records it, a
+    collapsed directory hides the rows deeper than it until its depth comes
+    back, the grid lays out at most 200 columns and says how many more
+    there are, a document's pictures are decoded by the `image` crate in
+    the UI crate (the first dependency on it there) and drawn no wider than
+    the pane and never above their own size, and a link opens with the
+    system when it is an `http`, `https` or `mailto` address.
+
+193. (issue 50) "If a plugin has no way to read or write its own declared
+    settings today, add the smallest accessor on the extension context".
+    Assumed: the extension context is the registry, which now lends a
+    `SettingsStore` (`get` and `set` of a `SettingValue` by extension id and
+    key) the way it lends the platform services and the question queue;
+    the application's `ExtSettings` is that store, shared behind an `Arc`
+    and created by the binary before the plugin host loads, so a plugin
+    loaded there and an extension compiled in read and write the same
+    values and the Settings screen shows what a plugin wrote back. The
+    values are read once every extension has declared its schema, which
+    is why a plugin keeps the handle from `register` and asks lazily. The
+    `Options` of the plugin host carry the store; `App::with_services`
+    takes it. Part of API 12.
+
+194. (issue 50) "Development and CI write the setting instead" of
+    `RICK_PDFIUM_DIR`, while the tests run every `App` over a temporary
+    config directory of the fake platform, where no setting file is.
+    Assumed: the CI setup action and the release workflow write
+    `library = "<path>"` into `preview-pdf.toml` of the runner's config
+    directory (`$XDG_CONFIG_HOME/rick` or `~/.config/rick`,
+    `~/Library/Application Support/Rick`, `%APPDATA%\Rick`), which the
+    `rick` binary and `cargo xtask bundle` read; and the setup action also
+    copies the library beside the test binaries (`target/<profile>/deps/`
+    and `target/<profile>/`), which is the spec's second place to look, so
+    the tests find it the way a user without the setting would. The
+    bundler copies pdfium from the setting (a file, or the directory
+    holding it) and says so when the setting is unset; the release smoke
+    test keeps running the check binary beside the unpacked `rick` with no
+    setting at all. `RICK_REQUIRE_PDFIUM` stays, as the issue allows.
+
+195. (issue 50) "*Browse…* (a file dialogue through `UiHost`, the choice
+    stored in the setting)", while `UiHost` has prompt, confirm, show and
+    form, every one a synchronous answer-queue dialogue, and the platform
+    already has the asynchronous file dialogues (`NativeDialogs`).
+    Assumed: *Browse…* opens `platform::NativeDialogs::pick_files` the way
+    the side panel's folder *Browse…* does, with the filters the previewer
+    names in `MissingLibrary`; the shell stores the chosen file into the
+    previewer's setting through `Command::ExtSetting` and opens the preview
+    again (`Command::PreviewRetry`). No `UiHost` method was added.
+
+196. (issue 50) The Office previewer renders through its own pdfium
+    binding (QUESTIONS.md 104), which also needs the library's path.
+    Assumed: one setting for one library: the Office plugin reads the PDF
+    previewer's `library` setting through the `SettingsStore` and looks in
+    the same places, but never writes it; its message for a missing pdfium
+    points *Browse…* at the PDF previewer's setting. The Office plugin's
+    own setting is `soffice` (the program, or the directory it is in),
+    with the `PATH` and the platforms' install directories after the
+    setting, beside the binary and the plugins directory.
+
+197. (issue 50) The issue writes `preview_always = true` "for that SSH host
+    (`[[ssh.hosts]]`)", while Rick's hosts are `[[connections]]` tables
+    (QUESTIONS.md 163) and a host of `~/.ssh/config` has no table at all,
+    being read-only in Rick.
+    Assumed: the switch is the connection field `preview_always` of the
+    `[[connections]]` table (`provider = "ssh"`), a checkbox in the host
+    editor; for a configuration host the application writes a
+    `[[connections]]` entry that carries the switch alone (and a cap
+    override, when one is set), which `Hosts` merges onto the
+    configuration host of that alias instead of hiding it, so *Always
+    preview on <host>* and the row's menu work for every host in Network.
+    `Provider::remote_preview_always` reports the switch; the kernel skips
+    the cap when it is on. Cloud accounts have no editor yet, so their
+    rows get the menu entry only once their schema has the field.
+
+198. (issue 50) *Copy* "puts the whole file's text on the clipboard"; the
+    spec says nothing about a file too large to hold as text, nor about
+    the encoding.
+    Assumed: the file is read again as a job up to 256 MiB (`COPY_LIMIT`),
+    decoded by its byte-order mark (UTF-8, UTF-16) and as UTF-8 otherwise
+    with invalid sequences replaced, and put on the clipboard through
+    `platform::Clipboard`, with a notification of the character count; a
+    larger file is refused with a notification. The button shows for a
+    preview with a text layer and no pages: text, code, Markdown, HTML and
+    CSV, not a file list (whose text layer is the listing's dump) and not a
+    paged document.
+
+199. (issue 50) *No previewer* when a previewer claims the file but fails
+    to open it.
+    Assumed: the placeholder is for a file no previewer claims, which the
+    application now reports as `Event::PreviewNone` (with the disabled
+    plugin that would claim it, from the plugin rows); a previewer that
+    claims a file and fails keeps `Event::PreviewFailed` and the error
+    line, since the type is known and the failure is the news.
+
+200. (issue 50) How a test stands on a machine without pdfium or
+    LibreOffice when CI has both beside the binary.
+    Assumed: `PdfPreview::with_search(Search::SettingOnly)` and the Office
+    plugin's `Lookup::with_search` restrict the search to the setting, the
+    one place a test controls; the acceptance test of the in-pane message
+    uses it and then browses to the real library where the machine has
+    one.
+
+201. (issue 50) Space "while the preview has focus" plays or pauses, while
+    Space in a list toggles the focused entry.
+    Assumed: the Preview pane table of the shortcut screen has one row,
+    *Play / pause media* (`preview.play`, Space), live while the Preview
+    tab has the focus and tried before the other tables there; it is not
+    bound in an explorer. The transport in the toolbar is play or pause, a
+    seek bar with elapsed and total time and a volume slider; speed, frame
+    step and loop of `Transport` have no control in the pane.
+
+202. (issue 51) The issue builds on #50, "which is merged into `dev`"; when
+    this task started, `dev` carried #50's spec change and none of its
+    code, and #50 landed on `dev` (#56) while the work was under way.
+    Assumed: the branch was brought level with `dev` before it merged, and
+    the four items use #50's API where it exists: the markup plugin's
+    manifest lists its extensions in `previews`; the Rendered toggle is the
+    `PreviewControl::Toggle` with `Icon::Rendered` the pane shows for any
+    previewer, on for every newly shown file, and the raw source is the
+    text layer the pane's *Copy* reads; a disk image enters on Enter
+    through the archive provider's path, so `archives.on_open` governs it
+    like any archive; the 7-Zip library's setting is read and written
+    through the registry's `SettingsStore` (question 193), with no store,
+    as in the compress plugin's extraction, nothing is remembered; and the
+    missing library is `Content::MissingLibrary` carrying
+    `ext::MissingLibrary` (the library's name, the install command for this
+    platform, the setting `vfs-archive`/`sevenzip_library` and where Rick
+    looked), which the pane lays out with its *Browse…* and *Retry*, while
+    the provider, which has no pane, raises the same facts as an
+    `Error::Extension` carrying `ext_vfs_archive::MissingLibrary`.
+203. (issue 51) "The `unsafe` needed to call the library stays in
     `platform` or behind the smallest wrapper the Architecture rules
     allow — record the choice".
     Assumed: in `platform`, as `platform::sevenzip`: the `libloading` load,
@@ -2228,7 +2432,7 @@ Once answered, an entry keeps its number and gains a dated decision line.
     them with (a 4-byte length prefix, `wchar_t` text) and `SysFreeString`
     on Windows.
 
-187. (issue 51) Two plugins read disk images (`ext-vfs-archive` lists and
+204. (issue 51) Two plugins read disk images (`ext-vfs-archive` lists and
     reads them, `ext-preview-archive` lists them in the pane) and the spec
     puts a library's path in "the plugin's own TOML settings file".
     Assumed: one setting, `sevenzip_library` in `vfs-archive.toml`, owned
@@ -2244,7 +2448,7 @@ Once answered, an entry keeps its number and gains a dated decision line.
     paths on Linux, Homebrew and MacPorts on macOS, `C:\Program
     Files\7-Zip\7z.dll`); the first hit is written back.
 
-188. (issue 51) How a disk image becomes a file tree: the library's
+205. (issue 51) How a disk image becomes a file tree: the library's
     container handler (VHD, VHDX, VMDK, VDI, QCOW, Dmg) lists the disk as
     one item, not the files.
     Assumed: the walk 7-Zip's own browser does, nested through
@@ -2262,7 +2466,7 @@ Once answered, an entry keeps its number and gains a dated decision line.
     VHD, DMG, raw). The spec's "no mature Rust crate" stands: nothing is
     parsed natively.
 
-189. (issue 51) The Mount action's outcome and its undo.
+206. (issue 51) The Mount action's outcome and its undo.
     Assumed: `platform::Mount::mount_image` returns the `Volume` the image
     became, as `Volumes::volumes` lists it, and the action runs it as one
     job for the selection, so the mount shows in the operations area; the
@@ -2280,7 +2484,7 @@ Once answered, an entry keeps its number and gains a dated decision line.
     another platform's list, so the action's availability is tried for all
     three on every runner.
 
-190. (issue 51) "The source one toggle away" for Markdown and HTML is the
+207. (issue 51) "The source one toggle away" for Markdown and HTML is the
     code previewer's highlighted view (SPEC.md "Preview support").
     Assumed: `ext-preview-markup` depends on `ext-preview-code` and builds
     its document over a `CodeDoc`, so the source behind the toggle is the
@@ -2293,7 +2497,7 @@ Once answered, an entry keeps its number and gains a dated decision line.
     and the text layer (a file over 1 MiB is cut there; Copy's "whole
     file" for such a file is #50's pane to resolve).
 
-191. (issue 51) Where the bundled 7-Zip library comes from on each
+208. (issue 51) Where the bundled 7-Zip library comes from on each
     platform, and its licence.
     Assumed: `cargo xtask bundle` copies `7z.so` or `7z.dll` and
     `License.txt` from `RICK_SEVENZIP_DIR` into `plugins/vfs-archive/`
@@ -2311,7 +2515,7 @@ Once answered, an entry keeps its number and gains a dated decision line.
     source build could not be run in this task's environment and is
     verified by tier 2.
 
-192. (issue 51) "Integration test on Linux x64 where udisks is available
+209. (issue 51) "Integration test on Linux x64 where udisks is available
     in CI, otherwise a fake Mount".
     Assumed: `crates/tests/tests/mount_linux.rs` mounts a generated ISO
     through `platform::Native`, finds it among the volumes, reads a file

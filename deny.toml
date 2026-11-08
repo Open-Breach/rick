@@ -30,7 +30,7 @@ multiple-versions = "warn"
 deny = [
     { crate = "runtime", wrappers = ["platform", "ext", "vfs", "vfs-local", "vfs-rick", "model", "ops", "app", "ui-egui", "rick", "tests"] },
     { crate = "platform", wrappers = ["ext", "vfs", "vfs-local", "vfs-rick", "model", "ops", "app", "ui-egui", "rick", "tests"] },
-    { crate = "ext", wrappers = ["vfs", "vfs-local", "vfs-rick", "model", "ops", "app", "ui-egui", "rick", "tests", "ext-preview-text", "ext-preview-code", "ext-preview-image", "ext-preview-pdf", "ext-preview-office", "ext-preview-media", "ext-preview-archive", "ext-preview-markup", "ext-preview-hex", "ext-preview-3d", "ext-git", "ext-svn", "ext-vfs-trash", "ext-vfs-archive", "ext-search-walk", "ext-search-windows", "ext-search-spotlight", "ext-search-tracker", "ext-search-baloo", "ext-vfs-sftp", "ext-ssh", "ext-vfs-s3", "ext-vfs-azure", "ext-vfs-gcs", "ext-action-compress", "ext-action-compare", "ext-action-terminal", "ext-action-rename", "ext-installer", "plugins-native", "plugin-probe", "plugin-panic"] },
+    { crate = "ext", wrappers = ["vfs", "vfs-local", "vfs-rick", "model", "ops", "app", "ui-egui", "rick", "tests", "ext-preview-text", "ext-preview-code", "ext-preview-image", "ext-preview-pdf", "ext-preview-office", "ext-preview-media", "ext-preview-archive", "ext-preview-markup", "ext-preview-hex", "ext-preview-3d", "ext-git", "ext-svn", "ext-vfs-trash", "ext-vfs-archive", "ext-search-walk", "ext-search-windows", "ext-search-spotlight", "ext-search-tracker", "ext-search-baloo", "ext-ssh", "ext-vfs-s3", "ext-vfs-azure", "ext-vfs-gcs", "ext-action-compress", "ext-action-compare", "ext-action-terminal", "ext-action-rename", "ext-installer", "plugins-native", "plugin-probe", "plugin-panic"] },
     { crate = "vfs", wrappers = ["vfs-local", "vfs-rick", "ops", "app", "ui-egui", "rick", "tests"] },
     { crate = "vfs-local", wrappers = ["vfs-rick", "ops", "app", "ui-egui", "rick", "tests"] },
     { crate = "vfs-rick", wrappers = ["ops", "app", "ui-egui", "rick", "tests"] },
@@ -57,10 +57,9 @@ deny = [
     # provider's crate (QUESTIONS.md 127); the archive previewer reads disk
     # images through its 7-Zip reader and library resolver (issue 51).
     { crate = "ext-vfs-archive", wrappers = ["rick", "tests", "ext-action-compress", "ext-preview-archive"] },
-    # The provider plugins of issue 21: SFTP and the three clouds.
-    { crate = "ext-vfs-sftp", wrappers = ["rick", "tests"] },
     # The SSH plugin of issue 34: shell commands over SSH, no SFTP.
     { crate = "ext-ssh", wrappers = ["rick", "tests"] },
+    # The cloud provider plugins of issue 21.
     { crate = "ext-vfs-s3", wrappers = ["rick", "tests"] },
     { crate = "ext-vfs-azure", wrappers = ["rick", "tests"] },
     { crate = "ext-vfs-gcs", wrappers = ["rick", "tests"] },
@@ -114,7 +113,7 @@ ignore = [
     { id = "RUSTSEC-2025-0141", reason = "bincode 1 decodes syntect's bundled grammar and theme dumps; no alternative without repacking them" },
     # The `rsa` crate's Marvin timing side channel has no fixed release; it
     # comes with russh's RSA support (ssh-rsa host keys, RSA user keys) in
-    # the SFTP plugin, where the only private-key operation is the user's
+    # the SSH plugin, where the only private-key operation is the user's
     # own signature on the user's machine and the attacker would have to
     # time it there. Revisit when `rsa` ships constant-time decryption.
     { id = "RUSTSEC-2023-0071", reason = "rsa's timing side channel; transitive via russh for RSA SSH keys, client-side only" },

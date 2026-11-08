@@ -159,6 +159,7 @@ impl MarkupPreview {
                 requires: Capabilities::empty(),
                 points: Points::PREVIEWER,
                 platforms: Platforms::ALL,
+                previews: EXTENSIONS,
             },
         }
     }

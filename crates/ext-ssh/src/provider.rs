@@ -1021,6 +1021,12 @@ impl Provider for SshProvider {
         )
     }
 
+    fn remote_preview_always(&self, loc: &Location) -> bool {
+        split(loc)
+            .and_then(|(alias, _)| self.pool.hosts().get(&alias))
+            .is_some_and(|host| host.preview_always)
+    }
+
     fn watch(&self, _loc: &Location) -> Result<ChangeStream, Error> {
         Err(Error::Unsupported(
             "a remote host sends no change notifications; the folder refreshes on request",

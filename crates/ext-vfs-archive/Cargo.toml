@@ -18,8 +18,6 @@ futures = { workspace = true }
 tokio = { workspace = true, features = ["fs", "io-util", "sync"] }
 tracing = { workspace = true }
 tempfile = { workspace = true }
-# The plugin's own settings file, `vfs-archive.toml`: the 7-Zip library's path.
-toml = { workspace = true }
 thiserror = { workspace = true }
 zip = { workspace = true }
 flate2 = { workspace = true }

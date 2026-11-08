@@ -39,6 +39,8 @@ pub mod field {
     pub const REMEMBER_PASSWORD: &str = "remember_password";
     /// The preview size cap for this host in MiB; 0 for the setting's.
     pub const PREVIEW_CAP: &str = "preview_size_cap_mib";
+    /// *Always preview*: whole-file previews on this host ignore the cap.
+    pub const PREVIEW_ALWAYS: &str = "preview_always";
     /// The password, in the keychain.
     pub const PASSWORD: &str = "password";
     /// The passphrase of the identity file, in the keychain.
@@ -141,6 +143,8 @@ pub struct Host {
     pub remember_password: bool,
     /// The preview size cap for this host, when it overrides the setting.
     pub preview_cap: Option<u64>,
+    /// *Always preview*: the cap does not apply on this host.
+    pub preview_always: bool,
 }
 
 impl Host {
@@ -157,7 +161,24 @@ impl Host {
             jump: entry.proxy_jump.iter().map(|h| Hop::parse(h)).collect(),
             source: Source::Config,
             remember_password: false,
+            preview_always: false,
             preview_cap: None,
+        }
+    }
+
+    /// Takes the preview switches of a Rick entry that carries no host
+    /// name: Rick's own settings for a host of `~/.ssh/config`, which the
+    /// cap message and the row's menu write for a host Rick cannot edit.
+    fn overlay(&mut self, connection: &Connection) {
+        if connection.get(field::PREVIEW_ALWAYS) == Some("true") {
+            self.preview_always = true;
+        }
+        if let Some(cap) = connection
+            .get(field::PREVIEW_CAP)
+            .and_then(|c| c.parse::<u64>().ok())
+            .filter(|c| *c > 0)
+        {
+            self.preview_cap = Some(cap.saturating_mul(1024 * 1024));
         }
     }
 
@@ -199,6 +220,7 @@ impl Host {
             jump,
             source: Source::Rick,
             remember_password: connection.get(field::REMEMBER_PASSWORD) == Some("true"),
+            preview_always: connection.get(field::PREVIEW_ALWAYS) == Some("true"),
             preview_cap,
         })
     }
@@ -380,17 +402,27 @@ impl Hosts {
     }
 
     /// Every host, Rick's first in the order the settings hold them, then
-    /// the configuration's in file order, an alias listed once.
+    /// the configuration's in file order, an alias listed once. A Rick
+    /// entry without a host name is no host of its own: it carries Rick's
+    /// preview switches for the configuration host of its alias.
     #[must_use]
     pub fn all(&self) -> Vec<Host> {
         let env = self.env();
-        let mut hosts: Vec<Host> = lock(&self.rick)
+        let rick = lock(&self.rick);
+        let mut hosts: Vec<Host> = rick
             .iter()
             .filter_map(|c| Host::from_connection(c, &env))
             .collect();
         for entry in self.config_hosts() {
             if !hosts.iter().any(|h| h.alias == entry.alias) {
-                hosts.push(Host::from_config(&entry));
+                let mut host = Host::from_config(&entry);
+                if let Some(overlay) = rick
+                    .iter()
+                    .find(|c| c.name == entry.alias && c.get(field::HOST).is_none())
+                {
+                    host.overlay(overlay);
+                }
+                hosts.push(host);
             }
         }
         hosts
@@ -417,6 +449,7 @@ impl Hosts {
             jump: Vec::new(),
             source: Source::Config,
             remember_password: false,
+            preview_always: false,
             preview_cap: None,
         });
         if let Some(user) = &hop.user {
@@ -508,6 +541,12 @@ impl Hosts {
                     },
                     required: false,
                 },
+                ConnectionField {
+                    key: field::PREVIEW_ALWAYS,
+                    label: Text("ssh-always-preview"),
+                    kind: ConnectionFieldKind::Bool { default: false },
+                    required: false,
+                },
             ],
         }
     }
@@ -557,17 +596,23 @@ mod tests {
                     ("identity_file", "~/.ssh/id_prod"),
                     ("remember_password", "true"),
                     ("preview_size_cap_mib", "1"),
+                    ("preview_always", "true"),
                 ],
             ),
             rick("nas", &[("host", "192.168.1.20"), ("port", "2222")]),
             rick("broken", &[("user", "nobody")]),
+            // Rick's preview switches for a host of the configuration.
+            rick(
+                "bastion",
+                &[("preview_always", "true"), ("preview_size_cap_mib", "2")],
+            ),
         ]);
         let all = hosts.all();
         let aliases: Vec<&str> = all.iter().map(|h| h.alias.as_str()).collect();
         assert_eq!(
             aliases,
             ["prod-db", "nas", "bastion"],
-            "a Rick host hides the config host of its alias; one without a host is dropped"
+            "a Rick host hides the config host of its alias; one without a host is no host"
         );
         let db = &all[0];
         assert_eq!(db.source, Source::Rick);
@@ -576,6 +621,7 @@ mod tests {
         assert_eq!(db.identity_files, [fake.home_dir().join(".ssh/id_prod")]);
         assert!(db.remember_password);
         assert_eq!(db.preview_cap, Some(1024 * 1024));
+        assert!(db.preview_always);
         assert_eq!(
             db.ssh_command(),
             [
@@ -590,10 +636,13 @@ mod tests {
         let nas = &all[1];
         assert_eq!(nas.port, 2222);
         assert_eq!(nas.user, None);
+        assert!(!nas.preview_always);
         assert_eq!(nas.ssh_command(), ["ssh", "-p", "2222", "192.168.1.20"]);
         let bastion = &all[2];
         assert_eq!(bastion.source, Source::Config);
         assert_eq!(bastion.ssh_command(), ["ssh", "bastion"]);
+        assert!(bastion.preview_always, "Rick's switch for a config host");
+        assert_eq!(bastion.preview_cap, Some(2 * 1024 * 1024));
         let hop = hosts.hop_host(&Hop::parse("ops@bastion:2201"));
         assert_eq!(
             (hop.alias.as_str(), hop.user.as_deref(), hop.port),

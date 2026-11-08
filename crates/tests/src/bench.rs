@@ -6,8 +6,9 @@
 //! target of the operating system it runs on. The Linux targets are the
 //! spec's (Decisions table, QUESTIONS.md 5, 24 and 30); the macOS and
 //! Windows targets were set from five measured runs on the CI runners, as
-//! `BENCHMARKS.md` records. Setting `RICK_BENCH_RECORD` turns the assertion
-//! off, for measuring before a target exists.
+//! `BENCHMARKS.md` records, last from the 0.2 run of issue 25 (QUESTIONS.md
+//! 188). Setting `RICK_BENCH_RECORD` turns the assertion off, for measuring
+//! before a target exists.
 
 use std::time::Duration;
 
@@ -39,19 +40,19 @@ pub const BENCHMARKS: &[Benchmark] = &[
     Benchmark {
         key: "fixture",
         linux: ms(30_000),
-        macos: ms(40_000),
-        windows: ms(30_000),
+        macos: ms(35_000),
+        windows: ms(45_000),
     },
     Benchmark {
         key: "listing-first",
         linux: ms(50),
-        macos: ms(400),
+        macos: ms(50),
         windows: ms(50),
     },
     Benchmark {
         key: "listing-complete",
         linux: ms(400),
-        macos: ms(3_000),
+        macos: ms(1_600),
         windows: ms(400),
     },
     Benchmark {
@@ -75,7 +76,7 @@ pub const BENCHMARKS: &[Benchmark] = &[
     Benchmark {
         key: "pdf-first",
         linux: ms(200),
-        macos: ms(1_200),
+        macos: ms(200),
         windows: ms(200),
     },
     Benchmark {
@@ -121,28 +122,22 @@ pub const BENCHMARKS: &[Benchmark] = &[
         windows: us(16_600),
     },
     Benchmark {
-        key: "viewer-frame",
-        linux: us(16_600),
-        macos: us(16_600),
-        windows: us(16_600),
-    },
-    Benchmark {
         key: "startup",
-        linux: ms(20),
-        macos: ms(150),
-        windows: ms(40),
+        linux: ms(25),
+        macos: ms(25),
+        windows: ms(25),
     },
     Benchmark {
         key: "plugin-load",
         linux: ms(50),
-        macos: ms(100),
-        windows: ms(100),
+        macos: ms(50),
+        windows: ms(50),
     },
     Benchmark {
         key: "archive-zip-first",
         linux: ms(50),
-        macos: ms(100),
-        windows: ms(100),
+        macos: ms(50),
+        windows: ms(50),
     },
     Benchmark {
         key: "tree-first",
@@ -154,18 +149,18 @@ pub const BENCHMARKS: &[Benchmark] = &[
         key: "search-first",
         linux: ms(100),
         macos: ms(100),
-        windows: ms(150),
+        windows: ms(100),
     },
     Benchmark {
         key: "cancel",
         linux: ms(20),
-        macos: ms(50),
+        macos: ms(80),
         windows: ms(20),
     },
     Benchmark {
         key: "session-start",
         linux: ms(5),
-        macos: ms(15),
+        macos: ms(12),
         windows: ms(5),
     },
     Benchmark {

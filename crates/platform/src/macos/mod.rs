@@ -4,8 +4,11 @@
 //! Open with, Terminal.app, Finder's Get Info window,
 //! `~/Library/Application Support/Rick`, the mounted volumes from
 //! `NSFileManager.mountedVolumeURLs` ejected through `diskutil`, the
-//! standard directories under the home, and Spotlight's last-used dates
-//! through `mdfind` for the recently-used list.
+//! standard directories under the home, Spotlight's last-used dates
+//! through `mdfind` for the recently-used list, and drag and drop through
+//! an `NSDraggingSession` and the mouse location.
+
+mod drag;
 
 use std::fs;
 use std::io;
@@ -22,9 +25,10 @@ use types::Error;
 use crate::Native;
 use crate::time::parse_iso8601;
 use crate::traits::{
-    Application, Chrome, ConfigDir, ControlsSide, DragSource, Elevate, ElevatedOutput, ImageFormat,
-    Mount, OpenWith, Properties, PropertiesOutcome, RecentItem, RecentlyUsed, StandardFolder,
-    StandardFolders, Terminal, Trash, TrashedItem, Volume, VolumeKind, Volumes, WindowChrome,
+    Application, Chrome, ConfigDir, ControlsSide, DragSource, DropTarget, Elevate, ElevatedOutput,
+    ImageFormat, IncomingFiles, Mount, OpenWith, Point, Properties, PropertiesOutcome, RecentItem,
+    RecentlyUsed, StandardFolder, StandardFolders, Terminal, Trash, TrashedItem, Volume,
+    VolumeKind, Volumes, WindowChrome, WindowRef,
 };
 use crate::trash_record::{self, TRASH_FILE};
 
@@ -666,16 +670,30 @@ impl Chrome for Native {
 }
 
 impl DragSource for Native {
-    /// Not available yet: an `AppKit` drag starts from the `NSView` with the
-    /// `NSEvent` of the press (`beginDraggingSessionWithItems:event:source:`),
-    /// and `winit` 0.30 behind `eframe` 0.36 hands neither out; it exposes
-    /// drop reception only (QUESTIONS.md).
-    fn start_drag(&self, paths: &[PathBuf]) -> Result<(), Error> {
-        let uris: Vec<String> = paths.iter().map(|p| crate::paths::file_uri(p)).collect();
-        tracing::debug!(?uris, "platform drag not started");
-        Err(Error::Unsupported(
-            "starting a drag needs the window's NSView and the press event, which winit does not expose",
-        ))
+    /// Nothing to prepare: `AppKit` has the view and the event when the drag
+    /// starts.
+    fn attach(&self, _window: &WindowRef, _wake: std::sync::Arc<dyn Fn() + Send + Sync>) {}
+
+    /// An `NSDraggingSession` from the window's view, the files as `NSURL`
+    /// items with the first one's icon under the cursor.
+    fn start_drag(&self, window: &WindowRef, paths: &[PathBuf]) -> Result<(), Error> {
+        drag::start_drag(window, paths)
+    }
+
+    fn drag_in_progress(&self) -> bool {
+        drag::drag_in_progress()
+    }
+}
+
+impl DropTarget for Native {
+    /// winit's view receives the drops and hands them to egui.
+    fn incoming_files(&self) -> IncomingFiles {
+        IncomingFiles::default()
+    }
+
+    /// The mouse location converted into the window's view.
+    fn drop_position(&self, window: &WindowRef) -> Option<Point> {
+        drag::drop_position(window)
     }
 }
 

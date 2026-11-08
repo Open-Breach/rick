@@ -14,10 +14,11 @@ encrypted lists nothing and says so (QUESTIONS.md 105); a disk image lists
 one folder per partition with the layout and volume label in File info.
 The status bar shows entries, compressed and uncompressed size and the
 format; `render` gives the same list as text for a pane that shows no
-listings. Without the 7-Zip library a disk image fails to open with the
-message that names the library, how to install it and the setting, and
-browsing to the library stores its path in the archive provider's setting,
-shared by both plugins (QUESTIONS.md 187). It is a plugin (`cdylib`,
+listings. Without the 7-Zip library a disk image opens as the pane's
+missing-library content, which names the library, how to install it on
+this platform and the archive provider's setting; *Browse…* stores the
+chosen library into that setting, shared by both plugins, and *Retry*
+lists the image (QUESTIONS.md 204). It is a plugin (`cdylib`,
 loaded from `plugins/preview-archive/`) and an `rlib` for the binary's
 opt-in `preview-archive` feature. It depends on `ext`, `types` and
 `ext-vfs-archive` (the disk-image reader and the library resolver);

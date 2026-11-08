@@ -3,11 +3,8 @@
 `app` is the command loop: it receives `Command`s from the UI, mutates the
 `model`, runs listings and watches as jobs, forwards job progress, and emits
 `Event`s; the UI never touches the model directly. It opens the preview of
-the followed explorer's selection and every viewer tab's file through the
-best-scoring previewer, and decides what `Open` does with a file (a viewer
-tab when a previewer claims it, the system application otherwise or when the
-`[viewer] external` setting names its type) by reading its first bytes as a
-job. It owns the undo/redo log of
+the followed explorer's selection through the best-scoring previewer, the
+preview pane being Rick's only viewer. It owns the undo/redo log of
 reversible commands, the extension `Registry` the actions come from, the
 TOML settings file with its watcher (the `language` setting among them: it
 registers the kernel's `locales/en.ftl` and `de.ftl` with the `t!` lookup,
@@ -20,8 +17,16 @@ layouts in `layouts/`. Windows open, close and exchange tabs through it;
 closing the last one asks the UI to exit. A drag and drop's `Transfer`, `Receive`,
 `SpringLoad`, `Pin` and `Unpin` are commands it handles itself, and so is
 `Open`: a folder navigates, a local file is offered to the archive provider
-and enters as a location when it browses it, anything else opens with the
-system default. The pinned list lives in its settings, and the pin actions
+and enters as a location when it browses it (unless the setting
+`archives.on_open` says `system`), anything else opens with the system
+default; nothing opens a viewer. The preview pane's *Copy* reads the whole
+file as a job and puts its text on the clipboard; a file no previewer
+claims is reported with the disabled plugin whose manifest claims its type,
+for the pane's placeholder; *Always preview on <source>* writes
+`preview_always` into the source's connection and takes the size cap off
+there. The extension settings store is shared with the plugins through the
+registry, so a plugin that found its third-party library writes the path
+into its own setting. The pinned list lives in its settings, and the pin actions
 in `ops` see it through the `PinStore` bridge it hands them. It feeds the
 side panel — the Places list from `places.toml`, seeded from the standard
 folders on the first start and edited through `PlaceAdd`, `PlaceRemove`,

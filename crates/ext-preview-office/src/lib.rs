@@ -3,15 +3,22 @@
 //! LibreOffice, the metadata the file carries and a hint to install it.
 //!
 //! `open` reads the file's metadata from its zip (title, author, dates,
-//! page, sheet or slide count), looks for `soffice` on the `PATH` and in
-//! the usual install directories of the three platforms (QUESTIONS.md
-//! 87), and when it is there runs the conversion on the blocking pool
-//! inside the preview job: cancelling the preview kills the process, and
-//! so does the [`CONVERT_TIMEOUT`]. The PDF lands in a cache under the
+//! page, sheet or slide count), looks for `soffice` the way SPEC.md's
+//! *Third-party libraries* says, lazily on the first file shown: the
+//! `soffice` setting of `preview-office.toml` when it is set, then beside
+//! the binary and the plugins directory, the `PATH` and the usual install
+//! directories of the three platforms, the first hit written back into
+//! the setting through the host's [`SettingsStore`]; no environment
+//! variable is read. When it is there the conversion runs on the blocking
+//! pool inside the preview job: cancelling the preview kills the process,
+//! and so does the [`CONVERT_TIMEOUT`]. The PDF lands in a cache under the
 //! temporary directory, keyed by the file's path, size and modification
 //! time, so a second look costs nothing; the cache is trimmed to
 //! [`CACHE_LIMIT`]. Pages render through pdfium like the PDF previewer's
-//! (`pdf`). LibreOffice is never bundled.
+//! (`pdf`). Without LibreOffice (or pdfium) the document's content is
+//! [`Content::MissingLibrary`]: the pane shows the file's facts, the
+//! install command for this platform, *Browse…* and *Retry*. LibreOffice
+//! is never bundled.
 
 #![deny(unsafe_code)]
 
@@ -23,19 +30,22 @@ use std::fmt::Write as _;
 use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::sync::{Arc, Mutex, OnceLock, PoisonError};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, Instant, SystemTime};
 
 use ext::Text;
+use ext::platform::DialogFilter;
 use ext::{
-    API_VERSION, Capabilities, ControlId, ControlValue, Extension, Frame, Icon, InfoSection,
-    Manifest, Platforms, Points, PreviewControl, PreviewDoc, Previewer, Provider, Registry,
-    RenderRequest, TextBlock, TextLayer, Transport, Version, async_trait,
+    API_VERSION, Capabilities, Content, ControlId, ControlValue, Extension, Frame, Icon,
+    InfoSection, Manifest, MissingLibrary, Platforms, Points, PreviewControl, PreviewDoc,
+    Previewer, Provider, Registry, RenderRequest, SettingField, SettingKind, SettingValue,
+    SettingsSchema, SettingsStore, TextBlock, TextLayer, Transport, Version, async_trait,
 };
+use pdfium_render::prelude::Pdfium;
 use types::{CancelToken, Entry, EntryKind, Error, ExtId, Location};
 
 pub use meta::Meta;
-pub use pdf::Pages;
+pub use pdf::{Binding, Pages, Search};
 
 /// The extension id.
 pub const ID: ExtId = ExtId("preview-office");
@@ -52,9 +62,12 @@ pub const CACHE_LIMIT: u64 = 512 * 1024 * 1024;
 /// The cache keeps at most this many converted PDFs.
 pub const CACHE_FILES: usize = 200;
 
-/// An environment variable naming the LibreOffice executable to use, for
-/// development and tests; the usual lookup runs when it is unset.
-pub const SOFFICE_VAR: &str = "RICK_SOFFICE";
+/// The setting that holds the path of the LibreOffice program (`soffice`,
+/// or the directory it is in), in `preview-office.toml`.
+pub const SOFFICE_SETTING: &str = "soffice";
+
+/// The file name extensions the manifest claims: the six formats.
+const PREVIEWS: &[&str] = &["docx", "xlsx", "pptx", "odt", "ods", "odp"];
 
 /// Where to get LibreOffice, as the hint says.
 pub const DOWNLOAD_URL: &str = "https://www.libreoffice.org/download/";
@@ -85,6 +98,7 @@ impl OfficePreview {
                 requires: Capabilities::empty(),
                 points: Points::PREVIEWER,
                 platforms: Platforms::ALL,
+                previews: PREVIEWS,
             },
         }
     }
@@ -97,16 +111,62 @@ impl Extension for OfficePreview {
 
     fn register(&self, reg: &mut Registry) -> Result<(), Error> {
         reg.translations(&[("en", include_str!("../locales/en.ftl"))]);
-        reg.previewer(Arc::new(OfficePreviewer));
+        reg.settings(settings_schema());
+        let settings = reg.settings_store().cloned();
+        let config_dir = reg.platform().map(|platform| platform.config_dir());
+        reg.previewer(Arc::new(OfficePreviewer::new(
+            Arc::new(Lookup::new(settings.clone(), config_dir.clone())),
+            Arc::new(Binding::new(settings, config_dir)),
+        )));
         Ok(())
+    }
+}
+
+/// The settings the Settings window shows for `preview-office.toml`: the
+/// program's path.
+#[must_use]
+pub fn settings_schema() -> SettingsSchema {
+    SettingsSchema {
+        ext: ID,
+        fields: vec![SettingField {
+            key: SOFFICE_SETTING,
+            label: Text("preview-office-soffice"),
+            kind: SettingKind::Text {
+                default: String::new(),
+            },
+        }],
     }
 }
 
 ext::plugin!(|| Arc::new(OfficePreview::new()) as Arc<dyn Extension>);
 
 /// Previews office documents.
-#[derive(Debug, Default)]
-pub struct OfficePreviewer;
+#[derive(Debug)]
+pub struct OfficePreviewer {
+    soffice: Arc<Lookup>,
+    pdfium: Arc<Binding>,
+}
+
+impl Default for OfficePreviewer {
+    fn default() -> Self {
+        Self::new(Arc::new(Lookup::default()), Arc::new(Binding::default()))
+    }
+}
+
+impl OfficePreviewer {
+    /// A previewer finding LibreOffice through `soffice` and pdfium through
+    /// `pdfium`.
+    #[must_use]
+    pub fn new(soffice: Arc<Lookup>, pdfium: Arc<Binding>) -> Self {
+        Self { soffice, pdfium }
+    }
+
+    /// Where the previewer looks for LibreOffice.
+    #[must_use]
+    pub fn soffice(&self) -> &Arc<Lookup> {
+        &self.soffice
+    }
+}
 
 /// The six formats.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -237,9 +297,7 @@ pub fn detect(name: &str, sniff: &[u8]) -> Option<(Kind, u8)> {
     Some((kind, if is_zip || sniff.is_empty() { 180 } else { 60 }))
 }
 
-static SOFFICE: OnceLock<Mutex<Option<PathBuf>>> = OnceLock::new();
-
-/// The executable names the lookup tries on the `PATH`.
+/// The executable names the lookup tries on the `PATH` and in a directory.
 const PATH_NAMES: [&str; 3] = ["soffice", "libreoffice", "soffice.exe"];
 
 /// The install directories of the three platforms, checked whatever the
@@ -300,29 +358,191 @@ fn standard_locations() -> Vec<PathBuf> {
     out
 }
 
-/// Looks for the LibreOffice executable: `RICK_SOFFICE`, then the `PATH`,
-/// then the standard install directories. A hit is remembered; a miss is
-/// looked up again next time, so installing LibreOffice while Rick runs
-/// is picked up.
+/// Where LibreOffice is looked for and, once found, remembered.
+pub struct Lookup {
+    settings: Option<Arc<dyn SettingsStore>>,
+    config_dir: Option<PathBuf>,
+    search: Search,
+    known: Mutex<Option<PathBuf>>,
+}
+
+impl std::fmt::Debug for Lookup {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Lookup")
+            .field("search", &self.search)
+            .field("known", &*self.lock())
+            .finish_non_exhaustive()
+    }
+}
+
+impl Default for Lookup {
+    fn default() -> Self {
+        Self::new(None, None)
+    }
+}
+
+/// The program a path names: itself, or `soffice` inside it when it is a
+/// directory.
+fn program_at(path: &Path) -> Option<PathBuf> {
+    if path.is_dir() {
+        PATH_NAMES
+            .iter()
+            .map(|name| path.join(name))
+            .find(|candidate| candidate.is_file())
+    } else {
+        Some(path.to_path_buf())
+    }
+}
+
+/// What installs LibreOffice on this platform.
+fn install_hint() -> String {
+    match std::env::consts::OS {
+        "linux" => "sudo apt install libreoffice".to_owned(),
+        "macos" => "brew install --cask libreoffice".to_owned(),
+        "windows" => "winget install TheDocumentFoundation.LibreOffice".to_owned(),
+        _ => DOWNLOAD_URL.to_owned(),
+    }
+}
+
+impl Lookup {
+    /// A lookup over every place, writing the hit back into `settings`
+    /// when the host lent them; `config_dir` holds the per-user plugins
+    /// directory.
+    #[must_use]
+    pub fn new(settings: Option<Arc<dyn SettingsStore>>, config_dir: Option<PathBuf>) -> Self {
+        Self {
+            settings,
+            config_dir,
+            search: Search::Everywhere,
+            known: Mutex::new(None),
+        }
+    }
+
+    /// The same lookup, over `search` only.
+    #[must_use]
+    pub fn with_search(mut self, search: Search) -> Self {
+        self.search = search;
+        self
+    }
+
+    fn lock(&self) -> MutexGuard<'_, Option<PathBuf>> {
+        self.known.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// The `soffice` setting as a path, when it is set.
+    #[must_use]
+    pub fn setting(&self) -> Option<PathBuf> {
+        match self.settings.as_ref()?.get(ID, SOFFICE_SETTING)? {
+            SettingValue::Text(text) if !text.trim().is_empty() => Some(PathBuf::from(text.trim())),
+            _ => None,
+        }
+    }
+
+    /// The places tried, in order: the setting, beside the binary and the
+    /// plugins directories, the `PATH`, the platforms' install directories.
+    #[must_use]
+    pub fn candidates(&self) -> Vec<PathBuf> {
+        let mut out = Vec::new();
+        if let Some(setting) = self.setting() {
+            out.push(program_at(&setting).unwrap_or(setting));
+        }
+        if self.search == Search::SettingOnly {
+            return out;
+        }
+        let mut dirs = Vec::new();
+        if let Ok(exe) = std::env::current_exe()
+            && let Some(dir) = exe.parent()
+        {
+            dirs.push(dir.to_path_buf());
+            dirs.push(dir.join("plugins").join(ID.0));
+        }
+        if let Some(config) = &self.config_dir {
+            dirs.push(config.join("plugins").join(ID.0));
+        }
+        if let Some(paths) = std::env::var_os("PATH") {
+            dirs.extend(std::env::split_paths(&paths));
+        }
+        for dir in dirs {
+            for name in PATH_NAMES {
+                let candidate = dir.join(name);
+                if !out.contains(&candidate) {
+                    out.push(candidate);
+                }
+            }
+        }
+        for path in standard_locations() {
+            if !out.contains(&path) {
+                out.push(path);
+            }
+        }
+        out
+    }
+
+    /// The LibreOffice program: the one remembered while it is still
+    /// there, else the first candidate that is a file, written into the
+    /// setting. A miss is looked up again next time, so installing
+    /// LibreOffice while Rick runs is picked up.
+    ///
+    /// # Errors
+    ///
+    /// What the pane shows when nothing is found.
+    pub fn find(&self) -> Result<PathBuf, Box<MissingLibrary>> {
+        if let Some(path) = self.lock().as_ref().filter(|p| p.is_file()) {
+            return Ok(path.clone());
+        }
+        let setting = self.setting();
+        let candidates = self.candidates();
+        let Some(found) = candidates.iter().find(|p| p.is_file()).cloned() else {
+            return Err(Box::new(
+                self.missing(
+                    &candidates
+                        .iter()
+                        .map(|p| p.display().to_string())
+                        .collect::<Vec<_>>()
+                        .join("\n"),
+                ),
+            ));
+        };
+        if setting.as_deref() != Some(found.as_path())
+            && let Some(settings) = &self.settings
+            && let Err(error) = settings.set(
+                ID,
+                SOFFICE_SETTING,
+                SettingValue::Text(found.display().to_string()),
+            )
+        {
+            tracing::warn!(%error, "the LibreOffice path was not written to the setting");
+        }
+        *self.lock() = Some(found.clone());
+        Ok(found)
+    }
+
+    /// The message for a LibreOffice that is not there: the install
+    /// command for this platform, the setting *Browse…* fills, and
+    /// `detail` on where it was looked for.
+    #[must_use]
+    pub fn missing(&self, detail: &str) -> MissingLibrary {
+        MissingLibrary {
+            name: "LibreOffice".to_owned(),
+            install: install_hint(),
+            setting: (ID, SOFFICE_SETTING),
+            filters: vec![DialogFilter {
+                name: "LibreOffice program",
+                extensions: &["exe", ""],
+            }],
+            detail: format!(
+                "Rick shows office documents by converting them to PDF with LibreOffice \
+                 ({DOWNLOAD_URL}). It was looked for at:\n{detail}"
+            ),
+        }
+    }
+}
+
+/// Looks for the LibreOffice executable everywhere but a setting: the
+/// `PATH`, then the standard install directories.
 #[must_use]
 pub fn find_soffice() -> Option<PathBuf> {
-    let cache = SOFFICE.get_or_init(|| Mutex::new(None));
-    let mut known = cache.lock().unwrap_or_else(PoisonError::into_inner);
-    if let Some(path) = known.as_ref().filter(|p| p.is_file()) {
-        return Some(path.clone());
-    }
-    let found = std::env::var_os(SOFFICE_VAR)
-        .map(PathBuf::from)
-        .filter(|p| p.is_file())
-        .or_else(|| {
-            let paths = std::env::var_os("PATH")?;
-            std::env::split_paths(&paths)
-                .flat_map(|dir| PATH_NAMES.iter().map(move |name| dir.join(name)))
-                .find(|candidate| candidate.is_file())
-        })
-        .or_else(|| standard_locations().into_iter().find(|p| p.is_file()));
-    known.clone_from(&found);
-    found
+    Lookup::default().find().ok()
 }
 
 /// Whether LibreOffice can be found on this machine.
@@ -534,8 +754,11 @@ impl std::error::Error for ConvertErrorWrapper {}
 pub enum Rendering {
     /// The converted PDF, through pdfium.
     Pages(Pages),
-    /// No PDF: LibreOffice missing or failed, or pdfium missing.
+    /// No PDF: the conversion failed, or the file is too large.
     None(String),
+    /// No PDF: LibreOffice or pdfium is not there; the pane shows the
+    /// message with *Browse…* and *Retry*.
+    Missing(Arc<MissingLibrary>),
 }
 
 /// An opened office document.
@@ -592,25 +815,34 @@ impl OfficeDoc {
     fn count(&self) -> Option<(usize, &'static str)> {
         match &self.rendering {
             Rendering::Pages(pages) => Some((pages.count(), "page")),
-            Rendering::None(_) => self.meta.count.map(|n| (n, self.kind.unit())),
+            Rendering::None(_) | Rendering::Missing(_) => {
+                self.meta.count.map(|n| (n, self.kind.unit()))
+            }
+        }
+    }
+
+    /// Why there are no pages, in one line.
+    fn reason(&self) -> String {
+        match &self.rendering {
+            Rendering::Pages(_) => String::new(),
+            Rendering::None(reason) => reason.clone(),
+            Rendering::Missing(missing) => format!("{} is not installed", missing.name),
         }
     }
 
     /// The text shown when there are no pages: the reason, the install
-    /// hint when LibreOffice is missing, and the metadata.
+    /// hint when a library is missing, and the metadata.
     fn fallback_text(&self, reason: &str) -> String {
         let mut text = String::new();
         text.push_str(self.kind.name());
         text.push_str("\n\n");
         text.push_str(reason);
         text.push('\n');
-        if reason.starts_with("LibreOffice is not installed") {
-            text.push_str(
-                "\nRick shows office documents by converting them to PDF with LibreOffice. \
-                 Install it (",
-            );
-            text.push_str(DOWNLOAD_URL);
-            text.push_str(") and select the file again.\n");
+        if let Rendering::Missing(missing) = &self.rendering {
+            text.push_str(&missing.install);
+            text.push('\n');
+            text.push_str(&missing.detail);
+            text.push('\n');
         }
         if !self.meta.rows.is_empty() || self.meta.count.is_some() {
             text.push('\n');
@@ -649,18 +881,18 @@ impl PreviewDoc for OfficeDoc {
     fn pages(&self) -> Option<usize> {
         match &self.rendering {
             Rendering::Pages(pages) => Some(pages.count()),
-            Rendering::None(_) => None,
+            Rendering::None(_) | Rendering::Missing(_) => None,
         }
     }
 
     fn render(&mut self, page: usize, req: RenderRequest) -> Result<Frame, Error> {
         match &mut self.rendering {
             Rendering::Pages(pages) => pages.render(page, req),
-            Rendering::None(reason) => {
+            Rendering::None(_) | Rendering::Missing(_) => {
                 if page != 0 {
                     return Err(Error::NotFound);
                 }
-                let reason = reason.clone();
+                let reason = self.reason();
                 Ok(Frame::Text(TextBlock {
                     text: self.fallback_text(&reason),
                     language: None,
@@ -673,7 +905,14 @@ impl PreviewDoc for OfficeDoc {
     fn text_layer(&self) -> Option<&TextLayer> {
         match &self.rendering {
             Rendering::Pages(pages) => Some(pages.layer()),
-            Rendering::None(_) => None,
+            Rendering::None(_) | Rendering::Missing(_) => None,
+        }
+    }
+
+    fn content(&self) -> Option<Content> {
+        match &self.rendering {
+            Rendering::Missing(missing) => Some(Content::MissingLibrary(Arc::clone(missing))),
+            Rendering::Pages(_) | Rendering::None(_) => None,
         }
     }
 
@@ -694,7 +933,7 @@ impl PreviewDoc for OfficeDoc {
                     "converted to PDF by LibreOffice (cached)".to_owned()
                 }
                 Rendering::Pages(_) => "converted to PDF by LibreOffice".to_owned(),
-                Rendering::None(reason) => reason.clone(),
+                Rendering::None(_) | Rendering::Missing(_) => self.reason(),
             },
         ));
         vec![InfoSection {
@@ -716,8 +955,8 @@ impl PreviewDoc for OfficeDoc {
         if let Some(size) = self.size {
             status.push(format_size(size));
         }
-        if let Rendering::None(reason) = &self.rendering {
-            status.push(reason.clone());
+        if matches!(self.rendering, Rendering::None(_) | Rendering::Missing(_)) {
+            status.push(self.reason());
         }
         status
     }
@@ -746,6 +985,7 @@ fn local_path(loc: &Location) -> Option<PathBuf> {
 /// has it, and parses the PDF. Blocking.
 fn pages_for(
     soffice: &Path,
+    pdfium: &Arc<Pdfium>,
     input: &Path,
     key: &str,
     cancel: &CancelToken,
@@ -753,7 +993,7 @@ fn pages_for(
     let dir = cache_dir();
     let pdf = dir.join(format!("{key}.pdf"));
     if let Ok(bytes) = std::fs::read(&pdf)
-        && let Ok(pages) = Pages::new(bytes)
+        && let Ok(pages) = Pages::new(Arc::clone(pdfium), bytes)
     {
         tracing::debug!(key, "office preview from the cache");
         return Ok((pages, true));
@@ -766,7 +1006,7 @@ fn pages_for(
         "converted to PDF"
     );
     let bytes = std::fs::read(&pdf).map_err(Error::from_io)?;
-    Ok((Pages::new(bytes)?, false))
+    Ok((Pages::new(Arc::clone(pdfium), bytes)?, false))
 }
 
 #[async_trait]
@@ -798,6 +1038,8 @@ impl Previewer for OfficePreviewer {
         let name = entry.name.clone();
         let local = local_path(loc);
         let token = cancel.clone();
+        let lookup = Arc::clone(&self.soffice);
+        let binding = Arc::clone(&self.pdfium);
         let doc = ext::blocking(move || {
             let meta = meta::read(&bytes, kind);
             if too_big {
@@ -809,14 +1051,31 @@ impl Previewer for OfficePreviewer {
                     false,
                 ));
             }
-            let Some(soffice) = find_soffice() else {
-                return Ok(OfficeDoc::new(
-                    kind,
-                    meta,
-                    Rendering::None(ConvertError::NotInstalled.to_string()),
-                    size,
-                    false,
-                ));
+            // Both libraries are resolved here, on the first file shown,
+            // never at start; a miss is looked up again on every file.
+            let soffice = match lookup.find() {
+                Ok(soffice) => soffice,
+                Err(missing) => {
+                    return Ok(OfficeDoc::new(
+                        kind,
+                        meta,
+                        Rendering::Missing(Arc::new(*missing)),
+                        size,
+                        false,
+                    ));
+                }
+            };
+            let pdfium = match binding.bind() {
+                Ok(pdfium) => pdfium,
+                Err(missing) => {
+                    return Ok(OfficeDoc::new(
+                        kind,
+                        meta,
+                        Rendering::Missing(Arc::new(*missing)),
+                        size,
+                        false,
+                    ));
+                }
             };
             // A file on another provider is copied next to the cache with
             // its extension kept, which LibreOffice reads the type from.
@@ -834,7 +1093,7 @@ impl Previewer for OfficePreviewer {
                 std::fs::write(temp.path(), &bytes).map_err(Error::from_io)?;
                 (temp.path(), cache_key(Path::new(&name), modified, size))
             };
-            let (rendering, cached) = match pages_for(&soffice, input, &key, &token) {
+            let (rendering, cached) = match pages_for(&soffice, &pdfium, input, &key, &token) {
                 Ok((pages, cached)) => (Rendering::Pages(pages), cached),
                 Err(Error::Cancelled) => return Err(Error::Cancelled),
                 Err(error) => {

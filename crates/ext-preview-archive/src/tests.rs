@@ -5,6 +5,7 @@ use crate::fixtures::{
     bzip2_bytes, gzip, lz4, sample_7z, sample_iso, sample_rar, sample_tar, sample_zip, xz,
     zstd_bytes,
 };
+use ext::SettingsStore;
 use ext_vfs_archive::Resolver;
 use types::{Attrs, EntryId, ProviderId};
 
@@ -658,10 +659,7 @@ fn every_disk_image_fixture_lists_its_files_through_the_library() {
     ];
     let fake = Arc::new(platform::Fake::new().unwrap_or_else(|e| panic!("{e}")));
     let provider: Arc<dyn Provider> = Arc::new(vfs_local::LocalProvider::new(fake.clone()));
-    let previewer = ArchivePreviewer::new(Arc::new(Resolver::with_locations(
-        Some(fake),
-        vec![library],
-    )));
+    let previewer = ArchivePreviewer::new(Arc::new(Resolver::with_locations(None, vec![library])));
     for (name, bytes, image) in fixtures {
         let path = write(dir.path(), name, &bytes);
         let listed = list(previewer.resolver(), &path, Format::Disk(image), &limit())
@@ -736,41 +734,115 @@ fn a_disk_image_without_the_library_says_what_to_install_and_browsing_to_it_list
         &ext_vfs_archive::fixtures::vhdx(&ext_vfs_archive::fixtures::fat12_image()),
     );
     let fake = Arc::new(platform::Fake::new().unwrap_or_else(|e| panic!("{e}")));
-    // A machine without the library: the resolver looks in an empty folder.
+    // A machine without the library: the resolver looks in an empty folder,
+    // its setting in a store of this test's.
+    let store = Arc::new(Memory::default());
     let resolver = Arc::new(Resolver::with_locations(
-        Some(fake.clone()),
+        Some(Arc::clone(&store) as Arc<dyn SettingsStore>),
         vec![dir.path().join("none")],
     ));
     let previewer = ArchivePreviewer::new(Arc::clone(&resolver));
     let provider: Arc<dyn Provider> = Arc::new(vfs_local::LocalProvider::new(fake));
     let loc = Location::new(vfs_local::PROVIDER_ID, platform::paths::from_path(&path));
-    let error = runtime::block_on(previewer.open(&loc, Arc::clone(&provider), CancelToken::new()))
-        .err()
-        .unwrap_or_else(|| panic!("opened without the library"));
-    let message = error.to_string();
-    assert!(message.contains("7-Zip library"), "{message}");
-    assert!(
-        message.contains(ext::platform::sevenzip::install_hint()),
-        "{message}"
-    );
-    let Error::Extension { source, .. } = &error else {
-        panic!("{error}");
+    // The document is the message the pane lays out, not an error.
+    let mut doc =
+        runtime::block_on(previewer.open(&loc, Arc::clone(&provider), CancelToken::new()))
+            .unwrap_or_else(|e| panic!("{e}"));
+    let Some(Content::MissingLibrary(missing)) = doc.content() else {
+        panic!("no missing-library content: {:?}", doc.status());
     };
-    assert!(
-        source
-            .downcast_ref::<ext_vfs_archive::MissingLibrary>()
-            .is_some()
+    assert_eq!(missing.name, ext_vfs_archive::LIBRARY_NAME);
+    assert_eq!(missing.install, ext::platform::sevenzip::install_hint());
+    assert_eq!(
+        missing.setting,
+        (ext_vfs_archive::ID, ext_vfs_archive::LIBRARY_SETTING)
     );
+    assert!(
+        missing
+            .detail
+            .contains(&dir.path().join("none").display().to_string()),
+        "{}",
+        missing.detail
+    );
+    let Frame::Text(block) = doc
+        .render(
+            0,
+            RenderRequest {
+                width: 10,
+                height: 10,
+                scale: 1.0,
+                dark: false,
+            },
+        )
+        .unwrap_or_else(|e| panic!("{e}"))
+    else {
+        panic!("no text fallback");
+    };
+    assert!(block.text.contains("7-Zip library"), "{}", block.text);
+    assert!(
+        block.text.contains(ext::platform::sevenzip::install_hint()),
+        "{}",
+        block.text
+    );
+    let rows = &doc.sections()[0].rows;
+    assert!(
+        rows.iter().any(|(k, v)| k == "Format" && v == "VHDX"),
+        "{rows:?}"
+    );
+    assert!(
+        doc.status().iter().any(|s| s.ends_with("not found")),
+        "{:?}",
+        doc.status()
+    );
+    assert!(doc.controls().is_empty());
     assert!(list(&resolver, &path, Format::Disk(ImageFormat::Vhdx), &limit()).is_err());
+    assert!(
+        store
+            .get(ext_vfs_archive::ID, ext_vfs_archive::LIBRARY_SETTING)
+            .is_none()
+    );
     let Some(library) = sevenzip_library() else {
         return;
     };
-    // Browse… names the library: stored, and the listing appears.
-    resolver
-        .set_library(&library)
+    // Browse… names the library: the pane stores the choice into the
+    // setting, and the listing appears on the retry.
+    store
+        .set(
+            ext_vfs_archive::ID,
+            ext_vfs_archive::LIBRARY_SETTING,
+            ext::SettingValue::Text(library.display().to_string()),
+        )
         .unwrap_or_else(|e| panic!("{e}"));
     assert_eq!(resolver.setting().as_deref(), Some(library.as_path()));
     let doc = runtime::block_on(previewer.open(&loc, provider, CancelToken::new()))
         .unwrap_or_else(|e| panic!("{e}"));
     assert!(matches!(doc.content(), Some(Content::Listing(l)) if l.entries.len() == 3));
+}
+
+/// A store of one extension's values in memory: the registry's
+/// `SettingsStore` for a test without the application.
+#[derive(Default)]
+struct Memory(std::sync::Mutex<Vec<(String, ext::SettingValue)>>);
+
+impl SettingsStore for Memory {
+    fn get(&self, ext: ExtId, key: &str) -> Option<ext::SettingValue> {
+        assert_eq!(ext, ext_vfs_archive::ID);
+        self.0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .iter()
+            .find(|(k, _)| k == key)
+            .map(|(_, v)| v.clone())
+    }
+
+    fn set(&self, ext: ExtId, key: &str, value: ext::SettingValue) -> Result<(), Error> {
+        assert_eq!(ext, ext_vfs_archive::ID);
+        let mut values = self
+            .0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        values.retain(|(k, _)| k != key);
+        values.push((key.to_owned(), value));
+        Ok(())
+    }
 }

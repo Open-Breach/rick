@@ -13,14 +13,15 @@
 //! and RAR with encrypted headers) lists nothing and says so (QUESTIONS.md
 //! 88). The status bar shows the entry count, the compressed and
 //! uncompressed sizes and the format. A disk image without the 7-Zip
-//! library fails to open with the message that names the library and how
-//! to install it ([`ext_vfs_archive::MissingLibrary`]), which the pane
-//! shows in place of the listing; browsing to the library stores its path
-//! in the archive provider's setting, shared by both plugins.
+//! library opens as a [`disk::MissingDoc`]: the file's facts and the
+//! [`ext::MissingLibrary`] content that names the library, how to install
+//! it on this platform and the archive provider's setting, which the pane
+//! lays out with *Browse…* (the choice stored into that setting, shared by
+//! both plugins) and *Retry*.
 
 #![deny(unsafe_code)]
 
-mod disk;
+pub mod disk;
 pub mod fixtures;
 mod iso;
 mod rar;
@@ -59,6 +60,14 @@ pub const TIME_BUDGET: Duration = Duration::from_secs(10);
 /// temporary file first; above this size it is not previewed.
 pub const REMOTE_LIMIT: usize = 256 * 1024 * 1024;
 
+/// The file name extensions the manifest claims: what [`detect`] knows by
+/// name, the disk images of `ImageFormat::for_name` among them.
+const PREVIEWS: &[&str] = &[
+    "zip", "jar", "war", "ear", "apk", "epub", "xpi", "7z", "rar", "iso", "tar", "tar.gz", "tgz",
+    "tar.zst", "tzst", "tar.xz", "txz", "tar.bz2", "tbz", "tbz2", "tar.lz4", "tlz4", "img", "ima",
+    "raw", "dmg", "vhd", "vhdx", "vmdk", "vdi", "qcow2", "qcow",
+];
+
 /// How many entries the textual fallback lists.
 const FALLBACK_LINES: usize = 10_000;
 
@@ -88,6 +97,7 @@ impl ArchivePreview {
                 requires: Capabilities::empty(),
                 points: Points::PREVIEWER,
                 platforms: Platforms::ALL,
+                previews: PREVIEWS,
             },
         }
     }
@@ -99,11 +109,13 @@ impl Extension for ArchivePreview {
     }
 
     /// The previewer, its disk images read with the 7-Zip library found
-    /// through the host's platform (the archive provider's setting).
+    /// through the archive provider's setting in the store the host lends
+    /// and the bundle under the host's config directory.
     fn register(&self, reg: &mut Registry) -> Result<(), Error> {
         reg.translations(&[("en", include_str!("../locales/en.ftl"))]);
         reg.previewer(Arc::new(ArchivePreviewer::new(Arc::new(Resolver::new(
-            reg.platform().cloned(),
+            reg.settings_store().cloned(),
+            reg.platform().map(|p| p.config_dir()),
         )))));
         Ok(())
     }
@@ -955,16 +967,28 @@ impl Previewer for ArchivePreviewer {
         };
         let limit = Limit::standard(cancel.clone());
         let size = entry.size;
+        let name = entry.name.clone();
         let resolver = Arc::clone(&self.resolver);
         let doc = ext::blocking(move || {
-            let listed = list(&resolver, source.path(), format, &limit)?;
-            Ok(ArchiveDoc::new(format, listed, size))
+            match list(&resolver, source.path(), format, &limit) {
+                Ok(listed) => {
+                    Ok(Box::new(ArchiveDoc::new(format, listed, size)) as Box<dyn PreviewDoc>)
+                }
+                // Without the library the pane gets the message with
+                // Browse… and Retry, not an error.
+                Err(error) => match ext_vfs_archive::MissingLibrary::in_error(&error) {
+                    Some(missing) => {
+                        Ok(Box::new(disk::MissingDoc::new(missing, format, name, size)))
+                    }
+                    None => Err(error),
+                },
+            }
         })
         .await?;
         if cancel.is_cancelled() {
             return Err(Error::Cancelled);
         }
-        Ok(Box::new(doc))
+        Ok(doc)
     }
 }
 

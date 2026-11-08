@@ -131,16 +131,20 @@ jobs:
           fi
           mkdir -p "$dest"
           curl -sSL "https://github.com/bblanchon/pdfium-binaries/releases/latest/download/${{ matrix.pdfium }}.tgz" | tar xz -C "$dest"
+          # The library's path goes into the PDF previewer's setting file in
+          # the runner's config directory, which `cargo xtask bundle` reads
+          # to copy the library beside the binary (issue 50: no environment
+          # variable names it any more).
           if [ "${{ runner.os }}" = "Windows" ]; then
-            echo "PDFIUM_LIB=$dest/bin/pdfium.dll" >> "$GITHUB_ENV"
-            echo "RICK_PDFIUM_DIR=$(cygpath -w "$dest/bin")" >> "$GITHUB_ENV"
+            lib="$dest/bin/pdfium.dll"; config="$(cygpath -u "$APPDATA")/Rick"; lib_setting="$(cygpath -m "$lib")"
           elif [ "${{ runner.os }}" = "macOS" ]; then
-            echo "PDFIUM_LIB=$dest/lib/libpdfium.dylib" >> "$GITHUB_ENV"
-            echo "RICK_PDFIUM_DIR=$dest/lib" >> "$GITHUB_ENV"
+            lib="$dest/lib/libpdfium.dylib"; config="$HOME/Library/Application Support/Rick"; lib_setting="$lib"
           else
-            echo "PDFIUM_LIB=$dest/lib/libpdfium.so" >> "$GITHUB_ENV"
-            echo "RICK_PDFIUM_DIR=$dest/lib" >> "$GITHUB_ENV"
+            lib="$dest/lib/libpdfium.so"; config="${XDG_CONFIG_HOME:-$HOME/.config}/rick"; lib_setting="$lib"
           fi
+          echo "PDFIUM_LIB=$lib" >> "$GITHUB_ENV"
+          mkdir -p "$config"
+          printf 'library = "%s"\n' "$lib_setting" > "$config/preview-pdf.toml"
       # The 7-Zip library for the disk images (issue 51): 7z.so built from
       # the pinned sources on Linux and macOS, 7z.dll from the pinned
       # installer on Windows, with the licence text beside it.
@@ -156,8 +160,8 @@ jobs:
           else
             echo "RICK_SEVENZIP_DIR=$dest" >> "$GITHUB_ENV"
           fi
-      # The bundle: binary, kernel dylibs, libstd, pdfium (from
-      # RICK_PDFIUM_DIR), the GStreamer runtime (from RICK_GSTREAMER_DIR on
+      # The bundle: binary, kernel dylibs, libstd, pdfium (from the PDF
+      # previewer's setting), the GStreamer runtime (from RICK_GSTREAMER_DIR on
       # macOS and Windows), plugins/ with the 7-Zip library beside the
       # archive plugin (from RICK_SEVENZIP_DIR), from one build of every library,
       # binary and example in the workspace with the media previewer's
@@ -251,11 +255,8 @@ jobs:
         with: { name: "pdfium-check-${{ matrix.platform }}", path: check }
       - name: smoke test
         shell: bash
-        env:
-          RICK_PDFIUM_DIR: ""
         run: |
           set -euo pipefail
-          unset RICK_PDFIUM_DIR
           version="${TAG#v}"
           name="rick-$version-${{ matrix.platform }}"
           exe=""
@@ -297,9 +298,9 @@ jobs:
           # resolves; on Linux the runner's system GStreamer does.
           "$GITHUB_WORKSPACE/.github/scripts/check-plugins.sh" . --sevenzip
           # pdfium from beside the binary: the previewer's test binary, copied
-          # next to rick, with RICK_PDFIUM_DIR unset and no system pdfium. The
-          # example has no run path of its own, so the library path names the
-          # directory for the kernel dylibs and libstd.
+          # next to rick, with no setting (a fresh runner) and no system
+          # pdfium. The example has no run path of its own, so the library
+          # path names the directory for the kernel dylibs and libstd.
           cp "../../../check/pdfium_check$exe" .
           chmod +x "pdfium_check$exe"
           LD_LIBRARY_PATH=. DYLD_LIBRARY_PATH=. "./pdfium_check$exe" | tee check.txt

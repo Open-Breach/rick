@@ -531,14 +531,14 @@ fn mount_shows_on_the_images_this_platform_mounts_and_goes_through_it() {
 #[test]
 fn every_action_has_an_id_label_and_core_group() {
     let h = harness();
-    assert_eq!(h.registry.actions().len(), 23);
+    assert_eq!(h.registry.actions().len(), 24);
     for action in h.registry.actions() {
         assert!(action.id().0.starts_with("core."), "{}", action.id().0);
         assert_ne!(action.label(), "");
         assert_eq!(action.group(), ext::ActionGroup::Core);
-        // Pin, Unpin, Open containing folder and Mount have no shortcut in
-        // the spec's tables; New file lost Mod+N to New window (QUESTIONS.md
-        // 66).
+        // Pin, Unpin, Open containing folder, Compute hash and Mount have
+        // no shortcut in the spec's tables; New file lost Mod+N to New
+        // window (QUESTIONS.md 66).
         let unbound = matches!(
             action.id().0,
             "core.pin"
@@ -547,6 +547,7 @@ fn every_action_has_an_id_label_and_core_group() {
                 | "core.open_containing"
                 | "core.open_containing_tab"
                 | "core.create_link"
+                | "core.hash"
                 | "core.mount"
         );
         assert_eq!(

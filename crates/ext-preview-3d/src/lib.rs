@@ -93,6 +93,7 @@ impl Preview3d {
                 requires: Capabilities::empty(),
                 points: Points::PREVIEWER,
                 platforms: Platforms::ALL,
+                previews: &["stl", "obj", "3mf"],
             },
         }
     }

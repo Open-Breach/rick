@@ -85,10 +85,10 @@ jobs:
       - uses: actions/checkout@v4
       - uses: ./.github/actions/setup
         with: { system: test }
-      # Issue 21: the provider plugins' round trips run against MinIO,
-      # Azurite, fake-gcs-server and an sshd container; the tests skip with
-      # a note without the RICK_* variables and fail instead here.
-      - name: storage and sftp containers
+      # Issues 21 and 34: the provider plugins' round trips run against
+      # MinIO, Azurite, fake-gcs-server and the sshd containers; the tests
+      # skip with a note without the RICK_* variables and fail instead here.
+      - name: storage and ssh containers
         run: .github/scripts/containers.sh
       # Issue 24: a permission change the user may not make runs in the
       # privileged helper through pkexec; no desktop here shows polkit's

@@ -165,6 +165,7 @@ impl S3Extension {
                 requires: Capabilities::empty(),
                 points: Points::PROVIDER,
                 platforms: Platforms::ALL,
+                previews: &[],
             },
         }
     }

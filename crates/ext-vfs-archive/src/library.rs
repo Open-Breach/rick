@@ -4,25 +4,32 @@
 //! platform's usual install locations, the first hit written back into the
 //! setting (`sevenzip_library` in `vfs-archive.toml`) so the user can see
 //! and change where Rick looks. Nothing is probed at start, and no
-//! environment variable is read. When nothing is found,
-//! [`MissingLibrary`] names the library, how it is installed on this
-//! platform and where Rick looked; the preview pane shows it in place of
-//! the content, with *Browse…*, whose choice [`Resolver::set_library`]
-//! stores, and *Retry*. The archive previewer shares this resolver, so
-//! the library is one setting for both plugins (QUESTIONS.md).
+//! environment variable is read. The setting is read and written through
+//! the [`SettingsStore`] the registry lends (QUESTIONS.md 193); without
+//! one, as in the compress plugin's extraction, nothing is remembered.
+//! When nothing is found, [`MissingLibrary`] names the library, how it is
+//! installed on this platform and where Rick looked; the provider raises
+//! it as an error, and the archive previewer, which shares this resolver so
+//! the library is one setting for both plugins (QUESTIONS.md 204), shows
+//! it in the pane as [`ext::MissingLibrary`] ([`MissingLibrary::for_pane`])
+//! with *Browse…*, whose choice the pane stores into the setting, and
+//! *Retry*.
 
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, LazyLock, Mutex, MutexGuard, PoisonError};
 
-use ext::platform::Platform;
+use ext::platform::DialogFilter;
 use ext::platform::sevenzip::{self, SevenZip, SevenZipError};
-use ext::{SettingField, SettingKind, SettingsSchema, Text};
+use ext::{SettingField, SettingKind, SettingValue, SettingsSchema, SettingsStore, Text};
 use types::Error;
 
 use crate::ID;
 
 /// The setting's key in `vfs-archive.toml`: the path of the library.
 pub const LIBRARY_SETTING: &str = "sevenzip_library";
+
+/// The library's name, as the pane's message calls it.
+pub const LIBRARY_NAME: &str = "7-Zip library";
 
 /// The settings the plugin declares: the library path, a text field.
 #[must_use]
@@ -70,11 +77,44 @@ impl MissingLibrary {
             source: Box::new(self),
         }
     }
+
+    /// The same facts as the content the preview pane lays out: the
+    /// library's name, the install command for this platform, the setting
+    /// *Browse…* fills and where Rick looked.
+    #[must_use]
+    pub fn for_pane(&self) -> ext::MissingLibrary {
+        ext::MissingLibrary {
+            name: LIBRARY_NAME.to_owned(),
+            install: self.hint.to_owned(),
+            setting: (ID, LIBRARY_SETTING),
+            filters: vec![DialogFilter {
+                name: LIBRARY_NAME,
+                extensions: &["so", "dylib", "dll"],
+            }],
+            detail: format!(
+                "It reads disk images (VHD, VHDX, VMDK, VDI, QCOW2, DMG, raw) and the file \
+                 systems inside them. Looked for {}: {}{}",
+                self.file, self.looked, self.errors
+            ),
+        }
+    }
+
+    /// The missing library in an error, when `error` carries one.
+    #[must_use]
+    pub fn in_error(error: &Error) -> Option<&Self> {
+        match error {
+            Error::Extension { source, .. } => source.downcast_ref::<Self>(),
+            _ => None,
+        }
+    }
 }
 
 /// Resolves and caches the library for one plugin instance.
 pub struct Resolver {
-    platform: Option<Arc<dyn Platform>>,
+    settings: Option<Arc<dyn SettingsStore>>,
+    /// The config directory, whose `plugins/` is one of the places the
+    /// bundle puts the library.
+    config_dir: Option<PathBuf>,
     /// The places searched after the setting, when a test narrows them;
     /// `None` for the bundle and the platform's usual locations.
     locations: Option<Vec<PathBuf>>,
@@ -84,7 +124,8 @@ pub struct Resolver {
 impl std::fmt::Debug for Resolver {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Resolver")
-            .field("platform", &self.platform.is_some())
+            .field("settings", &self.settings.is_some())
+            .field("config_dir", &self.config_dir)
             .field("locations", &self.locations)
             .field("loaded", &lock(&self.cache).is_some())
             .finish()
@@ -96,17 +137,20 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
-/// The resolver a caller without a platform uses (the compress plugin's
+/// The resolver a caller without a registry uses (the compress plugin's
 /// extraction): no setting, the bundle and the usual locations only.
-static SHARED: LazyLock<Arc<Resolver>> = LazyLock::new(|| Arc::new(Resolver::new(None)));
+static SHARED: LazyLock<Arc<Resolver>> = LazyLock::new(|| Arc::new(Resolver::new(None, None)));
 
 impl Resolver {
-    /// A resolver reading and writing the setting through `platform`'s
-    /// config directory; without one, the setting is skipped.
+    /// A resolver reading and writing the setting through `settings`, the
+    /// store the registry lends, and looking in `config_dir`'s plugins
+    /// directory among the bundle's places; without a store, the setting
+    /// is skipped and nothing is written back.
     #[must_use]
-    pub fn new(platform: Option<Arc<dyn Platform>>) -> Self {
+    pub fn new(settings: Option<Arc<dyn SettingsStore>>, config_dir: Option<PathBuf>) -> Self {
         Self {
-            platform,
+            settings,
+            config_dir,
             locations: None,
             cache: Mutex::new(None),
         }
@@ -116,65 +160,56 @@ impl Resolver {
     /// instead of the bundle and the platform's usual places: how a test
     /// stands in for a machine without the library.
     #[must_use]
-    pub fn with_locations(platform: Option<Arc<dyn Platform>>, locations: Vec<PathBuf>) -> Self {
+    pub fn with_locations(
+        settings: Option<Arc<dyn SettingsStore>>,
+        locations: Vec<PathBuf>,
+    ) -> Self {
         Self {
-            platform,
+            settings,
+            config_dir: None,
             locations: Some(locations),
             cache: Mutex::new(None),
         }
     }
 
-    /// The process-wide resolver without a platform.
+    /// The process-wide resolver without a store.
     #[must_use]
     pub fn shared() -> Arc<Self> {
         Arc::clone(&SHARED)
     }
 
-    /// The settings file, when there is a platform to name its directory.
-    fn settings_file(&self) -> Option<PathBuf> {
-        self.platform
+    /// The settings file, for the message: in the config directory when
+    /// it is known.
+    fn settings_file(&self) -> String {
+        let name = format!("{}.toml", ID.0);
+        self.config_dir
             .as_ref()
-            .map(|p| p.config_dir().join(format!("{}.toml", ID.0)))
+            .map_or(name.clone(), |dir| dir.join(name).display().to_string())
     }
 
     /// The path the setting holds, when set and not empty.
     #[must_use]
     pub fn setting(&self) -> Option<PathBuf> {
-        let file = self.settings_file()?;
-        let text = std::fs::read_to_string(file).ok()?;
-        let table = text.parse::<toml::Table>().ok()?;
-        table
-            .get(LIBRARY_SETTING)?
-            .as_str()
-            .filter(|s| !s.trim().is_empty())
-            .map(PathBuf::from)
+        match self.settings.as_ref()?.get(ID, LIBRARY_SETTING)? {
+            SettingValue::Text(text) if !text.trim().is_empty() => Some(PathBuf::from(text.trim())),
+            _ => None,
+        }
     }
 
-    /// Writes `path` into the setting, keeping the file's other keys.
+    /// Writes `path` into the setting, when there is a store and the
+    /// setting does not name it already.
     fn write_setting(&self, path: &Path) -> Result<(), Error> {
-        let Some(file) = self.settings_file() else {
+        let Some(settings) = &self.settings else {
             return Ok(());
         };
-        let mut table = std::fs::read_to_string(&file)
-            .ok()
-            .and_then(|text| text.parse::<toml::Table>().ok())
-            .unwrap_or_default();
-        let value = toml::Value::String(path.to_string_lossy().into_owned());
-        if table.get(LIBRARY_SETTING) == Some(&value) {
+        if self.setting().as_deref() == Some(path) {
             return Ok(());
         }
-        table.insert(LIBRARY_SETTING.to_owned(), value);
-        let text = toml::to_string_pretty(&table)
-            .map_err(|error| Error::Io(std::io::Error::other(error.to_string())))?;
-        if let Some(dir) = file.parent() {
-            std::fs::create_dir_all(dir).map_err(Error::from_io)?;
-        }
-        let temp = file.with_extension(format!("toml.{}.tmp", std::process::id()));
-        std::fs::write(&temp, text).map_err(Error::from_io)?;
-        std::fs::rename(&temp, &file).map_err(|error| {
-            let _ = std::fs::remove_file(&temp);
-            Error::from_io(error)
-        })
+        settings.set(
+            ID,
+            LIBRARY_SETTING,
+            SettingValue::Text(path.display().to_string()),
+        )
     }
 
     /// The directories of the bundle the library travels in: beside the
@@ -189,8 +224,8 @@ impl Resolver {
             dirs.push(dir.join("plugins").join(ID.0));
             dirs.push(dir.join("plugins"));
         }
-        if let Some(platform) = &self.platform {
-            let plugins = platform.config_dir().join("plugins");
+        if let Some(config) = &self.config_dir {
+            let plugins = config.join("plugins");
             dirs.push(plugins.join(ID.0));
             dirs.push(plugins);
         }
@@ -259,9 +294,7 @@ impl Resolver {
             file: sevenzip::LIBRARY_FILE,
             hint: sevenzip::install_hint(),
             setting: LIBRARY_SETTING,
-            settings_file: self
-                .settings_file()
-                .map_or_else(|| format!("{}.toml", ID.0), |f| f.display().to_string()),
+            settings_file: self.settings_file(),
             looked: looked.join(", "),
             errors: if errors.is_empty() {
                 String::new()
@@ -271,8 +304,9 @@ impl Resolver {
         }
     }
 
-    /// Takes the library at `path` (what *Browse…* chose): loads it, stores
-    /// the path in the setting and keeps it.
+    /// Takes the library at `path` (what *Browse…* chose, when the caller
+    /// has no pane to store the choice through): loads it, stores the path
+    /// in the setting and keeps it.
     ///
     /// # Errors
     ///

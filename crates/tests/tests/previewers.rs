@@ -85,6 +85,7 @@ fn load_plugins() -> &'static Host {
         compiled_in: Vec::new(),
         platform: None,
         prompts: None,
+        settings: None,
     });
     for (_, id) in PLUGINS {
         let row = host
@@ -259,6 +260,32 @@ fn the_four_previewer_plugins_load_through_the_host() {
     assert_eq!(host.extensions().len(), 4);
 }
 
+/// A markup fixture rendered by default: the CSV and TSV as a grid over
+/// the text fallback, Markdown and HTML as a document over the highlighted
+/// source.
+fn check_markup(name: &str, content: Option<Content>, frame: &Frame) {
+    let tabular = Path::new(name)
+        .extension()
+        .is_some_and(|e| e.eq_ignore_ascii_case("csv") || e.eq_ignore_ascii_case("tsv"));
+    if tabular {
+        let Some(Content::Grid(grid)) = content else {
+            panic!("{name}: no grid");
+        };
+        assert_eq!(grid.header()[0], "name", "{name}");
+        assert!(grid.rows() >= 1, "{name}");
+        assert!(matches!(frame, Frame::Text(_)), "{name}: text fallback");
+    } else {
+        let Some(Content::Document(document)) = content else {
+            panic!("{name}: no document");
+        };
+        assert!(!document.blocks.is_empty(), "{name}");
+        let Frame::Text(block) = frame else {
+            panic!("{name}: source fallback");
+        };
+        assert!(!block.spans.is_empty(), "{name}: highlighted source");
+    }
+}
+
 #[test]
 fn every_fixture_opens_with_the_right_previewer_by_sniff() {
     let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
@@ -295,30 +322,8 @@ fn every_fixture_opens_with_the_right_previewer_by_sniff() {
                 assert!(matches!(frame, Frame::Text(_)), "{name}: text fallback");
                 assert_eq!(doc.status().len(), 3, "{name}: {:?}", doc.status());
             }
-            "preview-markup"
-                if Path::new(&name).extension().is_some_and(|e| {
-                    e.eq_ignore_ascii_case("csv") || e.eq_ignore_ascii_case("tsv")
-                }) =>
-            {
-                let Some(Content::Grid(grid)) = content else {
-                    panic!("{name}: no grid");
-                };
-                assert_eq!(grid.header()[0], "name", "{name}");
-                assert!(grid.rows() >= 1, "{name}");
-                assert!(matches!(frame, Frame::Text(_)), "{name}: text fallback");
-            }
-            "preview-markup" => {
-                let Some(Content::Document(document)) = content else {
-                    panic!("{name}: no document");
-                };
-                assert!(!document.blocks.is_empty(), "{name}");
-                let Frame::Text(block) = frame else {
-                    panic!("{name}: source fallback");
-                };
-                assert!(!block.spans.is_empty(), "{name}: highlighted source");
-            }
+            "preview-markup" => check_markup(&name, content, &frame),
             "preview-office" => {
-                assert!(content.is_none(), "{name}");
                 let status = doc.status();
                 assert!(
                     ext_preview_office::Kind::ALL
@@ -332,12 +337,23 @@ fn every_fixture_opens_with_the_right_previewer_by_sniff() {
                     "{name}: {rows:?}"
                 );
                 match frame {
-                    Frame::Rgba { .. } => assert_eq!(doc.pages(), Some(2), "{name}"),
-                    Frame::Text(block) => assert!(
-                        block.text.contains("LibreOffice") || block.text.contains("pdfium"),
-                        "{name}: {}",
-                        block.text
-                    ),
+                    Frame::Rgba { .. } => {
+                        assert!(content.is_none(), "{name}");
+                        assert_eq!(doc.pages(), Some(2), "{name}");
+                    }
+                    // Without LibreOffice or pdfium the pane gets the
+                    // missing-library message with Browse… and Retry.
+                    Frame::Text(block) => {
+                        let Some(Content::MissingLibrary(missing)) = content else {
+                            panic!("{name}: no missing-library content: {}", block.text);
+                        };
+                        assert!(
+                            missing.name == "LibreOffice" || missing.name == "pdfium",
+                            "{name}: {}",
+                            missing.name
+                        );
+                        assert!(block.text.contains(&missing.name), "{name}: {}", block.text);
+                    }
                     Frame::External(id) => panic!("{name}: external texture {id:?}"),
                 }
             }
@@ -435,7 +451,7 @@ fn a_docx_converts_within_5_s_when_libreoffice_is_present() {
         return;
     }
     let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
-    let previewer: Arc<dyn Previewer> = Arc::new(ext_preview_office::OfficePreviewer);
+    let previewer: Arc<dyn Previewer> = Arc::new(ext_preview_office::OfficePreviewer::default());
     let provider = provider();
     // One conversion to start LibreOffice's profile, which the first run of
     // a fresh install pays once.
@@ -816,6 +832,7 @@ fn load_plugins_disabling(disabled: &[&str]) -> &'static Host {
         compiled_in: Vec::new(),
         platform: None,
         prompts: None,
+        settings: None,
     });
     let _ = dir.keep();
     Box::leak(Box::new(host))

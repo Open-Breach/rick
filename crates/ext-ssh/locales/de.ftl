@@ -16,3 +16,4 @@ ssh-jump-host = Jump-Host
 ssh-password = Passwort
 ssh-remember-password-in-the-os-keychain = Passwort im Schlüsselbund des Systems merken
 ssh-preview-size-cap-mib-0-for = Größengrenze für Vorschauen (MiB, 0 für die Vorgabe)
+ssh-always-preview = Immer Vorschau (keine Größengrenze auf diesem Host)

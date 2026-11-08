@@ -28,7 +28,6 @@ everywhere=(
   "svn|SVN|decorator, action"
   "vfs-trash|Trash|provider, decorator, action"
   "vfs-archive|Archives|provider"
-  "vfs-sftp|SFTP|provider"
   "ssh|SSH|provider, action"
   "vfs-s3|S3|provider"
   "vfs-azure|Azure Blob|provider"

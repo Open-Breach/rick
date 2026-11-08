@@ -55,6 +55,7 @@ impl ProbeExtension {
                 requires: Capabilities::empty(),
                 points: Points::PREVIEWER | Points::ACTION,
                 platforms: Platforms::ALL,
+                previews: &[],
             },
         }
     }

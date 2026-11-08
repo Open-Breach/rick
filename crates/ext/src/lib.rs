@@ -47,6 +47,7 @@ pub mod action;
 pub mod connection;
 pub mod decorator;
 pub mod form;
+pub mod hash;
 pub mod i18n;
 pub mod plugin;
 pub mod preview;
@@ -69,12 +70,13 @@ pub use decorator::{
 };
 pub use form::{Field, FieldKind, Form, Preview, PreviewRow, Value, Values};
 pub use futures::stream::BoxStream;
+pub use hash::{Algorithm, Digests, Hashes};
 pub use i18n::Text;
 pub use preview::{
     Block, Content, ControlId, ControlValue, Document, Frame, Gesture, Grid, Icon, Image,
-    InfoSection, Inline, Listing, ListingEntry, PreviewControl, PreviewDoc, Previewer, Reads,
-    RenderRequest, Style, TextBlock, TextLayer, TextSpan, TextureId, Transport, blocking,
-    read_bytes,
+    InfoSection, Inline, Listing, ListingEntry, MissingLibrary, PreviewControl, PreviewDoc,
+    Previewer, Reads, RenderRequest, Style, TextBlock, TextLayer, TextSpan, TextureId, Transport,
+    blocking, read_bytes,
 };
 pub use provider::{
     Capabilities, ChangeStream, CopyOptions, Depth, EntryStream, FsChange, LinkKind, ListOptions,
@@ -82,7 +84,7 @@ pub use provider::{
 };
 pub use registry::{
     API_VERSION, Extension, Manifest, Platforms, Points, Registry, SettingField, SettingKind,
-    SettingValue, SettingsSchema,
+    SettingValue, SettingsSchema, SettingsStore,
 };
 pub use runtime::{Conflicts, JobCtx, JobRunner, ProgressSink, Prompts};
 pub use search::{Filter, Query, QueryKind, SearchHit, SearchIndex, SearchScope};

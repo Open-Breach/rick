@@ -11,9 +11,11 @@ QCOW2) read-only through the 7-Zip library (`7z.so` / `7z.dll`, bound in
 `platform::sevenzip`), which opens the container, the partition table and
 the file systems inside the way 7-Zip's browser does, one folder per
 partition; the library is found lazily through the `sevenzip_library`
-setting of `vfs-archive.toml`, the bundle beside the plugin and the
-platform's usual installs, the first hit written back, and when it is
-missing the error names it and how to install it (QUESTIONS.md 185–188).
+setting (`vfs-archive.toml`, read and written through the settings store
+the registry lends), the bundle beside the plugin and the platform's usual
+installs, the first hit written back, and when it is missing the error
+names it and how to install it, with the same facts as the content the
+archive previewer shows in the pane (QUESTIONS.md 202–205).
 Formats are told apart by extension and, failing that, by their first
 bytes. Each archive's
 index is read once and cached by path, size and modification time; listings

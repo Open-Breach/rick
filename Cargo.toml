@@ -39,7 +39,6 @@ ext-search-spotlight = { path = "crates/ext-search-spotlight" }
 ext-search-tracker = { path = "crates/ext-search-tracker" }
 ext-search-baloo = { path = "crates/ext-search-baloo" }
 ext-svn = { path = "crates/ext-svn" }
-ext-vfs-sftp = { path = "crates/ext-vfs-sftp" }
 ext-ssh = { path = "crates/ext-ssh" }
 ext-vfs-s3 = { path = "crates/ext-vfs-s3" }
 ext-vfs-azure = { path = "crates/ext-vfs-azure" }
@@ -123,13 +122,13 @@ vte = "0.15"
 anyhow = "1"
 # The platform keychain (SPEC.md "Package layout": `Secrets`, 0.2).
 keyring = "4"
-# The provider plugins of issue 21. SFTP through russh and russh-sftp,
-# with ring as the one crypto library of the process (the cloud plugins'
-# TLS uses it too), no aws-lc; the clouds through reqwest over rustls with
-# ring, streaming bodies, and the small signing crates: HMAC-SHA256 for
-# SigV4 and Azure's SharedKey, ring's RSA for the GCS service-account JWT.
+# The provider plugins of issue 21 and the SSH plugin of issue 34. SSH
+# through russh, with ring as the one crypto library of the process (the
+# cloud plugins' TLS uses it too), no aws-lc; the clouds through reqwest
+# over rustls with ring, streaming bodies, and the small signing crates:
+# HMAC-SHA256 for SigV4 and Azure's SharedKey, ring's RSA for the GCS
+# service-account JWT.
 russh = { version = "0.65", default-features = false, features = ["ring", "flate2", "rsa"] }
-russh-sftp = "3"
 reqwest = { version = "0.13", default-features = false, features = ["rustls-no-provider", "stream", "http2"] }
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12", "logging"] }
 ring = "0.17"
@@ -139,6 +138,11 @@ hmac = "0.12"
 sha2 = "0.10"
 # HMAC-SHA1 for the hashed entries of `known_hosts` in the SSH plugin.
 sha1 = { version = "0.10", default-features = false }
+# The other two digests of Compute hash (`ops::hash`), beside the SHA-1
+# and SHA-256 above: MD5 and BLAKE3, the latter with its own SIMD code and
+# no thread pool.
+md-5 = "0.10"
+blake3 = "1"
 # Localisation (`ext::i18n`): Fluent messages, language identifiers, the
 # negotiation of the system language against the bundled ones, and the
 # system language itself.
@@ -165,6 +169,8 @@ libloading = "0.8"
 notify = "8"
 objc2 = "0.6"
 objc2-foundation = { version = "0.3", default-features = false }
+objc2-app-kit = { version = "0.3", default-features = false }
+raw-window-handle = "0.6"
 rayon = "1"
 rfd = { version = "0.16", default-features = false }
 rustix = { version = "1", default-features = false }
@@ -177,7 +183,16 @@ thiserror = "2"
 tokio = { version = "1", default-features = false }
 toml = "0.9"
 tracing = "0.1"
+# The Linux drag source and drop target (issue 25): the Wayland data device
+# over winit's own libwayland connection, the XDND messages over an X11
+# connection of Rick's own. Both match what winit links: wayland-client's
+# system backend without dlopen, x11rb's Rust connection.
+wayland-client = { version = "0.31", features = ["system"] }
+wayland-backend = { version = "0.3", features = ["client_system"] }
+x11rb = "0.13"
 windows = "0.62"
+# Named directly for the `implement` macro, which spells out its paths.
+windows-core = "0.62"
 # NTFS directory junctions for Create link / Paste as link on Windows.
 junction = "2"
 

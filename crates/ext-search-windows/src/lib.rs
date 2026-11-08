@@ -79,6 +79,7 @@ impl WindowsSearchExtension {
                 requires: Capabilities::empty(),
                 points: Points::SEARCH_INDEX,
                 platforms: Platforms::WINDOWS,
+                previews: &[],
             },
         }
     }

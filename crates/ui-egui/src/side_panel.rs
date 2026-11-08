@@ -621,6 +621,38 @@ fn connection_items(
     }
 }
 
+/// *Always preview* in a connection row's menu, for a provider whose
+/// editor has the switch (`preview_always` in its schema): the preview
+/// size cap on or off for this source, as its connection entry has it.
+fn preview_always_item(
+    ui: &mut egui::Ui,
+    app: &App,
+    requests: &mut Vec<Request>,
+    connector: &dyn Connector,
+    name: &str,
+) {
+    let provider = connector.provider();
+    if connector.schema().field(app::PREVIEW_ALWAYS).is_none() {
+        return;
+    }
+    let mut on = app
+        .model()
+        .settings
+        .connections
+        .iter()
+        .find(|c| c.provider == provider.0 && c.name == name)
+        .and_then(|c| c.settings.get(app::PREVIEW_ALWAYS))
+        .is_some_and(|v| v == "true");
+    if ui.checkbox(&mut on, t!("preview-always-preview")).changed() {
+        requests.push(Request::Command(Command::SetPreviewAlways {
+            provider,
+            name: name.to_owned(),
+            on,
+        }));
+        ui.close();
+    }
+}
+
 /// The entries of the extension groups whose actions apply to a row's
 /// location, as the context menu of a folder would list them: *Open console
 /// here* and *Open in external terminal* on an SSH host.
@@ -706,6 +738,7 @@ fn provider_row(
         if let Some((connector, name)) = &connection {
             let editable = is_rick_connection(app, connector.provider(), name);
             connection_items(ui, requests, &***connector, name, editable);
+            preview_always_item(ui, app, requests, &***connector, name);
         }
         row_actions(ui, app, requests, &action_ctx);
     };
@@ -1188,7 +1221,7 @@ fn add_row(
                 let text = match section {
                     Section::Machine => "Drives appear here as the system mounts them.",
                     Section::Network => {
-                        "Connections are created by a network provider plugin, such as ext-vfs-sftp; none is installed."
+                        "Connections are created by a network provider plugin, such as ext-ssh; none is installed."
                     }
                     Section::Cloud => {
                         "Accounts are created by a cloud provider plugin; none is installed."
