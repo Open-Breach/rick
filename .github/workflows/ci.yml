@@ -12,11 +12,11 @@ name: ci
 # reports success.
 on:
   pull_request:
-    branches: [dev]
+    branches: [dev, ci-test/base]
   # Each merge into dev: the check after the fact, and the cache the pull
   # requests into dev restore from.
   push:
-    branches: [dev]
+    branches: [dev, ci-test/base]
 concurrency:
   group: ci-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
