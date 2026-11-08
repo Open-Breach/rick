@@ -1,0 +1,82 @@
+name: setup
+description: >-
+  The Rust toolchain of rust-toolchain.toml with the requested components,
+  the cargo cache, the Linux system packages the previewers need, and pdfium
+  for the PDF previewer. Shared by the ci, full and bench workflows (issue
+  35); release.yml has its own steps.
+inputs:
+  components:
+    description: Toolchain components to add, comma-separated (rustfmt, clippy).
+    required: false
+    default: ""
+  system:
+    description: >-
+      The Linux packages (issue 18). "build" installs the GStreamer
+      development files the media previewer's gstreamer feature compiles
+      against. "test" adds the GStreamer codec plug-ins and LibreOffice and
+      sets RICK_REQUIRE_GSTREAMER and RICK_REQUIRE_LIBREOFFICE, so their
+      tests fail rather than skip when either is missing. "none" installs
+      nothing. Ignored on macOS and Windows, whose runners have neither and
+      skip those tests with a note.
+    required: false
+    default: test
+  pdfium:
+    description: >-
+      Bind pdfium for the PDF previewer: the release binary for this runner
+      in RICK_PDFIUM_DIR, with RICK_REQUIRE_PDFIUM set so its tests fail
+      rather than skip when the binding is missing.
+    required: false
+    default: "true"
+runs:
+  using: composite
+  steps:
+    - uses: dtolnay/rust-toolchain@stable
+      with:
+        components: ${{ inputs.components }}
+    # The cargo registry and the dependencies' build artifacts, keyed by the
+    # job, the lock file and the toolchain; the workspace crates themselves
+    # are rebuilt every run.
+    - uses: Swatinem/rust-cache@v2
+    - name: gstreamer development files
+      if: runner.os == 'Linux' && inputs.system != 'none'
+      shell: bash
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y --no-install-recommends \
+          libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev
+    - name: gstreamer plug-ins and libreoffice
+      if: runner.os == 'Linux' && inputs.system == 'test'
+      shell: bash
+      run: |
+        sudo apt-get install -y --no-install-recommends \
+          gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-plugins-bad \
+          gstreamer1.0-plugins-ugly gstreamer1.0-libav \
+          libreoffice-writer libreoffice-calc libreoffice-impress
+        echo "RICK_REQUIRE_GSTREAMER=1" >> "$GITHUB_ENV"
+        echo "RICK_REQUIRE_LIBREOFFICE=1" >> "$GITHUB_ENV"
+    - name: pdfium
+      if: inputs.pdfium == 'true'
+      shell: bash
+      run: |
+        case "$RUNNER_OS-$RUNNER_ARCH" in
+          Linux-X64) asset=pdfium-linux-x64 ;;
+          Linux-ARM64) asset=pdfium-linux-arm64 ;;
+          macOS-ARM64) asset=pdfium-mac-arm64 ;;
+          macOS-X64) asset=pdfium-mac-x64 ;;
+          Windows-X64) asset=pdfium-win-x64 ;;
+          *) echo "no pdfium build for $RUNNER_OS-$RUNNER_ARCH"; exit 1 ;;
+        esac
+        # Git Bash's tar reads a Windows path's drive colon as a host, so
+        # work in POSIX form there and hand Rust the Windows form.
+        dest="$RUNNER_TEMP/pdfium"
+        if [ "$RUNNER_OS" = "Windows" ]; then
+          dest="$(cygpath -u "$RUNNER_TEMP")/pdfium"
+        fi
+        mkdir -p "$dest"
+        curl -sSL "https://github.com/bblanchon/pdfium-binaries/releases/latest/download/$asset.tgz" | tar xz -C "$dest"
+        if [ "$RUNNER_OS" = "Windows" ]; then
+          echo "RICK_PDFIUM_DIR=$(cygpath -w "$dest/bin")" >> "$GITHUB_ENV"
+        else
+          echo "RICK_PDFIUM_DIR=$dest/lib" >> "$GITHUB_ENV"
+        fi
+        echo "RICK_REQUIRE_PDFIUM=1" >> "$GITHUB_ENV"

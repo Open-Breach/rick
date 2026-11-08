@@ -1369,3 +1369,16 @@ Once answered, an entry keeps its number and gains a dated decision line.
     time; a toolbar toggle stacks them in one continuous scroll, where the
     page under the upper third of the view is the current one. Both are
     kept per tab for the session.
+
+117. (issue 35) SPEC.md asks for the performance targets "met on the
+    200k-entry fixture, on all three platforms" and for the 0.2 milestones
+    to "merge to `main` behind CI on all three OSes as in 0.1"; until now
+    every push ran the acceptance benchmarks once per OS and asserted the
+    targets. Issue 35 moves the benchmarks to tier 3, which measures
+    (`RICK_BENCH_RECORD`) and never blocks a pull request.
+    Assumed: the targets are no longer asserted automatically. The nightly
+    run on Linux x64 and the runs on release tags record the medians next
+    to the targets of `bench.rs`, and a release is checked by reading the
+    tag's bench summary; the three-OS gate before `main` is kept by tier 2,
+    which runs the tests, the bundle and the plugin loading on the full
+    matrix, without the timings.

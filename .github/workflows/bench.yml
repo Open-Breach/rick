@@ -1,8 +1,18 @@
 name: bench
-# Measures every acceptance benchmark five times in release on the three
-# runners and summarises the median and the worst run per benchmark, with
-# the runner's hardware line. BENCHMARKS.md is written from this summary;
-# the targets in crates/tests/src/bench.rs follow from it. Run by hand.
+# Tier 3 of the pipeline (issue 35): the acceptance benchmarks, measured and
+# never blocking a pull request. Every benchmark runs RUNS times in release
+# with RICK_BENCH_RECORD set (a run over its target is recorded, not
+# failed); the job summary gets the runner's hardware line and the median
+# and the worst run per benchmark, and the raw logs, the hardware line and
+# the summary are the job's artifact. BENCHMARKS.md is written from the
+# summary of a manual run; the targets in crates/tests/src/bench.rs follow
+# from it.
+#
+# By hand from the Actions tab and on a `v*` tag: the three runners.
+# Nightly: Linux x64 on dev, the summary committed to the benchmark-history
+# branch, so a regression can be traced to a day range (a schedule runs
+# from main's copy of this file and checks dev out). A manual run records
+# there too when asked.
 on:
   workflow_dispatch:
     inputs:
@@ -10,14 +20,31 @@ on:
         description: "Runs per benchmark"
         default: "5"
         required: true
+      history:
+        description: "Record the summary on the benchmark-history branch, as the nightly run does"
+        type: boolean
+        default: false
+  push:
+    tags: ["v*"]
+  schedule:
+    - cron: "41 3 * * *"
+concurrency:
+  group: bench-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: true
+env:
+  CARGO_TERM_COLOR: always
+  RUNS: ${{ inputs.runs || '5' }}
 jobs:
   bench:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+        os: ${{ github.event_name == 'schedule' && fromJSON('["ubuntu-latest"]') || fromJSON('["ubuntu-latest", "macos-latest", "windows-latest"]') }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 90
+    permissions:
+      # The summary goes to the benchmark-history branch.
+      contents: write
     env:
       # Measure only: a run over a target is recorded, not failed.
       RICK_BENCH_RECORD: "1"
@@ -26,40 +53,9 @@ jobs:
       RICK_TESTS_FEATURES: ${{ matrix.os == 'ubuntu-latest' && '--features gstreamer' || '' }}
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-      - name: gstreamer and libreoffice
-        if: runner.os == 'Linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev \
-            gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-plugins-bad \
-            gstreamer1.0-plugins-ugly gstreamer1.0-libav \
-            libreoffice-writer libreoffice-calc libreoffice-impress
-      - name: pdfium
-        shell: bash
-        run: |
-          case "${{ runner.os }}-${{ runner.arch }}" in
-            Linux-X64) asset=pdfium-linux-x64 ;;
-            Linux-ARM64) asset=pdfium-linux-arm64 ;;
-            macOS-ARM64) asset=pdfium-mac-arm64 ;;
-            macOS-X64) asset=pdfium-mac-x64 ;;
-            Windows-X64) asset=pdfium-win-x64 ;;
-            *) echo "no pdfium build for ${{ runner.os }}-${{ runner.arch }}"; exit 1 ;;
-          esac
-          dest="$RUNNER_TEMP/pdfium"
-          if [ "${{ runner.os }}" = "Windows" ]; then
-            dest="$(cygpath -u "$RUNNER_TEMP")/pdfium"
-          fi
-          mkdir -p "$dest"
-          curl -sSL "https://github.com/bblanchon/pdfium-binaries/releases/latest/download/$asset.tgz" | tar xz -C "$dest"
-          if [ "${{ runner.os }}" = "Windows" ]; then
-            echo "RICK_PDFIUM_DIR=$(cygpath -w "$dest/bin")" >> "$GITHUB_ENV"
-          else
-            echo "RICK_PDFIUM_DIR=$dest/lib" >> "$GITHUB_ENV"
-          fi
-          echo "RICK_REQUIRE_PDFIUM=1" >> "$GITHUB_ENV"
+        with: { ref: "${{ github.event_name == 'schedule' && 'dev' || '' }}" }
+      - uses: ./.github/actions/setup
+        with: { system: test }
       # The hardware line, as the runner reports it: GitHub's image name and
       # version, then the CPU, core count and memory the OS sees.
       - name: hardware
@@ -80,19 +76,20 @@ jobs:
                 echo "- CPU: $(powershell -NoProfile -Command '(Get-CimInstance Win32_Processor).Name'), $NUMBER_OF_PROCESSORS vCPU"
                 echo "- Memory: $(powershell -NoProfile -Command '[math]::Round((Get-CimInstance Win32_ComputerSystem).TotalPhysicalMemory / 1GB)') GB" ;;
             esac
+            echo "- Commit: $(git rev-parse --short HEAD), $RUNS runs per benchmark"
             echo
           } | tee -a "$GITHUB_STEP_SUMMARY" hardware.md
       - name: build
         run: cargo test -p tests --release ${{ env.RICK_TESTS_FEATURES }} --no-run
       - name: measure
         shell: bash
-        # The fixtures on the runner's temp disk, as ci.yml puts them. The
+        # The fixtures on the runner's temp disk, as full.yml puts them. The
         # one ignored close-out test that is not a timing (the search walk
-        # cancelled by a new text) is skipped: it is not measured here.
+        # cancelled by a new text) is skipped: full.yml runs it.
         env: { TMP: "${{ runner.temp }}", TEMP: "${{ runner.temp }}", TMPDIR: "${{ runner.temp }}" }
         run: |
           set -o pipefail
-          for i in $(seq 1 "${{ inputs.runs }}"); do
+          for i in $(seq 1 "$RUNS"); do
             echo "::group::run $i"
             cargo test -p tests --release ${{ env.RICK_TESTS_FEATURES }} --test fixture --test listing --test copy --test ui --test preview --test git --test chrome --test preview_pane --test viewer --test startup --test plugins --test providers --test closeout --test previewers -- --ignored --nocapture --test-threads 1 --skip a_new_text_cancels_the_running_walk 2>&1 | tee "bench-$i.log"
             cargo test -p tests --release ${{ env.RICK_TESTS_FEATURES }} --test session -- --nocapture --test-threads 1 a_big_session_starts 2>&1 | tee -a "bench-$i.log"
@@ -108,3 +105,8 @@ jobs:
             bench-*.log
             hardware.md
             summary.md
+          retention-days: 90
+      - name: record on the benchmark-history branch
+        if: github.event_name == 'schedule' || inputs.history
+        shell: bash
+        run: .github/scripts/bench-history.sh summary.md hardware.md "$(echo "$RUNNER_OS-$RUNNER_ARCH" | tr '[:upper:]' '[:lower:]')"

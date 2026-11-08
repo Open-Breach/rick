@@ -1,0 +1,149 @@
+name: full
+# Tier 2 of the pipeline (issue 35): the full matrix, Linux x64, Linux
+# arm64, macOS arm64 and Windows x64, on the pull request from dev into
+# main, which `tier 2` must pass before it merges; nightly on dev; and by
+# hand from the Actions tab. Every runner takes tier 1's checks (fmt,
+# clippy, the tests, the bundle with every plugin loading, the docs); Linux
+# x64 adds the integration tests on the 200k fixture, Linux x64 and macOS
+# the screenshots; cargo deny runs beside them. The timings are bench.yml.
+#
+# A new push cancels the pull request's running check; a docs-only change
+# builds nothing and `tier 2` still reports success. A schedule runs from
+# main's copy of this file and checks dev out, so dev must carry
+# .github/actions/setup and .github/scripts: it does once it is level with
+# main.
+on:
+  pull_request:
+    branches: [main]
+  schedule:
+    - cron: "17 2 * * *"
+  workflow_dispatch:
+concurrency:
+  group: full-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+env:
+  CARGO_TERM_COLOR: always
+  # The nightly run measures dev; everything else the ref that started it.
+  CHECKOUT_REF: ${{ github.event_name == 'schedule' && 'dev' || '' }}
+jobs:
+  changes:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      code: ${{ steps.filter.outputs.code }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: filter
+        run: .github/scripts/docs-only.sh
+        env:
+          GH_TOKEN: ${{ github.token }}
+  check:
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
+    strategy:
+      # One platform failing must not cancel the others: their results are
+      # the point of the matrix.
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, ubuntu-24.04-arm, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    # The Windows runner spends about 15 minutes on the steps and several
+    # more saving the cache, which the shared libraries and the plugin
+    # libraries made larger.
+    timeout-minutes: 45
+    # Issue 18: the media previewer's playback is built only where the
+    # GStreamer development files are (Linux, from the system packages);
+    # macOS and Windows build it without, and the release workflow bundles
+    # the runtime there. The two variables carry the feature to every cargo
+    # command of the job, so the kernel dylibs are built once per profile
+    # (QUESTIONS.md 81).
+    env:
+      RICK_WS_FEATURES: ${{ startsWith(matrix.os, 'ubuntu') && '--features ext-preview-media/gstreamer,tests/gstreamer' || '' }}
+      RICK_TESTS_FEATURES: ${{ startsWith(matrix.os, 'ubuntu') && '--features gstreamer' || '' }}
+    steps:
+      - uses: actions/checkout@v4
+        with: { ref: "${{ env.CHECKOUT_REF }}" }
+      - uses: ./.github/actions/setup
+        with: { components: "rustfmt, clippy", system: test }
+      - run: cargo fmt --check
+      # No Unicode symbol character is used as an icon (SPEC.md "Icons").
+      - run: "! grep -rnP '(*UTF8)[\\x{2190}-\\x{2BFF}\\x{1F300}-\\x{1FAFF}]' crates/ui-egui/src"
+        if: matrix.os == 'ubuntu-latest'
+      - run: cargo clippy --workspace --all-targets ${{ env.RICK_WS_FEATURES }} -- -D warnings
+      - run: cargo test --workspace ${{ env.RICK_WS_FEATURES }}
+      # Issue 16: the bundle, target/debug/bundle/ with the binary, the kernel
+      # dylibs, libstd and plugins/<id>/ per plugin, and the host loading
+      # them from it. The same whole-workspace build as the tests: a smaller
+      # package set would rewrite the shared libraries (QUESTIONS.md 81).
+      - run: cargo xtask bundle ${{ env.RICK_WS_FEATURES }}
+      # Every plugin loads through --list-plugins.
+      - name: list plugins
+        shell: bash
+        run: |
+          exe=""
+          if [ "$RUNNER_OS" = "Windows" ]; then exe=".exe"; fi
+          ls -l target/debug/bundle target/debug/bundle/plugins
+          for id in git vfs-trash vfs-archive preview-archive preview-csv preview-media preview-office preview-hex; do
+            test -f "target/debug/bundle/plugins/$id/plugin.toml" || { echo "no plugin.toml for $id"; exit 1; }
+          done
+          out="$("./target/debug/bundle/rick$exe" --list-plugins)"
+          echo "$out"
+          echo "$out" | grep -E '^git +Git +[^ ]+ +decorator, action +loaded +' || { echo "git plugin not loaded"; exit 1; }
+          echo "$out" | grep -E '^vfs-trash +Trash +[^ ]+ +provider, decorator, action +loaded +' || { echo "trash plugin not loaded"; exit 1; }
+          echo "$out" | grep -E '^vfs-archive +Archives +[^ ]+ +provider +loaded +' || { echo "archive plugin not loaded"; exit 1; }
+          for id in preview-archive preview-csv preview-media preview-office preview-hex; do
+            echo "$out" | grep -E "^$id +[^ ].* +previewer +loaded +" || { echo "$id plugin not loaded"; exit 1; }
+          done
+      - run: cargo doc --no-deps ${{ env.RICK_WS_FEATURES }}
+        env: { RUSTDOCFLAGS: "-D warnings" }
+      # The two integration tests on the 200k fixture that are not timings:
+      # a new search text cancels the running walk (close-out A), and a
+      # job's progress events stay at twenty a second (0.2 milestone 2). In
+      # release, as their fixture asks, on Linux x64, where the fixture
+      # takes a minute; what they check is not the platform's. The timed
+      # tests on the fixture are bench.yml's.
+      - name: integration tests on the 200k fixture
+        if: matrix.os == 'ubuntu-latest'
+        run: cargo test -p tests --release ${{ env.RICK_TESTS_FEATURES }} --test closeout --test side_panel -- --ignored --nocapture --test-threads=1 a_new_text_cancels_the_running_walk_on_the_200k_fixture progress_over_the_200k_fixture_is_throttled_to_twenty_events_a_second
+        env: { TMP: "${{ runner.temp }}", TEMP: "${{ runner.temp }}", TMPDIR: "${{ runner.temp }}" }
+      # Screenshots of the chrome for the pull request, through wgpu on the
+      # runner's software adapter: lavapipe on Linux x64, Metal on macOS.
+      # Not on Windows: the dx12 software adapter (WARP) on the runner
+      # crashed the test process once in four runs (run 42314323512), and
+      # a screenshot step that fails by chance would block a release.
+      - name: screenshots
+        if: matrix.os == 'ubuntu-latest' || runner.os == 'macOS'
+        shell: bash
+        run: |
+          if [ "$RUNNER_OS" = "Linux" ]; then sudo apt-get install -y mesa-vulkan-drivers; fi
+          cargo test -p tests --release ${{ env.RICK_TESTS_FEATURES }} --features screenshots --test screenshots -- --ignored --nocapture
+        env: { TMP: "${{ runner.temp }}", TEMP: "${{ runner.temp }}", TMPDIR: "${{ runner.temp }}", WGPU_BACKEND: "${{ runner.os == 'macOS' && 'metal' || 'vulkan' }}" }
+      - uses: actions/upload-artifact@v4
+        if: always() && (matrix.os == 'ubuntu-latest' || runner.os == 'macOS')
+        with:
+          name: screenshots-${{ runner.os }}
+          path: target/screenshots/
+          if-no-files-found: ignore
+  deny:
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with: { ref: "${{ env.CHECKOUT_REF }}" }
+      - uses: EmbarkStudios/cargo-deny-action@v2
+  tier2:
+    name: tier 2
+    # The one check main requires: green when every job above succeeded or
+    # was skipped for a docs-only change, red on any failure.
+    needs: [changes, check, deny]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - env: { RESULTS: "${{ toJSON(needs) }}" }
+        run: |
+          echo "$RESULTS"
+          jq -e 'map(.result) | all(. == "success" or . == "skipped")' <<< "$RESULTS" > /dev/null \
+            || { echo "a job failed or was cancelled"; exit 1; }
