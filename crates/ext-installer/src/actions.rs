@@ -1,5 +1,6 @@
 //! The actions: *Install as application…* on an archive with its form,
-//! *Installed apps* opening the view, and the per-row actions of the view
+//! *Installed Apps…* opening the view (from the palette and the burger
+//! menu's *Installer* submenu), and the per-row actions of the view
 //! (Open install folder, Launch, Update from archive…, Revert to previous
 //! version, Edit launcher…, Uninstall…, Repair, Forget, Remove staging
 //! folder). Everything long runs as a job: reading the archive is the job
@@ -969,7 +970,8 @@ impl Action for Install {
     }
 }
 
-/// *Installed apps*: opens the view.
+/// *Installed Apps…*: opens the view; listed in the application menu
+/// under *Installer* as well.
 pub struct Apps;
 
 impl Action for Apps {
@@ -981,6 +983,9 @@ impl Action for Apps {
     }
     fn group(&self) -> ActionGroup {
         GROUP
+    }
+    fn app_menu(&self) -> bool {
+        true
     }
     fn default_shortcut(&self) -> Option<Shortcut> {
         None

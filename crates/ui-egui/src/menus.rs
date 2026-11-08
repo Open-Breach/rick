@@ -1,16 +1,20 @@
 //! Menus: the burger menu and the context menu built from the action
 //! registry.
 
+use std::sync::Arc;
+
 use app::{App, Command};
 use ext::t;
-use ext::{ActionCtx, ActionGroup, ActionId, Availability, Invocation};
+use ext::{Action, ActionCtx, ActionGroup, ActionId, Availability, Invocation};
 use types::Entry;
 
 use crate::keys::Intent;
 use crate::shell::{PaneCx, Request};
 
 /// The burger menu at the top of the window: New window, the Layouts
-/// submenu, Settings, Keyboard shortcuts, Extensions, About.
+/// submenu, the actions extensions put in the application menu
+/// ([`Action::app_menu`]) under one submenu per extension, Settings,
+/// Keyboard shortcuts, Extensions, About.
 pub fn burger(ui: &mut egui::Ui, requests: &mut Vec<Request>, pane: model::PaneId, app: &App) {
     ui.menu_button(crate::icons::MENU, |ui| {
         if ui.button(t!("menu-new-window")).clicked() {
@@ -23,6 +27,25 @@ pub fn burger(ui: &mut egui::Ui, requests: &mut Vec<Request>, pane: model::PaneI
         ui.menu_button(t!("menu-layouts"), |ui| {
             layouts_menu(ui, requests, pane, app);
         });
+        if let Some((ctx, groups)) = app_menu_actions(app, pane) {
+            ui.separator();
+            for (group, members) in groups {
+                match group {
+                    None => {
+                        for action in members {
+                            action_item(ui, requests, action.as_ref(), &ctx);
+                        }
+                    }
+                    Some(name) => {
+                        ui.menu_button(name, |ui| {
+                            for action in &members {
+                                action_item(ui, requests, action.as_ref(), &ctx);
+                            }
+                        });
+                    }
+                }
+            }
+        }
         ui.separator();
         if ui.button(t!("settings-ellipsis")).clicked() {
             requests.push(Request::Intent {
@@ -51,6 +74,50 @@ pub fn burger(ui: &mut egui::Ui, requests: &mut Vec<Request>, pane: model::PaneI
             ui.close();
         }
     });
+}
+
+/// The actions that asked for the application menu and apply to the
+/// focused pane, with the context they run on: the core ones first, then
+/// one group per extension, by name. `None` when the pane shows no
+/// entries (a console, a comparison) or nothing applies.
+#[allow(clippy::type_complexity)]
+fn app_menu_actions(
+    app: &App,
+    pane: model::PaneId,
+) -> Option<(ActionCtx, Vec<(Option<&'static str>, Vec<Arc<dyn Action>>)>)> {
+    let ctx = app.action_ctx(pane, Invocation::Menu)?;
+    let mut groups: Vec<(Option<&'static str>, Vec<Arc<dyn Action>>)> = Vec::new();
+    for action in app.registry().actions() {
+        if !action.app_menu() || action.availability(&ctx) != Availability::Enabled {
+            continue;
+        }
+        let group = match action.group() {
+            ActionGroup::Core => None,
+            ActionGroup::Extension(name) => Some(name),
+        };
+        match groups.iter_mut().find(|(g, _)| *g == group) {
+            Some((_, members)) => members.push(Arc::clone(action)),
+            None => groups.push((group, vec![Arc::clone(action)])),
+        }
+    }
+    groups.sort_by_key(|(group, _)| *group);
+    (!groups.is_empty()).then_some((ctx, groups))
+}
+
+/// One action as a menu item, run on `ctx` from the application menu.
+fn action_item(
+    ui: &mut egui::Ui,
+    requests: &mut Vec<Request>,
+    action: &dyn Action,
+    ctx: &ActionCtx,
+) {
+    if ui.button(action.label()).clicked() {
+        requests.push(Request::RunAction {
+            action: action.id(),
+            ctx: ctx.clone(),
+        });
+        ui.close();
+    }
 }
 
 /// The Layouts submenu: "Continue where I left off" first, then one
