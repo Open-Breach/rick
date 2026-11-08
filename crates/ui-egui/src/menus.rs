@@ -140,6 +140,7 @@ const GROUPS: &[(&str, &[&str])] = &[
         &[
             "core.open_default",
             "core.open_with",
+            "core.mount",
             "core.open_containing",
             "core.open_containing_tab",
             "terminal.console",
