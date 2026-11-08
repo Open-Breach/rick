@@ -2,7 +2,7 @@
 //! a live preview with clash detection, one undoable job.
 //!
 //! The action shows a form ([`ext::Form`]) whose preview is computed by
-//! [`plan`] from the selected entries as the rules are typed; a problem in
+//! [`plan()`] from the selected entries as the rules are typed; a problem in
 //! any row keeps the form from being confirmed. The renames then run as
 //! one job through temporary names, so swapping two names or changing
 //! only the case on a case-insensitive file system works, and come back

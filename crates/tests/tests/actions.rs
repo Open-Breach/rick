@@ -125,7 +125,7 @@ impl Driver {
 
     /// Runs the loop until nothing arrives for a while and nothing runs.
     fn settle(&mut self) {
-        let deadline = Instant::now() + Duration::from_secs(60);
+        let deadline = Instant::now() + Duration::from_mins(1);
         runtime::block_on(async {
             loop {
                 let quiet = tokio::time::timeout(
@@ -284,6 +284,8 @@ fn compress_and_extract_round_trip_through_the_app_with_the_conflict_dialogue() 
     }
 }
 
+// Two files, then two panes, in one story.
+#[allow(clippy::too_many_lines)]
 #[test]
 fn two_files_diff_and_two_panes_folders_diff() {
     let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
@@ -691,30 +693,32 @@ fn all_four_action_plugins_load_through_the_host() {
     );
 }
 
+/// Every `.rs` file under `dir` that still carries a stub's text.
+fn stub_hits(dir: &Path, hits: &mut Vec<PathBuf>) {
+    for entry in fs::read_dir(dir).unwrap_or_else(|e| panic!("{}: {e}", dir.display())) {
+        let path = entry.unwrap_or_else(|e| panic!("{e}")).path();
+        if path.is_dir() {
+            if path.file_name().is_some_and(|n| n == "target") {
+                continue;
+            }
+            stub_hits(&path, hits);
+        } else if path.extension().is_some_and(|e| e == "rs") {
+            let text = fs::read_to_string(&path).unwrap_or_default();
+            if text.contains("is not part of version 0.1") || text.contains("fn unavailable(") {
+                hits.push(path);
+            }
+        }
+    }
+}
+
 #[test]
 fn no_stub_notification_remains() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("..")
         .join("..")
         .join("crates");
-    fn walk(dir: &Path, hits: &mut Vec<PathBuf>) {
-        for entry in fs::read_dir(dir).unwrap_or_else(|e| panic!("{}: {e}", dir.display())) {
-            let path = entry.unwrap_or_else(|e| panic!("{e}")).path();
-            if path.is_dir() {
-                if path.file_name().is_some_and(|n| n == "target") {
-                    continue;
-                }
-                walk(&path, hits);
-            } else if path.extension().is_some_and(|e| e == "rs") {
-                let text = fs::read_to_string(&path).unwrap_or_default();
-                if text.contains("is not part of version 0.1") || text.contains("fn unavailable(") {
-                    hits.push(path);
-                }
-            }
-        }
-    }
     let mut hits = Vec::new();
-    walk(&root, &mut hits);
+    stub_hits(&root, &mut hits);
     // This test names the text it looks for.
     hits.retain(|p| !p.ends_with("tests/tests/actions.rs"));
     assert!(hits.is_empty(), "stubs remain: {hits:?}");
