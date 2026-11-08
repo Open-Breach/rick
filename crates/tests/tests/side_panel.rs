@@ -1280,6 +1280,35 @@ fn progress_over_the_200k_fixture_is_throttled_to_twenty_events_a_second() {
     );
 }
 
+/// Opens the context menu on the file row `name` and says whether
+/// *Mount* is in it, then closes the menu.
+fn mount_offered(harness: &mut Harness<'_, RickUi>, name: &str) -> bool {
+    let at = harness.get_by_label(name).rect().center();
+    click_at(harness, at, egui::PointerButton::Secondary);
+    harness.step();
+    let offered = harness.query_by_label("Mount").is_some();
+    harness.key_press(egui::Key::Escape);
+    harness.step();
+    harness.step();
+    offered
+}
+
+/// The side panel rows whose label contains `text` but not the image
+/// file's name: the volume's row, not the "Mount disc.iso" job row of
+/// the operations area nor the file in the list.
+fn volume_rows(harness: &Harness<'_, RickUi>, text: &str) -> Vec<egui::Rect> {
+    let rect = pane_rect(harness);
+    let file: Vec<egui::Rect> = harness
+        .query_all_by_label_contains(&format!("{text}.iso"))
+        .map(|n| n.rect())
+        .collect();
+    harness
+        .query_all_by_label_contains(text)
+        .map(|n| n.rect())
+        .filter(|r| r.center().x < rect.left() && !file.contains(r))
+        .collect()
+}
+
 /// Issue 51: *Mount* in a disk image's context menu, shown on an ISO on
 /// every platform, on a VHDX only where Windows would show it, on a DMG
 /// only as macOS would, never on a QCOW2, through the fake platform's
@@ -1294,19 +1323,6 @@ fn mount_shows_on_the_images_this_os_mounts_and_a_mounted_iso_is_a_volume_until_
         fs::write(dir.path().join(name), name).unwrap_or_else(|e| panic!("{e}"));
     }
     let (mut harness, fake) = harness(dir.path());
-
-    /// Opens the context menu on the file row `name` and says whether
-    /// *Mount* is in it, then closes the menu.
-    fn mount_offered(harness: &mut Harness<'_, RickUi>, name: &str) -> bool {
-        let at = harness.get_by_label(name).rect().center();
-        click_at(harness, at, egui::PointerButton::Secondary);
-        harness.step();
-        let offered = harness.query_by_label("Mount").is_some();
-        harness.key_press(egui::Key::Escape);
-        harness.step();
-        harness.step();
-        offered
-    }
 
     let as_platform: [(&str, &'static [ImageFormat], [bool; 4]); 3] = [
         (
@@ -1332,22 +1348,6 @@ fn mount_shows_on_the_images_this_os_mounts_and_a_mounted_iso_is_a_volume_until_
             .map(|name| mount_offered(&mut harness, name))
             .collect();
         assert_eq!(offered, expected, "as {platform}: iso, vhdx, dmg, qcow2");
-    }
-
-    /// The side panel rows whose label contains `text` but not the image
-    /// file's name: the volume's row, not the "Mount disc.iso" job row of
-    /// the operations area nor the file in the list.
-    fn volume_rows(harness: &Harness<'_, RickUi>, text: &str) -> Vec<egui::Rect> {
-        let rect = pane_rect(harness);
-        let file: Vec<egui::Rect> = harness
-            .query_all_by_label_contains(&format!("{text}.iso"))
-            .map(|n| n.rect())
-            .collect();
-        harness
-            .query_all_by_label_contains(text)
-            .map(|n| n.rect())
-            .filter(|r| r.center().x < rect.left() && !file.contains(r))
-            .collect()
     }
 
     // Mount the ISO: the fake mounts, the live volume watch shows the

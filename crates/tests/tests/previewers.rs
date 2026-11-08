@@ -295,7 +295,11 @@ fn every_fixture_opens_with_the_right_previewer_by_sniff() {
                 assert!(matches!(frame, Frame::Text(_)), "{name}: text fallback");
                 assert_eq!(doc.status().len(), 3, "{name}: {:?}", doc.status());
             }
-            "preview-markup" if name.ends_with(".csv") || name.ends_with(".tsv") => {
+            "preview-markup"
+                if Path::new(&name).extension().is_some_and(|e| {
+                    e.eq_ignore_ascii_case("csv") || e.eq_ignore_ascii_case("tsv")
+                }) =>
+            {
                 let Some(Content::Grid(grid)) = content else {
                     panic!("{name}: no grid");
                 };
@@ -890,17 +894,28 @@ fn the_markup_previewers_render_by_default_and_fall_back_to_source_without_the_p
         }
     }
 
-    // With the plugin disabled in the host: the code previewer's
-    // highlighted source for Markdown and HTML, plain text for CSV, and no
-    // content to lay out.
+    falls_back_without_the_plugin(dir.path(), &files, &provider, req);
+}
+
+/// With the markup plugin disabled in the host: the code previewer's
+/// highlighted source for Markdown and HTML, plain text for CSV, and no
+/// content to lay out.
+fn falls_back_without_the_plugin(
+    dir: &Path,
+    files: &[(&str, &[u8], &str)],
+    provider: &Arc<dyn Provider>,
+    req: RenderRequest,
+) {
+    use ext::PreviewControl;
+
     let without = previewers(load_plugins_disabling(&["preview-markup"]));
     assert!(
         without.iter().all(|p| p.id().0 != "preview-markup"),
         "the disabled plugin registers nothing"
     );
-    for (name, bytes, kind) in &files {
-        let path = dir.path().join(name);
-        let (entry, sniff) = sniff(&provider, &path);
+    for (name, bytes, kind) in files {
+        let path = dir.join(name);
+        let (entry, sniff) = sniff(provider, &path);
         let picked =
             best(&without, &entry, &sniff).unwrap_or_else(|| panic!("{name}: no previewer"));
         let expected = if *kind == "document" {
@@ -909,7 +924,7 @@ fn the_markup_previewers_render_by_default_and_fall_back_to_source_without_the_p
             "preview-text"
         };
         assert_eq!(picked.id().0, expected, "{name}");
-        let mut doc = open(picked, &provider, &path);
+        let mut doc = open(picked, provider, &path);
         assert!(doc.content().is_none(), "{name}: nothing rendered");
         assert!(
             !doc.controls().iter().any(|c| matches!(

@@ -90,17 +90,15 @@ fn an_iso_mounted_through_udisks_is_a_volume_until_eject() {
         !volumes.iter().any(|v| v.mount_point == volume.mount_point),
         "the volume is gone after Eject: {volumes:?}"
     );
-    let loop_devices = fs::read_dir("/sys/block")
-        .map(|entries| {
-            entries
-                .filter_map(Result::ok)
-                .filter(|e| e.file_name().to_string_lossy().starts_with("loop"))
-                .filter(|e| {
-                    fs::read_to_string(e.path().join("loop/backing_file"))
-                        .is_ok_and(|f| f.trim() == path.display().to_string())
-                })
-                .count()
-        })
-        .unwrap_or(0);
+    let loop_devices = fs::read_dir("/sys/block").map_or(0, |entries| {
+        entries
+            .filter_map(Result::ok)
+            .filter(|e| e.file_name().to_string_lossy().starts_with("loop"))
+            .filter(|e| {
+                fs::read_to_string(e.path().join("loop/backing_file"))
+                    .is_ok_and(|f| f.trim() == path.display().to_string())
+            })
+            .count()
+    });
     assert_eq!(loop_devices, 0, "the loop device was deleted");
 }
