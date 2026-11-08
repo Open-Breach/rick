@@ -1,0 +1,28 @@
+[package]
+name = "ext-action-terminal"
+version.workspace = true
+description = "Rick's Open console action: an embedded terminal tab through a pseudo-terminal and a small terminal emulator, or the system terminal when the setting says so; as a plugin."
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+# A plugin: a `cdylib` the host loads from `plugins/action-terminal/`, and
+# an `rlib` for the binary's opt-in `action-terminal` feature and the tests.
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+types = { workspace = true }
+ext = { workspace = true }
+portable-pty = { workspace = true }
+vte = { workspace = true }
+toml = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+runtime = { workspace = true }
+platform = { workspace = true }
+tempfile = { workspace = true }
+
+[lints]
+workspace = true
