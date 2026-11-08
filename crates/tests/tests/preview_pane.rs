@@ -1369,8 +1369,12 @@ fn a_missing_pdfium_shows_the_message_and_browsing_to_it_stores_the_setting() {
         );
     }
     let text = fs::read_to_string(&settings_file).unwrap_or_else(|e| panic!("{e}"));
-    assert!(
-        text.contains(&format!("library = \"{}\"", library.display())),
+    // TOML quotes a Windows path as a literal string, so the file is read
+    // as TOML rather than matched as text.
+    let table: toml::Table = toml::from_str(&text).unwrap_or_else(|e| panic!("{e}: {text}"));
+    assert_eq!(
+        table.get("library").and_then(toml::Value::as_str),
+        Some(library.to_string_lossy().as_ref()),
         "{text}"
     );
     assert_eq!(
