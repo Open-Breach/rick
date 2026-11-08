@@ -133,9 +133,10 @@ pub(super) struct Wayland {
 }
 
 impl Wayland {
-    /// Joins winit's display, binds the seat, the pointer and the data
+    /// Joins winit's display, binds the data device manager and, as the
+    /// compositor announces them, the seat, its pointer and the data
     /// device, and starts the reader; `None` when the display cannot be
-    /// joined or has no seat or data device manager.
+    /// joined or has no data device manager.
     pub(super) fn connect(display: WaylandDisplayHandle, wake: Wake) -> Option<Self> {
         // SAFETY: the pointer is the live `wl_display` winit gave out through
         // its raw display handle, which outlives every window of the process;
@@ -161,9 +162,12 @@ impl Wayland {
                 return None;
             }
         }
-        if lock(&shared).device.is_none() {
-            tracing::warn!("no wl_data_device_manager or wl_seat; no native drag");
+        if lock(&shared).manager.is_none() {
+            tracing::warn!("no wl_data_device_manager; no native drag");
             return None;
+        }
+        if lock(&shared).device.is_none() {
+            tracing::debug!("no wl_seat yet; the data device follows the seat");
         }
         runtime::handle().spawn_blocking(move || read_forever(queue, state));
         Some(Self { conn, qh, shared })
@@ -563,3 +567,54 @@ fn write_all(fd: &OwnedFd, mut data: &[u8]) {
 }
 
 delegate_noop!(State: ignore WlDataDeviceManager);
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use raw_window_handle::WaylandDisplayHandle;
+    use wayland_client::Connection;
+
+    use super::Wayland;
+
+    /// Against a real compositor, when `WAYLAND_DISPLAY` names one (a
+    /// headless Weston does, with no seat): the display opened by another
+    /// client of the process, as winit's is, joined through its pointer,
+    /// the globals bound and the reader started; a drag cannot start
+    /// without a seat and a button press seen, and nothing is incoming.
+    #[test]
+    fn with_a_compositor_the_display_is_joined_and_the_globals_bound() {
+        if std::env::var_os("WAYLAND_DISPLAY").is_none() {
+            return;
+        }
+        let winit = Connection::connect_to_env().unwrap_or_else(|e| panic!("{e}"));
+        let display = std::ptr::NonNull::new(winit.backend().display_ptr().cast())
+            .unwrap_or_else(|| panic!("a display pointer"));
+        let wakes = Arc::new(AtomicUsize::new(0));
+        let counter = Arc::clone(&wakes);
+        let wayland = Wayland::connect(
+            WaylandDisplayHandle::new(display),
+            Arc::new(move || {
+                counter.fetch_add(1, Ordering::Relaxed);
+            }),
+        )
+        .unwrap_or_else(|| panic!("a Wayland connection with a data device manager"));
+        assert!(!wayland.drag_in_progress());
+        assert_eq!(
+            wayland.incoming_files(),
+            crate::traits::IncomingFiles::default()
+        );
+        let window = crate::fake::test_window();
+        assert!(matches!(
+            wayland.start_drag(&window, &[std::path::PathBuf::from("/tmp/x")]),
+            Err(types::Error::Unsupported(_))
+        ));
+        assert_eq!(wayland.drop_position(&window), None);
+        // The display is winit's and outlives every window of the process;
+        // here it is the test's, so it is left open rather than torn down
+        // under the reader.
+        std::mem::forget(wayland);
+        std::mem::forget(winit);
+    }
+}

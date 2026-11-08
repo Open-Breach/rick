@@ -401,3 +401,67 @@ fn proxy_of(conn: &RustConnection, atoms: &Atoms, window: Window) -> Option<Wind
         .ok()?;
     (check.value32()?.next() == Some(proxy)).then_some(proxy)
 }
+
+#[cfg(test)]
+mod tests {
+    use std::path::PathBuf;
+
+    use raw_window_handle::{
+        RawDisplayHandle, RawWindowHandle, XlibDisplayHandle, XlibWindowHandle,
+    };
+    use x11rb::connection::Connection as _;
+    use x11rb::protocol::xproto::{ConnectionExt as _, CreateWindowAux, WindowClass};
+
+    use super::X11;
+    use crate::traits::WindowRef;
+
+    /// Against a real X server, when `DISPLAY` names one (`xvfb-run` does):
+    /// the connection, the hidden source window owning the selection, a
+    /// drag that ends at once since no button is held, and the pointer
+    /// position over a window of the test's own.
+    #[test]
+    fn with_a_display_the_source_connects_and_the_pointer_is_queried() {
+        if std::env::var_os("DISPLAY").is_none() {
+            return;
+        }
+        let mut x11 = X11::connect().unwrap_or_else(|| panic!("an X11 connection"));
+        x11.start_drag(&[PathBuf::from("/tmp/x")])
+            .unwrap_or_else(|e| panic!("{e}"));
+        let owner = x11
+            .conn
+            .get_selection_owner(x11.atoms.XdndSelection)
+            .ok()
+            .and_then(|cookie| cookie.reply().ok())
+            .unwrap_or_else(|| panic!("the selection owner"));
+        assert_eq!(owner.owner, x11.source);
+        // No button is down: the first tick ends the drag.
+        assert!(!x11.drag_in_progress());
+
+        let window = x11.conn.generate_id().unwrap_or_else(|e| panic!("{e}"));
+        x11.conn
+            .create_window(
+                x11rb::COPY_DEPTH_FROM_PARENT,
+                window,
+                x11.root,
+                0,
+                0,
+                200,
+                100,
+                0,
+                WindowClass::INPUT_OUTPUT,
+                x11rb::COPY_FROM_PARENT,
+                &CreateWindowAux::new(),
+            )
+            .unwrap_or_else(|e| panic!("{e}"));
+        x11.conn.flush().unwrap_or_else(|e| panic!("{e}"));
+        let window_ref = WindowRef {
+            window: RawWindowHandle::Xlib(XlibWindowHandle::new(u64::from(window))),
+            display: RawDisplayHandle::Xlib(XlibDisplayHandle::new(None, 0)),
+            scale: 2.0,
+        };
+        let position = x11
+            .drop_position(&window_ref)
+            .unwrap_or_else(|| panic!("a pointer position"));
+        assert!(position.x.is_finite() && position.y.is_finite());
+    }
+}
