@@ -53,8 +53,12 @@ pub struct Fake {
     opened: Mutex<Vec<PathBuf>>,
     opened_with: Mutex<Vec<(PathBuf, Application)>>,
     terminals: Mutex<Vec<(PathBuf, Option<Vec<String>>)>>,
-    /// The programs handed to [`Elevate::run_elevated`]; nothing runs.
+    /// The programs handed to [`Elevate::run_elevated`]; nothing runs
+    /// unless `elevate_runs` says so.
     elevated: Mutex<Vec<(PathBuf, Vec<OsString>)>>,
+    /// Whether [`Elevate::run_elevated`] runs the program, as the current
+    /// user: for a test of the helper itself.
+    elevate_runs: Mutex<bool>,
     revealed: Mutex<Vec<PathBuf>>,
     clipboard: Mutex<Option<String>>,
     dragged: Mutex<Vec<Vec<String>>>,
@@ -105,6 +109,7 @@ impl Fake {
             opened_with: Mutex::new(Vec::new()),
             terminals: Mutex::new(Vec::new()),
             elevated: Mutex::new(Vec::new()),
+            elevate_runs: Mutex::new(false),
             revealed: Mutex::new(Vec::new()),
             clipboard: Mutex::new(None),
             dragged: Mutex::new(Vec::new()),
@@ -132,10 +137,18 @@ impl Fake {
     }
 
     /// The programs and arguments handed to [`Elevate::run_elevated`],
-    /// oldest first; the fake runs none of them.
+    /// oldest first; the fake runs none of them unless
+    /// [`Fake::set_elevate_runs`] said so.
     #[must_use]
     pub fn elevated(&self) -> Vec<(PathBuf, Vec<OsString>)> {
         lock(&self.elevated).clone()
+    }
+
+    /// Makes [`Elevate::run_elevated`] run the program, as the current user
+    /// and with its output captured, so a test can exercise the privileged
+    /// helper without privileges.
+    pub fn set_elevate_runs(&self, runs: bool) {
+        *lock(&self.elevate_runs) = runs;
     }
 
     /// Paths handed to [`OpenWith::open`], oldest first.
@@ -389,12 +402,26 @@ impl Terminal for Fake {
 }
 
 impl Elevate for Fake {
-    /// Records the call and reports success without running anything.
+    /// Records the call and reports success without running anything, or
+    /// runs the program as the current user when [`Fake::set_elevate_runs`]
+    /// said so.
     fn run_elevated(&self, program: &Path, args: &[OsString]) -> Result<ElevatedOutput, Error> {
         lock(&self.elevated).push((program.to_path_buf(), args.to_vec()));
+        if !*lock(&self.elevate_runs) {
+            return Ok(ElevatedOutput {
+                code: Some(0),
+                ..ElevatedOutput::default()
+            });
+        }
+        let output = std::process::Command::new(program)
+            .args(args)
+            .stdin(std::process::Stdio::null())
+            .output()
+            .map_err(Error::from_io)?;
         Ok(ElevatedOutput {
-            code: Some(0),
-            ..ElevatedOutput::default()
+            code: output.status.code(),
+            stdout: output.stdout,
+            stderr: output.stderr,
         })
     }
 }

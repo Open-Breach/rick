@@ -425,17 +425,59 @@ impl OpenWith for Native {
 }
 
 impl Elevate for Native {
-    /// Not offered on macOS in this version: the installer that needs it
-    /// is Linux only (`specs/ext-installer.md`).
+    /// Through Authorization Services, the way `osascript`'s `with
+    /// administrator privileges` reaches it: the system's own prompt, and
+    /// the command run as root once the user has authorised it.
     fn run_elevated(
         &self,
-        _program: &Path,
-        _args: &[std::ffi::OsString],
+        program: &Path,
+        args: &[std::ffi::OsString],
     ) -> Result<ElevatedOutput, Error> {
-        Err(Error::Unsupported(
-            "running a command as the administrator is not implemented on this platform",
-        ))
+        let program = std::path::absolute(program).map_err(Error::from_io)?;
+        let mut words = vec![shell_quote(utf8(&program)?)];
+        for arg in args {
+            words.push(shell_quote(arg.to_str().ok_or(Error::Unsupported(
+                "an argument that is not valid UTF-8",
+            ))?));
+        }
+        let command = words.join(" ");
+        // The command runs inside an AppleScript string: backslashes and
+        // quotes are escaped for that string, the shell quoting above for
+        // the shell it then runs in.
+        let escaped = command.replace('\\', "\\\\").replace('"', "\\\"");
+        let script = format!("do shell script \"{escaped}\" with administrator privileges");
+        let output = Command::new("osascript")
+            .args(["-e", &script])
+            .stdin(Stdio::null())
+            .output()
+            .map_err(Error::from_io)?;
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        if !output.status.success() {
+            // -128 is the user cancelling the prompt; -60007 and -60005 a
+            // user who may not administer the machine.
+            if stderr.contains("(-128)")
+                || stderr.contains("(-60007)")
+                || stderr.contains("(-60005)")
+            {
+                return Err(Error::PermissionDenied);
+            }
+            return Ok(ElevatedOutput {
+                code: output.status.code(),
+                stdout: output.stdout,
+                stderr: output.stderr,
+            });
+        }
+        Ok(ElevatedOutput {
+            code: Some(0),
+            stdout: output.stdout,
+            stderr: output.stderr,
+        })
     }
+}
+
+/// `text` as one word of a POSIX shell command.
+fn shell_quote(text: &str) -> String {
+    format!("'{}'", text.replace('\'', "'\\''"))
 }
 
 impl Terminal for Native {

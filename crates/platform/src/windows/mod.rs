@@ -737,17 +737,108 @@ fn on_path(program: &str) -> bool {
 }
 
 impl Elevate for Native {
-    /// Not offered on Windows in this version: the installer that needs it
-    /// is Linux only (`specs/ext-installer.md`).
+    /// Through User Account Control: `ShellExecuteEx` with the `runas` verb
+    /// shows the consent prompt and starts the program elevated; the call
+    /// waits for it to end. An elevated process shares no pipes with this
+    /// one, so the output comes back through a file the helper is told to
+    /// write (`--output <file>` appended to the arguments) when the caller
+    /// asked for one, else empty.
     fn run_elevated(
         &self,
-        _program: &Path,
-        _args: &[std::ffi::OsString],
+        program: &Path,
+        args: &[std::ffi::OsString],
     ) -> Result<ElevatedOutput, Error> {
-        Err(Error::Unsupported(
-            "running a command as the administrator is not implemented on this platform",
-        ))
+        use windows::Win32::System::Threading::{
+            GetExitCodeProcess, INFINITE, WaitForSingleObject,
+        };
+        use windows::Win32::UI::Shell::{SEE_MASK_NO_CONSOLE, SEE_MASK_NOCLOSEPROCESS};
+        use windows::Win32::UI::WindowsAndMessaging::SW_HIDE;
+
+        let program = std::path::absolute(program).map_err(Error::from_io)?;
+        let output_file = tempfile::Builder::new()
+            .prefix("rick-elevated-")
+            .suffix(".out")
+            .tempfile()
+            .map_err(Error::from_io)?;
+        let mut words: Vec<String> = args
+            .iter()
+            .map(|a| quote_argument(&a.to_string_lossy()))
+            .collect();
+        words.push("--output".to_owned());
+        words.push(quote_argument(&output_file.path().to_string_lossy()));
+        let parameters = wide_text(&words.join(" "));
+        let file = wide(&program);
+        let mut info = SHELLEXECUTEINFOW {
+            cbSize: u32::try_from(std::mem::size_of::<SHELLEXECUTEINFOW>()).unwrap_or(0),
+            fMask: SEE_MASK_NOCLOSEPROCESS | SEE_MASK_NO_CONSOLE,
+            hwnd: HWND::default(),
+            lpVerb: w!("runas"),
+            lpFile: PCWSTR(file.as_ptr()),
+            lpParameters: PCWSTR(parameters.as_ptr()),
+            nShow: SW_HIDE.0,
+            ..Default::default()
+        };
+        // SAFETY: `info` is fully initialised and the strings outlive the call.
+        if let Err(error) = unsafe { ShellExecuteExW(&raw mut info) } {
+            // ERROR_CANCELLED: the user said no to the prompt.
+            if error.code().0 as u32 & 0xFFFF == 1223 {
+                return Err(Error::PermissionDenied);
+            }
+            return Err(Error::Io(io_error(error)));
+        }
+        let process = info.hProcess;
+        if process.is_invalid() {
+            return Err(Error::Io(io::Error::other("no process started")));
+        }
+        // SAFETY: `process` is the handle `ShellExecuteExW` returned, closed
+        // below.
+        let code = unsafe {
+            let _ = WaitForSingleObject(process, INFINITE);
+            let mut code: u32 = 0;
+            let got = GetExitCodeProcess(process, &raw mut code);
+            let _ = CloseHandle(process);
+            got.map(|()| code)
+        }
+        .map_err(|e| Error::Io(io_error(e)))?;
+        let stdout = fs::read(output_file.path()).unwrap_or_default();
+        Ok(ElevatedOutput {
+            code: i32::try_from(code).ok(),
+            stdout,
+            stderr: Vec::new(),
+        })
     }
+}
+
+/// `text` as one argument of a Windows command line, quoted the way
+/// `CommandLineToArgvW` undoes it.
+fn quote_argument(text: &str) -> String {
+    if !text.is_empty() && !text.contains([' ', '\t', '"']) {
+        return text.to_owned();
+    }
+    let mut out = String::from("\"");
+    let mut backslashes = 0;
+    for c in text.chars() {
+        match c {
+            '\\' => backslashes += 1,
+            '"' => {
+                out.extend(std::iter::repeat_n('\\', backslashes * 2 + 1));
+                out.push('"');
+                backslashes = 0;
+            }
+            other => {
+                out.extend(std::iter::repeat_n('\\', backslashes));
+                out.push(other);
+                backslashes = 0;
+            }
+        }
+    }
+    out.extend(std::iter::repeat_n('\\', backslashes * 2));
+    out.push('"');
+    out
+}
+
+fn wide_text(text: &str) -> Vec<u16> {
+    text.encode_utf16().chain(Some(0)).collect()
 }
 
 impl Terminal for Native {
