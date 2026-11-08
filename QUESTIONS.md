@@ -2114,3 +2114,71 @@ Once answered, an entry keeps its number and gains a dated decision line.
     the Permissions section appears for a local entry only, every other
     entry's Properties shows the general rows. A provider-level API waits
     for a provider that wants it.
+
+178. (issue 24) "User-facing strings still go through one `t!` lookup
+    function from the start" (SPEC.md "Language"), and the issue has the
+    lookup read Fluent files; the spec names no crate for it, and every
+    plugin's strings must go through the same one.
+    Assumed: the lookup is `ext::i18n` with the `ext::t!` macro, in the
+    dylib the binary and every plugin share, so one bundle per language
+    serves the kernel and the plugins alike; `ext` gained `fluent-bundle`
+    for it. The strings of the crates below `ext` (`platform`'s error texts,
+    `types`' error display) stay English, as do the texts the issue does
+    not name: error messages and the reasons in `Error::Unsupported`, job
+    and undo labels ("Copy 3 items"), the bodies of confirmations that
+    carry data, the status bar's facts and the rows' keys of the info
+    sections; a later pass can move them the same way.
+
+179. (issue 24) A label an extension hands the registry once (a setting's,
+    a connection field's, a connection schema's title, an info section's,
+    a decorator column's) was a `&'static str`; a language applied live
+    cannot relabel it.
+    Assumed: those labels are `ext::Text`, a Fluent key read every time it
+    is shown, so they follow a language change too; `Action::label` and
+    `Availability::Disabled` return a `String` built with `t!` on each call.
+    The extension API is at version 11 for it.
+
+180. (issue 24) Where a plugin's translations live and how they reach the
+    lookup.
+    Assumed: `crates/<plugin>/locales/<lang>.ftl`, bundled with
+    `include_str!` and handed to `Registry::translations` while the plugin
+    registers; the keys carry the plugin's prefix (`git-commit`,
+    `ssh-open-console-here`) so one bundle holds every plugin's messages;
+    English is the one language every key must have. The names of the
+    extension groups (Git, SVN, SSH, Trash, Installer) and the option texts
+    of a `Choice` setting are values, not translated.
+
+181. (issue 24) "A CI check fails on a user-facing string literal outside
+    `t!` (a lint or a grep over ui-egui)".
+    Assumed: `.github/scripts/check-strings.py`, run by the `fmt` job and
+    by a test, reads the non-test code of `crates/ui-egui/src` and reports
+    a string literal with letters handed to a widget or a window title
+    (`ui.label("…")`, `egui::Button::new("…")`, `.on_hover_text("…")`, the
+    shell's toast); `t!("…")` on the line is the key, and `// i18n: ok`
+    exempts a glyph, a unit or a format of numbers. Text a helper function
+    returns was moved into `t!` by hand, since no grep sees it.
+
+182. (issue 24) The German proof.
+    Assumed: `locales/de.ftl` translates the Settings screen in full, the
+    burger and context menus with every core action and the reasons a core
+    action is greyed out, the Properties dialogue's permission words, and
+    the plugins with actions in the context menus translate those actions
+    in their own `de.ftl` (Git, SVN, SSH, the trash, compress, compare,
+    rename, the console, the installer); everything else falls back to
+    English, which is what the issue asks of the rest.
+
+183. (issue 24) "A language setting (system default, or a listed language)".
+    Assumed: `language` in `rick.toml`, `None` for the system's; the
+    Settings row lists *System default* and every language that has
+    messages under the name its own file gives it (`language-name`). The
+    system's language is `sys-locale`'s list, negotiated against the bundled
+    languages by whole tag, then by language alone (`de-CH` finds `de`),
+    English when nothing matches; `fluent-langneg` was not used, since it
+    speaks ICU's locale type. A file `locales/<lang>.ftl` in the
+    configuration directory overrides the bundled messages of that language
+    key by key, read at start.
+
+184. (issue 24) Fluent wraps placeables in Unicode isolation marks.
+    Assumed: off (`set_use_isolating(false)`), since egui draws the marks as
+    boxes; a key nobody wrote comes back as itself, so a missing translation
+    is a visible text or key, never a panic.

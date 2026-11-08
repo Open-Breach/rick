@@ -9,6 +9,15 @@ the pull request that brought the change.
 
 ### Added
 
+- Localisation (#24): every text of the shell, the dialogues, the menus,
+  the core actions and the plugins goes through the `t!` lookup over Fluent
+  files bundled in the binary (`locales/` for the kernel, each plugin's
+  own), overridable key by key from `locales/<lang>.ftl` in the
+  configuration directory; the *Language* setting (system default, or a
+  listed language) applies live, English is the fallback for any missing
+  key, and German is the first other language, for the Settings screen,
+  the context menus with their actions and the Properties dialogue. A CI
+  check fails on a user-facing string literal outside `t!` in the egui UI.
 - Permissions in Properties (#24): Properties on a local entry shows and
   edits its owner, group and mode bits (`rwx` for user, group and other,
   setuid, setgid and sticky, with the octal beside them) and the access
@@ -243,6 +252,12 @@ the pull request that brought the change.
 
 ### Changed
 
+- The extension API is at version 11: `Action::label` returns a `String`
+  and `Availability::Disabled` carries one, both built with `t!`; the
+  labels the registry keeps (`SettingField`, `ConnectionField`,
+  `ConnectionSchema`, `InfoSection`, `ColumnDef`) are `Text` keys read
+  live; the registry takes an extension's translation files through
+  `Registry::translations` (#24).
 - Properties is Rick's own dialogue on every platform; on Windows and
   macOS *System properties…* opens the platform's own as before (#24).
 - `platform::Elevate` runs a command as the administrator on macOS and

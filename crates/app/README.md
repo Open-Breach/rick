@@ -9,7 +9,10 @@ tab when a previewer claims it, the system application otherwise or when the
 `[viewer] external` setting names its type) by reading its first bytes as a
 job. It owns the undo/redo log of
 reversible commands, the extension `Registry` the actions come from, the
-TOML settings file with its watcher, and the session: `session.toml`, written
+TOML settings file with its watcher (the `language` setting among them: it
+registers the kernel's `locales/en.ftl` and `de.ftl` with the `t!` lookup,
+reads the overrides in the configuration directory's `locales/`, and applies
+a language change live), and the session: `session.toml`, written
 after every change at most once per second through a temporary file and once
 more on exit, restored at start (or the start layout the settings name, with
 a vanished folder's tab opened at its nearest ancestor), and the saved
