@@ -284,6 +284,14 @@ struct Dialog {
     )>,
 }
 
+/// The file dialogue a preview's *Browse…* opened for a missing library:
+/// the pane that asked, the setting the choice goes into, the answer.
+struct LibraryBrowse {
+    pane: PaneId,
+    setting: (types::ExtId, &'static str),
+    answer: runtime::oneshot::Receiver<Vec<std::path::PathBuf>>,
+}
+
 /// What a name typed into the name prompt is for.
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum NameFor {
@@ -378,12 +386,8 @@ pub struct RickUi {
     /// The Properties dialogue, open or not.
     properties: properties::PropertiesDialog,
     /// The file dialogue a preview's *Browse…* opened for a missing
-    /// library: the pane, the setting the choice goes into, the answer.
-    library_browse: Option<(
-        PaneId,
-        (types::ExtId, &'static str),
-        runtime::oneshot::Receiver<Vec<std::path::PathBuf>>,
-    )>,
+    /// library, while it is open.
+    library_browse: Option<LibraryBrowse>,
     /// Read-only texts actions asked to show, each in its own window.
     texts: Vec<TextWindow>,
     next_text: u64,
@@ -891,9 +895,14 @@ impl RickUi {
                     served,
                     total,
                 } => self.previews.prefix(pane, served, total),
-                Event::PreviewCapped { pane, size, cap } => {
+                Event::PreviewCapped {
+                    pane,
+                    size,
+                    cap,
+                    source,
+                } => {
                     let entry = self.preview_entry(pane);
-                    self.previews.capped(pane, size, cap, entry);
+                    self.previews.capped(pane, size, cap, source, entry);
                 }
                 Event::ViewOpened { tab, view, .. } => {
                     if let ext::View::Console(console) = &view {
@@ -2010,18 +2019,22 @@ impl RickUi {
         runtime::handle().spawn(async move {
             let _ = tx.send(platform.pick_files(&title, &filters).await);
         });
-        self.library_browse = Some((pane, setting, rx));
+        self.library_browse = Some(LibraryBrowse {
+            pane,
+            setting,
+            answer: rx,
+        });
     }
 
     /// A file the *Browse…* dialogue picked goes into the previewer's
     /// setting, and the preview opens again.
     fn poll_library_browse(&mut self, ctx: &egui::Context) {
-        let Some((pane, (ext, key), rx)) = self.library_browse.as_mut() else {
+        let Some(browse) = self.library_browse.as_mut() else {
             return;
         };
-        match rx.try_recv() {
+        match browse.answer.try_recv() {
             Ok(files) => {
-                let (pane, ext, key) = (*pane, *ext, *key);
+                let (pane, (ext, key)) = (browse.pane, browse.setting);
                 self.library_browse = None;
                 if let Some(path) = files.into_iter().next() {
                     self.handle(Command::ExtSetting {

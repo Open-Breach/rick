@@ -304,6 +304,23 @@ pub enum Command {
     /// A remote file held behind the size cap (`Event::PreviewCapped`):
     /// open the preview whatever its size.
     PreviewAnyway(PaneId),
+    /// The cap message's *Always preview on <source>*: switch the cap off
+    /// for the source (one SSH host, one cloud account) that holds the
+    /// pane's file, `preview_always = true` in its connection, then open
+    /// the file.
+    PreviewAlways(PaneId),
+    /// Turn a source's *Always preview* on or off: the connection row's
+    /// context menu in the Network or Cloud section. A source Rick cannot
+    /// edit (a host of `~/.ssh/config`) gets a connection entry that
+    /// carries the switch alone.
+    SetPreviewAlways {
+        /// The provider.
+        provider: ProviderId,
+        /// The connection's name.
+        name: String,
+        /// On or off.
+        on: bool,
+    },
     /// Open the pane's preview again, as it is: *Retry* on a missing
     /// third-party library, after it was installed or its setting changed.
     PreviewRetry(PaneId),
@@ -550,6 +567,9 @@ pub enum Event {
         size: u64,
         /// The cap it is above.
         cap: u64,
+        /// The source the file is on, when its provider keeps connections:
+        /// the host or account *Always preview on <source>* names.
+        source: Option<String>,
     },
     /// A thumbnail finished: the frame, or `None` when no previewer claims
     /// the entry or the render failed.
@@ -679,11 +699,17 @@ impl fmt::Debug for Event {
                 .field("served", served)
                 .field("total", total)
                 .finish(),
-            Self::PreviewCapped { pane, size, cap } => f
+            Self::PreviewCapped {
+                pane,
+                size,
+                cap,
+                source,
+            } => f
                 .debug_struct("PreviewCapped")
                 .field("pane", pane)
                 .field("size", size)
                 .field("cap", cap)
+                .field("source", source)
                 .finish(),
             Self::Conflict(conflict) => f.debug_tuple("Conflict").field(&conflict.id).finish(),
             Self::Question(question) => f.debug_tuple("Question").field(&question.id).finish(),

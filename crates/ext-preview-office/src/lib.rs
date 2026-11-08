@@ -486,19 +486,21 @@ impl Lookup {
     /// # Errors
     ///
     /// What the pane shows when nothing is found.
-    pub fn find(&self) -> Result<PathBuf, MissingLibrary> {
+    pub fn find(&self) -> Result<PathBuf, Box<MissingLibrary>> {
         if let Some(path) = self.lock().as_ref().filter(|p| p.is_file()) {
             return Ok(path.clone());
         }
         let setting = self.setting();
         let candidates = self.candidates();
         let Some(found) = candidates.iter().find(|p| p.is_file()).cloned() else {
-            return Err(self.missing(
-                candidates
-                    .iter()
-                    .map(|p| p.display().to_string())
-                    .collect::<Vec<_>>()
-                    .join("\n"),
+            return Err(Box::new(
+                self.missing(
+                    &candidates
+                        .iter()
+                        .map(|p| p.display().to_string())
+                        .collect::<Vec<_>>()
+                        .join("\n"),
+                ),
             ));
         };
         if setting.as_deref() != Some(found.as_path())
@@ -519,7 +521,7 @@ impl Lookup {
     /// command for this platform, the setting *Browse…* fills, and
     /// `detail` on where it was looked for.
     #[must_use]
-    pub fn missing(&self, detail: String) -> MissingLibrary {
+    pub fn missing(&self, detail: &str) -> MissingLibrary {
         MissingLibrary {
             name: "LibreOffice".to_owned(),
             install: install_hint(),
@@ -1057,7 +1059,7 @@ impl Previewer for OfficePreviewer {
                     return Ok(OfficeDoc::new(
                         kind,
                         meta,
-                        Rendering::Missing(Arc::new(missing)),
+                        Rendering::Missing(Arc::new(*missing)),
                         size,
                         false,
                     ));
@@ -1069,7 +1071,7 @@ impl Previewer for OfficePreviewer {
                     return Ok(OfficeDoc::new(
                         kind,
                         meta,
-                        Rendering::Missing(Arc::new(missing)),
+                        Rendering::Missing(Arc::new(*missing)),
                         size,
                         false,
                     ));

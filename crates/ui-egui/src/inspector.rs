@@ -244,6 +244,9 @@ pub fn show(
             Some(PreviewAct::PreviewAnyway) => {
                 requests.push(Request::Command(Command::PreviewAnyway(pane)));
             }
+            Some(PreviewAct::PreviewAlways) => {
+                requests.push(Request::Command(Command::PreviewAlways(pane)));
+            }
             Some(PreviewAct::Retry) => {
                 requests.push(Request::Command(Command::PreviewRetry(pane)));
             }

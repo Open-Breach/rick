@@ -339,6 +339,10 @@ pub const REMOTE_PREFIX_CHUNK: u64 = 256 * 1024;
 pub const REMOTE_PREVIEW_CAP: u64 = 4 * 1024 * 1024;
 /// The largest file the preview pane's *Copy* puts on the clipboard.
 pub const COPY_LIMIT: usize = 256 * 1024 * 1024;
+/// The connection field that switches the preview size cap off for one
+/// source (SPEC.md, Preview, *Remote sources*): `preview_always = true`
+/// in the source's `[[connections]]` table.
+pub const PREVIEW_ALWAYS: &str = "preview_always";
 
 /// The kernel's English messages, `locales/en.ftl` of the repository:
 /// every key of the shell, the dialogues, the menus and the core actions.
@@ -1485,6 +1489,10 @@ impl App {
                     self.restart_preview(pane);
                 }
             }
+            Command::PreviewAlways(pane) => self.preview_always(pane),
+            Command::SetPreviewAlways { provider, name, on } => {
+                self.set_preview_always(provider, &name, on);
+            }
             Command::PreviewRetry(pane) => self.restart_preview(pane),
             Command::PreviewCopy(pane) => self.copy_preview_text(pane),
             Command::TabOrder { pane, order } => {
@@ -2031,6 +2039,64 @@ impl App {
                 self.refresh_rows_of(provider);
             }
         }
+    }
+
+    /// The connection (one SSH host, one cloud account) an entry is on:
+    /// the first component of its path, for a provider that keeps
+    /// connections as the folders at its root.
+    fn source_of(&self, entry: &Entry) -> Option<String> {
+        self.registry.connector_of(entry.id.provider)?;
+        let bytes = entry.path.as_bytes();
+        let trimmed = bytes
+            .strip_prefix(b"/")
+            .or_else(|| bytes.strip_prefix(b"\\"))
+            .unwrap_or(bytes);
+        let first = trimmed
+            .split(|b| matches!(b, b'/' | b'\\'))
+            .next()
+            .filter(|first| !first.is_empty())?;
+        Some(String::from_utf8_lossy(first).into_owned())
+    }
+
+    /// *Always preview on <source>*: the switch goes on for the source of
+    /// the pane's file, and the file opens.
+    fn preview_always(&mut self, pane: PaneId) {
+        let Some(job) = self.preview.get(&pane) else {
+            return;
+        };
+        let (provider, entry) = (job.full.id.provider, job.entry);
+        let Some(source) = self.source_of(&job.full) else {
+            return;
+        };
+        self.set_preview_always(provider, &source, true);
+        self.preview_force.insert(pane, entry);
+        self.restart_preview(pane);
+    }
+
+    /// Writes `preview_always` for the connection `name` of `provider`
+    /// into `rick.toml` and tells the connector; a source without a
+    /// connection entry (a host of `~/.ssh/config`) gets one that carries
+    /// the switch alone (QUESTIONS.md 191).
+    fn set_preview_always(&mut self, provider: ProviderId, name: &str, on: bool) {
+        let mut connections = self.model.settings.connections.clone();
+        let index = connections
+            .iter()
+            .position(|c| c.provider == provider.0 && c.name == name)
+            .unwrap_or_else(|| {
+                connections.push(ConnectionEntry {
+                    provider: provider.0.to_owned(),
+                    name: name.to_owned(),
+                    settings: std::collections::BTreeMap::new(),
+                });
+                connections.len() - 1
+            });
+        if let Some(entry) = connections.get_mut(index) {
+            entry
+                .settings
+                .insert(PREVIEW_ALWAYS.to_owned(), on.to_string());
+        }
+        self.save_connections(connections);
+        self.push_connections(provider);
     }
 
     /// Replaces the connections in the settings and saves the file.
@@ -3278,7 +3344,16 @@ impl App {
                     .get(&pane)
                     .is_some_and(|job| job.generation == generation)
                 {
-                    events.push(Event::PreviewCapped { pane, size, cap });
+                    let source = self
+                        .preview
+                        .get(&pane)
+                        .and_then(|job| self.source_of(&job.full));
+                    events.push(Event::PreviewCapped {
+                        pane,
+                        size,
+                        cap,
+                        source,
+                    });
                 }
             }
             Msg::Decorated {
@@ -3634,6 +3709,8 @@ impl App {
         let cap = provider
             .remote_preview_cap(&loc)
             .unwrap_or(REMOTE_PREVIEW_CAP);
+        // The source's *Always preview* switch takes the cap off there.
+        let always = remote && provider.remote_preview_always(&loc);
         let more = self
             .preview_more
             .get(&pane)
@@ -3668,7 +3745,10 @@ impl App {
                             previewer.open(&loc, limited, job.cancel.clone()).await
                         }
                         Some(_)
-                            if remote && !force && entry.size.is_some_and(|size| size > cap) =>
+                            if remote
+                                && !force
+                                && !always
+                                && entry.size.is_some_and(|size| size > cap) =>
                         {
                             tx.send(Msg::PreviewCapped {
                                 pane,
@@ -4257,6 +4337,9 @@ impl ext::Provider for Prefixed {
     }
     fn remote_preview_cap(&self, loc: &Location) -> Option<u64> {
         self.inner.remote_preview_cap(loc)
+    }
+    fn remote_preview_always(&self, loc: &Location) -> bool {
+        self.inner.remote_preview_always(loc)
     }
     fn watch(&self, loc: &Location) -> Result<ext::ChangeStream, Error> {
         self.inner.watch(loc)

@@ -1029,6 +1029,9 @@ const README: &str = "# Title\n\nA paragraph with *emphasis*, **strong** and a [
 /// file list in the explorer's columns with the stats line, folding in
 /// place.
 #[test]
+// One scenario over the three content kinds; splitting it would repeat the
+// window.
+#[allow(clippy::too_many_lines)]
 fn markdown_csv_and_a_zip_are_laid_out_by_the_pane_itself() {
     let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
     fs::write(dir.path().join("README.md"), README).unwrap_or_else(|e| panic!("{e}"));
@@ -1282,6 +1285,8 @@ fn copy_puts_the_whole_text_on_the_clipboard_and_the_raw_source_for_markdown() {
 /// path by hand and pressing *Retry* does the same; and a previewer that
 /// finds the library by itself writes the hit back into the setting.
 #[test]
+// One scenario start to finish; splitting it would repeat the windows.
+#[allow(clippy::too_many_lines)]
 fn a_missing_pdfium_shows_the_message_and_browsing_to_it_stores_the_setting() {
     let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
     fs::write(dir.path().join("paper.pdf"), media::pdf(2, 300, 400))
@@ -1347,7 +1352,7 @@ fn a_missing_pdfium_shows_the_message_and_browsing_to_it_stores_the_setting() {
     // Browse… to it: the choice goes into the setting and the PDF renders.
     fake.answer_files(vec![library.clone()]);
     click_in_pane(&mut harness, "Browse…");
-    let rendered = |harness: &Harness<'_, RickUi>| {
+    let rendered = |harness: &Harness<'_, RickUi>, pane| {
         harness
             .state()
             .previews()
@@ -1355,7 +1360,7 @@ fn a_missing_pdfium_shows_the_message_and_browsing_to_it_stores_the_setting() {
             .is_some_and(|s| s.pages() == Some(2) && s.frame_size(0).is_some())
     };
     let started = Instant::now();
-    while !rendered(&harness) {
+    while !rendered(&harness, pane) {
         settle(&mut harness);
         assert!(
             started.elapsed() < Duration::from_secs(20),
@@ -1408,7 +1413,7 @@ fn a_missing_pdfium_shows_the_message_and_browsing_to_it_stores_the_setting() {
     );
     click_in_pane(&mut harness, "Retry");
     let started = Instant::now();
-    while !rendered(&harness) {
+    while !rendered(&harness, pane) {
         settle(&mut harness);
         assert!(
             started.elapsed() < Duration::from_secs(20),
@@ -1430,7 +1435,7 @@ fn a_missing_pdfium_shows_the_message_and_browsing_to_it_stores_the_setting() {
     let pane = harness.state().app().model().focused;
     select(&mut harness, "paper.pdf");
     let started = Instant::now();
-    while !rendered(&harness) {
+    while !rendered(&harness, pane) {
         settle(&mut harness);
         assert!(started.elapsed() < Duration::from_secs(20), "no render");
     }
@@ -1441,7 +1446,6 @@ fn a_missing_pdfium_shows_the_message_and_browsing_to_it_stores_the_setting() {
         .lines()
         .find_map(|l| l.strip_prefix("library = \""))
         .and_then(|rest| rest.strip_suffix('"'))
-        .map(Path::new)
-        .unwrap_or_else(|| panic!("{text}"));
+        .map_or_else(|| panic!("{text}"), Path::new);
     assert!(written.is_file(), "{}", written.display());
 }

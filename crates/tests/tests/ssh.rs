@@ -499,6 +499,9 @@ impl Provider for Counting {
     fn remote_preview_cap(&self, loc: &Location) -> Option<u64> {
         self.inner.remote_preview_cap(loc)
     }
+    fn remote_preview_always(&self, loc: &Location) -> bool {
+        self.inner.remote_preview_always(loc)
+    }
     fn watch(&self, loc: &Location) -> Result<ext::ChangeStream, Error> {
         self.inner.watch(loc)
     }
@@ -852,6 +855,144 @@ fn previews_over_ssh_serve_a_prefix_with_load_more_and_cap_a_whole_file() {
         !d.events
             .iter()
             .any(|e| matches!(e, Event::PreviewPrefix { .. }))
+    );
+
+    // Issue 50, *Always preview on <host>*: a second host on the same
+    // server, so the switch can be told from the cap.
+    fake.store_secret("ssh/box2/password", "rickpass")
+        .unwrap_or_else(|e| panic!("{e}"));
+    d.send(Command::AddConnection {
+        provider: SSH,
+        name: "box2".into(),
+        values: {
+            let mut v = values(
+                server.port,
+                &[("default_dir", &home.path().to_string_lossy())],
+            );
+            v.retain(|(k, _)| k != "password");
+            v
+        },
+    });
+    d.settle();
+    // Two more large "pictures": huge.png is forced open on this pane by
+    // the Preview anyway above, so the switch is shown on other files.
+    let mut other = b"\x89PNG\r\n\x1a\n".to_vec();
+    other.resize(5 * 1024 * 1024, 1);
+    fs::write(home.path().join("other.png"), &other).unwrap_or_else(|e| panic!("{e}"));
+    fs::write(home.path().join("third.png"), &other).unwrap_or_else(|e| panic!("{e}"));
+    d.navigate(at("box", ""));
+    let pane = d.pane();
+    let picture = d.id_of("other.png");
+    d.events.clear();
+    d.send(Command::Select {
+        pane,
+        change: SelectionChange::Set(vec![picture]),
+    });
+    d.settle();
+    let source = d.events.iter().find_map(|e| match e {
+        Event::PreviewCapped { source, .. } => Some(source.clone()),
+        _ => None,
+    });
+    assert_eq!(
+        source,
+        Some(Some("box".to_owned())),
+        "the cap message names the host: {:?}",
+        d.events
+    );
+    // Always preview on box: the file loads and the host's switch is set.
+    d.events.clear();
+    d.send(Command::PreviewAlways(pane));
+    d.settle();
+    assert!(
+        d.events
+            .iter()
+            .any(|e| matches!(e, Event::PreviewReady { .. } | Event::PreviewFailed { .. })),
+        "{:?}",
+        d.events
+    );
+    let switch = |d: &Driver, name: &str| {
+        d.app
+            .model()
+            .settings
+            .connections
+            .iter()
+            .find(|c| c.provider == "ssh" && c.name == name)
+            .and_then(|c| c.settings.get("preview_always").cloned())
+    };
+    assert_eq!(switch(&d, "box"), Some("true".to_owned()));
+    assert_eq!(switch(&d, "box2"), None);
+    let text = fs::read_to_string(fake.config_dir().join(app::SETTINGS_FILE))
+        .unwrap_or_else(|e| panic!("{e}"));
+    assert!(text.contains("preview_always = \"true\""), "{text}");
+    // The next large image on box previews without the message.
+    let third = d.id_of("third.png");
+    d.events.clear();
+    d.send(Command::Select {
+        pane,
+        change: SelectionChange::Set(vec![third]),
+    });
+    d.settle();
+    assert!(
+        !d.events
+            .iter()
+            .any(|e| matches!(e, Event::PreviewCapped { .. })),
+        "no cap on box any more: {:?}",
+        d.events
+    );
+    assert!(
+        d.events
+            .iter()
+            .any(|e| matches!(e, Event::PreviewReady { .. } | Event::PreviewFailed { .. }))
+    );
+    // The same image on the other host still shows the message.
+    d.navigate(at("box2", ""));
+    let pane = d.pane();
+    let picture = d.id_of("huge.png");
+    d.events.clear();
+    d.send(Command::Select {
+        pane,
+        change: SelectionChange::Set(vec![picture]),
+    });
+    d.settle();
+    assert!(
+        d.events
+            .iter()
+            .any(|e| matches!(e, Event::PreviewCapped { source: Some(s), .. } if s == "box2")),
+        "box2 keeps its cap: {:?}",
+        d.events
+    );
+    // Unticking the switch (the host editor's checkbox, the row's menu)
+    // brings the message back on box.
+    d.send(Command::SetPreviewAlways {
+        provider: SSH,
+        name: "box".into(),
+        on: false,
+    });
+    d.settle();
+    assert_eq!(switch(&d, "box"), Some("false".to_owned()));
+    // A different file first, so the next look at third.png is a fresh
+    // preview and not the one already open.
+    d.navigate(at("box", ""));
+    let pane = d.pane();
+    let notes = d.id_of("notes.txt");
+    d.send(Command::Select {
+        pane,
+        change: SelectionChange::Set(vec![notes]),
+    });
+    d.settle();
+    let third = d.id_of("third.png");
+    d.events.clear();
+    d.send(Command::Select {
+        pane,
+        change: SelectionChange::Set(vec![third]),
+    });
+    d.settle();
+    assert!(
+        d.events
+            .iter()
+            .any(|e| matches!(e, Event::PreviewCapped { .. })),
+        "the cap is back: {:?}",
+        d.events
     );
 }
 

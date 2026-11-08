@@ -113,6 +113,7 @@ fn without_libreoffice_the_document_shows_metadata_and_the_hint() {
     let Err(missing) = lookup.find() else {
         panic!("nothing to find with the setting alone");
     };
+    let missing = *missing;
     assert_eq!(missing.name, "LibreOffice");
     assert_eq!(missing.setting, (ID, SOFFICE_SETTING));
     assert!(!missing.install.is_empty());

@@ -163,7 +163,7 @@ impl Binding {
     /// # Errors
     ///
     /// What the pane shows when nothing binds; the next call looks again.
-    pub fn bind(&self) -> Result<Arc<Pdfium>, MissingLibrary> {
+    pub fn bind(&self) -> Result<Arc<Pdfium>, Box<MissingLibrary>> {
         if let Some(bound) = self.lock().as_ref() {
             return Ok(Arc::clone(bound));
         }
@@ -192,7 +192,7 @@ impl Binding {
                 Err(error) => tried.push(format!("the system loader: {error}")),
             }
         }
-        Err(missing(tried.join("\n")))
+        Err(Box::new(missing(&tried.join("\n"))))
     }
 
     /// Whether the library binds on this machine.
@@ -205,7 +205,7 @@ impl Binding {
 /// The message for a pdfium that is not there; *Browse…* fills the PDF
 /// previewer's setting, which both previewers read.
 #[must_use]
-pub fn missing(detail: String) -> MissingLibrary {
+pub fn missing(detail: &str) -> MissingLibrary {
     MissingLibrary {
         name: "pdfium".to_owned(),
         install: DOWNLOADS.to_owned(),

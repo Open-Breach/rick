@@ -280,6 +280,8 @@ pub struct Slot {
     /// A remote file above the size cap for whole-file previews: its size
     /// and the cap; the pane offers *Preview anyway*.
     capped: Option<(u64, u64)>,
+    /// The source the capped file is on, for *Always preview on <source>*.
+    cap_source: Option<String>,
     /// No previewer claims the file: the pane shows the placeholder, and
     /// this says whether a disabled plugin would claim it.
     placeholder: Option<Placeholder>,
@@ -856,7 +858,14 @@ impl Previews {
 
     /// `pane`'s selection is a remote file of `size` bytes above `cap`,
     /// about `entry`; nothing opens until *Preview anyway*.
-    pub fn capped(&mut self, pane: PaneId, size: u64, cap: u64, entry: Option<EntryId>) {
+    pub fn capped(
+        &mut self,
+        pane: PaneId,
+        size: u64,
+        cap: u64,
+        source: Option<String>,
+        entry: Option<EntryId>,
+    ) {
         let slot = self.slot(pane);
         if slot.entry != entry {
             slot.reset(entry);
@@ -865,6 +874,7 @@ impl Previews {
         slot.error = None;
         slot.placeholder = None;
         slot.capped = Some((size, cap));
+        slot.cap_source = source;
     }
 
     /// Brings `pane`'s slot up to date with the entry the app is following:
@@ -894,7 +904,7 @@ impl Previews {
     ) -> Option<PreviewAct> {
         let slot = self.slot(pane);
         if let Some((size, cap)) = slot.capped.filter(|_| target.is_some()) {
-            return capped_message(ui, size, cap);
+            return capped_message(ui, size, cap, slot.cap_source.as_deref());
         }
         if let Some(placeholder) = slot.placeholder.as_ref().filter(|_| target.is_some())
             && let Some(entry) = entry.filter(|e| Some(e.id) == target)
@@ -1126,6 +1136,8 @@ pub enum PreviewAct {
     LoadMore,
     /// Open a remote file above the size cap whatever its size.
     PreviewAnyway,
+    /// Switch the cap off for the file's source and open the file.
+    PreviewAlways,
     /// Open the preview again: a missing library may be there now.
     Retry,
     /// Ask for the file of a missing library with a file dialogue and
@@ -1166,8 +1178,15 @@ pub fn prefix_bar(ui: &mut egui::Ui, served: u64, total: Option<u64>) -> Option<
     act
 }
 
-/// The cap message: the file's size against the cap and *Preview anyway*.
-pub fn capped_message(ui: &mut egui::Ui, size: u64, cap: u64) -> Option<PreviewAct> {
+/// The cap message: the file's size against the cap, *Preview anyway*
+/// and, for a file on a source with a connection, *Always preview on
+/// <source>*.
+pub fn capped_message(
+    ui: &mut egui::Ui,
+    size: u64,
+    cap: u64,
+    source: Option<&str>,
+) -> Option<PreviewAct> {
     let mut act = None;
     ui.add_space(12.0);
     ui.vertical_centered(|ui| {
@@ -1181,9 +1200,18 @@ pub fn capped_message(ui: &mut egui::Ui, size: u64, cap: u64) -> Option<PreviewA
         );
         ui.weak(t!("preview-the-whole-file-would-be"));
         ui.add_space(6.0);
-        if ui.button(t!("preview-preview-anyway")).clicked() {
-            act = Some(PreviewAct::PreviewAnyway);
-        }
+        ui.horizontal(|ui| {
+            if ui.button(t!("preview-preview-anyway")).clicked() {
+                act = Some(PreviewAct::PreviewAnyway);
+            }
+            if let Some(source) = source
+                && ui
+                    .button(t!("preview-always-preview-on", source = source))
+                    .clicked()
+            {
+                act = Some(PreviewAct::PreviewAlways);
+            }
+        });
     });
     act
 }

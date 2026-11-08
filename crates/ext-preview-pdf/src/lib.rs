@@ -282,7 +282,7 @@ impl Library {
     /// # Errors
     ///
     /// What the pane shows when nothing binds; the next call looks again.
-    pub fn bind(&self) -> Result<Arc<Pdfium>, MissingLibrary> {
+    pub fn bind(&self) -> Result<Arc<Pdfium>, Box<MissingLibrary>> {
         if let Some(bound) = self.lock().as_ref() {
             return Ok(Arc::clone(bound));
         }
@@ -324,10 +324,7 @@ impl Library {
                 Err(error) => tried.push(format!("the system loader: {error}")),
             }
         }
-        Err(self.missing(tried.join(
-            "
-",
-        )))
+        Err(Box::new(self.missing(&tried.join("\n"))))
     }
 
     /// Whether the library binds on this machine.
@@ -340,7 +337,7 @@ impl Library {
     /// platform, the setting *Browse…* fills, and `detail` on where it was
     /// looked for.
     #[must_use]
-    pub fn missing(&self, detail: String) -> MissingLibrary {
+    pub fn missing(&self, detail: &str) -> MissingLibrary {
         MissingLibrary {
             name: "pdfium".to_owned(),
             install: DOWNLOADS.to_owned(),
@@ -350,9 +347,8 @@ impl Library {
                 extensions: &["so", "dylib", "dll"],
             }],
             detail: format!(
-                "Download {} from the address above, unpack it and put {} beside the rick                  binary, or browse to it.
-Looked in:
-{detail}",
+                "Download {} from the address above, unpack it and put {} beside the rick \
+                 binary, or browse to it.\nLooked in:\n{detail}",
                 download_asset(),
                 Pdfium::pdfium_platform_library_name().to_string_lossy()
             ),
@@ -725,7 +721,7 @@ impl Previewer for PdfPreviewer {
             .unwrap_or_default();
         ext::blocking(move || match library.bind() {
             Ok(pdfium) => Ok(Box::new(PdfDoc::new(pdfium, bytes)?) as Box<dyn PreviewDoc>),
-            Err(missing) => Ok(Box::new(MissingDoc::new(missing, name, Some(size)))),
+            Err(missing) => Ok(Box::new(MissingDoc::new(*missing, name, Some(size)))),
         })
         .await
     }
