@@ -50,6 +50,14 @@ fn built_ins() -> Vec<Arc<dyn ext::Extension>> {
     extensions.push(Arc::new(ext_vfs_trash::TrashExtension::new()));
     #[cfg(feature = "vfs-archive")]
     extensions.push(Arc::new(ext_vfs_archive::ArchiveExtension::new()));
+    #[cfg(feature = "vfs-sftp")]
+    extensions.push(Arc::new(ext_vfs_sftp::SftpExtension::new()));
+    #[cfg(feature = "vfs-s3")]
+    extensions.push(Arc::new(ext_vfs_s3::S3Extension::new()));
+    #[cfg(feature = "vfs-azure")]
+    extensions.push(Arc::new(ext_vfs_azure::AzureExtension::new()));
+    #[cfg(feature = "vfs-gcs")]
+    extensions.push(Arc::new(ext_vfs_gcs::GcsExtension::new()));
     extensions
 }
 
