@@ -137,6 +137,11 @@ hmac = "0.12"
 sha2 = "0.10"
 # HMAC-SHA1 for the hashed entries of `known_hosts` in the SSH plugin.
 sha1 = { version = "0.10", default-features = false }
+# The other two digests of Compute hash (`ops::hash`), beside the SHA-1
+# and SHA-256 above: MD5 and BLAKE3, the latter with its own SIMD code and
+# no thread pool.
+md-5 = "0.10"
+blake3 = "1"
 # Localisation (`ext::i18n`): Fluent messages, language identifiers, the
 # negotiation of the system language against the bundled ones, and the
 # system language itself.
