@@ -1000,11 +1000,11 @@ fn a_file_no_previewer_claims_shows_the_placeholder_with_the_right_line() {
     assert!(harness.query_by_label("No plugin available").is_none());
 }
 
-/// The four built-in previewers plus the CSV and archive previewer plugins,
-/// linked in for the content layout tests.
+/// The four built-in previewers plus the markup (Markdown, HTML, CSV) and
+/// archive previewer plugins, linked in for the content layout tests.
 fn content_previewers() -> Vec<Arc<dyn Extension>> {
     let mut all = previewers();
-    all.push(Arc::new(ext_preview_csv::CsvPreview::new()));
+    all.push(Arc::new(ext_preview_markup::MarkupPreview::new()));
     all.push(Arc::new(ext_preview_archive::ArchivePreview::new()));
     all
 }

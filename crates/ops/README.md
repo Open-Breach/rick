@@ -3,7 +3,10 @@
 `ops` holds the file operations of version 0.1 as `Action`s registered through
 `ext` from one built-in `Extension`: copy, cut and paste, duplicate, move to
 trash, delete permanently, rename, new file, new folder, copy path, open with
-the system default, open the containing folder, pin to side panel and unpin;
+the system default, open the containing folder, pin to side panel and unpin,
+and Mount, a disk image handed to the operating system's own mount
+mechanism through `platform::Mount`, shown only on the formats this OS
+mounts (the mounted image is a removable volume whose Eject unmounts it);
 each follows the provider's capabilities at the pane's location, so Paste,
 Rename and the rest hide where nothing can be written and Move to trash
 where there is no trash, and in the virtual locations of `vfs-rick` the

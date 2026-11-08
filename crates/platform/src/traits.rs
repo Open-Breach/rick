@@ -151,6 +151,102 @@ pub trait Volumes: Send + Sync {
     fn eject(&self, volume: &Volume) -> Result<(), Error>;
 }
 
+/// A disk-image format, by the file's extension: what the *Mount* action
+/// asks [`Mount::mountable`] about and what the archive provider browses
+/// (SPEC.md "Disk images").
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ImageFormat {
+    /// An ISO 9660 or UDF disc image, `.iso`.
+    Iso,
+    /// A raw image of a disk or a partition, `.img`, `.ima`, `.raw`.
+    Img,
+    /// An Apple disk image, `.dmg`.
+    Dmg,
+    /// A Virtual PC or `Hyper-V` disk, `.vhd`.
+    Vhd,
+    /// A `Hyper-V` disk, `.vhdx`.
+    Vhdx,
+    /// A `VMware` disk, `.vmdk`.
+    Vmdk,
+    /// A `VirtualBox` disk, `.vdi`.
+    Vdi,
+    /// A QEMU copy-on-write disk, `.qcow2` or `.qcow`.
+    Qcow2,
+}
+
+impl ImageFormat {
+    /// Every format, in the order of the spec's Disk images table.
+    pub const ALL: [Self; 8] = [
+        Self::Iso,
+        Self::Img,
+        Self::Dmg,
+        Self::Vhd,
+        Self::Vhdx,
+        Self::Vmdk,
+        Self::Vdi,
+        Self::Qcow2,
+    ];
+
+    /// The format a file name's extension names, if any; case does not
+    /// matter.
+    #[must_use]
+    pub fn for_name(name: &str) -> Option<Self> {
+        let (stem, ext) = name.rsplit_once('.')?;
+        if stem.is_empty() {
+            return None;
+        }
+        Some(match ext.to_ascii_lowercase().as_str() {
+            "iso" => Self::Iso,
+            "img" | "ima" | "raw" => Self::Img,
+            "dmg" => Self::Dmg,
+            "vhd" => Self::Vhd,
+            "vhdx" => Self::Vhdx,
+            "vmdk" => Self::Vmdk,
+            "vdi" => Self::Vdi,
+            "qcow2" | "qcow" => Self::Qcow2,
+            _ => return None,
+        })
+    }
+
+    /// The format's name for messages: `ISO`, `raw image`, `DMG`, …
+    #[must_use]
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Iso => "ISO",
+            Self::Img => "raw image",
+            Self::Dmg => "DMG",
+            Self::Vhd => "VHD",
+            Self::Vhdx => "VHDX",
+            Self::Vmdk => "VMDK",
+            Self::Vdi => "VDI",
+            Self::Qcow2 => "QCOW2",
+        }
+    }
+}
+
+/// Mounting a disk image through the operating system's own mechanism and
+/// nothing else: `Mount-DiskImage` on Windows (ISO, VHD, VHDX), `hdiutil
+/// attach` on macOS (DMG, ISO, raw images), `udisksctl loop-setup` on
+/// Linux (ISO and raw images). No qemu-nbd, no FUSE. The mounted image
+/// shows up in [`Volumes::volumes`] as a removable volume, and that
+/// volume's [`Volumes::eject`] unmounts it; there is no separate unmount.
+pub trait Mount: Send + Sync {
+    /// The formats this operating system mounts natively; the *Mount*
+    /// action hides itself on any other file.
+    fn mountable(&self) -> &'static [ImageFormat];
+
+    /// Mounts the image file at `path` through the OS and returns the
+    /// volume it became, as [`Volumes::volumes`] lists it.
+    ///
+    /// # Errors
+    ///
+    /// `Error::Unsupported` for a format this OS does not mount, or when
+    /// the mechanism is missing (udisks not installed on Linux); otherwise
+    /// the platform error with what the OS said (a refused or damaged
+    /// image).
+    fn mount_image(&self, path: &Path) -> Result<Volume, Error>;
+}
+
 /// A folder the operating system sets aside for the user.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum StandardFolder {
@@ -597,6 +693,7 @@ pub trait Platform:
     + DragSource
     + DropTarget
     + Volumes
+    + Mount
     + StandardFolders
     + RecentlyUsed
     + Secrets
@@ -617,6 +714,7 @@ impl<
         + DragSource
         + DropTarget
         + Volumes
+        + Mount
         + StandardFolders
         + RecentlyUsed
         + Secrets,

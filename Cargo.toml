@@ -32,7 +32,7 @@ ext-vfs-archive = { path = "crates/ext-vfs-archive" }
 ext-preview-office = { path = "crates/ext-preview-office" }
 ext-preview-media = { path = "crates/ext-preview-media" }
 ext-preview-archive = { path = "crates/ext-preview-archive" }
-ext-preview-csv = { path = "crates/ext-preview-csv" }
+ext-preview-markup = { path = "crates/ext-preview-markup" }
 ext-search-walk = { path = "crates/ext-search-walk" }
 ext-search-windows = { path = "crates/ext-search-windows" }
 ext-search-spotlight = { path = "crates/ext-search-spotlight" }
@@ -87,7 +87,8 @@ hadris-iso = { version = "3.0.0-rc.3", default-features = false, features = ["st
 hadris-udf = { version = "3.0.0-rc.3", default-features = false, features = ["std", "sync"] }
 hadris-storage = { version = "3.0.0-rc.3", default-features = false, features = ["std", "sync"] }
 # The other previewer plugins of issue 18: Office metadata from the zip's
-# XML, CSV, Markdown and HTML, media tags and GStreamer playback.
+# XML, media tags and GStreamer playback; CSV, Markdown and HTML for the
+# markup plugin of issue 51.
 roxmltree = "0.21"
 csv = "1"
 memchr = "2"

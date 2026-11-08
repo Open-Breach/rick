@@ -8,9 +8,12 @@
 //! program, remembered per type in `core.toml`), Paste as link and Create
 //! link… (a symbolic link, or a junction or a `.lnk` shortcut where the
 //! provider offers them), Select by pattern (a glob or a regular
-//! expression, replacing or adding to the selection) and Compute hash…
+//! expression, replacing or adding to the selection), Compute hash…
 //! (MD5, SHA-1, SHA-256 and BLAKE3 of the selected files in one read each,
-//! for the Hash dialogue; [`hash`]). Navigation,
+//! for the Hash dialogue; [`hash`]) and Mount (a disk image handed to the
+//! OS's own mount mechanism through [`platform::Mount`], shown only on the
+//! formats this OS mounts; the mounted image is a removable volume whose
+//! Eject unmounts it). Navigation,
 //! selection and view commands are `Command`s the application handles
 //! directly, as is a drag and drop's [`transfer`], which is not an action
 //! but runs the same jobs. Restore and Empty trash belong to the trash
@@ -52,6 +55,7 @@ mod create;
 mod edit;
 pub mod hash;
 mod link;
+mod mount;
 mod open;
 mod open_with;
 pub mod perms;
@@ -230,6 +234,7 @@ impl Extension for Core {
         reg.action(Arc::new(link::CreateLink(Arc::clone(s))));
         reg.action(Arc::new(select::SelectByPattern));
         reg.action(Arc::new(hash::Hash(Arc::clone(s))));
+        reg.action(Arc::new(mount::MountImage(Arc::clone(s))));
         Ok(())
     }
 }

@@ -71,7 +71,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: ./.github/actions/setup
-        with: { components: clippy, system: build, pdfium: "false" }
+        with: { components: clippy, system: build, pdfium: "false", sevenzip: "false" }
       - run: cargo clippy --workspace --all-targets ${{ env.RICK_WS_FEATURES }} -- -D warnings
       # Shares clippy's check artifacts, so it costs seconds here.
       - run: cargo doc --no-deps ${{ env.RICK_WS_FEATURES }}
@@ -116,7 +116,8 @@ jobs:
       # workspace (QUESTIONS.md 81).
       - run: cargo xtask bundle ${{ env.RICK_WS_FEATURES }}
       # Every plugin built for this platform loads through --list-plugins;
-      # the connectors for the other platforms are not bundled (issue 22).
+      # the connectors for the other platforms are not bundled (issue 22);
+      # the 7-Zip library sits beside the archive plugin (issue 51).
       - name: list plugins
         run: .github/scripts/check-plugins.sh target/debug/bundle
   tier1:

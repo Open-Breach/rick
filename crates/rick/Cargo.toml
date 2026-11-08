@@ -16,9 +16,10 @@ path = "src/main.rs"
 # `git`, `svn`, `vfs-trash`, `vfs-archive`, `ssh`, the three cloud
 # providers, `preview-hex` and the five `search-*` connectors compile a
 # plugin in instead of loading it from `plugins/`; default off, since the
-# plugins directory is where they live in 0.2. The four previewer plugins
-# of issue 18, the 3D previewer of issue 19, the four action plugins of
-# issue 23 and the installer of issue 44 have the same opt-in features;
+# plugins directory is where they live in 0.2. The previewer plugins of
+# issue 18, the 3D previewer of issue 19, the markup previewer of issue
+# 51, the four action plugins of issue 23 and the installer of issue 44
+# have the same opt-in features;
 # `gstreamer` turns playback on in the media previewer, wherever it is
 # built (the plugin's own feature of that name; off by default so a build
 # without the GStreamer development files still builds every crate).
@@ -32,7 +33,7 @@ preview-hex = ["dep:ext-preview-hex"]
 preview-office = ["dep:ext-preview-office"]
 preview-media = ["dep:ext-preview-media"]
 preview-archive = ["dep:ext-preview-archive"]
-preview-csv = ["dep:ext-preview-csv"]
+preview-markup = ["dep:ext-preview-markup"]
 preview-3d = ["dep:ext-preview-3d"]
 gstreamer = ["preview-media", "ext-preview-media/gstreamer"]
 git = ["dep:ext-git"]
@@ -82,7 +83,7 @@ ext-installer = { workspace = true, optional = true }
 ext-preview-office = { workspace = true, optional = true }
 ext-preview-media = { workspace = true, optional = true }
 ext-preview-archive = { workspace = true, optional = true }
-ext-preview-csv = { workspace = true, optional = true }
+ext-preview-markup = { workspace = true, optional = true }
 ext-svn = { workspace = true, optional = true }
 ext-search-walk = { workspace = true, optional = true }
 ext-search-windows = { workspace = true, optional = true }

@@ -22,7 +22,12 @@ receives no drops at all, the files themselves through Rick's own
 `wl_data_device`), `Volumes` (every mounted volume with its file system and space,
 from `/proc/mounts` and sysfs, `NSFileManager.mountedVolumeURLs`, or
 `GetLogicalDrives`, and ejecting removable media through `udisksctl`,
-`diskutil` or `DeviceIoControl`), `StandardFolders` (XDG user-dirs, the known
+`diskutil` or `DeviceIoControl`), `Mount` (which disk-image formats this
+OS mounts natively and mounting one through the OS and nothing else:
+`udisksctl loop-setup` for ISO and raw images on Linux, `hdiutil attach`
+for DMG, ISO and raw images on macOS, `Mount-DiskImage` for ISO, VHD and
+VHDX on Windows; the mounted image is a removable volume whose Eject
+unmounts it), `StandardFolders` (XDG user-dirs, the known
 folders, the fixed directories under the macOS home), `RecentlyUsed` (the
 XDG `recently-used.xbel`, Spotlight's last-used dates, the Recent folder's
 shortcuts) and `Secrets` (a secret by a stable key in the platform keychain

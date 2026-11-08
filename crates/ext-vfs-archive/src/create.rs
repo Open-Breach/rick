@@ -188,7 +188,7 @@ pub fn create(
             Format::Tar(codec) => write_tar(&mut file, codec, sources, before)?,
             Format::SevenZ => write_7z(&mut file, sources, before)?,
             Format::Single(codec) => write_single(&mut file, codec, sources, before)?,
-            Format::Rar | Format::Image => {
+            Format::Rar | Format::Image | Format::Disk(_) => {
                 return Err(Error::Unsupported("this archive format cannot be created"));
             }
         }

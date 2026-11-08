@@ -155,8 +155,11 @@ use crate::search::SearchIndex;
 /// [`SettingsStore`] so a plugin reads and writes its own declared
 /// settings, `Content` gained `MissingLibrary` for a third-party library a
 /// previewer cannot find, and `Provider` gained `remote_preview_always`
-/// (QUESTIONS.md 191–197).
-pub const API_VERSION: u32 = 12;
+/// (QUESTIONS.md 191–197); 13 `platform` gained `Mount` (which disk
+/// images this OS mounts, and mounting one through it) and the `sevenzip`
+/// binding of the 7-Zip library behind the disk images (QUESTIONS.md
+/// 202–207).
+pub const API_VERSION: u32 = 13;
 
 bitflags::bitflags! {
     /// The extension points an extension fills, as its manifest declares

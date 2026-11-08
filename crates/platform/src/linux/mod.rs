@@ -2,12 +2,14 @@
 //! the MIME databases for Open with, `$TERMINAL` or a known emulator for
 //! the terminal, `pkexec` for a command run as root, Rick's own properties
 //! rows, `$XDG_CONFIG_HOME/rick`, the mount table from `/proc/mounts` with
-//! `udisksctl` for ejecting, XDG user-dirs and `recently-used.xbel`, and
-//! drag and drop through a Wayland data device or XDND.
+//! `udisksctl` for ejecting and for mounting a disk image through a loop
+//! device, XDG user-dirs and `recently-used.xbel`, and drag and drop
+//! through a Wayland data device or XDND.
 
 mod apps;
 mod drag;
 mod elevate;
+mod mount;
 mod terminal;
 mod trash;
 mod user;
@@ -26,9 +28,9 @@ use crate::Native;
 use crate::time::iso8601;
 use crate::traits::{
     Application, Chrome, ConfigDir, ControlsSide, DragSource, DropTarget, Elevate, ElevatedOutput,
-    IncomingFiles, OpenWith, Point, Properties, PropertiesOutcome, RecentItem, RecentlyUsed,
-    StandardFolder, StandardFolders, Terminal, Trash, TrashedItem, Volume, Volumes, WindowChrome,
-    WindowRef,
+    ImageFormat, IncomingFiles, Mount, OpenWith, Point, Properties, PropertiesOutcome, RecentItem,
+    RecentlyUsed, StandardFolder, StandardFolders, Terminal, Trash, TrashedItem, Volume, Volumes,
+    WindowChrome, WindowRef,
 };
 
 impl Trash for Native {
@@ -60,6 +62,17 @@ impl Volumes for Native {
 
     fn eject(&self, volume: &Volume) -> Result<(), Error> {
         volumes::eject(volume)
+    }
+}
+
+impl Mount for Native {
+    /// ISO and raw images, through `udisksctl loop-setup`.
+    fn mountable(&self) -> &'static [ImageFormat] {
+        crate::NATIVE_MOUNTABLE
+    }
+
+    fn mount_image(&self, path: &Path) -> Result<Volume, Error> {
+        mount::mount(path)
     }
 }
 

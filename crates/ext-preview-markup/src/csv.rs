@@ -5,25 +5,22 @@
 //! then Windows-1252), sniffs the delimiter, decides whether the first row
 //! is a header and indexes where every row starts, quotes respected, so
 //! that [`Grid::cells`] parses only the rows a pane asks for: a million
-//! rows cost the index once and the rows on screen after. `render` returns
-//! the raw text as the fallback for a pane that lays out no grids; the
-//! grid itself comes through [`PreviewDoc::content`].
-
-#![deny(unsafe_code)]
+//! rows cost the index once and the rows on screen after (QUESTIONS.md
+//! 107). The grid comes through [`PreviewDoc::content`] while the Rendered
+//! toggle is on; `render` always returns the raw text, the source the
+//! toggle switches to and the fallback for a pane that lays out no grids.
 
 use std::ops::Range;
 use std::sync::Arc;
 
 use ext::Text;
 use ext::{
-    API_VERSION, Capabilities, Content, ControlId, ControlValue, Extension, Frame, Grid, Icon,
-    InfoSection, Manifest, Platforms, Points, PreviewControl, PreviewDoc, Previewer, Provider,
-    Reads, Registry, RenderRequest, TextBlock, TextLayer, Transport, Version, async_trait,
+    Content, ControlId, ControlValue, Frame, Grid, Icon, InfoSection, PreviewControl, PreviewDoc,
+    Previewer, Provider, Reads, RenderRequest, TextBlock, TextLayer, Transport, async_trait,
 };
 use types::{CancelToken, Entry, Error, ExtId, Location};
 
-/// The extension id.
-pub const ID: ExtId = ExtId("preview-csv");
+use crate::{ID, RENDERED, SCORE, extension, rendered_control};
 
 /// How much of a file is read and indexed: larger files show their top
 /// and say so.
@@ -35,54 +32,8 @@ pub const FALLBACK_TEXT: usize = 1024 * 1024;
 /// How many lines the delimiter is sniffed from.
 const SNIFF_LINES: usize = 20;
 
-/// Extensions this previewer claims.
-const EXTENSIONS: &[&str] = &["csv", "tsv", "tab"];
-
-/// The extension: registers [`CsvPreviewer`].
-#[derive(Debug)]
-pub struct CsvPreview {
-    manifest: Manifest,
-}
-
-impl Default for CsvPreview {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl CsvPreview {
-    /// The extension with its manifest.
-    #[must_use]
-    pub fn new() -> Self {
-        Self {
-            manifest: Manifest {
-                id: ID,
-                name: "CSV preview",
-                version: Version::parse(env!("CARGO_PKG_VERSION"))
-                    .unwrap_or_else(|_| Version::new(0, 0, 0)),
-                api_version: API_VERSION,
-                requires: Capabilities::empty(),
-                points: Points::PREVIEWER,
-                platforms: Platforms::ALL,
-                previews: EXTENSIONS,
-            },
-        }
-    }
-}
-
-impl Extension for CsvPreview {
-    fn manifest(&self) -> &Manifest {
-        &self.manifest
-    }
-
-    fn register(&self, reg: &mut Registry) -> Result<(), Error> {
-        reg.translations(&[("en", include_str!("../locales/en.ftl"))]);
-        reg.previewer(Arc::new(CsvPreviewer));
-        Ok(())
-    }
-}
-
-ext::plugin!(|| Arc::new(CsvPreview::new()) as Arc<dyn Extension>);
+/// Extensions this previewer claims, of the plugin's [`crate::EXTENSIONS`].
+pub const EXTENSIONS: &[&str] = &["csv", "tsv", "tab"];
 
 /// Previews delimited text files.
 #[derive(Debug, Default)]
@@ -101,15 +52,6 @@ pub fn delimiter_name(delimiter: u8) -> &'static str {
         b'|' => "pipe",
         _ => "other",
     }
-}
-
-/// The lower-case extension of a name, if any.
-fn extension(name: &str) -> Option<String> {
-    let (stem, ext) = name.rsplit_once('.')?;
-    if stem.is_empty() || ext.is_empty() {
-        return None;
-    }
-    Some(ext.to_ascii_lowercase())
 }
 
 /// Decodes bytes to text: BOM-marked UTF-8 and UTF-16, then UTF-8, then
@@ -346,6 +288,8 @@ pub struct CsvDoc {
     size: Option<u64>,
     bytes_read: usize,
     truncated: bool,
+    /// The Rendered toggle: the grid rather than the raw text.
+    rendered: bool,
 }
 
 impl std::fmt::Debug for CsvDoc {
@@ -386,13 +330,13 @@ impl CsvDoc {
         } else {
             (1..=first.len()).map(|n| format!("Column {n}")).collect()
         };
-        let fallback_end = text
-            .char_indices()
-            .map(|(i, _)| i)
-            .take_while(|&i| i <= FALLBACK_TEXT)
-            .last()
-            .unwrap_or(0)
-            .min(text.len());
+        // The raw text up to the fallback limit, cut at a character
+        // boundary: the source the toggle shows and the text layer Copy
+        // reads, the whole file when it fits.
+        let mut fallback_end = text.len().min(FALLBACK_TEXT);
+        while !text.is_char_boundary(fallback_end) {
+            fallback_end -= 1;
+        }
         let fallback = text[..fallback_end].to_owned();
         Self {
             table: Arc::new(Table {
@@ -409,7 +353,14 @@ impl CsvDoc {
             size,
             bytes_read: bytes.len(),
             truncated,
+            rendered: true,
         }
+    }
+
+    /// Whether the Rendered toggle is on.
+    #[must_use]
+    pub fn rendered(&self) -> bool {
+        self.rendered
     }
 
     /// The grid: header, row count and cells on demand.
@@ -469,7 +420,7 @@ impl PreviewDoc for CsvDoc {
     }
 
     fn content(&self) -> Option<Content> {
-        Some(Content::Grid(self.grid()))
+        self.rendered.then(|| Content::Grid(self.grid()))
     }
 
     fn sections(&self) -> Vec<InfoSection> {
@@ -496,7 +447,7 @@ impl PreviewDoc for CsvDoc {
         }
         vec![InfoSection {
             id: "file",
-            title: Text("preview-csv-file-info"),
+            title: Text("preview-markup-file-info"),
             icon: Icon::Info,
             rows,
         }]
@@ -516,13 +467,18 @@ impl PreviewDoc for CsvDoc {
     }
 
     fn controls(&self) -> Vec<PreviewControl> {
-        Vec::new()
+        vec![rendered_control(self.rendered)]
     }
 
-    fn set_control(&mut self, _id: ControlId, _value: ControlValue) -> Result<(), Error> {
-        Err(Error::Unsupported(
-            "CSV files have no controls of their own",
-        ))
+    fn set_control(&mut self, id: ControlId, value: ControlValue) -> Result<(), Error> {
+        match (id, value) {
+            (RENDERED, ControlValue::Bool(on)) => {
+                self.rendered = on;
+                Ok(())
+            }
+            (RENDERED, _) => Err(Error::Unsupported("the Rendered toggle takes on or off")),
+            _ => Err(Error::Unsupported("CSV files have no other control")),
+        }
     }
 
     fn transport(&mut self) -> Option<&mut dyn Transport> {
@@ -547,7 +503,11 @@ impl Previewer for CsvPreviewer {
             return 0;
         }
         let named = extension(&entry.name).is_some_and(|ext| EXTENSIONS.contains(&ext.as_str()));
-        if named && !sniff.contains(&0) { 150 } else { 0 }
+        if named && !sniff.contains(&0) {
+            SCORE
+        } else {
+            0
+        }
     }
 
     async fn open(
@@ -601,8 +561,8 @@ mod tests {
     #[test]
     fn scores_by_name_and_text_only() {
         let p = CsvPreviewer;
-        assert_eq!(p.score(&entry("data.csv"), b"a,b\n1,2\n"), 150);
-        assert_eq!(p.score(&entry("data.TSV"), b"a\tb\n"), 150);
+        assert_eq!(p.score(&entry("data.csv"), b"a,b\n1,2\n"), SCORE);
+        assert_eq!(p.score(&entry("data.TSV"), b"a\tb\n"), SCORE);
         assert_eq!(p.score(&entry("data.csv"), b"\x00\x01"), 0);
         assert_eq!(p.score(&entry("data.txt"), b"a,b\n1,2\n"), 0);
         let mut dir = entry("x.csv");
@@ -749,7 +709,7 @@ mod tests {
             )
             .is_err()
         );
-        assert_eq!(doc.controls().len(), 0);
+        assert_eq!(doc.controls(), [rendered_control(true)]);
         assert!(
             doc.set_control(ControlId("x"), ControlValue::Pressed)
                 .is_err()

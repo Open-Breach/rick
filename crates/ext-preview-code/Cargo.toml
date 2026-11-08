@@ -1,7 +1,7 @@
 [package]
 name = "ext-preview-code"
 version.workspace = true
-description = "Rick preview extension for source code: syntax highlighting with syntect on top of the text previewer's window."
+description = "Rick preview extension for source code: syntax highlighting with syntect on top of the text previewer's window; the source view of Markdown and HTML."
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
@@ -10,8 +10,6 @@ repository.workspace = true
 types = { workspace = true }
 ext = { workspace = true }
 encoding_rs = { workspace = true }
-html-escape = { workspace = true }
-pulldown-cmark = { workspace = true }
 serde_json = { workspace = true }
 syntect = { workspace = true }
 tracing = { workspace = true }

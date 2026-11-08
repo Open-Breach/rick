@@ -1,6 +1,8 @@
 //! The mounted volumes from `/proc/mounts`, with the removable flag from
 //! sysfs (`/sys/block/<disk>/removable`, which is what udisks2 reads), the
-//! free space from `statvfs`, and ejecting through `udisksctl`.
+//! free space from `statvfs`, and ejecting through `udisksctl`: a drive is
+//! unmounted and powered off, a mounted disk image (a loop device the
+//! *Mount* action set up) is unmounted and its loop device deleted.
 //!
 //! Pseudo file systems and bind mounts of the system disk are left out; the
 //! system disk itself is listed as `System`; network file systems and
@@ -251,9 +253,23 @@ fn available(program: &str) -> bool {
         .is_some_and(|path| std::env::split_paths(&path).any(|dir| dir.join(program).is_file()))
 }
 
+/// The loop device behind a partition or loop device name: `/dev/loop3`
+/// for `/dev/loop3p1` and for itself; `None` for any other device.
+fn loop_device(device: &str) -> Option<String> {
+    let name = device.strip_prefix("/dev/loop")?;
+    let digits: String = name.chars().take_while(char::is_ascii_digit).collect();
+    let rest = &name[digits.len()..];
+    let is_partition = rest
+        .strip_prefix('p')
+        .is_some_and(|p| !p.is_empty() && p.bytes().all(|b| b.is_ascii_digit()));
+    (!digits.is_empty() && (rest.is_empty() || is_partition)).then(|| format!("/dev/loop{digits}"))
+}
+
 /// Unmounts the volume and powers its drive off: `udisksctl unmount` and
 /// `udisksctl power-off` where udisks2 is installed, which needs no
-/// privilege for media the user plugged in; a plain `umount` otherwise.
+/// privilege for media the user plugged in; a plain `umount` otherwise. A
+/// mounted disk image sits on a loop device, which is deleted instead of
+/// powered off, so the image file is released.
 pub(super) fn eject(volume: &Volume) -> Result<(), Error> {
     if !volume.is_removable() {
         return Err(Error::Unsupported("only removable media can be ejected"));
@@ -261,6 +277,7 @@ pub(super) fn eject(volume: &Volume) -> Result<(), Error> {
     let mount_point = volume.mount_point.as_os_str();
     match &volume.device {
         Some(device) if available("udisksctl") => {
+            let loop_device = loop_device(device);
             let device = std::ffi::OsStr::new(device);
             run(
                 "udisksctl",
@@ -270,6 +287,20 @@ pub(super) fn eject(volume: &Volume) -> Result<(), Error> {
                     device,
                 ],
             )?;
+            if let Some(loop_device) = loop_device {
+                // A disk image: give the loop device back.
+                if let Err(error) = run(
+                    "udisksctl",
+                    &[
+                        std::ffi::OsStr::new("loop-delete"),
+                        std::ffi::OsStr::new("-b"),
+                        std::ffi::OsStr::new(&loop_device),
+                    ],
+                ) {
+                    tracing::debug!(%error, "loop-delete refused; unmounted only");
+                }
+                return Ok(());
+            }
             // Powering the drive off is the eject proper; a drive that does
             // not support it (an SD reader) is unmounted all the same.
             if let Err(error) = run(
@@ -352,6 +383,15 @@ server:/export /mnt/nfs nfs4 rw 0 0
             eject(nfs.unwrap_or_else(|| panic!("nfs"))),
             Err(Error::Unsupported(_))
         ));
+    }
+
+    #[test]
+    fn loop_devices_are_told_from_drives() {
+        assert_eq!(loop_device("/dev/loop3").as_deref(), Some("/dev/loop3"));
+        assert_eq!(loop_device("/dev/loop12p1").as_deref(), Some("/dev/loop12"));
+        assert_eq!(loop_device("/dev/loop3x"), None);
+        assert_eq!(loop_device("/dev/sdb1"), None);
+        assert_eq!(loop_device("/dev/loop"), None);
     }
 
     #[test]

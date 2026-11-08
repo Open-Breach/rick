@@ -43,7 +43,8 @@ ext-vfs-gcs = { workspace = true }
 ext-preview-office = { workspace = true }
 ext-preview-media = { workspace = true }
 ext-preview-archive = { workspace = true, features = ["fixtures"] }
-ext-preview-csv = { workspace = true }
+# The markup plugin of issue 51: Markdown, HTML and the CSV grid.
+ext-preview-markup = { workspace = true }
 # Milestone 5 (issue 22): the subdirectory search, the four index
 # connectors (each tested against its real service only where the runner
 # has it) and Subversion.

@@ -16,9 +16,10 @@ use crate::perms::{
 };
 use crate::traits::{
     Application, Chrome, Clipboard, ConfigDir, ControlsSide, DialogFilter, DragSource, DropTarget,
-    Elevate, ElevatedOutput, IncomingFiles, NativeDialogs, OpenWith, Point, Properties,
-    PropertiesOutcome, RecentItem, RecentlyUsed, Secrets, StandardFolder, StandardFolders,
-    Terminal, Trash, TrashedItem, Volume, Volumes, WindowChrome, WindowRef,
+    Elevate, ElevatedOutput, ImageFormat, IncomingFiles, Mount, NativeDialogs, OpenWith, Point,
+    Properties, PropertiesOutcome, RecentItem, RecentlyUsed, Secrets, StandardFolder,
+    StandardFolders, Terminal, Trash, TrashedItem, Volume, VolumeKind, Volumes, WindowChrome,
+    WindowRef,
 };
 
 /// The applications the fake offers for every file, the default first.
@@ -40,9 +41,12 @@ pub const FAKE_STANDARD_FOLDERS: [StandardFolder; 3] = [
 /// The trash really moves files, into a private directory that disappears
 /// with the `Fake`; opening and revealing are recorded instead of launching
 /// anything; dialogues answer what the test told them to; the volumes and
-/// the recently-used list are what the test registered; the standard
-/// folders are the directories under the fake's home; the secrets live in
-/// a map the test can read back.
+/// the recently-used list are what the test registered; mounting a disk
+/// image adds a volume under the fake's own directory and is recorded,
+/// with the formats it accepts settable per test, so the *Mount* action's
+/// availability can be tried for every platform; the standard folders are
+/// the directories under the fake's home; the secrets live in a map the
+/// test can read back.
 #[derive(Debug)]
 pub struct Fake {
     dir: TempDir,
@@ -71,6 +75,11 @@ pub struct Fake {
     answers: Mutex<Answers>,
     volumes: Mutex<Vec<Volume>>,
     ejected: Mutex<Vec<PathBuf>>,
+    /// The disk-image formats [`Mount::mountable`] answers; the current
+    /// platform's unless a test says otherwise.
+    mountable: Mutex<&'static [ImageFormat]>,
+    /// The image files handed to [`Mount::mount_image`], oldest first.
+    mounted: Mutex<Vec<PathBuf>>,
     recent: Mutex<Vec<RecentItem>>,
     /// `list` answers `Unsupported`, as the macOS trash does.
     unlistable: Mutex<bool>,
@@ -125,6 +134,8 @@ impl Fake {
             answers: Mutex::new(Answers::default()),
             volumes: Mutex::new(Vec::new()),
             ejected: Mutex::new(Vec::new()),
+            mountable: Mutex::new(crate::NATIVE_MOUNTABLE),
+            mounted: Mutex::new(Vec::new()),
             recent: Mutex::new(Vec::new()),
             unlistable: Mutex::new(false),
             secrets: Mutex::new(std::collections::BTreeMap::new()),
@@ -246,6 +257,19 @@ impl Fake {
         lock(&self.ejected).clone()
     }
 
+    /// What [`Mount::mountable`] answers from now on: another platform's
+    /// list, so a test can try the *Mount* action as Windows or macOS
+    /// would show it.
+    pub fn set_mountable(&self, formats: &'static [ImageFormat]) {
+        *lock(&self.mountable) = formats;
+    }
+
+    /// The image files handed to [`Mount::mount_image`], oldest first.
+    #[must_use]
+    pub fn mounted(&self) -> Vec<PathBuf> {
+        lock(&self.mounted).clone()
+    }
+
     /// What [`RecentlyUsed::recently_used`] answers from now on; the
     /// test's stand-in for the system's list.
     pub fn set_recent(&self, items: Vec<RecentItem>) {
@@ -293,6 +317,52 @@ impl Volumes for Fake {
         volumes.retain(|v| v.mount_point != volume.mount_point);
         lock(&self.ejected).push(volume.mount_point.clone());
         Ok(())
+    }
+}
+
+impl Mount for Fake {
+    fn mountable(&self) -> &'static [ImageFormat] {
+        *lock(&self.mountable)
+    }
+
+    /// Mounts nothing: records the call and adds a volume at a directory
+    /// of the fake's own, named after the image, which [`Volumes::eject`]
+    /// takes away again like any removable volume.
+    fn mount_image(&self, path: &Path) -> Result<Volume, Error> {
+        let name = path
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let format = ImageFormat::for_name(&name)
+            .filter(|f| self.mountable().contains(f))
+            .ok_or(Error::Unsupported(
+                "this platform does not mount that kind of disk image",
+            ))?;
+        if !path.is_file() {
+            return Err(Error::NotFound);
+        }
+        let stem = Path::new(&name)
+            .file_stem()
+            .map(|s| s.to_string_lossy().into_owned())
+            .unwrap_or(name);
+        let mount_point = self.dir.path().join("mounts").join(&stem);
+        fs::create_dir_all(&mount_point).map_err(Error::from_io)?;
+        let volume = Volume {
+            name: stem,
+            mount_point,
+            kind: if format == ImageFormat::Iso {
+                VolumeKind::Optical
+            } else {
+                VolumeKind::Removable
+            },
+            fs_type: "fake".to_owned(),
+            device: None,
+            total: None,
+            free: None,
+        };
+        lock(&self.mounted).push(path.to_path_buf());
+        lock(&self.volumes).push(volume.clone());
+        Ok(volume)
     }
 }
 
@@ -730,6 +800,34 @@ mod tests {
         fake.add_volume(usb.clone());
         fake.remove_volume(Path::new("/media/usb"));
         assert_eq!(fake.volumes().map(|v| v.len()).ok(), Some(0));
+        // Mounting an image adds a volume that Eject takes away again.
+        assert_eq!(fake.mountable(), crate::NATIVE_MOUNTABLE);
+        fake.set_mountable(&[ImageFormat::Iso, ImageFormat::Vhdx]);
+        assert_eq!(fake.mountable(), &[ImageFormat::Iso, ImageFormat::Vhdx]);
+        let image = fake.dir.path().join("disc.iso");
+        fs::write(&image, b"iso").unwrap_or_else(|e| panic!("{e}"));
+        assert!(matches!(
+            fake.mount_image(&fake.dir.path().join("disk.qcow2")),
+            Err(Error::Unsupported(_))
+        ));
+        assert!(matches!(
+            fake.mount_image(&fake.dir.path().join("missing.iso")),
+            Err(Error::NotFound)
+        ));
+        let mounted = fake.mount_image(&image).unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(mounted.name, "disc");
+        assert_eq!(mounted.kind, VolumeKind::Optical);
+        assert!(mounted.mount_point.is_dir());
+        assert_eq!(fake.mounted(), std::slice::from_ref(&image));
+        assert_eq!(fake.volumes().map(|v| v.len()).ok(), Some(1));
+        fake.eject(&mounted).unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(fake.volumes().map(|v| v.len()).ok(), Some(0));
+        assert_eq!(ImageFormat::for_name("A.VHDX"), Some(ImageFormat::Vhdx));
+        assert_eq!(ImageFormat::for_name("a.qcow"), Some(ImageFormat::Qcow2));
+        assert_eq!(ImageFormat::for_name(".iso"), None);
+        assert_eq!(ImageFormat::for_name("notes.txt"), None);
+        assert_eq!(ImageFormat::Img.name(), "raw image");
+        assert_eq!(ImageFormat::ALL.len(), 8);
         assert_eq!(
             fake.standard_folder(StandardFolder::Home),
             Some(fake.home_dir())

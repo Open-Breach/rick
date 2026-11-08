@@ -457,16 +457,88 @@ fn copy_path_open_and_reveal_go_to_the_platform() {
 }
 
 #[test]
+fn mount_shows_on_the_images_this_platform_mounts_and_goes_through_it() {
+    use platform::{ImageFormat, Volumes as _};
+
+    let h = harness();
+    let dir = h.dir.path().join("images");
+    fs::create_dir_all(&dir).unwrap_or_else(|e| panic!("{e}"));
+    for name in [
+        "disc.iso",
+        "disk.vhdx",
+        "disk.dmg",
+        "disk.qcow2",
+        "notes.txt",
+    ] {
+        write(&dir.join(name), "x");
+    }
+    let mount = h.action("core.mount");
+    let shows = |name: &str| mount.availability(&h.ctx(&dir, &[&dir.join(name)]));
+    // As Linux: ISO yes, VHDX and DMG no, QCOW2 never.
+    h.fake.set_mountable(&[ImageFormat::Iso, ImageFormat::Img]);
+    assert_eq!(shows("disc.iso"), Availability::Enabled);
+    assert_eq!(shows("disk.vhdx"), Availability::Hidden);
+    assert_eq!(shows("disk.dmg"), Availability::Hidden);
+    assert_eq!(shows("disk.qcow2"), Availability::Hidden);
+    assert_eq!(shows("notes.txt"), Availability::Hidden);
+    // As Windows: ISO, VHD and VHDX.
+    h.fake
+        .set_mountable(&[ImageFormat::Iso, ImageFormat::Vhd, ImageFormat::Vhdx]);
+    assert_eq!(shows("disc.iso"), Availability::Enabled);
+    assert_eq!(shows("disk.vhdx"), Availability::Enabled);
+    assert_eq!(shows("disk.dmg"), Availability::Hidden);
+    assert_eq!(shows("disk.qcow2"), Availability::Hidden);
+    // As macOS: DMG, ISO and raw images.
+    h.fake
+        .set_mountable(&[ImageFormat::Dmg, ImageFormat::Iso, ImageFormat::Img]);
+    assert_eq!(shows("disc.iso"), Availability::Enabled);
+    assert_eq!(shows("disk.dmg"), Availability::Enabled);
+    assert_eq!(shows("disk.vhdx"), Availability::Hidden);
+    assert_eq!(shows("disk.qcow2"), Availability::Hidden);
+    // A mixed selection, the empty selection and a folder hide it.
+    assert_eq!(
+        mount.availability(&h.ctx(&dir, &[&dir.join("disc.iso"), &dir.join("notes.txt")])),
+        Availability::Hidden
+    );
+    assert_eq!(mount.availability(&h.ctx(&dir, &[])), Availability::Hidden);
+    assert_eq!(
+        mount.availability(&h.ctx(&dir, &[&dir])),
+        Availability::Hidden
+    );
+    assert_eq!(
+        mount.availability(&ActionCtx {
+            pane: PaneId(1),
+            location: vfs_rick::trash_location(),
+            selection: h.entries(&[&dir.join("disc.iso")]),
+            invoked_from: Invocation::ContextMenu,
+            other: None,
+        }),
+        Availability::Hidden,
+        "in the trash"
+    );
+    // Running it mounts through the platform: a job, then a volume.
+    let outcome = h.run("core.mount", h.ctx(&dir, &[&dir.join("disc.iso")]));
+    assert!(matches!(outcome, ActionOutcome::Started(_)), "{outcome:?}");
+    assert_eq!(h.fake.mounted(), [dir.join("disc.iso")]);
+    let volumes = h.fake.volumes().unwrap_or_else(|e| panic!("{e}"));
+    assert_eq!(volumes.len(), 1);
+    assert_eq!(volumes[0].name, "disc");
+    assert!(volumes[0].is_removable(), "Eject applies to it");
+    h.fake.eject(&volumes[0]).unwrap_or_else(|e| panic!("{e}"));
+    assert!(h.fake.volumes().is_ok_and(|v| v.is_empty()));
+}
+
+#[test]
 fn every_action_has_an_id_label_and_core_group() {
     let h = harness();
-    assert_eq!(h.registry.actions().len(), 23);
+    assert_eq!(h.registry.actions().len(), 24);
     for action in h.registry.actions() {
         assert!(action.id().0.starts_with("core."), "{}", action.id().0);
         assert_ne!(action.label(), "");
         assert_eq!(action.group(), ext::ActionGroup::Core);
-        // Pin, Unpin, Open containing folder and Compute hash have no
-        // shortcut in the spec's tables; New file lost Mod+N to New window
-        // (QUESTIONS.md 66).
+        // Pin, Unpin, Open containing folder, Compute hash and Mount have
+        // no shortcut in the spec's tables; New file lost Mod+N to New
+        // window (QUESTIONS.md 66).
         let unbound = matches!(
             action.id().0,
             "core.pin"
@@ -476,6 +548,7 @@ fn every_action_has_an_id_label_and_core_group() {
                 | "core.open_containing_tab"
                 | "core.create_link"
                 | "core.hash"
+                | "core.mount"
         );
         assert_eq!(
             action.default_shortcut().is_some(),

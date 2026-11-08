@@ -8,10 +8,16 @@
 # issue 44 load everywhere; the installer's actions hide off Linux. Used by
 # the ci, full and release workflows.
 #
-#   check-plugins.sh <dir>    the directory holding rick and plugins/
+#   check-plugins.sh <dir> [--sevenzip]
+#       <dir> is the directory holding rick and plugins/; --sevenzip also
+#       requires the 7-Zip library and its licence beside the archive
+#       plugin (issue 51), as a release archive always carries them and a
+#       bundle does when RICK_SEVENZIP_DIR named the library.
 set -euo pipefail
 
-dir="${1:?usage: check-plugins.sh <dir>}"
+dir="${1:?usage: check-plugins.sh <dir> [--sevenzip]}"
+want_sevenzip="${2:-}"
+if [ -n "${RICK_SEVENZIP_DIR:-}" ]; then want_sevenzip="--sevenzip"; fi
 exe=""
 if [ "${RUNNER_OS:-$(uname -s)}" = "Windows" ]; then exe=".exe"; fi
 cd "$dir"
@@ -27,7 +33,7 @@ everywhere=(
   "vfs-azure|Azure Blob|provider"
   "vfs-gcs|Google Cloud Storage|provider"
   "preview-archive|[^|]*|previewer"
-  "preview-csv|[^|]*|previewer"
+  "preview-markup|[^|]*|previewer"
   "preview-media|[^|]*|previewer"
   "preview-office|[^|]*|previewer"
   "preview-hex|[^|]*|previewer"
@@ -60,4 +66,9 @@ for spec in "${everywhere[@]}" "${here[@]}"; do
   test -f "plugins/$id/plugin.toml" || { echo "no plugins/$id/plugin.toml"; exit 1; }
   echo "$out" | grep -Eq "^$id +$name +[^ ]+ +$points +loaded +" || { echo "$id plugin not loaded with points '$points'"; exit 1; }
 done
+if [ "$want_sevenzip" = "--sevenzip" ]; then
+  test -f plugins/vfs-archive/7z.so || test -f plugins/vfs-archive/7z.dll || { echo "no 7-Zip library beside the archive plugin"; exit 1; }
+  test -f plugins/vfs-archive/7-Zip-License.txt || { echo "no 7-Zip licence beside the library"; exit 1; }
+  echo "the 7-Zip library and its licence are beside the archive plugin"
+fi
 echo "every plugin for this platform loaded"

@@ -67,6 +67,15 @@ pub fn extract(archive: &Path, format: Format, decide: &mut Decide<'_>) -> Resul
             decide,
             |inner, sink| crate::image::copy_out(archive, inner, sink),
         ),
+        Format::Disk(image) => {
+            let resolver = crate::library::Resolver::shared();
+            extract_by_item(
+                archive,
+                &crate::diskimage::index(&resolver, archive, image)?,
+                decide,
+                |inner, sink| crate::diskimage::copy_out(&resolver, archive, image, inner, sink),
+            )
+        }
         Format::Single(codec) => {
             let items = crate::single::index(archive, codec);
             extract_by_item(archive, &items, decide, |inner, sink| {
