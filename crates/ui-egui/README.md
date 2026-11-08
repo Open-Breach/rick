@@ -37,7 +37,11 @@ sources, folders, pane space, breadcrumb segments and tab headers are drop
 zones with the ghost, the live indicator and spring-loading in between (a
 pane at the Trash view trashes what lands in it); the side panel is never a
 file-operation target, a dragged folder becomes a place at the insertion
-line and files are refused with the not-allowed indicator. It never mutates
+line and files are refused with the not-allowed indicator; a drag that
+leaves the window is handed to the platform's drag source one frame later,
+once the ghost is gone, and followed until the platform says it ended; a
+drop from outside lands where the platform says the cursor is, or in the
+focused pane's folder where it cannot say. It never mutates
 the model: everything the user does becomes a `Command` handed to `app`,
 and it re-renders from the model. It depends on `types`, `runtime`,
 `platform`, `ext`, `vfs-local` (the local provider's id, for dropped

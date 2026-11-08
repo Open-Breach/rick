@@ -9,6 +9,28 @@ the pull request that brought the change.
 
 ### Added
 
+- Dragging out of Rick reaches the desktop: a file dragged past the window
+  is handed to the platform's drag source as `file://` URIs once the ghost
+  is off the screen, through an `NSDraggingSession` on macOS (the first
+  file's icon under the cursor), OLE's `DoDragDrop` with a `CF_HDROP` on
+  Windows, a `wl_data_source` on Wayland and an XDND source on X11, each
+  from the window `winit` describes through its raw handles; the receiver
+  decides between move and copy, and Rick's pointer is put right when the
+  drag ends, since the backend never sees the button come up (#25).
+- A drop from another application lands where it was dropped: the platform
+  supplies the cursor position the backend leaves out (the cursor over the
+  window on Windows and X11, the mouse location in the view on macOS, the
+  data device's motion on Wayland), so a file dropped on a folder row goes
+  into that folder; without a position the drop lands in the focused pane's
+  folder as before. On Wayland, where `winit` 0.30 receives no drops at
+  all, Rick's own `wl_data_device` now takes them (#25).
+- `BENCHMARKS.md` carries the five-run numbers of every benchmark 0.2
+  added and the macOS targets re-measured and tightened towards the spec's
+  numbers where the runner now meets them (the listing's first batch and
+  the PDF's first frame are back at the spec's); the two the runners fell
+  short of, cancelling on macOS and the fixture on Windows, follow what
+  the runners do (#25).
+
 - Localisation (#24): every text of the shell, the dialogues, the menus,
   the core actions and the plugins goes through the `t!` lookup over Fluent
   files bundled in the binary (`locales/` for the kernel, each plugin's

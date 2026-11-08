@@ -6225,7 +6225,9 @@ dependencies = [
  "keyring",
  "libc",
  "objc2 0.6.5",
+ "objc2-app-kit 0.3.2",
  "objc2-foundation 0.3.2",
+ "raw-window-handle",
  "rayon",
  "rfd",
  "runtime",
@@ -6238,7 +6240,11 @@ dependencies = [
  "toml 0.9.12+spec-1.1.0",
  "tracing",
  "types",
+ "wayland-backend",
+ "wayland-client",
  "windows",
+ "windows-core",
+ "x11rb",
 ]
 
 [[package]]

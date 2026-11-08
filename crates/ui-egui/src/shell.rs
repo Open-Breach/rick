@@ -22,7 +22,8 @@ use model::{
     Column, Density, DockTarget, Geometry, IconSize, JobState, PaneId, PanelSide, SelectionChange,
     SettingsChange, SidePanelChange, SortDir, Tab, TabId, TabKind, Theme, ViewMode, WindowId,
 };
-use platform::ControlsSide;
+use platform::raw_window_handle::{HasDisplayHandle as _, HasWindowHandle as _};
+use platform::{ControlsSide, WindowRef};
 use types::{EntryId, Location};
 
 use crate::console::ConsoleUi;
@@ -415,6 +416,12 @@ pub struct RickUi {
     quitting: bool,
     /// The viewports open right now, for the waker.
     viewports: Arc<Mutex<Vec<ViewportId>>>,
+    /// The root viewport's window as the backend describes it, for the
+    /// platform's drag source and drop target; `None` without a backend
+    /// window (the test harness).
+    window_ref: Option<WindowRef>,
+    /// The platform has been told about `window_ref`.
+    attached: bool,
 }
 
 /// How many dispatched intents are remembered.
@@ -576,6 +583,8 @@ impl RickUi {
             windows,
             root,
             quitting: false,
+            window_ref: None,
+            attached: false,
             viewports,
         }
     }
@@ -809,6 +818,44 @@ impl RickUi {
     #[must_use]
     pub fn drag(&self) -> Option<DragView> {
         self.windows.get(&self.root).and_then(|w| w.dnd.view())
+    }
+
+    /// Whether the platform runs a drag the root window handed it, for tests.
+    #[must_use]
+    pub fn native_drag_running(&self) -> bool {
+        self.windows
+            .get(&self.root)
+            .is_some_and(|w| w.dnd.native_drag_running())
+    }
+
+    /// The root viewport's window as the backend describes it. eframe's
+    /// frame supplies it each frame; the test harness has no backend window
+    /// and sets a stand-in here so the platform's drag source and drop
+    /// target are consulted as they are in a real window.
+    pub fn set_window_ref(&mut self, window: Option<WindowRef>) {
+        self.window_ref = window;
+        self.attached = false;
+    }
+
+    /// Keeps `window_ref` in step with the backend and tells the platform
+    /// about the window once it exists.
+    fn sync_window_ref(&mut self, frame: &eframe::Frame, ctx: &egui::Context) {
+        if let (Ok(window), Ok(display)) = (frame.window_handle(), frame.display_handle()) {
+            self.window_ref = Some(WindowRef {
+                window: window.as_raw(),
+                display: display.as_raw(),
+                scale: ctx.native_pixels_per_point().unwrap_or(1.0),
+            });
+        }
+        if !self.attached
+            && let Some(window) = &self.window_ref
+        {
+            let wake = ctx.clone();
+            self.app
+                .platform()
+                .attach(window, Arc::new(move || wake.request_repaint()));
+            self.attached = true;
+        }
     }
 
     /// Whether the move/copy/cancel prompt of a drop is up, for tests.
@@ -3313,10 +3360,17 @@ impl RickUi {
             });
         }
         self.apply_settings(ctx);
-        let after = self.app.model().settings.drag.after;
+        // Positions and the platform's own drops are known for the backend's
+        // window, the root viewport; the other windows fall back.
+        let window_ref = (window == self.root).then_some(self.window_ref).flatten();
         if let Some(w) = self.windows.get_mut(&window) {
-            w.dnd
-                .begin_frame(ctx, after, &mut self.tabs, &mut self.requests);
+            w.dnd.begin_frame(
+                ctx,
+                &self.app,
+                window_ref.as_ref(),
+                &mut self.tabs,
+                &mut self.requests,
+            );
         }
         self.resolve_pending_selects();
         self.handle_keys(ctx, window);
@@ -3369,8 +3423,13 @@ impl RickUi {
             window_frame.grips(ui, window.0);
         }
         if let Some(w) = self.windows.get_mut(&window) {
-            w.dnd
-                .end_frame(ctx, &self.app, &mut self.tabs, &mut self.requests);
+            w.dnd.end_frame(
+                ctx,
+                &self.app,
+                window_ref.as_ref(),
+                &mut self.tabs,
+                &mut self.requests,
+            );
             w.dnd.show_prompt(ctx, &mut self.requests);
         }
         self.apply_requests(ctx);
@@ -3524,10 +3583,11 @@ impl eframe::App for RickUi {
         }
     }
 
-    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+    fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
         let root = self.root;
-        self.draw_window(ui, root);
         let ctx = ui.ctx().clone();
+        self.sync_window_ref(frame, &ctx);
+        self.draw_window(ui, root);
         self.sync_windows(&ctx);
     }
 

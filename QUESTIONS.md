@@ -2185,3 +2185,66 @@ Once answered, an entry keeps its number and gains a dated decision line.
     Assumed: off (`set_use_isolating(false)`), since egui draws the marks as
     boxes; a key nobody wrote comes back as itself, so a missing translation
     is a visible text or key, never a panic.
+
+185. (issue 25) Question 62 assumed that `egui` 0.36 over `winit` 0.30
+    "receives hovered and dropped files on Linux (Wayland and X11), macOS
+    and Windows". It does not on Wayland: `winit` 0.30.13 implements the
+    drop target for X11 (XDND), macOS and Windows only, so a Wayland Rick
+    received nothing from outside in 0.1.
+    Assumed: on Wayland the platform receives drags from outside itself,
+    with a `wl_data_device` of its own on `winit`'s display (joined through
+    the raw display handle), reads the `text/uri-list` and hands the files
+    and the cursor position to the UI through `DropTarget::incoming_files`
+    and `DropTarget::drop_position`; on the other three backends `winit`'s
+    hovered and dropped files are kept and the platform supplies only the
+    position (`GetCursorPos` against the window, `NSEvent.mouseLocation`
+    converted into the view, `XQueryPointer` on the window). The spec's
+    "a drop arriving without a cursor position … lands in the focused
+    pane's folder" stays as the fallback wherever the position cannot be
+    had.
+
+186. (issue 25) The issue asks for the drag source "via winit's raw window
+    handle". `eframe` hands out the raw window and display handles of the
+    root viewport (its `Frame`); Rick's further windows are egui viewports
+    drawn in the same frame, with no handle of their own.
+    Assumed: a drag out of a secondary window stays inside it (nothing to
+    hand the platform), and a drop into one lands in the focused pane's
+    folder, the fallback above; the root window gets both. Neither the
+    Wayland nor the X11 source shows a drag image outside the window: a
+    Wayland icon surface would need a buffer of Rick's own and XDND has no
+    image at all; macOS shows the first file's icon, Windows the system's
+    drag cursor.
+
+187. (issue 25) Once the desktop runs a drag, the windowing backend never
+    sees the button come up (`AppKit`, OLE and the compositor consume it),
+    so egui would keep the row dragged and the button down until the next
+    click.
+    Assumed: the UI forgets egui's pointer state and the dragged widget when
+    the handover succeeds and again when the platform reports the drag
+    ended (`DragSource::drag_in_progress`, polled every frame meanwhile);
+    the next press starts afresh. The handover itself happens one frame
+    after the cursor left the window, so the frame without the ghost is on
+    the screen when the desktop takes over, as the issue asks; on Windows
+    `DoDragDrop` runs its own loop and the frame that starts it ends when
+    the drag does, `winit` buffering the window's messages meanwhile.
+
+188. (issue 25) The issue asks to "re-measure the four macOS benchmarks that
+    run against measured targets" without naming them; `BENCHMARKS.md` had
+    five macOS targets above the spec's numbers (fixture, listing-first,
+    listing-complete, pdf-first, tree-first) and three with no spec number
+    (startup, cancel, session-start).
+    Assumed: the four are the listing pair, `pdf-first` and `tree-first`,
+    the ones the Released paragraph was written about; `fixture` was
+    re-measured with them. Every macOS and Windows target follows the 0.1
+    rule from the five-run bench of this branch (median × 1.5, rounded up,
+    never below the Linux target, and past the worst run where that sits
+    higher), and where that lands at or under the spec's number the spec's
+    number is the target. The 0.2 tables never measured by the bench
+    workflow (viewer-frame, plugin-load, archive-zip-first, office-convert,
+    waveform, zip-first, csv-window, previewers-frame) are filled from the
+    same run, with the provisional macOS and Windows targets of
+    `plugin-load` and `archive-zip-first` set by the same rule. Two targets
+    had to loosen by that rule rather than tighten, since the runner did
+    not meet them: cancelling the sparse copy on macOS (80 ms, was 50 ms)
+    and the fixture on Windows (45 s, was the spec's 30 s, QUESTIONS.md 5's
+    Defender case); `BENCHMARKS.md` says why beside each table.

@@ -4,7 +4,7 @@
 use std::ffi::OsString;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::{Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::SystemTime;
 
 use async_trait::async_trait;
@@ -15,10 +15,10 @@ use crate::perms::{
     FilePermissions, PermissionChange, Permissions, Principal, PrincipalKind, Principals,
 };
 use crate::traits::{
-    Application, Chrome, Clipboard, ConfigDir, ControlsSide, DialogFilter, DragSource, Elevate,
-    ElevatedOutput, NativeDialogs, OpenWith, Properties, PropertiesOutcome, RecentItem,
-    RecentlyUsed, Secrets, StandardFolder, StandardFolders, Terminal, Trash, TrashedItem, Volume,
-    Volumes, WindowChrome,
+    Application, Chrome, Clipboard, ConfigDir, ControlsSide, DialogFilter, DragSource, DropTarget,
+    Elevate, ElevatedOutput, IncomingFiles, NativeDialogs, OpenWith, Point, Properties,
+    PropertiesOutcome, RecentItem, RecentlyUsed, Secrets, StandardFolder, StandardFolders,
+    Terminal, Trash, TrashedItem, Volume, Volumes, WindowChrome, WindowRef,
 };
 
 /// The applications the fake offers for every file, the default first.
@@ -62,6 +62,12 @@ pub struct Fake {
     revealed: Mutex<Vec<PathBuf>>,
     clipboard: Mutex<Option<String>>,
     dragged: Mutex<Vec<Vec<String>>>,
+    /// A drag handed to `start_drag` runs until the test ends it.
+    drag_running: Mutex<bool>,
+    /// What `drop_position` answers.
+    drop_position: Mutex<Option<Point>>,
+    /// What the next `incoming_files` answers.
+    incoming: Mutex<IncomingFiles>,
     answers: Mutex<Answers>,
     volumes: Mutex<Vec<Volume>>,
     ejected: Mutex<Vec<PathBuf>>,
@@ -113,6 +119,9 @@ impl Fake {
             revealed: Mutex::new(Vec::new()),
             clipboard: Mutex::new(None),
             dragged: Mutex::new(Vec::new()),
+            drag_running: Mutex::new(false),
+            drop_position: Mutex::new(None),
+            incoming: Mutex::new(IncomingFiles::default()),
             answers: Mutex::new(Answers::default()),
             volumes: Mutex::new(Vec::new()),
             ejected: Mutex::new(Vec::new()),
@@ -174,6 +183,28 @@ impl Fake {
     #[must_use]
     pub fn dragged(&self) -> Vec<Vec<String>> {
         lock(&self.dragged).clone()
+    }
+
+    /// Ends the drag `start_drag` began, as the desktop does when the button
+    /// comes up: `drag_in_progress` answers `false` from now on.
+    pub fn end_drag(&self) {
+        *lock(&self.drag_running) = false;
+    }
+
+    /// What [`DropTarget::drop_position`] answers from now on: where the
+    /// cursor of a drag from outside is, or `None` for a platform that
+    /// cannot tell.
+    pub fn answer_drop_position(&self, position: Option<Point>) {
+        *lock(&self.drop_position) = position;
+    }
+
+    /// Files the platform receives itself, as the Wayland data device does:
+    /// `hovered` is answered by every `incoming_files` until changed,
+    /// `dropped` by the next one only.
+    pub fn receive_files(&self, hovered: Vec<PathBuf>, dropped: Vec<PathBuf>) {
+        let mut incoming = lock(&self.incoming);
+        incoming.hovered = hovered;
+        incoming.dropped.extend(dropped);
     }
 
     /// What `pick_folder` answers from now on.
@@ -464,9 +495,31 @@ impl Clipboard for Fake {
 }
 
 impl DragSource for Fake {
-    fn start_drag(&self, paths: &[PathBuf]) -> Result<(), Error> {
+    fn attach(&self, _window: &WindowRef, _wake: Arc<dyn Fn() + Send + Sync>) {}
+
+    fn start_drag(&self, _window: &WindowRef, paths: &[PathBuf]) -> Result<(), Error> {
         lock(&self.dragged).push(paths.iter().map(|p| crate::paths::file_uri(p)).collect());
+        *lock(&self.drag_running) = true;
         Ok(())
+    }
+
+    fn drag_in_progress(&self) -> bool {
+        *lock(&self.drag_running)
+    }
+}
+
+impl DropTarget for Fake {
+    fn incoming_files(&self) -> IncomingFiles {
+        let mut incoming = lock(&self.incoming);
+        IncomingFiles {
+            hovering: !incoming.hovered.is_empty(),
+            hovered: incoming.hovered.clone(),
+            dropped: std::mem::take(&mut incoming.dropped),
+        }
+    }
+
+    fn drop_position(&self, _window: &WindowRef) -> Option<Point> {
+        *lock(&self.drop_position)
     }
 }
 
@@ -502,6 +555,18 @@ impl NativeDialogs for Fake {
 
     async fn save_file(&self, _title: &str, _suggested: &str) -> Option<PathBuf> {
         lock(&self.answers).save.clone()
+    }
+}
+
+/// A window of no backend, enough for the fake, which never looks at it,
+/// and for the native platforms' tests, which refuse it.
+#[cfg(test)]
+pub(crate) fn test_window() -> WindowRef {
+    use raw_window_handle::{RawDisplayHandle, RawWindowHandle, WebDisplayHandle, WebWindowHandle};
+    WindowRef {
+        window: RawWindowHandle::Web(WebWindowHandle::new(1)),
+        display: RawDisplayHandle::Web(WebDisplayHandle::new()),
+        scale: 1.0,
     }
 }
 
@@ -583,6 +648,45 @@ mod tests {
     }
 
     #[test]
+    fn drags_and_drops_are_recorded_and_answered() {
+        let fake = Fake::new().unwrap_or_else(|e| panic!("{e}"));
+        fake.attach(&test_window(), Arc::new(|| {}));
+        fake.start_drag(&test_window(), &[PathBuf::from("/a b")])
+            .unwrap_or_else(|e| panic!("{e}"));
+        let dragged = fake.dragged();
+        assert_eq!(dragged.len(), 1);
+        assert!(dragged[0][0].ends_with("/a%20b"), "{dragged:?}");
+        assert!(fake.drag_in_progress());
+        fake.end_drag();
+        assert!(!fake.drag_in_progress());
+        assert_eq!(fake.drop_position(&test_window()), None);
+        fake.answer_drop_position(Some(Point { x: 3.0, y: 4.0 }));
+        assert_eq!(
+            fake.drop_position(&test_window()),
+            Some(Point { x: 3.0, y: 4.0 })
+        );
+        assert_eq!(fake.incoming_files(), IncomingFiles::default());
+        fake.receive_files(vec![PathBuf::from("/h")], vec![PathBuf::from("/d")]);
+        assert_eq!(
+            fake.incoming_files(),
+            IncomingFiles {
+                hovering: true,
+                hovered: vec![PathBuf::from("/h")],
+                dropped: vec![PathBuf::from("/d")],
+            }
+        );
+        assert_eq!(
+            fake.incoming_files(),
+            IncomingFiles {
+                hovering: true,
+                hovered: vec![PathBuf::from("/h")],
+                dropped: Vec::new(),
+            },
+            "a drop is reported once"
+        );
+    }
+
+    #[test]
     fn calls_and_answers_are_recorded() {
         let fake = Fake::new().unwrap_or_else(|e| panic!("{e}"));
         fake.open(Path::new("/a")).unwrap_or_else(|e| panic!("{e}"));
@@ -596,11 +700,6 @@ mod tests {
         assert!(fake.config_dir().starts_with(fake.dir.path()));
         fake.set_text("/a\n/b").unwrap_or_else(|e| panic!("{e}"));
         assert_eq!(fake.clipboard_text().as_deref(), Some("/a\n/b"));
-        fake.start_drag(&[PathBuf::from("/a b")])
-            .unwrap_or_else(|e| panic!("{e}"));
-        let dragged = fake.dragged();
-        assert_eq!(dragged.len(), 1);
-        assert!(dragged[0][0].ends_with("/a%20b"), "{dragged:?}");
         assert!(matches!(
             fake.show(fake.dir.path()),
             Ok(PropertiesOutcome::Rows(rows)) if rows[0].0 == "Name"

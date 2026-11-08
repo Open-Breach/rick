@@ -67,8 +67,8 @@ fn win32(error: WIN32_ERROR) -> Error {
     }
 }
 
-fn core_error(error: windows::core::Error) -> Error {
-    win32(WIN32_ERROR::from_error(&error).unwrap_or(WIN32_ERROR(u32::MAX)))
+fn core_error(error: &windows::core::Error) -> Error {
+    win32(WIN32_ERROR::from_error(error).unwrap_or(WIN32_ERROR(u32::MAX)))
 }
 
 /// Memory the security API allocated with `LocalAlloc`, freed on drop.
@@ -207,7 +207,7 @@ fn sid_of(principal: &Principal) -> Result<(PSID, Local), Error> {
         let mut sid = PSID::default();
         // SAFETY: `text` is NUL-terminated; the SID is freed through `Local`.
         unsafe { ConvertStringSidToSidW(PCWSTR(text.as_ptr()), &raw mut sid) }
-            .map_err(core_error)?;
+            .map_err(|e| core_error(&e))?;
         return Ok((sid, Local(sid.0)));
     }
     let name = principal.name.as_deref().unwrap_or(id);
@@ -242,7 +242,7 @@ fn lookup_name(name: &str) -> Result<(PSID, Local), Error> {
             sid_len as usize,
         )
     }
-    .map_err(core_error)?;
+    .map_err(|e| core_error(&e))?;
     let local = Local(memory.0);
     let sid = PSID(memory.0);
     let mut domain = vec![0u16; domain_len.max(1) as usize];
@@ -277,12 +277,12 @@ fn aces(dacl: *mut ACL) -> Result<Vec<NtAce>, Error> {
             AclSizeInformation,
         )
     }
-    .map_err(core_error)?;
+    .map_err(|e| core_error(&e))?;
     let mut entries = Vec::with_capacity(info.AceCount as usize);
     for index in 0..info.AceCount {
         let mut ace: *mut c_void = std::ptr::null_mut();
         // SAFETY: `index` is below the count the ACL reported.
-        unsafe { GetAce(dacl, index, &raw mut ace) }.map_err(core_error)?;
+        unsafe { GetAce(dacl, index, &raw mut ace) }.map_err(|e| core_error(&e))?;
         // SAFETY: every ACE starts with an `ACE_HEADER`.
         let header = unsafe { *ace.cast::<ACE_HEADER>() };
         let allow = match header.AceType {
@@ -383,7 +383,7 @@ fn write_dacl(path: &[u16], entries: &[NtAce], protected: bool) -> Result<(), Er
     let acl: *mut ACL = buffer.as_mut_ptr().cast();
     // SAFETY: `buffer` is `size` bytes, DWORD-aligned.
     unsafe { InitializeAcl(acl, u32::try_from(size).unwrap_or(u32::MAX), ACL_REVISION) }
-        .map_err(core_error)?;
+        .map_err(|e| core_error(&e))?;
     for (entry, (sid, _)) in own.iter().zip(&sids) {
         let flags = ACE_FLAGS(u32::from(entry.flags & !NtAce::INHERITED));
         // SAFETY: `acl` was initialised with room for every entry; `sid` is
@@ -395,7 +395,7 @@ fn write_dacl(path: &[u16], entries: &[NtAce], protected: bool) -> Result<(), Er
                 AddAccessDeniedAceEx(acl, ACL_REVISION, flags, entry.mask, *sid)
             }
         };
-        added.map_err(core_error)?;
+        added.map_err(|e| core_error(&e))?;
     }
     let inheritance = if protected {
         PROTECTED_DACL_SECURITY_INFORMATION
@@ -490,6 +490,8 @@ fn local_groups() -> Vec<String> {
     names
 }
 
+// The same signature as the Linux and macOS versions, which can fail.
+#[allow(clippy::unnecessary_wraps)]
 pub(super) fn principals() -> Result<Principals, Error> {
     let mut users: Vec<Principal> = local_users()
         .iter()
