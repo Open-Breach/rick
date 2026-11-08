@@ -204,6 +204,8 @@ pub enum Request {
         /// Its icon now.
         icon: String,
     },
+    /// Open the side panel's *Add connection…* dialogue of a provider.
+    AddConnection(types::ProviderId),
 }
 
 /// What a tab's widgets see.
@@ -1148,6 +1150,9 @@ impl RickUi {
                     Request::ViewerFullscreen { tab, on } => self.set_fullscreen(ctx, tab, on),
                     Request::EditPlace { index, title, icon } => {
                         side_panel::begin_edit(&mut self.side, index, title, icon);
+                    }
+                    Request::AddConnection(provider) => {
+                        side_panel::begin_connection(&mut self.side, &self.app, provider);
                     }
                 }
             }
