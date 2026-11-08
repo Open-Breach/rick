@@ -9,6 +9,22 @@ the pull request that brought the change.
 
 ### Added
 
+- Providers as plugins, SFTP and the clouds: `ext-vfs-sftp` (remote hosts
+  over SSH through russh and russh-sftp, a move within a host a remote
+  rename), `ext-vfs-s3` (S3, R2, MinIO and other S3-compatible stores),
+  `ext-vfs-azure` (Azure Blob) and `ext-vfs-gcs` (Google Cloud Storage),
+  each with its connections as the rows of the side panel's Network or
+  Cloud section, *Add connection…* on the section header and the *Add…*
+  row with a dialogue per provider, and *Connect*, *Disconnect* and
+  *Remove connection* on a row. Connections live in `[[connections]]`
+  tables of `rick.toml`; passwords, keys and secret keys in the platform
+  keychain through the new `platform::Secrets` (Secret Service, Keychain,
+  Credential Manager). A move or copy inside one account runs on the
+  service (`CopyObject`, *Copy Blob*, `Rewrite`) and streams nothing
+  through the machine, within a bucket or across two buckets of the
+  account; uploads stream in parts and a cancelled one leaves no object
+  (#21).
+
 - The viewer: Enter or a double-click opens a previewable file in a viewer
   tab of the pane, a dock tab like any other (split, dock, tear out). Left
   and Right step through the folder's files in the list's order with the
