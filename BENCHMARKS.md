@@ -3,10 +3,13 @@
 The acceptance benchmarks of version 0.1, measured on the GitHub-hosted CI
 runners by the `bench` workflow (`.github/workflows/bench.yml`): every
 benchmark five times in release on each runner, the median and the worst run
-below. Each benchmark is an `#[ignore]`d test in `crates/tests/tests`; CI runs
-each once per push on the three runners and asserts the target of that
-runner's OS (`crates/tests/src/bench.rs`, whose table a unit test checks
-against this file).
+below. Each benchmark is an `#[ignore]`d test in `crates/tests/tests`, timed
+against the target of the runner's OS in `crates/tests/src/bench.rs`, whose
+table a unit test checks against this file. Since issue 35 CI measures the
+targets without asserting them: the `bench` workflow runs by hand, on release
+tags and nightly on Linux x64 from `dev`, its nightly summaries on the
+`benchmark-history` branch; a release run without `RICK_BENCH_RECORD` asserts
+them.
 
 **Targets.** Linux: the spec's (Decisions table, QUESTIONS.md 5, 24 and 30),
 asserted on a single run. macOS and Windows: the median × 1.5, rounded up to
