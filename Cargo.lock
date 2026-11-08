@@ -7910,6 +7910,7 @@ dependencies = [
  "ext-vfs-gcs",
  "ext-vfs-s3",
  "ext-vfs-trash",
+ "flate2",
  "futures",
  "hadris-fs",
  "hadris-iso",

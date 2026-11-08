@@ -2,8 +2,10 @@
 //! *Installed apps* opening the view, and the per-row actions of the view
 //! (Open install folder, Launch, Update from archive…, Revert to previous
 //! version, Edit launcher…, Uninstall…, Repair, Forget, Remove staging
-//! folder). Everything long runs as a job; the form is one dialogue per
-//! action run, as the UI host's protocol asks.
+//! folder). Everything long runs as a job: reading the archive is the job
+//! *Reading archive…*, whose end opens the install form
+//! ([`ActionOutcome::Later`]), and confirming the form starts the install
+//! job.
 
 use ext::t;
 use std::collections::HashMap;
@@ -13,12 +15,12 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::SystemTime;
 
 use ext::{
-    Action, ActionCtx, ActionGroup, ActionId, ActionOutcome, Availability, Field, Form, JobRunner,
-    PreviewRow, Shortcut, UiHost, Values,
+    Action, ActionCtx, ActionGroup, ActionId, ActionOutcome, Availability, Continuation, Field,
+    Form, FormLater, JobRunner, PreviewRow, Shortcut, UiHost, Values,
 };
-use types::{Entry, EntryKind, Error, Location, Progress, ProviderId};
+use types::{CancelToken, Entry, EntryKind, Error, Location, Progress, ProviderId};
 
-use crate::archive::Format;
+use crate::archive::{Format, OnProgress};
 use crate::detect::{self, CATEGORIES, Detected};
 use crate::error::{InstallError, err};
 use crate::install::{self, CommandLink, IconSource, Plan};
@@ -78,14 +80,13 @@ const CMD_KEYS: [&str; 16] = [
 /// runs again.
 type Stamp = (u64, Option<SystemTime>);
 
-/// The actions' shared state: the view's provider, the detections of the
-/// archives looked at (the form protocol runs an action twice), and the
-/// archive an *Update from archive…* is in the middle of.
+/// The actions' shared state: the view's provider and the detections of
+/// the archives looked at, so a second look at an unchanged file opens
+/// the form without reading it again.
 pub struct Installer {
     /// The view, whose last scan the actions read.
     pub provider: Arc<AppsProvider>,
     detections: Mutex<HashMap<PathBuf, (Stamp, Arc<Detected>)>>,
-    pending_updates: Mutex<HashMap<String, PathBuf>>,
 }
 
 impl std::fmt::Debug for Installer {
@@ -107,46 +108,40 @@ impl Installer {
         Self {
             provider,
             detections: Mutex::new(HashMap::new()),
-            pending_updates: Mutex::new(HashMap::new()),
         }
     }
 
-    /// Detects the archive at `path`, or returns the detection kept from
-    /// an earlier look at the same file.
+    /// The detection kept from an earlier look at the file at `path`, when
+    /// its size and modification time have not changed since.
+    #[must_use]
+    pub fn cached(&self, path: &Path) -> Option<Arc<Detected>> {
+        let meta = std::fs::metadata(path).ok()?;
+        let stamp: Stamp = (meta.len(), meta.modified().ok());
+        lock(&self.detections)
+            .get(path)
+            .filter(|(kept, _)| *kept == stamp)
+            .map(|(_, detected)| Arc::clone(detected))
+    }
+
+    /// Detects the archive at `path`, reading it once with `cancel`
+    /// checked between entries and `progress` told the bytes read so far,
+    /// and keeps the result for the next look at the same file. Blocking:
+    /// a job's work.
     ///
     /// # Errors
     ///
-    /// The errors of [`detect::detect`].
-    pub fn detect(&self, path: &Path) -> Result<Arc<Detected>, Error> {
+    /// The errors of [`detect::detect_with`].
+    pub fn detect_with(
+        &self,
+        path: &Path,
+        cancel: &CancelToken,
+        progress: &mut OnProgress<'_>,
+    ) -> Result<Arc<Detected>, Error> {
         let meta = std::fs::metadata(path).map_err(Error::from_io)?;
         let stamp: Stamp = (meta.len(), meta.modified().ok());
-        if let Some((kept, detected)) = lock(&self.detections).get(path)
-            && *kept == stamp
-        {
-            return Ok(Arc::clone(detected));
-        }
-        let detected = Arc::new(detect::detect(path)?);
+        let detected = Arc::new(detect::detect_with(path, cancel, progress)?);
         lock(&self.detections).insert(path.to_path_buf(), (stamp, Arc::clone(&detected)));
         Ok(detected)
-    }
-
-    fn pending_update(&self, id: &str) -> Option<PathBuf> {
-        let mut pending = lock(&self.pending_updates);
-        let path = pending.get(id)?.clone();
-        if path.is_file() {
-            Some(path)
-        } else {
-            pending.remove(id);
-            None
-        }
-    }
-
-    fn set_pending_update(&self, id: &str, path: &Path) {
-        lock(&self.pending_updates).insert(id.to_owned(), path.to_path_buf());
-    }
-
-    fn clear_pending_update(&self, id: &str) {
-        lock(&self.pending_updates).remove(id);
     }
 }
 
@@ -862,41 +857,77 @@ fn spawn_install(
     ActionOutcome::Started(handle.id)
 }
 
-/// Runs the form and, on confirmation, the install job.
+/// The name of the job that reads an archive for its install form.
+pub const READING_ARCHIVE: &str = "Reading archive…";
+
+/// Opens the install form once the archive is read and, on confirmation,
+/// runs the install job. Reading the archive is the job *Reading archive…*
+/// with byte progress over the file and a cancel; a detection kept from
+/// an earlier look at the same file opens the form at once. The form and
+/// the rest of the action travel through the [`FormLater`] the outcome
+/// carries: the host shows the form, the application runs the rest.
 fn install_through_form(
     installer: &Arc<Installer>,
     archive: &Path,
     update_of: Option<&Installed>,
     jobs: &JobRunner,
-    ui: &dyn UiHost,
-) -> Result<ActionOutcome, Error> {
-    let detected = installer.detect(archive)?;
-    let scan = installer.provider.rescan();
-    let layout = installer.provider.user_layout();
-    let matched = update_of.cloned().or_else(|| matching(&scan, &detected));
-    let form = install_form(
-        &detected,
-        &scan,
-        &layout,
-        matched.as_ref(),
-        update_of.is_some(),
-    );
-    let Some(values) = ui.form(form) else {
-        return Ok(ActionOutcome::Done);
+) -> ActionOutcome {
+    let (sender, later) = FormLater::channel();
+    let label = if update_of.is_some() {
+        t!("installer-update-from-archive")
+    } else {
+        t!("installer-install-as-application")
     };
-    if let Some(u) = update_of {
-        installer.clear_pending_update(&u.record.id);
-    }
-    let assembled = assemble(&values, &detected, &scan, &layout, update_of);
-    if let Some(problem) = assembled.problem() {
-        return Err(err(InstallError::Invalid(problem.to_owned())));
-    }
-    let Some(plan) = assembled.plan else {
-        return Err(err(InstallError::Invalid(
-            "pick the main executable".to_owned(),
-        )));
+    // From the detection to the form and the rest of the action.
+    let make = {
+        let installer = Arc::clone(installer);
+        let jobs = jobs.clone();
+        let update_of = update_of.cloned();
+        move |detected: Arc<Detected>| -> (Form, Continuation) {
+            let scan = installer.provider.rescan();
+            let layout = installer.provider.user_layout();
+            let forced = update_of.is_some();
+            let matched = update_of.clone().or_else(|| matching(&scan, &detected));
+            let form = install_form(&detected, &scan, &layout, matched.as_ref(), forced);
+            let then = Continuation::new(label, move |values| {
+                let Some(values) = values else {
+                    return Ok(ActionOutcome::Done);
+                };
+                let assembled = assemble(&values, &detected, &scan, &layout, update_of.as_ref());
+                if let Some(problem) = assembled.problem() {
+                    return Err(err(InstallError::Invalid(problem.to_owned())));
+                }
+                let Some(plan) = assembled.plan else {
+                    return Err(err(InstallError::Invalid(
+                        "pick the main executable".to_owned(),
+                    )));
+                };
+                Ok(spawn_install(&installer, plan, scan, &jobs))
+            });
+            (form, then)
+        }
     };
-    Ok(spawn_install(installer, plan, scan, jobs))
+    if let Some(detected) = installer.cached(archive) {
+        let _ = sender.send(make(detected));
+        return ActionOutcome::Later(later);
+    }
+    let installer = Arc::clone(installer);
+    let archive = archive.to_path_buf();
+    jobs.spawn_named(READING_ARCHIVE, move |job| async move {
+        let total = std::fs::metadata(&archive).ok().map(|m| m.len());
+        let progress = job.progress.clone();
+        let cancel = job.cancel.clone();
+        progress.report(Progress::Bytes { done: 0, total });
+        let detected = ext::blocking(move || {
+            installer.detect_with(&archive, &cancel, &mut |done| {
+                progress.report(Progress::Bytes { done, total });
+            })
+        })
+        .await?;
+        let _ = sender.send(make(detected));
+        Ok(())
+    });
+    ActionOutcome::Later(later)
 }
 
 /// *Install as application…* on a selected archive.
@@ -926,7 +957,7 @@ impl Action for Install {
         &self,
         ctx: ActionCtx,
         jobs: &JobRunner,
-        ui: &dyn UiHost,
+        _ui: &dyn UiHost,
     ) -> Result<ActionOutcome, Error> {
         if !crate::supported() {
             return Err(err(InstallError::Unsupported));
@@ -934,7 +965,7 @@ impl Action for Install {
         let archive = selected_archive(&ctx).ok_or(Error::Unsupported(
             "select one tar or zip archive on the local disk",
         ))?;
-        install_through_form(&self.0, &archive, None, jobs, ui)
+        Ok(install_through_form(&self.0, &archive, None, jobs))
     }
 }
 
@@ -1085,33 +1116,31 @@ impl Action for Update {
         ui: &dyn UiHost,
     ) -> Result<ActionOutcome, Error> {
         let installed = selected_app(&self.0, &ctx).ok_or(Error::NotFound)?;
-        let id = installed.record.id.clone();
-        let archive = if let Some(path) = self.0.pending_update(&id) {
-            path
-        } else {
-            let Some(text) = ui.prompt(
-                &format!("Update {} from archive", installed.record.name),
-                "",
-            ) else {
-                return Ok(ActionOutcome::Done);
-            };
-            let text = text.trim();
-            if text.is_empty() {
-                return Ok(ActionOutcome::Done);
-            }
-            let path = installed.layout.expand(text);
-            if !path.is_file() {
-                return Err(Error::NotFound);
-            }
-            if Format::by_name(text).is_none() {
-                return Err(Error::Unsupported(
-                    "the archive must be a tar (gz, xz, bz2, zst) or zip file",
-                ));
-            }
-            self.0.set_pending_update(&id, &path);
-            path
+        let Some(text) = ui.prompt(
+            &format!("Update {} from archive", installed.record.name),
+            "",
+        ) else {
+            return Ok(ActionOutcome::Done);
         };
-        install_through_form(&self.0, &archive, Some(&installed), jobs, ui)
+        let text = text.trim();
+        if text.is_empty() {
+            return Ok(ActionOutcome::Done);
+        }
+        let archive = installed.layout.expand(text);
+        if !archive.is_file() {
+            return Err(Error::NotFound);
+        }
+        if Format::by_name(text).is_none() {
+            return Err(Error::Unsupported(
+                "the archive must be a tar (gz, xz, bz2, zst) or zip file",
+            ));
+        }
+        Ok(install_through_form(
+            &self.0,
+            &archive,
+            Some(&installed),
+            jobs,
+        ))
     }
 }
 

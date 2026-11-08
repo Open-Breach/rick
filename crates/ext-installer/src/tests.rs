@@ -243,13 +243,26 @@ impl Harness {
     }
 
     /// Runs the action, waits for its jobs and returns the outcome and the
-    /// jobs' results.
+    /// jobs' results. A form the action asks for later is shown through
+    /// the host as the application would, and the rest of the action's
+    /// outcome stands for the action's.
     fn run(
         &self,
         id: ext::ActionId,
         ctx: ActionCtx,
     ) -> (Result<ActionOutcome, Error>, Vec<Result<(), Error>>) {
-        let outcome = self.action(id).run(ctx, &self.jobs, &self.ui);
+        let pane = ctx.pane;
+        let outcome = match self.action(id).run(ctx, &self.jobs, &self.ui) {
+            Ok(ActionOutcome::Later(later)) => match runtime::block_on(later.wait()) {
+                Some((form, then)) => self
+                    .ui
+                    .form_later(pane, form, then)
+                    .unwrap_or_else(|| panic!("the scripted host answers at once")),
+                // The job failed: its result says why.
+                None => Ok(ActionOutcome::Done),
+            },
+            outcome => outcome,
+        };
         self.settle();
         let mut results = Vec::new();
         let mut events = self.events.lock().unwrap_or_else(PoisonError::into_inner);
@@ -1102,10 +1115,11 @@ fn a_checksum_mismatch_refuses_before_extracting() {
         matches!(outcome, Ok(ActionOutcome::Started(_))),
         "{outcome:?}"
     );
-    assert_eq!(results.len(), 1);
-    let error = results[0]
-        .as_ref()
-        .err()
+    // Two jobs ran: reading the archive, then the install, which failed.
+    assert_eq!(results.len(), 2, "{results:?}");
+    let error = results
+        .iter()
+        .find_map(|r| r.as_ref().err())
         .unwrap_or_else(|| panic!("the job did not fail"));
     let text = text_of(error);
     assert!(

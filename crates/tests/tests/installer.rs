@@ -9,10 +9,14 @@
 //! the Installed Apps view removes exactly the record's files and the app
 //! folder, which a diff of the home asserts; a tarbomb, a wrong-machine
 //! binary, a bad checksum and a source tree are handled as the spec says;
-//! and the plugin loads through the host with its three points.
+//! reading a 300 MB archive is a job the action returns from at once,
+//! cancellable without a trace; and the plugin loads through the host
+//! with its three points.
 
 use std::fs;
+use std::io::{self, Read, Write as _};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
@@ -20,20 +24,27 @@ use app::{App, Command, Config, Event};
 use ext::{ActionId, Form, Invocation, Level, UiHost, Value, Values};
 use ext_installer::fixtures::Fixture;
 use ext_installer::record::{Layout, Record};
-use model::SelectionChange;
+use model::{JobState, SelectionChange};
 use platform::{ConfigDir, Fake};
 use plugins_native::{Host, Library, MANIFEST_FILE, Options, PluginStatus, Source};
 use tests::local;
+use types::Progress;
 
 /// A UI whose form answers the script sets in advance; confirms everything.
 #[derive(Default)]
 struct Scripted {
     form: Mutex<Vec<(&'static str, Value)>>,
+    forms: AtomicUsize,
 }
 
 impl Scripted {
     fn answer_form(&self, values: Vec<(&'static str, Value)>) {
         *self.form.lock().unwrap_or_else(PoisonError::into_inner) = values;
+    }
+
+    /// How many forms were shown.
+    fn forms_shown(&self) -> usize {
+        self.forms.load(Ordering::SeqCst)
     }
 }
 
@@ -47,6 +58,7 @@ impl UiHost for Scripted {
     }
     fn show(&self, _title: &str, _text: &str) {}
     fn form(&self, form: Form) -> Option<Values> {
+        self.forms.fetch_add(1, Ordering::SeqCst);
         let mut values = form.defaults();
         for (key, value) in self
             .form
@@ -405,6 +417,202 @@ fn install_launch_update_collide_path_mode_and_uninstall_through_the_app() {
 
     // The filesystem diff: the home holds what it held before.
     assert_eq!(files_under(&home), before, "nothing of Rick's remains");
+}
+
+/// Pseudo-random bytes, so a stored gzip stays as large as its contents.
+struct Noise {
+    left: u64,
+    state: u64,
+}
+
+impl Read for Noise {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        let n = usize::try_from(self.left.min(buf.len() as u64)).unwrap_or(0);
+        for chunk in buf[..n].chunks_mut(8) {
+            self.state ^= self.state << 13;
+            self.state ^= self.state >> 7;
+            self.state ^= self.state << 17;
+            let bytes = self.state.to_le_bytes();
+            chunk.copy_from_slice(&bytes[..chunk.len()]);
+        }
+        self.left -= n as u64;
+        Ok(n)
+    }
+}
+
+/// A gzip tar of about 300 MB: the shape of a GUI application (top folder
+/// `Big App-1.0`, `bin/app`, `bin/app.png`), then three blobs of 100 MiB
+/// of noise stored without compression, so the file on disk is as large as
+/// its contents and reading it takes long enough to cancel. Returns the
+/// path and the file's size.
+fn big_archive(dir: &Path) -> (PathBuf, u64) {
+    const BLOB: u64 = 100 << 20;
+    let path = dir.join("Big.App-1.0.tar.gz");
+    let file = fs::File::create(&path).unwrap_or_else(|e| panic!("{e}"));
+    let encoder = flate2::write::GzEncoder::new(
+        io::BufWriter::with_capacity(1 << 20, file),
+        flate2::Compression::none(),
+    );
+    let mut tar = tar::Builder::new(encoder);
+    let top = "Big App-1.0";
+    let mut entry =
+        |path: String, kind: tar::EntryType, mode: u32, size: u64, data: &mut dyn Read| {
+            let mut header = tar::Header::new_gnu();
+            header.set_entry_type(kind);
+            header.set_mode(mode);
+            header.set_size(size);
+            header.set_mtime(1_700_000_000);
+            tar.append_data(&mut header, path, data)
+                .unwrap_or_else(|e| panic!("{e}"));
+        };
+    entry(
+        format!("{top}/"),
+        tar::EntryType::Directory,
+        0o755,
+        0,
+        &mut io::empty(),
+    );
+    entry(
+        format!("{top}/bin/"),
+        tar::EntryType::Directory,
+        0o755,
+        0,
+        &mut io::empty(),
+    );
+    let elf = ext_installer::fixtures::tiny_elf(ext_installer::fixtures::this_machine(), &[]);
+    entry(
+        format!("{top}/bin/app"),
+        tar::EntryType::Regular,
+        0o755,
+        elf.len() as u64,
+        &mut elf.as_slice(),
+    );
+    let png = ext_installer::fixtures::tiny_png(64);
+    entry(
+        format!("{top}/bin/app.png"),
+        tar::EntryType::Regular,
+        0o644,
+        png.len() as u64,
+        &mut png.as_slice(),
+    );
+    for i in 0..3u64 {
+        entry(
+            format!("{top}/data/blob{i}"),
+            tar::EntryType::Regular,
+            0o644,
+            BLOB,
+            &mut Noise {
+                left: BLOB,
+                state: 0x9e37_79b9_7f4a_7c15 ^ (i + 1),
+            },
+        );
+    }
+    let encoder = tar.into_inner().unwrap_or_else(|e| panic!("{e}"));
+    let mut file = encoder.finish().unwrap_or_else(|e| panic!("{e}"));
+    file.flush().unwrap_or_else(|e| panic!("{e}"));
+    drop(file);
+    let size = fs::metadata(&path).unwrap_or_else(|e| panic!("{e}")).len();
+    (path, size)
+}
+
+/// Reading the archive is a job (specs/ext-installer.md "Detection is a
+/// job"): *Install as application* returns at once, *Reading archive…*
+/// shows in the operations table with byte progress against the file's
+/// size, cancelling it leaves nothing behind and opens no form; left to
+/// finish, the form opens and the install runs.
+#[test]
+fn reading_the_archive_is_a_job_that_returns_at_once_and_cancels_cleanly() {
+    if !ext_installer::supported() {
+        eprintln!("the installer is Linux only; skipping");
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+    let (archive, size) = big_archive(dir.path());
+    assert!(size > 290 << 20, "{size} bytes");
+    let mut d = Driver::new(dir.path());
+    let home = d.fake.home_dir();
+    let before = files_under(&home);
+    let name = archive
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    d.select(&[&name]);
+
+    // The action returns at once; the reading is the job.
+    let ctx = d
+        .app
+        .action_ctx(d.pane, Invocation::ContextMenu)
+        .unwrap_or_else(|| panic!("no active tab"));
+    let started = Instant::now();
+    let mut events = Vec::new();
+    d.app.handle(
+        Command::Run {
+            action: ActionId("installer.install"),
+            ctx,
+        },
+        &mut events,
+    );
+    let took = started.elapsed();
+    assert!(
+        took < Duration::from_millis(16),
+        "Install as application took {took:?}"
+    );
+    assert_eq!(d.ui.forms_shown(), 0, "the form waits for the job");
+    let (id, info) = d
+        .app
+        .model()
+        .jobs
+        .iter()
+        .find(|(_, job)| job.name == ext_installer::actions::READING_ARCHIVE)
+        .map_or_else(
+            || panic!("no Reading archive… job in {:?}", d.app.model().jobs),
+            |(id, job)| (*id, job.clone()),
+        );
+    assert!(matches!(info.state, JobState::Running(_)), "{info:?}");
+
+    // Cancelled: the job ends cancelled, no form opens, nothing is written.
+    let events = d.step(Command::CancelJob(id));
+    assert!(
+        events.iter().any(|e| matches!(
+            e,
+            Event::JobDone { id: done, result: Err(types::Error::Cancelled) } if *done == id
+        )),
+        "{events:?}"
+    );
+    assert_eq!(
+        d.app.model().jobs.get(&id).map(|job| job.state.clone()),
+        Some(JobState::Cancelled)
+    );
+    assert_eq!(d.ui.forms_shown(), 0, "a cancelled read opens no form");
+    assert_eq!(
+        files_under(&home),
+        before,
+        "cancelling leaves nothing behind"
+    );
+
+    // Left to finish: byte progress against the file's size, then the
+    // form, then the install.
+    let events = d.run("installer.install");
+    assert!(errors(&events).is_empty(), "{:?}", errors(&events));
+    assert!(
+        events.iter().any(|e| matches!(
+            e,
+            Event::JobProgress {
+                progress: Progress::Bytes { done, total: Some(total) },
+                ..
+            } if *total == size && *done > 0
+        )),
+        "no byte progress against the file's size"
+    );
+    assert_eq!(d.ui.forms_shown(), 1);
+    assert_eq!(d.current("big-app"), "1.0");
+    assert_eq!(d.record("big-app").main_executable, "bin/app");
+    assert!(
+        d.layout()
+            .version_dir("big-app", "1.0")
+            .join("data/blob2")
+            .is_file()
+    );
 }
 
 /// The directory the test binary runs from, where cargo puts every
