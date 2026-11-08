@@ -2,6 +2,7 @@
 //! working copy as a job, then drops the cached status so the badges
 //! follow.
 
+use ext::t;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -40,7 +41,7 @@ fn inside(copies: &WorkingCopies, ctx: &ActionCtx) -> Availability {
 fn needs_selection(copies: &WorkingCopies, ctx: &ActionCtx) -> Availability {
     match inside(copies, ctx) {
         Availability::Enabled if ctx.selection.is_empty() => {
-            Availability::Disabled("select the files first")
+            Availability::Disabled(t!("svn-select-the-files-first"))
         }
         other => other,
     }
@@ -114,11 +115,11 @@ macro_rules! svn_action {
     };
 }
 
-svn_action!(Update, "svn.update", "Update");
-svn_action!(Commit, "svn.commit", "Commit");
-svn_action!(Revert, "svn.revert", "Revert");
-svn_action!(Log, "svn.log", "Log");
-svn_action!(Add, "svn.add", "Add");
+svn_action!(Update, "svn.update", "svn-update");
+svn_action!(Commit, "svn.commit", "svn-commit");
+svn_action!(Revert, "svn.revert", "svn-revert");
+svn_action!(Log, "svn.log", "svn-log");
+svn_action!(Add, "svn.add", "svn-add");
 
 /// The common parts of the trait, with the per-action pieces as closures.
 macro_rules! impl_action {
@@ -127,8 +128,8 @@ macro_rules! impl_action {
             fn id(&self) -> ActionId {
                 Self::id_label().0
             }
-            fn label(&self) -> &'static str {
-                Self::id_label().1
+            fn label(&self) -> String {
+                ext::t!(Self::id_label().1)
             }
             fn group(&self) -> ActionGroup {
                 GROUP
@@ -179,7 +180,7 @@ impl_action!(Update,
 impl_action!(Commit,
     availability: inside,
     run: |shared, jobs, ui, root, ctx| {
-        let Some(message) = ui.prompt("Commit message", "") else {
+        let Some(message) = ui.prompt(&t!("svn-commit-message"), "") else {
             return Ok(ActionOutcome::Done);
         };
         if message.trim().is_empty() {
@@ -208,7 +209,7 @@ impl_action!(Revert,
     run: |shared, jobs, ui, root, ctx| {
         let paths = rela_paths(&root, &ctx.selection);
         let what = if paths.len() == 1 { paths[0].clone() } else { format!("{} items", paths.len()) };
-        if !ui.confirm("Revert", &format!("Revert the changes to {what}? This cannot be undone.")) {
+        if !ui.confirm(&t!("svn-revert"), &format!("Revert the changes to {what}? This cannot be undone.")) {
             return Ok(ActionOutcome::Done);
         }
         let mut args = strings(&["revert", "-R", "--"]);
@@ -228,7 +229,7 @@ impl_action!(Log,
         }
         let log = svn(&root, &args).map_err(to_error)?;
         let log = log.trim();
-        ui.show("SVN log", if log.is_empty() || log.chars().all(|c| c == '-') { "No commits yet." } else { log });
+        ui.show(&t!("svn-svn-log"), if log.is_empty() || log.chars().all(|c| c == '-') { "No commits yet." } else { log });
         Ok(ActionOutcome::Done)
     }
 );

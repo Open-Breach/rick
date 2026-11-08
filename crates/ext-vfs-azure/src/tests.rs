@@ -127,7 +127,7 @@ fn listings_parse() {
 #[test]
 fn the_schema_and_the_extension_register() {
     let schema = schema();
-    assert_eq!(schema.title, "Azure Blob");
+    assert_eq!(schema.title.key(), "azure-azure-blob");
     assert_eq!(schema.secret_fields().collect::<Vec<_>>(), ["key"]);
     assert!(schema.field("account").is_some_and(|f| f.required));
     assert!(matches!(

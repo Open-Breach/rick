@@ -1,10 +1,12 @@
 //! The view: the trash's items as entries, a trashed folder browsable below
 //! them, and the decorator that shows where each item came from.
 
+use ext::t;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
+use ext::Text;
 use ext::platform::{Trash, TrashedItem};
 use ext::{
     Capabilities, CellValue, ChangeStream, ColumnDef, ColumnId, CopyOptions, DecorateCtx,
@@ -23,7 +25,7 @@ pub const ORIGINAL_COLUMN: ColumnId = ColumnId("trash.original");
 
 const COLUMNS: [ColumnDef; 1] = [ColumnDef {
     id: ORIGINAL_COLUMN,
-    label: "Original location",
+    label: Text("trash-original-location"),
 }];
 
 /// FNV-1a over `bytes`: the key of an entry, stable across listings and
@@ -532,7 +534,7 @@ impl Decorator for TrashDecorator {
     fn panel(&self, entry: &Entry) -> Option<PanelSection> {
         let original = self.provider.original_of(entry)?;
         Some(PanelSection {
-            title: "Trash".to_owned(),
+            title: t!("trash-trash"),
             rows: vec![(
                 "Original location".to_owned(),
                 original.display().to_string(),

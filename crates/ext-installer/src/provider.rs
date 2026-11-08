@@ -3,9 +3,11 @@
 //! own, and the decorator that adds the version, kind, scope, state and
 //! commands columns.
 
+use ext::t;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
+use ext::Text;
 use ext::platform::Platform;
 use ext::{
     Capabilities, CellValue, ChangeStream, ColumnDef, ColumnId, CopyOptions, DecorateCtx,
@@ -35,23 +37,23 @@ pub const COMMANDS_COLUMN: ColumnId = ColumnId("installer.commands");
 const COLUMNS: [ColumnDef; 5] = [
     ColumnDef {
         id: VERSION_COLUMN,
-        label: "Version",
+        label: Text("installer-version"),
     },
     ColumnDef {
         id: KIND_COLUMN,
-        label: "Kind",
+        label: Text("installer-kind"),
     },
     ColumnDef {
         id: SCOPE_COLUMN,
-        label: "Scope",
+        label: Text("installer-scope"),
     },
     ColumnDef {
         id: STATE_COLUMN,
-        label: "State",
+        label: Text("installer-state"),
     },
     ColumnDef {
         id: COMMANDS_COLUMN,
-        label: "Commands",
+        label: Text("installer-commands"),
     },
 ];
 
@@ -622,7 +624,7 @@ impl Decorator for AppsDecorator {
             rows.push(("StartupWMClass".to_owned(), class.clone()));
         }
         Some(PanelSection {
-            title: "Installed app".to_owned(),
+            title: t!("installer-installed-app"),
             rows,
         })
     }

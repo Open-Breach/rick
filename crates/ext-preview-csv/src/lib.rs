@@ -14,6 +14,7 @@
 use std::ops::Range;
 use std::sync::Arc;
 
+use ext::Text;
 use ext::{
     API_VERSION, Capabilities, Content, ControlId, ControlValue, Extension, Frame, Grid, Icon,
     InfoSection, Manifest, Platforms, Points, PreviewControl, PreviewDoc, Previewer, Provider,
@@ -74,6 +75,7 @@ impl Extension for CsvPreview {
     }
 
     fn register(&self, reg: &mut Registry) -> Result<(), Error> {
+        reg.translations(&[("en", include_str!("../locales/en.ftl"))]);
         reg.previewer(Arc::new(CsvPreviewer));
         Ok(())
     }
@@ -493,7 +495,7 @@ impl PreviewDoc for CsvDoc {
         }
         vec![InfoSection {
             id: "file",
-            title: "File info",
+            title: Text("preview-csv-file-info"),
             icon: Icon::Info,
             rows,
         }]

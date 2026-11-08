@@ -1,5 +1,6 @@
 //! The five actions and the jobs behind them.
 
+use ext::t;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -181,8 +182,8 @@ impl Action for Compress {
     fn id(&self) -> ActionId {
         COMPRESS
     }
-    fn label(&self) -> &'static str {
-        "Compress"
+    fn label(&self) -> String {
+        t!("compress-compress")
     }
     fn group(&self) -> ActionGroup {
         ActionGroup::Core
@@ -195,7 +196,7 @@ impl Action for Compress {
             return Availability::Hidden;
         }
         if ctx.selection.is_empty() {
-            Availability::Disabled("select what to compress first")
+            Availability::Disabled(t!("compress-select-what-to-compress-first"))
         } else {
             Availability::Enabled
         }
@@ -245,8 +246,8 @@ impl Action for CompressAs {
     fn id(&self) -> ActionId {
         COMPRESS_AS
     }
-    fn label(&self) -> &'static str {
-        "Compress to…"
+    fn label(&self) -> String {
+        t!("compress-compress-to")
     }
     fn group(&self) -> ActionGroup {
         ActionGroup::Core
@@ -271,20 +272,24 @@ impl Action for CompressAs {
         let what = describe(&ctx.selection);
         let preview_formats: Vec<&'static str> = formats.iter().map(|(ext, _)| *ext).collect();
         let preview_what = what.clone();
-        let form = Form::new(format!("Compress {what}"), "Compress")
+        let form = Form::new(format!("Compress {what}"), t!("compress-compress"))
             .field(Field::text(
                 "name",
-                "Archive name",
+                t!("compress-archive-name"),
                 default_stem(&ctx),
                 "without the extension",
             ))
             .field(Field::choice(
                 "format",
-                "Format",
+                t!("compress-format"),
                 formats.iter().map(|(ext, _)| (*ext).to_owned()).collect(),
                 0,
             ))
-            .field(Field::folder("into", "Into", dir.display().to_string()))
+            .field(Field::folder(
+                "into",
+                t!("compress-into"),
+                dir.display().to_string(),
+            ))
             .preview(Arc::new(move |values: &Values| {
                 let stem = values.text("name").trim();
                 let ext = preview_formats
@@ -486,11 +491,11 @@ impl Action for Extract {
             Self::To => EXTRACT_TO,
         }
     }
-    fn label(&self) -> &'static str {
+    fn label(&self) -> String {
         match self {
-            Self::Here => "Extract here",
-            Self::Folder => "Extract to folder",
-            Self::To => "Extract to…",
+            Self::Here => t!("compress-extract-here"),
+            Self::Folder => t!("compress-extract-to-folder"),
+            Self::To => t!("compress-extract-to"),
         }
     }
     fn group(&self) -> ActionGroup {
@@ -529,34 +534,34 @@ impl Action for Extract {
             .map(|e| local_path(&location_of(e)))
             .collect::<Result<_, _>>()?;
         let what = describe(&ctx.selection);
-        let pairs: Vec<(PathBuf, PathBuf)> =
-            match self {
-                Self::Here => archives.into_iter().map(|a| (a, dir.clone())).collect(),
-                Self::Folder => archives
-                    .into_iter()
-                    .map(|a| {
-                        let stem = a.file_name().map_or_else(
-                            || "Archive".to_owned(),
-                            |n| archive_stem(&n.to_string_lossy()),
-                        );
-                        let folder = dir.join(stem);
-                        (a, folder)
-                    })
-                    .collect(),
-                Self::To => {
-                    let form = Form::new(format!("Extract {what}"), "Extract")
-                        .field(Field::folder("into", "Into", dir.display().to_string()));
-                    let Some(values) = ui.form(form) else {
-                        return Ok(ActionOutcome::Done);
-                    };
-                    let into = values.text("into").trim().to_owned();
-                    if into.is_empty() {
-                        return Err(Error::Unsupported("name the folder to extract to"));
-                    }
-                    let into = PathBuf::from(into);
-                    archives.into_iter().map(|a| (a, into.clone())).collect()
+        let pairs: Vec<(PathBuf, PathBuf)> = match self {
+            Self::Here => archives.into_iter().map(|a| (a, dir.clone())).collect(),
+            Self::Folder => archives
+                .into_iter()
+                .map(|a| {
+                    let stem = a.file_name().map_or_else(
+                        || "Archive".to_owned(),
+                        |n| archive_stem(&n.to_string_lossy()),
+                    );
+                    let folder = dir.join(stem);
+                    (a, folder)
+                })
+                .collect(),
+            Self::To => {
+                let form = Form::new(format!("Extract {what}"), t!("compress-extract")).field(
+                    Field::folder("into", t!("compress-into"), dir.display().to_string()),
+                );
+                let Some(values) = ui.form(form) else {
+                    return Ok(ActionOutcome::Done);
+                };
+                let into = values.text("into").trim().to_owned();
+                if into.is_empty() {
+                    return Err(Error::Unsupported("name the folder to extract to"));
                 }
-            };
+                let into = PathBuf::from(into);
+                archives.into_iter().map(|a| (a, into.clone())).collect()
+            }
+        };
         Ok(spawn_extract(jobs, &what, pairs))
     }
 }

@@ -17,7 +17,7 @@ use std::task::{Context, Poll};
 use std::time::{Duration, Instant};
 
 use ext::platform::Platform;
-use ext::{Connection, ConnectionSchema, Connector, Prompts, async_trait, secret_key};
+use ext::{Connection, ConnectionSchema, Connector, Prompts, Text, async_trait, secret_key};
 use futures::future::BoxFuture;
 use russh::client::{self, KeyboardInteractiveAuthResponse, Msg};
 use russh::keys::agent::AgentIdentity;
@@ -1228,7 +1228,7 @@ impl Connector for SshConnector {
         let mut schema = self.pool.hosts().schema();
         schema.fields.push(ext::ConnectionField {
             key: field::PASSPHRASE,
-            label: "Identity file passphrase",
+            label: Text("ssh-identity-file-passphrase"),
             kind: ext::ConnectionFieldKind::Secret,
             required: false,
         });

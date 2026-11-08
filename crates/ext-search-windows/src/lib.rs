@@ -27,6 +27,7 @@ pub mod backend;
 pub mod hits;
 pub mod service;
 
+use ext::t;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Weak};
 use std::time::Duration;
@@ -89,6 +90,7 @@ impl Extension for WindowsSearchExtension {
     }
 
     fn register(&self, reg: &mut Registry) -> Result<(), Error> {
+        reg.translations(&[("en", include_str!("../locales/en.ftl"))]);
         reg.search_index(Arc::new(WindowsSearchIndex::new(Arc::new(Process))));
         Ok(())
     }
@@ -219,9 +221,9 @@ impl SearchIndex for WindowsSearchIndex {
         if self.state.available() {
             Availability::Enabled
         } else if self.state.probed() {
-            Availability::Disabled("Windows Search is not running")
+            Availability::Disabled(t!("search-windows-windows-search-is-not-running"))
         } else {
-            Availability::Disabled("Windows Search has not answered yet")
+            Availability::Disabled(t!("search-windows-windows-search-has-not-answered-yet"))
         }
     }
 

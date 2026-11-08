@@ -102,7 +102,7 @@ pub(crate) fn sections_for(app: &App, slot: Option<&Slot>, entry: Option<&Entry>
         .iter()
         .map(|s| Section {
             id: s.id,
-            title: s.title.to_owned(),
+            title: s.title.get(),
             glyph: icons::for_icon(s.icon),
             rows: s.rows.clone(),
         })

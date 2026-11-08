@@ -57,6 +57,7 @@ mod schedule;
 mod select;
 mod transfer;
 
+use ext::t;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
@@ -96,7 +97,7 @@ fn needs_entries(ctx: &ActionCtx) -> Availability {
     if is_trash(ctx) {
         Availability::Hidden
     } else if ctx.selection.is_empty() {
-        Availability::Disabled("select something first")
+        Availability::Disabled(t!("reason-select-something-first"))
     } else {
         Availability::Enabled
     }

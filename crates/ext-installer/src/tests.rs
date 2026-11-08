@@ -633,7 +633,7 @@ fn install_update_revert_and_uninstall_leave_the_home_clean() {
     assert_eq!(
         h.action(REVERT)
             .availability(&h.ctx_view(vec![row.clone()])),
-        Availability::Disabled("no previous version is kept")
+        Availability::Disabled("no previous version is kept".to_owned())
     );
     let below = h.list(&Location::new(ProviderId::RICK, "apps/fixture-gui"));
     assert!(
@@ -1085,7 +1085,7 @@ fn repair_rewrites_what_is_missing_and_forget_drops_the_record() {
     assert_eq!(
         h.action(REPAIR)
             .availability(&h.ctx_view(vec![row.clone()])),
-        Availability::Disabled("nothing to repair")
+        Availability::Disabled("nothing to repair".to_owned())
     );
 
     // Forget deletes the record and leaves the files.

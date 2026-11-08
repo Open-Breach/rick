@@ -305,8 +305,8 @@ pub struct InfoSection {
     /// Stable id, unique within the document: `"file"`, `"exif"`. The pane
     /// remembers which id is pinned per content kind.
     pub id: &'static str,
-    /// The badge's tooltip and the panel's heading.
-    pub title: &'static str,
+    /// The badge's tooltip and the panel's heading: a Fluent key, read live.
+    pub title: crate::Text,
     /// The badge's glyph.
     pub icon: Icon,
     /// Key and value rows, in display order.

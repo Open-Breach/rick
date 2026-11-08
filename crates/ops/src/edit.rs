@@ -1,5 +1,6 @@
 //! Copy, Cut, Paste and Duplicate.
 
+use ext::t;
 use std::sync::Arc;
 
 use ext::{
@@ -22,8 +23,8 @@ impl Action for Copy {
     fn id(&self) -> ActionId {
         ActionId("core.copy")
     }
-    fn label(&self) -> &'static str {
-        "Copy"
+    fn label(&self) -> String {
+        t!("action-copy")
     }
     fn group(&self) -> ActionGroup {
         ActionGroup::Core
@@ -58,8 +59,8 @@ impl Action for Cut {
     fn id(&self) -> ActionId {
         ActionId("core.cut")
     }
-    fn label(&self) -> &'static str {
-        "Cut"
+    fn label(&self) -> String {
+        t!("action-cut")
     }
     fn group(&self) -> ActionGroup {
         ActionGroup::Core
@@ -94,8 +95,8 @@ impl Action for Paste {
     fn id(&self) -> ActionId {
         ActionId("core.paste")
     }
-    fn label(&self) -> &'static str {
-        "Paste"
+    fn label(&self) -> String {
+        t!("action-paste")
     }
     fn group(&self) -> ActionGroup {
         ActionGroup::Core
@@ -119,7 +120,7 @@ impl Action for Paste {
         {
             Availability::Enabled
         } else {
-            Availability::Disabled("nothing to paste")
+            Availability::Disabled(t!("reason-nothing-to-paste"))
         }
     }
     fn run(
@@ -513,8 +514,8 @@ impl Action for Duplicate {
     fn id(&self) -> ActionId {
         ActionId("core.duplicate")
     }
-    fn label(&self) -> &'static str {
-        "Duplicate"
+    fn label(&self) -> String {
+        t!("action-duplicate")
     }
     fn group(&self) -> ActionGroup {
         ActionGroup::Core

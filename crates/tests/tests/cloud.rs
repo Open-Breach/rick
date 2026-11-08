@@ -285,10 +285,10 @@ fn the_four_plugins_load_through_the_host_with_a_provider_and_a_connector_each()
     let mut providers: Vec<&str> = registry.providers().iter().map(|p| p.id().0).collect();
     providers.sort_unstable();
     assert_eq!(providers, ["azure", "gcs", "s3", "sftp"]);
-    let mut titles: Vec<&str> = registry
+    let mut titles: Vec<String> = registry
         .connectors()
         .iter()
-        .map(|c| c.schema().title)
+        .map(|c| c.schema().title.get())
         .collect();
     titles.sort_unstable();
     assert_eq!(titles, ["Azure Blob", "Google Cloud Storage", "S3", "SFTP"]);

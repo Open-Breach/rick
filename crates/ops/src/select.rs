@@ -1,6 +1,7 @@
 //! Select by pattern: the entries whose name matches a glob or a regular
 //! expression, added to or replacing the selection (Mod+Shift+S).
 
+use ext::t;
 use std::sync::Arc;
 
 use ext::{
@@ -54,8 +55,8 @@ impl Action for SelectByPattern {
     fn id(&self) -> ActionId {
         ActionId("core.select_pattern")
     }
-    fn label(&self) -> &'static str {
-        "Select by pattern…"
+    fn label(&self) -> String {
+        t!("action-select-by-pattern")
     }
     fn group(&self) -> ActionGroup {
         ActionGroup::Core

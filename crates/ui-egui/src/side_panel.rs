@@ -68,7 +68,7 @@ pub struct ConnectionDialog {
     /// The provider the connection is for.
     pub provider: ProviderId,
     /// The provider's name in the title.
-    pub title: &'static str,
+    pub title: String,
     /// The connection's name as typed.
     pub name: String,
     /// The fields with their values as typed; a `Bool` holds `true` or
@@ -89,7 +89,7 @@ impl ConnectionDialog {
         let schema = connector.schema();
         Self {
             provider: connector.provider(),
-            title: schema.title,
+            title: schema.title.get(),
             name: String::new(),
             values: schema
                 .fields
@@ -499,7 +499,7 @@ fn connection_field(ui: &mut egui::Ui, field: &ConnectionField, value: &mut Stri
     let label = if field.required {
         format!("{} *", field.label)
     } else {
-        field.label.to_owned()
+        field.label.get()
     };
     ui.label(label);
     match &field.kind {

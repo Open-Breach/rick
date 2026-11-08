@@ -217,14 +217,14 @@ pub enum LinkKind {
 }
 
 impl LinkKind {
-    /// The name shown in menus and dialogues.
+    /// The name shown in menus and dialogues, in the language in use.
     #[must_use]
-    pub fn label(self) -> &'static str {
+    pub fn label(self) -> String {
         match self {
-            Self::Symbolic => "Symbolic link",
-            Self::Hard => "Hard link",
-            Self::Junction => "Directory junction",
-            Self::Shortcut => "Shortcut (.lnk)",
+            Self::Symbolic => crate::t!("link-symbolic"),
+            Self::Hard => crate::t!("link-hard"),
+            Self::Junction => crate::t!("link-junction"),
+            Self::Shortcut => crate::t!("link-shortcut"),
         }
     }
 

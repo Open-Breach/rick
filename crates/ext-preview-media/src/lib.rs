@@ -27,6 +27,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
+use ext::Text;
 use ext::{
     API_VERSION, Capabilities, ControlId, ControlValue, Extension, Frame, Icon, InfoSection,
     Manifest, Platforms, Points, PreviewControl, PreviewDoc, Previewer, Provider, Registry,
@@ -84,6 +85,7 @@ impl Extension for MediaPreview {
     }
 
     fn register(&self, reg: &mut Registry) -> Result<(), Error> {
+        reg.translations(&[("en", include_str!("../locales/en.ftl"))]);
         reg.previewer(Arc::new(MediaPreviewer));
         Ok(())
     }
@@ -394,14 +396,14 @@ impl PreviewDoc for MediaDoc {
         ));
         let mut sections = vec![InfoSection {
             id: "file",
-            title: "File info",
+            title: Text("preview-media-file-info"),
             icon: Icon::Info,
             rows,
         }];
         if !self.tags.is_empty() {
             sections.push(InfoSection {
                 id: "tags",
-                title: "Tags",
+                title: Text("preview-media-tags"),
                 icon: Icon::Tag,
                 rows: self.tags.clone(),
             });
@@ -409,7 +411,7 @@ impl PreviewDoc for MediaDoc {
         if !self.streams.is_empty() {
             sections.push(InfoSection {
                 id: "streams",
-                title: "Stream details",
+                title: Text("preview-media-stream-details"),
                 icon: Icon::Film,
                 rows: self.streams.clone(),
             });

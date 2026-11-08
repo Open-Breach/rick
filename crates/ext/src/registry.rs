@@ -45,7 +45,7 @@
 //! struct Hello;
 //! impl Action for Hello {
 //!     fn id(&self) -> ActionId { ActionId("demo.hello") }
-//!     fn label(&self) -> &str { "Say hello" }
+//!     fn label(&self) -> String { t!("hello-say") }
 //!     fn group(&self) -> ActionGroup { ActionGroup::Extension("Demo") }
 //!     fn default_shortcut(&self) -> Option<Shortcut> { None }
 //!     fn availability(&self, _ctx: &ActionCtx) -> Availability { Availability::Enabled }
@@ -143,8 +143,13 @@ use crate::search::SearchIndex;
 /// `remote_preview_cap` for the previews over a remote provider,
 /// `Connector::schema` is computed per call and gained a `Choice` field,
 /// and the terminal emulation moved into `ext::terminal` (QUESTIONS.md
-/// 159–162).
-pub const API_VERSION: u32 = 10;
+/// 159–162); 11 every user-facing string goes through the
+/// [`t!`](crate::t) lookup: `Action::label` returns a `String`,
+/// `Availability::Disabled` carries one, the labels the registry keeps
+/// (`SettingField`, `ConnectionField`, `ConnectionSchema`, `InfoSection`,
+/// `ColumnDef`) are [`Text`](crate::Text) keys, and the registry takes an
+/// extension's translation files (QUESTIONS.md 178–181).
+pub const API_VERSION: u32 = 11;
 
 bitflags::bitflags! {
     /// The extension points an extension fills, as its manifest declares
@@ -357,8 +362,8 @@ impl SettingKind {
 pub struct SettingField {
     /// Key in the extension's TOML file.
     pub key: &'static str,
-    /// Label in the Settings screen.
-    pub label: &'static str,
+    /// Label in the Settings screen: a Fluent key, read live.
+    pub label: crate::Text,
     /// How it is edited.
     pub kind: SettingKind,
 }

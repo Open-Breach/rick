@@ -65,7 +65,7 @@ fn the_extension_registers_a_provider_a_connector_two_actions_and_settings() {
         .connector_of(PROVIDER_ID)
         .unwrap_or_else(|| panic!("connector"));
     let schema = connector.schema();
-    assert_eq!(schema.title, "SSH");
+    assert_eq!(schema.title.key(), "ssh-ssh");
     assert_eq!(
         schema.secret_fields().collect::<Vec<_>>(),
         ["password", "passphrase"]

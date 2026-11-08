@@ -129,8 +129,8 @@ pub struct ConnectionField {
     /// The key in `rick.toml` and in [`Connection::settings`], or the
     /// last part of the keychain key for a secret.
     pub key: &'static str,
-    /// The label in the dialogue.
-    pub label: &'static str,
+    /// The label in the dialogue: a Fluent key, read live.
+    pub label: crate::Text,
     /// How it is edited and stored.
     pub kind: ConnectionFieldKind,
     /// Whether the dialogue refuses an empty value.
@@ -141,8 +141,9 @@ pub struct ConnectionField {
 /// name is asked for by the application itself and is not a field.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ConnectionSchema {
-    /// The provider's name in the *Add connection…* menu: "S3", "SFTP".
-    pub title: &'static str,
+    /// The provider's name in the *Add connection…* menu ("S3", "SFTP"): a
+    /// Fluent key, read live.
+    pub title: crate::Text,
     /// The fields, in display order.
     pub fields: Vec<ConnectionField>,
 }

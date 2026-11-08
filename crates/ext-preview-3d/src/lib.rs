@@ -35,6 +35,7 @@ use std::hash::BuildHasher;
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use ext::Text;
 use ext::{
     API_VERSION, Capabilities, ControlId, ControlValue, Extension, Frame, Gesture, Icon,
     InfoSection, Manifest, Platforms, Points, PreviewControl, PreviewDoc, Previewer, Provider,
@@ -103,6 +104,7 @@ impl Extension for Preview3d {
     }
 
     fn register(&self, reg: &mut Registry) -> Result<(), Error> {
+        reg.translations(&[("en", include_str!("../locales/en.ftl"))]);
         let config_dir = reg.platform().map(|platform| platform.config_dir());
         reg.previewer(Arc::new(Previewer3d::new(config_dir)));
         reg.settings(settings::schema());
@@ -685,7 +687,7 @@ impl PreviewDoc for Doc3d {
     fn sections(&self) -> Vec<InfoSection> {
         vec![InfoSection {
             id: "file",
-            title: "File info",
+            title: Text("preview-3d-file-info"),
             icon: Icon::Info,
             rows: self.rows(),
         }]

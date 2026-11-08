@@ -24,6 +24,7 @@ pub mod markdown;
 
 use std::sync::{Arc, LazyLock};
 
+use ext::Text;
 use ext::{
     API_VERSION, Capabilities, Content, ControlId, ControlValue, Document, Extension, Frame, Icon,
     InfoSection, Manifest, Platforms, Points, PreviewControl, PreviewDoc, Previewer, Provider,
@@ -171,6 +172,7 @@ impl Extension for CodePreview {
     }
 
     fn register(&self, reg: &mut Registry) -> Result<(), Error> {
+        reg.translations(&[("en", include_str!("../locales/en.ftl"))]);
         reg.previewer(Arc::new(CodePreviewer));
         Ok(())
     }
@@ -666,7 +668,7 @@ impl PreviewDoc for CodeDoc {
         }
         vec![InfoSection {
             id: "file",
-            title: "File info",
+            title: Text("preview-code-file-info"),
             icon: Icon::Info,
             rows,
         }]
@@ -985,7 +987,10 @@ mod tests {
         let doc = CodeDoc::new("a.rs", b"fn a() {}\r\nfn b() {}\r\n", false, Some(2048));
         let sections = doc.sections();
         assert_eq!(sections.len(), 1);
-        assert_eq!((sections[0].id, sections[0].title), ("file", "File info"));
+        assert_eq!(
+            (sections[0].id, sections[0].title.key()),
+            ("file", "preview-code-file-info")
+        );
         let row = |key: &str| {
             sections[0]
                 .rows

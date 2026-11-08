@@ -908,8 +908,8 @@ fn the_plugin_loads_through_the_host_and_without_it_network_is_empty() {
     }
     assert_eq!(registry.providers()[0].id(), SSH);
     assert_eq!(
-        registry.connector_of(SSH).map(|c| c.schema().title),
-        Some("SSH")
+        registry.connector_of(SSH).map(|c| c.schema().title.key()),
+        Some("ssh-ssh")
     );
     let mut actions: Vec<&str> = registry.actions().iter().map(|a| a.id().0).collect();
     actions.sort_unstable();

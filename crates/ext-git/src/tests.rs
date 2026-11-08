@@ -330,7 +330,7 @@ fn the_decorator_answers_pending_first_then_publishes_and_then_from_cache() {
     let panel = decorator
         .panel(&batch[0])
         .unwrap_or_else(|| panic!("panel"));
-    assert_eq!(panel.title, "Git");
+    assert_eq!(panel.title, ext::t!("git-git"));
     assert!(
         panel.rows.iter().any(|(k, v)| k == "Branch" && v == "main"),
         "{panel:?}"

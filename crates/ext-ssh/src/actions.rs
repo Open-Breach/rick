@@ -1,6 +1,7 @@
 //! The "SSH" action group: *Open console here* and *Open in external
 //! terminal*, on a remote folder and on a host row of the Network section.
 
+use ext::t;
 use std::sync::Arc;
 
 use ext::{
@@ -69,8 +70,8 @@ impl Action for OpenConsole {
     fn id(&self) -> ActionId {
         CONSOLE
     }
-    fn label(&self) -> &'static str {
-        "Open console here"
+    fn label(&self) -> String {
+        t!("ssh-open-console-here")
     }
     fn group(&self) -> ActionGroup {
         GROUP
@@ -111,8 +112,8 @@ impl Action for OpenTerminal {
     fn id(&self) -> ActionId {
         TERMINAL
     }
-    fn label(&self) -> &'static str {
-        "Open in external terminal"
+    fn label(&self) -> String {
+        t!("ssh-open-in-external-terminal")
     }
     fn group(&self) -> ActionGroup {
         GROUP

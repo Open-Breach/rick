@@ -1,5 +1,6 @@
 //! Move to trash and Delete permanently.
 
+use ext::t;
 use std::sync::{Arc, Mutex, PoisonError};
 
 use ext::{
@@ -20,8 +21,8 @@ impl Action for Trash {
     fn id(&self) -> ActionId {
         ActionId("core.trash")
     }
-    fn label(&self) -> &'static str {
-        "Move to trash"
+    fn label(&self) -> String {
+        t!("action-move-to-trash")
     }
     fn group(&self) -> ActionGroup {
         ActionGroup::Core
@@ -154,8 +155,8 @@ impl Action for Delete {
     fn id(&self) -> ActionId {
         ActionId("core.delete")
     }
-    fn label(&self) -> &'static str {
-        "Delete permanently"
+    fn label(&self) -> String {
+        t!("action-delete-permanently")
     }
     fn group(&self) -> ActionGroup {
         ActionGroup::Core
@@ -170,7 +171,7 @@ impl Action for Delete {
     /// for good through the view's own `remove`.
     fn availability(&self, ctx: &ActionCtx) -> Availability {
         if ctx.selection.is_empty() {
-            Availability::Disabled("select something first")
+            Availability::Disabled(t!("reason-select-something-first"))
         } else {
             Availability::Enabled
         }

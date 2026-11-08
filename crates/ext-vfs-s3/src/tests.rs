@@ -154,7 +154,7 @@ fn listings_and_bucket_lists_parse() {
 #[test]
 fn the_schema_names_the_fields_and_the_secret() {
     let schema = schema();
-    assert_eq!(schema.title, "S3");
+    assert_eq!(schema.title.key(), "s3-s3");
     assert_eq!(schema.secret_fields().collect::<Vec<_>>(), ["secret_key"]);
     assert!(schema.field("access_key").is_some_and(|f| f.required));
     assert!(matches!(

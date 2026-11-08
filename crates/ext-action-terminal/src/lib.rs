@@ -19,6 +19,7 @@
 
 pub mod session;
 
+use ext::t;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -26,7 +27,7 @@ use ext::platform::Platform;
 use ext::{
     API_VERSION, Action, ActionCtx, ActionGroup, ActionId, ActionOutcome, Availability,
     Capabilities, Extension, JobRunner, Key, Manifest, Modifiers, Platforms, Points, Registry,
-    SettingField, SettingKind, SettingsSchema, Shortcut, UiHost, Version, View,
+    SettingField, SettingKind, SettingsSchema, Shortcut, Text, UiHost, Version, View,
 };
 use types::{Error, ExtId, Location, ProviderId};
 
@@ -81,6 +82,10 @@ impl Extension for TerminalExtension {
     }
 
     fn register(&self, reg: &mut Registry) -> Result<(), Error> {
+        reg.translations(&[
+            ("en", include_str!("../locales/en.ftl")),
+            ("de", include_str!("../locales/de.ftl")),
+        ]);
         reg.action(Arc::new(OpenConsole {
             platform: reg.platform().cloned(),
         }));
@@ -88,7 +93,7 @@ impl Extension for TerminalExtension {
             ext: ID,
             fields: vec![SettingField {
                 key: CONSOLE_SETTING,
-                label: "Open console in",
+                label: Text("terminal-open-console-in"),
                 kind: SettingKind::Choice {
                     options: CONSOLE_OPTIONS.to_vec(),
                     default: 0,
@@ -131,8 +136,8 @@ impl Action for OpenConsole {
     fn id(&self) -> ActionId {
         CONSOLE
     }
-    fn label(&self) -> &'static str {
-        "Open console"
+    fn label(&self) -> String {
+        t!("terminal-open-console")
     }
     fn group(&self) -> ActionGroup {
         ActionGroup::Core

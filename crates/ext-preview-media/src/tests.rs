@@ -300,7 +300,7 @@ fn without_playback_the_document_shows_the_facts_and_the_reason() {
     );
     let sections = doc.sections();
     assert_eq!(sections.len(), 2);
-    assert_eq!(sections[0].title, "File info");
+    assert_eq!(sections[0].title.key(), "preview-media-file-info");
     assert!(
         sections[0]
             .rows
@@ -319,7 +319,7 @@ fn without_playback_the_document_shows_the_facts_and_the_reason() {
             .iter()
             .any(|(k, v)| k == "Playback" && v.starts_with("Playback is not available"))
     );
-    assert_eq!(sections[1].title, "Tags");
+    assert_eq!(sections[1].title.key(), "preview-media-tags");
     assert_eq!(sections[1].icon, Icon::Tag);
     assert_eq!(doc.kind(), Kind::Wav);
     assert_eq!(doc.probe().channels, Some(1));
@@ -402,7 +402,9 @@ mod with_gstreamer {
             "{sections:?}"
         );
         assert!(
-            sections.iter().any(|s| s.title == "Stream details"),
+            sections
+                .iter()
+                .any(|s| s.title.key() == "preview-media-stream-details"),
             "{sections:?}"
         );
         let Frame::Rgba {
@@ -527,7 +529,7 @@ mod with_gstreamer {
         let sections = doc.sections();
         let streams = sections
             .iter()
-            .find(|s| s.title == "Stream details")
+            .find(|s| s.title.key() == "preview-media-stream-details")
             .unwrap_or_else(|| panic!("{sections:?}"));
         assert!(
             streams
@@ -574,7 +576,7 @@ mod with_gstreamer {
             let sections = doc.sections();
             let tags = sections
                 .iter()
-                .find(|s| s.title == "Tags")
+                .find(|s| s.title.key() == "preview-media-tags")
                 .unwrap_or_else(|| panic!("{sections:?}"));
             assert!(
                 tags.rows

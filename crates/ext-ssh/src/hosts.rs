@@ -14,6 +14,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, SystemTime};
 
+use ext::Text;
 use ext::platform::Platform;
 use ext::{Connection, ConnectionField, ConnectionFieldKind, ConnectionSchema};
 
@@ -434,11 +435,11 @@ impl Hosts {
         let mut jumps: Vec<String> = vec![String::new()];
         jumps.extend(self.all().into_iter().map(|h| h.alias));
         ConnectionSchema {
-            title: "SSH",
+            title: Text("ssh-ssh"),
             fields: vec![
                 ConnectionField {
                     key: field::HOST,
-                    label: "Host name",
+                    label: Text("ssh-host-name"),
                     kind: ConnectionFieldKind::Text {
                         default: String::new(),
                     },
@@ -446,7 +447,7 @@ impl Hosts {
                 },
                 ConnectionField {
                     key: field::PORT,
-                    label: "Port",
+                    label: Text("ssh-port"),
                     kind: ConnectionFieldKind::Integer {
                         default: 22,
                         min: 1,
@@ -456,7 +457,7 @@ impl Hosts {
                 },
                 ConnectionField {
                     key: field::USER,
-                    label: "User",
+                    label: Text("ssh-user"),
                     kind: ConnectionFieldKind::Text {
                         default: String::new(),
                     },
@@ -464,7 +465,7 @@ impl Hosts {
                 },
                 ConnectionField {
                     key: field::DEFAULT_DIR,
-                    label: "Default directory",
+                    label: Text("ssh-default-directory"),
                     kind: ConnectionFieldKind::Text {
                         default: String::new(),
                     },
@@ -472,13 +473,13 @@ impl Hosts {
                 },
                 ConnectionField {
                     key: field::IDENTITY_FILE,
-                    label: "Identity file",
+                    label: Text("ssh-identity-file"),
                     kind: ConnectionFieldKind::Path,
                     required: false,
                 },
                 ConnectionField {
                     key: field::JUMP,
-                    label: "Jump host",
+                    label: Text("ssh-jump-host"),
                     kind: ConnectionFieldKind::Choice {
                         options: jumps,
                         default: 0,
@@ -487,19 +488,19 @@ impl Hosts {
                 },
                 ConnectionField {
                     key: field::PASSWORD,
-                    label: "Password",
+                    label: Text("ssh-password"),
                     kind: ConnectionFieldKind::Secret,
                     required: false,
                 },
                 ConnectionField {
                     key: field::REMEMBER_PASSWORD,
-                    label: "Remember password in the OS keychain",
+                    label: Text("ssh-remember-password-in-the-os-keychain"),
                     kind: ConnectionFieldKind::Bool { default: false },
                     required: false,
                 },
                 ConnectionField {
                     key: field::PREVIEW_CAP,
-                    label: "Preview size cap (MiB, 0 for the default)",
+                    label: Text("ssh-preview-size-cap-mib-0-for"),
                     kind: ConnectionFieldKind::Integer {
                         default: 0,
                         min: 0,
@@ -604,7 +605,7 @@ mod tests {
 
         // The schema offers the known aliases as jump hosts.
         let schema = hosts.schema();
-        assert_eq!(schema.title, "SSH");
+        assert_eq!(schema.title.key(), "ssh-ssh");
         assert!(matches!(
             schema.field("jump").map(|f| &f.kind),
             Some(ConnectionFieldKind::Choice { options, .. })

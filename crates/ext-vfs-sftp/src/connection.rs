@@ -6,6 +6,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
+use ext::Text;
 use ext::platform::Platform;
 use ext::{
     Connection, ConnectionField, ConnectionFieldKind, ConnectionSchema, Connector, async_trait,
@@ -46,11 +47,11 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
 #[must_use]
 pub fn schema() -> ConnectionSchema {
     ConnectionSchema {
-        title: "SFTP",
+        title: Text("sftp-sftp"),
         fields: vec![
             ConnectionField {
                 key: field::HOST,
-                label: "Host",
+                label: Text("sftp-host"),
                 kind: ConnectionFieldKind::Text {
                     default: String::new(),
                 },
@@ -58,7 +59,7 @@ pub fn schema() -> ConnectionSchema {
             },
             ConnectionField {
                 key: field::PORT,
-                label: "Port",
+                label: Text("sftp-port"),
                 kind: ConnectionFieldKind::Integer {
                     default: 22,
                     min: 1,
@@ -68,7 +69,7 @@ pub fn schema() -> ConnectionSchema {
             },
             ConnectionField {
                 key: field::USER,
-                label: "User",
+                label: Text("sftp-user"),
                 kind: ConnectionFieldKind::Text {
                     default: String::new(),
                 },
@@ -76,25 +77,25 @@ pub fn schema() -> ConnectionSchema {
             },
             ConnectionField {
                 key: field::KEY_FILE,
-                label: "Private key file",
+                label: Text("sftp-private-key-file"),
                 kind: ConnectionFieldKind::Path,
                 required: false,
             },
             ConnectionField {
                 key: field::PASSPHRASE,
-                label: "Key passphrase",
+                label: Text("sftp-key-passphrase"),
                 kind: ConnectionFieldKind::Secret,
                 required: false,
             },
             ConnectionField {
                 key: field::PASSWORD,
-                label: "Password",
+                label: Text("sftp-password"),
                 kind: ConnectionFieldKind::Secret,
                 required: false,
             },
             ConnectionField {
                 key: field::FOLDER,
-                label: "Remote folder",
+                label: Text("sftp-remote-folder"),
                 kind: ConnectionFieldKind::Text {
                     default: String::new(),
                 },

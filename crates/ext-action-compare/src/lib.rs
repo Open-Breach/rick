@@ -18,6 +18,7 @@
 
 mod diff;
 
+use ext::t;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -73,6 +74,10 @@ impl Extension for CompareExtension {
     }
 
     fn register(&self, reg: &mut Registry) -> Result<(), Error> {
+        reg.translations(&[
+            ("en", include_str!("../locales/en.ftl")),
+            ("de", include_str!("../locales/de.ftl")),
+        ]);
         reg.action(Arc::new(CompareAction));
         Ok(())
     }
@@ -140,8 +145,8 @@ impl Action for CompareAction {
     fn id(&self) -> ActionId {
         COMPARE
     }
-    fn label(&self) -> &'static str {
-        "Compare"
+    fn label(&self) -> String {
+        t!("compare-compare")
     }
     fn group(&self) -> ActionGroup {
         ActionGroup::Core
@@ -153,10 +158,10 @@ impl Action for CompareAction {
         match sides(ctx) {
             Some(_) => Availability::Enabled,
             None if ctx.selection.len() == 2 => {
-                Availability::Disabled("select two files or two folders")
+                Availability::Disabled(t!("compare-select-two-files-or-two-folders"))
             }
             None if ctx.selection.is_empty() && ctx.location.provider == ProviderId("local") => {
-                Availability::Disabled("select two files or two folders, or open a second pane")
+                Availability::Disabled(t!("compare-select-two-files-or-two-folders-2"))
             }
             None => Availability::Hidden,
         }

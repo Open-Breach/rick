@@ -45,7 +45,7 @@ use std::sync::Arc;
 
 use ext::{
     API_VERSION, Capabilities, Connector, Extension, Manifest, Platforms, Points, Provider,
-    Registry, SettingField, SettingKind, SettingsSchema, Version,
+    Registry, SettingField, SettingKind, SettingsSchema, Text, Version,
 };
 use types::{Error, ExtId, Location, ProviderId, VPath};
 
@@ -170,12 +170,12 @@ impl SshExtension {
             fields: vec![
                 SettingField {
                     key: hosts::setting::READ_OPENSSH_CONFIG,
-                    label: "Hosts from ~/.ssh/config",
+                    label: Text("ssh-hosts-from-ssh-config"),
                     kind: SettingKind::Bool { default: true },
                 },
                 SettingField {
                     key: hosts::setting::IDLE_TIMEOUT_MINUTES,
-                    label: "Close idle connections after (minutes)",
+                    label: Text("ssh-close-idle-connections-after-minutes"),
                     kind: SettingKind::Integer {
                         default: 10,
                         min: 1,
@@ -184,7 +184,7 @@ impl SshExtension {
                 },
                 SettingField {
                     key: hosts::setting::PREVIEW_CAP_MIB,
-                    label: "Preview size cap for whole-file previews (MiB)",
+                    label: Text("ssh-preview-size-cap-for-whole-file"),
                     kind: SettingKind::Integer {
                         default: 4,
                         min: 1,
@@ -202,6 +202,10 @@ impl Extension for SshExtension {
     }
 
     fn register(&self, reg: &mut Registry) -> Result<(), Error> {
+        reg.translations(&[
+            ("en", include_str!("../locales/en.ftl")),
+            ("de", include_str!("../locales/de.ftl")),
+        ]);
         let platform = reg
             .platform()
             .ok_or(Error::Unsupported(

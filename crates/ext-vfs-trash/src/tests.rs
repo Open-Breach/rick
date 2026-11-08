@@ -299,12 +299,12 @@ fn restore_undo_and_empty_work_in_the_view_only() {
     assert_eq!(
         h.action("trash.restore")
             .availability(&h.ctx(location(), vec![entry("one.txt"), entry("two.txt")])),
-        Availability::Disabled("Restore trash items puts several back")
+        Availability::Disabled("Restore trash items puts several back".to_owned())
     );
     assert_eq!(
         h.action("trash.restore_items")
             .availability(&h.ctx(location(), Vec::new())),
-        Availability::Disabled("select trashed items first")
+        Availability::Disabled("select trashed items first".to_owned())
     );
 
     // Restore one; undo trashes it again; redo restores it.
@@ -358,6 +358,6 @@ fn restore_undo_and_empty_work_in_the_view_only() {
     assert_eq!(
         h.action("trash.empty")
             .availability(&h.ctx(location(), Vec::new())),
-        Availability::Disabled("the trash is empty")
+        Availability::Disabled("the trash is empty".to_owned())
     );
 }

@@ -17,6 +17,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use egui_kittest::Harness;
+use ext::Text;
 use ext::{
     API_VERSION, Capabilities, ControlId, ControlValue, Extension, Frame, Gesture, Icon,
     InfoSection, Manifest, Platforms, Points, PreviewControl, PreviewDoc, Previewer, Provider,
@@ -340,7 +341,7 @@ impl PreviewDoc for GestureDoc {
     fn sections(&self) -> Vec<InfoSection> {
         vec![InfoSection {
             id: "file",
-            title: "File info",
+            title: Text("File info"),
             icon: Icon::Info,
             rows: vec![("Renders".to_owned(), self.renders.to_string())],
         }]

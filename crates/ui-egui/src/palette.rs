@@ -37,12 +37,12 @@ pub fn items(app: &App, keys: &KeyMap, pane: PaneId, recents: &[Intent]) -> Vec<
             let intent = Intent::Action(action.id());
             let disabled = match ctx.as_ref().map(|c| action.availability(c)) {
                 Some(Availability::Enabled) => None,
-                Some(Availability::Disabled(why)) => Some(why.to_owned()),
+                Some(Availability::Disabled(why)) => Some(why),
                 Some(Availability::Hidden) | None => return None,
             };
             Some(Item {
                 intent,
-                label: action.label().to_owned(),
+                label: action.label(),
                 shortcut: keys.text_for(intent),
                 disabled,
                 recency: recency(intent),

@@ -313,7 +313,7 @@ fn extension_settings(
                         .get(schema.ext.0, field.key)
                         .cloned()
                         .unwrap_or_else(|| field.kind.default_value());
-                    ui.label(field.label);
+                    ui.label(field.label.get());
                     let new_value = match (&field.kind, &current) {
                         (ext::SettingKind::Bool { .. }, ext::SettingValue::Bool(on)) => {
                             let mut on = *on;
@@ -514,7 +514,7 @@ impl ShortcutsScreen {
                                         (
                                             "File operations".to_owned(),
                                             Intent::Action(a.id()),
-                                            a.label().to_owned(),
+                                            a.label(),
                                         )
                                     })
                                     .chain(UI_INTENTS.iter().filter(|s| s.group != "List").map(
@@ -579,7 +579,7 @@ pub fn label_of(intent: Intent, registry: &Registry) -> String {
             .actions()
             .iter()
             .find(|a| a.id() == id)
-            .map_or_else(|| id.0.to_owned(), |a| a.label().to_owned()),
+            .map_or_else(|| id.0.to_owned(), |a| a.label()),
         other => other
             .spec()
             .map_or_else(|| format!("{other:?}"), |s| s.label.to_owned()),
