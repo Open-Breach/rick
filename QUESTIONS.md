@@ -2648,3 +2648,36 @@ Once answered, an entry keeps its number and gains a dated decision line.
     -Werror, through the makefile's own variables; the Linux build keeps
     the gcc flags as the makefile has them, and the pinned release and
     its checksums are unchanged.
+
+220. (0.2.0 release, 2026-11-08) The in-process SSH server of the plugin's
+    live tests and of the host's `ssh.rs` runs its commands through this
+    machine's `sh`, and the fixture home carries a name with a newline;
+    on the Windows runner no Unix shell answers and the name is invalid,
+    so twelve tests failed there in the first Windows run of the 0.2
+    content, while specs/ext-ssh.md serves Unix-like hosts only.
+    Assumed: the tests against the in-process server say so and stop on
+    Windows (the plugin's other tests run there); a Windows host for the
+    SSH fixture is not a 0.2 concern. The macOS runner refuses a non-UTF-8
+    name, reports a `/var/…` home as `/private/var/…` and answers the
+    profile probe with BSD; the fixture and the expectations follow.
+
+221. (0.2.0 release, 2026-11-08) The Windows Search acceptance writes a
+    file into the fixture directory and expects the index to find it; the
+    runner's indexer, started by CI's setup, backs off while the build and
+    the tests load the machine and did not index the file within five
+    minutes, where a probe on an idle runner found it after ten seconds.
+    Assumed: CI's setup sets the "Disable indexer backoff" policy before
+    it starts the service, and the test allows five minutes, reached only
+    on failure; the acceptance itself is unchanged.
+
+222. (0.2.0 release, 2026-11-08) `vfs-local`'s watch handed every event to
+    its stream through a bounded channel whose sender blocks while the
+    channel is full, and dropped the watcher before the receiver; FSEvents
+    joins the callback thread when the watcher drops, so a relist over a
+    burst of more than 1024 events (a bulk rename of a thousand files)
+    waited for ever and the macOS job ran into its timeout.
+    Assumed: the watch state closes its receiver first, so the blocked
+    send fails and the thread ends; the channel's depth and the blocking
+    send, which keep the watcher from dropping events, stay as they are.
+    Found through a stack sample of the hung test process on a throwaway
+    branch (`ci/macos-hang`, which this session could not delete).
