@@ -211,6 +211,28 @@ pub fn settings_window(
                     }
                     ui.end_row();
 
+                    ui.label(t!("settings-language"));
+                    let mut language = settings.language.clone();
+                    let name = |tag: &Option<String>| {
+                        tag.as_deref().map_or_else(
+                            || t!("settings-language-system"),
+                            ext::i18n::language_name,
+                        )
+                    };
+                    egui::ComboBox::from_id_salt("language")
+                        .selected_text(name(&language))
+                        .show_ui(ui, |ui| {
+                            ui.selectable_value(&mut language, None, name(&None));
+                            for tag in ext::i18n::available() {
+                                let choice = Some(tag);
+                                ui.selectable_value(&mut language, choice.clone(), name(&choice));
+                            }
+                        });
+                    if language != settings.language {
+                        change(SettingsChange::Language(language));
+                    }
+                    ui.end_row();
+
                     ui.label(t!("settings-theme"));
                     let mut theme = settings.theme;
                     egui::ComboBox::from_id_salt("theme")

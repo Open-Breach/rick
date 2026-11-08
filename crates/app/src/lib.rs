@@ -328,6 +328,13 @@ pub const REMOTE_PREFIX_CHUNK: u64 = 256 * 1024;
 /// on a remote provider, unless the provider names another cap.
 pub const REMOTE_PREVIEW_CAP: u64 = 4 * 1024 * 1024;
 
+/// The kernel's English messages, `locales/en.ftl` of the repository:
+/// every key of the shell, the dialogues, the menus and the core actions.
+pub const LOCALE_EN: &str = include_str!("../../../locales/en.ftl");
+/// The kernel's German messages, `locales/de.ftl`: the Settings screen and
+/// the context menus at least, the rest falling back to English.
+pub const LOCALE_DE: &str = include_str!("../../../locales/de.ftl");
+
 /// The pinned list as the pin actions see it. The list itself lives in the
 /// model's settings, which `App` owns; the bridge keeps a copy for the
 /// actions to read and queues the changes they ask for, which `App` applies
@@ -655,6 +662,12 @@ impl App {
                 Settings::default()
             }
         };
+        // The kernel's own translations, the user's overrides in the
+        // configuration directory, and the language the settings name.
+        ext::i18n::add_bundled("en", LOCALE_EN);
+        ext::i18n::add_bundled("de", LOCALE_DE);
+        ext::i18n::load_overrides(&config_dir);
+        ext::i18n::set_language(settings.language.as_deref());
         pins.sync(&settings.pinned);
         for connector in registry.connectors() {
             connector.update(connections_of(&settings, connector.provider()));
@@ -2233,6 +2246,9 @@ impl App {
         let mut settings = self.model.settings.clone();
         let pinned_before = settings.pinned.clone();
         settings.apply(change);
+        if settings.language != self.model.settings.language {
+            ext::i18n::set_language(settings.language.as_deref());
+        }
         self.pins.sync(&settings.pinned);
         self.model.apply_settings(settings.clone());
         if settings.pinned != pinned_before {
@@ -3132,6 +3148,9 @@ impl App {
                 }
                 if settings != self.model.settings {
                     debug!("settings file changed");
+                    if settings.language != self.model.settings.language {
+                        ext::i18n::set_language(settings.language.as_deref());
+                    }
                     self.pins.sync(&settings.pinned);
                     let connections_changed =
                         settings.connections != self.model.settings.connections;
