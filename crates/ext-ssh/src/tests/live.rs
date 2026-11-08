@@ -165,12 +165,32 @@ fn remote_home() -> tempfile::TempDir {
     #[cfg(unix)]
     {
         use std::os::unix::ffi::OsStrExt as _;
+        // A name that is not UTF-8; the file systems of macOS refuse one
+        // (EILSEQ), and the home then does without it.
         let raw = std::ffi::OsStr::from_bytes(b"not\xffutf8.bin");
-        std::fs::write(home.path().join(raw), b"raw").unwrap_or_else(|e| panic!("{e}"));
+        if let Err(error) = std::fs::write(home.path().join(raw), b"raw") {
+            eprintln!("no non-UTF-8 name on this file system: {error}");
+        }
         std::os::unix::fs::symlink("plain.txt", home.path().join("link"))
             .unwrap_or_else(|e| panic!("{e}"));
     }
     home
+}
+
+/// Whether the remote home got the name that is not UTF-8.
+fn has_raw_name(home: &Path) -> bool {
+    #[cfg(unix)]
+    let present = {
+        use std::os::unix::ffi::OsStrExt as _;
+        home.join(std::ffi::OsStr::from_bytes(b"not\xffutf8.bin"))
+            .exists()
+    };
+    #[cfg(not(unix))]
+    let present = {
+        let _ = home;
+        false
+    };
+    present
 }
 
 fn at(alias: &str, path: &str) -> Location {
@@ -234,8 +254,9 @@ fn against_the_server_browse_read_write_rename_delete_and_transfer_round_trip() 
             "plain.txt",
             "with space.txt",
         ];
-        #[cfg(unix)]
-        expected.push("not\u{fffd}utf8.bin");
+        if has_raw_name(home.path()) {
+            expected.push("not\u{fffd}utf8.bin");
+        }
         expected.sort_unstable();
         assert_eq!(names, expected);
         let visible = world
