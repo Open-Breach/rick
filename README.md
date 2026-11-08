@@ -22,7 +22,7 @@ Select a file and the preview pane shows it, whatever it is: the pane is Rick's 
 - **Text and code** come with syntax highlighting and pretty-print for JSON, XML and YAML, and a 500 MB log shows its first screen instantly because Rick never loads a file whole.
 - **Audio and video** play right in the pane, with the stream details in the info bar.
 
-Everything that doesn't fit a previewer falls back to a hex view, so nothing is a black box.
+A file no previewer claims shows its facts and whether a plugin for its type is there to switch on; a hex view is one setting away for the types you want it for.
 
 ## Then put it in order
 

@@ -168,6 +168,7 @@ impl Core {
                 requires: Capabilities::WRITE,
                 points: Points::ACTION,
                 platforms: Platforms::ALL,
+                previews: &[],
             },
             state: Arc::new(State {
                 mounts,

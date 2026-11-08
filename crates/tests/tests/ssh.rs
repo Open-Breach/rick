@@ -542,6 +542,7 @@ fn counted_ssh() -> (Arc<AtomicU64>, Arc<dyn Extension>) {
             requires: Capabilities::empty(),
             points: Points::PROVIDER,
             platforms: Platforms::ALL,
+            previews: &[],
         },
         read: Arc::clone(&read),
     });

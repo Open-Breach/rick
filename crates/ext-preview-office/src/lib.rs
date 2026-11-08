@@ -56,6 +56,9 @@ pub const CACHE_FILES: usize = 200;
 /// development and tests; the usual lookup runs when it is unset.
 pub const SOFFICE_VAR: &str = "RICK_SOFFICE";
 
+/// The file name extensions the manifest claims: the six formats.
+const PREVIEWS: &[&str] = &["docx", "xlsx", "pptx", "odt", "ods", "odp"];
+
 /// Where to get LibreOffice, as the hint says.
 pub const DOWNLOAD_URL: &str = "https://www.libreoffice.org/download/";
 
@@ -85,6 +88,7 @@ impl OfficePreview {
                 requires: Capabilities::empty(),
                 points: Points::PREVIEWER,
                 platforms: Platforms::ALL,
+                previews: PREVIEWS,
             },
         }
     }

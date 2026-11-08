@@ -133,6 +133,9 @@ pub struct Plugin {
     pub version: String,
     /// The extension points its manifest lists.
     pub points: Points,
+    /// The file name extensions its previewers claim, as its manifest
+    /// lists them, lower case without the dot.
+    pub previews: Vec<String>,
     /// Loaded, disabled or refused.
     pub status: PluginStatus,
     /// The plugin's directory.

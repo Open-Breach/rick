@@ -447,6 +447,7 @@ fn rows(host: &Host) -> Vec<app::Plugin> {
             name: p.name.clone(),
             version: p.version.clone(),
             points: p.points,
+            previews: p.previews.clone(),
             status: match &p.status {
                 PluginStatus::Loaded => app::PluginStatus::Loaded,
                 PluginStatus::Disabled => app::PluginStatus::Disabled,

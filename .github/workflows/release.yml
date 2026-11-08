@@ -267,7 +267,7 @@ jobs:
           echo "$out" | grep -Eq "^${version%%-*}(-[0-9A-Za-z.]+)? \([0-9a-f]{7,}\)$" || { echo "unexpected version line"; exit 1; }
           # The plugins, bundled and loaded from plugins/<id>/: Git and SVN,
           # the archive and trash providers of issue 20, the four previewers
-          # of issue 18, the hex fallback of issue 17, the subdirectory
+          # of issue 18, the hex view of issue 17, the subdirectory
           # search and this platform's index connector of issue 22. The
           # media previewer loading on macOS and Windows shows the bundled
           # GStreamer runtime resolves; on Linux the runner's system

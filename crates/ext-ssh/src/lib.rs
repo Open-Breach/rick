@@ -158,6 +158,7 @@ impl SshExtension {
                 requires: Capabilities::empty(),
                 points: Points::PROVIDER | Points::ACTION,
                 platforms: Platforms::ALL,
+                previews: &[],
             },
         }
     }

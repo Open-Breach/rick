@@ -84,6 +84,7 @@ impl SvnExtension {
                 requires: Capabilities::empty(),
                 points: Points::DECORATOR | Points::ACTION,
                 platforms: Platforms::ALL,
+                previews: &[],
             },
             copies: Arc::new(WorkingCopies::default()),
         }

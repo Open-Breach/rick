@@ -157,10 +157,10 @@ the pull request that brought the change.
   to the selection (#23).
 - Settings an extension declares appear in the Settings window and are
   kept in the extension's own TOML file in the config directory (#23).
-- `ext-preview-hex`, the fallback previewer, as a plugin in `plugins/`:
-  anything no other previewer claims shows as a hex dump with an ASCII
-  column, the first mebibyte of a large file, laid out row by row as it
-  scrolls (#17).
+- `ext-preview-hex`, the hex view, as a plugin in `plugins/`: a file's
+  bytes as a hex dump with an ASCII column, the first mebibyte of a large
+  file, laid out row by row as it scrolls (#17); it claims no file on its
+  own and is chosen per type in settings (#50).
 - Archives browsed in place, as the plugin `ext-vfs-archive`: Enter or a
   double-click on a zip (DEFLATE, zstd), a tar (plain, gz, zst, xz, bz2,
   lz4), a 7z, a RAR, an ISO 9660 or UDF image or a single compressed file

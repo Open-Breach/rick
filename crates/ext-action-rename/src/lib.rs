@@ -63,6 +63,7 @@ impl RenameExtension {
                 requires: Capabilities::RENAME,
                 points: Points::ACTION,
                 platforms: Platforms::ALL,
+                previews: &[],
             },
         }
     }

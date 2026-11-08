@@ -205,6 +205,7 @@ impl FixedIndex {
                 requires: Capabilities::empty(),
                 points: Points::SEARCH_INDEX,
                 platforms: Platforms::ALL,
+                previews: &[],
             },
             hits,
         })

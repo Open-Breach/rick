@@ -752,6 +752,7 @@ impl ArchiveExtension {
                 requires: Capabilities::empty(),
                 points: Points::PROVIDER,
                 platforms: Platforms::ALL,
+                previews: &[],
             },
         }
     }

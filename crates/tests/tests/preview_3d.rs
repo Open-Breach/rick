@@ -268,6 +268,7 @@ impl GestureExtension {
                 requires: Capabilities::empty(),
                 points: Points::PREVIEWER,
                 platforms: Platforms::ALL,
+                previews: &[],
             },
             log,
         }

@@ -60,6 +60,7 @@ impl PdfPreview {
                 requires: Capabilities::empty(),
                 points: Points::PREVIEWER,
                 platforms: Platforms::ALL,
+                previews: &["pdf"],
             },
         }
     }

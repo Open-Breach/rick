@@ -457,6 +457,7 @@ impl MemExtension {
                 requires: Capabilities::empty(),
                 points: Points::PROVIDER,
                 platforms: Platforms::ALL,
+                previews: &[],
             },
             provider,
         }

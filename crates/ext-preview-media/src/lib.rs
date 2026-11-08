@@ -48,6 +48,9 @@ pub const PROBE_BYTES: usize = 4 * 1024 * 1024;
 /// file for GStreamer; above this size only its headers are read.
 pub const REMOTE_LIMIT: usize = 256 * 1024 * 1024;
 
+/// The file name extensions the manifest claims: every [`Kind`]'s.
+const PREVIEWS: &[&str] = &["mp3", "wav", "wave", "mp4", "m4v", "m4a", "mov", "avi"];
+
 /// The extension: registers [`MediaPreviewer`].
 #[derive(Debug)]
 pub struct MediaPreview {
@@ -74,6 +77,7 @@ impl MediaPreview {
                 requires: Capabilities::empty(),
                 points: Points::PREVIEWER,
                 platforms: Platforms::ALL,
+                previews: PREVIEWS,
             },
         }
     }

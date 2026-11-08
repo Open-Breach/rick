@@ -175,6 +175,7 @@ fn row(plugin: &plugins_native::Plugin) -> app::Plugin {
         name: plugin.name.clone(),
         version: plugin.version.clone(),
         points: plugin.points,
+        previews: plugin.previews.clone(),
         status: match &plugin.status {
             PluginStatus::Loaded => app::PluginStatus::Loaded,
             PluginStatus::Disabled => app::PluginStatus::Disabled,

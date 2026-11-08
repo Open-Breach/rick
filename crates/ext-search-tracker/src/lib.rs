@@ -79,6 +79,7 @@ impl TrackerExtension {
                 requires: Capabilities::empty(),
                 points: Points::SEARCH_INDEX,
                 platforms: Platforms::LINUX,
+                previews: &[],
             },
         }
     }

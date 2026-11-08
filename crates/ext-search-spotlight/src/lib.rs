@@ -77,6 +77,7 @@ impl SpotlightExtension {
                 requires: Capabilities::empty(),
                 points: Points::SEARCH_INDEX,
                 platforms: Platforms::MACOS,
+                previews: &[],
             },
         }
     }

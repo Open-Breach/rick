@@ -50,6 +50,13 @@ pub const TIME_BUDGET: Duration = Duration::from_secs(10);
 /// temporary file first; above this size it is not previewed.
 pub const REMOTE_LIMIT: usize = 256 * 1024 * 1024;
 
+/// The file name extensions the manifest claims: what [`detect`] knows by
+/// name.
+const PREVIEWS: &[&str] = &[
+    "zip", "jar", "war", "ear", "apk", "epub", "xpi", "7z", "rar", "iso", "tar", "tar.gz", "tgz",
+    "tar.zst", "tzst", "tar.xz", "txz", "tar.bz2", "tbz", "tbz2", "tar.lz4", "tlz4",
+];
+
 /// How many entries the textual fallback lists.
 const FALLBACK_LINES: usize = 10_000;
 
@@ -79,6 +86,7 @@ impl ArchivePreview {
                 requires: Capabilities::empty(),
                 points: Points::PREVIEWER,
                 platforms: Platforms::ALL,
+                previews: PREVIEWS,
             },
         }
     }

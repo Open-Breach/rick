@@ -84,6 +84,7 @@
 //!     requires: Capabilities::empty(),
 //!     points: Points::DECORATOR | Points::ACTION,
 //!     platforms: Platforms::ALL,
+//!     previews: &[],
 //! };
 //!
 //! let mut registry = Registry::new();
@@ -148,8 +149,14 @@ use crate::search::SearchIndex;
 /// `Availability::Disabled` carries one, the labels the registry keeps
 /// (`SettingField`, `ConnectionField`, `ConnectionSchema`, `InfoSection`,
 /// `ColumnDef`) are [`Text`](crate::Text) keys, and the registry takes an
-/// extension's translation files (QUESTIONS.md 178–181).
-pub const API_VERSION: u32 = 11;
+/// extension's translation files (QUESTIONS.md 178–181); 12 the preview
+/// pane became the only viewer (issue 50): [`Manifest`] gained `previews`,
+/// the file extensions a plugin's previewers claim, the registry lends a
+/// [`SettingsStore`] so a plugin reads and writes its own declared
+/// settings, `Content` gained `MissingLibrary` for a third-party library a
+/// previewer cannot find, and `Provider` gained `remote_preview_always`
+/// (QUESTIONS.md 185–191).
+pub const API_VERSION: u32 = 12;
 
 bitflags::bitflags! {
     /// The extension points an extension fills, as its manifest declares
@@ -292,6 +299,13 @@ pub struct Manifest {
     /// The operating systems it runs on; the plugin host refuses the
     /// plugin elsewhere.
     pub platforms: Platforms,
+    /// The file name extensions the extension's previewers claim, lower
+    /// case without the dot (`"pdf"`, `"tar.gz"`), so the host can say
+    /// *Plugin available* for a file of such a type from the manifest
+    /// alone, without loading a disabled plugin. Empty for an extension
+    /// without previewers, and for a previewer that claims no file by its
+    /// name (the hex view, chosen per type in settings).
+    pub previews: &'static [&'static str],
 }
 
 /// How a setting is edited and stored.
@@ -776,6 +790,7 @@ mod tests {
             requires: Capabilities::empty(),
             points: Points::empty(),
             platforms: Platforms::ALL,
+            previews: &[],
         }));
         assert!(matches!(result, Err(Error::Unsupported(_))));
         assert_eq!(registry.extensions(), [] as [ExtId; 0]);
@@ -831,6 +846,7 @@ mod tests {
             requires: Capabilities::empty(),
             points: Points::ACTION,
             platforms: Platforms::ALL,
+            previews: &[],
         };
         assert!(matches!(
             registry.load(&Undeclared(manifest.clone())),

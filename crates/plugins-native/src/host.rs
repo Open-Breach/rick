@@ -61,6 +61,9 @@ pub struct Plugin {
     pub version: String,
     /// The points the manifest lists.
     pub points: Points,
+    /// The file name extensions its previewers claim, as the manifest
+    /// lists them.
+    pub previews: Vec<String>,
     /// The plugin's directory.
     pub dir: PathBuf,
     /// Which plugins directory it was found in.
@@ -238,6 +241,7 @@ fn process(
                     name: String::new(),
                     version: String::new(),
                     points: Points::empty(),
+                    previews: Vec::new(),
                     dir: candidate.dir,
                     source: candidate.source,
                     status: PluginStatus::Refused(error.to_string()),
@@ -269,6 +273,7 @@ fn process(
             name: toml.name.clone(),
             version: toml.version.clone(),
             points: toml.points().unwrap_or_default(),
+            previews: toml.previews.clone(),
             dir: candidate.dir,
             source: candidate.source,
             status,

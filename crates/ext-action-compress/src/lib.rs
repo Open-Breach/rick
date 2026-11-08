@@ -57,6 +57,7 @@ impl CompressExtension {
                 requires: Capabilities::WRITE,
                 points: Points::ACTION,
                 platforms: Platforms::ALL,
+                previews: &[],
             },
         }
     }

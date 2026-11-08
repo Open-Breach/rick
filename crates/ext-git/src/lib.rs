@@ -84,6 +84,7 @@ impl GitExtension {
                 requires: Capabilities::empty(),
                 points: Points::DECORATOR | Points::ACTION,
                 platforms: Platforms::ALL,
+                previews: &[],
             },
             repos: Arc::new(Repos::default()),
         }
