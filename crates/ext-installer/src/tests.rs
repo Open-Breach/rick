@@ -243,13 +243,26 @@ impl Harness {
     }
 
     /// Runs the action, waits for its jobs and returns the outcome and the
-    /// jobs' results.
+    /// jobs' results. A form the action asks for later is shown through
+    /// the host as the application would, and the rest of the action's
+    /// outcome stands for the action's.
     fn run(
         &self,
         id: ext::ActionId,
         ctx: ActionCtx,
     ) -> (Result<ActionOutcome, Error>, Vec<Result<(), Error>>) {
-        let outcome = self.action(id).run(ctx, &self.jobs, &self.ui);
+        let pane = ctx.pane;
+        let outcome = match self.action(id).run(ctx, &self.jobs, &self.ui) {
+            Ok(ActionOutcome::Later(later)) => match runtime::block_on(later.wait()) {
+                Some((form, then)) => self
+                    .ui
+                    .form_later(pane, form, then)
+                    .unwrap_or_else(|| panic!("the scripted host answers at once")),
+                // The job failed: its result says why.
+                None => Ok(ActionOutcome::Done),
+            },
+            outcome => outcome,
+        };
         self.settle();
         let mut results = Vec::new();
         let mut events = self.events.lock().unwrap_or_else(PoisonError::into_inner);
@@ -448,6 +461,7 @@ fn the_elf_reader_reads_the_tiny_programs() {
 }
 
 #[test]
+#[allow(clippy::too_many_lines)]
 fn detection_answers_the_five_questions_for_each_fixture() {
     let h = harness();
     let detect = |f: Fixture| {
@@ -492,7 +506,10 @@ fn detection_answers_the_five_questions_for_each_fixture() {
         tool.bins,
         vec!["bin/fixa", "bin/fixb", "bin/fixc", "bin/fixscript"]
     );
-    assert_eq!(tool.main_rel(), Some("bin/fixa"));
+    assert_eq!(
+        tool.main, None,
+        "three equal commands, none named like the toolchain: the user picks"
+    );
     assert_eq!(tool.candidates.len(), 3, "the .so.1 file is no candidate");
     assert_eq!(tool.name, "fixtool");
     assert_eq!(tool.version, "1.2.0");
@@ -549,6 +566,357 @@ fn detection_answers_the_five_questions_for_each_fixture() {
     );
     let v1 = detect(Fixture::UpdateV1);
     assert_eq!(v1.version, "1.0.0");
+
+    // The JetBrains shape: no desktop entry, the launcher named like the
+    // app among helpers in bin/, its icons beside it.
+    let ide = detect(Fixture::JetBrains);
+    assert_eq!(ide.name, "Vendor App");
+    assert_eq!(ide.app_id(), "vendor-app");
+    assert_eq!(ide.version, "1.2.3");
+    assert_eq!(ide.source_pattern, "Vendor.App-*.tar.gz");
+    assert_eq!(ide.kind, Kind::Gui);
+    assert_eq!(ide.kind_reason, "the archive ships an icon");
+    assert_eq!(ide.main_rel(), Some("bin/app"), "{:?}", ide.candidates);
+    assert_eq!(
+        ide.icons.iter().map(|i| i.rel.as_str()).collect::<Vec<_>>(),
+        vec!["bin/app.svg", "bin/app.png"]
+    );
+    assert!(ide.icon_trusted);
+    assert_eq!(ide.icons[1].size, Some((128, 128)));
+    assert_eq!(
+        ide.bins,
+        vec![
+            "bin/app",
+            "bin/app.sh",
+            "bin/format.sh",
+            "bin/fsnotifier",
+            "bin/inspect.sh",
+            "bin/restarter"
+        ]
+    );
+    assert_eq!(ide.arch_mismatch, None);
+}
+
+/// A gzip tar of `files` (path, mode, bytes) under the folder `top`, for
+/// a shape the fixtures do not cover.
+fn gz_tar(top: &str, files: &[(&str, u32, &[u8])]) -> Vec<u8> {
+    use std::io::Write as _;
+    let mut builder = tar::Builder::new(Vec::new());
+    let mut dir = tar::Header::new_ustar();
+    dir.set_entry_type(tar::EntryType::Directory);
+    dir.set_mode(0o755);
+    dir.set_size(0);
+    dir.set_path(format!("{top}/"))
+        .unwrap_or_else(|e| panic!("{e}"));
+    dir.set_cksum();
+    builder
+        .append(&dir, std::io::empty())
+        .unwrap_or_else(|e| panic!("{e}"));
+    for (path, mode, bytes) in files {
+        let mut header = tar::Header::new_ustar();
+        header.set_entry_type(tar::EntryType::Regular);
+        header.set_mode(*mode);
+        header.set_size(bytes.len() as u64);
+        header
+            .set_path(format!("{top}/{path}"))
+            .unwrap_or_else(|e| panic!("{e}"));
+        header.set_cksum();
+        builder
+            .append(&header, *bytes)
+            .unwrap_or_else(|e| panic!("{e}"));
+    }
+    let plain = builder.into_inner().unwrap_or_else(|e| panic!("{e}"));
+    let mut encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast());
+    encoder.write_all(&plain).unwrap_or_else(|e| panic!("{e}"));
+    encoder.finish().unwrap_or_else(|e| panic!("{e}"))
+}
+
+/// The case that exposed the rule: a helper sorting before the launcher
+/// must not become the main executable, and the launcher's icons beside
+/// it make the archive a GUI application.
+#[test]
+fn a_helper_sorting_before_the_launcher_does_not_win() {
+    let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+    let elf = tiny_elf(this_machine(), &[]);
+    let png = crate::fixtures::tiny_png(32);
+    let path = dir.path().join("Vendor.Rider-2026.2.4.1.tar.gz");
+    fs::write(
+        &path,
+        gz_tar(
+            "Vendor Rider-2026.2.4.1",
+            &[
+                ("bin/fsnotifier", 0o755, &elf),
+                ("bin/remote-dev-server", 0o755, &elf),
+                ("bin/restarter", 0o755, &elf),
+                ("bin/rider", 0o755, &elf),
+                ("bin/rider.sh", 0o755, b"#!/bin/sh\nexit 0\n"),
+                ("bin/rider.png", 0o644, &png),
+                ("bin/rider.svg", 0o644, crate::fixtures::ICON_SVG.as_bytes()),
+                ("lib/app.jar", 0o644, b"PK\x05\x06"),
+            ],
+        ),
+    )
+    .unwrap_or_else(|e| panic!("{e}"));
+    let detected = detect::detect(&path).unwrap_or_else(|e| panic!("{e}"));
+    assert_eq!(detected.name, "Vendor Rider");
+    assert_eq!(detected.app_id(), "vendor-rider");
+    assert_eq!(detected.version, "2026.2.4.1");
+    assert_eq!(detected.main_rel(), Some("bin/rider"));
+    assert_eq!(detected.kind, Kind::Gui);
+    assert_eq!(detected.kind_reason, "the archive ships an icon");
+    assert_eq!(detected.icons[0].rel, "bin/rider.svg");
+    assert_eq!(detected.icons[1].rel, "bin/rider.png");
+    assert!(detected.icon_trusted);
+}
+
+/// The field `key` of a form.
+fn field<'a>(form: &'a Form, key: &str) -> &'a ext::FieldKind {
+    &form
+        .fields
+        .iter()
+        .find(|f| f.key == key)
+        .unwrap_or_else(|| panic!("no field {key} in {form:?}"))
+        .kind
+}
+
+/// The command defaults follow the chosen kind: a GUI application links
+/// one command named after the app id at the main executable, a
+/// toolchain its `bin/` contents, whichever kind detection proposed.
+#[test]
+#[allow(clippy::too_many_lines)]
+fn the_form_defaults_follow_the_kind() {
+    if !supported() {
+        return;
+    }
+    let h = harness();
+    let layout = h.layout();
+    h.install(Fixture::JetBrains, Vec::new());
+    let form = h.ui.last_form();
+    assert!(matches!(
+        field(&form, "kind"),
+        ext::FieldKind::Choice { selected: 0, .. }
+    ));
+    assert!(matches!(
+        field(&form, "exe"),
+        ext::FieldKind::Choice { options, selected: 0 } if options[0] == "bin/app"
+    ));
+    let commands: Vec<&ext::Field> = form
+        .fields
+        .iter()
+        .filter(|f| f.key.starts_with("cmd"))
+        .collect();
+    assert_eq!(commands.len(), 1, "{commands:?}");
+    assert_eq!(
+        commands[0].label,
+        "Link command vendor-app → current/bin/app"
+    );
+    // What was written: one link named after the id, the desktop entry
+    // running the chosen executable through current.
+    let record = h.record("vendor-app");
+    assert_eq!(record.kind, Kind::Gui);
+    assert_eq!(record.main_executable, "bin/app");
+    assert_eq!(record.commands(), vec!["vendor-app"]);
+    let expected = layout.current("vendor-app").join("bin/app");
+    assert_eq!(
+        fs::read_link(layout.bin_dir().join("vendor-app")).ok(),
+        Some(expected.clone())
+    );
+    assert!(
+        fs::symlink_metadata(layout.bin_dir().join("fsnotifier")).is_err(),
+        "a helper is not linked"
+    );
+    let desktop =
+        fs::read_to_string(layout.desktop_path("vendor-app")).unwrap_or_else(|e| panic!("{e}"));
+    let entry = desktop::DesktopEntry::parse(&desktop);
+    assert_eq!(
+        entry.get("Exec"),
+        Some(format!("\"{}\"", expected.display()).as_str()),
+        "{desktop}"
+    );
+    assert_eq!(entry.get("Icon"), Some("vendor-app"));
+    assert!(layout.icon_path("vendor-app", "scalable", "svg").is_file());
+    // Switched to a command-line tool in the dialogue, the summary lists
+    // the bin/ contents and no desktop entry.
+    let mut values = form.defaults();
+    values.set("kind", Value::Choice(1));
+    let rows = form.preview_rows(&values);
+    let linked: Vec<&str> = rows
+        .iter()
+        .filter(|r| r.from == "Command")
+        .map(|r| r.to.as_str())
+        .collect();
+    assert_eq!(linked.len(), 6, "{linked:?}");
+    assert!(
+        linked
+            .iter()
+            .any(|l| l.ends_with("fsnotifier → current/bin/fsnotifier")),
+        "{linked:?}"
+    );
+    assert!(rows.iter().all(|r| r.from != "Desktop entry"), "{rows:?}");
+    // And a toolchain installed as a GUI application links one command
+    // named after its id at the executable the user picked.
+    h.install(
+        Fixture::Toolchain,
+        vec![("kind", Value::Choice(0)), ("exe", Value::Choice(2))],
+    );
+    let record = h.record("fixtool");
+    assert_eq!(record.kind, Kind::Gui);
+    assert_eq!(record.main_executable, "bin/fixb");
+    assert_eq!(record.commands(), vec!["fixtool"]);
+    assert_eq!(
+        fs::read_link(layout.bin_dir().join("fixtool")).ok(),
+        Some(layout.current("fixtool").join("bin/fixb"))
+    );
+    assert!(layout.desktop_path("fixtool").is_file());
+}
+
+/// The Icon field is one list: `(none)`, then every PNG and SVG of the
+/// archive with its path and pixel size, best first, the best one
+/// preselected only when detection trusts it; there is no file picker.
+#[test]
+fn the_icon_field_is_one_list_of_the_archives_icons() {
+    let h = harness();
+    let scan = crate::record::Scan::default();
+    let layout = h.layout();
+    let detected =
+        Arc::new(detect::detect(h.archive(Fixture::JetBrains)).unwrap_or_else(|e| panic!("{e}")));
+    let form = actions::install_form(&detected, &scan, &layout, None, false);
+    assert!(
+        matches!(
+            field(&form, "icon"),
+            ext::FieldKind::Choice { options, selected: 1 }
+                if *options == ["(none)", "bin/app.svg (scalable)", "bin/app.png (128×128)"]
+        ),
+        "{:?}",
+        field(&form, "icon")
+    );
+    assert!(
+        form.fields.iter().all(|f| f.key != "icon_file"),
+        "no file picker"
+    );
+    // Choosing the PNG instead puts it in the plan.
+    let mut values = form.defaults();
+    values.set("icon", Value::Choice(2));
+    let rows = form.preview_rows(&values);
+    let icon = rows
+        .iter()
+        .find(|r| r.from == "Icon")
+        .unwrap_or_else(|| panic!("no Icon row in {rows:?}"));
+    assert_eq!(icon.to, "bin/app.png → hicolor/128x128/apps/vendor-app.png");
+    assert!(icon.problem.is_none());
+
+    // A stray PNG is listed but not preselected, and does not make the
+    // archive a GUI application.
+    let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+    let path = dir.path().join("fixplain-1.0.tar.gz");
+    fs::write(
+        &path,
+        gz_tar(
+            "fixplain-1.0",
+            &[
+                ("fixplain", 0o755, &tiny_elf(this_machine(), &[])),
+                ("docs/shot.png", 0o644, &crate::fixtures::tiny_png(32)),
+            ],
+        ),
+    )
+    .unwrap_or_else(|e| panic!("{e}"));
+    let detected = Arc::new(detect::detect(&path).unwrap_or_else(|e| panic!("{e}")));
+    assert_eq!(detected.kind, Kind::Cli);
+    assert!(!detected.icon_trusted);
+    assert_eq!(detected.icons.len(), 1);
+    let form = actions::install_form(&detected, &scan, &layout, None, false);
+    assert!(
+        matches!(
+            field(&form, "icon"),
+            ext::FieldKind::Choice { options, selected: 0 }
+                if *options == ["(none)", "docs/shot.png (32×32)"]
+        ),
+        "{:?}",
+        field(&form, "icon")
+    );
+}
+
+/// Detection reads the archive in one streaming pass: the index and the
+/// heads it collects are what the two passes (the index, then the heads
+/// over it) collected, with byte progress against the file and a cancel
+/// between entries.
+#[test]
+fn the_single_pass_reads_what_the_two_passes_did() {
+    let h = harness();
+    for fixture in Fixture::ALL {
+        let path = h.archive(fixture);
+        let name = fixture.file_name();
+        let format = Format::detect(path).unwrap_or_else(|e| panic!("{name}: {e}"));
+        // The two passes as they were.
+        let index = archive::index(path, format).unwrap_or_else(|e| panic!("{name}: {e}"));
+        let mut heads = detect::Heads::default();
+        archive::visit(path, format, &mut |item, reader| {
+            if item.kind == ItemKind::File && !item.hostile {
+                heads.probe(item, reader)?;
+            }
+            Ok(archive::Visit::Next)
+        })
+        .unwrap_or_else(|e| panic!("{name}: {e}"));
+        // The one pass.
+        let mut reports: Vec<u64> = Vec::new();
+        let (one_index, one_heads) =
+            detect::read_archive(path, format, &CancelToken::new(), &mut |done| {
+                reports.push(done);
+            })
+            .unwrap_or_else(|e| panic!("{name}: {e}"));
+        assert_eq!(one_index, index, "{name}");
+        assert_eq!(one_heads, heads, "{name}");
+        assert!(
+            !heads.elves.is_empty() || fixture == Fixture::Source,
+            "{name}"
+        );
+        // Progress: a report per entry, in bytes of the file, never above
+        // its size.
+        let size = fs::metadata(path).unwrap_or_else(|e| panic!("{e}")).len();
+        assert_eq!(reports.len(), index.items.len(), "{name}");
+        assert!(
+            reports.windows(2).all(|w| w[0] <= w[1]),
+            "{name}: {reports:?}"
+        );
+        assert!(
+            reports
+                .last()
+                .is_some_and(|last| *last > 0 && *last <= size),
+            "{name}: {reports:?} against {size}"
+        );
+        // Cancelled before the first entry: nothing comes back.
+        let cancel = CancelToken::new();
+        cancel.cancel();
+        assert!(
+            matches!(
+                detect::detect_with(path, &cancel, &mut |_| {}),
+                Err(Error::Cancelled)
+            ),
+            "{name}"
+        );
+    }
+}
+
+#[test]
+fn the_name_rule_takes_a_word_of_the_name_or_a_suffix_of_the_id() {
+    let names = ["JetBrains Rider", "JetBrains Rider"];
+    assert!(detect::name_matches("rider", &names));
+    assert!(detect::name_matches("Rider", &names));
+    assert!(detect::name_matches("jetbrains-rider", &names));
+    assert!(detect::name_matches("rider.png", &names));
+    assert!(!detect::name_matches("fsnotifier", &names));
+    assert!(
+        !detect::name_matches("ider", &names),
+        "a suffix of a word is not a word"
+    );
+    assert!(!detect::name_matches("rider64", &names));
+    assert!(detect::name_matches("code", &["Code - OSS"]));
+    assert!(detect::name_matches(
+        "idea",
+        &["IntelliJ IDEA Community Edition"]
+    ));
+    assert!(!detect::name_matches("fixa", &["fixtool"]));
+    assert!(detect::name_matches("fixtool", &["fixtool"]));
 }
 
 /// The acceptance round trip: install, launch through the desktop entry,
@@ -747,10 +1115,11 @@ fn a_checksum_mismatch_refuses_before_extracting() {
         matches!(outcome, Ok(ActionOutcome::Started(_))),
         "{outcome:?}"
     );
-    assert_eq!(results.len(), 1);
-    let error = results[0]
-        .as_ref()
-        .err()
+    // Two jobs ran: reading the archive, then the install, which failed.
+    assert_eq!(results.len(), 2, "{results:?}");
+    let error = results
+        .iter()
+        .find_map(|r| r.as_ref().err())
         .unwrap_or_else(|| panic!("the job did not fail"));
     let text = text_of(error);
     assert!(
@@ -845,7 +1214,18 @@ fn a_toolchain_links_its_commands_or_goes_on_the_path() {
     }
     let h = harness();
     let layout = h.layout();
-    h.install(Fixture::Toolchain, Vec::new());
+    // Three equal commands: the form opens on "(choose one)" and the
+    // user picks the first.
+    h.ui.answer_form(Vec::new());
+    let (outcome, _) = h.run(INSTALL, h.ctx_archive(Fixture::Toolchain));
+    let error = outcome
+        .err()
+        .unwrap_or_else(|| panic!("the pick was not asked"));
+    assert!(
+        text_of(&error).contains("pick the main executable"),
+        "{error}"
+    );
+    h.install(Fixture::Toolchain, vec![("exe", Value::Choice(1))]);
     for name in ["fixa", "fixb", "fixc", "fixscript"] {
         let link = layout.bin_dir().join(name);
         assert_eq!(
@@ -880,6 +1260,7 @@ fn a_toolchain_links_its_commands_or_goes_on_the_path() {
     h.install(
         Fixture::Toolchain,
         vec![
+            ("exe", Value::Choice(1)),
             ("path_mode", Value::Choice(1)),
             ("env_var", Value::Text("FIXTOOL_HOME".into())),
         ],

@@ -39,7 +39,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: ${{ github.event_name == 'schedule' && fromJSON('["ubuntu-latest"]') || fromJSON('["ubuntu-latest", "macos-latest", "windows-latest"]') }}
+        os: ${{ github.event_name == 'schedule' && fromJSON('["ubuntu-24.04"]') || fromJSON('["ubuntu-24.04", "macos-latest", "windows-latest"]') }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 90
     permissions:
@@ -50,7 +50,7 @@ jobs:
       RICK_BENCH_RECORD: "1"
       # Issue 18: media playback is built where GStreamer's development
       # files are (Linux); the office and media timings run there only.
-      RICK_TESTS_FEATURES: ${{ matrix.os == 'ubuntu-latest' && '--features gstreamer' || '' }}
+      RICK_TESTS_FEATURES: ${{ matrix.os == 'ubuntu-24.04' && '--features gstreamer' || '' }}
     steps:
       - uses: actions/checkout@v4
         with: { ref: "${{ github.event_name == 'schedule' && 'dev' || '' }}" }

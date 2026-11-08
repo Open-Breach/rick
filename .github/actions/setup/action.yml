@@ -89,7 +89,10 @@ runs:
       shell: bash
       run: |
         sudo apt-get install -y --no-install-recommends subversion dbus tracker tracker-miner-fs
-        sudo apt-get install -y --no-install-recommends baloo-kf6 || sudo apt-get install -y --no-install-recommends baloo-kf5
+        # Baloo's file indexer: `baloo6` on Ubuntu 26.04, where `baloo-kf5`
+        # no longer ships `baloo_file`; `baloo-kf5` on 24.04, which has no
+        # `baloo6`. with-indexers.sh finds the indexer where either puts it.
+        sudo apt-get install -y --no-install-recommends baloo6 || sudo apt-get install -y --no-install-recommends baloo-kf5
         echo "RICK_REQUIRE_SVN=1" >> "$GITHUB_ENV"
         # Issue 44: desktop-file-validate checks every desktop entry the
         # installer writes; its tests fail rather than skip without it here.

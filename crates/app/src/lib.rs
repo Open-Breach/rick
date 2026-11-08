@@ -91,9 +91,9 @@ use std::time::Duration;
 
 use ext::{
     ActionCtx, ActionOutcome, Availability, Capabilities, DecorateCtx, Decoration, Decorator,
-    Depth, Extension, Filter, FsChange, Invocation, Level, ListOptions, Points, PreviewDoc,
-    Previewer, Prompts, Query, QueryKind, Reads, Registry, SearchIndex, SearchScope, UiHost,
-    UndoCommand,
+    Depth, Extension, Filter, FormLater, FormLaterState, FsChange, Invocation, Level, ListOptions,
+    Points, PreviewDoc, Previewer, Prompts, Query, QueryKind, Reads, Registry, SearchIndex,
+    SearchScope, UiHost, UndoCommand,
 };
 use futures::StreamExt;
 use model::{
@@ -529,6 +529,10 @@ pub struct App {
     thumbnails: BTreeSet<(EntryId, u32)>,
     /// Events from start-up, delivered on the first poll.
     pending: Vec<Event>,
+    /// The forms actions will show once a job of theirs finishes
+    /// ([`ActionOutcome::Later`]), with the pane each ran in; looked at on
+    /// every poll.
+    later: Vec<(PaneId, FormLater)>,
     /// Writes `places.toml`, latest snapshot wins.
     places_saver: mpsc::UnboundedSender<Vec<Place>>,
     /// Stops the volume poll.
@@ -827,6 +831,7 @@ impl App {
             preview_force: BTreeMap::new(),
             thumbnails: BTreeSet::new(),
             pending,
+            later: Vec::new(),
             places_saver,
             volumes_watch: CancelToken::new(),
             poke: runtime::watch::channel(0).0,
@@ -1398,6 +1403,13 @@ impl App {
                 self.connection_op(provider, &name, op, events);
             }
             Command::Run { action, ctx } => self.run(action, ctx, events),
+            Command::Continue { pane, then, values } => {
+                let label = then.label().to_owned();
+                let location = self.pane_location(pane);
+                let result = then.run(values);
+                self.outcome(pane, location, &label, result, events);
+                self.check_later(events);
+            }
             Command::NewTab(location) => {
                 let recent = Virtual::of(&location) == Some(Virtual::Recent);
                 let (pane, _) = self.model.new_tab(None, location);
@@ -1567,6 +1579,7 @@ impl App {
     pub fn poll(&mut self, events: &mut Vec<Event>) -> usize {
         let started = std::time::Instant::now();
         events.append(&mut self.pending);
+        self.check_later(events);
         self.sync_search_indexes();
         let mut handled = 0;
         loop {
@@ -2336,13 +2349,15 @@ impl App {
                     text: format!("Copying {what}; a copy cannot be undone"),
                 });
             }
-            // A transfer moves or copies; it selects, opens and navigates nothing.
+            // A transfer moves or copies; it selects, opens and navigates
+            // nothing, and asks nothing later.
             Ok(
                 ActionOutcome::Done
                 | ActionOutcome::Select(_)
                 | ActionOutcome::View(_)
                 | ActionOutcome::Hashes(_)
-                | ActionOutcome::Navigate(_),
+                | ActionOutcome::Navigate(_)
+                | ActionOutcome::Later(_),
             ) => {}
             Err(error) => events.push(Event::Notify {
                 level: Level::Error,
@@ -2554,10 +2569,61 @@ impl App {
         }
         let pane = ctx.pane;
         let location = ctx.location.clone();
-        match action.run(ctx, &self.jobs, &*self.ui) {
+        let label = action.label();
+        let result = action.run(ctx, &self.jobs, &*self.ui);
+        self.outcome(pane, location, &label, result, events);
+        // A detection kept from an earlier look fills the form at once.
+        self.check_later(events);
+    }
+
+    /// The location of the pane's active tab, the home when it has none.
+    fn pane_location(&self, pane: PaneId) -> Location {
+        self.model
+            .active_tab(pane)
+            .map_or_else(|| self.home.clone(), |(_, tab)| tab.location.clone())
+    }
+
+    /// Looks at the forms actions asked for later: a form that arrived is
+    /// shown through the host, which runs the rest of the action at once
+    /// when it can block and otherwise sends `Command::Continue` later; a
+    /// form that will never arrive (its job failed or was cancelled, which
+    /// the job reported itself) is forgotten.
+    fn check_later(&mut self, events: &mut Vec<Event>) {
+        let mut ready = Vec::new();
+        self.later
+            .retain_mut(|(pane, later)| match later.try_take() {
+                FormLaterState::Pending => true,
+                FormLaterState::Gone => false,
+                FormLaterState::Ready(form, then) => {
+                    ready.push((*pane, form, then));
+                    false
+                }
+            });
+        for (pane, form, then) in ready {
+            let label = then.label().to_owned();
+            if let Some(result) = self.ui.form_later(pane, form, then) {
+                let location = self.pane_location(pane);
+                self.outcome(pane, location, &label, result, events);
+            }
+        }
+    }
+
+    /// Applies what an action, or the rest of one, produced for `pane`.
+    fn outcome(
+        &mut self,
+        pane: PaneId,
+        location: Location,
+        label: &str,
+        result: Result<ActionOutcome, Error>,
+        events: &mut Vec<Event>,
+    ) {
+        match result {
             Ok(ActionOutcome::Done) => {}
             Ok(ActionOutcome::Started(id)) => {
                 self.pane_jobs.insert(id, pane);
+            }
+            Ok(ActionOutcome::Later(later)) => {
+                self.later.push((pane, later));
             }
             Ok(ActionOutcome::Undoable(command)) => {
                 self.undo.push(command);
@@ -2602,7 +2668,7 @@ impl App {
             }
             Err(error) => events.push(Event::Notify {
                 level: Level::Error,
-                text: format!("{}: {error}", action.label()),
+                text: format!("{label}: {error}"),
             }),
         }
         self.drain_pins();

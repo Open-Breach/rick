@@ -71,10 +71,12 @@ plugin-probe = { workspace = true }
 plugin-panic = { workspace = true }
 image = { workspace = true }
 egui = { workspace = true }
-# Fixture archives for the provider acceptance tests.
+# Fixture archives for the provider acceptance tests, and the large gzip
+# tar the installer's detection job is tried on.
 zip = { workspace = true }
 tar = { workspace = true }
 zstd = { workspace = true }
+flate2 = { workspace = true }
 sevenz-rust2 = { workspace = true }
 hadris-fs = { workspace = true }
 hadris-iso = { workspace = true, features = ["write"] }

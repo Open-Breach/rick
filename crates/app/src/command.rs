@@ -5,7 +5,7 @@ use std::fmt;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use ext::{ActionCtx, ActionId, Decoration, FsChange, Level, PreviewDoc};
+use ext::{ActionCtx, ActionId, Continuation, Decoration, FsChange, Level, PreviewDoc, Values};
 use model::{
     Column, Dock, DockTarget, Geometry, PaneId, Place, SelectionChange, SettingsChange,
     SidePanelChange, SortDir, SplitDir, TabId, ViewMode, WindowId,
@@ -226,6 +226,17 @@ pub enum Command {
         action: ActionId,
         /// What it runs on.
         ctx: ActionCtx,
+    },
+    /// Run the rest of an action with the values of the form it asked for
+    /// once a job of its finished ([`ext::UiHost::form_later`]): what the
+    /// UI sends when the user confirms or dismisses that form.
+    Continue {
+        /// The pane the action ran in.
+        pane: PaneId,
+        /// The rest of the action.
+        then: Continuation,
+        /// The form's values, or `None` when the dialogue was dismissed.
+        values: Option<Values>,
     },
     /// Open a tab at the location in the focused pane.
     NewTab(Location),

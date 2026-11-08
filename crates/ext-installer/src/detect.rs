@@ -1,7 +1,8 @@
-//! Detection: the archive's index and the heads of its candidate files
-//! answer the spec's five questions (source or prebuilt, main executable,
-//! GUI or CLI, icon, name and version) and fill the install form with
-//! defaults. Headers and text only; nothing from the archive runs.
+//! Detection: the archive's index and the heads of its candidate files,
+//! read together in one streaming pass, answer the spec's five questions
+//! (source or prebuilt, main executable, GUI or CLI, icon, name and
+//! version) and fill the install form with defaults. Headers and text
+//! only; nothing from the archive runs.
 
 use std::cmp::Ordering;
 use std::collections::HashMap;
@@ -9,9 +10,9 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use types::Error;
+use types::{CancelToken, Error};
 
-use crate::archive::{self, Format, Index, ItemKind, Visit};
+use crate::archive::{self, Format, Index, Item, OnProgress};
 use crate::desktop::{self, DesktopEntry};
 use crate::elf::{self, Elf};
 use crate::record::Kind;
@@ -173,8 +174,13 @@ pub struct Detected {
     pub kind_reason: &'static str,
     /// The vendor's desktop entry, if shipped.
     pub desktop: Option<ShippedDesktop>,
-    /// The icon files, best first.
+    /// Every PNG and SVG in the archive, best first.
     pub icons: Vec<IconFile>,
+    /// Whether the best icon earns preselection: it is the one the
+    /// vendor's desktop entry names, it is named like the app, or it sits
+    /// in an icon folder. A stray PNG (a screenshot in `docs/`) is listed
+    /// but not preselected.
+    pub icon_trusted: bool,
     /// The display name.
     pub name: String,
     /// The version, possibly empty.
@@ -224,13 +230,64 @@ impl Detected {
     }
 }
 
-/// What one pass over the archive read of its files.
-#[derive(Default)]
-struct Heads {
-    elves: HashMap<String, Elf>,
-    desktops: HashMap<String, String>,
-    icons: HashMap<String, Option<(u32, u32)>>,
-    shebangs: Vec<String>,
+/// What the pass over the archive read of its files, by the entries' full
+/// paths (the top-level folder is only known once the pass is over).
+#[derive(Debug, Default, PartialEq, Eq)]
+pub(crate) struct Heads {
+    /// The executables, with what their headers say.
+    pub(crate) elves: HashMap<String, Elf>,
+    /// The desktop entries' text.
+    pub(crate) desktops: HashMap<String, String>,
+    /// The PNG and SVG files, with the raster's size when read.
+    pub(crate) icons: HashMap<String, Option<(u32, u32)>>,
+    /// The shebang scripts, in archive order.
+    pub(crate) shebangs: Vec<String>,
+}
+
+impl Heads {
+    /// Reads what matters of one file entry: a desktop entry's text, a PNG
+    /// header, an ELF header with its dynamic section, or a shebang.
+    pub(crate) fn probe(&mut self, item: &Item, reader: &mut dyn Read) -> Result<(), Error> {
+        let name = item.name();
+        if name.to_ascii_lowercase().ends_with(".desktop") {
+            let mut text = Vec::new();
+            reader
+                .take(TEXT_MAX)
+                .read_to_end(&mut text)
+                .map_err(crate::error::io_read)?;
+            self.desktops.insert(
+                item.path.clone(),
+                String::from_utf8_lossy(&text).into_owned(),
+            );
+            return Ok(());
+        }
+        if is_icon_name(name).is_some() {
+            let mut head = [0u8; 24];
+            let got = read_up_to(reader, &mut head)?;
+            self.icons.insert(item.path.clone(), png_size(&head[..got]));
+            return Ok(());
+        }
+        if is_library_name(name) || item.size < 2 {
+            return Ok(());
+        }
+        let mut head = [0u8; 4];
+        let got = read_up_to(reader, &mut head)?;
+        if got == 4 && elf::is_elf(&head) && item.size >= 52 {
+            let mut bytes = head.to_vec();
+            reader
+                .take(ELF_HEAD - 4)
+                .read_to_end(&mut bytes)
+                .map_err(crate::error::io_read)?;
+            if let Some(elf) = elf::read_bytes(&bytes)
+                && elf.is_executable()
+            {
+                self.elves.insert(item.path.clone(), elf);
+            }
+        } else if got >= 2 && &head[..2] == b"#!" {
+            self.shebangs.push(item.path.clone());
+        }
+        Ok(())
+    }
 }
 
 fn is_icon_name(name: &str) -> Option<&'static str> {
@@ -265,57 +322,72 @@ pub fn png_size(head: &[u8]) -> Option<(u32, u32)> {
     Some((w, h))
 }
 
-/// Reads the heads of the files that matter in one pass.
-fn read_heads(archive: &Path, format: Format, index: &Index) -> Result<Heads, Error> {
+/// The name rule of the spec's detection rules 2 and 4: `stem` names the
+/// app when it is a word of one of `names` (`rider` in `JetBrains Rider`)
+/// or a suffix of one of their app ids (`rider` in `jetbrains-rider`),
+/// compared as slugs, so case and separators do not matter. A candidate's
+/// name is tried whole and without its extension.
+#[must_use]
+pub fn name_matches(stem: &str, names: &[&str]) -> bool {
+    let stems = [
+        slug(stem),
+        stem.rsplit_once('.')
+            .map_or_else(String::new, |(s, _)| slug(s)),
+    ];
+    stems.iter().filter(|s| !s.is_empty()).any(|stem| {
+        names.iter().any(|name| {
+            let id = slug(name);
+            id == *stem
+                || id.ends_with(&format!("-{stem}"))
+                || name
+                    .split(|c: char| !c.is_ascii_alphanumeric())
+                    .any(|word| !word.is_empty() && slug(word) == *stem)
+        })
+    })
+}
+
+/// Why an icon ranks where it does.
+struct IconSignals {
+    /// The vendor's desktop entry names it.
+    named_in_desktop: bool,
+    /// Its stem names the app ([`name_matches`]).
+    named_like_app: bool,
+    /// It sits under `icons/`, `resources/` or `share/`.
+    under_icon_dir: bool,
+}
+
+impl IconSignals {
+    fn of(icon: &IconFile, icon_hint: Option<&str>, names: &[&str]) -> Self {
+        Self {
+            named_in_desktop: icon_hint.is_some_and(|h| icon.stem().eq_ignore_ascii_case(h)),
+            named_like_app: name_matches(icon.stem(), names),
+            under_icon_dir: icon.rel.starts_with("icons/")
+                || icon.rel.starts_with("resources/")
+                || icon.rel.starts_with("share/")
+                || icon.rel.contains("/icons/"),
+        }
+    }
+
+    /// Whether the icon earns preselection.
+    fn trusted(&self) -> bool {
+        self.named_in_desktop || self.named_like_app || self.under_icon_dir
+    }
+}
+
+/// Reads the archive once: its index and the heads of the files that
+/// matter, with `cancel` checked between entries and `progress` told the
+/// bytes of the file read so far.
+pub(crate) fn read_archive(
+    path: &Path,
+    format: Format,
+    cancel: &CancelToken,
+    progress: &mut OnProgress<'_>,
+) -> Result<(Index, Heads), Error> {
     let mut heads = Heads::default();
-    archive::visit(archive, format, &mut |item, reader| {
-        if item.kind != ItemKind::File || item.hostile {
-            return Ok(Visit::Next);
-        }
-        let Some(rel) = index.relative(&item.path) else {
-            return Ok(Visit::Next);
-        };
-        let name = item.name();
-        let lower = name.to_ascii_lowercase();
-        if lower.ends_with(".desktop") {
-            let mut text = Vec::new();
-            reader
-                .take(TEXT_MAX)
-                .read_to_end(&mut text)
-                .map_err(crate::error::io_read)?;
-            heads
-                .desktops
-                .insert(rel.to_owned(), String::from_utf8_lossy(&text).into_owned());
-            return Ok(Visit::Next);
-        }
-        if is_icon_name(name).is_some() {
-            let mut head = [0u8; 24];
-            let got = read_up_to(reader, &mut head)?;
-            heads.icons.insert(rel.to_owned(), png_size(&head[..got]));
-            return Ok(Visit::Next);
-        }
-        if is_library_name(name) || item.size < 2 {
-            return Ok(Visit::Next);
-        }
-        let mut head = [0u8; 4];
-        let got = read_up_to(reader, &mut head)?;
-        if got == 4 && elf::is_elf(&head) && item.size >= 52 {
-            let mut bytes = head.to_vec();
-            reader
-                .take(ELF_HEAD - 4)
-                .read_to_end(&mut bytes)
-                .map_err(crate::error::io_read)?;
-            if let Some(elf) = elf::read_bytes(&bytes)
-                && elf.is_executable()
-            {
-                heads.elves.insert(rel.to_owned(), elf);
-            }
-        } else if got >= 2 && &head[..2] == b"#!" && rel.starts_with("bin/") {
-            heads.shebangs.push(rel.to_owned());
-        }
-        Ok(Visit::Next)
+    let index = archive::scan(path, format, cancel, progress, &mut |item, reader| {
+        heads.probe(item, reader)
     })?;
-    Ok(heads)
+    Ok((index, heads))
 }
 
 fn read_up_to(reader: &mut dyn Read, buf: &mut [u8]) -> Result<usize, Error> {
@@ -331,16 +403,34 @@ fn read_up_to(reader: &mut dyn Read, buf: &mut [u8]) -> Result<usize, Error> {
     Ok(filled)
 }
 
-/// Detects what the archive at `path` is and proposes the form's defaults.
+/// Detects what the archive at `path` is and proposes the form's defaults,
+/// reading the whole archive without a cancel or progress; the actions use
+/// [`detect_with`] from a job.
 ///
 /// # Errors
 ///
 /// The errors of reading the archive.
-#[allow(clippy::too_many_lines)]
 pub fn detect(path: &Path) -> Result<Detected, Error> {
+    detect_with(path, &CancelToken::new(), &mut |_| {})
+}
+
+/// Detects what the archive at `path` is and proposes the form's defaults.
+/// The archive is read in one streaming pass: `cancel` is checked between
+/// entries and `progress` is told the bytes of the file read so far.
+///
+/// # Errors
+///
+/// `Error::Cancelled` when `cancel` fires; the errors of reading the
+/// archive.
+#[allow(clippy::too_many_lines)]
+pub fn detect_with(
+    path: &Path,
+    cancel: &CancelToken,
+    progress: &mut OnProgress<'_>,
+) -> Result<Detected, Error> {
     let format = Format::detect(path)?;
-    let index = Arc::new(archive::index(path, format)?);
-    let heads = read_heads(path, format, &index)?;
+    let (index, heads) = read_archive(path, format, cancel, progress)?;
+    let index = Arc::new(index);
 
     let hostile: Vec<String> = index
         .items
@@ -354,7 +444,7 @@ pub fn detect(path: &Path) -> Result<Detected, Error> {
         .iter()
         .filter_map(|i| {
             let rel = index.relative(&i.path)?;
-            heads.elves.get(rel).map(|elf| Candidate {
+            heads.elves.get(&i.path).map(|elf| Candidate {
                 rel: rel.to_owned(),
                 elf: elf.clone(),
             })
@@ -374,11 +464,17 @@ pub fn detect(path: &Path) -> Result<Detected, Error> {
             .any(|f| SOURCE_MARKERS.contains(f) || *f == "src");
 
     let desktop = {
-        let mut paths: Vec<&String> = heads.desktops.keys().collect();
-        paths.sort_by_key(|p| (p.matches('/').count(), (*p).clone()));
-        paths.first().map(|rel| ShippedDesktop {
-            rel: (*rel).clone(),
-            entry: DesktopEntry::parse(&heads.desktops[*rel]),
+        // The shallowest desktop entry, by its path inside the version
+        // folder; a hostile or top-level-folder entry has none.
+        let mut paths: Vec<(&str, &String)> = heads
+            .desktops
+            .iter()
+            .filter_map(|(path, text)| index.relative(path).map(|rel| (rel, text)))
+            .collect();
+        paths.sort_by_key(|(rel, _)| (rel.matches('/').count(), (*rel).to_owned()));
+        paths.first().map(|(rel, text)| ShippedDesktop {
+            rel: (*rel).to_owned(),
+            entry: DesktopEntry::parse(text),
         })
     };
 
@@ -413,14 +509,21 @@ pub fn detect(path: &Path) -> Result<Detected, Error> {
         .map(str::to_owned)
         .filter(|n| !n.is_empty())
         .unwrap_or_else(|| base_name.clone());
-    let hint = slug(&base_name);
 
-    // The main executable: the desktop file's Exec, then a prominent
-    // binary named like the archive, then the only prominent or only one.
+    // The main executable: the desktop file's Exec; then the one prominent
+    // binary (top level or `bin/`) named like the app, a top-level one
+    // first when several are; then the one matching binary anywhere; then
+    // the single prominent one or the single candidate. A helper never
+    // wins by alphabetical order: anything else is the user's pick.
+    let names = [name.as_str(), base_name.as_str()];
     let exec_program = desktop
         .as_ref()
         .and_then(|d| d.entry.get("Exec"))
         .and_then(desktop::exec_program);
+    let only = |indexes: &[usize]| match indexes {
+        [one] => Some(*one),
+        _ => None,
+    };
     let main = exec_program
         .as_deref()
         .and_then(|program| {
@@ -429,9 +532,27 @@ pub fn detect(path: &Path) -> Result<Detected, Error> {
                 .position(|c| c.name() == program || c.rel == program)
         })
         .or_else(|| {
-            candidates
+            let matching: Vec<usize> = candidates
                 .iter()
-                .position(|c| c.is_prominent() && slug(c.name()) == hint)
+                .enumerate()
+                .filter(|(_, c)| c.is_prominent() && name_matches(c.name(), &names))
+                .map(|(i, _)| i)
+                .collect();
+            let top: Vec<usize> = matching
+                .iter()
+                .copied()
+                .filter(|i| !candidates[*i].rel.contains('/'))
+                .collect();
+            only(&matching).or_else(|| only(&top))
+        })
+        .or_else(|| {
+            let matching: Vec<usize> = candidates
+                .iter()
+                .enumerate()
+                .filter(|(_, c)| name_matches(c.name(), &names))
+                .map(|(i, _)| i)
+                .collect();
+            only(&matching)
         })
         .or_else(|| {
             let prominent: Vec<usize> = candidates
@@ -440,10 +561,7 @@ pub fn detect(path: &Path) -> Result<Detected, Error> {
                 .filter(|(_, c)| c.is_prominent())
                 .map(|(i, _)| i)
                 .collect();
-            match prominent.as_slice() {
-                [one] => Some(*one),
-                _ => (candidates.len() == 1).then_some(0),
-            }
+            only(&prominent).or_else(|| (candidates.len() == 1).then_some(0))
         });
 
     let mut icons: Vec<IconFile> = index
@@ -455,7 +573,7 @@ pub fn detect(path: &Path) -> Result<Detected, Error> {
             Some(IconFile {
                 rel: rel.to_owned(),
                 ext: ext.to_owned(),
-                size: heads.icons.get(rel).copied().flatten(),
+                size: heads.icons.get(&i.path).copied().flatten(),
                 bytes: i.size,
             })
         })
@@ -465,60 +583,43 @@ pub fn detect(path: &Path) -> Result<Detected, Error> {
         .and_then(|d| d.entry.get("Icon"))
         .map(|i| i.rsplit('/').next().unwrap_or(i).to_owned())
         .map(|i| i.rsplit_once('.').map_or(i.clone(), |(s, _)| s.to_owned()));
+    // Every PNG and SVG stays a choice; the ranking decides which one is
+    // preselected, and only a trusted best one is.
     icons.sort_by_key(|icon| {
-        let named_in_desktop = icon_hint
-            .as_deref()
-            .is_some_and(|h| icon.stem().eq_ignore_ascii_case(h));
-        let named_like_app = slug(icon.stem()) == hint || slug(icon.stem()) == slug(&name);
-        let under_icon_dir = icon.rel.starts_with("icons/")
-            || icon.rel.starts_with("resources/")
-            || icon.rel.starts_with("share/")
-            || icon.rel.contains("/icons/");
+        let signals = IconSignals::of(icon, icon_hint.as_deref(), &names);
         let area = icon.size.map_or(0, |(w, h)| u64::from(w) * u64::from(h));
         (
-            std::cmp::Reverse(u8::from(named_in_desktop)),
-            std::cmp::Reverse(u8::from(named_like_app)),
-            std::cmp::Reverse(u8::from(under_icon_dir)),
+            std::cmp::Reverse(u8::from(signals.named_in_desktop)),
+            std::cmp::Reverse(u8::from(signals.named_like_app)),
+            std::cmp::Reverse(u8::from(signals.under_icon_dir)),
             std::cmp::Reverse(u8::from(icon.ext == "svg")),
             std::cmp::Reverse(area),
             std::cmp::Reverse(icon.bytes),
         )
     });
-    if desktop.is_none() && icon_hint.is_none() {
-        // Without a desktop file, only an icon named like the app or kept
-        // in an icon folder counts; a stray PNG is a screenshot.
-        icons.retain(|icon| {
-            slug(icon.stem()) == hint
-                || slug(icon.stem()) == slug(&name)
-                || icon.rel.starts_with("icons/")
-                || icon.rel.starts_with("resources/")
-                || icon.rel.starts_with("share/")
-                || icon.rel.contains("/icons/")
-        });
-    }
+    let icon_trusted = icons
+        .first()
+        .is_some_and(|icon| IconSignals::of(icon, icon_hint.as_deref(), &names).trusted());
 
     let mut bins: Vec<String> = candidates
         .iter()
         .filter(|c| c.rel.strip_prefix("bin/").is_some_and(|r| !r.contains('/')))
         .map(|c| c.rel.clone())
-        .chain(heads.shebangs.iter().cloned())
+        .chain(
+            heads
+                .shebangs
+                .iter()
+                .filter_map(|path| index.relative(path))
+                .filter(|rel| rel.starts_with("bin/"))
+                .map(str::to_owned),
+        )
         .collect();
     bins.sort();
     bins.dedup();
-    // A toolchain's commands are all equal: its first one stands in as the
-    // main executable rather than making the user pick.
-    let main = main.or_else(|| {
-        (bins.len() >= 2)
-            .then(|| {
-                bins.iter()
-                    .find_map(|b| candidates.iter().position(|c| c.rel == *b))
-            })
-            .flatten()
-    });
 
     let (kind, kind_reason) = if desktop.is_some() {
         (Kind::Gui, "the archive ships a desktop entry")
-    } else if !icons.is_empty() {
+    } else if icon_trusted {
         (Kind::Gui, "the archive ships an icon")
     } else if main.is_some_and(|i| {
         candidates[i]
@@ -557,6 +658,7 @@ pub fn detect(path: &Path) -> Result<Detected, Error> {
         kind_reason,
         desktop,
         icons,
+        icon_trusted,
         name,
         version,
         source_pattern: pattern,
