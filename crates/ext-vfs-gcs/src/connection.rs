@@ -156,8 +156,8 @@ impl Connector for GcsConnections {
         PROVIDER_ID
     }
 
-    fn schema(&self) -> &ConnectionSchema {
-        &self.schema
+    fn schema(&self) -> ConnectionSchema {
+        self.schema.clone()
     }
 
     /// Keeps the client of a connection whose settings did not change,

@@ -618,6 +618,22 @@ pub trait PreviewDoc: Send {
     fn transport(&mut self) -> Option<&mut dyn Transport>;
 }
 
+/// How much of a file a previewer reads, which decides how a file on a
+/// remote provider (`Capabilities::REMOTE`) is served to it: a prefix
+/// previewer gets the first chunk and the pane offers *Load more*; a
+/// whole-file previewer is held behind a size cap with *Preview anyway*
+/// (`specs/ext-ssh.md`, "Previews over SSH").
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub enum Reads {
+    /// The previewer needs the whole file to show anything: an image, a
+    /// PDF, a media file, an archive.
+    #[default]
+    Whole,
+    /// The previewer shows the start of a file from its first bytes and
+    /// can do with a prefix: text, code, CSV, a hex dump.
+    Prefix,
+}
+
 /// Turns an entry into something the inspector or viewer can show.
 #[async_trait]
 pub trait Previewer: Send + Sync + 'static {
@@ -627,6 +643,12 @@ pub trait Previewer: Send + Sync + 'static {
     /// 0 means cannot handle; the highest score wins. `sniff` is the first
     /// 4 KiB of the file.
     fn score(&self, entry: &Entry, sniff: &[u8]) -> u8;
+
+    /// Whether the previewer can work on a prefix of the file or needs the
+    /// whole of it; [`Reads::Whole`] unless the previewer says otherwise.
+    fn reads(&self) -> Reads {
+        Reads::Whole
+    }
 
     /// Opens the entry through its provider.
     async fn open(

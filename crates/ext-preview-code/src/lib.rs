@@ -27,7 +27,8 @@ use std::sync::{Arc, LazyLock};
 use ext::{
     API_VERSION, Capabilities, Content, ControlId, ControlValue, Document, Extension, Frame, Icon,
     InfoSection, Manifest, Platforms, Points, PreviewControl, PreviewDoc, Previewer, Provider,
-    Registry, RenderRequest, TextBlock, TextLayer, TextSpan, Transport, Version, async_trait,
+    Reads, Registry, RenderRequest, TextBlock, TextLayer, TextSpan, Transport, Version,
+    async_trait,
 };
 use syntect::easy::HighlightLines;
 use syntect::highlighting::{FontStyle, Theme, ThemeSet};
@@ -731,6 +732,12 @@ impl PreviewDoc for CodeDoc {
 impl Previewer for CodePreviewer {
     fn id(&self) -> ExtId {
         ID
+    }
+
+    /// The start of a file is enough: a remote file is served as a prefix
+    /// with *Load more*.
+    fn reads(&self) -> Reads {
+        Reads::Prefix
     }
 
     fn score(&self, entry: &Entry, sniff: &[u8]) -> u8 {

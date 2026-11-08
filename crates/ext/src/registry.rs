@@ -105,6 +105,7 @@ use std::fmt;
 use std::sync::Arc;
 
 use platform::Platform;
+use runtime::Prompts;
 use semver::Version;
 use types::{Error, ExtId};
 
@@ -136,8 +137,14 @@ use crate::search::SearchIndex;
 /// `PreviewControl` gained `Pointer` (a drag, the wheel or a double-click
 /// over the content handed to the document) and `ControlValue` gained
 /// `Delta` (QUESTIONS.md 142); 9 `ActionOutcome` gained `Navigate` and
-/// `platform` gained `Elevate` (QUESTIONS.md 149–150).
-pub const API_VERSION: u32 = 9;
+/// `platform` gained `Elevate` (QUESTIONS.md 149–150); 10 the registry
+/// lends the [`Prompts`] queue for the questions an extension asks the user
+/// while it works, `Previewer` gained `reads` and `Provider`
+/// `remote_preview_cap` for the previews over a remote provider,
+/// `Connector::schema` is computed per call and gained a `Choice` field,
+/// and the terminal emulation moved into `ext::terminal` (QUESTIONS.md
+/// 159–162).
+pub const API_VERSION: u32 = 10;
 
 bitflags::bitflags! {
     /// The extension points an extension fills, as its manifest declares
@@ -399,6 +406,8 @@ pub struct Registry {
     kernel: usize,
     /// The platform services of the host, when it lent them.
     platform: Option<Arc<dyn Platform>>,
+    /// The question queue of the host, when it lent one.
+    prompts: Option<Arc<Prompts>>,
     extensions: Vec<ExtId>,
     manifests: Vec<Manifest>,
     failure: Option<String>,
@@ -419,6 +428,7 @@ impl Default for Registry {
         Self {
             kernel: kernel_id(),
             platform: None,
+            prompts: None,
             extensions: Vec::new(),
             manifests: Vec::new(),
             failure: None,
@@ -451,6 +461,16 @@ impl Registry {
         }
     }
 
+    /// The same registry, lending `prompts` as well: the queue an
+    /// extension asks the user through while it works with no action in
+    /// hand (a host key to trust, a passphrase); the host answers through
+    /// its dialogues.
+    #[must_use]
+    pub fn with_prompts(mut self, prompts: Arc<Prompts>) -> Self {
+        self.prompts = Some(prompts);
+        self
+    }
+
     /// The platform services the host lent, for an extension's `register`:
     /// the trash, open-with, the config directory, the native dialogues.
     /// `None` in a registry built with [`new`](Self::new); an extension
@@ -459,6 +479,14 @@ impl Registry {
     #[must_use]
     pub fn platform(&self) -> Option<&Arc<dyn Platform>> {
         self.platform.as_ref()
+    }
+
+    /// The question queue the host lent, for an extension's `register`.
+    /// `None` when the host lent none; an extension then has no way to ask
+    /// and must refuse what it cannot decide alone (an unknown host key).
+    #[must_use]
+    pub fn prompts(&self) -> Option<&Arc<Prompts>> {
+        self.prompts.as_ref()
     }
 
     /// Whether the registry was created by this copy of the kernel: `false`
@@ -499,6 +527,7 @@ impl Registry {
         }
         let mut staging = Registry {
             platform: self.platform.clone(),
+            prompts: self.prompts.clone(),
             ..Registry::default()
         };
         ext.register(&mut staging)?;
@@ -684,6 +713,7 @@ impl std::fmt::Debug for Registry {
             .field("extensions", &self.extensions)
             .field("manifests", &self.manifests.len())
             .field("platform", &self.platform.is_some())
+            .field("prompts", &self.prompts.is_some())
             .field("providers", &self.providers.len())
             .field(
                 "views",

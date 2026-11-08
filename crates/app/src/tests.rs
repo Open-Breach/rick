@@ -1559,8 +1559,8 @@ mod net {
         fn provider(&self) -> ProviderId {
             ID
         }
-        fn schema(&self) -> &ConnectionSchema {
-            self.schema.as_ref().unwrap_or_else(|| unreachable!())
+        fn schema(&self) -> ConnectionSchema {
+            self.schema.clone().unwrap_or_else(|| unreachable!())
         }
         fn update(&self, connections: Vec<Connection>) {
             let names: Vec<String> = connections.iter().map(|c| c.name.clone()).collect();

@@ -418,8 +418,8 @@ impl Connector for SftpConnections {
         PROVIDER_ID
     }
 
-    fn schema(&self) -> &ConnectionSchema {
-        &self.schema
+    fn schema(&self) -> ConnectionSchema {
+        self.schema.clone()
     }
 
     /// Keeps the session of a connection whose settings did not change,

@@ -4,9 +4,10 @@
 //! Such a provider lists its connections as the folders at its root, one
 //! row per connection in the panel's Network or Cloud section, and
 //! registers a [`Connector`] besides its `Provider`: the fields its *Add
-//! connection…* dialogue asks for ([`ConnectionSchema`]), and the methods
-//! the application calls when the list changes or the user picks
-//! *Connect*, *Disconnect* or *Remove* on a row. The application owns the
+//! connection…* and *Edit…* dialogues ask for ([`ConnectionSchema`],
+//! computed on each call, so a choice among the other connections stays
+//! current), and the methods the application calls when the list changes
+//! or the user picks *Connect*, *Disconnect* or *Remove* on a row. The application owns the
 //! list: the non-secret fields go into `rick.toml`, a field of
 //! [`ConnectionFieldKind::Secret`] into the platform keychain under
 //! [`secret_key`], and the connector is handed the list through
@@ -40,8 +41,8 @@
 //!     fn provider(&self) -> ProviderId {
 //!         ID
 //!     }
-//!     fn schema(&self) -> &ConnectionSchema {
-//!         &self.schema
+//!     fn schema(&self) -> ConnectionSchema {
+//!         self.schema.clone()
 //!     }
 //!     fn update(&self, connections: Vec<Connection>) {
 //!         *self.connections.lock().unwrap() = connections;
@@ -191,8 +192,10 @@ pub trait Connector: Send + Sync + 'static {
     /// The provider whose connections these are.
     fn provider(&self) -> ProviderId;
 
-    /// The fields of the *Add connection…* dialogue.
-    fn schema(&self) -> &ConnectionSchema;
+    /// The fields of the *Add connection…* and *Edit…* dialogues, as they
+    /// are now: a connector whose fields depend on its state (a choice
+    /// among the other connections) computes them on each call.
+    fn schema(&self) -> ConnectionSchema;
 
     /// The connections as the application keeps them, once at start and
     /// after every change: the connector keeps them for its provider's

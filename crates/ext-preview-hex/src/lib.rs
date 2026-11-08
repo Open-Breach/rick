@@ -22,7 +22,7 @@ use std::sync::Arc;
 
 use ext::{
     API_VERSION, Capabilities, ControlId, ControlValue, Extension, Frame, Icon, InfoSection,
-    Manifest, Platforms, Points, PreviewControl, PreviewDoc, Previewer, Provider, Registry,
+    Manifest, Platforms, Points, PreviewControl, PreviewDoc, Previewer, Provider, Reads, Registry,
     RenderRequest, TextBlock, TextLayer, Transport, Version, async_trait,
 };
 use types::{CancelToken, Entry, Error, ExtId, Location};
@@ -92,6 +92,12 @@ pub struct HexPreviewer;
 impl Previewer for HexPreviewer {
     fn id(&self) -> ExtId {
         ID
+    }
+
+    /// The start of a file is enough: a remote file is served as a prefix
+    /// with *Load more*.
+    fn reads(&self) -> Reads {
+        Reads::Prefix
     }
 
     fn score(&self, _entry: &Entry, _sniff: &[u8]) -> u8 {

@@ -65,7 +65,7 @@ pub use form::{Field, FieldKind, Form, Preview, PreviewRow, Value, Values};
 pub use futures::stream::BoxStream;
 pub use preview::{
     Block, Content, ControlId, ControlValue, Document, Frame, Gesture, Grid, Icon, Image,
-    InfoSection, Inline, Listing, ListingEntry, PreviewControl, PreviewDoc, Previewer,
+    InfoSection, Inline, Listing, ListingEntry, PreviewControl, PreviewDoc, Previewer, Reads,
     RenderRequest, Style, TextBlock, TextLayer, TextSpan, TextureId, Transport, blocking,
     read_bytes,
 };
@@ -77,7 +77,7 @@ pub use registry::{
     API_VERSION, Extension, Manifest, Platforms, Points, Registry, SettingField, SettingKind,
     SettingValue, SettingsSchema,
 };
-pub use runtime::{Conflicts, JobCtx, JobRunner, ProgressSink};
+pub use runtime::{Conflicts, JobCtx, JobRunner, ProgressSink, Prompts};
 pub use search::{Filter, Query, QueryKind, SearchHit, SearchIndex, SearchScope};
 pub use semver::Version;
 pub use view::{
