@@ -25,7 +25,7 @@
 //!     API_VERSION, Action, ActionCtx, ActionGroup, ActionId, ActionOutcome, Availability,
 //!     Capabilities, ColumnDef, DecorateCtx, Decoration, Decorator, Extension, Manifest,
 //!     PanelSection, Platforms, Points, Registry, SettingField, SettingKind, SettingsSchema,
-//!     Shortcut, UiHost, Version,
+//!     Shortcut, Text, UiHost, Version, t,
 //! };
 //! use runtime::JobRunner;
 //! use std::sync::Arc;
@@ -68,7 +68,7 @@
 //!             ext: self.0.id,
 //!             fields: vec![SettingField {
 //!                 key: "greeting",
-//!                 label: "Greeting",
+//!                 label: Text("greeting"),
 //!                 kind: SettingKind::Text { default: "hello".into() },
 //!             }],
 //!         });

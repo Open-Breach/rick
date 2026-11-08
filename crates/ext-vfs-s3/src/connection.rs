@@ -34,7 +34,7 @@ pub mod field {
 #[must_use]
 pub fn schema() -> ConnectionSchema {
     ConnectionSchema {
-        title: Text("S3"),
+        title: Text("s3-s3"),
         fields: vec![
             ConnectionField {
                 key: field::ENDPOINT,

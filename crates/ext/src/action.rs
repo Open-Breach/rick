@@ -14,7 +14,7 @@
 //! ```
 //! use ext::{
 //!     Action, ActionCtx, ActionGroup, ActionId, ActionOutcome, Availability, Form, Invocation,
-//!     Key, Level, Modifiers, PaneId, Shortcut, UiHost, Values,
+//!     Key, Level, Modifiers, PaneId, Shortcut, UiHost, Values, t,
 //! };
 //! use runtime::JobRunner;
 //! use std::sync::Mutex;
@@ -41,7 +41,7 @@
 //!
 //!     fn availability(&self, ctx: &ActionCtx) -> Availability {
 //!         if ctx.selection.is_empty() {
-//!             Availability::Disabled("select something first")
+//!             Availability::Disabled(t!("select-something-first"))
 //!         } else {
 //!             Availability::Enabled
 //!         }

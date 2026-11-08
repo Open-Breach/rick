@@ -24,8 +24,8 @@
 //! use std::sync::{Arc, Mutex};
 //!
 //! use ext::{
-//!     Connection, ConnectionField, ConnectionSchema, Connector, ConnectionFieldKind, async_trait,
-//!     secret_key,
+//!     Connection, ConnectionField, ConnectionSchema, Connector, ConnectionFieldKind, Text,
+//!     async_trait, secret_key,
 //! };
 //! use types::{Error, ProviderId};
 //!
@@ -59,10 +59,10 @@
 //!
 //! let demo = Demo {
 //!     schema: ConnectionSchema {
-//!         title: "Demo",
+//!         title: Text("demo"),
 //!         fields: vec![
-//!             ConnectionField { key: "host", label: "Host", kind: ConnectionFieldKind::Text { default: String::new() }, required: true },
-//!             ConnectionField { key: "token", label: "Token", kind: ConnectionFieldKind::Secret, required: false },
+//!             ConnectionField { key: "host", label: Text("host"), kind: ConnectionFieldKind::Text { default: String::new() }, required: true },
+//!             ConnectionField { key: "token", label: Text("token"), kind: ConnectionFieldKind::Secret, required: false },
 //!         ],
 //!     },
 //!     connections: Mutex::new(Vec::new()),

@@ -15,7 +15,7 @@
 //! ```
 //! use ext::{
 //!     Badge, CellValue, Color, ColumnDef, ColumnId, DecorateCtx, Decoration, Decorator,
-//!     PanelSection,
+//!     PanelSection, Text,
 //! };
 //! use runtime::JobRunner;
 //! use types::{Attrs, CancelToken, Entry, EntryId, EntryKind, ExtId, Location, ProviderId};

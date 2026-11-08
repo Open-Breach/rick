@@ -333,7 +333,7 @@ mod tests {
         assert!(
             matches!(&toks[1], Token::Tag { name, attrs, closing: false } if name == "b" && attrs.contains("x>y"))
         );
-        assert_eq!(toks[2], Token::Text("preview-code-bold"));
+        assert_eq!(toks[2], Token::Text("bold"));
         assert!(matches!(&toks[3], Token::Tag { name, closing: true, .. } if name == "b"));
         assert!(matches!(&toks[5], Token::Tag { name, closing: false, .. } if name == "br"));
         assert!(

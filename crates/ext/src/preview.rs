@@ -29,7 +29,7 @@
 //!
 //! use ext::{
 //!     ControlId, ControlValue, Frame, Icon, InfoSection, PreviewControl, PreviewDoc, Previewer,
-//!     Provider, RenderRequest, TextBlock, TextLayer, Transport, async_trait,
+//!     Provider, RenderRequest, Text, TextBlock, TextLayer, Transport, async_trait,
 //! };
 //! use types::{Attrs, CancelToken, Entry, EntryId, EntryKind, Error, ExtId, Location, ProviderId};
 //!
@@ -57,7 +57,7 @@
 //!     fn sections(&self) -> Vec<InfoSection> {
 //!         vec![InfoSection {
 //!             id: "file",
-//!             title: "File info",
+//!             title: Text("file-info"),
 //!             icon: Icon::Info,
 //!             rows: vec![("Characters".into(), self.body.chars().count().to_string())],
 //!         }]
@@ -125,7 +125,7 @@
 //! assert_eq!(PlainText.score(&Entry { name: "a.bin".into(), ..entry.clone() }, b"\x00\x01"), 0);
 //!
 //! let mut doc = TextDoc { body: "hi".into(), layer: TextLayer::default(), upper: false };
-//! assert_eq!(doc.sections()[0].title, "File info");
+//! assert_eq!(doc.sections()[0].title.key(), "file-info");
 //! assert!(matches!(doc.controls()[0], PreviewControl::Toggle { on: false, .. }));
 //! doc.set_control(UPPER, ControlValue::Bool(true)).unwrap();
 //! let req = RenderRequest { width: 10, height: 10, scale: 1.0, dark: false };
