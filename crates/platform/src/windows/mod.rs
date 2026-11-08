@@ -243,7 +243,7 @@ impl Trash for Native {
         }
         // Find what the shell made of it: by original path, or failing that
         // by name among the items recycled since we started.
-        let recent = started - std::time::Duration::from_secs(120);
+        let recent = started - std::time::Duration::from_mins(2);
         let mut candidates: Vec<TrashedItem> = recycle_bin_items()?
             .into_iter()
             .filter(|item| {
