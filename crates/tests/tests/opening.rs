@@ -213,8 +213,9 @@ fn enter_enters_an_archive_unless_the_setting_sends_it_to_the_system() {
     );
 
     // The setting is in rick.toml.
-    let text = fs::read_to_string(d.fake.config_dir().join(app::SETTINGS_FILE))
-        .unwrap_or_else(|e| panic!("{e}"));
+    let text = tests::read_until(&d.fake.config_dir().join(app::SETTINGS_FILE), |t| {
+        t.contains("on_open = \"system\"")
+    });
     assert!(
         text.contains("[archives]") && text.contains("on_open = \"system\""),
         "{text}"

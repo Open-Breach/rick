@@ -301,8 +301,9 @@ fn config_hosts_appear_in_network_and_rick_hosts_are_added_edited_and_removed() 
     }));
     d.settle();
     assert_eq!(d.network_names(), ["box", "nas"]);
-    let settings = fs::read_to_string(fake.config_dir().join(app::SETTINGS_FILE))
-        .unwrap_or_else(|e| panic!("{e}"));
+    let settings = tests::read_until(&fake.config_dir().join(app::SETTINGS_FILE), |t| {
+        t.contains("name = \"box\"")
+    });
     assert!(settings.contains("[[connections]]"), "{settings}");
     assert!(settings.contains("provider = \"ssh\""), "{settings}");
     assert!(settings.contains("name = \"box\""), "{settings}");
@@ -354,8 +355,9 @@ fn config_hosts_appear_in_network_and_rick_hosts_are_added_edited_and_removed() 
         ],
     });
     d.settle();
-    let settings = fs::read_to_string(fake.config_dir().join(app::SETTINGS_FILE))
-        .unwrap_or_else(|e| panic!("{e}"));
+    let settings = tests::read_until(&fake.config_dir().join(app::SETTINGS_FILE), |t| {
+        t.contains("photos")
+    });
     assert!(settings.contains("photos"), "{settings}");
     assert_eq!(
         fake.secrets().get("ssh/box/password").map(String::as_str),
@@ -375,8 +377,9 @@ fn config_hosts_appear_in_network_and_rick_hosts_are_added_edited_and_removed() 
     });
     d.settle();
     assert_eq!(d.network_names(), ["nas"]);
-    let settings = fs::read_to_string(fake.config_dir().join(app::SETTINGS_FILE))
-        .unwrap_or_else(|e| panic!("{e}"));
+    let settings = tests::read_until(&fake.config_dir().join(app::SETTINGS_FILE), |t| {
+        !t.contains("[[connections]]")
+    });
     assert!(!settings.contains("[[connections]]"), "{settings}");
     assert!(!fake.secrets().contains_key("ssh/box/password"));
     assert!(!connector.is_connected("box"));
@@ -921,8 +924,9 @@ fn previews_over_ssh_serve_a_prefix_with_load_more_and_cap_a_whole_file() {
     };
     assert_eq!(switch(&d, "box"), Some("true".to_owned()));
     assert_eq!(switch(&d, "box2"), None);
-    let text = fs::read_to_string(fake.config_dir().join(app::SETTINGS_FILE))
-        .unwrap_or_else(|e| panic!("{e}"));
+    let text = tests::read_until(&fake.config_dir().join(app::SETTINGS_FILE), |t| {
+        t.contains("preview_always = \"true\"")
+    });
     assert!(text.contains("preview_always = \"true\""), "{text}");
     // The next large image on box previews without the message.
     let third = d.id_of("third.png");

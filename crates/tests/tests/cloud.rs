@@ -449,8 +449,9 @@ fn add_connection_opens_the_dialogue_and_a_row_connects_and_removes_from_its_men
             .any(|e| e.name == "acme-prod")
     }));
     settle(&mut harness);
-    let settings = fs::read_to_string(fake.config_dir().join(app::SETTINGS_FILE))
-        .unwrap_or_else(|e| panic!("{e}"));
+    let settings = tests::read_until(&fake.config_dir().join(app::SETTINGS_FILE), |t| {
+        t.contains("access_key = \"minio\"")
+    });
     assert!(settings.contains("[[connections]]"), "{settings}");
     assert!(settings.contains("access_key = \"minio\""), "{settings}");
     assert!(
@@ -486,8 +487,9 @@ fn add_connection_opens_the_dialogue_and_a_row_connects_and_removes_from_its_men
         h.state().app().model().cloud.is_empty()
     }));
     settle(&mut harness);
-    let settings = fs::read_to_string(fake.config_dir().join(app::SETTINGS_FILE))
-        .unwrap_or_else(|e| panic!("{e}"));
+    let settings = tests::read_until(&fake.config_dir().join(app::SETTINGS_FILE), |t| {
+        !t.contains("acme-prod")
+    });
     assert!(!settings.contains("acme-prod"), "{settings}");
     assert!(fake.secrets().is_empty());
     // The empty section offers Add connection… again (the finished job's
