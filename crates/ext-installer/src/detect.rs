@@ -173,8 +173,13 @@ pub struct Detected {
     pub kind_reason: &'static str,
     /// The vendor's desktop entry, if shipped.
     pub desktop: Option<ShippedDesktop>,
-    /// The icon files, best first.
+    /// Every PNG and SVG in the archive, best first.
     pub icons: Vec<IconFile>,
+    /// Whether the best icon earns preselection: it is the one the
+    /// vendor's desktop entry names, it is named like the app, or it sits
+    /// in an icon folder. A stray PNG (a screenshot in `docs/`) is listed
+    /// but not preselected.
+    pub icon_trusted: bool,
     /// The display name.
     pub name: String,
     /// The version, possibly empty.
@@ -263,6 +268,58 @@ pub fn png_size(head: &[u8]) -> Option<(u32, u32)> {
     let w = u32::from_be_bytes([head[16], head[17], head[18], head[19]]);
     let h = u32::from_be_bytes([head[20], head[21], head[22], head[23]]);
     Some((w, h))
+}
+
+/// The name rule of the spec's detection rules 2 and 4: `stem` names the
+/// app when it is a word of one of `names` (`rider` in `JetBrains Rider`)
+/// or a suffix of one of their app ids (`rider` in `jetbrains-rider`),
+/// compared as slugs, so case and separators do not matter. A candidate's
+/// name is tried whole and without its extension.
+#[must_use]
+pub fn name_matches(stem: &str, names: &[&str]) -> bool {
+    let stems = [
+        slug(stem),
+        stem.rsplit_once('.')
+            .map_or_else(String::new, |(s, _)| slug(s)),
+    ];
+    stems.iter().filter(|s| !s.is_empty()).any(|stem| {
+        names.iter().any(|name| {
+            let id = slug(name);
+            id == *stem
+                || id.ends_with(&format!("-{stem}"))
+                || name
+                    .split(|c: char| !c.is_ascii_alphanumeric())
+                    .any(|word| !word.is_empty() && slug(word) == *stem)
+        })
+    })
+}
+
+/// Why an icon ranks where it does.
+struct IconSignals {
+    /// The vendor's desktop entry names it.
+    named_in_desktop: bool,
+    /// Its stem names the app ([`name_matches`]).
+    named_like_app: bool,
+    /// It sits under `icons/`, `resources/` or `share/`.
+    under_icon_dir: bool,
+}
+
+impl IconSignals {
+    fn of(icon: &IconFile, icon_hint: Option<&str>, names: &[&str]) -> Self {
+        Self {
+            named_in_desktop: icon_hint.is_some_and(|h| icon.stem().eq_ignore_ascii_case(h)),
+            named_like_app: name_matches(icon.stem(), names),
+            under_icon_dir: icon.rel.starts_with("icons/")
+                || icon.rel.starts_with("resources/")
+                || icon.rel.starts_with("share/")
+                || icon.rel.contains("/icons/"),
+        }
+    }
+
+    /// Whether the icon earns preselection.
+    fn trusted(&self) -> bool {
+        self.named_in_desktop || self.named_like_app || self.under_icon_dir
+    }
 }
 
 /// Reads the heads of the files that matter in one pass.
@@ -413,14 +470,21 @@ pub fn detect(path: &Path) -> Result<Detected, Error> {
         .map(str::to_owned)
         .filter(|n| !n.is_empty())
         .unwrap_or_else(|| base_name.clone());
-    let hint = slug(&base_name);
 
-    // The main executable: the desktop file's Exec, then a prominent
-    // binary named like the archive, then the only prominent or only one.
+    // The main executable: the desktop file's Exec; then the one prominent
+    // binary (top level or `bin/`) named like the app, a top-level one
+    // first when several are; then the one matching binary anywhere; then
+    // the single prominent one or the single candidate. A helper never
+    // wins by alphabetical order: anything else is the user's pick.
+    let names = [name.as_str(), base_name.as_str()];
     let exec_program = desktop
         .as_ref()
         .and_then(|d| d.entry.get("Exec"))
         .and_then(desktop::exec_program);
+    let only = |indexes: &[usize]| match indexes {
+        [one] => Some(*one),
+        _ => None,
+    };
     let main = exec_program
         .as_deref()
         .and_then(|program| {
@@ -429,9 +493,27 @@ pub fn detect(path: &Path) -> Result<Detected, Error> {
                 .position(|c| c.name() == program || c.rel == program)
         })
         .or_else(|| {
-            candidates
+            let matching: Vec<usize> = candidates
                 .iter()
-                .position(|c| c.is_prominent() && slug(c.name()) == hint)
+                .enumerate()
+                .filter(|(_, c)| c.is_prominent() && name_matches(c.name(), &names))
+                .map(|(i, _)| i)
+                .collect();
+            let top: Vec<usize> = matching
+                .iter()
+                .copied()
+                .filter(|i| !candidates[*i].rel.contains('/'))
+                .collect();
+            only(&matching).or_else(|| only(&top))
+        })
+        .or_else(|| {
+            let matching: Vec<usize> = candidates
+                .iter()
+                .enumerate()
+                .filter(|(_, c)| name_matches(c.name(), &names))
+                .map(|(i, _)| i)
+                .collect();
+            only(&matching)
         })
         .or_else(|| {
             let prominent: Vec<usize> = candidates
@@ -440,10 +522,7 @@ pub fn detect(path: &Path) -> Result<Detected, Error> {
                 .filter(|(_, c)| c.is_prominent())
                 .map(|(i, _)| i)
                 .collect();
-            match prominent.as_slice() {
-                [one] => Some(*one),
-                _ => (candidates.len() == 1).then_some(0),
-            }
+            only(&prominent).or_else(|| (candidates.len() == 1).then_some(0))
         });
 
     let mut icons: Vec<IconFile> = index
@@ -465,37 +544,23 @@ pub fn detect(path: &Path) -> Result<Detected, Error> {
         .and_then(|d| d.entry.get("Icon"))
         .map(|i| i.rsplit('/').next().unwrap_or(i).to_owned())
         .map(|i| i.rsplit_once('.').map_or(i.clone(), |(s, _)| s.to_owned()));
+    // Every PNG and SVG stays a choice; the ranking decides which one is
+    // preselected, and only a trusted best one is.
     icons.sort_by_key(|icon| {
-        let named_in_desktop = icon_hint
-            .as_deref()
-            .is_some_and(|h| icon.stem().eq_ignore_ascii_case(h));
-        let named_like_app = slug(icon.stem()) == hint || slug(icon.stem()) == slug(&name);
-        let under_icon_dir = icon.rel.starts_with("icons/")
-            || icon.rel.starts_with("resources/")
-            || icon.rel.starts_with("share/")
-            || icon.rel.contains("/icons/");
+        let signals = IconSignals::of(icon, icon_hint.as_deref(), &names);
         let area = icon.size.map_or(0, |(w, h)| u64::from(w) * u64::from(h));
         (
-            std::cmp::Reverse(u8::from(named_in_desktop)),
-            std::cmp::Reverse(u8::from(named_like_app)),
-            std::cmp::Reverse(u8::from(under_icon_dir)),
+            std::cmp::Reverse(u8::from(signals.named_in_desktop)),
+            std::cmp::Reverse(u8::from(signals.named_like_app)),
+            std::cmp::Reverse(u8::from(signals.under_icon_dir)),
             std::cmp::Reverse(u8::from(icon.ext == "svg")),
             std::cmp::Reverse(area),
             std::cmp::Reverse(icon.bytes),
         )
     });
-    if desktop.is_none() && icon_hint.is_none() {
-        // Without a desktop file, only an icon named like the app or kept
-        // in an icon folder counts; a stray PNG is a screenshot.
-        icons.retain(|icon| {
-            slug(icon.stem()) == hint
-                || slug(icon.stem()) == slug(&name)
-                || icon.rel.starts_with("icons/")
-                || icon.rel.starts_with("resources/")
-                || icon.rel.starts_with("share/")
-                || icon.rel.contains("/icons/")
-        });
-    }
+    let icon_trusted = icons
+        .first()
+        .is_some_and(|icon| IconSignals::of(icon, icon_hint.as_deref(), &names).trusted());
 
     let mut bins: Vec<String> = candidates
         .iter()
@@ -505,20 +570,10 @@ pub fn detect(path: &Path) -> Result<Detected, Error> {
         .collect();
     bins.sort();
     bins.dedup();
-    // A toolchain's commands are all equal: its first one stands in as the
-    // main executable rather than making the user pick.
-    let main = main.or_else(|| {
-        (bins.len() >= 2)
-            .then(|| {
-                bins.iter()
-                    .find_map(|b| candidates.iter().position(|c| c.rel == *b))
-            })
-            .flatten()
-    });
 
     let (kind, kind_reason) = if desktop.is_some() {
         (Kind::Gui, "the archive ships a desktop entry")
-    } else if !icons.is_empty() {
+    } else if icon_trusted {
         (Kind::Gui, "the archive ships an icon")
     } else if main.is_some_and(|i| {
         candidates[i]
@@ -557,6 +612,7 @@ pub fn detect(path: &Path) -> Result<Detected, Error> {
         kind_reason,
         desktop,
         icons,
+        icon_trusted,
         name,
         version,
         source_pattern: pattern,

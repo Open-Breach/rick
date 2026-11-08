@@ -1,7 +1,8 @@
 //! The test fixtures of specs/ext-installer.md, generated on demand so no
-//! binary is committed: ten small archives, each exercising one detection
-//! or safety rule, with tiny ELF programs that exit 0 when run on this
-//! machine. Built with the `fixtures` feature and in the crate's tests.
+//! binary is committed: the spec's ten small archives, each exercising one
+//! detection or safety rule, plus a JetBrains-shaped one for the name rule,
+//! with tiny ELF programs that exit 0 when run on this machine. Built with
+//! the `fixtures` feature and in the crate's tests.
 
 // Fixture bytes are small by construction: the casts between the ELF
 // header's widths and the buffers' lengths cannot truncate.
@@ -210,11 +211,16 @@ pub enum Fixture {
     UpdateV2,
     /// The GUI app again as `fixgui-1.0.0`.
     UpdateV1,
+    /// A JetBrains-shaped IDE: top folder `Vendor App-1.2.3`, no desktop
+    /// entry, the launcher `bin/app` beside the helpers `bin/fsnotifier`
+    /// and `bin/restarter`, three `bin/*.sh` scripts, `bin/app.svg` and
+    /// `bin/app.png`, as `Vendor.App-1.2.3.tar.gz`.
+    JetBrains,
 }
 
 impl Fixture {
-    /// Every fixture, in the spec's order.
-    pub const ALL: [Self; 10] = [
+    /// Every fixture, in the spec's order, the JetBrains one last.
+    pub const ALL: [Self; 11] = [
         Self::GuiWithDesktop,
         Self::GuiNoDesktop,
         Self::Toolchain,
@@ -225,6 +231,7 @@ impl Fixture {
         Self::Hostile,
         Self::UpdateV2,
         Self::UpdateV1,
+        Self::JetBrains,
     ];
 
     /// The archive's file name, as the spec's table names it.
@@ -241,6 +248,7 @@ impl Fixture {
             Self::Hostile => "hostile.tar",
             Self::UpdateV2 => "update-v2.tar.gz",
             Self::UpdateV1 => "update-v1.tar.gz",
+            Self::JetBrains => "Vendor.App-1.2.3.tar.gz",
         }
     }
 
@@ -338,6 +346,36 @@ impl Fixture {
                 tar.dir("fixamb-2.0.0");
                 tar.file("fixamb-2.0.0/alpha", 0o755, &tiny_elf(this_machine(), &[]));
                 tar.file("fixamb-2.0.0/beta", 0o755, &tiny_elf(this_machine(), &[]));
+                gzip(&tar.finish()?)
+            }
+            Self::JetBrains => {
+                let top = "Vendor App-1.2.3";
+                let mut tar = TarBuild::new();
+                tar.dir(top);
+                tar.dir(&format!("{top}/bin"));
+                for name in ["app", "fsnotifier", "restarter"] {
+                    tar.file(
+                        &format!("{top}/bin/{name}"),
+                        0o755,
+                        &tiny_elf(this_machine(), &[]),
+                    );
+                }
+                for name in ["app.sh", "format.sh", "inspect.sh"] {
+                    tar.file(
+                        &format!("{top}/bin/{name}"),
+                        0o755,
+                        b"#!/bin/sh\nexec \"$(dirname \"$0\")/app\" \"$@\"\n",
+                    );
+                }
+                tar.file(&format!("{top}/bin/app.svg"), 0o644, ICON_SVG.as_bytes());
+                tar.file(&format!("{top}/bin/app.png"), 0o644, &tiny_png(128));
+                tar.dir(&format!("{top}/lib"));
+                tar.file(&format!("{top}/lib/app.jar"), 0o644, b"PK\x05\x06");
+                tar.file(
+                    &format!("{top}/product-info.json"),
+                    0o644,
+                    b"{\"name\": \"Vendor App\", \"version\": \"1.2.3\"}\n",
+                );
                 gzip(&tar.finish()?)
             }
             Self::Hostile => {

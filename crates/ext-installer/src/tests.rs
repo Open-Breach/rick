@@ -492,7 +492,10 @@ fn detection_answers_the_five_questions_for_each_fixture() {
         tool.bins,
         vec!["bin/fixa", "bin/fixb", "bin/fixc", "bin/fixscript"]
     );
-    assert_eq!(tool.main_rel(), Some("bin/fixa"));
+    assert_eq!(
+        tool.main, None,
+        "three equal commands, none named like the toolchain: the user picks"
+    );
     assert_eq!(tool.candidates.len(), 3, "the .so.1 file is no candidate");
     assert_eq!(tool.name, "fixtool");
     assert_eq!(tool.version, "1.2.0");
@@ -549,6 +552,129 @@ fn detection_answers_the_five_questions_for_each_fixture() {
     );
     let v1 = detect(Fixture::UpdateV1);
     assert_eq!(v1.version, "1.0.0");
+
+    // The JetBrains shape: no desktop entry, the launcher named like the
+    // app among helpers in bin/, its icons beside it.
+    let ide = detect(Fixture::JetBrains);
+    assert_eq!(ide.name, "Vendor App");
+    assert_eq!(ide.app_id(), "vendor-app");
+    assert_eq!(ide.version, "1.2.3");
+    assert_eq!(ide.source_pattern, "Vendor.App-*.tar.gz");
+    assert_eq!(ide.kind, Kind::Gui);
+    assert_eq!(ide.kind_reason, "the archive ships an icon");
+    assert_eq!(ide.main_rel(), Some("bin/app"), "{:?}", ide.candidates);
+    assert_eq!(
+        ide.icons.iter().map(|i| i.rel.as_str()).collect::<Vec<_>>(),
+        vec!["bin/app.svg", "bin/app.png"]
+    );
+    assert!(ide.icon_trusted);
+    assert_eq!(ide.icons[1].size, Some((128, 128)));
+    assert_eq!(
+        ide.bins,
+        vec![
+            "bin/app",
+            "bin/app.sh",
+            "bin/format.sh",
+            "bin/fsnotifier",
+            "bin/inspect.sh",
+            "bin/restarter"
+        ]
+    );
+    assert_eq!(ide.arch_mismatch, None);
+}
+
+/// A gzip tar of `files` (path, mode, bytes) under the folder `top`, for
+/// a shape the fixtures do not cover.
+fn gz_tar(top: &str, files: &[(&str, u32, &[u8])]) -> Vec<u8> {
+    use std::io::Write as _;
+    let mut builder = tar::Builder::new(Vec::new());
+    let mut dir = tar::Header::new_ustar();
+    dir.set_entry_type(tar::EntryType::Directory);
+    dir.set_mode(0o755);
+    dir.set_size(0);
+    dir.set_path(format!("{top}/"))
+        .unwrap_or_else(|e| panic!("{e}"));
+    dir.set_cksum();
+    builder
+        .append(&dir, std::io::empty())
+        .unwrap_or_else(|e| panic!("{e}"));
+    for (path, mode, bytes) in files {
+        let mut header = tar::Header::new_ustar();
+        header.set_entry_type(tar::EntryType::Regular);
+        header.set_mode(*mode);
+        header.set_size(bytes.len() as u64);
+        header
+            .set_path(format!("{top}/{path}"))
+            .unwrap_or_else(|e| panic!("{e}"));
+        header.set_cksum();
+        builder
+            .append(&header, *bytes)
+            .unwrap_or_else(|e| panic!("{e}"));
+    }
+    let plain = builder.into_inner().unwrap_or_else(|e| panic!("{e}"));
+    let mut encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast());
+    encoder.write_all(&plain).unwrap_or_else(|e| panic!("{e}"));
+    encoder.finish().unwrap_or_else(|e| panic!("{e}"))
+}
+
+/// The case that exposed the rule: a helper sorting before the launcher
+/// must not become the main executable, and the launcher's icons beside
+/// it make the archive a GUI application.
+#[test]
+fn a_helper_sorting_before_the_launcher_does_not_win() {
+    let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+    let elf = tiny_elf(this_machine(), &[]);
+    let png = crate::fixtures::tiny_png(32);
+    let path = dir.path().join("Vendor.Rider-2026.2.4.1.tar.gz");
+    fs::write(
+        &path,
+        gz_tar(
+            "Vendor Rider-2026.2.4.1",
+            &[
+                ("bin/fsnotifier", 0o755, &elf),
+                ("bin/remote-dev-server", 0o755, &elf),
+                ("bin/restarter", 0o755, &elf),
+                ("bin/rider", 0o755, &elf),
+                ("bin/rider.sh", 0o755, b"#!/bin/sh\nexit 0\n"),
+                ("bin/rider.png", 0o644, &png),
+                ("bin/rider.svg", 0o644, crate::fixtures::ICON_SVG.as_bytes()),
+                ("lib/app.jar", 0o644, b"PK\x05\x06"),
+            ],
+        ),
+    )
+    .unwrap_or_else(|e| panic!("{e}"));
+    let detected = detect::detect(&path).unwrap_or_else(|e| panic!("{e}"));
+    assert_eq!(detected.name, "Vendor Rider");
+    assert_eq!(detected.app_id(), "vendor-rider");
+    assert_eq!(detected.version, "2026.2.4.1");
+    assert_eq!(detected.main_rel(), Some("bin/rider"));
+    assert_eq!(detected.kind, Kind::Gui);
+    assert_eq!(detected.kind_reason, "the archive ships an icon");
+    assert_eq!(detected.icons[0].rel, "bin/rider.svg");
+    assert_eq!(detected.icons[1].rel, "bin/rider.png");
+    assert!(detected.icon_trusted);
+}
+
+#[test]
+fn the_name_rule_takes_a_word_of_the_name_or_a_suffix_of_the_id() {
+    let names = ["JetBrains Rider", "JetBrains Rider"];
+    assert!(detect::name_matches("rider", &names));
+    assert!(detect::name_matches("Rider", &names));
+    assert!(detect::name_matches("jetbrains-rider", &names));
+    assert!(detect::name_matches("rider.png", &names));
+    assert!(!detect::name_matches("fsnotifier", &names));
+    assert!(
+        !detect::name_matches("ider", &names),
+        "a suffix of a word is not a word"
+    );
+    assert!(!detect::name_matches("rider64", &names));
+    assert!(detect::name_matches("code", &["Code - OSS"]));
+    assert!(detect::name_matches(
+        "idea",
+        &["IntelliJ IDEA Community Edition"]
+    ));
+    assert!(!detect::name_matches("fixa", &["fixtool"]));
+    assert!(detect::name_matches("fixtool", &["fixtool"]));
 }
 
 /// The acceptance round trip: install, launch through the desktop entry,
@@ -845,7 +971,18 @@ fn a_toolchain_links_its_commands_or_goes_on_the_path() {
     }
     let h = harness();
     let layout = h.layout();
-    h.install(Fixture::Toolchain, Vec::new());
+    // Three equal commands: the form opens on "(choose one)" and the
+    // user picks the first.
+    h.ui.answer_form(Vec::new());
+    let (outcome, _) = h.run(INSTALL, h.ctx_archive(Fixture::Toolchain));
+    let error = outcome
+        .err()
+        .unwrap_or_else(|| panic!("the pick was not asked"));
+    assert!(
+        text_of(&error).contains("pick the main executable"),
+        "{error}"
+    );
+    h.install(Fixture::Toolchain, vec![("exe", Value::Choice(1))]);
     for name in ["fixa", "fixb", "fixc", "fixscript"] {
         let link = layout.bin_dir().join(name);
         assert_eq!(
@@ -880,6 +1017,7 @@ fn a_toolchain_links_its_commands_or_goes_on_the_path() {
     h.install(
         Fixture::Toolchain,
         vec![
+            ("exe", Value::Choice(1)),
             ("path_mode", Value::Choice(1)),
             ("env_var", Value::Text("FIXTOOL_HOME".into())),
         ],

@@ -304,7 +304,9 @@ fn install_launch_update_collide_path_mode_and_uninstall_through_the_app() {
     // A command link of another origin is refused, then replaced.
     let foreign = layout.bin_dir().join("fixa");
     fs::write(&foreign, "#!/bin/sh\necho mine\n").unwrap_or_else(|e| panic!("{e}"));
-    let events = d.install(Fixture::Toolchain, Vec::new());
+    // Its three commands are equal, so the main executable is the user's
+    // pick: the first.
+    let events = d.install(Fixture::Toolchain, vec![("exe", Value::Choice(1))]);
     let refused = errors(&events);
     assert!(
         refused
@@ -313,7 +315,10 @@ fn install_launch_update_collide_path_mode_and_uninstall_through_the_app() {
         "{refused:?}"
     );
     assert!(!layout.app_dir("fixtool").exists());
-    let events = d.install(Fixture::Toolchain, vec![("overwrite", Value::Check(true))]);
+    let events = d.install(
+        Fixture::Toolchain,
+        vec![("exe", Value::Choice(1)), ("overwrite", Value::Check(true))],
+    );
     assert!(errors(&events).is_empty(), "{:?}", errors(&events));
     assert!(fs::read_link(&foreign).is_ok(), "replaced by the link");
     assert_eq!(d.record("fixtool").commands().len(), 4);
@@ -373,6 +378,7 @@ fn install_launch_update_collide_path_mode_and_uninstall_through_the_app() {
     let events = d.install(
         Fixture::Toolchain,
         vec![
+            ("exe", Value::Choice(1)),
             ("path_mode", Value::Choice(1)),
             ("env_var", Value::Text("FIXTOOL_HOME".into())),
         ],
