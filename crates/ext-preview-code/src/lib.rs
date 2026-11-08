@@ -7,15 +7,27 @@
 //! HTML carry a Pretty print control: a view transformation that reformats
 //! the shown text with one element per line, off for every newly opened
 //! file; invalid input shows the raw text with the error's line in red.
+//!
+//! Markdown and HTML are also rendered: a [`Document`] of headings,
+//! paragraphs, lists, code, tables, links and images ([`markdown`],
+//! [`html`]) that a pane which knows documents lays out, with images from
+//! the file's own folder read through the provider. A Rendered toggle in
+//! the toolbar, on for a newly opened file, switches between it and the
+//! highlighted source; `render` always gives the source, for a pane that
+//! shows no documents.
 
 #![forbid(unsafe_code)]
+
+pub mod document;
+pub mod html;
+pub mod markdown;
 
 use std::sync::{Arc, LazyLock};
 
 use ext::{
-    API_VERSION, Capabilities, ControlId, ControlValue, Extension, Frame, Icon, InfoSection,
-    Manifest, Platforms, Points, PreviewControl, PreviewDoc, Previewer, Provider, Registry,
-    RenderRequest, TextBlock, TextLayer, TextSpan, Transport, Version, async_trait,
+    API_VERSION, Capabilities, Content, ControlId, ControlValue, Document, Extension, Frame, Icon,
+    InfoSection, Manifest, Platforms, Points, PreviewControl, PreviewDoc, Previewer, Provider,
+    Registry, RenderRequest, TextBlock, TextLayer, TextSpan, Transport, Version, async_trait,
 };
 use syntect::easy::HighlightLines;
 use syntect::highlighting::{FontStyle, Theme, ThemeSet};
@@ -76,6 +88,48 @@ static THEMES: LazyLock<ThemeSet> = LazyLock::new(ThemeSet::load_defaults);
 
 /// The Pretty print toggle's id.
 pub const PRETTY: ControlId = ControlId("code.pretty");
+
+/// The Rendered toggle's id: the rendered document rather than the source.
+pub const RENDERED: ControlId = ControlId("code.rendered");
+
+/// An image named by a document is read up to this size.
+pub const IMAGE_LIMIT: usize = 16 * 1024 * 1024;
+
+/// All images of a document together are read up to this size.
+pub const IMAGES_LIMIT: usize = 64 * 1024 * 1024;
+
+/// At most this many images of a document are read.
+pub const MAX_IMAGES: usize = 50;
+
+/// A markup the previewer renders as a document.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Markup {
+    /// Markdown, through `pulldown-cmark`.
+    Markdown,
+    /// HTML, through the sanitising renderer.
+    Html,
+}
+
+impl Markup {
+    /// The markup for a syntect syntax name.
+    #[must_use]
+    pub fn for_language(language: &str) -> Option<Self> {
+        match language {
+            "Markdown" => Some(Self::Markdown),
+            "HTML" | "HTML (Rails)" => Some(Self::Html),
+            _ => None,
+        }
+    }
+
+    /// Renders `text` as a document.
+    #[must_use]
+    pub fn render(self, text: &str) -> Document {
+        match self {
+            Self::Markdown => markdown::render(text),
+            Self::Html => html::render(text),
+        }
+    }
+}
 
 /// The colour of the line a parse error points at.
 const ERROR_RED: [u8; 4] = [0xD3, 0x2F, 0x2F, 0xFF];
@@ -353,6 +407,9 @@ pub fn indent_markup(text: &str) -> String {
 }
 
 /// An opened source file.
+// Four independent facts and toggles about one file: a byte order mark,
+// a cut window, the pretty-print toggle and the rendered toggle.
+#[allow(clippy::struct_excessive_bools)]
 pub struct CodeDoc {
     text: String,
     layer: TextLayer,
@@ -368,6 +425,10 @@ pub struct CodeDoc {
     /// The pretty-printed text, cached while the toggle is on.
     formatted: Option<Pretty>,
     cached: Option<(bool, bool, Vec<TextSpan>)>,
+    markup: Option<Markup>,
+    /// The Rendered toggle: the document rather than the source.
+    rendered: bool,
+    document: Option<Arc<Document>>,
 }
 
 impl std::fmt::Debug for CodeDoc {
@@ -390,6 +451,7 @@ impl CodeDoc {
         let first_line = text.lines().next().unwrap_or("");
         let syntax = syntax_for(token, first_line);
         let language = syntax.map(|s| s.name.clone());
+        let markup = language.as_deref().and_then(Markup::for_language);
         Self {
             layer: TextLayer {
                 pages: vec![text.clone()],
@@ -406,7 +468,40 @@ impl CodeDoc {
             pretty: false,
             formatted: None,
             cached: None,
+            markup,
+            rendered: true,
+            document: None,
         }
+    }
+
+    /// The markup this file is rendered as, if any.
+    #[must_use]
+    pub fn markup(&self) -> Option<Markup> {
+        self.markup
+    }
+
+    /// The decoded text.
+    #[must_use]
+    pub fn text(&self) -> &str {
+        &self.text
+    }
+
+    /// Renders the document from the text, images unread; `None` for a
+    /// file that is no markup.
+    #[must_use]
+    pub fn render_document(&self) -> Option<Document> {
+        self.markup.map(|markup| markup.render(&self.text))
+    }
+
+    /// Sets the rendered document, images read.
+    pub fn set_document(&mut self, document: Document) {
+        self.document = Some(Arc::new(document));
+    }
+
+    /// The rendered document, when the file is markup.
+    #[must_use]
+    pub fn document(&self) -> Option<&Arc<Document>> {
+        self.document.as_ref()
     }
 
     /// The text as shown: pretty printed when the toggle is on and the
@@ -527,6 +622,15 @@ impl PreviewDoc for CodeDoc {
         Some(&self.layer)
     }
 
+    fn content(&self) -> Option<Content> {
+        if !self.rendered {
+            return None;
+        }
+        self.document
+            .as_ref()
+            .map(|document| Content::Document(Arc::clone(document)))
+    }
+
     fn sections(&self) -> Vec<InfoSection> {
         let size = self.size.unwrap_or(self.bytes_read as u64);
         let mut rows = vec![
@@ -582,15 +686,24 @@ impl PreviewDoc for CodeDoc {
     }
 
     fn controls(&self) -> Vec<PreviewControl> {
-        match self.formatter {
-            Some(_) => vec![PreviewControl::Toggle {
+        let mut controls = Vec::new();
+        if self.markup.is_some() {
+            controls.push(PreviewControl::Toggle {
+                id: RENDERED,
+                icon: Icon::Rendered,
+                label: "Rendered",
+                on: self.rendered,
+            });
+        }
+        if self.formatter.is_some() {
+            controls.push(PreviewControl::Toggle {
                 id: PRETTY,
                 icon: Icon::PrettyPrint,
                 label: "Pretty print",
                 on: self.pretty,
-            }],
-            None => Vec::new(),
+            });
         }
+        controls
     }
 
     fn set_control(&mut self, id: ControlId, value: ControlValue) -> Result<(), Error> {
@@ -600,6 +713,11 @@ impl PreviewDoc for CodeDoc {
                 Ok(())
             }
             (PRETTY, _, None) => Err(Error::Unsupported("this format has no pretty printer")),
+            (RENDERED, ControlValue::Bool(on), _) if self.markup.is_some() => {
+                self.rendered = on;
+                Ok(())
+            }
+            (RENDERED, _, _) => Err(Error::Unsupported("this format is not rendered")),
             _ => Err(Error::Unsupported("no such control")),
         }
     }
@@ -648,8 +766,99 @@ impl Previewer for CodePreviewer {
             .file_name()
             .map(|n| String::from_utf8_lossy(n).into_owned())
             .unwrap_or_default();
-        Ok(Box::new(CodeDoc::new(&name, shown, truncated, size)))
+        let mut doc = CodeDoc::new(&name, shown, truncated, size);
+        if let Some(mut document) = doc.render_document() {
+            load_images(&mut document, loc, &*provider, &cancel).await?;
+            doc.set_document(document);
+        }
+        Ok(Box::new(doc))
     }
+}
+
+/// The path of an image source relative to the document, when it names a
+/// file in the document's folder or below: no scheme, no leading slash, no
+/// parent steps; the query and fragment dropped and percent-escapes
+/// decoded.
+#[must_use]
+pub fn relative_source(source: &str) -> Option<String> {
+    let source = source.trim();
+    let source = source.split(['?', '#']).next().unwrap_or("");
+    if source.is_empty()
+        || source.starts_with('/')
+        || source.starts_with('\\')
+        || source.contains("://")
+        || source.starts_with("data:")
+        || source.starts_with("mailto:")
+    {
+        return None;
+    }
+    let decoded = percent_decode(source);
+    if decoded.split(['/', '\\']).any(|part| part == "..") {
+        return None;
+    }
+    Some(decoded)
+}
+
+/// Decodes `%XX` escapes; invalid ones stay as they are.
+fn percent_decode(text: &str) -> String {
+    let bytes = text.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%'
+            && i + 2 < bytes.len()
+            && let Some(value) = std::str::from_utf8(&bytes[i + 1..i + 3])
+                .ok()
+                .and_then(|h| u8::from_str_radix(h, 16).ok())
+        {
+            out.push(value);
+            i += 3;
+        } else {
+            out.push(bytes[i]);
+            i += 1;
+        }
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+/// Reads the images a document names from the document's folder through
+/// the provider, within the limits; a source that cannot be read keeps
+/// `None` for its data.
+async fn load_images(
+    document: &mut Document,
+    loc: &Location,
+    provider: &dyn Provider,
+    cancel: &CancelToken,
+) -> Result<(), Error> {
+    let Some(folder) = loc.path.parent() else {
+        return Ok(());
+    };
+    let mut total = 0usize;
+    let mut count = 0usize;
+    for image in document::images_mut(document) {
+        if count >= MAX_IMAGES || total >= IMAGES_LIMIT {
+            break;
+        }
+        let Some(relative) = relative_source(&image.source) else {
+            continue;
+        };
+        if cancel.is_cancelled() {
+            return Err(Error::Cancelled);
+        }
+        count += 1;
+        let path = folder.join(relative.as_bytes());
+        let target = Location::new(loc.provider, path);
+        match ext::read_bytes(provider, &target, Some(IMAGE_LIMIT + 1), cancel).await {
+            Ok(bytes) if bytes.len() <= IMAGE_LIMIT => {
+                total += bytes.len();
+                image.data = Some(bytes.into());
+            }
+            Ok(_) => tracing::debug!(source = %image.source, "image larger than the limit"),
+            Err(Error::Cancelled) => return Err(Error::Cancelled),
+            Err(error) => tracing::debug!(source = %image.source, %error, "image not read"),
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -880,5 +1089,354 @@ mod tests {
         assert_eq!(formatter_for("Rust"), None);
         let doc = CodeDoc::new("x.xml", b"<a><b/></a>", false, None);
         assert_eq!(doc.controls().len(), 1);
+    }
+
+    const ALL_MARKDOWN: &str = "# Title\n\nA paragraph with *emphasis*, **strong**, ~~struck~~, `code` and a [link](https://example.org/page).  \nHard break above. Soft\nbreak here.\n\n## Lists\n\n- one\n- two\n  - nested\n\n3. third\n4. fourth\n\n- [x] done\n- [ ] open\n\n> A quote\n> with two lines\n\n```rust\nfn main() {}\n```\n\n    indented code\n\n| A | B |\n|---|---|\n| 1 | 2 |\n| 3 | 4 |\n\n![Alt text](picture.png)\n\nInline ![icon](icon%20one.png) here and <b>raw html</b>.\n\n---\n\n### The end\n";
+
+    #[test]
+    fn markdown_renders_every_element() {
+        let doc = markdown::render(ALL_MARKDOWN);
+        let blocks = &doc.blocks;
+        assert!(
+            matches!(&blocks[0], ext::Block::Heading { level: 1, text } if text == &[ext::Inline::Text { text: "Title".into(), style: ext::Style::empty() }]),
+            "{:?}",
+            blocks[0]
+        );
+        let ext::Block::Paragraph(inlines) = &blocks[1] else {
+            panic!("{:?}", blocks[1]);
+        };
+        assert!(inlines.iter().any(|i| matches!(i, ext::Inline::Text { text, style } if text == "emphasis" && *style == ext::Style::ITALIC)));
+        assert!(inlines.iter().any(|i| matches!(i, ext::Inline::Text { text, style } if text == "strong" && *style == ext::Style::BOLD)));
+        assert!(inlines.iter().any(|i| matches!(i, ext::Inline::Text { text, style } if text == "struck" && *style == ext::Style::STRIKETHROUGH)));
+        assert!(inlines.iter().any(|i| matches!(i, ext::Inline::Text { text, style } if text == "code" && *style == ext::Style::CODE)));
+        assert!(inlines.iter().any(|i| matches!(i, ext::Inline::Link { text, href } if text == "link" && href == "https://example.org/page")));
+        assert!(inlines.iter().any(|i| matches!(i, ext::Inline::Break)));
+        assert!(
+            inlines.iter().any(
+                |i| matches!(i, ext::Inline::Text { text, .. } if text.contains("Soft break here"))
+            ),
+            "{inlines:?}"
+        );
+        assert!(matches!(&blocks[2], ext::Block::Heading { level: 2, .. }));
+        let ext::Block::List {
+            ordered: false,
+            items,
+            ..
+        } = &blocks[3]
+        else {
+            panic!("{:?}", blocks[3]);
+        };
+        assert_eq!(items.len(), 2);
+        assert!(
+            items[1].iter().any(
+                |b| matches!(b, ext::Block::List { ordered: false, items, .. } if items.len() == 1)
+            ),
+            "nested: {:?}",
+            items[1]
+        );
+        assert!(
+            matches!(&blocks[4], ext::Block::List { ordered: true, start: 3, items } if items.len() == 2),
+            "{:?}",
+            blocks[4]
+        );
+        let ext::Block::List { items, .. } = &blocks[5] else {
+            panic!("{:?}", blocks[5]);
+        };
+        assert!(
+            matches!(&items[0][0], ext::Block::Paragraph(p) if matches!(&p[0], ext::Inline::Text { text, .. } if text == "[x] done")),
+            "{:?}",
+            items[0]
+        );
+        assert!(
+            matches!(&blocks[6], ext::Block::Quote(inner) if inner.len() == 1),
+            "{:?}",
+            blocks[6]
+        );
+        assert!(
+            matches!(&blocks[7], ext::Block::Code { language: Some(l), text } if l == "rust" && text == "fn main() {}"),
+            "{:?}",
+            blocks[7]
+        );
+        assert!(
+            matches!(&blocks[8], ext::Block::Code { language: None, text } if text == "indented code"),
+            "{:?}",
+            blocks[8]
+        );
+        let ext::Block::Table { header, rows } = &blocks[9] else {
+            panic!("{:?}", blocks[9]);
+        };
+        assert_eq!(header.len(), 2);
+        assert_eq!(rows.len(), 2);
+        assert!(matches!(&rows[1][1][0], ext::Inline::Text { text, .. } if text == "4"));
+        assert!(
+            matches!(&blocks[10], ext::Block::Image(image) if image.alt == "Alt text" && image.source == "picture.png" && image.data.is_none()),
+            "{:?}",
+            blocks[10]
+        );
+        let ext::Block::Paragraph(inlines) = &blocks[11] else {
+            panic!("{:?}", blocks[11]);
+        };
+        assert!(
+            inlines
+                .iter()
+                .any(|i| matches!(i, ext::Inline::Image(image) if image.alt == "icon")),
+            "{inlines:?}"
+        );
+        assert!(
+            inlines
+                .iter()
+                .any(|i| matches!(i, ext::Inline::Text { text, .. } if text.contains("<b>"))),
+            "raw html stays text: {inlines:?}"
+        );
+        assert!(matches!(&blocks[12], ext::Block::Rule));
+        assert!(matches!(&blocks[13], ext::Block::Heading { level: 3, .. }));
+        assert_eq!(blocks.len(), 14, "{blocks:?}");
+    }
+
+    #[test]
+    fn odd_markup_renders_without_panics() {
+        for text in [
+            "",
+            "#",
+            "- ",
+            "1.",
+            "> > >",
+            "| a |\n|",
+            "```\nunterminated",
+            "![]()",
+            "[]()",
+            "***",
+            "<div><p>unclosed",
+            "</p></li></ul></table>",
+            "<table><td>cell without row</td></table>",
+            "<ul>text outside items<li>a<ul><li>b</ul></ul>",
+            "<pre><code class=\"language-rs\">let x = 1;</code>",
+            "<a href=\"javascript:alert(1)\">x</a><img src=\"\"><img alt=\"only alt\">",
+            "<!-- open comment",
+            "<b><i>crossed</b></i>",
+            "a < b && c > d",
+            "<script>never</script>after<style>.x{}</style>",
+        ] {
+            let md = markdown::render(text);
+            let html = html::render(text);
+            assert!(md.blocks.len() < 100 && html.blocks.len() < 100, "{text}");
+        }
+    }
+
+    const SAMPLE_HTML: &str = "<!DOCTYPE html><html><head><title>Nope</title><style>p{color:red}</style><script>alert(1)</script></head><body><h1>Heading &amp; more</h1><p>First <b>bold</b> and <em>italic</em> with a <a href=\"docs/a.html\">link</a> and <a href=\"javascript:x\">unsafe</a>.<br>Second line</p><ul><li>one</li><li>two<ol start=\"5\"><li>five</li></ol></li></ul><blockquote><p>quoted</p></blockquote><pre><code class=\"language-rust\">fn x() {}\n</code></pre><table><tr><th>H1</th><th>H2</th></tr><tr><td>a</td><td>b &lt; c</td></tr></table><div><img src=\"pic%20one.png\" alt=\"A picture\"></div><p>Text <img src=\"http://x/y.png\" alt=\"remote\"> inline</p><hr><section>Loose text</section></body></html>";
+
+    #[test]
+    fn html_renders_sanitised() {
+        let doc = html::render(SAMPLE_HTML);
+        let blocks = &doc.blocks;
+        assert!(
+            matches!(&blocks[0], ext::Block::Heading { level: 1, text } if matches!(&text[0], ext::Inline::Text { text, .. } if text == "Heading & more")),
+            "{:?}",
+            blocks[0]
+        );
+        let ext::Block::Paragraph(inlines) = &blocks[1] else {
+            panic!("{:?}", blocks[1]);
+        };
+        assert!(inlines.iter().any(|i| matches!(i, ext::Inline::Text { text, style } if text == "bold" && *style == ext::Style::BOLD)));
+        assert!(inlines.iter().any(|i| matches!(i, ext::Inline::Text { text, style } if text == "italic" && *style == ext::Style::ITALIC)));
+        assert!(inlines.iter().any(|i| matches!(i, ext::Inline::Link { text, href } if text == "link" && href == "docs/a.html")));
+        assert!(
+            inlines
+                .iter()
+                .any(|i| matches!(i, ext::Inline::Text { text, .. } if text.contains("unsafe"))),
+            "unsafe link kept as text: {inlines:?}"
+        );
+        assert!(!inlines.iter().any(
+            |i| matches!(i, ext::Inline::Link { href, .. } if href.starts_with("javascript"))
+        ));
+        assert!(inlines.iter().any(|i| matches!(i, ext::Inline::Break)));
+        let ext::Block::List {
+            ordered: false,
+            items,
+            ..
+        } = &blocks[2]
+        else {
+            panic!("{:?}", blocks[2]);
+        };
+        assert_eq!(items.len(), 2);
+        assert!(
+            items[1].iter().any(|b| matches!(
+                b,
+                ext::Block::List {
+                    ordered: true,
+                    start: 5,
+                    ..
+                }
+            )),
+            "{:?}",
+            items[1]
+        );
+        assert!(matches!(&blocks[3], ext::Block::Quote(_)));
+        assert!(
+            matches!(&blocks[4], ext::Block::Code { language: Some(l), text } if l == "rust" && text == "fn x() {}"),
+            "{:?}",
+            blocks[4]
+        );
+        let ext::Block::Table { header, rows } = &blocks[5] else {
+            panic!("{:?}", blocks[5]);
+        };
+        assert_eq!(header.len(), 2);
+        assert_eq!(rows.len(), 1);
+        assert!(
+            matches!(&rows[0][1][0], ext::Inline::Text { text, .. } if text == "b < c"),
+            "{:?}",
+            rows[0]
+        );
+        assert!(
+            matches!(&blocks[6], ext::Block::Image(image) if image.alt == "A picture" && image.source == "pic%20one.png"),
+            "{:?}",
+            blocks[6]
+        );
+        let ext::Block::Paragraph(inlines) = &blocks[7] else {
+            panic!("{:?}", blocks[7]);
+        };
+        assert!(
+            inlines.iter().any(
+                |i| matches!(i, ext::Inline::Image(image) if image.source == "http://x/y.png")
+            )
+        );
+        assert!(matches!(&blocks[8], ext::Block::Rule));
+        assert!(
+            matches!(&blocks[9], ext::Block::Paragraph(p) if matches!(&p[0], ext::Inline::Text { text, .. } if text == "Loose text")),
+            "{:?}",
+            blocks[9]
+        );
+        assert_eq!(blocks.len(), 10, "{blocks:?}");
+        let flat = format!("{doc:?}");
+        assert!(
+            !flat.contains("alert") && !flat.contains("color:red") && !flat.contains("Nope"),
+            "{flat}"
+        );
+    }
+
+    #[test]
+    fn relative_sources_stay_inside_the_folder() {
+        assert_eq!(
+            relative_source("pic%20one.png?x=1#top").as_deref(),
+            Some("pic one.png")
+        );
+        assert_eq!(
+            relative_source("sub/pic.png").as_deref(),
+            Some("sub/pic.png")
+        );
+        assert_eq!(relative_source("./pic.png").as_deref(), Some("./pic.png"));
+        assert_eq!(relative_source("../pic.png"), None);
+        assert_eq!(relative_source("/etc/passwd"), None);
+        assert_eq!(relative_source("https://x/y.png"), None);
+        assert_eq!(relative_source("data:image/png;base64,AAAA"), None);
+        assert_eq!(relative_source(""), None);
+        assert_eq!(percent_decode("a%2Fb%zz"), "a/b%zz");
+    }
+
+    #[test]
+    fn markdown_files_get_a_rendered_toggle_that_starts_on() {
+        let mut doc = CodeDoc::new("README.md", b"# Hi\n\nText\n", false, None);
+        assert_eq!(doc.markup(), Some(Markup::Markdown));
+        assert_eq!(doc.text(), "# Hi\n\nText\n");
+        assert!(doc.content().is_none(), "no document until it is set");
+        let document = doc.render_document().unwrap_or_else(|| panic!("document"));
+        doc.set_document(document);
+        assert!(
+            matches!(
+                doc.controls()[0],
+                PreviewControl::Toggle {
+                    id: RENDERED,
+                    icon: Icon::Rendered,
+                    on: true,
+                    ..
+                }
+            ),
+            "{:?}",
+            doc.controls()
+        );
+        let Some(Content::Document(rendered)) = doc.content() else {
+            panic!("no content");
+        };
+        assert!(matches!(
+            &rendered.blocks[0],
+            ext::Block::Heading { level: 1, .. }
+        ));
+        assert!(doc.document().is_some());
+        // The source is always there for the pane that shows no documents.
+        let Frame::Text(block) = doc.render(0, req(false)).unwrap_or_else(|e| panic!("{e}")) else {
+            panic!("not text");
+        };
+        assert_eq!(block.text, "# Hi\n\nText\n");
+        doc.set_control(RENDERED, ControlValue::Bool(false))
+            .unwrap_or_else(|e| panic!("{e}"));
+        assert!(doc.content().is_none());
+        assert!(matches!(
+            doc.controls()[0],
+            PreviewControl::Toggle {
+                id: RENDERED,
+                on: false,
+                ..
+            }
+        ));
+        let html = CodeDoc::new("page.html", b"<p>x</p>", false, None);
+        assert_eq!(html.markup(), Some(Markup::Html));
+        assert_eq!(
+            html.controls().len(),
+            2,
+            "rendered and pretty print: {:?}",
+            html.controls()
+        );
+        let mut rust = CodeDoc::new("main.rs", b"fn main() {}", false, None);
+        assert_eq!(rust.markup(), None);
+        assert!(rust.render_document().is_none());
+        assert!(
+            rust.set_control(RENDERED, ControlValue::Bool(false))
+                .is_err()
+        );
+        assert_eq!(rust.controls(), []);
+    }
+
+    #[test]
+    fn open_reads_the_images_of_the_folder_and_nothing_else() {
+        let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+        std::fs::create_dir(dir.path().join("img")).unwrap_or_else(|e| panic!("{e}"));
+        std::fs::write(dir.path().join("img").join("a b.png"), b"\x89PNG fake")
+            .unwrap_or_else(|e| panic!("{e}"));
+        std::fs::write(dir.path().join("secret.txt"), b"outside").unwrap_or_else(|e| panic!("{e}"));
+        let sub = dir.path().join("docs");
+        std::fs::create_dir(&sub).unwrap_or_else(|e| panic!("{e}"));
+        std::fs::write(sub.join("local.png"), b"\x89PNG local").unwrap_or_else(|e| panic!("{e}"));
+        let md = sub.join("page.md");
+        std::fs::write(
+            &md,
+            "![local](local.png)\n\n![up](../img/a%20b.png)\n\n![missing](nope.png)\n\n![web](https://example.org/x.png)\n",
+        )
+        .unwrap_or_else(|e| panic!("{e}"));
+        let fake = Arc::new(platform::Fake::new().unwrap_or_else(|e| panic!("{e}")));
+        let provider: Arc<dyn Provider> = Arc::new(vfs_local::LocalProvider::new(fake));
+        let loc = Location::new(vfs_local::PROVIDER_ID, platform::paths::from_path(&md));
+        let doc = runtime::block_on(CodePreviewer.open(&loc, provider, CancelToken::new()))
+            .unwrap_or_else(|e| panic!("{e}"));
+        let Some(Content::Document(document)) = doc.content() else {
+            panic!("no document");
+        };
+        let images: Vec<&ext::Image> = document
+            .blocks
+            .iter()
+            .filter_map(|b| match b {
+                ext::Block::Image(image) => Some(image),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(images.len(), 4, "{:?}", document.blocks);
+        assert_eq!(
+            images[0].data.as_deref(),
+            Some(&b"\x89PNG local"[..]),
+            "a file next to the document"
+        );
+        assert!(images[1].data.is_none(), "no parent steps");
+        assert!(images[2].data.is_none(), "missing files stay empty");
+        assert!(images[3].data.is_none(), "no network");
+        assert_eq!(doc.status()[0], "Markdown");
     }
 }

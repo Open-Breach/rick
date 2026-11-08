@@ -15,7 +15,7 @@ use std::collections::BTreeSet;
 
 use app::{App, Command, Event};
 use egui_dock::{DockState, Node, NodeIndex, Split, SurfaceIndex, TabIndex, Tree};
-use model::{Dock, DockTarget, Model, PaneId, Side, TabId, WindowId};
+use model::{Dock, DockTarget, Model, PaneId, Side, TabId, TabKind, WindowId};
 
 /// The structure of panes and tabs, as either side sees it.
 #[derive(Debug, Clone, PartialEq)]
@@ -542,10 +542,12 @@ impl DockSync {
 
         self.place_panes(app, events, pointer);
 
-        // Focus.
+        // Focus. A pane showing the Preview tab never takes it: the preview
+        // follows the focus, so the keyboard stays with the explorer.
         if may_focus
             && let Some(pane) = self.focused_pane(app.model())
             && pane != app.model().focused
+            && !shows_preview(app.model(), pane)
         {
             app.handle(Command::FocusPane(pane), events);
         }
@@ -867,6 +869,14 @@ fn divergent_leaf(tree: &PaneShape, model: &PaneShape) -> Option<PaneId> {
         (split @ PaneShape::Split { .. }, _) => Some(split.first_leaf()),
         (PaneShape::Leaf(a), PaneShape::Split { .. }) => Some(*a),
     }
+}
+
+/// Whether the pane's active tab is the Preview tab.
+#[must_use]
+pub fn shows_preview(model: &Model, pane: PaneId) -> bool {
+    model
+        .active_tab(pane)
+        .is_some_and(|(_, tab)| tab.kind == TabKind::Preview)
 }
 
 /// The pane owning most of `tabs`; the first tab's pane on a tie.

@@ -121,6 +121,12 @@ pub const BENCHMARKS: &[Benchmark] = &[
         windows: us(16_600),
     },
     Benchmark {
+        key: "viewer-frame",
+        linux: us(16_600),
+        macos: us(16_600),
+        windows: us(16_600),
+    },
+    Benchmark {
         key: "startup",
         linux: ms(20),
         macos: ms(150),
@@ -128,6 +134,12 @@ pub const BENCHMARKS: &[Benchmark] = &[
     },
     Benchmark {
         key: "plugin-load",
+        linux: ms(50),
+        macos: ms(100),
+        windows: ms(100),
+    },
+    Benchmark {
+        key: "archive-zip-first",
         linux: ms(50),
         macos: ms(100),
         windows: ms(100),
@@ -155,6 +167,36 @@ pub const BENCHMARKS: &[Benchmark] = &[
         linux: ms(5),
         macos: ms(15),
         windows: ms(5),
+    },
+    Benchmark {
+        key: "office-convert",
+        linux: ms(5_000),
+        macos: ms(5_000),
+        windows: ms(5_000),
+    },
+    Benchmark {
+        key: "waveform",
+        linux: ms(500),
+        macos: ms(500),
+        windows: ms(500),
+    },
+    Benchmark {
+        key: "zip-first",
+        linux: ms(100),
+        macos: ms(100),
+        windows: ms(100),
+    },
+    Benchmark {
+        key: "csv-window",
+        linux: us(16_600),
+        macos: us(16_600),
+        windows: us(16_600),
+    },
+    Benchmark {
+        key: "previewers-frame",
+        linux: us(16_600),
+        macos: us(16_600),
+        windows: us(16_600),
     },
 ];
 

@@ -12,6 +12,10 @@
 //! copy, allocated sizes and extent sharing. [`paths`] converts between
 //! [`VPath`](types::VPath) and [`std::path::Path`].
 //!
+//! Where the OS keeps the original paths of trashed items to itself
+//! (macOS), the trash lists Rick's own record of what it trashed instead,
+//! kept in [`trash_record`] under the config directory.
+//!
 //! This is the only crate allowed `unsafe` and `cfg(target_os)`. Every
 //! `unsafe` block carries a `// SAFETY:` comment. The [`Clipboard`] is text
 //! only and goes through `arboard` on all three platforms.
@@ -29,6 +33,7 @@ pub mod paths;
 #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 mod time;
 mod traits;
+pub mod trash_record;
 #[cfg(unix)]
 mod volumes;
 
@@ -49,6 +54,7 @@ pub use traits::{
     Platform, Properties, PropertiesOutcome, RecentItem, RecentlyUsed, StandardFolder,
     StandardFolders, Trash, TrashedItem, Volume, VolumeKind, Volumes, WindowChrome,
 };
+pub use trash_record::TRASH_FILE;
 
 /// The platform the binary runs on.
 ///

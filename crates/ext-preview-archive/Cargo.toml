@@ -1,0 +1,44 @@
+[package]
+name = "ext-preview-archive"
+version.workspace = true
+description = "Rick preview plugin for archives: lists zip, tar family, 7z, RAR and ISO contents without extracting."
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+# A plugin: the `cdylib` the host loads from `plugins/preview-archive/`,
+# and an `rlib` for the binary's opt-in `preview-archive` feature and the
+# tests.
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+# `fixtures` adds the encoders the test fixtures need (AES zip entries, 7z
+# writing, xz); the shipped plugin is built without it.
+[features]
+default = []
+fixtures = ["zip/aes-crypto", "sevenz-rust2/compress", "sevenz-rust2/aes256", "lzma-rust2/encoder"]
+
+[dependencies]
+types = { workspace = true }
+ext = { workspace = true }
+zip = { workspace = true }
+tar = { workspace = true }
+flate2 = { workspace = true }
+zstd = { workspace = true }
+lzma-rust2 = { workspace = true }
+bzip2 = { workspace = true }
+lz4_flex = { workspace = true }
+sevenz-rust2 = { workspace = true }
+unrar = { workspace = true }
+tempfile = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+# The crate's own tests use the fixtures with their encoders.
+ext-preview-archive = { path = ".", features = ["fixtures"] }
+runtime = { workspace = true }
+vfs-local = { workspace = true }
+platform = { workspace = true }
+
+[lints]
+workspace = true

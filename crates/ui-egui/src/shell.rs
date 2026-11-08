@@ -1,6 +1,6 @@
-//! The windows: for each one the title row, dock of tabs and panes, side
-//! panel, inspector and operations area; and, shared by all of them, the
-//! dialogues, palette, toasts and the keyboard.
+//! The windows: for each one the title row, dock of tabs and panes (the
+//! Preview tab among them), side panel and operations area; and, shared by
+//! all of them, the dialogues, palette, toasts and the keyboard.
 //!
 //! One [`RickUi`] holds the `App` and every window's state; the first
 //! window is eframe's root viewport and every further one an immediate
@@ -19,10 +19,10 @@ use egui_dock::{DockArea, NodePath, TabViewer};
 use ext::{ActionCtx, ActionId, Invocation, Level};
 use model::{
     Column, Density, DockTarget, Geometry, IconSize, JobState, PaneId, PanelSide, SelectionChange,
-    SettingsChange, SidePanelChange, SortDir, Tab, TabId, Theme, ViewMode, WindowId,
+    SettingsChange, SidePanelChange, SortDir, Tab, TabId, TabKind, Theme, ViewMode, WindowId,
 };
 use platform::{ControlsSide, PropertiesOutcome};
-use types::{EntryId, EntryKind, Location};
+use types::{EntryId, Location};
 
 use crate::dnd::{Dnd, DragView, Source, Spring, Target, Zone};
 use crate::dock::DockSync;
@@ -35,6 +35,7 @@ use crate::search::{Pick, SearchBox};
 use crate::settings_ui::ShortcutsScreen;
 use crate::side_panel::SidePanelState;
 use crate::thumbs::Thumbnails;
+use crate::viewer::{self, ViewerCx, ViewerState, Zoom};
 use crate::{conflict, frame, icons, inspector, menus, pane, paths, settings_ui, side_panel};
 
 /// Per-tab view state that is the UI's business, not the model's.
@@ -80,9 +81,21 @@ pub struct TabUi {
     pub edit: Option<RowEdit>,
     /// The last plain click on a row and when, for the slow second click.
     pub last_click: Option<(EntryId, f64)>,
+    /// The breadcrumbs of the location drawn last, so the filesystem is
+    /// asked where an archive begins once per location, not per frame.
+    pub crumbs: Option<(Location, Vec<paths::Crumb>)>,
 }
 
 impl TabUi {
+    /// The breadcrumbs of `location`, computed when it is not the one
+    /// cached.
+    pub fn crumbs_of(&mut self, location: &Location) -> &[paths::Crumb] {
+        if self.crumbs.as_ref().is_none_or(|(l, _)| l != location) {
+            self.crumbs = Some((location.clone(), paths::crumbs(location)));
+        }
+        self.crumbs.as_ref().map_or(&[], |(_, c)| c.as_slice())
+    }
+
     /// The view state of a tab the model holds: a restored scroll offset
     /// waits for the listing.
     fn for_tab(tab: &Tab) -> Self {
@@ -175,6 +188,13 @@ pub enum Request {
     RenameLayout(String),
     /// Close a window; the last one closes the application.
     CloseWindow(WindowId),
+    /// A viewer tab fills the screen, or stops filling it.
+    ViewerFullscreen {
+        /// The viewer tab.
+        tab: TabId,
+        /// On or off.
+        on: bool,
+    },
     /// Open the side panel's Edit… dialogue for a place.
     EditPlace {
         /// The row's index.
@@ -258,16 +278,14 @@ struct NamePrompt {
     focus: bool,
 }
 
-/// The state of one window: its dock, search box, inspector and drag.
+/// The state of one window: its dock, search box and drag.
 pub struct WindowUi {
     /// The dock tree.
     dock: DockSync,
     search: SearchBox,
-    inspector_open: bool,
-    /// The preview pane's width when it first opens.
-    inspector_width: f32,
-    /// Where the preview pane was in the last frame, if open.
-    inspector_rect: Option<egui::Rect>,
+    /// Where the Preview tab's content was in the last frame, when the
+    /// window showed it.
+    preview_rect: Option<egui::Rect>,
     /// The tab the pointer was over in the frame being drawn.
     hovered_tab: Option<TabId>,
     /// Each tab's header button in the last frame, for tests that drop on
@@ -291,13 +309,11 @@ pub struct WindowUi {
 }
 
 impl WindowUi {
-    fn new(model: &model::Model, window: WindowId, inspector_width: f32) -> Self {
+    fn new(model: &model::Model, window: WindowId) -> Self {
         Self {
             dock: DockSync::new(model, window),
             search: SearchBox::default(),
-            inspector_open: false,
-            inspector_width,
-            inspector_rect: None,
+            preview_rect: None,
             hovered_tab: None,
             tab_headers: HashMap::new(),
             window_frame: None,
@@ -332,10 +348,10 @@ pub struct RickUi {
     /// What the About window shows as the version: the binary's version
     /// and git hash, or this crate's version until the binary says.
     version: String,
-    /// The preview pane's own state: pinned-panel search, what it drew.
-    /// One preview, shown in every window that opens the pane.
+    /// The Preview tab's own state: pinned-panel search, what it drew. One
+    /// preview, shown in every window that opens the tab.
     inspector_state: inspector::PaneState,
-    /// The width a window's preview pane first opens at.
+    /// The width the Preview tab's pane opens at, in points.
     inspector_width: f32,
     properties: Option<(String, Vec<(String, String)>)>,
     /// Read-only texts actions asked to show, each in its own window.
@@ -346,6 +362,12 @@ pub struct RickUi {
     /// The egui context, for uploading textures outside a frame callback.
     ctx: egui::Context,
     previews: Previews,
+    /// Each viewer tab's own state.
+    viewers: HashMap<TabId, ViewerState>,
+    /// The zoom remembered per file type, for the viewers, this session.
+    zoom_memory: HashMap<String, Zoom>,
+    /// The viewer tab filling the screen, if one does.
+    fullscreen: Option<TabId>,
     closed_tabs: Vec<Location>,
     /// The operations area's rows: rates and when each job ended.
     operations: Operations,
@@ -486,7 +508,7 @@ impl RickUi {
         let inspector_width = 260.0;
         let mut windows = BTreeMap::new();
         for (id, _) in app.model().windows() {
-            windows.insert(id, WindowUi::new(app.model(), id, inspector_width));
+            windows.insert(id, WindowUi::new(app.model(), id));
         }
         Self {
             app,
@@ -512,6 +534,9 @@ impl RickUi {
             thumbnails: Thumbnails::default(),
             ctx: ctx.clone(),
             previews: Previews::default(),
+            viewers: HashMap::new(),
+            zoom_memory: HashMap::new(),
+            fullscreen: None,
             closed_tabs: Vec::new(),
             operations: Operations::default(),
             side: SidePanelState::default(),
@@ -562,26 +587,23 @@ impl RickUi {
         ids
     }
 
-    /// Whether the root window's preview pane is shown.
+    /// Whether the root window has its Preview tab open.
     #[must_use]
     pub fn inspector_open(&self) -> bool {
-        self.windows
-            .get(&self.root)
-            .is_some_and(|w| w.inspector_open)
+        self.app.model().preview_tab(self.root).is_some()
     }
 
-    /// The width the preview pane opens at; for tests, before it opens.
+    /// The width the Preview tab's pane opens at; for tests, before it
+    /// opens.
     pub fn set_inspector_width(&mut self, width: f32) {
         self.inspector_width = width;
-        for window in self.windows.values_mut() {
-            window.inspector_width = width;
-        }
     }
 
-    /// Where the root window's preview pane was in the last frame, if open.
+    /// Where the root window's Preview tab drew its content in the last
+    /// frame, if the tab is open and shown.
     #[must_use]
     pub fn inspector_rect(&self) -> Option<egui::Rect> {
-        self.windows.get(&self.root).and_then(|w| w.inspector_rect)
+        self.windows.get(&self.root).and_then(|w| w.preview_rect)
     }
 
     /// Where the preview pane's parts were in the last frame, for tests.
@@ -777,6 +799,24 @@ impl RickUi {
         &self.previews
     }
 
+    /// A viewer tab's state, for tests.
+    #[must_use]
+    pub fn viewer(&self, tab: TabId) -> Option<&ViewerState> {
+        self.viewers.get(&tab)
+    }
+
+    /// The viewer tab filling the screen, for tests.
+    #[must_use]
+    pub fn viewer_fullscreen(&self) -> Option<TabId> {
+        self.fullscreen
+    }
+
+    /// The zoom remembered for a file type this session, for tests.
+    #[must_use]
+    pub fn zoom_for(&self, name: &str) -> Option<Zoom> {
+        self.zoom_memory.get(&viewer::type_key(name)).copied()
+    }
+
     /// Whether the application is closing.
     #[must_use]
     pub fn quitting(&self) -> bool {
@@ -845,12 +885,19 @@ impl RickUi {
         });
     }
 
-    /// The entry the app is previewing in `pane`, if any.
+    /// The entry the app is previewing in `pane`, if any: the Preview tab's
+    /// or a viewer tab's.
     fn preview_entry(&self, pane: PaneId) -> Option<EntryId> {
+        self.app.preview_entry(pane)
+    }
+
+    /// Whether the pane's active tab is a viewer, which takes the Viewer
+    /// shortcut table.
+    fn in_viewer(&self, pane: PaneId) -> bool {
         self.app
-            .preview_target()
-            .filter(|(p, _)| *p == pane)
-            .map(|(_, id)| id)
+            .model()
+            .active_tab(pane)
+            .is_some_and(|(_, tab)| tab.kind == TabKind::Viewer)
     }
 
     fn handle(&mut self, command: Command) {
@@ -910,10 +957,63 @@ impl RickUi {
             .map_or(self.app.model().focused, |w| w.focused)
     }
 
+    /// The pane an intent about files goes to: `pane` itself, or, when its
+    /// active tab is the Preview tab, the pane of the explorer the preview
+    /// follows. The dock never focuses a preview pane on its own, but a
+    /// Preview tab dragged into an explorer pane can be the active one.
+    fn explorer_pane(&self, pane: PaneId) -> PaneId {
+        if crate::dock::shows_preview(self.app.model(), pane) {
+            self.app.preview_pane().unwrap_or(pane)
+        } else {
+            pane
+        }
+    }
+
+    /// Where an intent lands: the tab-strip intents stay with the pane
+    /// they were pressed in, everything else follows
+    /// [`explorer_pane`](Self::explorer_pane).
+    fn route(&self, intent: Intent, pane: PaneId) -> PaneId {
+        match intent {
+            Intent::CloseTab
+            | Intent::CloseOtherTabs
+            | Intent::NextTab
+            | Intent::PrevTab
+            | Intent::Tab(_)
+            | Intent::MoveTabLeft
+            | Intent::MoveTabRight
+            | Intent::FocusPane(_) => pane,
+            _ => self.explorer_pane(pane),
+        }
+    }
+
+    /// The share of the dock the existing panes keep when the Preview tab
+    /// opens, so that its pane is [`inspector_width`](Self::inspector_width)
+    /// wide: the dock puts the divider at the fraction and gives each side
+    /// half of its width.
+    fn preview_fraction(&self, window: WindowId) -> f32 {
+        let Some(w) = self.windows.get(&window) else {
+            return 0.72;
+        };
+        let rects = w.dock.pane_rects(self.app.model());
+        let left = rects
+            .iter()
+            .map(|(_, r)| r.left())
+            .fold(f32::INFINITY, f32::min);
+        let right = rects
+            .iter()
+            .map(|(_, r)| r.right())
+            .fold(f32::NEG_INFINITY, f32::max);
+        let width = right - left;
+        if !width.is_finite() || width <= 0.0 {
+            return 0.72;
+        }
+        (1.0 - (self.inspector_width + 0.5) / width).clamp(0.2, 0.9)
+    }
+
     /// Turns this frame's key presses into intents, unless a text field, a
     /// dialogue, the palette or the shortcuts screen wants them.
     fn handle_keys(&mut self, ctx: &egui::Context, window: WindowId) {
-        let pane = self.focused_in(window);
+        let pane = self.explorer_pane(self.focused_in(window));
         if self.dialog.is_some()
             || self.name_prompt.is_some()
             || self.shortcuts.rebinding.is_some()
@@ -929,6 +1029,7 @@ impl RickUi {
         if search_active || ctx.egui_wants_keyboard_input() || egui::Popup::is_any_open(ctx) {
             return;
         }
+        let in_viewer = self.in_viewer(pane);
         let filter_text = self
             .app
             .model()
@@ -950,11 +1051,15 @@ impl RickUi {
                     if *key == egui::Key::Backspace
                         && modifiers.is_none()
                         && !filter_text.is_empty()
+                        && !in_viewer
                     {
                         backspace = true;
                         return false;
                     }
-                    match self.keys.match_key(*modifiers, *key, *physical_key) {
+                    match self
+                        .keys
+                        .match_key(*modifiers, *key, *physical_key, in_viewer)
+                    {
                         Some(intent) => {
                             intents.push(intent);
                             false
@@ -962,10 +1067,14 @@ impl RickUi {
                         None => true,
                     }
                 }
+                // Type-to-filter; a viewer has no list and its letters
+                // (J, K, L, I) are shortcuts.
                 egui::Event::Text(text)
                     if text.chars().all(|c| !c.is_control() && !c.is_whitespace()) =>
                 {
-                    typed.push_str(text);
+                    if !in_viewer {
+                        typed.push_str(text);
+                    }
                     false
                 }
                 _ => true,
@@ -982,7 +1091,14 @@ impl RickUi {
             self.requests
                 .push(Request::Command(Command::Filter { pane, text }));
         }
+        let strip = self.focused_in(window);
         for intent in intents {
+            // The tab-strip intents act on the pane they were pressed in.
+            let pane = if self.route(intent, strip) == strip {
+                strip
+            } else {
+                pane
+            };
             self.requests.push(Request::Intent { intent, pane });
         }
     }
@@ -1029,11 +1145,33 @@ impl RickUi {
                         });
                     }
                     Request::CloseWindow(window) => self.close_window(window, ctx),
+                    Request::ViewerFullscreen { tab, on } => self.set_fullscreen(ctx, tab, on),
                     Request::EditPlace { index, title, icon } => {
                         side_panel::begin_edit(&mut self.side, index, title, icon);
                     }
                 }
             }
+        }
+    }
+
+    /// A viewer fills the screen, or stops: the window goes fullscreen with
+    /// it and draws nothing but the viewer, and the viewer's pane takes the
+    /// keyboard.
+    fn set_fullscreen(&mut self, ctx: &egui::Context, tab: TabId, on: bool) {
+        if on {
+            if self
+                .app
+                .model()
+                .tab(tab)
+                .is_none_or(|t| t.kind != TabKind::Viewer)
+            {
+                return;
+            }
+            self.fullscreen = Some(tab);
+            self.handle(Command::ActivateTab(tab));
+            ctx.send_viewport_cmd(ViewportCommand::Fullscreen(true));
+        } else if self.fullscreen.take().is_some() {
+            ctx.send_viewport_cmd(ViewportCommand::Fullscreen(false));
         }
     }
 
@@ -1259,14 +1397,11 @@ impl RickUi {
 
     fn run_action(&mut self, action: ActionId, pane: PaneId, invoked_from: Invocation) {
         if let Some(ctx) = self.app.action_ctx(pane, invoked_from) {
-            // In the Trash view the Delete key deletes for good and Enter
-            // restores: the view's own operations take the keys.
-            let action = if vfs_rick::is_trash(&ctx.location) {
-                match action.0 {
-                    "core.trash" | "core.delete" => ActionId("core.purge_trash"),
-                    "core.open_default" => ActionId("core.restore_trash"),
-                    _ => action,
-                }
+            // In the Trash view Enter restores through the trash plugin's
+            // action; the Delete key deletes for good through the view's
+            // own `remove`, as the core action does everywhere.
+            let action = if vfs_rick::is_trash(&ctx.location) && action.0 == "core.open_default" {
+                ActionId("trash.restore_items")
             } else {
                 action
             };
@@ -1347,26 +1482,41 @@ impl RickUi {
         });
     }
 
+    /// Whether the provider at `location` takes new entries: the inline
+    /// edits start only where New file and New folder can finish.
+    fn writable(&self, location: &Location) -> bool {
+        self.app
+            .mounts()
+            .resolve(location)
+            .is_ok_and(|p| p.capabilities(location).contains(ext::Capabilities::WRITE))
+    }
+
     /// Whether the shell handles an action itself rather than running it:
     /// the three inline edits (QUESTIONS.md 26) and Open containing folder
-    /// (QUESTIONS.md 19).
+    /// (QUESTIONS.md 19). A viewer has no list to edit in, so its rename
+    /// and new entries go through the action's own prompt.
     fn intercept(&mut self, action: ActionId, ctx: &ActionCtx) -> bool {
+        let in_viewer = self.in_viewer(ctx.pane);
         match action.0 {
-            "core.rename" if !self.inline_commit && ctx.selection.len() == 1 => {
+            "core.rename" if !self.inline_commit && !in_viewer && ctx.selection.len() == 1 => {
                 self.requests.push(Request::StartEdit {
                     pane: ctx.pane,
                     kind: EditKind::Rename(ctx.selection[0].id),
                 });
                 true
             }
-            "core.new_file" if !self.inline_commit && !ops::is_trash(ctx) => {
+            "core.new_file"
+                if !self.inline_commit && !in_viewer && self.writable(&ctx.location) =>
+            {
                 self.requests.push(Request::StartEdit {
                     pane: ctx.pane,
                     kind: EditKind::NewFile,
                 });
                 true
             }
-            "core.new_folder" if !self.inline_commit && !ops::is_trash(ctx) => {
+            "core.new_folder"
+                if !self.inline_commit && !in_viewer && self.writable(&ctx.location) =>
+            {
                 self.requests.push(Request::StartEdit {
                     pane: ctx.pane,
                     kind: EditKind::NewFolder,
@@ -1414,36 +1564,29 @@ impl RickUi {
         }
     }
 
+    /// Opens an entry: a trashed item is restored; otherwise the app
+    /// decides: a folder or an archive navigates, a previewable file goes to
+    /// the viewer, anything else to the system default.
     fn open_entry(&mut self, pane: PaneId, id: EntryId) {
         let Some((_, tab)) = self.app.model().active_tab(pane) else {
             return;
         };
-        let Some(entry) = tab.entry(id).cloned() else {
-            return;
-        };
-        // A trashed item opens nowhere; Enter and a double-click restore it.
+        // A trashed item opens nowhere; Enter and a double-click restore it
+        // through the trash plugin's action.
         if vfs_rick::is_trash(&tab.location) {
+            let Some(entry) = tab.entry(id).cloned() else {
+                return;
+            };
             let ctx = ActionCtx {
                 pane,
                 location: tab.location.clone(),
                 selection: vec![entry],
                 invoked_from: Invocation::Shortcut,
             };
-            self.run_action_with(ActionId("core.restore_trash"), ctx);
+            self.run_action_with(ActionId("trash.restore_items"), ctx);
             return;
         }
-        if entry.kind == EntryKind::Dir {
-            let to = tab.location_of(&entry);
-            self.handle(Command::Navigate { pane, to });
-        } else {
-            let ctx = ActionCtx {
-                pane,
-                location: tab.location.clone(),
-                selection: vec![entry],
-                invoked_from: Invocation::Shortcut,
-            };
-            self.run_action_with(ActionId("core.open_default"), ctx);
-        }
+        self.handle(Command::Open { pane, id });
     }
 
     fn unavailable(&mut self, what: &str) {
@@ -1452,6 +1595,7 @@ impl RickUi {
 
     #[allow(clippy::too_many_lines)]
     fn dispatch(&mut self, intent: Intent, pane: PaneId, ctx: &egui::Context) {
+        let pane = self.route(intent, pane);
         self.dispatched.push_back(Dispatched { intent, pane });
         while self.dispatched.len() > RECENTS {
             self.dispatched.pop_front();
@@ -1461,6 +1605,9 @@ impl RickUi {
             .model()
             .window_of(pane)
             .unwrap_or(self.app.model().focused_window);
+        if self.dispatch_viewer(intent, pane, ctx) {
+            return;
+        }
         match intent {
             Intent::Action(action) => self.run_action(action, pane, Invocation::Shortcut),
             Intent::Open => self.open_selection(pane),
@@ -1468,24 +1615,26 @@ impl RickUi {
             Intent::Forward => self.handle(Command::Forward(pane)),
             Intent::Refresh => self.handle(Command::Refresh(pane)),
             Intent::Parent => {
-                if let Some((_, tab)) = self.app.model().active_tab(pane)
-                    && let Some(parent) = paths::parent(&tab.location.path)
-                {
-                    let to = Location::new(tab.location.provider, parent);
-                    self.handle(Command::Navigate { pane, to });
+                if let Some((tab_id, tab)) = self.app.model().active_tab(pane) {
+                    let location = tab.location.clone();
+                    let to = paths::parent_of(self.tab_ui(tab_id).crumbs_of(&location));
+                    if let Some(to) = to {
+                        self.handle(Command::Navigate { pane, to });
+                    }
                 }
             }
             Intent::Root => {
-                if let Some((_, tab)) = self.app.model().active_tab(pane)
-                    && let Some(root) = paths::root(&tab.location.path)
-                {
-                    let to = Location::new(tab.location.provider, root);
-                    self.handle(Command::Navigate { pane, to });
+                if let Some((tab_id, tab)) = self.app.model().active_tab(pane) {
+                    let location = tab.location.clone();
+                    let to = paths::root_of(self.tab_ui(tab_id).crumbs_of(&location));
+                    if let Some(to) = to {
+                        self.handle(Command::Navigate { pane, to });
+                    }
                 }
             }
             Intent::FocusPath => {
                 if let Some((tab_id, tab)) = self.app.model().active_tab(pane) {
-                    let text = tab.location.path.to_string_lossy().into_owned();
+                    let text = paths::text_of(&tab.location);
                     let tab_ui = self.tab_ui(tab_id);
                     tab_ui.path_edit = Some(text);
                     tab_ui.focus_path = true;
@@ -1642,9 +1791,8 @@ impl RickUi {
                 mode: ViewMode::Tree,
             }),
             Intent::ToggleInspector => {
-                if let Some(w) = self.windows.get_mut(&window) {
-                    w.inspector_open = !w.inspector_open;
-                }
+                let fraction = self.preview_fraction(window);
+                self.handle(Command::TogglePreview { window, fraction });
             }
             Intent::Settings => self.settings_open = true,
             Intent::Shortcuts => self.shortcuts.open = true,
@@ -1767,7 +1915,134 @@ impl RickUi {
                     change: SidePanelChange::Visible(!visible),
                 });
             }
+            // The Viewer table outside a viewer tab: nothing to do.
+            Intent::ViewerPrev
+            | Intent::ViewerNext
+            | Intent::ViewerPageUp
+            | Intent::ViewerPageDown
+            | Intent::ViewerFirst
+            | Intent::ViewerLast
+            | Intent::ViewerFit
+            | Intent::ViewerActual
+            | Intent::ViewerFitWidth
+            | Intent::ViewerZoomIn
+            | Intent::ViewerZoomOut
+            | Intent::ViewerPlay
+            | Intent::ViewerRewind
+            | Intent::ViewerPause
+            | Intent::ViewerForward
+            | Intent::ViewerFind
+            | Intent::ViewerInfo => {}
         }
+    }
+
+    /// The intents a viewer tab takes when it is the pane's active tab: its
+    /// own table, Escape (leave fullscreen, then close) and F11. Returns
+    /// whether the intent was one of them.
+    // One arm per row of the Viewer table.
+    #[allow(clippy::too_many_lines)]
+    fn dispatch_viewer(&mut self, intent: Intent, pane: PaneId, ctx: &egui::Context) -> bool {
+        let Some((tab_id, tab)) = self
+            .app
+            .model()
+            .active_tab(pane)
+            .filter(|(_, tab)| tab.kind == TabKind::Viewer)
+        else {
+            return false;
+        };
+        let fullscreen = self.fullscreen == Some(tab_id);
+        let state = self.viewers.entry(tab_id).or_default();
+        let slot = self.previews.get_mut(pane);
+        let entry = viewer::shown(tab).cloned();
+        let mut v = ViewerCx {
+            state,
+            slot,
+            zoom_memory: &mut self.zoom_memory,
+            fullscreen,
+        };
+        let select = |id: Option<EntryId>| {
+            id.map(|id| Command::Select {
+                pane,
+                change: SelectionChange::Set(vec![id]),
+            })
+        };
+        let mut command = None;
+        match intent {
+            Intent::ViewerPrev => command = select(viewer::step(tab, viewer::Step::By(-1))),
+            Intent::ViewerNext => command = select(viewer::step(tab, viewer::Step::By(1))),
+            Intent::ViewerFirst => command = select(viewer::step(tab, viewer::Step::First)),
+            Intent::ViewerLast => command = select(viewer::step(tab, viewer::Step::Last)),
+            Intent::ViewerPageUp | Intent::ViewerPageDown => {
+                let by = if intent == Intent::ViewerPageUp {
+                    -1
+                } else {
+                    1
+                };
+                let pages = v.slot.pages().unwrap_or(1);
+                let target = v.slot.page as isize + by;
+                if pages > 1 && (0..pages as isize).contains(&target) {
+                    viewer::go_to_page(&mut v, target as usize);
+                } else {
+                    command = select(viewer::step(tab, viewer::Step::By(by)));
+                }
+            }
+            Intent::ViewerFit => viewer::set_zoom(&mut v, entry.as_ref(), Zoom::Fit),
+            Intent::ViewerActual => viewer::set_zoom(&mut v, entry.as_ref(), Zoom::Actual),
+            Intent::ViewerFitWidth => viewer::set_zoom(&mut v, entry.as_ref(), Zoom::FitWidth),
+            Intent::ViewerZoomIn => {
+                let zoom = viewer::zoom_step(v.state, 1.25);
+                viewer::set_zoom(&mut v, entry.as_ref(), zoom);
+            }
+            Intent::ViewerZoomOut => {
+                let zoom = viewer::zoom_step(v.state, 0.8);
+                viewer::set_zoom(&mut v, entry.as_ref(), zoom);
+            }
+            Intent::ViewerPlay => {
+                if let Some(t) = v.slot.transport() {
+                    if t.playing() {
+                        t.pause();
+                    } else {
+                        t.play();
+                    }
+                }
+            }
+            Intent::ViewerPause => {
+                if let Some(t) = v.slot.transport() {
+                    t.pause();
+                }
+            }
+            Intent::ViewerRewind => viewer::seek_by(v.slot, viewer::SEEK_STEP, true),
+            Intent::ViewerForward => viewer::seek_by(v.slot, viewer::SEEK_STEP, false),
+            Intent::ViewerFind => {
+                let find = v.state.find.get_or_insert_with(Default::default);
+                find.focus = true;
+            }
+            Intent::ViewerInfo => v.state.info_open = !v.state.info_open,
+            Intent::Fullscreen => {
+                self.requests.push(Request::ViewerFullscreen {
+                    tab: tab_id,
+                    on: !fullscreen,
+                });
+            }
+            Intent::Escape => {
+                if fullscreen {
+                    self.requests.push(Request::ViewerFullscreen {
+                        tab: tab_id,
+                        on: false,
+                    });
+                } else {
+                    self.closed_tabs.push(tab.location.clone());
+                    self.requests
+                        .push(Request::Command(Command::CloseTab(tab_id)));
+                }
+            }
+            _ => return false,
+        }
+        if let Some(command) = command {
+            self.handle(command);
+        }
+        let _ = ctx;
+        true
     }
 
     /// The tab order of a pane as its window's dock shows it.
@@ -1791,7 +2066,10 @@ impl RickUi {
                     self.open_entry(pane, id);
                 }
             }
-            [one] if one.kind == EntryKind::Dir && !vfs_rick::is_trash(&tab.location) => {
+            // One entry: a folder or an archive navigates, a file goes to the
+            // viewer or the system application, a trashed item is restored;
+            // several entries all go to the system (or back out of the trash).
+            [one] => {
                 let id = one.id;
                 self.open_entry(pane, id);
             }
@@ -1843,7 +2121,7 @@ impl RickUi {
         let from = *from;
         let best = rects
             .iter()
-            .filter(|(p, _)| *p != pane)
+            .filter(|(p, _)| *p != pane && !crate::dock::shows_preview(self.app.model(), *p))
             .filter(|(_, r)| match direction {
                 Direction::Left => r.max.x <= from.min.x + 1.0,
                 Direction::Right => r.min.x >= from.max.x - 1.0,
@@ -2076,14 +2354,16 @@ impl RickUi {
             }
             right.separator();
         }
-        let inspector_open = self.windows.get(&window).is_some_and(|w| w.inspector_open);
+        let preview_open = self.app.model().preview_tab(window).is_some();
         if right
-            .add(toggle_icon(icons::INSPECTOR, inspector_open))
+            .add(toggle_icon(icons::PREVIEW, preview_open))
             .on_hover_text("Toggle preview pane")
             .clicked()
-            && let Some(w) = self.windows.get_mut(&window)
         {
-            w.inspector_open = !w.inspector_open;
+            self.requests.push(Request::Intent {
+                intent: Intent::ToggleInspector,
+                pane: focused,
+            });
         }
         let side_visible = self
             .app
@@ -2352,6 +2632,16 @@ struct Viewer<'a> {
     shift: bool,
     /// The pane keyboard input goes to in this window.
     focused: PaneId,
+    /// The previews, for the Preview tab and the viewers.
+    previews: &'a mut Previews,
+    /// The Preview tab's own state.
+    inspector_state: &'a mut inspector::PaneState,
+    /// Each viewer tab's state.
+    viewers: &'a mut HashMap<TabId, ViewerState>,
+    /// The zoom remembered per file type.
+    zoom_memory: &'a mut HashMap<String, Zoom>,
+    /// The viewer tab filling the screen.
+    fullscreen: Option<TabId>,
 }
 
 impl TabViewer for Viewer<'_> {
@@ -2364,18 +2654,16 @@ impl TabViewer for Viewer<'_> {
     fn title(&mut self, tab: &mut TabId) -> egui::WidgetText {
         self.app.model().tab(*tab).map_or_else(
             || "?".into(),
-            |t| {
-                // A folder icon for local folders, a view's own for a
-                // virtual location, the provider's otherwise.
-                if let Some(which) = vfs_rick::Virtual::of(&t.location) {
-                    format!("{} {}", virtual_icon(which), which.title()).into()
-                } else {
-                    let icon = if t.location.provider.0 == "local" {
-                        icons::FOLDER
-                    } else {
-                        icons::PROVIDER
-                    };
-                    format!("{icon} {}", paths::title(&t.location.path)).into()
+            |t| match t.kind {
+                TabKind::Preview => format!("{} Preview", icons::PREVIEW).into(),
+                TabKind::Viewer => viewer::title(t).into(),
+                TabKind::Explorer => {
+                    // A folder icon for local folders, a view's own for a
+                    // virtual location, the archive's for an archive, the
+                    // provider's otherwise.
+                    let icon = vfs_rick::Virtual::of(&t.location)
+                        .map_or_else(|| paths::location_icon(&t.location), virtual_icon);
+                    format!("{icon} {}", paths::title_of(&t.location)).into()
                 }
             },
         )
@@ -2391,18 +2679,22 @@ impl TabViewer for Viewer<'_> {
                 .push(Request::Command(Command::CloseTab(*tab)));
         }
         // A drop target: into the folder the tab shows; hovering activates
-        // the tab.
+        // the tab. The Preview tab shows no folder.
         if self.dnd.active()
             && let Some(state) = self.app.model().tab(*tab)
+            && state.kind != TabKind::Preview
         {
             let highlight = self.dnd.zone(Zone {
                 key: egui::Id::new(("dnd-tab", tab.0)),
                 rect: response.rect,
-                target: Target::Folder {
-                    to: state.location.clone(),
-                    device: crate::dnd::listing_device(state),
-                    spring: Some(Spring::Tab(*tab)),
-                },
+                target: crate::dnd::into_pane(
+                    state,
+                    Target::Folder {
+                        to: state.location.clone(),
+                        device: crate::dnd::listing_device(state),
+                        spring: Some(Spring::Tab(*tab)),
+                    },
+                ),
             });
             if highlight {
                 let painter = response.ctx.layer_painter(response.layer_id);
@@ -2431,6 +2723,20 @@ impl TabViewer for Viewer<'_> {
         let Some(state) = model.tab(*tab) else {
             return;
         };
+        if state.kind == TabKind::Preview {
+            let close = inspector::show(
+                ui,
+                self.app,
+                self.previews,
+                self.inspector_state,
+                self.requests,
+            );
+            if close {
+                self.requests
+                    .push(Request::Command(Command::CloseTab(*tab)));
+            }
+            return;
+        }
         let tab_ui = self
             .tabs
             .entry(*tab)
@@ -2448,6 +2754,18 @@ impl TabViewer for Viewer<'_> {
             thumbnails: self.thumbnails,
             dnd: self.dnd,
         };
+        if state.kind == TabKind::Viewer {
+            let target = self.app.preview_entry(pane);
+            let slot = self.previews.sync_mut(ui.ctx(), pane, target);
+            let mut v = ViewerCx {
+                state: self.viewers.entry(*tab).or_default(),
+                slot,
+                zoom_memory: self.zoom_memory,
+                fullscreen: self.fullscreen == Some(*tab),
+            };
+            viewer::show(ui, &mut cx, &mut v);
+            return;
+        }
         pane::show(ui, &mut cx);
     }
 
@@ -2480,45 +2798,14 @@ impl TabViewer for Viewer<'_> {
 }
 
 impl RickUi {
-    /// The window's panels: title row, side panel, inspector and the dock.
+    /// The window's panels: title row, side panel and the dock, the Preview
+    /// tab among its tabs.
     fn panels(&mut self, ui: &mut egui::Ui, ctx: &egui::Context, window: WindowId) {
         let focused = self.focused_in(window);
         self.title_row(ui, ctx, window, focused);
         self.apply_requests(ctx);
 
         self.side_panel(ui, ctx, window);
-
-        let inspector_open = self.windows.get(&window).is_some_and(|w| w.inspector_open);
-        if let Some(w) = self.windows.get_mut(&window) {
-            w.inspector_rect = None;
-        }
-        if inspector_open {
-            let width = self
-                .windows
-                .get(&window)
-                .map_or(self.inspector_width, |w| w.inspector_width);
-            // The pane's width is the dock's and the user's; its content
-            // fits itself in and never asks for more.
-            let response = egui::Panel::right(egui::Id::new(("inspector", window.0)))
-                .default_size(width)
-                .size_range(inspector::MIN_WIDTH..=f32::INFINITY)
-                .show(ui, |ui| {
-                    inspector::show(
-                        ui,
-                        &self.app,
-                        self.app.model().focused,
-                        &mut self.previews,
-                        &mut self.inspector_state,
-                        &mut self.requests,
-                    )
-                });
-            if let Some(w) = self.windows.get_mut(&window) {
-                w.inspector_rect = Some(response.response.rect);
-                if response.inner {
-                    w.inspector_open = false;
-                }
-            }
-        }
 
         let shift = ctx.input(|i| i.modifiers.shift);
         let dock_id = egui::Id::new(("dock", window.0));
@@ -2543,6 +2830,11 @@ impl RickUi {
                 tab_headers: &mut w.tab_headers,
                 shift,
                 focused,
+                previews: &mut self.previews,
+                inspector_state: &mut self.inspector_state,
+                viewers: &mut self.viewers,
+                zoom_memory: &mut self.zoom_memory,
+                fullscreen: self.fullscreen,
             };
             DockArea::new(&mut w.dock.state)
                 .id(dock_id)
@@ -2554,6 +2846,26 @@ impl RickUi {
                 .show_inside(ui, &mut viewer);
             w.strips = w.dock.strips(self.app.model(), strip_height);
             w.tab_drag = w.dock.dragged_tab(ctx, dock_id);
+            // The Preview tab's leaf below its strip, for tests.
+            let model = self.app.model();
+            w.preview_rect = model
+                .preview_tab(window)
+                .and_then(|tab| model.pane_of(tab))
+                .filter(|pane| {
+                    model.pane(*pane).and_then(model::Pane::active) == model.preview_tab(window)
+                })
+                .and_then(|pane| {
+                    w.dock
+                        .pane_rects(model)
+                        .into_iter()
+                        .find(|(p, _)| *p == pane)
+                        .map(|(_, rect)| {
+                            egui::Rect::from_min_max(
+                                egui::pos2(rect.left(), rect.top() + strip_height),
+                                rect.max,
+                            )
+                        })
+                });
         });
         self.cross_window_drop(ctx, window, drag_before);
         let may_focus = ctx.input(|i| i.viewport().focused.unwrap_or(true));
@@ -2652,11 +2964,14 @@ impl RickUi {
     }
 
     /// Draws one window: everything from the frame to the toasts.
+    // One window, top to bottom, in the order the parts depend on each
+    // other.
+    #[allow(clippy::too_many_lines)]
     fn draw_window(&mut self, ui: &mut egui::Ui, window: WindowId) {
         let ctx = ui.ctx().clone();
         let ctx = &ctx;
         if !self.windows.contains_key(&window) {
-            let state = WindowUi::new(self.app.model(), window, self.inspector_width);
+            let state = WindowUi::new(self.app.model(), window);
             self.windows.insert(window, state);
         }
         self.now = SystemTime::now();
@@ -2684,6 +2999,33 @@ impl RickUi {
         self.resolve_pending_selects();
         self.handle_keys(ctx, window);
         self.apply_requests(ctx);
+        // Viewer tabs that went took their state with them; a fullscreen
+        // viewer that closed leaves the screen.
+        let model = self.app.model();
+        self.viewers.retain(|tab, _| model.tab(*tab).is_some());
+        if self.fullscreen.is_some_and(|tab| model.tab(tab).is_none()) {
+            self.set_fullscreen(ctx, TabId(0), false);
+        }
+
+        // A viewer filling the screen: nothing but it.
+        if let Some(tab) = self.fullscreen
+            && self
+                .app
+                .model()
+                .pane_of(tab)
+                .and_then(|p| self.app.model().window_of(p))
+                == Some(window)
+        {
+            if let Some(w) = self.windows.get_mut(&window) {
+                w.window_frame = None;
+                w.content = Some(ui.max_rect());
+            }
+            self.fullscreen_viewer(ui, tab);
+            self.apply_requests(ctx);
+            self.report_viewport(ctx, window);
+            self.apply_requests(ctx);
+            return;
+        }
 
         // Rick's own window frame where the system draws none; the panels
         // go inside it.
@@ -2745,6 +3087,49 @@ impl RickUi {
             w.dock.rebuild(self.app.model());
             w.dock.take_order(self.app.model());
         }
+    }
+
+    /// Draws the viewer `tab` over the whole window: its fullscreen.
+    fn fullscreen_viewer(&mut self, ui: &mut egui::Ui, tab: TabId) {
+        let model = self.app.model();
+        let Some(pane) = model.pane_of(tab) else {
+            return;
+        };
+        let Some(state) = model.tab(tab) else {
+            return;
+        };
+        let Some(window) = model.window_of(pane) else {
+            return;
+        };
+        let Some(w) = self.windows.get_mut(&window) else {
+            return;
+        };
+        let tab_ui = self
+            .tabs
+            .entry(tab)
+            .or_insert_with(|| TabUi::for_tab(state));
+        let mut cx = PaneCx {
+            app: &self.app,
+            pane,
+            tab_id: tab,
+            tab: state,
+            tab_ui,
+            requests: &mut self.requests,
+            keys: &self.keys,
+            now: self.now,
+            focused: true,
+            thumbnails: &mut self.thumbnails,
+            dnd: &mut w.dnd,
+        };
+        let target = self.app.preview_entry(pane);
+        let slot = self.previews.sync_mut(ui.ctx(), pane, target);
+        let mut v = ViewerCx {
+            state: self.viewers.entry(tab).or_default(),
+            slot,
+            zoom_memory: &mut self.zoom_memory,
+            fullscreen: true,
+        };
+        egui::CentralPanel::default().show(ui, |ui| viewer::show(ui, &mut cx, &mut v));
     }
 
     /// Keeps the windows in step with the model: the root viewport follows

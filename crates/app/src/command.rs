@@ -37,6 +37,20 @@ pub enum Command {
         /// Where to go.
         to: Location,
     },
+    /// Open an entry of the pane's active tab: a folder navigates the pane
+    /// to it; a local file the archive provider can browse navigates into
+    /// it as a location (`archive:` with the archive as a breadcrumb
+    /// segment); any other file opens in a viewer tab of the pane when a
+    /// previewer claims it, and with the system's default application
+    /// otherwise or when its type is listed in `[viewer] external`. The
+    /// archive check and the scoring read the file as a job, so the result
+    /// follows a moment later.
+    Open {
+        /// The pane.
+        pane: PaneId,
+        /// The entry.
+        id: EntryId,
+    },
     /// One step back in the pane's history.
     Back(PaneId),
     /// One step forward in the pane's history.
@@ -172,6 +186,16 @@ pub enum Command {
         /// Where it goes.
         to: DockTarget,
     },
+    /// Open the window's Preview tab, in a new pane right of every other,
+    /// or close it when it is open. The preview is one tab per window that
+    /// follows the focus; it docks and tears out like any other tab.
+    TogglePreview {
+        /// The window.
+        window: WindowId,
+        /// The share of the width the existing panes keep when the tab
+        /// opens; display state the UI works out from its size.
+        fraction: f32,
+    },
     /// Cancel a running job.
     CancelJob(JobId),
     /// Pause a running job that supports it.
@@ -187,8 +211,6 @@ pub enum Command {
         /// Skip, overwrite, rename, cancel; for this item or all remaining.
         answer: ConflictAnswer,
     },
-    /// List the trash again.
-    RefreshTrash,
     /// Enumerate the mounted volumes again.
     RefreshVolumes,
     /// Revert the last reversible operation.

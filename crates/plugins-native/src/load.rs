@@ -3,8 +3,10 @@
 use std::fmt;
 use std::mem::ManuallyDrop;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
-use ext::plugin::{ENTRY_POINT, EntryPoint, Status};
+use ext::platform::Platform;
+use ext::plugin::{EntryPoint, Status, entry_point};
 use ext::{Extension, Manifest, Registry};
 use tracing::{debug, warn};
 use types::Error;
@@ -16,9 +18,10 @@ pub enum LoadError {
     /// built against another kernel build whose libraries it cannot find.
     #[error("the library could not be loaded: {0}")]
     Open(#[source] libloading::Error),
-    /// The library is not a Rick plugin.
-    #[error("the library exports no `{ENTRY_POINT}`: {0}")]
-    NoEntryPoint(#[source] libloading::Error),
+    /// The library is not a Rick plugin: it exports no entry point named
+    /// after its file.
+    #[error("the library exports no `{0}`: {1}")]
+    NoEntryPoint(String, #[source] libloading::Error),
     /// The registry refused the manifest or the extension's `register`
     /// failed.
     #[error("{0}")]
@@ -93,8 +96,25 @@ impl fmt::Debug for Loaded {
     }
 }
 
-/// Opens the library at `path`, calls its entry point with a fresh
-/// registry and returns the plugin with its contributions.
+/// The crate name a library file stands for: `libext_git.so` and
+/// `ext_git.dll` give `ext_git`.
+#[must_use]
+pub fn crate_stem(path: &Path) -> String {
+    let name = path
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    name.strip_prefix(std::env::consts::DLL_PREFIX)
+        .unwrap_or(&name)
+        .strip_suffix(std::env::consts::DLL_SUFFIX)
+        .unwrap_or(&name)
+        .to_owned()
+}
+
+/// Opens the library at `path`, calls its entry point (named after the
+/// library's file: `libext_git.so` exports `rick_plugin_register_ext_git`)
+/// with a fresh registry lending `platform` and returns the plugin with its
+/// contributions.
 ///
 /// The caller has checked the plugin's manifest file first: the toolchain
 /// and the API version are what make the library's entry point safe to
@@ -106,19 +126,20 @@ impl fmt::Debug for Loaded {
 ///
 /// [`LoadError`] says what went wrong; the reason a plugin gave for failing
 /// or the message of the panic it raised is in the error's text.
-pub fn load_library(path: &Path) -> Result<Loaded, LoadError> {
+pub fn load_library(path: &Path, platform: Arc<dyn Platform>) -> Result<Loaded, LoadError> {
     debug!(path = %path.display(), "loading");
     // SAFETY: loading runs the library's initialisers. A Rust cdylib built
     // from this workspace has none beyond the runtime's own, and the caller
     // has checked the manifest that says it is one.
     let library = unsafe { libloading::Library::new(path) }.map_err(LoadError::Open)?;
-    let mut registry = Registry::new();
+    let symbol = entry_point(&crate_stem(path));
+    let mut registry = Registry::with_platform(platform);
     let status = {
         // SAFETY: `EntryPoint` is the signature `ext::plugin!` declares for
         // this symbol; the manifest checks (API version, toolchain) make
         // the library one built against the same `ext`.
-        let entry: libloading::Symbol<EntryPoint> =
-            unsafe { library.get(ENTRY_POINT.as_bytes()) }.map_err(LoadError::NoEntryPoint)?;
+        let entry: libloading::Symbol<EntryPoint> = unsafe { library.get(symbol.as_bytes()) }
+            .map_err(|error| LoadError::NoEntryPoint(symbol.clone(), error))?;
         // SAFETY: the entry point catches its own panics and only touches
         // the registry it is given, which outlives the call.
         unsafe { entry(&mut registry) }

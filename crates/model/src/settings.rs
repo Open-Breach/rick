@@ -82,8 +82,36 @@ pub struct Settings {
     pub preview: Preview,
     /// Search in subdirectories: the names the walk skips.
     pub search: Search,
+    /// The viewer: the types that open with the system application instead.
+    pub viewer: Viewer,
     /// Plugins: which of them not to load.
     pub plugins: Plugins,
+}
+
+/// The `[viewer]` table.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(default)]
+pub struct Viewer {
+    /// File name extensions, lower case without the dot, that Open hands to
+    /// the system's default application instead of the viewer, previewable
+    /// or not: the setting that flips the viewer's default per type.
+    pub external: Vec<String>,
+}
+
+impl Viewer {
+    /// Whether files named `name` open outside the viewer.
+    #[must_use]
+    pub fn opens_externally(&self, name: &str) -> bool {
+        let Some((stem, ext)) = name.rsplit_once('.') else {
+            return false;
+        };
+        !stem.is_empty()
+            && !ext.is_empty()
+            && self
+                .external
+                .iter()
+                .any(|e| e.trim_start_matches('.').eq_ignore_ascii_case(ext))
+    }
 }
 
 /// The `[plugins]` table.
@@ -390,6 +418,7 @@ impl Default for Settings {
             drag: Drag::default(),
             preview: Preview::default(),
             search: Search::default(),
+            viewer: Viewer::default(),
             plugins: Plugins::default(),
         }
     }
@@ -454,6 +483,9 @@ pub enum SettingsChange {
     },
     /// The names the subtree search skips.
     SearchIgnore(Vec<String>),
+    /// The file name extensions Open hands to the system application
+    /// instead of the viewer.
+    ViewerExternal(Vec<String>),
     /// Enable or disable a plugin; takes effect on the next start.
     Plugin {
         /// The plugin id.
@@ -514,6 +546,13 @@ impl Settings {
                 }
             },
             SettingsChange::SearchIgnore(names) => self.search.ignore = names,
+            SettingsChange::ViewerExternal(types) => {
+                self.viewer.external = types
+                    .into_iter()
+                    .map(|t| t.trim().trim_start_matches('.').to_ascii_lowercase())
+                    .filter(|t| !t.is_empty())
+                    .collect();
+            }
             SettingsChange::Plugin { id, enabled } => {
                 self.plugins.disabled.retain(|d| *d != id);
                 if !enabled {
@@ -541,9 +580,27 @@ mod tests {
         assert!(!s.preview.text.wrap, "wrap off");
         assert!(s.preview.pinned.is_empty());
         assert_eq!(s.search.ignore, [".git", "node_modules", "target"]);
+        assert!(
+            s.viewer.external.is_empty(),
+            "every type opens in the viewer"
+        );
         let mut s = s;
         s.apply(SettingsChange::SearchIgnore(vec!["build".into()]));
         assert_eq!(s.search.ignore, ["build"]);
+        s.apply(SettingsChange::ViewerExternal(vec![
+            " .PDF ".into(),
+            "docx".into(),
+            String::new(),
+        ]));
+        assert_eq!(s.viewer.external, ["pdf", "docx"]);
+        assert!(s.viewer.opens_externally("paper.pdf"));
+        assert!(s.viewer.opens_externally("Paper.PDF"));
+        assert!(!s.viewer.opens_externally("paper.png"));
+        assert!(
+            !s.viewer.opens_externally(".pdf"),
+            "a dot-file has no extension"
+        );
+        assert!(!s.viewer.opens_externally("pdf"));
     }
 
     #[test]

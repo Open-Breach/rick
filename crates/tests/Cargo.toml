@@ -24,7 +24,17 @@ ext-preview-text = { workspace = true }
 ext-preview-code = { workspace = true }
 ext-preview-image = { workspace = true }
 ext-preview-pdf = { workspace = true }
+ext-preview-hex = { workspace = true }
 ext-git = { workspace = true }
+ext-vfs-trash = { workspace = true }
+ext-vfs-archive = { workspace = true }
+# The previewer plugins of issue 18: linked for their fixture generators
+# and built as library files beside the test binaries, which the host
+# loads from a temporary plugins directory.
+ext-preview-office = { workspace = true }
+ext-preview-media = { workspace = true }
+ext-preview-archive = { workspace = true, features = ["fixtures"] }
+ext-preview-csv = { workspace = true }
 plugins-native = { workspace = true }
 # The fixture plugins, built as library files beside the test binaries and
 # loaded from there; never named in the test code.
@@ -32,6 +42,13 @@ plugin-probe = { workspace = true }
 plugin-panic = { workspace = true }
 image = { workspace = true }
 egui = { workspace = true }
+# Fixture archives for the provider acceptance tests.
+zip = { workspace = true }
+tar = { workspace = true }
+zstd = { workspace = true }
+sevenz-rust2 = { workspace = true }
+hadris-fs = { workspace = true }
+hadris-iso = { workspace = true, features = ["write"] }
 futures = { workspace = true }
 tempfile = { workspace = true }
 thiserror = { workspace = true }
@@ -44,3 +61,6 @@ workspace = true
 [features]
 # Screenshots through wgpu, for the CI job that renders them.
 screenshots = ["egui_kittest/wgpu"]
+# Media playback in the previewer tests: the media plugin built with
+# GStreamer, which Linux CI and the release builds have.
+gstreamer = ["ext-preview-media/gstreamer"]

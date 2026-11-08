@@ -1029,3 +1029,356 @@ Once answered, an entry keeps its number and gains a dated decision line.
     the section headers and *Add…*, Enter opens, Mod+Enter in a new tab,
     Escape releases. The Edit… dialogue and the reorder drag are the
     panel's own state, not the model's.
+
+94. (issue 20) The trash record of QUESTIONS.md 74 lived in `app`
+    (`trash.toml` through `ops::TrashStore`, which the `rick://trash` view
+    of 86 fell back to as `TrashRecord`); the trash provider plugin, which
+    depends on `ext` and `types` only, cannot reach it.
+    Assumed: the record moves into `platform`, behind `Trash::list`: on
+    macOS the trash itself writes `trash.toml` in the config directory when
+    it trashes, forgets on restore and removal, and `list` reads it back
+    pruned of items that left the trash, so the local provider's trashing
+    and the Trash view see one list and `list` never answers `Unsupported`
+    any more. `TrashStore`, `TrashRecord` and the `Fake`'s unlistable knob
+    go; the record module carries its own tests.
+
+95. (issue 20) Milestone 2 (86) made `vfs-rick` the one provider of the six
+    virtual locations, built in; the issue wants the Trash view served by
+    the plugin `ext-vfs-trash`, and Favorites, Recent and the overviews are
+    to follow the same road later.
+    Assumed: an extension serves a virtual location by registering a view,
+    `Registry::view(name, provider)`, which the application hands to
+    `RickProvider::add_view`; the rick provider then routes that location
+    and everything below it (`rick://trash`, `rick://trash/<item>/…`) to the
+    view's provider for `list`, `stat`, `open_read`, `remove` and the rest,
+    including `capabilities`, keeps `watch` itself so `changed` still
+    re-lists the view, and lists a location no extension serves as empty.
+    The view's provider sees the full path (`trash/<name>`), answers under
+    `ProviderId::RICK` and lives in a plugin that knows nothing of
+    `vfs-rick`. The path bar takes `rick://trash/<name>` as typed.
+
+96. (issue 20) Plugins depend on `ext` and `types` only (Module rules 2),
+    but the trash provider needs `platform::Trash` and the archive provider
+    the runtime's blocking pool.
+    Assumed: `ext` re-exports `platform` and `runtime`, and the `Registry`
+    is the extension context the Package layout names: the host builds it
+    with `Registry::with_platform` and an extension takes
+    `Registry::platform()` while it registers (`None` in a registry built
+    with `Registry::new()`, which the trash extension refuses). The plugin
+    host and the binary pass the platform on; the tests pass the `Fake`, so
+    a plugin's trash is the test's. `platform` becomes part of the `ext`
+    dylib; the layer order is unchanged (platform sits below ext).
+
+97. (issue 20) "Entering an archive … navigates into it as a location
+    (archive: provider); the breadcrumb shows the archive as a segment"
+    does not say what the location's path is.
+    Assumed: the archive's OS path with the path inside appended,
+    `archive:/home/me/a.zip/docs/x`. Which prefix is the archive is found
+    by asking the filesystem for the shortest prefix that is a file
+    (`ext_vfs_archive::split`); the UI does the same once per location for
+    its breadcrumbs, whose segments above the archive navigate the local
+    provider, and Up from the archive root goes to its folder. Open
+    (Enter, double-click) hands a local file to the archive provider first,
+    whose `stat` says whether it browses the file; anything else opens with
+    the system default. An archive inside an archive is a file, not a
+    location: the archive previewer of #18 is the way to look inside
+    without extracting. Entry ids hash the archive path and the inner path,
+    so they are stable across listings and survive a rewrite.
+
+98. (issue 20) "Change notification by polling (watch returns
+    Unsupported)" names no poller.
+    Assumed: the kernel polls. For a pane whose provider's `watch` answers
+    `Unsupported` (an archive, a trashed folder browsed below the view),
+    `app` calls `stat` on the location every 3 s and right after an
+    operation finished, and lists again when the entry's size or times
+    changed; an archive's root entry carries the archive file's size and
+    time. The Trash view itself is re-listed the milestone-2 way: `app`
+    lists the platform trash after every operation for the Places row's
+    count and rings `RickProvider::changed` when the list changed.
+
+99. (issue 20) Two plugin libraries linked into one binary (the tests, or
+    `rick` with two plugin features on) both exported
+    `rick_plugin_register` and the link failed.
+    Assumed: the exported symbol carries the crate name,
+    `rick_plugin_register_ext_vfs_trash`, which `ext::plugin!` takes from
+    `CARGO_CRATE_NAME`; the host and the bundler derive it from the
+    library's file name, so `plugin.toml` needs no new field. The Rust
+    function keeps its name, `rick_plugin_register`.
+
+100. (issue 20) Restore, Restore trash items and Empty trash are in the
+    spec's operations list without a context-menu group, and "live inside
+    the view only"; 92 had them as core actions over the application's
+    record.
+    Assumed: they are the plugin's, in the "Trash" action group
+    (`ActionGroup::Extension("Trash")`): `trash.restore`,
+    `trash.restore_items` and `trash.empty`, Hidden unless the pane is at
+    `rick://trash`, so the context menu offers them under Trash in the view
+    and nowhere else, and the palette lists them there too. Delete
+    permanently in the view is the core action through the view's
+    `remove(Permanent)`; Move to trash hides there, as 92 says, and the
+    other file actions with it. Enter and a double-click still restore
+    (the shell runs `trash.restore_items`). Without the plugin the view
+    lists nothing. The Places row keeps its count hint (92).
+
+101. (issue 20) Which core actions apply at a location another provider
+    serves; 92 settled the virtual locations only.
+    Assumed: the actions follow the provider's capabilities, as the
+    Provider contract says the kernel should: Paste, Duplicate, Rename, New
+    file and New folder are Hidden without `WRITE`, Move to trash without
+    `TRASH` (except in Favorites and Recent, whose entries are real files
+    elsewhere), so a read-only archive, the Trash view and a RAR show only
+    what works. The inline edits of New file and New folder start only
+    where the provider takes writes.
+
+102. (issue 20) How a write into an archive happens.
+    Assumed: zip, the tar family and 7z declare `WRITE | RENAME`; every
+    `open_write`, `create_dir`, `rename`, `remove` and same-archive `copy`
+    rewrites the whole archive into a temporary file beside it and renames
+    it over the original, under a lock per archive, inside the operation's
+    job (the rewrite reports no progress of its own). Zip entries keep
+    their compressed bytes, a compressed tar is recompressed with its
+    codec, 7z entries are re-encoded with LZMA2, new zip entries use
+    DEFLATE. RAR, ISO 9660 and UDF images and single-file codecs are
+    read-only. A `.iso` is tried as ISO 9660 first, then as UDF; a codec
+    file whose stream holds a tar is a tar.
+
+103. (issue 18) The spec's `PreviewDoc` returns `Frame::{Rgba, Text,
+     External}`, and the archive, CSV and rendered Markdown/HTML previews
+     need the pane to lay out a file list, a table and a document; the
+     issue's media transport asks for volume, speed, frame step and loop,
+     which the spec's `Transport` does not have. Changing `Frame` would
+     have touched `ui-egui`, which the viewer (issue 17) is reworking in
+     parallel.
+     Assumed: `PreviewDoc` gains `content(&self) -> Option<Content>` with a
+     default of `None`; `Content` is `Listing(Arc<Listing>)` (entries in
+     explorer order with depth, kind, size, compressed size, date and an
+     encrypted flag, plus a stats line), `Grid(Arc<dyn Grid>)` (header, row
+     count, and the cells of any window of rows, parsed on demand) or
+     `Document(Arc<Document>)` (headings, paragraphs, styled inlines, links,
+     lists, quotes, code, tables, images, rules). `render` keeps answering
+     for such a document with a textual fallback (the listing as text, the
+     raw CSV, the highlighted source), so the 0.1 pane shows something
+     sensible until the viewer lays the content out. `Transport` gains
+     `volume`/`set_volume`, `speed`/`set_speed`, `step` and
+     `looping`/`set_looping` with defaults that do nothing, so the viewer's
+     fake transport keeps compiling. `Icon` gains `Rendered`. The extension
+     API is version 4.
+
+104. (issue 18) The office previewer: the issue says LibreOffice is found
+     "through platform", but a plugin may depend on `ext` and `types` only
+     (SPEC.md "Module rules"); and the spec names no place for the cache of
+     converted PDFs, while plugins have no access to the config directory.
+     Assumed: the plugin looks for `soffice` itself: `RICK_SOFFICE` (a
+     development override like `RICK_PDFIUM_DIR`), then the `PATH`, then the
+     install directories of all three platforms checked as plain paths (a
+     path that does not exist on the current OS is simply absent), so no
+     `cfg(target_os)` is needed; a hit is remembered, a miss is looked up
+     again next time. The cache lives under the temporary directory,
+     `<temp>/rick/office/<key>.pdf` with `<key>` a hash of the file's path,
+     size and modification time (a changed file misses the cache by
+     itself), trimmed to 512 MiB and 200 files, oldest out; LibreOffice runs
+     with its own user profile under the same directory so that an open
+     LibreOffice does not swallow the command. A conversion runs inside the
+     preview job on the blocking pool, cancellable (the process is killed)
+     and limited to 60 s; it is not a separate row in the operations area,
+     since the preview job already is the job. The office pages render
+     through the plugin's own pdfium binding (a mirror of the PDF
+     previewer's; a plugin cannot call `ext-preview-pdf`), which means two
+     copies of `pdfium-render`'s call serialisation exist in the process; a
+     PDF and an office page rendering at the same instant are not
+     serialised against each other. To revisit if pdfium shows it.
+
+105. (issue 18) The spec and the issue say nothing about encrypted entries
+     in an archive listing.
+     Assumed: an entry whose content is encrypted (zip and RAR with a
+     password, 7z without header encryption) is listed with its name and
+     size and marked `encrypted`, and the stats line counts them; an archive
+     whose directory itself is encrypted (7z `-mhe`, RAR `-hp`) lists
+     nothing, its stats line says the list of files needs a password, and
+     the status bar says "encrypted"; no password is ever asked for in the
+     preview. Also assumed: a listing stops after 200 000 entries or, for a
+     compressed tar (which has no directory and must be streamed), after
+     10 s, and says so; symbolic links in zips show without their target
+     (it is the entry's content). Archives are case-sensitive: `Alpha/` and
+     `alpha/` are two folders, ordered without regard to case.
+
+106. (issue 18) GStreamer: the spec bundles the runtime on macOS and
+     Windows and the issue asks for "a clear runtime missing state"; the
+     GStreamer Rust bindings link the libraries at build time, so a plugin
+     built with them needs the development files to build and cannot load
+     where the core library is absent.
+     Assumed: playback sits behind the media plugin's `gstreamer` Cargo
+     feature, off by default so every workspace build still builds; Linux
+     CI and the release builds turn it on (`--features
+     ext-preview-media/gstreamer`, which `cargo xtask bundle` passes
+     through), with the system packages on Linux and the official
+     GStreamer packages (1.28.8) installed on the macOS and Windows runners.
+     The bundle carries the runtime where `RICK_GSTREAMER_DIR` names it:
+     macOS `gstreamer/lib/` (the libraries name each other through
+     `@rpath`, which the media plugin's run path `@loader_path/../../
+     gstreamer/lib` and the binary's `@executable_path/gstreamer/lib`
+     resolve) and the elements in `gstreamer/lib/gstreamer-1.0/`, thinned
+     to arm64 by the release workflow; Windows the DLLs beside the binary,
+     where every DLL the process loads is searched for, and the elements in
+     `gstreamer-1.0/`; the plugin scans those directories at start, and
+     Linux uses the system's. The missing-runtime state has three shapes:
+     built without the feature, or GStreamer failing to initialise, the
+     document shows the file's metadata (read natively from the headers and
+     tags) and says so; a core library absent on Linux, where the plugin
+     cannot be loaded at all, the Extensions screen and `--list-plugins`
+     show it refused with the loader's message; a decoder or demuxer
+     missing for one file (the usual case: codec plug-ins not installed),
+     the document shows the metadata and names the missing plug-in and the
+     package family to install. A plugin written against GStreamer's C API
+     with `libloading`, which would have given the first shape in every
+     case, would have put hundreds of `unsafe` calls into a plugin; a helper
+     process would have doubled the code. Hardware decoding is GStreamer's
+     own choice of the highest-ranked decoder. On a machine without an audio
+     device (CI) playback runs with a `fakesink` and says so.
+
+107. (issue 18) The CSV grid's header and window: the spec says "a
+     virtualised grid with header row" and leaves the heuristics open.
+     Assumed: the first record is the header unless every cell of it reads
+     as a number, in which case the columns are numbered; the delimiter is
+     the one of comma, semicolon, tab and pipe that appears the same number
+     of times on each of the first twenty records, the most frequent on the
+     first record otherwise, a tab for `.tsv` and a comma for `.csv` when
+     none appears; up to 256 MiB of the file is read and indexed (a cut
+     file says so), the raw text up to 1 MiB is the fallback and the text
+     layer for find. Rendered Markdown and HTML: the Rendered toggle is on
+     for every newly opened file (unlike pretty print), images are read
+     from the document's own folder or below only (no parent steps, no
+     absolute paths, no network), 16 MiB each and 64 MiB in all, and a link
+     is kept only with a web, mail or relative address; raw HTML inside
+     Markdown is shown as text.
+
+108. (issue 17) The spec says the preview "follows focus: it always shows
+    the selection of whichever explorer tab was last focused", and as a
+    dock tab the preview sits in a pane of its own that a click would
+    focus, which would leave it with no selection to show.
+    Assumed: the model keeps the explorer tab the preview follows
+    (`Model::preview_follows`): the focused pane's active tab whenever that
+    is an explorer, else the one followed so far while it exists. A pane
+    whose active tab is the Preview tab never takes the model's focus from
+    the dock, so clicking in the preview leaves the keyboard with the
+    explorer; the Preview tab is the one tab the Action registry has no
+    context for (`App::action_ctx` is `None` there). A Preview tab dragged
+    into an explorer pane can still be that pane's active tab, in which
+    case the keys about files go to the followed explorer and only the
+    tab-strip keys (close, next, previous, move) stay with the pane. The
+    tab is one per window, opens in a new pane right of the whole dock with
+    the width the 0.1 panel had (the UI works the split fraction out), and
+    its kind is part of the session (`TabSession::kind`), so it comes back
+    where it was.
+
+109. (issue 17) The spec's viewer "steps to the previous and next file of
+    the same folder in the list's current sort and filter", and nothing
+    says what the viewer holds once the list it came from has moved on or
+    closed.
+    Assumed: a viewer tab is a copy of the explorer tab it was opened from
+    (`TabKind::Viewer`: location, listing, sort, filter, hidden flag), with
+    the file shown as its selection, so it steps through its own rows,
+    the app lists and watches it like any tab (a rename or trash of the
+    file reaches it, and the explorer, through their watches), and the
+    Action registry works on its selection through the same `ActionCtx`.
+    The explorer's listing is cloned at open, so the position ("12 of 240")
+    is known at once and the relist reconciles behind it. Enter or a
+    double-click on another file of the same folder reuses the pane's
+    viewer tab for that folder rather than opening a second one; a file of
+    another folder opens another viewer tab. When the file shown goes
+    (trashed, renamed out of the filter) the viewer shows the file that
+    took its place in the order, the last one when it was last. The
+    viewer's inline-rename, new-file and new-folder interceptions of the
+    list do not apply: those actions use their own prompts there. The
+    viewer tab persists in the session like an explorer tab.
+
+110. (issue 17) "Enter … previewable file: viewer; other: system default",
+    where the hex fallback claims every file, and the issue's acceptance
+    test opens an unknown binary in hex with Enter.
+    Assumed: a file is previewable when any registered previewer scores
+    it above 0, the hex plugin included, so with it loaded Enter opens every
+    file in the viewer; without it (disabled in the Extensions screen, or
+    absent) Enter hands a file no previewer claims to the system's default
+    application. The decision reads the file's first 4 KiB as an internal
+    job (`Command::Open`), like the preview's scoring; the per-type flip the
+    spec names is `[viewer] external`, a list of extensions in `rick.toml`
+    with a row in the Settings screen, and Mod+Enter (`core.open_default`)
+    forces the application whatever the type. When the viewer lands on a
+    file nothing claims (stepping through a folder without the hex plugin,
+    or a previewer failing to open it) it says "No preview for this file".
+
+111. (issue 17) "The zoom level is remembered per type" does not say for
+    how long, and "1:1" has no meaning for paged content, since
+    `PreviewDoc` does not say how large a page is in points.
+    Assumed: the zoom is remembered per lower-case file extension for the
+    session, in the UI, not in `rick.toml`: a setting the spec does not
+    name, and a wheel zoom would rewrite the file on every step. For a
+    raster Fit never enlarges past 100%, Fit width and the free factors
+    may, and 1:1 is one pixel per pixel; for paged content 1:1 shows the
+    page as wide as the content, the same as Fit width, until a page size
+    reaches the trait (a `PreviewDoc` method, a spec change, when the first
+    previewer that knows its page sizes needs it). The free zoom is a
+    factor on the fitted size, shown as a percentage of it.
+
+112. (issue 17) The shortcut table binds Left/Right and PageUp/PageDown to
+    "Previous / next item or page" in one row, while the Navigation bullet
+    gives both pairs to files.
+    Assumed: Left and Right always step files; PageUp and PageDown step
+    pages while a paged document has a page that way and files otherwise.
+    The Viewer table is live only while a viewer tab is the pane's active
+    tab, where its rows shadow the list's and the view's of the same keys
+    (Mod+F finds, Mod+1 is actual size, Space plays, Home and End are the
+    first and last file), the list's own rows (cursor movement, Enter,
+    type-to-filter) are not bound at all, and every other row (tabs, panes,
+    windows, actions) keeps working; F11 fills the screen with the viewer
+    alone, Escape leaves fullscreen and then closes the tab.
+
+113. (issue 17) Find "searches the text layer … with match count, next and
+    previous, and highlights in place", and `TextLayer` holds page texts
+    without positions.
+    Assumed: matches are highlighted in place for text content, which the
+    UI lays out itself; for paged content find counts the matches, and
+    next and previous go to the match's page, without a box on the page.
+    The PDF previewer fills a page's text when the page is rendered, so
+    find in a PDF covers the pages seen so far. Matching ignores case where
+    lower-casing keeps the byte offsets, which it does for ASCII and most
+    scripts, and is exact otherwise.
+
+114. (issue 17) The spec's viewer media transport names "seek bar, volume,
+    playback speed, frame step, loop", and `Transport` has play, pause,
+    seek, position, duration and playing.
+    Assumed: the viewer's transport bar is built against the trait as it
+    is (play/pause, a seek bar with elapsed and total time; Space, J, K and
+    L), tested with a fake transport; volume, speed, frame step and loop
+    wait for the media previewer of milestone 4, which will need them added
+    to the trait through a question of its own.
+
+115. (issue 17) The spec's Preview section says "Space on a file or folder
+    opens the preview tab if it is closed and shows the entry; Space again
+    closes it", while the Selection table binds Space to "Toggle selection
+    of the focused entry" (question 21 settled the tables in the second
+    one's favour).
+    Assumed: Space keeps toggling the selection; the Preview tab opens and
+    closes with Mod+Shift+I and the title row's toggle, as in 0.1.
+
+116. (issue 17) The issue asks for "a page strip on the side"; the spec
+    says the same without saying what a tile is.
+    Assumed: one tile per page with the page's number and a thumbnail the
+    pane's slot renders as the tile comes into view, the current page
+    marked and kept in view; a click goes to the page. Pages open one at a
+    time; a toolbar toggle stacks them in one continuous scroll, where the
+    page under the upper third of the view is the current one. Both are
+    kept per tab for the session.
+
+117. (issue 35) SPEC.md asks for the performance targets "met on the
+    200k-entry fixture, on all three platforms" and for the 0.2 milestones
+    to "merge to `main` behind CI on all three OSes as in 0.1"; until now
+    every push ran the acceptance benchmarks once per OS and asserted the
+    targets. Issue 35 moves the benchmarks to tier 3, which measures
+    (`RICK_BENCH_RECORD`) and never blocks a pull request.
+    Assumed: the targets are no longer asserted automatically. The nightly
+    run on Linux x64 and the runs on release tags record the medians next
+    to the targets of `bench.rs`, and a release is checked by reading the
+    tag's bench summary; the three-OS gate before `main` is kept by tier 2,
+    which runs the tests, the bundle and the plugin loading on the full
+    matrix, without the timings.
