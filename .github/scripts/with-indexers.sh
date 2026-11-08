@@ -23,6 +23,8 @@ export RICK_REQUIRE_TRACKER=1
 export RICK_REQUIRE_BALOO=1
 
 # Baloo: its config file names the folder; the indexer reads it at start.
+# `baloo_file` is on the PATH with KF5 (Ubuntu 24.04's baloo-kf5) and in
+# the KF6 libexec directory with `baloo6` (Ubuntu 26.04).
 cat > "$HOME/.config/baloofilerc" <<CFG
 [Basic Settings]
 Indexing-Enabled=true
@@ -32,7 +34,17 @@ folders[\$e]=$fixture/
 exclude folders[\$e]=
 only basic indexing=true
 CFG
-QT_QPA_PLATFORM=offscreen baloo_file > "$HOME/baloo.log" 2>&1 &
+baloo_file_bin="$(command -v baloo_file || true)"
+if [ -z "$baloo_file_bin" ]; then
+  for candidate in /usr/lib/*/libexec/kf6/baloo_file /usr/libexec/kf6/baloo_file /usr/lib/*/libexec/baloo_file; do
+    if [ -x "$candidate" ]; then baloo_file_bin="$candidate"; break; fi
+  done
+fi
+if [ -z "$baloo_file_bin" ]; then
+  echo "baloo_file not found: install baloo6 (Ubuntu 26.04) or baloo-kf5 (24.04)"
+  exit 1
+fi
+QT_QPA_PLATFORM=offscreen "$baloo_file_bin" > "$HOME/baloo.log" 2>&1 &
 
 # Tracker: the miner's settings through the keyfile backend, which needs
 # no dconf service; only the miner process reads them.
