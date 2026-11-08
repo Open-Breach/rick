@@ -13,7 +13,11 @@ holds `transfer`, the move-or-copy job a drag and drop runs, which hands a
 selection whose source and target share one provider instance with
 `NATIVE_TRANSFER` to the provider's own `transfer` (a server-side copy, a
 remote rename) and streams only what the provider cannot do itself;
-`Conflicts`,
+`perms`, the permission jobs the Properties dialogue runs (owner, group,
+mode bits and ACL on the selection and, when asked, on everything inside a
+folder, every entry's previous state recorded so the job is one undo step,
+the entries the user may not change handed to the privileged helper in one
+prompt); `Conflicts`,
 where a copy or move that would land on an existing name asks — skip,
 overwrite, rename, apply to all, cancel — and waits; and the `Scheduler`,
 which runs two jobs that share a source or destination volume one after the
