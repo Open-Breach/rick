@@ -56,10 +56,15 @@ fn guard(name: &'static str, limit: Duration) -> impl Drop {
 fn harness(start: &Path) -> Harness<'static, RickUi> {
     let fake = Arc::new(Fake::new().unwrap_or_else(|e| panic!("{e}")));
     let host = Arc::new(EguiHost::new());
+    // The two action plugins whose shortcuts the spec's tables bind.
+    let extensions: Vec<Arc<dyn ext::Extension>> = vec![
+        Arc::new(ext_action_rename::RenameExtension::new()),
+        Arc::new(ext_action_terminal::TerminalExtension::new()),
+    ];
     let app = app::App::new(app::Config {
         platform: fake.clone(),
         ui: host.clone(),
-        extensions: Vec::new(),
+        extensions,
         config_dir: Some(fake.config_dir()),
         start: Some(local(start)),
     });

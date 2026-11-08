@@ -9,6 +9,31 @@ the pull request that brought the change.
 
 ### Added
 
+- The action plugins of milestone 6, every one in `plugins/` of the
+  archives (#23): `action-compress` packs the selection into a zip next to
+  it, or into a zip, tar.gz, tar.zst, 7z, tar, tar.xz, tar.bz2 or a single
+  compressed file named and placed in a form, and extracts the selected
+  archives here, into a folder named after each or to a chosen folder, as
+  pausable jobs with progress and the conflict dialogue; `action-compare`
+  opens two files side by side with the differing lines highlighted and
+  one scroll for both, or two folders (the two selected, or the two panes')
+  entry by entry as same, added, removed or changed with a copy button
+  each way; `action-terminal` opens a console at the location as a dock
+  tab, the user's shell in a pseudo-terminal drawn by a small terminal
+  emulator with colours, a scroll region, the alternate screen and 10 000
+  lines of history, or the system terminal when its `console` setting says
+  so; `action-rename` renames the selection by a pattern (`{name}`,
+  `{ext}`, `{n}`, `{date}`), find and replace with regular expressions and
+  a case change, every result previewed with clashes marked, as one
+  undoable job.
+- Core actions: Open with… (Mod+O) lists the platform's applications for
+  the file's type and takes any program, the choice remembered per type;
+  Paste as link (Mod+Shift+V) and Create link… make symbolic links, or a
+  junction or a .lnk shortcut on Windows, undoably; Select by pattern
+  (Mod+Shift+S) selects by glob or regular expression, replacing or adding
+  to the selection (#23).
+- Settings an extension declares appear in the Settings window and are
+  kept in the extension's own TOML file in the config directory (#23).
 - The viewer: Enter or a double-click opens a previewable file in a viewer
   tab of the pane, a dock tab like any other (split, dock, tear out). Left
   and Right step through the folder's files in the list's order with the
@@ -104,6 +129,14 @@ the pull request that brought the change.
 
 ### Changed
 
+- The extension API is version 5: actions show forms with a live preview
+  (`UiHost::form`), open a console or a comparison in a tab
+  (`ActionOutcome::View`) or change the selection (`ActionOutcome::Select`),
+  see the other pane's location, and make junctions and shortcuts where
+  the provider offers them; the name-conflict queue is the job runner's,
+  so a plugin's job asks the same dialogue as a copy; the platform knows
+  the applications for a file, opens with one, and opens the user's
+  terminal (#23).
 - The preview is a dock tab: one Preview tab per window, right of the
   explorer by default, docked below or torn out at will, following the
   focus across panes and windows; its toolbar, badges, pinned section and
@@ -135,6 +168,9 @@ the pull request that brought the change.
 
 ### Removed
 
+- The "not part of version 0.1" notices of Select by pattern, Paste as
+  link, Bulk rename, Open with… and Open console; the five rows of the
+  shortcut table dispatch to the actions (#23).
 - The 0.1 Recent feed (`recent.toml`, the watches and the scan at start),
   replaced by the system's recently-used list.
 

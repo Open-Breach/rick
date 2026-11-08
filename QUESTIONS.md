@@ -1382,3 +1382,153 @@ Once answered, an entry keeps its number and gains a dated decision line.
     tag's bench summary; the three-OS gate before `main` is kept by tier 2,
     which runs the tests, the bundle and the plugin loading on the full
     matrix, without the timings.
+
+118. (issue 23) The action plugins need dialogues richer than `UiHost`'s
+    `prompt` and `confirm`: a format and a name for Compress to…, a
+    pattern with a live preview for Bulk rename, an application list for
+    Open with…, a pattern kind and mode for Select by pattern.
+    Assumed: `UiHost` gains `form(Form) -> Option<Values>`: a titled list
+    of fields (text, checkbox, choice, folder with a Browse… button) and an
+    optional preview closure the UI calls with the values as they are
+    typed, each row a from → to pair with an optional problem; a problem
+    keeps the form from being confirmed. The egui host answers it the way
+    it answers `prompt`: the first run records the form, the shell shows
+    it, and the action runs again with the values. The extension API is
+    version 5 for this and the changes of 119 to 123.
+
+119. (issue 23) An action that opens a console or a comparison, or that
+    selects entries, has no outcome to say so: `ActionOutcome` had `Done`,
+    `Started` and `Undoable`, and the UI never touches the model.
+    Assumed: `ActionOutcome::View(View)` hands the application data the
+    UI draws — `View::Compare(Arc<Compare>)`, filled by the action's job,
+    and `View::Console(Arc<dyn Console>)`, live — and the application opens
+    a tab of the new kinds `TabKind::Compare` and `TabKind::Console` next to
+    the pane's active one and passes the view on with `Event::ViewOpened`;
+    `ActionOutcome::Select(Selector)` hands it a matcher it applies to the
+    pane's rows, replacing or adding to the selection. A console or compare
+    tab lists nothing, offers no action context (like the Preview tab) and
+    is left out of the session, since a shell or a comparison cannot come
+    back; closing the tab drops the view, which ends the shell.
+
+120. (issue 23) Compare "the folders of the two panes": the action's
+    context carries one pane's location and selection.
+    Assumed: `ActionCtx` gains `other: Option<Location>`, the location of
+    the first other pane of the window whose active tab is an explorer, in
+    dock order. Compare uses it with nothing selected; with two files or
+    two folders selected it compares those and ignores it.
+
+121. (issue 23) An extraction "with the conflict dialogue": the `Conflicts`
+    queue lived in `ops`, which a plugin cannot depend on.
+    Assumed: the queue moves to `runtime` and every `JobCtx` carries its
+    runner's queue (`JobCtx::conflicts`), so a plugin's job asks the same
+    dialogue as a copy; `ops` keeps the landing policy and re-exports the
+    queue, and the application takes it from its `JobRunner`. The compress
+    plugin's extraction asks for a file over an existing entry and merges a
+    folder over a folder without asking, as the copy rules say; a job
+    whose dialogue was never answered ends when it is cancelled.
+
+122. (issue 23) The issue says Compress writes "through ext-vfs-archive's
+    writers", while Module rule 2 says extensions depend on `ext` and
+    `types` only.
+    Assumed: `ext-action-compress` links `ext-vfs-archive` as a library,
+    the one exception, so the zip, tar and 7z code exists once; the
+    archive crate gains `create` (a new archive from files on disk) and
+    `extract` (a whole archive in one pass, asking where each entry goes)
+    for it, and `deny.toml` allows the edge. The archive plugin's library
+    is still loaded by the host on its own; the compress plugin carries its
+    own copy of that code, which holds no process-wide state.
+
+123. (issue 23) "Create link / Paste as link (symlink; junction and .lnk
+    on Windows with a choice)": `LinkKind` had `Symbolic` and `Hard`, and
+    nothing told an action which kinds a provider offers.
+    Assumed: `LinkKind` gains `Junction` and `Shortcut`, `Capabilities`
+    gains `JUNCTION` and `SHORTCUT` (and the spec's `NATIVE_TRANSFER`,
+    which was missing), the local provider offers them where the platform
+    has them (Windows, through the `junction` crate and the shell link
+    object), and Paste as link and Create link… ask which kind when more
+    than one is offered. Create link… asks for the folder in a form; Paste
+    as link links to the clipboard's items, whatever the clipboard's mode,
+    in the current folder, under a numbered name when the name is taken; a
+    shortcut is named `name.lnk`. Both are undoable: undo removes the links.
+
+124. (issue 23) Open with… "the platform's application list for the type
+    plus any executable, remember-for-type".
+    Assumed: `platform::OpenWith` gains `applications` (the desktop files
+    the MIME databases register for the type on Linux, with `xdg-open` as
+    "System default" where nothing is registered; Launch Services' list on
+    macOS; the shell's recommended handlers for the extension on Windows,
+    File Explorer for a folder) and `open_with` (a listed application, or
+    a program the user typed, run with the path as its argument). The
+    choice is remembered per lower-case extension (`folder`, `none`) in
+    `core.toml` under `[open_with]` and listed first the next time; Enter
+    keeps opening with the viewer or the system default, as the spec's
+    navigation row says.
+
+125. (issue 23) "The system terminal when the setting says so": the spec
+    has `Registry::settings` render "in the Settings screen, stored in the
+    extension's TOML", which nothing did yet, and names the `Terminal`
+    platform trait without a shape.
+    Assumed: the Settings window renders every declared schema under the
+    extension's name and the application keeps the values in
+    `<config dir>/<extension id>.toml` (`Command::ExtSetting`); an
+    extension reads its own file. The console plugin declares `console`
+    with the options `embedded` and `system`. `platform::Terminal` is
+    `open_terminal(dir, command: Option<&[String]>)`: `$TERMINAL` or the
+    first of x-terminal-emulator, gnome-terminal, konsole, xfce4-terminal,
+    kitty, alacritty, foot, wezterm and xterm on Linux, Terminal.app on
+    macOS (`osascript` for a command), Windows Terminal or `cmd` in a new
+    window on Windows. The spec said `ext-ssh` introduces the trait; it
+    arrives here and `ext-ssh` reuses it.
+
+126. (issue 23) The embedded console: "a dock tab through portable-pty
+    with a small VT renderer" leaves the emulator's extent open.
+    Assumed: the user's shell (`$SHELL`, `ComSpec`) with `TERM` set to
+    `xterm-256color`; a screen of cells handling the VT100 to xterm
+    sequences a shell, an editor and a pager use (cursor movement, erasing,
+    insert and delete, a scroll region, the alternate screen, tab stops,
+    SGR with the 16 named colours, the 256-colour cube and true colour, the
+    cursor and application cursor keys modes, the title, the cursor
+    position and device attributes answers), a scrollback of 10 000 lines
+    shown with the wheel and Shift+PageUp/PageDown, and every character one
+    cell wide (double-width characters misalign until a width table is
+    added). While the console has the keyboard every key goes to the
+    shell, Tab, Escape and the arrows included, so the shell's shortcuts
+    rest until the mouse moves on; Ctrl+V pastes (egui turns it into a
+    paste) and Ctrl+C is the interrupt. The pane's title is the folder, or
+    what the shell sets. The reader runs on the runtime's blocking pool,
+    the one place a plugin may block.
+
+127. (issue 23) Bulk rename's placeholders and order are not defined, nor
+    what "Rename with several selected" does.
+    Assumed: `{name}` is the name without its extension, `{ext}` the
+    extension with its dot (empty when there is none, a folder has none),
+    `{n}` the counter from the form's start padded to the width of the last
+    number (`{n:4}` for a fixed width), `{date}` the modification date as
+    `YYYY-MM-DD` in local time; find and replace runs on the original name
+    first (a regular expression with `$1` groups when the box is ticked),
+    the pattern fills from the result, the case change applies to the
+    whole result. Clashes — two entries on one name, a name another entry
+    of the folder has, an empty name, a separator — are marked in the
+    preview and refuse the rename. The renames are one undoable job
+    through temporary names (so swaps and case-only renames work on
+    case-insensitive file systems), on local folders only. The shell runs
+    the bulk rename for Rename (F2) with several entries selected when the
+    plugin is loaded; the core action keeps asking for one entry otherwise.
+    The spec's operations list gives Select by pattern Ctrl+Shift+A, its
+    table Mod+Shift+S (Mod+Shift+A inverts); the table wins, as for 21.
+
+128. (issue 23) Compare's limits.
+    Assumed: local files and folders only; two files are compared as text
+    when both look like text and are at most 64 MiB, byte for byte
+    otherwise (reported as identical or different); folders are compared
+    one level deep by name, size and modification time (two times within a
+    second are the same), a subfolder present on both sides counting as
+    the same; the copy buttons of the folder diff run the kernel's copy
+    (`Command::Receive`), so the conflict dialogue and the operations area
+    apply. The comparison is a job on the blocking pool that fills the tab;
+    the tab's title is `left ↔ right`.
+
+129. (issue 23) The package layout lists "open in system file manager"
+    under `ext-action-terminal`, the issue says it "stays".
+    Assumed: it stays `core.reveal` in the built-in core actions, so it
+    works without the plugin; the terminal plugin holds Open console only.
