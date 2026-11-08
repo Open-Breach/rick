@@ -410,10 +410,12 @@ mod tests {
         let fake: Arc<dyn Platform> = Arc::new(Fake::new().unwrap_or_else(|e| panic!("{e}")));
         let jobs = JobRunner::new();
 
-        // Files only: the folders keep their mode.
+        // Files only: the folders keep their mode. The target folder gets the
+        // change as well, so the mode keeps its execute bit for the checks
+        // that read through it.
         let r = request(
             vec![root.clone()],
-            0o600,
+            0o700,
             Some(Recursion {
                 files: true,
                 folders: false,
@@ -427,9 +429,9 @@ mod tests {
         assert!(!applied.elevated);
         // The target itself and the two files; `sub` was walked, not changed.
         assert_eq!(applied.previous.len(), 3);
-        assert_eq!(mode_of(&root), 0o600);
-        assert_eq!(mode_of(&root.join("a.txt")), 0o600);
-        assert_eq!(mode_of(&root.join("sub").join("b.txt")), 0o600);
+        assert_eq!(mode_of(&root), 0o700);
+        assert_eq!(mode_of(&root.join("a.txt")), 0o700);
+        assert_eq!(mode_of(&root.join("sub").join("b.txt")), 0o700);
         assert_eq!(mode_of(&root.join("sub")), 0o755);
 
         // One undo puts all three back.
@@ -444,8 +446,8 @@ mod tests {
         // Redo applies the recorded change again.
         command.redo(&jobs).unwrap_or_else(|e| panic!("{e}"));
         wait_idle(&jobs);
-        assert_eq!(mode_of(&root.join("a.txt")), 0o600);
-        assert_eq!(mode_of(&root), 0o600);
+        assert_eq!(mode_of(&root.join("a.txt")), 0o700);
+        assert_eq!(mode_of(&root), 0o700);
     }
 
     #[test]

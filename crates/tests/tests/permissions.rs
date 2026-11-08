@@ -287,9 +287,11 @@ fn a_recursive_change_on_a_thousand_files_is_one_job_with_progress_and_one_undo(
 
     let jobs_before = d.app.model().jobs.len();
     let events_before = d.events.len();
+    // The target folder gets the change as well, so the mode keeps its
+    // execute bit for the checks that read through it.
     let job = d.set_permissions(PermissionRequest {
         targets: vec![tree.clone()],
-        change: mode_change(0o600),
+        change: mode_change(0o700),
         recursive: Some(Recursion {
             files: true,
             folders: false,
@@ -301,10 +303,10 @@ fn a_recursive_change_on_a_thousand_files_is_one_job_with_progress_and_one_undo(
         "one job for the whole tree"
     );
     assert!(
-        files.iter().all(|f| mode_of(f) == 0o600),
+        files.iter().all(|f| mode_of(f) == 0o700),
         "every file changed"
     );
-    assert_eq!(mode_of(&tree), 0o600, "the folder itself too");
+    assert_eq!(mode_of(&tree), 0o700, "the folder itself too");
     assert_eq!(
         mode_of(&tree.join("d3")),
         0o755,
