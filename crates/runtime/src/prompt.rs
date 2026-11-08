@@ -253,7 +253,7 @@ mod tests {
                 None
             );
         });
-        assert!(prompts.take_new().is_empty());
+        assert_eq!(prompts.take_new(), Vec::<types::Question>::new());
         assert!(format!("{prompts:?}").contains("waiting: 0"));
     }
 }

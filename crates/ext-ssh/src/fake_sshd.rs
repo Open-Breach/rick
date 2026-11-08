@@ -14,6 +14,7 @@
 
 use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
+use std::future::ready;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -289,64 +290,70 @@ impl Conn {
 impl server::Handler for Conn {
     type Error = russh::Error;
 
-    async fn auth_password(&mut self, _user: &str, password: &str) -> Result<Auth, Self::Error> {
-        Ok(if self.options.password.as_deref() == Some(password) {
+    // The methods that answer at once return a ready future, as the trait
+    // suggests, rather than an `async fn` with nothing to await.
+    fn auth_password(
+        &mut self,
+        _user: &str,
+        password: &str,
+    ) -> impl Future<Output = Result<Auth, Self::Error>> + Send {
+        ready(Ok(if self.options.password.as_deref() == Some(password) {
             Auth::Accept
         } else {
             Auth::reject()
-        })
+        }))
     }
 
-    async fn auth_publickey_offered(
+    fn auth_publickey_offered(
         &mut self,
         _user: &str,
         key: server::PublicKeyOffer<'_>,
-    ) -> Result<Auth, Self::Error> {
-        Ok(if self.authorized(key.public_key) {
+    ) -> impl Future<Output = Result<Auth, Self::Error>> + Send {
+        ready(Ok(if self.authorized(key.public_key) {
             Auth::Accept
         } else {
             Auth::reject()
-        })
+        }))
     }
 
-    async fn auth_publickey(
+    fn auth_publickey(
         &mut self,
         _user: &str,
         key: server::VerifiedPublicKey<'_>,
-    ) -> Result<Auth, Self::Error> {
-        Ok(if self.authorized(key.public_key) {
+    ) -> impl Future<Output = Result<Auth, Self::Error>> + Send {
+        ready(Ok(if self.authorized(key.public_key) {
             Auth::Accept
         } else {
             Auth::reject()
-        })
+        }))
     }
 
-    async fn auth_keyboard_interactive<'a>(
+    fn auth_keyboard_interactive<'a>(
         &'a mut self,
         _user: &str,
         _submethods: &str,
         response: Option<Response<'a>>,
-    ) -> Result<Auth, Self::Error> {
-        if !self.options.keyboard_interactive {
-            return Ok(Auth::reject());
-        }
-        match response {
-            None => Ok(Auth::Partial {
-                name: Cow::Borrowed("Rick test server"),
-                instructions: Cow::Borrowed("Say the password."),
-                prompts: Cow::Owned(vec![(Cow::Borrowed("Password: "), false)]),
-            }),
-            Some(mut answers) => {
-                let typed = answers.next().unwrap_or_default();
-                Ok(
+    ) -> impl Future<Output = Result<Auth, Self::Error>> + Send {
+        let auth = if self.options.keyboard_interactive {
+            match response {
+                None => Auth::Partial {
+                    name: Cow::Borrowed("Rick test server"),
+                    instructions: Cow::Borrowed("Say the password."),
+                    prompts: Cow::Owned(vec![(Cow::Borrowed("Password: "), false)]),
+                },
+                Some(mut answers) => {
+                    let typed = answers.next().unwrap_or_default();
                     if self.options.password.as_deref().map(str::as_bytes) == Some(&typed[..]) {
                         Auth::Accept
                     } else {
                         Auth::reject()
-                    },
-                )
+                    }
+                }
             }
-        }
+        } else {
+            Auth::reject()
+        };
+        ready(Ok(auth))
     }
 
     async fn channel_open_session(
@@ -373,14 +380,14 @@ impl server::Handler for Conn {
         Ok(())
     }
 
-    async fn channel_close(
+    fn channel_close(
         &mut self,
         channel: ChannelId,
         _session: &mut Session,
-    ) -> Result<(), Self::Error> {
+    ) -> impl Future<Output = Result<(), Self::Error>> + Send {
         self.stdin.remove(&channel);
         forget(&self.open, channel);
-        Ok(())
+        ready(Ok(()))
     }
 
     async fn channel_open_direct_tcpip(
@@ -413,7 +420,7 @@ impl server::Handler for Conn {
         Ok(())
     }
 
-    async fn pty_request(
+    fn pty_request(
         &mut self,
         channel: ChannelId,
         _term: &str,
@@ -423,12 +430,11 @@ impl server::Handler for Conn {
         _pix_height: u32,
         _modes: &[(russh::Pty, u32)],
         session: &mut Session,
-    ) -> Result<(), Self::Error> {
-        session.channel_success(channel)?;
-        Ok(())
+    ) -> impl Future<Output = Result<(), Self::Error>> + Send {
+        ready(session.channel_success(channel))
     }
 
-    async fn window_change_request(
+    fn window_change_request(
         &mut self,
         _channel: ChannelId,
         _cols: u32,
@@ -436,29 +442,33 @@ impl server::Handler for Conn {
         _pix_width: u32,
         _pix_height: u32,
         _session: &mut Session,
-    ) -> Result<(), Self::Error> {
-        Ok(())
+    ) -> impl Future<Output = Result<(), Self::Error>> + Send {
+        ready(Ok(()))
     }
 
-    async fn shell_request(
+    fn shell_request(
         &mut self,
         channel: ChannelId,
         session: &mut Session,
-    ) -> Result<(), Self::Error> {
-        session.channel_success(channel)?;
-        self.spawn(channel, None, session);
-        Ok(())
+    ) -> impl Future<Output = Result<(), Self::Error>> + Send {
+        let accepted = session.channel_success(channel);
+        if accepted.is_ok() {
+            self.spawn(channel, None, session);
+        }
+        ready(accepted)
     }
 
-    async fn exec_request(
+    fn exec_request(
         &mut self,
         channel: ChannelId,
         data: &[u8],
         session: &mut Session,
-    ) -> Result<(), Self::Error> {
-        session.channel_success(channel)?;
-        self.spawn(channel, Some(data.to_vec()), session);
-        Ok(())
+    ) -> impl Future<Output = Result<(), Self::Error>> + Send {
+        let accepted = session.channel_success(channel);
+        if accepted.is_ok() {
+            self.spawn(channel, Some(data.to_vec()), session);
+        }
+        ready(accepted)
     }
 
     async fn data(
@@ -475,14 +485,14 @@ impl server::Handler for Conn {
         Ok(())
     }
 
-    async fn channel_eof(
+    fn channel_eof(
         &mut self,
         channel: ChannelId,
         _session: &mut Session,
-    ) -> Result<(), Self::Error> {
+    ) -> impl Future<Output = Result<(), Self::Error>> + Send {
         // Dropping the pipe is the command's EOF.
         self.stdin.remove(&channel);
-        Ok(())
+        ready(Ok(()))
     }
 }
 

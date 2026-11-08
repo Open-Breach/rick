@@ -460,7 +460,8 @@ mod tests {
         let record =
             b"f\x001234\x001700000000.5000000000\x00644\x00serge\x00users\x00\x00a b.txt\x00";
         let (head, tail) = record.split_at(20);
-        assert!(parser.push(head).is_empty());
+        let pushed = parser.push(head);
+        assert!(pushed.is_empty(), "{pushed:?}");
         let entries = parser.push(tail);
         assert_eq!(entries.len(), 1);
         let e = &entries[0];
@@ -482,7 +483,7 @@ mod tests {
         assert_eq!(more[1].mode, 0o1755);
         assert_eq!(more[1].mtime, Some((-5, 0)));
         assert_eq!(more[1].name, [0xff, 0xfe]);
-        assert!(parser.remainder().is_empty());
+        assert!(parser.remainder().is_empty(), "{:?}", parser.remainder());
     }
 
     #[test]
@@ -501,8 +502,8 @@ mod tests {
         // A stat line that is not a record is skipped, its name and link
         // consumed with it.
         let skipped = parser.push(b"stat: cannot stat\nname\x00\x00");
-        assert!(skipped.is_empty());
-        assert!(parser.remainder().is_empty());
+        assert!(skipped.is_empty(), "{skipped:?}");
+        assert!(parser.remainder().is_empty(), "{:?}", parser.remainder());
         let mut bsd = Parser::new(Profile::Bsd);
         let entries = bsd.push(b"Regular File|5|1700000000|0644|me|staff\nnotes.txt\x00\x00");
         assert_eq!(entries[0].kind, RawKind::File);

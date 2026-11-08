@@ -922,8 +922,13 @@ fn the_plugin_loads_through_the_host_and_without_it_network_is_empty() {
     )
     .unwrap_or_else(|e| panic!("{e}"));
     let d = Driver::new(&fake, dir.path(), Vec::new(), trust_and_save);
-    assert!(d.app.model().network_providers.is_empty());
-    assert!(d.network_names().is_empty());
+    assert!(
+        d.app.model().network_providers.is_empty(),
+        "{:?}",
+        d.app.model().network_providers
+    );
+    let names = d.network_names();
+    assert!(names.is_empty(), "{names:?}");
     assert!(
         ui_egui::side_panel::sections_shown(&d.app).contains(&model::Section::Network),
         "the section stays, with its Add… row"

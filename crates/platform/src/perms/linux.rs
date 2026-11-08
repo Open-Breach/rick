@@ -290,7 +290,9 @@ pub(super) mod posix {
         if rest.len() % 8 != 0 {
             return Err(bad("a partial entry"));
         }
-        rest.chunks_exact(8)
+        rest.as_chunks::<8>()
+            .0
+            .iter()
             .map(|entry| {
                 let tag = u16::from_le_bytes([entry[0], entry[1]]);
                 let perms = u16::from_le_bytes([entry[2], entry[3]]);
@@ -595,7 +597,7 @@ mod tests {
             return;
         };
         assert_eq!(access, posix::minimal(0o640));
-        assert!(default.is_empty());
+        assert!(default.is_empty(), "{default:?}");
         let mut extended = access.clone();
         extended.push(ace(PosixTag::User, Some(0), 4));
         extended.push(ace(PosixTag::Mask, None, 4));

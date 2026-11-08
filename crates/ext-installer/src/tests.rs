@@ -408,7 +408,8 @@ fn the_extension_registers_the_view_the_columns_and_the_actions() {
 
     // The view is empty at first and the archive action is enabled on an
     // archive only.
-    assert!(h.rows().is_empty());
+    let rows = h.rows();
+    assert!(rows.is_empty(), "{rows:?}");
     let install = h.action(INSTALL);
     assert_eq!(
         install.availability(&h.ctx_archive(Fixture::GuiWithDesktop)),
@@ -441,7 +442,7 @@ fn the_elf_reader_reads_the_tiny_programs() {
     let plain =
         elf::read_bytes(&tiny_elf(other_machine(), &[])).unwrap_or_else(|| panic!("not elf"));
     assert_eq!(plain.machine, other_machine());
-    assert!(plain.needed.is_empty());
+    assert!(plain.needed.is_empty(), "{:?}", plain.needed);
     assert_eq!(elf::read_bytes(b"#!/bin/sh\n"), None);
     assert!(elf::read_bytes(&program[..40]).is_some_and(|e| e.needed.is_empty()));
 }
@@ -495,7 +496,7 @@ fn detection_answers_the_five_questions_for_each_fixture() {
     assert_eq!(tool.candidates.len(), 3, "the .so.1 file is no candidate");
     assert_eq!(tool.name, "fixtool");
     assert_eq!(tool.version, "1.2.0");
-    assert!(tool.icons.is_empty());
+    assert!(tool.icons.is_empty(), "{:?}", tool.icons);
 
     let bomb = detect(Fixture::Tarbomb);
     assert_eq!(bomb.format, Format::Zip);
@@ -513,7 +514,7 @@ fn detection_answers_the_five_questions_for_each_fixture() {
 
     let source = detect(Fixture::Source);
     assert!(source.source);
-    assert!(source.candidates.is_empty());
+    assert!(source.candidates.is_empty(), "{:?}", source.candidates);
 
     let arch = detect(Fixture::WrongArch);
     assert_eq!(arch.arch_mismatch, Some(other_machine()));
@@ -729,7 +730,8 @@ fn install_update_revert_and_uninstall_leave_the_home_clean() {
     assert!(!layout.app_dir("fixture-gui").exists());
     assert!(!desktop_path.exists() && !icon.exists());
     assert!(fs::symlink_metadata(&link).is_err());
-    assert!(h.rows().is_empty());
+    let rows = h.rows();
+    assert!(rows.is_empty(), "{rows:?}");
     assert_eq!(files_under(&h.home()), before, "nothing of Rick's remains");
 }
 
@@ -1090,7 +1092,8 @@ fn repair_rewrites_what_is_missing_and_forget_drops_the_record() {
 
     // Forget deletes the record and leaves the files.
     h.ok(FORGET, h.ctx_view(vec![row]));
-    assert!(h.rows().is_empty());
+    let rows = h.rows();
+    assert!(rows.is_empty(), "{rows:?}");
     assert!(!layout.record_path("fixture-gui").exists());
     assert!(
         layout
@@ -1127,7 +1130,8 @@ fn orphaned_staging_folders_are_listed_and_removed() {
     );
     h.ok(REMOVE_STAGING, h.ctx_view(vec![rows[0].clone()]));
     assert!(!staging.exists());
-    assert!(h.rows().is_empty());
+    let rows = h.rows();
+    assert!(rows.is_empty(), "{rows:?}");
 }
 
 #[test]

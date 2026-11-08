@@ -474,7 +474,7 @@ Host !nothing
                 PathBuf::from("/home/me/.ssh/id_serge"),
             ]
         );
-        assert!(nas.proxy_jump.is_empty());
+        assert!(nas.proxy_jump.is_empty(), "{:?}", nas.proxy_jump);
         let db = &hosts[2];
         assert_eq!(db.user.as_deref(), Some("dba"), "the first block wins");
         assert_eq!(db.host(), "db.prod-db.internal");
@@ -538,7 +538,8 @@ Host !nothing
             "an include inside a block joins the block"
         );
         assert_eq!(hosts[1].identity_files, [ssh.join("id_local")]);
-        assert!(load(&home.join("missing"), &env).is_empty());
+        let hosts = load(&home.join("missing"), &env);
+        assert!(hosts.is_empty(), "{hosts:?}");
     }
 
     #[test]
