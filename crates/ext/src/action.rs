@@ -97,6 +97,7 @@ use runtime::JobRunner;
 use types::{Entry, Error, JobId, Location};
 
 use crate::form::{Form, Values};
+use crate::hash::Hashes;
 use crate::view::View;
 
 /// Identity of a pane in a window; `app` assigns them.
@@ -171,6 +172,9 @@ pub enum ActionOutcome {
     Select(Selector),
     /// Open this in a tab of its own, next to the pane's active tab.
     View(View),
+    /// Show the Hash dialogue on this slot, which the job the action
+    /// spawned fills; the UI polls it.
+    Hashes(Arc<Hashes>),
     /// Take the pane to this location, as a click on a side-panel row
     /// does: what an action that opens a view of its own returns (the
     /// installer's Installed Apps).
@@ -188,6 +192,7 @@ impl fmt::Debug for ActionOutcome {
                 .field("replace", &selector.replace)
                 .finish_non_exhaustive(),
             Self::View(view) => f.debug_tuple("View").field(view).finish(),
+            Self::Hashes(hashes) => f.debug_tuple("Hashes").field(hashes).finish(),
             Self::Navigate(to) => f.debug_tuple("Navigate").field(to).finish(),
         }
     }

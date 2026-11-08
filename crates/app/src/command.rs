@@ -3,6 +3,7 @@
 use std::fmt;
 
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use ext::{ActionCtx, ActionId, Decoration, FsChange, Level, PreviewDoc};
 use model::{
@@ -311,6 +312,9 @@ pub enum Command {
     ShowProperties(PaneId),
     /// The Properties dialogue closed; a later change does not report back.
     PropertiesClosed,
+    /// The Hash dialogue's format toggle changed: remember the format as
+    /// `[hash] format` in `core.toml`, so the next dialogue opens with it.
+    HashFormat(ops::hash::Format),
     /// Open the platform's own properties dialogue (Windows Properties,
     /// macOS Get Info) on the pane's selected entry.
     SystemProperties(PaneId),
@@ -567,6 +571,16 @@ pub enum Event {
     },
     /// What `Command::ShowProperties` found: the dialogue's contents.
     Properties(Box<PropertiesInfo>),
+    /// Compute hash started on the pane's selection: open the Hash
+    /// dialogue on the slot, which the job fills file by file.
+    HashesOpened {
+        /// The pane.
+        pane: PaneId,
+        /// The files' names and, as they arrive, their digests.
+        hashes: Arc<ext::Hashes>,
+        /// The format remembered in `core.toml`, for the toggle.
+        format: ops::hash::Format,
+    },
 }
 
 /// What the Properties dialogue shows for one entry.
@@ -678,6 +692,16 @@ impl fmt::Debug for Event {
                 .debug_struct("Notify")
                 .field("level", level)
                 .field("text", text)
+                .finish(),
+            Self::HashesOpened {
+                pane,
+                hashes,
+                format,
+            } => f
+                .debug_struct("HashesOpened")
+                .field("pane", pane)
+                .field("hashes", hashes)
+                .field("format", format)
                 .finish(),
         }
     }

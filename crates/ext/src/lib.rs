@@ -47,6 +47,7 @@ pub mod action;
 pub mod connection;
 pub mod decorator;
 pub mod form;
+pub mod hash;
 pub mod i18n;
 pub mod plugin;
 pub mod preview;
@@ -69,6 +70,7 @@ pub use decorator::{
 };
 pub use form::{Field, FieldKind, Form, Preview, PreviewRow, Value, Values};
 pub use futures::stream::BoxStream;
+pub use hash::{Algorithm, Digests, Hashes};
 pub use i18n::Text;
 pub use preview::{
     Block, Content, ControlId, ControlValue, Document, Frame, Gesture, Grid, Icon, Image,
