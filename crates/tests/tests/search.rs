@@ -441,7 +441,10 @@ fn without_an_index_the_search_box_searches_the_current_location_alone() {
         .with_size(egui::vec2(1100.0, 720.0))
         .build_eframe(move |cc| RickUi::new(app, host, &cc.egui_ctx));
     settle_ui(&mut harness);
-    assert!(harness.state().app().model().search_indexes.is_empty());
+    assert_eq!(
+        harness.state().app().model().search_indexes,
+        Vec::<ExtId>::new()
+    );
     harness.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::P);
     harness.step();
     harness.event(egui::Event::Text("alp".to_owned()));

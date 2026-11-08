@@ -492,7 +492,10 @@ fn add_connection_opens_the_dialogue_and_a_row_connects_and_removes_from_its_men
     assert!(fake.secrets().is_empty());
     // The empty section offers Add connection… again (the finished job's
     // row in the operations area may still carry the words).
-    assert!(!panel_rects(&harness, "Add connection").is_empty());
+    assert_ne!(
+        panel_rects(&harness, "Add connection"),
+        Vec::<egui::Rect>::new()
+    );
 }
 
 /// The whole pipeline against a real S3 store (issue 21): a 100 MB file

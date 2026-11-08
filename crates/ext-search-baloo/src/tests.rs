@@ -148,10 +148,9 @@ fn a_query_runs_the_tool_and_streams_the_hits_that_are_on_disk() {
         fake.prints(&[]);
         let mut q = query("foo bar", None);
         q.kind = kind;
-        assert!(
-            collect(&index, &q)
-                .unwrap_or_else(|e| panic!("{e}"))
-                .is_empty()
+        assert_eq!(
+            collect(&index, &q).unwrap_or_else(|e| panic!("{e}")),
+            Vec::<SearchHit>::new()
         );
         backend::tests::check_kind_command(&last_query(&fake), "foo bar", kind);
     }
@@ -175,18 +174,16 @@ fn a_failing_tool_yields_one_error_and_noise_lines_are_ignored() {
 
     // What the tool prints besides paths is not a hit.
     fake.prints(&backend::tests::noise());
-    assert!(
-        collect(&index, &query("foo", None))
-            .unwrap_or_else(|e| panic!("{e}"))
-            .is_empty()
+    assert_eq!(
+        collect(&index, &query("foo", None)).unwrap_or_else(|e| panic!("{e}")),
+        Vec::<SearchHit>::new()
     );
 
     // An empty text is still a command, answered by the tool.
     fake.prints(&[]);
-    assert!(
-        collect(&index, &query("", None))
-            .unwrap_or_else(|e| panic!("{e}"))
-            .is_empty()
+    assert_eq!(
+        collect(&index, &query("", None)).unwrap_or_else(|e| panic!("{e}")),
+        Vec::<SearchHit>::new()
     );
 }
 

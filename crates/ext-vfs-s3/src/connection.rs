@@ -204,11 +204,7 @@ impl Connector for S3Connections {
     }
 
     fn is_connected(&self, name: &str) -> bool {
-        self.conn(name).is_ok_and(|conn| {
-            conn.client
-                .try_lock()
-                .ok()
-                .is_some_and(|slot| slot.is_some())
-        })
+        self.conn(name)
+            .is_ok_and(|conn| conn.client.try_lock().is_ok_and(|slot| slot.is_some()))
     }
 }

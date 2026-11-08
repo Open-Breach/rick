@@ -176,7 +176,7 @@ fn the_root_lists_the_connections_without_connecting() {
     });
     // Forgetting a connection drops it from the list.
     conns.update(Vec::new());
-    assert!(conns.names().is_empty());
+    assert_eq!(conns.names(), Vec::<String>::new());
 }
 
 /// The whole round trip against a real server (issue 21): `RICK_SFTP_HOST`,

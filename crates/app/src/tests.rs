@@ -946,7 +946,7 @@ fn without_a_subtree_index_the_toggle_is_absent_and_a_search_ends_with_a_notice(
     let mut h = harness();
     h.settle();
     assert!(!h.app.model().subtree_search);
-    assert!(h.app.model().search_indexes.is_empty());
+    assert_eq!(h.app.model().search_indexes, Vec::<ExtId>::new());
     let pane = h.app.model().focused;
     h.send(Command::Subtree { pane, on: true });
     h.send(Command::Filter {
@@ -963,7 +963,7 @@ fn without_a_subtree_index_the_toggle_is_absent_and_a_search_ends_with_a_notice(
         "{events:?}"
     );
     assert!(!h.app.is_busy());
-    assert!(h.names().is_empty());
+    assert_eq!(h.names(), Vec::<String>::new());
 }
 
 #[test]
@@ -1709,7 +1709,7 @@ fn a_connection_keeps_its_secret_in_the_keychain_and_the_rest_in_the_settings() 
     };
     h.settle();
     assert_eq!(h.app.model().network_providers, [net::ID]);
-    assert!(h.app.model().network.is_empty());
+    assert_eq!(h.app.model().network, Vec::<Entry>::new());
 
     h.send(Command::AddConnection {
         provider: net::ID,
@@ -1821,7 +1821,7 @@ fn a_connection_keeps_its_secret_in_the_keychain_and_the_rest_in_the_settings() 
             .unwrap_or_else(PoisonError::into_inner)
             .is_empty()
     );
-    assert!(h.app.model().network.is_empty());
+    assert_eq!(h.app.model().network, Vec::<Entry>::new());
     drop(h.ui);
 }
 
@@ -1863,7 +1863,7 @@ fn the_title_row_search_asks_every_available_index_and_lists_each_hit_once() {
     let mut names: Vec<&str> = search.hits.iter().map(|e| e.name.as_str()).collect();
     names.sort_unstable();
     assert_eq!(names, ["foo.rs", "foo.txt", "foobar.md"], "{search:?}");
-    assert!(search.errors.is_empty());
+    assert_eq!(search.errors, Vec::<String>::new());
     assert_eq!(first.queries(), ["foo"]);
     assert_eq!(second.queries(), ["foo"]);
     let events = h.take_events();
@@ -1921,7 +1921,7 @@ fn the_title_row_search_asks_every_available_index_and_lists_each_hit_once() {
     assert_eq!(h.app.model().search_indexes, [ExtId("fake-two")]);
     second.available.store(false, Ordering::SeqCst);
     h.app.poll(&mut h.events);
-    assert!(h.app.model().search_indexes.is_empty());
+    assert_eq!(h.app.model().search_indexes, Vec::<ExtId>::new());
     h.send(Command::IndexSearch { text: "foo".into() });
     assert!(h.app.model().index_search.done);
     h.settle();
