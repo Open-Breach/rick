@@ -379,6 +379,9 @@ pub struct WindowUi {
     /// The workspace the window showed when the drag of a pane or a tab
     /// began: what it shows again when the drag ends and nothing moved.
     drag_origin: Option<WorkspaceId>,
+    /// Where this window would take what another window's drag carries
+    /// over it, as the frame being drawn shows it.
+    offer: Option<Offer>,
     /// The restored geometry has been handed to the backend.
     placed: bool,
     /// The operations drawer shows its summary alone (SPEC.md *Operations
@@ -408,6 +411,7 @@ impl WindowUi {
             pane_drop_slot: None,
             tab_rest: None,
             drag_origin: None,
+            offer: None,
             placed: false,
             drawer_collapsed: false,
         }
@@ -591,6 +595,87 @@ struct TabDrag {
     id: WorkspaceId,
     /// Where the pointer took the tab, from its top left corner.
     grab: egui::Vec2,
+}
+
+/// What a drag of the layout carries: a pane by its handle, or a workspace
+/// tab.
+#[derive(Debug, Clone, Copy)]
+enum Carried {
+    /// A pane, by its handle.
+    Pane(PaneDrag),
+    /// A workspace tab.
+    Tab(TabDrag),
+}
+
+/// A drag of a pane or of a workspace tab as every window sees it (SPEC.md
+/// *Windows*). The pointer belongs to the window the drag began in, so
+/// that window publishes the drag each frame with the cursor's place in
+/// the coordinates the windows share; the window the cursor is over then
+/// offers its tab row and its dock targets and paints the ghost, and the
+/// first window lands the drop where that one offered it.
+#[derive(Debug, Clone, Copy)]
+struct Roam {
+    /// The window the drag began in.
+    from: WindowId,
+    /// What it carries.
+    what: Carried,
+    /// The cursor, in the coordinates the windows share: the screen's, or
+    /// the root's where the windows are drawn inside it.
+    at: egui::Pos2,
+    /// The window the cursor is over.
+    over: Option<WindowId>,
+}
+
+impl Roam {
+    /// The cursor in `window`'s coordinates while it is over that window,
+    /// `origin` being where the window's coordinates begin among the
+    /// shared ones; `pointer` is the window's own pointer, which is the
+    /// cursor of a drag that began in it.
+    fn cursor_in(
+        self,
+        window: WindowId,
+        origin: Option<egui::Vec2>,
+        pointer: Option<egui::Pos2>,
+    ) -> Option<egui::Pos2> {
+        if self.over != Some(window) {
+            None
+        } else if self.from == window {
+            pointer
+        } else {
+            origin.map(|origin| self.at - origin)
+        }
+    }
+
+    /// The tab another window's drag carries, as `window` sees it.
+    fn visiting_tab(self, window: WindowId) -> Option<TabDrag> {
+        match self.what {
+            Carried::Tab(tab) if self.from != window => Some(tab),
+            _ => None,
+        }
+    }
+
+    /// The pane another window's drag carries, as `window` sees it.
+    fn visiting_pane(self, window: WindowId) -> Option<PaneDrag> {
+        match self.what {
+            Carried::Pane(pane) if self.from != window => Some(pane),
+            _ => None,
+        }
+    }
+}
+
+/// Where a window would take what another window's drag carries over it,
+/// as its last frame showed it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Offer {
+    /// A place in its tab row.
+    Row(usize),
+    /// A dock target of one of its panes.
+    Dock {
+        /// The pane under the cursor.
+        pane: PaneId,
+        /// The tile of its cross.
+        zone: DockZone,
+    },
 }
 
 /// What a workspace tab shows: the folder in the workspace's focused pane.
@@ -843,6 +928,12 @@ pub struct RickUi {
     windows: BTreeMap<WindowId, WindowUi>,
     /// The model window the root viewport shows.
     root: WindowId,
+    /// The drag of a pane or a workspace tab in progress, as the window it
+    /// began in published it for the others.
+    roam: Option<Roam>,
+    /// The windows are drawn inside the root window, not as windows of
+    /// the system's (a test harness): they share the root's coordinates.
+    embedded: bool,
     /// The application is closing: the root's close is not a window close.
     quitting: bool,
     /// The viewports open right now, for the waker.
@@ -1055,6 +1146,8 @@ impl RickUi {
             now: SystemTime::now(),
             windows,
             root,
+            roam: None,
+            embedded: false,
             quitting: false,
             window_ref: None,
             attached: false,
@@ -1289,6 +1382,30 @@ impl RickUi {
     #[must_use]
     pub fn tab_row(&self) -> Option<egui::Rect> {
         self.windows.get(&self.root).and_then(|w| w.tab_row)
+    }
+
+    /// The tab row of `window` in the last frame, in that window's
+    /// coordinates; for tests that drag between windows.
+    #[must_use]
+    pub fn tab_row_of(&self, window: WindowId) -> Option<egui::Rect> {
+        self.windows.get(&window).and_then(|w| w.tab_row)
+    }
+
+    /// Each pane's rectangle in the last frame of `window`; for tests that
+    /// drag between windows.
+    #[must_use]
+    pub fn pane_rects_of(&self, window: WindowId) -> Vec<(PaneId, egui::Rect)> {
+        self.windows
+            .get(&window)
+            .map(|w| w.dock.pane_rects(self.app.model()))
+            .unwrap_or_default()
+    }
+
+    /// The content of `window` in the last frame, in its own coordinates;
+    /// for tests that drag between windows.
+    #[must_use]
+    pub fn content_of(&self, window: WindowId) -> Option<egui::Rect> {
+        self.windows.get(&window).and_then(|w| w.content)
     }
 
     /// Queues an intent as a key press would.
@@ -2901,13 +3018,18 @@ impl RickUi {
     /// the model says so — is then offered the four side dock targets of
     /// the pane under the cursor, and released on one its pane docks
     /// there, the tab leaving the row; a tab of several panes is offered
-    /// none. Released outside the window a tab moves to the window under
-    /// it or opens a new one, released anywhere else it returns to its
-    /// place. A pane's tab dragged over the row shows the slot where it
-    /// would land as a new tab. A dragged pane, or a dragged tab that
-    /// holds one pane, resting on another tab for the spring-loading
-    /// delay switches the window to that tab's workspace (SPEC.md
-    /// *Workspace tabs*).
+    /// none. Released outside every window a tab opens a new one,
+    /// released anywhere else it returns to its place. A pane's tab
+    /// dragged over the row shows the slot where it would land as a new
+    /// tab. A dragged pane, or a dragged tab that holds one pane, resting
+    /// on another tab for the spring-loading delay switches the window to
+    /// that tab's workspace (SPEC.md *Workspace tabs*).
+    ///
+    /// All of it holds for a tab or a pane dragged here from another
+    /// window (SPEC.md *Windows*): that window publishes its drag as the
+    /// [`Roam`], this one shows the gap, the slot, the targets and the
+    /// lifted tab while the cursor is over it, and records what it offers
+    /// for the other window to land the drop.
     #[allow(clippy::too_many_lines, clippy::too_many_arguments)]
     fn title_tabs(
         &mut self,
@@ -2935,6 +3057,19 @@ impl RickUi {
             .collect();
         let still = self.app.platform().reduce_motion();
         let now = ctx.input(|i| i.time);
+        // Another window's drag, which this window takes on its row and
+        // its panes while the cursor is over it (SPEC.md *Windows*).
+        let roam = self.roam;
+        let origin = self.origin(window);
+        let visiting = roam.and_then(|roam| roam.visiting_tab(window));
+        let visiting_label = roam.zip(visiting).and_then(|(roam, tab)| {
+            model
+                .workspaces(roam.from)
+                .iter()
+                .find(|ws| ws.id == tab.id)
+                .map(|ws| workspace_label(model, ws))
+        });
+        let visiting_pane = roam.is_some_and(|roam| roam.visiting_pane(window).is_some());
         let Some(w) = self.windows.get_mut(&window) else {
             return;
         };
@@ -2944,6 +3079,11 @@ impl RickUi {
         let pointer = ctx.pointer_latest_pos();
         let primary_down = ctx.input(|i| i.pointer.primary_down());
         let released = ctx.input(|i| i.pointer.any_released());
+        // The cursor of the drag while it is over this window, in the
+        // window's coordinates: its own pointer for a drag that began
+        // here, the published place for another window's. Over another
+        // window, that one shows the gap, the targets and the ghost.
+        let cursor = roam.map_or(pointer, |roam| roam.cursor_in(window, origin, pointer));
 
         // A drag of a tab ends when the button comes up.
         let drag = w.workspace_drag.filter(|_| primary_down || released);
@@ -2952,9 +3092,12 @@ impl RickUi {
         }
         let dragged = drag.and_then(|d| tabs.iter().position(|(id, _)| *id == d.id));
         let others = tabs.len() - usize::from(dragged.is_some());
+        // The tab over this window: its own, or another window's.
+        let carried = drag.filter(|_| dragged.is_some()).or(visiting);
+        let pane_carried = w.pane_drag.is_some() || visiting_pane;
         // The workspace to come back to when the drag moves nothing: the
-        // one shown when it began.
-        if drag.is_some() || w.pane_drag.is_some() {
+        // one shown when it began, in whichever window it began.
+        if drag.is_some() || w.pane_drag.is_some() || roam.is_some() {
             w.drag_origin = w.drag_origin.or(active);
         } else {
             w.drag_origin = None;
@@ -2962,7 +3105,7 @@ impl RickUi {
         // The dragged tab rides the row while the cursor is in the title
         // row; off it, the tab follows the cursor as its own ghost and the
         // row keeps no room for it (QUESTIONS.md 273).
-        let riding = dragged.is_some() && pointer.is_some_and(|p| rect.contains(p));
+        let riding = carried.is_some() && cursor.is_some_and(|p| rect.contains(p));
         // The slot a tab's left edge at `x` lands in, among `count` tabs.
         let slot_of = |x: f32, count: usize| -> usize {
             #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
@@ -2971,12 +3114,12 @@ impl RickUi {
         };
         // The gap is where the dragged tab would land: any place of the
         // row, the last one included.
-        let drag_slot = drag
+        let drag_slot = carried
             .filter(|_| riding)
-            .and_then(|d| pointer.map(|p| slot_of(p.x - d.grab.x, others)));
-        let pane_over_row = w.pane_drag.is_some()
-            && pointer.is_some_and(|p| row.expand2(egui::vec2(0.0, 6.0)).contains(p));
-        let drop_slot = pane_over_row.then(|| pointer.map(|p| slot_of(p.x, tabs.len())));
+            .and_then(|d| cursor.map(|p| slot_of(p.x - d.grab.x, others)));
+        let pane_over_row =
+            pane_carried && cursor.is_some_and(|p| row.expand2(egui::vec2(0.0, 6.0)).contains(p));
+        let drop_slot = pane_over_row.then(|| cursor.map(|p| slot_of(p.x, tabs.len())));
         w.pane_drop_slot = drop_slot.flatten();
         // Off the row, a tab that holds exactly one pane can be docked: the
         // pane under the cursor shows the four side targets, and the tile
@@ -2984,10 +3127,10 @@ impl RickUi {
         // whether the tab holds one pane; a tab of several is offered
         // nothing. The tab's own pane, when its workspace is the one shown,
         // is no target for itself.
-        let dock = drag
-            .filter(|_| dragged.is_some() && !riding)
+        let dock = carried
+            .filter(|_| !riding)
             .and_then(|d| model.sole_pane(d.id))
-            .zip(pointer)
+            .zip(cursor)
             .and_then(|(sole, p)| {
                 let (pane, rect) = w
                     .dock
@@ -3001,7 +3144,7 @@ impl RickUi {
         // animated and a dropped tab settles into it; at any other time,
         // and under the system's reduce-motion setting, they are simply
         // where they belong (QUESTIONS.md 269).
-        if drag.is_some() || pane_over_row {
+        if drag.is_some() || visiting.is_some() || pane_over_row {
             w.slide_until = now + crate::drag::TAB_SLIDE;
         }
         let sliding = !still && now <= w.slide_until;
@@ -3013,10 +3156,10 @@ impl RickUi {
         // quarter of a tab or more, short of the half where the two would
         // swap (QUESTIONS.md 272). Only a tab of one pane spring-loads; it
         // is the one that can be docked where the spring leads.
-        let lean = drag
+        let lean = carried
             .filter(|d| riding && model.sole_pane(d.id).is_some())
             .zip(drag_slot)
-            .zip(pointer)
+            .zip(cursor)
             .map(|((d, slot), p)| {
                 let x =
                     (p.x - d.grab.x).clamp(row.left(), (row.right() - TAB_WIDTH).max(row.left()));
@@ -3082,8 +3225,8 @@ impl RickUi {
             // the one after its gap or the one before it. The shown tab
             // has nothing to spring to.
             if Some(*id) != active {
-                let rests = if w.pane_drag.is_some() {
-                    pointer.is_some_and(|p| tab_rect.contains(p))
+                let rests = if pane_carried {
+                    cursor.is_some_and(|p| tab_rect.contains(p))
                 } else {
                     lean.is_some_and(|(slot, lean)| {
                         (lean >= quarter && shown == slot)
@@ -3176,8 +3319,14 @@ impl RickUi {
         // itself, lifted with a shadow. In the title row it rides the row
         // under the pointer, held where it was grabbed; off the row it
         // follows the pointer, the grab point `GHOST_OFFSET` away from it.
+        // A tab from another window is painted by the window the cursor is
+        // over, this one, as the tab's own window would paint it.
         w.ghost = w.ghost.filter(|g| g.of != crate::drag::Dragged::Tab);
-        if let (Some(d), Some(i), Some(p)) = (drag, dragged, pointer) {
+        let lifted = carried.zip(cursor).and_then(|(d, p)| {
+            let label = dragged.map(|i| &tabs[i].1).or(visiting_label.as_ref())?;
+            Some((d, p, label))
+        });
+        if let Some((d, p, label)) = lifted {
             let size = egui::vec2(TAB_WIDTH, row.height());
             let float = if riding {
                 let x =
@@ -3187,8 +3336,10 @@ impl RickUi {
                 egui::Rect::from_min_size(egui::pos2(x, row.top()), size)
             } else {
                 // Off the row its place in the row is the one it came from.
-                w.tab_slides
-                    .put(Some(d.id), row.left() + i as f32 * pitch, now);
+                if let Some(i) = dragged {
+                    w.tab_slides
+                        .put(Some(d.id), row.left() + i as f32 * pitch, now);
+                }
                 egui::Rect::from_min_size(p + crate::drag::GHOST_OFFSET - d.grab, size)
             };
             let layer = egui::LayerId::new(
@@ -3209,24 +3360,36 @@ impl RickUi {
                     se: 0,
                 },
             );
-            let (_, _) = workspace_tab(&mut top, float, tabs[i].0, &tabs[i].1, true);
+            let (_, _) = workspace_tab(&mut top, float, d.id, label, true);
             // The dock targets over the lifted tab, not under it: the
             // cursor is inside the tab, which is wider than the cross and
             // would hide the targets it is being taken to.
             if let Some((_, rect, zone)) = dock {
                 paint_dock_cross(top.painter(), rect, zone, Cross::Tab, scheme);
             }
-            crate::drag::announce(
-                &top,
-                egui::Id::new(("drag-status", window.0)),
-                &t!("shell-dragging-tab", title = tabs[i].1.title.as_str()),
-            );
             w.ghost = Some(crate::drag::Ghost {
                 of: crate::drag::Dragged::Tab,
                 rect: float,
                 shapes: 0,
             });
         }
+        // What a screen reader hears of the drag, from the window it
+        // began in, wherever the cursor is.
+        if let Some(i) = dragged {
+            crate::drag::announce(
+                ui,
+                egui::Id::new(("drag-status", window.0)),
+                &t!("shell-dragging-tab", title = tabs[i].1.title.as_str()),
+            );
+        }
+        // Where another window's drag would land here, for that window to
+        // land it; a pane's dock target is added when the panes are drawn.
+        w.offer = drag_slot
+            .or(drop_slot.flatten())
+            .map(Offer::Row)
+            .or_else(|| {
+                dock.and_then(|(pane, _, zone)| zone.map(|zone| Offer::Dock { pane, zone }))
+            });
         if sliding && w.tab_slides.moving(now) {
             ctx.request_repaint();
         }
@@ -3235,8 +3398,8 @@ impl RickUi {
         // A dragged tab leans on a neighbour for most of the way past it,
         // so it rests only where it is held still: a tab on the move
         // starts the clock again, and a slow reorder switches nothing.
-        let at = pointer.unwrap_or_default();
-        let on_the_move = w.pane_drag.is_none()
+        let at = cursor.unwrap_or_default();
+        let on_the_move = !pane_carried
             && w.tab_rest
                 .is_some_and(|resting| (at - resting.at).length() > crate::drag::REST_SLOP);
         w.tab_rest = match (w.tab_rest, rested_on) {
@@ -3293,12 +3456,20 @@ impl RickUi {
         if let Some(id) = closed {
             self.close_workspace(id);
         }
-        match dropped {
+        // Over another window, that window says where the tab lands.
+        let elsewhere = roam
+            .and_then(|roam| roam.over)
+            .filter(|over| *over != window);
+        if dropped.is_some() {
+            self.roam = None;
+        }
+        match (dropped, elsewhere) {
+            (Some((d, _)), Some(other)) => self.land_tab(window, other, d.id),
             // Released on the row: into the room the row kept for it. On
             // a dock target: its one pane docks there, and the model takes
             // the tab out of the row. Anywhere else in the window it
             // returns to its place (QUESTIONS.md 274).
-            Some((d, _)) if in_window => {
+            (Some((d, _)), None) if in_window => {
                 if let Some(to) = drag_slot {
                     self.handle(Command::MoveWorkspace { id: d.id, to });
                 } else if let Some((pane, _, Some(zone))) = dock
@@ -3310,12 +3481,12 @@ impl RickUi {
                         side,
                     });
                 } else {
-                    // Nothing moved: the window shows what it showed when
-                    // the drag began (QUESTIONS.md 276).
-                    let _ = self.return_to_origin(window);
+                    // Nothing moved: every window shows what it showed
+                    // when the drag began (QUESTIONS.md 276).
+                    let _ = self.return_all_to_origin(window);
                 }
             }
-            Some((d, Some(pos))) => self.drop_workspace_outside(window, d.id, pos),
+            (Some((d, Some(pos))), None) => self.drop_workspace_outside(window, d.id, pos),
             _ => {}
         }
     }
@@ -3340,52 +3511,200 @@ impl RickUi {
         back
     }
 
-    /// Escape cancels the drag of a pane or of a tab in progress in
-    /// `window` (SPEC.md *No-ops and cancel*): the ghost goes, nothing
-    /// moves, the tabs are back in their order and the window shows the
-    /// workspace it showed when the drag began, whatever spring-loading
-    /// has switched since. The key is consumed, so it reaches nothing
-    /// else, and the button still held starts nothing new. Called before
-    /// the frame draws, so the dock is drawn from the model as it then is.
+    /// Every window shows again the workspace it showed when the drag of
+    /// a pane or a tab began: the drag went over other windows, whose
+    /// tabs spring-load alike, and it moved nothing. Returns whether
+    /// `window` switched back.
+    fn return_all_to_origin(&mut self, window: WindowId) -> bool {
+        let windows: Vec<WindowId> = self.windows.keys().copied().collect();
+        let mut back = false;
+        for id in windows {
+            let switched = self.return_to_origin(id);
+            back |= switched && id == window;
+        }
+        back
+    }
+
+    /// Escape cancels the drag of a pane or of a tab in progress (SPEC.md
+    /// *No-ops and cancel*): the ghost goes, nothing moves, the tabs are
+    /// back in their order and every window shows the workspace it showed
+    /// when the drag began, whatever spring-loading has switched since.
+    /// The key is consumed, so it reaches nothing else, and the button
+    /// still held starts nothing new. Called before `window`'s frame
+    /// draws, so the dock is drawn from the model as it then is; the key
+    /// reaches the window the drag began in, or, where the windows share
+    /// one input, whichever is drawn first.
     fn cancel_layout_drag(&mut self, ctx: &egui::Context, window: WindowId) {
-        let Some(w) = self.windows.get_mut(&window) else {
-            return;
-        };
-        if w.pane_drag.is_none() && w.workspace_drag.is_none() {
+        let from = self.roam.map_or(window, |roam| roam.from);
+        if self
+            .windows
+            .get(&from)
+            .is_none_or(|w| w.pane_drag.is_none() && w.workspace_drag.is_none())
+        {
             return;
         }
         if !ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
             return;
         }
-        w.pane_drag = None;
-        w.pane_ghost = None;
-        w.workspace_drag = None;
-        w.ghost = None;
-        w.tab_rest = None;
-        w.pane_drop_slot = None;
+        if let Some(w) = self.windows.get_mut(&from) {
+            w.pane_drag = None;
+            w.pane_ghost = None;
+            w.workspace_drag = None;
+        }
+        self.roam = None;
         // egui would report the handle or the tab as dragged until the
         // button comes up.
         ctx.stop_dragging();
-        let _ = self.return_to_origin(window);
-        if let Some(w) = self.windows.get_mut(&window) {
+        let _ = self.return_all_to_origin(window);
+        for w in self.windows.values_mut() {
+            w.ghost = None;
+            w.tab_rest = None;
+            w.pane_drop_slot = None;
+            w.offer = None;
             w.drag_origin = None;
         }
     }
 
-    /// A workspace tab released outside its window: onto another window's
-    /// tab row, which takes it, or onto nothing, which opens a window for
+    /// Where `window`'s coordinates begin among those the windows share:
+    /// its place on the screen, or the root's own origin where the windows
+    /// are drawn inside the root. `None` while the system does not say
+    /// where the window is.
+    fn origin(&self, window: WindowId) -> Option<egui::Vec2> {
+        if self.embedded {
+            return Some(egui::Vec2::ZERO);
+        }
+        let screen = self.windows.get(&window)?.screen?;
+        Some(screen.min.to_vec2())
+    }
+
+    /// The window under a place in the shared coordinates, for a drag that
+    /// began in `from`. Windows may overlap, and nothing says which is in
+    /// front: the one the drag began in was clicked last, so it is; drawn
+    /// inside the root, every other window lies over the root.
+    fn window_under(&self, at: egui::Pos2, from: WindowId) -> Option<WindowId> {
+        let holds = |id: &WindowId| {
+            self.origin(*id)
+                .zip(self.windows.get(id).and_then(|w| w.content))
+                .is_some_and(|(origin, content)| content.translate(origin).contains(at))
+        };
+        let root_last = self.embedded || from != self.root;
+        let first = (!(self.embedded && from == self.root)).then_some(from);
+        let others = self
+            .windows
+            .keys()
+            .copied()
+            .filter(|id| *id != from && *id != self.root);
+        let last = (root_last && Some(self.root) != first).then_some(self.root);
+        first.into_iter().chain(others).chain(last).find(holds)
+    }
+
+    /// Publishes the drag of a pane or a tab in progress in `window` for
+    /// the other windows, with the cursor's place among them, and
+    /// withdraws it when the drag is over. Called as the window's frame
+    /// begins.
+    fn publish_roam(&mut self, ctx: &egui::Context, window: WindowId) {
+        let Some(w) = self.windows.get(&window) else {
+            return;
+        };
+        let what = w
+            .pane_drag
+            .map(Carried::Pane)
+            .or(w.workspace_drag.map(Carried::Tab));
+        let Some((what, pointer)) = what.zip(ctx.pointer_latest_pos()) else {
+            if self.roam.is_some_and(|roam| roam.from == window) {
+                self.roam = None;
+            }
+            return;
+        };
+        let content = w.content;
+        self.roam = Some(match self.origin(window) {
+            Some(origin) => {
+                let at = pointer + origin;
+                Roam {
+                    from: window,
+                    what,
+                    at,
+                    over: self.window_under(at, window),
+                }
+            }
+            // The system does not say where the windows are: the drag
+            // knows its own window alone.
+            None => Roam {
+                from: window,
+                what,
+                at: pointer,
+                over: content
+                    .is_none_or(|c| c.contains(pointer))
+                    .then_some(window),
+            },
+        });
+    }
+
+    /// A workspace tab released over another window: into the gap its tab
+    /// row opened for it, or, holding one pane, onto the dock target of
+    /// the pane under the cursor; anywhere else there nothing moves
+    /// (SPEC.md *Windows*).
+    fn land_tab(&mut self, window: WindowId, other: WindowId, id: WorkspaceId) {
+        match self.windows.get(&other).and_then(|w| w.offer) {
+            Some(Offer::Row(to)) => {
+                self.handle(Command::WorkspaceToWindow {
+                    id,
+                    window: Some(other),
+                });
+                self.handle(Command::MoveWorkspace { id, to });
+            }
+            Some(Offer::Dock { pane, zone }) => {
+                if let Some(side) = zone.side() {
+                    self.handle(Command::DockWorkspace { id, pane, side });
+                }
+            }
+            None => {
+                let _ = self.return_all_to_origin(window);
+            }
+        }
+    }
+
+    /// A pane released over another window: a new workspace tab at the
+    /// slot its tab row showed, or docked on the target of the pane under
+    /// the cursor, whose centre makes it a new tab there. Returns whether
+    /// it landed.
+    fn land_pane(&mut self, other: WindowId, tab: TabId) -> bool {
+        let Some(offer) = self.windows.get(&other).and_then(|w| w.offer) else {
+            return false;
+        };
+        let side = match offer {
+            Offer::Dock { pane, zone } => zone.side().map(|side| (pane, side)),
+            Offer::Row(_) => None,
+        };
+        if let Some((pane, side)) = side {
+            self.handle(Command::MoveTab {
+                tab,
+                to: DockTarget::Beside { pane, side },
+            });
+            return true;
+        }
+        self.handle(Command::MoveTab {
+            tab,
+            to: DockTarget::NewWorkspace,
+        });
+        if let Some(id) = self.workspace_of_tab(tab) {
+            self.handle(Command::WorkspaceToWindow {
+                id,
+                window: Some(other),
+            });
+            if let Offer::Row(to) = offer {
+                self.handle(Command::MoveWorkspace { id, to });
+            }
+        }
+        true
+    }
+
+    /// A workspace tab released outside every window: a window opens for
     /// it.
     fn drop_workspace_outside(&mut self, window: WindowId, id: WorkspaceId, pos: egui::Pos2) {
         let Some((screen_pos, size)) = self.on_screen(window, pos) else {
             return;
         };
-        if let Some(other) = self.tab_row_under(window, screen_pos) {
-            self.handle(Command::WorkspaceToWindow {
-                id,
-                window: Some(other),
-            });
-            return;
-        }
         self.handle(Command::WorkspaceToWindow { id, window: None });
         self.place_new_window(window, screen_pos, size);
     }
@@ -3396,21 +3715,6 @@ impl RickUi {
     fn on_screen(&self, window: WindowId, pos: egui::Pos2) -> Option<(egui::Pos2, egui::Vec2)> {
         let screen = self.windows.get(&window)?.screen?;
         Some((screen.min + pos.to_vec2(), screen.size()))
-    }
-
-    /// Another window whose tab row lies under a screen position.
-    fn tab_row_under(&self, window: WindowId, screen_pos: egui::Pos2) -> Option<WindowId> {
-        self.windows.iter().find_map(|(other, state)| {
-            if *other == window {
-                return None;
-            }
-            let origin = state.screen?.min;
-            state
-                .tab_row?
-                .translate(origin.to_vec2())
-                .contains(screen_pos)
-                .then_some(*other)
-        })
     }
 
     /// Puts the window the model just opened under the pointer, as large
@@ -4160,7 +4464,71 @@ impl RickUi {
             );
         }
         self.absorb(events);
+        self.visiting_pane(ctx, window);
         self.apply_requests(ctx);
+    }
+
+    /// A pane dragged from another window over this one (SPEC.md
+    /// *Windows*): the pane under the cursor shows the dock targets, as
+    /// it would for a pane of this window, and the ghost is painted here,
+    /// the pane's own window having no say over these pixels. The target
+    /// under the cursor is what this window offers the drop.
+    fn visiting_pane(&mut self, ctx: &egui::Context, window: WindowId) {
+        let roam = self.roam;
+        let origin = self.origin(window);
+        let Some(w) = self.windows.get(&window) else {
+            return;
+        };
+        let own = w.pane_drag.is_some();
+        let visiting = roam
+            .and_then(|roam| Some((roam, roam.visiting_pane(window)?)))
+            .and_then(|(roam, drag)| Some((roam, drag, roam.cursor_in(window, origin, None)?)));
+        let Some((roam, drag, cursor)) = visiting else {
+            if !own && let Some(w) = self.windows.get_mut(&window) {
+                w.ghost = w.ghost.filter(|g| g.of != crate::drag::Dragged::Pane);
+            }
+            return;
+        };
+        let model = self.app.model();
+        let under = w
+            .dock
+            .pane_rects(model)
+            .into_iter()
+            .find(|(pane, rect)| *pane != drag.pane && rect.contains(cursor));
+        let zone = under.and_then(|(pane, rect)| Some((pane, Cross::Pane.zone_at(rect, cursor)?)));
+        let overlay = ctx.layer_painter(egui::LayerId::new(
+            egui::Order::Tooltip,
+            egui::Id::new(("pane-drag", window.0)),
+        ));
+        if let Some((_, rect)) = under {
+            paint_dock_cross(
+                &overlay,
+                rect,
+                zone.map(|(_, zone)| zone),
+                Cross::Pane,
+                crate::theme::scheme_of(ctx),
+            );
+        }
+        let ghost = self
+            .windows
+            .get(&roam.from)
+            .and_then(|from| from.pane_ghost.as_ref())
+            .map(|snapshot| {
+                let rect = snapshot.placed(ctx, cursor);
+                snapshot.paint(ctx, overlay.layer_id(), rect);
+                crate::drag::Ghost {
+                    of: crate::drag::Dragged::Pane,
+                    rect,
+                    shapes: snapshot.len(),
+                }
+            });
+        ctx.request_repaint();
+        if let Some(w) = self.windows.get_mut(&window) {
+            w.ghost = ghost;
+            if let Some((pane, zone)) = zone {
+                w.offer = Some(Offer::Dock { pane, zone });
+            }
+        }
     }
 
     /// The drag of a pane by its handle (SPEC.md *Panes*): while it lasts,
@@ -4171,6 +4539,8 @@ impl RickUi {
     /// says. Returns `Some(handled)` when the drag ended this frame,
     /// `handled` telling whether the model changed.
     fn pane_drag(&mut self, ui: &egui::Ui, ctx: &egui::Context, window: WindowId) -> Option<bool> {
+        let roam = self.roam;
+        let origin = self.origin(window);
         let w = self.windows.get(&window)?;
         let drag = w.pane_drag?;
         let (pointer, down, released) = ctx.input(|i| {
@@ -4180,8 +4550,11 @@ impl RickUi {
                 i.pointer.any_released(),
             )
         });
+        // The cursor while it is over this window: over another, that one
+        // shows the targets and the ghost (SPEC.md *Windows*).
+        let cursor = roam.map_or(pointer, |roam| roam.cursor_in(window, origin, pointer));
         let model = self.app.model();
-        let under = pointer.and_then(|p| {
+        let under = cursor.and_then(|p| {
             w.dock
                 .pane_rects(model)
                 .into_iter()
@@ -4189,7 +4562,7 @@ impl RickUi {
         });
         let zone = under.and_then(|(pane, rect)| {
             Cross::Pane
-                .zone_at(rect, pointer?)
+                .zone_at(rect, cursor?)
                 .map(|zone| (pane, rect, zone))
         });
         if down && !released {
@@ -4209,7 +4582,7 @@ impl RickUi {
             }
             // The ghost: the pane as it was grabbed, anchored to the grab
             // point (SPEC.md *Drag ghost*).
-            let ghost = pointer.zip(w.pane_ghost.as_ref()).map(|(p, snapshot)| {
+            let ghost = cursor.zip(w.pane_ghost.as_ref()).map(|(p, snapshot)| {
                 let rect = snapshot.placed(ctx, p);
                 snapshot.paint(ctx, overlay.layer_id(), rect);
                 crate::drag::Ghost {
@@ -4241,8 +4614,9 @@ impl RickUi {
             w.pane_ghost = None;
             w.ghost = w.ghost.filter(|g| g.of != crate::drag::Dragged::Pane);
         }
+        self.roam = None;
         if !released {
-            return Some(self.return_to_origin(window));
+            return Some(self.return_all_to_origin(window));
         }
         if let Some((pane, _, zone)) = zone {
             let to = match zone.side() {
@@ -4252,17 +4626,21 @@ impl RickUi {
             self.handle(Command::MoveTab { tab: drag.tab, to });
             return Some(true);
         }
-        // Released where it cannot land, nothing moved and the window
+        // Released where it cannot land, nothing moved and every window
         // shows what it showed when the drag began; that is a change of
         // the model too, which the dock's tree has to follow, not report.
-        let handled = self.cross_window_drop(ctx, window, Some(drag.tab));
-        Some(handled || self.return_to_origin(window))
+        let handled = match roam.and_then(|roam| roam.over) {
+            // Over another window: where that window offered.
+            Some(other) if other != window => self.land_pane(other, drag.tab),
+            _ => self.cross_window_drop(ctx, window, Some(drag.tab)),
+        };
+        Some(handled || self.return_all_to_origin(window))
     }
 
-    /// A pane released outside every dock tile: on this window's tab row it
-    /// becomes a new workspace tab at the slot shown, on another window's
-    /// tab row a new workspace there, on nothing a window of its own.
-    /// Returns whether a drop was handled.
+    /// A pane released outside every dock tile of its window: on the
+    /// window's tab row it becomes a new workspace tab at the slot shown,
+    /// outside every window a window of its own. Returns whether a drop
+    /// was handled.
     fn cross_window_drop(
         &mut self,
         ctx: &egui::Context,
@@ -4300,19 +4678,6 @@ impl RickUi {
             // No screen position (a test harness): nothing to tear out to.
             return false;
         };
-        if let Some(other) = self.tab_row_under(window, screen_pos) {
-            self.handle(Command::MoveTab {
-                tab,
-                to: DockTarget::NewWorkspace,
-            });
-            if let Some(id) = self.workspace_of_tab(tab) {
-                self.handle(Command::WorkspaceToWindow {
-                    id,
-                    window: Some(other),
-                });
-            }
-            return true;
-        }
         self.handle(Command::MoveTab {
             tab,
             to: DockTarget::NewWindow,
@@ -4400,6 +4765,7 @@ impl RickUi {
                 &mut self.requests,
             );
         }
+        self.publish_roam(ctx, window);
         self.cancel_layout_drag(ctx, window);
         self.resolve_pending_selects();
         self.poll_library_browse(ctx);
@@ -4461,13 +4827,14 @@ impl RickUi {
         }
 
         // The closed hand for as long as a pane or a tab is dragged,
-        // whatever the cursor is over: set last, so nothing drawn in this
-        // frame shows another cursor (SPEC.md *Panes*: a drag never shows
-        // the arrow).
-        if self
-            .windows
-            .get(&window)
-            .is_some_and(|w| w.pane_drag.is_some() || w.workspace_drag.is_some())
+        // whatever the cursor is over and in whichever window: set last,
+        // so nothing drawn in this frame shows another cursor (SPEC.md
+        // *Panes*: a drag never shows the arrow).
+        if self.roam.is_some()
+            || self
+                .windows
+                .get(&window)
+                .is_some_and(|w| w.pane_drag.is_some() || w.workspace_drag.is_some())
         {
             ctx.set_cursor_icon(egui::CursorIcon::Grabbing);
         }
@@ -4553,6 +4920,7 @@ impl eframe::App for RickUi {
     fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
         let root = self.root;
         let ctx = ui.ctx().clone();
+        self.embedded = ctx.embed_viewports();
         self.sync_window_ref(frame, &ctx);
         // The integration check: asked for once the first frame is drawn.
         self.integration.frame(&mut self.requests);
@@ -4610,6 +4978,61 @@ pub fn column_label(column: Column) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A drag published by one window is seen by the others where the
+    /// cursor is in their own coordinates, and only by the one it is over
+    /// (issue 80, rule 6): two windows side by side on a screen, the
+    /// second 900 points right of the first.
+    #[test]
+    fn a_roaming_drag_is_seen_in_the_coordinates_of_the_window_it_is_over() {
+        let (first, second) = (WindowId(1), WindowId(2));
+        let tab = TabDrag {
+            id: WorkspaceId(7),
+            grab: egui::vec2(40.0, 10.0),
+        };
+        let origins = [egui::vec2(100.0, 50.0), egui::vec2(1000.0, 80.0)];
+        // The pointer of the first window, 950 points right of its corner:
+        // over the second window, 50 points into it.
+        let pointer = egui::pos2(950.0, 60.0);
+        let roam = Roam {
+            from: first,
+            what: Carried::Tab(tab),
+            at: pointer + origins[0],
+            over: Some(second),
+        };
+        assert_eq!(
+            roam.cursor_in(first, Some(origins[0]), Some(pointer)),
+            None,
+            "not over the window it began in"
+        );
+        assert_eq!(
+            roam.cursor_in(second, Some(origins[1]), None),
+            Some(egui::pos2(50.0, 30.0)),
+            "in the other window's coordinates"
+        );
+        assert_eq!(
+            roam.cursor_in(second, None, None),
+            None,
+            "a window that does not know where it is takes nothing"
+        );
+        assert!(roam.visiting_tab(second).is_some_and(|t| t.id == tab.id));
+        assert!(
+            roam.visiting_tab(first).is_none(),
+            "its own tab visits no one"
+        );
+        assert!(roam.visiting_pane(second).is_none());
+
+        // Back over its own window, its own pointer is the cursor.
+        let home = Roam {
+            over: Some(first),
+            ..roam
+        };
+        assert_eq!(
+            home.cursor_in(first, Some(origins[0]), Some(pointer)),
+            Some(pointer)
+        );
+        assert_eq!(home.cursor_in(second, Some(origins[1]), None), None);
+    }
 
     /// The bundled icon is the 256 px tile, decoded once.
     #[test]
