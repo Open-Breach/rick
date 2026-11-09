@@ -278,6 +278,33 @@ fn table(plugins: &[plugins_native::Plugin]) -> String {
 mod tests {
     use super::*;
 
+    /// The build's details `crates/rick/build.rs` records for the About
+    /// dialog (specs/about-dialog.md): a `YYYY-MM-DD` date, a target
+    /// triple, and the contributors' names one per line in a file the
+    /// binary embeds, empty outside a checkout (QUESTIONS.md 258).
+    #[test]
+    fn the_build_records_its_date_target_and_contributors() {
+        let date = env!("RICK_BUILD_DATE");
+        assert_eq!(date.len(), 10, "{date}");
+        let digits: Vec<bool> = date.chars().map(|c| c.is_ascii_digit()).collect();
+        assert!(digits[0] && digits[1] && digits[2] && digits[3], "{date}");
+        assert_eq!(&date[4..5], "-", "{date}");
+        assert!(
+            digits[5] && digits[6] && date[7..8] == *"-" && digits[8] && digits[9],
+            "{date}"
+        );
+        let target = env!("RICK_TARGET");
+        assert!(target.split('-').count() >= 3, "{target}");
+        let names = include_str!(env!("RICK_CONTRIBUTORS"));
+        for name in names.lines() {
+            assert_eq!(name, name.trim());
+            assert!(!name.is_empty());
+        }
+        // The roles file is there, text, and empty until CONTRIBUTORS.md exists.
+        let roles = include_str!(env!("RICK_CONTRIBUTOR_ROLES"));
+        assert!(roles.lines().all(|line| line.len() < 10_000));
+    }
+
     /// Every argument is a folder to open, in order, made absolute where
     /// it exists and kept where it does not; nothing is dropped and
     /// nothing fails.
