@@ -1,0 +1,19 @@
+schema: spec-driven
+
+# Pinned CLI: @fission-ai/openspec@1.15.0 (see openspec/README.md before bumping).
+
+context: |
+  Rick is a cross-platform file manager in Rust (Linux, macOS, Windows are all
+  first-class). SPEC.md at the repository root is the authoritative
+  specification and agents must not edit it; when a proposal contradicts it,
+  say so explicitly in the proposal and add a question to QUESTIONS.md.
+  Every change must respect the layer order and the architecture rules in
+  SPEC.md (UI emits Commands, app publishes Events, entries keyed by EntryId,
+  long operations are Jobs, no cfg(target_os) outside the platform crate).
+
+rules:
+  proposal:
+    - State what is deliberately out of scope.
+    - Name the crates touched and confirm dependencies only point downward.
+  tasks:
+    - One task per commit-sized concern, with the acceptance test that proves it.
