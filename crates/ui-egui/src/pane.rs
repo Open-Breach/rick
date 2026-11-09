@@ -13,11 +13,10 @@ use crate::dnd::{self, Spring, Target, Zone};
 use crate::keys::Intent;
 use crate::shell::{PaneCx, PaneDrag, Request};
 use crate::theme::{self, FOOTER_CONTROL, ICON, TEXT_BODY, TEXT_CAPS, TEXT_SECONDARY};
-use crate::widgets::switch;
+use crate::widgets::{divider, switch};
 use crate::{format, icons, paths, views};
 
-/// The grab handle's width.
-pub const HANDLE_WIDTH: f32 = 28.0;
+pub use crate::widgets::HANDLE_WIDTH;
 /// The view options button's width: the sliders and the caret.
 const VIEW_OPTIONS_WIDTH: f32 = 48.0;
 /// The view options menu card's width.
@@ -158,16 +157,6 @@ fn icon_button(ui: &mut egui::Ui, glyph: &str, enabled: bool) -> egui::Response 
     )
 }
 
-/// A 1 px hairline, `height` tall, centred in the row.
-fn divider(ui: &mut egui::Ui, height: f32) {
-    let (rect, _) = ui.allocate_exact_size(egui::vec2(1.0, height), egui::Sense::hover());
-    let x = rect.center().x.round() + 0.5;
-    ui.painter().line_segment(
-        [egui::pos2(x, rect.top()), egui::pos2(x, rect.bottom())],
-        theme::scheme(ui).hairline(),
-    );
-}
-
 fn remember(cx: &mut PaneCx<'_>, group: &'static str, rect: egui::Rect) {
     cx.tab_ui.toolbar_rects.push((group, rect));
 }
@@ -195,46 +184,17 @@ fn right_group(ui: &mut egui::Ui, cx: &mut PaneCx<'_>) {
     view_options(ui, cx);
 }
 
-/// The pane's grab handle: a `HANDLE_WIDTH` wide ghost area with
-/// `DOTS_SIX_VERTICAL` at 70 % opacity; the grab cursor over it, the
-/// grabbing cursor while it drags the pane (SPEC.md *Panes*).
+/// The pane's grab handle ([`crate::widgets::pane_handle`]): dragging it
+/// starts the pane drag (SPEC.md *Panes*).
 fn handle(ui: &mut egui::Ui, cx: &mut PaneCx<'_>) {
-    let size = button_size(ui);
-    let (rect, response) = ui.allocate_exact_size(
-        egui::vec2(HANDLE_WIDTH, size),
-        egui::Sense::click_and_drag(),
-    );
-    response.widget_info(|| {
-        egui::WidgetInfo::labeled(egui::WidgetType::Button, true, t!("pane-drag-pane"))
-    });
-    remember(cx, "right", rect);
-    let scheme = theme::scheme(ui);
-    if response.hovered() || response.dragged() {
-        ui.painter().rect_filled(
-            rect,
-            theme::metrics(ui.ctx()).corner_radius(),
-            scheme.bg_subtle,
-        );
-    }
-    ui.painter().text(
-        rect.center(),
-        egui::Align2::CENTER_CENTER,
-        icons::HANDLE,
-        egui::FontId::proportional(ICON),
-        scheme.icon_default.gamma_multiply(0.7),
-    );
-    if response.dragged() {
-        ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
-    } else if response.hovered() {
-        ui.ctx().set_cursor_icon(egui::CursorIcon::Grab);
-    }
+    let response = crate::widgets::pane_handle(ui);
+    remember(cx, "right", response.rect);
     if response.drag_started() {
         *cx.pane_drag = Some(PaneDrag {
             tab: cx.tab_id,
             pane: cx.pane,
         });
     }
-    response.on_hover_text(t!("pane-drag-pane"));
 }
 
 /// The glyph of a view mode.

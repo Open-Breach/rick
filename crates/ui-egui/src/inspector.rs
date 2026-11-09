@@ -1,7 +1,8 @@
 //! The Preview tab's content: the content is the point of it, everything
-//! else is one row. Top to bottom: a toolbar (the entry's file-type icon,
-//! the controls for this kind of content and the previewer's own, info
-//! badges, close), the pinned info section when one is pinned, the content,
+//! else is one row. Top to bottom: a toolbar, the explorer toolbar's
+//! height (the entry's file-type icon, the controls for this kind of
+//! content and the previewer's own, info badges, close, a hairline and the
+//! pane handle), the pinned info section when one is pinned, the content,
 //! and a one-line status bar, the explorer footer's height under its
 //! hairline, in the file list's status size. The pane shows
 //! no heading: the dock tab's label is enough, and the word "Inspector"
@@ -28,10 +29,8 @@ use types::{Entry, EntryId};
 
 use crate::icons;
 use crate::preview::{PreviewAct, Previews, Slot};
-use crate::shell::Request;
+use crate::shell::{PaneDrag, Request};
 
-/// The toolbar's height: a tab's.
-pub const TOOLBAR_HEIGHT: f32 = 30.0;
 /// Rows beyond this get a search box.
 const SEARCHABLE_FROM: usize = 20;
 /// A pinned panel takes at most this share of the pane's height.
@@ -44,6 +43,8 @@ pub const MIN_WIDTH: f32 = 96.0;
 pub struct PaneRects {
     /// The toolbar row.
     pub toolbar: Option<Rect>,
+    /// The pane handle at the toolbar's right end.
+    pub handle: Option<Rect>,
     /// The pinned section's panel, when one is pinned.
     pub panel: Option<Rect>,
     /// The content area.
@@ -85,6 +86,15 @@ pub struct PaneState {
     pub badges: Vec<BadgeItem>,
     /// The status bar's text of the last frame.
     pub status: String,
+}
+
+/// The pane handle's wiring: the drag it starts and where the window keeps
+/// the drag in progress (SPEC.md *Panes*).
+pub struct Handle<'a> {
+    /// The Preview tab and its pane, what the model moves.
+    pub drag: PaneDrag,
+    /// The window's pane drag, which the handle starts.
+    pub slot: &'a mut Option<PaneDrag>,
 }
 
 /// An info section as the pane shows it, from either source: the
@@ -188,6 +198,7 @@ pub fn show(
     previews: &mut Previews,
     state: &mut PaneState,
     requests: &mut Vec<Request>,
+    handle: &mut Handle<'_>,
 ) -> bool {
     let width = ui.available_width().max(MIN_WIDTH);
     ui.set_max_width(width);
@@ -196,13 +207,14 @@ pub fn show(
 
     let view = collect(ui, app, previews);
 
-    // Toolbar.
-    let (row, _) = ui.allocate_exact_size(vec2(width, TOOLBAR_HEIGHT), egui::Sense::hover());
+    // Toolbar: the explorer toolbar's height (SPEC.md *Preview*).
+    let toolbar_h = crate::theme::metrics(ui.ctx()).toolbar_height();
+    let (row, _) = ui.allocate_exact_size(vec2(width, toolbar_h), egui::Sense::hover());
     state.rects.toolbar = Some(row);
     state.toolbar.clear();
     state.badges.clear();
     let mut acts = Vec::new();
-    toolbar(ui, row, &view, state, &mut acts);
+    toolbar(ui, row, &view, state, &mut acts, handle);
     separator(ui, width);
 
     // Pinned panel.
@@ -523,23 +535,32 @@ fn separator(ui: &mut egui::Ui, width: f32) {
     );
 }
 
-/// One row: the file icon, the controls, then the badges and the close
-/// button from the right. Icons only, labels as tooltips.
+/// One row with `space/toolbar-x` padding: the file icon, the controls,
+/// then from the right the pane handle after a hairline, the close button
+/// and the badges. Icons only, labels as tooltips.
 fn toolbar(
     ui: &mut egui::Ui,
     row: Rect,
     view: &View<'_>,
     state: &mut PaneState,
     acts: &mut Vec<Act>,
+    handle: &mut Handle<'_>,
 ) {
-    // Right: close, then the badges, so they keep their place.
+    let inner = row.shrink2(vec2(crate::theme::metrics(ui.ctx()).space_toolbar_x, 0.0));
+    // Right: the handle and its hairline, close, then the badges, so they
+    // keep their place.
     let mut right = ui.new_child(
         egui::UiBuilder::new()
-            .max_rect(row)
+            .max_rect(inner)
             .layout(egui::Layout::right_to_left(Align::Center)),
     );
     right.set_clip_rect(row.intersect(ui.clip_rect()));
-    right.add_space(2.0);
+    let grip = crate::widgets::pane_handle(&mut right);
+    state.rects.handle = Some(grip.rect);
+    if grip.drag_started() {
+        *handle.slot = Some(handle.drag);
+    }
+    crate::widgets::divider(&mut right, 16.0);
     if icon_button(&mut right, icons::CLOSE, "Close", None).clicked() {
         acts.push(Act::Close);
     }
@@ -547,14 +568,16 @@ fn toolbar(
     let right_edge = right.min_rect().left();
 
     // Left: the file icon, then the controls.
-    let left_rect = Rect::from_min_max(row.min, pos2(right_edge.max(row.left()), row.bottom()));
+    let left_rect = Rect::from_min_max(
+        inner.min,
+        pos2(right_edge.max(inner.left()), inner.bottom()),
+    );
     let mut left = ui.new_child(
         egui::UiBuilder::new()
             .max_rect(left_rect)
             .layout(egui::Layout::left_to_right(Align::Center)),
     );
     left.set_clip_rect(left_rect.intersect(ui.clip_rect()));
-    left.add_space(6.0);
     if let Some(entry) = view.entry {
         left.add(
             egui::Label::new(egui::RichText::new(icons::for_entry(entry)).size(16.0))
