@@ -860,6 +860,56 @@ fn screenshots_of_the_footer() {
     }
 }
 
+/// Issue 79 item 6: the column header with the pointer on the boundary
+/// between Size and Type, in Light and Dark at both densities, for the
+/// comparison with the frame *Column header — resize hover*.
+#[test]
+#[ignore = "needs a wgpu adapter; CI runs it and uploads the images"]
+fn screenshots_of_the_column_header() {
+    use egui_kittest::kittest::Queryable as _;
+    let (_dir, deep) = sample_tree();
+    let mut harness = shell(&deep, egui::vec2(1920.0, 1000.0));
+    for (theme, density) in [
+        (Theme::Light, Density::Comfortable),
+        (Theme::Light, Density::Compact),
+        (Theme::Dark, Density::Comfortable),
+        (Theme::Dark, Density::Compact),
+    ] {
+        for change in [
+            SettingsChange::Theme(theme),
+            SettingsChange::Density(density),
+        ] {
+            harness
+                .state_mut()
+                .app_mut()
+                .handle(app::Command::Settings(change), &mut Vec::new());
+        }
+        settle(&mut harness);
+        // The boundary before the Type title: its cell's left edge less
+        // half the gap between cells.
+        let kind = harness.get_by_label_contains("Type").rect();
+        harness.event(egui::Event::PointerMoved(egui::pos2(
+            kind.left() - 3.0,
+            kind.center().y,
+        )));
+        harness.step();
+        harness.step();
+        let theme_name = match theme {
+            Theme::Light => "light",
+            Theme::Dark => "dark",
+            Theme::System => "system",
+        };
+        let density_name = match density {
+            Density::Comfortable => "comfortable",
+            Density::Compact => "compact",
+        };
+        shoot(
+            &mut harness,
+            &format!("column-header-{theme_name}-{density_name}"),
+        );
+    }
+}
+
 /// Issue 79 item 5: the path field in edit mode — Mod+L on the focused
 /// pane — in Light and Dark at both densities, for the comparison with
 /// the frame *Toolbar — path editing*.
