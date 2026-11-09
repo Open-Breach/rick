@@ -306,7 +306,7 @@ enum Msg {
         result: Result<(), Error>,
     },
     /// The trash was listed.
-    Trash(Result<Vec<TrashedItem>, Error>),
+    Trash(Result<(Vec<TrashedItem>, u64), Error>),
     /// The cloud providers' roots were listed.
     Cloud(Vec<Entry>),
     /// The network providers' roots were listed.
@@ -1736,18 +1736,40 @@ impl App {
         self.poke.send_modify(|n| *n += 1);
     }
 
-    /// Lists the trash again, off the loop's thread, for the Places row's
-    /// count; a change makes the Trash view list again too.
+    /// Lists the trash again, off the loop's thread, with the bytes its
+    /// items take, for the Places row's pill; a change makes the Trash view
+    /// list again too.
     fn refresh_trash(&mut self) {
         let platform = Arc::clone(&self.platform);
         let tx = self.mailbox.clone();
         runtime::handle().spawn(async move {
             let result = runtime::handle()
-                .spawn_blocking(move || platform.list())
+                .spawn_blocking(move || {
+                    platform.list().map(|items| {
+                        let size = items.iter().map(|item| tree_size(&item.trashed)).sum();
+                        (items, size)
+                    })
+                })
                 .await
                 .unwrap_or_else(|join| Err(Error::Io(std::io::Error::other(join))));
             tx.send(Msg::Trash(result));
         });
+    }
+
+    /// The share of its disk the trash takes: its size against the total of
+    /// the volume whose mount point is the longest prefix of a trashed
+    /// item's path.
+    #[allow(clippy::cast_precision_loss, clippy::cast_possible_truncation)]
+    fn trash_share(&self, items: &[TrashedItem], size: u64) -> Option<f32> {
+        let inside = items.first()?.trashed.as_path();
+        let volume = self
+            .model
+            .volumes
+            .iter()
+            .filter(|v| inside.starts_with(&v.mount_point))
+            .max_by_key(|v| v.mount_point.as_os_str().len())?;
+        let total = volume.total.filter(|t| *t > 0)?;
+        Some((size as f64 / total as f64) as f32)
     }
 
     /// Enumerates the mounted volumes once, off the loop's thread.
@@ -3589,6 +3611,10 @@ impl App {
                 if volumes != self.model.volumes {
                     debug!(count = volumes.len(), "volumes");
                     self.model.volumes = volumes;
+                    // The trash's disk may be among them now.
+                    let size = self.model.trash.size;
+                    let share = self.trash_share(&self.model.trash.items, size);
+                    self.model.trash.set_stats(size, share);
                     self.rick.changed(Virtual::Machine);
                     self.rick.changed(Virtual::Network);
                 }
@@ -3611,9 +3637,11 @@ impl App {
                     None => self.open_default(pane, entry, events),
                 }
             }
-            Msg::Trash(Ok(items)) => {
+            Msg::Trash(Ok((items, size))) => {
                 let changed = self.model.trash.items != items || !self.model.trash.listed;
+                let share = self.trash_share(&items, size);
                 self.model.trash.set(items, true);
+                self.model.trash.set_stats(size, share);
                 if changed {
                     self.rick.changed(Virtual::Trash);
                 }
@@ -4518,6 +4546,25 @@ impl std::fmt::Debug for App {
             .field("redo", &self.redo.len())
             .finish_non_exhaustive()
     }
+}
+
+/// The bytes under `path`: the file's size, or the sizes of everything in
+/// the folder, links counted by their own size and never followed. An entry
+/// that cannot be read counts nothing.
+fn tree_size(path: &Path) -> u64 {
+    let Ok(meta) = std::fs::symlink_metadata(path) else {
+        return 0;
+    };
+    if !meta.is_dir() {
+        return meta.len();
+    }
+    let Ok(entries) = std::fs::read_dir(path) else {
+        return 0;
+    };
+    entries
+        .flatten()
+        .map(|entry| tree_size(&entry.path()))
+        .sum()
 }
 
 #[cfg(test)]

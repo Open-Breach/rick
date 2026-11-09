@@ -2899,3 +2899,19 @@ Once answered, an entry keeps its number and gains a dated decision line.
     and tooltips alike. Assumed: the hint takes the key map's spelling like
     the rest of the UI; a platform spelling (Ctrl, ⌘) for shown shortcuts
     would be one change for all of them, not this hint's.
+
+250. (design refresh, 2026-11-09) *Operations drawer* gives a running job
+    "its icon (the Portal spinner for a copy or move; `ARCHIVE` for an
+    archive job, and so on)", but a job in the job table has a name and a
+    state, no kind. Assumed: the spinner for every running job except one
+    whose name starts with *Extract*, *Compress*, *Archive*, *Zip* or
+    *Unzip*, which shows `ARCHIVE`; a job kind on the job table would let
+    every plugin name its glyph.
+
+251. (design refresh, 2026-11-09) *Trash pill*: "the size and the share
+    come from the trash provider's statistics", but no trash API reports a
+    size — the platform lists the items, the trash plugin shows them.
+    Assumed: the app sums the trashed items' sizes when it lists the trash
+    (a folder is walked once, links are not followed) and takes the share
+    against the volume whose mount point contains them; no pill while the
+    trash is empty, the low tint while the disk's size is unknown.

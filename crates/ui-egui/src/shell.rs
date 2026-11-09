@@ -362,6 +362,9 @@ pub struct WindowUi {
     pane_drop_slot: Option<usize>,
     /// The restored geometry has been handed to the backend.
     placed: bool,
+    /// The operations drawer shows its summary alone (SPEC.md *Operations
+    /// drawer*); remembered for the window.
+    drawer_collapsed: bool,
 }
 
 impl WindowUi {
@@ -381,6 +384,7 @@ impl WindowUi {
             workspace_drag: None,
             pane_drop_slot: None,
             placed: false,
+            drawer_collapsed: false,
         }
     }
 }
@@ -2936,8 +2940,9 @@ impl RickUi {
         });
     }
 
-    /// The side panel on its side with the operations area at its foot, or
-    /// the operations area along the window's foot when the panel is hidden.
+    /// The side panel on its side with the operations drawer floating over
+    /// its foot, or the drawer along the window's foot when the panel is
+    /// hidden, so a running job is never invisible.
     fn side_panel(&mut self, ui: &mut egui::Ui, ctx: &egui::Context, window: WindowId) {
         let side = self
             .app
@@ -2946,15 +2951,28 @@ impl RickUi {
             .map(|w| w.side_panel.clone())
             .unwrap_or_default();
         let jobs = !self.app.model().jobs.is_empty();
-        let operations_height = Operations::height(self.app.model());
+        let still = self.app.platform().reduce_motion();
+        let Some(w) = self.windows.get_mut(&window) else {
+            return;
+        };
         if !side.visible {
             if jobs {
+                let mut collapsed = w.drawer_collapsed;
+                let height = Operations::height(self.app.model(), collapsed);
                 egui::Panel::bottom(egui::Id::new(("operations", window.0)))
-                    .exact_size(operations_height)
+                    .exact_size(height)
+                    .frame(egui::Frame::NONE)
+                    .show_separator_line(false)
                     .show(ui, |ui| {
-                        self.operations
-                            .show(ui, self.app.model(), &mut self.requests);
+                        self.operations.show(
+                            ui,
+                            self.app.model(),
+                            &mut self.requests,
+                            &mut collapsed,
+                            still,
+                        );
                     });
+                w.drawer_collapsed = collapsed;
             }
             return;
         }
@@ -2962,23 +2980,18 @@ impl RickUi {
             PanelSide::Left => egui::Panel::left(egui::Id::new(("side", window.0))),
             PanelSide::Right => egui::Panel::right(egui::Id::new(("side", window.0))),
         };
-        let Some(w) = self.windows.get_mut(&window) else {
-            return;
-        };
         let shown = panel
-            .frame(egui::Frame::side_top_panel(ui.style()).fill(crate::theme::scheme(ui).bg_panel))
+            .frame(egui::Frame::new().fill(crate::theme::scheme(ui).bg_panel))
             .resizable(true)
             .default_size(f32::from(side.width))
             .size_range(120.0..=600.0)
             .show(ui, |ui| {
-                if jobs {
-                    egui::Panel::bottom(egui::Id::new(("operations", window.0)))
-                        .exact_size(operations_height)
-                        .show(ui, |ui| {
-                            self.operations
-                                .show(ui, self.app.model(), &mut self.requests);
-                        });
-                }
+                let panel_rect = ui.max_rect();
+                let height = if jobs {
+                    Operations::height(self.app.model(), w.drawer_collapsed)
+                } else {
+                    0.0
+                };
                 side_panel::show(
                     ui,
                     &self.app,
@@ -2987,7 +3000,29 @@ impl RickUi {
                     &mut self.side,
                     &mut self.requests,
                     &mut w.dnd,
+                    height,
                 );
+                if jobs {
+                    // Drawn after the lists, so it floats over their end.
+                    let drawer = egui::Rect::from_min_max(
+                        egui::pos2(panel_rect.left(), panel_rect.bottom() - height),
+                        panel_rect.max,
+                    );
+                    let mut child = ui.new_child(
+                        egui::UiBuilder::new()
+                            .max_rect(drawer)
+                            .layout(egui::Layout::top_down(egui::Align::Min)),
+                    );
+                    let mut collapsed = w.drawer_collapsed;
+                    self.operations.show(
+                        &mut child,
+                        self.app.model(),
+                        &mut self.requests,
+                        &mut collapsed,
+                        still,
+                    );
+                    w.drawer_collapsed = collapsed;
+                }
             });
         // The outer width is what egui restores from `default_size`, so it
         // is what persists; only once the pointer is up, so a drag writes
