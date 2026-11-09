@@ -3,7 +3,10 @@
 //! button, a click, a middle click, Mod+Tab and a drag along the row open,
 //! show, close, cycle and reorder them; a pane dropped on the row becomes
 //! a workspace of its own; and every tab and close button carries a name
-//! for a screen reader.
+//! for a screen reader. Issue 80, rules 7 and 8: a dragged tab is its own
+//! ghost, lifted with a shadow — riding the row, or off it anchored to the
+//! grab point — under the open hand before the drag and the closed hand
+//! during it.
 
 use std::fs;
 use std::path::Path;
@@ -310,4 +313,212 @@ fn a_pane_dropped_on_the_tab_row_becomes_a_workspace_of_its_own() {
     assert_eq!(model.workspaces(window)[1].dock, model::Dock::Pane(pane_b));
     assert_eq!(shown(&harness), 1);
     assert_eq!(titles(&harness), ["left-pane", "right-pane"]);
+}
+
+/// The cursor the last frame asked for.
+fn cursor(harness: &Harness<'_, RickUi>) -> egui::CursorIcon {
+    harness.output().platform_output.cursor_icon
+}
+
+/// Moves the pointer to `to` and runs a frame.
+fn move_to(harness: &mut Harness<'_, RickUi>, to: egui::Pos2) {
+    harness.event(egui::Event::PointerMoved(to));
+    harness.step();
+}
+
+/// Presses or releases the primary button at `pos` and runs a frame.
+fn button(harness: &mut Harness<'_, RickUi>, pos: egui::Pos2, pressed: bool) {
+    harness.event(egui::Event::PointerButton {
+        pos,
+        button: egui::PointerButton::Primary,
+        pressed,
+        modifiers: egui::Modifiers::default(),
+    });
+    harness.step();
+}
+
+/// Whether the last frame painted a soft shadow under `rect`, in view: a
+/// blurred rectangle of its size, a few points lower, its middle not
+/// clipped away.
+fn shadow_under(harness: &Harness<'_, RickUi>, rect: egui::Rect) -> bool {
+    harness
+        .output()
+        .shapes
+        .iter()
+        .any(|clipped| match &clipped.shape {
+            egui::Shape::Rect(r) => {
+                r.blur_width > 0.0
+                    && (r.rect.width() - rect.width()).abs() < 0.01
+                    && (r.rect.left() - rect.left()).abs() < 0.01
+                    && r.rect.top() > rect.top()
+                    && r.rect.top() - rect.top() < 12.0
+                    && clipped.clip_rect.contains(r.rect.center())
+            }
+            _ => false,
+        })
+}
+
+/// Whether the last frame painted the text `title` inside `rect`, in view.
+fn titled(harness: &Harness<'_, RickUi>, rect: egui::Rect, title: &str) -> bool {
+    harness
+        .output()
+        .shapes
+        .iter()
+        .any(|clipped| match &clipped.shape {
+            egui::Shape::Text(text) => {
+                let at = text.galley.rect.translate(text.pos.to_vec2());
+                text.galley.job.text == title
+                    && rect.contains_rect(at)
+                    && clipped.clip_rect.contains(at.center())
+            }
+            _ => false,
+        })
+}
+
+/// Issue 80, rules 7 and 8 (SPEC.md *Workspace tabs*, *Drag ghost*): a tab
+/// shows the open hand over its body and not over its close button; a
+/// dragged tab is its own ghost, the tab itself lifted with a shadow —
+/// along the row it rides the row held where it was grabbed, off the row
+/// it follows the cursor with the grab point 8 px down and right of it and
+/// the row keeps no room for it — under the closed hand throughout; and
+/// released off the row inside the window it returns to its place.
+#[test]
+// One gesture from the hover to the release.
+#[allow(clippy::too_many_lines)]
+fn a_dragged_tab_is_its_own_ghost_lifted_with_a_shadow() {
+    let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+    let alpha = dir.path().join("alpha-folder");
+    let beta = dir.path().join("beta-folder");
+    fs::create_dir(&alpha).unwrap_or_else(|e| panic!("{e}"));
+    fs::create_dir(&beta).unwrap_or_else(|e| panic!("{e}"));
+    fs::write(alpha.join("a.txt"), "a").unwrap_or_else(|e| panic!("{e}"));
+    let mut harness = harness(&alpha, egui::vec2(1400.0, 800.0));
+    harness.get_by_label("New tab").click();
+    harness.step();
+    settle(&mut harness);
+    let pane = harness.state().app().model().focused;
+    command(
+        &mut harness,
+        app::Command::Navigate {
+            pane,
+            to: local(&beta),
+        },
+    );
+    let alpha_tab = tab_centre(&harness, "alpha-folder");
+    click_at(&mut harness, alpha_tab, egui::PointerButton::Primary);
+    settle(&mut harness);
+    assert_eq!(titles(&harness), ["alpha-folder", "beta-folder"]);
+    assert_eq!(shown(&harness), 0);
+    let row = harness
+        .state()
+        .tab_row()
+        .unwrap_or_else(|| panic!("no tab row"));
+    let tab = harness
+        .query_all_by_label("beta-folder")
+        .map(|n| n.rect())
+        .find(|r| row.contains(r.center()))
+        .unwrap_or_else(|| panic!("no beta tab"));
+
+    // Rule 8: the open hand over the tab's body, not over its close button.
+    move_to(&mut harness, tab.center());
+    harness.step();
+    assert_eq!(cursor(&harness), egui::CursorIcon::Grab);
+    let close = harness
+        .query_all_by_label("Close tab")
+        .map(|n| n.rect())
+        .find(|r| tab.contains(r.center()))
+        .unwrap_or_else(|| panic!("no close button on the beta tab"));
+    move_to(&mut harness, close.center());
+    harness.step();
+    assert_ne!(cursor(&harness), egui::CursorIcon::Grab);
+    assert_eq!(harness.state().drag_ghost(), None);
+
+    // Grabbed right of its middle and pulled along the row: the tab rides
+    // the row, the grab point under the cursor.
+    let grab = tab.center() + egui::vec2(30.0, 4.0);
+    move_to(&mut harness, grab);
+    button(&mut harness, grab, true);
+    for i in 1..=6u8 {
+        move_to(&mut harness, grab + egui::vec2(-8.0, 0.0) * f32::from(i));
+    }
+    let at = grab + egui::vec2(-48.0, 0.0);
+    harness.step();
+    let ghost = harness
+        .state()
+        .drag_ghost()
+        .unwrap_or_else(|| panic!("no ghost in the row"));
+    assert_eq!(ghost.of, ui_egui::drag::Dragged::Tab);
+    assert!(
+        (ghost.rect.size() - tab.size()).length() < 0.01,
+        "full size"
+    );
+    assert!(
+        (ghost.rect.min - (tab.min + egui::vec2(-48.0, 0.0))).length() < 0.01,
+        "{:?} rides the row from {tab:?}",
+        ghost.rect
+    );
+    assert!(
+        ((ghost.rect.min + (grab - tab.min)) - at).length() < 0.01,
+        "held where it was grabbed"
+    );
+    assert!(shadow_under(&harness, ghost.rect), "lifted with a shadow");
+    assert!(
+        titled(&harness, ghost.rect, "beta-folder"),
+        "the tab itself"
+    );
+    assert_eq!(cursor(&harness), egui::CursorIcon::Grabbing);
+    harness.get_by_label("Dragging tab beta-folder");
+    assert_eq!(shown(&harness), 0, "a drag does not activate the tab");
+
+    // Off the row, over the panes: the tab follows the cursor, its grab
+    // point 8 px down and right of it, and the row closes up behind it.
+    for stop in [
+        egui::pos2(at.x, row.bottom() + 40.0),
+        egui::pos2(900.0, 420.0),
+        egui::pos2(120.0, 600.0),
+    ] {
+        move_to(&mut harness, stop);
+        harness.step();
+        let ghost = harness
+            .state()
+            .drag_ghost()
+            .unwrap_or_else(|| panic!("no ghost at {stop:?}"));
+        assert_eq!(ghost.of, ui_egui::drag::Dragged::Tab);
+        assert!(
+            (ghost.rect.size() - tab.size()).length() < 0.01,
+            "full size"
+        );
+        let held = ghost.rect.min + (grab - tab.min);
+        assert!(
+            (held - (stop + ui_egui::drag::GHOST_OFFSET)).length() < 0.01,
+            "the grab point at {held:?}, the cursor at {stop:?}"
+        );
+        assert!(shadow_under(&harness, ghost.rect), "lifted with a shadow");
+        assert!(
+            titled(&harness, ghost.rect, "beta-folder"),
+            "the tab itself at {stop:?}"
+        );
+        assert_eq!(cursor(&harness), egui::CursorIcon::Grabbing, "at {stop:?}");
+        let plus = harness.get_by_label("New tab").rect();
+        assert!(
+            (plus.left() - tab.left()).abs() < 0.01,
+            "the row keeps no room: the new-tab button at {plus:?}"
+        );
+    }
+
+    // Released there, inside the window and off the row: back in its
+    // place, nothing shown that was not.
+    let end = egui::pos2(120.0, 600.0);
+    button(&mut harness, end, false);
+    settle(&mut harness);
+    assert_eq!(titles(&harness), ["alpha-folder", "beta-folder"]);
+    assert_eq!(shown(&harness), 0);
+    assert_eq!(harness.state().drag_ghost(), None);
+    assert_ne!(cursor(&harness), egui::CursorIcon::Grabbing);
+    let back = harness
+        .query_all_by_label("beta-folder")
+        .map(|n| n.rect())
+        .find(|r| row.contains(r.center()))
+        .unwrap_or_else(|| panic!("no beta tab"));
+    assert_eq!(back, tab, "the tab is where it was");
 }

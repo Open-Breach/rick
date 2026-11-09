@@ -3406,7 +3406,31 @@ Once answered, an entry keeps its number and gains a dated decision line.
     debug level and the item is still set up, since the desktops read
     the entry and the icons without the caches.
 
-291. (system integration, issue 120, 2026-11-09) §6.1 and §7.1: the
+291. (issue 80, rule 7, 2026-11-09) *Drag ghost*: "a real snapshot of the
+    grabbed pane … drawn at 70 % opacity". A picture of the frame would
+    give one even 70 %, but the backend delivers a screenshot for its
+    root viewport only (eframe 0.36 paints an immediate viewport with no
+    screenshot request), and every Rick window beyond the first is such a
+    viewport.
+    Assumed: the snapshot is the pane's own shapes, kept from the frame it
+    was grabbed in and painted again at a quarter, each shape at 70 %. It
+    is the same in every window and needs no frame of delay; where shapes
+    lie over one another — a name on a selected row — a little less than
+    30 % of what is under the ghost shows through, and the snapshot's
+    corners are cut square under the rounded border. A paint callback in
+    the pane is left out of its ghost.
+
+292. (issue 80, rule 7, 2026-11-09) *Drag ghost*: the ghost "moves rigidly
+    with the cursor". A window paints inside itself only: once the cursor
+    leaves the window a pane or a tab was dragged from, nothing of Rick
+    is under it to paint the ghost on, unless it is over another Rick
+    window.
+    Assumed for now: the ghost shows while the cursor is inside the
+    window the drag began in, and the closed hand alone follows the
+    cursor outside it; another window painting the ghost, and what shows
+    over the desktop, are part of rule 6 and are asked there.
+
+293. (system integration, issue 120, 2026-11-09) §6.1 and §7.1: the
     install location goes "through `ext-installer`", whose `install()`
     takes an archive; a started Rick is an unpacked folder and the
     archive may be gone.
@@ -3421,7 +3445,7 @@ Once answered, an entry keeps its number and gains a dated decision line.
     nothing written outside the app folder: the launcher entry, the
     icons and the `rick` command are items with switches of their own.
 
-292. (system integration, issue 120, 2026-11-09) §4 has plugins register
+294. (system integration, issue 120, 2026-11-09) §4 has plugins register
     subcommands and §6.1 has the core perform the install location
     through the plugin, but no command for it is named.
     Assumed: the installer declares `install-rick <folder> <version>`
@@ -3433,7 +3457,7 @@ Once answered, an entry keeps its number and gains a dated decision line.
     would otherwise point at the folder Rick was meant to leave. The
     command is listed by `rick --help` like any other.
 
-293. (system integration, issue 120, 2026-11-09) §6.1: "which moves Rick
+295. (system integration, issue 120, 2026-11-09) §6.1: "which moves Rick
     to `~/.local/opt/rick` … and relaunches from there"; the Figma row
     reads "Move Rick from ~/Downloads/rick-0.3.0 to ~/.local/opt/rick".
     The process that performs the row runs from the folder it would
@@ -3443,7 +3467,7 @@ Once answered, an entry keeps its number and gains a dated decision line.
     folder again offers the row again, as an update of the installed
     copy.
 
-294. (system integration, issue 120, 2026-11-09) §6.1: "relaunches from
+296. (system integration, issue 120, 2026-11-09) §6.1: "relaunches from
     there", and §3: one Rick per user session, a launch that finds an
     instance hands over and exits. How the running Rick gives way to the
     installed one is not said.

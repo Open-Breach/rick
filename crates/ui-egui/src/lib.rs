@@ -34,6 +34,7 @@ pub mod content;
 pub mod dialog;
 pub mod dnd;
 pub mod dock;
+pub mod drag;
 pub mod fonts;
 pub mod format;
 pub mod frame;

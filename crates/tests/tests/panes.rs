@@ -2,7 +2,10 @@
 //! view options button and grab handle, no tab bar over a pane, and the
 //! view options menu — view modes, the hidden-files and folders-first
 //! switches, refresh, and the per-type filter that narrows the list and
-//! clears on navigation.
+//! clears on navigation. Issue 80, rules 7 and 8: the ghost of a dragged
+//! pane is its own snapshot at a quarter, anchored to the grab point, and
+//! the cursor is the open hand over the grip and the closed hand for the
+//! whole drag.
 
 use std::fs;
 use std::path::Path;
@@ -481,4 +484,231 @@ fn the_path_field_is_styled_selects_the_path_and_cancels_on_escape_or_focus_loss
             .map(|(_, t)| t.location.clone()),
         Some(location)
     );
+}
+
+/// The rectangle of `pane` in the last frame.
+fn rect_of(harness: &Harness<'_, RickUi>, pane: model::PaneId) -> egui::Rect {
+    harness
+        .state()
+        .pane_rects()
+        .iter()
+        .find(|(p, _)| *p == pane)
+        .map_or_else(|| panic!("no rect for {pane:?}"), |(_, r)| *r)
+}
+
+/// The cursor the last frame asked for.
+fn cursor(harness: &Harness<'_, RickUi>) -> egui::CursorIcon {
+    harness.output().platform_output.cursor_icon
+}
+
+/// Moves the pointer to `to` and runs a frame.
+fn move_to(harness: &mut Harness<'_, RickUi>, to: egui::Pos2) {
+    harness.event(egui::Event::PointerMoved(to));
+    harness.step();
+}
+
+/// Presses or releases the primary button at `pos` and runs a frame.
+fn button(harness: &mut Harness<'_, RickUi>, pos: egui::Pos2, pressed: bool) {
+    harness.event(egui::Event::PointerButton {
+        pos,
+        button: egui::PointerButton::Primary,
+        pressed,
+        modifiers: egui::Modifiers::default(),
+    });
+    harness.step();
+}
+
+/// Every text shape the last frame painted, with the rectangle it covers.
+fn texts(harness: &Harness<'_, RickUi>) -> Vec<(String, egui::Rect)> {
+    fn walk(shape: &egui::Shape, clip: egui::Rect, found: &mut Vec<(String, egui::Rect)>) {
+        match shape {
+            egui::Shape::Text(text) => {
+                let rect = text.galley.rect.translate(text.pos.to_vec2());
+                found.push((text.galley.job.text.clone(), rect.intersect(clip)));
+            }
+            egui::Shape::Vec(shapes) => {
+                for shape in shapes {
+                    walk(shape, clip, found);
+                }
+            }
+            _ => {}
+        }
+    }
+    let mut found = Vec::new();
+    for clipped in &harness.output().shapes {
+        walk(&clipped.shape, clipped.clip_rect, &mut found);
+    }
+    found
+}
+
+/// Issue 80, rules 7 and 8 (SPEC.md *Panes*, *Drag ghost*): the grip shows
+/// the open hand; while the pane is dragged by it the ghost is the pane's
+/// own snapshot, a quarter of its size at 70 % opacity inside a 1 px
+/// `border/strong` border, its scaled grip 8 px down and right of the
+/// cursor wherever the cursor goes; the cursor is the closed hand over
+/// everything, never an arrow; a screen reader is told of the drag; and a
+/// release beside the dock targets leaves the layout as it was.
+#[test]
+// One gesture from the hover to the release.
+#[allow(clippy::too_many_lines)]
+fn a_dragged_pane_is_followed_by_its_own_snapshot_and_the_closed_hand() {
+    let dir = tree();
+    let other = dir.path().join("sub");
+    fs::write(other.join("inside.txt"), "x").unwrap_or_else(|e| panic!("{e}"));
+    let mut harness = harness(dir.path(), egui::vec2(1400.0, 800.0));
+    harness.state_mut().app_mut().handle(
+        app::Command::Settings(SettingsChange::Theme(Theme::Light)),
+        &mut Vec::new(),
+    );
+    let pane_a = harness.state().app().model().focused;
+    harness.state_mut().app_mut().handle(
+        app::Command::Split {
+            pane: pane_a,
+            dir: model::SplitDir::Right,
+        },
+        &mut Vec::new(),
+    );
+    settle(&mut harness);
+    let pane_b = harness.state().app().model().focused;
+    assert_ne!(pane_b, pane_a);
+    harness.state_mut().app_mut().handle(
+        app::Command::Navigate {
+            pane: pane_b,
+            to: local(&other),
+        },
+        &mut Vec::new(),
+    );
+    settle(&mut harness);
+    let layout = harness.state().app().model().dock().clone();
+    let rect_a = rect_of(&harness, pane_a);
+    let rect_b = rect_of(&harness, pane_b);
+    let grip = harness
+        .query_all_by_label("Drag pane")
+        .map(|n| n.rect())
+        .find(|r| rect_b.contains(r.center()))
+        .unwrap_or_else(|| panic!("no handle in pane B"));
+
+    // Rule 8: the open hand over the grip, and no ghost before a drag.
+    move_to(&mut harness, grip.center());
+    harness.step();
+    assert_eq!(cursor(&harness), egui::CursorIcon::Grab);
+    assert_eq!(harness.state().drag_ghost(), None);
+
+    // Grabbed a little off the grip's centre, so the anchor is told from it.
+    let grab = grip.center() + egui::vec2(3.0, -4.0);
+    move_to(&mut harness, grab);
+    button(&mut harness, grab, true);
+    for i in 1..=4u8 {
+        move_to(&mut harness, grab + egui::vec2(-4.0, 3.0) * f32::from(i));
+    }
+
+    // Where the cursor goes: over the other pane's list, its column
+    // header, its filter field, the title row, the side panel, and back
+    // over the dragged pane itself.
+    let tab_a = harness
+        .state()
+        .app()
+        .model()
+        .active_tab(pane_a)
+        .map_or_else(|| panic!("tab a"), |(id, _)| id);
+    let boundary = harness.state().column_boundaries(tab_a);
+    let band = harness
+        .state()
+        .header_band(tab_a)
+        .unwrap_or_else(|| panic!("no header band"));
+    let footer = harness
+        .state()
+        .footer_row(tab_a)
+        .unwrap_or_else(|| panic!("no footer"));
+    let row = harness
+        .state()
+        .tab_row()
+        .unwrap_or_else(|| panic!("no tab row"));
+    let stops = [
+        rect_a.center() + egui::vec2(-130.0, 150.0),
+        egui::pos2(boundary[0], band.center().y),
+        egui::pos2(footer.right() - 60.0, footer.center().y),
+        egui::pos2(row.right() - 20.0, row.center().y - 3.0),
+        egui::pos2(40.0, 300.0),
+        rect_b.center() + egui::vec2(20.0, 200.0),
+    ];
+    let scheme = ui_egui::theme::Scheme::LIGHT;
+    let size = rect_b.size() * ui_egui::drag::GHOST_SCALE;
+    let anchor = (grab - rect_b.min) * ui_egui::drag::GHOST_SCALE;
+    for stop in stops {
+        move_to(&mut harness, stop);
+        harness.step();
+        // Rule 8: the closed hand, whatever is under the cursor.
+        assert_eq!(cursor(&harness), egui::CursorIcon::Grabbing, "at {stop:?}");
+
+        // Rule 7: a quarter of the pane, its scaled grab point 8 px down
+        // and right of the cursor (on the pixel grid).
+        let ghost = harness
+            .state()
+            .drag_ghost()
+            .unwrap_or_else(|| panic!("no ghost at {stop:?}"));
+        assert_eq!(ghost.of, ui_egui::drag::Dragged::Pane);
+        assert!(
+            (ghost.rect.size() - size).length() < 0.01,
+            "{:?} is a quarter of {rect_b:?}",
+            ghost.rect
+        );
+        let held = ghost.rect.min + anchor;
+        let wanted = stop + ui_egui::drag::GHOST_OFFSET;
+        assert!(
+            (held - wanted).abs().max_elem() <= 0.5,
+            "the grip of the ghost at {held:?}, the cursor at {stop:?}"
+        );
+
+        // The pane itself, scaled: its file name and its breadcrumb are
+        // in the ghost, a quarter as tall as text is, and so is far more
+        // than a title and five bars.
+        assert!(ghost.shapes > 20, "{} shapes", ghost.shapes);
+        let small: Vec<(String, egui::Rect)> = texts(&harness)
+            .into_iter()
+            .filter(|(_, r)| ghost.rect.expand(0.5).contains_rect(*r) && r.height() < 6.0)
+            .collect();
+        for name in ["inside.txt", "sub"] {
+            assert!(
+                small.iter().any(|(text, _)| text == name),
+                "{name} in the ghost at {stop:?}: {small:?}"
+            );
+        }
+
+        // Its frame: the 1 px border/strong border at 70 %.
+        let border = harness
+            .output()
+            .shapes
+            .iter()
+            .find_map(|clipped| match &clipped.shape {
+                egui::Shape::Rect(r)
+                    if (r.rect.min - ghost.rect.min).length() < 0.01
+                        && (r.rect.size() - size).length() < 0.01
+                        && r.stroke.width > 0.0 =>
+                {
+                    Some(r.stroke)
+                }
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("no border around the ghost at {stop:?}"));
+        assert!((border.width - 1.0).abs() < 0.01);
+        let faded = scheme
+            .border_strong
+            .gamma_multiply(ui_egui::drag::GHOST_OPACITY);
+        assert_eq!(border.color, faded, "border/strong at 70 %");
+
+        // What a screen reader is told.
+        harness.get_by_label("Dragging pane sub");
+    }
+
+    // Released beside the dock targets: nothing moved, the ghost is gone
+    // and so is the closed hand.
+    let away = egui::pos2(rect_a.center().x, rect_a.bottom() - 60.0);
+    move_to(&mut harness, away);
+    button(&mut harness, away, false);
+    settle(&mut harness);
+    assert_eq!(*harness.state().app().model().dock(), layout);
+    assert_eq!(harness.state().drag_ghost(), None);
+    assert_ne!(cursor(&harness), egui::CursorIcon::Grabbing);
+    assert!(harness.query_by_label("Dragging pane sub").is_none());
 }
