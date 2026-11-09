@@ -7050,6 +7050,7 @@ dependencies = [
  "ext-vfs-gcs",
  "ext-vfs-s3",
  "ext-vfs-trash",
+ "model",
  "ops",
  "platform",
  "plugins-native",

@@ -68,6 +68,7 @@ types = { workspace = true }
 platform = { workspace = true }
 ext = { workspace = true }
 vfs-local = { workspace = true }
+model = { workspace = true }
 app = { workspace = true }
 ui-egui = { workspace = true }
 plugins-native = { workspace = true }
@@ -105,7 +106,7 @@ anyhow = { workspace = true }
 clap = { workspace = true }
 # The single-instance endpoint's serving loop (`instance`): the timers and
 # the task handle, on the one runtime.
-tokio = { workspace = true, features = ["time", "rt"] }
+tokio = { workspace = true, features = ["time", "rt", "sync"] }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 

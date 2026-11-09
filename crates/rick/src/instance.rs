@@ -142,6 +142,109 @@ pub fn dispatch(app: &mut App, events: &mut Vec<Event>, request: &Request) -> Re
     }
 }
 
+/// `Command::Activate` with the launcher's token: the window that shows
+/// what a launch asked for comes forward.
+fn activate(app: &mut App, events: &mut Vec<Event>, token: Option<&str>) {
+    app.handle(
+        Command::Activate {
+            token: token.map(str::to_owned),
+        },
+        events,
+    );
+}
+
+/// `rick [--new-window] <target>…`: a tab per folder, the first in a
+/// window of its own with `new_window`.
+fn open(
+    app: &mut App,
+    events: &mut Vec<Event>,
+    targets: Vec<Target>,
+    new_window: bool,
+    token: Option<&str>,
+) -> Reply {
+    tracing::info!(new_window, ?targets, "open from the command line");
+    // A `rick://` URL names an existing folder, to open, or an existing
+    // file, to reveal; anything else is an error toast in the window and
+    // nothing opens for it.
+    let mut first = true;
+    let mut reveal: Vec<Location> = Vec::new();
+    let mut problems: Vec<String> = Vec::new();
+    for target in targets {
+        let folder = match target {
+            Target::Path(path) => Some(path),
+            Target::Url(url) => match platform::paths::from_uri(&url, "rick") {
+                Some(path) if path.is_dir() => Some(path),
+                Some(path) if path.is_file() => {
+                    reveal.push(location(&path));
+                    None
+                }
+                _ => {
+                    problems.push(url);
+                    None
+                }
+            },
+        };
+        if let Some(path) = folder {
+            if first && new_window {
+                app.handle(Command::NewWindowAt(location(&path)), events);
+            } else {
+                app.handle(Command::NewTab(location(&path)), events);
+            }
+            first = false;
+        }
+    }
+    if !reveal.is_empty() {
+        app.handle(
+            Command::Reveal {
+                items: reveal,
+                new_window: new_window && first,
+                properties: false,
+            },
+            events,
+        );
+        first = false;
+    }
+    let problems: Vec<String> = problems
+        .iter()
+        .map(|url| ext::t!("cli-url-not-local", url = url.as_str()))
+        .collect();
+    for text in &problems {
+        events.push(Event::Notify {
+            level: ext::Level::Error,
+            text: text.clone(),
+        });
+    }
+    if !first {
+        activate(app, events, token);
+    }
+    if problems.is_empty() {
+        Reply::ok(None)
+    } else {
+        Reply::failed(EXIT_FAILED, problems.join("\n"))
+    }
+}
+
+/// `Command::Reveal` for `files`, then the window's activation.
+fn reveal(
+    app: &mut App,
+    events: &mut Vec<Event>,
+    files: &[PathBuf],
+    new_window: bool,
+    properties: bool,
+    token: Option<&str>,
+) -> Reply {
+    app.handle(
+        Command::Reveal {
+            items: files.iter().map(|f| location(f)).collect(),
+            new_window,
+            properties,
+        },
+        events,
+    );
+    activate(app, events, token);
+    Reply::ok(None)
+}
+
 /// Applies a parsed command line to the application
 /// (specs/system-integration.md §3): the paths open as tabs of the most
 /// recently focused window, the first in a window of its own with
@@ -158,92 +261,14 @@ pub fn apply(
     cwd: &Path,
     token: Option<&str>,
 ) -> Reply {
-    let activate = |app: &mut App, events: &mut Vec<Event>| {
-        app.handle(
-            Command::Activate {
-                token: token.map(str::to_owned),
-            },
-            events,
-        );
-    };
     match parsed {
         Parsed::Open {
             targets,
             new_window,
-        } => {
-            tracing::info!(new_window, ?targets, "open from the command line");
-            // A `rick://` URL names an existing folder, to open, or an
-            // existing file, to reveal; anything else is an error toast in
-            // the window and nothing opens for it.
-            let mut first = true;
-            let mut reveal: Vec<Location> = Vec::new();
-            let mut problems: Vec<String> = Vec::new();
-            for target in targets {
-                let folder = match target {
-                    Target::Path(path) => Some(path),
-                    Target::Url(url) => match platform::paths::from_uri(&url, "rick") {
-                        Some(path) if path.is_dir() => Some(path),
-                        Some(path) if path.is_file() => {
-                            reveal.push(location(&path));
-                            None
-                        }
-                        _ => {
-                            problems.push(url);
-                            None
-                        }
-                    },
-                };
-                if let Some(path) = folder {
-                    if first && new_window {
-                        app.handle(Command::NewWindowAt(location(&path)), events);
-                    } else {
-                        app.handle(Command::NewTab(location(&path)), events);
-                    }
-                    first = false;
-                }
-            }
-            if !reveal.is_empty() {
-                app.handle(
-                    Command::Reveal {
-                        items: reveal,
-                        new_window: new_window && first,
-                        properties: false,
-                    },
-                    events,
-                );
-                first = false;
-            }
-            let problems: Vec<String> = problems
-                .iter()
-                .map(|url| ext::t!("cli-url-not-local", url = url.as_str()))
-                .collect();
-            for text in &problems {
-                events.push(Event::Notify {
-                    level: ext::Level::Error,
-                    text: text.clone(),
-                });
-            }
-            if !first {
-                activate(app, events);
-            }
-            if problems.is_empty() {
-                Reply::ok(None)
-            } else {
-                Reply::failed(EXIT_FAILED, problems.join("\n"))
-            }
-        }
+        } => open(app, events, targets, new_window, token),
         Parsed::Reveal { files, new_window } => {
             tracing::info!(new_window, ?files, "reveal from the command line");
-            app.handle(
-                Command::Reveal {
-                    items: files.iter().map(|f| location(f)).collect(),
-                    new_window,
-                    properties: false,
-                },
-                events,
-            );
-            activate(app, events);
-            Reply::ok(None)
+            reveal(app, events, &files, new_window, false, token)
         }
         Parsed::Plugin { name, args } => {
             tracing::info!(command = %name, ?args, "plugin command from the command line");
@@ -255,28 +280,100 @@ pub fn apply(
                 Some(Ok(Some(text))) => Reply::ok(Some(text)),
                 Some(Ok(None)) => {
                     // The command did something in the window: show it.
-                    activate(app, events);
+                    activate(app, events, token);
                     Reply::ok(None)
                 }
                 Some(Err(error)) => Reply::failed(EXIT_FAILED, format!("rick {name}: {error}")),
             }
         }
+        // The instance is up, which is all the bus's activation asked.
+        Parsed::Service => Reply::ok(None),
         Parsed::Help(text) | Parsed::Version(text) => Reply::ok(Some(text)),
     }
+}
+
+/// Runs a call of `org.freedesktop.FileManager1` against the application
+/// (specs/system-integration.md §4): the bus is one more entry point for
+/// the commands of the command line. `ShowItems` is `reveal`,
+/// `ShowFolders` opens each folder in a tab, `ShowItemProperties` reveals
+/// the items and opens Properties on them; the caller's startup id is the
+/// activation token the window is raised with. A URI that names no path
+/// of this computer is left out.
+pub fn show(app: &mut App, events: &mut Vec<Event>, call: &platform::file_manager::Call) -> Reply {
+    use platform::file_manager::Show;
+    let paths: Vec<PathBuf> = call
+        .uris
+        .iter()
+        .filter_map(|uri| platform::paths::from_uri(uri, "file"))
+        .collect();
+    tracing::info!(show = ?call.show, ?paths, "a call from the session bus");
+    if paths.is_empty() {
+        return Reply::ok(None);
+    }
+    let token = Some(call.startup_id.as_str()).filter(|id| !id.is_empty());
+    // The paths are absolute: there is no working directory to resolve
+    // against.
+    let cwd = Path::new("/");
+    match call.show {
+        Show::Items => apply(
+            app,
+            events,
+            Parsed::Reveal {
+                files: paths,
+                new_window: false,
+            },
+            cwd,
+            token,
+        ),
+        Show::Folders => apply(
+            app,
+            events,
+            Parsed::Open {
+                targets: paths.into_iter().map(Target::Path).collect(),
+                new_window: false,
+            },
+            cwd,
+            token,
+        ),
+        Show::ItemProperties => reveal(app, events, &paths, false, true, token),
+    }
+}
+
+/// Who takes the calls of `org.freedesktop.FileManager1`: each runs on
+/// the application's thread between two frames, like a second launch's
+/// command line.
+#[must_use]
+pub fn bus_calls(externals: ExternalSender) -> platform::file_manager::OnCall {
+    std::sync::Arc::new(move |call| {
+        let queued = externals.send(Box::new(move |app, events| {
+            let reply = show(app, events, &call);
+            if reply.status != 0 {
+                tracing::warn!(status = reply.status, text = ?reply.text, "a bus call failed");
+            }
+        }));
+        if !queued {
+            tracing::debug!("a bus call arrived while the instance was shutting down");
+        }
+    })
 }
 
 /// Serves the endpoint for the rest of the process: every connection's
 /// request goes to the application's thread through `externals`, and the
 /// reply comes back the same way. A connection that sends nothing within
 /// [`PATIENCE`] is dropped. Returns the task, to abort at exit.
+/// `on_service` is told when a launch hands over `--dbus-service`.
 #[must_use]
-pub fn serve(mut listener: Listener, externals: ExternalSender) -> tokio::task::JoinHandle<()> {
+pub fn serve(
+    mut listener: Listener,
+    externals: ExternalSender,
+    on_service: Option<OnService>,
+) -> tokio::task::JoinHandle<()> {
     runtime::handle().spawn(async move {
         loop {
             match listener.accept().await {
                 Ok(connection) => {
                     let externals = externals.clone();
-                    runtime::handle().spawn(answer(connection, externals));
+                    runtime::handle().spawn(answer(connection, externals, on_service.clone()));
                 }
                 Err(error) => {
                     tracing::warn!(%error, "the single-instance endpoint failed to accept");
@@ -288,9 +385,18 @@ pub fn serve(mut listener: Listener, externals: ExternalSender) -> tokio::task::
     })
 }
 
+/// What the instance does when a launch hands it `--dbus-service`: the
+/// session bus started that launch because nobody owned
+/// `org.freedesktop.FileManager1`, so the instance takes the name now.
+pub type OnService = std::sync::Arc<dyn Fn() + Send + Sync>;
+
 /// One launch's connection: its request run on the application's thread,
 /// its reply written back.
-async fn answer(mut connection: Connection, externals: ExternalSender) {
+async fn answer(
+    mut connection: Connection,
+    externals: ExternalSender,
+    on_service: Option<OnService>,
+) {
     let request = match connection.request(PATIENCE).await {
         Ok(request) => request,
         Err(error) => {
@@ -298,6 +404,14 @@ async fn answer(mut connection: Connection, externals: ExternalSender) {
             return;
         }
     };
+    if let Some(on_service) = on_service
+        && request
+            .argv
+            .iter()
+            .any(|arg| arg == platform::file_manager::SERVICE_ARGUMENT)
+    {
+        on_service();
+    }
     let (tx, rx) = oneshot::channel();
     let queued = externals.send(Box::new(move |app, events| {
         let reply = dispatch(app, events, &request);
