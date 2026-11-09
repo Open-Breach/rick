@@ -3505,6 +3505,10 @@ impl TabViewer for Viewer<'_> {
                 self.previews,
                 self.inspector_state,
                 self.requests,
+                &mut inspector::Handle {
+                    drag: PaneDrag { tab: *tab, pane },
+                    slot: self.pane_drag,
+                },
             );
             if close {
                 self.requests

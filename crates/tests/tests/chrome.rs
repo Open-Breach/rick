@@ -703,3 +703,73 @@ fn side_panel_visible(harness: &Harness<'_, RickUi>) -> bool {
         .window(model.focused_window)
         .is_some_and(|w| w.side_panel.visible)
 }
+
+/// Issue 79 items 2 and 3: the preview pane's toolbar is the explorer
+/// toolbar's height and ends in the same grab handle after a hairline,
+/// and the handle drags the pane like any other's (SPEC.md *Preview*:
+/// "with the same toolbar height, handle and footer").
+#[test]
+fn the_preview_toolbar_is_the_explorers_height_and_its_handle_drags_the_pane() {
+    let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+    let folder = dir.path().join("photos");
+    fs::create_dir(&folder).unwrap_or_else(|e| panic!("{e}"));
+    let mut harness = harness(&folder, egui::vec2(1400.0, 800.0));
+    let explorer = harness.state().app().model().focused;
+    harness
+        .state_mut()
+        .queue(ui_egui::Intent::ToggleInspector, explorer);
+    harness.step();
+    harness.step();
+    settle(&mut harness);
+    let window = harness.state().window_ids()[0];
+    let model = harness.state().app().model();
+    let preview_tab = model
+        .preview_tab(window)
+        .unwrap_or_else(|| panic!("no preview tab"));
+    let preview = model
+        .pane_of(preview_tab)
+        .unwrap_or_else(|| panic!("no preview pane"));
+    let density = model.settings.density;
+
+    // The toolbar row is the explorer toolbar's height, and the handle
+    // sits at its right end inside the pane, the width of every handle.
+    let rects = harness.state().preview_rects();
+    let toolbar = rects
+        .toolbar
+        .unwrap_or_else(|| panic!("no preview toolbar"));
+    assert!(
+        (toolbar.height() - ui_egui::toolbar_height(density)).abs() < 0.5,
+        "toolbar {toolbar:?} for {density:?}"
+    );
+    let handle = rects.handle.unwrap_or_else(|| panic!("no handle"));
+    let preview_rect = rect_of(&harness, preview);
+    assert!(
+        toolbar.expand(0.5).contains_rect(handle) && preview_rect.contains_rect(handle),
+        "handle {handle:?} in toolbar {toolbar:?} of pane {preview_rect:?}"
+    );
+    assert!((handle.width() - ui_egui::HANDLE_WIDTH).abs() < 0.5);
+    assert!(
+        preview_rect.right() - handle.right() < 20.0,
+        "at the right end: {handle:?} in {preview_rect:?}"
+    );
+    let grip = handle_of(&harness, preview);
+    assert!((grip - handle.center()).length() < 1.0, "named Drag pane");
+
+    // Dragging it onto the explorer's left tile docks the preview to the
+    // left of the explorer.
+    let rect_a = rect_of(&harness, explorer);
+    drag(&mut harness, grip, tile(rect_a, -1.0, 0.0));
+    let model = harness.state().app().model();
+    let home = model
+        .pane_of(preview_tab)
+        .unwrap_or_else(|| panic!("preview tab lost"));
+    assert_eq!(
+        *model.dock(),
+        model::Dock::split_of(
+            model::SplitDir::Right,
+            model::Dock::Pane(home),
+            model::Dock::Pane(explorer),
+        ),
+        "the preview is left of the explorer"
+    );
+}

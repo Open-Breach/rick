@@ -239,6 +239,7 @@ panel-fold-section = Fold { $section }
 panel-unfold-section = Unfold { $section }
 panel-add = Add…
 panel-add-connection = Add connection…
+panel-eject = Eject { $name }
 overview-no = No
 deny = Deny
 properties-user = (user)

@@ -2944,7 +2944,19 @@ Once answered, an entry keeps its number and gains a dated decision line.
     console, ssh, archive) with a puzzle piece otherwise, manifests having
     no icon.
 
-254. (preview formats, 2026-11-09) *Vector images* gives an SVG "the
+254. (design refresh fix round 1, 2026-11-09) *Footer*: "one row at the
+    foot of every pane, as tall as the toolbar (`button/size` plus twice
+    `space/toolbar-y`)"; the three *Rick — refined* frames draw the status
+    bar 39 px tall in Comfortable and 35 in Compact — the 26 px filter
+    field with `space/toolbar-y` above and below it under the hairline —
+    and the hidden-files toggle 26 px like the field, not `button/size`;
+    issue 79 item 4 asks for the Figma height.
+    Assumed: the footer takes the frames' height, the hairline, the field
+    and the toolbar padding (`Metrics::footer_height`), the toggle is the
+    field's 26 px, and the preview pane's footer follows; the spec's "as
+    tall as the toolbar" is for the author to reword.
+
+255. (preview formats, 2026-11-09) *Vector images* gives an SVG "the
     raster images' Fit and 1:1 plus the *Rendered* toggle", makes its
     source the text layer, and shows transparent regions "over the
     checkerboard raster images with alpha use". The pane offers Fit and
@@ -2960,7 +2972,7 @@ Once answered, an entry keeps its number and gains a dated decision line.
     "a raster is any document whose frames are pixels", one change in the
     pane for the design refresh, with the checkerboard.
 
-255. (preview formats, 2026-11-09) *Vector images*: "*Copy* copies the raw
+256. (preview formats, 2026-11-09) *Vector images*: "*Copy* copies the raw
     SVG as text — decompressed for SVGZ". *Copy* is the app's: it reads the
     whole file itself (the whole file, not the window the pane loaded) and
     decodes the bytes as text, so it never asks the previewer what the text

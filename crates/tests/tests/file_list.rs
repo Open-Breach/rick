@@ -167,3 +167,119 @@ fn the_loading_portal_stands_still_under_reduce_motion() {
     // repaint of its own: a frame settles.
     harness.get_by_label("This folder is empty");
 }
+
+/// The x positions of the vertical hairlines painted inside `band` in the
+/// last frame: the header's separators, in order.
+fn separators_in(harness: &Harness<'_, RickUi>, band: egui::Rect) -> Vec<f32> {
+    fn walk(shape: &egui::Shape, band: egui::Rect, xs: &mut Vec<f32>) {
+        match shape {
+            egui::Shape::LineSegment { points, .. }
+                if (points[0].x - points[1].x).abs() < 0.5
+                    && band.x_range().contains(points[0].x)
+                    && band.y_range().contains(points[0].y)
+                    && band.y_range().contains(points[1].y) =>
+            {
+                xs.push(points[0].x);
+            }
+            egui::Shape::Vec(shapes) => {
+                for shape in shapes {
+                    walk(shape, band, xs);
+                }
+            }
+            _ => {}
+        }
+    }
+    let mut xs = Vec::new();
+    for clipped in &harness.output().shapes {
+        if clipped.clip_rect.intersects(band) {
+            walk(&clipped.shape, band, &mut xs);
+        }
+    }
+    xs.sort_by(f32::total_cmp);
+    xs.dedup_by(|a, b| (*a - *b).abs() < 1.0);
+    xs
+}
+
+/// Presses at `from`, moves to `to` in steps and releases.
+fn drag(harness: &mut Harness<'_, RickUi>, from: egui::Pos2, to: egui::Pos2) {
+    harness.event(egui::Event::PointerMoved(from));
+    harness.step();
+    harness.event(egui::Event::PointerButton {
+        pos: from,
+        button: egui::PointerButton::Primary,
+        pressed: true,
+        modifiers: egui::Modifiers::default(),
+    });
+    harness.step();
+    for i in 1..=12u8 {
+        let t = f32::from(i) / 12.0;
+        harness.event(egui::Event::PointerMoved(from + (to - from) * t));
+        harness.step();
+    }
+    harness.event(egui::Event::PointerButton {
+        pos: to,
+        button: egui::PointerButton::Primary,
+        pressed: false,
+        modifiers: egui::Modifiers::default(),
+    });
+    harness.step();
+    harness.step();
+}
+
+/// Issue 79 item 6: a separator stands between every pair of titles, not
+/// only between Size and Type, and every column resizes by its boundary,
+/// Name included; the last column takes the remaining width.
+#[test]
+fn every_column_resizes_name_included_and_every_boundary_has_a_separator() {
+    let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+    for name in ["a.txt", "b.svg"] {
+        fs::write(dir.path().join(name), name).unwrap_or_else(|e| panic!("{e}"));
+    }
+    let fake = Arc::new(Fake::new().unwrap_or_else(|e| panic!("{e}")));
+    let mut harness = harness(dir.path(), &fake);
+    let model = harness.state().app().model();
+    let (tab, _) = model
+        .active_tab(model.focused)
+        .unwrap_or_else(|| panic!("tab"));
+    let band = harness
+        .state()
+        .header_band(tab)
+        .unwrap_or_else(|| panic!("no header band"));
+    let separators = separators_in(&harness, band);
+    assert_eq!(
+        separators.len(),
+        3,
+        "Name|Size, Size|Type and Type|Modified: {separators:?}"
+    );
+    let size = title_x(&harness, band, "Size");
+    let kind = title_x(&harness, band, "Type");
+    let modified = title_x(&harness, band, "Modified");
+    assert!(separators[0] < size && size < separators[1]);
+    assert!(separators[1] < kind && kind < separators[2]);
+    assert!(separators[2] < modified);
+
+    // Name grows by 60 px: Size, Type and Modified move right together
+    // and Modified, the last column, gives the room.
+    let from = egui::pos2(separators[0], band.center().y);
+    drag(&mut harness, from, from + egui::vec2(60.0, 0.0));
+    let moved = separators_in(&harness, band);
+    assert_eq!(moved.len(), 3, "{moved:?}");
+    assert!(
+        (moved[0] - separators[0] - 60.0).abs() < 2.0,
+        "Name|Size {separators:?} -> {moved:?}"
+    );
+    assert!((title_x(&harness, band, "Size") - size - 60.0).abs() < 2.0);
+    assert!((title_x(&harness, band, "Type") - kind - 60.0).abs() < 2.0);
+    assert!((title_x(&harness, band, "Modified") - modified - 60.0).abs() < 2.0);
+
+    // Type shrinks by 30 px from its right boundary: only Modified moves.
+    let from = egui::pos2(moved[2], band.center().y);
+    drag(&mut harness, from, from - egui::vec2(30.0, 0.0));
+    let shrunk = separators_in(&harness, band);
+    assert!(
+        (shrunk[2] - moved[2] + 30.0).abs() < 2.0,
+        "Type|Modified {moved:?} -> {shrunk:?}"
+    );
+    assert!((title_x(&harness, band, "Type") - kind - 60.0).abs() < 2.0);
+    assert!((title_x(&harness, band, "Modified") - modified - 30.0).abs() < 2.0);
+}

@@ -726,14 +726,12 @@ fn fitted_frames_are_centred_and_actual_size_pans_by_dragging() {
         "fitted into the pane: {frame:?} in {content:?}"
     );
 
-    // The status bar is a body-text row, like the file list's status line.
+    // The status bar is the explorer footer's height (issue 79 item 4).
     let status = rects.status.unwrap_or_else(|| panic!("status"));
-    let body = egui::TextStyle::Body
-        .resolve(&harness.ctx.style_of(egui::Theme::Light))
-        .size;
+    let footer = ui_egui::footer_height(model::Density::Comfortable);
     assert!(
-        status.height() >= body + 5.0,
-        "status {status:?} for body {body}"
+        (status.height() - footer).abs() < 0.5,
+        "status {status:?} against {footer}"
     );
 
     // 1:1: the picture is wider than the pane and dragging it pans.

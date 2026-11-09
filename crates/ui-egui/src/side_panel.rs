@@ -55,6 +55,8 @@ const CARD_GAP: f32 = 6.0;
 /// A drive card's height in Comfortable and in Compact.
 const DRIVE_CARD: f32 = 44.0;
 const DRIVE_CARD_COMPACT: f32 = 26.0;
+/// The hit area of a drive card's eject button, around its 16 px glyph.
+const EJECT_HIT: f32 = 24.0;
 /// The air above and below a section header (SPEC.md *Section headers*).
 const SECTION_AIR_ABOVE: f32 = 18.0;
 const SECTION_AIR_BELOW: f32 = 6.0;
@@ -1441,8 +1443,10 @@ fn section_header(
 /// corners, 44 px tall in Comfortable — the drive's icon at the left, the
 /// name with the utilisation percentage at the right end of the first line,
 /// a 4 px usage bar under them — and 26 px in Compact, one line: icon,
-/// name, bar, percentage. A click opens the drive's root; Eject is in the
-/// context menu of removable media.
+/// name, bar, percentage. A removable drive carries the eject button at
+/// the card's right edge, vertically centred and always visible (issue 79
+/// item 7), and the rest of the row ends before it. A click opens the
+/// drive's root; Eject is in the context menu of removable media too.
 #[allow(clippy::too_many_lines)]
 fn drive_card(
     ui: &mut egui::Ui,
@@ -1466,8 +1470,17 @@ fn drive_card(
     );
     ui.add_space(CARD_GAP);
     let rect = inset(outer);
+    ui.painter()
+        .rect_filled(rect, CARD_RADIUS, scheme.bg_subtle);
+    // The eject button first, over the card and before the painter the
+    // rest of the row draws with; the row's content ends before it.
+    let mut right = rect.right() - metrics.space_row_x;
+    let removable = volume.is_removable();
+    let eject = removable.then(|| eject_button(ui, rect, right, &volume.name));
+    if removable {
+        right -= ICON + ICON_GAP;
+    }
     let painter = ui.painter();
-    painter.rect_filled(rect, CARD_RADIUS, scheme.bg_subtle);
     let glyph_x = rect.left() + metrics.space_row_x;
     painter.text(
         egui::pos2(glyph_x + ICON / 2.0, rect.center().y),
@@ -1477,7 +1490,6 @@ fn drive_card(
         scheme.icon_default,
     );
     let label_x = glyph_x + ICON + ICON_GAP;
-    let right = rect.right() - metrics.space_row_x;
     let percent_text = percent(volume);
     let percent_galley = painter.layout_no_wrap(
         percent_text.clone(),
@@ -1575,7 +1587,10 @@ fn drive_card(
         state.take_focus(id);
     }
     let mount_point = volume.mount_point.clone();
-    let removable = volume.is_removable();
+    if eject.is_some_and(|eject| eject.clicked()) {
+        state.take_focus(id);
+        requests.push(Request::Command(Command::Eject(mount_point.clone())));
+    }
     response
         .on_hover_text(volume_hint(volume))
         .context_menu(|ui| {
@@ -1588,6 +1603,41 @@ fn drive_card(
                 ui.close();
             }
         });
+}
+
+/// The eject button of a removable drive's card: `EJECT` at the card's
+/// right edge (`right` is where the row's content ends), vertically
+/// centred, always visible; `bg/control` while hovered. Named *Eject
+/// <drive>* for the tooltip and the screen reader.
+fn eject_button(ui: &mut egui::Ui, card: egui::Rect, right: f32, name: &str) -> egui::Response {
+    let scheme = theme::scheme(ui);
+    let rect = egui::Rect::from_center_size(
+        egui::pos2(right - ICON / 2.0, card.center().y),
+        egui::vec2(EJECT_HIT, EJECT_HIT),
+    );
+    let response = ui.interact(
+        rect,
+        egui::Id::new(("side-eject", name)),
+        egui::Sense::click(),
+    );
+    if response.hovered() {
+        ui.painter().rect_filled(
+            rect,
+            theme::metrics(ui.ctx()).corner_radius(),
+            scheme.bg_control,
+        );
+    }
+    ui.painter().text(
+        rect.center(),
+        egui::Align2::CENTER_CENTER,
+        icons::EJECT,
+        egui::FontId::proportional(ICON),
+        scheme.icon_default,
+    );
+    let label = t!("panel-eject", name = name);
+    response
+        .widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, label.clone()));
+    response.on_hover_text(label)
 }
 
 /// The hover text of a drive: mount point, file system, free of total.

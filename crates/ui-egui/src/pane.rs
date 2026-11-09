@@ -12,12 +12,11 @@ use types::{EntryKind, Location};
 use crate::dnd::{self, Spring, Target, Zone};
 use crate::keys::Intent;
 use crate::shell::{PaneCx, PaneDrag, Request};
-use crate::theme::{self, ICON, TEXT_BODY, TEXT_CAPS, TEXT_SECONDARY};
-use crate::widgets::switch;
+use crate::theme::{self, FOOTER_CONTROL, ICON, TEXT_BODY, TEXT_CAPS, TEXT_SECONDARY};
+use crate::widgets::{divider, switch};
 use crate::{format, icons, paths, views};
 
-/// The grab handle's width.
-pub const HANDLE_WIDTH: f32 = 28.0;
+pub use crate::widgets::HANDLE_WIDTH;
 /// The view options button's width: the sliders and the caret.
 const VIEW_OPTIONS_WIDTH: f32 = 48.0;
 /// The view options menu card's width.
@@ -27,7 +26,7 @@ const MENU_ROW: f32 = 32.0;
 /// The parent chip's size.
 const CHIP: egui::Vec2 = egui::vec2(28.0, 26.0);
 /// The footer's filter field: 200 px wide, 26 px tall (SPEC.md *Footer*).
-const FILTER_FIELD: egui::Vec2 = egui::vec2(200.0, 26.0);
+const FILTER_FIELD: egui::Vec2 = egui::vec2(200.0, FOOTER_CONTROL);
 /// The padding inside the filter field.
 const FIELD_PAD: f32 = 8.0;
 /// The include-subfolders toggle inside the field's right end.
@@ -35,16 +34,24 @@ const FIELD_TOGGLE: f32 = 22.0;
 
 /// Draws the whole tab.
 pub fn show(ui: &mut egui::Ui, cx: &mut PaneCx<'_>) {
+    // No frame of its own: the toolbar sits on the pane's `bg/pane`, the
+    // active workspace tab's colour, so the tab reads as attached to its
+    // pane; only the column header band is tinted (SPEC.md *Workspace
+    // tabs*, *File list*). egui's panel frame would paint `bg/window`.
     egui::Panel::top(egui::Id::new(("toolbar", cx.tab_id)))
         .show_separator_line(false)
+        .frame(egui::Frame::NONE)
         .show(ui, |ui| toolbar(ui, cx));
     if cx.tab.failure.is_some() {
         egui::Panel::top(egui::Id::new(("failure", cx.tab_id)))
             .show_separator_line(true)
             .show(ui, |ui| failure_banner(ui, cx));
     }
+    // The footer paints its own hairline and sits on `bg/pane` like the
+    // toolbar: no panel frame, no second line.
     egui::Panel::bottom(egui::Id::new(("foot", cx.tab_id)))
-        .show_separator_line(true)
+        .show_separator_line(false)
+        .frame(egui::Frame::NONE)
         .show(ui, |ui| foot(ui, cx));
     egui::CentralPanel::no_frame().show(ui, |ui| views::show(ui, cx));
 }
@@ -89,21 +96,32 @@ pub fn toolbar_height(density: model::Density) -> f32 {
     crate::theme::Metrics::of(density).toolbar_height()
 }
 
+/// The footer row's height for a density: the hairline, the filter field
+/// and the toolbar padding above and below it (SPEC.md *Footer*,
+/// QUESTIONS.md 254).
+#[must_use]
+pub fn footer_height(density: model::Density) -> f32 {
+    crate::theme::Metrics::of(density).footer_height()
+}
+
 /// The toolbar: a fixed group of navigation icons on the left, a fixed group
 /// of view controls on the right, and the breadcrumb flexing in between,
-/// never overlapping either.
+/// never overlapping either; `space/toolbar-x` of padding at both ends
+/// (SPEC.md *Toolbar*).
 fn toolbar(ui: &mut egui::Ui, cx: &mut PaneCx<'_>) {
     cx.tab_ui.toolbar_rects.clear();
-    let height = toolbar_height(cx.app.model().settings.density);
+    let metrics = theme::metrics(ui.ctx());
+    let height = metrics.toolbar_height();
     let (row, _) = ui.allocate_exact_size(
         egui::vec2(ui.available_width(), height),
         egui::Sense::hover(),
     );
     cx.tab_ui.toolbar_row = Some(row);
+    let inner = row.shrink2(egui::vec2(metrics.space_toolbar_x, 0.0));
     // Left group, fixed.
     let mut left = ui.new_child(
         egui::UiBuilder::new()
-            .max_rect(row)
+            .max_rect(inner)
             .layout(egui::Layout::left_to_right(Align::Center)),
     );
     left_group(&mut left, cx);
@@ -111,7 +129,7 @@ fn toolbar(ui: &mut egui::Ui, cx: &mut PaneCx<'_>) {
     // Right group, fixed.
     let mut right = ui.new_child(
         egui::UiBuilder::new()
-            .max_rect(row)
+            .max_rect(inner)
             .layout(egui::Layout::right_to_left(Align::Center)),
     );
     right_group(&mut right, cx);
@@ -119,8 +137,8 @@ fn toolbar(ui: &mut egui::Ui, cx: &mut PaneCx<'_>) {
     // The breadcrumb gets what is left, clipped to it.
     let gap = ui.spacing().item_spacing.x;
     let middle = egui::Rect::from_min_max(
-        egui::pos2(left_edge + gap, row.top()),
-        egui::pos2((right_edge - gap).max(left_edge + gap), row.bottom()),
+        egui::pos2(left_edge + gap, inner.top()),
+        egui::pos2((right_edge - gap).max(left_edge + gap), inner.bottom()),
     );
     let mut centre = ui.new_child(
         egui::UiBuilder::new()
@@ -137,16 +155,6 @@ fn icon_button(ui: &mut egui::Ui, glyph: &str, enabled: bool) -> egui::Response 
         enabled,
         egui::Button::new(glyph).min_size(egui::vec2(size, size)),
     )
-}
-
-/// A 1 px hairline, `height` tall, centred in the row.
-fn divider(ui: &mut egui::Ui, height: f32) {
-    let (rect, _) = ui.allocate_exact_size(egui::vec2(1.0, height), egui::Sense::hover());
-    let x = rect.center().x.round() + 0.5;
-    ui.painter().line_segment(
-        [egui::pos2(x, rect.top()), egui::pos2(x, rect.bottom())],
-        theme::scheme(ui).hairline(),
-    );
 }
 
 fn remember(cx: &mut PaneCx<'_>, group: &'static str, rect: egui::Rect) {
@@ -176,46 +184,17 @@ fn right_group(ui: &mut egui::Ui, cx: &mut PaneCx<'_>) {
     view_options(ui, cx);
 }
 
-/// The pane's grab handle: a `HANDLE_WIDTH` wide ghost area with
-/// `DOTS_SIX_VERTICAL` at 70 % opacity; the grab cursor over it, the
-/// grabbing cursor while it drags the pane (SPEC.md *Panes*).
+/// The pane's grab handle ([`crate::widgets::pane_handle`]): dragging it
+/// starts the pane drag (SPEC.md *Panes*).
 fn handle(ui: &mut egui::Ui, cx: &mut PaneCx<'_>) {
-    let size = button_size(ui);
-    let (rect, response) = ui.allocate_exact_size(
-        egui::vec2(HANDLE_WIDTH, size),
-        egui::Sense::click_and_drag(),
-    );
-    response.widget_info(|| {
-        egui::WidgetInfo::labeled(egui::WidgetType::Button, true, t!("pane-drag-pane"))
-    });
-    remember(cx, "right", rect);
-    let scheme = theme::scheme(ui);
-    if response.hovered() || response.dragged() {
-        ui.painter().rect_filled(
-            rect,
-            theme::metrics(ui.ctx()).corner_radius(),
-            scheme.bg_subtle,
-        );
-    }
-    ui.painter().text(
-        rect.center(),
-        egui::Align2::CENTER_CENTER,
-        icons::HANDLE,
-        egui::FontId::proportional(ICON),
-        scheme.icon_default.gamma_multiply(0.7),
-    );
-    if response.dragged() {
-        ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
-    } else if response.hovered() {
-        ui.ctx().set_cursor_icon(egui::CursorIcon::Grab);
-    }
+    let response = crate::widgets::pane_handle(ui);
+    remember(cx, "right", response.rect);
     if response.drag_started() {
         *cx.pane_drag = Some(PaneDrag {
             tab: cx.tab_id,
             pane: cx.pane,
         });
     }
-    response.on_hover_text(t!("pane-drag-pane"));
 }
 
 /// The glyph of a view mode.
@@ -662,13 +641,19 @@ fn path_bar(ui: &mut egui::Ui, cx: &mut PaneCx<'_>, rect: egui::Rect) {
     breadcrumb(ui, cx, rect);
 }
 
-/// The breadcrumb as an editable text field.
+/// The breadcrumb as an editable text field: the control height of Back
+/// and Forward, on their line, the breadcrumb's whole width (SPEC.md
+/// *Path bar*; issue 79 item 5).
 fn path_edit(ui: &mut egui::Ui, cx: &mut PaneCx<'_>, rect: egui::Rect) {
+    remember(cx, "middle", rect);
+    let height = button_size(ui);
     let Some(text) = cx.tab_ui.path_edit.as_mut() else {
         return;
     };
     let output = egui::TextEdit::singleline(text)
         .desired_width(rect.width())
+        .min_size(egui::vec2(rect.width(), height))
+        .vertical_align(Align::Center)
         .show(ui);
     if cx.tab_ui.focus_path {
         output.response.request_focus();
@@ -916,14 +901,15 @@ fn crumb_zone(
     }
 }
 
-/// The footer (SPEC.md *Footer*): as tall as the toolbar, under a
-/// hairline, with `space/toolbar-x` padding. Left to right: the
-/// hidden-files toggle, the statistics, a divider and the selection pill
-/// while something is selected, the pane's note; the filter field at the
-/// right.
+/// The footer (SPEC.md *Footer*, QUESTIONS.md 254): the Figma status
+/// bar's height — a hairline, then the 26 px controls with the toolbar
+/// padding above and below — with `space/toolbar-x` padding. Left to
+/// right: the hidden-files toggle, the statistics, a divider and the
+/// selection pill while something is selected, the pane's note; the filter
+/// field at the right.
 fn foot(ui: &mut egui::Ui, cx: &mut PaneCx<'_>) {
     let metrics = theme::metrics(ui.ctx());
-    let height = metrics.toolbar_height();
+    let height = metrics.footer_height();
     let (row, _) = ui.allocate_exact_size(
         egui::vec2(ui.available_width(), height),
         egui::Sense::hover(),
@@ -974,13 +960,13 @@ fn foot(ui: &mut egui::Ui, cx: &mut PaneCx<'_>) {
     }
 }
 
-/// The hidden-files toggle, icon only: `EYE` on `bg/selected-soft` while
-/// hidden files are shown, `EYE_SLASH` as a ghost button while they are
-/// hidden.
+/// The hidden-files toggle, icon only and the filter field's 26 px: `EYE`
+/// on `bg/selected-soft` while hidden files are shown, `EYE_SLASH` as a
+/// ghost button while they are hidden.
 fn hidden_toggle(ui: &mut egui::Ui, cx: &mut PaneCx<'_>) {
     let shown = cx.tab.show_hidden;
     let scheme = theme::scheme(ui);
-    let size = button_size(ui);
+    let size = FOOTER_CONTROL;
     let (rect, response) = ui.allocate_exact_size(egui::vec2(size, size), egui::Sense::click());
     let radius = theme::metrics(ui.ctx()).corner_radius();
     let (glyph, colour) = if shown {

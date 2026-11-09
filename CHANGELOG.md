@@ -27,7 +27,7 @@ the pull request that brought the change.
   the parser's message, line and column, in the footer. Footer
   `SVG · 512 × 512 px · 14.2 KiB`, `viewBox 0 0 24 24` in place of the
   size when only a viewBox exists; File info plus an Image section
-  (QUESTIONS.md 254, 255) (#91).
+  (QUESTIONS.md 255, 256) (#91).
 
 ### Changed
 
@@ -229,6 +229,45 @@ the pull request that brought the change.
   pairs, and more colour comes as further schemes; an `accent` key in
   `rick.toml` is ignored and dropped on the next write (QUESTIONS.md 226)
   (#68).
+
+### Fixed
+
+- The pane toolbar sits on the pane's `bg/pane`, the active workspace
+  tab's colour, so the tab reads as attached to its pane and only the
+  column header band is tinted; egui's panel frame had painted it
+  `bg/window` like the title row. The row keeps `space/toolbar-x` of
+  padding at both ends, as the design has it, in place of the frame's
+  (issue 79 item 1).
+- The footer is the Figma status bar's height — the hairline, then the
+  26 px filter field with `space/toolbar-y` above and below it: 39 px
+  Comfortable, 35 px Compact — with the hidden-files toggle 26 px like
+  the field, and one hairline over it: egui's panel separator had drawn a
+  second line between the list and the footer, and the panel's margins
+  had made the row taller than the toolbar. The preview pane's footer
+  takes the same height and hairline (issue 79 item 4, QUESTIONS.md 254).
+- The preview pane's toolbar is the explorer toolbar's height, with
+  `space/toolbar-x` padding, and ends like every other pane's in the
+  hairline and the six-dot grab handle (`DOTS_SIX_VERTICAL`, named *Drag
+  pane*, the grab and grabbing cursors), which drags the pane onto the
+  dock tiles, the tab row or out of the window; it had been a 30 px row
+  with the close button alone. The handle and the hairline are one widget
+  shared with the explorer toolbar (`widgets::pane_handle`, `divider`)
+  (issue 79 items 2 and 3).
+- The path field, while the breadcrumb is being edited, is `button/size`
+  tall — the height of Back and Forward, on their line — and as wide as
+  the breadcrumb; it had hugged its text. Its look and the rest of the
+  editing rule are issue 79 item 10 (issue 79 item 5).
+- Every column of the details list resizes by the boundary after it, Name
+  included, and the last column takes the remaining width; the header
+  draws its separator at every boundary, where the previous code's
+  clipped cells had cut all but the one between Size and Type away. The
+  hover and drag visuals of the boundaries, the fit on double-click and
+  the widths' persistence are issue 79 item 9 (issue 79 item 6).
+- A removable drive's card in This Machine carries an eject button
+  (`EJECT`) at its right edge, vertically centred and always visible,
+  named *Eject <drive>* for the tooltip and the screen reader; a click
+  ejects the drive, as the context menu's *Eject* does. The usage bar's
+  colours and the read-only drives are issue 79 item 8 (issue 79 item 7).
 
 ## [0.2.0] - 2026-11-08
 

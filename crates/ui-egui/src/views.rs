@@ -23,6 +23,14 @@ const ROW_INSET: f32 = 6.0;
 /// row background, which is itself `ROW_INSET` from the pane's edge.
 const NAME_INSET: f32 = ROW_INSET + 6.0;
 
+/// The columns' first widths and Name's floor, in points; the last column
+/// takes what is left.
+const NAME_MIN: f32 = 140.0;
+const SIZE_WIDTH: f32 = 80.0;
+const TYPE_WIDTH: f32 = 110.0;
+const MODIFIED_WIDTH: f32 = 130.0;
+const EXTRA_WIDTH: f32 = 90.0;
+
 /// Indent per tree level, in points.
 const TREE_INDENT: f32 = 16.0;
 /// Width of the expand chevron's slot, in points.
@@ -672,6 +680,15 @@ pub fn details(ui: &mut egui::Ui, cx: &mut PaneCx<'_>) {
     }
     let row_x = egui::Rangef::new(outer.left() + ROW_INSET, outer.right() - ROW_INSET);
     let clip = ui.clip_rect();
+    // Every column resizes, Name included, and the last one takes the
+    // remaining width (issue 79 item 6): a resizable column keeps the
+    // width it was given, so Name starts at what the fixed columns leave
+    // on the first frame and the last column flexes from then on.
+    let spacing_x = ui.spacing().item_spacing.x;
+    let fixed: f32 = SIZE_WIDTH + TYPE_WIDTH + extra.len() as f32 * EXTRA_WIDTH;
+    let columns = 3 + extra.len();
+    let name_initial =
+        (outer.width() - fixed - MODIFIED_WIDTH - columns as f32 * spacing_x).max(NAME_MIN);
     let mut builder = TableBuilder::new(ui)
         .id_salt(("details", cx.tab_id))
         .striped(false)
@@ -679,19 +696,34 @@ pub fn details(ui: &mut egui::Ui, cx: &mut PaneCx<'_>) {
         .sense(Sense::click_and_drag())
         .auto_shrink([false, false])
         .cell_layout(egui::Layout::left_to_right(Align::Center))
-        // Name takes what the other columns leave; a resizable remainder
-        // column would keep its first width when the pane narrows.
         .column(
+            TableColumn::initial(name_initial)
+                .at_least(NAME_MIN)
+                .clip(true),
+        )
+        .column(TableColumn::initial(SIZE_WIDTH).at_least(50.0))
+        .column(TableColumn::initial(TYPE_WIDTH).at_least(60.0).clip(true));
+    if extra.is_empty() {
+        builder = builder.column(
             TableColumn::remainder()
-                .at_least(140.0)
+                .at_least(60.0)
                 .clip(true)
                 .resizable(false),
-        )
-        .column(TableColumn::initial(80.0).at_least(50.0))
-        .column(TableColumn::initial(110.0).at_least(60.0).clip(true))
-        .column(TableColumn::initial(130.0).at_least(60.0).clip(true));
-    for _ in &extra {
-        builder = builder.column(TableColumn::initial(90.0).at_least(40.0).clip(true));
+        );
+    } else {
+        builder = builder.column(
+            TableColumn::initial(MODIFIED_WIDTH)
+                .at_least(60.0)
+                .clip(true),
+        );
+        for (i, _) in extra.iter().enumerate() {
+            let column = if i + 1 == extra.len() {
+                TableColumn::remainder().at_least(40.0).resizable(false)
+            } else {
+                TableColumn::initial(EXTRA_WIDTH).at_least(40.0)
+            };
+            builder = builder.column(column.clip(true));
+        }
     }
     if cx.tab_ui.reset_columns {
         builder.reset();
@@ -706,6 +738,10 @@ pub fn details(ui: &mut egui::Ui, cx: &mut PaneCx<'_>) {
 
     let sort = cx.tab.sort;
     let mut sort_request = None;
+    // The right edge of every header cell, the cell's own rectangle: the
+    // separators are painted after the table, so a clipped cell cannot
+    // cut its own away.
+    let mut edges: Vec<f32> = Vec::with_capacity(columns + 1);
     let table = builder.header(COLUMN_HEADER, |mut row| {
         for (label, column) in [
             (t!("list-column-name"), Column::Name),
@@ -714,6 +750,7 @@ pub fn details(ui: &mut egui::Ui, cx: &mut PaneCx<'_>) {
             (t!("list-column-modified"), Column::Modified),
         ] {
             row.col(|ui| {
+                edges.push(ui.max_rect().right());
                 if column == Column::Name {
                     ui.add_space(NAME_INSET);
                 }
@@ -726,17 +763,16 @@ pub fn details(ui: &mut egui::Ui, cx: &mut PaneCx<'_>) {
                 } else if sort_header(ui, &label, column, sort) {
                     sort_request = Some(column);
                 }
-                header_separator(ui);
             });
         }
         for def in &extra {
             row.col(|ui| {
+                edges.push(ui.max_rect().right());
                 ui.label(
                     egui::RichText::new(def.label.get())
                         .size(TEXT_SECONDARY)
                         .color(theme::scheme(ui).text_secondary),
                 );
-                header_separator(ui);
             });
         }
     });
@@ -802,6 +838,7 @@ pub fn details(ui: &mut egui::Ui, cx: &mut PaneCx<'_>) {
         });
     });
     cx.tab_ui.scroll_offset = out.state.offset.y;
+    header_separators(ui, band, &edges);
     if let Some(outcome) = outcome {
         finish_edit(cx, outcome);
     }
@@ -1106,14 +1143,17 @@ pub fn badge_text(badge: Badge) -> egui::RichText {
         .strong()
 }
 
-/// The vertical hairline between column titles, at the right edge of a
-/// header cell, where the resize handle is: the only vertical separators
-/// of the list.
-fn header_separator(ui: &mut egui::Ui) {
-    let rect = ui.max_rect();
-    let x = rect.right() + ui.spacing().item_spacing.x / 2.0;
-    ui.painter()
-        .vline(x, rect.y_range().shrink(9.0), theme::scheme(ui).hairline());
+/// The vertical hairlines between column titles, one at every boundary
+/// where a resize handle is, in the header band and nowhere else: the
+/// only vertical separators of the list. `edges` are the header cells'
+/// right edges; the last one, the table's edge, gets none.
+fn header_separators(ui: &egui::Ui, band: egui::Rect, edges: &[f32]) {
+    let half_gap = ui.spacing().item_spacing.x / 2.0;
+    let stroke = theme::scheme(ui).hairline();
+    for right in edges.iter().take(edges.len().saturating_sub(1)) {
+        let x = (right + half_gap).round() + 0.5;
+        ui.painter().vline(x, band.y_range().shrink(9.0), stroke);
+    }
 }
 
 /// A column title in 12 px `text/secondary` with the sort glyph after the
