@@ -350,6 +350,10 @@ pub struct WindowUi {
     dnd: Dnd,
     /// The pane being dragged by its handle, with its tab.
     pane_drag: Option<PaneDrag>,
+    /// What the dragged pane looked like when it was grabbed: its ghost.
+    pane_ghost: Option<crate::drag::Snapshot>,
+    /// The drag ghost as this frame painted it, a pane's or a tab's.
+    ghost: Option<crate::drag::Ghost>,
     /// The content rectangle of the last frame, window coordinates.
     content: Option<egui::Rect>,
     /// The window's inner rectangle on the screen, from the last frame.
@@ -380,6 +384,8 @@ impl WindowUi {
             window_frame: None,
             dnd: Dnd::default(),
             pane_drag: None,
+            pane_ghost: None,
+            ghost: None,
             content: None,
             screen: None,
             tab_row: None,
@@ -473,6 +479,36 @@ fn paint_split_icon(
         }
     };
     painter.rect_filled(filled, 1.0, colour);
+}
+
+/// The dock targets over the pane at `rect`: the five tiles, the one of
+/// `hot` filled `accent/button`, and a translucent preview of the half a
+/// pane dropped there would take (SPEC.md *Panes*).
+fn paint_dock_cross(
+    overlay: &egui::Painter,
+    rect: egui::Rect,
+    hot: Option<DockZone>,
+    scheme: &crate::theme::Scheme,
+) {
+    if let Some(half) = hot.and_then(|zone| dock_half(rect, zone)) {
+        overlay.rect_filled(half, 0.0, scheme.accent_button.gamma_multiply(0.35));
+    }
+    for (zone, tile) in dock_tiles(rect) {
+        let lit = hot == Some(zone);
+        let fill = if lit {
+            scheme.accent_button
+        } else {
+            scheme.bg_card
+        };
+        overlay.rect_filled(tile, 8.0, fill);
+        overlay.rect_stroke(tile, 8.0, scheme.hairline(), egui::StrokeKind::Inside);
+        let colour = if lit {
+            crate::theme::Scheme::ON_BUTTON
+        } else {
+            scheme.icon_default
+        };
+        paint_split_icon(overlay, tile, zone, colour);
+    }
 }
 
 /// A workspace tab being dragged along the title row.
@@ -803,42 +839,6 @@ fn dock_style(egui_style: &egui::Style, scheme: &crate::theme::Scheme) -> egui_d
     style.tab.tab_body.hidden_tab_bar_drag_height = Some(0.0);
     style.buttons.show_tab_bar_size = 0.0;
     style
-}
-
-/// The ghost card that follows a dragged pane: its title over skeleton
-/// rows, a `bg/card` card with a soft shadow.
-fn ghost_card(painter: &egui::Painter, at: egui::Pos2, title: &str, scheme: &crate::theme::Scheme) {
-    let rect = egui::Rect::from_min_size(at, egui::vec2(220.0, 140.0));
-    let shadow = egui::epaint::Shadow {
-        offset: [0, 6],
-        blur: 18,
-        spread: 0,
-        color: scheme.shadow(),
-    };
-    painter.add(shadow.as_shape(rect, crate::theme::CARD_RADIUS));
-    painter.rect_filled(rect, crate::theme::CARD_RADIUS, scheme.bg_card);
-    painter.rect_stroke(
-        rect,
-        crate::theme::CARD_RADIUS,
-        scheme.hairline(),
-        egui::StrokeKind::Inside,
-    );
-    painter.text(
-        rect.min + egui::vec2(12.0, 14.0),
-        egui::Align2::LEFT_CENTER,
-        title,
-        egui::FontId::proportional(crate::theme::TEXT_BODY),
-        scheme.text_primary,
-    );
-    for (i, width) in [150.0, 130.0, 140.0, 110.0, 120.0].into_iter().enumerate() {
-        #[allow(clippy::cast_precision_loss)]
-        let y = rect.min.y + 40.0 + i as f32 * 18.0;
-        painter.rect_filled(
-            egui::Rect::from_min_size(egui::pos2(rect.min.x + 12.0, y), egui::vec2(width, 8.0)),
-            4.0,
-            scheme.bg_subtle,
-        );
-    }
 }
 
 /// An icon-only toggle; the fill weight marks it active.
@@ -1257,6 +1257,13 @@ impl RickUi {
             .iter()
             .map(|w| (w.title.clone(), w.text.clone()))
             .collect()
+    }
+
+    /// The drag ghost of a pane or a workspace tab as the last frame
+    /// painted it, in whichever window has one; for tests.
+    #[must_use]
+    pub fn drag_ghost(&self) -> Option<crate::drag::Ghost> {
+        self.windows.values().find_map(|w| w.ghost)
     }
 
     /// The drag in progress in the root window, for tests.
@@ -3518,6 +3525,8 @@ struct Viewer<'a> {
     dnd: &'a mut Dnd,
     /// The pane drag by a handle.
     pane_drag: &'a mut Option<PaneDrag>,
+    /// Where the snapshot of a pane goes in the frame its drag starts.
+    pane_ghost: &'a mut Option<crate::drag::Snapshot>,
     /// The pane keyboard input goes to in this window.
     focused: PaneId,
     /// The previews, for the Preview tab.
@@ -3594,65 +3603,20 @@ impl TabViewer for Viewer<'_> {
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, tab: &mut TabId) {
-        let model = self.app.model();
-        let Some(pane) = model.pane_of(*tab) else {
-            return;
-        };
-        let Some(state) = model.tab(*tab) else {
-            return;
-        };
-        if state.kind == TabKind::Preview {
-            let close = inspector::show(
-                ui,
-                self.app,
-                self.previews,
-                self.inspector_state,
-                self.requests,
-                &mut inspector::Handle {
-                    drag: PaneDrag { tab: *tab, pane },
-                    slot: self.pane_drag,
-                },
-            );
-            if close {
-                self.requests
-                    .push(Request::Command(Command::CloseTab(*tab)));
-            }
-            return;
+        // A pane grabbed by its handle in this frame leaves its snapshot:
+        // what it paints now is what its ghost shows (SPEC.md *Drag
+        // ghost*).
+        let dragging = self.pane_drag.is_some();
+        let mark = crate::drag::mark(ui);
+        let rect = ui.max_rect();
+        self.pane(ui, *tab);
+        if !dragging && self.pane_drag.is_some_and(|drag| drag.tab == *tab) {
+            let ctx = ui.ctx();
+            let grab = ctx
+                .input(|i| i.pointer.press_origin().or_else(|| i.pointer.latest_pos()))
+                .unwrap_or_else(|| rect.center());
+            *self.pane_ghost = Some(crate::drag::Snapshot::take(ctx, mark, rect, grab));
         }
-        if state.kind.is_view() {
-            match self.views.get(tab) {
-                Some(ext::View::Console(console)) => {
-                    let state = self.consoles.entry(*tab).or_default();
-                    console::show(ui, state, console, *tab);
-                }
-                Some(ext::View::Compare(compare)) => compare::show(ui, compare, self.requests),
-                None => {
-                    ui.centered_and_justified(|ui| {
-                        ui.weak(t!("shell-this-tab-s-content-is"));
-                    });
-                }
-            }
-            return;
-        }
-        let tab_ui = self
-            .tabs
-            .entry(*tab)
-            .or_insert_with(|| TabUi::for_tab(state));
-        let mut cx = PaneCx {
-            app: self.app,
-            pane,
-            tab_id: *tab,
-            tab: state,
-            tab_ui,
-            requests: self.requests,
-            keys: self.keys,
-            now: self.now,
-            focused: self.focused == pane && model.focused == pane,
-            thumbnails: self.thumbnails,
-            dnd: self.dnd,
-            pane_drag: self.pane_drag,
-        };
-        pane::show(ui, &mut cx);
     }
 
     fn on_close(&mut self, _tab: &mut TabId) -> egui_dock::widgets::tab_viewer::OnCloseResponse {
@@ -3669,6 +3633,70 @@ impl TabViewer for Viewer<'_> {
 
     fn scroll_bars(&self, _tab: &TabId) -> [bool; 2] {
         [false, false]
+    }
+}
+
+impl Viewer<'_> {
+    /// One pane: the tab's content, whatever its kind.
+    fn pane(&mut self, ui: &mut egui::Ui, tab: TabId) {
+        let model = self.app.model();
+        let Some(pane) = model.pane_of(tab) else {
+            return;
+        };
+        let Some(state) = model.tab(tab) else {
+            return;
+        };
+        if state.kind == TabKind::Preview {
+            let close = inspector::show(
+                ui,
+                self.app,
+                self.previews,
+                self.inspector_state,
+                self.requests,
+                &mut inspector::Handle {
+                    drag: PaneDrag { tab, pane },
+                    slot: self.pane_drag,
+                },
+            );
+            if close {
+                self.requests.push(Request::Command(Command::CloseTab(tab)));
+            }
+            return;
+        }
+        if state.kind.is_view() {
+            match self.views.get(&tab) {
+                Some(ext::View::Console(console)) => {
+                    let state = self.consoles.entry(tab).or_default();
+                    console::show(ui, state, console, tab);
+                }
+                Some(ext::View::Compare(compare)) => compare::show(ui, compare, self.requests),
+                None => {
+                    ui.centered_and_justified(|ui| {
+                        ui.weak(t!("shell-this-tab-s-content-is"));
+                    });
+                }
+            }
+            return;
+        }
+        let tab_ui = self
+            .tabs
+            .entry(tab)
+            .or_insert_with(|| TabUi::for_tab(state));
+        let mut cx = PaneCx {
+            app: self.app,
+            pane,
+            tab_id: tab,
+            tab: state,
+            tab_ui,
+            requests: self.requests,
+            keys: self.keys,
+            now: self.now,
+            focused: self.focused == pane && model.focused == pane,
+            thumbnails: self.thumbnails,
+            dnd: self.dnd,
+            pane_drag: self.pane_drag,
+        };
+        pane::show(ui, &mut cx);
     }
 }
 
@@ -3700,6 +3728,7 @@ impl RickUi {
                 thumbnails: &mut self.thumbnails,
                 dnd: &mut w.dnd,
                 pane_drag: &mut w.pane_drag,
+                pane_ghost: &mut w.pane_ghost,
                 focused,
                 previews: &mut self.previews,
                 inspector_state: &mut self.inspector_state,
@@ -3734,7 +3763,7 @@ impl RickUi {
         });
         let may_focus = ctx.input(|i| i.viewport().focused.unwrap_or(true));
         let mut events = Vec::new();
-        if self.pane_drag(ctx, window) == Some(true) {
+        if self.pane_drag(ui, ctx, window) == Some(true) {
             // The model moved on: the tree follows it, there is nothing of
             // the user's left in the tree to read.
             if let Some(w) = self.windows.get_mut(&window) {
@@ -3753,13 +3782,13 @@ impl RickUi {
     }
 
     /// The drag of a pane by its handle (SPEC.md *Panes*): while it lasts,
-    /// the ghost card follows the pointer, the pane under it shows the five
+    /// the pane's ghost follows the pointer, the pane under it shows the five
     /// dock tiles with the hovered one lit and the half the pane would take
     /// previewed; on release the pane docks there, or lands on the tab row
     /// or outside the window as [`cross_window_drop`](Self::cross_window_drop)
     /// says. Returns `Some(handled)` when the drag ended this frame,
     /// `handled` telling whether the model changed.
-    fn pane_drag(&mut self, ctx: &egui::Context, window: WindowId) -> Option<bool> {
+    fn pane_drag(&mut self, ui: &egui::Ui, ctx: &egui::Context, window: WindowId) -> Option<bool> {
         let w = self.windows.get(&window)?;
         let drag = w.pane_drag?;
         let (pointer, down, released) = ctx.input(|i| {
@@ -3790,42 +3819,42 @@ impl RickUi {
                 egui::Id::new(("pane-drag", window.0)),
             ));
             if let Some((_, rect)) = under {
-                if let Some(half) = zone.and_then(|(_, rect, zone)| dock_half(rect, zone)) {
-                    overlay.rect_filled(half, 0.0, scheme.accent_button.gamma_multiply(0.35));
-                }
-                for (tile_zone, tile) in dock_tiles(rect) {
-                    let hot = zone.is_some_and(|(_, _, z)| z == tile_zone);
-                    let fill = if hot {
-                        scheme.accent_button
-                    } else {
-                        scheme.bg_card
-                    };
-                    overlay.rect_filled(tile, 8.0, fill);
-                    overlay.rect_stroke(tile, 8.0, scheme.hairline(), egui::StrokeKind::Inside);
-                    let colour = if hot {
-                        crate::theme::Scheme::ON_BUTTON
-                    } else {
-                        scheme.icon_default
-                    };
-                    paint_split_icon(&overlay, tile, tile_zone, colour);
-                }
+                paint_dock_cross(&overlay, rect, zone.map(|(_, _, zone)| zone), scheme);
             }
-            if let Some(p) = pointer {
-                let title = model
-                    .tab(drag.tab)
-                    .map(|t| tab_label(model, t).1)
-                    .unwrap_or_default();
-                // Below the pointer, clear of the dock cross under it.
-                ghost_card(&overlay, p + egui::vec2(24.0, 72.0), &title, scheme);
-            }
+            // The ghost: the pane as it was grabbed, anchored to the grab
+            // point (SPEC.md *Drag ghost*).
+            let ghost = pointer.zip(w.pane_ghost.as_ref()).map(|(p, snapshot)| {
+                let rect = snapshot.placed(ctx, p);
+                snapshot.paint(ctx, overlay.layer_id(), rect);
+                crate::drag::Ghost {
+                    of: crate::drag::Dragged::Pane,
+                    rect,
+                    shapes: snapshot.len(),
+                }
+            });
+            // What a screen reader hears of the drag.
+            let title = model
+                .tab(drag.tab)
+                .map(|t| tab_label(model, t).1)
+                .unwrap_or_default();
+            crate::drag::announce(
+                ui,
+                egui::Id::new(("drag-status", window.0)),
+                &t!("shell-dragging-pane", title = title.as_str()),
+            );
             ctx.set_cursor_icon(egui::CursorIcon::Grabbing);
             ctx.request_repaint();
+            if let Some(w) = self.windows.get_mut(&window) {
+                w.ghost = ghost;
+            }
             return None;
         }
         // The drag ended: with a release it may land somewhere; without one
         // (the button came up unseen) it just stops.
         if let Some(w) = self.windows.get_mut(&window) {
             w.pane_drag = None;
+            w.pane_ghost = None;
+            w.ghost = w.ghost.filter(|g| g.of != crate::drag::Dragged::Pane);
         }
         if !released {
             return Some(false);

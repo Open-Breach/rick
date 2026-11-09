@@ -198,6 +198,7 @@ shell-this-tab-s-content-is = This tab's content is gone; close it.
 shell-new-tab = New tab
 shell-close-tab = Close tab
 shell-drop-for-new-tab = Drop for new tab
+shell-dragging-pane = Dragging pane { $title }
 shell-preview-tab = Preview
 shell-console-tab = Console
 shell-compare-tab = Compare
