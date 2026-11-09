@@ -13,7 +13,10 @@
 //! and docks its pane there; a tab of several panes is offered none.
 //! Rule 4: a dragged pane, or a dragged tab of one pane, resting on
 //! another tab for the spring-loading delay switches the window to that
-//! tab's workspace, where it can be docked.
+//! tab's workspace, where it can be docked. Rule 9: `Mod+Shift+PageUp` and
+//! `Mod+Shift+PageDown` move the shown tab along the row, and Escape
+//! cancels the drag of a pane or of a tab and leaves the layout exactly as
+//! it was.
 
 use std::fs;
 use std::path::Path;
@@ -1308,4 +1311,212 @@ fn a_dragged_pane_resting_on_a_tab_springs_its_workspace_open_and_docks_there() 
         "beta's pane docked left of gamma's"
     );
     assert_eq!(shown(&harness), 1, "the window stays where the pane went");
+}
+
+/// Issue 80, rule 9 (SPEC.md *Workspace tabs*, Behaviour; *Move tab left /
+/// right*): `Mod+Shift+PageDown` and `Mod+Shift+PageUp` move the shown
+/// tab one place right and left, the keyboard's way of reordering, and
+/// stop at the ends of the row.
+#[test]
+fn mod_shift_page_up_and_down_move_the_shown_tab_along_the_row() {
+    let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+    let folders = ["alpha-folder", "beta-folder", "gamma-folder"].map(|name| {
+        let folder = dir.path().join(name);
+        fs::create_dir(&folder).unwrap_or_else(|e| panic!("{e}"));
+        folder
+    });
+    let mut harness = harness(&folders[0], egui::vec2(1400.0, 800.0));
+    for folder in &folders[1..] {
+        command(&mut harness, app::Command::NewTab(local(folder)));
+    }
+    let model = harness.state().app().model();
+    let first = model.workspaces(model.focused_window)[0].id;
+    command(&mut harness, app::Command::ActivateWorkspace(first));
+    assert_eq!(
+        titles(&harness),
+        ["alpha-folder", "beta-folder", "gamma-folder"]
+    );
+    let key = |harness: &mut Harness<'_, RickUi>, key: egui::Key| {
+        harness.key_press_modifiers(egui::Modifiers::COMMAND | egui::Modifiers::SHIFT, key);
+        harness.step();
+        settle(harness);
+    };
+
+    // At the left end, left does nothing.
+    key(&mut harness, egui::Key::PageUp);
+    assert_eq!(
+        titles(&harness),
+        ["alpha-folder", "beta-folder", "gamma-folder"]
+    );
+    // Right, right: to the end, the tab still shown.
+    key(&mut harness, egui::Key::PageDown);
+    assert_eq!(
+        titles(&harness),
+        ["beta-folder", "alpha-folder", "gamma-folder"]
+    );
+    assert_eq!(shown(&harness), 1, "the moved tab stays shown");
+    key(&mut harness, egui::Key::PageDown);
+    assert_eq!(
+        titles(&harness),
+        ["beta-folder", "gamma-folder", "alpha-folder"]
+    );
+    assert_eq!(shown(&harness), 2);
+    // At the right end, right does nothing; left goes back.
+    key(&mut harness, egui::Key::PageDown);
+    assert_eq!(
+        titles(&harness),
+        ["beta-folder", "gamma-folder", "alpha-folder"]
+    );
+    key(&mut harness, egui::Key::PageUp);
+    assert_eq!(
+        titles(&harness),
+        ["beta-folder", "alpha-folder", "gamma-folder"]
+    );
+    assert_eq!(shown(&harness), 1);
+}
+
+/// Issue 80, rule 9 (SPEC.md *No-ops and cancel*): Escape cancels the drag
+/// of a tab and the drag of a pane. The ghost goes and nothing moves: the
+/// tabs are in their order, the panes in their layout, and the window
+/// shows the workspace it showed when the drag began, also after
+/// spring-loading switched it. The button that is still down then drops
+/// nothing when it comes up.
+#[test]
+// Four drags, each cancelled.
+#[allow(clippy::too_many_lines)]
+fn escape_cancels_the_drag_of_a_tab_or_a_pane_and_restores_the_layout() {
+    let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+    let folders = [
+        "alpha-folder",
+        "beta-folder",
+        "gamma-folder",
+        "delta-folder",
+    ]
+    .map(|name| {
+        let folder = dir.path().join(name);
+        fs::create_dir(&folder).unwrap_or_else(|e| panic!("{e}"));
+        folder
+    });
+    let mut harness = harness(&folders[0], egui::vec2(1400.0, 800.0));
+    command(
+        &mut harness,
+        app::Command::Settings(model::SettingsChange::SpringDelay(500)),
+    );
+    // alpha and delta side by side; beta; gamma. The first is shown.
+    let pane_alpha = harness.state().app().model().focused;
+    command(
+        &mut harness,
+        app::Command::Split {
+            pane: pane_alpha,
+            dir: model::SplitDir::Right,
+        },
+    );
+    let pane_delta = harness.state().app().model().focused;
+    command(
+        &mut harness,
+        app::Command::Navigate {
+            pane: pane_delta,
+            to: local(&folders[3]),
+        },
+    );
+    command(&mut harness, app::Command::NewTab(local(&folders[1])));
+    command(&mut harness, app::Command::NewTab(local(&folders[2])));
+    let pane_gamma = harness.state().app().model().focused;
+    let model = harness.state().app().model();
+    let window = model.focused_window;
+    let ids: Vec<model::WorkspaceId> = model.workspaces(window).iter().map(|w| w.id).collect();
+    command(&mut harness, app::Command::ActivateWorkspace(ids[0]));
+    let before = harness.state().app().model().workspaces(window).to_vec();
+    let unchanged = |harness: &Harness<'_, RickUi>, what: &str| {
+        let model = harness.state().app().model();
+        assert_eq!(model.workspaces(window), &before[..], "{what}");
+        assert_eq!(
+            model.window(window).map(|w| w.active),
+            Some(ids[0]),
+            "{what}"
+        );
+        assert_eq!(harness.state().drag_ghost(), None, "{what}");
+        assert_ne!(
+            harness.output().platform_output.cursor_icon,
+            egui::CursorIcon::Grabbing,
+            "{what}"
+        );
+    };
+    let escape = |harness: &mut Harness<'_, RickUi>| {
+        harness.key_press(egui::Key::Escape);
+        harness.step();
+        harness.step();
+    };
+    let pitch =
+        tab_rect(&harness, "gamma-folder").left() - tab_rect(&harness, "beta-folder").left();
+    let beta_home = tab_rect(&harness, "beta-folder");
+
+    // A tab, taken past its neighbour so the row has opened another gap.
+    let from = beta_home.center();
+    hold(&mut harness, from, from + egui::vec2(pitch * 0.8, 0.0));
+    assert!(harness.state().drag_ghost().is_some());
+    assert!(
+        tab_rect(&harness, "gamma-folder").left() < beta_home.left() + pitch - 1.0,
+        "the neighbour has made room"
+    );
+    escape(&mut harness);
+    rest(&mut harness, 2);
+    unchanged(&harness, "a tab on the row");
+    assert_eq!(
+        tab_rect(&harness, "beta-folder"),
+        beta_home,
+        "back in its place"
+    );
+    button(&mut harness, from + egui::vec2(pitch * 0.8, 0.0), false);
+    settle(&mut harness);
+    unchanged(&harness, "the button coming up after the cancel");
+
+    // A tab of one pane that spring-loading took to gamma's workspace,
+    // held over a dock target there.
+    hold(&mut harness, from, from + egui::vec2(pitch * 0.35, 0.0));
+    rest(&mut harness, 4);
+    assert_eq!(shown(&harness), 2, "sprung to gamma");
+    let tile =
+        pane_rect(&harness, pane_gamma).center() + egui::vec2(-ui_egui::DOCK_TILE_PITCH, 0.0);
+    for i in 1..=8u8 {
+        let start = from + egui::vec2(pitch * 0.35, 0.0);
+        move_to(&mut harness, start + (tile - start) * (f32::from(i) / 8.0));
+    }
+    escape(&mut harness);
+    unchanged(&harness, "a tab after spring-loading");
+    button(&mut harness, tile, false);
+    settle(&mut harness);
+    unchanged(&harness, "the button coming up on a dock target");
+
+    // A pane, held over the other pane's dock target.
+    let grip_of = |harness: &Harness<'_, RickUi>, pane: model::PaneId| {
+        let rect = pane_rect(harness, pane);
+        harness
+            .query_all_by_label("Drag pane")
+            .map(|n| n.rect())
+            .find(|r| rect.contains(r.center()))
+            .map_or_else(|| panic!("no handle in {pane:?}"), |r| r.center())
+    };
+    let grip = grip_of(&harness, pane_delta);
+    let tile =
+        pane_rect(&harness, pane_alpha).center() + egui::vec2(-ui_egui::DOCK_TILE_PITCH, 0.0);
+    hold(&mut harness, grip, tile);
+    assert!(harness.state().drag_ghost().is_some());
+    escape(&mut harness);
+    unchanged(&harness, "a pane over a dock target");
+    button(&mut harness, tile, false);
+    settle(&mut harness);
+    unchanged(&harness, "the button coming up on the dock target");
+
+    // A pane that spring-loading took to gamma's workspace.
+    let grip = grip_of(&harness, pane_delta);
+    let on_tab = tab_rect(&harness, "gamma-folder").center() + egui::vec2(60.0, 0.0);
+    hold(&mut harness, grip, on_tab);
+    rest(&mut harness, 4);
+    assert_eq!(shown(&harness), 2, "sprung to gamma");
+    escape(&mut harness);
+    unchanged(&harness, "a pane after spring-loading");
+    button(&mut harness, on_tab, false);
+    settle(&mut harness);
+    unchanged(&harness, "the button coming up on the tab row");
 }

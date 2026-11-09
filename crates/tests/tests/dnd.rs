@@ -1210,3 +1210,79 @@ fn entries_held_over_a_workspace_tab_show_its_workspace_and_drop_into_a_folder_t
     assert!(!dir.path().join("a.txt").exists());
     assert_eq!(shown(&harness), other_pane, "After a drag: stay");
 }
+
+/// Issue 80, rule 9 (SPEC.md *No-ops and cancel*): Escape during a drag of
+/// entries that spring-loading took through two other workspaces leaves
+/// nothing moved and the window on the workspace it showed when the drag
+/// began — not the one in between — with *After a drag* at its default,
+/// stay; the folder a pane drilled into on the way still follows that
+/// setting.
+#[test]
+fn escape_returns_the_window_to_the_workspace_a_drag_of_entries_began_in() {
+    let dir = tree();
+    let other = dir.path().join("sub");
+    let (mut harness, _fake) = harness(dir.path());
+    let pane_a = harness.state().app().model().focused;
+    let (first_tab, _) = tab(&harness, pane_a);
+    command(&mut harness, app::Command::NewTab(local(&other)));
+    let other_pane = harness.state().app().model().focused;
+    let (other_tab, _) = tab(&harness, other_pane);
+    command(&mut harness, app::Command::NewTab(local(&other)));
+    let third_pane = harness.state().app().model().focused;
+    let (third_tab, _) = tab(&harness, third_pane);
+    command(&mut harness, app::Command::ActivateTab(first_tab));
+    let window = harness.state().app().model().focused_window;
+    let shown = |harness: &Harness<'_, RickUi>| {
+        let model = harness.state().app().model();
+        model
+            .window(window)
+            .map_or_else(|| panic!("window"), model::Window::focused)
+    };
+    let header_of = |harness: &Harness<'_, RickUi>, tab: model::TabId| {
+        harness
+            .state()
+            .tab_header_rect(tab)
+            .unwrap_or_else(|| panic!("no header for {tab:?}"))
+    };
+    let third = header_of(&harness, third_tab);
+    let header = header_of(&harness, other_tab);
+
+    // Onto the third tab, held: the window shows the third workspace. On
+    // to the second tab, held: it shows the second. On to its folder row,
+    // held: its pane drills into the folder.
+    let from = centre_in(&harness, pane_a, "a.txt");
+    press(&mut harness, from, egui::PointerButton::Primary);
+    move_to(&mut harness, from, third.center());
+    hover_for_spring(&mut harness);
+    assert_eq!(shown(&harness), third_pane);
+    move_to(&mut harness, third.center(), header.center());
+    hover_for_spring(&mut harness);
+    assert_eq!(shown(&harness), other_pane);
+    let child = centre_in(&harness, other_pane, "child");
+    move_to(&mut harness, header.center(), child);
+    hover_for_spring(&mut harness);
+    assert_eq!(location(&harness, other_pane), other.join("child"));
+
+    // Escape: nothing moved, the first workspace is shown again, and the
+    // pane that drilled stays where it is, as the setting says.
+    harness.key_press(egui::Key::Escape);
+    harness.step();
+    settle(&mut harness);
+    assert!(harness.state().drag().is_none(), "the drag is over");
+    assert!(dir.path().join("a.txt").exists(), "nothing moved");
+    assert!(!other.join("child/a.txt").exists());
+    assert_eq!(
+        shown(&harness),
+        pane_a,
+        "back on the workspace it began in, not the one in between"
+    );
+    assert_eq!(
+        location(&harness, other_pane),
+        other.join("child"),
+        "After a drag: stay"
+    );
+    // The button comes up later and drops nothing.
+    release(&mut harness, child, egui::PointerButton::Primary);
+    assert!(dir.path().join("a.txt").exists());
+    assert_eq!(shown(&harness), pane_a);
+}

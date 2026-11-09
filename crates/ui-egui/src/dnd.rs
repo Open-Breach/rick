@@ -499,7 +499,11 @@ impl Dnd {
     }
 
     /// Cancels the drag in progress: the ghost goes, the model is untouched,
-    /// the panes that spring-loaded follow the `after` setting.
+    /// the panes that spring-loaded follow the `after` setting, and a
+    /// window that spring-loading switched to another workspace shows the
+    /// one it showed when the drag began whatever the setting says: a
+    /// cancelled drag leaves the layout as it was (SPEC.md *No-ops and
+    /// cancel*, QUESTIONS.md 276).
     pub fn cancel(
         &mut self,
         after: AfterDrag,
@@ -509,7 +513,23 @@ impl Dnd {
         if self.drag.is_some() {
             self.suppressed = true;
         }
-        self.end(after);
+        if let Some(drag) = self.drag.take() {
+            // The folders first, by the setting; then the workspaces, the
+            // last switch undone first, so that the window ends on the one
+            // it showed before the first.
+            let (shown, drilled): (Vec<Origin>, Vec<Origin>) = drag
+                .origins
+                .into_iter()
+                .partition(|origin| matches!(origin, Origin::Tab { .. }));
+            self.finished
+                .extend(drilled.into_iter().map(|origin| (after, origin)));
+            self.finished.extend(
+                shown
+                    .into_iter()
+                    .rev()
+                    .map(|origin| (AfterDrag::Return, origin)),
+            );
+        }
         self.finish(tabs, requests);
     }
 

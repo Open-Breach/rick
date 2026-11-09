@@ -355,6 +355,15 @@ the pull request that brought the change.
   (QUESTIONS.md 308). Let go where it cannot land, nothing moves and the
   window shows the workspace the drag began in. Entries dragged from a
   list already switched the window this way; a test now holds it (#132).
+- Escape cancels the drag of a pane or of a workspace tab (issue 80, rule
+  9; SPEC.md *No-ops and cancel*): the ghost goes, nothing moves, the
+  tabs are back in their order and the window shows the workspace it
+  showed when the drag began, whatever spring-loading has switched since;
+  the button that is still down then drops nothing. A cancelled drag of
+  entries returns the window to that workspace too, whatever *After a
+  drag* says and through however many tabs it sprang (QUESTIONS.md 309);
+  the folders its panes drilled into still follow the setting
+  (QUESTIONS.md 276) (#137).
 
 ### Removed
 

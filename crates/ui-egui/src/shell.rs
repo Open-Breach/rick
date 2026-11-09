@@ -3340,6 +3340,38 @@ impl RickUi {
         back
     }
 
+    /// Escape cancels the drag of a pane or of a tab in progress in
+    /// `window` (SPEC.md *No-ops and cancel*): the ghost goes, nothing
+    /// moves, the tabs are back in their order and the window shows the
+    /// workspace it showed when the drag began, whatever spring-loading
+    /// has switched since. The key is consumed, so it reaches nothing
+    /// else, and the button still held starts nothing new. Called before
+    /// the frame draws, so the dock is drawn from the model as it then is.
+    fn cancel_layout_drag(&mut self, ctx: &egui::Context, window: WindowId) {
+        let Some(w) = self.windows.get_mut(&window) else {
+            return;
+        };
+        if w.pane_drag.is_none() && w.workspace_drag.is_none() {
+            return;
+        }
+        if !ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
+            return;
+        }
+        w.pane_drag = None;
+        w.pane_ghost = None;
+        w.workspace_drag = None;
+        w.ghost = None;
+        w.tab_rest = None;
+        w.pane_drop_slot = None;
+        // egui would report the handle or the tab as dragged until the
+        // button comes up.
+        ctx.stop_dragging();
+        let _ = self.return_to_origin(window);
+        if let Some(w) = self.windows.get_mut(&window) {
+            w.drag_origin = None;
+        }
+    }
+
     /// A workspace tab released outside its window: onto another window's
     /// tab row, which takes it, or onto nothing, which opens a window for
     /// it.
@@ -4368,6 +4400,7 @@ impl RickUi {
                 &mut self.requests,
             );
         }
+        self.cancel_layout_drag(ctx, window);
         self.resolve_pending_selects();
         self.poll_library_browse(ctx);
         self.handle_keys(ctx, window);

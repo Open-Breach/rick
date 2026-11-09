@@ -1451,6 +1451,58 @@ fn frames_of_spring_loaded_tabs() {
     }
 }
 
+/// Issue 80, rule 9, as frame sequences in Light and Dark at both
+/// densities: a tab dragged past its neighbour, and the row after Escape;
+/// a pane that spring-loading took to another workspace, on a dock target
+/// there, and the window after Escape, on the workspace the drag began in
+/// with its layout as it was.
+#[test]
+#[ignore = "needs a wgpu adapter; CI runs it and uploads the images"]
+fn frames_of_escape_cancelling_a_drag() {
+    let (_dir, deep) = sample_tree();
+    for (theme, density) in LOOKS {
+        let (mut harness, _first, second, edited) = three_workspaces(&deep, theme, density);
+        let mut frames = Frames::new(format!("issue80-escape-{}", look(theme, density)));
+
+        // A tab taken past its neighbour.
+        let tab = tab_in_row(&harness, "edited");
+        let pitch = tab_in_row(&harness, "holiday-2026").left() - tab.left();
+        let hold = tab.center();
+        let past = hold + egui::vec2(pitch * 0.8, 0.0);
+        glide(&mut harness, hold + egui::vec2(0.0, 80.0), hold, 3);
+        primary(&mut harness, hold, true);
+        glide(&mut harness, hold, past, 8);
+        hold_still(&mut harness, 2);
+        frames.shoot(&mut harness, "tab-past-its-neighbour");
+        harness.key_press(egui::Key::Escape);
+        harness.step();
+        hold_still(&mut harness, 3);
+        frames.shoot(&mut harness, "escape-the-row-as-it-was");
+        primary(&mut harness, past, false);
+        settle(&mut harness);
+
+        // A pane that spring-loading took to the workspace of `edited`.
+        let grip = grip_of_pane(&harness, second);
+        let on_tab = tab_in_row(&harness, "edited").center() + egui::vec2(60.0, 0.0);
+        glide(&mut harness, past, grip, 6);
+        primary(&mut harness, grip, true);
+        glide(&mut harness, grip, on_tab, 10);
+        hold_still(&mut harness, 3);
+        settle(&mut harness);
+        let tile =
+            rect_of_pane(&harness, edited).center() + egui::vec2(-ui_egui::DOCK_TILE_PITCH, 0.0);
+        glide(&mut harness, on_tab, tile, 10);
+        frames.shoot(&mut harness, "pane-on-a-target-of-the-sprung-workspace");
+        harness.key_press(egui::Key::Escape);
+        harness.step();
+        hold_still(&mut harness, 2);
+        frames.shoot(&mut harness, "escape-the-layout-as-it-was");
+        primary(&mut harness, tile, false);
+        settle(&mut harness);
+        frames.sheet();
+    }
+}
+
 /// Issue 60: the file list — the header band and the row states (a
 /// selection with the keyboard cursor in the focused pane, a selection in
 /// the other pane), the empty folder, and the portal burst at three
