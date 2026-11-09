@@ -231,6 +231,10 @@ the pull request that brought the change.
   with the close button alone. The handle and the hairline are one widget
   shared with the explorer toolbar (`widgets::pane_handle`, `divider`)
   (issue 79 items 2 and 3).
+- The path field, while the breadcrumb is being edited, is `button/size`
+  tall — the height of Back and Forward, on their line — and as wide as
+  the breadcrumb; it had hugged its text. Its look and the rest of the
+  editing rule are issue 79 item 10 (issue 79 item 5).
 
 ## [0.2.0] - 2026-11-08
 
