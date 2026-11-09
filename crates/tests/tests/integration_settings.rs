@@ -92,18 +92,25 @@ fn start(fake: &Arc<Fake>, config: &Path, settings: Option<&str>) -> Harness<'st
     harness
 }
 
-/// Runs frames until the app has nothing in flight and a quiet moment
-/// passed.
+/// Runs frames until no job, no check and no apply is in flight and a
+/// quiet moment passed. A job that has ended is not enough to go by: the
+/// answer it sent may still be waiting for the frame that folds it into
+/// the model, and the check that follows an apply starts only then.
 fn settle(harness: &mut Harness<'_, RickUi>) {
+    let quiet = |harness: &Harness<'_, RickUi>| {
+        let app = harness.state().app();
+        let integration = &app.model().integration;
+        !app.is_busy() && !integration.checking && integration.applying.is_none()
+    };
     let deadline = Instant::now() + Duration::from_secs(30);
     loop {
         for _ in 0..3 {
             harness.step();
         }
-        if !harness.state().app().is_busy() {
+        if quiet(harness) {
             std::thread::sleep(Duration::from_millis(50));
             harness.step();
-            if !harness.state().app().is_busy() {
+            if quiet(harness) {
                 break;
             }
         }
