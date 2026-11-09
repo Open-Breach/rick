@@ -18,6 +18,7 @@ use egui_kittest::kittest::Queryable as _;
 use platform::{ConfigDir, Fake};
 use tests::local;
 use ui_egui::about::{self, Build};
+use ui_egui::licences::LicencesPage;
 use ui_egui::{EguiHost, RickUi};
 
 fn build() -> Build {
@@ -320,15 +321,20 @@ fn licences_search<'h>(harness: &'h Harness<'_, RickUi>) -> egui_kittest::Node<'
         .unwrap_or_else(|| panic!("no search field under the title"))
 }
 
-#[test]
-fn the_third_party_page_lists_filters_expands_and_exports() {
-    let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
-    let (mut harness, fake) = harness_with(dir.path(), build_with_licences());
-    open(&mut harness);
+/// Opens the dialog and its Third-party licences page.
+fn open_licences(harness: &mut Harness<'_, RickUi>) {
+    open(harness);
     // Two crates, eight bundled runtimes and the plugin's one entry.
     assert_eq!(harness.state().about().component_count(), Some(11));
-    click_button(&mut harness, "Third-party licences");
+    click_button(harness, "Third-party licences");
     assert!(harness.state().about().licences_page().is_some());
+}
+
+#[test]
+fn the_third_party_page_lists_the_sections_and_opens_one_row_at_a_time() {
+    let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+    let (mut harness, _fake) = harness_with(dir.path(), build_with_licences());
+    open_licences(&mut harness);
     harness.get_by_label("Third-party licences");
     for section in ["BUNDLED RUNTIMES", "RUST CRATES", "PROBE"] {
         harness.get_by_label(section);
@@ -384,6 +390,18 @@ fn the_third_party_page_lists_filters_expands_and_exports() {
             .is_none()
     );
 
+    // Back returns to the About page.
+    click_button(&mut harness, "Back");
+    assert!(harness.state().about().licences_page().is_none());
+    assert!(harness.state().about().is_open());
+}
+
+#[test]
+fn the_third_party_page_filters_by_name_and_exports_the_whole_list() {
+    let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+    let (mut harness, fake) = harness_with(dir.path(), build_with_licences());
+    open_licences(&mut harness);
+
     // The search narrows the rows to the names that contain the text.
     let search = licences_search(&harness);
     search.focus();
@@ -413,7 +431,7 @@ fn the_third_party_page_lists_filters_expands_and_exports() {
         .state()
         .about()
         .licences_page()
-        .is_some_and(|p| p.exporting())
+        .is_some_and(LicencesPage::exporting)
     {
         assert!(Instant::now() < deadline, "the export did not finish");
         std::thread::sleep(Duration::from_millis(20));
@@ -444,9 +462,4 @@ fn the_third_party_page_lists_filters_expands_and_exports() {
         "{:?}",
         harness.state().toasts()
     );
-
-    // Back returns to the About page.
-    click_button(&mut harness, "Back");
-    assert!(harness.state().about().licences_page().is_none());
-    assert!(harness.state().about().is_open());
 }
