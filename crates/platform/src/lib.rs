@@ -6,7 +6,10 @@
 //! [`Chrome`], [`DragSource`], [`DropTarget`], [`Volumes`], [`Mount`] (a
 //! disk image mounted through the OS: `udisksctl loop-setup`, `hdiutil
 //! attach`, `Mount-DiskImage`), [`StandardFolders`], [`RecentlyUsed`],
-//! [`Secrets`] and [`SingleInstance`], bundled as [`Platform`]. [`Native`] is the real
+//! [`Secrets`], [`SingleInstance`] and [`Activation`] (raising the window a
+//! second launch's path opened in: `xdg_activation_v1` with the launcher's
+//! token, `_NET_ACTIVE_WINDOW`, `NSApp.activate`, `SetForegroundWindow`),
+//! bundled as [`Platform`]. [`Native`] is the real
 //! implementation for the OS the binary runs on; [`Fake`] is the one tests
 //! use, with a private trash directory and recorded calls.
 //!
@@ -90,9 +93,9 @@ pub use perms::{
 pub use raw_window_handle;
 pub use time::iso8601;
 pub use traits::{
-    Application, Chrome, Clipboard, ConfigDir, ControlsSide, DialogFilter, DragSource, DropTarget,
-    Elevate, ElevatedOutput, FontFile, Fonts, ImageFormat, IncomingFiles, Motion, Mount,
-    NativeDialogs, OpenWith, Platform, Point, Properties, PropertiesOutcome, RecentItem,
+    Activation, Application, Chrome, Clipboard, ConfigDir, ControlsSide, DialogFilter, DragSource,
+    DropTarget, Elevate, ElevatedOutput, FontFile, Fonts, ImageFormat, IncomingFiles, Motion,
+    Mount, NativeDialogs, OpenWith, Platform, Point, Properties, PropertiesOutcome, RecentItem,
     RecentlyUsed, Secrets, SingleInstance, StandardFolder, StandardFolders, SystemFonts, Terminal,
     Trash, TrashedItem, Volume, VolumeKind, Volumes, WindowChrome, WindowRef,
 };

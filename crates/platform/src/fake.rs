@@ -16,11 +16,11 @@ use crate::perms::{
     FilePermissions, PermissionChange, Permissions, Principal, PrincipalKind, Principals,
 };
 use crate::traits::{
-    Application, Chrome, Clipboard, ConfigDir, ControlsSide, DialogFilter, DragSource, DropTarget,
-    Elevate, ElevatedOutput, ImageFormat, IncomingFiles, Mount, NativeDialogs, OpenWith, Point,
-    Properties, PropertiesOutcome, RecentItem, RecentlyUsed, Secrets, SingleInstance,
-    StandardFolder, StandardFolders, Terminal, Trash, TrashedItem, Volume, VolumeKind, Volumes,
-    WindowChrome, WindowRef,
+    Activation, Application, Chrome, Clipboard, ConfigDir, ControlsSide, DialogFilter, DragSource,
+    DropTarget, Elevate, ElevatedOutput, ImageFormat, IncomingFiles, Mount, NativeDialogs,
+    OpenWith, Point, Properties, PropertiesOutcome, RecentItem, RecentlyUsed, Secrets,
+    SingleInstance, StandardFolder, StandardFolders, Terminal, Trash, TrashedItem, Volume,
+    VolumeKind, Volumes, WindowChrome, WindowRef,
 };
 
 /// The applications the fake offers for every file, the default first.
@@ -57,6 +57,9 @@ pub struct Fake {
     trashed_count: Mutex<u64>,
     opened: Mutex<Vec<PathBuf>>,
     opened_with: Mutex<Vec<(PathBuf, Application)>>,
+    /// The tokens handed to [`Activation::activate_window`], oldest first;
+    /// nothing is raised.
+    activations: Mutex<Vec<Option<String>>>,
     terminals: Mutex<Vec<(PathBuf, Option<Vec<String>>)>>,
     /// The programs handed to [`Elevate::run_elevated`]; nothing runs
     /// unless `elevate_runs` says so.
@@ -126,6 +129,7 @@ impl Fake {
             trashed_count: Mutex::new(0),
             opened: Mutex::new(Vec::new()),
             opened_with: Mutex::new(Vec::new()),
+            activations: Mutex::new(Vec::new()),
             terminals: Mutex::new(Vec::new()),
             elevated: Mutex::new(Vec::new()),
             elevate_runs: Mutex::new(false),
@@ -180,6 +184,13 @@ impl Fake {
     #[must_use]
     pub fn opened(&self) -> Vec<PathBuf> {
         lock(&self.opened).clone()
+    }
+
+    /// The tokens handed to [`Activation::activate_window`], oldest
+    /// first.
+    #[must_use]
+    pub fn activations(&self) -> Vec<Option<String>> {
+        lock(&self.activations).clone()
     }
 
     /// Paths handed to [`OpenWith::reveal`], oldest first.
@@ -611,6 +622,15 @@ impl ConfigDir for Fake {
     fn home_dir(&self) -> PathBuf {
         self.dir.path().join("home")
     }
+}
+
+impl Activation for Fake {
+    fn activate_window(&self, _window: &WindowRef, token: Option<&str>) -> Result<(), Error> {
+        lock(&self.activations).push(token.map(str::to_owned));
+        Ok(())
+    }
+
+    fn allow_activation(&self) {}
 }
 
 impl SingleInstance for Fake {
