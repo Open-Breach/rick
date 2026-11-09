@@ -8,6 +8,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use serde::{Deserialize, Serialize};
 use types::{Location, ProviderId};
 
+use crate::integration::{IntegrationSettings, ItemRecord};
 use crate::listing::{Column, SortDir};
 
 /// Light or dark, or whatever the system says.
@@ -92,6 +93,10 @@ pub struct Settings {
     /// secrets are in the platform keychain, never here.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub connections: Vec<ConnectionEntry>,
+    /// System integration (specs/system-integration.md §6.1): one record
+    /// per integration item, whether the dialog asks, and the switches of
+    /// Settings → Integration.
+    pub integration: IntegrationSettings,
 }
 
 /// One `[[connections]]` table of `rick.toml`: a connection of a network
@@ -449,6 +454,7 @@ impl Default for Settings {
             archives: Archives::default(),
             plugins: Plugins::default(),
             connections: Vec::new(),
+            integration: IntegrationSettings::default(),
             language: None,
         }
     }
@@ -522,6 +528,16 @@ pub enum SettingsChange {
         /// `false` adds it to `[plugins] disabled`, `true` removes it.
         enabled: bool,
     },
+    /// Whether the integration dialog opens when the startup check finds
+    /// something; `false` is its *Don't ask again*.
+    IntegrationAsk(bool),
+    /// *Check integration at startup*.
+    IntegrationCheckAtStartup(bool),
+    /// *Shell integration*: the console follows the tab and the tab the
+    /// console.
+    ShellIntegration(bool),
+    /// The integration items' records, as a check or an apply left them.
+    IntegrationRecords(BTreeMap<String, ItemRecord>),
 }
 
 impl Settings {
@@ -582,6 +598,10 @@ impl Settings {
                     self.plugins.disabled.push(id);
                 }
             }
+            SettingsChange::IntegrationAsk(v) => self.integration.ask = v,
+            SettingsChange::IntegrationCheckAtStartup(v) => self.integration.check_at_startup = v,
+            SettingsChange::ShellIntegration(v) => self.integration.shell_integration = v,
+            SettingsChange::IntegrationRecords(records) => self.integration.items = records,
         }
     }
 }
@@ -611,6 +631,38 @@ mod tests {
         assert_eq!(s.archives.on_open, OnOpen::System);
         let text = toml::to_string(&s).unwrap_or_default();
         assert!(text.contains("[archives]\non_open = \"system\""), "{text}");
+    }
+
+    #[test]
+    fn the_integration_table_has_its_switches_and_records() {
+        use crate::integration::ItemState;
+        let mut s = Settings::default();
+        assert!(s.integration.ask, "the dialog asks by default");
+        assert!(s.integration.check_at_startup);
+        assert!(s.integration.shell_integration);
+        s.apply(SettingsChange::IntegrationAsk(false));
+        s.apply(SettingsChange::IntegrationCheckAtStartup(false));
+        s.apply(SettingsChange::ShellIntegration(false));
+        s.apply(SettingsChange::IntegrationRecords(BTreeMap::from([(
+            "dock-favourite".to_owned(),
+            ItemRecord::new(ItemState::Declined),
+        )])));
+        let text = toml::to_string(&s).unwrap_or_else(|e| panic!("{e}"));
+        assert!(
+            text.contains(
+                "[integration]\nask = false\ncheck_at_startup = false\nshell_integration = false"
+            ),
+            "{text}"
+        );
+        assert!(
+            text.contains("[integration.items.dock-favourite]\nstate = \"declined\""),
+            "{text}"
+        );
+        let back: Settings = toml::from_str(&text).unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(back, s);
+        // A file from before the table reads as the defaults.
+        let old: Settings = toml::from_str("theme = \"dark\"\n").unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(old.integration, IntegrationSettings::default());
     }
 
     #[test]
