@@ -365,7 +365,7 @@ The preview is its own pane, not part of any explorer pane, and there is one of 
 There is no menu bar; the burger menu at the left of the title row holds the global entries.
 
 - The command palette has no menu entry: it is the title row's search box in command mode (Mod+Shift+P, or type `>`), always visible.
-- Entries: New window, Settings, Extensions, Keyboard shortcuts, About; the Layouts submenu; one submenu per extension that puts actions in the application menu.
+- Entries: New window, Settings, Extensions, Keyboard shortcuts, About (the About dialog, [`specs/about-dialog.md`](specs/about-dialog.md)); the Layouts submenu; one submenu per extension that puts actions in the application menu.
 
 The menu is drawn as the menus above are; its contents are not part of the design refresh.
 
@@ -1193,6 +1193,7 @@ Some plugins are specified in their own file under `specs/`, so they can be hand
 - [`specs/ext-ssh.md`](specs/ext-ssh.md) — `ext-ssh`, remote hosts over SSH: a Provider driven by shell commands on `exec` channels (no SFTP) with per-host command profiles for GNU, BSD and BusyBox userlands, hosts from `~/.ssh/config` plus Rick's own in the Network section, agent, key and password authentication with secrets in the OS keychain, `known_hosts` dialogues, jump hosts and chains, pooled connections, same-host `cp`/`mv` through `NATIVE_TRANSFER`, *Open console here* and *Open in external terminal*, prefix and size-capped previews. Unix-like hosts only. Milestone 5 of 0.2, in place of `ext-vfs-sftp`.
 - [`specs/ext-installer.md`](specs/ext-installer.md) — `ext-installer`, the tarball installer: *Install as application* on a tar or zip archive, versioned layout with a `current` symlink, desktop entry, icon and commands on the PATH, user-space or system-wide scope, update with one previous version kept, revert, uninstall, repair, and an Installed Apps view. Linux only. Ships with 0.2 (Linux only). It extracts with the tar and zip crates itself, so it has no dependency on `ext-vfs-archive` and no ordering constraint within 0.2.
 - [`specs/app-icons.md`](specs/app-icons.md) — the app icon on all three platforms and the Linux desktop entry: one identifier, `rick`, for the desktop file, the hicolor icon name, the Wayland app id and `StartupWMClass`; the window icon through eframe and the rings-only symbol in the About dialog; the icon and version resource of `rick.exe`; the `Rick.app` bundle the release workflow assembles, plugins still beside the binary; the desktop entry and the `share/` layout of the Linux archive, which installs by one copy of `share/` or through `ext-installer`. No signing, notarisation or package formats: those are Version 0.3 System Integration & Distribution.
+- [`specs/about-dialog.md`](specs/about-dialog.md) — the About dialog: a modal in the settings window's chrome with the build details (commit, target, plugin ABI, build date, toolchain, OS and desktop, loaded plugins; *Copy details* and `rick --version` print the same text), *What's new* from the embedded changelog, the link, licence and credits cards, and a second page listing every third-party component — the bundled runtimes from `about/bundled.toml` and every crate from `third-party.json`, which `cargo about` generates at release time — with search, a licence filter, expandable licence texts and *Export…*. Version 0.3.
 
 ### Still open
 
