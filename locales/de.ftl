@@ -172,6 +172,25 @@ pane-folders-first = Ordner zuerst
 pane-refresh-now = Jetzt aktualisieren
 pane-show-all = Alle anzeigen
 pane-type-folders = Ordner
+footer-hide-hidden = Versteckte Dateien ausblenden
+footer-folders = { $count ->
+    [one] { $count } Ordner
+   *[other] { $count } Ordner
+}
+footer-files = { $count ->
+    [one] { $count } Datei
+   *[other] { $count } Dateien
+}
+footer-of = { $shown } von { $total }
+footer-folders-of = { $shown } von { $total } Ordnern
+footer-files-of = { $shown } von { $total } Dateien
+footer-total-size = { $size } in Dateien
+footer-listing = wird gelesen…
+footer-selected = { $count } ausgewählt · { $size }
+footer-filter = Filter
+footer-subtree = Unterordner einbeziehen
+footer-subtree-on = Sucht auch in den Unterordnern; Klick filtert nur diesen Ordner
+footer-subtree-off = Auch in den Unterordnern suchen
 list-column-name = Name
 list-column-size = Größe
 list-column-type = Typ

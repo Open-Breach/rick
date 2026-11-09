@@ -105,8 +105,8 @@ pub const FOLDER_OPEN: &str = ph::FOLDER_OPEN;
 pub const PAUSE: &str = ph::PAUSE;
 /// Resume a job.
 pub const PLAY: &str = ph::PLAY;
-/// Search in subdirectories.
-pub const SUBTREE: &str = ph::FOLDERS;
+/// The footer's include-subfolders toggle (SPEC.md *Footer*).
+pub const SUBTREE: &str = ph::TREE_STRUCTURE;
 /// Removable media.
 pub const USB: &str = ph::USB;
 /// An internal disk.

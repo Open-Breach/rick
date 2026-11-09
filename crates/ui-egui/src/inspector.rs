@@ -223,7 +223,8 @@ pub fn show(
 
     // Status bar at the foot, in the body size the file list's status line
     // uses; the content gets what is left.
-    let status_h = ui.text_style_height(&egui::TextStyle::Body) + 6.0;
+    // The explorer footer's height (SPEC.md *Footer*).
+    let status_h = crate::theme::metrics(ui.ctx()).toolbar_height();
     let content_h = (ui.available_height() - status_h - 1.0).max(0.0);
     let (content, _) = ui.allocate_exact_size(vec2(width, content_h), egui::Sense::hover());
     state.rects.content = Some(content);
@@ -496,7 +497,16 @@ fn status_bar(ui: &mut egui::Ui, width: f32, height: f32, view: &View<'_>, state
             .layout(egui::Layout::left_to_right(Align::Center)),
     );
     bar.set_clip_rect(status.intersect(ui.clip_rect()));
-    bar.add(egui::Label::new(text).selectable(false).truncate());
+    let scheme = crate::theme::scheme(ui);
+    bar.add(
+        egui::Label::new(
+            egui::RichText::new(text)
+                .size(crate::theme::TEXT_SECONDARY)
+                .color(scheme.text_secondary),
+        )
+        .selectable(false)
+        .truncate(),
+    );
 }
 
 fn separator(ui: &mut egui::Ui, width: f32) {

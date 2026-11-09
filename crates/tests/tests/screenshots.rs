@@ -758,6 +758,108 @@ fn screenshots_of_the_file_list() {
     }
 }
 
+/// Issue 60: the footer — the hidden-files toggle in both states, the
+/// counts, the selection pill, the narrowed counts and the filter field
+/// with its text — in Light and Dark at both densities.
+#[test]
+#[ignore = "needs a wgpu adapter; CI runs it and uploads the images"]
+fn screenshots_of_the_footer() {
+    let (_dir, deep) = sample_tree();
+    fs::write(deep.join(".thumbs.db"), "x").unwrap_or_else(|e| panic!("{e}"));
+    let mut harness = shell(&deep, egui::vec2(1920.0, 1000.0));
+    let pane = harness.state().app().model().focused;
+    harness.state_mut().app_mut().handle(
+        app::Command::Split {
+            pane,
+            dir: model::SplitDir::Right,
+        },
+        &mut Vec::new(),
+    );
+    settle(&mut harness);
+    let second = harness.state().app().model().focused;
+    // The right pane: hidden files shown and a filter narrowing the list.
+    harness
+        .state_mut()
+        .app_mut()
+        .handle(app::Command::ToggleHidden(second), &mut Vec::new());
+    harness.state_mut().app_mut().handle(
+        app::Command::Filter {
+            pane: second,
+            text: "IMG_120".to_owned(),
+        },
+        &mut Vec::new(),
+    );
+    settle(&mut harness);
+    // The left pane: focused by a click on a row, then two pictures
+    // selected.
+    let row = harness
+        .get_all_by_label("IMG_1201.png")
+        .map(|n| n.rect())
+        .min_by(|a, b| a.left().total_cmp(&b.left()))
+        .unwrap_or_else(|| panic!("no row"))
+        .center();
+    harness.event(egui::Event::PointerMoved(row));
+    harness.step();
+    for pressed in [true, false] {
+        harness.event(egui::Event::PointerButton {
+            pos: row,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::default(),
+        });
+        harness.step();
+    }
+    settle(&mut harness);
+    let ids: Vec<_> = harness
+        .state()
+        .app()
+        .model()
+        .active_tab(pane)
+        .map(|(_, t)| {
+            t.rows()
+                .filter(|e| e.name == "IMG_1201.png" || e.name == "IMG_1202.png")
+                .map(|e| e.id)
+                .collect()
+        })
+        .unwrap_or_default();
+    harness.state_mut().app_mut().handle(
+        app::Command::Select {
+            pane,
+            change: SelectionChange::Set(ids),
+        },
+        &mut Vec::new(),
+    );
+    harness.event(egui::Event::PointerMoved(egui::pos2(960.0, 30.0)));
+    settle(&mut harness);
+    for (theme, density) in [
+        (Theme::Light, Density::Comfortable),
+        (Theme::Light, Density::Compact),
+        (Theme::Dark, Density::Comfortable),
+        (Theme::Dark, Density::Compact),
+    ] {
+        for change in [
+            SettingsChange::Theme(theme),
+            SettingsChange::Density(density),
+        ] {
+            harness
+                .state_mut()
+                .app_mut()
+                .handle(app::Command::Settings(change), &mut Vec::new());
+        }
+        settle(&mut harness);
+        let theme_name = match theme {
+            Theme::Light => "light",
+            Theme::Dark => "dark",
+            Theme::System => "system",
+        };
+        let density_name = match density {
+            Density::Comfortable => "comfortable",
+            Density::Compact => "compact",
+        };
+        shoot(&mut harness, &format!("footer-{theme_name}-{density_name}"));
+    }
+}
+
 /// Issue 17: the Preview tab docked below the explorer and torn out into a
 /// window of its own.
 #[test]

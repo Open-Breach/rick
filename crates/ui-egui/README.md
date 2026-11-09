@@ -20,8 +20,11 @@ each pane's toolbar (Back and Forward, the parent chip and breadcrumb, the view 
 title, the folders above an archive as local segments and the archive and
 its contents on the archive provider), file list (the 34 px header band over the Name, Size, Type and Modified columns, rows with inset rounded hover and selection backgrounds and the cursor ring, the empty-folder message, the portal burst while a folder is read; details, tree, list or
 icon view, only the visible rows laid out, names edited in place for
-Rename, New file and New folder) and status line with the subtree-search
-toggle, the Preview tab (toolbar with the media transport and *Copy*, info
+Rename, New file and New folder) and footer (the toolbar's height under a
+hairline: the hidden-files toggle, the folder and file counts and the
+files' size — *12 of 340* while a filter narrows the list — the selection
+pill, and the 200 px filter field with the include-subfolders toggle
+inside its right end), the Preview tab (toolbar with the media transport and *Copy*, info
 badges, content, status bar; one per window, following the focused
 explorer, docked and torn out like any tab; Rick's only viewer, laying out
 every kind of content a previewer returns itself in `content.rs`: a file
