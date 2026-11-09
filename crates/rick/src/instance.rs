@@ -317,6 +317,57 @@ async fn answer(mut connection: Connection, externals: ExternalSender) {
     }
 }
 
+/// How long the relaunch waits for the installed copy to answer.
+pub const RELAUNCH_PATIENCE: Duration = Duration::from_secs(20);
+
+/// Starts `binary`, the copy Rick was installed to, with `args`, and
+/// waits until it answers on `endpoint` as the new instance
+/// (specs/system-integration.md §6.1: Rick relaunches from the standard
+/// location, and by §3's rules there is one instance: the old process
+/// exits after the new one answers). The caller has stopped serving and
+/// unbound the endpoint before, so the new process finds nobody
+/// listening and becomes the instance; what is asked of it is `--help`,
+/// which changes nothing in its window.
+///
+/// # Errors
+///
+/// The I/O error of starting `binary`; `TimedOut` when nothing answered
+/// within `patience` — the caller then takes the endpoint back and stays.
+pub async fn relaunch(
+    endpoint: &Endpoint,
+    binary: &Path,
+    args: &[std::ffi::OsString],
+    patience: Duration,
+) -> io::Result<()> {
+    let mut child = std::process::Command::new(binary)
+        .args(args)
+        .stdin(std::process::Stdio::null())
+        .spawn()?;
+    tracing::info!(binary = %binary.display(), pid = child.id(), "started the installed copy");
+    // Reaped when it ends, however this process fares meanwhile.
+    runtime::handle().spawn_blocking(move || {
+        let _ = child.wait();
+    });
+    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    let ping = Request::new(vec!["--help".to_owned()], cwd);
+    let deadline = tokio::time::Instant::now() + patience;
+    loop {
+        if let Handover::Answered(_) = endpoint.hand_over(&ping, PATIENCE).await? {
+            return Ok(());
+        }
+        if tokio::time::Instant::now() >= deadline {
+            return Err(io::Error::new(
+                io::ErrorKind::TimedOut,
+                format!(
+                    "the installed copy did not answer within {} seconds",
+                    patience.as_secs()
+                ),
+            ));
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+}
+
 /// The exit status of a usage error, re-exported for the binary's own
 /// parsing.
 pub const USAGE: i32 = EXIT_USAGE;

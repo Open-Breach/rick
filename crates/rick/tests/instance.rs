@@ -128,6 +128,86 @@ fn the_launch_answers_version_and_help_without_an_instance() {
     });
 }
 
+/// The relaunch from the installed copy (specs/system-integration.md
+/// §6.1, by the single instance's rules of §3): the old process starts
+/// the copy and is done only once the new instance answers on the
+/// endpoint. Here the copy is the built binary asked for its version,
+/// which exits at once, and the test itself plays the new instance: it
+/// binds the endpoint a moment later and answers the one request.
+#[test]
+fn the_relaunch_returns_once_the_new_instance_answers() {
+    let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+    let config = dir.path().join("config");
+    std::fs::create_dir_all(&config).unwrap_or_else(|e| panic!("{e}"));
+    let endpoint = platform::Native::new().instance_endpoint(&config);
+    let args: Vec<std::ffi::OsString> = vec![
+        "--config-dir".into(),
+        config.clone().into(),
+        "--version".into(),
+    ];
+    runtime::block_on(async {
+        let late = Duration::from_millis(400);
+        let new_instance = async {
+            tokio::time::sleep(late).await;
+            let mut listener = endpoint.bind().await.unwrap_or_else(|e| panic!("{e}"));
+            let mut conn = listener.accept().await.unwrap_or_else(|e| panic!("{e}"));
+            let request = conn
+                .request(PATIENCE)
+                .await
+                .unwrap_or_else(|e| panic!("{e}"));
+            conn.reply(&Reply::ok(Some("help".to_owned())))
+                .await
+                .unwrap_or_else(|e| panic!("{e}"));
+            request
+        };
+        let started = Instant::now();
+        let (outcome, request) = tokio::join!(
+            rick::instance::relaunch(&endpoint, rick(), &args, Duration::from_secs(10)),
+            new_instance
+        );
+        outcome.unwrap_or_else(|e| panic!("{e}"));
+        assert!(
+            started.elapsed() >= late,
+            "not before the new instance answered: {:?}",
+            started.elapsed()
+        );
+        // What is asked of the new instance changes nothing in its window.
+        assert_eq!(request.argv, ["--help"]);
+    });
+    endpoint.unbind();
+}
+
+/// A copy that never becomes the instance: the relaunch gives up after
+/// its patience and says so, for the old process to stay.
+#[test]
+fn the_relaunch_gives_up_when_nothing_answers() {
+    let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+    let config = dir.path().join("config");
+    std::fs::create_dir_all(&config).unwrap_or_else(|e| panic!("{e}"));
+    let endpoint = platform::Native::new().instance_endpoint(&config);
+    let args: Vec<std::ffi::OsString> = vec![
+        "--config-dir".into(),
+        config.clone().into(),
+        "--version".into(),
+    ];
+    runtime::block_on(async {
+        let patience = Duration::from_millis(600);
+        let started = Instant::now();
+        let outcome = rick::instance::relaunch(&endpoint, rick(), &args, patience).await;
+        let error = outcome.err().unwrap_or_else(|| panic!("nothing answered"));
+        assert_eq!(error.kind(), std::io::ErrorKind::TimedOut, "{error}");
+        assert!(started.elapsed() >= patience);
+        // A binary that is not there is the caller's error at once.
+        let missing =
+            rick::instance::relaunch(&endpoint, &dir.path().join("no-such-rick"), &args, patience)
+                .await;
+        assert_eq!(
+            missing.err().map(|e| e.kind()),
+            Some(std::io::ErrorKind::NotFound)
+        );
+    });
+}
+
 /// The instance's half against a second process (issue 103, item 8): a
 /// headless app on the fake platform serves the endpoint of a config
 /// directory of its own; the built binary, run as the newcomer, sends

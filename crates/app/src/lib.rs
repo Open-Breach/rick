@@ -86,7 +86,7 @@ pub mod settings;
 pub use command::{Command, ConnectionOp, Event, PropertiesInfo, TransferMode};
 pub use ext_settings::ExtSettings;
 pub use external::{External, ExternalReceiver, ExternalSender, external_channel};
-pub use integration::IntegrationCommand;
+pub use integration::{INSTALL_RICK_COMMAND, IntegrationCommand};
 /// What the Hash dialogue draws with (the format, the rendering, the
 /// Verify logic), re-exported for the UI.
 pub use ops::hash;
@@ -342,12 +342,14 @@ enum Msg {
         total: usize,
         current: platform::integration::Item,
     },
-    /// The integration apply ended: each row's receipt, or why it failed.
+    /// The integration apply ended: each row's receipt, or why it failed,
+    /// and the copy Rick was installed to on the way.
     IntegrationApplied {
         results: Vec<(
             platform::integration::Item,
             Result<platform::integration::Receipt, Error>,
         )>,
+        relaunch: Option<PathBuf>,
     },
 }
 
@@ -1047,6 +1049,13 @@ impl App {
         self.exit
     }
 
+    /// Asks the UI to exit, as closing the last window does: what the
+    /// relaunch from the installed copy ends with, once the new instance
+    /// has answered (specs/system-integration.md §6.1).
+    pub fn request_exit(&mut self) {
+        self.exit = true;
+    }
+
     /// The user's home directory as a location.
     #[must_use]
     pub fn home(&self) -> &Location {
@@ -1691,7 +1700,7 @@ impl App {
             }
             Command::DeleteLayout(name) => self.delete_layout(&name, events),
             Command::RenameLayout { from, to } => self.rename_layout(&from, &to, events),
-            Command::Integration(command) => self.integration(command),
+            Command::Integration(command) => self.integration(command, events),
         }
         self.sync_panes(events);
         self.sync_preview();
@@ -3861,7 +3870,9 @@ impl App {
                 total,
                 current,
             } => self.integration_progress(done, total, current),
-            Msg::IntegrationApplied { results } => self.integration_applied(results, events),
+            Msg::IntegrationApplied { results, relaunch } => {
+                self.integration_applied(results, relaunch, events);
+            }
             Msg::Invalidate { pane, generation } => {
                 if self
                     .live
@@ -4424,6 +4435,7 @@ impl App {
                 }
                 self.waiting.remove(&id);
                 self.model.job_finished(id, state);
+                self.integration_job_finished(id, &result, events);
                 events.push(Event::JobDone { id, result });
                 if let Some(pane) = self.pane_jobs.remove(&id) {
                     self.refresh(pane);

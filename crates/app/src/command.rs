@@ -710,6 +710,11 @@ pub enum Event {
         /// The rows that could not be set up; each was reported through
         /// [`Event::Notify`].
         failed: Vec<platform::integration::Item>,
+        /// The binary of the copy Rick was installed to in this apply,
+        /// through its `current` link: the UI saves the session and
+        /// continues from there, the running process exiting once the new
+        /// one answers.
+        relaunch: Option<PathBuf>,
     },
 }
 
@@ -858,9 +863,10 @@ impl fmt::Debug for Event {
                 .debug_struct("IntegrationChecked")
                 .field("ask", ask)
                 .finish(),
-            Self::IntegrationApplied { failed } => f
+            Self::IntegrationApplied { failed, relaunch } => f
                 .debug_struct("IntegrationApplied")
                 .field("failed", failed)
+                .field("relaunch", relaunch)
                 .finish(),
         }
     }

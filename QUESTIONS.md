@@ -3429,3 +3429,54 @@ Once answered, an entry keeps its number and gains a dated decision line.
     window the drag began in, and the closed hand alone follows the
     cursor outside it; another window painting the ghost, and what shows
     over the desktop, are part of rule 6 and are asked there.
+
+293. (system integration, issue 120, 2026-11-09) §6.1 and §7.1: the
+    install location goes "through `ext-installer`", whose `install()`
+    takes an archive; a started Rick is an unpacked folder and the
+    archive may be gone.
+    Assumed (handoff of issue 120): the installer gains a source, an
+    unpacked folder, read as one more archive format (`Format::Folder`)
+    so the index, the safety rules, the staging folder renamed into
+    place, the record and the `current` link are the archive path's own;
+    the folder is never packed first. The tree is the folder that holds
+    the running binary, with its libraries, `plugins/` and `share/`. The
+    install is `~/.local/opt/rick/<version>` with the version the binary
+    reports (`0.3.0-dev` in a development build), the app id `rick`, and
+    nothing written outside the app folder: the launcher entry, the
+    icons and the `rick` command are items with switches of their own.
+
+294. (system integration, issue 120, 2026-11-09) §4 has plugins register
+    subcommands and §6.1 has the core perform the install location
+    through the plugin, but no command for it is named.
+    Assumed: the installer declares `install-rick <folder> <version>`
+    beside `install <archive>`: no form, one job in the operations area,
+    an update when a Rick is installed already, one previous version
+    kept. The core runs it with the folder the check reported and its
+    own version, waits for the job, and only then performs the other
+    rows, on the installed copy; a failed install stops them, since they
+    would otherwise point at the folder Rick was meant to leave. The
+    command is listed by `rick --help` like any other.
+
+295. (system integration, issue 120, 2026-11-09) §6.1: "which moves Rick
+    to `~/.local/opt/rick` … and relaunches from there"; the Figma row
+    reads "Move Rick from ~/Downloads/rick-0.3.0 to ~/.local/opt/rick".
+    The process that performs the row runs from the folder it would
+    move, and the installer never deletes what it installs from.
+    Assumed: Rick is copied, and the folder it was started from is left
+    for the user to remove; the row's line says *Copy*. Starting the old
+    folder again offers the row again, as an update of the installed
+    copy.
+
+296. (system integration, issue 120, 2026-11-09) §6.1: "relaunches from
+    there", and §3: one Rick per user session, a launch that finds an
+    instance hands over and exits. How the running Rick gives way to the
+    installed one is not said.
+    Assumed (handoff of issue 120: "the old process exits after the new
+    one answers"): the session is saved; the old process stops serving
+    and unbinds the endpoint, starts `current/rick` with its own
+    `--config-dir` if it had one, and asks the endpoint for `--help`
+    every 100 ms until the new instance answers, then exits. If nothing
+    answers within 20 seconds it binds the endpoint again, stays, and
+    shows *Rick could not be started from …*. Until the relaunch the
+    installed copy stands for the running Rick in the checks, so the
+    rows read *Set up*.
