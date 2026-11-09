@@ -611,8 +611,9 @@ fn tab_label(model: &model::Model, tab: &Tab) -> (&'static str, String) {
 /// Draws one workspace tab at `rect`: a 16 px icon, the title truncated
 /// with an ellipsis and a close button; filled `bg/pane` when active,
 /// `bg/subtle` when hovered, the inactive title in `text/secondary` and its
-/// close button at half opacity (SPEC.md *Workspace tabs*). Returns the
-/// tab's response and whether the close button was pressed.
+/// close button at half opacity; the grab cursor over its body (SPEC.md
+/// *Workspace tabs*). Returns the tab's response and whether the close
+/// button was pressed.
 fn workspace_tab(
     ui: &mut egui::Ui,
     rect: egui::Rect,
@@ -648,6 +649,12 @@ fn workspace_tab(
         sw: 0,
         se: 0,
     };
+    // The open hand over the tab's body: it can be dragged. Its close
+    // button keeps the cursor it has (QUESTIONS.md 277); the tab counts
+    // as hovered under it too, as it would take a drag from there.
+    if response.hovered() && !close.hovered() {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::Grab);
+    }
     let painter = ui.painter();
     if active {
         painter.rect_filled(rect, corners, scheme.bg_pane);
@@ -3886,7 +3893,6 @@ impl RickUi {
                 egui::Id::new(("drag-status", window.0)),
                 &t!("shell-dragging-pane", title = title.as_str()),
             );
-            ctx.set_cursor_icon(egui::CursorIcon::Grabbing);
             ctx.request_repaint();
             if let Some(w) = self.windows.get_mut(&window) {
                 w.ghost = ghost;
@@ -4126,6 +4132,18 @@ impl RickUi {
             self.show_texts(ctx);
             self.show_toasts(ctx);
             self.apply_requests(ctx);
+        }
+
+        // The closed hand for as long as a pane or a tab is dragged,
+        // whatever the cursor is over: set last, so nothing drawn in this
+        // frame shows another cursor (SPEC.md *Panes*: a drag never shows
+        // the arrow).
+        if self
+            .windows
+            .get(&window)
+            .is_some_and(|w| w.pane_drag.is_some() || w.workspace_drag.is_some())
+        {
+            ctx.set_cursor_icon(egui::CursorIcon::Grabbing);
         }
 
         self.report_scroll(window);
