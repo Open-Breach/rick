@@ -64,9 +64,12 @@ the scripted one; performing and undoing are there for the launcher entry
 default file manager (the two keys of `mimeapps.list`, what they named
 before put back by the undo), the `rick` command (the link, and the
 shell function as a marked block of `path.sh` and the fish drop-in, with
-the profile line that sources it) and *"Show in folder"* (the activation
+the profile line that sources it), *"Show in folder"* (the activation
 file, which starts this Rick with `--dbus-service`, the session bus
-asked to read its services again); a file of another origin in an item's
+asked to read its services again) and the dock favourite (Rick appended
+to the desktop's list and taken out of it again by the undo, the rest of
+the list left as it is; Plasma's shell asked to start over from its
+configuration); a file of another origin in an item's
 way is replaced only when the request says the user agreed), the
 `file_manager` module that serves `org.freedesktop.FileManager1` on the
 session bus and hands each call (`ShowItems`, `ShowFolders`,
