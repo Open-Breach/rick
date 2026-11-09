@@ -36,6 +36,49 @@ pub fn file_uri(path: &Path) -> String {
     imp::file_uri(path)
 }
 
+/// The path a `<scheme>:///…` URI names, percent-decoded:
+/// `file:///home/me/a%20b.txt` is `/home/me/a b.txt`,
+/// `rick:///C:/Users/me` is `C:\Users\me`. The scheme is matched
+/// regardless of case; the host may be empty or `localhost` and nothing
+/// else (a UNC host is another machine's); a query or fragment is
+/// dropped. `None` for anything that is not an absolute path of this
+/// machine spelled as such a URI.
+#[must_use]
+pub fn from_uri(uri: &str, scheme: &str) -> Option<PathBuf> {
+    let head = uri.get(..scheme.len())?;
+    if !head.eq_ignore_ascii_case(scheme) {
+        return None;
+    }
+    let rest = uri[scheme.len()..].strip_prefix("://")?;
+    let (host, path) = rest.find('/').map_or((rest, ""), |i| rest.split_at(i));
+    if !(host.is_empty() || host.eq_ignore_ascii_case("localhost")) || path.is_empty() {
+        return None;
+    }
+    let path = path.split(['?', '#']).next()?;
+    let bytes = percent_decode(path)?;
+    imp::from_uri_path(bytes).ok()
+}
+
+/// Percent-decodes `text` byte by byte; `None` for a `%` that no two hex
+/// digits follow.
+fn percent_decode(text: &str) -> Option<Vec<u8>> {
+    let bytes = text.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' {
+            let hex = bytes.get(i + 1..i + 3)?;
+            let hex = std::str::from_utf8(hex).ok()?;
+            out.push(u8::from_str_radix(hex, 16).ok()?);
+            i += 3;
+        } else {
+            out.push(bytes[i]);
+            i += 1;
+        }
+    }
+    Some(out)
+}
+
 /// Percent-encodes everything but the unreserved characters and `/`.
 pub(crate) fn percent_encode(bytes: &[u8]) -> String {
     let mut out = String::with_capacity(bytes.len());
@@ -68,6 +111,14 @@ mod imp {
             "file://{}",
             super::percent_encode(path.as_os_str().as_encoded_bytes())
         )
+    }
+
+    /// The decoded path of a URI: any bytes, from the root.
+    pub(super) fn from_uri_path(bytes: Vec<u8>) -> Result<PathBuf, Error> {
+        if bytes.first() != Some(&b'/') {
+            return Err(Error::Unsupported("a URI's path is absolute"));
+        }
+        Ok(PathBuf::from(OsString::from_vec(bytes)))
     }
 }
 
@@ -103,6 +154,24 @@ mod imp {
             );
         format!("file:///{encoded}")
     }
+
+    /// The decoded path of a URI: `/C:/Users/me` is `C:\Users\me`; the
+    /// bytes are UTF-8, as a URI of a Windows path is.
+    pub(super) fn from_uri_path(bytes: Vec<u8>) -> Result<PathBuf, Error> {
+        let text = String::from_utf8(bytes)
+            .map_err(|_| Error::Unsupported("a URI's path is UTF-8 on Windows"))?;
+        let text = text.replace('/', "\\");
+        let text = text
+            .strip_prefix('\\')
+            .filter(|rest| rest.as_bytes().get(1) == Some(&b':'))
+            .map_or(text.as_str(), |rest| rest)
+            .to_owned();
+        let path = PathBuf::from(text);
+        if !path.is_absolute() {
+            return Err(Error::Unsupported("a URI's path is absolute"));
+        }
+        Ok(path)
+    }
 }
 
 #[cfg(test)]
@@ -121,6 +190,54 @@ mod tests {
     }
 
     use super::*;
+
+    /// `file:///…` and `rick:///…` name a path of this machine, decoded;
+    /// another host, a relative path or a broken escape name nothing.
+    #[test]
+    fn uris_decode_to_paths_of_this_machine() {
+        let path = Path::new(if cfg!(windows) {
+            "C:\\Users\\me\\a b#1.txt"
+        } else {
+            "/home/me/a b#1.txt"
+        });
+        let uri = file_uri(path);
+        assert_eq!(from_uri(&uri, "file").as_deref(), Some(path));
+        let rick = format!("rick{}", &uri["file".len()..]);
+        assert_eq!(from_uri(&rick, "rick").as_deref(), Some(path));
+        assert_eq!(
+            from_uri(&rick.to_uppercase(), "rick").map(|p| p.to_string_lossy().to_lowercase()),
+            Some(path.to_string_lossy().to_lowercase())
+        );
+        assert_eq!(from_uri(&uri, "rick"), None, "another scheme");
+        assert_eq!(
+            from_uri(&format!("{rick}?x=1#frag"), "rick").as_deref(),
+            Some(path),
+            "query and fragment dropped"
+        );
+        assert_eq!(
+            from_uri(
+                &format!("file://localhost{}", &uri["file://".len()..]),
+                "file"
+            )
+            .as_deref(),
+            Some(path),
+            "localhost is this machine"
+        );
+        assert_eq!(
+            from_uri("rick://apps", "rick"),
+            None,
+            "a host is not a path"
+        );
+        assert_eq!(from_uri("rick://server/share/x", "rick"), None);
+        assert_eq!(
+            from_uri("rick:///", "rick").is_some(),
+            cfg!(unix),
+            "the root"
+        );
+        assert_eq!(from_uri("rick:///a%2", "rick"), None, "a broken escape");
+        assert_eq!(from_uri("rick:relative", "rick"), None);
+        assert_eq!(from_uri("rick", "rick"), None);
+    }
 
     #[test]
     fn native_paths_round_trip() {
