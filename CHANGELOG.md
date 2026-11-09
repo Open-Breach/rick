@@ -183,6 +183,23 @@ the pull request that brought the change.
   is disabled and *Cancel* stops the job and closes the dialogue at once.
   The platform's clipboard can be read (`Clipboard::text`) and the hash
   slots carry the files' sizes (#77).
+- The settings window of the design refresh (issue 60, SPEC.md *Settings
+  window*): 880 × 640, GNOME-style, a viewport of its own where the
+  backend has them and an area over the main window in the dialogue
+  frame otherwise. The left column in `bg/panel` holds the *Settings*
+  title, a search field that narrows the categories and rows to those
+  whose label or description match, and the category list — General,
+  View, Appearance, then *PLUGINS* with a row per loaded plugin that
+  declares settings, each with an icon chosen from its id. The right
+  column shows the chosen page: its title, a round close button and
+  grouped cards, one row per setting with its label, description and
+  control — a switch, a dropdown, a segmented control or a text field.
+  General holds Language, Start with, Opening an archive, After a drag,
+  the spring-loading delay (a dropdown of presets) and the names the
+  subtree search skips; View the Files, Sorting and Side panel groups;
+  Appearance Theme, Density and Font size; a plugin's page its schema as
+  a card. The 0.2 settings screen with its grid and sliders is gone
+  (#78).
 
 ### Removed
 
