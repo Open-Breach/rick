@@ -133,6 +133,9 @@ similar = "2"
 portable-pty = "0.9"
 vte = "0.15"
 anyhow = "1"
+# The command line of the binary (specs/system-integration.md §4): the core
+# subcommands by derive, the plugins' added from their manifests.
+clap = { version = "4", features = ["derive"] }
 # The platform keychain (SPEC.md "Package layout": `Secrets`, 0.2).
 keyring = "4"
 # The provider plugins of issue 21 and the SSH plugin of issue 34. SSH

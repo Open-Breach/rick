@@ -92,10 +92,10 @@ use std::sync::{Arc, Mutex, PoisonError, RwLock};
 use std::time::Duration;
 
 use ext::{
-    ActionCtx, ActionOutcome, Availability, Capabilities, DecorateCtx, Decoration, Decorator,
-    Depth, Extension, Filter, FormLater, FormLaterState, FsChange, Invocation, Level, ListOptions,
-    Points, PreviewDoc, Previewer, Prompts, Query, QueryKind, Reads, Registry, SearchIndex,
-    SearchScope, UiHost, UndoCommand,
+    ActionCtx, ActionOutcome, Availability, Capabilities, CliCtx, CliOutcome, DecorateCtx,
+    Decoration, Decorator, Depth, Extension, Filter, FormLater, FormLaterState, FsChange,
+    Invocation, Level, ListOptions, Points, PreviewDoc, Previewer, Prompts, Query, QueryKind,
+    Reads, Registry, SearchIndex, SearchScope, UiHost, UndoCommand,
 };
 use futures::StreamExt;
 use model::{
@@ -2637,6 +2637,47 @@ impl App {
         if after != before {
             events.push(Event::SelectionChanged { pane, ids: after });
         }
+    }
+
+    /// Runs the plugin subcommand `name` of the command line
+    /// (specs/system-integration.md §4, [`ext::cli`]) with `args`, typed
+    /// from the working directory `cwd`, on the focused pane: what an
+    /// action would return is applied there like an action's outcome,
+    /// text is handed back for the caller's terminal. `None` when no
+    /// loaded extension provides the command; the command's own error
+    /// otherwise, for the caller rather than a notification.
+    pub fn run_cli(
+        &mut self,
+        name: &str,
+        args: Vec<String>,
+        cwd: PathBuf,
+        events: &mut Vec<Event>,
+    ) -> Option<Result<Option<String>, Error>> {
+        let command = self
+            .registry
+            .commands()
+            .iter()
+            .find(|c| c.name() == name)
+            .cloned()?;
+        let pane = self.model.focused;
+        let location = self.pane_location(pane);
+        let ctx = CliCtx {
+            args,
+            cwd,
+            pane,
+            location: location.clone(),
+        };
+        let label = format!("rick {name}");
+        Some(match command.run(ctx, &self.jobs, &*self.ui) {
+            Ok(CliOutcome::Text(text)) => Ok(Some(text)),
+            Ok(CliOutcome::Outcome(outcome)) => {
+                self.outcome(pane, location, &label, Ok(outcome), events);
+                // A form filled from an earlier look opens at once.
+                self.check_later(events);
+                Ok(None)
+            }
+            Err(error) => Err(error),
+        })
     }
 
     fn run(&mut self, action: ext::ActionId, ctx: ActionCtx, events: &mut Vec<Event>) {

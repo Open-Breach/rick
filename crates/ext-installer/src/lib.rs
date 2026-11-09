@@ -4,9 +4,13 @@
 //! with one previous version kept, revert, uninstall, repair, and the
 //! Installed Apps view `rick://apps` (specs/ext-installer.md).
 //!
+//! `rick install <archive>` is the installer's subcommand of the command
+//! line (specs/system-integration.md §4): it opens the same install form
+//! in the running Rick.
+//!
 //! Linux only in this version: the plugin loads everywhere, its actions
-//! are hidden and its view answers "unsupported on this platform" on macOS
-//! and Windows. System-wide installs through the privileged helper are the
+//! are hidden, its command refuses and its view answers "unsupported on
+//! this platform" on macOS and Windows. System-wide installs through the privileged helper are the
 //! spec's own later milestone; the form shows the scope as unavailable.
 //!
 //! The crate builds as a `cdylib` the plugin host loads from
@@ -109,6 +113,7 @@ impl InstallerExtension {
                 points: Points::PROVIDER | Points::DECORATOR | Points::ACTION,
                 platforms: Platforms::ALL,
                 previews: &[],
+                commands: actions::COMMANDS,
             },
         }
     }
@@ -136,6 +141,9 @@ impl Extension for InstallerExtension {
         let installer = Arc::new(Installer::new(provider));
         for action in actions::all(&installer) {
             reg.action(action);
+        }
+        for command in actions::commands(&installer) {
+            reg.command(command);
         }
         Ok(())
     }

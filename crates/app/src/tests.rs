@@ -794,6 +794,7 @@ impl IndexExtension {
                 points: Points::SEARCH_INDEX,
                 platforms: Platforms::ALL,
                 previews: &[],
+                commands: &[],
             },
             index,
         })
@@ -1694,6 +1695,7 @@ mod net {
                     points: Points::PROVIDER,
                     platforms: Platforms::ALL,
                     previews: &[],
+                    commands: &[],
                 },
                 stub,
             }

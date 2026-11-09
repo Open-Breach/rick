@@ -96,6 +96,7 @@ impl TrashExtension {
                 points: Points::PROVIDER | Points::DECORATOR | Points::ACTION,
                 platforms: Platforms::ALL,
                 previews: &[],
+                commands: &[],
             },
         }
     }

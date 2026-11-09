@@ -97,6 +97,7 @@ impl IconsPreview {
                 points: Points::PREVIEWER,
                 platforms: Platforms::ALL,
                 previews: PREVIEWS,
+                commands: &[],
             },
         }
     }

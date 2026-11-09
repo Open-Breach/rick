@@ -206,6 +206,7 @@ impl FixedIndex {
                 points: Points::SEARCH_INDEX,
                 platforms: Platforms::ALL,
                 previews: &[],
+                commands: &[],
             },
             hits,
         })

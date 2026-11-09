@@ -166,6 +166,7 @@ impl S3Extension {
                 points: Points::PROVIDER,
                 platforms: Platforms::ALL,
                 previews: &[],
+                commands: &[],
             },
         }
     }

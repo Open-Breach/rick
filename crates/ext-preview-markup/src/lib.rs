@@ -160,6 +160,7 @@ impl MarkupPreview {
                 points: Points::PREVIEWER,
                 platforms: Platforms::ALL,
                 previews: EXTENSIONS,
+                commands: &[],
             },
         }
     }

@@ -69,6 +69,7 @@ impl HexPreview {
                 points: Points::PREVIEWER,
                 platforms: Platforms::ALL,
                 previews: &[],
+                commands: &[],
             },
         }
     }

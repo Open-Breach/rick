@@ -21,10 +21,21 @@
 //! macos = "libext_git.dylib"
 //! windows = "ext_git.dll"
 //! ```
+//!
+//! A plugin with subcommands of the `rick` command line
+//! (specs/system-integration.md §4) carries one `[[commands]]` table per
+//! command, name and help line, so `rick --help` can list them without
+//! loading the plugin:
+//!
+//! ```toml
+//! [[commands]]
+//! name = "install"
+//! help = "Install a tar or zip archive as an application"
+//! ```
 
 use std::path::{Path, PathBuf};
 
-use ext::{Manifest, Platforms, Points};
+use ext::{CommandSpec, Manifest, Platforms, Points};
 use serde::{Deserialize, Serialize};
 
 /// The file's name inside a plugin's directory.
@@ -97,6 +108,26 @@ impl Library {
     }
 }
 
+/// A subcommand of the `rick` command line the plugin provides: one
+/// `[[commands]]` table, from the manifest's [`CommandSpec`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CommandToml {
+    /// The subcommand, as typed after `rick`.
+    pub name: String,
+    /// The one line `rick --help` shows beside it.
+    pub help: String,
+}
+
+impl From<&CommandSpec> for CommandToml {
+    fn from(spec: &CommandSpec) -> Self {
+        Self {
+            name: spec.name.to_owned(),
+            help: spec.help.to_owned(),
+        }
+    }
+}
+
 /// What `plugin.toml` holds: the extension's manifest as the host can read
 /// it without loading the library, plus the facts of the build the library
 /// came from.
@@ -124,6 +155,12 @@ pub struct PluginToml {
     pub toolchain: String,
     /// The library's file name per platform.
     pub library: Library,
+    /// The subcommands of the `rick` command line the plugin provides,
+    /// as `[[commands]]` tables after the library; what `rick --help`
+    /// lists without loading the plugin. Absent in a manifest written
+    /// before API 15.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub commands: Vec<CommandToml>,
 }
 
 impl PluginToml {
@@ -151,6 +188,7 @@ impl PluginToml {
             previews: manifest.previews.iter().map(|n| (*n).to_owned()).collect(),
             toolchain: toolchain.to_owned(),
             library: Library::for_crate(crate_name),
+            commands: manifest.commands.iter().map(CommandToml::from).collect(),
         }
     }
 
@@ -235,9 +273,20 @@ mod tests {
             points: Points::DECORATOR | Points::ACTION,
             platforms: Platforms::ALL,
             previews: &["pdf", "tar.gz"],
+            commands: &[CommandSpec {
+                name: "install",
+                help: "Install an archive",
+            }],
         };
         let toml = PluginToml::describe(&manifest, "ext-git", "rustc 1.97.0 (abc 2026-07-07)");
         assert_eq!(toml.previews, ["pdf", "tar.gz"]);
+        assert_eq!(
+            toml.commands,
+            [CommandToml {
+                name: "install".to_owned(),
+                help: "Install an archive".to_owned()
+            }]
+        );
         assert_eq!(toml.library.linux, "libext_git.so");
         assert_eq!(toml.library.macos, "libext_git.dylib");
         assert_eq!(toml.library.windows, "ext_git.dll");
@@ -251,6 +300,10 @@ mod tests {
         let text = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{e}"));
         assert!(text.starts_with("id = \"git\"\n"), "{text}");
         assert!(text.contains("\n[library]\n"), "{text}");
+        assert!(
+            text.contains("\n[[commands]]\nname = \"install\"\nhelp = \"Install an archive\"\n"),
+            "{text}"
+        );
         assert_eq!(
             PluginToml::read(&path).unwrap_or_else(|e| panic!("{e}")),
             toml
@@ -276,6 +329,10 @@ mod tests {
         assert!(
             parsed.previews.is_empty(),
             "an older manifest names no previews"
+        );
+        assert!(
+            parsed.commands.is_empty(),
+            "an older manifest names no commands"
         );
         assert!(matches!(parsed.points(), Err(ManifestError::UnknownPoint(p)) if p == "wizard"));
         assert_eq!(parsed.library.for_os("macos"), Some("b"));
