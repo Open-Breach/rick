@@ -863,7 +863,7 @@ fn row_icon(label: &str) -> Option<&'static str> {
 
 /// The preview: under its caps title a card with a row per effect — an
 /// icon, the label and the detail in the monospace font, a problem in
-/// `status/danger` — or, without a title, the from → to table.
+/// `status/danger` — or, without a title, the from-to table.
 #[allow(clippy::too_many_lines)]
 fn preview_ui(ui: &mut egui::Ui, form: &Form, rows: &[PreviewRow]) {
     let scheme = theme::scheme(ui);
@@ -939,7 +939,7 @@ fn preview_ui(ui: &mut egui::Ui, form: &Form, rows: &[PreviewRow]) {
         });
         return;
     }
-    // The from → to table of the rename and compress previews.
+    // The from-to table of the rename and compress previews.
     let problems = rows.iter().filter(|r| r.problem.is_some()).count();
     ui.add(
         egui::Label::new(
