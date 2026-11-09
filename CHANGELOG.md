@@ -50,7 +50,8 @@ the pull request that brought the change.
   at startup, and *Reset choices* (#135). Windows and macOS list no item
   yet: the dialog never opens there and the page shows its line and the
   preferences. Questions 278–290, 293–307 and 313–315; the README's
-  install paragraph and the screenshots of the dialog and the page.
+  install paragraph, the screenshots of the dialog and the page, and the
+  first acceptance line clicked through the dialog (#140).
 - Single instance, the command line and `rick://` (issue 103,
   [`specs/system-integration.md`](specs/system-integration.md) §3 and
   §4, milestone 1 of the integration track). One Rick per user session
