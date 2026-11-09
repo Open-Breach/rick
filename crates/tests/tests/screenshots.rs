@@ -732,10 +732,16 @@ fn screenshots_of_the_schemes_and_densities() {
         .map(|(p, _)| p)
         .find(|p| *p != pane)
         .unwrap_or_else(|| panic!("second pane"));
+    // The left pane on the small parent folder, the right one on the
+    // pictures with one selected and previewed, as the Figma frame.
+    let parent = deep
+        .parent()
+        .unwrap_or_else(|| panic!("parent"))
+        .to_path_buf();
     harness.state_mut().app_mut().handle(
         app::Command::Navigate {
-            pane: second,
-            to: local(&deep.join("raw")),
+            pane,
+            to: local(&parent),
         },
         &mut Vec::new(),
     );
@@ -744,15 +750,15 @@ fn screenshots_of_the_schemes_and_densities() {
         .state_mut()
         .app_mut()
         .handle(app::Command::FocusPane(second), &mut Vec::new());
-    harness.step();
-    let name = harness
-        .state()
-        .app()
-        .model()
-        .active_tab(second)
-        .and_then(|(_, t)| t.rows().next().map(|e| e.name.clone()))
-        .unwrap_or_else(|| panic!("a row in raw"));
-    preview(&mut harness, &name);
+    step_until(&mut harness, Duration::from_secs(10), |h| {
+        h.state()
+            .app()
+            .model()
+            .active_tab(second)
+            .is_some_and(|(_, t)| t.rows().next().is_some())
+    });
+    let name = "IMG_1200.png";
+    preview(&mut harness, name);
     for (theme, density) in [
         (Theme::Light, Density::Comfortable),
         (Theme::Light, Density::Compact),
