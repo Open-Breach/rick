@@ -673,7 +673,7 @@ pub struct RickUi {
     toasts: Vec<Toast>,
     dialog: Option<Dialog>,
     name_prompt: Option<NamePrompt>,
-    settings_open: bool,
+    settings: settings_ui::SettingsWindow,
     shortcuts: ShortcutsScreen,
     extensions_open: bool,
     about_open: bool,
@@ -898,7 +898,7 @@ impl RickUi {
             toasts: Vec::new(),
             dialog: None,
             name_prompt: None,
-            settings_open: false,
+            settings: settings_ui::SettingsWindow::default(),
             shortcuts: ShortcutsScreen::default(),
             extensions_open: false,
             about_open: false,
@@ -1039,15 +1039,16 @@ impl RickUi {
             .map_or("", |w| w.search.text.as_str())
     }
 
-    /// Whether the Settings screen is open.
+    /// Whether the Settings window is open.
     #[must_use]
     pub fn settings_open(&self) -> bool {
-        self.settings_open
+        self.settings.is_open()
     }
 
-    /// Opens the Settings window, as the menu does; for the tests.
+    /// Opens the Settings window on the root window, as the menu does; for
+    /// the tests.
     pub fn open_settings(&mut self) {
-        self.settings_open = true;
+        self.settings.open(self.root);
     }
 
     /// Whether the Keyboard shortcuts screen is open.
@@ -2248,7 +2249,7 @@ impl RickUi {
                 let fraction = self.preview_fraction(window);
                 self.handle(Command::TogglePreview { window, fraction });
             }
-            Intent::Settings => self.settings_open = true,
+            Intent::Settings => self.settings.open(window),
             Intent::Shortcuts => self.shortcuts.open = true,
             Intent::Extensions => self.extensions_open = true,
             Intent::ViewList => self.handle(Command::SetView {
@@ -3926,13 +3927,6 @@ impl RickUi {
             conflict::show(ctx, &self.app, &mut self.conflict, &mut self.requests);
             question::show(ctx, &self.app, &mut self.question, &mut self.requests);
             self.show_name_prompt(ctx);
-            settings_ui::settings_window(
-                ctx,
-                &mut self.settings_open,
-                &self.app,
-                window,
-                &mut self.requests,
-            );
             self.shortcuts
                 .show(ctx, &self.keys, self.app.registry(), &mut self.requests);
             settings_ui::extensions_window(
@@ -4032,6 +4026,10 @@ impl eframe::App for RickUi {
         let ctx = ui.ctx().clone();
         self.sync_window_ref(frame, &ctx);
         self.draw_window(ui, root);
+        // The Settings window: its own viewport, or an area over the root
+        // window where the backend embeds viewports.
+        self.settings.show(&ctx, &self.app, &mut self.requests);
+        self.apply_requests(&ctx);
         self.sync_windows(&ctx);
     }
 

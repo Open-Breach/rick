@@ -29,7 +29,7 @@ pub(crate) const PAD: f32 = 24.0;
 /// The label column of the field grid.
 const LABEL_COLUMN: f32 = 128.0;
 /// A control's height.
-pub(crate) const FIELD_HEIGHT: f32 = 36.0;
+pub(crate) const FIELD_HEIGHT: f32 = widgets::FIELD_HEIGHT;
 /// The gap between rows.
 const ROW_GAP: f32 = 12.0;
 /// The header's app icon.
@@ -771,41 +771,16 @@ fn field_row(
             }
         }
         FieldKind::Choice { options, .. } => {
-            let mut selected = state.values.choice(field.key);
-            let current = options.get(selected).map_or("", String::as_str).to_owned();
-            let font = if field.mono {
-                FontId::monospace(TEXT_BODY)
-            } else {
-                FontId::proportional(TEXT_BODY)
-            };
-            let radius = theme::metrics(control_ui.ctx()).corner_radius();
-            {
-                let visuals = control_ui.visuals_mut();
-                visuals.widgets.inactive.weak_bg_fill = scheme.bg_pane;
-                visuals.widgets.inactive.bg_stroke = egui::Stroke::new(1.0, scheme.border_default);
-                visuals.widgets.hovered.weak_bg_fill = scheme.bg_pane;
-                visuals.widgets.hovered.bg_stroke = egui::Stroke::new(1.0, scheme.border_strong);
-                visuals.widgets.open.weak_bg_fill = scheme.bg_pane;
-                visuals.widgets.inactive.corner_radius = radius;
-                visuals.widgets.hovered.corner_radius = radius;
-                visuals.widgets.open.corner_radius = radius;
-            }
-            control_ui.spacing_mut().interact_size.y = FIELD_HEIGHT;
-            control_ui.spacing_mut().button_padding = vec2(10.0, 8.0);
-            egui::ComboBox::from_id_salt(("dialog-choice", field.key))
-                .selected_text(
-                    egui::RichText::new(current)
-                        .font(font)
-                        .color(scheme.text_primary),
-                )
-                .width(control.width())
-                .show_ui(&mut control_ui, |ui| {
-                    for (i, option) in options.iter().enumerate() {
-                        ui.selectable_value(&mut selected, i, option);
-                    }
-                });
-            if selected != state.values.choice(field.key) {
-                state.values.set(field.key, Value::Choice(selected));
+            let selected = state.values.choice(field.key);
+            if let Some(picked) = widgets::dropdown(
+                &mut control_ui,
+                egui::Id::new(("dialog-choice", field.key)),
+                control.width(),
+                options,
+                selected,
+                field.mono,
+            ) {
+                state.values.set(field.key, Value::Choice(picked));
                 *changed = true;
             }
         }

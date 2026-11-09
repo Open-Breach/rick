@@ -2925,3 +2925,21 @@ Once answered, an entry keeps its number and gains a dated decision line.
     clipboard is read on the dialogue's first frame, hex of either case
     before Base64, and anything that is not a digest's length leaves the
     field empty.
+
+253. (design refresh, 2026-11-09) *Settings window*: "a window of their
+    own, 880 × 640", and the controls "a switch, a dropdown, a segmented
+    control, a text field or a button" — the 0.2 screen had sliders for the
+    spring-loading delay and the font size, and the test harness has no
+    viewports.
+    Assumed: the window is an egui viewport where the backend has them and
+    an area over the main window, in the dialogue frame, where viewports are
+    embedded (the tests and the screenshots); the spring-loading delay is a
+    dropdown of 200, 500, 750, 1000, 1500, 2000 and 3000 ms (plus the saved
+    value when it is none of these) and the font size a dropdown of 9 to
+    24 pt; the General page's groups are Language, Session, Archives, Drag
+    and drop and Search, the Appearance page's Theme and Type and spacing;
+    a plugin's page is one card named after the plugin, its Integer fields
+    as text fields that take a number within the schema's bounds; the
+    category glyphs are chosen from the plugin's id (pdf, office, 3d,
+    console, ssh, archive) with a puzzle piece otherwise, manifests having
+    no icon.

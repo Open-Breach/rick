@@ -6,6 +6,9 @@ use egui::{Align2, FontId, Rect, Sense, pos2, vec2};
 
 use crate::theme::{self, Scheme, TEXT_BODY, TEXT_SECONDARY};
 
+/// The height of a field or dropdown in a dialogue.
+pub const FIELD_HEIGHT: f32 = 36.0;
+
 /// A switch, 32 × 18: `accent/focus` with the knob at the right while on,
 /// `bg/switch-off` with it at the left while off. Paint only; the caller
 /// owns the click.
@@ -25,6 +28,83 @@ pub fn switch(ui: &mut egui::Ui, on: bool) {
     };
     ui.painter()
         .circle_filled(pos2(knob_x, rect.center().y), 7.0, Scheme::ON_BUTTON);
+}
+
+/// A switch that takes the click itself: [`switch`]'s look, `Sense::click`,
+/// read aloud as a checkbox named `label`. Returns the response.
+pub fn toggle(ui: &mut egui::Ui, on: bool, label: &str) -> egui::Response {
+    let scheme = theme::scheme(ui);
+    let (rect, response) = ui.allocate_exact_size(vec2(32.0, 18.0), Sense::click());
+    let fill = if on {
+        scheme.accent_focus
+    } else {
+        scheme.bg_switch_off
+    };
+    let fill = if response.hovered() {
+        fill.gamma_multiply(0.9)
+    } else {
+        fill
+    };
+    ui.painter().rect_filled(rect, 9.0, fill);
+    let knob_x = if on {
+        rect.right() - 9.0
+    } else {
+        rect.left() + 9.0
+    };
+    ui.painter()
+        .circle_filled(pos2(knob_x, rect.center().y), 7.0, Scheme::ON_BUTTON);
+    response.widget_info(|| {
+        egui::WidgetInfo::selected(egui::WidgetType::Checkbox, true, on, label.to_owned())
+    });
+    response
+}
+
+/// A dropdown `width` wide: a `bg/pane` button with a `border/default`
+/// frame and `radius/control` corners showing the chosen option and a
+/// caret, the options listed when open. Returns the option clicked.
+pub fn dropdown(
+    ui: &mut egui::Ui,
+    id: egui::Id,
+    width: f32,
+    options: &[String],
+    selected: usize,
+    mono: bool,
+) -> Option<usize> {
+    let scheme = theme::scheme(ui);
+    let radius = theme::metrics(ui.ctx()).corner_radius();
+    let current = options.get(selected).map_or("", String::as_str).to_owned();
+    let font = if mono {
+        FontId::monospace(TEXT_BODY)
+    } else {
+        FontId::proportional(TEXT_BODY)
+    };
+    {
+        let visuals = ui.visuals_mut();
+        visuals.widgets.inactive.weak_bg_fill = scheme.bg_pane;
+        visuals.widgets.inactive.bg_stroke = egui::Stroke::new(1.0, scheme.border_default);
+        visuals.widgets.hovered.weak_bg_fill = scheme.bg_pane;
+        visuals.widgets.hovered.bg_stroke = egui::Stroke::new(1.0, scheme.border_strong);
+        visuals.widgets.open.weak_bg_fill = scheme.bg_pane;
+        visuals.widgets.inactive.corner_radius = radius;
+        visuals.widgets.hovered.corner_radius = radius;
+        visuals.widgets.open.corner_radius = radius;
+    }
+    ui.spacing_mut().interact_size.y = FIELD_HEIGHT;
+    ui.spacing_mut().button_padding = vec2(10.0, 8.0);
+    let mut picked = selected;
+    egui::ComboBox::from_id_salt(id)
+        .selected_text(
+            egui::RichText::new(current)
+                .font(font)
+                .color(scheme.text_primary),
+        )
+        .width(width)
+        .show_ui(ui, |ui| {
+            for (i, option) in options.iter().enumerate() {
+                ui.selectable_value(&mut picked, i, option);
+            }
+        });
+    (picked != selected).then_some(picked)
 }
 
 /// A segmented control in `rect`: a `bg/control` track with `radius`
