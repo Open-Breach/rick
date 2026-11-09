@@ -7,6 +7,28 @@ the pull request that brought the change.
 
 ## [Unreleased]
 
+### Changed
+
+- The scheme and density tokens of the design refresh (issue 60;
+  `ui_egui::theme`): every colour comes from a scheme, the Figma collection
+  *Rick* one to one with *Light* and *Dark* as the two schemes Rick ships,
+  and every size from the *Density* collection, *Comfortable* (the default)
+  and *Compact*; egui's visuals, spacing and text styles are derived from
+  them for both of egui's themes, so following the system keeps working,
+  and a widget that needs a token egui has no field for reads it from the
+  context. A unit test holds the shipped pairs to WCAG contrast (4.5:1
+  text, 3:1 controls and icons; QUESTIONS.md 242 names the three Figma
+  pairs that fall short) (#68).
+- The density setting has two levels, Comfortable and Compact; `normal` in
+  an existing `rick.toml` reads as Comfortable (QUESTIONS.md 225) (#68).
+
+### Removed
+
+- The accent-colour setting: colours are the scheme's contrast-checked
+  pairs, and more colour comes as further schemes; an `accent` key in
+  `rick.toml` is ignored and dropped on the next write (QUESTIONS.md 226)
+  (#68).
+
 ## [0.2.0] - 2026-11-08
 
 The plugin release, on Linux, macOS and Windows: the native plugin host and
