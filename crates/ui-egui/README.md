@@ -78,11 +78,16 @@ window in `settings_ui.rs` (880 × 640, a viewport of its own where the
 backend has them and an area over the main window otherwise: the
 `bg/panel` column with the title, the search field that narrows the
 categories and rows to those whose label or description match, and the
-category list — General, View, Appearance, then *PLUGINS* with a row per
-plugin that declares settings; the page at the right with its title, a
-round close button and grouped cards, one row per setting with its label,
-description and control: a switch, a dropdown, a segmented control or a
-text field) and the Keyboard shortcuts screen, and drag and drop of entries: rows are drag
+category list — General, View, Appearance, Integration, then *PLUGINS*
+with a row per plugin that declares settings; the page at the right with
+its title, a round close button and grouped cards, one row per setting
+with its label, description and control: a switch, a dropdown, a
+segmented control or a text field; the Integration page starts with the
+line naming the system, the desktop and the last check beside *Check
+again*, lists every integration item with the line its state words and
+its pill — *Set up*, *Reset by system* with *Restore*, *Skipped* or *Not
+set up* with *Add*, *Unsupported* — and has the switches for shell
+integration and the check at startup and *Reset choices*) and the Keyboard shortcuts screen, and drag and drop of entries: rows are drag
 sources, folders, pane space, breadcrumb segments and tab headers are drop
 zones with the ghost, the live indicator and spring-loading in between (a
 pane at the Trash view trashes what lands in it); the side panel is never a

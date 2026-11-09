@@ -3668,3 +3668,35 @@ Once answered, an entry keeps its number and gains a dated decision line.
     not said.
     Assumed: at the end of that window's row, shown; dropped on the row
     itself, at the slot the row shows.
+
+313. (system integration, issue 120, 2026-11-09) The Figma frame
+    *Settings — Integration* has the line "Fedora Linux 43 · GNOME 49 ·
+    checked at start, 14:02" and, under *Terminal and links*, a row
+    "rick:// links" with a *Set up* pill.
+    Assumed: the line is the system and the desktop as the platform
+    names them, without the desktop's version, then *checked at start,
+    HH:MM* in local time, or *checked HH:MM* after **Check again**. The
+    `rick://` row is left out: §7.1 has no such item, the scheme is
+    registered by the desktop entry and made Rick's by the default file
+    manager item (`x-scheme-handler/rick`), whose line says so.
+
+314. (system integration, issue 120, 2026-11-09) The frame's lines
+    "Reset by a system update on 8 Nov" and "Skipped at first run" say
+    more than Rick knows: the check finds an item it set up missing, not
+    who changed it or when, and a row can be switched off at any start.
+    Assumed: a reset item reads *Was set up by Rick and has been changed
+    or removed since*; a skipped one *Skipped in the setup dialog on
+    <day>*, the day being the one its record was last touched, which
+    for a declined item is the day it was switched off. A set-up item
+    says where it is; an unsupported one says why.
+
+315. (system integration, issue 120, 2026-11-09) §6.1 names four pills.
+    An item can also be neither set up nor declined: after *Not now*,
+    with the dialog silenced, or after *Reset choices*.
+    Assumed: such a row has a grey *Not set up* pill, the line the
+    dialog shows for it, and **Add**. A row with a file of another
+    origin in its way names the file and its button reads *Replace*,
+    which is the user's word to replace it (question 305). The buttons
+    rest while a check or an apply runs. *Reset choices* is there to
+    press when a row is declined or the dialog is silenced, and undoes
+    both. Opening the page before any check ran asks for one.

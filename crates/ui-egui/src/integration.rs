@@ -17,18 +17,25 @@
 //!
 //! The shell asks for the check once, after the first frame, and opens
 //! the dialog when the answer says to.
+//!
+//! the settings' Integration page (§6.1, the Figma frame *Settings —
+//! Integration*) words its rows here too: the line naming the system and
+//! the last check, and for every item its line, its pill — *Set up*,
+//! *Reset by system*, *Skipped*, *Not set up*, *Unsupported* — and what
+//! its button asks for.
 
 use std::path::Path;
 use std::sync::{Arc, OnceLock};
 
 use app::{App, Command, IntegrationCommand};
+use chrono::{DateTime, Local, NaiveDate};
 use egui::{Align, Align2, FontId, Rect, Sense, pos2, vec2};
 use ext::{Header, HeaderIcon, t};
-use model::{Integration, IntegrationItem, SettingsChange};
-use platform::integration::{Desktop, Item, Scope};
+use model::{Integration, IntegrationItem, ItemRecord, ItemStatus, SettingsChange};
+use platform::integration::{Desktop, Item, Reason, Scope};
 
 use crate::shell::Request;
-use crate::theme::{self, CARD_RADIUS, ICON, TEXT_BODY, TEXT_SECONDARY};
+use crate::theme::{self, CARD_RADIUS, ICON, Scheme, TEXT_BODY, TEXT_SECONDARY};
 use crate::{dialog, icons, widgets};
 
 /// A row with a one-line description.
@@ -664,6 +671,172 @@ fn footer(ui: &mut egui::Ui, integration: &Integration, open: &mut Open, asked: 
             }
         },
     );
+}
+
+/// The line under the title of the settings' Integration page: the system and
+/// the desktop, then when the check last ran.
+pub(crate) fn checked_line(integration: &Integration) -> String {
+    let checked = if integration.checking {
+        t!("integration-checking")
+    } else {
+        match integration.checked_at {
+            Some(at) => {
+                let time = DateTime::<Local>::from(at).format("%H:%M").to_string();
+                if integration.at_startup {
+                    t!("integration-checked-at-start", time = time)
+                } else {
+                    t!("integration-checked", time = time)
+                }
+            }
+            None => t!("integration-not-checked"),
+        }
+    };
+    if integration.system.is_empty() {
+        checked
+    } else {
+        format!("{} · {checked}", integration.system)
+    }
+}
+
+/// The items of one group of the settings' Integration page, in the listed
+/// order: the `rick` command under *Terminal and links*, the others
+/// under *This system*.
+pub(crate) fn settings_rows(integration: &Integration, terminal: bool) -> Vec<&IntegrationItem> {
+    integration
+        .items
+        .iter()
+        .filter(|row| (row.item == Item::RickCommand) == terminal)
+        .collect()
+}
+
+/// An item's title on the settings' Integration page.
+pub(crate) fn item_name(item: Item) -> String {
+    match item {
+        Item::InstallLocation => t!("integration-item-install-location"),
+        Item::LauncherEntry => t!("integration-item-launcher-entry"),
+        Item::DefaultFileManager => t!("integration-item-default-file-manager"),
+        Item::ShowInFolder => t!("integration-item-show-in-folder"),
+        Item::RickCommand => t!("integration-item-rick-command"),
+        Item::DockFavourite => t!("integration-item-dock-favourite"),
+    }
+}
+
+/// The day a record was last touched, as `8 Nov`.
+fn record_day(record: Option<&ItemRecord>) -> Option<String> {
+    let date = record?.checked?.date?;
+    let date = NaiveDate::from_ymd_opt(date.year.into(), date.month.into(), date.day.into())?;
+    Some(date.format("%-d %b").to_string())
+}
+
+/// The line under an item's title on the settings' Integration page: where a
+/// set-up item is, what is in the way of one that is not, why one cannot
+/// be set up, or what setting it up would do.
+pub(crate) fn settings_line(
+    row: &IntegrationItem,
+    desktop: Option<Desktop>,
+    record: Option<&ItemRecord>,
+    home: &Path,
+) -> String {
+    let check = &row.check;
+    let shown = |path: Option<&Path>| path.map(|p| tilde(p, home)).unwrap_or_default();
+    if let Some(path) = check.foreign.first() {
+        return t!("integration-foreign", path = tilde(path, home));
+    }
+    match &row.status {
+        ItemStatus::SetUp => match row.item {
+            Item::InstallLocation => t!(
+                "integration-line-install-location",
+                path = shown(check.place.as_deref())
+            ),
+            Item::LauncherEntry => t!(
+                "integration-line-launcher-entry",
+                dir = shown(check.place.as_deref())
+            ),
+            Item::DefaultFileManager => t!("integration-line-default-file-manager"),
+            Item::ShowInFolder => t!("integration-line-show-in-folder"),
+            Item::RickCommand => t!(
+                "integration-line-rick-command",
+                link = shown(check.place.as_deref()),
+                target = shown(check.target.as_deref())
+            ),
+            Item::DockFavourite => match desktop {
+                Some(Desktop::Gnome) => t!("integration-line-dock-favourite-gnome"),
+                Some(Desktop::Plasma) => t!("integration-line-dock-favourite-plasma"),
+                Some(Desktop::Cosmic) => t!("integration-line-dock-favourite-cosmic"),
+                Some(Desktop::Cinnamon) => t!("integration-line-dock-favourite-cinnamon"),
+                None => t!("integration-line-dock-favourite"),
+            },
+        },
+        ItemStatus::Drifted => t!("integration-line-drifted"),
+        ItemStatus::Declined => match record_day(record) {
+            Some(day) => t!("integration-line-skipped-on", date = day),
+            None => t!("integration-line-skipped"),
+        },
+        ItemStatus::Missing => row_detail(row, desktop, home),
+        ItemStatus::Unsupported(reason) => match reason {
+            Reason::Desktop => t!("integration-unsupported-desktop"),
+            Reason::Program(name) => t!("integration-unsupported-program", name = name.as_str()),
+            Reason::Config(path) => t!("integration-unsupported-config", path = tilde(path, home)),
+            Reason::AllUsers => t!("integration-not-available-yet"),
+            Reason::Plugin(name) => t!("integration-unsupported-plugin", name = name.as_str()),
+        },
+    }
+}
+
+/// An item's pill on the settings' Integration page: its text, its tint and its
+/// text colour.
+pub(crate) fn status_pill(
+    status: &ItemStatus,
+    scheme: &Scheme,
+) -> (String, egui::Color32, egui::Color32) {
+    let grey = (scheme.trash_low_bg, scheme.trash_low_text);
+    let (text, (bg, fg)) = match status {
+        ItemStatus::SetUp => (
+            t!("integration-pill-set-up"),
+            (scheme.status_success_bg, scheme.status_success),
+        ),
+        ItemStatus::Drifted => (
+            t!("integration-pill-reset"),
+            (scheme.trash_mid_bg, scheme.status_warning),
+        ),
+        ItemStatus::Declined => (t!("integration-pill-skipped"), grey),
+        ItemStatus::Missing => (t!("integration-pill-not-set-up"), grey),
+        ItemStatus::Unsupported(_) => (t!("integration-pill-unsupported"), grey),
+    };
+    (text, bg, fg)
+}
+
+/// What an item's button on the settings' Integration page reads and asks for,
+/// and whether it is the primary one: *Restore* for an item the system
+/// reset, *Add* for one skipped or not set up; *Replace* instead of
+/// either while a file Rick did not write is in the way, which is the
+/// user's word to replace it. No button for an item that is set up or
+/// cannot be.
+pub(crate) fn status_action(row: &IntegrationItem) -> Option<(String, bool, IntegrationCommand)> {
+    let item = row.item;
+    let replace = !row.check.foreign.is_empty();
+    match &row.status {
+        ItemStatus::SetUp | ItemStatus::Unsupported(_) => None,
+        ItemStatus::Drifted if replace => Some((
+            t!("integration-replace"),
+            false,
+            IntegrationCommand::Restore { item, replace },
+        )),
+        ItemStatus::Drifted => Some((
+            t!("integration-restore"),
+            true,
+            IntegrationCommand::Restore { item, replace },
+        )),
+        ItemStatus::Declined | ItemStatus::Missing => Some((
+            if replace {
+                t!("integration-replace")
+            } else {
+                t!("integration-add")
+            },
+            false,
+            IntegrationCommand::Add { item, replace },
+        )),
+    }
 }
 
 #[cfg(test)]
