@@ -333,6 +333,18 @@ const POLL_BUDGET: Duration = Duration::from_millis(8);
 /// How long a reveal waits for its files to be listed before it selects
 /// what is there.
 const REVEAL_FOR: Duration = Duration::from_secs(5);
+
+/// The line typed into a console to take its shell to `path`: quoted for
+/// the shell, with a leading space so a shell that ignores such lines
+/// keeps it out of its history, and Enter.
+fn cd_command(path: &Path) -> Vec<u8> {
+    if ext::Platforms::current() == ext::Platforms::WINDOWS {
+        format!(" cd /d \"{}\"\r", path.display()).into_bytes()
+    } else {
+        let quoted = path.to_string_lossy().replace('\'', "'\\''");
+        format!(" cd '{quoted}'\r").into_bytes()
+    }
+}
 /// How long the title-row search box's text must stand before the search
 /// indexes are asked, so a typist does not start a query per keystroke.
 const INDEX_SEARCH_AFTER: Duration = Duration::from_millis(150);
@@ -482,6 +494,25 @@ struct Live {
     children: BTreeMap<EntryId, Child>,
 }
 
+/// A console tab and the explorer tab it was opened from
+/// (specs/system-integration.md §4): the tab follows the shell's working
+/// directory, and the shell is told `cd` when the tab navigates while it
+/// is at its prompt.
+struct ConsoleLink {
+    /// The explorer's pane.
+    pane: PaneId,
+    /// The explorer tab, which must be its pane's active tab to be moved.
+    explorer: TabId,
+    /// The console.
+    console: Arc<dyn ext::Console>,
+    /// The working directory the console last reported, so a report is
+    /// acted on once.
+    cwd_seen: Option<PathBuf>,
+    /// The explorer's location last seen, so a navigation is typed once,
+    /// and one the console itself caused not at all.
+    location_seen: Location,
+}
+
 /// The application: model, registry, jobs, undo log and settings.
 pub struct App {
     model: Model,
@@ -542,6 +573,9 @@ pub struct App {
     /// is listed, with when it asked; a name that never shows is dropped
     /// after [`REVEAL_FOR`].
     reveal_pending: BTreeMap<PaneId, (Vec<Vec<u8>>, std::time::Instant)>,
+    /// The console tabs open and the explorer tabs they follow, by the
+    /// console's tab.
+    console_links: BTreeMap<TabId, ConsoleLink>,
     /// Writes `places.toml`, latest snapshot wins.
     places_saver: mpsc::UnboundedSender<Vec<Place>>,
     /// Stops the volume poll.
@@ -842,6 +876,7 @@ impl App {
             pending,
             later: Vec::new(),
             reveal_pending: BTreeMap::new(),
+            console_links: BTreeMap::new(),
             places_saver,
             volumes_watch: CancelToken::new(),
             poke: runtime::watch::channel(0).0,
@@ -1258,6 +1293,7 @@ impl App {
         debug!(?command, "command");
         self.dispatch(command, events);
         self.sync_panes(events);
+        self.sync_consoles(events);
         self.sync_preview();
         self.sync_session();
     }
@@ -1657,6 +1693,7 @@ impl App {
                 break;
             }
         }
+        self.sync_consoles(events);
         if handled > 0 {
             self.sync_preview();
             self.sync_session();
@@ -2808,7 +2845,28 @@ impl App {
                     ext::View::Compare(_) => model::TabKind::Compare,
                     ext::View::Console(_) => model::TabKind::Console,
                 };
+                // The explorer tab a console follows: the pane's active
+                // tab the action ran in.
+                let explorer = self
+                    .model
+                    .active_tab(pane)
+                    .filter(|(_, tab)| tab.kind == model::TabKind::Explorer)
+                    .map(|(id, tab)| (id, tab.location.clone()));
                 if let Some(tab) = self.model.open_view(pane, kind, location, view.title()) {
+                    if let (ext::View::Console(console), Some((explorer, location_seen))) =
+                        (&view, explorer)
+                    {
+                        self.console_links.insert(
+                            tab,
+                            ConsoleLink {
+                                pane,
+                                explorer,
+                                console: Arc::clone(console),
+                                cwd_seen: console.cwd(),
+                                location_seen,
+                            },
+                        );
+                    }
                     events.push(Event::ViewOpened { pane, tab, view });
                 }
             }
@@ -4202,6 +4260,65 @@ impl App {
         }
         if let Some(ids) = self.model.select(pane, SelectionChange::Set(ids)) {
             events.push(Event::SelectionChanged { pane, ids });
+        }
+    }
+
+    /// Keeps each console and the explorer tab it was opened from in step
+    /// (specs/system-integration.md §4): a working directory the shell
+    /// reported (OSC 7) since the last look moves the explorer tab there,
+    /// when it is its pane's active tab; the explorer's own navigation
+    /// types `cd` into the console while the shell is at its prompt, never
+    /// while a job has the terminal or the session cannot tell. A console
+    /// or explorer tab that closed ends the link.
+    fn sync_consoles(&mut self, events: &mut Vec<Event>) {
+        let model = &self.model;
+        self.console_links
+            .retain(|tab, link| model.tab(*tab).is_some() && model.tab(link.explorer).is_some());
+        let tabs: Vec<TabId> = self.console_links.keys().copied().collect();
+        for tab in tabs {
+            let Some(link) = self.console_links.get(&tab) else {
+                continue;
+            };
+            let Some(location) = self
+                .model
+                .active_tab(link.pane)
+                .filter(|(id, _)| *id == link.explorer)
+                .map(|(_, t)| t.location.clone())
+            else {
+                continue;
+            };
+            let pane = link.pane;
+            let cwd = link.console.cwd();
+            if cwd != link.cwd_seen {
+                let to = cwd
+                    .as_deref()
+                    .map(|path| Location::new(ProviderId::LOCAL, platform::paths::from_path(path)));
+                if let Some(link) = self.console_links.get_mut(&tab) {
+                    link.cwd_seen = cwd;
+                    if let Some(to) = &to {
+                        link.location_seen = to.clone();
+                    }
+                }
+                if let Some(to) = to
+                    && to != location
+                {
+                    self.dispatch(Command::Navigate { pane, to }, events);
+                }
+                continue;
+            }
+            if location != link.location_seen {
+                let path = (location.provider == ProviderId::LOCAL)
+                    .then(|| platform::paths::to_path(&location.path).ok())
+                    .flatten();
+                if let Some(path) = path
+                    && link.console.foreground_job() == Some(false)
+                {
+                    link.console.write(&cd_command(&path));
+                }
+                if let Some(link) = self.console_links.get_mut(&tab) {
+                    link.location_seen = location;
+                }
+            }
         }
     }
 
