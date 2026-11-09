@@ -67,7 +67,8 @@ pub enum Spring {
     /// Navigate this pane into the target folder (a folder row or a
     /// breadcrumb segment).
     Pane(PaneId),
-    /// Make this tab its pane's active one (a tab header).
+    /// Show this tab's workspace and focus its pane (a workspace tab of
+    /// the title row, or a pane bar's tab).
     Tab(TabId),
 }
 
@@ -256,7 +257,7 @@ enum Origin {
         location: Location,
         scroll: f32,
     },
-    /// The pane switched tabs away from `previous`.
+    /// The window showed `pane`'s workspace instead of `previous`'s.
     Tab { pane: PaneId, previous: TabId },
 }
 
@@ -1010,15 +1011,21 @@ fn spring_load(
             }));
         }
         Spring::Tab(tab) => {
+            // A workspace tab of the title row: resting on it shows the
+            // workspace, with its pane focused; the tab that had the
+            // window's focus is the one to come back to.
             let model = app.model();
             let Some(pane) = model.pane_of(*tab) else {
                 return;
             };
-            let active = model.pane(pane).and_then(model::Pane::active);
-            if active == Some(*tab) {
+            let Some(window) = model.window_of(pane) else {
+                return;
+            };
+            let focused = model.window(window).map(model::Window::focused);
+            if focused == Some(pane) {
                 return;
             }
-            if let Some(previous) = active
+            if let Some(previous) = focused.and_then(|p| model.active_tab(p)).map(|(id, _)| id)
                 && !drag
                     .origins
                     .iter()

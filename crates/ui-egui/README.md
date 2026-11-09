@@ -11,9 +11,11 @@ is the system's UI and monospace fonts (`fonts`, through the platform's
 the `model` the `app` owns, the first as eframe's root viewport and the
 others as viewports of their own drawn in the same frame: the window frame
 with its shadow and resize grips where the system draws none, the title row
-with the burger menu (New window, the Layouts submenu), the `egui_dock` tree
-of tabs and split panes, whose tab order and divider positions it reports
-back for the session, a tab dragged outside every window opening a new one,
+with the burger menu (New window, the Layouts submenu), the workspace tabs
+(one per workspace, titled after the folder in its focused pane, reordered
+by drag, a tab dragged outside every window opening a new one) and the
+search box, the `egui_dock` tree of the shown workspace's split panes, whose
+divider positions it reports back for the session,
 each tab's toolbar, path bar (breadcrumbs per provider: a `rick://` view's
 title, the folders above an archive as local segments and the archive and
 its contents on the archive provider), file list (details, tree, list or

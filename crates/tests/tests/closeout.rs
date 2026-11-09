@@ -860,13 +860,11 @@ fn open_containing_folder_from_a_flattened_view_selects_the_item() {
     assert!(step_until(&mut harness, Duration::from_secs(3), |h| {
         selected_names(h) == ["inner.txt"]
     }));
+    let model = harness.state().app().model();
     assert_eq!(
-        harness
-            .state()
-            .app()
-            .model()
-            .pane(pane)
-            .map(|p| p.tabs().len()),
-        Some(2)
+        model.workspaces(model.focused_window).len(),
+        2,
+        "the folder opened in a new workspace tab"
     );
+    assert_ne!(model.focused, pane);
 }

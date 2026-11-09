@@ -16,11 +16,12 @@ use std::time::{Duration, Instant, SystemTime};
 
 use app::{App, Command, Event};
 use egui::{ViewportBuilder, ViewportCommand, ViewportId};
-use egui_dock::{DockArea, NodePath, TabViewer};
+use egui_dock::{DockArea, TabViewer};
 use ext::{ActionCtx, ActionId, Invocation, Level};
 use model::{
     Column, Density, DockTarget, Geometry, IconSize, JobState, PaneId, PanelSide, SelectionChange,
     SettingsChange, SidePanelChange, SortDir, Tab, TabId, TabKind, Theme, ViewMode, WindowId,
+    WorkspaceId,
 };
 use platform::raw_window_handle::{HasDisplayHandle as _, HasWindowHandle as _};
 use platform::{ControlsSide, WindowRef};
@@ -321,32 +322,38 @@ struct NamePrompt {
     focus: bool,
 }
 
-/// The state of one window: its dock, search box and drag.
+/// The state of one window: its dock, search box and drags.
 pub struct WindowUi {
-    /// The dock tree.
+    /// The dock tree of the shown workspace.
     dock: DockSync,
     search: SearchBox,
     /// Where the Preview tab's content was in the last frame, when the
     /// window showed it.
     preview_rect: Option<egui::Rect>,
-    /// The tab the pointer was over in the frame being drawn.
+    /// The pane bar's tab the pointer was over in the frame being drawn.
     hovered_tab: Option<TabId>,
-    /// Each tab's header button in the last frame, for tests that drop on
-    /// one.
+    /// Each workspace tab of the title row in the last frame, by the tab
+    /// its title comes from, for tests that drop on one.
     tab_headers: HashMap<TabId, egui::Rect>,
     /// Rick's own window frame as the last frame drew it, if it did; the
     /// window is then cleared to transparent around it.
     window_frame: Option<frame::Frame>,
     /// Drag and drop of entries.
     dnd: Dnd,
-    /// The tab a drag out of a tab strip carried in the last frame.
+    /// The tab a drag out of a pane's bar carried in the last frame.
     tab_drag: Option<TabId>,
     /// The content rectangle of the last frame, window coordinates.
     content: Option<egui::Rect>,
     /// The window's inner rectangle on the screen, from the last frame.
     screen: Option<egui::Rect>,
-    /// Each pane's tab strip in the last frame, window coordinates.
-    strips: Vec<(PaneId, egui::Rect)>,
+    /// The title row's tab row in the last frame, window coordinates: where
+    /// a dropped pane, or a tab dragged from another window, lands.
+    tab_row: Option<egui::Rect>,
+    /// A workspace tab being dragged along the title row.
+    workspace_drag: Option<TabDrag>,
+    /// Where a pane dragged over the tab row would land as a new tab, in
+    /// this frame.
+    pane_drop_slot: Option<usize>,
     /// The restored geometry has been handed to the backend.
     placed: bool,
 }
@@ -364,10 +371,198 @@ impl WindowUi {
             tab_drag: None,
             content: None,
             screen: None,
-            strips: Vec::new(),
+            tab_row: None,
+            workspace_drag: None,
+            pane_drop_slot: None,
             placed: false,
         }
     }
+}
+
+/// A workspace tab being dragged along the title row.
+#[derive(Debug, Clone, Copy)]
+struct TabDrag {
+    /// The workspace.
+    id: WorkspaceId,
+    /// Where the pointer took the tab, from its left edge.
+    grab: f32,
+}
+
+/// What a workspace tab shows: the folder in the workspace's focused pane.
+struct TabLabel {
+    /// The place's, the view's or the provider's icon.
+    icon: &'static str,
+    /// The folder's name or the view's title.
+    title: String,
+    /// The tab the label comes from.
+    tab: Option<TabId>,
+    /// Where that tab is, when it lists a folder; *Reopen closed tab*
+    /// brings it back.
+    location: Option<Location>,
+    /// What a drop of entries on the tab does, when it lists a folder.
+    drop: Option<Target>,
+}
+
+/// The label of a workspace: the folder of its focused pane, or of its
+/// first explorer when the focused pane shows the preview.
+fn workspace_label(model: &model::Model, ws: &model::Workspace) -> TabLabel {
+    let pane = if crate::dock::shows_preview(model, ws.focused) {
+        ws.dock
+            .panes()
+            .into_iter()
+            .find(|p| !crate::dock::shows_preview(model, *p))
+            .unwrap_or(ws.focused)
+    } else {
+        ws.focused
+    };
+    let Some((id, tab)) = model.active_tab(pane) else {
+        return TabLabel {
+            icon: icons::FOLDER,
+            title: "?".to_owned(),
+            tab: None,
+            location: None,
+            drop: None,
+        };
+    };
+    let (icon, title) = tab_label(model, tab);
+    let lists = tab.kind.lists();
+    TabLabel {
+        icon,
+        title,
+        tab: Some(id),
+        location: lists.then(|| tab.location.clone()),
+        drop: lists.then(|| {
+            crate::dnd::into_pane(
+                tab,
+                Target::Folder {
+                    to: tab.location.clone(),
+                    device: crate::dnd::listing_device(tab),
+                    spring: Some(Spring::Tab(id)),
+                },
+            )
+        }),
+    }
+}
+
+/// A tab's icon and title: a view's own; for a folder, the icon the side
+/// panel gives it when it is a place, a virtual location's own, the
+/// provider's for an archive or a remote, `FOLDER` otherwise, and the
+/// folder's name (SPEC.md *Workspace tabs*).
+fn tab_label(model: &model::Model, tab: &Tab) -> (&'static str, String) {
+    match tab.kind {
+        TabKind::Preview => (icons::PREVIEW, t!("shell-preview-tab")),
+        TabKind::Console => (
+            icons::TERMINAL,
+            tab.title.clone().unwrap_or_else(|| t!("shell-console-tab")),
+        ),
+        TabKind::Compare => (
+            icons::COMPARE,
+            tab.title.clone().unwrap_or_else(|| t!("shell-compare-tab")),
+        ),
+        TabKind::Explorer => {
+            let place = model
+                .places
+                .rows()
+                .iter()
+                .find(|p| p.location == tab.location)
+                .map(|p| icons::named(&p.icon));
+            let icon = place.unwrap_or_else(|| {
+                vfs_rick::Virtual::of(&tab.location)
+                    .map_or_else(|| paths::location_icon(&tab.location), virtual_icon)
+            });
+            (icon, paths::title_of(&tab.location))
+        }
+    }
+}
+
+/// Draws one workspace tab at `rect`: a 16 px icon, the title truncated
+/// with an ellipsis and a close button; filled `bg/pane` when active,
+/// `bg/subtle` when hovered, the inactive title in `text/secondary` and its
+/// close button at half opacity (SPEC.md *Workspace tabs*). Returns the
+/// tab's response and whether the close button was pressed.
+fn workspace_tab(
+    ui: &mut egui::Ui,
+    rect: egui::Rect,
+    id: WorkspaceId,
+    label: &TabLabel,
+    active: bool,
+) -> (egui::Response, bool) {
+    use crate::theme::{ICON, TAB_CORNER, TEXT_BODY};
+    let scheme = crate::theme::scheme(ui);
+    let response = ui.interact(
+        rect,
+        egui::Id::new(("workspace-tab", id.0)),
+        egui::Sense::click_and_drag(),
+    );
+    response.widget_info(|| {
+        egui::WidgetInfo::labeled(egui::WidgetType::Button, true, label.title.as_str())
+    });
+    let close_rect = egui::Rect::from_center_size(
+        egui::pos2(rect.right() - 8.0 - ICON / 2.0, rect.center().y),
+        egui::vec2(20.0, 20.0),
+    );
+    let close = ui.interact(
+        close_rect,
+        egui::Id::new(("workspace-tab-close", id.0)),
+        egui::Sense::click(),
+    );
+    close.widget_info(|| {
+        egui::WidgetInfo::labeled(egui::WidgetType::Button, true, t!("shell-close-tab"))
+    });
+    let corners = egui::CornerRadius {
+        nw: TAB_CORNER,
+        ne: TAB_CORNER,
+        sw: 0,
+        se: 0,
+    };
+    let painter = ui.painter();
+    if active {
+        painter.rect_filled(rect, corners, scheme.bg_pane);
+    } else if response.hovered() || close.hovered() {
+        painter.rect_filled(rect, corners, scheme.bg_subtle);
+    }
+    let icon_font = egui::FontId::proportional(ICON);
+    painter.text(
+        egui::pos2(rect.left() + 14.0, rect.center().y),
+        egui::Align2::LEFT_CENTER,
+        label.icon,
+        icon_font.clone(),
+        scheme.icon_default,
+    );
+    let colour = if active {
+        scheme.text_primary
+    } else {
+        scheme.text_secondary
+    };
+    let title_left = rect.left() + 38.0;
+    let title_width = (close_rect.left() - 6.0 - title_left).max(0.0);
+    let mut job = egui::text::LayoutJob::simple_singleline(
+        label.title.clone(),
+        egui::FontId::proportional(TEXT_BODY),
+        colour,
+    );
+    job.wrap = egui::text::TextWrapping::truncate_at_width(title_width);
+    let galley = ui.fonts_mut(|fonts| fonts.layout_job(job));
+    let text_pos = egui::pos2(title_left, rect.center().y - galley.size().y / 2.0);
+    ui.painter().galley(text_pos, galley, colour);
+    let x_colour = if active {
+        scheme.icon_default
+    } else {
+        scheme.icon_default.gamma_multiply(0.5)
+    };
+    if close.hovered() {
+        ui.painter()
+            .circle_filled(close_rect.center(), 10.0, scheme.bg_control);
+    }
+    ui.painter().text(
+        close_rect.center(),
+        egui::Align2::CENTER_CENTER,
+        icons::CLOSE,
+        icon_font,
+        x_colour,
+    );
+    let closed = close.on_hover_text(t!("shell-close-tab")).clicked();
+    (response, closed)
 }
 
 /// The eframe application: the app and every window.
@@ -448,23 +643,30 @@ pub struct RickUi {
 
 /// How many dispatched intents are remembered.
 const RECENTS: usize = 64;
-/// The title row's height in points: that of a tab.
-const TITLE_ROW_HEIGHT: f32 = 30.0;
+/// The height of a pane's bar in points, the one tab of the pane as its
+/// handle until the pane toolbar takes over.
+const STRIP_HEIGHT: f32 = 30.0;
+/// The room between two workspace tabs.
+const TAB_GAP: f32 = 2.0;
+/// The new-tab button's width.
+const NEW_TAB_WIDTH: f32 = 28.0;
+/// The slot the tab row shows where a dropped pane would land as a new tab.
+const DROP_SLOT_WIDTH: f32 = 160.0;
 /// A new window's inner size before the user resizes it.
 const DEFAULT_SIZE: [f32; 2] = [1100.0, 720.0];
 /// The smallest inner size.
 const MIN_SIZE: [f32; 2] = [480.0, 320.0];
 
-/// The tab strip's look: VS Code-like padding, rounded top corners, the
-/// new-tab button right after the last tab, a scroll bar on overflow; the
-/// strip on the window's background and the leaf on the pane's.
+/// The pane bar's look: rounded top corners, the bar on the window's
+/// background and the leaf on the pane's. The bar holds the pane's one tab
+/// as its drag handle until the pane toolbar's handle replaces it.
 fn tab_strip_style(egui_style: &egui::Style, scheme: &crate::theme::Scheme) -> egui_dock::Style {
     let mut style = egui_dock::Style::from_egui(egui_style);
     style.tab_bar.bg_fill = scheme.bg_window;
     style.tab.tab_body.bg_fill = scheme.bg_pane;
     style.tab.tab_body.stroke = egui::Stroke::NONE;
     style.buttons.add_tab_align = egui_dock::TabAddAlign::Left;
-    style.tab_bar.height = TITLE_ROW_HEIGHT;
+    style.tab_bar.height = STRIP_HEIGHT;
     style.tab_bar.show_scroll_bar_on_overflow = true;
     style.tab_bar.fill_tab_bar = false;
     style.tab.spacing = 2.0;
@@ -783,10 +985,18 @@ impl RickUi {
             .collect()
     }
 
-    /// The tab order of a pane as the dock shows it.
+    /// The workspace tabs of the window holding `pane`, in the order of
+    /// the title row, for tests.
     #[must_use]
-    pub fn tab_order(&self, pane: PaneId) -> Vec<TabId> {
-        self.order_of(pane)
+    pub fn tab_order(&self, pane: PaneId) -> Vec<WorkspaceId> {
+        self.workspace_order(pane)
+    }
+
+    /// The title row's tab row of the root window in the last frame, for
+    /// tests that drop on it.
+    #[must_use]
+    pub fn tab_row(&self) -> Option<egui::Rect> {
+        self.windows.get(&self.root).and_then(|w| w.tab_row)
     }
 
     /// Queues an intent as a key press would.
@@ -1050,7 +1260,7 @@ impl RickUi {
         self.app
             .model()
             .window(window)
-            .map_or(self.app.model().focused, |w| w.focused)
+            .map_or(self.app.model().focused, model::Window::focused)
     }
 
     /// The pane an intent about files goes to: `pane` itself, or, when its
@@ -1276,7 +1486,7 @@ impl RickUi {
         let Some(w) = model.window(window) else {
             return;
         };
-        for pane in w.dock.panes() {
+        for pane in w.panes() {
             let Some(pane) = model.pane(pane) else {
                 continue;
             };
@@ -1385,7 +1595,7 @@ impl RickUi {
             return;
         };
         let mut changed = Vec::new();
-        for pane in w.dock.panes() {
+        for pane in w.dock().panes() {
             let Some((tab_id, tab)) = model.active_tab(pane) else {
                 continue;
             };
@@ -1810,9 +2020,8 @@ impl RickUi {
                 }
             }
             Intent::CloseTab => {
-                if let Some((tab_id, tab)) = self.app.model().active_tab(pane) {
-                    self.closed_tabs.push(tab.location.clone());
-                    self.handle(Command::CloseTab(tab_id));
+                if let Some((_, id)) = self.app.model().workspace_of(pane) {
+                    self.close_workspace(id);
                 }
             }
             Intent::ReopenTab => {
@@ -1820,25 +2029,30 @@ impl RickUi {
                     self.handle(Command::NewTab(location));
                 }
             }
-            Intent::NextTab => self.step_tab(pane, 1),
-            Intent::PrevTab => self.step_tab(pane, -1),
+            Intent::NextTab => self.step_workspace(pane, 1),
+            Intent::PrevTab => self.step_workspace(pane, -1),
             Intent::Tab(n) => {
-                let order = self.order_of(pane);
+                let order = self.workspace_order(pane);
                 let index = if n == 9 {
                     order.len().saturating_sub(1)
                 } else {
                     usize::from(n).saturating_sub(1)
                 };
-                if let Some(tab) = order.get(index).copied() {
-                    self.handle(Command::ActivateTab(tab));
+                if let Some(id) = order.get(index).copied() {
+                    self.handle(Command::ActivateWorkspace(id));
                 }
             }
             Intent::MoveTabLeft | Intent::MoveTabRight => {
-                if let Some((tab_id, _)) = self.app.model().active_tab(pane)
-                    && let Some(w) = self.window_ui_of_mut(pane)
+                let model = self.app.model();
+                if let Some((window, id)) = model.workspace_of(pane)
+                    && let Some(at) = model.window(window).and_then(|w| w.position(id))
                 {
-                    w.dock
-                        .shift_tab(tab_id, if intent == Intent::MoveTabLeft { -1 } else { 1 });
+                    let to = if intent == Intent::MoveTabLeft {
+                        at.saturating_sub(1)
+                    } else {
+                        at + 1
+                    };
+                    self.handle(Command::MoveWorkspace { id, to });
                 }
             }
             Intent::SplitRight => self.handle(Command::Split {
@@ -1851,15 +2065,17 @@ impl RickUi {
             }),
             Intent::FocusPane(direction) => self.focus_towards(pane, direction),
             Intent::CloseOtherTabs => {
-                if let Some((keep, _)) = self.app.model().active_tab(pane) {
-                    let others: Vec<TabId> = self
+                if let Some((window, keep)) = self.app.model().workspace_of(pane) {
+                    let others: Vec<WorkspaceId> = self
                         .app
                         .model()
-                        .pane(pane)
-                        .map(|p| p.tabs().iter().copied().filter(|t| *t != keep).collect())
-                        .unwrap_or_default();
-                    for tab in others {
-                        self.handle(Command::CloseTab(tab));
+                        .workspaces(window)
+                        .iter()
+                        .map(|ws| ws.id)
+                        .filter(|id| *id != keep)
+                        .collect();
+                    for id in others {
+                        self.close_workspace(id);
                     }
                 }
             }
@@ -2020,11 +2236,28 @@ impl RickUi {
         }
     }
 
-    /// The tab order of a pane as its window's dock shows it.
-    fn order_of(&self, pane: PaneId) -> Vec<TabId> {
-        self.window_ui_of(pane)
-            .map(|w| w.dock.tab_order(self.app.model(), pane))
+    /// The workspaces of the window holding `pane`, in the order of the
+    /// title row.
+    fn workspace_order(&self, pane: PaneId) -> Vec<WorkspaceId> {
+        let model = self.app.model();
+        model
+            .window_of(pane)
+            .map(|window| model.workspaces(window).iter().map(|ws| ws.id).collect())
             .unwrap_or_default()
+    }
+
+    /// Closes a workspace tab, remembering the folder of its focused pane
+    /// so that *Reopen closed tab* brings it back.
+    fn close_workspace(&mut self, id: WorkspaceId) {
+        let model = self.app.model();
+        if let Some(window) = model.window_of_workspace(id)
+            && let Some(ws) = model.workspaces(window).iter().find(|ws| ws.id == id)
+            && let Some((_, tab)) = model.active_tab(ws.focused)
+            && tab.kind.lists()
+        {
+            self.closed_tabs.push(tab.location.clone());
+        }
+        self.handle(Command::CloseWorkspace(id));
     }
 
     fn open_selection(&mut self, pane: PaneId) {
@@ -2109,19 +2342,16 @@ impl RickUi {
             .push(Request::Command(Command::ShowProperties(pane)));
     }
 
-    fn step_tab(&mut self, pane: PaneId, by: isize) {
-        let order = self.order_of(pane);
-        let Some((current, _)) = self.app.model().active_tab(pane) else {
+    fn step_workspace(&mut self, pane: PaneId, by: isize) {
+        let order = self.workspace_order(pane);
+        let Some((_, current)) = self.app.model().workspace_of(pane) else {
             return;
         };
-        let Some(index) = order.iter().position(|t| *t == current) else {
+        let Some(index) = order.iter().position(|id| *id == current) else {
             return;
         };
-        if order.is_empty() {
-            return;
-        }
         let next = (index as isize + by).rem_euclid(order.len() as isize) as usize;
-        self.handle(Command::ActivateTab(order[next]));
+        self.handle(Command::ActivateWorkspace(order[next]));
     }
 
     fn focus_towards(&mut self, pane: PaneId, direction: Direction) {
@@ -2201,9 +2431,10 @@ impl RickUi {
         self.handle(Command::Select { pane, change });
     }
 
-    /// The title row: burger menu, the search box, the layout toggles and
-    /// the window controls. An empty part of it drags the window and a
-    /// double click maximises or restores it.
+    /// The title row (SPEC.md *Title row*): the menu slot above the side
+    /// panel, the workspace tabs, the search box and the window group. An
+    /// empty part of it drags the window and a double click maximises or
+    /// restores it.
     fn title_row(
         &mut self,
         ui: &mut egui::Ui,
@@ -2212,10 +2443,12 @@ impl RickUi {
         focused: PaneId,
     ) {
         let chrome = self.app.platform().window_chrome();
-        let height = TITLE_ROW_HEIGHT;
+        let metrics = crate::theme::metrics(ctx);
+        let height = metrics.titlebar_height;
         egui::Panel::top(egui::Id::new(("title", window.0)))
             .exact_size(height)
-            .show_separator_line(true)
+            .show_separator_line(false)
+            .frame(egui::Frame::NONE.fill(crate::theme::scheme_of(ctx).bg_window))
             .show(ui, |ui| {
                 let rect = ui.max_rect();
                 // The background first, so every widget drawn after it wins
@@ -2233,17 +2466,31 @@ impl RickUi {
                     ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(!maximized));
                 }
 
-                // Left: room for the native controls, then the burger.
+                // Left: the menu slot. Room for the native controls, then
+                // the burger, alone above the side panel when the panel is
+                // on the left, so the first tab starts where the panes do.
                 let mut left = ui.new_child(
                     egui::UiBuilder::new()
                         .max_rect(rect)
                         .layout(egui::Layout::left_to_right(egui::Align::Center)),
                 );
+                left.add_space(metrics.space_toolbar_y);
                 if chrome.native_controls && chrome.controls == ControlsSide::Left {
                     left.add_space(chrome.native_controls_width);
                 }
                 menus::burger(&mut left, &mut self.requests, focused, &self.app);
-                let left_edge = left.min_rect().right();
+                let side = self
+                    .app
+                    .model()
+                    .window(window)
+                    .map(|w| w.side_panel.clone())
+                    .unwrap_or_default();
+                let burger_right = left.min_rect().right() + metrics.space_toolbar_y;
+                let left_edge = if side.visible && side.side == PanelSide::Left {
+                    burger_right.max(rect.left() + f32::from(side.width))
+                } else {
+                    burger_right
+                };
 
                 // Right: window controls, then the toggles.
                 let mut right = ui.new_child(
@@ -2251,11 +2498,318 @@ impl RickUi {
                         .max_rect(rect)
                         .layout(egui::Layout::right_to_left(egui::Align::Center)),
                 );
+                right.add_space(metrics.space_toolbar_x);
                 self.title_right(&mut right, ctx, chrome, window, focused);
                 let right_edge = right.min_rect().left();
 
-                self.title_search(ui, rect, left_edge, right_edge, window, focused);
+                // The search box before the window group, then the tabs in
+                // the room that is left.
+                let tabs = self.app.model().workspaces(window).len();
+                #[allow(clippy::cast_precision_loss)]
+                let tabs_width = tabs as f32 * (crate::theme::TAB_WIDTH + TAB_GAP) + NEW_TAB_WIDTH;
+                let search_left =
+                    self.title_search(ui, rect, left_edge, right_edge, tabs_width, window, focused);
+                self.title_tabs(
+                    ui,
+                    ctx,
+                    rect,
+                    left_edge,
+                    search_left - metrics.space_toolbar_x,
+                    window,
+                    focused,
+                );
             });
+    }
+
+    /// The workspace tabs from `left` to `right`, each `TAB_WIDTH` wide and
+    /// `tab/height` tall on the bottom edge of the row, the new-tab button
+    /// directly after the last; the row clips what does not fit. A tab
+    /// dragged along the row reorders the tabs, one released outside the
+    /// window moves to the window under it or opens a new one; a pane's
+    /// tab dragged over the row shows the slot where it would land as a
+    /// new tab (SPEC.md *Workspace tabs*).
+    #[allow(clippy::too_many_lines, clippy::too_many_arguments)]
+    fn title_tabs(
+        &mut self,
+        ui: &mut egui::Ui,
+        ctx: &egui::Context,
+        rect: egui::Rect,
+        left: f32,
+        right: f32,
+        window: WindowId,
+        focused: PaneId,
+    ) {
+        use crate::theme::{ICON, TAB_WIDTH, TEXT_BODY};
+        let metrics = crate::theme::metrics(ctx);
+        let scheme = crate::theme::scheme(ui);
+        let row = egui::Rect::from_min_max(
+            egui::pos2(left, rect.bottom() - metrics.tab_height),
+            egui::pos2(right.max(left), rect.bottom()),
+        );
+        let model = self.app.model();
+        let active = model.window(window).map(|w| w.active);
+        let tabs: Vec<(WorkspaceId, TabLabel)> = model
+            .workspaces(window)
+            .iter()
+            .map(|ws| (ws.id, workspace_label(model, ws)))
+            .collect();
+        let Some(w) = self.windows.get_mut(&window) else {
+            return;
+        };
+        w.tab_row = Some(row);
+        w.tab_headers.clear();
+        let pitch = TAB_WIDTH + TAB_GAP;
+        let pointer = ctx.pointer_latest_pos();
+        let primary_down = ctx.input(|i| i.pointer.primary_down());
+        let released = ctx.input(|i| i.pointer.any_released());
+
+        // A drag along the row ends when the button comes up.
+        let drag = w.workspace_drag.filter(|_| primary_down || released);
+        if drag.is_none() {
+            w.workspace_drag = None;
+        }
+        let dragged = drag.and_then(|d| tabs.iter().position(|(id, _)| *id == d.id));
+        let others = tabs.len() - usize::from(dragged.is_some());
+        // The slot a tab's left edge at `x` lands in, among `count` tabs.
+        let slot_of = |x: f32, count: usize| -> usize {
+            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+            let slot = ((x - row.left()) / pitch).round().max(0.0) as usize;
+            slot.min(count)
+        };
+        let drag_slot =
+            drag.and_then(|d| pointer.map(|p| slot_of(p.x - d.grab, others.saturating_sub(1))));
+        let pane_over_row = w.tab_drag.is_some()
+            && pointer.is_some_and(|p| row.expand2(egui::vec2(0.0, 6.0)).contains(p));
+        let drop_slot = pane_over_row.then(|| pointer.map(|p| slot_of(p.x, tabs.len())));
+        w.pane_drop_slot = drop_slot.flatten();
+
+        let clip = row.intersect(ui.clip_rect());
+        let mut child = ui.new_child(egui::UiBuilder::new().max_rect(row));
+        child.set_clip_rect(clip);
+        let mut x = row.left();
+        let mut shown = 0usize;
+        let mut clicked: Option<WorkspaceId> = None;
+        let mut closed: Option<WorkspaceId> = None;
+        let mut started: Option<TabDrag> = None;
+        let slot_rect = |x: f32| {
+            egui::Rect::from_min_size(
+                egui::pos2(x, row.top() + 4.0),
+                egui::vec2(DROP_SLOT_WIDTH, (row.height() - 4.0).max(1.0)),
+            )
+        };
+        let paint_slot = |ui: &egui::Ui, x: f32| {
+            let slot = slot_rect(x);
+            ui.painter()
+                .rect_filled(slot, metrics.corner_radius(), scheme.accent_button);
+            ui.painter().text(
+                slot.center(),
+                egui::Align2::CENTER_CENTER,
+                t!("shell-drop-for-new-tab"),
+                egui::FontId::proportional(TEXT_BODY),
+                crate::theme::Scheme::ON_BUTTON,
+            );
+        };
+        for (i, (id, label)) in tabs.iter().enumerate() {
+            if dragged == Some(i) {
+                continue;
+            }
+            if drop_slot.flatten() == Some(shown) {
+                paint_slot(&child, x);
+                x += DROP_SLOT_WIDTH + TAB_GAP;
+            }
+            if drag_slot == Some(shown) {
+                // The dragged tab's room.
+                x += pitch;
+            }
+            let tab_rect = egui::Rect::from_min_size(
+                egui::pos2(x, row.top()),
+                egui::vec2(TAB_WIDTH, row.height()),
+            );
+            let (response, close) =
+                workspace_tab(&mut child, tab_rect, *id, label, Some(*id) == active);
+            if let Some(tab) = label.tab {
+                w.tab_headers.insert(tab, tab_rect);
+            }
+            if response.clicked() {
+                clicked = Some(*id);
+            }
+            if response.middle_clicked() || close {
+                closed = Some(*id);
+            }
+            if response.drag_started()
+                && let Some(p) = pointer
+            {
+                started = Some(TabDrag {
+                    id: *id,
+                    grab: p.x - tab_rect.left(),
+                });
+            }
+            if let Some(location) = &label.location {
+                response.on_hover_text(paths::text_of(location));
+            }
+            // Entries dragged over the tab go into its folder; resting on it
+            // shows the workspace.
+            if w.dnd.active()
+                && let Some(target) = &label.drop
+            {
+                let highlight = w.dnd.zone(Zone {
+                    key: egui::Id::new(("dnd-workspace", id.0)),
+                    rect: tab_rect,
+                    target: target.clone(),
+                });
+                if highlight {
+                    crate::dnd::highlight(child.painter(), &child.style().visuals, tab_rect);
+                }
+            }
+            x += pitch;
+            shown += 1;
+        }
+        if drop_slot.flatten() == Some(shown) {
+            paint_slot(&child, x);
+            x += DROP_SLOT_WIDTH + TAB_GAP;
+        }
+        if drag_slot == Some(shown) {
+            x += pitch;
+        }
+
+        // The new-tab button, a ghost button directly after the last tab.
+        let plus_rect = egui::Rect::from_min_size(
+            egui::pos2(x, row.top()),
+            egui::vec2(NEW_TAB_WIDTH, row.height()),
+        );
+        let plus = child.interact(
+            plus_rect,
+            egui::Id::new(("new-tab", window.0)),
+            egui::Sense::click(),
+        );
+        plus.widget_info(|| {
+            egui::WidgetInfo::labeled(egui::WidgetType::Button, true, t!("shell-new-tab"))
+        });
+        if plus.hovered() {
+            child
+                .painter()
+                .rect_filled(plus_rect, metrics.corner_radius(), scheme.bg_subtle);
+        }
+        child.painter().text(
+            plus_rect.center(),
+            egui::Align2::CENTER_CENTER,
+            icons::PLUS,
+            egui::FontId::proportional(ICON),
+            scheme.icon_default,
+        );
+        let plus_clicked = plus.on_hover_text(t!("shell-new-tab")).clicked();
+
+        // The dragged tab floats along the row under the pointer.
+        if let (Some(d), Some(i), Some(p)) = (drag, dragged, pointer) {
+            let x = (p.x - d.grab).clamp(row.left(), (row.right() - TAB_WIDTH).max(row.left()));
+            let float = egui::Rect::from_min_size(
+                egui::pos2(x, row.top()),
+                egui::vec2(TAB_WIDTH, row.height()),
+            );
+            let layer = egui::LayerId::new(
+                egui::Order::Tooltip,
+                egui::Id::new(("workspace-drag", window.0)),
+            );
+            let mut top = ui.new_child(egui::UiBuilder::new().layer_id(layer).max_rect(float));
+            let (_, _) = workspace_tab(&mut top, float, tabs[i].0, &tabs[i].1, true);
+        }
+        if let Some(d) = started {
+            w.workspace_drag = Some(d);
+        }
+        let dropped = drag.filter(|_| released).map(|d| (d, pointer));
+        if dropped.is_some() {
+            w.workspace_drag = None;
+        }
+        let in_window = w
+            .content
+            .is_none_or(|c| pointer.is_some_and(|p| c.contains(p)));
+
+        if plus_clicked {
+            if ctx.input(|i| i.modifiers.shift) {
+                self.requests.push(Request::Command(Command::NewWindow));
+            } else if let Some((_, tab)) = self.app.model().active_tab(focused) {
+                self.requests.push(Request::NewTabAt(tab.location.clone()));
+            }
+        }
+        if let Some(id) = clicked
+            && drag.is_none()
+        {
+            self.requests
+                .push(Request::Command(Command::ActivateWorkspace(id)));
+        }
+        if let Some(id) = closed {
+            self.close_workspace(id);
+        }
+        match dropped {
+            Some((d, _)) if in_window => {
+                if let Some(to) = drag_slot {
+                    self.handle(Command::MoveWorkspace { id: d.id, to });
+                }
+            }
+            Some((d, Some(pos))) => self.drop_workspace_outside(window, d.id, pos),
+            _ => {}
+        }
+    }
+
+    /// A workspace tab released outside its window: onto another window's
+    /// tab row, which takes it, or onto nothing, which opens a window for
+    /// it.
+    fn drop_workspace_outside(&mut self, window: WindowId, id: WorkspaceId, pos: egui::Pos2) {
+        let Some((screen_pos, size)) = self.on_screen(window, pos) else {
+            return;
+        };
+        if let Some(other) = self.tab_row_under(window, screen_pos) {
+            self.handle(Command::WorkspaceToWindow {
+                id,
+                window: Some(other),
+            });
+            return;
+        }
+        self.handle(Command::WorkspaceToWindow { id, window: None });
+        self.place_new_window(window, screen_pos, size);
+    }
+
+    /// A position in `window`'s coordinates on the screen, with the
+    /// window's size; `None` while the window's place on the screen is
+    /// unknown (a test harness).
+    fn on_screen(&self, window: WindowId, pos: egui::Pos2) -> Option<(egui::Pos2, egui::Vec2)> {
+        let screen = self.windows.get(&window)?.screen?;
+        Some((screen.min + pos.to_vec2(), screen.size()))
+    }
+
+    /// Another window whose tab row lies under a screen position.
+    fn tab_row_under(&self, window: WindowId, screen_pos: egui::Pos2) -> Option<WindowId> {
+        self.windows.iter().find_map(|(other, state)| {
+            if *other == window {
+                return None;
+            }
+            let origin = state.screen?.min;
+            state
+                .tab_row?
+                .translate(origin.to_vec2())
+                .contains(screen_pos)
+                .then_some(*other)
+        })
+    }
+
+    /// Puts the window the model just opened under the pointer, as large
+    /// as the one it came from.
+    fn place_new_window(&mut self, from: WindowId, screen_pos: egui::Pos2, size: egui::Vec2) {
+        let new = self.app.model().focused_window;
+        if new == from {
+            return;
+        }
+        let height = crate::theme::metrics(&self.ctx).titlebar_height;
+        self.handle(Command::WindowGeometry {
+            window: new,
+            geometry: Geometry {
+                x: screen_pos.x - 80.0,
+                y: screen_pos.y - height / 2.0,
+                width: size.x,
+                height: size.y,
+                maximised: false,
+            },
+        });
     }
 
     /// The side panel on its side with the operations area at its foot, or
@@ -2412,33 +2966,41 @@ impl RickUi {
         }
     }
 
-    /// The search box between the burger and the right-hand group, as wide
-    /// as the room allows.
+    /// The search box, `SEARCH_WIDTH` wide and `search/height` tall before
+    /// the window group, centred in the row; narrower only when the row
+    /// cannot hold the tabs, the box and the controls, and absent when not
+    /// even a narrow one fits. Returns its left edge, `right_edge` without
+    /// a box.
+    #[allow(clippy::too_many_arguments)]
     fn title_search(
         &mut self,
         ui: &mut egui::Ui,
         rect: egui::Rect,
         left_edge: f32,
         right_edge: f32,
+        tabs_width: f32,
         window: WindowId,
         focused: PaneId,
-    ) {
-        let room = (right_edge - left_edge - 24.0).max(0.0);
-        let width = (rect.width() * 0.4).clamp(160.0, 560.0).min(room);
+    ) -> f32 {
+        let metrics = crate::theme::metrics(ui.ctx());
+        let gap = metrics.space_toolbar_x;
+        let room = right_edge - left_edge - 2.0 * gap;
+        let width = (room - tabs_width)
+            .clamp(120.0, crate::theme::SEARCH_WIDTH)
+            .min(room);
         if width < 120.0 {
-            return;
+            return right_edge;
         }
-        let centre = f32::midpoint(left_edge, right_edge).clamp(
-            left_edge + width / 2.0 + 12.0,
-            right_edge - width / 2.0 - 12.0,
-        );
-        let search_rect = egui::Rect::from_center_size(
-            egui::pos2(centre, rect.center().y),
-            egui::vec2(width, (rect.height() - 6.0).max(16.0)),
+        let search_rect = egui::Rect::from_min_size(
+            egui::pos2(
+                right_edge - gap - width,
+                rect.center().y - metrics.search_height / 2.0,
+            ),
+            egui::vec2(width, metrics.search_height),
         );
         let recents: Vec<Intent> = self.dispatched.iter().rev().map(|d| d.intent).collect();
         let Some(w) = self.windows.get_mut(&window) else {
-            return;
+            return right_edge;
         };
         let pick = w.search.show(
             ui,
@@ -2485,6 +3047,7 @@ impl RickUi {
             }
             None => {}
         }
+        search_rect.left()
     }
 
     // One dialogue, three shapes.
@@ -2863,9 +3426,6 @@ struct Viewer<'a> {
     hovered_now: &'a mut Option<TabId>,
     thumbnails: &'a mut Thumbnails,
     dnd: &'a mut Dnd,
-    tab_headers: &'a mut HashMap<TabId, egui::Rect>,
-    /// Shift was down when the frame began: the plus opens a window.
-    shift: bool,
     /// The pane keyboard input goes to in this window.
     focused: PaneId,
     /// The previews, for the Preview tab.
@@ -2886,36 +3446,17 @@ impl TabViewer for Viewer<'_> {
     }
 
     fn title(&mut self, tab: &mut TabId) -> egui::WidgetText {
-        self.app.model().tab(*tab).map_or_else(
+        let model = self.app.model();
+        model.tab(*tab).map_or_else(
             || "?".into(),
-            |t| match t.kind {
-                TabKind::Preview => format!("{} Preview", icons::PREVIEW).into(),
-                TabKind::Console => format!(
-                    "{} {}",
-                    icons::TERMINAL,
-                    t.title.as_deref().unwrap_or("Console")
-                )
-                .into(),
-                TabKind::Compare => format!(
-                    "{} {}",
-                    icons::COMPARE,
-                    t.title.as_deref().unwrap_or("Compare")
-                )
-                .into(),
-                TabKind::Explorer => {
-                    // A folder icon for local folders, a view's own for a
-                    // virtual location, the archive's for an archive, the
-                    // provider's otherwise.
-                    let icon = vfs_rick::Virtual::of(&t.location)
-                        .map_or_else(|| paths::location_icon(&t.location), virtual_icon);
-                    format!("{icon} {}", paths::title_of(&t.location)).into()
-                }
+            |t| {
+                let (icon, title) = tab_label(model, t);
+                format!("{icon} {title}").into()
             },
         )
     }
 
     fn on_tab_button(&mut self, tab: &mut TabId, response: &egui::Response) {
-        self.tab_headers.insert(*tab, response.rect);
         if response.hovered() {
             *self.hovered_now = Some(*tab);
         }
@@ -3021,17 +3562,6 @@ impl TabViewer for Viewer<'_> {
         egui_dock::widgets::tab_viewer::OnCloseResponse::Close
     }
 
-    fn on_add(&mut self, _path: NodePath) {
-        if self.shift {
-            self.requests.push(Request::Command(Command::NewWindow));
-            return;
-        }
-        let model = self.app.model();
-        if let Some((_, tab)) = model.active_tab(self.focused) {
-            self.requests.push(Request::NewTabAt(tab.location.clone()));
-        }
-    }
-
     fn allowed_in_windows(&self, _tab: &mut TabId) -> bool {
         false
     }
@@ -3055,9 +3585,7 @@ impl RickUi {
 
         self.side_panel(ui, ctx, window);
 
-        let shift = ctx.input(|i| i.modifiers.shift);
         let dock_id = egui::Id::new(("dock", window.0));
-        let strip_height = TITLE_ROW_HEIGHT;
         let drag_before = self.windows.get(&window).and_then(|w| w.tab_drag);
         egui::CentralPanel::no_frame().show(ui, |ui| {
             let Some(w) = self.windows.get_mut(&window) else {
@@ -3075,8 +3603,6 @@ impl RickUi {
                 hovered_now: &mut w.hovered_tab,
                 thumbnails: &mut self.thumbnails,
                 dnd: &mut w.dnd,
-                tab_headers: &mut w.tab_headers,
-                shift,
                 focused,
                 previews: &mut self.previews,
                 inspector_state: &mut self.inspector_state,
@@ -3086,12 +3612,11 @@ impl RickUi {
             DockArea::new(&mut w.dock.state)
                 .id(dock_id)
                 .style(tab_strip_style(ui.style(), crate::theme::scheme(ui)))
-                .show_add_buttons(true)
+                .show_add_buttons(false)
                 .show_close_buttons(true)
                 .show_leaf_close_all_buttons(false)
                 .show_leaf_collapse_buttons(false)
                 .show_inside(ui, &mut viewer);
-            w.strips = w.dock.strips(self.app.model(), strip_height);
             w.tab_drag = w.dock.dragged_tab(ctx, dock_id);
             // The Preview tab's leaf below its strip, for tests.
             let model = self.app.model();
@@ -3108,16 +3633,21 @@ impl RickUi {
                         .find(|(p, _)| *p == pane)
                         .map(|(_, rect)| {
                             egui::Rect::from_min_max(
-                                egui::pos2(rect.left(), rect.top() + strip_height),
+                                egui::pos2(rect.left(), rect.top() + STRIP_HEIGHT),
                                 rect.max,
                             )
                         })
                 });
         });
-        self.cross_window_drop(ctx, window, drag_before);
         let may_focus = ctx.input(|i| i.viewport().focused.unwrap_or(true));
         let mut events = Vec::new();
-        if let Some(w) = self.windows.get_mut(&window) {
+        if self.cross_window_drop(ctx, window, drag_before) {
+            // The model moved on: the tree follows it, there is nothing of
+            // the user's left in the tree to read.
+            if let Some(w) = self.windows.get_mut(&window) {
+                w.dock.rebuild(self.app.model());
+            }
+        } else if let Some(w) = self.windows.get_mut(&window) {
             w.dock.reconcile(
                 &mut self.app,
                 &mut events,
@@ -3129,74 +3659,72 @@ impl RickUi {
         self.apply_requests(ctx);
     }
 
-    /// A tab dragged out of a strip and released outside this window: onto
-    /// another window's strip, which takes it, or onto nothing, which opens
-    /// a window for it.
+    /// A pane's tab dragged out of its bar and released outside the dock:
+    /// on this window's tab row it becomes a new workspace tab at the slot
+    /// shown, on another window's tab row a new workspace there, on nothing
+    /// a window of its own. Returns whether a drop was handled.
     fn cross_window_drop(
         &mut self,
         ctx: &egui::Context,
         window: WindowId,
         dragging: Option<TabId>,
-    ) {
+    ) -> bool {
         let Some(tab) = dragging else {
-            return;
+            return false;
         };
         let released = ctx.input(|i| i.pointer.any_released());
         if !released {
-            return;
+            return false;
         }
         let Some(pos) = ctx.input(|i| i.pointer.interact_pos().or_else(|| i.pointer.latest_pos()))
         else {
-            return;
+            return false;
         };
         let Some(w) = self.windows.get(&window) else {
-            return;
+            return false;
         };
-        if w.content.is_some_and(|c| c.contains(pos)) {
-            return;
-        }
-        let Some(from_screen) = w.screen else {
-            // No screen position (a test harness): nothing to tear out to.
-            return;
-        };
-        let screen_pos = from_screen.min + pos.to_vec2();
-        let size = from_screen.size();
-        // Another window's strip under the pointer takes the tab.
-        let target = self.windows.iter().find_map(|(other, state)| {
-            if *other == window {
-                return None;
-            }
-            let origin = state.screen?.min;
-            state
-                .strips
-                .iter()
-                .find(|(_, strip)| strip.translate(origin.to_vec2()).contains(screen_pos))
-                .map(|(pane, _)| *pane)
-        });
-        if let Some(pane) = target {
+        if let Some(slot) = w.pane_drop_slot {
             self.handle(Command::MoveTab {
                 tab,
-                to: DockTarget::Into(pane),
+                to: DockTarget::NewWorkspace,
             });
-            return;
+            if let Some(id) = self.workspace_of_tab(tab) {
+                self.handle(Command::MoveWorkspace { id, to: slot });
+            }
+            return true;
+        }
+        if w.content.is_some_and(|c| c.contains(pos)) {
+            return false;
+        }
+        let Some((screen_pos, size)) = self.on_screen(window, pos) else {
+            // No screen position (a test harness): nothing to tear out to.
+            return false;
+        };
+        if let Some(other) = self.tab_row_under(window, screen_pos) {
+            self.handle(Command::MoveTab {
+                tab,
+                to: DockTarget::NewWorkspace,
+            });
+            if let Some(id) = self.workspace_of_tab(tab) {
+                self.handle(Command::WorkspaceToWindow {
+                    id,
+                    window: Some(other),
+                });
+            }
+            return true;
         }
         self.handle(Command::MoveTab {
             tab,
             to: DockTarget::NewWindow,
         });
-        let new = self.app.model().focused_window;
-        if new != window {
-            self.handle(Command::WindowGeometry {
-                window: new,
-                geometry: Geometry {
-                    x: screen_pos.x - 80.0,
-                    y: screen_pos.y - TITLE_ROW_HEIGHT / 2.0,
-                    width: size.x,
-                    height: size.y,
-                    maximised: false,
-                },
-            });
-        }
+        self.place_new_window(window, screen_pos, size);
+        true
+    }
+
+    /// The workspace holding a tab's pane.
+    fn workspace_of_tab(&self, tab: TabId) -> Option<WorkspaceId> {
+        let model = self.app.model();
+        model.workspace_of(model.pane_of(tab)?).map(|(_, id)| id)
     }
 
     /// Whether this viewport should show the dialogues, the screens and the
@@ -3342,7 +3870,6 @@ impl RickUi {
         // Keep the dock in step before the next frame draws it.
         if let Some(w) = self.windows.get_mut(&window) {
             w.dock.rebuild(self.app.model());
-            w.dock.take_order(self.app.model());
         }
     }
 

@@ -156,10 +156,11 @@ fn tab_of(harness: &Harness<'_, RickUi>, name: &str) -> (model::TabId, model::Pa
         .unwrap_or_else(|| panic!("no tab at {name}"))
 }
 
-/// Dragging a tab from pane B onto pane A's strip moves it into pane A in
-/// the model, instead of snapping back.
+/// Dragging the tab of pane B onto pane A's bar makes B a workspace of its
+/// own, shown, and A's workspace keeps A alone (SPEC.md *Workspace tabs*:
+/// panes have no tab strips, the centre target opens a new tab).
 #[test]
-fn a_tab_dragged_onto_another_panes_strip_moves_there() {
+fn a_tab_dragged_onto_another_panes_bar_becomes_a_workspace() {
     let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
     let left = dir.path().join("left-pane");
     let right = dir.path().join("right-pane");
@@ -170,27 +171,25 @@ fn a_tab_dragged_onto_another_panes_strip_moves_there() {
     let (tab_b, home_b) = tab_of(&harness, "right-pane");
     assert_eq!(home_b, pane_b);
 
-    // Drag right-pane's tab onto the strip of pane A, to the right of its
-    // tab. Tab titles are painted, not widgets, so the strips are found from
-    // the pane rectangles: each strip is the top row of its pane and its
-    // first tab starts at the left.
+    // Drag right-pane's tab onto the bar of pane A, to the right of its
+    // tab. The bars are found from the pane rectangles: each bar is the top
+    // row of its pane and its tab starts at the left.
     let (rect_a, rect_b) = (rect_of(&harness, pane_a), rect_of(&harness, pane_b));
     let from = egui::pos2(rect_b.left() + 50.0, rect_b.top() + 14.0);
     let to = egui::pos2(rect_a.left() + 220.0, rect_a.top() + 14.0);
     drag(&mut harness, from, to);
 
     let model = harness.state().app().model();
+    let window = model.focused_window;
+    assert_eq!(model.pane_of(tab_b), Some(pane_b), "the tab keeps its pane");
     assert_eq!(
-        model.pane_of(tab_b),
-        Some(pane_a),
-        "the tab moved into pane A"
+        model.workspaces(window).len(),
+        2,
+        "pane B is a workspace of its own"
     );
-    assert_eq!(
-        model.pane(pane_a).map(|p| p.tabs().len()),
-        Some(2),
-        "pane A holds both tabs"
-    );
-    assert!(model.pane(pane_b).is_none(), "the emptied pane is gone");
+    assert_eq!(model.workspaces(window)[0].dock, model::Dock::Pane(pane_a));
+    assert_eq!(model.workspaces(window)[1].dock, model::Dock::Pane(pane_b));
+    assert_eq!(model.focused, pane_b, "and shown");
 }
 
 /// Presses the primary button at `from`, moves to `to` in small steps so
@@ -471,8 +470,15 @@ fn the_toolbar_groups_never_overlap_and_the_right_group_keeps_its_width() {
         let right_width = right.iter().map(|r| r.right()).fold(0.0, f32::max)
             - right.iter().map(|r| r.left()).fold(f32::INFINITY, f32::min);
         right_widths.push(right_width.round());
-        // The last segment is always there; at 480 the ancestors fold.
-        harness.get_by_label_contains("lima");
+        // The last segment is always there; at 480 the ancestors fold. The
+        // workspace tab above the pane carries the folder's name too, so
+        // the segment is the one inside the row.
+        assert!(
+            harness
+                .query_all_by_label_contains("lima")
+                .any(|n| row.contains(n.rect().center())),
+            "{width}: no last segment in the toolbar row"
+        );
         if width < 500.0 {
             harness.get_by_label(ui_egui::icons::COLLAPSED);
         }

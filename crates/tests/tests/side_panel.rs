@@ -125,11 +125,11 @@ fn local_location(harness: &Harness<'_, RickUi>) -> PathBuf {
     platform::paths::to_path(&location(harness).path).unwrap_or_else(|e| panic!("{e}"))
 }
 
+/// The workspace tabs of the focused window: *Open in new tab* opens a
+/// workspace (SPEC.md *Workspace tabs*).
 fn tab_count(harness: &Harness<'_, RickUi>) -> usize {
-    let app = harness.state().app();
-    app.model()
-        .pane(app.model().focused)
-        .map_or(0, |p| p.tabs().len())
+    let model = harness.state().app().model();
+    model.workspaces(model.focused_window).len()
 }
 
 fn row_names(harness: &Harness<'_, RickUi>) -> Vec<String> {
