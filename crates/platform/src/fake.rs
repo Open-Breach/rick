@@ -364,6 +364,7 @@ impl Mount for Fake {
             device: None,
             total: None,
             free: None,
+            read_only: format == ImageFormat::Iso,
         };
         lock(&self.mounted).push(path.to_path_buf());
         lock(&self.volumes).push(volume.clone());
@@ -827,6 +828,7 @@ mod tests {
             device: None,
             total: Some(10),
             free: Some(5),
+            read_only: false,
         };
         assert_eq!(usb.used(), Some(5));
         assert!(usb.utilisation().is_some_and(|u| (u - 0.5).abs() < 1e-6));

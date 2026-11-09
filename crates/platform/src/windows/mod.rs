@@ -20,8 +20,9 @@ use types::Error;
 use windows::Win32::Foundation::{CloseHandle, GENERIC_READ, GENERIC_WRITE, HANDLE};
 use windows::Win32::Foundation::{HWND, PROPERTYKEY, RPC_E_CHANGED_MODE};
 use windows::Win32::Storage::FileSystem::{
-    CreateFileW, FILE_FLAGS_AND_ATTRIBUTES, FILE_SHARE_READ, FILE_SHARE_WRITE, GetDiskFreeSpaceExW,
-    GetDriveTypeW, GetLogicalDrives, GetVolumeInformationW, OPEN_EXISTING,
+    CreateFileW, FILE_FLAGS_AND_ATTRIBUTES, FILE_READ_ONLY_VOLUME, FILE_SHARE_READ,
+    FILE_SHARE_WRITE, GetDiskFreeSpaceExW, GetDriveTypeW, GetLogicalDrives, GetVolumeInformationW,
+    OPEN_EXISTING,
 };
 use windows::Win32::System::Com::{
     CLSCTX_ALL, CLSCTX_INPROC_SERVER, COINIT_APARTMENTTHREADED, COINIT_DISABLE_OLE1DDE,
@@ -365,7 +366,7 @@ impl Volumes for Native {
             let root_wide = wide(Path::new(&root));
             // SAFETY: the root string is NUL-terminated and outlives the
             // calls; the out-pointers point at locals of the right type.
-            let (kind, label, fs_type, space) = unsafe {
+            let (kind, label, fs_type, space, read_only) = unsafe {
                 let drive_type = GetDriveTypeW(PCWSTR(root_wide.as_ptr()));
                 let kind = match drive_type {
                     DRIVE_REMOVABLE => VolumeKind::Removable,
@@ -376,15 +377,17 @@ impl Volumes for Native {
                 };
                 let mut label = [0u16; 261];
                 let mut fs_name = [0u16; 261];
+                let mut flags = 0u32;
                 let labelled = GetVolumeInformationW(
                     PCWSTR(root_wide.as_ptr()),
                     Some(&mut label),
                     None,
                     None,
-                    None,
+                    Some(&raw mut flags),
                     Some(&mut fs_name),
                 )
                 .is_ok();
+                let read_only = labelled && flags & FILE_READ_ONLY_VOLUME != 0;
                 let text = |buffer: &[u16]| {
                     let end = buffer.iter().position(|&c| c == 0).unwrap_or(buffer.len());
                     String::from_utf16_lossy(&buffer[..end])
@@ -404,7 +407,7 @@ impl Volumes for Native {
                 )
                 .is_ok()
                 .then_some((total, free));
-                (kind, label, fs_type, space)
+                (kind, label, fs_type, space, read_only)
             };
             let name = match label {
                 Some(label) => label,
@@ -420,6 +423,7 @@ impl Volumes for Native {
                 device: None,
                 total,
                 free,
+                read_only,
             });
         }
         // The system drive first, the rest by letter.
@@ -604,6 +608,7 @@ impl Mount for Native {
             device: None,
             total: None,
             free: None,
+            read_only: format == ImageFormat::Iso,
         })
     }
 }

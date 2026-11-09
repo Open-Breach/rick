@@ -883,6 +883,7 @@ mod tests {
             device: None,
             total: Some(100),
             free: Some(40),
+            read_only: false,
         });
         fake.add_volume(Volume {
             name: "nas".into(),
@@ -892,6 +893,7 @@ mod tests {
             device: None,
             total: None,
             free: None,
+            read_only: false,
         });
         let trashed = home.join("doomed.txt");
         std::fs::write(&trashed, "y").unwrap_or_else(|e| panic!("{e}"));

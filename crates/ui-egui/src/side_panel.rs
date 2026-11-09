@@ -26,6 +26,7 @@
 
 use ext::t;
 use std::collections::BTreeSet;
+use std::path::Path;
 
 use std::sync::Arc;
 
@@ -39,7 +40,7 @@ use types::{Entry, Location, ProviderId};
 use vfs_rick::Virtual;
 
 use crate::dnd::{Dnd, Target, Zone};
-use crate::overview::{percent, utilisation_bar, volume_icon};
+use crate::overview::{percent, read_only_bar, utilisation_bar, volume_icon};
 use crate::shell::Request;
 use crate::theme::{self, BAR, ICON, Scheme, TEXT_BODY, TEXT_CAPS, TEXT_SECONDARY};
 use crate::{format, icons};
@@ -57,6 +58,8 @@ const DRIVE_CARD: f32 = 44.0;
 const DRIVE_CARD_COMPACT: f32 = 26.0;
 /// The hit area of a drive card's eject button, around its 16 px glyph.
 const EJECT_HIT: f32 = 24.0;
+/// The hover zone of a read-only drive's 4 px bar.
+const READ_ONLY_HIT: f32 = 12.0;
 /// The air above and below a section header (SPEC.md *Section headers*).
 const SECTION_AIR_ABOVE: f32 = 18.0;
 const SECTION_AIR_BELOW: f32 = 6.0;
@@ -1441,12 +1444,15 @@ fn section_header(
 
 /// A drive card (SPEC.md *This Machine*): a `bg/subtle` card with 8 px
 /// corners, 44 px tall in Comfortable — the drive's icon at the left, the
-/// name with the utilisation percentage at the right end of the first line,
-/// a 4 px usage bar under them — and 26 px in Compact, one line: icon,
-/// name, bar, percentage. A removable drive carries the eject button at
-/// the card's right edge, vertically centred and always visible (issue 79
-/// item 7), and the rest of the row ends before it. A click opens the
-/// drive's root; Eject is in the context menu of removable media too.
+/// name on one line with the utilisation percentage at the right end of
+/// the line, a 4 px usage bar under them coloured by how full the drive is
+/// — and 26 px in Compact, one line: icon, name, bar, percentage. A
+/// read-only drive shows a full bar in `text/placeholder` and no
+/// percentage, the bar's tooltip and accessible description *Read-only*.
+/// A removable drive carries the eject button at the card's right edge,
+/// vertically centred and always visible, and the rest of the row ends
+/// before it. A click opens the drive's root; Eject is in the context menu
+/// of removable media too.
 #[allow(clippy::too_many_lines)]
 fn drive_card(
     ui: &mut egui::Ui,
@@ -1490,33 +1496,52 @@ fn drive_card(
         scheme.icon_default,
     );
     let label_x = glyph_x + ICON + ICON_GAP;
-    let percent_text = percent(volume);
+    // A read-only drive shows no percentage: the bar says it all.
+    let read_only = volume.read_only;
+    let percent_text = if read_only {
+        t!("panel-read-only")
+    } else {
+        percent(volume)
+    };
     let percent_galley = painter.layout_no_wrap(
         percent_text.clone(),
         egui::FontId::proportional(TEXT_SECONDARY),
         scheme.text_secondary,
     );
-    let percent_size = percent_galley.size();
+    let percent_size = if read_only {
+        egui::Vec2::ZERO
+    } else {
+        percent_galley.size()
+    };
+    // The room the percentage takes before the bar, in Compact.
+    let percent_gap = if read_only { 0.0 } else { ICON_GAP };
     let fraction = volume.utilisation().unwrap_or(0.0);
+    let bar;
     if compact {
         // One line: name, the bar, the percentage.
         let bar_width = 48.0;
-        painter.galley(
+        if !read_only {
+            painter.galley(
+                egui::pos2(
+                    right - percent_size.x,
+                    rect.center().y - percent_size.y / 2.0,
+                ),
+                percent_galley,
+                scheme.text_secondary,
+            );
+        }
+        bar = egui::Rect::from_min_size(
             egui::pos2(
-                right - percent_size.x,
-                rect.center().y - percent_size.y / 2.0,
-            ),
-            percent_galley,
-            scheme.text_secondary,
-        );
-        let bar = egui::Rect::from_min_size(
-            egui::pos2(
-                right - percent_size.x - ICON_GAP - bar_width,
+                right - percent_size.x - percent_gap - bar_width,
                 rect.center().y - BAR / 2.0,
             ),
             egui::vec2(bar_width, BAR),
         );
-        utilisation_bar(ui, bar, fraction);
+        if read_only {
+            read_only_bar(ui, bar);
+        } else {
+            utilisation_bar(ui, bar, fraction);
+        }
         let name = truncated(
             ui,
             &volume.name,
@@ -1532,17 +1557,19 @@ fn drive_card(
         );
     } else {
         let line_y = rect.top() + 15.0;
-        painter.galley(
-            egui::pos2(right - percent_size.x, line_y - percent_size.y / 2.0),
-            percent_galley,
-            scheme.text_secondary,
-        );
+        if !read_only {
+            painter.galley(
+                egui::pos2(right - percent_size.x, line_y - percent_size.y / 2.0),
+                percent_galley,
+                scheme.text_secondary,
+            );
+        }
         let name = truncated(
             ui,
             &volume.name,
             TEXT_BODY,
             scheme.text_primary,
-            right - percent_size.x - ICON_GAP - label_x,
+            right - percent_size.x - percent_gap - label_x,
         );
         let size = name.size();
         ui.painter().galley(
@@ -1550,11 +1577,18 @@ fn drive_card(
             name,
             scheme.text_primary,
         );
-        let bar = egui::Rect::from_min_size(
+        bar = egui::Rect::from_min_size(
             egui::pos2(label_x, rect.top() + 30.0),
             egui::vec2((right - label_x).max(0.0), BAR),
         );
-        utilisation_bar(ui, bar, fraction);
+        if read_only {
+            read_only_bar(ui, bar);
+        } else {
+            utilisation_bar(ui, bar, fraction);
+        }
+    }
+    if read_only {
+        read_only_hint(ui, bar, &volume.mount_point);
     }
     let location = Location::new(
         vfs_local::PROVIDER_ID,
@@ -1603,6 +1637,26 @@ fn drive_card(
                 ui.close();
             }
         });
+}
+
+/// The hover zone of a read-only drive's bar, a little taller than the 4 px
+/// bar: the tooltip *Read-only*, which is also the zone's accessible name
+/// and description (SPEC.md *Accessibility*).
+fn read_only_hint(ui: &mut egui::Ui, bar: egui::Rect, mount_point: &Path) {
+    let zone = bar.expand2(egui::vec2(0.0, (READ_ONLY_HIT - BAR) / 2.0));
+    let response = ui.interact(
+        zone,
+        egui::Id::new(("side-read-only", mount_point)),
+        egui::Sense::hover(),
+    );
+    let text = t!("panel-read-only");
+    response.widget_info(|| {
+        egui::WidgetInfo::labeled(egui::WidgetType::ProgressIndicator, true, text.clone())
+    });
+    ui.ctx().accesskit_node_builder(response.id, |node| {
+        node.set_description(text.clone());
+    });
+    response.on_hover_text(text);
 }
 
 /// The eject button of a removable drive's card: `EJECT` at the card's

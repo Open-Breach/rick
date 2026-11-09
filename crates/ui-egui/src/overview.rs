@@ -27,7 +27,22 @@ pub fn volume_icon(kind: VolumeKind) -> &'static str {
     }
 }
 
-/// Paints a small utilisation bar in `rect`, `fraction` of it filled.
+/// The fill colour of a usage bar by how full the drive is, like the Trash
+/// pill (SPEC.md *This Machine*): `accent/usage` below 80 %,
+/// `status/warning` from 80 %, `status/danger` from 90 %.
+#[must_use]
+pub fn usage_colour(scheme: &crate::theme::Scheme, fraction: f32) -> egui::Color32 {
+    if fraction >= 0.9 {
+        scheme.status_danger
+    } else if fraction >= 0.8 {
+        scheme.status_warning
+    } else {
+        scheme.accent_usage
+    }
+}
+
+/// Paints a small utilisation bar in `rect`, `fraction` of it filled in
+/// the colour of [`usage_colour`] on a `bg/track` track.
 pub fn utilisation_bar(ui: &egui::Ui, rect: egui::Rect, fraction: f32) {
     let scheme = crate::theme::scheme(ui);
     ui.painter().rect_filled(rect, 2.0, scheme.bg_track);
@@ -35,7 +50,26 @@ pub fn utilisation_bar(ui: &egui::Ui, rect: egui::Rect, fraction: f32) {
         rect.min,
         egui::vec2(rect.width() * fraction.clamp(0.0, 1.0), rect.height()),
     );
-    ui.painter().rect_filled(filled, 2.0, scheme.accent_usage);
+    ui.painter()
+        .rect_filled(filled, 2.0, usage_colour(scheme, fraction));
+}
+
+/// Paints the bar of a read-only volume in `rect`: full, in
+/// `text/placeholder`, no threshold colour — the medium is full by design
+/// (SPEC.md *This Machine*).
+pub fn read_only_bar(ui: &egui::Ui, rect: egui::Rect) {
+    let scheme = crate::theme::scheme(ui);
+    ui.painter().rect_filled(rect, 2.0, scheme.text_placeholder);
+}
+
+/// The bar of a volume: the read-only bar for read-only media, the
+/// utilisation bar otherwise.
+pub fn volume_bar(ui: &egui::Ui, rect: egui::Rect, volume: &Volume) {
+    if volume.read_only {
+        read_only_bar(ui, rect);
+    } else {
+        utilisation_bar(ui, rect, volume.utilisation().unwrap_or(0.0));
+    }
 }
 
 /// `45%`, or an em dash when the volume's size is unknown.
@@ -148,7 +182,7 @@ fn drive_table(ui: &mut egui::Ui, cx: &mut PaneCx<'_>, entries: &[Entry]) {
                 ui.horizontal(|ui| {
                     let (rect, _) =
                         ui.allocate_exact_size(egui::vec2(80.0, 8.0), egui::Sense::hover());
-                    utilisation_bar(ui, rect, v.utilisation().unwrap_or(0.0));
+                    volume_bar(ui, rect, v);
                     ui.label(percent(v));
                 });
                 ui.label(if v.is_removable() {
@@ -238,4 +272,23 @@ fn row_interaction(cx: &mut PaneCx<'_>, entry: &Entry, response: &egui::Response
             ui.close();
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::theme::Scheme;
+
+    #[test]
+    fn the_usage_colour_follows_the_fill_like_the_trash_pill() {
+        for scheme in [&Scheme::LIGHT, &Scheme::DARK] {
+            assert_eq!(usage_colour(scheme, 0.0), scheme.accent_usage);
+            assert_eq!(usage_colour(scheme, 0.4), scheme.accent_usage);
+            assert_eq!(usage_colour(scheme, 0.799), scheme.accent_usage);
+            assert_eq!(usage_colour(scheme, 0.8), scheme.status_warning);
+            assert_eq!(usage_colour(scheme, 0.85), scheme.status_warning);
+            assert_eq!(usage_colour(scheme, 0.9), scheme.status_danger);
+            assert_eq!(usage_colour(scheme, 1.0), scheme.status_danger);
+        }
+    }
 }

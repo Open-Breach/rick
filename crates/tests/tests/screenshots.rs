@@ -980,16 +980,60 @@ fn screenshots_of_the_side_panel() {
         device: None,
         total: Some(64 << 20),
         free: Some(38 << 20),
+        read_only: false,
     });
-    fake.add_volume(platform::Volume {
-        name: "HOLIDAY".into(),
-        mount_point: stick.path().to_path_buf(),
-        kind: platform::VolumeKind::Removable,
-        fs_type: "exfat".into(),
-        device: None,
-        total: Some(64 << 30),
-        free: Some(21 << 30),
-    });
+    // The drives of the Figma frames and the *Drive usage — thresholds*
+    // example: a warning and a critical fill, a read-only live USB and a
+    // removable stick.
+    for (name, sub, kind, fs, total, free, read_only) in [
+        (
+            "home",
+            "home",
+            platform::VolumeKind::Fixed,
+            "ext4",
+            1 << 40,
+            154 << 30,
+            false,
+        ),
+        (
+            "Data",
+            "data",
+            platform::VolumeKind::Fixed,
+            "ext4",
+            2 << 40,
+            100 << 30,
+            false,
+        ),
+        (
+            "Fedora-WS-Live-43",
+            "live",
+            platform::VolumeKind::Removable,
+            "iso9660",
+            2 << 30,
+            0,
+            true,
+        ),
+        (
+            "test",
+            "test",
+            platform::VolumeKind::Removable,
+            "exfat",
+            64 << 30,
+            59 << 30,
+            false,
+        ),
+    ] {
+        fake.add_volume(platform::Volume {
+            name: name.into(),
+            mount_point: stick.path().join(sub),
+            kind,
+            fs_type: fs.into(),
+            device: None,
+            total: Some(total),
+            free: Some(free),
+            read_only,
+        });
+    }
     fake.add_volume(platform::Volume {
         name: "nas".into(),
         mount_point: stick.path().join("nas"),
@@ -998,6 +1042,7 @@ fn screenshots_of_the_side_panel() {
         device: None,
         total: Some(4 << 40),
         free: Some(1 << 40),
+        read_only: false,
     });
     // 2.3 MiB in the trash: about 3.5 % of the small disk, the mid tint.
     let junk = deep.join("old-export.bin");
@@ -1017,7 +1062,7 @@ fn screenshots_of_the_side_panel() {
         .build_eframe(move |cc| RickUi::new(app, host, &cc.egui_ctx));
     settle(&mut harness);
     step_until(&mut harness, Duration::from_secs(5), |h| {
-        h.state().app().model().volumes.len() == 3 && h.state().app().model().trash.size > 0
+        h.state().app().model().volumes.len() == 6 && h.state().app().model().trash.size > 0
     });
     // Two jobs held half way: a copy with the spinner, an archive job.
     let (go_tx, go_rx) = runtime::watch::channel(false);
@@ -1675,6 +1720,7 @@ fn screenshots_of_the_side_panel_and_list() {
         device: None,
         total: Some(512 << 30),
         free: Some(200 << 30),
+        read_only: false,
     });
     fake.add_volume(platform::Volume {
         name: "HOLIDAY".into(),
@@ -1684,6 +1730,7 @@ fn screenshots_of_the_side_panel_and_list() {
         device: None,
         total: Some(64 << 30),
         free: Some(21 << 30),
+        read_only: false,
     });
     fake.add_volume(platform::Volume {
         name: "nas".into(),
@@ -1693,6 +1740,7 @@ fn screenshots_of_the_side_panel_and_list() {
         device: None,
         total: Some(4 << 40),
         free: Some(1 << 40),
+        read_only: false,
     });
     let host = Arc::new(EguiHost::new());
     let app = app::App::new(app::Config {

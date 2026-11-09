@@ -101,6 +101,9 @@ pub struct Volume {
     pub total: Option<u64>,
     /// Free bytes available to the user, when the OS reports it.
     pub free: Option<u64>,
+    /// Whether the operating system mounted the volume read-only: an
+    /// optical disc, a live USB, a mounted ISO (SPEC.md *This Machine*).
+    pub read_only: bool,
 }
 
 impl Volume {

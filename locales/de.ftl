@@ -214,6 +214,7 @@ panel-unfold-section = { $section } ausklappen
 panel-add = Hinzufügen…
 panel-add-connection = Verbindung hinzufügen…
 panel-eject = { $name } auswerfen
+panel-read-only = Schreibgeschützt
 menu-copy-as = Kopieren als
 menu-select-all = Alles auswählen
 menu-refresh = Aktualisieren
