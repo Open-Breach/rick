@@ -1348,6 +1348,29 @@ impl RickUi {
         self.windows.get_mut(&window)
     }
 
+    /// Raises and focuses a window, as a second launch's command line
+    /// asks: through the backend for every window, and through the
+    /// platform's activation for the root window, whose handles the
+    /// backend gives out (`xdg_activation` with the launcher's token,
+    /// `_NET_ACTIVE_WINDOW`, `NSApp.activate`, `SetForegroundWindow`).
+    fn activate(&mut self, window: WindowId, token: Option<&str>) {
+        let viewport = if window == self.root {
+            ViewportId::ROOT
+        } else {
+            viewport_of(window)
+        };
+        self.ctx
+            .send_viewport_cmd_to(viewport, ViewportCommand::Minimized(false));
+        self.ctx
+            .send_viewport_cmd_to(viewport, ViewportCommand::Focus);
+        if window == self.root
+            && let Some(window_ref) = &self.window_ref
+            && let Err(error) = self.app.platform().activate_window(window_ref, token)
+        {
+            tracing::debug!(%error, "the window was not raised through the platform");
+        }
+    }
+
     fn toast(&mut self, level: Level, text: impl Into<String>) {
         self.toasts.push(Toast {
             level,
@@ -1363,6 +1386,7 @@ impl RickUi {
                     self.thumbnails.arrived(&self.ctx, id, size, frame);
                 }
                 Event::Notify { level, text } => self.toast(level, text),
+                Event::Activate { window, token } => self.activate(window, token.as_deref()),
                 Event::Properties(info) => self.properties.open(*info),
                 Event::HashesOpened { hashes, format, .. } => self.hash.open(hashes, format),
                 Event::PreviewReady { pane, doc } => {

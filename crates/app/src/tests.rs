@@ -1989,3 +1989,69 @@ fn copy_inflates_a_gzip_compressed_file_before_decoding_it() {
     // Gzip that does not inflate is an error, never a panic.
     assert!(super::copied_text(&[0x1f, 0x8b, 8, 0, 1, 2, 3]).is_err());
 }
+
+/// `Command::Reveal` (specs/system-integration.md §3): the files' folder
+/// opens as a tab of the focused window and the files are selected once
+/// listed; with `new_window` the first folder's tab is a window of its
+/// own; `Command::Activate` asks the UI to raise the focused window with
+/// the launcher's token.
+#[test]
+fn reveal_opens_the_folder_in_a_tab_and_selects_the_files_once_listed() {
+    let mut h = harness();
+    h.settle();
+    let windows = h.app.model().windows().count();
+    let root = h.root.path().to_path_buf();
+    h.send(Command::Reveal {
+        items: vec![local(&root.join("a.txt")), local(&root.join("c.txt"))],
+        new_window: false,
+    });
+    h.settle();
+    let focused = h.app.model().focused;
+    let (_, tab) = h
+        .app
+        .model()
+        .active_tab(focused)
+        .unwrap_or_else(|| panic!("a focused tab"));
+    assert_eq!(tab.location, local(&root));
+    let mut names: Vec<String> = tab.selected().map(|e| e.name.clone()).collect();
+    names.sort();
+    assert_eq!(names, ["a.txt", "c.txt"]);
+    assert_eq!(h.app.model().windows().count(), windows);
+    assert!(
+        h.events
+            .iter()
+            .any(|e| matches!(e, Event::SelectionChanged { pane, ids } if *pane == focused && ids.len() == 2)),
+        "{:?}",
+        h.events
+    );
+
+    // A window of its own for the first folder; a name that is not there
+    // selects nothing once the listing is complete.
+    h.send(Command::Reveal {
+        items: vec![local(&root.join("sub")), local(&root.join("nowhere"))],
+        new_window: true,
+    });
+    h.settle();
+    assert_eq!(h.app.model().windows().count(), windows + 1);
+    let focused = h.app.model().focused;
+    let (_, tab) = h
+        .app
+        .model()
+        .active_tab(focused)
+        .unwrap_or_else(|| panic!("a focused tab"));
+    assert_eq!(tab.location, local(&root));
+    let names: Vec<String> = tab.selected().map(|e| e.name.clone()).collect();
+    assert_eq!(names, ["sub"]);
+
+    h.send(Command::Activate {
+        token: Some("token-1".to_owned()),
+    });
+    assert!(
+        h.events.iter().any(|e| matches!(
+            e,
+            Event::Activate { window, token } if *window == h.app.model().focused_window && token.as_deref() == Some("token-1")
+        )),
+        "{:?}",
+        h.events
+    );
+}

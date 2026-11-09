@@ -15,7 +15,11 @@ more on exit, restored at start (or the start layout the settings name, with
 a vanished folder's tab opened at its nearest ancestor), and the saved
 layouts in `layouts/`. Windows open, close and exchange workspace tabs and
 panes through it;
-closing the last one asks the UI to exit. A drag and drop's `Transfer`, `Receive`,
+closing the last one asks the UI to exit. A second launch's command line
+reaches it through the external-work channel: `NewWindowAt` opens a
+window of its own, `Reveal` opens the files' folders as tabs and selects
+the files once listed, and `Activate` asks the UI to raise the focused
+window with the launcher's token (`Event::Activate`). A drag and drop's `Transfer`, `Receive`,
 `SpringLoad`, `Pin` and `Unpin` are commands it handles itself, and so is
 `Open`: a folder navigates, a local file is offered to the archive provider
 and enters as a location when it browses it (unless the setting

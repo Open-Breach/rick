@@ -330,6 +330,9 @@ const POLL_EVERY: Duration = Duration::from_secs(3);
 /// How long one [`App::poll`] may spend applying messages before it leaves
 /// the rest to the next one.
 const POLL_BUDGET: Duration = Duration::from_millis(8);
+/// How long a reveal waits for its files to be listed before it selects
+/// what is there.
+const REVEAL_FOR: Duration = Duration::from_secs(5);
 /// How long the title-row search box's text must stand before the search
 /// indexes are asked, so a typist does not start a query per keystroke.
 const INDEX_SEARCH_AFTER: Duration = Duration::from_millis(150);
@@ -535,6 +538,10 @@ pub struct App {
     /// ([`ActionOutcome::Later`]), with the pane each ran in; looked at on
     /// every poll.
     later: Vec<(PaneId, FormLater)>,
+    /// The file names `Command::Reveal` selects in a pane once its folder
+    /// is listed, with when it asked; a name that never shows is dropped
+    /// after [`REVEAL_FOR`].
+    reveal_pending: BTreeMap<PaneId, (Vec<Vec<u8>>, std::time::Instant)>,
     /// Writes `places.toml`, latest snapshot wins.
     places_saver: mpsc::UnboundedSender<Vec<Place>>,
     /// Stops the volume poll.
@@ -834,6 +841,7 @@ impl App {
             thumbnails: BTreeSet::new(),
             pending,
             later: Vec::new(),
+            reveal_pending: BTreeMap::new(),
             places_saver,
             volumes_watch: CancelToken::new(),
             poke: runtime::watch::channel(0).0,
@@ -1576,6 +1584,14 @@ impl App {
                 self.model.focus_window(window);
             }
             Command::NewWindow => self.new_window(events),
+            Command::NewWindowAt(location) => {
+                self.model.new_window(location);
+            }
+            Command::Reveal { items, new_window } => self.reveal(&items, new_window),
+            Command::Activate { token } => events.push(Event::Activate {
+                window: self.model.focused_window,
+                token,
+            }),
             Command::CloseWindow(window) => {
                 if !self.model.close_window(window) && self.model.window(window).is_some() {
                     self.exit = true;
@@ -3409,6 +3425,7 @@ impl App {
                     batch,
                     done: false,
                 });
+                self.resolve_reveal(pane, false, events);
             }
             Msg::ListDone {
                 pane,
@@ -4057,6 +4074,7 @@ impl App {
                 Vec::new()
             }
         };
+        self.resolve_reveal(pane, true, events);
         // The Cloud overview's rows are the side panel's Cloud rows too, and
         // the Network overview's provider rows its Network rows (the
         // mounted shares are the volumes' own rows).
@@ -4120,6 +4138,70 @@ impl App {
         } else {
             debug!(?pane, "rescan");
             self.refresh(pane);
+        }
+    }
+
+    /// `Command::Reveal`: one tab per folder of `items`, in the focused
+    /// window (the first in a window of its own with `new_window`), each
+    /// selecting its files once listed.
+    fn reveal(&mut self, items: &[Location], new_window: bool) {
+        let mut folders: Vec<(Location, Vec<Vec<u8>>)> = Vec::new();
+        for item in items {
+            let Some(parent) = item.path.parent() else {
+                continue;
+            };
+            let Some(name) = item.path.file_name() else {
+                continue;
+            };
+            let folder = Location::new(item.provider, parent);
+            match folders.iter_mut().find(|(f, _)| *f == folder) {
+                Some((_, names)) => names.push(name.to_vec()),
+                None => folders.push((folder, vec![name.to_vec()])),
+            }
+        }
+        for (index, (folder, names)) in folders.into_iter().enumerate() {
+            let pane = if index == 0 && new_window {
+                self.model.new_window(folder).1
+            } else {
+                self.model.new_tab(None, folder).0
+            };
+            self.reveal_pending
+                .insert(pane, (names, std::time::Instant::now()));
+        }
+    }
+
+    /// Selects what a reveal asked for in `pane` once its names are
+    /// listed: all of them as soon as every name has a row, what is there
+    /// when the listing is `complete` or the wait is over.
+    fn resolve_reveal(&mut self, pane: PaneId, complete: bool, events: &mut Vec<Event>) {
+        let Some((names, since)) = self.reveal_pending.get(&pane) else {
+            return;
+        };
+        let ids: Vec<EntryId> = self
+            .model
+            .active_tab(pane)
+            .map(|(_, tab)| {
+                tab.listing
+                    .rows()
+                    .filter(|e| {
+                        e.path
+                            .file_name()
+                            .is_some_and(|n| names.iter().any(|w| w == n))
+                    })
+                    .map(|e| e.id)
+                    .collect()
+            })
+            .unwrap_or_default();
+        let all = ids.len() >= names.len();
+        if !all && !complete && since.elapsed() < REVEAL_FOR {
+            return;
+        }
+        self.reveal_pending.remove(&pane);
+        if ids.is_empty() {
+            return;
+        }
+        if let Some(ids) = self.model.select(pane, SelectionChange::Set(ids)) {
+            events.push(Event::SelectionChanged { pane, ids });
         }
     }
 
