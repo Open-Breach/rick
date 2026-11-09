@@ -88,7 +88,7 @@ impl Session {
         // the terminal says it understands it, and the way they all check
         // is the VTE version (bash and zsh through the distributions'
         // vte.sh, fish by itself): the version is a recent VTE's
-        // (QUESTIONS.md 265).
+        // (QUESTIONS.md 266).
         command.env("VTE_VERSION", "7800");
         let child = pair
             .slave
