@@ -47,7 +47,18 @@ stale socket and gives an unresponsive instance up after a second),
 `xdg_activation_v1` with the launcher's token on Wayland,
 `_NET_ACTIVE_WINDOW` on X11, the window made key and `NSApp.activate` on
 macOS, `SetForegroundWindow` on Windows after the launch's
-`AllowSetForegroundWindow`) the `process` module that asks whether a console's shell has handed its
+`AllowSetForegroundWindow`), `Integration` (the integration items of
+specs/system-integration.md §6 and §7: list those of this platform and
+desktop, check one without changing anything, perform one and answer a
+receipt of what was written, undo one from its receipt; Linux has the six
+of §7.1 — the install location, which the installer plugin performs and
+the platform only checks, the launcher entry and icons, the default file
+manager in `mimeapps.list`, the `org.freedesktop.FileManager1` activation
+file, the `rick` link with the shell function of `path.sh`, and the dock
+favourite of GNOME, KDE Plasma, COSMIC and Cinnamon with `gsettings`
+behind a trait — on a `LinuxEnv` of the caller's choosing, so tests run on
+a temporary home; Windows and macOS list none yet; `FakeIntegration` is
+the scripted one) the `process` module that asks whether a console's shell has handed its
 terminal to a job (`/proc/<pid>/stat`, `proc_pidinfo`; Windows cannot say),
 and the `agent` module that opens the SSH
 agent's socket (`SSH_AUTH_SOCK`, or OpenSSH's named pipe on Windows),

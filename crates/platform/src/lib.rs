@@ -9,6 +9,9 @@
 //! [`Secrets`], [`SingleInstance`] and [`Activation`] (raising the window a
 //! second launch's path opened in: `xdg_activation_v1` with the launcher's
 //! token, `_NET_ACTIVE_WINDOW`, `NSApp.activate`, `SetForegroundWindow`),
+//! and [`Integration`] (the integration items of
+//! specs/system-integration.md §6 and §7: list those of this platform and
+//! desktop, check one, perform one, undo one; [`integration`]),
 //! bundled as [`Platform`]. [`process`] asks the system whether the shell
 //! in a console has handed its terminal to a job. [`Native`] is the real
 //! implementation for the OS the binary runs on; [`Fake`] is the one tests
@@ -60,6 +63,7 @@ mod dnd;
 mod fake;
 pub mod fs;
 pub mod instance;
+pub mod integration;
 pub mod paths;
 pub mod perms;
 pub mod process;
@@ -86,6 +90,12 @@ compile_error!("Rick supports Linux, macOS and Windows");
 
 pub use async_trait::async_trait;
 pub use fake::{FAKE_APPLICATIONS, FAKE_STANDARD_FOLDERS, Fake};
+pub use integration::{FakeIntegration, Integration};
+/// The Linux integration items on an environment of the caller's choosing:
+/// what [`Native`] runs on the process's own, and what a test runs on a
+/// temporary home.
+#[cfg(target_os = "linux")]
+pub use linux::integration::{Gsettings, LinuxEnv, LinuxIntegration};
 pub use perms::{
     Acl, DarwinAce, FilePermissions, Nfs4Ace, Nfs4Kind, NtAce, PermissionChange, Permissions,
     PosixAce, PosixTag, Principal, PrincipalKind, Principals,
@@ -177,6 +187,64 @@ impl SystemFonts for Native {
 impl Motion for Native {
     fn reduce_motion(&self) -> bool {
         motion::system()
+    }
+}
+
+impl Integration for Native {
+    fn integration_items(&self) -> integration::Items {
+        #[cfg(target_os = "linux")]
+        {
+            LinuxIntegration::native().integration_items()
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            integration::none::items()
+        }
+    }
+
+    fn check_integration(
+        &self,
+        item: integration::Item,
+        request: &integration::Request,
+    ) -> integration::Check {
+        #[cfg(target_os = "linux")]
+        {
+            LinuxIntegration::native().check_integration(item, request)
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            integration::none::check(item, request)
+        }
+    }
+
+    fn perform_integration(
+        &self,
+        item: integration::Item,
+        request: &integration::Request,
+    ) -> Result<integration::Receipt, Error> {
+        #[cfg(target_os = "linux")]
+        {
+            LinuxIntegration::native().perform_integration(item, request)
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            integration::none::perform(item, request)
+        }
+    }
+
+    fn undo_integration(
+        &self,
+        item: integration::Item,
+        request: &integration::Request,
+    ) -> Result<(), Error> {
+        #[cfg(target_os = "linux")]
+        {
+            LinuxIntegration::native().undo_integration(item, request)
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            integration::none::undo(item, request)
+        }
     }
 }
 
