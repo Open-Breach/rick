@@ -18,6 +18,9 @@
 //! sits [`GHOST_OFFSET`] down and right of the cursor, so the cursor stays
 //! visible, and the ghost moves rigidly with it.
 //!
+//! The tabs a dragged tab passes do not jump out of its way: they slide,
+//! over [`TAB_SLIDE`], to open the gap where it will land ([`Slides`]).
+//!
 //! ```
 //! use ui_egui::drag::{GHOST_OFFSET, GHOST_SCALE, Snapshot};
 //!
@@ -33,6 +36,9 @@
 //! assert_eq!(grip, cursor + GHOST_OFFSET);
 //! ```
 
+use std::collections::HashMap;
+use std::hash::Hash;
+
 use egui::emath::{GuiRounding as _, TSTransform};
 use egui::epaint::ClippedShape;
 use egui::{LayerId, Pos2, Rect, Shape, Vec2};
@@ -46,6 +52,10 @@ pub const GHOST_OPACITY: f32 = 0.7;
 /// How far down and right of the cursor the grab point of a ghost sits, so
 /// that the cursor stays visible.
 pub const GHOST_OFFSET: Vec2 = egui::vec2(8.0, 8.0);
+
+/// How long the neighbours of a dragged tab take to slide to where they
+/// belong, in seconds (QUESTIONS.md 269).
+pub const TAB_SLIDE: f64 = 0.15;
 
 /// Where a pane's shapes begin in the paint list of its layer.
 #[derive(Debug, Clone, Copy)]
@@ -196,6 +206,111 @@ pub fn lift(painter: &egui::Painter, rect: Rect, corners: impl Into<egui::Corner
     painter.add(shadow.as_shape(rect, corners));
 }
 
+/// One thing on its way along a row: from where it was to where it
+/// belongs, since when.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct Slide {
+    from: f32,
+    to: f32,
+    since: f64,
+}
+
+impl Slide {
+    /// Where it is at `now`: eased out, fast at first and settling.
+    fn at(&self, now: f64) -> f32 {
+        let t = ((now - self.since) / TAB_SLIDE).clamp(0.0, 1.0) as f32;
+        if t >= 1.0 {
+            return self.to;
+        }
+        let eased = 1.0 - (1.0 - t).powi(3);
+        self.from + (self.to - self.from) * eased
+    }
+
+    /// Whether it has arrived.
+    fn done(&self, now: f64) -> bool {
+        now - self.since >= TAB_SLIDE || (self.to - self.from).abs() < 0.01
+    }
+}
+
+/// The things of a row — the workspace tabs — that slide to where they
+/// belong instead of jumping there (SPEC.md *Workspace tabs*, Dragging a
+/// tab): each is drawn where [`Slides::at`] says, which follows the place
+/// it belongs at over [`TAB_SLIDE`].
+///
+/// ```
+/// use ui_egui::drag::{Slides, TAB_SLIDE};
+///
+/// let mut row: Slides<&str> = Slides::default();
+/// // First seen, a tab is where it belongs.
+/// assert_eq!(row.at("b", 222.0, -1.0), 222.0);
+/// // At time 0 a dragged tab passes it: it now belongs one place to the
+/// // left, and gets there over the slide's time, fast at first.
+/// assert_eq!(row.at("b", 0.0, 0.0), 222.0);
+/// let midway = row.at("b", 0.0, TAB_SLIDE / 2.0);
+/// assert!(midway > 0.0 && midway < 111.0);
+/// assert!(row.moving(TAB_SLIDE / 2.0));
+/// assert_eq!(row.at("b", 0.0, TAB_SLIDE), 0.0);
+/// assert!(!row.moving(TAB_SLIDE));
+/// ```
+#[derive(Debug, Clone)]
+pub struct Slides<K> {
+    moving: HashMap<K, Slide>,
+}
+
+impl<K> Default for Slides<K> {
+    fn default() -> Self {
+        Self {
+            moving: HashMap::new(),
+        }
+    }
+}
+
+impl<K: Hash + Eq + Copy> Slides<K> {
+    /// Where `key` is drawn at `now`, belonging at `target`. A new target
+    /// starts a slide from wherever the thing is at that moment; a thing
+    /// seen for the first time is at its target at once.
+    pub fn at(&mut self, key: K, target: f32, now: f64) -> f32 {
+        let slide = self.moving.entry(key).or_insert(Slide {
+            from: target,
+            to: target,
+            since: now,
+        });
+        if (slide.to - target).abs() > 0.01 {
+            *slide = Slide {
+                from: slide.at(now),
+                to: target,
+                since: now,
+            };
+        }
+        slide.at(now)
+    }
+
+    /// Puts `key` at `x` without a slide: the dragged tab under the cursor,
+    /// or everything while nothing is dragged or motion is reduced.
+    pub fn put(&mut self, key: K, x: f32, now: f64) -> f32 {
+        self.moving.insert(
+            key,
+            Slide {
+                from: x,
+                to: x,
+                since: now,
+            },
+        );
+        x
+    }
+
+    /// Whether anything is still on its way at `now`.
+    #[must_use]
+    pub fn moving(&self, now: f64) -> bool {
+        self.moving.values().any(|slide| !slide.done(now))
+    }
+
+    /// Forgets the things `keep` no longer names.
+    pub fn retain(&mut self, keep: impl Fn(&K) -> bool) {
+        self.moving.retain(|key, _| keep(key));
+    }
+}
+
 /// What is being dragged, for the ghost's record.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Dragged {
@@ -260,6 +375,40 @@ mod tests {
             let grip = ghost.min + (grab - pane.min) * GHOST_SCALE;
             assert!((grip - (cursor + GHOST_OFFSET)).length() < 1e-3, "{grip:?}");
         }
+    }
+
+    #[test]
+    fn a_thing_slides_to_a_new_place_from_wherever_it_is() {
+        let mut row: Slides<u8> = Slides::default();
+        assert!((row.at(1, 100.0, 0.0) - 100.0).abs() < f32::EPSILON);
+        assert!(!row.moving(0.0), "first seen, it is in place");
+        // A new place: on its way for the slide's time, never past it.
+        let start = 10.0;
+        assert!((row.at(1, 322.0, start) - 100.0).abs() < f32::EPSILON);
+        let mut last = 100.0;
+        for step in 1..=9u8 {
+            let now = start + TAB_SLIDE * f64::from(step) / 9.0;
+            let x = row.at(1, 322.0, now);
+            assert!(x > last && x <= 322.0, "step {step}: {x} after {last}");
+            last = x;
+        }
+        assert!((last - 322.0).abs() < 0.01);
+        assert!(!row.moving(start + TAB_SLIDE));
+        // Turned round halfway: back from where it is, without a jump.
+        let turn = 20.0;
+        row.at(1, 100.0, turn);
+        let halfway = row.at(1, 100.0, turn + TAB_SLIDE / 2.0);
+        let back = row.at(1, 322.0, turn + TAB_SLIDE / 2.0);
+        assert!(
+            (back - halfway).abs() < f32::EPSILON,
+            "no jump on a new target"
+        );
+        assert!(row.moving(turn + TAB_SLIDE / 2.0));
+        // Put somewhere, it is there at once; forgotten, it starts afresh.
+        assert!((row.put(1, 50.0, 30.0) - 50.0).abs() < f32::EPSILON);
+        assert!(!row.moving(30.0));
+        row.retain(|key| *key != 1);
+        assert!((row.at(1, 400.0, 31.0) - 400.0).abs() < f32::EPSILON);
     }
 
     #[test]
