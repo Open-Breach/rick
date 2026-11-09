@@ -279,19 +279,23 @@ fn a_pane_dropped_on_the_tab_row_becomes_a_workspace_of_its_own() {
     );
     assert_eq!(titles(&harness), ["right-pane"], "one workspace, two panes");
 
-    // Pane B's tab, dragged from its bar onto the tab row after the one
-    // tab: a second workspace holding pane B, shown.
+    // Pane B, dragged by its handle onto the tab row after the one tab: a
+    // second workspace holding pane B, shown.
     let rect_b = harness
         .state()
         .pane_rects()
         .into_iter()
         .find(|(p, _)| *p == pane_b)
         .map_or_else(|| panic!("no rect"), |(_, r)| r);
+    let from = harness
+        .query_all_by_label("Drag pane")
+        .map(|n| n.rect())
+        .find(|r| rect_b.contains(r.center()))
+        .map_or_else(|| panic!("no handle in pane B"), |r| r.center());
     let row = harness
         .state()
         .tab_row()
         .unwrap_or_else(|| panic!("no tab row"));
-    let from = egui::pos2(rect_b.left() + 50.0, rect_b.top() + 14.0);
     let to = egui::pos2(row.left() + 240.0, row.center().y);
     drag(&mut harness, from, to);
     let model = harness.state().app().model();

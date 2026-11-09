@@ -259,34 +259,6 @@ impl DockSync {
         walk(self.state.main_surface(), NodeIndex::root(), model)
     }
 
-    /// The tab a drag out of a pane's bar carries right now, if any:
-    /// `egui_dock` marks the dragged tab's button id, which is built from the
-    /// dock area's id.
-    #[must_use]
-    pub fn dragged_tab(&self, ctx: &egui::Context, dock_id: egui::Id) -> Option<TabId> {
-        let dragged = ctx.dragged_id()?;
-        if !ctx.input(|i| i.pointer.is_decidedly_dragging()) {
-            return None;
-        }
-        let tree = self.state.main_surface();
-        for (node, tabs) in tree
-            .iter()
-            .enumerate()
-            .filter_map(|(index, node)| node.tabs().map(|tabs| (index, tabs)))
-        {
-            for (index, tab) in tabs.iter().enumerate() {
-                let id = dock_id
-                    .with((SurfaceIndex::main(), "surface"))
-                    .with((NodeIndex(node), "node"))
-                    .with((index, "tab"));
-                if id == dragged {
-                    return Some(*tab);
-                }
-            }
-        }
-        None
-    }
-
     /// Gives the leaf showing `pane` the dock's focus.
     pub fn focus_pane(&mut self, model: &Model, pane: PaneId) {
         let Some(tab) = model
@@ -726,10 +698,13 @@ fn build(tree: &mut Tree<TabId>, node: NodeIndex, shape: &Shape) {
             if let Some(leaf) = tree[node].get_leaf_mut() {
                 leaf.tabs.clone_from(tabs);
                 leaf.active = TabIndex(active);
+                leaf.tab_bar_hidden = true;
             } else {
                 tree[node] = Node::leaf_with(tabs.clone());
                 if let Some(leaf) = tree[node].get_leaf_mut() {
                     leaf.active = TabIndex(active);
+                    // Panes have no tab bars (SPEC.md *Workspace tabs*).
+                    leaf.tab_bar_hidden = true;
                 }
             }
         }

@@ -49,6 +49,22 @@ the pull request that brought the change.
   session and the saved layouts hold the workspaces in order with the
   active one; a `session.toml` of 0.2 reads as one workspace per window,
   its panes' further tabs opening as workspaces of their own (#70).
+- The panes of the design refresh (issue 60, SPEC.md *Panes*, *Toolbar*,
+  *Path bar*, *View options menu*): no tab bar over a pane any more; a
+  grab handle at the top right of every toolbar drags the pane, with a
+  ghost card under the pointer and the five dock tiles on the pane below —
+  left, right, top and bottom split it and dock the pane there, the
+  centre or the tab row makes it a workspace tab, outside the window a
+  new window; the toolbar holds Back and Forward, the breadcrumb starting
+  with the parent chip after a hairline, and a view options button
+  before the handle. The view options menu replaces the view-mode
+  dropdown, the hidden-files toggle and the refresh button: Details, List
+  and Icons with the three icon sizes, the Show hidden files and Folders
+  first switches, Refresh now, and a per-type filter — one checkbox per
+  file type in the folder with its count, folders too — that narrows the
+  list, clears on navigation and lights a dot on the button while it is
+  on (`Command::TypeFilter`). Panes are separated by a hairline that
+  drags to resize; the focused pane shows no border (#71).
 
 ### Removed
 

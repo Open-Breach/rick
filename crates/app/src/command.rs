@@ -103,6 +103,15 @@ pub enum Command {
         /// The column, or `None` for a flat list.
         by: Option<Column>,
     },
+    /// Narrow a pane to the entries of these file types, as the Type
+    /// column names them, from the view options menu; `None` shows every
+    /// type again. The filter is per pane and clears on navigation.
+    TypeFilter {
+        /// The pane.
+        pane: PaneId,
+        /// The types to show, or every type.
+        types: Option<std::collections::BTreeSet<String>>,
+    },
     /// Set the pane's type-to-filter text.
     Filter {
         /// The pane.

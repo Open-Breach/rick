@@ -1339,6 +1339,9 @@ impl App {
             Command::Filter { pane, text } => {
                 self.model.set_filter(pane, &text);
             }
+            Command::TypeFilter { pane, types } => {
+                self.model.set_types(pane, types);
+            }
             Command::ToggleHidden(pane) => {
                 self.model.toggle_hidden(pane);
             }

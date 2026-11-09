@@ -461,6 +461,142 @@ fn screenshots_of_the_title_row() {
     }
 }
 
+/// Issue 60: the panes — two panes with their toolbars (parent chip,
+/// breadcrumb, view options, handle), the view options menu open on the
+/// left one, and a pane dragged by its handle over the other with the dock
+/// cross and the ghost card — in Light and Dark at both densities.
+#[test]
+#[ignore = "needs a wgpu adapter; CI runs it and uploads the images"]
+fn screenshots_of_the_panes() {
+    use egui_kittest::kittest::Queryable as _;
+    let (_dir, deep) = sample_tree();
+    let mut harness = shell(&deep, egui::vec2(1920.0, 1000.0));
+    let pane = harness.state().app().model().focused;
+    harness.state_mut().app_mut().handle(
+        app::Command::Split {
+            pane,
+            dir: model::SplitDir::Right,
+        },
+        &mut Vec::new(),
+    );
+    settle(&mut harness);
+    let second = harness.state().app().model().focused;
+    harness.state_mut().app_mut().handle(
+        app::Command::Navigate {
+            pane: second,
+            to: local(&deep.join("raw")),
+        },
+        &mut Vec::new(),
+    );
+    settle(&mut harness);
+    harness
+        .state_mut()
+        .app_mut()
+        .handle(app::Command::FocusPane(pane), &mut Vec::new());
+    settle(&mut harness);
+    for (theme, density) in [
+        (Theme::Light, Density::Comfortable),
+        (Theme::Light, Density::Compact),
+        (Theme::Dark, Density::Comfortable),
+        (Theme::Dark, Density::Compact),
+    ] {
+        for change in [
+            SettingsChange::Theme(theme),
+            SettingsChange::Density(density),
+        ] {
+            harness
+                .state_mut()
+                .app_mut()
+                .handle(app::Command::Settings(change), &mut Vec::new());
+        }
+        settle(&mut harness);
+        let theme_name = match theme {
+            Theme::Light => "light",
+            Theme::Dark => "dark",
+            Theme::System => "system",
+        };
+        let density_name = match density {
+            Density::Comfortable => "comfortable",
+            Density::Compact => "compact",
+        };
+        // The view options menu of the left pane.
+        let rects = harness.state().pane_rects();
+        let left_rect = rects
+            .iter()
+            .find(|(p, _)| *p == pane)
+            .map_or_else(|| panic!("left pane"), |(_, r)| *r);
+        let right_rect = rects
+            .iter()
+            .find(|(p, _)| *p == second)
+            .map_or_else(|| panic!("right pane"), |(_, r)| *r);
+        let button = harness
+            .query_all_by_label("View options")
+            .map(|n| n.rect())
+            .find(|r| left_rect.contains(r.center()))
+            .unwrap_or_else(|| panic!("view options of the left pane"));
+        harness.event(egui::Event::PointerMoved(button.center()));
+        harness.step();
+        for pressed in [true, false] {
+            harness.event(egui::Event::PointerButton {
+                pos: button.center(),
+                button: egui::PointerButton::Primary,
+                pressed,
+                modifiers: egui::Modifiers::default(),
+            });
+            harness.step();
+        }
+        harness.step();
+        shoot(
+            &mut harness,
+            &format!("panes-view-options-{theme_name}-{density_name}"),
+        );
+        harness.key_press(egui::Key::Escape);
+        harness.step();
+        harness.step();
+
+        // The right pane dragged by its handle over the left pane's left
+        // tile, held there.
+        let handle = harness
+            .query_all_by_label("Drag pane")
+            .map(|n| n.rect())
+            .find(|r| right_rect.contains(r.center()))
+            .unwrap_or_else(|| panic!("handle of the right pane"));
+        let from = handle.center();
+        let to = left_rect.center() + egui::vec2(-ui_egui::DOCK_TILE_PITCH, 0.0);
+        harness.event(egui::Event::PointerMoved(from));
+        harness.step();
+        harness.event(egui::Event::PointerButton {
+            pos: from,
+            button: egui::PointerButton::Primary,
+            pressed: true,
+            modifiers: egui::Modifiers::default(),
+        });
+        harness.step();
+        for i in 1..=12u8 {
+            let t = f32::from(i) / 12.0;
+            harness.event(egui::Event::PointerMoved(from + (to - from) * t));
+            harness.step();
+        }
+        harness.step();
+        shoot(
+            &mut harness,
+            &format!("panes-drag-{theme_name}-{density_name}"),
+        );
+        // Back to where it was: release over nothing, outside every tile.
+        let away = egui::pos2(right_rect.center().x, right_rect.bottom() - 40.0);
+        harness.event(egui::Event::PointerMoved(away));
+        harness.step();
+        harness.event(egui::Event::PointerButton {
+            pos: away,
+            button: egui::PointerButton::Primary,
+            pressed: false,
+            modifiers: egui::Modifiers::default(),
+        });
+        harness.step();
+        settle(&mut harness);
+    }
+}
+
 /// Issue 17: the Preview tab docked below the explorer and torn out into a
 /// window of its own.
 #[test]
