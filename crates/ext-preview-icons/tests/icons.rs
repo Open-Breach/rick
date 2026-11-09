@@ -145,7 +145,7 @@ fn a_multi_entry_ico_previews_largest_first_with_every_variant_a_page_magnified_
         file.rows
     );
     assert!(doc.text_layer().is_none(), "a binary container has no Copy");
-    assert!(doc.controls().is_empty());
+    assert_eq!(doc.controls(), Vec::new(), "no controls of its own");
 
     // Actual pixels: each variant at its own size.
     let (w, h, red) = pixels(&mut doc, 0, actual());
@@ -349,7 +349,7 @@ fn an_xpm_with_named_colours_and_none_renders_with_transparency_and_copies_its_s
         Some(vec![String::from_utf8_lossy(&xpm).into_owned()]),
         "the source"
     );
-    assert!(doc.controls().is_empty());
+    assert_eq!(doc.controls(), Vec::new(), "no controls of its own");
     let file = &doc.sections()[0];
     for (key, value) in [
         ("Format", "XPM"),
