@@ -167,7 +167,9 @@ pub fn show(ui: &mut egui::Ui, cx: &mut PaneCx<'_>) {
                 .action_ctx(cx.pane, ext::Invocation::ContextMenu)
                 .and_then(|c| c.other),
         };
-        background.context_menu(|ui| menus::context_menu(ui, cx, &action_ctx, None));
+        egui::Popup::context_menu(&background)
+            .style(menus::menu_style)
+            .show(|ui| menus::context_menu(ui, cx, &action_ctx, None));
     }
 }
 
@@ -1312,5 +1314,7 @@ fn interact(ui: &mut egui::Ui, cx: &mut PaneCx<'_>, index: usize, response: &egu
         cx.requests.push(Request::FocusPane(cx.pane));
     }
     let action_ctx = menus::context_for(cx, if selected { None } else { Some(entry.clone()) });
-    response.context_menu(|ui| menus::context_menu(ui, cx, &action_ctx, Some(entry)));
+    egui::Popup::context_menu(response)
+        .style(menus::menu_style)
+        .show(|ui| menus::context_menu(ui, cx, &action_ctx, Some(entry)));
 }

@@ -881,9 +881,7 @@ fn the_trash_view_lists_restores_undoes_and_empties() {
     let rect = pane_rect(&harness);
     let empty_space = egui::pos2(rect.center().x, rect.bottom() - 80.0);
     click_at(&mut harness, empty_space, egui::PointerButton::Secondary);
-    harness.get_by_label_contains("Trash ⏵").hover();
-    harness.step();
-    harness.step();
+    // The Trash group has one entry in the view, so it is that entry.
     harness.get_by_label("Empty trash").click();
     harness.step();
     harness.step();
@@ -907,7 +905,7 @@ fn the_trash_view_lists_restores_undoes_and_empties() {
     click_at(&mut harness, empty_space, egui::PointerButton::Secondary);
     harness.step();
     harness.get_by_label_contains("New folder");
-    assert!(harness.query_by_label_contains("Trash ⏵").is_none());
+    assert!(harness.query_by_label("Empty trash").is_none());
     harness.key_press(egui::Key::Escape);
     harness.step();
 }

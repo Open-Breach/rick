@@ -101,6 +101,19 @@ pub const TREE_CLOSED: &str = ph::CARET_RIGHT;
 pub const TREE_OPEN: &str = ph::CARET_DOWN;
 /// The operations drawer's caret while it is collapsed.
 pub const CARET_UP: &str = ph::CARET_UP;
+/// The context menu's entries (SPEC.md *Context menu*).
+pub const CUT: &str = ph::SCISSORS;
+pub const PASTE: &str = ph::CLIPBOARD;
+pub const RENAME: &str = ph::PENCIL_SIMPLE;
+pub const HASH: &str = ph::HASH;
+pub const INSTALL: &str = ph::DOWNLOAD_SIMPLE;
+pub const DUPLICATE: &str = ph::COPY_SIMPLE;
+pub const SELECT_ALL: &str = ph::SELECTION_ALL;
+pub const NEW_FILE: &str = ph::FILE_PLUS;
+pub const NEW_FOLDER: &str = ph::FOLDER_PLUS;
+pub const REVEAL: &str = ph::ARROW_SQUARE_OUT;
+pub const MOUNT: &str = ph::HARD_DRIVES;
+pub const OPEN_WITH: &str = ph::APP_WINDOW;
 /// An open folder, for the expanded folder tree node.
 pub const FOLDER_OPEN: &str = ph::FOLDER_OPEN;
 /// Pause a job.
@@ -385,6 +398,18 @@ mod tests {
         TREE_CLOSED,
         TREE_OPEN,
         CARET_UP,
+        CUT,
+        PASTE,
+        RENAME,
+        HASH,
+        INSTALL,
+        DUPLICATE,
+        SELECT_ALL,
+        NEW_FILE,
+        NEW_FOLDER,
+        REVEAL,
+        MOUNT,
+        OPEN_WITH,
         FOLDER_OPEN,
         PAUSE,
         PLAY,

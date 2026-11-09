@@ -51,7 +51,7 @@ too when asked), the Hash dialogue (a block per selected file with the
 MD5, SHA-1, SHA-256 and BLAKE3 rows, each with a read-only monospace value
 and Copy, then Copy all; byte progress and Cancel while the job runs; the
 format toggle and the Verify field, compared live against every row of
-the pasted length), the context menu and command palette
+the pasted length), the context menu (a 260 px card of the spec's groups — Open, Edit with the *Copy as* submenu, Change with the destructive pair in `status/danger`, the extension groups as submenus or single entries, Info — each entry with an icon slot, its label and its shortcut, hidden when it does not apply; on the empty area New folder and New file, Paste, Select all, Open terminal here, Refresh and Folder properties) and command palette
 built from the action registry, the keyboard shortcut table, the Settings
 (the language row among the rows) and Keyboard shortcuts screens, and drag and drop of entries: rows are drag
 sources, folders, pane space, breadcrumb segments and tab headers are drop

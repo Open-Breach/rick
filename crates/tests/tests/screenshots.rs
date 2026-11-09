@@ -998,6 +998,91 @@ fn screenshots_of_the_side_panel() {
     });
 }
 
+/// Issue 60: the context menus — a file's menu with its groups and the
+/// empty area's menu — in Light and Dark at both densities.
+#[test]
+#[ignore = "needs a wgpu adapter; CI runs it and uploads the images"]
+fn screenshots_of_the_context_menus() {
+    use egui_kittest::kittest::Queryable as _;
+    let (_dir, deep) = sample_tree();
+    let mut harness = shell(&deep, egui::vec2(1920.0, 1000.0));
+    let pane = harness.state().app().model().focused;
+    let tab = harness
+        .state()
+        .app()
+        .model()
+        .active_tab(pane)
+        .map_or_else(|| panic!("no tab"), |(id, _)| id);
+    let right_click = |harness: &mut Harness<'_, RickUi>, at: egui::Pos2| {
+        harness.event(egui::Event::PointerMoved(at));
+        harness.step();
+        for pressed in [true, false] {
+            harness.event(egui::Event::PointerButton {
+                pos: at,
+                button: egui::PointerButton::Secondary,
+                pressed,
+                modifiers: egui::Modifiers::default(),
+            });
+            harness.step();
+        }
+        harness.step();
+        harness.step();
+    };
+    for (theme, density) in [
+        (Theme::Light, Density::Comfortable),
+        (Theme::Light, Density::Compact),
+        (Theme::Dark, Density::Comfortable),
+        (Theme::Dark, Density::Compact),
+    ] {
+        for change in [
+            SettingsChange::Theme(theme),
+            SettingsChange::Density(density),
+        ] {
+            harness
+                .state_mut()
+                .app_mut()
+                .handle(app::Command::Settings(change), &mut Vec::new());
+        }
+        settle(&mut harness);
+        let theme_name = match theme {
+            Theme::Light => "light",
+            Theme::Dark => "dark",
+            Theme::System => "system",
+        };
+        let density_name = match density {
+            Density::Comfortable => "comfortable",
+            Density::Compact => "compact",
+        };
+        // The file's menu on a picture.
+        let row = harness.get_by_label("IMG_1203.png").rect().center();
+        right_click(&mut harness, row);
+        shoot(
+            &mut harness,
+            &format!("context-menu-file-{theme_name}-{density_name}"),
+        );
+        harness.key_press(egui::Key::Escape);
+        harness.step();
+        harness.step();
+        // The empty area's menu.
+        let toolbar = harness
+            .state()
+            .toolbar_row(tab)
+            .unwrap_or_else(|| panic!("no toolbar"));
+        let last = harness.get_by_label("notes.md").rect();
+        right_click(
+            &mut harness,
+            egui::pos2(toolbar.left() + 400.0, last.bottom() + 120.0),
+        );
+        shoot(
+            &mut harness,
+            &format!("context-menu-empty-{theme_name}-{density_name}"),
+        );
+        harness.key_press(egui::Key::Escape);
+        harness.step();
+        harness.step();
+    }
+}
+
 /// Issue 17: the Preview tab docked below the explorer and torn out into a
 /// window of its own.
 #[test]

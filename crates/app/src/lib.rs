@@ -2453,10 +2453,9 @@ impl App {
             return;
         };
         let Some(entry) = ctx.selection.first().cloned() else {
-            events.push(Event::Notify {
-                level: Level::Info,
-                text: "Select an entry to inspect".to_owned(),
-            });
+            // Nothing selected: the folder's own properties (SPEC.md
+            // *Context menu*, *Folder properties*).
+            self.show_folder_properties(pane, ctx.location, events);
             return;
         };
         let path = (entry.id.provider == vfs_local::PROVIDER_ID)
@@ -2468,6 +2467,43 @@ impl App {
         let location = ctx.location.clone();
         runtime::handle().spawn_blocking(move || {
             let info = read_properties(&*platform, pane, entry, path, &location);
+            tx.send(Msg::Properties(Box::new(info)));
+        });
+    }
+
+    /// The Properties dialogue for the pane's folder itself: the location
+    /// is read as an entry through its provider, then as any entry.
+    fn show_folder_properties(
+        &mut self,
+        pane: PaneId,
+        location: Location,
+        events: &mut Vec<Event>,
+    ) {
+        let Some(provider) = self.mounts.provider(location.provider) else {
+            events.push(Event::Notify {
+                level: Level::Info,
+                text: "Select an entry to inspect".to_owned(),
+            });
+            return;
+        };
+        let path = (location.provider == vfs_local::PROVIDER_ID)
+            .then(|| platform::paths::to_path(&location.path).ok())
+            .flatten();
+        self.properties_shown = path.clone().map(|path| (pane, path));
+        let platform = Arc::clone(&self.platform);
+        let tx = self.mailbox.clone();
+        runtime::handle().spawn(async move {
+            let entry = match provider.stat(&location).await {
+                Ok(entry) => entry,
+                Err(error) => {
+                    tx.send(Msg::Properties(Box::new(Err(error))));
+                    return;
+                }
+            };
+            let info = runtime::handle()
+                .spawn_blocking(move || read_properties(&*platform, pane, entry, path, &location))
+                .await
+                .unwrap_or_else(|join| Err(Error::Io(std::io::Error::other(join))));
             tx.send(Msg::Properties(Box::new(info)));
         });
     }
