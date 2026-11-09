@@ -102,6 +102,32 @@ the pull request that brought the change.
   gone. The counts and the pill are read aloud with their nouns. The
   preview pane's footer takes the same height and the 12 px secondary
   text (#73).
+- The side panel of the design refresh (issue 60, SPEC.md *Rows*,
+  *Section headers*, *Trash pill*, *This Machine*, *Operations drawer*):
+  rows `sidebar/item-height` tall with `radius/control` corners and
+  `space/row-x` padding, inset 6 px from the panel's edges, a 16 px icon,
+  12 px of gap and the label in 13 px, `bg/subtle` on hover and the
+  2 px `accent/focus` ring on the keyboard row; section headers in 11 px
+  letter-spaced capitals with a `CARET_DOWN` at 60 % that folds the
+  section (`CARET_RIGHT` when folded), 18 px of air above and 6 below, the
+  title itself the overview's row, nothing indented; the Trash row's pill
+  with the trash's size — not its count — tinted `trash/low-*`, `mid-*`
+  or `high-*` by the share of its disk the trash takes (under 1 %, to
+  5 %, over), no pill while the trash is empty; This Machine as drive
+  cards (`bg/subtle`, 8 px corners, 6 px apart; 44 px in Comfortable with
+  the icon, the name, the percentage and a 4 px usage bar, 26 px in
+  Compact on one line), a network mount as a row with its percentage, the
+  *Add…* row with `PLUS_CIRCLE`. The operations area is the **operations
+  drawer**: a `bg/card` card floating over the foot of the panel — along
+  the window's foot while the panel is hidden — with 12 px top corners, a
+  hairline and a shadow upwards; its summary *2 running · 2 waiting* with
+  the overall percentage in `accent/focus` and a caret over a 4 px bar,
+  which a click collapses the drawer to; a block per running job with its
+  icon (the portal spinner, `ARCHIVE` for an archive job), its title,
+  pause and a round `bg/control` cancel button, a thin bar and the detail
+  line *473 MiB of 2.2 GiB · 33.7 MiB/s · 53 s left*; the waiting jobs
+  under *WAITING* with why each waits; finished jobs as compact rows. The
+  app sums the trashed items' sizes when it lists the trash (#74).
 
 ### Removed
 
