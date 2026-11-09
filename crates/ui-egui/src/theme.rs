@@ -277,11 +277,19 @@ impl Metrics {
         ]
     }
 
-    /// A toolbar's and a footer's height: a tool button with the vertical
-    /// padding above and below it.
+    /// A toolbar's height: a tool button with the vertical padding above
+    /// and below it.
     #[must_use]
     pub fn toolbar_height(&self) -> f32 {
         self.button_size + 2.0 * self.space_toolbar_y
+    }
+
+    /// A footer's height, the Figma status bar's: the hairline over it,
+    /// then the 26 px filter field with the toolbar padding above and
+    /// below it — 39 px Comfortable, 35 px Compact (QUESTIONS.md 254).
+    #[must_use]
+    pub fn footer_height(&self) -> f32 {
+        HAIRLINE + FOOTER_CONTROL + 2.0 * self.space_toolbar_y
     }
 
     /// `radius/control` as egui spells a corner radius.
@@ -303,6 +311,11 @@ pub const TAB_WIDTH: f32 = 220.0;
 pub const SEARCH_WIDTH: f32 = 320.0;
 /// A progress or usage bar.
 pub const BAR: f32 = 4.0;
+/// A hairline.
+pub const HAIRLINE: f32 = 1.0;
+/// The footer's filter field and its hidden-files toggle, whatever the
+/// density (SPEC.md *Footer*).
+pub const FOOTER_CONTROL: f32 = 26.0;
 /// A menu entry.
 pub const MENU_ENTRY: f32 = 30.0;
 /// The top corners of a workspace tab.
@@ -663,6 +676,9 @@ mod tests {
         }
         assert_eq!(Metrics::COMFORTABLE.toolbar_height(), 46.0);
         assert_eq!(Metrics::COMPACT.toolbar_height(), 36.0);
+        // The Figma status bar: 39 and 35, the hairline included.
+        assert_eq!(Metrics::COMFORTABLE.footer_height(), 39.0);
+        assert_eq!(Metrics::COMPACT.footer_height(), 35.0);
         assert_eq!(Metrics::of(Density::Comfortable), &Metrics::COMFORTABLE);
         assert_eq!(Metrics::of(Density::Compact), &Metrics::COMPACT);
         assert_eq!(Metrics::of(Density::default()), &Metrics::COMFORTABLE);

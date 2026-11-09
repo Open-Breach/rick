@@ -12,7 +12,7 @@ use types::{EntryKind, Location};
 use crate::dnd::{self, Spring, Target, Zone};
 use crate::keys::Intent;
 use crate::shell::{PaneCx, PaneDrag, Request};
-use crate::theme::{self, ICON, TEXT_BODY, TEXT_CAPS, TEXT_SECONDARY};
+use crate::theme::{self, FOOTER_CONTROL, ICON, TEXT_BODY, TEXT_CAPS, TEXT_SECONDARY};
 use crate::widgets::switch;
 use crate::{format, icons, paths, views};
 
@@ -27,7 +27,7 @@ const MENU_ROW: f32 = 32.0;
 /// The parent chip's size.
 const CHIP: egui::Vec2 = egui::vec2(28.0, 26.0);
 /// The footer's filter field: 200 px wide, 26 px tall (SPEC.md *Footer*).
-const FILTER_FIELD: egui::Vec2 = egui::vec2(200.0, 26.0);
+const FILTER_FIELD: egui::Vec2 = egui::vec2(200.0, FOOTER_CONTROL);
 /// The padding inside the filter field.
 const FIELD_PAD: f32 = 8.0;
 /// The include-subfolders toggle inside the field's right end.
@@ -48,8 +48,11 @@ pub fn show(ui: &mut egui::Ui, cx: &mut PaneCx<'_>) {
             .show_separator_line(true)
             .show(ui, |ui| failure_banner(ui, cx));
     }
+    // The footer paints its own hairline and sits on `bg/pane` like the
+    // toolbar: no panel frame, no second line.
     egui::Panel::bottom(egui::Id::new(("foot", cx.tab_id)))
-        .show_separator_line(true)
+        .show_separator_line(false)
+        .frame(egui::Frame::NONE)
         .show(ui, |ui| foot(ui, cx));
     egui::CentralPanel::no_frame().show(ui, |ui| views::show(ui, cx));
 }
@@ -92,6 +95,14 @@ fn button_size(ui: &egui::Ui) -> f32 {
 #[must_use]
 pub fn toolbar_height(density: model::Density) -> f32 {
     crate::theme::Metrics::of(density).toolbar_height()
+}
+
+/// The footer row's height for a density: the hairline, the filter field
+/// and the toolbar padding above and below it (SPEC.md *Footer*,
+/// QUESTIONS.md 254).
+#[must_use]
+pub fn footer_height(density: model::Density) -> f32 {
+    crate::theme::Metrics::of(density).footer_height()
 }
 
 /// The toolbar: a fixed group of navigation icons on the left, a fixed group
@@ -924,14 +935,15 @@ fn crumb_zone(
     }
 }
 
-/// The footer (SPEC.md *Footer*): as tall as the toolbar, under a
-/// hairline, with `space/toolbar-x` padding. Left to right: the
-/// hidden-files toggle, the statistics, a divider and the selection pill
-/// while something is selected, the pane's note; the filter field at the
-/// right.
+/// The footer (SPEC.md *Footer*, QUESTIONS.md 254): the Figma status
+/// bar's height — a hairline, then the 26 px controls with the toolbar
+/// padding above and below — with `space/toolbar-x` padding. Left to
+/// right: the hidden-files toggle, the statistics, a divider and the
+/// selection pill while something is selected, the pane's note; the filter
+/// field at the right.
 fn foot(ui: &mut egui::Ui, cx: &mut PaneCx<'_>) {
     let metrics = theme::metrics(ui.ctx());
-    let height = metrics.toolbar_height();
+    let height = metrics.footer_height();
     let (row, _) = ui.allocate_exact_size(
         egui::vec2(ui.available_width(), height),
         egui::Sense::hover(),
@@ -982,13 +994,13 @@ fn foot(ui: &mut egui::Ui, cx: &mut PaneCx<'_>) {
     }
 }
 
-/// The hidden-files toggle, icon only: `EYE` on `bg/selected-soft` while
-/// hidden files are shown, `EYE_SLASH` as a ghost button while they are
-/// hidden.
+/// The hidden-files toggle, icon only and the filter field's 26 px: `EYE`
+/// on `bg/selected-soft` while hidden files are shown, `EYE_SLASH` as a
+/// ghost button while they are hidden.
 fn hidden_toggle(ui: &mut egui::Ui, cx: &mut PaneCx<'_>) {
     let shown = cx.tab.show_hidden;
     let scheme = theme::scheme(ui);
-    let size = button_size(ui);
+    let size = FOOTER_CONTROL;
     let (rect, response) = ui.allocate_exact_size(egui::vec2(size, size), egui::Sense::click());
     let radius = theme::metrics(ui.ctx()).corner_radius();
     let (glyph, colour) = if shown {

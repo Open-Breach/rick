@@ -2,7 +2,8 @@
 //! else is one row. Top to bottom: a toolbar (the entry's file-type icon,
 //! the controls for this kind of content and the previewer's own, info
 //! badges, close), the pinned info section when one is pinned, the content,
-//! and a one-line status bar in the file list's status size. The pane shows
+//! and a one-line status bar, the explorer footer's height under its
+//! hairline, in the file list's status size. The pane shows
 //! no heading: the dock tab's label is enough, and the word "Inspector"
 //! appears nowhere in it. It shows the selection of the explorer tab the
 //! preview follows ([`App::preview_pane`]), whichever window that is in.
@@ -221,11 +222,10 @@ pub fn show(
         separator(ui, width);
     }
 
-    // Status bar at the foot, in the body size the file list's status line
-    // uses; the content gets what is left.
-    // The explorer footer's height (SPEC.md *Footer*).
-    let status_h = crate::theme::metrics(ui.ctx()).toolbar_height();
-    let content_h = (ui.available_height() - status_h - 1.0).max(0.0);
+    // Status bar at the foot, the explorer footer's height with its
+    // hairline (SPEC.md *Footer*); the content gets what is left.
+    let status_h = crate::theme::metrics(ui.ctx()).footer_height();
+    let content_h = (ui.available_height() - status_h).max(0.0);
     let (content, _) = ui.allocate_exact_size(vec2(width, content_h), egui::Sense::hover());
     state.rects.content = Some(content);
     let mut inner = ui.new_child(
@@ -267,7 +267,6 @@ pub fn show(
             inner.weak(t!("inspector-select-a-file-to-preview"));
         }
     }
-    separator(ui, width);
     status_bar(ui, width, status_h, &view, state);
 
     apply_acts(acts, view.pane, previews, requests)
@@ -476,9 +475,16 @@ fn transport_controls(
 /// One line of text, the file list's status size: the previewer's facts
 /// joined with a dot, or what is known about the selection without one.
 /// Never wraps; truncates.
+/// The footer: the explorer footer's height, its hairline on top, the
+/// previewer's facts in 12 px `text/secondary` with `space/toolbar-x` of
+/// padding, truncated when the pane is narrow.
 fn status_bar(ui: &mut egui::Ui, width: f32, height: f32, view: &View<'_>, state: &mut PaneState) {
     let (status, _) = ui.allocate_exact_size(vec2(width, height), egui::Sense::hover());
     state.rects.status = Some(status);
+    let scheme = crate::theme::scheme(ui);
+    let metrics = crate::theme::metrics(ui.ctx());
+    ui.painter()
+        .hline(status.x_range(), status.top() + 0.5, scheme.hairline());
     let text = if view.status.is_empty() {
         match (view.entry, view.selected) {
             (Some(entry), _) => model::type_of(entry).clone(),
@@ -493,11 +499,10 @@ fn status_bar(ui: &mut egui::Ui, width: f32, height: f32, view: &View<'_>, state
     state.status.clone_from(&text);
     let mut bar = ui.new_child(
         egui::UiBuilder::new()
-            .max_rect(status.shrink2(vec2(6.0, 0.0)))
+            .max_rect(status.shrink2(vec2(metrics.space_toolbar_x, 0.0)))
             .layout(egui::Layout::left_to_right(Align::Center)),
     );
     bar.set_clip_rect(status.intersect(ui.clip_rect()));
-    let scheme = crate::theme::scheme(ui);
     bar.add(
         egui::Label::new(
             egui::RichText::new(text)
