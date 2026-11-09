@@ -1214,6 +1214,243 @@ fn frames_of_a_tab_docked_as_a_pane() {
     }
 }
 
+/// A window for the spring-loading and Escape sequences: the first
+/// workspace holds two panes, `day-one` and `raw`, the second `edited`,
+/// the third `holiday-2026`; the first is shown, and tabs spring after
+/// half a second. Returns the window with the two panes of the first
+/// workspace and the pane of the second.
+fn three_workspaces(
+    deep: &Path,
+    theme: Theme,
+    density: Density,
+) -> (
+    Harness<'static, RickUi>,
+    model::PaneId,
+    model::PaneId,
+    model::PaneId,
+) {
+    let mut harness = shell_with_hands(deep, egui::vec2(1360.0, 800.0));
+    let first = harness.state().app().model().focused;
+    let run = |harness: &mut Harness<'static, RickUi>, command: app::Command| {
+        harness
+            .state_mut()
+            .app_mut()
+            .handle(command, &mut Vec::new());
+        settle(harness);
+    };
+    run(
+        &mut harness,
+        app::Command::Split {
+            pane: first,
+            dir: model::SplitDir::Right,
+        },
+    );
+    let second = harness.state().app().model().focused;
+    run(
+        &mut harness,
+        app::Command::Navigate {
+            pane: second,
+            to: local(&deep.join("raw")),
+        },
+    );
+    run(
+        &mut harness,
+        app::Command::NewTab(local(&deep.join("edited"))),
+    );
+    let edited = harness.state().app().model().focused;
+    let parent = deep
+        .parent()
+        .unwrap_or_else(|| panic!("parent"))
+        .to_path_buf();
+    run(&mut harness, app::Command::NewTab(local(&parent)));
+    let model = harness.state().app().model();
+    let shown = model.workspaces(model.focused_window)[0].id;
+    run(&mut harness, app::Command::ActivateWorkspace(shown));
+    run(&mut harness, app::Command::FocusPane(first));
+    for change in [
+        SettingsChange::Theme(theme),
+        SettingsChange::Density(density),
+        SettingsChange::SpringDelay(500),
+    ] {
+        run(&mut harness, app::Command::Settings(change));
+    }
+    (harness, first, second, edited)
+}
+
+/// The name of a scheme and a density in a file name.
+fn look(theme: Theme, density: Density) -> String {
+    let theme = match theme {
+        Theme::Light => "light",
+        Theme::Dark => "dark",
+        Theme::System => "system",
+    };
+    let density = match density {
+        Density::Comfortable => "comfortable",
+        Density::Compact => "compact",
+    };
+    format!("{theme}-{density}")
+}
+
+/// The four looks every sequence is rendered in.
+const LOOKS: [(Theme, Density); 4] = [
+    (Theme::Light, Density::Comfortable),
+    (Theme::Light, Density::Compact),
+    (Theme::Dark, Density::Comfortable),
+    (Theme::Dark, Density::Compact),
+];
+
+/// The rectangle of the workspace tab titled `title` in the title row.
+fn tab_in_row(harness: &Harness<'_, RickUi>, title: &str) -> egui::Rect {
+    use egui_kittest::kittest::Queryable as _;
+    let row = harness
+        .state()
+        .tab_row()
+        .unwrap_or_else(|| panic!("no tab row"));
+    harness
+        .query_all_by_label(title)
+        .map(|n| n.rect())
+        .find(|r| row.contains(r.center()))
+        .unwrap_or_else(|| panic!("no tab {title}"))
+}
+
+/// The rectangle of `pane` in the last frame.
+fn rect_of_pane(harness: &Harness<'_, RickUi>, pane: model::PaneId) -> egui::Rect {
+    harness
+        .state()
+        .pane_rects()
+        .into_iter()
+        .find(|(p, _)| *p == pane)
+        .map_or_else(|| panic!("no rect for {pane:?}"), |(_, r)| r)
+}
+
+/// The centre of the grab handle of `pane`.
+fn grip_of_pane(harness: &Harness<'_, RickUi>, pane: model::PaneId) -> egui::Pos2 {
+    use egui_kittest::kittest::Queryable as _;
+    let rect = rect_of_pane(harness, pane);
+    harness
+        .query_all_by_label("Drag pane")
+        .map(|n| n.rect())
+        .find(|r| rect.contains(r.center()))
+        .map_or_else(|| panic!("no handle in {pane:?}"), |r| r.center())
+}
+
+/// Runs `frames` frames with the pointer where it is, a quarter of a
+/// second each.
+fn hold_still(harness: &mut Harness<'_, RickUi>, frames: usize) {
+    for _ in 0..frames {
+        harness.step();
+    }
+}
+
+/// Issue 80, rules 4 and 5, as frame sequences in Light and Dark at both
+/// densities. A pane held on another workspace's tab, before the delay
+/// and after it, the window then showing that workspace; the pane on a
+/// dock target there; docked. A tab of one pane leaning on its neighbour,
+/// before and after. A file held on a tab, before and after, the drag
+/// then over a folder of the workspace that opened.
+#[test]
+#[ignore = "needs a wgpu adapter; CI runs it and uploads the images"]
+fn frames_of_spring_loaded_tabs() {
+    use egui_kittest::kittest::Queryable as _;
+    let (_dir, deep) = sample_tree();
+    fs::create_dir_all(deep.join("edited/print")).unwrap_or_else(|e| panic!("{e}"));
+    for i in 0..5u32 {
+        fs::write(
+            deep.join(format!("edited/IMG_{:04}-final.png", 1200 + i)),
+            vec![0u8; 4096],
+        )
+        .unwrap_or_else(|e| panic!("{e}"));
+    }
+    for (theme, density) in LOOKS {
+        let (mut harness, first, second, edited) = three_workspaces(&deep, theme, density);
+        let mut frames = Frames::new(format!("issue80-spring-{}", look(theme, density)));
+
+        // The second pane of the shown workspace, held on the tab of
+        // `edited`: on its right half, where the slot of a new tab opens
+        // after it.
+        let grip = grip_of_pane(&harness, second);
+        let on_tab = tab_in_row(&harness, "edited").center() + egui::vec2(60.0, 0.0);
+        glide(&mut harness, grip + egui::vec2(-40.0, 60.0), grip, 3);
+        primary(&mut harness, grip, true);
+        glide(&mut harness, grip, on_tab, 10);
+        frames.shoot(&mut harness, "pane-rests-on-a-tab");
+        hold_still(&mut harness, 3);
+        settle(&mut harness);
+        frames.shoot(&mut harness, "its-workspace-opens");
+        let tile =
+            rect_of_pane(&harness, edited).center() + egui::vec2(-ui_egui::DOCK_TILE_PITCH, 0.0);
+        glide(&mut harness, on_tab, tile, 10);
+        frames.shoot(&mut harness, "pane-on-a-dock-target-there");
+        primary(&mut harness, tile, false);
+        settle(&mut harness);
+        frames.shoot(&mut harness, "docked");
+
+        // The tab of one pane, `holiday-2026`, leaning on its neighbour.
+        let model = harness.state().app().model();
+        let shown = model.workspaces(model.focused_window)[0].id;
+        harness
+            .state_mut()
+            .app_mut()
+            .handle(app::Command::ActivateWorkspace(shown), &mut Vec::new());
+        settle(&mut harness);
+        let tab = tab_in_row(&harness, "holiday-2026");
+        let neighbour = ["edited", "raw"]
+            .iter()
+            .find_map(|title| {
+                let row = harness.state().tab_row()?;
+                harness
+                    .query_all_by_label(title)
+                    .map(|n| n.rect())
+                    .find(|r| row.contains(r.center()) && r.left() < tab.left() - 1.0)
+            })
+            .unwrap_or_else(|| panic!("the neighbour of the last tab"));
+        let pitch = tab.left() - neighbour.left();
+        let hold = tab.center();
+        let lean = hold - egui::vec2(pitch * 0.35, 0.0);
+        glide(&mut harness, tile, hold, 6);
+        primary(&mut harness, hold, true);
+        glide(&mut harness, hold, lean, 6);
+        frames.shoot(&mut harness, "tab-leans-on-its-neighbour");
+        hold_still(&mut harness, 3);
+        settle(&mut harness);
+        frames.shoot(&mut harness, "the-neighbours-workspace-opens");
+        // Back to its place: let go off the row, on no target.
+        let away = egui::pos2(lean.x, 700.0);
+        glide(&mut harness, lean, away, 6);
+        primary(&mut harness, away, false);
+        settle(&mut harness);
+
+        // A file of the shown workspace, held on the tab of the one-pane
+        // workspace, then over a folder there.
+        let file = harness
+            .query_all_by_label("notes.md")
+            .map(|n| n.rect())
+            .find(|r| rect_of_pane(&harness, first).contains(r.center()))
+            .unwrap_or_else(|| panic!("notes.md in the first pane"))
+            .center();
+        let on_tab = tab_in_row(&harness, "holiday-2026").center();
+        glide(&mut harness, away, file, 6);
+        primary(&mut harness, file, true);
+        glide(&mut harness, file, on_tab, 10);
+        frames.shoot(&mut harness, "file-rests-on-a-tab");
+        hold_still(&mut harness, 3);
+        settle(&mut harness);
+        let folder = harness
+            .query_all_by_label("day-one")
+            .map(|n| n.rect())
+            .find(|r| r.top() > on_tab.y + 60.0)
+            .unwrap_or_else(|| panic!("the folder row in the workspace that opened"))
+            .center();
+        glide(&mut harness, on_tab, folder, 8);
+        frames.shoot(&mut harness, "file-over-a-folder-there");
+        harness.key_press(egui::Key::Escape);
+        harness.step();
+        primary(&mut harness, folder, false);
+        settle(&mut harness);
+        frames.sheet();
+    }
+}
+
 /// Issue 60: the file list — the header band and the row states (a
 /// selection with the keyboard cursor in the focused pane, a selection in
 /// the other pane), the empty folder, and the portal burst at three

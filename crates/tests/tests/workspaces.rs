@@ -11,6 +11,9 @@
 //! the tab can land anywhere in the row. Rules 2 and 3: a tab holding
 //! exactly one pane, dragged down, is offered the four side dock targets
 //! and docks its pane there; a tab of several panes is offered none.
+//! Rule 4: a dragged pane, or a dragged tab of one pane, resting on
+//! another tab for the spring-loading delay switches the window to that
+//! tab's workspace, where it can be docked.
 
 use std::fs;
 use std::path::Path;
@@ -1018,4 +1021,291 @@ fn a_tab_of_one_pane_docks_into_the_shown_layout_and_a_tab_of_several_is_offered
         order
     );
     assert_eq!(*model.dock(), model::Dock::Pane(pane_epsilon));
+}
+
+/// The pane rectangle of `pane` in the last frame.
+fn pane_rect(harness: &Harness<'_, RickUi>, pane: model::PaneId) -> egui::Rect {
+    harness
+        .state()
+        .pane_rects()
+        .into_iter()
+        .find(|(p, _)| *p == pane)
+        .map_or_else(|| panic!("no rect for {pane:?}"), |(_, r)| r)
+}
+
+/// Runs `frames` frames with the pointer where it is: at the harness's
+/// quarter of a second a frame, four are a second.
+fn rest(harness: &mut Harness<'_, RickUi>, frames: usize) {
+    for _ in 0..frames {
+        harness.step();
+    }
+}
+
+/// Issue 80, rule 4 (SPEC.md *Workspace tabs*, Spring-loaded tabs), for a
+/// dragged tab: a tab of one pane that leans on a neighbour — overlapping
+/// it by a quarter of a tab or more, short of the half where they swap —
+/// for the spring-loading delay switches the window to the neighbour's
+/// workspace, and dragged down from there docks into its layout. Held
+/// squarely in its gap it switches nothing, and neither does a tab of
+/// several panes.
+#[test]
+// One row of tabs, three drags.
+#[allow(clippy::too_many_lines)]
+fn a_dragged_tab_of_one_pane_leaning_on_a_neighbour_springs_its_workspace_open() {
+    let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+    let folders = [
+        "alpha-folder",
+        "beta-folder",
+        "gamma-folder",
+        "delta-folder",
+    ]
+    .map(|name| {
+        let folder = dir.path().join(name);
+        fs::create_dir(&folder).unwrap_or_else(|e| panic!("{e}"));
+        folder
+    });
+    let mut harness = harness(&folders[0], egui::vec2(1400.0, 800.0));
+    command(
+        &mut harness,
+        app::Command::Settings(model::SettingsChange::SpringDelay(500)),
+    );
+    // alpha, of two panes (alpha and delta); beta; gamma. Alpha is shown.
+    let pane_alpha = harness.state().app().model().focused;
+    command(
+        &mut harness,
+        app::Command::Split {
+            pane: pane_alpha,
+            dir: model::SplitDir::Right,
+        },
+    );
+    let pane_delta = harness.state().app().model().focused;
+    command(
+        &mut harness,
+        app::Command::Navigate {
+            pane: pane_delta,
+            to: local(&folders[3]),
+        },
+    );
+    command(&mut harness, app::Command::NewTab(local(&folders[1])));
+    let pane_beta = harness.state().app().model().focused;
+    command(&mut harness, app::Command::NewTab(local(&folders[2])));
+    let pane_gamma = harness.state().app().model().focused;
+    let model = harness.state().app().model();
+    let window = model.focused_window;
+    let ids: Vec<model::WorkspaceId> = model.workspaces(window).iter().map(|w| w.id).collect();
+    command(&mut harness, app::Command::ActivateWorkspace(ids[0]));
+    assert_eq!(
+        titles(&harness),
+        ["delta-folder", "beta-folder", "gamma-folder"]
+    );
+    assert_eq!(shown(&harness), 0);
+    let pitch =
+        tab_rect(&harness, "gamma-folder").left() - tab_rect(&harness, "beta-folder").left();
+
+    // The tab of two panes, leaning on its neighbour for well over the
+    // delay: it is not one that can be docked, and nothing springs.
+    let from = tab_centre(&harness, "delta-folder");
+    hold(&mut harness, from, from + egui::vec2(pitch * 0.35, 0.0));
+    rest(&mut harness, 6);
+    assert_eq!(shown(&harness), 0, "a tab of several panes springs nothing");
+    button(&mut harness, from + egui::vec2(pitch * 0.35, 0.0), false);
+    settle(&mut harness);
+    assert_eq!(
+        titles(&harness),
+        ["delta-folder", "beta-folder", "gamma-folder"]
+    );
+
+    // The tab of one pane, taken slowly all the way past gamma — over it
+    // for seconds, but never still: a reorder, and nothing springs.
+    let from = tab_centre(&harness, "beta-folder");
+    move_to(&mut harness, from);
+    button(&mut harness, from, true);
+    for i in 1..=24u8 {
+        move_to(
+            &mut harness,
+            from + egui::vec2(pitch * f32::from(i) / 24.0, 0.0),
+        );
+        assert_eq!(shown(&harness), 0, "on the move it rests on no one");
+    }
+    button(&mut harness, from + egui::vec2(pitch, 0.0), false);
+    settle(&mut harness);
+    assert_eq!(
+        titles(&harness),
+        ["delta-folder", "gamma-folder", "beta-folder"]
+    );
+    assert_eq!(shown(&harness), 0);
+    // And back to where it was, as slowly.
+    let from = tab_centre(&harness, "beta-folder");
+    move_to(&mut harness, from);
+    button(&mut harness, from, true);
+    for i in 1..=24u8 {
+        move_to(
+            &mut harness,
+            from - egui::vec2(pitch * f32::from(i) / 24.0, 0.0),
+        );
+    }
+    button(&mut harness, from - egui::vec2(pitch, 0.0), false);
+    settle(&mut harness);
+    assert_eq!(
+        titles(&harness),
+        ["delta-folder", "beta-folder", "gamma-folder"]
+    );
+    assert_eq!(shown(&harness), 0);
+
+    // The tab of one pane, held squarely in its gap: nothing springs.
+    let from = tab_centre(&harness, "beta-folder");
+    hold(&mut harness, from, from + egui::vec2(pitch * 0.1, 0.0));
+    rest(&mut harness, 6);
+    assert_eq!(shown(&harness), 0, "in its gap it rests on no one");
+    // Leaning on gamma, a third of a tab over it: not at once, but after
+    // the delay the window shows gamma.
+    move_to(&mut harness, from + egui::vec2(pitch * 0.35, 0.0));
+    assert_eq!(shown(&harness), 0, "not before the delay");
+    rest(&mut harness, 4);
+    assert_eq!(shown(&harness), 2, "the window shows the tab it leans on");
+    assert!(harness.state().drag_ghost().is_some(), "still dragging");
+    // Down into gamma's layout, onto the left target of its pane.
+    let rect_gamma = pane_rect(&harness, pane_gamma);
+    let tile = rect_gamma.center() + egui::vec2(-ui_egui::DOCK_TILE_PITCH, 0.0);
+    for i in 1..=10u8 {
+        let start = from + egui::vec2(pitch * 0.35, 0.0);
+        move_to(&mut harness, start + (tile - start) * (f32::from(i) / 10.0));
+    }
+    button(&mut harness, tile, false);
+    settle(&mut harness);
+    let model = harness.state().app().model();
+    assert_eq!(
+        model
+            .workspaces(window)
+            .iter()
+            .map(|w| w.id)
+            .collect::<Vec<_>>(),
+        [ids[0], ids[2]],
+        "beta's tab left the row"
+    );
+    assert_eq!(
+        *model.dock(),
+        model::Dock::split_of(
+            model::SplitDir::Right,
+            model::Dock::Pane(pane_beta),
+            model::Dock::Pane(pane_gamma),
+        ),
+        "beta's pane docked left of gamma's"
+    );
+    assert_eq!(model.window(window).map(|w| w.active), Some(ids[2]));
+}
+
+/// Issue 80, rule 4, for a dragged pane: resting on another workspace's
+/// tab for the spring-loading delay switches the window to it, and the
+/// pane docks into the layout that opened. Let go where it cannot land,
+/// nothing moves and the window shows the workspace the drag began in.
+#[test]
+// One pane, dragged twice.
+#[allow(clippy::too_many_lines)]
+fn a_dragged_pane_resting_on_a_tab_springs_its_workspace_open_and_docks_there() {
+    let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+    let folders = ["alpha-folder", "beta-folder", "gamma-folder"].map(|name| {
+        let folder = dir.path().join(name);
+        fs::create_dir(&folder).unwrap_or_else(|e| panic!("{e}"));
+        folder
+    });
+    let mut harness = harness(&folders[0], egui::vec2(1400.0, 800.0));
+    command(
+        &mut harness,
+        app::Command::Settings(model::SettingsChange::SpringDelay(500)),
+    );
+    // The first workspace: alpha and beta side by side. The second: gamma.
+    let pane_alpha = harness.state().app().model().focused;
+    command(
+        &mut harness,
+        app::Command::Split {
+            pane: pane_alpha,
+            dir: model::SplitDir::Right,
+        },
+    );
+    let pane_beta = harness.state().app().model().focused;
+    command(
+        &mut harness,
+        app::Command::Navigate {
+            pane: pane_beta,
+            to: local(&folders[1]),
+        },
+    );
+    command(&mut harness, app::Command::NewTab(local(&folders[2])));
+    let pane_gamma = harness.state().app().model().focused;
+    let model = harness.state().app().model();
+    let window = model.focused_window;
+    let ids: Vec<model::WorkspaceId> = model.workspaces(window).iter().map(|w| w.id).collect();
+    command(&mut harness, app::Command::ActivateWorkspace(ids[0]));
+    assert_eq!(shown(&harness), 0);
+    let first = harness.state().app().model().dock().clone();
+    let grip_of = |harness: &Harness<'_, RickUi>, pane: model::PaneId| {
+        let rect = pane_rect(harness, pane);
+        harness
+            .query_all_by_label("Drag pane")
+            .map(|n| n.rect())
+            .find(|r| rect.contains(r.center()))
+            .map_or_else(|| panic!("no handle in {pane:?}"), |r| r.center())
+    };
+    // On the right half of gamma's tab, where the slot of a new tab opens
+    // after it and the tab stays under the cursor.
+    let on_tab = |harness: &Harness<'_, RickUi>| {
+        tab_rect(harness, "gamma-folder").center() + egui::vec2(60.0, 0.0)
+    };
+
+    // Beta's pane, held on gamma's tab: after the delay the window shows
+    // gamma; let go beside the dock targets there, nothing has moved and
+    // the first workspace is shown again.
+    let from = grip_of(&harness, pane_beta);
+    let to = on_tab(&harness);
+    hold(&mut harness, from, to);
+    assert_eq!(shown(&harness), 0, "not before the delay");
+    rest(&mut harness, 4);
+    assert_eq!(shown(&harness), 1, "resting on the tab shows its workspace");
+    assert!(harness.state().drag_ghost().is_some(), "still dragging");
+    let rect_gamma = pane_rect(&harness, pane_gamma);
+    let beside = egui::pos2(rect_gamma.center().x, rect_gamma.bottom() - 60.0);
+    for i in 1..=10u8 {
+        move_to(&mut harness, to + (beside - to) * (f32::from(i) / 10.0));
+    }
+    button(&mut harness, beside, false);
+    settle(&mut harness);
+    let model = harness.state().app().model();
+    assert_eq!(
+        shown(&harness),
+        0,
+        "back on the workspace the drag began in"
+    );
+    assert_eq!(*model.dock(), first, "nothing moved");
+    assert_eq!(model.workspaces(window).len(), 2);
+
+    // Again, and this time onto the left target of gamma's pane: beta's
+    // pane is docked there, and the window stays on that layout.
+    let from = grip_of(&harness, pane_beta);
+    let to = on_tab(&harness);
+    hold(&mut harness, from, to);
+    rest(&mut harness, 4);
+    assert_eq!(shown(&harness), 1);
+    let rect_gamma = pane_rect(&harness, pane_gamma);
+    let tile = rect_gamma.center() + egui::vec2(-ui_egui::DOCK_TILE_PITCH, 0.0);
+    for i in 1..=10u8 {
+        move_to(&mut harness, to + (tile - to) * (f32::from(i) / 10.0));
+    }
+    button(&mut harness, tile, false);
+    settle(&mut harness);
+    let model = harness.state().app().model();
+    assert_eq!(
+        model.workspaces(window)[0].dock,
+        model::Dock::Pane(pane_alpha)
+    );
+    assert_eq!(
+        model.workspaces(window)[1].dock,
+        model::Dock::split_of(
+            model::SplitDir::Right,
+            model::Dock::Pane(pane_beta),
+            model::Dock::Pane(pane_gamma),
+        ),
+        "beta's pane docked left of gamma's"
+    );
+    assert_eq!(shown(&harness), 1, "the window stays where the pane went");
 }

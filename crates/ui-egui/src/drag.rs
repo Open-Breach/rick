@@ -57,6 +57,12 @@ pub const GHOST_OFFSET: Vec2 = egui::vec2(8.0, 8.0);
 /// belong, in seconds (QUESTIONS.md 269).
 pub const TAB_SLIDE: f64 = 0.15;
 
+/// How far the cursor may stray while a dragged tab rests on a neighbour,
+/// in points. A tab riding its row is over a neighbour for most of the
+/// way past it, so only a tab held still spring-loads the neighbour's
+/// workspace; a hand holding still wanders a few points.
+pub const REST_SLOP: f32 = 6.0;
+
 /// Where a pane's shapes begin in the paint list of its layer.
 #[derive(Debug, Clone, Copy)]
 pub struct Mark {
