@@ -603,6 +603,14 @@ impl ConfigDir for Fake {
     }
 }
 
+impl crate::traits::SystemFonts for Fake {
+    /// The fonts of the machine the tests run on, so a screenshot shows
+    /// what a user there sees; nothing where the machine names none.
+    fn system_fonts(&self) -> crate::traits::Fonts {
+        crate::fonts::system()
+    }
+}
+
 impl Chrome for Fake {
     fn window_chrome(&self) -> WindowChrome {
         WindowChrome {

@@ -678,6 +678,35 @@ pub trait Secrets: Send + Sync {
     fn remove_secret(&self, key: &str) -> Result<(), Error>;
 }
 
+/// A font file the system names: its bytes, the face index inside a
+/// collection (`.ttc`), and the family the desktop shows it as.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FontFile {
+    /// The family name, `Inter`, `Segoe UI`, `Menlo`.
+    pub family: String,
+    /// The file's bytes, unparsed.
+    pub bytes: Vec<u8>,
+    /// The face in a collection; 0 for a single-face file.
+    pub index: u32,
+}
+
+/// The fonts the desktop sets its own windows in.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Fonts {
+    /// The UI font, for everything that is not code.
+    pub ui: Option<FontFile>,
+    /// The monospace font, for hashes, paths and code.
+    pub mono: Option<FontFile>,
+}
+
+/// The system's fonts (SPEC.md *Look and feel*, Typography).
+pub trait SystemFonts: Send + Sync {
+    /// The system's UI font and its monospace font, each when the platform
+    /// can name one; the caller keeps its bundled fonts for the rest and
+    /// validates the bytes before it uses them.
+    fn system_fonts(&self) -> Fonts;
+}
+
 /// All platform services behind one object.
 pub trait Platform:
     Trash
@@ -697,6 +726,7 @@ pub trait Platform:
     + StandardFolders
     + RecentlyUsed
     + Secrets
+    + SystemFonts
 {
 }
 
@@ -717,7 +747,8 @@ impl<
         + Mount
         + StandardFolders
         + RecentlyUsed
-        + Secrets,
+        + Secrets
+        + SystemFonts,
 > Platform for T
 {
 }

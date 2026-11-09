@@ -23,6 +23,9 @@ egui_extras = { workspace = true }
 image = { workspace = true }
 tracing = { workspace = true }
 egui-phosphor = { version = "0.14", features = ["fill"] }
+# Parses a system font file once before egui takes it (`fonts`), the
+# same parser egui renders with.
+ab_glyph = { workspace = true }
 
 [dev-dependencies]
 egui_kittest = { workspace = true }

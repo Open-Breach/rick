@@ -551,7 +551,7 @@ impl RickUi {
     /// Wraps `app`; `host` is the `UiHost` the app was built with.
     #[must_use]
     pub fn new(app: App, host: Arc<EguiHost>, ctx: &egui::Context) -> Self {
-        icons::install(ctx);
+        crate::fonts::install(ctx, &app.platform().system_fonts());
         let viewports: Arc<Mutex<Vec<ViewportId>>> = Arc::new(Mutex::new(vec![ViewportId::ROOT]));
         let wake = ctx.clone();
         let open = Arc::clone(&viewports);

@@ -32,6 +32,7 @@ pub mod console;
 pub mod content;
 pub mod dnd;
 pub mod dock;
+pub mod fonts;
 pub mod format;
 pub mod frame;
 pub mod hash;
