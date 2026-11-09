@@ -3130,7 +3130,104 @@ Once answered, an entry keeps its number and gains a dated decision line.
     risk typing into a running program; a Windows answer (the console
     host's process list) would lift that.
 
-268. (system integration, issue 120, 2026-11-09) §6.1: "Rick compares the
+268. (issue 80, 2026-11-09) Rule 4 has a workspace tab spring-load after
+    "~500 ms"; *Spring-loading* says "about a second (settable)", and the
+    one setting behind it (`drag.spring_delay_ms`, Settings → General)
+    defaults to 1000 ms.
+    Assumed: one delay for every kind of drag — entries, a pane, a tab —
+    and it is the existing setting; its default stays 1000 ms until this
+    is answered. If 500 ms is meant, is it the new default for folders
+    too?
+
+269. (issue 80, 2026-11-09) Rule 1: "neighbouring tabs slide apart
+    (animated)" names no duration, and nothing says what the slide does
+    under the system's reduce-motion setting.
+    Assumed: 150 ms, eased out, one constant; with reduce motion the tabs
+    take their places at once, as the portal animations stand still.
+
+270. (issue 80, 2026-11-09) Rules 2 and 3 turn on whether a tab holds
+    "exactly one pane"; the GUI chapter calls the preview "a pane like any
+    other", and the default layout is one explorer pane with the preview
+    beside it.
+    Assumed: every pane counts — the preview, a console and a comparison
+    included — so it is the model's count of the workspace's panes, and
+    the default tab with its preview is a multi-pane tab: it reorders and
+    tears off, and its explorer pane moves by its handle.
+
+271. (issue 80, 2026-11-09) Rule 2: a single-pane tab "can be dragged down
+    into the current workspace". Today a tab is activated by a click, not
+    by the press that starts a drag.
+    Assumed: it stays so. Dragging a tab never activates it, the window
+    goes on showing the workspace it showed, and an inactive single-pane
+    tab docks into that workspace directly. The dragged tab's own pane
+    shows no targets, so the shown tab, when it holds one pane, docks
+    elsewhere only through spring-loading (rule 4) or in another window
+    (rule 6).
+
+272. (issue 80, 2026-11-09) Rule 4 lets "a single-pane tab" spring-load by
+    "hovering another workspace tab"; rule 1 keeps a dragged tab in the row
+    under the cursor, so the cursor is never seen on another tab, and with
+    Chrome-style sliding a neighbour swaps away once the tab is halfway
+    over it.
+    Assumed: a dragged tab rests on a neighbour while it overlaps it by a
+    quarter of a tab's width or more, short of the half where the two
+    swap; held there for the delay it spring-loads that neighbour's
+    workspace, and held squarely in its gap it spring-loads nothing, so a
+    pause while reordering does not switch the window. A dragged pane
+    rests on a tab while the cursor is on the tab. Written into *Workspace
+    tabs*, Spring-loaded tabs.
+
+273. (issue 80, 2026-11-09) Rule 7 gives the pane's ghost its scale and
+    opacity and says of a tab only "the tab itself, lifted with a shadow";
+    rule 1 has the tab "follow the cursor along the row", rule 7 anchors
+    every ghost 8 px down and right of the cursor.
+    Assumed: the tab's ghost is full size and opaque, with the pane
+    ghost's shadow. While the cursor is in a title row — its own window's
+    or another's — the tab rides that row, on its line, the grab point
+    under the cursor with no offset; once the cursor leaves the title row
+    the tab follows it freely, the grab point 8 px down and right.
+
+274. (issue 80, 2026-11-09) Rule 3: a multi-pane tab "can only be
+    reordered in the row or torn off into its own window". Today a tab
+    released anywhere inside its window — over the panes, over the side
+    panel — is reordered to the gap it last showed.
+    Assumed: only a release on a tab row reorders and only one outside
+    every window tears off; a tab of either kind released anywhere else
+    inside a window — a single-pane one beside the dock targets too —
+    moves nothing and returns to its place. Rule 6 adds another window's
+    tab row to what a multi-pane tab can do.
+
+275. (issue 80, 2026-11-09) Rule 6: a tab or pane "dragged onto the tab bar
+    of another Rick window joins that window (as a tab, or via
+    spring-loading onto a dock target)". Whether the panes the other
+    window already shows take the drop directly is not said.
+    Assumed: they do. The dock targets appear on the pane under the cursor
+    in whichever window of this Rick the cursor is over, for a pane and
+    for a single-pane tab; the tab row is one way in, not the only one.
+    Written into *Windows*.
+
+276. (issue 80, 2026-11-09) Rule 9: Escape "restores the original layout";
+    *Spring-loading* leaves a pane where it drilled to when a drag "ends or
+    is cancelled", by the *After a drag* setting, and question 65 decided
+    that its "return" also switches a spring-loaded tab back.
+    Assumed: Escape returns every window to the workspace it showed when
+    the drag began, for a drag of entries too and whatever *After a drag*
+    says; the setting still decides the folders the panes drilled into,
+    and the workspace only when a drag of entries ends in a drop. A pane
+    or tab drag knows no *After a drag*: dropped, it leaves each window on
+    the workspace it shows, the one docked into; released where nothing
+    moves, it ends as Escape does.
+
+277. (issue 80, 2026-11-09) Rule 8: "open hand on hovering a grip or a
+    tab", "no arrow during a drag". A tab carries a close button, the row
+    a new-tab button, and a drag of entries has its own ghost, indicator
+    and the not-allowed cursor over the side panel.
+    Assumed: the open hand shows over a tab's body; its close button and
+    the new-tab button keep the cursor they have. The closed hand stays
+    for the whole of a pane or tab drag, also where a release would move
+    nothing. Rule 8 does not touch a drag of entries.
+
+278. (system integration, issue 120, 2026-11-09) §6.1: "Rick compares the
     wanted state with the actual one, item by item" and "*Install to the
     standard location*, which moves Rick to `~/.local/opt/rick` … through
     `ext-installer`". The check and the dialog are the core's, the
@@ -3145,7 +3242,7 @@ Once answered, an entry keeps its number and gains a dated decision line.
     row reads *Unsupported* with the reason while every other row works
     against the folder Rick runs from.
 
-269. (system integration, issue 120, 2026-11-09) §6.1: "The *Install for*
+279. (system integration, issue 120, 2026-11-09) §6.1: "The *Install for*
     segmented control (Just me / All users) at the top of the dialog sets
     the scope for every row", with `/opt/rick` and `pkexec` "and the
     installer's helper" for All users. That helper does not exist
@@ -3156,7 +3253,7 @@ Once answered, an entry keeps its number and gains a dated decision line.
     available yet) and the dialog shows the segment disabled with the
     tooltip *Not available yet*; the helper is not built here.
 
-270. (system integration, issue 120, 2026-11-09) §6.1: "The check reads
+280. (system integration, issue 120, 2026-11-09) §6.1: "The check reads
     files and registry keys only" — but not what *set up* is for each
     item of §7.1.
     Assumed, for *Just me*: the **install location** when the running
@@ -3176,7 +3273,7 @@ Once answered, an entry keeps its number and gains a dated decision line.
     the install location, so an update that flips the link takes every
     item with it.
 
-271. (system integration, issue 120, 2026-11-09) §7.1: "`packaging/linux/
+281. (system integration, issue 120, 2026-11-09) §7.1: "`packaging/linux/
     rick.desktop` and the icons installed under `share/applications` and
     `share/icons/hicolor` of the chosen scope" — from where: the release
     archive has `share/` beside the binary, a development build has not,
@@ -3187,7 +3284,7 @@ Once answered, an entry keeps its number and gains a dated decision line.
     from every build; the archive's `share/` stays what a manual install
     copies (specs/app-icons.md).
 
-272. (system integration, issue 120, 2026-11-09) §7.1, dock favourite:
+282. (system integration, issue 120, 2026-11-09) §7.1, dock favourite:
     "Other desktops: *Unsupported*" — but not what the item is on one of
     the four desktops whose means are not there: no `gsettings` program,
     a `gsettings` without the desktop's schema, no Plasma panel
