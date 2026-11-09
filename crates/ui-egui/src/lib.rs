@@ -26,11 +26,15 @@
     clippy::cast_possible_wrap
 )]
 
+pub mod compare;
 pub mod conflict;
+pub mod console;
+pub mod content;
 pub mod dnd;
 pub mod dock;
 pub mod format;
 pub mod frame;
+pub mod hash;
 pub mod host;
 pub mod icons;
 pub mod inline;
@@ -43,12 +47,13 @@ pub mod palette;
 pub mod pane;
 pub mod paths;
 pub mod preview;
+pub mod properties;
+pub mod question;
 pub mod search;
 pub mod settings_ui;
 pub mod shell;
 pub mod side_panel;
 pub mod thumbs;
-pub mod viewer;
 pub mod views;
 
 use std::sync::Arc;

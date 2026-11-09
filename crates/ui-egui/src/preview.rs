@@ -1,14 +1,13 @@
-//! The documents the Preview tab and the viewer tabs show: one slot per
-//! pane holding the opened document, the frames it rendered as textures,
-//! and the render in flight.
+//! The documents the Preview tab shows: one slot per pane holding the
+//! opened document, the frames it rendered as textures, and the render in
+//! flight.
 //!
 //! Rendering decodes pixels, so it never runs on the UI thread: the slot
 //! hands its document to a blocking task on the runtime and takes it back
 //! with the frame through a channel it polls each frame, showing the last
 //! frame or a placeholder meanwhile. Frames are cached per page, size and
-//! theme ([`RenderKey`]), a bounded number of them, so a viewer can show the
-//! pages in view and the thumbnails of its page strip from one document;
-//! the Preview tab asks for one frame at a time and keeps the last.
+//! theme ([`RenderKey`]), a bounded number of them, so paging back shows
+//! the page at once; the pane asks for one frame at a time.
 //!
 //! Text frames are laid out here, only the visible lines of them: with wrap
 //! off each line is one row and the view scrolls both ways; with wrap on
@@ -21,22 +20,29 @@
 //! The content never sets the pane's width: frames are asked for at the
 //! pane's width and scaled down to fit, text scrolls inside a clipped area,
 //! and nothing here asks for more than the width it was given.
+//!
+//! A document that claims a pointer gesture ([`PreviewControl::Pointer`]:
+//! a 3D view's orbit by drag, zoom by wheel, reset by double-click) gets
+//! the gesture through `set_control` instead of the pane's pan, scroll or
+//! 1:1, and a control change keeps the last frame on screen, marked stale,
+//! until the next render lands, so an orbit never drops to a spinner.
 
+use ext::t;
 use std::collections::HashMap;
 use std::ops::Range;
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 
 use egui::text::{LayoutJob, TextFormat};
 use egui::{Align2, Color32, FontId, Rect, TextStyle, TextureHandle, TextureOptions, pos2, vec2};
 use ext::{
-    ControlId, ControlValue, Frame, InfoSection, PreviewControl, PreviewDoc, RenderRequest,
-    TextBlock, TextLayer, Transport,
+    Content, ControlId, ControlValue, Frame, Gesture, InfoSection, PreviewControl, PreviewDoc,
+    RenderRequest, TextBlock, TextLayer, Transport,
 };
 use model::{PaneId, TextPreview};
 use runtime::oneshot;
-use types::{EntryId, Error};
+use types::{Entry, EntryId, Error};
 
-use crate::icons;
+use crate::{content, icons};
 
 type Rendered = (Box<dyn PreviewDoc>, Result<Frame, Error>);
 
@@ -48,8 +54,8 @@ pub const QUANTUM: f32 = 64.0;
 /// take as one texture.
 pub const MAX_ACTUAL: u32 = 8192;
 
-/// How many rendered frames a slot keeps: the pages and the strip
-/// thumbnails a viewer has in view, with room to scroll.
+/// How many rendered frames a slot keeps: the pages of a document paged
+/// through, so going back costs nothing.
 const CACHE: usize = 32;
 
 /// A tab counts as this many columns.
@@ -84,6 +90,9 @@ struct Cached {
     size: (u32, u32),
     /// The slot's tick when it was last drawn, for eviction.
     used: u64,
+    /// Rendered before a control changed the document: shown until the
+    /// next frame for its key lands, which `request` starts.
+    stale: bool,
 }
 
 /// Wrapped row counts per line at one column width, with prefix sums so a
@@ -251,6 +260,12 @@ pub struct Slot {
     tick: u64,
     /// The laid-out text frame and the theme it was rendered for.
     text: Option<(bool, TextView)>,
+    /// Content the pane lays out itself (a file list, a grid, a
+    /// document), when the document offers it; the frame is not rendered
+    /// then.
+    content: Option<Content>,
+    /// The layout state of that content: folds, picture textures.
+    content_state: content::State,
     /// The page shown, zero-based.
     pub page: usize,
     pages: Option<usize>,
@@ -259,6 +274,17 @@ pub struct Slot {
     status: Vec<String>,
     controls: Vec<PreviewControl>,
     error: Option<String>,
+    /// The document shows a prefix of a remote file: the bytes served and
+    /// the file's size; the pane offers *Load more*.
+    prefix: Option<(u64, Option<u64>)>,
+    /// A remote file above the size cap for whole-file previews: its size
+    /// and the cap; the pane offers *Preview anyway*.
+    capped: Option<(u64, u64)>,
+    /// The source the capped file is on, for *Always preview on <source>*.
+    cap_source: Option<String>,
+    /// No previewer claims the file: the pane shows the placeholder, and
+    /// this says whether a disabled plugin would claim it.
+    placeholder: Option<Placeholder>,
     /// Control changes made while the document was out rendering.
     queued: Vec<(ControlId, ControlValue)>,
     /// Rasters at actual pixels instead of fitted to the pane.
@@ -297,6 +323,7 @@ impl Slot {
         self.sections = doc.sections();
         self.status = doc.status();
         self.controls = doc.controls();
+        self.content = doc.content();
         // The layer grows as pages render; copy it when it changed.
         let size = |layer: &TextLayer| {
             (
@@ -316,9 +343,32 @@ impl Slot {
         self.take_facts(&*doc);
         self.page = 0;
         self.error = None;
+        self.capped = None;
+        self.placeholder = None;
+        self.prefix = None;
         self.textures.clear();
         self.text = None;
+        self.content_state = content::State::default();
         self.doc = Some(doc);
+    }
+
+    /// The prefix the document shows of a remote file, as the bytes served
+    /// and the file's size, when it shows one.
+    #[must_use]
+    pub fn prefix(&self) -> Option<(u64, Option<u64>)> {
+        self.prefix
+    }
+
+    /// The size and the cap of a remote file held behind *Preview anyway*.
+    #[must_use]
+    pub fn capped(&self) -> Option<(u64, u64)> {
+        self.capped
+    }
+
+    /// The placeholder shown because no previewer claims the file, if so.
+    #[must_use]
+    pub fn placeholder(&self) -> Option<&Placeholder> {
+        self.placeholder.as_ref()
     }
 
     /// Whether a render is in flight.
@@ -327,10 +377,30 @@ impl Slot {
         self.pending.is_some()
     }
 
-    /// Whether a frame has been shown for the current document.
+    /// Whether a frame has been shown for the current document, or the
+    /// pane lays its content out itself.
     #[must_use]
     pub fn has_frame(&self) -> bool {
-        !self.textures.is_empty() || self.text.is_some()
+        !self.textures.is_empty() || self.text.is_some() || self.content.is_some()
+    }
+
+    /// The content the pane lays out itself for the document, when it
+    /// offers one: a file list, a grid or a document.
+    #[must_use]
+    pub fn content(&self) -> Option<&Content> {
+        self.content.as_ref()
+    }
+
+    /// What the content layout drew in the last frame.
+    #[must_use]
+    pub fn content_drawn(&self) -> &content::Drawn {
+        &self.content_state.drawn
+    }
+
+    /// The content layout's state, for the tests: what is folded.
+    #[must_use]
+    pub fn content_state(&self) -> &content::State {
+        &self.content_state
     }
 
     /// Whether a document is open or on its way.
@@ -455,7 +525,8 @@ impl Slot {
     }
 
     /// Sets one of the previewer's controls; the next render reflects it.
-    /// While the document is out rendering the change waits for it.
+    /// While the document is out rendering the change waits for it. The
+    /// frames rendered so far stay on screen, stale, until the next one.
     pub fn set_control(&mut self, id: ControlId, value: ControlValue) {
         match self.doc.as_mut() {
             Some(doc) => {
@@ -464,12 +535,98 @@ impl Slot {
                 }
                 self.controls = doc.controls();
                 self.sections = doc.sections();
-                self.textures.clear();
-                self.text = None;
+                self.content = doc.content();
+                self.outdate();
             }
             None if self.pending.is_some() => self.queued.push((id, value)),
             None => {}
         }
+    }
+
+    /// Marks every frame stale, to be rendered again, and drops the text
+    /// layout, which the next request lays out anew.
+    fn outdate(&mut self) {
+        for cached in &mut self.textures {
+            cached.stale = true;
+        }
+        self.text = None;
+    }
+
+    /// The id of the document's control for `gesture`, when it claims it.
+    #[must_use]
+    pub fn gesture(&self, gesture: Gesture) -> Option<ControlId> {
+        self.controls.iter().find_map(|control| match control {
+            PreviewControl::Pointer { id, gesture: g, .. } if *g == gesture => Some(*id),
+            _ => None,
+        })
+    }
+
+    /// Whether the document claims any pointer gesture, so the frame has
+    /// to sense the pointer.
+    #[must_use]
+    pub fn claims_pointer(&self) -> bool {
+        self.controls
+            .iter()
+            .any(|control| matches!(control, PreviewControl::Pointer { .. }))
+    }
+
+    /// Hands the pointer gestures the document claims to it: the drag's
+    /// movement, the unmodified wheel's scroll (the modifier is the pane's
+    /// zoom) and a double-click on `response`, the frame.
+    pub fn forward_gestures(&mut self, ui: &egui::Ui, response: &egui::Response) {
+        if let Some(id) = self.gesture(Gesture::Drag)
+            && response.dragged_by(egui::PointerButton::Primary)
+        {
+            let delta = response.drag_delta();
+            if delta != egui::Vec2::ZERO {
+                self.set_control(
+                    id,
+                    ControlValue::Delta {
+                        x: delta.x,
+                        y: delta.y,
+                    },
+                );
+            }
+        }
+        if let Some(id) = self.gesture(Gesture::Wheel)
+            && response.hovered()
+        {
+            let delta = ui.input(|i| {
+                if i.modifiers.command || i.modifiers.ctrl {
+                    egui::Vec2::ZERO
+                } else {
+                    i.smooth_scroll_delta
+                }
+            });
+            if delta != egui::Vec2::ZERO {
+                self.set_control(
+                    id,
+                    ControlValue::Delta {
+                        x: delta.x,
+                        y: delta.y,
+                    },
+                );
+            }
+        }
+        if let Some(id) = self.gesture(Gesture::DoubleClick)
+            && response.double_clicked()
+        {
+            self.set_control(id, ControlValue::Pressed);
+        }
+    }
+
+    /// The pane's scroll sources for a frame at actual size: all of them,
+    /// less the drag and the wheel when the document claims them.
+    #[must_use]
+    pub fn scroll_source(&self) -> egui::scroll_area::ScrollSource {
+        let mut source = egui::scroll_area::ScrollSource::ALL;
+        if self.gesture(Gesture::Drag).is_some() {
+            source.drag = egui::scroll_area::DragScroll::Never;
+        }
+        if self.gesture(Gesture::Wheel).is_some() {
+            source.mouse_wheel = false;
+        }
+        source
     }
 
     /// Takes a finished render back, if any.
@@ -490,12 +647,6 @@ impl Slot {
                 }
                 self.take_facts(&*doc);
                 self.doc = Some(doc);
-                if changed {
-                    // The frame is of the document before the change.
-                    self.textures.clear();
-                    self.text = None;
-                    return;
-                }
                 match result {
                     Ok(Frame::Rgba {
                         width,
@@ -524,6 +675,11 @@ impl Slot {
                         self.error = Some("external textures are not supported".to_owned());
                     }
                     Err(error) => self.error = Some(error.to_string()),
+                }
+                if changed {
+                    // The frame is of the document before the change: shown
+                    // until the next request renders it again.
+                    self.outdate();
                 }
             }
             Err(oneshot::error::TryRecvError::Empty) => {
@@ -555,14 +711,16 @@ impl Slot {
             texture,
             size,
             used: self.tick,
+            stale: false,
         });
     }
 
     /// Starts a render for `key` on the runtime's blocking pool, unless a
-    /// render is in flight, the frame is cached, or the content is text
-    /// already laid out for the theme. `scale` is the display's.
+    /// render is in flight, the frame is cached and not stale, or the
+    /// content is text already laid out for the theme. `scale` is the
+    /// display's.
     pub fn request(&mut self, ctx: &egui::Context, key: RenderKey, scale: f32) {
-        if self.pending.is_some() || self.textures.iter().any(|c| c.key == key) {
+        if self.pending.is_some() || self.textures.iter().any(|c| c.key == key && !c.stale) {
             return;
         }
         // Text lays itself out; one render per document and theme is enough.
@@ -673,7 +831,50 @@ impl Previews {
         if slot.entry != entry {
             slot.reset(entry);
         }
+        slot.capped = None;
+        slot.placeholder = None;
         slot.error = Some(error.to_string());
+    }
+
+    /// No previewer claims `pane`'s selection, about `entry`: the pane
+    /// shows the placeholder; `plugin` names a disabled plugin that would
+    /// claim it, when there is one.
+    pub fn none(&mut self, pane: PaneId, plugin: Option<String>, entry: Option<EntryId>) {
+        let slot = self.slot(pane);
+        if slot.entry != entry {
+            slot.reset(entry);
+        }
+        slot.doc = None;
+        slot.error = None;
+        slot.capped = None;
+        slot.placeholder = Some(Placeholder { plugin });
+    }
+
+    /// The document just opened for `pane` shows the first `served` bytes
+    /// of a remote file of `total` bytes.
+    pub fn prefix(&mut self, pane: PaneId, served: u64, total: Option<u64>) {
+        self.slot(pane).prefix = Some((served, total));
+    }
+
+    /// `pane`'s selection is a remote file of `size` bytes above `cap`,
+    /// about `entry`; nothing opens until *Preview anyway*.
+    pub fn capped(
+        &mut self,
+        pane: PaneId,
+        size: u64,
+        cap: u64,
+        source: Option<String>,
+        entry: Option<EntryId>,
+    ) {
+        let slot = self.slot(pane);
+        if slot.entry != entry {
+            slot.reset(entry);
+        }
+        slot.doc = None;
+        slot.error = None;
+        slot.placeholder = None;
+        slot.capped = Some((size, cap));
+        slot.cap_source = source;
     }
 
     /// Brings `pane`'s slot up to date with the entry the app is following:
@@ -687,31 +888,51 @@ impl Previews {
         slot
     }
 
-    /// [`sync`](Self::sync), with the slot open for the viewer's drawing.
-    pub fn sync_mut(
-        &mut self,
-        ctx: &egui::Context,
-        pane: PaneId,
-        target: Option<EntryId>,
-    ) -> &mut Slot {
-        let slot = self.slot(pane);
-        if slot.entry != target {
-            slot.reset(target);
-        }
-        slot.poll(ctx, pane);
-        slot
-    }
-
     /// Draws `pane`'s content into the space the caller allocated: the
-    /// frame fitted to it, text scrolling inside it, or a placeholder.
+    /// frame fitted to it, text scrolling inside it, or a placeholder; a
+    /// prefix of a remote file ends in a *Load more* bar and a file above
+    /// the cap shows its facts and *Preview anyway*; a file no previewer
+    /// claims shows `entry`'s facts, its type icon and whether a plugin is
+    /// there. Returns what a button of those asked for.
     pub fn content(
         &mut self,
         ui: &mut egui::Ui,
         pane: PaneId,
         target: Option<EntryId>,
+        entry: Option<&Entry>,
         text_settings: TextPreview,
-    ) {
+    ) -> Option<PreviewAct> {
         let slot = self.slot(pane);
+        if let Some((size, cap)) = slot.capped.filter(|_| target.is_some()) {
+            return capped_message(ui, size, cap, slot.cap_source.as_deref());
+        }
+        if let Some(placeholder) = slot.placeholder.as_ref().filter(|_| target.is_some())
+            && let Some(entry) = entry.filter(|e| Some(e.id) == target)
+        {
+            draw_placeholder(ui, entry, placeholder.plugin.as_deref(), SystemTime::now());
+            return None;
+        }
+        let mut act = None;
+        if let Some((served, total)) = slot.prefix.filter(|_| slot.doc.is_some()) {
+            act = prefix_bar(ui, served, total);
+        }
+        // Content the pane lays out itself needs no frame.
+        if let Some(content) = slot.content.clone() {
+            slot.drawn.clear();
+            slot.h_scroll = false;
+            let body = ui.available_rect_before_wrap();
+            slot.frame_rect = Some(body);
+            ui.set_clip_rect(body.intersect(ui.clip_rect()));
+            let sections = slot.sections.clone();
+            return content::draw(
+                ui,
+                &content,
+                &sections,
+                &mut slot.content_state,
+                SystemTime::now(),
+            )
+            .or(act);
+        }
         let ctx = ui.ctx().clone();
         let body = ui.available_rect_before_wrap();
         let ppp = ctx.pixels_per_point();
@@ -733,62 +954,266 @@ impl Previews {
         slot.h_scroll = false;
         slot.frame_rect = None;
         ui.set_clip_rect(body.intersect(ui.clip_rect()));
-        if let Some((texture, (w, h))) = shown {
-            let native = vec2(w as f32 / ppp, h as f32 / ppp);
-            if slot.actual_size && slot.is_raster() {
-                // Actual pixels: pan by dragging the picture or with the
-                // wheel, scrollbars either way.
-                let output = egui::ScrollArea::both()
-                    .auto_shrink([false, false])
-                    .scroll_source(egui::scroll_area::ScrollSource::ALL)
-                    .on_drag_cursor(egui::CursorIcon::Grabbing)
-                    .show(ui, |ui| {
-                        ui.add(egui::Image::from_texture(&texture).fit_to_exact_size(native))
-                    });
-                if output.inner.hovered() && !output.inner.dragged() {
-                    ctx.set_cursor_icon(egui::CursorIcon::Grab);
-                }
-                slot.pan = output.state.offset;
-                slot.frame_rect = Some(output.inner.rect.intersect(output.inner_rect));
-            } else {
-                let scale = (body.width() / native.x)
-                    .min(body.height() / native.y)
-                    .min(1.0);
-                let size = native * scale;
-                // Centred in the content both ways.
-                let rect = Rect::from_center_size(body.center(), size);
-                let response = ui.put(
-                    rect,
-                    egui::Image::from_texture(&texture).fit_to_exact_size(size),
-                );
-                slot.frame_rect = Some(response.rect);
-            }
+        if let Some((texture, size)) = shown {
+            draw_texture(ui, slot, pane, body, &texture, size, ppp);
         } else if let Some((_, view)) = slot.text.as_mut() {
             let (drawn, h_scroll) = draw_text(ui, view, TextOptions::from_settings(text_settings));
             slot.drawn = drawn;
             slot.h_scroll = h_scroll;
             slot.frame_rect = Some(body);
-        } else if let Some(error) = &slot.error {
-            ui.add(
-                egui::Label::new(
-                    egui::RichText::new(format!("No preview: {error}"))
-                        .color(ui.visuals().warn_fg_color),
-                )
-                .wrap(),
-            );
-        } else if target.is_some() {
-            ui.horizontal(|ui| {
-                ui.spinner();
-                ui.weak(if slot.has_doc() {
-                    "Rendering…"
-                } else {
-                    "Opening…"
-                });
-            });
         } else {
-            ui.weak("Select a file to preview it");
+            draw_waiting(ui, slot, target.is_some());
         }
+        act
     }
+}
+
+/// Draws a rendered frame into `body`: fitted and centred, or at actual
+/// pixels in a scroll area that pans; the gestures the document claims go
+/// to it. While media plays, every frame is rendered again.
+fn draw_texture(
+    ui: &mut egui::Ui,
+    slot: &mut Slot,
+    pane: PaneId,
+    body: Rect,
+    texture: &TextureHandle,
+    (w, h): (u32, u32),
+    ppp: f32,
+) {
+    let ctx = ui.ctx().clone();
+    let native = vec2(w as f32 / ppp, h as f32 / ppp);
+    // The gestures the document claims are sensed under one stable id,
+    // so a drag survives the frame being rendered again under it.
+    let gestures = slot
+        .claims_pointer()
+        .then(|| egui::Id::new(("preview-frame", pane)));
+    if slot.actual_size && slot.is_raster() {
+        // Actual pixels: pan by dragging the picture or with the
+        // wheel, scrollbars either way; a document that claims the
+        // drag or the wheel gets them instead.
+        let source = slot.scroll_source();
+        let output = egui::ScrollArea::both()
+            .auto_shrink([false, false])
+            .scroll_source(source)
+            .on_drag_cursor(egui::CursorIcon::Grabbing)
+            .show(ui, |ui| {
+                let image = ui.add(egui::Image::from_texture(texture).fit_to_exact_size(native));
+                match gestures {
+                    Some(id) => ui.interact(image.rect, id, egui::Sense::click_and_drag()),
+                    None => image,
+                }
+            });
+        if output.inner.hovered()
+            && !output.inner.dragged()
+            && source.drag != egui::scroll_area::DragScroll::Never
+        {
+            ctx.set_cursor_icon(egui::CursorIcon::Grab);
+        }
+        slot.pan = output.state.offset;
+        slot.frame_rect = Some(output.inner.rect.intersect(output.inner_rect));
+        slot.forward_gestures(ui, &output.inner);
+    } else {
+        let scale = (body.width() / native.x)
+            .min(body.height() / native.y)
+            .min(1.0);
+        let size = native * scale;
+        // Centred in the content both ways.
+        let rect = Rect::from_center_size(body.center(), size);
+        let response = ui.put(
+            rect,
+            egui::Image::from_texture(texture).fit_to_exact_size(size),
+        );
+        let response = match gestures {
+            Some(id) => ui.interact(response.rect, id, egui::Sense::click_and_drag()),
+            None => response,
+        };
+        slot.frame_rect = Some(response.rect);
+        slot.forward_gestures(ui, &response);
+    }
+    // Media plays: every frame is rendered again while it does.
+    if slot.transport().is_some_and(|t| t.playing()) {
+        slot.outdate();
+        ctx.request_repaint_after(Duration::from_millis(16));
+    }
+}
+
+/// What the pane shows while it has no frame to draw: the error that
+/// stopped the preview, a spinner while it opens or renders, or the hint
+/// to select a file.
+fn draw_waiting(ui: &mut egui::Ui, slot: &Slot, selected: bool) {
+    if let Some(error) = &slot.error {
+        ui.add(
+            egui::Label::new(
+                egui::RichText::new(t!("preview-failed", error = error.as_str()))
+                    .color(ui.visuals().warn_fg_color),
+            )
+            .wrap(),
+        );
+    } else if selected {
+        ui.horizontal(|ui| {
+            ui.spinner();
+            ui.weak(if slot.has_doc() {
+                "Rendering…"
+            } else {
+                "Opening…"
+            });
+        });
+    } else {
+        ui.weak(t!("inspector-select-a-file-to-preview"));
+    }
+}
+
+/// Why the pane shows its placeholder instead of a preview: no previewer
+/// claims the file.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Placeholder {
+    /// A disabled previewer plugin whose manifest claims the file's type,
+    /// by id: the line reads *Plugin available*; `None` reads *No plugin
+    /// available*.
+    pub plugin: Option<String>,
+}
+
+/// The rows of the File info section the pane builds itself for a file no
+/// previewer describes: name, type, size, modified.
+#[must_use]
+pub fn file_info_rows(entry: &Entry, now: SystemTime) -> Vec<(String, String)> {
+    let (_, modified) = crate::format::date(entry.modified, now);
+    vec![
+        (t!("preview-name"), entry.name.clone()),
+        (t!("preview-type"), model::type_of(entry)),
+        (t!("preview-size"), crate::format::size(entry.size)),
+        (t!("preview-modified"), modified),
+    ]
+}
+
+/// The placeholder of SPEC.md's *No previewer*: the File info rows at the
+/// top, the file-type icon the list uses drawn large and centred in the
+/// space below, and under it one plain line of small text, *Plugin
+/// available* or *No plugin available*. Nothing in it is clickable.
+fn draw_placeholder(ui: &mut egui::Ui, entry: &Entry, plugin: Option<&str>, now: SystemTime) {
+    let whole = ui.available_rect_before_wrap();
+    let section = crate::inspector::Section {
+        id: "file",
+        title: t!("preview-file-info"),
+        glyph: icons::INFO,
+        rows: file_info_rows(entry, now),
+    };
+    crate::inspector::section_rows(ui, &section, None, whole.height() * 0.5);
+    let rest = ui.available_rect_before_wrap();
+    let glyph = icons::for_entry(entry);
+    let line = if plugin.is_some() {
+        t!("preview-plugin-available")
+    } else {
+        t!("preview-no-plugin-available")
+    };
+    let icon_size = (rest.height() * 0.4).clamp(24.0, 96.0);
+    let line_h = ui.text_style_height(&TextStyle::Small) + 4.0;
+    let gap = 8.0;
+    let top = rest.center().y - (icon_size + gap + line_h) / 2.0;
+    let weak = ui.visuals().weak_text_color();
+    ui.put(
+        Rect::from_center_size(
+            pos2(rest.center().x, top + icon_size / 2.0),
+            vec2(rest.width(), icon_size + 4.0),
+        ),
+        egui::Label::new(egui::RichText::new(glyph).size(icon_size).color(weak)).selectable(false),
+    );
+    ui.put(
+        Rect::from_center_size(
+            pos2(rest.center().x, top + icon_size + gap + line_h / 2.0),
+            vec2(rest.width(), line_h),
+        ),
+        egui::Label::new(egui::RichText::new(line).small().color(weak))
+            .selectable(false)
+            .truncate(),
+    );
+}
+
+/// What a button of the preview's own asked for.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PreviewAct {
+    /// Serve the next chunk of a remote file shown as a prefix.
+    LoadMore,
+    /// Open a remote file above the size cap whatever its size.
+    PreviewAnyway,
+    /// Switch the cap off for the file's source and open the file.
+    PreviewAlways,
+    /// Open the preview again: a missing library may be there now.
+    Retry,
+    /// Ask for the file of a missing library with a file dialogue and
+    /// store the choice into the previewer's setting, then open again.
+    Browse {
+        /// The extension and the key of the setting that holds the path.
+        setting: (types::ExtId, &'static str),
+        /// What the dialogue filters for.
+        filters: Vec<platform::DialogFilter>,
+    },
+}
+
+/// The *Load more* bar at the foot of a prefix: takes its row off the
+/// bottom of the space, so the content gets what is left above it.
+pub fn prefix_bar(ui: &mut egui::Ui, served: u64, total: Option<u64>) -> Option<PreviewAct> {
+    let whole = ui.available_rect_before_wrap();
+    let bar_h = ui.text_style_height(&egui::TextStyle::Body) + 10.0;
+    let bar = Rect::from_min_max(pos2(whole.left(), whole.bottom() - bar_h), whole.max);
+    let mut foot = ui.new_child(
+        egui::UiBuilder::new()
+            .max_rect(bar)
+            .layout(egui::Layout::left_to_right(egui::Align::Center)),
+    );
+    foot.add_space(6.0);
+    foot.weak(match total {
+        Some(total) => format!(
+            "Showing the first {} of {}",
+            crate::format::size(Some(served)),
+            crate::format::size(Some(total))
+        ),
+        None => format!("Showing the first {}", crate::format::size(Some(served))),
+    });
+    let act = foot
+        .button(t!("preview-load-more"))
+        .clicked()
+        .then_some(PreviewAct::LoadMore);
+    ui.set_max_height((whole.height() - bar_h).max(0.0));
+    act
+}
+
+/// The cap message: the file's size against the cap, *Preview anyway*
+/// and, for a file on a source with a connection, *Always preview on
+/// <source>*.
+pub fn capped_message(
+    ui: &mut egui::Ui,
+    size: u64,
+    cap: u64,
+    source: Option<&str>,
+) -> Option<PreviewAct> {
+    let mut act = None;
+    ui.add_space(12.0);
+    ui.vertical_centered(|ui| {
+        ui.label(
+            egui::RichText::new(format!(
+                "{} on a remote host, above the {} preview cap",
+                crate::format::size(Some(size)),
+                crate::format::size(Some(cap))
+            ))
+            .strong(),
+        );
+        ui.weak(t!("preview-the-whole-file-would-be"));
+        ui.add_space(6.0);
+        ui.horizontal(|ui| {
+            if ui.button(t!("preview-preview-anyway")).clicked() {
+                act = Some(PreviewAct::PreviewAnyway);
+            }
+            if let Some(source) = source
+                && ui
+                    .button(t!("preview-always-preview-on", source = source))
+                    .clicked()
+            {
+                act = Some(PreviewAct::PreviewAlways);
+            }
+        });
+    });
+    act
 }
 
 /// Points to pixels, rounded up to the [`QUANTUM`].

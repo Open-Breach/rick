@@ -3,7 +3,7 @@
 `model` is the single source of truth for everything the windows show, as
 plain data: every window with its geometry, side panel and dock tree of
 panes, each pane's tabs in strip order, and per tab its kind (an explorer,
-the window's Preview tab, or a viewer showing one file of its listing), the
+or the window's Preview tab), the
 location and history, the listing with its sort, group, filter and
 selection, the view mode with the tree view's expanded folders and the
 scroll offset, the explorer tab the preview follows, the job table every

@@ -65,6 +65,9 @@ pub struct Settings {
     pub density: Density,
     /// Accent colour as `#rrggbb`, or the theme's own.
     pub accent: Option<String>,
+    /// The language of the user interface as a tag (`de`), or `None` for
+    /// the system's; applied live, English the fallback for a missing key.
+    pub language: Option<String>,
     /// Rebound shortcuts: action id to shortcut text, e.g. `"core.copy" =
     /// "Mod+C"`. Actions not listed keep their default.
     pub shortcuts: BTreeMap<String, String>,
@@ -82,36 +85,64 @@ pub struct Settings {
     pub preview: Preview,
     /// Search in subdirectories: the names the walk skips.
     pub search: Search,
-    /// The viewer: the types that open with the system application instead.
-    pub viewer: Viewer,
+    /// Archives: what Open does with one.
+    pub archives: Archives,
     /// Plugins: which of them not to load.
     pub plugins: Plugins,
+    /// The network and cloud connections, one `[[connections]]` table
+    /// each: the provider, the name and the non-secret fields. The
+    /// secrets are in the platform keychain, never here.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub connections: Vec<ConnectionEntry>,
 }
 
-/// The `[viewer]` table.
+/// One `[[connections]]` table of `rick.toml`: a connection of a network
+/// or cloud provider plugin with its non-secret fields inline, so a file
+/// reads `provider = "s3"`, `name = "work"`, `endpoint = "…"`. A password
+/// or key lives in the platform keychain under the plugin's key.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(default)]
-pub struct Viewer {
-    /// File name extensions, lower case without the dot, that Open hands to
-    /// the system's default application instead of the viewer, previewable
-    /// or not: the setting that flips the viewer's default per type.
-    pub external: Vec<String>,
+pub struct ConnectionEntry {
+    /// The provider id: `s3`, `azure`, `gcs`, `ssh`.
+    pub provider: String,
+    /// The name the user gave the connection; unique within the provider.
+    pub name: String,
+    /// The non-secret fields by key, inline in the table.
+    #[serde(flatten)]
+    pub settings: BTreeMap<String, String>,
 }
 
-impl Viewer {
-    /// Whether files named `name` open outside the viewer.
+impl ConnectionEntry {
+    /// The entry as the extension API hands it to the provider's
+    /// connector: the name and the fields.
     #[must_use]
-    pub fn opens_externally(&self, name: &str) -> bool {
-        let Some((stem, ext)) = name.rsplit_once('.') else {
-            return false;
-        };
-        !stem.is_empty()
-            && !ext.is_empty()
-            && self
-                .external
-                .iter()
-                .any(|e| e.trim_start_matches('.').eq_ignore_ascii_case(ext))
+    pub fn to_connection(&self) -> ext::Connection {
+        ext::Connection {
+            name: self.name.clone(),
+            settings: self.settings.clone(),
+        }
     }
+}
+
+/// The `[archives]` table.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(default)]
+pub struct Archives {
+    /// What Enter and a double-click do with an archive or a disk image.
+    pub on_open: OnOpen,
+}
+
+/// What Open does with an archive or a disk image (SPEC.md, *Opening
+/// files*).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum OnOpen {
+    /// Enter it as a read-only location in the current tab, through its
+    /// provider.
+    #[default]
+    Enter,
+    /// Hand it to the system's default application, like any other file.
+    System,
 }
 
 /// The `[plugins]` table.
@@ -418,8 +449,10 @@ impl Default for Settings {
             drag: Drag::default(),
             preview: Preview::default(),
             search: Search::default(),
-            viewer: Viewer::default(),
+            archives: Archives::default(),
             plugins: Plugins::default(),
+            connections: Vec::new(),
+            language: None,
         }
     }
 }
@@ -447,6 +480,8 @@ pub enum SettingsChange {
     Density(Density),
     /// Accent colour, `None` for the theme's own.
     Accent(Option<String>),
+    /// The language, `None` for the system's.
+    Language(Option<String>),
     /// Rebind an action; `None` restores its default.
     Shortcut {
         /// The action id.
@@ -483,9 +518,8 @@ pub enum SettingsChange {
     },
     /// The names the subtree search skips.
     SearchIgnore(Vec<String>),
-    /// The file name extensions Open hands to the system application
-    /// instead of the viewer.
-    ViewerExternal(Vec<String>),
+    /// What Open does with an archive or a disk image.
+    ArchivesOnOpen(OnOpen),
     /// Enable or disable a plugin; takes effect on the next start.
     Plugin {
         /// The plugin id.
@@ -511,6 +545,7 @@ impl Settings {
             SettingsChange::Theme(v) => self.theme = v,
             SettingsChange::FontSize(v) => self.font_size = v,
             SettingsChange::Density(v) => self.density = v,
+            SettingsChange::Language(v) => self.language = v,
             SettingsChange::Accent(v) => self.accent = v,
             SettingsChange::Shortcut { action, binding } => match binding {
                 Some(binding) => {
@@ -546,13 +581,7 @@ impl Settings {
                 }
             },
             SettingsChange::SearchIgnore(names) => self.search.ignore = names,
-            SettingsChange::ViewerExternal(types) => {
-                self.viewer.external = types
-                    .into_iter()
-                    .map(|t| t.trim().trim_start_matches('.').to_ascii_lowercase())
-                    .filter(|t| !t.is_empty())
-                    .collect();
-            }
+            SettingsChange::ArchivesOnOpen(on_open) => self.archives.on_open = on_open,
             SettingsChange::Plugin { id, enabled } => {
                 self.plugins.disabled.retain(|d| *d != id);
                 if !enabled {
@@ -580,27 +609,44 @@ mod tests {
         assert!(!s.preview.text.wrap, "wrap off");
         assert!(s.preview.pinned.is_empty());
         assert_eq!(s.search.ignore, [".git", "node_modules", "target"]);
-        assert!(
-            s.viewer.external.is_empty(),
-            "every type opens in the viewer"
-        );
+        assert_eq!(s.archives.on_open, OnOpen::Enter, "an archive is entered");
         let mut s = s;
         s.apply(SettingsChange::SearchIgnore(vec!["build".into()]));
         assert_eq!(s.search.ignore, ["build"]);
-        s.apply(SettingsChange::ViewerExternal(vec![
-            " .PDF ".into(),
-            "docx".into(),
-            String::new(),
-        ]));
-        assert_eq!(s.viewer.external, ["pdf", "docx"]);
-        assert!(s.viewer.opens_externally("paper.pdf"));
-        assert!(s.viewer.opens_externally("Paper.PDF"));
-        assert!(!s.viewer.opens_externally("paper.png"));
+        s.apply(SettingsChange::ArchivesOnOpen(OnOpen::System));
+        assert_eq!(s.archives.on_open, OnOpen::System);
+        let text = toml::to_string(&s).unwrap_or_default();
+        assert!(text.contains("[archives]\non_open = \"system\""), "{text}");
+    }
+
+    #[test]
+    fn connections_round_trip_as_tables_with_their_fields_inline() {
+        let mut s = Settings::default();
+        s.connections.push(ConnectionEntry {
+            provider: "s3".into(),
+            name: "work".into(),
+            settings: BTreeMap::from([
+                ("endpoint".to_owned(), "http://127.0.0.1:9000".to_owned()),
+                ("access_key".to_owned(), "minio".to_owned()),
+            ]),
+        });
+        let text = toml::to_string(&s).unwrap_or_else(|e| panic!("{e}"));
+        assert!(text.contains("[[connections]]"), "{text}");
+        assert!(text.contains("provider = \"s3\""), "{text}");
         assert!(
-            !s.viewer.opens_externally(".pdf"),
-            "a dot-file has no extension"
+            text.contains("endpoint = \"http://127.0.0.1:9000\""),
+            "{text}"
         );
-        assert!(!s.viewer.opens_externally("pdf"));
+        let back: Settings = toml::from_str(&text).unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(back, s);
+        assert_eq!(
+            back.connections[0].to_connection().get("access_key"),
+            Some("minio")
+        );
+        assert_eq!(back.connections[0].to_connection().get("missing"), None);
+        // No connection, no table.
+        let text = toml::to_string(&Settings::default()).unwrap_or_else(|e| panic!("{e}"));
+        assert!(!text.contains("connections"), "{text}");
     }
 
     #[test]
@@ -618,8 +664,8 @@ mod tests {
             Location::new(ProviderId("local"), "C:\\Users\\me")
         );
         assert_eq!(
-            parse_location("sftp:/srv"),
-            Location::new(ProviderId::intern("sftp"), "/srv")
+            parse_location("ssh:/srv"),
+            Location::new(ProviderId::intern("ssh"), "/srv")
         );
         let text = Location::new(ProviderId("local"), "C:\\x").to_string();
         assert_eq!(parse_location(&text).path.to_string(), "C:\\x");

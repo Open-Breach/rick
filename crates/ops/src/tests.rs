@@ -1,5 +1,5 @@
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
@@ -7,7 +7,7 @@ use ext::{
     Action, ActionCtx, ActionId, ActionOutcome, Availability, Extension, Invocation, Level, PaneId,
     Registry, UiHost,
 };
-use platform::{Fake, Trash as _};
+use platform::{ConfigDir as _, Fake, Trash as _};
 use runtime::JobRunner;
 use types::{Entry, Location};
 use vfs::Mounts;
@@ -21,6 +21,14 @@ struct Scripted {
     confirm: Mutex<bool>,
     prompt: Mutex<Option<String>>,
     notices: Mutex<Vec<(Level, String)>>,
+    /// Values laid over a form's defaults; `None` dismisses the form.
+    form: Mutex<Option<Vec<(&'static str, ext::Value)>>>,
+}
+
+impl Scripted {
+    fn answer_form(&self, values: Vec<(&'static str, ext::Value)>) {
+        *self.form.lock().unwrap_or_else(PoisonError::into_inner) = Some(values);
+    }
 }
 
 impl UiHost for Scripted {
@@ -40,6 +48,18 @@ impl UiHost for Scripted {
             .clone()
     }
     fn show(&self, _title: &str, _text: &str) {}
+    fn form(&self, form: ext::Form) -> Option<ext::Values> {
+        let overrides = self
+            .form
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()?;
+        let mut values = form.defaults();
+        for (key, value) in overrides {
+            values.set(key, value);
+        }
+        Some(values)
+    }
 }
 
 /// A pinned list in memory.
@@ -112,7 +132,10 @@ fn harness() -> Harness {
         registry,
         core_clipboard: Arc::new(move || clip.clipboard()),
         jobs: JobRunner::new(),
-        ui: Scripted::default(),
+        ui: Scripted {
+            form: Mutex::new(Some(Vec::new())),
+            ..Scripted::default()
+        },
     }
 }
 
@@ -151,6 +174,7 @@ impl Harness {
             location: tests_local(location),
             selection: self.entries(selection),
             invoked_from: Invocation::Palette,
+            other: None,
         }
     }
 
@@ -416,7 +440,7 @@ fn copy_path_open_and_reveal_go_to_the_platform() {
     );
     assert_eq!(
         h.action("core.copy_name").availability(&h.ctx(&dir, &[])),
-        Availability::Disabled("select something first")
+        Availability::Disabled(ext::t!("reason-select-something-first"))
     );
 
     h.run("core.open_default", h.ctx(&dir, &refs));
@@ -433,15 +457,88 @@ fn copy_path_open_and_reveal_go_to_the_platform() {
 }
 
 #[test]
+fn mount_shows_on_the_images_this_platform_mounts_and_goes_through_it() {
+    use platform::{ImageFormat, Volumes as _};
+
+    let h = harness();
+    let dir = h.dir.path().join("images");
+    fs::create_dir_all(&dir).unwrap_or_else(|e| panic!("{e}"));
+    for name in [
+        "disc.iso",
+        "disk.vhdx",
+        "disk.dmg",
+        "disk.qcow2",
+        "notes.txt",
+    ] {
+        write(&dir.join(name), "x");
+    }
+    let mount = h.action("core.mount");
+    let shows = |name: &str| mount.availability(&h.ctx(&dir, &[&dir.join(name)]));
+    // As Linux: ISO yes, VHDX and DMG no, QCOW2 never.
+    h.fake.set_mountable(&[ImageFormat::Iso, ImageFormat::Img]);
+    assert_eq!(shows("disc.iso"), Availability::Enabled);
+    assert_eq!(shows("disk.vhdx"), Availability::Hidden);
+    assert_eq!(shows("disk.dmg"), Availability::Hidden);
+    assert_eq!(shows("disk.qcow2"), Availability::Hidden);
+    assert_eq!(shows("notes.txt"), Availability::Hidden);
+    // As Windows: ISO, VHD and VHDX.
+    h.fake
+        .set_mountable(&[ImageFormat::Iso, ImageFormat::Vhd, ImageFormat::Vhdx]);
+    assert_eq!(shows("disc.iso"), Availability::Enabled);
+    assert_eq!(shows("disk.vhdx"), Availability::Enabled);
+    assert_eq!(shows("disk.dmg"), Availability::Hidden);
+    assert_eq!(shows("disk.qcow2"), Availability::Hidden);
+    // As macOS: DMG, ISO and raw images.
+    h.fake
+        .set_mountable(&[ImageFormat::Dmg, ImageFormat::Iso, ImageFormat::Img]);
+    assert_eq!(shows("disc.iso"), Availability::Enabled);
+    assert_eq!(shows("disk.dmg"), Availability::Enabled);
+    assert_eq!(shows("disk.vhdx"), Availability::Hidden);
+    assert_eq!(shows("disk.qcow2"), Availability::Hidden);
+    // A mixed selection, the empty selection and a folder hide it.
+    assert_eq!(
+        mount.availability(&h.ctx(&dir, &[&dir.join("disc.iso"), &dir.join("notes.txt")])),
+        Availability::Hidden
+    );
+    assert_eq!(mount.availability(&h.ctx(&dir, &[])), Availability::Hidden);
+    assert_eq!(
+        mount.availability(&h.ctx(&dir, &[&dir])),
+        Availability::Hidden
+    );
+    assert_eq!(
+        mount.availability(&ActionCtx {
+            pane: PaneId(1),
+            location: vfs_rick::trash_location(),
+            selection: h.entries(&[&dir.join("disc.iso")]),
+            invoked_from: Invocation::ContextMenu,
+            other: None,
+        }),
+        Availability::Hidden,
+        "in the trash"
+    );
+    // Running it mounts through the platform: a job, then a volume.
+    let outcome = h.run("core.mount", h.ctx(&dir, &[&dir.join("disc.iso")]));
+    assert!(matches!(outcome, ActionOutcome::Started(_)), "{outcome:?}");
+    assert_eq!(h.fake.mounted(), [dir.join("disc.iso")]);
+    let volumes = h.fake.volumes().unwrap_or_else(|e| panic!("{e}"));
+    assert_eq!(volumes.len(), 1);
+    assert_eq!(volumes[0].name, "disc");
+    assert!(volumes[0].is_removable(), "Eject applies to it");
+    h.fake.eject(&volumes[0]).unwrap_or_else(|e| panic!("{e}"));
+    assert!(h.fake.volumes().is_ok_and(|v| v.is_empty()));
+}
+
+#[test]
 fn every_action_has_an_id_label_and_core_group() {
     let h = harness();
-    assert_eq!(h.registry.actions().len(), 18);
+    assert_eq!(h.registry.actions().len(), 24);
     for action in h.registry.actions() {
         assert!(action.id().0.starts_with("core."), "{}", action.id().0);
         assert_ne!(action.label(), "");
         assert_eq!(action.group(), ext::ActionGroup::Core);
-        // Pin, Unpin and Open containing folder have no shortcut in the
-        // spec's tables; New file lost Mod+N to New window (QUESTIONS.md 66).
+        // Pin, Unpin, Open containing folder, Compute hash and Mount have
+        // no shortcut in the spec's tables; New file lost Mod+N to New
+        // window (QUESTIONS.md 66).
         let unbound = matches!(
             action.id().0,
             "core.pin"
@@ -449,6 +546,9 @@ fn every_action_has_an_id_label_and_core_group() {
                 | "core.new_file"
                 | "core.open_containing"
                 | "core.open_containing_tab"
+                | "core.create_link"
+                | "core.hash"
+                | "core.mount"
         );
         assert_eq!(
             action.default_shortcut().is_some(),
@@ -885,6 +985,7 @@ fn virtual_locations_hide_the_actions_that_do_not_apply() {
         location: vfs_rick::trash_location(),
         selection: entries.clone(),
         invoked_from: Invocation::ContextMenu,
+        other: None,
     };
     for hidden in [
         "core.copy",
@@ -917,6 +1018,7 @@ fn virtual_locations_hide_the_actions_that_do_not_apply() {
         location: vfs_rick::Virtual::Favorites.location(),
         selection: entries,
         invoked_from: Invocation::ContextMenu,
+        other: None,
     };
     for hidden in [
         "core.paste",
@@ -945,4 +1047,528 @@ fn virtual_locations_hide_the_actions_that_do_not_apply() {
     }
     assert!(super::is_virtual(&favorites_ctx));
     assert!(!super::is_trash(&favorites_ctx));
+}
+
+/// An in-memory provider with `NATIVE_TRANSFER`: files by path, a
+/// `transfer` that moves or copies the keys itself and records the call,
+/// and an `open_read` that counts the bytes handed out, so a test can
+/// prove a transfer streamed nothing. Copies answer `Unsupported` when
+/// `copies` is off, as an SFTP server would.
+mod native {
+    use std::collections::BTreeMap;
+    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+
+    use ext::{
+        Capabilities, ChangeStream, CopyOptions, EntryStream, LinkKind, ListOptions, Provider,
+        ReadHandle, RemoveMode, TransferMode, WriteHandle, WriteOptions, async_trait,
+    };
+    use futures::StreamExt as _;
+    use futures::stream;
+    use runtime::ProgressSink;
+    use types::{
+        Attrs, CancelToken, Entry, EntryId, EntryKind, Error, Location, Progress, ProviderId, VPath,
+    };
+
+    pub(super) const ID: ProviderId = ProviderId("store");
+
+    pub(super) struct Native {
+        files: Mutex<BTreeMap<String, Vec<u8>>>,
+        copies: bool,
+        /// Bytes handed out through `open_read`.
+        pub(super) read_bytes: Arc<AtomicU64>,
+        /// Every `transfer` call: the mode, the items, the target folder.
+        pub(super) transfers: Mutex<Vec<(TransferMode, Vec<String>, String)>>,
+    }
+
+    fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
+        m.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    fn key(loc: &Location) -> String {
+        loc.path.to_string_lossy().trim_end_matches('/').to_owned()
+    }
+
+    impl Native {
+        pub(super) fn new(copies: bool, files: &[(&str, &[u8])]) -> Arc<Self> {
+            Arc::new(Self {
+                files: Mutex::new(
+                    files
+                        .iter()
+                        .map(|(p, b)| ((*p).to_owned(), b.to_vec()))
+                        .collect(),
+                ),
+                copies,
+                read_bytes: Arc::new(AtomicU64::new(0)),
+                transfers: Mutex::new(Vec::new()),
+            })
+        }
+
+        pub(super) fn paths(&self) -> Vec<String> {
+            lock(&self.files).keys().cloned().collect()
+        }
+
+        fn entry(path: &str, size: Option<u64>) -> Entry {
+            Entry {
+                id: EntryId::new(ID, u128::from(path.len() as u64)),
+                name: path.rsplit('/').next().unwrap_or(path).to_owned(),
+                path: VPath::from(path),
+                kind: if size.is_some() {
+                    EntryKind::File
+                } else {
+                    EntryKind::Dir
+                },
+                size,
+                created: None,
+                modified: None,
+                accessed: None,
+                attrs: Attrs::empty(),
+                mime: None,
+            }
+        }
+    }
+
+    /// A reader that adds what it hands out to the provider's count.
+    struct Counted {
+        inner: std::io::Cursor<Vec<u8>>,
+        count: Arc<AtomicU64>,
+    }
+
+    impl tokio::io::AsyncRead for Counted {
+        fn poll_read(
+            mut self: std::pin::Pin<&mut Self>,
+            _cx: &mut std::task::Context<'_>,
+            buf: &mut tokio::io::ReadBuf<'_>,
+        ) -> std::task::Poll<std::io::Result<()>> {
+            let n = std::io::Read::read(&mut self.inner, buf.initialize_unfilled())?;
+            buf.advance(n);
+            self.count.fetch_add(n as u64, Ordering::SeqCst);
+            std::task::Poll::Ready(Ok(()))
+        }
+    }
+
+    #[async_trait]
+    impl Provider for Native {
+        fn id(&self) -> ProviderId {
+            ID
+        }
+        fn capabilities(&self, _loc: &Location) -> Capabilities {
+            Capabilities::WRITE | Capabilities::NATIVE_TRANSFER | Capabilities::REMOTE
+        }
+        fn list(&self, loc: &Location, _opts: ListOptions, _cancel: CancelToken) -> EntryStream {
+            let dir = key(loc);
+            let entries: Vec<Entry> = lock(&self.files)
+                .iter()
+                .filter(|(p, _)| p.rsplit_once('/').is_some_and(|(parent, _)| parent == dir))
+                .map(|(p, b)| Self::entry(p, Some(b.len() as u64)))
+                .collect();
+            stream::once(async move { Ok(entries) }).boxed()
+        }
+        async fn stat(&self, loc: &Location) -> Result<Entry, Error> {
+            let path = key(loc);
+            let files = lock(&self.files);
+            if let Some(bytes) = files.get(&path) {
+                return Ok(Self::entry(&path, Some(bytes.len() as u64)));
+            }
+            let prefix = format!("{path}/");
+            if path.is_empty() || files.keys().any(|k| k.starts_with(&prefix)) {
+                return Ok(Self::entry(&path, None));
+            }
+            Err(Error::NotFound)
+        }
+        async fn open_read(&self, loc: &Location) -> Result<ReadHandle, Error> {
+            let bytes = lock(&self.files)
+                .get(&key(loc))
+                .cloned()
+                .ok_or(Error::NotFound)?;
+            Ok(Box::new(Counted {
+                inner: std::io::Cursor::new(bytes),
+                count: Arc::clone(&self.read_bytes),
+            }))
+        }
+        async fn open_write(
+            &self,
+            loc: &Location,
+            _opts: WriteOptions,
+        ) -> Result<WriteHandle, Error> {
+            lock(&self.files).insert(key(loc), Vec::new());
+            Ok(Box::new(tokio::io::sink()))
+        }
+        async fn create_dir(&self, loc: &Location) -> Result<Entry, Error> {
+            Ok(Self::entry(&key(loc), None))
+        }
+        async fn rename(&self, _from: &Location, _to: &Location) -> Result<Entry, Error> {
+            Err(Error::Unsupported("no rename in the store"))
+        }
+        async fn remove(&self, loc: &Location, _mode: RemoveMode) -> Result<(), Error> {
+            let path = key(loc);
+            let prefix = format!("{path}/");
+            lock(&self.files).retain(|k, _| *k != path && !k.starts_with(&prefix));
+            Ok(())
+        }
+        async fn link(&self, _t: &Location, _at: &Location, _k: LinkKind) -> Result<Entry, Error> {
+            Err(Error::Unsupported("no links in the store"))
+        }
+        async fn copy(
+            &self,
+            from: &Location,
+            to: &Location,
+            _opts: CopyOptions,
+            progress: ProgressSink,
+            _cancel: CancelToken,
+        ) -> Result<(), Error> {
+            let bytes = lock(&self.files)
+                .get(&key(from))
+                .cloned()
+                .ok_or(Error::NotFound)?;
+            let total = bytes.len() as u64;
+            lock(&self.files).insert(key(to), bytes);
+            progress.report(Progress::Bytes {
+                done: total,
+                total: Some(total),
+            });
+            Ok(())
+        }
+        async fn transfer(
+            &self,
+            items: &[Location],
+            to: &Location,
+            mode: TransferMode,
+            _progress: ProgressSink,
+            _cancel: CancelToken,
+        ) -> Result<(), Error> {
+            if mode == TransferMode::Copy && !self.copies {
+                return Err(Error::Unsupported("the store cannot copy by itself"));
+            }
+            lock(&self.transfers).push((mode, items.iter().map(key).collect(), key(to)));
+            let dir = key(to);
+            let mut files = lock(&self.files);
+            for item in items {
+                let from = key(item);
+                let name = from.rsplit('/').next().unwrap_or(&from).to_owned();
+                let moved: Vec<(String, Vec<u8>)> = files
+                    .iter()
+                    .filter(|(k, _)| **k == from || k.starts_with(&format!("{from}/")))
+                    .map(|(k, v)| (k.clone(), v.clone()))
+                    .collect();
+                for (k, v) in moved {
+                    let rest = &k[from.len()..];
+                    files.insert(format!("{dir}/{name}{rest}"), v);
+                    if mode == TransferMode::Move {
+                        files.remove(&k);
+                    }
+                }
+            }
+            Ok(())
+        }
+        fn watch(&self, _loc: &Location) -> Result<ChangeStream, Error> {
+            Err(Error::Unsupported("no watches in the store"))
+        }
+    }
+}
+
+/// Acceptance (issue 21): a move or copy within one provider instance
+/// with `NATIVE_TRANSFER` goes through the provider's `transfer`, in one
+/// call per target folder, and streams nothing through `open_read`; the
+/// undo of the move goes back the same way.
+#[test]
+fn a_transfer_within_a_native_provider_streams_nothing() {
+    let h = harness();
+    let store = native::Native::new(
+        true,
+        &[
+            ("/bucket/a.bin", &[1u8; 4096][..]),
+            ("/bucket/tree/inner.bin", &[2u8; 2048][..]),
+            ("/other/.keep", b""),
+        ],
+    );
+    h.mounts.mount(Arc::clone(&store) as Arc<dyn ext::Provider>);
+    let loc = |path: &str| Location::new(native::ID, path);
+
+    let outcome = super::transfer(
+        &h.jobs,
+        Arc::clone(&h.mounts),
+        Arc::clone(&h.conflicts),
+        Arc::clone(&h.scheduler),
+        &[loc("/bucket/a.bin"), loc("/bucket/tree")],
+        &loc("/other"),
+        TransferKind::Move,
+    )
+    .unwrap_or_else(|e| panic!("{e}"));
+    h.settle();
+    let ActionOutcome::Undoable(command) = outcome else {
+        panic!("{outcome:?}");
+    };
+    assert_eq!(
+        store.paths(),
+        ["/other/.keep", "/other/a.bin", "/other/tree/inner.bin"]
+    );
+    {
+        let transfers = store
+            .transfers
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        assert_eq!(
+            *transfers,
+            [(
+                ext::TransferMode::Move,
+                vec!["/bucket/a.bin".to_owned(), "/bucket/tree".to_owned()],
+                "/other".to_owned()
+            )],
+            "one call for the whole selection"
+        );
+    }
+    assert_eq!(
+        store.read_bytes.load(std::sync::atomic::Ordering::SeqCst),
+        0,
+        "nothing streamed through the machine"
+    );
+
+    // The undo moves back natively too: the items of one target folder
+    // in one call.
+    command.undo(&h.jobs).unwrap_or_else(|e| panic!("{e}"));
+    h.settle();
+    assert_eq!(
+        store.paths(),
+        ["/bucket/a.bin", "/bucket/tree/inner.bin", "/other/.keep"]
+    );
+    assert_eq!(
+        store
+            .transfers
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .len(),
+        2
+    );
+    assert_eq!(
+        store.read_bytes.load(std::sync::atomic::Ordering::SeqCst),
+        0
+    );
+
+    // A copy goes the same way.
+    let outcome = super::transfer(
+        &h.jobs,
+        Arc::clone(&h.mounts),
+        Arc::clone(&h.conflicts),
+        Arc::clone(&h.scheduler),
+        &[loc("/bucket/a.bin")],
+        &loc("/other"),
+        TransferKind::Copy,
+    )
+    .unwrap_or_else(|e| panic!("{e}"));
+    h.settle();
+    assert!(matches!(outcome, ActionOutcome::Started(_)), "{outcome:?}");
+    assert!(store.paths().contains(&"/other/a.bin".to_owned()));
+    assert!(store.paths().contains(&"/bucket/a.bin".to_owned()));
+    assert_eq!(
+        store.read_bytes.load(std::sync::atomic::Ordering::SeqCst),
+        0
+    );
+}
+
+/// A provider that answers `Unsupported` for a mode (an SFTP server
+/// renames but cannot copy) gets the kernel's path for it; a transfer to
+/// another provider is never native.
+#[test]
+fn a_mode_the_provider_cannot_transfer_falls_back_to_the_kernel() {
+    let h = harness();
+    let store = native::Native::new(false, &[("/bucket/a.bin", &[7u8; 1024][..])]);
+    h.mounts.mount(Arc::clone(&store) as Arc<dyn ext::Provider>);
+    let loc = |path: &str| Location::new(native::ID, path);
+    super::transfer(
+        &h.jobs,
+        Arc::clone(&h.mounts),
+        Arc::clone(&h.conflicts),
+        Arc::clone(&h.scheduler),
+        &[loc("/bucket/a.bin")],
+        &loc("/other"),
+        TransferKind::Copy,
+    )
+    .unwrap_or_else(|e| panic!("{e}"));
+    h.settle();
+    assert_eq!(store.paths(), ["/bucket/a.bin", "/other/a.bin"]);
+    assert!(
+        store
+            .transfers
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .is_empty(),
+        "the refused call is not recorded as a transfer"
+    );
+
+    // Into the local disk: the streamed path, every byte read.
+    let dst = h.dir.path().join("down");
+    fs::create_dir_all(&dst).unwrap_or_else(|e| panic!("{e}"));
+    super::transfer(
+        &h.jobs,
+        Arc::clone(&h.mounts),
+        Arc::clone(&h.conflicts),
+        Arc::clone(&h.scheduler),
+        &[loc("/bucket/a.bin")],
+        &tests_local(&dst),
+        TransferKind::Copy,
+    )
+    .unwrap_or_else(|e| panic!("{e}"));
+    h.settle();
+    assert_eq!(
+        fs::read(dst.join("a.bin")).map(|b| b.len()).ok(),
+        Some(1024)
+    );
+    assert_eq!(
+        store.read_bytes.load(std::sync::atomic::Ordering::SeqCst),
+        1024
+    );
+}
+#[test]
+fn open_with_lists_the_platforms_applications_and_remembers_the_choice() {
+    let h = harness();
+    let dir = h.dir.path().join("docs");
+    fs::create_dir_all(&dir).unwrap_or_else(|e| panic!("{e}"));
+    write(&dir.join("a.txt"), "A");
+    let action = h.action("core.open_with");
+    assert!(matches!(
+        action.availability(&h.ctx(&dir, &[])),
+        Availability::Disabled(_)
+    ));
+    // The second fake application, remembered for .txt files.
+    h.ui.answer_form(vec![
+        ("app", ext::Value::Choice(1)),
+        ("remember", ext::Value::Check(true)),
+    ]);
+    h.run("core.open_with", h.ctx(&dir, &[&dir.join("a.txt")]));
+    let opened = h.fake.opened_with();
+    assert_eq!(opened.len(), 1);
+    assert_eq!(opened[0].0, dir.join("a.txt"));
+    assert_eq!(opened[0].1.id, platform::FAKE_APPLICATIONS[1].1);
+    let file = h.fake.config_dir().join(super::OPEN_WITH_FILE);
+    let text = fs::read_to_string(&file).unwrap_or_default();
+    assert!(text.contains("txt = \"fake-viewer\""), "{text}");
+
+    // Another program, typed.
+    h.ui.answer_form(vec![
+        ("app", ext::Value::Choice(9)),
+        ("command", ext::Value::Text("/opt/tool/view --fast".into())),
+    ]);
+    h.run("core.open_with", h.ctx(&dir, &[&dir.join("a.txt")]));
+    let opened = h.fake.opened_with();
+    assert_eq!(opened.len(), 2);
+    assert_eq!(opened[1].1.id, "/opt/tool/view --fast");
+    assert_eq!(opened[1].1.name, "view");
+}
+
+#[test]
+fn paste_as_link_makes_symlinks_and_undo_removes_them() {
+    let h = harness();
+    let (src, dst) = (h.dir.path().join("src"), h.dir.path().join("dst"));
+    fs::create_dir_all(&src).unwrap_or_else(|e| panic!("{e}"));
+    fs::create_dir_all(&dst).unwrap_or_else(|e| panic!("{e}"));
+    write(&src.join("a.txt"), "A");
+    fs::create_dir(src.join("sub")).unwrap_or_else(|e| panic!("{e}"));
+    let paste_link = h.action("core.paste_link");
+    assert!(matches!(
+        paste_link.availability(&h.ctx(&dst, &[])),
+        Availability::Disabled(_)
+    ));
+    h.run(
+        "core.copy",
+        h.ctx(&src, &[&src.join("a.txt"), &src.join("sub")]),
+    );
+    let outcome = h.run("core.paste_link", h.ctx(&dst, &[]));
+    let ActionOutcome::Undoable(command) = outcome else {
+        panic!("not undoable: {outcome:?}");
+    };
+    let link = dst.join("a.txt");
+    let meta = fs::symlink_metadata(&link).unwrap_or_else(|e| panic!("{e}"));
+    assert!(meta.file_type().is_symlink(), "a symlink was pasted");
+    assert_eq!(fs::read_link(&link).ok(), Some(src.join("a.txt")));
+    assert_eq!(fs::read_to_string(&link).ok().as_deref(), Some("A"));
+    assert!(fs::symlink_metadata(dst.join("sub")).is_ok_and(|m| m.file_type().is_symlink()));
+    assert!(src.join("a.txt").is_file(), "the source stays");
+
+    // A second paste takes a numbered name.
+    h.run("core.paste_link", h.ctx(&dst, &[]));
+    assert!(fs::symlink_metadata(dst.join("a (2).txt")).is_ok());
+
+    command.undo(&h.jobs).unwrap_or_else(|e| panic!("{e}"));
+    h.settle();
+    assert!(
+        fs::symlink_metadata(&link).is_err(),
+        "undo removed the link"
+    );
+    assert!(fs::symlink_metadata(dst.join("sub")).is_err());
+    assert!(src.join("a.txt").is_file(), "undo leaves the source");
+    command.redo(&h.jobs).unwrap_or_else(|e| panic!("{e}"));
+    h.settle();
+    assert!(fs::symlink_metadata(&link).is_ok());
+
+    // Create link… into a chosen folder.
+    let elsewhere = h.dir.path().join("elsewhere");
+    fs::create_dir_all(&elsewhere).unwrap_or_else(|e| panic!("{e}"));
+    h.ui.answer_form(vec![(
+        "folder",
+        ext::Value::Text(elsewhere.display().to_string()),
+    )]);
+    let outcome = h.run("core.create_link", h.ctx(&src, &[&src.join("a.txt")]));
+    assert!(matches!(outcome, ActionOutcome::Undoable(_)));
+    assert_eq!(
+        fs::read_link(elsewhere.join("a.txt")).ok(),
+        Some(src.join("a.txt"))
+    );
+}
+
+#[test]
+fn select_by_pattern_matches_globs_and_regular_expressions() {
+    let h = harness();
+    let dir = h.dir.path().join("docs");
+    fs::create_dir_all(&dir).unwrap_or_else(|e| panic!("{e}"));
+    for name in ["report.pdf", "notes.TXT", "draft.txt", "Image.png"] {
+        write(&dir.join(name), "x");
+    }
+    let all: Vec<_> = ["report.pdf", "notes.TXT", "draft.txt", "Image.png"]
+        .iter()
+        .map(|n| dir.join(n))
+        .collect();
+    let refs: Vec<&Path> = all.iter().map(PathBuf::as_path).collect();
+    let entries = h.entries(&refs);
+    let names = |selector: &ext::Selector| -> Vec<String> {
+        entries
+            .iter()
+            .filter(|e| (selector.matches)(e))
+            .map(|e| e.name.clone())
+            .collect()
+    };
+
+    h.ui.answer_form(vec![("pattern", ext::Value::Text("*.txt".into()))]);
+    let outcome = h.run("core.select_pattern", h.ctx(&dir, &[]));
+    let ActionOutcome::Select(selector) = outcome else {
+        panic!("not a selection: {outcome:?}");
+    };
+    assert!(selector.replace);
+    assert_eq!(names(&selector), ["notes.TXT", "draft.txt"]);
+
+    h.ui.answer_form(vec![
+        ("pattern", ext::Value::Text("^[a-z]+\\.(pdf|png)$".into())),
+        ("kind", ext::Value::Choice(1)),
+        ("mode", ext::Value::Choice(1)),
+    ]);
+    let outcome = h.run("core.select_pattern", h.ctx(&dir, &[]));
+    let ActionOutcome::Select(selector) = outcome else {
+        panic!("not a selection: {outcome:?}");
+    };
+    assert!(!selector.replace);
+    assert_eq!(names(&selector), ["report.pdf"]);
+
+    // A pattern that does not parse is reported, not applied.
+    h.ui.answer_form(vec![
+        ("pattern", ext::Value::Text("(".into())),
+        ("kind", ext::Value::Choice(1)),
+    ]);
+    let action = h.action("core.select_pattern");
+    assert!(action.run(h.ctx(&dir, &[]), &h.jobs, &h.ui).is_err());
+    // An empty pattern does nothing.
+    h.ui.answer_form(vec![("pattern", ext::Value::Text("  ".into()))]);
+    assert!(matches!(
+        h.run("core.select_pattern", h.ctx(&dir, &[])),
+        ActionOutcome::Done
+    ));
 }

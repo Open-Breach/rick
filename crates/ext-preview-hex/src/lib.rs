@@ -1,8 +1,9 @@
-//! The hex fallback: any file no other previewer claims, shown as a hex
-//! dump with an ASCII column.
+//! The hex view: a file's bytes as a hex dump with an ASCII column.
 //!
-//! The previewer scores every file at the lowest score, 1, so the highest
-//! score wins elsewhere and the hex view is what is left. `open` reads at
+//! The previewer claims no file on its own: it scores every file 0, so it
+//! is never an automatic fallback (a file nobody claims shows the pane's
+//! placeholder) and is chosen per type in settings like any other
+//! previewer (SPEC.md, Preview, *No previewer*). `open` reads at
 //! most [`WINDOW`] bytes; `render` returns the dump as a [`Frame::Text`] the
 //! pane lays out line by line, so a long dump costs only its visible rows;
 //! the dump doubles as the text layer, so find works over offsets, hex and
@@ -20,9 +21,10 @@
 use std::fmt::Write as _;
 use std::sync::Arc;
 
+use ext::Text;
 use ext::{
     API_VERSION, Capabilities, ControlId, ControlValue, Extension, Frame, Icon, InfoSection,
-    Manifest, Platforms, Points, PreviewControl, PreviewDoc, Previewer, Provider, Registry,
+    Manifest, Platforms, Points, PreviewControl, PreviewDoc, Previewer, Provider, Reads, Registry,
     RenderRequest, TextBlock, TextLayer, Transport, Version, async_trait,
 };
 use types::{CancelToken, Entry, Error, ExtId, Location};
@@ -30,9 +32,9 @@ use types::{CancelToken, Entry, Error, ExtId, Location};
 /// The extension id.
 pub const ID: ExtId = ExtId("preview-hex");
 
-/// The score for every file: the lowest that claims a file, so any other
-/// previewer wins.
-pub const SCORE: u8 = 1;
+/// The score for every file: none. The hex view claims nothing by itself
+/// and is chosen per type in settings.
+pub const SCORE: u8 = 0;
 
 /// How much of a file is read: large files show their start.
 pub const WINDOW: usize = 1024 * 1024;
@@ -66,6 +68,7 @@ impl HexPreview {
                 requires: Capabilities::empty(),
                 points: Points::PREVIEWER,
                 platforms: Platforms::ALL,
+                previews: &[],
             },
         }
     }
@@ -77,6 +80,7 @@ impl Extension for HexPreview {
     }
 
     fn register(&self, reg: &mut Registry) -> Result<(), Error> {
+        reg.translations(&[("en", include_str!("../locales/en.ftl"))]);
         reg.previewer(Arc::new(HexPreviewer));
         Ok(())
     }
@@ -92,6 +96,12 @@ pub struct HexPreviewer;
 impl Previewer for HexPreviewer {
     fn id(&self) -> ExtId {
         ID
+    }
+
+    /// The start of a file is enough: a remote file is served as a prefix
+    /// with *Load more*.
+    fn reads(&self) -> Reads {
+        Reads::Prefix
     }
 
     fn score(&self, _entry: &Entry, _sniff: &[u8]) -> u8 {
@@ -227,7 +237,7 @@ impl PreviewDoc for HexDoc {
         rows.push(("Rows".to_owned(), self.shown.div_ceil(ROW).to_string()));
         vec![InfoSection {
             id: "file",
-            title: "File info",
+            title: Text("preview-hex-file-info"),
             icon: Icon::Info,
             rows,
         }]
@@ -287,7 +297,7 @@ mod tests {
     }
 
     #[test]
-    fn every_file_scores_the_lowest_claim() {
+    fn no_file_is_claimed_by_itself() {
         let entry = Entry {
             id: types::EntryId::new(types::ProviderId("local"), 1),
             name: "x.bin".into(),

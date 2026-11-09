@@ -4,7 +4,7 @@
 
 Rick is a lens into your files. Point it at a folder and you see what's what: what every file is, what's inside it, what changed, what's where. Then you move things, rename things, sort things out, without ever leaving the window. One tool, written in Rust, identical on Linux, macOS and Windows, and built from modules so it only carries what *you* need.
 
-> Status: 0.1.0 is out, on all three platforms at once, as plain archives from the [Releases page](https://github.com/Open-Breach/rick/releases). 0.2 is under way: the native plugin host is in, so every non-essential feature becomes a file you can drop in or remove, and the first providers are plugins — archives, ISO and UDF images browsed in place, and the Trash as a location; the viewer, more previewers (Office, media, archives, CSV, 3D models), SFTP and cloud providers, search connectors and the remaining actions follow — the plan is in [SPEC.md](SPEC.md) under "Version 0.2 — scope". Star the repo, watch it, and come along for the ride.
+> Status: 0.2.0 is out, on all three platforms at once, as plain archives from the [Releases page](https://github.com/Open-Breach/rick/releases). It brought the native plugin host and the split: every non-essential feature is now a file you can drop in or remove. Archives, disk images, the Trash, SSH hosts and S3, Azure Blob and Google Cloud Storage accounts are providers; the Office, media, archive, markup (Markdown, HTML, CSV), hex and 3D previewers, the search connectors, Subversion and the compress, compare, console and bulk-rename actions are plugins; on Linux the tarball installer turns an archive into an installed application. The spec is [SPEC.md](SPEC.md). Star the repo, watch it, and come along for the ride.
 
 > **Use with caution.** Rick is written largely by an AI coding agent working from [SPEC.md](SPEC.md), with human review, a strict test gate and CI on all three platforms. That makes it fast to build and easy to audit, but it is still young software whose entire purpose is to move, rename and delete your files. Until 1.0, run it on data you have backed up, prefer *Move to trash* over *Delete permanently*, and treat every release as a preview. If it does something surprising, that's a bug: please report it.
 
@@ -12,17 +12,17 @@ Rick is a lens into your files. Point it at a folder and you see what's what: wh
 
 Most file managers show you names in a column and leave the rest to a dozen other programs: an image viewer, a PDF reader, an archive tool, a Git client, something to mount an ISO. Rick's job is to make that pile of tools unnecessary.
 
-Select a file and the preview pane shows it. Press Enter and the viewer opens it full size. No app launch, no switching windows:
+Select a file and the preview pane shows it, whatever it is: the pane is Rick's only viewer. Press Enter to open it with the application the system has for it. No app launch to look at a file, no switching windows:
 
 - **An image** opens scaled to fit, with 1:1, pan and zoom, EXIF and the camera data one click away.
 - **A Git repository** shows its status on every entry: badges, branch, ahead and behind, folder roll-ups. Commit, stash, pull, push, checkout and blame are in the right-click menu, only when you're inside a repo.
 - **A zip, 7z, tar or RAR** opens like a folder. Browse it, look at a file inside it, extract what you need, and never unpack the whole thing.
-- **An ISO** is browsable the same way, no mounting required.
+- **An ISO or a disk image** (raw, DMG, VHD, VHDX, VMDK, VDI, QCOW2) is browsable the same way, no mounting required; *Mount* in its menu hands it to the system where the system can mount it, and the mounted volume ejects from the side panel.
 - **A PDF** renders page by page with a searchable text layer; Office documents go through the same path when LibreOffice is installed.
 - **Text and code** come with syntax highlighting and pretty-print for JSON, XML and YAML, and a 500 MB log shows its first screen instantly because Rick never loads a file whole.
 - **Audio and video** play right in the pane, with the stream details in the info bar.
 
-Everything that doesn't fit a previewer falls back to a hex view, so nothing is a black box.
+A file no previewer claims shows its facts and whether a plugin for its type is there to switch on; a hex view is one setting away for the types you want it for.
 
 ## Then put it in order
 
@@ -71,26 +71,26 @@ The full story, from supported file systems to the trait signatures, lives in [S
 
 ## Try it
 
-Release archives for Linux (x64 and arm64), macOS (Apple silicon) and Windows (x64) are on the [Releases page](https://github.com/Open-Breach/rick/releases). Each archive holds the `rick` binary, the shared libraries it needs beside it (Rick's kernel and the Rust standard library, which the plugins share with it), the pdfium library for PDF previews, a `plugins/` folder with the Git, archive and trash plugins and the Office, media, archive and CSV previewers, the GStreamer runtime the media previewer plays through on macOS and Windows (on Linux it uses the system GStreamer: install `gstreamer1.0-plugins-good` and `gstreamer1.0-libav`, or your distribution's equivalents, for MP3 and H.264), the license, this README, the changelog and the third-party licenses; `SHA256SUMS.txt` has the checksums. Office previews need LibreOffice installed; without it the preview shows the document's metadata and says so. Unpack it anywhere and run it from the unpacked folder:
+Release archives for Linux (x64 and arm64), macOS (Apple silicon) and Windows (x64) are on the [Releases page](https://github.com/Open-Breach/rick/releases). Each archive holds the `rick` binary, the shared libraries it needs beside it (Rick's kernel and the Rust standard library, which the plugins share with it), the pdfium library for PDF previews, a `plugins/` folder with the Git, SVN, archive, trash, SSH, S3, Azure Blob and Google Cloud Storage plugins (the 7-Zip library for disk images beside the archive plugin, with its licence), the Office, media, archive, markup (Markdown, HTML, CSV), hex and 3D previewers, the subdirectory search and the platform's search-index connector (Windows Search, Spotlight, or Tracker and Baloo on Linux), the compress, compare, console and bulk-rename actions and the tarball installer (Linux only), the GStreamer runtime the media previewer plays through on macOS and Windows (on Linux it uses the system GStreamer: install `gstreamer1.0-plugins-good` and `gstreamer1.0-libav`, or your distribution's equivalents, for MP3 and H.264), the license, this README, the changelog and the third-party licenses; `SHA256SUMS.txt` has the checksums. Office previews need LibreOffice installed; without it the preview shows the document's metadata and says so. Unpack it anywhere and run it from the unpacked folder:
 
 ```bash
 # Linux
-tar xzf rick-0.1.0-linux-x64.tar.gz && ./rick-0.1.0-linux-x64/rick
+tar xzf rick-0.2.0-linux-x64.tar.gz && ./rick-0.2.0-linux-x64/rick
 ```
 
 ```bash
 # macOS
-tar xzf rick-0.1.0-macos-arm64.tar.gz && ./rick-0.1.0-macos-arm64/rick
+tar xzf rick-0.2.0-macos-arm64.tar.gz && ./rick-0.2.0-macos-arm64/rick
 ```
 
 ```powershell
 # Windows
-Expand-Archive rick-0.1.0-windows-x64.zip -DestinationPath . ; .\rick-0.1.0-windows-x64\rick.exe
+Expand-Archive rick-0.2.0-windows-x64.zip -DestinationPath . ; .\rick-0.2.0-windows-x64\rick.exe
 ```
 
-`rick --version` prints the version and the git hash it was built from; `rick --list-plugins` prints the plugins it found and whether each loaded; `rick <folder>` starts in that folder. Plugins live in the `plugins/` folder beside the binary and in a per-user one in the config directory (`~/.config/rick/plugins` on Linux, `~/Library/Application Support/Rick/plugins` on macOS, `%APPDATA%\Rick\plugins` on Windows); the Extensions screen in the burger menu lists them and switches each on or off for the next start. The archives are not signed or notarised yet (0.2 at the earliest): macOS may refuse a binary downloaded through a browser until you allow it under System Settings → Privacy & Security, or clear the quarantine flag with `xattr -dr com.apple.quarantine rick-0.1.0-macos-arm64`; Windows SmartScreen may warn the first time. The Linux builds need glibc 2.39 or later (Ubuntu 24.04). Intel Macs are not covered yet.
+`rick --version` prints the version and the git hash it was built from; `rick --list-plugins` prints the plugins it found and whether each loaded; `rick <folder>` starts in that folder. Plugins live in the `plugins/` folder beside the binary and in a per-user one in the config directory (`~/.config/rick/plugins` on Linux, `~/Library/Application Support/Rick/plugins` on macOS, `%APPDATA%\Rick\plugins` on Windows); the Extensions screen in the burger menu lists them and switches each on or off for the next start. The archives are not signed or notarised yet (planned for 0.3): macOS may refuse a binary downloaded through a browser until you allow it under System Settings → Privacy & Security, or clear the quarantine flag with `xattr -dr com.apple.quarantine rick-0.2.0-macos-arm64`; Windows SmartScreen may warn the first time. The Linux builds need glibc 2.39 or later (Ubuntu 24.04). Intel Macs are not covered yet.
 
-0.1 ships local files, tabs and panes, the core operations, previews for text, code, images and PDF, and the Git module. 0.2 starts with the plugin host: Git is the first plugin, archives (zip, tar, 7z, RAR, ISO and UDF images) and the Trash view are the next two, and media and Office follow as plugins. The numbers the release was measured against are in [BENCHMARKS.md](BENCHMARKS.md), the changes in [CHANGELOG.md](CHANGELOG.md).
+0.1 shipped local files, tabs and panes, the core operations, previews for text, code, images and PDF, and the Git module. 0.2.0 adds the plugin host and moves everything non-essential into plugins: Git first, then the archive (zip, tar, 7z, RAR, ISO and UDF images, the other disk images through the 7-Zip library), Trash, SSH and cloud (S3, Azure Blob, Google Cloud Storage) providers, the Office, media, archive, markup, hex and 3D previewers, the search connectors, Subversion and the compress, compare, console and bulk-rename actions; the core gained permissions in Properties, localisation (German first), the native drag source, Compute hash and, on Linux, the tarball installer. The numbers the release was measured against are in [BENCHMARKS.md](BENCHMARKS.md), the changes in [CHANGELOG.md](CHANGELOG.md).
 
 To build from source instead:
 
@@ -101,7 +101,7 @@ cargo xtask bundle
 ./target/debug/bundle/rick
 ```
 
-You need the stable Rust toolchain (`rust-toolchain.toml` pins it) and, on Linux, the usual Wayland/X11 development packages for an egui app. `cargo xtask bundle` builds the workspace and lays out the binary, the shared libraries it links and every plugin in `target/debug/bundle/` (`--release` for `target/release/bundle/`), which is also what the release archives contain; build and test the workspace as a whole (`cargo test --workspace`), since the kernel crates are shared libraries built once per feature set (QUESTIONS.md 81). PDF previews need pdfium beside the binary or in `RICK_PDFIUM_DIR`: the bundle copies it from there when set, a release archive brings it along. Media playback is built only with `--features ext-preview-media/gstreamer` (`cargo test --workspace --features ext-preview-media/gstreamer`, `cargo xtask bundle --features ext-preview-media/gstreamer`), which needs the GStreamer development files (`libgstreamer1.0-dev` and `libgstreamer-plugins-base1.0-dev` on Debian and Ubuntu, the official development package on macOS and Windows); without the feature the media previewer shows metadata only. `RICK_GSTREAMER_DIR` makes the bundle carry a GStreamer runtime on macOS and Windows (QUESTIONS.md 106). To write a plugin, start from `crates/plugins-native/README.md`.
+You need the stable Rust toolchain (`rust-toolchain.toml` pins it) and, on Linux, the usual Wayland/X11 development packages for an egui app. `cargo xtask bundle` builds the workspace and lays out the binary, the shared libraries it links and every plugin in `target/debug/bundle/` (`--release` for `target/release/bundle/`), which is also what the release archives contain; build and test the workspace as a whole (`cargo test --workspace`), since the kernel crates are shared libraries built once per feature set (QUESTIONS.md 81). PDF previews need pdfium beside the binary, or wherever the PDF previewer's `library` setting points (`preview-pdf.toml` in the config directory, which Rick fills in itself when it finds the library and which the preview pane's *Browse…* sets): the bundle copies the library from that setting when it is set, a release archive brings it along. Media playback is built only with `--features ext-preview-media/gstreamer` (`cargo test --workspace --features ext-preview-media/gstreamer`, `cargo xtask bundle --features ext-preview-media/gstreamer`), which needs the GStreamer development files (`libgstreamer1.0-dev` and `libgstreamer-plugins-base1.0-dev` on Debian and Ubuntu, the official development package on macOS and Windows); without the feature the media previewer shows metadata only. `RICK_GSTREAMER_DIR` makes the bundle carry a GStreamer runtime on macOS and Windows (QUESTIONS.md 106). To write a plugin, start from `crates/plugins-native/README.md`.
 
 ## Join in
 

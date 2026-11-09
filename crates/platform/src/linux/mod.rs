@@ -1,10 +1,21 @@
-//! Linux: the XDG trash specification, `xdg-open`, Rick's own properties
+//! Linux: the XDG trash specification, `xdg-open` and the desktop files of
+//! the MIME databases for Open with, `$TERMINAL` or a known emulator for
+//! the terminal, `pkexec` for a command run as root, Rick's own properties
 //! rows, `$XDG_CONFIG_HOME/rick`, the mount table from `/proc/mounts` with
-//! `udisksctl` for ejecting, XDG user-dirs and `recently-used.xbel`.
+//! `udisksctl` for ejecting and for mounting a disk image through a loop
+//! device, XDG user-dirs and `recently-used.xbel`, and drag and drop
+//! through a Wayland data device or XDND.
 
+mod apps;
+mod drag;
+mod elevate;
+mod mount;
+mod terminal;
 mod trash;
 mod user;
 mod volumes;
+mod wayland;
+mod x11;
 
 use std::fs;
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
@@ -16,9 +27,10 @@ use types::Error;
 use crate::Native;
 use crate::time::iso8601;
 use crate::traits::{
-    Chrome, ConfigDir, ControlsSide, DragSource, OpenWith, Properties, PropertiesOutcome,
-    RecentItem, RecentlyUsed, StandardFolder, StandardFolders, Trash, TrashedItem, Volume, Volumes,
-    WindowChrome,
+    Application, Chrome, ConfigDir, ControlsSide, DragSource, DropTarget, Elevate, ElevatedOutput,
+    ImageFormat, IncomingFiles, Mount, OpenWith, Point, Properties, PropertiesOutcome, RecentItem,
+    RecentlyUsed, StandardFolder, StandardFolders, Terminal, Trash, TrashedItem, Volume, Volumes,
+    WindowChrome, WindowRef,
 };
 
 impl Trash for Native {
@@ -50,6 +62,17 @@ impl Volumes for Native {
 
     fn eject(&self, volume: &Volume) -> Result<(), Error> {
         volumes::eject(volume)
+    }
+}
+
+impl Mount for Native {
+    /// ISO and raw images, through `udisksctl loop-setup`.
+    fn mountable(&self) -> &'static [ImageFormat] {
+        crate::NATIVE_MOUNTABLE
+    }
+
+    fn mount_image(&self, path: &Path) -> Result<Volume, Error> {
+        mount::mount(path)
     }
 }
 
@@ -110,6 +133,30 @@ impl OpenWith for Native {
         }
         let parent = path.parent().unwrap_or(&path);
         spawn_detached("xdg-open", &[parent.as_os_str()])
+    }
+
+    fn applications(&self, path: &Path) -> Result<Vec<Application>, Error> {
+        apps::applications(path)
+    }
+
+    fn open_with(&self, path: &Path, app: &Application) -> Result<(), Error> {
+        apps::open_with(path, app)
+    }
+}
+
+impl Terminal for Native {
+    fn open_terminal(&self, dir: &Path, command: Option<&[String]>) -> Result<(), Error> {
+        terminal::open(dir, command)
+    }
+}
+
+impl Elevate for Native {
+    fn run_elevated(
+        &self,
+        program: &Path,
+        args: &[std::ffi::OsString],
+    ) -> Result<ElevatedOutput, Error> {
+        elevate::run(program, args)
     }
 }
 
@@ -228,17 +275,35 @@ impl Chrome for Native {
 }
 
 impl DragSource for Native {
-    /// Not available yet: a Wayland drag source needs the window's
-    /// `wl_data_device` and the serial of the press that started the drag,
-    /// an X11 one the XDND handshake on the window; `winit` 0.30 behind
-    /// `eframe` 0.36 keeps both to itself and exposes drop reception only
-    /// (QUESTIONS.md). The URIs are computed so a caller can log them.
-    fn start_drag(&self, paths: &[PathBuf]) -> Result<(), Error> {
-        let uris: Vec<String> = paths.iter().map(|p| crate::paths::file_uri(p)).collect();
-        tracing::debug!(?uris, "platform drag not started");
-        Err(Error::Unsupported(
-            "starting a drag needs the Wayland data device or XDND, which winit does not expose",
-        ))
+    /// Connects to the display the window is on: on Wayland, Rick's own
+    /// seat and pointer start watching for the button press a drag needs.
+    fn attach(&self, window: &WindowRef, wake: std::sync::Arc<dyn Fn() + Send + Sync>) {
+        drag::attach(window, wake);
+    }
+
+    /// A `wl_data_source` offering `text/uri-list`, started from winit's
+    /// surface with the press serial Rick's own pointer saw; or an XDND
+    /// source on X11, moved along by [`drag_in_progress`](Self::drag_in_progress).
+    fn start_drag(&self, window: &WindowRef, paths: &[PathBuf]) -> Result<(), Error> {
+        drag::start_drag(window, paths)
+    }
+
+    fn drag_in_progress(&self) -> bool {
+        drag::drag_in_progress()
+    }
+}
+
+impl DropTarget for Native {
+    /// On Wayland, the files Rick's own data device received; nothing on
+    /// X11, where winit reports them.
+    fn incoming_files(&self) -> IncomingFiles {
+        drag::incoming_files()
+    }
+
+    /// The data device's last motion over the window on Wayland; the
+    /// pointer queried on X11.
+    fn drop_position(&self, window: &WindowRef) -> Option<Point> {
+        drag::drop_position(window)
     }
 }
 
@@ -283,10 +348,17 @@ mod tests {
     }
 
     #[test]
-    fn the_drag_source_says_why_it_cannot_start() {
+    fn without_a_display_nothing_drags_and_nothing_arrives() {
+        // The fake window of the fake's tests is of no Linux backend, so the
+        // native platform cannot connect and says so.
+        let window = crate::fake::test_window();
+        Native.attach(&window, std::sync::Arc::new(|| {}));
         assert!(matches!(
-            Native.start_drag(&[PathBuf::from("/tmp/x")]),
+            Native.start_drag(&window, &[PathBuf::from("/tmp/x")]),
             Err(Error::Unsupported(_))
         ));
+        assert!(!Native.drag_in_progress());
+        assert_eq!(Native.incoming_files(), IncomingFiles::default());
+        assert_eq!(Native.drop_position(&window), None);
     }
 }

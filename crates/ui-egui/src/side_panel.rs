@@ -11,15 +11,27 @@
 //! dragged from a file list becomes a place at the insertion line. Files
 //! are refused anywhere in the panel. The three titled sections fold with a
 //! chevron; their header opens the section's overview (`rick://machine`,
-//! `rick://network`, `rick://cloud`) and their rows a root. With the panel
-//! focused, Up and Down move, Enter opens, Mod+Enter opens in a new tab.
+//! `rick://network`, `rick://cloud`) and their rows a root. The Network and
+//! Cloud sections list one row per connection of the network and cloud
+//! provider plugins; the header's context menu and the *Add…* row of an
+//! empty section offer *Add connection…* per plugin, which opens the
+//! dialogue the plugin's `Connector` describes, and a connection row's
+//! context menu offers *Connect*, *Disconnect* and *Remove connection*.
+//! With the panel focused, Up and Down move, Enter opens, Mod+Enter opens
+//! in a new tab.
 
+use ext::t;
 use std::collections::BTreeSet;
 
-use app::{App, Command};
-use ext::Level;
+use std::sync::Arc;
+
+use app::{App, Command, ConnectionOp};
+use ext::{
+    ActionCtx, ActionGroup, Availability, ConnectionField, ConnectionFieldKind, Connector,
+    Invocation, Level,
+};
 use model::{PaneId, Place, Section, SidePanel, SidePanelChange, Volume, VolumeKind, WindowId};
-use types::Location;
+use types::{Entry, Location, ProviderId};
 use vfs_rick::Virtual;
 
 use crate::dnd::{Dnd, Target, Zone};
@@ -49,8 +61,133 @@ pub struct PlaceEdit {
     focus: bool,
 }
 
+/// The *Add connection…* and *Edit…* dialogue of a network or cloud
+/// provider.
+#[derive(Debug, Clone)]
+pub struct ConnectionDialog {
+    /// The provider the connection is for.
+    pub provider: ProviderId,
+    /// The provider's name in the title.
+    pub title: String,
+    /// The connection's name as typed.
+    pub name: String,
+    /// The fields with their values as typed; a `Bool` holds `true` or
+    /// `false`, a `Choice` the chosen option's text.
+    pub values: Vec<(ConnectionField, String)>,
+    /// What stopped the last OK.
+    pub error: Option<String>,
+    /// Editing an existing connection: the name is fixed and a secret left
+    /// empty keeps the one in the keychain.
+    pub editing: bool,
+    focus: bool,
+}
+
+impl ConnectionDialog {
+    /// The dialogue for `connector`, every field at its default.
+    #[must_use]
+    pub fn new(connector: &dyn Connector) -> Self {
+        let schema = connector.schema();
+        Self {
+            provider: connector.provider(),
+            title: schema.title.get(),
+            name: String::new(),
+            values: schema
+                .fields
+                .iter()
+                .map(|field| {
+                    let value = match &field.kind {
+                        ConnectionFieldKind::Text { default } => default.clone(),
+                        ConnectionFieldKind::Integer { default, .. } => default.to_string(),
+                        ConnectionFieldKind::Bool { default } => default.to_string(),
+                        ConnectionFieldKind::Choice { options, default } => {
+                            options.get(*default).cloned().unwrap_or_default()
+                        }
+                        ConnectionFieldKind::Path | ConnectionFieldKind::Secret => String::new(),
+                    };
+                    (field.clone(), value)
+                })
+                .collect(),
+            error: None,
+            editing: false,
+            focus: true,
+        }
+    }
+
+    /// The *Edit…* dialogue for the connection `entry` of `connector`: the
+    /// name fixed, the fields as the settings hold them, the secrets empty
+    /// (an empty secret keeps the keychain's).
+    #[must_use]
+    pub fn edit(connector: &dyn Connector, entry: &model::ConnectionEntry) -> Self {
+        let mut dialog = Self::new(connector);
+        dialog.name.clone_from(&entry.name);
+        dialog.editing = true;
+        for (field, value) in &mut dialog.values {
+            if field.kind == ConnectionFieldKind::Secret {
+                continue;
+            }
+            *value = entry.settings.get(field.key).cloned().unwrap_or_default();
+        }
+        dialog
+    }
+
+    /// The command OK sends.
+    ///
+    /// # Errors
+    ///
+    /// What stops it, to show in the dialogue: an empty name or one that is
+    /// taken, a required field without a value, a number out of its bounds.
+    pub fn command(&self, taken: &[String]) -> Result<Command, String> {
+        let name = self.name.trim();
+        if name.is_empty() {
+            return Err("The connection needs a name".to_owned());
+        }
+        if name.contains(['/', '\\']) {
+            return Err("The name cannot contain a slash".to_owned());
+        }
+        if !self.editing && taken.iter().any(|t| t == name) {
+            return Err(format!("A connection called {name} exists already"));
+        }
+        let mut values = Vec::with_capacity(self.values.len());
+        for (field, value) in &self.values {
+            let value = value.trim();
+            if value.is_empty() {
+                // An edited connection keeps the secret it has.
+                if field.required && !(self.editing && field.kind == ConnectionFieldKind::Secret) {
+                    return Err(format!("{} needs a value", field.label));
+                }
+                continue;
+            }
+            if let ConnectionFieldKind::Integer { min, max, .. } = field.kind {
+                match value.parse::<i64>() {
+                    Ok(n) if (min..=max).contains(&n) => {}
+                    _ => {
+                        return Err(format!(
+                            "{} must be a number from {min} to {max}",
+                            field.label
+                        ));
+                    }
+                }
+            }
+            values.push((field.key.to_owned(), value.to_owned()));
+        }
+        if self.editing {
+            Ok(Command::EditConnection {
+                provider: self.provider,
+                name: name.to_owned(),
+                values,
+            })
+        } else {
+            Ok(Command::AddConnection {
+                provider: self.provider,
+                name: name.to_owned(),
+                values,
+            })
+        }
+    }
+}
+
 /// The panel's own state: the keyboard focus, a reorder in progress, the
-/// Edit… dialogue.
+/// Edit… dialogue, the *Add connection…* dialogue.
 #[derive(Debug, Default)]
 pub struct SidePanelState {
     /// The row the keyboard is on.
@@ -63,6 +200,8 @@ pub struct SidePanelState {
     reorder: Option<usize>,
     /// The Edit… dialogue, when open.
     pub edit: Option<PlaceEdit>,
+    /// The *Add connection…* dialogue, when open.
+    pub connection: Option<ConnectionDialog>,
 }
 
 impl SidePanelState {
@@ -201,6 +340,426 @@ pub fn show(
             }
         });
     edit_dialog(ui.ctx(), app, state, requests);
+    connection_dialog(ui.ctx(), app, state, requests);
+}
+
+/// The connectors whose provider belongs to `section`: the cloud plugins
+/// under Cloud, the network plugins under Network, none under This
+/// Machine.
+fn connectors_of(app: &App, section: Section) -> Vec<Arc<dyn Connector>> {
+    app.registry()
+        .connectors()
+        .iter()
+        .filter(|c| match section {
+            Section::Machine => false,
+            Section::Network => vfs_rick::is_network_provider(c.provider()),
+            Section::Cloud => vfs_rick::is_cloud_provider(c.provider()),
+        })
+        .cloned()
+        .collect()
+}
+
+/// Opens the *Add connection…* dialogue of `provider`; the shell calls
+/// this for `Request::AddConnection`.
+pub fn begin_connection(state: &mut SidePanelState, app: &App, provider: ProviderId) {
+    if let Some(connector) = app.registry().connector_of(provider) {
+        state.connection = Some(ConnectionDialog::new(&**connector));
+    }
+}
+
+/// Opens the *Edit…* dialogue of the connection `name` of `provider`; the
+/// shell calls this for `Request::EditConnection`.
+pub fn begin_edit_connection(
+    state: &mut SidePanelState,
+    app: &App,
+    provider: ProviderId,
+    name: &str,
+) {
+    let Some(connector) = app.registry().connector_of(provider) else {
+        return;
+    };
+    let Some(entry) = app
+        .model()
+        .settings
+        .connections
+        .iter()
+        .find(|c| c.provider == provider.0 && c.name == name)
+    else {
+        return;
+    };
+    state.connection = Some(ConnectionDialog::edit(&**connector, entry));
+}
+
+/// Whether the application keeps a connection `name` of `provider` in its
+/// settings: those rows can be edited and removed; a row the provider lists
+/// from elsewhere (a host of `~/.ssh/config`) cannot.
+fn is_rick_connection(app: &App, provider: ProviderId, name: &str) -> bool {
+    app.model()
+        .settings
+        .connections
+        .iter()
+        .any(|c| c.provider == provider.0 && c.name == name)
+}
+
+/// The names of `provider`'s connections, which a new one cannot take.
+fn connection_names(app: &App, provider: ProviderId) -> Vec<String> {
+    app.model()
+        .settings
+        .connections
+        .iter()
+        .filter(|c| c.provider == provider.0)
+        .map(|c| c.name.clone())
+        .collect()
+}
+
+/// The *Add connection…* dialogue: the name, the connector's fields, OK
+/// and Cancel.
+fn connection_dialog(
+    ctx: &egui::Context,
+    app: &App,
+    state: &mut SidePanelState,
+    requests: &mut Vec<Request>,
+) {
+    let Some(dialog) = state.connection.as_mut() else {
+        return;
+    };
+    let taken = connection_names(app, dialog.provider);
+    let mut open = true;
+    let mut done: Option<bool> = None;
+    let title = if dialog.editing {
+        format!("Edit {} connection", dialog.title)
+    } else {
+        format!("Add {} connection", dialog.title)
+    };
+    egui::Window::new(title)
+        .id(egui::Id::new("add-connection"))
+        .collapsible(false)
+        .resizable(false)
+        .open(&mut open)
+        .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
+        .show(ctx, |ui| {
+            egui::Grid::new("add-connection-fields")
+                .num_columns(2)
+                .spacing(egui::vec2(12.0, 6.0))
+                .show(ui, |ui| {
+                    ui.label(t!("compare-name"));
+                    let name = ui.add_enabled(
+                        !dialog.editing,
+                        egui::TextEdit::singleline(&mut dialog.name).desired_width(260.0),
+                    );
+                    if dialog.focus {
+                        name.request_focus();
+                        dialog.focus = false;
+                    }
+                    ui.end_row();
+                    let editing = dialog.editing;
+                    for (field, value) in &mut dialog.values {
+                        connection_field(ui, field, value, editing);
+                        ui.end_row();
+                    }
+                });
+            if let Some(error) = &dialog.error {
+                ui.add_space(4.0);
+                ui.colored_label(ui.visuals().error_fg_color, error);
+            }
+            ui.add_space(6.0);
+            ui.horizontal(|ui| {
+                let enter = ui.input(|i| i.key_pressed(egui::Key::Enter));
+                if ui.button(t!("ok")).clicked() || enter {
+                    done = Some(true);
+                }
+                if ui.button(t!("cancel")).clicked()
+                    || ui.input(|i| i.key_pressed(egui::Key::Escape))
+                {
+                    done = Some(false);
+                }
+            });
+        });
+    if !open {
+        done = Some(false);
+    }
+    match done {
+        Some(true) => match dialog.command(&taken) {
+            Ok(command) => {
+                requests.push(Request::Command(command));
+                state.connection = None;
+            }
+            Err(error) => dialog.error = Some(error),
+        },
+        Some(false) => state.connection = None,
+        None => {}
+    }
+}
+
+/// One row of the connection dialogue: the label, then the field as its
+/// kind asks: a masked text for a secret (left empty while editing, it
+/// keeps the keychain's), a checkbox, a combo box for a choice, a text
+/// field for the rest.
+fn connection_field(ui: &mut egui::Ui, field: &ConnectionField, value: &mut String, editing: bool) {
+    let label = if field.required {
+        format!("{} *", field.label)
+    } else {
+        field.label.get()
+    };
+    ui.label(label);
+    match &field.kind {
+        ConnectionFieldKind::Secret => {
+            let hint = if editing { "(unchanged)" } else { "" };
+            ui.add(
+                egui::TextEdit::singleline(value)
+                    .password(true)
+                    .hint_text(hint)
+                    .desired_width(260.0),
+            );
+        }
+        ConnectionFieldKind::Bool { .. } => {
+            let mut on = value == "true";
+            if ui.checkbox(&mut on, "").changed() {
+                *value = on.to_string();
+            }
+        }
+        ConnectionFieldKind::Choice { options, .. } => {
+            let shown = if value.is_empty() {
+                "(none)"
+            } else {
+                value.as_str()
+            };
+            egui::ComboBox::from_id_salt(("add-connection-choice", field.key))
+                .selected_text(shown.to_owned())
+                .width(260.0)
+                .show_ui(ui, |ui| {
+                    for option in options {
+                        let label = if option.is_empty() {
+                            "(none)"
+                        } else {
+                            option.as_str()
+                        };
+                        if ui.selectable_label(value == option, label).clicked() {
+                            value.clone_from(option);
+                        }
+                    }
+                });
+        }
+        ConnectionFieldKind::Text { .. }
+        | ConnectionFieldKind::Integer { .. }
+        | ConnectionFieldKind::Path => {
+            ui.add(egui::TextEdit::singleline(value).desired_width(260.0));
+        }
+    }
+}
+
+/// The *Add connection…* entries of a section's menu, one per provider
+/// plugin of the section.
+fn add_connection_items(
+    ui: &mut egui::Ui,
+    requests: &mut Vec<Request>,
+    connectors: &[Arc<dyn Connector>],
+) {
+    for connector in connectors {
+        if ui
+            .button(format!(
+                "{} Add {} connection…",
+                icons::ADD,
+                connector.schema().title
+            ))
+            .clicked()
+        {
+            requests.push(Request::AddConnection(connector.provider()));
+            ui.close();
+        }
+    }
+}
+
+/// The context-menu entries of a connection row: *Connect* or
+/// *Disconnect*, and for a connection the application keeps *Edit…* and
+/// *Remove connection*.
+fn connection_items(
+    ui: &mut egui::Ui,
+    requests: &mut Vec<Request>,
+    connector: &dyn Connector,
+    name: &str,
+    editable: bool,
+) {
+    let provider = connector.provider();
+    if connector.is_connected(name) {
+        if ui
+            .button(format!("{} Disconnect", icons::UNLINKED))
+            .clicked()
+        {
+            requests.push(Request::Command(Command::Connection {
+                provider,
+                name: name.to_owned(),
+                op: ConnectionOp::Disconnect,
+            }));
+            ui.close();
+        }
+    } else if ui.button(format!("{} Connect", icons::LINKED)).clicked() {
+        requests.push(Request::Command(Command::Connection {
+            provider,
+            name: name.to_owned(),
+            op: ConnectionOp::Connect,
+        }));
+        ui.close();
+    }
+    if !editable {
+        return;
+    }
+    if ui.button(format!("{} Edit…", icons::EDIT)).clicked() {
+        requests.push(Request::EditConnection(provider, name.to_owned()));
+        ui.close();
+    }
+    if ui
+        .button(format!("{} Remove connection", icons::TRASH))
+        .clicked()
+    {
+        requests.push(Request::Command(Command::Connection {
+            provider,
+            name: name.to_owned(),
+            op: ConnectionOp::Remove,
+        }));
+        ui.close();
+    }
+}
+
+/// *Always preview* in a connection row's menu, for a provider whose
+/// editor has the switch (`preview_always` in its schema): the preview
+/// size cap on or off for this source, as its connection entry has it.
+fn preview_always_item(
+    ui: &mut egui::Ui,
+    app: &App,
+    requests: &mut Vec<Request>,
+    connector: &dyn Connector,
+    name: &str,
+) {
+    let provider = connector.provider();
+    if connector.schema().field(app::PREVIEW_ALWAYS).is_none() {
+        return;
+    }
+    let mut on = app
+        .model()
+        .settings
+        .connections
+        .iter()
+        .find(|c| c.provider == provider.0 && c.name == name)
+        .and_then(|c| c.settings.get(app::PREVIEW_ALWAYS))
+        .is_some_and(|v| v == "true");
+    if ui.checkbox(&mut on, t!("preview-always-preview")).changed() {
+        requests.push(Request::Command(Command::SetPreviewAlways {
+            provider,
+            name: name.to_owned(),
+            on,
+        }));
+        ui.close();
+    }
+}
+
+/// The entries of the extension groups whose actions apply to a row's
+/// location, as the context menu of a folder would list them: *Open console
+/// here* and *Open in external terminal* on an SSH host.
+fn row_actions(ui: &mut egui::Ui, app: &App, requests: &mut Vec<Request>, ctx: &ActionCtx) {
+    let actions = app.registry().actions();
+    let mut groups: Vec<&'static str> = actions
+        .iter()
+        .filter_map(|a| match a.group() {
+            ActionGroup::Extension(name) => Some(name),
+            ActionGroup::Core => None,
+        })
+        .collect();
+    groups.sort_unstable();
+    groups.dedup();
+    for group in groups {
+        let members: Vec<_> = actions
+            .iter()
+            .filter(|a| {
+                a.group() == ActionGroup::Extension(group)
+                    && a.availability(ctx) == Availability::Enabled
+            })
+            .collect();
+        if members.is_empty() {
+            continue;
+        }
+        ui.separator();
+        for action in members {
+            if ui.button(action.label()).clicked() {
+                requests.push(Request::RunAction {
+                    action: action.id(),
+                    ctx: ctx.clone(),
+                });
+                ui.close();
+            }
+        }
+    }
+}
+
+/// The connection a row of a provider's root stands for: its name, when
+/// the row is a direct child of the root and the provider has a connector.
+fn connection_of<'a>(app: &'a App, entry: &Entry) -> Option<(&'a Arc<dyn Connector>, String)> {
+    let connector = app.registry().connector_of(entry.id.provider)?;
+    let bytes = entry.path.as_bytes();
+    let trimmed = bytes
+        .strip_prefix(b"/")
+        .or_else(|| bytes.strip_prefix(b"\\"))
+        .unwrap_or(bytes);
+    if trimmed.is_empty() || trimmed.iter().any(|b| matches!(b, b'/' | b'\\')) {
+        return None;
+    }
+    Some((connector, String::from_utf8_lossy(trimmed).into_owned()))
+}
+
+/// A row for a connection or an account a provider lists at its root.
+#[allow(clippy::too_many_arguments)]
+fn provider_row(
+    ui: &mut egui::Ui,
+    app: &App,
+    state: &mut SidePanelState,
+    requests: &mut Vec<Request>,
+    pane: PaneId,
+    section: Section,
+    index: usize,
+    entry: &Entry,
+) {
+    let location = Location::new(entry.id.provider, entry.path.clone());
+    let glyph = match section {
+        Section::Cloud => icons::CLOUD,
+        _ => icons::NETWORK,
+    };
+    let button = egui::Button::new(format!("{glyph} {}", entry.name))
+        .frame(false)
+        .truncate();
+    let connection = connection_of(app, entry);
+    let action_ctx = ActionCtx {
+        pane,
+        location: location.clone(),
+        selection: Vec::new(),
+        invoked_from: Invocation::ContextMenu,
+        other: None,
+    };
+    let mut extra = |ui: &mut egui::Ui, requests: &mut Vec<Request>| {
+        if let Some((connector, name)) = &connection {
+            let editable = is_rick_connection(app, connector.provider(), name);
+            connection_items(ui, requests, &***connector, name, editable);
+            preview_always_item(ui, app, requests, &***connector, name);
+        }
+        row_actions(ui, app, requests, &action_ctx);
+    };
+    let response = location_row(
+        ui,
+        state,
+        requests,
+        pane,
+        egui::Id::new(("side-provider-row", section.name(), index)),
+        button,
+        &location,
+        &mut extra,
+    );
+    if let Some((connector, name)) = &connection {
+        let state_text = if connector.is_connected(name) {
+            "connected"
+        } else {
+            "not connected"
+        };
+        response.on_hover_text(format!("{} · {state_text}", entry.id.provider));
+    }
 }
 
 /// Paints the keyboard focus around a row when the panel has it.
@@ -245,7 +804,7 @@ fn location_row(
         state.take_focus(id);
     }
     response.context_menu(|ui| {
-        if ui.button("Open in new tab").clicked() {
+        if ui.button(t!("open-in-new-tab")).clicked() {
             open(requests, pane, location.clone(), true);
             ui.close();
         }
@@ -309,7 +868,7 @@ fn places(
                 state_edit_start(requests, index, place);
                 ui.close();
             }
-            if ui.button("Remove").clicked() {
+            if ui.button(t!("remove")).clicked() {
                 requests.push(Request::Command(Command::PlaceRemove(index)));
                 ui.close();
             }
@@ -390,7 +949,7 @@ fn places(
         ui.ctx().request_repaint();
     }
     if rows.is_empty() {
-        ui.weak("Drop a folder here to add a place.");
+        ui.weak(t!("panel-drop-a-folder-here-to"));
     }
 }
 
@@ -431,21 +990,21 @@ fn edit_dialog(
     }
     let mut open = true;
     let mut done: Option<bool> = None;
-    egui::Window::new("Edit place")
+    egui::Window::new(t!("panel-edit-place"))
         .id(egui::Id::new("edit-place"))
         .collapsible(false)
         .resizable(false)
         .open(&mut open)
         .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
         .show(ctx, |ui| {
-            ui.label("Title");
+            ui.label(t!("panel-title"));
             let title = ui.text_edit_singleline(&mut edit.title);
             if edit.focus {
                 title.request_focus();
                 edit.focus = false;
             }
             ui.add_space(6.0);
-            ui.label("Icon");
+            ui.label(t!("panel-icon"));
             egui::ScrollArea::vertical()
                 .max_height(160.0)
                 .show(ui, |ui| {
@@ -465,10 +1024,12 @@ fn edit_dialog(
             ui.add_space(6.0);
             ui.horizontal(|ui| {
                 let enter = title.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
-                if ui.button("OK").clicked() || enter {
+                if ui.button(t!("ok")).clicked() || enter {
                     done = Some(true);
                 }
-                if ui.button("Cancel").clicked() || ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+                if ui.button(t!("cancel")).clicked()
+                    || ui.input(|i| i.key_pressed(egui::Key::Escape))
+                {
                     done = Some(false);
                 }
             });
@@ -532,6 +1093,7 @@ fn titled_section(
         let button = egui::Button::new(egui::RichText::new(section.title()).strong())
             .frame(false)
             .truncate();
+        let connectors = connectors_of(app, section);
         location_row(
             ui,
             state,
@@ -540,9 +1102,9 @@ fn titled_section(
             id,
             button,
             &overview,
-            &mut |_, _| {},
+            &mut |ui, requests| add_connection_items(ui, requests, &connectors),
         )
-        .on_hover_text(format!("Open the {} overview", section.title()));
+        .on_hover_text(t!("panel-open-overview", section = section.title()));
     });
     if folded {
         return;
@@ -562,46 +1124,17 @@ fn titled_section(
                 volume_row(ui, state, requests, pane, volume);
             }
         }
-        if section == Section::Network {
-            for id in &app.model().network_providers {
-                any = true;
-                let location = Location::new(*id, "/");
-                let button = egui::Button::new(format!("{} {}", icons::NETWORK, id))
-                    .frame(false)
-                    .truncate();
-                location_row(
-                    ui,
-                    state,
-                    requests,
-                    pane,
-                    egui::Id::new(("side-network-provider", id.0)),
-                    button,
-                    &location,
-                    &mut |_, _| {},
-                );
-            }
-        }
-        if section == Section::Cloud {
-            for (index, entry) in app.model().cloud.iter().enumerate() {
-                any = true;
-                let location = Location::new(entry.id.provider, entry.path.clone());
-                let button = egui::Button::new(format!("{} {}", icons::CLOUD, entry.name))
-                    .frame(false)
-                    .truncate();
-                location_row(
-                    ui,
-                    state,
-                    requests,
-                    pane,
-                    egui::Id::new(("side-cloud", index)),
-                    button,
-                    &location,
-                    &mut |_, _| {},
-                );
-            }
+        let rows: &[Entry] = match section {
+            Section::Machine => &[],
+            Section::Network => &app.model().network,
+            Section::Cloud => &app.model().cloud,
+        };
+        for (index, entry) in rows.iter().enumerate() {
+            any = true;
+            provider_row(ui, app, state, requests, pane, section, index, entry);
         }
         if !any {
-            add_row(ui, state, requests, section);
+            add_row(ui, app, state, requests, section);
         }
     });
 }
@@ -653,33 +1186,51 @@ fn volume_row(
 }
 
 /// The *Add…* row of an empty section: how connections and accounts are
-/// created, once a provider that makes them is installed.
+/// created. With one provider plugin of the section it opens that
+/// plugin's *Add connection…* dialogue, with several it offers one entry
+/// per plugin, and without any it says what would create them.
 fn add_row(
     ui: &mut egui::Ui,
+    app: &App,
     state: &mut SidePanelState,
     requests: &mut Vec<Request>,
     section: Section,
 ) {
     let id = egui::Id::new(("side-add", section.name()));
+    let connectors = connectors_of(app, section);
+    let label = if connectors.len() == 1 {
+        format!("{} Add connection…", icons::ADD)
+    } else {
+        format!("{} Add…", icons::ADD)
+    };
     let response = ui.add(
-        egui::Button::new(egui::RichText::new(format!("{} Add…", icons::ADD)).weak())
+        egui::Button::new(egui::RichText::new(label).weak())
             .frame(false)
             .min_size(egui::vec2(ui.available_width(), 0.0)),
     );
     state.row(id, None);
     focus_ring(ui, state, id, response.rect);
+    if connectors.len() > 1 {
+        egui::Popup::menu(&response).show(|ui| add_connection_items(ui, requests, &connectors));
+    }
     if response.clicked() {
         state.take_focus(id);
-        let text = match section {
-            Section::Machine => "Drives appear here as the system mounts them.",
-            Section::Network => {
-                "Connections are created by a network provider plugin; SFTP comes with a later 0.2 milestone."
+        match connectors.as_slice() {
+            [one] => requests.push(Request::AddConnection(one.provider())),
+            [] => {
+                let text = match section {
+                    Section::Machine => "Drives appear here as the system mounts them.",
+                    Section::Network => {
+                        "Connections are created by a network provider plugin, such as ext-ssh; none is installed."
+                    }
+                    Section::Cloud => {
+                        "Accounts are created by a cloud provider plugin; none is installed."
+                    }
+                };
+                requests.push(Request::Toast(Level::Info, text.to_owned()));
             }
-            Section::Cloud => {
-                "Accounts are created in the cloud provider plugin's settings; none is configured yet."
-            }
-        };
-        requests.push(Request::Toast(Level::Info, text.to_owned()));
+            _ => {}
+        }
     }
 }
 

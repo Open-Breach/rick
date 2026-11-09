@@ -12,7 +12,10 @@ use std::time::{Duration, Instant};
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable as _;
 use model::{AfterDrag, SettingsChange};
-use platform::{ConfigDir, Fake};
+use platform::raw_window_handle::{
+    RawDisplayHandle, RawWindowHandle, WebDisplayHandle, WebWindowHandle,
+};
+use platform::{ConfigDir, Fake, Point, WindowRef};
 use tests::local;
 use ui_egui::dnd::{Indicator, Target};
 use ui_egui::{EguiHost, RickUi, icons};
@@ -43,6 +46,17 @@ fn harness(start: &Path) -> (Harness<'static, RickUi>, Arc<Fake>) {
         app::Command::Settings(SettingsChange::SpringDelay(SPRING_MS)),
     );
     (harness, fake)
+}
+
+/// Gives the harness a backend window: a stand-in handle of no backend,
+/// which the fake platform never looks at, so the shell consults the
+/// platform's drag source and drop target as it does for a real window.
+fn with_window(harness: &mut Harness<'_, RickUi>) {
+    harness.state_mut().set_window_ref(Some(WindowRef {
+        window: RawWindowHandle::Web(WebWindowHandle::new(1)),
+        display: RawDisplayHandle::Web(WebDisplayHandle::new()),
+        scale: 1.0,
+    }));
 }
 
 /// Runs frames until the app has nothing in flight and a quiet moment
@@ -813,12 +827,14 @@ fn an_external_drop_copies_and_shift_moves() {
     let outside = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
     fs::write(outside.path().join("ext.txt"), "e").unwrap_or_else(|e| panic!("{e}"));
     fs::write(outside.path().join("ext2.txt"), "e2").unwrap_or_else(|e| panic!("{e}"));
-    let (mut harness, _fake) = harness(dir.path());
+    let (mut harness, fake) = harness(dir.path());
+    with_window(&mut harness);
     let pane = harness.state().app().model().focused;
 
     // Hovering from outside shows the indicator: a copy, whatever the volume.
+    // The platform says where the cursor is; the backend does not.
     let at = empty_space(&harness, pane);
-    harness.event(egui::Event::PointerMoved(at));
+    fake.answer_drop_position(Some(Point { x: at.x, y: at.y }));
     harness.input_mut().hovered_files.push(egui::HoveredFile {
         path: Some(outside.path().join("ext.txt")),
         mime: String::new(),
@@ -859,23 +875,185 @@ fn an_external_drop_copies_and_shift_moves() {
     assert!(!outside.path().join("ext2.txt").exists(), "moved");
 }
 
+/// A drop from outside with a position lands on the row under it: the file
+/// goes into the folder whose row the cursor was over, not into the pane's
+/// folder or wherever the backend last saw the pointer.
+#[test]
+fn an_external_drop_with_a_position_lands_on_the_row_under_it() {
+    let dir = tree();
+    let outside = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+    fs::write(outside.path().join("ext.txt"), "e").unwrap_or_else(|e| panic!("{e}"));
+    let (mut harness, fake) = harness(dir.path());
+    with_window(&mut harness);
+    let pane = harness.state().app().model().focused;
+
+    // The backend's pointer is stale, somewhere in the pane's empty space.
+    harness.event(egui::Event::PointerMoved(empty_space(&harness, pane)));
+    harness.step();
+    let row = centre_of(&harness, "sub");
+    fake.answer_drop_position(Some(Point { x: row.x, y: row.y }));
+    harness.input_mut().hovered_files.push(egui::HoveredFile {
+        path: Some(outside.path().join("ext.txt")),
+        mime: String::new(),
+    });
+    harness.step();
+    harness.step();
+    let view = harness
+        .state()
+        .drag()
+        .unwrap_or_else(|| panic!("an external drag"));
+    assert!(
+        matches!(&view.target, Some(Target::Folder { to, .. }) if to.path.file_name() == Some(b"sub".as_slice())),
+        "{view:?}"
+    );
+    harness.input_mut().hovered_files.clear();
+    harness
+        .input_mut()
+        .dropped_files
+        .push(Arc::new(Dropped(outside.path().join("ext.txt"))));
+    harness.step();
+    harness.step();
+    settle(&mut harness);
+    assert!(dir.path().join("sub/ext.txt").exists(), "landed on the row");
+    assert!(!dir.path().join("ext.txt").exists());
+    assert!(outside.path().join("ext.txt").exists(), "copied");
+}
+
+/// Without a position from the platform the drop lands in the focused
+/// pane's folder, whatever row the backend's stale pointer is over.
+#[test]
+fn an_external_drop_without_a_position_lands_in_the_focused_pane() {
+    let dir = tree();
+    let outside = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+    fs::write(outside.path().join("ext.txt"), "e").unwrap_or_else(|e| panic!("{e}"));
+    let (mut harness, fake) = harness(dir.path());
+    with_window(&mut harness);
+    fake.answer_drop_position(None);
+
+    // The stale pointer sits on a folder row; the drop must not go there.
+    harness.event(egui::Event::PointerMoved(centre_of(&harness, "sub")));
+    harness.step();
+    harness.input_mut().hovered_files.push(egui::HoveredFile {
+        path: Some(outside.path().join("ext.txt")),
+        mime: String::new(),
+    });
+    harness.step();
+    harness.step();
+    let view = harness
+        .state()
+        .drag()
+        .unwrap_or_else(|| panic!("an external drag"));
+    assert_eq!(view.indicator, Some(Indicator::Copy));
+    assert!(
+        matches!(&view.target, Some(Target::Folder { to, .. }) if *to == local(dir.path())),
+        "{view:?}"
+    );
+    harness.input_mut().hovered_files.clear();
+    harness
+        .input_mut()
+        .dropped_files
+        .push(Arc::new(Dropped(outside.path().join("ext.txt"))));
+    harness.step();
+    harness.step();
+    settle(&mut harness);
+    assert!(dir.path().join("ext.txt").exists(), "in the pane's folder");
+    assert!(!dir.path().join("sub/ext.txt").exists());
+}
+
+/// Files the platform receives itself (the Wayland data device) go the same
+/// way as the backend's hovered and dropped files, with their position.
+#[test]
+fn files_the_platform_receives_itself_drop_like_the_backends() {
+    let dir = tree();
+    let outside = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+    fs::write(outside.path().join("ext.txt"), "e").unwrap_or_else(|e| panic!("{e}"));
+    let (mut harness, fake) = harness(dir.path());
+    with_window(&mut harness);
+    let row = centre_of(&harness, "sub");
+    fake.answer_drop_position(Some(Point { x: row.x, y: row.y }));
+    fake.receive_files(vec![outside.path().join("ext.txt")], Vec::new());
+    harness.step();
+    harness.step();
+    let view = harness
+        .state()
+        .drag()
+        .unwrap_or_else(|| panic!("an external drag"));
+    assert!(view.external);
+    assert_eq!(view.count, 1);
+    assert_eq!(view.indicator, Some(Indicator::Copy));
+    fake.receive_files(Vec::new(), vec![outside.path().join("ext.txt")]);
+    harness.step();
+    harness.step();
+    settle(&mut harness);
+    assert!(dir.path().join("sub/ext.txt").exists(), "landed on the row");
+    assert!(harness.state().drag().is_none());
+}
+
+/// A drag that leaves the window is handed to the platform's drag source
+/// with the items' URIs, one frame later so the ghost is off the screen
+/// first; the drag then runs on the platform until it says it ended, and
+/// the row is no longer dragged although the backend never saw the release.
 #[test]
 fn leaving_the_window_hands_the_drag_to_the_platform() {
+    let dir = tree();
+    let (mut harness, fake) = harness(dir.path());
+    with_window(&mut harness);
+    let from = centre_of(&harness, "a.txt");
+    press(&mut harness, from, egui::PointerButton::Primary);
+    // A drag inside the window first, then one move past its edge.
+    move_to(&mut harness, from, egui::pos2(4.0, from.y));
+    assert_eq!(fake.dragged(), [] as [Vec<String>; 0]);
+    harness.event(egui::Event::PointerMoved(egui::pos2(-40.0, from.y)));
+    harness.step();
+    assert!(fake.dragged().is_empty(), "the ghost-free frame goes first");
+    assert!(harness.state().drag().is_some());
+    harness.step();
+    let dragged = fake.dragged();
+    assert_eq!(dragged.len(), 1, "{dragged:?}");
+    assert!(dragged[0][0].starts_with("file://"), "{dragged:?}");
+    assert!(dragged[0][0].ends_with("/a.txt"), "{dragged:?}");
+    assert!(
+        harness.state().drag().is_none(),
+        "the drag is the platform's"
+    );
+    assert!(harness.state().native_drag_running());
+    // Coming back in with the button still "down" as far as the backend
+    // knows starts no new drag.
+    harness.event(egui::Event::PointerMoved(from));
+    harness.step();
+    harness.step();
+    assert!(harness.state().drag().is_none());
+    assert_eq!(fake.dragged().len(), 1);
+    fake.end_drag();
+    harness.step();
+    assert!(!harness.state().native_drag_running());
+    release(
+        &mut harness,
+        egui::pos2(-40.0, from.y),
+        egui::PointerButton::Primary,
+    );
+    assert!(dir.path().join("a.txt").exists());
+}
+
+/// Without a backend window (a secondary viewport) the drag stays inside:
+/// nothing is handed over and the ghost keeps following the cursor.
+#[test]
+fn without_a_backend_window_the_drag_stays_inside() {
     let dir = tree();
     let (mut harness, fake) = harness(dir.path());
     let from = centre_of(&harness, "a.txt");
     press(&mut harness, from, egui::PointerButton::Primary);
     move_to(&mut harness, from, egui::pos2(-40.0, from.y));
     harness.step();
-    let dragged = fake.dragged();
-    assert_eq!(dragged.len(), 1, "{dragged:?}");
-    assert!(dragged[0][0].starts_with("file://"), "{dragged:?}");
-    assert!(dragged[0][0].ends_with("/a.txt"), "{dragged:?}");
+    harness.step();
+    assert_eq!(fake.dragged(), [] as [Vec<String>; 0]);
+    assert!(harness.state().drag().is_some());
     release(
         &mut harness,
         egui::pos2(-40.0, from.y),
         egui::PointerButton::Primary,
     );
+    assert!(harness.state().drag().is_none());
     assert!(dir.path().join("a.txt").exists());
 }
 

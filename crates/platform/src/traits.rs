@@ -1,10 +1,15 @@
 //! The trait set the rest of Rick programs against.
 
+use std::ffi::OsString;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::SystemTime;
 
 use async_trait::async_trait;
+use raw_window_handle::{RawDisplayHandle, RawWindowHandle};
 use types::Error;
+
+use crate::perms::Permissions;
 
 /// An entry in the trash, with enough to put it back.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -146,6 +151,102 @@ pub trait Volumes: Send + Sync {
     fn eject(&self, volume: &Volume) -> Result<(), Error>;
 }
 
+/// A disk-image format, by the file's extension: what the *Mount* action
+/// asks [`Mount::mountable`] about and what the archive provider browses
+/// (SPEC.md "Disk images").
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ImageFormat {
+    /// An ISO 9660 or UDF disc image, `.iso`.
+    Iso,
+    /// A raw image of a disk or a partition, `.img`, `.ima`, `.raw`.
+    Img,
+    /// An Apple disk image, `.dmg`.
+    Dmg,
+    /// A Virtual PC or `Hyper-V` disk, `.vhd`.
+    Vhd,
+    /// A `Hyper-V` disk, `.vhdx`.
+    Vhdx,
+    /// A `VMware` disk, `.vmdk`.
+    Vmdk,
+    /// A `VirtualBox` disk, `.vdi`.
+    Vdi,
+    /// A QEMU copy-on-write disk, `.qcow2` or `.qcow`.
+    Qcow2,
+}
+
+impl ImageFormat {
+    /// Every format, in the order of the spec's Disk images table.
+    pub const ALL: [Self; 8] = [
+        Self::Iso,
+        Self::Img,
+        Self::Dmg,
+        Self::Vhd,
+        Self::Vhdx,
+        Self::Vmdk,
+        Self::Vdi,
+        Self::Qcow2,
+    ];
+
+    /// The format a file name's extension names, if any; case does not
+    /// matter.
+    #[must_use]
+    pub fn for_name(name: &str) -> Option<Self> {
+        let (stem, ext) = name.rsplit_once('.')?;
+        if stem.is_empty() {
+            return None;
+        }
+        Some(match ext.to_ascii_lowercase().as_str() {
+            "iso" => Self::Iso,
+            "img" | "ima" | "raw" => Self::Img,
+            "dmg" => Self::Dmg,
+            "vhd" => Self::Vhd,
+            "vhdx" => Self::Vhdx,
+            "vmdk" => Self::Vmdk,
+            "vdi" => Self::Vdi,
+            "qcow2" | "qcow" => Self::Qcow2,
+            _ => return None,
+        })
+    }
+
+    /// The format's name for messages: `ISO`, `raw image`, `DMG`, …
+    #[must_use]
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Iso => "ISO",
+            Self::Img => "raw image",
+            Self::Dmg => "DMG",
+            Self::Vhd => "VHD",
+            Self::Vhdx => "VHDX",
+            Self::Vmdk => "VMDK",
+            Self::Vdi => "VDI",
+            Self::Qcow2 => "QCOW2",
+        }
+    }
+}
+
+/// Mounting a disk image through the operating system's own mechanism and
+/// nothing else: `Mount-DiskImage` on Windows (ISO, VHD, VHDX), `hdiutil
+/// attach` on macOS (DMG, ISO, raw images), `udisksctl loop-setup` on
+/// Linux (ISO and raw images). No qemu-nbd, no FUSE. The mounted image
+/// shows up in [`Volumes::volumes`] as a removable volume, and that
+/// volume's [`Volumes::eject`] unmounts it; there is no separate unmount.
+pub trait Mount: Send + Sync {
+    /// The formats this operating system mounts natively; the *Mount*
+    /// action hides itself on any other file.
+    fn mountable(&self) -> &'static [ImageFormat];
+
+    /// Mounts the image file at `path` through the OS and returns the
+    /// volume it became, as [`Volumes::volumes`] lists it.
+    ///
+    /// # Errors
+    ///
+    /// `Error::Unsupported` for a format this OS does not mount, or when
+    /// the mechanism is missing (udisks not installed on Linux); otherwise
+    /// the platform error with what the OS said (a refused or damaged
+    /// image).
+    fn mount_image(&self, path: &Path) -> Result<Volume, Error>;
+}
+
 /// A folder the operating system sets aside for the user.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum StandardFolder {
@@ -222,6 +323,34 @@ pub trait RecentlyUsed: Send + Sync {
     fn recently_used(&self) -> Result<Vec<RecentItem>, Error>;
 }
 
+/// An application the platform knows for a file type, or one the user
+/// named.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Application {
+    /// What the user sees: `Text Editor`, `Preview`, `Notepad`.
+    pub name: String,
+    /// What launches it: a desktop file's path on Linux, an application
+    /// bundle's path on macOS, an executable's path on Windows; or any
+    /// executable the user typed, on every platform.
+    pub id: String,
+}
+
+impl Application {
+    /// An application from an executable the user typed, named after it.
+    #[must_use]
+    pub fn executable(command: &str) -> Self {
+        let name = command
+            .split_whitespace()
+            .next()
+            .and_then(|program| Path::new(program).file_name())
+            .map_or_else(|| command.to_owned(), |n| n.to_string_lossy().into_owned());
+        Self {
+            name,
+            id: command.to_owned(),
+        }
+    }
+}
+
 /// Handing entries to other applications.
 pub trait OpenWith: Send + Sync {
     /// Opens the entry with the system default application.
@@ -237,6 +366,82 @@ pub trait OpenWith: Send + Sync {
     ///
     /// Fails when the platform refuses or has no file manager.
     fn reveal(&self, path: &Path) -> Result<(), Error>;
+
+    /// The applications the platform offers for the entry's type, the
+    /// default first: the desktop files registered for its MIME type on
+    /// Linux, Launch Services' list on macOS, the shell's handlers for its
+    /// extension on Windows. Empty when the platform knows none.
+    ///
+    /// # Errors
+    ///
+    /// The platform error from reading the registrations.
+    fn applications(&self, path: &Path) -> Result<Vec<Application>, Error>;
+
+    /// Opens the entry with one application: one of
+    /// [`applications`](Self::applications), or any executable the user
+    /// named ([`Application::executable`]), which is run with the entry's
+    /// path as its argument.
+    ///
+    /// # Errors
+    ///
+    /// Fails when the application cannot be started.
+    fn open_with(&self, path: &Path, app: &Application) -> Result<(), Error>;
+}
+
+/// The user's terminal emulator.
+pub trait Terminal: Send + Sync {
+    /// Opens a terminal window in `dir`, running `command` in it when one
+    /// is given and the user's shell otherwise: `$TERMINAL` or a known
+    /// emulator on Linux, Terminal.app on macOS, Windows Terminal or
+    /// `cmd` on Windows.
+    ///
+    /// # Errors
+    ///
+    /// `Error::Unsupported` when no terminal emulator is found; otherwise
+    /// the error from starting it.
+    fn open_terminal(&self, dir: &Path, command: Option<&[String]>) -> Result<(), Error>;
+}
+
+/// What a command run elevated produced.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct ElevatedOutput {
+    /// The exit code, when the process ended by itself.
+    pub code: Option<i32>,
+    /// What it wrote to standard output.
+    pub stdout: Vec<u8>,
+    /// What it wrote to standard error.
+    pub stderr: Vec<u8>,
+}
+
+impl ElevatedOutput {
+    /// Whether the command ended with exit code 0.
+    #[must_use]
+    pub fn success(&self) -> bool {
+        self.code == Some(0)
+    }
+}
+
+/// Running one command as the administrator through the platform's own
+/// prompt, for the few steps that need it (the privileged helper of a
+/// system-wide install): `pkexec` and its polkit prompt on Linux. Rick
+/// itself never runs elevated; the program does, and it is a helper that
+/// validates its input.
+pub trait Elevate: Send + Sync {
+    /// Runs `program` with `args` elevated and waits for it to end: through
+    /// `pkexec` and its polkit prompt on Linux, Authorization Services on
+    /// macOS, User Account Control on Windows. An elevated process on
+    /// Windows shares no pipes with this one, so there the arguments get
+    /// `--output <file>` appended and the file's contents come back as the
+    /// standard output: a program run this way must honour that flag, as
+    /// `rick-perms` does.
+    ///
+    /// # Errors
+    ///
+    /// `Error::Unsupported` where the platform offers no prompt (no
+    /// `pkexec` on Linux); `Error::PermissionDenied` when the user dismissed
+    /// the prompt or is not allowed; otherwise the error from starting the
+    /// program.
+    fn run_elevated(&self, program: &Path, args: &[OsString]) -> Result<ElevatedOutput, Error>;
 }
 
 /// What showing properties did.
@@ -337,52 +542,182 @@ pub trait Chrome: Send + Sync {
     fn window_chrome(&self) -> WindowChrome;
 }
 
+/// The window a drag starts from or a drop lands in, as the windowing
+/// backend describes it: `winit`'s raw window and display handles, and the
+/// window's scale. Only the thread that runs the window's event loop may
+/// use it, which is the thread every [`DragSource`] and [`DropTarget`]
+/// method is called on.
+#[derive(Debug, Clone, Copy)]
+pub struct WindowRef {
+    /// The window: an `NSView` on macOS, an `HWND` on Windows, a
+    /// `wl_surface` or an X11 window id on Linux.
+    pub window: RawWindowHandle,
+    /// The display the window is on: the `wl_display`, the X11 display.
+    pub display: RawDisplayHandle,
+    /// Physical pixels per logical point of the window, for the backends
+    /// that report positions in pixels (X11).
+    pub scale: f32,
+}
+
+/// A position inside a window, in logical points from its top-left corner,
+/// the coordinates egui works in.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Point {
+    /// From the left edge.
+    pub x: f32,
+    /// From the top edge.
+    pub y: f32,
+}
+
 /// Starting a drag the rest of the desktop can receive: the half of
-/// drag-and-drop the windowing backend does not do for Rick. Receiving a
-/// drop is the backend's (`winit` hands egui the hovered and dropped files
-/// on every platform); starting one is this trait's.
+/// drag-and-drop the windowing backend does not do for Rick. An
+/// `NSDraggingSession` on macOS, OLE's `DoDragDrop` with a `CF_HDROP` on
+/// Windows, a `wl_data_source` on Wayland and an XDND source on X11, each
+/// from the window `winit` hands out through its raw window handle.
+///
+/// The drag carries the items' `file://` URIs and the receiver decides what
+/// to do with them. The windowing backend never sees the button come up
+/// after a drag it did not run, so the UI polls
+/// [`DragSource::drag_in_progress`] and puts its pointer state right when
+/// the drag ends. Every method is called on the thread that runs the
+/// window's event loop.
 pub trait DragSource: Send + Sync {
-    /// Starts a platform drag carrying `paths` as `file://` URIs, so another
-    /// application or another Rick process can take them when the cursor
-    /// leaves the window. Returns once the drag has been handed to the
-    /// platform; the drop itself is the receiver's business.
+    /// Tells the platform the window drags may start from, once the window
+    /// exists. Where starting a drag needs something only seen before the
+    /// drag (on Wayland, the serial of the button press that started it),
+    /// this is where the platform starts listening for it. `wake` asks the
+    /// UI for a frame; the platform calls it, from any thread, when a drag
+    /// it watches has news the UI would otherwise not hear of (a drag from
+    /// outside entering a Wayland window while the pointer is quiet).
+    fn attach(&self, window: &WindowRef, wake: Arc<dyn Fn() + Send + Sync>);
+
+    /// Starts a platform drag of `paths` from `window`, as `file://` URIs,
+    /// so another application or another Rick process can take them when
+    /// the cursor leaves the window. Returns once the drag is the
+    /// platform's: on Windows, where `DoDragDrop` runs its own loop, that is
+    /// when the drag has ended; elsewhere the drag goes on in the event
+    /// loop and [`drag_in_progress`](Self::drag_in_progress) says when it
+    /// has ended.
     ///
     /// # Errors
     ///
-    /// `Error::Unsupported`, with the reason, where the platform gives Rick no
-    /// way to start one from the window it has (see QUESTIONS.md); the UI
-    /// then keeps the drag inside the window.
-    fn start_drag(&self, paths: &[PathBuf]) -> Result<(), Error>;
+    /// `Error::Unsupported`, with the reason, when the platform gives Rick no
+    /// way to start one from this window (no display connection, no button
+    /// press seen, a window handle of another backend); the UI then keeps
+    /// the drag inside the window.
+    fn start_drag(&self, window: &WindowRef, paths: &[PathBuf]) -> Result<(), Error>;
+
+    /// Whether a drag started through [`start_drag`](Self::start_drag) is
+    /// still running. Polled every frame while one is, so the platform can
+    /// do what the drag needs in between (answer the receiver's request for
+    /// the data, move the XDND source along).
+    fn drag_in_progress(&self) -> bool;
+}
+
+/// Files another application drags over or drops on a window, as far as the
+/// platform receives them itself. Empty where the windowing backend does
+/// that and hands them to egui as hovered and dropped files (macOS, Windows,
+/// X11); on Wayland, where `winit` 0.30 has no drop target, the platform's
+/// own data device fills these.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct IncomingFiles {
+    /// A drag from outside is over one of the windows, its files perhaps
+    /// not read yet; the UI keeps asking while this holds.
+    pub hovering: bool,
+    /// The files of the drag over the window right now, once read.
+    pub hovered: Vec<PathBuf>,
+    /// The files dropped on the window since the last call.
+    pub dropped: Vec<PathBuf>,
+}
+
+/// The receiving half of a drag from outside the process: where the cursor
+/// is, which the windowing backend reports with no position, and the files
+/// themselves where the backend reports nothing at all. Every method is
+/// called on the thread that runs the window's event loop.
+pub trait DropTarget: Send + Sync {
+    /// The files a drag from outside hovers over or dropped on Rick's
+    /// windows, where the platform tracks them itself (see
+    /// [`IncomingFiles`]). Cheap; polled every frame.
+    fn incoming_files(&self) -> IncomingFiles;
+
+    /// Where the cursor of a drag from outside is over `window` right now,
+    /// for the files the backend or [`incoming_files`](Self::incoming_files)
+    /// reports as hovered or dropped. `None` where the platform cannot tell:
+    /// the UI then lets the drop land in the focused pane's folder, as the
+    /// spec's Drag and drop table says.
+    fn drop_position(&self, window: &WindowRef) -> Option<Point>;
+}
+
+/// The platform keychain: secrets by a stable key, never in a TOML file.
+/// Secret Service on Linux, Keychain on macOS, Credential Manager on
+/// Windows; the fake keeps them in memory. The key is the caller's: the
+/// connection plugins use `<provider>/<connection>/<field>`.
+pub trait Secrets: Send + Sync {
+    /// Stores `secret` under `key`, replacing what was there.
+    ///
+    /// # Errors
+    ///
+    /// `Error::Unsupported` when no keychain is reachable (no Secret Service
+    /// on the bus); otherwise the platform error.
+    fn store_secret(&self, key: &str, secret: &str) -> Result<(), Error>;
+
+    /// The secret stored under `key`, or `None` when there is none.
+    ///
+    /// # Errors
+    ///
+    /// `Error::Unsupported` when no keychain is reachable; otherwise the
+    /// platform error.
+    fn get_secret(&self, key: &str) -> Result<Option<String>, Error>;
+
+    /// Forgets the secret under `key`; a key without a secret is fine.
+    ///
+    /// # Errors
+    ///
+    /// `Error::Unsupported` when no keychain is reachable; otherwise the
+    /// platform error.
+    fn remove_secret(&self, key: &str) -> Result<(), Error>;
 }
 
 /// All platform services behind one object.
 pub trait Platform:
     Trash
     + OpenWith
+    + Terminal
+    + Elevate
     + Properties
+    + Permissions
     + ConfigDir
     + NativeDialogs
     + Clipboard
     + Chrome
     + DragSource
+    + DropTarget
     + Volumes
+    + Mount
     + StandardFolders
     + RecentlyUsed
+    + Secrets
 {
 }
 
 impl<
     T: Trash
         + OpenWith
+        + Terminal
+        + Elevate
         + Properties
+        + Permissions
         + ConfigDir
         + NativeDialogs
         + Clipboard
         + Chrome
         + DragSource
+        + DropTarget
         + Volumes
+        + Mount
         + StandardFolders
-        + RecentlyUsed,
+        + RecentlyUsed
+        + Secrets,
 > Platform for T
 {
 }

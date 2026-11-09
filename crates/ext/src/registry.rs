@@ -25,7 +25,7 @@
 //!     API_VERSION, Action, ActionCtx, ActionGroup, ActionId, ActionOutcome, Availability,
 //!     Capabilities, ColumnDef, DecorateCtx, Decoration, Decorator, Extension, Manifest,
 //!     PanelSection, Platforms, Points, Registry, SettingField, SettingKind, SettingsSchema,
-//!     Shortcut, UiHost, Version,
+//!     Shortcut, Text, UiHost, Version, t,
 //! };
 //! use runtime::JobRunner;
 //! use std::sync::Arc;
@@ -45,7 +45,7 @@
 //! struct Hello;
 //! impl Action for Hello {
 //!     fn id(&self) -> ActionId { ActionId("demo.hello") }
-//!     fn label(&self) -> &str { "Say hello" }
+//!     fn label(&self) -> String { t!("hello-say") }
 //!     fn group(&self) -> ActionGroup { ActionGroup::Extension("Demo") }
 //!     fn default_shortcut(&self) -> Option<Shortcut> { None }
 //!     fn availability(&self, _ctx: &ActionCtx) -> Availability { Availability::Enabled }
@@ -68,7 +68,7 @@
 //!             ext: self.0.id,
 //!             fields: vec![SettingField {
 //!                 key: "greeting",
-//!                 label: "Greeting",
+//!                 label: Text("greeting"),
 //!                 kind: SettingKind::Text { default: "hello".into() },
 //!             }],
 //!         });
@@ -84,6 +84,7 @@
 //!     requires: Capabilities::empty(),
 //!     points: Points::DECORATOR | Points::ACTION,
 //!     platforms: Platforms::ALL,
+//!     previews: &[],
 //! };
 //!
 //! let mut registry = Registry::new();
@@ -105,10 +106,12 @@ use std::fmt;
 use std::sync::Arc;
 
 use platform::Platform;
+use runtime::Prompts;
 use semver::Version;
 use types::{Error, ExtId};
 
 use crate::action::Action;
+use crate::connection::Connector;
 use crate::decorator::Decorator;
 use crate::preview::Previewer;
 use crate::provider::{Capabilities, Provider};
@@ -123,8 +126,45 @@ use crate::search::SearchIndex;
 /// ([`plugin`](mod@crate::plugin)) and their manifest file; 4
 /// `PreviewDoc` gained `content` (file listings, grids and documents the
 /// UI lays out), `Transport` gained volume, speed, frame step and loop,
-/// and `Icon` gained `Rendered` (QUESTIONS.md 103).
-pub const API_VERSION: u32 = 4;
+/// and `Icon` gained `Rendered` (QUESTIONS.md 103); 5 `Filter` gained
+/// `NoHidden` and `SkipNames`, what the subtree walk takes from the pane
+/// and the settings, and `SearchScope` gained `covers` (QUESTIONS.md 119);
+/// 6 `UiHost` gained `form`, `ActionOutcome` gained `Select` and `View`,
+/// `ActionCtx` gained `other`, `LinkKind` gained `Junction` and `Shortcut`
+/// with their capabilities, `JobCtx` gained `conflicts`, and settings gained
+/// [`SettingValue`] (QUESTIONS.md 123–126); 7 `Provider` gained `transfer`
+/// behind `NATIVE_TRANSFER`, `Capabilities` gained `REMOTE`, and the registry
+/// takes a [`Connector`] per network provider (QUESTIONS.md 135–137); 8
+/// `PreviewControl` gained `Pointer` (a drag, the wheel or a double-click
+/// over the content handed to the document) and `ControlValue` gained
+/// `Delta` (QUESTIONS.md 142); 9 `ActionOutcome` gained `Navigate` and
+/// `platform` gained `Elevate` (QUESTIONS.md 149–150); 10 the registry
+/// lends the [`Prompts`] queue for the questions an extension asks the user
+/// while it works, `Previewer` gained `reads` and `Provider`
+/// `remote_preview_cap` for the previews over a remote provider,
+/// `Connector::schema` is computed per call and gained a `Choice` field,
+/// and the terminal emulation moved into `ext::terminal` (QUESTIONS.md
+/// 159–162); 11 every user-facing string goes through the
+/// [`t!`](crate::t) lookup: `Action::label` returns a `String`,
+/// `Availability::Disabled` carries one, the labels the registry keeps
+/// (`SettingField`, `ConnectionField`, `ConnectionSchema`, `InfoSection`,
+/// `ColumnDef`) are [`Text`](crate::Text) keys, and the registry takes an
+/// extension's translation files (QUESTIONS.md 178–181); 12 the preview
+/// pane became the only viewer (issue 50): [`Manifest`] gained `previews`,
+/// the file extensions a plugin's previewers claim, the registry lends a
+/// [`SettingsStore`] so a plugin reads and writes its own declared
+/// settings, `Content` gained `MissingLibrary` for a third-party library a
+/// previewer cannot find, and `Provider` gained `remote_preview_always`
+/// (QUESTIONS.md 191–197); 13 `platform` gained `Mount` (which disk
+/// images this OS mounts, and mounting one through it) and the `sevenzip`
+/// binding of the 7-Zip library behind the disk images (QUESTIONS.md
+/// 202–207); 14 an action opens its form when a job of its finishes:
+/// `ActionOutcome` gained `Later` with the [`FormLater`](crate::FormLater)
+/// a job fills, `UiHost` gained `form_later` and the
+/// [`Continuation`](crate::Continuation) it runs with the values; and
+/// `Action` gained `app_menu`, whether the action is listed in the
+/// application menu under its extension (QUESTIONS.md 210–211).
+pub const API_VERSION: u32 = 14;
 
 bitflags::bitflags! {
     /// The extension points an extension fills, as its manifest declares
@@ -267,6 +307,13 @@ pub struct Manifest {
     /// The operating systems it runs on; the plugin host refuses the
     /// plugin elsewhere.
     pub platforms: Platforms,
+    /// The file name extensions the extension's previewers claim, lower
+    /// case without the dot (`"pdf"`, `"tar.gz"`), so the host can say
+    /// *Plugin available* for a file of such a type from the manifest
+    /// alone, without loading a disabled plugin. Empty for an extension
+    /// without previewers, and for a previewer that claims no file by its
+    /// name (the hex view, chosen per type in settings).
+    pub previews: &'static [&'static str],
 }
 
 /// How a setting is edited and stored.
@@ -300,15 +347,67 @@ pub enum SettingKind {
     },
 }
 
+/// The stored value of a setting, as the extension's TOML file holds it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SettingValue {
+    /// A checkbox.
+    Bool(bool),
+    /// A text field.
+    Text(String),
+    /// A whole number.
+    Integer(i64),
+    /// The chosen option of a choice, by its text.
+    Choice(String),
+}
+
+impl SettingKind {
+    /// The value a setting has when its file does not name one.
+    #[must_use]
+    pub fn default_value(&self) -> SettingValue {
+        match self {
+            Self::Bool { default } => SettingValue::Bool(*default),
+            Self::Text { default } => SettingValue::Text(default.clone()),
+            Self::Integer { default, .. } => SettingValue::Integer(*default),
+            Self::Choice { options, default } => SettingValue::Choice(
+                options
+                    .get(*default)
+                    .or(options.first())
+                    .map(|o| (*o).to_owned())
+                    .unwrap_or_default(),
+            ),
+        }
+    }
+}
+
 /// One setting of an extension.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SettingField {
     /// Key in the extension's TOML file.
     pub key: &'static str,
-    /// Label in the Settings screen.
-    pub label: &'static str,
+    /// Label in the Settings screen: a Fluent key, read live.
+    pub label: crate::Text,
     /// How it is edited.
     pub kind: SettingKind,
+}
+
+/// The values of the settings extensions declare ([`SettingsSchema`]), as
+/// the host keeps them in each extension's own TOML file: how an extension
+/// reads and writes its own settings while it runs (issue 50: a previewer
+/// stores the path of the third-party library it found). The registry
+/// lends it like the platform services ([`Registry::settings_store`]); an
+/// extension keeps the handle from `register` and asks lazily, since the
+/// values are read after every extension has declared its schema.
+pub trait SettingsStore: Send + Sync {
+    /// The value of `key` of the extension `ext`: the file's, else the
+    /// schema's default; `None` when no schema declares it.
+    fn get(&self, ext: ExtId, key: &str) -> Option<SettingValue>;
+
+    /// Stores `value` for `key` of `ext` and writes the extension's file.
+    ///
+    /// # Errors
+    ///
+    /// The I/O error of writing the file.
+    fn set(&self, ext: ExtId, key: &str, value: SettingValue) -> Result<(), Error>;
 }
 
 /// The settings an extension exposes; rendered in the Settings screen and
@@ -354,12 +453,18 @@ pub struct Registry {
     kernel: usize,
     /// The platform services of the host, when it lent them.
     platform: Option<Arc<dyn Platform>>,
+    /// The question queue of the host, when it lent one.
+    prompts: Option<Arc<Prompts>>,
+    /// The settings values of the host, when it lent them.
+    settings_store: Option<Arc<dyn SettingsStore>>,
     extensions: Vec<ExtId>,
     manifests: Vec<Manifest>,
     failure: Option<String>,
     providers: Vec<Arc<dyn Provider>>,
     /// Virtual locations, `rick://<name>`, by name.
     views: Vec<(String, Arc<dyn Provider>)>,
+    /// The connectors of the network providers.
+    connectors: Vec<Arc<dyn Connector>>,
     decorators: Vec<Arc<dyn Decorator>>,
     actions: Vec<Arc<dyn Action>>,
     previewers: Vec<Arc<dyn Previewer>>,
@@ -372,11 +477,14 @@ impl Default for Registry {
         Self {
             kernel: kernel_id(),
             platform: None,
+            prompts: None,
+            settings_store: None,
             extensions: Vec::new(),
             manifests: Vec::new(),
             failure: None,
             providers: Vec::new(),
             views: Vec::new(),
+            connectors: Vec::new(),
             decorators: Vec::new(),
             actions: Vec::new(),
             previewers: Vec::new(),
@@ -403,6 +511,32 @@ impl Registry {
         }
     }
 
+    /// The same registry, lending `prompts` as well: the queue an
+    /// extension asks the user through while it works with no action in
+    /// hand (a host key to trust, a passphrase); the host answers through
+    /// its dialogues.
+    #[must_use]
+    pub fn with_prompts(mut self, prompts: Arc<Prompts>) -> Self {
+        self.prompts = Some(prompts);
+        self
+    }
+
+    /// The same registry, lending `store` as well: where an extension reads
+    /// and writes the settings it declared, after registration.
+    #[must_use]
+    pub fn with_settings_store(mut self, store: Arc<dyn SettingsStore>) -> Self {
+        self.settings_store = Some(store);
+        self
+    }
+
+    /// The settings values the host lent, for an extension's `register` to
+    /// keep: `None` in a registry built with [`new`](Self::new), when an
+    /// extension works with its schema's defaults and remembers nothing.
+    #[must_use]
+    pub fn settings_store(&self) -> Option<&Arc<dyn SettingsStore>> {
+        self.settings_store.as_ref()
+    }
+
     /// The platform services the host lent, for an extension's `register`:
     /// the trash, open-with, the config directory, the native dialogues.
     /// `None` in a registry built with [`new`](Self::new); an extension
@@ -411,6 +545,14 @@ impl Registry {
     #[must_use]
     pub fn platform(&self) -> Option<&Arc<dyn Platform>> {
         self.platform.as_ref()
+    }
+
+    /// The question queue the host lent, for an extension's `register`.
+    /// `None` when the host lent none; an extension then has no way to ask
+    /// and must refuse what it cannot decide alone (an unknown host key).
+    #[must_use]
+    pub fn prompts(&self) -> Option<&Arc<Prompts>> {
+        self.prompts.as_ref()
     }
 
     /// Whether the registry was created by this copy of the kernel: `false`
@@ -451,6 +593,8 @@ impl Registry {
         }
         let mut staging = Registry {
             platform: self.platform.clone(),
+            prompts: self.prompts.clone(),
+            settings_store: self.settings_store.clone(),
             ..Registry::default()
         };
         ext.register(&mut staging)?;
@@ -463,6 +607,7 @@ impl Registry {
         self.manifests.push(manifest.clone());
         self.providers.append(&mut staging.providers);
         self.views.append(&mut staging.views);
+        self.connectors.append(&mut staging.connectors);
         self.decorators.append(&mut staging.decorators);
         self.actions.append(&mut staging.actions);
         self.previewers.append(&mut staging.previewers);
@@ -484,6 +629,14 @@ impl Registry {
     /// as a `Points::PROVIDER` contribution.
     pub fn view(&mut self, name: impl Into<String>, p: Arc<dyn Provider>) {
         self.views.push((name.into(), p));
+    }
+
+    /// Registers the connector of a network provider: the fields of its
+    /// *Add connection…* dialogue and the calls behind *Connect*,
+    /// *Disconnect* and *Remove* on its rows. A connector counts as a
+    /// `Points::PROVIDER` contribution, like the provider it belongs to.
+    pub fn connector(&mut self, c: Arc<dyn Connector>) {
+        self.connectors.push(c);
     }
 
     /// Registers a decorator.
@@ -512,13 +665,24 @@ impl Registry {
         self.settings.push(schema);
     }
 
+    /// Hands the extension's translation files to the lookup
+    /// ([`crate::i18n`]): one `(language tag, Fluent source)` pair per
+    /// language, `include_str!`'d from the crate's `locales/` directory.
+    /// Every key the extension uses in [`t!`](crate::t) comes from here, and
+    /// English is the one language every key must have.
+    pub fn translations(&mut self, files: &[(&str, &str)]) {
+        for (language, source) in files {
+            crate::i18n::add_bundled(language, source);
+        }
+    }
+
     /// The points filled so far: the kinds of contribution registered.
     #[must_use]
     pub fn points(&self) -> Points {
         let mut points = Points::empty();
         points.set(
             Points::PROVIDER,
-            !self.providers.is_empty() || !self.views.is_empty(),
+            !self.providers.is_empty() || !self.views.is_empty() || !self.connectors.is_empty(),
         );
         points.set(Points::DECORATOR, !self.decorators.is_empty());
         points.set(Points::ACTION, !self.actions.is_empty());
@@ -532,6 +696,7 @@ impl Registry {
     pub fn absorb(&mut self, other: &Registry) {
         self.providers.extend(other.providers.iter().cloned());
         self.views.extend(other.views.iter().cloned());
+        self.connectors.extend(other.connectors.iter().cloned());
         self.decorators.extend(other.decorators.iter().cloned());
         self.actions.extend(other.actions.iter().cloned());
         self.previewers.extend(other.previewers.iter().cloned());
@@ -577,6 +742,18 @@ impl Registry {
         &self.views
     }
 
+    /// Registered connectors, in registration order.
+    #[must_use]
+    pub fn connectors(&self) -> &[Arc<dyn Connector>] {
+        &self.connectors
+    }
+
+    /// The connector of `provider`, if a network provider registered one.
+    #[must_use]
+    pub fn connector_of(&self, provider: types::ProviderId) -> Option<&Arc<dyn Connector>> {
+        self.connectors.iter().find(|c| c.provider() == provider)
+    }
+
     /// Registered decorators, in registration order.
     #[must_use]
     pub fn decorators(&self) -> &[Arc<dyn Decorator>] {
@@ -614,11 +791,13 @@ impl std::fmt::Debug for Registry {
             .field("extensions", &self.extensions)
             .field("manifests", &self.manifests.len())
             .field("platform", &self.platform.is_some())
+            .field("prompts", &self.prompts.is_some())
             .field("providers", &self.providers.len())
             .field(
                 "views",
                 &self.views.iter().map(|(n, _)| n).collect::<Vec<_>>(),
             )
+            .field("connectors", &self.connectors.len())
             .field("decorators", &self.decorators.len())
             .field("actions", &self.actions.len())
             .field("previewers", &self.previewers.len())
@@ -659,6 +838,7 @@ mod tests {
             requires: Capabilities::empty(),
             points: Points::empty(),
             platforms: Platforms::ALL,
+            previews: &[],
         }));
         assert!(matches!(result, Err(Error::Unsupported(_))));
         assert_eq!(registry.extensions(), [] as [ExtId; 0]);
@@ -714,6 +894,7 @@ mod tests {
             requires: Capabilities::empty(),
             points: Points::ACTION,
             platforms: Platforms::ALL,
+            previews: &[],
         };
         assert!(matches!(
             registry.load(&Undeclared(manifest.clone())),

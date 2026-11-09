@@ -2,13 +2,18 @@
 //! shell Properties dialogue, `%APPDATA%\Rick`, the drives from
 //! `GetLogicalDrives` with `GetVolumeInformationW` and `GetDiskFreeSpaceExW`
 //! and ejected through `DeviceIoControl`, the known folders through
-//! `SHGetKnownFolderPath`, and the Recent folder's shortcuts resolved with
-//! `IShellLinkW`.
+//! `SHGetKnownFolderPath`, the Recent folder's shortcuts resolved with
+//! `IShellLinkW`, and drag and drop through OLE's `DoDragDrop` and the
+//! cursor position.
+
+mod drag;
 
 use std::ffi::c_void;
 use std::fs;
 use std::io;
+use std::os::windows::ffi::OsStrExt as _;
 use std::path::{Path, PathBuf};
+use std::process::Stdio;
 use std::time::SystemTime;
 
 use types::Error;
@@ -20,7 +25,8 @@ use windows::Win32::Storage::FileSystem::{
 };
 use windows::Win32::System::Com::{
     CLSCTX_ALL, CLSCTX_INPROC_SERVER, COINIT_APARTMENTTHREADED, COINIT_DISABLE_OLE1DDE,
-    CoCreateInstance, CoInitializeEx, CoTaskMemFree, CoUninitialize, IPersistFile, STGM_READ,
+    CoCreateInstance, CoInitializeEx, CoTaskMemFree, CoUninitialize, IDataObject, IPersistFile,
+    STGM_READ,
 };
 use windows::Win32::System::IO::DeviceIoControl;
 use windows::Win32::System::Ioctl::{
@@ -29,10 +35,11 @@ use windows::Win32::System::Ioctl::{
 };
 use windows::Win32::System::SystemInformation::GetWindowsDirectoryW;
 use windows::Win32::UI::Shell::{
-    BHID_EnumItems, FOF_ALLOWUNDO, FOF_NO_UI, FOFX_RECYCLEONDELETE, FOLDERID_Desktop,
-    FOLDERID_Documents, FOLDERID_Downloads, FOLDERID_Music, FOLDERID_Pictures, FOLDERID_Recent,
-    FOLDERID_RecycleBinFolder, FOLDERID_Videos, FileOperation, IEnumShellItems, IFileOperation,
-    IShellItem, IShellItem2, IShellLinkW, KF_FLAG_DEFAULT, SEE_MASK_INVOKEIDLIST,
+    ASSOC_FILTER_RECOMMENDED, BHID_DataObject, BHID_EnumItems, FOF_ALLOWUNDO, FOF_NO_UI,
+    FOFX_RECYCLEONDELETE, FOLDERID_Desktop, FOLDERID_Documents, FOLDERID_Downloads, FOLDERID_Music,
+    FOLDERID_Pictures, FOLDERID_Recent, FOLDERID_RecycleBinFolder, FOLDERID_Videos, FileOperation,
+    IAssocHandler, IEnumAssocHandlers, IEnumShellItems, IFileOperation, IShellItem, IShellItem2,
+    IShellLinkW, KF_FLAG_DEFAULT, SEE_MASK_INVOKEIDLIST, SHAssocEnumHandlers,
     SHCreateItemFromParsingName, SHELLEXECUTEINFOW, SHERB_NOCONFIRMATION, SHERB_NOPROGRESSUI,
     SHERB_NOSOUND, SHEmptyRecycleBinW, SHGetKnownFolderItem, SHGetKnownFolderPath,
     SIGDN_FILESYSPATH, SIGDN_NORMALDISPLAY, ShellExecuteExW, ShellExecuteW, ShellLink,
@@ -43,9 +50,10 @@ use windows::core::{GUID, Interface, PCWSTR, PWSTR, w};
 use crate::Native;
 use crate::fs::windows::{filetime, io_error, wide};
 use crate::traits::{
-    Chrome, ConfigDir, ControlsSide, DragSource, OpenWith, Properties, PropertiesOutcome,
-    RecentItem, RecentlyUsed, StandardFolder, StandardFolders, Trash, TrashedItem, Volume,
-    VolumeKind, Volumes, WindowChrome,
+    Application, Chrome, ConfigDir, ControlsSide, DragSource, DropTarget, Elevate, ElevatedOutput,
+    ImageFormat, IncomingFiles, Mount, OpenWith, Point, Properties, PropertiesOutcome, RecentItem,
+    RecentlyUsed, StandardFolder, StandardFolders, Terminal, Trash, TrashedItem, Volume,
+    VolumeKind, Volumes, WindowChrome, WindowRef,
 };
 
 /// `System.Recycle.DeletedFrom`: the folder a recycled item came from.
@@ -243,7 +251,7 @@ impl Trash for Native {
         }
         // Find what the shell made of it: by original path, or failing that
         // by name among the items recycled since we started.
-        let recent = started - std::time::Duration::from_secs(120);
+        let recent = started - std::time::Duration::from_mins(2);
         let mut candidates: Vec<TrashedItem> = recycle_bin_items()?
             .into_iter()
             .filter(|item| {
@@ -510,6 +518,96 @@ fn known_folder(id: &GUID) -> Option<PathBuf> {
     take_string(path).map(PathBuf::from)
 }
 
+impl Mount for Native {
+    /// ISO, VHD and VHDX, through `Mount-DiskImage`.
+    fn mountable(&self) -> &'static [ImageFormat] {
+        crate::NATIVE_MOUNTABLE
+    }
+
+    /// `Mount-DiskImage` through PowerShell: an ISO becomes a virtual DVD
+    /// drive, a VHD or VHDX a disk whose partitions get drive letters; the
+    /// first drive letter is the volume returned.
+    fn mount_image(&self, path: &Path) -> Result<Volume, Error> {
+        let path = std::path::absolute(path).map_err(Error::from_io)?;
+        let name = path
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let format = ImageFormat::for_name(&name)
+            .filter(|f| crate::NATIVE_MOUNTABLE.contains(f))
+            .ok_or(Error::Unsupported(
+                "Windows mounts ISO, VHD and VHDX images only",
+            ))?;
+        // A single-quoted PowerShell string: the quote doubled, nothing
+        // else interpreted. No double quotes anywhere in the script, so the
+        // command line reaches PowerShell as written.
+        let quoted = path.to_string_lossy().replace('\'', "''");
+        let script = format!(
+            "$ErrorActionPreference = 'Stop'; \
+             $image = Mount-DiskImage -ImagePath '{quoted}' -PassThru; \
+             $volumes = if ($image.StorageType -eq 1) {{ $image | Get-Volume }} \
+             else {{ $image | Get-Disk | Get-Partition | Get-Volume }}; \
+             $volumes | Where-Object {{ $_.DriveLetter }} | ForEach-Object {{ $_.DriveLetter.ToString() }}"
+        );
+        let output = std::process::Command::new("powershell.exe")
+            .args([
+                "-NoProfile",
+                "-NonInteractive",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-Command",
+                &script,
+            ])
+            .stdin(Stdio::null())
+            .output()
+            .map_err(Error::from_io)?;
+        if !output.status.success() {
+            let said = String::from_utf8_lossy(&output.stderr);
+            let said = said.trim();
+            return Err(Error::Io(io::Error::other(if said.is_empty() {
+                format!("Mount-DiskImage exited with {}", output.status)
+            } else {
+                said.to_owned()
+            })));
+        }
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let letter = stdout
+            .lines()
+            .map(str::trim)
+            .find_map(|line| {
+                let mut chars = line.chars();
+                match (chars.next(), chars.next()) {
+                    (Some(c), None) if c.is_ascii_alphabetic() => Some(c.to_ascii_uppercase()),
+                    _ => None,
+                }
+            })
+            .ok_or_else(|| {
+                Error::Io(io::Error::other(
+                    "Mount-DiskImage gave the image no drive letter",
+                ))
+            })?;
+        let mount_point = PathBuf::from(format!("{letter}:\\"));
+        if let Ok(volumes) = self.volumes()
+            && let Some(volume) = volumes.into_iter().find(|v| v.mount_point == mount_point)
+        {
+            return Ok(volume);
+        }
+        Ok(Volume {
+            name: format!("{letter}:"),
+            mount_point,
+            kind: if format == ImageFormat::Iso {
+                VolumeKind::Optical
+            } else {
+                VolumeKind::Removable
+            },
+            fs_type: String::new(),
+            device: None,
+            total: None,
+            free: None,
+        })
+    }
+}
+
 impl StandardFolders for Native {
     fn standard_folder(&self, folder: StandardFolder) -> Option<PathBuf> {
         let path = match folder {
@@ -601,6 +699,55 @@ fn shell_execute(file: PCWSTR, parameters: PCWSTR) -> Result<(), Error> {
     Ok(())
 }
 
+/// The shell's handlers for a file name's extension (`.txt`), the
+/// recommended ones, each with its display name and executable; empty for
+/// a name without an extension. COM must be initialised.
+fn assoc_handlers(path: &Path) -> Result<Vec<(String, String, IAssocHandler)>, Error> {
+    let Some(ext) = path.extension() else {
+        return Ok(Vec::new());
+    };
+    let ext: Vec<u16> = std::iter::once(u16::from(b'.'))
+        .chain(ext.encode_wide())
+        .chain(Some(0))
+        .collect();
+    // SAFETY: the extension is NUL-terminated and outlives the call.
+    let enumerator: IEnumAssocHandlers =
+        unsafe { SHAssocEnumHandlers(PCWSTR(ext.as_ptr()), ASSOC_FILTER_RECOMMENDED) }
+            .map_err(|e| Error::Io(io_error(e)))?;
+    let mut out = Vec::new();
+    loop {
+        let mut handlers: [Option<IAssocHandler>; 8] = Default::default();
+        let mut fetched = 0u32;
+        // SAFETY: the slice and the count are valid for the call, which
+        // fills at most the slice's length and reports how many.
+        let result = unsafe { enumerator.Next(&mut handlers, Some(&raw mut fetched)) };
+        if result.is_err() || fetched == 0 {
+            break;
+        }
+        for handler in handlers.iter_mut().take(fetched as usize) {
+            let Some(handler) = handler.take() else {
+                continue;
+            };
+            // SAFETY: both calls return task-allocated strings that
+            // `take_string` reads once and frees once.
+            let (name, exe) = unsafe {
+                (
+                    handler.GetUIName().ok().and_then(take_string),
+                    handler.GetName().ok().and_then(take_string),
+                )
+            };
+            let (Some(name), Some(exe)) = (name, exe) else {
+                continue;
+            };
+            if out.iter().any(|(_, e, _): &(String, String, _)| *e == exe) {
+                continue;
+            }
+            out.push((name, exe, handler));
+        }
+    }
+    Ok(out)
+}
+
 impl OpenWith for Native {
     fn open(&self, path: &Path) -> Result<(), Error> {
         let path = std::path::absolute(path).map_err(Error::from_io)?;
@@ -616,6 +763,237 @@ impl OpenWith for Native {
             .collect();
         shell_execute(w!("explorer.exe"), PCWSTR(select.as_ptr()))
     }
+
+    /// The shell's recommended handlers for the extension; File Explorer
+    /// for a folder.
+    fn applications(&self, path: &Path) -> Result<Vec<Application>, Error> {
+        let path = std::path::absolute(path).map_err(Error::from_io)?;
+        let meta = fs::symlink_metadata(&path).map_err(Error::from_io)?;
+        if meta.is_dir() {
+            return Ok(vec![Application {
+                name: "File Explorer".to_owned(),
+                id: "explorer.exe".to_owned(),
+            }]);
+        }
+        let _com = Com::new()?;
+        Ok(assoc_handlers(&path)?
+            .into_iter()
+            .map(|(name, id, _)| Application { name, id })
+            .collect())
+    }
+
+    /// A handler of the extension is invoked through the shell, so store
+    /// applications work too; anything else runs with the path as its
+    /// argument.
+    fn open_with(&self, path: &Path, app: &Application) -> Result<(), Error> {
+        let path = std::path::absolute(path).map_err(Error::from_io)?;
+        {
+            let _com = Com::new()?;
+            if let Some((_, _, handler)) = assoc_handlers(&path)?
+                .into_iter()
+                .find(|(_, exe, _)| *exe == app.id)
+            {
+                let wide = wide(&path);
+                // SAFETY: the path is NUL-terminated and outlives the call;
+                // the item and the data object are owned COM pointers.
+                let invoked = unsafe {
+                    let item: IShellItem = SHCreateItemFromParsingName(PCWSTR(wide.as_ptr()), None)
+                        .map_err(|e| Error::Io(io_error(e)))?;
+                    let data: IDataObject = item
+                        .BindToHandler(None, &BHID_DataObject)
+                        .map_err(|e| Error::Io(io_error(e)))?;
+                    handler.Invoke(&data)
+                };
+                return invoked.map_err(|e| Error::Io(io_error(e)));
+            }
+        }
+        let mut words = app.id.split_whitespace();
+        let program = words
+            .next()
+            .ok_or(Error::Unsupported("no application named"))?;
+        let args: Vec<&str> = words.collect();
+        std::process::Command::new(program)
+            .args(args)
+            .arg(&path)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .map(drop)
+            .map_err(Error::from_io)
+    }
+}
+
+/// Whether `program` is on the `PATH`.
+fn on_path(program: &str) -> bool {
+    std::env::var_os("PATH")
+        .is_some_and(|path| std::env::split_paths(&path).any(|dir| dir.join(program).is_file()))
+}
+
+impl Elevate for Native {
+    /// Through User Account Control: `ShellExecuteEx` with the `runas` verb
+    /// shows the consent prompt and starts the program elevated; the call
+    /// waits for it to end. An elevated process shares no pipes with this
+    /// one, so the output comes back through a file the helper is told to
+    /// write (`--output <file>` appended to the arguments) when the caller
+    /// asked for one, else empty.
+    fn run_elevated(
+        &self,
+        program: &Path,
+        args: &[std::ffi::OsString],
+    ) -> Result<ElevatedOutput, Error> {
+        use windows::Win32::System::Threading::{
+            GetExitCodeProcess, INFINITE, WaitForSingleObject,
+        };
+        use windows::Win32::UI::Shell::{SEE_MASK_NO_CONSOLE, SEE_MASK_NOCLOSEPROCESS};
+        use windows::Win32::UI::WindowsAndMessaging::SW_HIDE;
+
+        let program = std::path::absolute(program).map_err(Error::from_io)?;
+        let output_file = tempfile::Builder::new()
+            .prefix("rick-elevated-")
+            .suffix(".out")
+            .tempfile()
+            .map_err(Error::from_io)?;
+        let mut words: Vec<String> = args
+            .iter()
+            .map(|a| quote_argument(&a.to_string_lossy()))
+            .collect();
+        words.push("--output".to_owned());
+        words.push(quote_argument(&output_file.path().to_string_lossy()));
+        let parameters = wide_text(&words.join(" "));
+        let file = wide(&program);
+        let mut info = SHELLEXECUTEINFOW {
+            cbSize: u32::try_from(std::mem::size_of::<SHELLEXECUTEINFOW>()).unwrap_or(0),
+            fMask: SEE_MASK_NOCLOSEPROCESS | SEE_MASK_NO_CONSOLE,
+            hwnd: HWND::default(),
+            lpVerb: w!("runas"),
+            lpFile: PCWSTR(file.as_ptr()),
+            lpParameters: PCWSTR(parameters.as_ptr()),
+            nShow: SW_HIDE.0,
+            ..Default::default()
+        };
+        // SAFETY: `info` is fully initialised and the strings outlive the call.
+        if let Err(error) = unsafe { ShellExecuteExW(&raw mut info) } {
+            // ERROR_CANCELLED: the user said no to the prompt.
+            if error.code().0.cast_unsigned() & 0xFFFF == 1223 {
+                return Err(Error::PermissionDenied);
+            }
+            return Err(Error::Io(io_error(error)));
+        }
+        let process = info.hProcess;
+        if process.is_invalid() {
+            return Err(Error::Io(io::Error::other("no process started")));
+        }
+        // SAFETY: `process` is the handle `ShellExecuteExW` returned, closed
+        // below.
+        let code = unsafe {
+            let _ = WaitForSingleObject(process, INFINITE);
+            let mut code: u32 = 0;
+            let got = GetExitCodeProcess(process, &raw mut code);
+            let _ = CloseHandle(process);
+            got.map(|()| code)
+        }
+        .map_err(|e| Error::Io(io_error(e)))?;
+        let stdout = fs::read(output_file.path()).unwrap_or_default();
+        Ok(ElevatedOutput {
+            code: i32::try_from(code).ok(),
+            stdout,
+            stderr: Vec::new(),
+        })
+    }
+}
+
+/// `text` as one argument of a Windows command line, quoted the way
+/// `CommandLineToArgvW` undoes it.
+fn quote_argument(text: &str) -> String {
+    if !text.is_empty() && !text.contains([' ', '\t', '"']) {
+        return text.to_owned();
+    }
+    let mut out = String::from("\"");
+    let mut backslashes = 0;
+    for c in text.chars() {
+        match c {
+            '\\' => backslashes += 1,
+            '"' => {
+                out.extend(std::iter::repeat_n('\\', backslashes * 2 + 1));
+                out.push('"');
+                backslashes = 0;
+            }
+            other => {
+                out.extend(std::iter::repeat_n('\\', backslashes));
+                out.push(other);
+                backslashes = 0;
+            }
+        }
+    }
+    out.extend(std::iter::repeat_n('\\', backslashes * 2));
+    out.push('"');
+    out
+}
+
+fn wide_text(text: &str) -> Vec<u16> {
+    text.encode_utf16().chain(Some(0)).collect()
+}
+
+impl Terminal for Native {
+    /// Windows Terminal when it is installed, `cmd` in a new window
+    /// otherwise.
+    fn open_terminal(&self, dir: &Path, command: Option<&[String]>) -> Result<(), Error> {
+        let dir = std::path::absolute(dir).map_err(Error::from_io)?;
+        let command = command.filter(|c| !c.is_empty());
+        let mut process = if on_path("wt.exe") {
+            let mut process = std::process::Command::new("wt.exe");
+            process.arg("-d").arg(&dir);
+            if let Some(command) = command {
+                process.arg("cmd.exe").arg("/k").args(command);
+            }
+            process
+        } else {
+            let mut process = std::process::Command::new("cmd.exe");
+            process
+                .args(["/c", "start", "", "/D"])
+                .arg(&dir)
+                .arg("cmd.exe");
+            if let Some(command) = command {
+                process.arg("/k").args(command);
+            }
+            process
+        };
+        process
+            .current_dir(&dir)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .map(drop)
+            .map_err(Error::from_io)
+    }
+}
+
+/// A `.lnk` shortcut at `at` pointing to `target`, through the shell link
+/// object.
+pub(crate) fn create_shortcut(target: &Path, at: &Path) -> io::Result<()> {
+    let target = std::path::absolute(target)?;
+    let _com = Com::new().map_err(|e| io::Error::other(e.to_string()))?;
+    // SAFETY: COM is initialised on this thread, the class id is a static
+    // GUID, and every string is NUL-terminated and outlives its call.
+    unsafe {
+        let link: IShellLinkW =
+            CoCreateInstance(&ShellLink, None, CLSCTX_INPROC_SERVER).map_err(io_error)?;
+        let target_w = wide(&target);
+        link.SetPath(PCWSTR(target_w.as_ptr())).map_err(io_error)?;
+        if let Some(dir) = target.parent() {
+            let dir_w = wide(dir);
+            link.SetWorkingDirectory(PCWSTR(dir_w.as_ptr()))
+                .map_err(io_error)?;
+        }
+        let persist: IPersistFile = link.cast().map_err(io_error)?;
+        let at_w = wide(at);
+        persist
+            .Save(PCWSTR(at_w.as_ptr()), true)
+            .map_err(io_error)?;
+    }
+    Ok(())
 }
 
 impl Properties for Native {
@@ -669,15 +1047,29 @@ impl Chrome for Native {
 }
 
 impl DragSource for Native {
-    /// Not available yet: OLE's `DoDragDrop` must run on the thread that owns
-    /// the window and pumps its messages while the drag lasts, with an
-    /// `IDropSource` of Rick's own; `eframe` 0.36 owns that loop and gives
-    /// Rick no hook into it, exposing drop reception only (QUESTIONS.md).
-    fn start_drag(&self, paths: &[PathBuf]) -> Result<(), Error> {
-        let uris: Vec<String> = paths.iter().map(|p| crate::paths::file_uri(p)).collect();
-        tracing::debug!(?uris, "platform drag not started");
-        Err(Error::Unsupported(
-            "starting a drag needs OLE's DoDragDrop on the window's message loop, which eframe owns",
-        ))
+    /// Nothing to prepare: OLE is initialised for the window's thread by
+    /// winit.
+    fn attach(&self, _window: &WindowRef, _wake: std::sync::Arc<dyn Fn() + Send + Sync>) {}
+
+    /// `DoDragDrop` with the files as a `CF_HDROP`, offering copy, move and
+    /// link; returns when the drag has ended, since OLE runs its loop here.
+    fn start_drag(&self, window: &WindowRef, paths: &[PathBuf]) -> Result<(), Error> {
+        drag::start_drag(window, paths)
+    }
+
+    fn drag_in_progress(&self) -> bool {
+        drag::drag_in_progress()
+    }
+}
+
+impl DropTarget for Native {
+    /// winit's drop target receives the drops and hands them to egui.
+    fn incoming_files(&self) -> IncomingFiles {
+        IncomingFiles::default()
+    }
+
+    /// The cursor over the window's client area, at the window's DPI.
+    fn drop_position(&self, window: &WindowRef) -> Option<Point> {
+        drag::drop_position(window)
     }
 }

@@ -22,9 +22,21 @@ futures = { workspace = true }
 semver = { workspace = true }
 smallvec = { workspace = true }
 tokio = { workspace = true, features = ["io-util"] }
+# The terminal emulator behind the console pane (`terminal`): the parser of
+# the escape sequences a shell writes, shared by every plugin that attaches
+# a stream to the pane (the local console, a shell over SSH).
+vte = { workspace = true }
+# The `t!` lookup (`i18n`): Fluent messages bundled by the kernel and the
+# plugins, the system language negotiated against them, a tracing line for
+# a key nobody translated.
+fluent-bundle = { workspace = true }
+unic-langid = { workspace = true }
+sys-locale = { workspace = true }
+tracing = { workspace = true }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["io-util"] }
+tempfile = { workspace = true }
 
 [lints]
 workspace = true

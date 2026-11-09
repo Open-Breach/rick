@@ -54,7 +54,12 @@ pub const HOST_TOOLCHAIN: &str = env!("RICK_TOOLCHAIN");
 ///
 /// [`LoadError`] when the library is not a plugin of this build.
 pub fn describe(path: &Path) -> Result<PluginToml, LoadError> {
-    let loaded = load_library(path, std::sync::Arc::new(ext::platform::Native::new()))?;
+    let loaded = load_library(
+        path,
+        std::sync::Arc::new(ext::platform::Native::new()),
+        None,
+        None,
+    )?;
     let stem = crate_stem(path);
     Ok(PluginToml::describe(
         loaded.manifest(),

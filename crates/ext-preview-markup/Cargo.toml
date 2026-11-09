@@ -1,0 +1,35 @@
+[package]
+name = "ext-preview-markup"
+version.workspace = true
+description = "Rick preview plugin for the structured text formats: Markdown and HTML rendered as documents, CSV and TSV as a virtualised grid, each with the Rendered toggle to the source."
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+# A plugin: the `cdylib` the host loads from `plugins/preview-markup/`, and
+# an `rlib` for the binary's opt-in `preview-markup` feature and the tests.
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+types = { workspace = true }
+ext = { workspace = true }
+# The source view the Rendered toggle switches to: the code previewer's
+# highlighted text, decoding and status, so the markup plugin renders the
+# same source the code previewer shows when the plugin is disabled.
+ext-preview-code = { workspace = true }
+csv = { workspace = true }
+encoding_rs = { workspace = true }
+memchr = { workspace = true }
+pulldown-cmark = { workspace = true }
+html-escape = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+runtime = { workspace = true }
+vfs-local = { workspace = true }
+platform = { workspace = true }
+tempfile = { workspace = true }
+
+[lints]
+workspace = true

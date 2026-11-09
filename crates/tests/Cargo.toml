@@ -28,13 +28,42 @@ ext-preview-hex = { workspace = true }
 ext-git = { workspace = true }
 ext-vfs-trash = { workspace = true }
 ext-vfs-archive = { workspace = true }
+# The SSH plugin of issue 34, with the SSH server in the test process
+# that its acceptance tests run against on every OS.
+ext-ssh = { workspace = true, features = ["fake-sshd"] }
+# The cloud provider plugins of issue 21, linked for the acceptance
+# tests against the containers and built as library files beside the
+# test binaries for the host to load.
+ext-vfs-s3 = { workspace = true }
+ext-vfs-azure = { workspace = true }
+ext-vfs-gcs = { workspace = true }
 # The previewer plugins of issue 18: linked for their fixture generators
 # and built as library files beside the test binaries, which the host
 # loads from a temporary plugins directory.
 ext-preview-office = { workspace = true }
 ext-preview-media = { workspace = true }
 ext-preview-archive = { workspace = true, features = ["fixtures"] }
-ext-preview-csv = { workspace = true }
+# The markup plugin of issue 51: Markdown, HTML and the CSV grid.
+ext-preview-markup = { workspace = true }
+# Milestone 5 (issue 22): the subdirectory search, the four index
+# connectors (each tested against its real service only where the runner
+# has it) and Subversion.
+ext-search-walk = { workspace = true }
+ext-search-windows = { workspace = true }
+ext-search-spotlight = { workspace = true }
+ext-search-tracker = { workspace = true }
+ext-search-baloo = { workspace = true }
+ext-svn = { workspace = true }
+# The action plugins of issue 23: linked for the headless acceptance tests
+# and built as library files beside the test binaries for the host.
+ext-action-compress = { workspace = true }
+ext-action-compare = { workspace = true }
+ext-action-terminal = { workspace = true }
+ext-action-rename = { workspace = true }
+# The 3D previewer plugin of issue 19, the same way.
+ext-preview-3d = { workspace = true }
+# The tarball installer of issue 44, with its generated fixture archives.
+ext-installer = { workspace = true, features = ["fixtures"] }
 plugins-native = { workspace = true }
 # The fixture plugins, built as library files beside the test binaries and
 # loaded from there; never named in the test code.
@@ -42,18 +71,30 @@ plugin-probe = { workspace = true }
 plugin-panic = { workspace = true }
 image = { workspace = true }
 egui = { workspace = true }
-# Fixture archives for the provider acceptance tests.
+# Fixture archives for the provider acceptance tests, and the large gzip
+# tar the installer's detection job is tried on.
 zip = { workspace = true }
 tar = { workspace = true }
 zstd = { workspace = true }
+flate2 = { workspace = true }
 sevenz-rust2 = { workspace = true }
 hadris-fs = { workspace = true }
 hadris-iso = { workspace = true, features = ["write"] }
 futures = { workspace = true }
 tempfile = { workspace = true }
 thiserror = { workspace = true }
+# The expected digests of the Compute hash tests, computed with the
+# crates themselves rather than md5sum and friends, so the tests run on
+# every platform; `toml` reads `core.toml` back.
+md-5 = { workspace = true }
+sha1 = { workspace = true }
+sha2 = { workspace = true }
+blake3 = { workspace = true }
+hex = { workspace = true }
+toml = { workspace = true }
 tokio = { workspace = true, features = ["rt", "time"] }
 tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
 
 [lints]
 workspace = true

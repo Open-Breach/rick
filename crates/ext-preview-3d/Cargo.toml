@@ -1,0 +1,39 @@
+[package]
+name = "ext-preview-3d"
+version.workspace = true
+description = "Rick preview plugin for 3D models: STL, OBJ and 3MF meshes rendered through wgpu as a shaded solid over a ground grid, orbited, zoomed and reset by the pointer."
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+# A plugin: the `cdylib` the host loads from `plugins/preview-3d/`, and an
+# `rlib` for the binary's opt-in `preview-3d` feature and the tests.
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+types = { workspace = true }
+ext = { workspace = true }
+stl_io = { workspace = true }
+tobj = { workspace = true }
+zip = { workspace = true }
+# `zip` decodes the 3MF's DEFLATE through flate2, whose backend a direct
+# dependent has to pick, so the crate builds on its own as it does in the
+# workspace.
+flate2 = { workspace = true }
+roxmltree = { workspace = true }
+wgpu = { workspace = true }
+bytemuck = { workspace = true }
+pollster = { workspace = true }
+toml = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+runtime = { workspace = true }
+vfs-local = { workspace = true }
+platform = { workspace = true }
+tempfile = { workspace = true }
+
+[lints]
+workspace = true

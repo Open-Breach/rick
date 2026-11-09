@@ -4,15 +4,23 @@
 //! `bundle [--release] [--features <spec>]` builds the whole workspace and
 //! lays out `target/<profile>/bundle/` (QUESTIONS.md 84): the `rick`
 //! binary, the kernel dylibs and the `libstd` they need beside it, pdfium
-//! when `RICK_PDFIUM_DIR` names it, the GStreamer runtime when
+//! when the PDF previewer's `library` setting (`preview-pdf.toml` in the
+//! config directory) names it, the GStreamer runtime when
 //! `RICK_GSTREAMER_DIR` names it (QUESTIONS.md 106: on macOS into
 //! `gstreamer/lib/`, on Windows the DLLs beside the binary and the
-//! elements into `gstreamer-1.0/`; Linux uses the system's), and
+//! elements into `gstreamer-1.0/`; Linux uses the system's),
 //! `plugins/<id>/plugin.toml` with the library for every plugin crate (an
-//! `ext-*` member built as a `cdylib`). `--features` is handed to the
-//! build as is (`--features ext-preview-media/gstreamer` turns playback
-//! on). Running `rick` from there finds every plugin with nothing copied
-//! by hand, and the release workflow archives the same directory.
+//! `ext-*` member built as a `cdylib`) whose manifest names this platform,
+//! and the 7-Zip library (`7z.so` / `7z.dll`, LGPL) with its licence into
+//! `plugins/vfs-archive/` beside the archive plugin when
+//! `RICK_SEVENZIP_DIR` names the directory holding it (SPEC.md
+//! "Third-party libraries"; `.github/scripts/sevenzip.sh` fills one);
+//! a plugin built for other platforms only (the Spotlight connector on
+//! Linux) is left out and said so (QUESTIONS.md 121). `--features` is
+//! handed to the build as is (`--features ext-preview-media/gstreamer`
+//! turns playback on). Running `rick` from there finds every plugin with
+//! nothing copied by hand, and the release workflow archives the same
+//! directory.
 //!
 //! The task builds with `--workspace --exclude xtask --lib --bins
 //! --examples` (every library, binary and example of every member but this
@@ -28,6 +36,14 @@ type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 
 const KERNEL_DYLIBS: [&str; 3] = ["types", "runtime", "ext"];
 const PDFIUM_FILES: [&str; 3] = ["libpdfium.so", "libpdfium.dylib", "pdfium.dll"];
+/// The 7-Zip library's names, and the plugin it travels beside.
+const SEVENZIP_FILES: [&str; 2] = ["7z.so", "7z.dll"];
+const SEVENZIP_PLUGIN: &str = "vfs-archive";
+/// The licence file beside the library in `RICK_SEVENZIP_DIR`, and its
+/// name in the bundle.
+const SEVENZIP_LICENSE: (&str, &str) = ("License.txt", "7-Zip-License.txt");
+/// The manifest helper's exit code for a plugin built for other platforms.
+const NOT_FOR_THIS_PLATFORM: i32 = 3;
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -101,20 +117,16 @@ fn bundle(args: &[String]) -> Result<()> {
     std::fs::create_dir_all(&plugins_dir)?;
 
     copy(&profile_dir.join(exe("rick")), &out)?;
+    // The privileged helper lives beside the binary, where Rick looks for
+    // it (`platform::perms::helper_path`).
+    copy(&profile_dir.join(exe("rick-perms")), &out)?;
     for name in KERNEL_DYLIBS {
         copy(&profile_dir.join(dylib(name)), &out)?;
     }
     for lib in libstd(&cargo)? {
         copy(&lib, &out)?;
     }
-    if let Some(dir) = std::env::var_os("RICK_PDFIUM_DIR") {
-        for file in PDFIUM_FILES {
-            let path = Path::new(&dir).join(file);
-            if path.is_file() {
-                copy(&path, &out)?;
-            }
-        }
-    }
+    pdfium(&out)?;
     if let Some(dir) = std::env::var_os("RICK_GSTREAMER_DIR") {
         gstreamer(Path::new(&dir), &out)?;
     }
@@ -126,6 +138,15 @@ fn bundle(args: &[String]) -> Result<()> {
             .arg(&library)
             .arg(&plugins_dir)
             .output()?;
+        if output.status.code() == Some(NOT_FOR_THIS_PLATFORM) {
+            println!(
+                "plugin from {crate_name}: {}; not bundled",
+                String::from_utf8_lossy(&output.stderr)
+                    .trim()
+                    .trim_start_matches("rick-plugin-manifest: ")
+            );
+            continue;
+        }
         if !output.status.success() {
             return Err(format!(
                 "{} failed for {}: {}",
@@ -141,8 +162,103 @@ fn bundle(args: &[String]) -> Result<()> {
             plugins_dir.join(&id).display()
         );
     }
+    match std::env::var_os("RICK_SEVENZIP_DIR") {
+        Some(dir) => sevenzip(Path::new(&dir), &plugins_dir)?,
+        None => println!("7-zip: RICK_SEVENZIP_DIR not set; the library is not bundled"),
+    }
     println!("bundle: {}", out.display());
     Ok(())
+}
+
+/// Copies the 7-Zip library and its licence from `dir` into the archive
+/// plugin's folder, where the plugin looks for it first after its setting.
+fn sevenzip(dir: &Path, plugins_dir: &Path) -> Result<()> {
+    let target = plugins_dir.join(SEVENZIP_PLUGIN);
+    std::fs::create_dir_all(&target)?;
+    let library = SEVENZIP_FILES
+        .iter()
+        .map(|file| dir.join(file))
+        .find(|path| path.is_file())
+        .ok_or_else(|| format!("no {} in {}", SEVENZIP_FILES.join(" or "), dir.display()))?;
+    copy(&library, &target)?;
+    let (source, name) = SEVENZIP_LICENSE;
+    let license = dir.join(source);
+    if license.is_file() {
+        std::fs::copy(&license, target.join(name))
+            .map_err(|e| format!("copying {}: {e}", license.display()))?;
+    } else {
+        println!("7-zip: no {source} beside the library; the licence is not bundled");
+    }
+    println!("7-zip: {} into {}", library.display(), target.display());
+    Ok(())
+}
+
+/// Copies the pdfium library the PDF previewer's setting names into the
+/// bundle, beside the binary; says so when the setting is unset or names
+/// nothing that is there.
+fn pdfium(out: &Path) -> Result<()> {
+    match pdfium_setting() {
+        Some(path) if path.is_file() => copy(&path, out),
+        Some(path) if path.is_dir() => {
+            for file in PDFIUM_FILES {
+                let candidate = path.join(file);
+                if candidate.is_file() {
+                    copy(&candidate, out)?;
+                }
+            }
+            Ok(())
+        }
+        Some(path) => {
+            println!(
+                "pdfium: the PDF previewer's setting names {}, which is not there; not bundled",
+                path.display()
+            );
+            Ok(())
+        }
+        None => {
+            println!(
+                "pdfium: no `library` in {}; not bundled (set it in Rick's settings, or write \
+                 the file, to ship the library beside the binary)",
+                config_dir().join("preview-pdf.toml").display()
+            );
+            Ok(())
+        }
+    }
+}
+
+/// Rick's config directory on this machine, as `platform::ConfigDir`
+/// computes it: `$XDG_CONFIG_HOME/rick` (or `~/.config/rick`) on Linux,
+/// `~/Library/Application Support/Rick` on macOS, `%APPDATA%\Rick` on
+/// Windows.
+fn config_dir() -> PathBuf {
+    let home = std::env::var_os("HOME")
+        .or_else(|| std::env::var_os("USERPROFILE"))
+        .map_or_else(|| PathBuf::from("."), PathBuf::from);
+    match std::env::consts::OS {
+        "macos" => home
+            .join("Library")
+            .join("Application Support")
+            .join("Rick"),
+        "windows" => std::env::var_os("APPDATA")
+            .map_or_else(|| home.join("AppData").join("Roaming"), PathBuf::from)
+            .join("Rick"),
+        _ => std::env::var_os("XDG_CONFIG_HOME")
+            .map_or_else(|| home.join(".config"), PathBuf::from)
+            .join("rick"),
+    }
+}
+
+/// The PDF previewer's `library` setting: the path the user (or CI) wrote
+/// into `preview-pdf.toml`, a file or the directory holding it.
+fn pdfium_setting() -> Option<PathBuf> {
+    let text = std::fs::read_to_string(config_dir().join("preview-pdf.toml")).ok()?;
+    let line = text
+        .lines()
+        .map(str::trim)
+        .find(|line| line.starts_with("library"))?;
+    let (_, value) = line.split_once('=')?;
+    let value = value.trim().trim_matches(|c| c == '"' || c == '\'');
+    (!value.is_empty()).then(|| PathBuf::from(value))
 }
 
 /// Copies the GStreamer runtime at `dir` into the bundle, in the layout the

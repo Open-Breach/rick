@@ -2,6 +2,7 @@
 //! available in the view only. Delete permanently is the core action, which
 //! goes through the provider's `remove`.
 
+use ext::t;
 use std::sync::{Arc, Mutex, PoisonError};
 
 use ext::platform::{Trash, TrashedItem};
@@ -160,8 +161,8 @@ impl Action for Restore {
     fn id(&self) -> ActionId {
         RESTORE
     }
-    fn label(&self) -> &'static str {
-        "Restore"
+    fn label(&self) -> String {
+        t!("trash-restore")
     }
     fn group(&self) -> ActionGroup {
         GROUP
@@ -175,8 +176,8 @@ impl Action for Restore {
         }
         match ctx.selection.len() {
             1 => Availability::Enabled,
-            0 => Availability::Disabled("select a trashed item first"),
-            _ => Availability::Disabled("Restore trash items puts several back"),
+            0 => Availability::Disabled(t!("trash-select-a-trashed-item-first")),
+            _ => Availability::Disabled(t!("trash-restore-trash-items-puts-several-back")),
         }
     }
     fn run(
@@ -196,8 +197,8 @@ impl Action for RestoreItems {
     fn id(&self) -> ActionId {
         RESTORE_ITEMS
     }
-    fn label(&self) -> &'static str {
-        "Restore trash items"
+    fn label(&self) -> String {
+        t!("trash-restore-trash-items")
     }
     fn group(&self) -> ActionGroup {
         GROUP
@@ -209,7 +210,7 @@ impl Action for RestoreItems {
         if !in_view(ctx) {
             Availability::Hidden
         } else if ctx.selection.is_empty() {
-            Availability::Disabled("select trashed items first")
+            Availability::Disabled(t!("trash-select-trashed-items-first"))
         } else {
             Availability::Enabled
         }
@@ -231,8 +232,8 @@ impl Action for Empty {
     fn id(&self) -> ActionId {
         EMPTY
     }
-    fn label(&self) -> &'static str {
-        "Empty trash"
+    fn label(&self) -> String {
+        t!("trash-empty-trash")
     }
     fn group(&self) -> ActionGroup {
         GROUP
@@ -244,7 +245,7 @@ impl Action for Empty {
         if !in_view(ctx) {
             Availability::Hidden
         } else if self.0.is_empty() {
-            Availability::Disabled("the trash is empty")
+            Availability::Disabled(t!("trash-the-trash-is-empty"))
         } else {
             Availability::Enabled
         }

@@ -5,6 +5,10 @@
 //! paints the first screen before the walk finishes, and it implements the
 //! native fast path for same-provider copies; cross-provider copies are
 //! composed by `vfs` from [`Provider::open_read`] and [`Provider::open_write`].
+//! A provider whose service can move or copy a selection by itself (an
+//! object store's copy API, a remote rename) sets
+//! [`Capabilities::NATIVE_TRANSFER`] and answers [`Provider::transfer`];
+//! the default answers `Unsupported` and the kernel does the work.
 //!
 //! # Worked example
 //!
@@ -111,7 +115,7 @@
 use async_trait::async_trait;
 use futures::stream::BoxStream;
 use runtime::ProgressSink;
-use tokio::io::{AsyncRead, AsyncWrite};
+use tokio::io::{AsyncRead, AsyncReadExt as _, AsyncWrite};
 use types::{CancelToken, Entry, EntryId, Error, Location, ProviderId};
 
 bitflags::bitflags! {
@@ -135,7 +139,30 @@ bitflags::bitflags! {
         const SEEK = 64;
         /// Entries carry permission bits the user may change.
         const PERMISSIONS = 128;
+        /// Copy and move between two locations of this provider instance
+        /// happen on the provider's side (server-side copy, remote rename):
+        /// nothing streams through the machine and the job only tracks
+        /// progress. `ops` calls [`Provider::transfer`] first where it is
+        /// set.
+        const NATIVE_TRANSFER = 256;
+        /// `link` with [`LinkKind::Junction`] is available (NTFS).
+        const JUNCTION = 512;
+        /// `link` with [`LinkKind::Shortcut`] is available (Windows `.lnk`).
+        const SHORTCUT = 1024;
+        /// The entries live behind a network: the kernel treats the
+        /// location as a remote-latency mount (SPEC.md "Network file
+        /// systems"), with no eager stat and no thumbnails by default.
+        const REMOTE = 2048;
     }
+}
+
+/// Whether a [`Provider::transfer`] moves or copies.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum TransferMode {
+    /// The items end up at the target and are gone from the source.
+    Move,
+    /// The items are duplicated at the target.
+    Copy,
 }
 
 /// How deep a listing goes.
@@ -183,6 +210,33 @@ pub enum LinkKind {
     Symbolic,
     /// A hard link to the same entry.
     Hard,
+    /// An NTFS directory junction; Windows only, folders only.
+    Junction,
+    /// A classic `.lnk` shortcut file; Windows only.
+    Shortcut,
+}
+
+impl LinkKind {
+    /// The name shown in menus and dialogues, in the language in use.
+    #[must_use]
+    pub fn label(self) -> String {
+        match self {
+            Self::Symbolic => crate::t!("link-symbolic"),
+            Self::Hard => crate::t!("link-hard"),
+            Self::Junction => crate::t!("link-junction"),
+            Self::Shortcut => crate::t!("link-shortcut"),
+        }
+    }
+
+    /// The capability a provider needs for this kind.
+    #[must_use]
+    pub fn capability(self) -> Capabilities {
+        match self {
+            Self::Symbolic | Self::Hard => Capabilities::SYMLINK,
+            Self::Junction => Capabilities::JUNCTION,
+            Self::Shortcut => Capabilities::SHORTCUT,
+        }
+    }
 }
 
 /// How to copy.
@@ -245,6 +299,24 @@ pub trait Provider: Send + Sync + 'static {
     /// Opens the entry for reading from the start.
     async fn open_read(&self, loc: &Location) -> Result<ReadHandle, Error>;
 
+    /// Opens the entry for reading from byte `offset` on: what `SEEK`
+    /// promises. The default opens from the start and discards the first
+    /// `offset` bytes; a provider with a cheaper way (a `tail -c +N` on a
+    /// remote host) overrides it.
+    ///
+    /// # Errors
+    ///
+    /// As [`open_read`](Self::open_read), or the error of discarding.
+    async fn open_read_at(&self, loc: &Location, offset: u64) -> Result<ReadHandle, Error> {
+        let mut reader = self.open_read(loc).await?;
+        if offset > 0 {
+            tokio::io::copy(&mut (&mut reader).take(offset), &mut tokio::io::sink())
+                .await
+                .map_err(Error::from_io)?;
+        }
+        Ok(reader)
+    }
+
     /// Opens or creates the entry for writing from the start.
     async fn open_write(&self, loc: &Location, opts: WriteOptions) -> Result<WriteHandle, Error>;
 
@@ -271,6 +343,56 @@ pub trait Provider: Send + Sync + 'static {
         progress: ProgressSink,
         cancel: CancelToken,
     ) -> Result<(), Error>;
+
+    /// Moves or copies a whole selection within this provider instance on
+    /// the provider's side, if `NATIVE_TRANSFER` is set: the object store's
+    /// copy API across buckets of one account, a remote rename over SSH.
+    /// Every item lands in `to` under its own name. The provider submits
+    /// the operation, reports progress as the service exposes it and
+    /// honours `cancel` where the service allows. `ops` calls this first
+    /// when source and target share a provider instance with the
+    /// capability and falls back to `rename`, `copy` and the streamed path
+    /// when it answers `Error::Unsupported`, which the default does, and
+    /// which a provider answers for a mode it has no native path for (an
+    /// SFTP server renames but cannot copy).
+    ///
+    /// # Errors
+    ///
+    /// `Error::Unsupported` when there is no native path for `mode` here;
+    /// `Error::Cancelled` when cancelled; the service's error otherwise.
+    async fn transfer(
+        &self,
+        items: &[Location],
+        to: &Location,
+        mode: TransferMode,
+        progress: ProgressSink,
+        cancel: CancelToken,
+    ) -> Result<(), Error> {
+        let _ = (items, to, mode, progress, cancel);
+        Err(Error::Unsupported(
+            "this provider moves and copies through the kernel",
+        ))
+    }
+
+    /// The size in bytes above which a whole-file previewer is held behind
+    /// *Preview anyway* for an entry at `loc`, for a provider with
+    /// [`Capabilities::REMOTE`]: a per-host override of the kernel's
+    /// default, 4 MiB (`specs/ext-ssh.md`, "Previews over SSH"). `None`,
+    /// the default, leaves the kernel's default in force.
+    fn remote_preview_cap(&self, loc: &Location) -> Option<u64> {
+        let _ = loc;
+        None
+    }
+
+    /// Whether the source holding `loc` (one SSH host, one cloud account)
+    /// has *Always preview* on: its `preview_always` switch, set from the
+    /// cap message or the source's editor, after which no whole-file
+    /// preview there is held behind the cap (SPEC.md, Preview, *Remote
+    /// sources*). `false`, the default, leaves the cap in force.
+    fn remote_preview_always(&self, loc: &Location) -> bool {
+        let _ = loc;
+        false
+    }
 
     /// Change notifications for one location, if `WATCH` is set.
     ///

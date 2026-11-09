@@ -16,6 +16,7 @@
 use std::io::Cursor;
 use std::sync::Arc;
 
+use ext::Text;
 use ext::{
     API_VERSION, Capabilities, ControlId, ControlValue, Extension, Frame, Icon, InfoSection,
     Manifest, Platforms, Points, PreviewControl, PreviewDoc, Previewer, Provider, Registry,
@@ -58,6 +59,7 @@ impl ImagePreview {
                 requires: Capabilities::empty(),
                 points: Points::PREVIEWER,
                 platforms: Platforms::ALL,
+                previews: EXTENSIONS,
             },
         }
     }
@@ -69,6 +71,7 @@ impl Extension for ImagePreview {
     }
 
     fn register(&self, reg: &mut Registry) -> Result<(), Error> {
+        reg.translations(&[("en", include_str!("../locales/en.ftl"))]);
         reg.previewer(Arc::new(ImagePreviewer));
         Ok(())
     }
@@ -539,14 +542,14 @@ impl PreviewDoc for ImageDoc {
         rows.extend(self.header.exif.iter().cloned());
         let mut sections = vec![InfoSection {
             id: "file",
-            title: "File info",
+            title: Text("preview-image-file-info"),
             icon: Icon::Info,
             rows,
         }];
         if !self.header.exif_all.is_empty() {
             sections.push(InfoSection {
                 id: "exif",
-                title: "EXIF",
+                title: Text("preview-image-exif"),
                 icon: Icon::Camera,
                 rows: self.header.exif_all.clone(),
             });
@@ -1016,8 +1019,8 @@ mod tests {
         assert_eq!(sections.len(), 2, "{sections:?}");
         let file = &sections[0];
         assert_eq!(
-            (file.id, file.title, file.icon),
-            ("file", "File info", Icon::Info)
+            (file.id, file.title.key(), file.icon),
+            ("file", "preview-image-file-info", Icon::Info)
         );
         let row = |rows: &[(String, String)], key: &str| {
             rows.iter()
@@ -1033,8 +1036,8 @@ mod tests {
         assert_eq!(row(&file.rows, "Aperture"), "f/2.8");
         let exif = &sections[1];
         assert_eq!(
-            (exif.id, exif.title, exif.icon),
-            ("exif", "EXIF", Icon::Camera)
+            (exif.id, exif.title.key(), exif.icon),
+            ("exif", "preview-image-exif", Icon::Camera)
         );
         assert_eq!(exif.rows.len(), 5, "every tag: {:?}", exif.rows);
         assert_eq!(row(&exif.rows, "Make"), "Rick Cameras");

@@ -19,7 +19,7 @@ pub struct Item {
     /// The binding, if any.
     pub shortcut: Option<String>,
     /// Greyed out with this reason when it cannot run now.
-    pub disabled: Option<&'static str>,
+    pub disabled: Option<String>,
     /// Lower is more recently used; `None` never used.
     pub recency: Option<usize>,
 }
@@ -42,7 +42,7 @@ pub fn items(app: &App, keys: &KeyMap, pane: PaneId, recents: &[Intent]) -> Vec<
             };
             Some(Item {
                 intent,
-                label: action.label().to_owned(),
+                label: action.label(),
                 shortcut: keys.text_for(intent),
                 disabled,
                 recency: recency(intent),

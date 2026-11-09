@@ -7,8 +7,8 @@
 //! before the walk finishes. Copies take the native fast path through
 //! [`platform::fs::copy_file`]. Trash goes through the platform's [`Trash`].
 //! Change notification comes from the `notify` crate, translated into
-//! [`FsChange`](ext::FsChange) with stable entry ids. [`search`] is the
-//! subtree search: the `ignore` crate's parallel walker streaming matches.
+//! [`FsChange`](ext::FsChange) with stable entry ids. The subtree search of
+//! 0.1 moved to the `ext-search-walk` plugin in 0.2 (issue 22).
 //!
 //! Entry ids are the device and inode on Unix and the volume serial and file
 //! id on Windows, so a renamed entry keeps its id.
@@ -16,7 +16,6 @@
 #![forbid(unsafe_code)]
 
 mod list;
-pub mod search;
 mod watch;
 
 use std::fmt;
@@ -147,15 +146,21 @@ impl Provider for LocalProvider {
         PROVIDER_ID
     }
 
+    /// Everything a local filesystem offers; directory junctions and `.lnk`
+    /// shortcuts where the platform has them (Windows).
     fn capabilities(&self, _loc: &Location) -> Capabilities {
-        Capabilities::WRITE
+        let mut caps = Capabilities::WRITE
             | Capabilities::TRASH
             | Capabilities::RENAME
             | Capabilities::SYMLINK
             | Capabilities::REFLINK
             | Capabilities::WATCH
             | Capabilities::SEEK
-            | Capabilities::PERMISSIONS
+            | Capabilities::PERMISSIONS;
+        if platform::fs::HAS_WINDOWS_LINKS {
+            caps |= Capabilities::JUNCTION | Capabilities::SHORTCUT;
+        }
+        caps
     }
 
     fn list(&self, loc: &Location, opts: ListOptions, cancel: CancelToken) -> EntryStream {
@@ -230,6 +235,8 @@ impl Provider for LocalProvider {
         blocking(move || match kind {
             LinkKind::Symbolic => platform::fs::symlink(&target_path, &at_path),
             LinkKind::Hard => std::fs::hard_link(&target_path, &at_path),
+            LinkKind::Junction => platform::fs::junction(&target_path, &at_path),
+            LinkKind::Shortcut => platform::fs::shortcut(&target_path, &at_path),
         })
         .await?;
         self.stat(at).await

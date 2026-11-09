@@ -39,7 +39,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: ${{ github.event_name == 'schedule' && fromJSON('["ubuntu-latest"]') || fromJSON('["ubuntu-latest", "macos-latest", "windows-latest"]') }}
+        os: ${{ github.event_name == 'schedule' && fromJSON('["ubuntu-24.04"]') || fromJSON('["ubuntu-24.04", "macos-latest", "windows-latest"]') }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 90
     permissions:
@@ -50,12 +50,13 @@ jobs:
       RICK_BENCH_RECORD: "1"
       # Issue 18: media playback is built where GStreamer's development
       # files are (Linux); the office and media timings run there only.
-      RICK_TESTS_FEATURES: ${{ matrix.os == 'ubuntu-latest' && '--features gstreamer' || '' }}
+      RICK_TESTS_FEATURES: ${{ matrix.os == 'ubuntu-24.04' && '--features gstreamer' || '' }}
     steps:
       - uses: actions/checkout@v4
         with: { ref: "${{ github.event_name == 'schedule' && 'dev' || '' }}" }
+      # No 7-Zip library here: the benchmarks measure no disk image.
       - uses: ./.github/actions/setup
-        with: { system: test }
+        with: { system: test, sevenzip: "false" }
       # The hardware line, as the runner reports it: GitHub's image name and
       # version, then the CPU, core count and memory the OS sees.
       - name: hardware
@@ -91,7 +92,7 @@ jobs:
           set -o pipefail
           for i in $(seq 1 "$RUNS"); do
             echo "::group::run $i"
-            cargo test -p tests --release ${{ env.RICK_TESTS_FEATURES }} --test fixture --test listing --test copy --test ui --test preview --test git --test chrome --test preview_pane --test viewer --test startup --test plugins --test providers --test closeout --test previewers -- --ignored --nocapture --test-threads 1 --skip a_new_text_cancels_the_running_walk 2>&1 | tee "bench-$i.log"
+            cargo test -p tests --release ${{ env.RICK_TESTS_FEATURES }} --test fixture --test listing --test copy --test ui --test preview --test git --test chrome --test preview_pane --test startup --test plugins --test providers --test closeout --test previewers --test preview_3d -- --ignored --nocapture --test-threads 1 --skip a_new_text_cancels_the_running_walk 2>&1 | tee "bench-$i.log"
             cargo test -p tests --release ${{ env.RICK_TESTS_FEATURES }} --test session -- --nocapture --test-threads 1 a_big_session_starts 2>&1 | tee -a "bench-$i.log"
             echo "::endgroup::"
           done

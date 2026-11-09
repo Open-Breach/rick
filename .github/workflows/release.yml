@@ -4,7 +4,10 @@ name: release
 # dylibs and libstd it shares with the plugins, the pdfium library beside it
 # (SPEC.md: pdfium ships beside the binary), the GStreamer runtime on macOS
 # and Windows (SPEC.md: bundled there, the system's on Linux; QUESTIONS.md
-# 89) and `plugins/` with every plugin (QUESTIONS.md 81) — plus LICENSE,
+# 89), `plugins/` with every plugin (QUESTIONS.md 81) and the 7-Zip library
+# with its licence beside the archive plugin (issue 51; built from the
+# pinned sources on Linux and macOS, the pinned installer's 7z.dll on
+# Windows, see .github/scripts/sevenzip.sh) — plus LICENSE,
 # README, CHANGELOG and the third-party
 # licenses; a smoke test of every archive; then a GitHub Release with the archives, their
 # SHA-256 sums and the tag's changelog section as its body. A tag with a
@@ -31,7 +34,7 @@ env:
   GSTREAMER_VERSION: "1.28.8"
 jobs:
   licenses:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
@@ -49,7 +52,7 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { os: ubuntu-latest, platform: linux-x64, pdfium: pdfium-linux-x64 }
+          - { os: ubuntu-24.04, platform: linux-x64, pdfium: pdfium-linux-x64 }
           # aarch64 Linux builds natively on GitHub's arm runner, no cross
           # toolchain needed.
           - { os: ubuntu-24.04-arm, platform: linux-arm64, pdfium: pdfium-linux-arm64 }
@@ -128,19 +131,39 @@ jobs:
           fi
           mkdir -p "$dest"
           curl -sSL "https://github.com/bblanchon/pdfium-binaries/releases/latest/download/${{ matrix.pdfium }}.tgz" | tar xz -C "$dest"
+          # The library's path goes into the PDF previewer's setting file in
+          # the runner's config directory, which `cargo xtask bundle` reads
+          # to copy the library beside the binary (issue 50: no environment
+          # variable names it any more).
           if [ "${{ runner.os }}" = "Windows" ]; then
-            echo "PDFIUM_LIB=$dest/bin/pdfium.dll" >> "$GITHUB_ENV"
-            echo "RICK_PDFIUM_DIR=$(cygpath -w "$dest/bin")" >> "$GITHUB_ENV"
+            lib="$dest/bin/pdfium.dll"; config="$(cygpath -u "$APPDATA")/Rick"; lib_setting="$(cygpath -m "$lib")"
           elif [ "${{ runner.os }}" = "macOS" ]; then
-            echo "PDFIUM_LIB=$dest/lib/libpdfium.dylib" >> "$GITHUB_ENV"
-            echo "RICK_PDFIUM_DIR=$dest/lib" >> "$GITHUB_ENV"
+            lib="$dest/lib/libpdfium.dylib"; config="$HOME/Library/Application Support/Rick"; lib_setting="$lib"
           else
-            echo "PDFIUM_LIB=$dest/lib/libpdfium.so" >> "$GITHUB_ENV"
-            echo "RICK_PDFIUM_DIR=$dest/lib" >> "$GITHUB_ENV"
+            lib="$dest/lib/libpdfium.so"; config="${XDG_CONFIG_HOME:-$HOME/.config}/rick"; lib_setting="$lib"
           fi
-      # The bundle: binary, kernel dylibs, libstd, pdfium (from
-      # RICK_PDFIUM_DIR), the GStreamer runtime (from RICK_GSTREAMER_DIR on
-      # macOS and Windows) and plugins/, from one build of every library,
+          echo "PDFIUM_LIB=$lib" >> "$GITHUB_ENV"
+          mkdir -p "$config"
+          printf 'library = "%s"\n' "$lib_setting" > "$config/preview-pdf.toml"
+      # The 7-Zip library for the disk images (issue 51): 7z.so built from
+      # the pinned sources on Linux and macOS, 7z.dll from the pinned
+      # installer on Windows, with the licence text beside it.
+      - name: 7-zip library
+        shell: bash
+        env: { SEVENZIP_SOURCE: build }
+        run: |
+          dest="$RUNNER_TEMP/sevenzip"
+          if [ "${{ runner.os }}" = "Windows" ]; then dest="$(cygpath -u "$RUNNER_TEMP")/sevenzip"; fi
+          .github/scripts/sevenzip.sh "$dest"
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            echo "RICK_SEVENZIP_DIR=$(cygpath -w "$dest")" >> "$GITHUB_ENV"
+          else
+            echo "RICK_SEVENZIP_DIR=$dest" >> "$GITHUB_ENV"
+          fi
+      # The bundle: binary, kernel dylibs, libstd, pdfium (from the PDF
+      # previewer's setting), the GStreamer runtime (from RICK_GSTREAMER_DIR on
+      # macOS and Windows), plugins/ with the 7-Zip library beside the
+      # archive plugin (from RICK_SEVENZIP_DIR), from one build of every library,
       # binary and example in the workspace with the media previewer's
       # playback on, the previewer's pdfium_check example for the smoke
       # test among them.
@@ -169,6 +192,9 @@ jobs:
           mkdir -p "dist/$NAME"
           cp -R target/release/bundle/. "dist/$NAME/"
           cp LICENSE README.md CHANGELOG.md THIRD-PARTY-LICENSES.md "dist/$NAME/"
+          # The 7-Zip licence among the licences at the root as well as
+          # beside the library.
+          cp "dist/$NAME/plugins/vfs-archive/7-Zip-License.txt" "dist/$NAME/7-Zip-License.txt"
           ls -lR "dist/$NAME"
           cd dist
           if [ "${{ runner.os }}" = "Windows" ]; then
@@ -199,21 +225,23 @@ jobs:
           if-no-files-found: error
 
   # Each archive, as a user gets it: unpacked in an empty directory, the
-  # binary reports its version, lists the Git plugin as loaded, and pdfium
-  # loads from beside it.
+  # binary reports its version, lists every plugin of the platform as
+  # loaded, and pdfium loads from beside it.
   smoke:
     needs: build
     strategy:
       fail-fast: false
       matrix:
         include:
-          - { os: ubuntu-latest, platform: linux-x64 }
+          - { os: ubuntu-24.04, platform: linux-x64 }
           - { os: ubuntu-24.04-arm, platform: linux-arm64 }
           - { os: macos-latest, platform: macos-arm64 }
           - { os: windows-latest, platform: windows-x64 }
     runs-on: ${{ matrix.os }}
     timeout-minutes: 15
     steps:
+      # For .github/scripts/check-plugins.sh, the per-platform plugin check.
+      - uses: actions/checkout@v4
       # The Linux archives use the system GStreamer: the media plugin links
       # it and loads only where it is installed, as a user's desktop has it.
       - name: gstreamer (linux)
@@ -227,11 +255,8 @@ jobs:
         with: { name: "pdfium-check-${{ matrix.platform }}", path: check }
       - name: smoke test
         shell: bash
-        env:
-          RICK_PDFIUM_DIR: ""
         run: |
           set -euo pipefail
-          unset RICK_PDFIUM_DIR
           version="${TAG#v}"
           name="rick-$version-${{ matrix.platform }}"
           exe=""
@@ -242,7 +267,7 @@ jobs:
           if [ -f "../$name.zip" ]; then 7z x "../$name.zip" > /dev/null; else tar xzf "../$name.tar.gz"; fi
           cd "$name"
           ls -l
-          for file in "rick$exe" LICENSE README.md CHANGELOG.md THIRD-PARTY-LICENSES.md; do
+          for file in "rick$exe" LICENSE README.md CHANGELOG.md THIRD-PARTY-LICENSES.md 7-Zip-License.txt; do
             test -f "$file" || { echo "missing $file"; exit 1; }
           done
           test -f libpdfium.so || test -f libpdfium.dylib || test -f pdfium.dll || { echo "no pdfium library beside the binary"; exit 1; }
@@ -263,27 +288,19 @@ jobs:
           out="$("./rick$exe" --version)"
           echo "rick --version: $out"
           echo "$out" | grep -Eq "^${version%%-*}(-[0-9A-Za-z.]+)? \([0-9a-f]{7,}\)$" || { echo "unexpected version line"; exit 1; }
-          # The plugins, bundled and loaded from plugins/<id>/: Git, the
-          # archive and trash providers of issue 20, the four previewers of
-          # issue 18 and the hex fallback of issue 17. The media previewer
-          # loading on macOS and Windows
-          # shows the bundled GStreamer runtime resolves; on Linux the
-          # runner's system GStreamer does.
-          for id in git vfs-trash vfs-archive preview-archive preview-csv preview-media preview-office preview-hex; do
-            test -f "plugins/$id/plugin.toml" || { echo "no plugins/$id/plugin.toml"; exit 1; }
-          done
-          plugins="$("./rick$exe" --list-plugins)"
-          echo "$plugins"
-          echo "$plugins" | grep -Eq '^git +Git +[^ ]+ +decorator, action +loaded +' || { echo "git plugin not loaded"; exit 1; }
-          echo "$plugins" | grep -Eq '^vfs-trash +Trash +[^ ]+ +provider, decorator, action +loaded +' || { echo "trash plugin not loaded"; exit 1; }
-          echo "$plugins" | grep -Eq '^vfs-archive +Archives +[^ ]+ +provider +loaded +' || { echo "archive plugin not loaded"; exit 1; }
-          for id in preview-archive preview-csv preview-media preview-office preview-hex; do
-            echo "$plugins" | grep -Eq "^$id +[^ ].* +previewer +loaded +" || { echo "$id plugin not loaded"; exit 1; }
-          done
+          # The plugins, bundled and loaded from plugins/<id>/: Git and SVN,
+          # the archive and trash providers of issue 20, the previewers of
+          # issue 18 and the markup previewer of issue 51, the hex fallback
+          # of issue 17, the subdirectory search and this platform's index
+          # connector of issue 22; and the 7-Zip library with its licence
+          # beside the archive plugin (issue 51). The media previewer
+          # loading on macOS and Windows shows the bundled GStreamer runtime
+          # resolves; on Linux the runner's system GStreamer does.
+          "$GITHUB_WORKSPACE/.github/scripts/check-plugins.sh" . --sevenzip
           # pdfium from beside the binary: the previewer's test binary, copied
-          # next to rick, with RICK_PDFIUM_DIR unset and no system pdfium. The
-          # example has no run path of its own, so the library path names the
-          # directory for the kernel dylibs and libstd.
+          # next to rick, with no setting (a fresh runner) and no system
+          # pdfium. The example has no run path of its own, so the library
+          # path names the directory for the kernel dylibs and libstd.
           cp "../../../check/pdfium_check$exe" .
           chmod +x "pdfium_check$exe"
           LD_LIBRARY_PATH=. DYLD_LIBRARY_PATH=. "./pdfium_check$exe" | tee check.txt
@@ -291,7 +308,7 @@ jobs:
 
   release:
     needs: [build, smoke]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
@@ -309,7 +326,7 @@ jobs:
           python3 .github/scripts/changelog-section.py "$TAG" CHANGELOG.md > body.md
           {
             echo
-            echo "Archives: the \`rick\` binary with the shared kernel libraries, libstd and the pdfium library beside it, \`plugins/\` with the Git, Office, media, archive, CSV and hex-preview plugins, the GStreamer runtime on macOS and Windows (Linux uses the system's: install the gstreamer1.0 plug-in packages for playback), LICENSE, README, CHANGELOG and THIRD-PARTY-LICENSES; \`SHA256SUMS.txt\` has the checksums. Not signed or notarised (see README, Try it)."
+            echo "Archives: the \`rick\` binary with the shared kernel libraries, libstd and the pdfium library beside it, \`plugins/\` with the Git, SVN, archive, trash, Office, media, archive-preview, markup (Markdown, HTML, CSV), hex-preview and subdirectory-search plugins and the platform's search-index connector (Windows Search, Spotlight, or Tracker and Baloo), the 7-Zip library (LGPL) beside the archive plugin for the disk images, the GStreamer runtime on macOS and Windows (Linux uses the system's: install the gstreamer1.0 plug-in packages for playback), LICENSE, README, CHANGELOG, THIRD-PARTY-LICENSES and the 7-Zip licence; \`SHA256SUMS.txt\` has the checksums. Not signed or notarised (see README, Try it)."
           } >> body.md
           cat body.md
       - uses: softprops/action-gh-release@v2

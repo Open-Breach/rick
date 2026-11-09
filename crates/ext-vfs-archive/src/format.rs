@@ -4,6 +4,7 @@
 use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::path::Path;
 
+use ext::platform::ImageFormat;
 use types::Error;
 
 /// A compression codec: wrapped around a tar, or a file on its own.
@@ -187,8 +188,13 @@ pub enum Format {
     SevenZ,
     /// RAR; read-only, creation is not licensable.
     Rar,
-    /// An ISO 9660 or UDF disc image; read-only.
+    /// An ISO 9660 or UDF disc image; read-only, through the native
+    /// readers.
     Image,
+    /// A disk image of the Disk images table (raw, DMG, VHD, VHDX, VMDK,
+    /// VDI, QCOW2); read-only, through the 7-Zip library. Never
+    /// [`ImageFormat::Iso`], which is [`Format::Image`].
+    Disk(ImageFormat),
     /// One compressed file: a one-entry archive.
     Single(Codec),
 }
@@ -210,9 +216,22 @@ impl Format {
             Self::Tar(Some(_)) => "compressed tar",
             Self::SevenZ => "7z",
             Self::Rar => "RAR",
-            Self::Image => "disc image",
+            Self::Image | Self::Disk(ImageFormat::Iso) => "disc image",
+            Self::Disk(ImageFormat::Img) => "raw disk image",
+            Self::Disk(ImageFormat::Dmg) => "DMG image",
+            Self::Disk(ImageFormat::Vhd) => "VHD image",
+            Self::Disk(ImageFormat::Vhdx) => "VHDX image",
+            Self::Disk(ImageFormat::Vmdk) => "VMDK image",
+            Self::Disk(ImageFormat::Vdi) => "VDI image",
+            Self::Disk(ImageFormat::Qcow2) => "QCOW2 image",
             Self::Single(_) => "compressed file",
         }
+    }
+
+    /// Whether the format is read through the 7-Zip library.
+    #[must_use]
+    pub fn needs_sevenzip(self) -> bool {
+        matches!(self, Self::Disk(_))
     }
 
     /// The format a file name's extension names, if any. `.tar.gz` and its
@@ -232,6 +251,13 @@ impl Format {
             "7z" => Self::SevenZ,
             "rar" | "cbr" => Self::Rar,
             "iso" | "udf" => Self::Image,
+            "img" | "ima" | "raw" => Self::Disk(ImageFormat::Img),
+            "dmg" => Self::Disk(ImageFormat::Dmg),
+            "vhd" => Self::Disk(ImageFormat::Vhd),
+            "vhdx" => Self::Disk(ImageFormat::Vhdx),
+            "vmdk" => Self::Disk(ImageFormat::Vmdk),
+            "vdi" => Self::Disk(ImageFormat::Vdi),
+            "qcow2" | "qcow" => Self::Disk(ImageFormat::Qcow2),
             _ => {
                 let codec = Codec::by_extension(ext)?;
                 let tar_inside = Path::new(stem)
@@ -248,11 +274,17 @@ impl Format {
 
     /// The format the first bytes of a file name: zip, 7z, RAR, a tar (the
     /// `ustar` magic in its first header), a disc image (`CD001`, `BEA01`
-    /// or `NSR0x` in its volume descriptors) or a codec.
+    /// or `NSR0x` in its volume descriptors), a disk image whose container
+    /// starts with a signature (VHDX, QCOW2, VMDK, VDI, a dynamic VHD) or
+    /// a codec. A fixed VHD's footer, a DMG's trailer and a raw image carry
+    /// nothing at the start; their names tell.
     #[must_use]
     pub fn by_magic(head: &[u8], descriptors: &[u8]) -> Option<Self> {
         if head.starts_with(b"PK\x03\x04") || head.starts_with(b"PK\x05\x06") {
             return Some(Self::Zip);
+        }
+        if let Some(image) = disk_by_magic(head) {
+            return Some(Self::Disk(image));
         }
         if head.starts_with(&[b'7', b'z', 0xbc, 0xaf, 0x27, 0x1c]) {
             return Some(Self::SevenZ);
@@ -311,6 +343,26 @@ impl Format {
             }
         }
         Ok(format)
+    }
+}
+
+/// The disk-image container whose signature `head` starts with.
+fn disk_by_magic(head: &[u8]) -> Option<ImageFormat> {
+    if head.starts_with(b"vhdxfile") {
+        Some(ImageFormat::Vhdx)
+    } else if head.starts_with(b"QFI\xfb") {
+        Some(ImageFormat::Qcow2)
+    } else if head.starts_with(b"KDMV") || head.starts_with(b"# Disk DescriptorFile") {
+        Some(ImageFormat::Vmdk)
+    } else if head.starts_with(b"conectix") {
+        Some(ImageFormat::Vhd)
+    } else if head.starts_with(b"<<< ")
+        && head.len() >= 0x44
+        && head[0x40..0x44] == [0x7f, 0x10, 0xda, 0xbe]
+    {
+        Some(ImageFormat::Vdi)
+    } else {
+        None
     }
 }
 
@@ -390,6 +442,26 @@ mod tests {
         assert_eq!(Format::by_extension("a.rar"), Some(Format::Rar));
         assert_eq!(Format::by_extension("a.iso"), Some(Format::Image));
         assert_eq!(
+            Format::by_extension("disk.vhdx"),
+            Some(Format::Disk(ImageFormat::Vhdx))
+        );
+        assert_eq!(
+            Format::by_extension("DISK.QCOW2"),
+            Some(Format::Disk(ImageFormat::Qcow2))
+        );
+        assert_eq!(
+            Format::by_extension("floppy.img"),
+            Some(Format::Disk(ImageFormat::Img))
+        );
+        assert_eq!(
+            Format::by_extension("app.dmg"),
+            Some(Format::Disk(ImageFormat::Dmg))
+        );
+        assert!(!Format::Disk(ImageFormat::Vhd).writable());
+        assert!(Format::Disk(ImageFormat::Vdi).needs_sevenzip());
+        assert!(!Format::Image.needs_sevenzip());
+        assert_eq!(Format::Disk(ImageFormat::Vmdk).name(), "VMDK image");
+        assert_eq!(
             Format::by_extension("notes.txt.gz"),
             Some(Format::Single(Codec::Gzip))
         );
@@ -422,6 +494,29 @@ mod tests {
             Some(Format::Single(Codec::Gzip))
         );
         assert_eq!(Format::by_magic(b"", b"CD001"), Some(Format::Image));
+        assert_eq!(
+            Format::by_magic(b"vhdxfile rest", b""),
+            Some(Format::Disk(ImageFormat::Vhdx))
+        );
+        assert_eq!(
+            Format::by_magic(b"QFI\xfb\0\0\0\x03", b""),
+            Some(Format::Disk(ImageFormat::Qcow2))
+        );
+        assert_eq!(
+            Format::by_magic(b"KDMV", b""),
+            Some(Format::Disk(ImageFormat::Vmdk))
+        );
+        assert_eq!(
+            Format::by_magic(b"conectix", b""),
+            Some(Format::Disk(ImageFormat::Vhd))
+        );
+        let mut vdi = b"<<< Oracle VM VirtualBox Disk Image >>>\n".to_vec();
+        vdi.resize(0x40, 0);
+        vdi.extend_from_slice(&[0x7f, 0x10, 0xda, 0xbe]);
+        assert_eq!(
+            Format::by_magic(&vdi, b""),
+            Some(Format::Disk(ImageFormat::Vdi))
+        );
         assert_eq!(Format::by_magic(b"", b"NSR03"), Some(Format::Image));
         assert_eq!(Format::by_magic(b"hello", b""), None);
         let mut header = [0u8; 512];

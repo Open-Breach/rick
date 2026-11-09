@@ -1,14 +1,36 @@
 use std::fs;
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
-use ext::{ActionId, Invocation, Level, UiHost};
+use ext::{
+    API_VERSION, ActionId, Availability, Capabilities, Extension, Filter, Invocation, Level,
+    Manifest, Platforms, Points, Query, Registry, SearchHit, SearchIndex, SearchScope, UiHost,
+    Version,
+};
+use futures::StreamExt;
+use futures::stream;
 use model::{Column, SelectionChange, SettingsChange, SortDir};
 use platform::{ConfigDir, Fake};
-use types::Location;
+use types::{Attrs, CancelToken, Entry, EntryId, EntryKind, Error, ExtId, Location, VPath};
 
 use super::{App, Command, Config, Event, SETTINGS_FILE};
+
+/// The text of the file at `path` once `done` holds for it, or as it is
+/// after ten seconds: the settings saver writes on a task of the runtime
+/// after the command, which `settle` does not wait for, so a test reads the
+/// file this way rather than once (the Linux arm64 runner read it early).
+fn read_until(path: &Path, done: impl Fn(&str) -> bool) -> String {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let text = fs::read_to_string(path).unwrap_or_default();
+        if done(&text) || Instant::now() >= deadline {
+            return text;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
 
 #[derive(Default)]
 struct Scripted {
@@ -27,6 +49,9 @@ impl UiHost for Scripted {
             .clone()
     }
     fn show(&self, _title: &str, _text: &str) {}
+    fn form(&self, form: ext::Form) -> Option<ext::Values> {
+        Some(form.defaults())
+    }
 }
 
 fn local(path: &Path) -> Location {
@@ -42,6 +67,11 @@ struct Harness {
 }
 
 fn harness() -> Harness {
+    harness_with(Vec::new())
+}
+
+/// A harness with `extensions` loaded besides the core.
+fn harness_with(extensions: Vec<Arc<dyn Extension>>) -> Harness {
     let root = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
     for name in ["b.txt", "a.txt", "c.txt"] {
         fs::write(root.path().join(name), name).unwrap_or_else(|e| panic!("{e}"));
@@ -52,7 +82,7 @@ fn harness() -> Harness {
     let app = App::new(Config {
         platform: fake.clone(),
         ui: ui.clone(),
-        extensions: Vec::new(),
+        extensions,
         config_dir: Some(fake.config_dir()),
         start: Some(local(root.path())),
     });
@@ -271,7 +301,7 @@ fn settings_changes_are_saved_and_disk_edits_are_picked_up() {
         SortDir::Descending,
     )));
     h.settle();
-    let text = fs::read_to_string(&path).unwrap_or_else(|e| panic!("{e}"));
+    let text = read_until(&path, |t| t.contains("sort_by = \"size\""));
     assert!(text.contains("sort_by = \"size\""), "{text}");
     assert_eq!(h.app.model().settings.sort_by, Column::Size);
 
@@ -581,7 +611,8 @@ fn pin_and_unpin_edit_the_settings_and_undo() {
     h.send(Command::Undo);
     assert_eq!(h.app.model().settings.pinned, [local(&sub), local(&a)]);
     h.settle();
-    let text = fs::read_to_string(h.app.settings_path()).unwrap_or_else(|e| panic!("{e}"));
+    let settings_path = h.app.settings_path();
+    let text = read_until(Path::new(&settings_path), |t| t.contains("local:"));
     assert!(
         text.contains("local:"),
         "pins are saved as locations: {text}"
@@ -734,10 +765,236 @@ fn tree_view_lists_children_lazily_and_keeps_them_across_a_refresh() {
     assert!(tab.tree.expanded.is_empty());
 }
 
+/// A search index that stands in for a plugin: a manifest around it and
+/// the extension that registers it.
+struct IndexExtension {
+    manifest: Manifest,
+    index: Arc<dyn SearchIndex>,
+}
+
+impl IndexExtension {
+    /// The extension around `index`, ready for a [`Config`].
+    fn around(id: &'static str, index: Arc<dyn SearchIndex>) -> Arc<dyn Extension> {
+        Arc::new(Self {
+            manifest: Manifest {
+                id: ExtId(id),
+                name: "Fake index",
+                version: Version::new(0, 1, 0),
+                api_version: API_VERSION,
+                requires: Capabilities::empty(),
+                points: Points::SEARCH_INDEX,
+                platforms: Platforms::ALL,
+                previews: &[],
+            },
+            index,
+        })
+    }
+}
+
+impl Extension for IndexExtension {
+    fn manifest(&self) -> &Manifest {
+        &self.manifest
+    }
+    fn register(&self, reg: &mut Registry) -> Result<(), Error> {
+        reg.search_index(Arc::clone(&self.index));
+        Ok(())
+    }
+}
+
+/// The subdirectory walk as the `ext-search-walk` plugin provides it,
+/// small enough for this crate's tests: `Under` the local root, one batch
+/// per directory, honouring the hidden and skip filters.
+struct FakeWalk;
+
+impl SearchIndex for FakeWalk {
+    fn id(&self) -> ExtId {
+        ExtId("fake-walk")
+    }
+    fn availability(&self) -> Availability {
+        Availability::Enabled
+    }
+    fn scope(&self) -> SearchScope {
+        SearchScope::Under(Location::new(vfs_local::PROVIDER_ID, VPath::new()))
+    }
+    fn query(
+        &self,
+        q: &Query,
+        cancel: CancelToken,
+    ) -> ext::BoxStream<'static, Result<Vec<SearchHit>, Error>> {
+        let Some(root) = q.root.clone() else {
+            return stream::once(async { Err(Error::Unsupported("no root")) }).boxed();
+        };
+        let text = q.text.to_lowercase();
+        let hidden = !q.filters.contains(&Filter::NoHidden);
+        let skip: Vec<String> = q
+            .filters
+            .iter()
+            .filter_map(|f| match f {
+                Filter::SkipNames(names) => Some(names.clone()),
+                _ => None,
+            })
+            .flatten()
+            .collect();
+        let (tx, rx) = runtime::mpsc::channel(8);
+        runtime::handle().spawn_blocking(move || {
+            let start = platform::paths::to_path(&root.path).unwrap_or_default();
+            let mut dirs = vec![start];
+            while let Some(dir) = dirs.pop() {
+                if cancel.is_cancelled() {
+                    return;
+                }
+                let mut batch = Vec::new();
+                for entry in fs::read_dir(&dir).into_iter().flatten().flatten() {
+                    let name = entry.file_name().to_string_lossy().into_owned();
+                    if (!hidden && name.starts_with('.')) || skip.contains(&name) {
+                        continue;
+                    }
+                    if entry.file_type().is_ok_and(|t| t.is_dir()) {
+                        dirs.push(entry.path());
+                    }
+                    if name.to_lowercase().contains(&text)
+                        && let Ok(found) = vfs_local::entry_at(
+                            &entry.path(),
+                            &platform::paths::from_path(&entry.path()),
+                        )
+                    {
+                        batch.push(SearchHit {
+                            entry: found,
+                            snippet: None,
+                        });
+                    }
+                }
+                if !batch.is_empty() && tx.blocking_send(Ok(batch)).is_err() {
+                    return;
+                }
+            }
+        });
+        stream::unfold(rx, |mut rx| async move { rx.recv().await.map(|b| (b, rx)) }).boxed()
+    }
+}
+
+/// A platform index: a fixed list of hits, a switch for its availability
+/// and a record of the queries it was asked.
+struct FakeIndex {
+    id: &'static str,
+    available: AtomicBool,
+    hits: Vec<Entry>,
+    queries: Mutex<Vec<Query>>,
+}
+
+impl FakeIndex {
+    fn new(id: &'static str, hits: Vec<Entry>) -> Arc<Self> {
+        Arc::new(Self {
+            id,
+            available: AtomicBool::new(true),
+            hits,
+            queries: Mutex::new(Vec::new()),
+        })
+    }
+
+    fn queries(&self) -> Vec<String> {
+        self.queries
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .iter()
+            .map(|q| q.text.clone())
+            .collect()
+    }
+}
+
+impl SearchIndex for FakeIndex {
+    fn id(&self) -> ExtId {
+        ExtId(self.id)
+    }
+    fn availability(&self) -> Availability {
+        if self.available.load(Ordering::SeqCst) {
+            Availability::Enabled
+        } else {
+            Availability::Disabled("service gone".to_owned())
+        }
+    }
+    fn scope(&self) -> SearchScope {
+        SearchScope::Everywhere
+    }
+    fn query(
+        &self,
+        q: &Query,
+        _cancel: CancelToken,
+    ) -> ext::BoxStream<'static, Result<Vec<SearchHit>, Error>> {
+        self.queries
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push(q.clone());
+        if q.text == "fail" {
+            return stream::once(async { Err(Error::Unsupported("the index refused")) }).boxed();
+        }
+        let hits: Vec<SearchHit> = self
+            .hits
+            .iter()
+            .filter(|e| e.name.contains(&q.text))
+            .map(|e| SearchHit {
+                entry: e.clone(),
+                snippet: None,
+            })
+            .collect();
+        stream::iter(vec![Ok(hits)]).boxed()
+    }
+}
+
+/// An entry of a fictional file for the fake indexes.
+fn hit(id: u128, path: &str) -> Entry {
+    let name = path.rsplit('/').next().unwrap_or(path).to_owned();
+    Entry {
+        id: EntryId::new(vfs_local::PROVIDER_ID, id),
+        name,
+        path: VPath::from(path),
+        kind: EntryKind::File,
+        size: None,
+        created: None,
+        modified: None,
+        accessed: None,
+        attrs: Attrs::empty(),
+        mime: None,
+    }
+}
+
 #[test]
-fn subtree_search_streams_matches_as_a_job_and_a_new_text_supersedes_it() {
+fn without_a_subtree_index_the_toggle_is_absent_and_a_search_ends_with_a_notice() {
     let mut h = harness();
     h.settle();
+    assert!(!h.app.model().subtree_search);
+    assert_eq!(h.app.model().search_indexes, Vec::<ExtId>::new());
+    let pane = h.app.model().focused;
+    h.send(Command::Subtree { pane, on: true });
+    h.send(Command::Filter {
+        pane,
+        text: "foo".into(),
+    });
+    h.settle();
+    let events = h.take_events();
+    assert!(
+        events.iter().any(|e| matches!(
+            e,
+            Event::Notify { level: Level::Error, text } if text.contains("No subdirectory search")
+        )),
+        "{events:?}"
+    );
+    assert!(!h.app.is_busy());
+    assert_eq!(h.names(), Vec::<String>::new());
+}
+
+#[test]
+fn subtree_search_streams_matches_as_a_job_and_a_new_text_supersedes_it() {
+    let mut h = harness_with(vec![IndexExtension::around(
+        "fake-walk",
+        Arc::new(FakeWalk),
+    )]);
+    h.settle();
+    assert!(h.app.model().subtree_search);
+    assert!(
+        h.app.model().search_indexes.is_empty(),
+        "a walk is not a platform index"
+    );
     let pane = h.app.model().focused;
     let mut dir = h.root.path().join("sub");
     for level in 0..20 {
@@ -1244,4 +1501,446 @@ fn open_navigates_into_a_folder_and_opens_a_file_with_the_default() {
         .map_or_else(|| panic!("tab"), |(_, tab)| tab.location.clone());
     assert_eq!(location, local(&h.root.path().join("sub")));
     assert_eq!(h.fake.opened().len(), 1, "a folder opens nothing outside");
+}
+
+/// A network provider stub for the connection tests: its root lists the
+/// connections its connector was handed, everything else is unsupported.
+mod net {
+    use ext::Text;
+    use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+
+    use ext::{
+        API_VERSION, Capabilities, ChangeStream, Connection, ConnectionField, ConnectionFieldKind,
+        ConnectionSchema, Connector, CopyOptions, EntryStream, Extension, LinkKind, ListOptions,
+        Manifest, Platforms, Points, Provider, ReadHandle, Registry, RemoveMode, Version,
+        WriteHandle, WriteOptions, async_trait,
+    };
+    use futures::StreamExt as _;
+    use futures::stream;
+    use runtime::ProgressSink;
+    use types::{
+        Attrs, CancelToken, Entry, EntryId, EntryKind, Error, ExtId, Location, ProviderId,
+    };
+
+    pub(super) const ID: ProviderId = ProviderId("ssh");
+
+    #[derive(Default)]
+    pub(super) struct Stub {
+        pub(super) connections: Mutex<Vec<Connection>>,
+        pub(super) connected: Mutex<Vec<String>>,
+        schema: Option<ConnectionSchema>,
+    }
+
+    fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
+        m.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    impl Stub {
+        pub(super) fn new() -> Arc<Self> {
+            Arc::new(Self {
+                schema: Some(ConnectionSchema {
+                    title: Text("Stub"),
+                    fields: vec![
+                        ConnectionField {
+                            key: "host",
+                            label: Text("Host"),
+                            kind: ConnectionFieldKind::Text {
+                                default: String::new(),
+                            },
+                            required: true,
+                        },
+                        ConnectionField {
+                            key: "port",
+                            label: Text("Port"),
+                            kind: ConnectionFieldKind::Integer {
+                                default: 22,
+                                min: 1,
+                                max: 65535,
+                            },
+                            required: false,
+                        },
+                        ConnectionField {
+                            key: "password",
+                            label: Text("Password"),
+                            kind: ConnectionFieldKind::Secret,
+                            required: false,
+                        },
+                    ],
+                }),
+                ..Self::default()
+            })
+        }
+    }
+
+    #[async_trait]
+    impl Connector for Stub {
+        fn provider(&self) -> ProviderId {
+            ID
+        }
+        fn schema(&self) -> ConnectionSchema {
+            self.schema.clone().unwrap_or_else(|| unreachable!())
+        }
+        fn update(&self, connections: Vec<Connection>) {
+            let names: Vec<String> = connections.iter().map(|c| c.name.clone()).collect();
+            lock(&self.connected).retain(|n| names.contains(n));
+            *lock(&self.connections) = connections;
+        }
+        async fn connect(&self, name: &str) -> Result<(), Error> {
+            if !lock(&self.connections).iter().any(|c| c.name == name) {
+                return Err(Error::NotFound);
+            }
+            lock(&self.connected).push(name.to_owned());
+            Ok(())
+        }
+        fn disconnect(&self, name: &str) {
+            lock(&self.connected).retain(|n| n != name);
+        }
+        fn is_connected(&self, name: &str) -> bool {
+            lock(&self.connected).iter().any(|n| n == name)
+        }
+    }
+
+    #[async_trait]
+    impl Provider for Stub {
+        fn id(&self) -> ProviderId {
+            ID
+        }
+        fn capabilities(&self, _loc: &Location) -> Capabilities {
+            Capabilities::REMOTE
+        }
+        fn list(&self, loc: &Location, _opts: ListOptions, _cancel: CancelToken) -> EntryStream {
+            if loc.path.as_bytes() != b"/" {
+                return stream::once(async { Err(Error::NotFound) }).boxed();
+            }
+            let entries: Vec<Entry> = lock(&self.connections)
+                .iter()
+                .map(|c| Entry {
+                    id: EntryId::new(ID, u128::from(c.name.len() as u64)),
+                    name: c.name.clone(),
+                    path: format!("/{}", c.name).into(),
+                    kind: EntryKind::Dir,
+                    size: None,
+                    created: None,
+                    modified: None,
+                    accessed: None,
+                    attrs: Attrs::empty(),
+                    mime: None,
+                })
+                .collect();
+            stream::once(async move { Ok(entries) }).boxed()
+        }
+        async fn stat(&self, _loc: &Location) -> Result<Entry, Error> {
+            Err(Error::NotFound)
+        }
+        async fn open_read(&self, _loc: &Location) -> Result<ReadHandle, Error> {
+            Err(Error::Unsupported("stub"))
+        }
+        async fn open_write(&self, _l: &Location, _o: WriteOptions) -> Result<WriteHandle, Error> {
+            Err(Error::Unsupported("stub"))
+        }
+        async fn create_dir(&self, _loc: &Location) -> Result<Entry, Error> {
+            Err(Error::Unsupported("stub"))
+        }
+        async fn rename(&self, _f: &Location, _t: &Location) -> Result<Entry, Error> {
+            Err(Error::Unsupported("stub"))
+        }
+        async fn remove(&self, _loc: &Location, _mode: RemoveMode) -> Result<(), Error> {
+            Err(Error::Unsupported("stub"))
+        }
+        async fn link(&self, _t: &Location, _a: &Location, _k: LinkKind) -> Result<Entry, Error> {
+            Err(Error::Unsupported("stub"))
+        }
+        async fn copy(
+            &self,
+            _f: &Location,
+            _t: &Location,
+            _o: CopyOptions,
+            _p: ProgressSink,
+            _c: CancelToken,
+        ) -> Result<(), Error> {
+            Err(Error::Unsupported("stub"))
+        }
+        fn watch(&self, _loc: &Location) -> Result<ChangeStream, Error> {
+            Err(Error::Unsupported("stub"))
+        }
+    }
+
+    pub(super) struct StubExtension {
+        manifest: Manifest,
+        pub(super) stub: Arc<Stub>,
+    }
+
+    impl StubExtension {
+        pub(super) fn new(stub: Arc<Stub>) -> Self {
+            Self {
+                manifest: Manifest {
+                    id: ExtId("stub-net"),
+                    name: "Stub network provider",
+                    version: Version::new(0, 1, 0),
+                    api_version: API_VERSION,
+                    requires: Capabilities::empty(),
+                    points: Points::PROVIDER,
+                    platforms: Platforms::ALL,
+                    previews: &[],
+                },
+                stub,
+            }
+        }
+    }
+
+    impl Extension for StubExtension {
+        fn manifest(&self) -> &Manifest {
+            &self.manifest
+        }
+        fn register(&self, reg: &mut Registry) -> Result<(), Error> {
+            reg.provider(Arc::clone(&self.stub) as Arc<dyn Provider>);
+            reg.connector(Arc::clone(&self.stub) as Arc<dyn Connector>);
+            Ok(())
+        }
+    }
+}
+
+/// Acceptance (issue 21): a connection's secret goes to the platform
+/// keychain and never into `rick.toml`, its other fields into
+/// `[[connections]]`; the connector is handed the list; the Network rows
+/// follow; a second connection of the same name is refused; Connect marks
+/// it connected and Remove forgets the entry and its secret.
+#[test]
+// One scenario, start to finish: add, refuse twice, connect, disconnect, remove.
+#[allow(clippy::too_many_lines)]
+fn a_connection_keeps_its_secret_in_the_keychain_and_the_rest_in_the_settings() {
+    let root = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+    let fake = Arc::new(Fake::new().unwrap_or_else(|e| panic!("{e}")));
+    let stub = net::Stub::new();
+    let app = App::new(Config {
+        platform: fake.clone(),
+        ui: Arc::new(Scripted::default()),
+        extensions: vec![Arc::new(net::StubExtension::new(Arc::clone(&stub)))],
+        config_dir: Some(fake.config_dir()),
+        start: Some(local(root.path())),
+    });
+    let mut h = Harness {
+        root,
+        fake,
+        ui: Arc::new(Scripted::default()),
+        app,
+        events: Vec::new(),
+    };
+    h.settle();
+    assert_eq!(h.app.model().network_providers, [net::ID]);
+    assert_eq!(h.app.model().network, Vec::<Entry>::new());
+
+    h.send(Command::AddConnection {
+        provider: net::ID,
+        name: "nas".into(),
+        values: vec![
+            ("host".into(), "10.0.0.2".into()),
+            ("port".into(), String::new()),
+            ("password".into(), "hunter2".into()),
+            ("stray".into(), "dropped".into()),
+        ],
+    });
+    h.settle();
+    let settings_path = h.fake.config_dir().join(SETTINGS_FILE);
+    let text = read_until(&settings_path, |t| t.contains("name = \"nas\""));
+    assert!(text.contains("[[connections]]"), "{text}");
+    assert!(text.contains("provider = \"ssh\""), "{text}");
+    assert!(text.contains("name = \"nas\""), "{text}");
+    assert!(text.contains("host = \"10.0.0.2\""), "{text}");
+    assert!(
+        !text.contains("hunter2"),
+        "the secret is not in the file: {text}"
+    );
+    assert!(!text.contains("stray"), "{text}");
+    assert_eq!(
+        h.fake.secrets().get("ssh/nas/password").map(String::as_str),
+        Some("hunter2")
+    );
+    {
+        let handed = stub
+            .connections
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone();
+        assert_eq!(handed.len(), 1);
+        assert_eq!(handed[0].name, "nas");
+        assert_eq!(handed[0].get("host"), Some("10.0.0.2"));
+        assert_eq!(
+            handed[0].get("password"),
+            None,
+            "the connector gets no secret"
+        );
+    }
+    let rows: Vec<String> = h
+        .app
+        .model()
+        .network
+        .iter()
+        .map(|e| e.name.clone())
+        .collect();
+    assert_eq!(rows, ["nas"]);
+
+    // The same name again is refused with a notice and changes nothing.
+    h.take_events();
+    h.send(Command::AddConnection {
+        provider: net::ID,
+        name: "nas".into(),
+        values: vec![("host".into(), "other".into())],
+    });
+    h.settle();
+    assert!(
+        h.take_events()
+            .iter()
+            .any(|e| matches!(e, Event::Notify { level: Level::Error, text } if text.contains("exists already"))),
+    );
+    assert_eq!(h.app.model().settings.connections.len(), 1);
+
+    // A required field left empty is refused too.
+    h.send(Command::AddConnection {
+        provider: net::ID,
+        name: "second".into(),
+        values: vec![("password".into(), "x".into())],
+    });
+    h.settle();
+    assert_eq!(h.app.model().settings.connections.len(), 1);
+    assert_eq!(h.fake.secrets().len(), 1);
+
+    // Connect runs as a job and marks the connection connected.
+    h.send(Command::Connection {
+        provider: net::ID,
+        name: "nas".into(),
+        op: super::ConnectionOp::Connect,
+    });
+    h.settle();
+    assert!(ext::Connector::is_connected(&*stub, "nas"));
+    h.send(Command::Connection {
+        provider: net::ID,
+        name: "nas".into(),
+        op: super::ConnectionOp::Disconnect,
+    });
+    h.settle();
+    assert!(!ext::Connector::is_connected(&*stub, "nas"));
+
+    // Remove forgets the entry, the secret and the row.
+    h.send(Command::Connection {
+        provider: net::ID,
+        name: "nas".into(),
+        op: super::ConnectionOp::Remove,
+    });
+    h.settle();
+    let text = read_until(&settings_path, |t| !t.contains("nas"));
+    assert!(!text.contains("nas"), "{text}");
+    assert!(h.fake.secrets().is_empty());
+    assert!(
+        stub.connections
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .is_empty()
+    );
+    assert_eq!(h.app.model().network, Vec::<Entry>::new());
+    drop(h.ui);
+}
+
+/// The title-row search box asks every available index once the text has
+/// stood for a moment, lists each hit once, follows the availability of
+/// the indexes, and an empty text ends the search.
+#[test]
+fn the_title_row_search_asks_every_available_index_and_lists_each_hit_once() {
+    let first = FakeIndex::new(
+        "fake-one",
+        vec![hit(1, "/one/foo.txt"), hit(2, "/shared/foobar.md")],
+    );
+    let second = FakeIndex::new(
+        "fake-two",
+        vec![hit(2, "/shared/foobar.md"), hit(3, "/two/foo.rs")],
+    );
+    let mut h = harness_with(vec![
+        IndexExtension::around("fake-one", first.clone()),
+        IndexExtension::around("fake-two", second.clone()),
+    ]);
+    h.settle();
+    assert_eq!(
+        h.app.model().search_indexes,
+        [ExtId("fake-one"), ExtId("fake-two")]
+    );
+    assert!(h.app.model().index_search.done, "nothing asked yet");
+
+    h.send(Command::IndexSearch { text: "foo".into() });
+    assert_eq!(h.app.model().index_search.text, "foo");
+    assert!(!h.app.model().index_search.done);
+    assert!(
+        first.queries().is_empty(),
+        "the indexes wait for the pause after the keystroke"
+    );
+    assert!(wait_until(&mut h, Duration::from_secs(5), |h| {
+        h.app.model().index_search.done
+    }));
+    let search = &h.app.model().index_search;
+    let mut names: Vec<&str> = search.hits.iter().map(|e| e.name.as_str()).collect();
+    names.sort_unstable();
+    assert_eq!(names, ["foo.rs", "foo.txt", "foobar.md"], "{search:?}");
+    assert_eq!(search.errors, Vec::<String>::new());
+    assert_eq!(first.queries(), ["foo"]);
+    assert_eq!(second.queries(), ["foo"]);
+    let events = h.take_events();
+    assert!(
+        events
+            .iter()
+            .any(|e| matches!(e, Event::IndexSearched { done: true, .. })),
+        "{events:?}"
+    );
+    assert!(
+        h.app
+            .model()
+            .jobs
+            .values()
+            .all(|j| !j.name.starts_with("Search")),
+        "index queries stay out of the operations area"
+    );
+
+    // Two texts within the pause: only the last one is asked.
+    h.send(Command::IndexSearch { text: "fo".into() });
+    h.send(Command::IndexSearch {
+        text: " foobar ".into(),
+    });
+    assert!(wait_until(&mut h, Duration::from_secs(5), |h| {
+        h.app.model().index_search.done
+    }));
+    assert_eq!(first.queries(), ["foo", "foobar"]);
+    assert_eq!(h.app.model().index_search.hits.len(), 1);
+
+    // An index that fails is reported beside the others' hits.
+    h.send(Command::IndexSearch {
+        text: "fail".into(),
+    });
+    assert!(wait_until(&mut h, Duration::from_secs(5), |h| {
+        h.app.model().index_search.done
+    }));
+    let errors = &h.app.model().index_search.errors;
+    assert_eq!(errors.len(), 2, "{errors:?}");
+    assert!(
+        errors.iter().any(|e| e.starts_with("fake-one: ")),
+        "{errors:?}"
+    );
+
+    // An empty text ends the search.
+    h.send(Command::IndexSearch {
+        text: String::new(),
+    });
+    let search = &h.app.model().index_search;
+    assert!(search.done && search.text.is_empty() && search.hits.is_empty());
+
+    // The service behind an index goes away: the box follows on the next
+    // poll, and with no index left a search is done at once, unasked.
+    first.available.store(false, Ordering::SeqCst);
+    h.app.poll(&mut h.events);
+    assert_eq!(h.app.model().search_indexes, [ExtId("fake-two")]);
+    second.available.store(false, Ordering::SeqCst);
+    h.app.poll(&mut h.events);
+    assert_eq!(h.app.model().search_indexes, Vec::<ExtId>::new());
+    h.send(Command::IndexSearch { text: "foo".into() });
+    assert!(h.app.model().index_search.done);
+    h.settle();
+    assert_eq!(first.queries().len(), 3);
+    assert_eq!(second.queries().len(), 3);
 }

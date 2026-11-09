@@ -1,12 +1,15 @@
-//! Acceptance (issue 18): the previewer plugins. Every plugin loads through
-//! the host; a fixture per format opens with the right previewer by sniff;
+//! Acceptance (issue 18, and issue 51 for the markup plugin): the
+//! previewer plugins. Every plugin loads through the host; a fixture per
+//! format opens with the right previewer by sniff;
 //! a DOCX converts within 5 s when LibreOffice is present (CI installs it
 //! on Linux; macOS and Windows skip with a note); an MP4 plays and seeks
 //! and a 3-minute MP3 gets its waveform within 500 ms when GStreamer is
 //! present (Linux CI); a 10 000-entry zip lists its first screen within
 //! 100 ms; a window of a 1 000 000-row CSV comes within a frame; Markdown
-//! with every element renders without panics; and no UI frame goes over
-//! 16.6 ms while any of them decodes.
+//! with every element renders without panics; the three markup previewers
+//! render by default and toggle to the source, and with the markup plugin
+//! disabled Markdown and HTML fall back to highlighted source and CSV to
+//! text; and no UI frame goes over 16.6 ms while any of them decodes.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -29,7 +32,7 @@ const PLUGINS: [(&str, &str); 4] = [
     ("ext_preview_office", "preview-office"),
     ("ext_preview_media", "preview-media"),
     ("ext_preview_archive", "preview-archive"),
-    ("ext_preview_csv", "preview-csv"),
+    ("ext_preview_markup", "preview-markup"),
 ];
 
 /// The directory the test binary runs from, where cargo puts every
@@ -81,6 +84,8 @@ fn load_plugins() -> &'static Host {
         disabled: Vec::new(),
         compiled_in: Vec::new(),
         platform: None,
+        prompts: None,
+        settings: None,
     });
     for (_, id) in PLUGINS {
         let row = host
@@ -174,11 +179,11 @@ fn fixtures(dir: &Path) -> Vec<Fixture> {
             fs::write(&path, bytes).unwrap_or_else(|e| panic!("{e}"));
             out.push(Fixture { path, previewer });
         };
-        put("README.md", ALL_MARKDOWN.as_bytes(), "preview-code");
+        put("README.md", ALL_MARKDOWN.as_bytes(), "preview-markup");
         put(
             "page.html",
             b"<html><body><h1>Hi</h1><p>Text <b>bold</b></p><ul><li>a</li></ul></body></html>",
-            "preview-code",
+            "preview-markup",
         );
         let tar = archives::sample_tar(4096);
         put("a.zip", &archives::sample_zip(), "preview-archive");
@@ -195,8 +200,8 @@ fn fixtures(dir: &Path) -> Vec<Fixture> {
         );
         put("a.rar", &archives::sample_rar(), "preview-archive");
         put("a.iso", &archives::sample_iso(true), "preview-archive");
-        put("data.csv", b"name,age\nAda,36\nAlan,41\n", "preview-csv");
-        put("data.tsv", b"name\tage\nAda\t36\n", "preview-csv");
+        put("data.csv", b"name,age\nAda,36\nAlan,41\n", "preview-markup");
+        put("data.tsv", b"name\tage\nAda\t36\n", "preview-markup");
         for kind in ext_preview_office::Kind::ALL {
             let name = format!("doc.{}", kind.extension());
             put(
@@ -241,7 +246,11 @@ fn fixtures(dir: &Path) -> Vec<Fixture> {
 fn the_four_previewer_plugins_load_through_the_host() {
     let host = load_plugins();
     let previewers = previewers(host);
-    assert_eq!(previewers.len(), 8, "four built-ins and four plugins");
+    assert_eq!(
+        previewers.len(),
+        10,
+        "four built-ins, three plugins with one previewer and the markup plugin's three"
+    );
     for (_, id) in PLUGINS {
         assert!(
             previewers.iter().any(|p| p.id().0 == id),
@@ -249,6 +258,32 @@ fn the_four_previewer_plugins_load_through_the_host() {
         );
     }
     assert_eq!(host.extensions().len(), 4);
+}
+
+/// A markup fixture rendered by default: the CSV and TSV as a grid over
+/// the text fallback, Markdown and HTML as a document over the highlighted
+/// source.
+fn check_markup(name: &str, content: Option<Content>, frame: &Frame) {
+    let tabular = Path::new(name)
+        .extension()
+        .is_some_and(|e| e.eq_ignore_ascii_case("csv") || e.eq_ignore_ascii_case("tsv"));
+    if tabular {
+        let Some(Content::Grid(grid)) = content else {
+            panic!("{name}: no grid");
+        };
+        assert_eq!(grid.header()[0], "name", "{name}");
+        assert!(grid.rows() >= 1, "{name}");
+        assert!(matches!(frame, Frame::Text(_)), "{name}: text fallback");
+    } else {
+        let Some(Content::Document(document)) = content else {
+            panic!("{name}: no document");
+        };
+        assert!(!document.blocks.is_empty(), "{name}");
+        let Frame::Text(block) = frame else {
+            panic!("{name}: source fallback");
+        };
+        assert!(!block.spans.is_empty(), "{name}: highlighted source");
+    }
 }
 
 #[test]
@@ -287,16 +322,8 @@ fn every_fixture_opens_with_the_right_previewer_by_sniff() {
                 assert!(matches!(frame, Frame::Text(_)), "{name}: text fallback");
                 assert_eq!(doc.status().len(), 3, "{name}: {:?}", doc.status());
             }
-            "preview-csv" => {
-                let Some(Content::Grid(grid)) = content else {
-                    panic!("{name}: no grid");
-                };
-                assert_eq!(grid.header()[0], "name", "{name}");
-                assert!(grid.rows() >= 1, "{name}");
-                assert!(matches!(frame, Frame::Text(_)), "{name}: text fallback");
-            }
+            "preview-markup" => check_markup(&name, content, &frame),
             "preview-office" => {
-                assert!(content.is_none(), "{name}");
                 let status = doc.status();
                 assert!(
                     ext_preview_office::Kind::ALL
@@ -310,12 +337,23 @@ fn every_fixture_opens_with_the_right_previewer_by_sniff() {
                     "{name}: {rows:?}"
                 );
                 match frame {
-                    Frame::Rgba { .. } => assert_eq!(doc.pages(), Some(2), "{name}"),
-                    Frame::Text(block) => assert!(
-                        block.text.contains("LibreOffice") || block.text.contains("pdfium"),
-                        "{name}: {}",
-                        block.text
-                    ),
+                    Frame::Rgba { .. } => {
+                        assert!(content.is_none(), "{name}");
+                        assert_eq!(doc.pages(), Some(2), "{name}");
+                    }
+                    // Without LibreOffice or pdfium the pane gets the
+                    // missing-library message with Browse… and Retry.
+                    Frame::Text(block) => {
+                        let Some(Content::MissingLibrary(missing)) = content else {
+                            panic!("{name}: no missing-library content: {}", block.text);
+                        };
+                        assert!(
+                            missing.name == "LibreOffice" || missing.name == "pdfium",
+                            "{name}: {}",
+                            missing.name
+                        );
+                        assert!(block.text.contains(&missing.name), "{name}: {}", block.text);
+                    }
                     Frame::External(id) => panic!("{name}: external texture {id:?}"),
                 }
             }
@@ -331,16 +369,9 @@ fn every_fixture_opens_with_the_right_previewer_by_sniff() {
                     "{name}"
                 );
             }
-            "preview-code" => {
-                let Some(Content::Document(document)) = content else {
-                    panic!("{name}: no document");
-                };
-                assert!(!document.blocks.is_empty(), "{name}");
-                assert!(matches!(frame, Frame::Text(_)), "{name}: source fallback");
-            }
             other => panic!("{name}: unexpected previewer {other}"),
         }
-        assert_eq!(doc.sections()[0].title, "File info", "{name}");
+        assert_eq!(doc.sections()[0].title.get(), "File info", "{name}");
         assert!(!doc.status().is_empty(), "{name}: status facts");
     }
 }
@@ -350,7 +381,7 @@ fn markdown_with_every_element_renders_without_panics() {
     let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
     let path = dir.path().join("all.md");
     fs::write(&path, ALL_MARKDOWN).unwrap_or_else(|e| panic!("{e}"));
-    let previewer: Arc<dyn Previewer> = Arc::new(ext_preview_code::CodePreviewer);
+    let previewer: Arc<dyn Previewer> = Arc::new(ext_preview_markup::MarkdownPreviewer);
     let provider = provider();
     let doc = open(&previewer, &provider, &path);
     let Some(Content::Document(document)) = doc.content() else {
@@ -420,7 +451,7 @@ fn a_docx_converts_within_5_s_when_libreoffice_is_present() {
         return;
     }
     let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
-    let previewer: Arc<dyn Previewer> = Arc::new(ext_preview_office::OfficePreviewer);
+    let previewer: Arc<dyn Previewer> = Arc::new(ext_preview_office::OfficePreviewer::default());
     let provider = provider();
     // One conversion to start LibreOffice's profile, which the first run of
     // a fresh install pays once.
@@ -588,7 +619,7 @@ fn a_10000_entry_zip_lists_its_first_screen_within_100_ms() {
     let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
     let path = dir.path().join("many.zip");
     fs::write(&path, archives::big_zip(10_000)).unwrap_or_else(|e| panic!("{e}"));
-    let previewer: Arc<dyn Previewer> = Arc::new(ext_preview_archive::ArchivePreviewer);
+    let previewer: Arc<dyn Previewer> = Arc::new(ext_preview_archive::ArchivePreviewer::default());
     let provider = provider();
     let mut samples = Vec::new();
     for _ in 0..tests::bench::runs() {
@@ -638,7 +669,7 @@ fn a_million_row_csv_answers_any_window_within_a_frame() {
             .unwrap_or_else(|e| panic!("{e}"));
         }
     }
-    let previewer: Arc<dyn Previewer> = Arc::new(ext_preview_csv::CsvPreviewer);
+    let previewer: Arc<dyn Previewer> = Arc::new(ext_preview_markup::CsvPreviewer);
     let provider = provider();
     let started = Instant::now();
     let doc = open(&previewer, &provider, &path);
@@ -784,4 +815,153 @@ fn no_ui_frame_over_16_ms_while_the_previewers_decode() {
         samples.push(all[all.len() - 1]);
     }
     tests::bench::record("previewers-frame", &samples);
+}
+
+/// The plugins installed into a fresh plugins directory and loaded by a
+/// host with `disabled` switched off, as `[plugins] disabled` in
+/// `rick.toml` does.
+fn load_plugins_disabling(disabled: &[&str]) -> &'static Host {
+    let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+    let plugins = dir.path().join("plugins");
+    for (stem, _) in PLUGINS {
+        install(&plugins, stem);
+    }
+    let host = Host::load(&Options {
+        dirs: vec![(Source::BesideBinary, plugins)],
+        disabled: disabled.iter().map(|d| (*d).to_owned()).collect(),
+        compiled_in: Vec::new(),
+        platform: None,
+        prompts: None,
+        settings: None,
+    });
+    let _ = dir.keep();
+    Box::leak(Box::new(host))
+}
+
+/// Issue 51: `README.md`, `page.html` and `data.csv` render by default from
+/// the markup plugin, toggle to the source, and fall back to highlighted
+/// source (`.md`, `.html`) and plain text (`.csv`) when the plugin is
+/// disabled.
+#[test]
+fn the_markup_previewers_render_by_default_and_fall_back_to_source_without_the_plugin() {
+    use ext::{ControlValue, PreviewControl};
+
+    let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+    let files = [
+        ("README.md", ALL_MARKDOWN.as_bytes(), "document"),
+        (
+            "page.html",
+            &b"<html><body><h1>Hi</h1><p>Text <b>bold</b></p></body></html>"[..],
+            "document",
+        ),
+        ("data.csv", &b"name,age\nAda,36\nAlan,41\n"[..], "grid"),
+    ];
+    for (name, bytes, _) in &files {
+        fs::write(dir.path().join(name), bytes).unwrap_or_else(|e| panic!("{e}"));
+    }
+    let provider = provider();
+    let req = RenderRequest {
+        width: 300,
+        height: 200,
+        scale: 1.0,
+        dark: false,
+    };
+
+    // With the plugin: rendered by default, the Rendered toggle leads to
+    // the source, the text layer carries the raw text for Copy.
+    let with = previewers(load_plugins());
+    for (name, bytes, kind) in &files {
+        let path = dir.path().join(name);
+        let (entry, sniff) = sniff(&provider, &path);
+        let picked = best(&with, &entry, &sniff).unwrap_or_else(|| panic!("{name}: no previewer"));
+        assert_eq!(picked.id().0, "preview-markup", "{name}");
+        let mut doc = open(picked, &provider, &path);
+        match (*kind, doc.content()) {
+            ("document", Some(Content::Document(d))) => assert!(!d.blocks.is_empty(), "{name}"),
+            ("grid", Some(Content::Grid(g))) => assert_eq!(g.header()[0], "name", "{name}"),
+            (_, other) => panic!("{name}: {other:?}"),
+        }
+        let controls = doc.controls();
+        let Some(PreviewControl::Toggle {
+            id,
+            on: true,
+            label,
+            ..
+        }) = controls.first()
+        else {
+            panic!("{name}: no Rendered toggle on: {controls:?}");
+        };
+        assert_eq!(*label, "Rendered", "{name}");
+        let source = String::from_utf8_lossy(bytes).into_owned();
+        assert_eq!(
+            doc.text_layer().map(|l| l.pages[0].as_str()),
+            Some(source.as_str()),
+            "{name}: the raw source is the text layer"
+        );
+        doc.set_control(*id, ControlValue::Bool(false))
+            .unwrap_or_else(|e| panic!("{name}: {e}"));
+        assert!(doc.content().is_none(), "{name}: the source shows instead");
+        let Frame::Text(block) = doc.render(0, req).unwrap_or_else(|e| panic!("{name}: {e}"))
+        else {
+            panic!("{name}: not text");
+        };
+        assert_eq!(block.text, source, "{name}");
+        if *kind == "document" {
+            assert!(!block.spans.is_empty(), "{name}: highlighted source");
+        }
+    }
+
+    falls_back_without_the_plugin(dir.path(), &files, &provider, req);
+}
+
+/// With the markup plugin disabled in the host: the code previewer's
+/// highlighted source for Markdown and HTML, plain text for CSV, and no
+/// content to lay out.
+fn falls_back_without_the_plugin(
+    dir: &Path,
+    files: &[(&str, &[u8], &str)],
+    provider: &Arc<dyn Provider>,
+    req: RenderRequest,
+) {
+    use ext::PreviewControl;
+
+    let without = previewers(load_plugins_disabling(&["preview-markup"]));
+    assert!(
+        without.iter().all(|p| p.id().0 != "preview-markup"),
+        "the disabled plugin registers nothing"
+    );
+    for (name, bytes, kind) in files {
+        let path = dir.join(name);
+        let (entry, sniff) = sniff(provider, &path);
+        let picked =
+            best(&without, &entry, &sniff).unwrap_or_else(|| panic!("{name}: no previewer"));
+        let expected = if *kind == "document" {
+            "preview-code"
+        } else {
+            "preview-text"
+        };
+        assert_eq!(picked.id().0, expected, "{name}");
+        let mut doc = open(picked, provider, &path);
+        assert!(doc.content().is_none(), "{name}: nothing rendered");
+        assert!(
+            !doc.controls().iter().any(|c| matches!(
+                c,
+                PreviewControl::Toggle {
+                    label: "Rendered",
+                    ..
+                }
+            )),
+            "{name}: no Rendered toggle without the plugin"
+        );
+        let Frame::Text(block) = doc.render(0, req).unwrap_or_else(|e| panic!("{name}: {e}"))
+        else {
+            panic!("{name}: not text");
+        };
+        assert_eq!(block.text, String::from_utf8_lossy(bytes), "{name}");
+        if *kind == "document" {
+            assert!(!block.spans.is_empty(), "{name}: highlighted source");
+        } else {
+            assert!(block.spans.is_empty(), "{name}: plain text");
+        }
+    }
 }

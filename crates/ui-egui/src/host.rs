@@ -7,14 +7,19 @@
 //! action twice when it has to: the first run gets `None` or `false` and
 //! leaves the question in [`EguiHost::take_asked`]; the shell shows the
 //! dialogue, and when the user answers it stores the answer and runs the
-//! action again, which now gets the answer at once.
+//! action again, which now gets the answer at once. A form a job finished
+//! with ([`UiHost::form_later`]) is queued with the rest of its action in
+//! [`EguiHost::take_later`]; the shell shows it and hands the values to the
+//! application, which runs the rest.
 
+use std::collections::VecDeque;
 use std::sync::{Mutex, MutexGuard, PoisonError};
 
-use ext::{Level, UiHost};
+use ext::{ActionOutcome, Continuation, Form, Level, PaneId, UiHost, Values};
+use types::Error;
 
 /// A question an action asked and nobody had answered yet.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub enum Ask {
     /// A line of text.
     Prompt {
@@ -30,13 +35,28 @@ pub enum Ask {
         /// The question.
         text: String,
     },
+    /// A form: fields with a live preview.
+    Form(Form),
+}
+
+impl Ask {
+    /// The dialogue's title.
+    #[must_use]
+    pub fn title(&self) -> &str {
+        match self {
+            Self::Prompt { title, .. } | Self::Confirm { title, .. } => title,
+            Self::Form(form) => &form.title,
+        }
+    }
 }
 
 #[derive(Default)]
 struct Inner {
     prompt_answer: Option<String>,
     confirm_answer: Option<bool>,
+    form_answer: Option<Values>,
     asked: Option<Ask>,
+    later: VecDeque<(PaneId, Form, Continuation)>,
     notices: Vec<(Level, String)>,
     shown: Vec<(String, String)>,
 }
@@ -69,16 +89,29 @@ impl EguiHost {
         self.lock().confirm_answer = Some(yes);
     }
 
+    /// The values the next `form` call gets.
+    pub fn answer_form(&self, values: Values) {
+        self.lock().form_answer = Some(values);
+    }
+
     /// Drops any queued answer.
     pub fn clear_answers(&self) {
         let mut inner = self.lock();
         inner.prompt_answer = None;
         inner.confirm_answer = None;
+        inner.form_answer = None;
     }
 
     /// The question an action asked since the last call, if any.
     pub fn take_asked(&self) -> Option<Ask> {
         self.lock().asked.take()
+    }
+
+    /// The next form a job finished with, the pane its action ran in and
+    /// the rest of the action, which the application runs with the values
+    /// (`Command::Continue`).
+    pub fn take_later(&self) -> Option<(PaneId, Form, Continuation)> {
+        self.lock().later.pop_front()
     }
 
     /// The notifications since the last call.
@@ -135,6 +168,25 @@ impl UiHost for EguiHost {
     fn show(&self, title: &str, text: &str) {
         self.lock().shown.push((title.to_owned(), text.to_owned()));
     }
+
+    fn form(&self, form: Form) -> Option<Values> {
+        let mut inner = self.lock();
+        if let Some(values) = inner.form_answer.take() {
+            return Some(values);
+        }
+        inner.asked = Some(Ask::Form(form));
+        None
+    }
+
+    fn form_later(
+        &self,
+        pane: PaneId,
+        form: Form,
+        then: Continuation,
+    ) -> Option<Result<ActionOutcome, Error>> {
+        self.lock().later.push_back((pane, form, then));
+        None
+    }
 }
 
 #[cfg(test)]
@@ -145,14 +197,11 @@ mod tests {
     fn unanswered_questions_are_recorded_and_answers_are_consumed_once() {
         let host = EguiHost::new();
         assert_eq!(host.prompt("Rename", "a.txt"), None);
-        assert_eq!(
+        assert!(matches!(
             host.take_asked(),
-            Some(Ask::Prompt {
-                title: "Rename".into(),
-                default: "a.txt".into()
-            })
-        );
-        assert_eq!(host.take_asked(), None);
+            Some(Ask::Prompt { title, default }) if title == "Rename" && default == "a.txt"
+        ));
+        assert!(host.take_asked().is_none());
 
         host.answer_prompt("b.txt".into());
         assert_eq!(host.prompt("Rename", "a.txt").as_deref(), Some("b.txt"));
@@ -170,5 +219,39 @@ mod tests {
         host.notify(Level::Info, "hi");
         assert_eq!(host.take_notices(), vec![(Level::Info, "hi".to_owned())]);
         assert_eq!(host.take_notices(), Vec::new());
+
+        let form = Form::new("Compress", "OK").field(ext::Field::text("name", "Name", "a.zip", ""));
+        assert!(host.form(form.clone()).is_none());
+        assert!(matches!(host.take_asked(), Some(Ask::Form(f)) if f.title == "Compress"));
+        host.answer_form(form.defaults());
+        assert_eq!(
+            host.form(form).map(|v| v.text("name").to_owned()),
+            Some("a.zip".to_owned())
+        );
+    }
+
+    #[test]
+    fn a_form_for_later_is_queued_with_the_rest_of_its_action() {
+        let host = EguiHost::new();
+        let form = Form::new("Install", "Install").field(ext::Field::text("name", "Name", "x", ""));
+        let then = Continuation::new("Install", |values| {
+            assert_eq!(
+                values.map(|v| v.text("name").to_owned()),
+                Some("x".to_owned())
+            );
+            Ok(ActionOutcome::Done)
+        });
+        assert!(
+            host.form_later(PaneId(3), form, then).is_none(),
+            "the shell shows it on its next frame"
+        );
+        let (pane, form, then) = host.take_later().unwrap_or_else(|| panic!("queued"));
+        assert_eq!(pane, PaneId(3));
+        assert!(host.take_later().is_none(), "taken once");
+        assert!(matches!(
+            then.run(Some(form.defaults())),
+            Ok(ActionOutcome::Done)
+        ));
+        assert!(then.run(None).is_err(), "the rest runs once");
     }
 }

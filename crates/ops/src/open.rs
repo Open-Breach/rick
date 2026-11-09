@@ -1,6 +1,7 @@
 //! Copy name, Copy path, Copy path and name, Open with the system default,
 //! Open in the system file manager.
 
+use ext::t;
 use std::sync::Arc;
 
 use ext::{
@@ -52,8 +53,8 @@ impl Action for CopyName {
     fn id(&self) -> ActionId {
         ActionId("core.copy_name")
     }
-    fn label(&self) -> &'static str {
-        "Copy name"
+    fn label(&self) -> String {
+        t!("action-copy-name")
     }
     fn group(&self) -> ActionGroup {
         ActionGroup::Core
@@ -88,8 +89,8 @@ impl Action for CopyPath {
     fn id(&self) -> ActionId {
         ActionId("core.copy_path")
     }
-    fn label(&self) -> &'static str {
-        "Copy path"
+    fn label(&self) -> String {
+        t!("action-copy-path")
     }
     fn group(&self) -> ActionGroup {
         ActionGroup::Core
@@ -133,8 +134,8 @@ impl Action for CopyPathAndName {
     fn id(&self) -> ActionId {
         ActionId("core.copy_path_and_name")
     }
-    fn label(&self) -> &'static str {
-        "Copy path and name"
+    fn label(&self) -> String {
+        t!("action-copy-path-and-name")
     }
     fn group(&self) -> ActionGroup {
         ActionGroup::Core
@@ -167,8 +168,8 @@ impl Action for OpenDefault {
     fn id(&self) -> ActionId {
         ActionId("core.open_default")
     }
-    fn label(&self) -> &'static str {
-        "Open with system default"
+    fn label(&self) -> String {
+        t!("action-open")
     }
     fn group(&self) -> ActionGroup {
         ActionGroup::Core
@@ -204,8 +205,8 @@ impl Action for Reveal {
     fn id(&self) -> ActionId {
         ActionId("core.reveal")
     }
-    fn label(&self) -> &'static str {
-        "Open in system file manager"
+    fn label(&self) -> String {
+        t!("action-reveal")
     }
     fn group(&self) -> ActionGroup {
         ActionGroup::Core

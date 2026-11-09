@@ -1,20 +1,32 @@
 //! The platform tests run against: a private trash directory, recorded
 //! calls and canned dialogue answers.
 
+use std::ffi::OsString;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::{Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::SystemTime;
 
 use async_trait::async_trait;
 use tempfile::TempDir;
 use types::Error;
 
-use crate::traits::{
-    Chrome, Clipboard, ConfigDir, ControlsSide, DialogFilter, DragSource, NativeDialogs, OpenWith,
-    Properties, PropertiesOutcome, RecentItem, RecentlyUsed, StandardFolder, StandardFolders,
-    Trash, TrashedItem, Volume, Volumes, WindowChrome,
+use crate::perms::{
+    FilePermissions, PermissionChange, Permissions, Principal, PrincipalKind, Principals,
 };
+use crate::traits::{
+    Application, Chrome, Clipboard, ConfigDir, ControlsSide, DialogFilter, DragSource, DropTarget,
+    Elevate, ElevatedOutput, ImageFormat, IncomingFiles, Mount, NativeDialogs, OpenWith, Point,
+    Properties, PropertiesOutcome, RecentItem, RecentlyUsed, Secrets, StandardFolder,
+    StandardFolders, Terminal, Trash, TrashedItem, Volume, VolumeKind, Volumes, WindowChrome,
+    WindowRef,
+};
+
+/// The applications the fake offers for every file, the default first.
+pub const FAKE_APPLICATIONS: [(&str, &str); 2] = [
+    ("Fake Editor", "fake-editor"),
+    ("Fake Viewer", "fake-viewer"),
+];
 
 /// The standard folders the fake creates under its home, so the side
 /// panel's default places have rows to show.
@@ -29,8 +41,12 @@ pub const FAKE_STANDARD_FOLDERS: [StandardFolder; 3] = [
 /// The trash really moves files, into a private directory that disappears
 /// with the `Fake`; opening and revealing are recorded instead of launching
 /// anything; dialogues answer what the test told them to; the volumes and
-/// the recently-used list are what the test registered; the standard
-/// folders are the directories under the fake's home.
+/// the recently-used list are what the test registered; mounting a disk
+/// image adds a volume under the fake's own directory and is recorded,
+/// with the formats it accepts settable per test, so the *Mount* action's
+/// availability can be tried for every platform; the standard folders are
+/// the directories under the fake's home; the secrets live in a map the
+/// test can read back.
 #[derive(Debug)]
 pub struct Fake {
     dir: TempDir,
@@ -39,15 +55,36 @@ pub struct Fake {
     /// trashed after a restore does not land on another item's path.
     trashed_count: Mutex<u64>,
     opened: Mutex<Vec<PathBuf>>,
+    opened_with: Mutex<Vec<(PathBuf, Application)>>,
+    terminals: Mutex<Vec<(PathBuf, Option<Vec<String>>)>>,
+    /// The programs handed to [`Elevate::run_elevated`]; nothing runs
+    /// unless `elevate_runs` says so.
+    elevated: Mutex<Vec<(PathBuf, Vec<OsString>)>>,
+    /// Whether [`Elevate::run_elevated`] runs the program, as the current
+    /// user: for a test of the helper itself.
+    elevate_runs: Mutex<bool>,
     revealed: Mutex<Vec<PathBuf>>,
     clipboard: Mutex<Option<String>>,
     dragged: Mutex<Vec<Vec<String>>>,
+    /// A drag handed to `start_drag` runs until the test ends it.
+    drag_running: Mutex<bool>,
+    /// What `drop_position` answers.
+    drop_position: Mutex<Option<Point>>,
+    /// What the next `incoming_files` answers.
+    incoming: Mutex<IncomingFiles>,
     answers: Mutex<Answers>,
     volumes: Mutex<Vec<Volume>>,
     ejected: Mutex<Vec<PathBuf>>,
+    /// The disk-image formats [`Mount::mountable`] answers; the current
+    /// platform's unless a test says otherwise.
+    mountable: Mutex<&'static [ImageFormat]>,
+    /// The image files handed to [`Mount::mount_image`], oldest first.
+    mounted: Mutex<Vec<PathBuf>>,
     recent: Mutex<Vec<RecentItem>>,
     /// `list` answers `Unsupported`, as the macOS trash does.
     unlistable: Mutex<bool>,
+    /// The keychain: secrets by key.
+    secrets: Mutex<std::collections::BTreeMap<String, String>>,
 }
 
 #[derive(Debug, Default)]
@@ -84,15 +121,54 @@ impl Fake {
             items: Mutex::new(Vec::new()),
             trashed_count: Mutex::new(0),
             opened: Mutex::new(Vec::new()),
+            opened_with: Mutex::new(Vec::new()),
+            terminals: Mutex::new(Vec::new()),
+            elevated: Mutex::new(Vec::new()),
+            elevate_runs: Mutex::new(false),
             revealed: Mutex::new(Vec::new()),
             clipboard: Mutex::new(None),
             dragged: Mutex::new(Vec::new()),
+            drag_running: Mutex::new(false),
+            drop_position: Mutex::new(None),
+            incoming: Mutex::new(IncomingFiles::default()),
             answers: Mutex::new(Answers::default()),
             volumes: Mutex::new(Vec::new()),
             ejected: Mutex::new(Vec::new()),
+            mountable: Mutex::new(crate::NATIVE_MOUNTABLE),
+            mounted: Mutex::new(Vec::new()),
             recent: Mutex::new(Vec::new()),
             unlistable: Mutex::new(false),
+            secrets: Mutex::new(std::collections::BTreeMap::new()),
         })
+    }
+
+    /// Paths and applications handed to [`OpenWith::open_with`], oldest
+    /// first.
+    #[must_use]
+    pub fn opened_with(&self) -> Vec<(PathBuf, Application)> {
+        lock(&self.opened_with).clone()
+    }
+
+    /// The folders and commands handed to [`Terminal::open_terminal`],
+    /// oldest first.
+    #[must_use]
+    pub fn terminals(&self) -> Vec<(PathBuf, Option<Vec<String>>)> {
+        lock(&self.terminals).clone()
+    }
+
+    /// The programs and arguments handed to [`Elevate::run_elevated`],
+    /// oldest first; the fake runs none of them unless
+    /// [`Fake::set_elevate_runs`] said so.
+    #[must_use]
+    pub fn elevated(&self) -> Vec<(PathBuf, Vec<OsString>)> {
+        lock(&self.elevated).clone()
+    }
+
+    /// Makes [`Elevate::run_elevated`] run the program, as the current user
+    /// and with its output captured, so a test can exercise the privileged
+    /// helper without privileges.
+    pub fn set_elevate_runs(&self, runs: bool) {
+        *lock(&self.elevate_runs) = runs;
     }
 
     /// Paths handed to [`OpenWith::open`], oldest first.
@@ -118,6 +194,28 @@ impl Fake {
     #[must_use]
     pub fn dragged(&self) -> Vec<Vec<String>> {
         lock(&self.dragged).clone()
+    }
+
+    /// Ends the drag `start_drag` began, as the desktop does when the button
+    /// comes up: `drag_in_progress` answers `false` from now on.
+    pub fn end_drag(&self) {
+        *lock(&self.drag_running) = false;
+    }
+
+    /// What [`DropTarget::drop_position`] answers from now on: where the
+    /// cursor of a drag from outside is, or `None` for a platform that
+    /// cannot tell.
+    pub fn answer_drop_position(&self, position: Option<Point>) {
+        *lock(&self.drop_position) = position;
+    }
+
+    /// Files the platform receives itself, as the Wayland data device does:
+    /// `hovered` is answered by every `incoming_files` until changed,
+    /// `dropped` by the next one only.
+    pub fn receive_files(&self, hovered: Vec<PathBuf>, dropped: Vec<PathBuf>) {
+        let mut incoming = lock(&self.incoming);
+        incoming.hovered = hovered;
+        incoming.dropped.extend(dropped);
     }
 
     /// What `pick_folder` answers from now on.
@@ -159,10 +257,46 @@ impl Fake {
         lock(&self.ejected).clone()
     }
 
+    /// What [`Mount::mountable`] answers from now on: another platform's
+    /// list, so a test can try the *Mount* action as Windows or macOS
+    /// would show it.
+    pub fn set_mountable(&self, formats: &'static [ImageFormat]) {
+        *lock(&self.mountable) = formats;
+    }
+
+    /// The image files handed to [`Mount::mount_image`], oldest first.
+    #[must_use]
+    pub fn mounted(&self) -> Vec<PathBuf> {
+        lock(&self.mounted).clone()
+    }
+
     /// What [`RecentlyUsed::recently_used`] answers from now on; the
     /// test's stand-in for the system's list.
     pub fn set_recent(&self, items: Vec<RecentItem>) {
         *lock(&self.recent) = items;
+    }
+
+    /// Every secret in the fake keychain, by key: what a test checks never
+    /// reached a file.
+    #[must_use]
+    pub fn secrets(&self) -> std::collections::BTreeMap<String, String> {
+        lock(&self.secrets).clone()
+    }
+}
+
+impl Secrets for Fake {
+    fn store_secret(&self, key: &str, secret: &str) -> Result<(), Error> {
+        lock(&self.secrets).insert(key.to_owned(), secret.to_owned());
+        Ok(())
+    }
+
+    fn get_secret(&self, key: &str) -> Result<Option<String>, Error> {
+        Ok(lock(&self.secrets).get(key).cloned())
+    }
+
+    fn remove_secret(&self, key: &str) -> Result<(), Error> {
+        lock(&self.secrets).remove(key);
+        Ok(())
     }
 }
 
@@ -183,6 +317,52 @@ impl Volumes for Fake {
         volumes.retain(|v| v.mount_point != volume.mount_point);
         lock(&self.ejected).push(volume.mount_point.clone());
         Ok(())
+    }
+}
+
+impl Mount for Fake {
+    fn mountable(&self) -> &'static [ImageFormat] {
+        *lock(&self.mountable)
+    }
+
+    /// Mounts nothing: records the call and adds a volume at a directory
+    /// of the fake's own, named after the image, which [`Volumes::eject`]
+    /// takes away again like any removable volume.
+    fn mount_image(&self, path: &Path) -> Result<Volume, Error> {
+        let name = path
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let format = ImageFormat::for_name(&name)
+            .filter(|f| self.mountable().contains(f))
+            .ok_or(Error::Unsupported(
+                "this platform does not mount that kind of disk image",
+            ))?;
+        if !path.is_file() {
+            return Err(Error::NotFound);
+        }
+        let stem = Path::new(&name)
+            .file_stem()
+            .map(|s| s.to_string_lossy().into_owned())
+            .unwrap_or(name);
+        let mount_point = self.dir.path().join("mounts").join(&stem);
+        fs::create_dir_all(&mount_point).map_err(Error::from_io)?;
+        let volume = Volume {
+            name: stem,
+            mount_point,
+            kind: if format == ImageFormat::Iso {
+                VolumeKind::Optical
+            } else {
+                VolumeKind::Removable
+            },
+            fs_type: "fake".to_owned(),
+            device: None,
+            total: None,
+            free: None,
+        };
+        lock(&self.mounted).push(path.to_path_buf());
+        lock(&self.volumes).push(volume.clone());
+        Ok(volume)
     }
 }
 
@@ -296,6 +476,75 @@ impl OpenWith for Fake {
         lock(&self.revealed).push(path.to_path_buf());
         Ok(())
     }
+
+    /// [`FAKE_APPLICATIONS`] for every entry that exists.
+    fn applications(&self, path: &Path) -> Result<Vec<Application>, Error> {
+        fs::symlink_metadata(path).map_err(Error::from_io)?;
+        Ok(FAKE_APPLICATIONS
+            .iter()
+            .map(|(name, id)| Application {
+                name: (*name).to_owned(),
+                id: (*id).to_owned(),
+            })
+            .collect())
+    }
+
+    fn open_with(&self, path: &Path, app: &Application) -> Result<(), Error> {
+        lock(&self.opened_with).push((path.to_path_buf(), app.clone()));
+        Ok(())
+    }
+}
+
+impl Terminal for Fake {
+    fn open_terminal(&self, dir: &Path, command: Option<&[String]>) -> Result<(), Error> {
+        lock(&self.terminals).push((dir.to_path_buf(), command.map(<[String]>::to_vec)));
+        Ok(())
+    }
+}
+
+impl Elevate for Fake {
+    /// Records the call and reports success without running anything, or
+    /// runs the program as the current user when [`Fake::set_elevate_runs`]
+    /// said so.
+    fn run_elevated(&self, program: &Path, args: &[OsString]) -> Result<ElevatedOutput, Error> {
+        lock(&self.elevated).push((program.to_path_buf(), args.to_vec()));
+        if !*lock(&self.elevate_runs) {
+            return Ok(ElevatedOutput {
+                code: Some(0),
+                ..ElevatedOutput::default()
+            });
+        }
+        let output = std::process::Command::new(program)
+            .args(args)
+            .stdin(std::process::Stdio::null())
+            .output()
+            .map_err(Error::from_io)?;
+        Ok(ElevatedOutput {
+            code: output.status.code(),
+            stdout: output.stdout,
+            stderr: output.stderr,
+        })
+    }
+}
+
+impl Permissions for Fake {
+    /// The real entry's permissions: the fake's temporary directory is a
+    /// real one, and the acceptance tests change modes on it.
+    fn permissions(&self, path: &Path) -> Result<FilePermissions, Error> {
+        crate::Native.permissions(path)
+    }
+
+    fn set_permissions(&self, path: &Path, change: &PermissionChange) -> Result<(), Error> {
+        crate::Native.set_permissions(path, change)
+    }
+
+    fn principals(&self) -> Result<Principals, Error> {
+        crate::Native.principals()
+    }
+
+    fn principal(&self, name: &str, kind: PrincipalKind) -> Result<Principal, Error> {
+        crate::Native.principal(name, kind)
+    }
 }
 
 impl Properties for Fake {
@@ -316,9 +565,31 @@ impl Clipboard for Fake {
 }
 
 impl DragSource for Fake {
-    fn start_drag(&self, paths: &[PathBuf]) -> Result<(), Error> {
+    fn attach(&self, _window: &WindowRef, _wake: Arc<dyn Fn() + Send + Sync>) {}
+
+    fn start_drag(&self, _window: &WindowRef, paths: &[PathBuf]) -> Result<(), Error> {
         lock(&self.dragged).push(paths.iter().map(|p| crate::paths::file_uri(p)).collect());
+        *lock(&self.drag_running) = true;
         Ok(())
+    }
+
+    fn drag_in_progress(&self) -> bool {
+        *lock(&self.drag_running)
+    }
+}
+
+impl DropTarget for Fake {
+    fn incoming_files(&self) -> IncomingFiles {
+        let mut incoming = lock(&self.incoming);
+        IncomingFiles {
+            hovering: !incoming.hovered.is_empty(),
+            hovered: incoming.hovered.clone(),
+            dropped: std::mem::take(&mut incoming.dropped),
+        }
+    }
+
+    fn drop_position(&self, _window: &WindowRef) -> Option<Point> {
+        *lock(&self.drop_position)
     }
 }
 
@@ -354,6 +625,18 @@ impl NativeDialogs for Fake {
 
     async fn save_file(&self, _title: &str, _suggested: &str) -> Option<PathBuf> {
         lock(&self.answers).save.clone()
+    }
+}
+
+/// A window of no backend, enough for the fake, which never looks at it,
+/// and for the native platforms' tests, which refuse it.
+#[cfg(test)]
+pub(crate) fn test_window() -> WindowRef {
+    use raw_window_handle::{RawDisplayHandle, RawWindowHandle, WebDisplayHandle, WebWindowHandle};
+    WindowRef {
+        window: RawWindowHandle::Web(WebWindowHandle::new(1)),
+        display: RawDisplayHandle::Web(WebDisplayHandle::new()),
+        scale: 1.0,
     }
 }
 
@@ -399,6 +682,28 @@ mod tests {
     }
 
     #[test]
+    fn secrets_are_kept_in_memory_by_key() {
+        let fake = Fake::new().unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(fake.get_secret("s3/work/secret_key").ok(), Some(None));
+        fake.store_secret("s3/work/secret_key", "hunter2")
+            .unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(
+            fake.get_secret("s3/work/secret_key")
+                .ok()
+                .flatten()
+                .as_deref(),
+            Some("hunter2")
+        );
+        assert_eq!(fake.secrets().len(), 1);
+        fake.remove_secret("s3/work/secret_key")
+            .unwrap_or_else(|e| panic!("{e}"));
+        fake.remove_secret("s3/work/secret_key")
+            .unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(fake.get_secret("s3/work/secret_key").ok(), Some(None));
+        assert!(fake.secrets().is_empty());
+    }
+
+    #[test]
     fn restore_refuses_an_occupied_path() {
         let fake = Fake::new().unwrap_or_else(|e| panic!("{e}"));
         let work = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
@@ -410,6 +715,45 @@ mod tests {
             fake.restore(&item),
             Err(Error::Io(e)) if e.kind() == std::io::ErrorKind::AlreadyExists
         ));
+    }
+
+    #[test]
+    fn drags_and_drops_are_recorded_and_answered() {
+        let fake = Fake::new().unwrap_or_else(|e| panic!("{e}"));
+        fake.attach(&test_window(), Arc::new(|| {}));
+        fake.start_drag(&test_window(), &[PathBuf::from("/a b")])
+            .unwrap_or_else(|e| panic!("{e}"));
+        let dragged = fake.dragged();
+        assert_eq!(dragged.len(), 1);
+        assert!(dragged[0][0].ends_with("/a%20b"), "{dragged:?}");
+        assert!(fake.drag_in_progress());
+        fake.end_drag();
+        assert!(!fake.drag_in_progress());
+        assert_eq!(fake.drop_position(&test_window()), None);
+        fake.answer_drop_position(Some(Point { x: 3.0, y: 4.0 }));
+        assert_eq!(
+            fake.drop_position(&test_window()),
+            Some(Point { x: 3.0, y: 4.0 })
+        );
+        assert_eq!(fake.incoming_files(), IncomingFiles::default());
+        fake.receive_files(vec![PathBuf::from("/h")], vec![PathBuf::from("/d")]);
+        assert_eq!(
+            fake.incoming_files(),
+            IncomingFiles {
+                hovering: true,
+                hovered: vec![PathBuf::from("/h")],
+                dropped: vec![PathBuf::from("/d")],
+            }
+        );
+        assert_eq!(
+            fake.incoming_files(),
+            IncomingFiles {
+                hovering: true,
+                hovered: vec![PathBuf::from("/h")],
+                dropped: Vec::new(),
+            },
+            "a drop is reported once"
+        );
     }
 
     #[test]
@@ -426,11 +770,6 @@ mod tests {
         assert!(fake.config_dir().starts_with(fake.dir.path()));
         fake.set_text("/a\n/b").unwrap_or_else(|e| panic!("{e}"));
         assert_eq!(fake.clipboard_text().as_deref(), Some("/a\n/b"));
-        fake.start_drag(&[PathBuf::from("/a b")])
-            .unwrap_or_else(|e| panic!("{e}"));
-        let dragged = fake.dragged();
-        assert_eq!(dragged.len(), 1);
-        assert!(dragged[0][0].ends_with("/a%20b"), "{dragged:?}");
         assert!(matches!(
             fake.show(fake.dir.path()),
             Ok(PropertiesOutcome::Rows(rows)) if rows[0].0 == "Name"
@@ -461,6 +800,34 @@ mod tests {
         fake.add_volume(usb.clone());
         fake.remove_volume(Path::new("/media/usb"));
         assert_eq!(fake.volumes().map(|v| v.len()).ok(), Some(0));
+        // Mounting an image adds a volume that Eject takes away again.
+        assert_eq!(fake.mountable(), crate::NATIVE_MOUNTABLE);
+        fake.set_mountable(&[ImageFormat::Iso, ImageFormat::Vhdx]);
+        assert_eq!(fake.mountable(), &[ImageFormat::Iso, ImageFormat::Vhdx]);
+        let image = fake.dir.path().join("disc.iso");
+        fs::write(&image, b"iso").unwrap_or_else(|e| panic!("{e}"));
+        assert!(matches!(
+            fake.mount_image(&fake.dir.path().join("disk.qcow2")),
+            Err(Error::Unsupported(_))
+        ));
+        assert!(matches!(
+            fake.mount_image(&fake.dir.path().join("missing.iso")),
+            Err(Error::NotFound)
+        ));
+        let mounted = fake.mount_image(&image).unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(mounted.name, "disc");
+        assert_eq!(mounted.kind, VolumeKind::Optical);
+        assert!(mounted.mount_point.is_dir());
+        assert_eq!(fake.mounted(), std::slice::from_ref(&image));
+        assert_eq!(fake.volumes().map(|v| v.len()).ok(), Some(1));
+        fake.eject(&mounted).unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(fake.volumes().map(|v| v.len()).ok(), Some(0));
+        assert_eq!(ImageFormat::for_name("A.VHDX"), Some(ImageFormat::Vhdx));
+        assert_eq!(ImageFormat::for_name("a.qcow"), Some(ImageFormat::Qcow2));
+        assert_eq!(ImageFormat::for_name(".iso"), None);
+        assert_eq!(ImageFormat::for_name("notes.txt"), None);
+        assert_eq!(ImageFormat::Img.name(), "raw image");
+        assert_eq!(ImageFormat::ALL.len(), 8);
         assert_eq!(
             fake.standard_folder(StandardFolder::Home),
             Some(fake.home_dir())

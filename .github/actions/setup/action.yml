@@ -1,9 +1,11 @@
 name: setup
 description: >-
   The Rust toolchain of rust-toolchain.toml with the requested components,
-  the cargo cache, the Linux system packages the previewers need, and pdfium
-  for the PDF previewer. Shared by the ci, full and bench workflows (issue
-  35); release.yml has its own steps.
+  the cargo cache, the Linux system packages the previewers need, the
+  software graphics adapter the 3D previewer's tests render on, pdfium
+  for the PDF previewer and the 7-Zip library for the disk images. Shared
+  by the ci, full and bench workflows (issue 35); release.yml has its own
+  steps.
 inputs:
   components:
     description: Toolchain components to add, comma-separated (rustfmt, clippy).
@@ -11,20 +13,48 @@ inputs:
     default: ""
   system:
     description: >-
-      The Linux packages (issue 18). "build" installs the GStreamer
+      The system packages (issue 18). "build" installs the GStreamer
       development files the media previewer's gstreamer feature compiles
-      against. "test" adds the GStreamer codec plug-ins and LibreOffice and
-      sets RICK_REQUIRE_GSTREAMER and RICK_REQUIRE_LIBREOFFICE, so their
-      tests fail rather than skip when either is missing. "none" installs
-      nothing. Ignored on macOS and Windows, whose runners have neither and
-      skip those tests with a note.
+      against. "test" adds the GStreamer codec plug-ins, LibreOffice and
+      lavapipe, Mesa's software Vulkan driver, and sets
+      RICK_REQUIRE_GSTREAMER, RICK_REQUIRE_LIBREOFFICE and RICK_REQUIRE_WGPU,
+      so their tests fail rather than skip when any is missing; and, for
+      milestone 5 (issue 22), Subversion on every runner with
+      RICK_REQUIRE_SVN set, Tracker and Baloo on Linux (their tests run
+      through .github/scripts/with-indexers.sh), and the Windows Search
+      service started on Windows, with RICK_REQUIRE_SPOTLIGHT or
+      RICK_REQUIRE_WINDOWS_SEARCH set and, on macOS, RICK_SEARCH_FIXTURE
+      naming a directory under the home the platform index covers (the
+      Windows index is too busy with its first crawl to take a fixture
+      within the job). "none"
+      installs nothing. The GStreamer and LibreOffice parts are Linux only;
+      macOS and Windows skip those tests with a note. On Windows "test" also
+      sets RICK_REQUIRE_WGPU, since the dx12 software adapter (WARP) is part
+      of the system; the 3D previewer's tests skip with a note on a macOS
+      runner without a graphics adapter (issue 19).
     required: false
     default: test
   pdfium:
     description: >-
-      Bind pdfium for the PDF previewer: the release binary for this runner
-      in RICK_PDFIUM_DIR, with RICK_REQUIRE_PDFIUM set so its tests fail
+      Bind pdfium for the PDF previewer (issue 50, no environment variable):
+      the release binary for this runner is copied beside the test binaries
+      (target/<profile>/deps/, where a previewer looks "beside the binary"
+      when the tests run it with their temporary config directory) and its
+      path is written into the PDF previewer's setting file in the runner's
+      config directory (preview-pdf.toml, which the rick binary and `cargo
+      xtask bundle` read), with RICK_REQUIRE_PDFIUM set so the tests fail
       rather than skip when the binding is missing.
+    required: false
+    default: "true"
+  sevenzip:
+    description: >-
+      The 7-Zip library the disk images are read with (issue 51), in
+      RICK_SEVENZIP_DIR for `cargo xtask bundle` and the tests, with
+      RICK_REQUIRE_SEVENZIP set so the disk-image tests fail rather than
+      skip without it: the distribution's 7zip package on Linux, the
+      runner's 7-Zip installation on Windows, 7z.so built from the pinned
+      sources on macOS (cached per release and architecture); see
+      .github/scripts/sevenzip.sh.
     required: false
     default: "true"
 runs:
@@ -44,16 +74,118 @@ runs:
         sudo apt-get update
         sudo apt-get install -y --no-install-recommends \
           libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev
-    - name: gstreamer plug-ins and libreoffice
+    - name: gstreamer plug-ins, libreoffice and lavapipe
       if: runner.os == 'Linux' && inputs.system == 'test'
       shell: bash
       run: |
         sudo apt-get install -y --no-install-recommends \
           gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-plugins-bad \
           gstreamer1.0-plugins-ugly gstreamer1.0-libav \
-          libreoffice-writer libreoffice-calc libreoffice-impress
+          libreoffice-writer libreoffice-calc libreoffice-impress \
+          mesa-vulkan-drivers
         echo "RICK_REQUIRE_GSTREAMER=1" >> "$GITHUB_ENV"
         echo "RICK_REQUIRE_LIBREOFFICE=1" >> "$GITHUB_ENV"
+        echo "RICK_REQUIRE_WGPU=1" >> "$GITHUB_ENV"
+    - name: subversion and the linux indexers
+      if: runner.os == 'Linux' && inputs.system == 'test'
+      shell: bash
+      run: |
+        sudo apt-get install -y --no-install-recommends subversion dbus tracker tracker-miner-fs
+        # Baloo's file indexer: `baloo6` on Ubuntu 26.04, where `baloo-kf5`
+        # no longer ships `baloo_file`; `baloo-kf5` on 24.04, which has no
+        # `baloo6`. with-indexers.sh finds the indexer where either puts it.
+        sudo apt-get install -y --no-install-recommends baloo6 || sudo apt-get install -y --no-install-recommends baloo-kf5
+        echo "RICK_REQUIRE_SVN=1" >> "$GITHUB_ENV"
+        # Issue 44: desktop-file-validate checks every desktop entry the
+        # installer writes; its tests fail rather than skip without it here.
+        sudo apt-get install -y --no-install-recommends desktop-file-utils
+        echo "RICK_REQUIRE_DESKTOP_FILE_VALIDATE=1" >> "$GITHUB_ENV"
+        # Issue 51: udisks2 with a polkit rule for the runner, so the real
+        # mount of an ISO through `udisksctl loop-setup` runs
+        # (crates/tests/tests/mount_linux.rs); where the daemon does not
+        # answer the test skips with a note instead.
+        sudo apt-get install -y --no-install-recommends udisks2
+        sudo install -D -m 644 .github/scripts/udisks-ci.rules /etc/polkit-1/rules.d/50-rick-ci.rules
+        sudo systemctl restart polkit 2>/dev/null || true
+        sudo systemctl start udisks2 2>/dev/null || true
+        if udisksctl status > /dev/null 2>&1; then
+          echo "RICK_REQUIRE_UDISKS=1" >> "$GITHUB_ENV"
+        else
+          echo "udisks does not answer on this runner; the real mount test skips"
+        fi
+    - name: subversion and spotlight
+      if: runner.os == 'macOS' && inputs.system == 'test'
+      shell: bash
+      run: |
+        brew install subversion
+        echo "RICK_REQUIRE_SVN=1" >> "$GITHUB_ENV"
+        mkdir -p "$HOME/rick-search-fixture"
+        echo "RICK_SEARCH_FIXTURE=$HOME/rick-search-fixture" >> "$GITHUB_ENV"
+        echo "RICK_REQUIRE_SPOTLIGHT=1" >> "$GITHUB_ENV"
+        mdutil -s / || true
+    - name: subversion and windows search
+      if: runner.os == 'Windows' && inputs.system == 'test'
+      shell: pwsh
+      run: |
+        choco install -y --no-progress svn
+        # The installer puts its bin directory on the machine's PATH, which
+        # the steps after this one do not see; they see GITHUB_PATH.
+        echo "C:\Program Files (x86)\Subversion\bin" >> $env:GITHUB_PATH
+        echo "RICK_REQUIRE_SVN=1" >> $env:GITHUB_ENV
+        Set-Service WSearch -StartupType Automatic
+        Start-Service WSearch
+        Get-Service WSearch
+        # The service is required, a fixture is not: the index starts here
+        # and crawls the whole profile, the cargo registry the build fills
+        # included, which outlasts the job (a file written at test time was
+        # not indexed within five minutes; an idle runner takes ten
+        # seconds, and the connector's script and SQL find it there). The
+        # test checks the service and a broad query; Spotlight and the
+        # Linux indexers check the fixture.
+        echo "RICK_REQUIRE_WINDOWS_SEARCH=1" >> $env:GITHUB_ENV
+    # Issue 19: the 3D previewer renders on WARP, Windows' software adapter,
+    # which wgpu's dx12 backend finds by itself; the tests must not skip.
+    - name: software graphics adapter required
+      if: runner.os == 'Windows' && inputs.system == 'test'
+      shell: bash
+      run: echo "RICK_REQUIRE_WGPU=1" >> "$GITHUB_ENV"
+    - name: 7-zip library (linux)
+      if: inputs.sevenzip == 'true' && runner.os == 'Linux'
+      shell: bash
+      run: |
+        .github/scripts/sevenzip.sh "$RUNNER_TEMP/sevenzip"
+        echo "RICK_SEVENZIP_DIR=$RUNNER_TEMP/sevenzip" >> "$GITHUB_ENV"
+        echo "RICK_REQUIRE_SEVENZIP=1" >> "$GITHUB_ENV"
+    - name: 7-zip library (windows)
+      if: inputs.sevenzip == 'true' && runner.os == 'Windows'
+      shell: bash
+      run: |
+        # The runner image carries 7-Zip; its 7z.dll and License.txt are
+        # what the installer puts there. Git Bash on the runner has the
+        # variable in upper case only (`$ProgramFiles` is empty there).
+        dir="$(cygpath -u "${PROGRAMFILES:-${ProgramFiles:-C:\\Program Files}}")/7-Zip"
+        if [ ! -f "$dir/7z.dll" ]; then
+          .github/scripts/sevenzip.sh "$(cygpath -u "$RUNNER_TEMP")/sevenzip"
+          dir="$(cygpath -u "$RUNNER_TEMP")/sevenzip"
+        fi
+        echo "RICK_SEVENZIP_DIR=$(cygpath -w "$dir")" >> "$GITHUB_ENV"
+        echo "RICK_REQUIRE_SEVENZIP=1" >> "$GITHUB_ENV"
+    - name: 7-zip library cache (macos)
+      if: inputs.sevenzip == 'true' && runner.os == 'macOS'
+      id: sevenzip-cache
+      uses: actions/cache@v4
+      with:
+        path: ${{ runner.temp }}/sevenzip
+        key: sevenzip-25.01-${{ runner.os }}-${{ runner.arch }}
+    - name: 7-zip library (macos)
+      if: inputs.sevenzip == 'true' && runner.os == 'macOS'
+      shell: bash
+      run: |
+        if [ "${{ steps.sevenzip-cache.outputs.cache-hit }}" != "true" ]; then
+          .github/scripts/sevenzip.sh "$RUNNER_TEMP/sevenzip"
+        fi
+        echo "RICK_SEVENZIP_DIR=$RUNNER_TEMP/sevenzip" >> "$GITHUB_ENV"
+        echo "RICK_REQUIRE_SEVENZIP=1" >> "$GITHUB_ENV"
     - name: pdfium
       if: inputs.pdfium == 'true'
       shell: bash
@@ -74,9 +206,24 @@ runs:
         fi
         mkdir -p "$dest"
         curl -sSL "https://github.com/bblanchon/pdfium-binaries/releases/latest/download/$asset.tgz" | tar xz -C "$dest"
-        if [ "$RUNNER_OS" = "Windows" ]; then
-          echo "RICK_PDFIUM_DIR=$(cygpath -w "$dest/bin")" >> "$GITHUB_ENV"
-        else
-          echo "RICK_PDFIUM_DIR=$dest/lib" >> "$GITHUB_ENV"
-        fi
+        # The library file, and the config directory the setting goes into,
+        # as platform::ConfigDir computes it (QUESTIONS.md 194).
+        case "$RUNNER_OS" in
+          Windows) lib="$dest/bin/pdfium.dll"; config="$(cygpath -u "$APPDATA")/Rick"; lib_setting="$(cygpath -m "$lib")" ;;
+          macOS)   lib="$dest/lib/libpdfium.dylib"; config="$HOME/Library/Application Support/Rick"; lib_setting="$lib" ;;
+          *)       lib="$dest/lib/libpdfium.so"; config="${XDG_CONFIG_HOME:-$HOME/.config}/rick"; lib_setting="$lib" ;;
+        esac
+        test -f "$lib" || { echo "no pdfium library in $dest"; exit 1; }
+        # Beside every test binary: the tests run with a temporary config
+        # directory and find the library the way a user without the setting
+        # would, beside the binary.
+        for profile in debug release; do
+          mkdir -p "$GITHUB_WORKSPACE/target/$profile/deps"
+          cp "$lib" "$GITHUB_WORKSPACE/target/$profile/deps/"
+          cp "$lib" "$GITHUB_WORKSPACE/target/$profile/"
+        done
+        # The setting, for the rick binary and the bundle.
+        mkdir -p "$config"
+        printf 'library = "%s"\n' "$lib_setting" > "$config/preview-pdf.toml"
+        cat "$config/preview-pdf.toml"
         echo "RICK_REQUIRE_PDFIUM=1" >> "$GITHUB_ENV"

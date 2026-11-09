@@ -15,13 +15,13 @@
 //! ```
 //! use ext::{
 //!     Badge, CellValue, Color, ColumnDef, ColumnId, DecorateCtx, Decoration, Decorator,
-//!     PanelSection,
+//!     PanelSection, Text,
 //! };
 //! use runtime::JobRunner;
 //! use types::{Attrs, CancelToken, Entry, EntryId, EntryKind, ExtId, Location, ProviderId};
 //!
 //! const EXTENSION: ColumnId = ColumnId("docs.extension");
-//! const COLUMNS: [ColumnDef; 1] = [ColumnDef { id: EXTENSION, label: "Extension" }];
+//! const COLUMNS: [ColumnDef; 1] = [ColumnDef { id: EXTENSION, label: Text("column-extension") }];
 //!
 //! struct Docs;
 //!
@@ -112,8 +112,8 @@ pub struct ColumnId(pub &'static str);
 pub struct ColumnDef {
     /// The column's id, used in [`Decoration::cells`].
     pub id: ColumnId,
-    /// The header text.
-    pub label: &'static str,
+    /// The header text: a Fluent key, read live.
+    pub label: crate::Text,
 }
 
 /// One cell of an extra column.

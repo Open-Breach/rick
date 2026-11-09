@@ -12,6 +12,10 @@
 //! that knows the kind lays out itself, while `render` keeps giving a
 //! textual fallback. The pane builds its toolbar from the kind of document
 //! (text layer, pages, raster) plus those controls; a previewer never draws.
+//! A document that answers to the pointer itself (a 3D view orbited by
+//! dragging, zoomed by the wheel, reset by a double-click) declares the
+//! gestures as [`PreviewControl::Pointer`] controls, and the pane hands it
+//! the movement through `set_control` instead of panning or scrolling.
 //!
 //! # Worked example
 //!
@@ -25,7 +29,7 @@
 //!
 //! use ext::{
 //!     ControlId, ControlValue, Frame, Icon, InfoSection, PreviewControl, PreviewDoc, Previewer,
-//!     Provider, RenderRequest, TextBlock, TextLayer, Transport, async_trait,
+//!     Provider, RenderRequest, Text, TextBlock, TextLayer, Transport, async_trait,
 //! };
 //! use types::{Attrs, CancelToken, Entry, EntryId, EntryKind, Error, ExtId, Location, ProviderId};
 //!
@@ -53,7 +57,7 @@
 //!     fn sections(&self) -> Vec<InfoSection> {
 //!         vec![InfoSection {
 //!             id: "file",
-//!             title: "File info",
+//!             title: Text("file-info"),
 //!             icon: Icon::Info,
 //!             rows: vec![("Characters".into(), self.body.chars().count().to_string())],
 //!         }]
@@ -121,7 +125,7 @@
 //! assert_eq!(PlainText.score(&Entry { name: "a.bin".into(), ..entry.clone() }, b"\x00\x01"), 0);
 //!
 //! let mut doc = TextDoc { body: "hi".into(), layer: TextLayer::default(), upper: false };
-//! assert_eq!(doc.sections()[0].title, "File info");
+//! assert_eq!(doc.sections()[0].title.key(), "file-info");
 //! assert!(matches!(doc.controls()[0], PreviewControl::Toggle { on: false, .. }));
 //! doc.set_control(UPPER, ControlValue::Bool(true)).unwrap();
 //! let req = RenderRequest { width: 10, height: 10, scale: 1.0, dark: false };
@@ -301,8 +305,8 @@ pub struct InfoSection {
     /// Stable id, unique within the document: `"file"`, `"exif"`. The pane
     /// remembers which id is pinned per content kind.
     pub id: &'static str,
-    /// The badge's tooltip and the panel's heading.
-    pub title: &'static str,
+    /// The badge's tooltip and the panel's heading: a Fluent key, read live.
+    pub title: crate::Text,
     /// The badge's glyph.
     pub icon: Icon,
     /// Key and value rows, in display order.
@@ -314,12 +318,33 @@ pub struct InfoSection {
 pub struct ControlId(pub &'static str);
 
 /// What a control was set to.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum ControlValue {
     /// A toggle's new state.
     Bool(bool),
-    /// A button was pressed.
+    /// A button was pressed, or a double-click landed on the content.
     Pressed,
+    /// A pointer movement over the content, in points: what a drag moved
+    /// since the last report, or what the wheel scrolled.
+    Delta {
+        /// Rightwards.
+        x: f32,
+        /// Downwards.
+        y: f32,
+    },
+}
+
+/// A pointer gesture over the content that a previewer takes for itself.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Gesture {
+    /// A drag with the primary button; reported as [`ControlValue::Delta`]
+    /// every frame it moves, in points since the last report.
+    Drag,
+    /// The wheel or a two-finger scroll without a modifier (the modifier
+    /// zooms the pane); reported as [`ControlValue::Delta`] in points.
+    Wheel,
+    /// A double-click; reported as [`ControlValue::Pressed`].
+    DoubleClick,
 }
 
 /// A toolbar control a previewer adds to the pane's standard ones. Icons
@@ -348,6 +373,19 @@ pub enum PreviewControl {
         /// Greyed out when `false`.
         enabled: bool,
     },
+    /// A gesture over the content the document handles itself: a 3D
+    /// view's orbit, zoom and reset. Nothing is drawn for it; the pane
+    /// forwards the gesture to [`PreviewDoc::set_control`] instead of
+    /// panning, scrolling or switching to actual size, and shows the last
+    /// frame until the next one is rendered.
+    Pointer {
+        /// The control's id, passed back to [`PreviewDoc::set_control`].
+        id: ControlId,
+        /// The gesture claimed.
+        gesture: Gesture,
+        /// What the gesture does, for a hint: `"Orbit"`.
+        label: &'static str,
+    },
 }
 
 /// Content the UI lays out itself when it knows the kind, beyond pixels
@@ -362,6 +400,10 @@ pub enum Content {
     Grid(Arc<dyn Grid>),
     /// A document of headings, paragraphs, lists, code, tables and images.
     Document(Arc<Document>),
+    /// Nothing to show yet: the previewer needs a third-party library it
+    /// could not find; the pane shows the file's information, the message
+    /// and *Browse…* and *Retry* (SPEC.md, *Third-party libraries*).
+    MissingLibrary(Arc<MissingLibrary>),
 }
 
 impl std::fmt::Debug for Content {
@@ -374,8 +416,32 @@ impl std::fmt::Debug for Content {
                 .field("rows", &grid.rows())
                 .finish(),
             Self::Document(document) => f.debug_tuple("Document").field(document).finish(),
+            Self::MissingLibrary(missing) => {
+                f.debug_tuple("MissingLibrary").field(missing).finish()
+            }
         }
     }
+}
+
+/// A third-party library a previewer needs and could not find: pdfium,
+/// LibreOffice. The pane names it, shows how to install it on this
+/// platform, and offers *Browse…*, whose choice it stores into `setting`
+/// through the host's [`SettingsStore`](crate::SettingsStore), and *Retry*,
+/// which opens the preview again.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MissingLibrary {
+    /// The library's name: `"pdfium"`, `"LibreOffice"`.
+    pub name: String,
+    /// What installs it on this platform: a command to run, or an address
+    /// to download it from.
+    pub install: String,
+    /// The setting that holds its path: the extension and the key the
+    /// extension declared ([`SettingKind::Text`](crate::SettingKind::Text)).
+    pub setting: (ExtId, &'static str),
+    /// What *Browse…* looks for: the library file's type.
+    pub filters: Vec<platform::DialogFilter>,
+    /// Where the previewer looked, for the curious.
+    pub detail: String,
 }
 
 /// A read-only file list, as an archive previewer produces it: the
@@ -530,7 +596,7 @@ pub struct Image {
     pub data: Option<Arc<[u8]>>,
 }
 
-/// An opened document the preview pane or viewer shows.
+/// An opened document the preview pane shows.
 pub trait PreviewDoc: Send {
     /// Number of pages; `None` for a single surface.
     fn pages(&self) -> Option<usize>;
@@ -580,7 +646,23 @@ pub trait PreviewDoc: Send {
     fn transport(&mut self) -> Option<&mut dyn Transport>;
 }
 
-/// Turns an entry into something the inspector or viewer can show.
+/// How much of a file a previewer reads, which decides how a file on a
+/// remote provider (`Capabilities::REMOTE`) is served to it: a prefix
+/// previewer gets the first chunk and the pane offers *Load more*; a
+/// whole-file previewer is held behind a size cap with *Preview anyway*
+/// (`specs/ext-ssh.md`, "Previews over SSH").
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub enum Reads {
+    /// The previewer needs the whole file to show anything: an image, a
+    /// PDF, a media file, an archive.
+    #[default]
+    Whole,
+    /// The previewer shows the start of a file from its first bytes and
+    /// can do with a prefix: text, code, CSV, a hex dump.
+    Prefix,
+}
+
+/// Turns an entry into something the preview pane can show.
 #[async_trait]
 pub trait Previewer: Send + Sync + 'static {
     /// The extension this previewer belongs to.
@@ -589,6 +671,12 @@ pub trait Previewer: Send + Sync + 'static {
     /// 0 means cannot handle; the highest score wins. `sniff` is the first
     /// 4 KiB of the file.
     fn score(&self, entry: &Entry, sniff: &[u8]) -> u8;
+
+    /// Whether the previewer can work on a prefix of the file or needs the
+    /// whole of it; [`Reads::Whole`] unless the previewer says otherwise.
+    fn reads(&self) -> Reads {
+        Reads::Whole
+    }
 
     /// Opens the entry through its provider.
     async fn open(

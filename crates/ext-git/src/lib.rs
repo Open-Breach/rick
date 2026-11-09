@@ -23,10 +23,12 @@
 pub mod actions;
 pub mod repo;
 
+use ext::t;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, PoisonError};
 
+use ext::Text;
 use ext::{
     API_VERSION, Badge, Capabilities, CellValue, ColumnDef, ColumnId, DecorateCtx, Decoration,
     Decorator, Extension, Manifest, PanelSection, Platforms, Points, Registry, Version,
@@ -43,7 +45,7 @@ pub const STATUS_COLUMN: ColumnId = ColumnId("git.status");
 
 const COLUMNS: [ColumnDef; 1] = [ColumnDef {
     id: STATUS_COLUMN,
-    label: "Git",
+    label: Text("git-git"),
 }];
 
 /// The OS path of a local location; `None` for other providers.
@@ -82,6 +84,7 @@ impl GitExtension {
                 requires: Capabilities::empty(),
                 points: Points::DECORATOR | Points::ACTION,
                 platforms: Platforms::ALL,
+                previews: &[],
             },
             repos: Arc::new(Repos::default()),
         }
@@ -100,6 +103,10 @@ impl Extension for GitExtension {
     }
 
     fn register(&self, reg: &mut Registry) -> Result<(), Error> {
+        reg.translations(&[
+            ("en", include_str!("../locales/en.ftl")),
+            ("de", include_str!("../locales/de.ftl")),
+        ]);
         reg.decorator(Arc::new(GitDecorator::new(Arc::clone(&self.repos))));
         let shared = Arc::new(actions::Shared {
             repos: Arc::clone(&self.repos),
@@ -307,7 +314,7 @@ impl Decorator for GitDecorator {
             .map_or("Unchanged", FileStatus::label);
         rows.push(("Status".to_owned(), status.to_owned()));
         Some(PanelSection {
-            title: "Git".to_owned(),
+            title: t!("git-git"),
             rows,
         })
     }

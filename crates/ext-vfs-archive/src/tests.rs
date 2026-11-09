@@ -3,7 +3,7 @@ use std::io::{Cursor, Write};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
-use ext::{Depth, ListOptions, Provider, Registry, RemoveMode, WriteOptions};
+use ext::{Depth, ListOptions, Provider, Registry, RemoveMode, SettingsStore, WriteOptions};
 use futures::StreamExt;
 use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 use types::{CancelToken, Entry, EntryKind, Error, Location, ProviderId};
@@ -586,4 +586,448 @@ fn the_extension_registers_one_provider() {
     assert_eq!(registry.providers()[0].id(), ProviderId::ARCHIVE);
     assert_eq!(registry.points(), Points::PROVIDER);
     assert!(format!("{:?}", ArchiveProvider::new()).contains("cached"));
+}
+
+/// A small tree to compress: a file at the top, a folder with a file, an
+/// empty folder.
+fn source_tree(dir: &Path) -> PathBuf {
+    let root = dir.join("src");
+    fs::create_dir_all(root.join("docs")).unwrap_or_else(|e| panic!("{e}"));
+    fs::create_dir_all(root.join("empty")).unwrap_or_else(|e| panic!("{e}"));
+    fs::write(root.join("top.txt"), b"top level").unwrap_or_else(|e| panic!("{e}"));
+    fs::write(root.join("docs/readme.txt"), b"hello from the tree")
+        .unwrap_or_else(|e| panic!("{e}"));
+    root
+}
+
+/// Every file under `dir`, as (relative path, contents), sorted.
+fn tree_contents(dir: &Path) -> Vec<(String, Vec<u8>)> {
+    fn walk(root: &Path, dir: &Path, out: &mut Vec<(String, Vec<u8>)>) {
+        for entry in fs::read_dir(dir).unwrap_or_else(|e| panic!("{e}")) {
+            let entry = entry.unwrap_or_else(|e| panic!("{e}"));
+            let path = entry.path();
+            let rel = path
+                .strip_prefix(root)
+                .unwrap_or(&path)
+                .to_string_lossy()
+                .replace('\\', "/");
+            if path.is_dir() {
+                out.push((format!("{rel}/"), Vec::new()));
+                walk(root, &path, out);
+            } else {
+                out.push((rel, fs::read(&path).unwrap_or_else(|e| panic!("{e}"))));
+            }
+        }
+    }
+    let mut out = Vec::new();
+    walk(dir, dir, &mut out);
+    out.sort();
+    out
+}
+
+#[test]
+fn create_and_extract_round_trip_in_every_creatable_format() {
+    let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+    let root = source_tree(dir.path());
+    let sources = create::collect(std::slice::from_ref(&root)).unwrap_or_else(|e| panic!("{e}"));
+    let names: Vec<String> = sources
+        .iter()
+        .map(|s| String::from_utf8_lossy(&s.path).into_owned())
+        .collect();
+    assert_eq!(
+        names,
+        [
+            "src",
+            "src/docs",
+            "src/docs/readme.txt",
+            "src/empty",
+            "src/top.txt"
+        ]
+    );
+    let total: u64 = sources.iter().map(create::Source::size).sum();
+    assert_eq!(total, 9 + 19);
+
+    for (ext, format) in create::CREATABLE {
+        if matches!(format, Format::Single(_)) {
+            continue;
+        }
+        let archive = dir.path().join(format!("out.{ext}"));
+        let mut seen = Vec::new();
+        create::create(*format, &archive, &sources, &mut |source, done| {
+            seen.push((String::from_utf8_lossy(&source.path).into_owned(), done));
+            Ok(())
+        })
+        .unwrap_or_else(|e| panic!("{ext}: {e}"));
+        assert_eq!(seen.len(), sources.len(), "{ext}");
+        assert_eq!(
+            seen.last().map(|(_, done)| *done),
+            Some(19),
+            "{ext}: bytes before the last"
+        );
+        assert_eq!(
+            Format::detect(&archive).unwrap_or_else(|e| panic!("{ext}: {e}")),
+            *format
+        );
+
+        let into = dir.path().join(format!("into-{ext}"));
+        let mut extracted = Vec::new();
+        extract::extract(&archive, *format, &mut |entry| {
+            extracted.push(String::from_utf8_lossy(&entry.path).into_owned());
+            let rel = String::from_utf8_lossy(&entry.path).into_owned();
+            Ok(extract::Target::Write(into.join(rel)))
+        })
+        .unwrap_or_else(|e| panic!("{ext}: {e}"));
+        assert!(
+            extracted.contains(&"src/docs/readme.txt".to_owned()),
+            "{ext}: {extracted:?}"
+        );
+        assert_eq!(
+            tree_contents(&into.join("src")),
+            tree_contents(&root),
+            "{ext}"
+        );
+    }
+
+    // A single compressed file takes one file and gives it back.
+    let one = create::collect(&[root.join("top.txt")]).unwrap_or_else(|e| panic!("{e}"));
+    for (ext, format) in create::CREATABLE {
+        let Format::Single(codec) = format else {
+            continue;
+        };
+        let archive = dir.path().join(format!("top.txt.{ext}"));
+        create::create(*format, &archive, &one, &mut |_, _| Ok(()))
+            .unwrap_or_else(|e| panic!("{ext}: {e}"));
+        assert_eq!(Codec::by_extension(ext), Some(*codec));
+        let into = dir.path().join(format!("single-{ext}"));
+        extract::extract(&archive, *format, &mut |entry| {
+            Ok(extract::Target::Write(
+                into.join(String::from_utf8_lossy(&entry.path).into_owned()),
+            ))
+        })
+        .unwrap_or_else(|e| panic!("{ext}: {e}"));
+        assert_eq!(
+            fs::read(into.join("top.txt")).unwrap_or_default(),
+            b"top level"
+        );
+    }
+    assert!(matches!(
+        create::create(
+            Format::Single(Codec::Gzip),
+            &dir.path().join("x.gz"),
+            &sources,
+            &mut |_, _| Ok(())
+        ),
+        Err(Error::Unsupported(_))
+    ));
+    assert!(matches!(
+        create::create(
+            Format::Rar,
+            &dir.path().join("x.rar"),
+            &sources,
+            &mut |_, _| Ok(())
+        ),
+        Err(Error::Unsupported(_))
+    ));
+    assert!(!dir.path().join("x.rar").exists());
+}
+
+#[test]
+fn extraction_skips_what_the_caller_says_and_refuses_climbing_paths() {
+    let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+    let archive = dir.path().join("a.zip");
+    {
+        let mut writer =
+            zip::ZipWriter::new(File::create(&archive).unwrap_or_else(|e| panic!("{e}")));
+        let options = zip::write::SimpleFileOptions::default();
+        writer
+            .start_file("keep.txt", options)
+            .unwrap_or_else(|e| panic!("{e}"));
+        writer.write_all(b"keep").unwrap_or_else(|e| panic!("{e}"));
+        writer
+            .start_file("skip.txt", options)
+            .unwrap_or_else(|e| panic!("{e}"));
+        writer.write_all(b"skip").unwrap_or_else(|e| panic!("{e}"));
+        writer
+            .start_file("../escape.txt", options)
+            .unwrap_or_else(|e| panic!("{e}"));
+        writer.write_all(b"no").unwrap_or_else(|e| panic!("{e}"));
+        writer.finish().unwrap_or_else(|e| panic!("{e}"));
+    }
+    let into = dir.path().join("into");
+    let result = extract::extract(&archive, Format::Zip, &mut |entry| {
+        let rel = String::from_utf8_lossy(&entry.path).into_owned();
+        if rel == "skip.txt" {
+            return Ok(extract::Target::Skip);
+        }
+        Ok(extract::Target::Write(into.join(rel)))
+    });
+    assert!(matches!(result, Err(Error::Unsupported(_))), "{result:?}");
+    assert_eq!(fs::read(into.join("keep.txt")).unwrap_or_default(), b"keep");
+    assert!(!into.join("skip.txt").exists());
+    assert!(!dir.path().join("escape.txt").exists());
+
+    // A cancel from the callback stops the write and leaves no archive.
+    let sources = create::collect(&[into.join("keep.txt")]).unwrap_or_else(|e| panic!("{e}"));
+    let out = dir.path().join("cancelled.zip");
+    let result = create::create(Format::Zip, &out, &sources, &mut |_, _| {
+        Err(Error::Cancelled)
+    });
+    assert!(matches!(result, Err(Error::Cancelled)));
+    assert!(!out.exists());
+}
+
+/// The 7-Zip library for the tests that need it: the one CI put in
+/// `RICK_SEVENZIP_DIR` (test infrastructure; the plugin itself reads no
+/// environment variable), else the platform's usual locations; `None`
+/// with a note otherwise, a failure where CI requires it.
+fn sevenzip_library() -> Option<PathBuf> {
+    let found = std::env::var_os("RICK_SEVENZIP_DIR")
+        .map(|dir| PathBuf::from(dir).join(ext::platform::sevenzip::LIBRARY_FILE))
+        .into_iter()
+        .chain(ext::platform::sevenzip::usual_locations())
+        .find(|p| p.is_file());
+    if found.is_none() {
+        eprintln!("no 7-Zip library on this machine; the disk image tests are skipped");
+        assert!(
+            std::env::var_os("RICK_REQUIRE_SEVENZIP").is_none(),
+            "the 7-Zip library is required here but was not found"
+        );
+    }
+    found
+}
+
+/// A store of one extension's values in memory: the registry's
+/// `SettingsStore` for a test without the application.
+#[derive(Default)]
+struct Memory(std::sync::Mutex<Vec<(String, ext::SettingValue)>>);
+
+impl Memory {
+    fn new() -> Arc<Self> {
+        Arc::new(Self::default())
+    }
+
+    fn library(&self) -> Option<PathBuf> {
+        match SettingsStore::get(self, ID, LIBRARY_SETTING)? {
+            ext::SettingValue::Text(text) => Some(PathBuf::from(text)),
+            _ => None,
+        }
+    }
+}
+
+impl ext::SettingsStore for Memory {
+    fn get(&self, ext: types::ExtId, key: &str) -> Option<ext::SettingValue> {
+        assert_eq!(ext, ID);
+        self.0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .iter()
+            .find(|(k, _)| k == key)
+            .map(|(_, v)| v.clone())
+    }
+
+    fn set(&self, ext: types::ExtId, key: &str, value: ext::SettingValue) -> Result<(), Error> {
+        assert_eq!(ext, ID);
+        let mut values = self
+            .0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        values.retain(|(k, _)| k != key);
+        values.push((key.to_owned(), value));
+        Ok(())
+    }
+}
+
+/// Every disk-image fixture: the FAT file system raw and in its three
+/// containers.
+fn disk_fixtures(dir: &Path) -> Vec<(PathBuf, Format)> {
+    use ext::platform::ImageFormat;
+    let fat = crate::fixtures::fat12_image();
+    let files = [
+        ("floppy.img", fat.clone(), Format::Disk(ImageFormat::Img)),
+        (
+            "disk.vhd",
+            crate::fixtures::vhd_fixed(&fat),
+            Format::Disk(ImageFormat::Vhd),
+        ),
+        (
+            "disk.vhdx",
+            crate::fixtures::vhdx(&fat),
+            Format::Disk(ImageFormat::Vhdx),
+        ),
+        (
+            "disk.qcow2",
+            crate::fixtures::qcow2(&fat),
+            Format::Disk(ImageFormat::Qcow2),
+        ),
+    ];
+    files
+        .into_iter()
+        .map(|(name, bytes, format)| {
+            let path = dir.join(name);
+            fs::write(&path, bytes).unwrap_or_else(|e| panic!("{e}"));
+            (path, format)
+        })
+        .collect()
+}
+
+#[test]
+fn disk_images_list_and_read_through_the_library_and_the_setting_remembers_it() {
+    let Some(library) = sevenzip_library() else {
+        return;
+    };
+    let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+    let store = Memory::new();
+    let resolver = Arc::new(Resolver::with_locations(
+        Some(Arc::clone(&store) as Arc<dyn SettingsStore>),
+        vec![library.clone()],
+    ));
+    let provider = ArchiveProvider::with_resolver(Arc::clone(&resolver));
+    assert!(!resolver.is_loaded(), "nothing is probed at start");
+    assert_eq!(store.library(), None, "and the setting is untouched");
+    for (path, format) in disk_fixtures(dir.path()) {
+        let name = path.file_name().unwrap_or_default().to_string_lossy();
+        assert_eq!(Format::detect(&path).ok(), Some(format), "{name}");
+        let root = list(&provider, &loc(&path, ""), Depth::One);
+        assert_eq!(names(&root), ["DOCS", "HELLO.TXT"], "{name}");
+        let hello = root
+            .iter()
+            .find(|e| e.name == "HELLO.TXT")
+            .unwrap_or_else(|| panic!("{name}: hello"));
+        assert_eq!(hello.kind, EntryKind::File, "{name}");
+        assert_eq!(
+            hello.size,
+            Some(crate::fixtures::HELLO.len() as u64),
+            "{name}"
+        );
+        assert!(hello.modified.is_some(), "{name}: FAT dates come through");
+        let docs = list(&provider, &loc(&path, "DOCS"), Depth::One);
+        assert_eq!(names(&docs), ["README.TXT"], "{name}");
+        assert_eq!(
+            read(&provider, &loc(&path, "HELLO.TXT")),
+            crate::fixtures::HELLO,
+            "{name}"
+        );
+        assert_eq!(
+            read(&provider, &loc(&path, "DOCS/README.TXT")),
+            crate::fixtures::README,
+            "{name}"
+        );
+        let all = list(&provider, &loc(&path, ""), Depth::Unlimited);
+        assert_eq!(names(&all), ["DOCS", "HELLO.TXT", "README.TXT"], "{name}");
+        // Read-only: no writes, and the capabilities say so.
+        assert!(provider.capabilities(&loc(&path, "")).is_empty(), "{name}");
+        assert!(matches!(
+            runtime::block_on(provider.create_dir(&loc(&path, "new"))),
+            Err(Error::Unsupported(_))
+        ));
+        assert!(matches!(
+            stat(&provider, &loc(&path, "missing.txt")),
+            Err(Error::NotFound)
+        ));
+        let root_entry = stat(&provider, &loc(&path, "")).unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(root_entry.kind, EntryKind::Dir);
+    }
+    // The first hit was written back into the setting, through the store.
+    assert!(resolver.is_loaded());
+    assert_eq!(resolver.setting().as_deref(), Some(library.as_path()));
+    assert_eq!(store.library().as_deref(), Some(library.as_path()));
+    // The settings the extension declares name the same key.
+    let schema = crate::library::settings_schema();
+    assert_eq!(schema.ext, ID);
+    assert_eq!(schema.fields[0].key, LIBRARY_SETTING);
+}
+
+#[test]
+fn a_missing_library_says_how_to_install_it_and_browsing_to_it_stores_the_path() {
+    let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+    // A machine without the library: nowhere to look but an empty folder.
+    let store = Memory::new();
+    let resolver = Resolver::with_locations(
+        Some(Arc::clone(&store) as Arc<dyn SettingsStore>),
+        vec![dir.path().join(ext::platform::sevenzip::LIBRARY_FILE)],
+    );
+    let error = resolver
+        .library()
+        .err()
+        .unwrap_or_else(|| panic!("the library was found"));
+    let message = error.to_string();
+    assert!(message.contains("7-Zip library"), "{message}");
+    assert!(
+        message.contains(ext::platform::sevenzip::LIBRARY_FILE),
+        "{message}"
+    );
+    assert!(
+        message.contains(ext::platform::sevenzip::install_hint()),
+        "{message}"
+    );
+    assert!(message.contains(LIBRARY_SETTING), "{message}");
+    assert!(
+        message.contains(&dir.path().display().to_string()),
+        "{message}"
+    );
+    let Error::Extension { ext, source } = &error else {
+        panic!("{error}");
+    };
+    assert_eq!(*ext, ID);
+    let missing = MissingLibrary::in_error(&error).unwrap_or_else(|| panic!("{error}"));
+    assert!(source.downcast_ref::<MissingLibrary>().is_some());
+    // The same facts as the pane's content: the name, the install command,
+    // the setting Browse… fills and where Rick looked.
+    let pane = missing.for_pane();
+    assert_eq!(pane.name, LIBRARY_NAME);
+    assert_eq!(pane.install, ext::platform::sevenzip::install_hint());
+    assert_eq!(pane.setting, (ID, LIBRARY_SETTING));
+    assert_eq!(pane.filters.len(), 1);
+    assert!(
+        pane.detail.contains(&dir.path().display().to_string()),
+        "{}",
+        pane.detail
+    );
+    assert_eq!(store.library(), None, "nothing is written for a miss");
+    // A disk image shows the same message in place of its listing.
+    let fat = dir.path().join("floppy.img");
+    fs::write(&fat, crate::fixtures::fat12_image()).unwrap_or_else(|e| panic!("{e}"));
+    let provider =
+        ArchiveProvider::with_resolver(Arc::new(Resolver::with_locations(None, Vec::new())));
+    let listed = runtime::block_on(async {
+        let mut stream = provider.list(
+            &loc(&fat, ""),
+            ListOptions {
+                hidden: false,
+                system: false,
+                depth: Depth::One,
+            },
+            CancelToken::new(),
+        );
+        stream.next().await
+    });
+    let missing = match &listed {
+        Some(Err(Error::Extension { source, .. })) => {
+            source.downcast_ref::<MissingLibrary>().is_some()
+        }
+        _ => false,
+    };
+    assert!(missing, "{listed:?}");
+    let Some(library) = sevenzip_library() else {
+        return;
+    };
+    // Browse… chose the library: the path is stored and used from then on.
+    let loaded = resolver
+        .set_library(&library)
+        .unwrap_or_else(|e| panic!("{e}"));
+    assert!(loaded.format("FAT").is_some());
+    assert_eq!(resolver.setting().as_deref(), Some(library.as_path()));
+    assert_eq!(store.library().as_deref(), Some(library.as_path()));
+    resolver.forget();
+    assert!(!resolver.is_loaded());
+    assert!(
+        resolver.library().is_ok(),
+        "the setting names the library now"
+    );
+    // A file that is not the library is refused and the setting kept.
+    let text = dir.path().join("text.so");
+    fs::write(&text, b"not a library").unwrap_or_else(|e| panic!("{e}"));
+    assert!(resolver.set_library(&text).is_err());
+    assert_eq!(resolver.setting().as_deref(), Some(library.as_path()));
+    assert!(format!("{resolver:?}").contains("Resolver"));
 }

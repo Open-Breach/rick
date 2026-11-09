@@ -106,6 +106,9 @@ impl UiHost for Scripted {
             .unwrap_or_else(PoisonError::into_inner)
             .push((title.to_owned(), text.to_owned()));
     }
+    fn form(&self, form: ext::Form) -> Option<ext::Values> {
+        Some(form.defaults())
+    }
 }
 
 /// The app with the Git extension loaded, driven headlessly.

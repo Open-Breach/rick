@@ -1,7 +1,11 @@
 //! An in-memory [`Provider`] for the integration tests: a tree of folders
 //! and files under any provider id, with a settable delay per copied file,
 //! so a test can mount a stand-in for a cloud provider (`s3`, `azure`) and
-//! watch copies on disjoint volumes run side by side.
+//! watch copies on disjoint volumes run side by side. With
+//! [`MemProvider::set_native`] on, it moves and copies through
+//! [`Provider::transfer`] under `NATIVE_TRANSFER`, like a cloud provider,
+//! and counts the bytes read through `open_read`, so a test can prove a
+//! transfer streamed nothing.
 
 use std::collections::BTreeMap;
 use std::pin::Pin;
@@ -9,10 +13,12 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::task::{Context, Poll};
 use std::time::{Duration, SystemTime};
 
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+
 use ext::{
     API_VERSION, Capabilities, ChangeStream, CopyOptions, EntryStream, Extension, LinkKind,
-    ListOptions, Manifest, Platforms, Points, Provider, ReadHandle, Registry, RemoveMode, Version,
-    WriteHandle, WriteOptions, async_trait,
+    ListOptions, Manifest, Platforms, Points, Provider, ReadHandle, Registry, RemoveMode,
+    TransferMode, Version, WriteHandle, WriteOptions, async_trait,
 };
 use futures::StreamExt;
 use futures::stream;
@@ -37,6 +43,12 @@ pub struct MemProvider {
     id: ProviderId,
     tree: Arc<Mutex<Tree>>,
     copy_delay: Duration,
+    /// Moves and copies run through `transfer`, as a cloud provider's do.
+    native: AtomicBool,
+    /// Bytes handed out through `open_read`.
+    read_bytes: Arc<AtomicU64>,
+    /// Every `transfer` call: the mode, the items and the target folder.
+    transfers: Mutex<Vec<(TransferMode, Vec<String>, String)>>,
 }
 
 impl std::fmt::Debug for MemProvider {
@@ -83,7 +95,32 @@ impl MemProvider {
             id,
             tree: Arc::new(Mutex::new(tree)),
             copy_delay,
+            native: AtomicBool::new(false),
+            read_bytes: Arc::new(AtomicU64::new(0)),
+            transfers: Mutex::new(Vec::new()),
         }
+    }
+
+    /// Turns `NATIVE_TRANSFER` on or off: with it, moves and copies within
+    /// the provider go through [`Provider::transfer`] and are recorded.
+    pub fn set_native(&self, on: bool) {
+        self.native.store(on, Ordering::SeqCst);
+    }
+
+    /// Bytes handed out through `open_read` so far.
+    #[must_use]
+    pub fn read_bytes(&self) -> u64 {
+        self.read_bytes.load(Ordering::SeqCst)
+    }
+
+    /// Every `transfer` call so far: the mode, the items' paths and the
+    /// target folder's path.
+    #[must_use]
+    pub fn transfers(&self) -> Vec<(TransferMode, Vec<String>, String)> {
+        self.transfers
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
     }
 
     /// Adds a folder, its parents included.
@@ -174,7 +211,11 @@ impl Provider for MemProvider {
     }
 
     fn capabilities(&self, _loc: &Location) -> Capabilities {
-        Capabilities::WRITE | Capabilities::RENAME
+        let mut caps = Capabilities::WRITE | Capabilities::RENAME;
+        if self.native.load(Ordering::SeqCst) {
+            caps |= Capabilities::NATIVE_TRANSFER | Capabilities::REMOTE;
+        }
+        caps
     }
 
     fn list(&self, loc: &Location, _opts: ListOptions, _cancel: CancelToken) -> EntryStream {
@@ -202,7 +243,10 @@ impl Provider for MemProvider {
     async fn open_read(&self, loc: &Location) -> Result<ReadHandle, Error> {
         let path = key(loc);
         match lock(&self.tree).get(&path) {
-            Some(Node::File(bytes)) => Ok(Box::new(std::io::Cursor::new(bytes.clone()))),
+            Some(Node::File(bytes)) => Ok(Box::new(Counted {
+                inner: std::io::Cursor::new(bytes.clone()),
+                count: Arc::clone(&self.read_bytes),
+            })),
             Some(Node::Dir) => Err(Error::Unsupported("a folder cannot be read")),
             None => Err(Error::NotFound),
         }
@@ -313,8 +357,82 @@ impl Provider for MemProvider {
         Ok(())
     }
 
+    /// Moves or copies the items into `to` inside the tree, recording the
+    /// call; nothing is read through `open_read`.
+    async fn transfer(
+        &self,
+        items: &[Location],
+        to: &Location,
+        mode: TransferMode,
+        progress: ProgressSink,
+        cancel: CancelToken,
+    ) -> Result<(), Error> {
+        if !self.native.load(Ordering::SeqCst) {
+            return Err(Error::Unsupported("native transfer is off"));
+        }
+        self.transfers
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push((mode, items.iter().map(key).collect(), key(to)));
+        tokio::select! {
+            () = cancel.cancelled() => return Err(Error::Cancelled),
+            () = tokio::time::sleep(self.copy_delay) => {}
+        }
+        let dir = key(to);
+        let mut tree = lock(&self.tree);
+        let total = items.len() as u64;
+        for (done, item) in items.iter().enumerate() {
+            let from = key(item);
+            let name = from.rsplit('/').next().unwrap_or(&from).to_owned();
+            let target_root = if dir == "/" {
+                format!("/{name}")
+            } else {
+                format!("{dir}/{name}")
+            };
+            let moved: Vec<(String, Node)> = tree
+                .iter()
+                .filter(|(p, _)| **p == from || p.starts_with(&format!("{from}/")))
+                .map(|(p, n)| (p.clone(), n.clone()))
+                .collect();
+            if moved.is_empty() {
+                return Err(Error::NotFound);
+            }
+            for (p, n) in moved {
+                let rest = &p[from.len()..];
+                tree.insert(format!("{target_root}{rest}"), n);
+                if mode == TransferMode::Move {
+                    tree.remove(&p);
+                }
+            }
+            progress.report(Progress::Items {
+                done: done as u64 + 1,
+                total: Some(total),
+            });
+        }
+        Ok(())
+    }
+
     fn watch(&self, _loc: &Location) -> Result<ChangeStream, Error> {
         Err(Error::Unsupported("no watches in memory"))
+    }
+}
+
+/// A reader that adds what it hands out to the provider's count.
+struct Counted {
+    inner: std::io::Cursor<Vec<u8>>,
+    count: Arc<AtomicU64>,
+}
+
+impl tokio::io::AsyncRead for Counted {
+    fn poll_read(
+        mut self: Pin<&mut Self>,
+        _cx: &mut Context<'_>,
+        buf: &mut tokio::io::ReadBuf<'_>,
+    ) -> Poll<std::io::Result<()>> {
+        let n = std::io::Read::read(&mut self.inner, buf.initialize_unfilled())?;
+        buf.advance(n);
+        self.count.fetch_add(n as u64, Ordering::SeqCst);
+        Poll::Ready(Ok(()))
     }
 }
 
@@ -339,6 +457,7 @@ impl MemExtension {
                 requires: Capabilities::empty(),
                 points: Points::PROVIDER,
                 platforms: Platforms::ALL,
+                previews: &[],
             },
             provider,
         }

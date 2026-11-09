@@ -7,8 +7,8 @@ side panel's Places open, and `rick://machine`, `rick://network` and
 Recent and the overviews are read-only listings built from what the kernel
 already knows: the pinned locations the application hands it through
 `Favorites`, the system's recently-used list and the mounted volumes from
-`platform`, and the roots of the network and cloud providers mounted in
-`vfs`. A view an extension registered (`Registry::view`, handed on through
+`platform`, and what the network and cloud providers mounted in `vfs` list
+at their roots: their connections and accounts, one row each. A view an extension registered (`Registry::view`, handed on through
 `add_view`) is served by that extension's provider, the location and
 everything below it: the Trash view is the `ext-vfs-trash` plugin's, and
 lists nothing without it. Because they are provider-backed paths they sit

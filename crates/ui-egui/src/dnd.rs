@@ -10,15 +10,23 @@
 //! at the end of the frame [`Dnd::end_frame`] resolves the target under the
 //! cursor, the modifiers and the hover time into an indicator, a
 //! spring-loading step or, on release, the `Command` the drop means. Drops
-//! from outside the process arrive through egui's hovered and dropped files
-//! and go through the same resolution.
+//! from outside the process arrive through egui's hovered and dropped files,
+//! or through the platform where the backend receives none (Wayland), with
+//! the cursor position the platform supplies where it can; without one the
+//! drop lands in the focused pane's folder, as the spec's table says. A drag
+//! that leaves the window is handed to the platform's drag source one frame
+//! later, so the ghost is gone from the screen when the desktop takes over,
+//! and egui's pointer is put right when that drag ends, since the backend
+//! never sees its button come up.
 
+use ext::t;
 use std::collections::{BTreeSet, HashMap};
 use std::path::PathBuf;
 
 use app::{App, Command, TransferMode};
 use egui::{Color32, Id, LayerId, Order, Pos2, Rect, Stroke, Vec2, pos2, vec2};
 use model::{AfterDrag, PaneId, Place, Tab, TabId};
+use platform::WindowRef;
 use types::{Entry, EntryId, EntryKind, Location};
 
 use crate::shell::{Request, TabUi};
@@ -215,6 +223,29 @@ pub fn listing_device(tab: &Tab) -> Option<u64> {
         .and_then(|e| device_of(e.id))
 }
 
+/// The folder of the focused pane as a drop target, for an external drop
+/// whose position the platform cannot tell: the spec's fallback.
+fn focused_pane_target(app: &App) -> Option<(Id, Target)> {
+    let model = app.model();
+    let (_, tab) = model.active_tab(model.focused)?;
+    let target = into_pane(
+        tab,
+        Target::Folder {
+            to: tab.location.clone(),
+            device: listing_device(tab),
+            spring: None,
+        },
+    );
+    Some((Id::new("dnd-focused-pane"), target))
+}
+
+/// Forgets egui's pointer: the platform took the button away with the
+/// drag, so the release will never arrive and the row would stay dragged.
+fn release_pointer(ctx: &egui::Context) {
+    ctx.input_mut(|i| i.pointer = egui::PointerState::default());
+    ctx.stop_dragging();
+}
+
 /// Where a pane was before a drag drilled into it, for *After a drag*.
 #[derive(Debug, Clone)]
 enum Origin {
@@ -246,7 +277,8 @@ pub struct Drag {
     /// Panes that already got their first spring-loading step.
     sprung: BTreeSet<PaneId>,
     origins: Vec<Origin>,
-    /// The platform was asked to take the drag over.
+    /// The cursor left the window: the platform was, or is about to be,
+    /// asked to take the drag over, once.
     left_window: bool,
     /// The target under the cursor as of the last frame.
     target: Option<(Id, Target)>,
@@ -287,6 +319,16 @@ pub struct Dnd {
     prompt: Option<Prompt>,
     /// Files dropped from outside this frame.
     dropped: Option<Vec<PathBuf>>,
+    /// Where the platform says the cursor of an external drag is this frame.
+    external_pos: Option<Pos2>,
+    /// The platform's own drop target sees a drag over the window this
+    /// frame (Wayland), where egui's hovered files say nothing.
+    platform_hovering: bool,
+    /// The paths of a drag that left the window last frame, to hand to the
+    /// platform this frame, once the ghost-free frame is on the screen.
+    handover: Option<Vec<PathBuf>>,
+    /// The platform runs a drag Rick started; polled until it ends.
+    native_running: bool,
     /// The `after` setting and the pane origins to apply it to once the
     /// frame's requests are in.
     finished: Vec<(AfterDrag, Origin)>,
@@ -360,17 +402,22 @@ impl Dnd {
         highlight
     }
 
-    /// Start of frame: files hovered or dropped from outside, Escape, and
-    /// the zone list of the frame.
+    /// Start of frame: files hovered or dropped from outside (egui's, and
+    /// the platform's own where the backend has none), their cursor
+    /// position from the platform, Escape, and the zone list of the frame.
+    /// `window` is the backend's window when this is the root viewport;
+    /// positions are only known for it.
     pub fn begin_frame(
         &mut self,
         ctx: &egui::Context,
-        after: AfterDrag,
+        app: &App,
+        window: Option<&WindowRef>,
         tabs: &mut HashMap<TabId, TabUi>,
         requests: &mut Vec<Request>,
     ) {
         self.zones.clear();
-        let (hovered, dropped) = ctx.input(|i| {
+        let after = app.model().settings.drag.after;
+        let (mut hovered, mut dropped) = ctx.input(|i| {
             let hovered: Vec<PathBuf> = i
                 .raw
                 .hovered_files
@@ -388,6 +435,23 @@ impl Dnd {
                 (!i.raw.dropped_files.is_empty()).then_some(dropped),
             )
         });
+        self.platform_hovering = false;
+        if window.is_some() {
+            let incoming = app.platform().incoming_files();
+            self.platform_hovering = incoming.hovering;
+            if incoming.hovering {
+                // The files may still be on their way; ask again next frame.
+                ctx.request_repaint();
+            }
+            if self.platform_hovering && hovered.is_none() {
+                hovered = Some(incoming.hovered);
+            }
+            if !incoming.dropped.is_empty() {
+                dropped
+                    .get_or_insert_with(Vec::new)
+                    .extend(incoming.dropped);
+            }
+        }
         if let Some(paths) = hovered {
             match &mut self.drag {
                 None => self.start(Source::External { paths }, false),
@@ -417,6 +481,12 @@ impl Dnd {
             }
             self.dropped = Some(paths);
         }
+        self.external_pos = match (&self.drag, window) {
+            (Some(drag), Some(window)) if drag.source.is_external() => {
+                app.platform().drop_position(window).map(|p| pos2(p.x, p.y))
+            }
+            _ => None,
+        };
         if self.suppressed && !ctx.input(|i| i.pointer.any_down()) {
             self.suppressed = false;
         }
@@ -487,22 +557,46 @@ impl Dnd {
 
     /// End of frame: resolves the target under the cursor, the modifiers
     /// and the hover time; acts on a release or an external drop; paints
-    /// the ghost.
+    /// the ghost; hands a drag that left the window to the platform and
+    /// follows that drag to its end.
     pub fn end_frame(
         &mut self,
         ctx: &egui::Context,
         app: &App,
+        window: Option<&WindowRef>,
         tabs: &mut HashMap<TabId, TabUi>,
         requests: &mut Vec<Request>,
     ) {
         let dropped = self.dropped.take();
         let settings = &app.model().settings;
         let after = settings.drag.after;
+        self.follow_native_drag(ctx, app);
+        if let Some(paths) = self.handover.take()
+            && let Some(window) = window
+        {
+            // The frame without the ghost is on the screen: the desktop
+            // takes the drag from here.
+            match app.platform().start_drag(window, &paths) {
+                Ok(()) => {
+                    tracing::debug!("drag handed to the platform");
+                    self.end(after);
+                    self.finish(tabs, requests);
+                    self.native_running = true;
+                    self.suppressed = true;
+                    release_pointer(ctx);
+                    if !app.platform().drag_in_progress() {
+                        self.native_running = false;
+                    }
+                    return;
+                }
+                Err(error) => tracing::debug!(%error, "drag stays in the window"),
+            }
+        }
         let Some(drag) = &mut self.drag else {
             self.finish(tabs, requests);
             return;
         };
-        let (pos, modifiers, released, now, any_down) = ctx.input(|i| {
+        let (pointer_pos, modifiers, released, now, any_down) = ctx.input(|i| {
             (
                 i.pointer.latest_pos().or_else(|| i.pointer.hover_pos()),
                 i.modifiers,
@@ -511,32 +605,43 @@ impl Dnd {
                 i.pointer.any_down(),
             )
         });
+        // An external drag is where the platform says it is, not where the
+        // backend last saw the pointer, which it stops reporting during one.
+        let external = drag.source.is_external();
+        let pos = if external {
+            self.external_pos
+        } else {
+            pointer_pos
+        };
 
-        // Outside the window: hand the drag to the platform once.
+        // Outside the window: hand the drag to the platform, from the next
+        // frame on, so this frame is drawn without the ghost first.
         let inside = pos.is_some_and(|p| ctx.viewport_rect().contains(p));
-        if !inside && !drag.left_window && !drag.source.is_external() && any_down {
+        if !inside && !drag.left_window && !external && any_down && window.is_some() {
             drag.left_window = true;
-            let paths: Vec<PathBuf> = drag
-                .source
-                .locations()
-                .iter()
-                .filter_map(|l| platform::paths::to_path(&l.path).ok())
-                .collect();
-            match app.platform().start_drag(&paths) {
-                Ok(()) => {
-                    tracing::debug!("drag handed to the platform");
-                    self.end(after);
-                    self.finish(tabs, requests);
-                    return;
-                }
-                Err(error) => tracing::debug!(%error, "drag stays in the window"),
-            }
+            self.handover = Some(
+                drag.source
+                    .locations()
+                    .iter()
+                    .filter_map(|l| platform::paths::to_path(&l.path).ok())
+                    .collect(),
+            );
+            ctx.request_repaint();
+            return;
         }
 
         // The target: the smallest zone under the cursor, then the no-op
-        // rule and the kind of source.
+        // rule and the kind of source; an external drag whose position the
+        // platform cannot tell lands in the focused pane's folder.
         let zone = pos.and_then(|p| smallest_zone(&self.zones, p));
-        let resolved = zone.map(|z| (z.key, resolve(&drag.source, &z.target)));
+        let resolved = zone
+            .map(|z| (z.key, resolve(&drag.source, &z.target)))
+            .or_else(|| {
+                (external && pos.is_none())
+                    .then(|| focused_pane_target(app))
+                    .flatten()
+                    .map(|(key, target)| (key, resolve(&drag.source, &target)))
+            });
         drag.indicator = resolved
             .as_ref()
             .and_then(|(_, t)| indicator_for(&drag.source, t, modifiers, drag.right_button));
@@ -555,7 +660,7 @@ impl Dnd {
 
         // The drop.
         let dropped_outside = dropped.is_some();
-        if released || dropped_outside {
+        if (released && !external) || dropped_outside {
             let target = resolved.map(|(_, t)| t);
             let drag = drag.clone();
             self.drop(&drag, target, pos, modifiers, app, requests);
@@ -563,7 +668,7 @@ impl Dnd {
             self.finish(tabs, requests);
             return;
         }
-        if drag.source.is_external() && ctx.input(|i| i.raw.hovered_files.is_empty()) {
+        if external && ctx.input(|i| i.raw.hovered_files.is_empty()) && !self.platform_hovering {
             // The external drag left the window without a drop.
             self.end(after);
             self.finish(tabs, requests);
@@ -574,6 +679,27 @@ impl Dnd {
             paint_ghost(ctx, drag, pos);
         }
         ctx.request_repaint();
+    }
+
+    /// Polls a drag the platform runs for Rick until it ends; the backend
+    /// never sees its button come up, so egui's pointer is put right then.
+    fn follow_native_drag(&mut self, ctx: &egui::Context, app: &App) {
+        if !self.native_running {
+            return;
+        }
+        if app.platform().drag_in_progress() {
+            ctx.request_repaint();
+        } else {
+            tracing::debug!("platform drag ended");
+            self.native_running = false;
+            release_pointer(ctx);
+        }
+    }
+
+    /// Whether the platform runs a drag Rick handed over, for tests.
+    #[must_use]
+    pub fn native_drag_running(&self) -> bool {
+        self.native_running
     }
 
     /// Turns a release over `target` into the drop's command.
@@ -622,6 +748,7 @@ impl Dnd {
                             location: tab.location.clone(),
                             selection: items.clone(),
                             invoked_from: ext::Invocation::Menu,
+                            other: None,
                         },
                     });
                 }
@@ -647,7 +774,7 @@ impl Dnd {
                         if ui.button(format!("{} Copy", icons::PLUS)).clicked() {
                             choice = Some(Some(TransferMode::Copy));
                         }
-                        if ui.button("Cancel").clicked() {
+                        if ui.button(t!("cancel")).clicked() {
                             choice = Some(None);
                         }
                     });

@@ -5,6 +5,7 @@
 //! actions are undoable: undoing a pin removes what it added, undoing an
 //! unpin puts the entry back where it was.
 
+use ext::t;
 use std::sync::Arc;
 
 use ext::{
@@ -147,8 +148,8 @@ impl Action for Pin {
     fn id(&self) -> ActionId {
         ActionId("core.pin")
     }
-    fn label(&self) -> &'static str {
-        "Pin to side panel"
+    fn label(&self) -> String {
+        t!("action-pin")
     }
     fn group(&self) -> ActionGroup {
         ActionGroup::Core
@@ -160,7 +161,7 @@ impl Action for Pin {
         if is_trash(ctx) {
             Availability::Hidden
         } else if ctx.selection.is_empty() {
-            Availability::Disabled("select something first")
+            Availability::Disabled(t!("reason-select-something-first"))
         } else if all_pinned(&self.0, ctx) {
             // Unpin takes its place.
             Availability::Hidden
@@ -189,8 +190,8 @@ impl Action for Unpin {
     fn id(&self) -> ActionId {
         ActionId("core.unpin")
     }
-    fn label(&self) -> &'static str {
-        "Unpin"
+    fn label(&self) -> String {
+        t!("action-unpin")
     }
     fn group(&self) -> ActionGroup {
         ActionGroup::Core

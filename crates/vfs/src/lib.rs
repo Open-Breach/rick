@@ -166,10 +166,18 @@ pub async fn copy(
                 .await?;
             }
             _ => {
-                stream_copy(
+                let streamed = stream_copy(
                     &src, &dst, &source, &target, opts, &progress, &cancel, pause, done, plan.total,
                 )
                 .await?;
+                if streamed != size {
+                    tracing::warn!(
+                        path = %file.path,
+                        planned = size,
+                        streamed,
+                        "the file's size changed between the plan and the copy"
+                    );
+                }
             }
         }
         done += size;
@@ -337,7 +345,7 @@ async fn stream_copy(
     pause: &PauseGate,
     base: u64,
     total: u64,
-) -> Result<(), Error> {
+) -> Result<u64, Error> {
     let mut reader = src.open_read(from).await?;
     let mut writer = dst
         .open_write(
@@ -367,7 +375,7 @@ async fn stream_copy(
         });
     }
     writer.shutdown().await.map_err(Error::from_io)?;
-    Ok(())
+    Ok(done)
 }
 
 #[cfg(test)]

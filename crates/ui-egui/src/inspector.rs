@@ -16,14 +16,17 @@
 //! Nothing here asks for width: the pane is as wide as the dock makes it,
 //! labels truncate, rows clip, and the content is fitted or scrolled.
 
+use std::time::Duration;
+
 use app::{App, Command};
 use egui::{Align, Rect, pos2, vec2};
-use ext::{ControlValue, PreviewControl};
+use ext::t;
+use ext::{Content, ControlValue, PreviewControl};
 use model::{PaneId, SettingsChange, TextPreview};
 use types::{Entry, EntryId};
 
 use crate::icons;
-use crate::preview::{Previews, Slot};
+use crate::preview::{PreviewAct, Previews, Slot};
 use crate::shell::Request;
 
 /// The toolbar's height: a tab's.
@@ -101,7 +104,7 @@ pub(crate) fn sections_for(app: &App, slot: Option<&Slot>, entry: Option<&Entry>
         .iter()
         .map(|s| Section {
             id: s.id,
-            title: s.title.to_owned(),
+            title: s.title.get(),
             glyph: icons::for_icon(s.icon),
             rows: s.rows.clone(),
         })
@@ -127,11 +130,30 @@ enum Act {
     Page(isize),
     ActualSize(bool),
     Control(ext::ControlId, ControlValue),
+    /// The transport: play or pause.
+    PlayPause,
+    /// The transport: jump to a position.
+    Seek(Duration),
+    /// The transport: set the volume, 0.0 to 1.0.
+    Volume(f32),
+    /// Copy the whole file's text to the clipboard.
+    Copy,
     Close,
+}
+
+/// The transport's facts for the toolbar, read from the document.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct TransportView {
+    playing: bool,
+    position: Duration,
+    duration: Option<Duration>,
+    volume: f32,
 }
 
 /// Everything the pane draws from, gathered before drawing so the slot is
 /// not borrowed while the widgets run.
+// The kinds of content are independent flags, not states of one machine.
+#[allow(clippy::struct_excessive_bools)]
 struct View<'a> {
     /// The pane whose selection is shown, when an explorer tab is followed.
     pane: Option<PaneId>,
@@ -150,6 +172,11 @@ struct View<'a> {
     sections: Vec<Section>,
     pinned: Option<usize>,
     status: Vec<String>,
+    /// Whether the preview has a text layer to copy: text, code, Markdown,
+    /// HTML, CSV; never a file list or a paged document.
+    copy: bool,
+    /// The media transport, when the document is media.
+    transport: Option<TransportView>,
 }
 
 /// Draws the pane for the selection of the explorer tab the preview
@@ -207,18 +234,55 @@ pub fn show(
     );
     inner.set_clip_rect(content.intersect(ui.clip_rect()));
     match view.pane {
-        Some(pane) => previews.content(&mut inner, pane, view.target, view.text_settings),
+        Some(pane) => match previews.content(
+            &mut inner,
+            pane,
+            view.target,
+            view.entry,
+            view.text_settings,
+        ) {
+            Some(PreviewAct::LoadMore) => {
+                requests.push(Request::Command(Command::PreviewMore(pane)));
+            }
+            Some(PreviewAct::PreviewAnyway) => {
+                requests.push(Request::Command(Command::PreviewAnyway(pane)));
+            }
+            Some(PreviewAct::PreviewAlways) => {
+                requests.push(Request::Command(Command::PreviewAlways(pane)));
+            }
+            Some(PreviewAct::Retry) => {
+                requests.push(Request::Command(Command::PreviewRetry(pane)));
+            }
+            Some(PreviewAct::Browse { setting, filters }) => {
+                requests.push(Request::BrowseLibrary {
+                    pane,
+                    setting,
+                    filters,
+                });
+            }
+            None => {}
+        },
         None => {
-            inner.weak("Select a file to preview it");
+            inner.weak(t!("inspector-select-a-file-to-preview"));
         }
     }
     separator(ui, width);
     status_bar(ui, width, status_h, &view, state);
 
-    // What the toolbar asked for.
+    apply_acts(acts, view.pane, previews, requests)
+}
+
+/// Applies what the toolbar asked for; returns whether the close button
+/// was pressed.
+fn apply_acts(
+    acts: Vec<Act>,
+    pane: Option<PaneId>,
+    previews: &mut Previews,
+    requests: &mut Vec<Request>,
+) -> bool {
     let mut close = false;
     for act in acts {
-        match (act, view.pane) {
+        match (act, pane) {
             (Act::Setting(change), _) => {
                 requests.push(Request::Command(Command::Settings(change)));
             }
@@ -231,11 +295,54 @@ pub fn show(
             (Act::Control(id, value), Some(pane)) => {
                 previews.get_mut(pane).set_control(id, value);
             }
+            (Act::PlayPause, Some(pane)) => {
+                if let Some(transport) = previews.get_mut(pane).transport() {
+                    if transport.playing() {
+                        transport.pause();
+                    } else {
+                        transport.play();
+                    }
+                }
+            }
+            (Act::Seek(to), Some(pane)) => {
+                if let Some(transport) = previews.get_mut(pane).transport() {
+                    transport.seek(to);
+                }
+            }
+            (Act::Volume(volume), Some(pane)) => {
+                if let Some(transport) = previews.get_mut(pane).transport() {
+                    transport.set_volume(volume);
+                }
+            }
+            (Act::Copy, Some(pane)) => {
+                requests.push(Request::Command(Command::PreviewCopy(pane)));
+            }
             (Act::Close, _) => close = true,
-            (Act::Page(_) | Act::ActualSize(_) | Act::Control(..), None) => {}
+            (
+                Act::Page(_)
+                | Act::ActualSize(_)
+                | Act::Control(..)
+                | Act::PlayPause
+                | Act::Seek(_)
+                | Act::Volume(_)
+                | Act::Copy,
+                None,
+            ) => {}
         }
     }
     close
+}
+
+/// Plays or pauses the media the pane shows, if any: Space while the
+/// preview pane has the focus.
+pub fn play_pause(previews: &mut Previews, pane: Option<PaneId>) {
+    if let Some(transport) = pane.and_then(|pane| previews.get_mut(pane).transport()) {
+        if transport.playing() {
+            transport.pause();
+        } else {
+            transport.play();
+        }
+    }
 }
 
 /// Gathers what the pane shows: the followed explorer tab's selection, the
@@ -264,7 +371,12 @@ fn collect<'a>(ui: &egui::Ui, app: &'a App, previews: &mut Previews) -> View<'a>
         .pinned
         .get(kind)
         .and_then(|id| sections.iter().position(|s| s.id == id));
-    View {
+    let copy = slot.is_some_and(|s| {
+        s.text_layer().is_some()
+            && s.pages().is_none()
+            && !matches!(s.content(), Some(Content::Listing(_)))
+    });
+    let mut view = View {
         pane,
         target,
         entry,
@@ -281,6 +393,82 @@ fn collect<'a>(ui: &egui::Ui, app: &'a App, previews: &mut Previews) -> View<'a>
         sections,
         pinned,
         status: slot.map(|s| s.status().to_vec()).unwrap_or_default(),
+        copy,
+        transport: None,
+    };
+    view.transport = pane
+        .filter(|_| target.is_some())
+        .and_then(|pane| previews.get_mut(pane).transport())
+        .map(|t| TransportView {
+            playing: t.playing(),
+            position: t.position(),
+            duration: t.duration(),
+            volume: t.volume(),
+        });
+    view
+}
+
+/// `m:ss`, or `h:mm:ss` from an hour on.
+fn clock(d: Duration) -> String {
+    let secs = d.as_secs();
+    let (h, m, s) = (secs / 3600, secs % 3600 / 60, secs % 60);
+    if h > 0 {
+        format!("{h}:{m:02}:{s:02}")
+    } else {
+        format!("{m}:{s:02}")
+    }
+}
+
+/// The transport in the toolbar's middle group: play or pause, a seek bar
+/// and the elapsed and total time (SPEC.md, Preview, *Toolbar*: "Media:
+/// the transport").
+fn transport_controls(
+    ui: &mut egui::Ui,
+    transport: TransportView,
+    state: &mut PaneState,
+    acts: &mut Vec<Act>,
+) {
+    let (glyph, label) = if transport.playing {
+        (icons::PAUSE, t!("preview-pause"))
+    } else {
+        (icons::PLAY, t!("preview-play"))
+    };
+    if button(ui, state, glyph, &label, true) {
+        acts.push(Act::PlayPause);
+    }
+    let total = transport.duration.map_or(0.0, |d| d.as_secs_f64());
+    let mut at = transport.position.as_secs_f64().min(total.max(0.0));
+    let width = (ui.available_width() - 160.0).clamp(40.0, 240.0);
+    ui.spacing_mut().slider_width = width;
+    let slider = ui.add(
+        egui::Slider::new(&mut at, 0.0..=total.max(0.001))
+            .show_value(false)
+            .trailing_fill(true),
+    );
+    if slider.changed() {
+        acts.push(Act::Seek(Duration::from_secs_f64(at.max(0.0))));
+    }
+    let total_text = transport.duration.map_or_else(|| "–:––".to_owned(), clock); // i18n: ok
+    ui.add(
+        egui::Label::new(
+            egui::RichText::new(format!("{} / {total_text}", clock(transport.position))).small(),
+        )
+        .selectable(false),
+    );
+    // The volume, a short slider behind the speaker glyph.
+    ui.add(egui::Label::new(egui::RichText::new(icons::VOLUME).size(15.0)).selectable(false))
+        .on_hover_text(t!("preview-volume"));
+    let mut volume = transport.volume.clamp(0.0, 1.0);
+    ui.spacing_mut().slider_width = 56.0;
+    if ui
+        .add(egui::Slider::new(&mut volume, 0.0..=1.0).show_value(false))
+        .on_hover_text(t!("preview-volume"))
+        .changed()
+    {
+        acts.push(Act::Volume(volume));
+    }
+    if transport.playing {
+        ui.ctx().request_repaint_after(Duration::from_millis(100));
     }
 }
 
@@ -365,6 +553,14 @@ fn toolbar(
     }
     standard_controls(&mut left, view, state, acts);
     previewer_controls(&mut left, view, state, acts);
+    if let Some(transport) = view.transport {
+        transport_controls(&mut left, transport, state, acts);
+    }
+    // Copy closes the middle group of every text-based preview: the whole
+    // file's text, the raw source of a rendered one, never the file.
+    if view.copy && button(&mut left, state, icons::COPY, &t!("inspector-copy"), true) {
+        acts.push(Act::Copy);
+    }
 }
 
 /// The badges, right to left so the first section ends up leftmost.
@@ -466,6 +662,8 @@ fn previewer_controls(
                     acts.push(Act::Control(*id, ControlValue::Pressed));
                 }
             }
+            // Pointer gestures are the frame's, not the toolbar's.
+            PreviewControl::Pointer { .. } => {}
         }
     }
 }
@@ -534,7 +732,7 @@ pub(crate) fn section_rows(
             ui.add_space(4.0);
             ui.add_sized(
                 vec2(width - 8.0, ui.spacing().interact_size.y),
-                egui::TextEdit::singleline(filter).hint_text("Search"),
+                egui::TextEdit::singleline(filter).hint_text(t!("inspector-search")),
             );
             ui.add_space(2.0);
             filter.trim().to_lowercase()
@@ -561,7 +759,7 @@ pub(crate) fn section_rows(
                 section_row(ui, width, key_w, key, value);
             }
             if section.rows.is_empty() {
-                ui.weak("Nothing to show");
+                ui.weak(t!("inspector-nothing-to-show"));
             }
         });
 }
@@ -591,7 +789,7 @@ fn section_row(ui: &mut egui::Ui, width: f32, key_w: f32, key: &str, value: &str
     );
     if row
         .add(egui::Button::new(egui::RichText::new(icons::COPY).small()).frame(false))
-        .on_hover_text("Copy")
+        .on_hover_text(t!("inspector-copy"))
         .clicked()
     {
         row.ctx().copy_text(value.to_owned());

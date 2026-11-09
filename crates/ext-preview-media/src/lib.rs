@@ -27,6 +27,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
+use ext::Text;
 use ext::{
     API_VERSION, Capabilities, ControlId, ControlValue, Extension, Frame, Icon, InfoSection,
     Manifest, Platforms, Points, PreviewControl, PreviewDoc, Previewer, Provider, Registry,
@@ -46,6 +47,9 @@ pub const PROBE_BYTES: usize = 4 * 1024 * 1024;
 /// A file on another provider than the local one is copied to a temporary
 /// file for GStreamer; above this size only its headers are read.
 pub const REMOTE_LIMIT: usize = 256 * 1024 * 1024;
+
+/// The file name extensions the manifest claims: every [`Kind`]'s.
+const PREVIEWS: &[&str] = &["mp3", "wav", "wave", "mp4", "m4v", "m4a", "mov", "avi"];
 
 /// The extension: registers [`MediaPreviewer`].
 #[derive(Debug)]
@@ -73,6 +77,7 @@ impl MediaPreview {
                 requires: Capabilities::empty(),
                 points: Points::PREVIEWER,
                 platforms: Platforms::ALL,
+                previews: PREVIEWS,
             },
         }
     }
@@ -84,6 +89,7 @@ impl Extension for MediaPreview {
     }
 
     fn register(&self, reg: &mut Registry) -> Result<(), Error> {
+        reg.translations(&[("en", include_str!("../locales/en.ftl"))]);
         reg.previewer(Arc::new(MediaPreviewer));
         Ok(())
     }
@@ -394,14 +400,14 @@ impl PreviewDoc for MediaDoc {
         ));
         let mut sections = vec![InfoSection {
             id: "file",
-            title: "File info",
+            title: Text("preview-media-file-info"),
             icon: Icon::Info,
             rows,
         }];
         if !self.tags.is_empty() {
             sections.push(InfoSection {
                 id: "tags",
-                title: "Tags",
+                title: Text("preview-media-tags"),
                 icon: Icon::Tag,
                 rows: self.tags.clone(),
             });
@@ -409,7 +415,7 @@ impl PreviewDoc for MediaDoc {
         if !self.streams.is_empty() {
             sections.push(InfoSection {
                 id: "streams",
-                title: "Stream details",
+                title: Text("preview-media-stream-details"),
                 icon: Icon::Film,
                 rows: self.streams.clone(),
             });

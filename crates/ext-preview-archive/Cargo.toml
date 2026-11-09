@@ -1,7 +1,7 @@
 [package]
 name = "ext-preview-archive"
 version.workspace = true
-description = "Rick preview plugin for archives: lists zip, tar family, 7z, RAR and ISO contents without extracting."
+description = "Rick preview plugin for archives and disk images: lists zip, tar family, 7z, RAR and ISO contents natively and the disk images through the 7-Zip library, without extracting or mounting."
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
@@ -21,6 +21,9 @@ fixtures = ["zip/aes-crypto", "sevenz-rust2/compress", "sevenz-rust2/aes256", "l
 [dependencies]
 types = { workspace = true }
 ext = { workspace = true }
+# The disk images: the archive provider's reader over the 7-Zip library
+# and its resolver, so the library is one setting for both plugins.
+ext-vfs-archive = { workspace = true }
 zip = { workspace = true }
 tar = { workspace = true }
 flate2 = { workspace = true }

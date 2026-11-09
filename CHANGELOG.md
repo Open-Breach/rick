@@ -7,28 +7,283 @@ the pull request that brought the change.
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-11-08
+
+The plugin release, on Linux, macOS and Windows: the native plugin host and
+the split of every non-essential feature into a plugin file, the side panel
+reworked, archives, disk images, the Trash, SSH hosts and the S3, Azure and
+Google Cloud stores as providers, the Office, media, archive, markup, hex and
+3D previewers, the search connectors, Subversion, the compress, compare,
+console and bulk-rename actions, permissions, localisation, the native drag
+source, Compute hash, and the tarball installer on Linux.
+
 ### Added
 
-- The viewer: Enter or a double-click opens a previewable file in a viewer
-  tab of the pane, a dock tab like any other (split, dock, tear out). Left
-  and Right step through the folder's files in the list's order with the
-  position in the title; Home and End go to the ends; PageUp and PageDown
-  step pages, then files. Fit, fit width, 1:1 and free zoom (Mod+scroll,
-  Mod+Plus and Minus, Mod+0, Mod+1, Mod+2) with panning, the zoom
-  remembered per file type for the session; a page strip with thumbnails, a
-  page counter with direct entry and single or continuous scrolling for
-  paged content; Mod+F finds in the text layer with the match count, next
-  and previous and highlights in place; I opens the info panel with every
-  section; the Action registry on the file from a menu and the shortcuts; a
-  transport bar for media (Space, J, K, L); F11 fills the screen, Escape
-  leaves it and then closes the tab. A file no previewer claims says so;
-  `[viewer] external` in `rick.toml` (a row in Settings) names the types
-  that open with the system application instead, and Mod+Enter always does
-  (#17).
-- `ext-preview-hex`, the fallback previewer, as a plugin in `plugins/`:
-  anything no other previewer claims shows as a hex dump with an ASCII
-  column, the first mebibyte of a large file, laid out row by row as it
-  scrolls (#17).
+- The burger menu lists the actions extensions put in the application
+  menu (`Action::app_menu`, extension API 14): after the Layouts submenu,
+  one submenu per extension with the actions that apply to the focused
+  pane; the installer's *Installed Apps…* is the first (#59).
+- An action can open its form when a job of its finishes
+  (`ActionOutcome::Later`, `FormLater`, `Continuation`,
+  `UiHost::form_later`; extension API 14): the application shows the form
+  and runs the rest of the action with its values, the egui shell as its
+  one dialogue through `Command::Continue` (#59).
+- `ext-preview-markup` (#51): one plugin with three previewers for the
+  structured text formats, each rendered by default with the *Rendered*
+  toggle to the source: Markdown through `pulldown-cmark` and HTML through
+  the basic reader (headings, paragraphs, lists, links, images, tables; no
+  browser engine, no JavaScript, no CSS fidelity) as documents the pane lays
+  out, with images read from the file's own folder; CSV and TSV as the
+  virtualised grid with the delimiter sniffed and the first row as header.
+  The source behind the toggle is the code previewer's highlighted text for
+  Markdown and HTML and the raw text for CSV, and it is the text layer the
+  pane's Copy reads. The previewers score above `ext-preview-code` for
+  their extensions, so disabling the plugin leaves highlighted source for
+  `.md` and `.html` and plain text for `.csv`.
+- Disk images (#51): raw IMG, DMG, VHD, VHDX, VMDK, VDI and QCOW2 browse
+  like archives, read-only, in `ext-vfs-archive` (Enter enters the image
+  as a location, files inside read and copy out) and `ext-preview-archive`
+  (the file list in the pane on selection, with the layout and volume
+  label in File info), through the 7-Zip library (`7z.so` / `7z.dll`,
+  LGPL) loaded dynamically from `platform::sevenzip`, which parses the
+  containers, the partition tables and the file systems inside (FAT, NTFS,
+  ext, HFS+, APFS, UDF, ISO), one folder per partition as 7-Zip names them;
+  ISO 9660 and UDF keep the native readers. The library is bundled beside
+  the archive plugin in `plugins/vfs-archive/` with its licence (built from
+  the pinned sources on Linux and macOS, the pinned installer's `7z.dll`
+  on Windows) and resolved lazily on the first image shown: the
+  `sevenzip_library` setting of `vfs-archive.toml`, then the bundle, then
+  the platform's usual installs, the first hit written back into the
+  setting; when nothing is found the preview shows a message naming the
+  library, how to install it on this platform and the setting, and
+  browsing to the library stores its path.
+- *Mount* (#51): in the context menu of a disk-image file, and so in the
+  command palette, hands the file to the operating system's own mount
+  mechanism through `platform::Mount` and nothing else: `udisksctl
+  loop-setup` and `mount` on Linux (ISO and raw images), `hdiutil attach`
+  on macOS (DMG, ISO, raw), `Mount-DiskImage` on Windows (ISO, VHD, VHDX);
+  the action hides itself on a file the current OS cannot mount, the
+  mounted image appears as a removable volume in This Machine through the
+  live volume watch, and that row's *Eject* unmounts it (deleting the loop
+  device on Linux). No qemu-nbd, no FUSE, no Unmount action.
+
+- Compute hash… in the Info group of a file's context menu, above
+  Properties, and `core.hash` in the palette: MD5, SHA-1, SHA-256 and
+  BLAKE3 of the selected files, each read once through its provider in
+  1 MiB chunks so a remote file is hashed like a local one, as one job with
+  byte progress and Cancel. The Hash dialogue opens at once and fills in: a
+  block per file with a row per algorithm (the value in a read-only
+  monospace field, Copy), Copy all, a format toggle (lower-case hex,
+  upper-case hex, Base64; remembered as `[hash] format` in `core.toml`)
+  that re-renders without recomputing, and a Verify field compared live
+  against every row of the pasted length — green *Match*, red *Mismatch*,
+  or *Unrecognised length*. Hidden on folders; no shortcut (#54).
+- Dragging out of Rick reaches the desktop: a file dragged past the window
+  is handed to the platform's drag source as `file://` URIs once the ghost
+  is off the screen, through an `NSDraggingSession` on macOS (the first
+  file's icon under the cursor), OLE's `DoDragDrop` with a `CF_HDROP` on
+  Windows, a `wl_data_source` on Wayland and an XDND source on X11, each
+  from the window `winit` describes through its raw handles; the receiver
+  decides between move and copy, and Rick's pointer is put right when the
+  drag ends, since the backend never sees the button come up (#25).
+- A drop from another application lands where it was dropped: the platform
+  supplies the cursor position the backend leaves out (the cursor over the
+  window on Windows and X11, the mouse location in the view on macOS, the
+  data device's motion on Wayland), so a file dropped on a folder row goes
+  into that folder; without a position the drop lands in the focused pane's
+  folder as before. On Wayland, where `winit` 0.30 receives no drops at
+  all, Rick's own `wl_data_device` now takes them (#25).
+- `BENCHMARKS.md` carries the five-run numbers of every benchmark 0.2
+  added and the macOS targets re-measured and tightened towards the spec's
+  numbers where the runner now meets them (the listing's first batch and
+  the PDF's first frame are back at the spec's); the two the runners fell
+  short of, cancelling on macOS and the fixture on Windows, follow what
+  the runners do (#25).
+- The preview pane is Rick's only viewer (#50): it lays out every kind
+  of content a previewer returns itself, so a folder, archive or disk
+  image shows its file list in the explorer's columns with the stats line
+  and folding in place, a CSV file its grid with a header row, and a
+  Markdown or HTML file its rendered document (headings, paragraphs,
+  styled text, links, lists, code, quotes, tables, pictures, rules), with
+  the *Rendered* toggle to the highlighted source; audio and video show
+  in the pane with the transport in the toolbar (play or pause, seek, the
+  times, volume; Space plays while the pane has the focus), playback on
+  demand. *Copy* in the middle group of every text-based preview puts
+  the whole file's text on the clipboard, the raw source for a rendered
+  format. A file no previewer claims shows a placeholder, not a hex dump:
+  its facts, its type icon and *Plugin available* or *No plugin
+  available*, answered from the plugin manifests, which now list the
+  file extensions a plugin's previewers claim. Enter and a double-click
+  open a file: a folder navigates, an archive enters in the current tab
+  unless the new setting `archives.on_open` (a row in Settings) is
+  `system`, everything else goes to the system's default application;
+  Mod+Enter always does.
+- Third-party libraries through a setting (#50): the PDF previewer's
+  `library` (`preview-pdf.toml`) and the Office previewer's `soffice`
+  (`preview-office.toml`) name pdfium and LibreOffice; each is resolved
+  lazily on the first file shown, from the setting, then beside the
+  binary and the plugins directory, then the platform's usual places,
+  and the first hit is written back into the setting. When nothing is
+  found the pane shows the file's information and a message naming the
+  library with the install command or download for this platform,
+  *Browse…* (a file dialogue, the choice stored in the setting) and
+  *Retry*. CI and `cargo xtask bundle` read and write the setting.
+- *Always preview on <host>* beside *Preview anyway* in the cap message
+  of a large file on a remote source (#50): it loads the file and sets
+  `preview_always` for that SSH host, after which the cap no longer
+  applies there; the same switch is a checkbox in the host editor and an
+  entry in the host row's context menu in Network, and works for a host
+  of `~/.ssh/config` too.
+- Localisation (#24): every text of the shell, the dialogues, the menus,
+  the core actions and the plugins goes through the `t!` lookup over Fluent
+  files bundled in the binary (`locales/` for the kernel, each plugin's
+  own), overridable key by key from `locales/<lang>.ftl` in the
+  configuration directory; the *Language* setting (system default, or a
+  listed language) applies live, English is the fallback for any missing
+  key, and German is the first other language, for the Settings screen,
+  the context menus with their actions and the Properties dialogue. A CI
+  check fails on a user-facing string literal outside `t!` in the egui UI.
+- Permissions in Properties (#24): Properties on a local entry shows and
+  edits its owner, group and mode bits (`rwx` for user, group and other,
+  setuid, setgid and sticky, with the octal beside them) and the access
+  control list of its file system (POSIX and NFSv4 ACLs on Linux, macOS
+  ACLs, NTFS permissions with the trustees and the standard rights on
+  Windows); *Apply to enclosed items* changes a folder's contents too,
+  files and folders chosen separately; every change is one job with
+  progress and one undo step, whatever it touched. What the user may not
+  change goes to `rick-perms`, the privileged helper beside the binary,
+  through the platform's prompt (polkit, Authorization Services, User
+  Account Control) once per job, so Rick itself never runs elevated.
+- `ext-ssh`, SSH hosts browsed over a shell (#34): every host of
+  `~/.ssh/config` (with its `Include`s, `HostName`, `User`, `Port`,
+  `IdentityFile` and `ProxyJump` honoured) and every host added in the
+  Network section's editor is a row of that section that opens its default
+  directory; browsing, stat, read, read from an offset, write, mkdir,
+  rename, delete and symlink targets run as commands on `exec` channels
+  through `russh`, never SFTP, with the host probed once for its command
+  profile (`gnu`, `bsd`, `busybox`) and listings streamed as NUL-separated
+  records so any name survives; a same-host copy or move runs on the host
+  as `cp -a` or `mv` and streams nothing. Authentication tries the agent,
+  the identity files (a passphrase is asked for) and then
+  keyboard-interactive and a password, with the secrets in the platform
+  keychain; host keys follow `known_hosts` with OpenSSH semantics (hashed
+  entries, `@revoked`, port-qualified names) and an unknown or changed key
+  asks in a dialogue, nothing trusted silently. Connections pool per host
+  with a second one at the server's session limit, close after the idle
+  timeout and come back on the next operation; jump hosts chain hop by
+  hop over `direct-tcpip` channels, a bastion shared by every target behind
+  it; a connection that fails is a banner with *Retry* in the tab. *Open
+  console here* opens the console pane on a PTY channel of the existing
+  connection and *Open in external terminal* runs `ssh <alias>` in the
+  user's terminal. Previews over a remote host serve a prefix with *Load
+  more* to the text-like previewers and hold a large file behind a size
+  cap with *Preview anyway*, the cap a setting with a per-host override.
+  Three settings in `ssh.toml`; Windows hosts, port forwarding and
+  mounting are out.
+- Questions from extensions (#34): an extension working off the UI thread
+  asks the user through `Prompts` (a choice or a secret with *Remember*)
+  and the shell shows one modal dialogue at a time, the oldest first.
+- *Edit…* on a connection row of the Network and Cloud sections opens the
+  connection's dialogue filled in; a choice field draws a combo box (#34).
+
+- `ext-preview-3d`, the 3D model previewer, as a plugin in `plugins/`:
+  STL (ASCII and binary), OBJ (materials read for their colour) and 3MF
+  (units and build transforms honoured) files render through wgpu into the
+  preview frame as a shaded solid over a ground grid; dragging orbits, the
+  wheel zooms, a double-click resets the view, and the view is kept per
+  file while it is open. The status bar shows the format, the triangle
+  count, the bounding box in millimetres and, for OBJ, the object count;
+  File info adds the 3MF unit and metadata. A model over the triangle
+  budget (`triangle_budget` in `preview-3d.toml`, 2 000 000 by default) is
+  decimated for the preview and the status bar says so; without a graphics
+  adapter the preview shows the facts and says rendering is unavailable
+  (#19).
+- `ext-installer`, the tarball installer of `specs/ext-installer.md`, as a
+  plugin (#44): *Install as application…* on a tar (gz, xz, bz2, zst) or
+  zip archive reads its index and the headers of its programs to tell a
+  prebuilt GUI app from a command-line toolchain and a source tree, guess
+  the main executable, icon, name and version, and check the ELF machine
+  type against the machine, then shows a form with every guess editable
+  and a summary of what will be written; the install extracts into a
+  staging folder under the archive-safety rules (no path escapes, no
+  outside-pointing links, no special entries, set-uid stripped, nothing
+  run), lands in `~/.local/opt/<app-id>/<version>/` behind a `current`
+  symlink, writes `rick-install.toml` beside it and the desktop entry,
+  icon and command symlinks through `current`, or the PATH-mode file
+  `~/.config/rick/path.sh` for toolchains. An archive matching an
+  installed app opens the form in update mode, with a downgrade warning;
+  one previous version is kept and *Revert* flips back. The Installed
+  Apps view, `rick://apps`, lists the records with version, kind, scope,
+  state and commands and offers *Open install folder*, *Launch*, *Update
+  from archive…*, *Revert to previous version*, *Edit launcher…*,
+  *Uninstall…* (exactly the record's files and the app folder), *Repair*,
+  *Forget* and *Remove staging folder*. Linux only: the plugin loads on
+  every platform and hides its actions elsewhere; system-wide installs
+  show as unavailable until the privileged helper's milestone. The
+  extension API is version 9: `ActionOutcome::Navigate` takes a pane to a
+  location and `platform::Elevate` runs a program as the administrator
+  (`pkexec` on Linux).
+- Search as plugins (#22): `ext-search-walk` carries the subdirectory
+  search of the filter bar, the same walk as 0.1's behind the
+  `SearchIndex` point, and the filter bar shows its toggle only while it
+  is loaded; `ext-search-windows`, `ext-search-spotlight`,
+  `ext-search-tracker` and `ext-search-baloo` connect the title-row
+  search box to the platform's index, each detecting its service at
+  start and every ten seconds, so the box lists the index's hits with
+  their folders after the current location's matches once the text has
+  stood for a moment, Enter on a hit goes to its folder and selects it,
+  and without an index the box searches the current location alone as
+  before. The bundle and the release archives carry only the connector
+  of their platform.
+- `ext-svn`, Subversion beside Git (#22): status badges with Subversion's
+  letters, an SVN column, a roll-up mark on folders with changes inside,
+  and the revision, URL and last commit in the info panel, read through
+  `svn status` and `svn info` and cached until the working copy or its
+  `.svn` directory changes; the SVN group (Update, Commit, Revert, Log,
+  Add) in the context menu and the palette inside a working copy, run
+  through the `svn` command line.
+- Providers as plugins, the clouds: `ext-vfs-s3` (S3, R2, MinIO and other
+  S3-compatible stores), `ext-vfs-azure` (Azure Blob) and `ext-vfs-gcs`
+  (Google Cloud Storage), each with its connections as the rows of the
+  side panel's Network or Cloud section, *Add connection…* on the section
+  header and the *Add…* row with a dialogue per provider, and *Connect*,
+  *Disconnect* and *Remove connection* on a row. Connections live in
+  `[[connections]]` tables of `rick.toml`; passwords, keys and secret keys
+  in the platform keychain through the new `platform::Secrets` (Secret
+  Service, Keychain, Credential Manager). A move or copy inside one
+  account runs on the service (`CopyObject`, *Copy Blob*, `Rewrite`) and
+  streams nothing through the machine, within a bucket or across two
+  buckets of the account; uploads stream in parts and a cancelled one
+  leaves no object (#21).
+- The action plugins of milestone 6, every one in `plugins/` of the
+  archives (#23): `action-compress` packs the selection into a zip next to
+  it, or into a zip, tar.gz, tar.zst, 7z, tar, tar.xz, tar.bz2 or a single
+  compressed file named and placed in a form, and extracts the selected
+  archives here, into a folder named after each or to a chosen folder, as
+  pausable jobs with progress and the conflict dialogue; `action-compare`
+  opens two files side by side with the differing lines highlighted and
+  one scroll for both, or two folders (the two selected, or the two panes')
+  entry by entry as same, added, removed or changed with a copy button
+  each way; `action-terminal` opens a console at the location as a dock
+  tab, the user's shell in a pseudo-terminal drawn by a small terminal
+  emulator with colours, a scroll region, the alternate screen and 10 000
+  lines of history, or the system terminal when its `console` setting says
+  so; `action-rename` renames the selection by a pattern (`{name}`,
+  `{ext}`, `{n}`, `{date}`), find and replace with regular expressions and
+  a case change, every result previewed with clashes marked, as one
+  undoable job.
+- Core actions: Open with… (Mod+O) lists the platform's applications for
+  the file's type and takes any program, the choice remembered per type;
+  Paste as link (Mod+Shift+V) and Create link… make symbolic links, or a
+  junction or a .lnk shortcut on Windows, undoably; Select by pattern
+  (Mod+Shift+S) selects by glob or regular expression, replacing or adding
+  to the selection (#23).
+- Settings an extension declares appear in the Settings window and are
+  kept in the extension's own TOML file in the config directory (#23).
+- `ext-preview-hex`, the hex view, as a plugin in `plugins/`: a file's
+  bytes as a hex dump with an ASCII column, the first mebibyte of a large
+  file, laid out row by row as it scrolls (#17); it claims no file on its
+  own and is chosen per type in settings (#50).
 - Archives browsed in place, as the plugin `ext-vfs-archive`: Enter or a
   double-click on a zip (DEFLATE, zstd), a tar (plain, gz, zst, xz, bz2,
   lz4), a 7z, a RAR, an ISO 9660 or UDF image or a single compressed file
@@ -49,7 +304,7 @@ the pull request that brought the change.
 - A location its provider cannot watch (an archive, a trashed folder
   browsed in the Trash view) is polled: every three seconds and right after
   an operation, a change lists it again (#20).
-- Five previewers as plugins, every one in `plugins/` of the archives
+- Three previewers as plugins, every one in `plugins/` of the archives
   (#18): `preview-office` converts DOCX, XLSX, PPTX, ODT, ODS and ODP to
   PDF with an installed LibreOffice, cached by path and modification time,
   and shows the metadata with a hint to install it otherwise; `preview-
@@ -58,10 +313,9 @@ the pull request that brought the change.
   audio, tags and stream details, and shows the metadata and what is
   missing without GStreamer; `preview-archive` lists zip, tar (plain and
   gzip, zstd, xz, bzip2, lz4), 7z, RAR and ISO 9660 contents without
-  extracting, encrypted entries marked; `preview-csv` shows CSV and TSV as
-  a grid with a sniffed delimiter and a header row, parsing only the rows
-  on screen. The code previewer renders Markdown and HTML as documents
-  behind a Rendered toggle, with images from the file's folder.
+  extracting, encrypted entries marked. The CSV grid and the rendered
+  Markdown and HTML of the same change were superseded by
+  `ext-preview-markup` before release (#51).
 - The release archives bundle the GStreamer runtime on macOS and Windows;
   Linux uses the system's (#18).
 - `cargo xtask bundle --features <spec>` hands features to the build, and
@@ -104,6 +358,75 @@ the pull request that brought the change.
 
 ### Changed
 
+- The extension API is at version 14: `ActionOutcome` gained `Later`,
+  `UiHost` `form_later` and `Action` `app_menu` (#59).
+- The installer reads an archive as the job *Reading archive…*, in one
+  streaming pass with byte progress over the compressed stream and a
+  cancel button, and opens the install form when the job finishes;
+  *Install as application…* returns at once, so a gzip tar of several
+  gigabytes no longer freezes the window (#59).
+- The installer's detection names the app by a word of the app name or a
+  suffix of the app id, so `bin/rider` and `bin/rider.svg` are found in a
+  JetBrains tarball where `fsnotifier` won by alphabetical order; among
+  several candidates a matching binary wins and a helper never does, a
+  toolchain whose commands are all equal opens the form on "(choose one)",
+  every PNG and SVG in the archive is offered in one Icon list with the
+  best preselected only when detection trusts it (the icon file field is
+  gone), and the command defaults follow the chosen kind: a GUI
+  application links one command named after the app id at the main
+  executable, a toolchain its `bin/` contents (#59).
+- The extension API is at version 13: `platform` gained `Mount` (which
+  disk-image formats this OS mounts, and mounting one through it) and the
+  `sevenzip` binding of the 7-Zip library; `ext-preview-code` highlights
+  Markdown and HTML as source only, the rendering having moved to
+  `ext-preview-markup` (#51).
+- Eject on Linux releases the loop device of a mounted disk image after
+  unmounting it (#51).
+- The extension API is at version 12 (#50): `Manifest` gained `previews`,
+  the registry lends a `SettingsStore` so a plugin reads and writes its
+  own declared settings, `Content` gained `MissingLibrary`, and `Provider`
+  gained `remote_preview_always`.
+- `ext-preview-hex` claims no file by itself any more: its score is 0 for
+  every file and it is chosen per type in settings (#50).
+- The extension API is at version 11: `Action::label` returns a `String`
+  and `Availability::Disabled` carries one, both built with `t!`; the
+  labels the registry keeps (`SettingField`, `ConnectionField`,
+  `ConnectionSchema`, `InfoSection`, `ColumnDef`) are `Text` keys read
+  live; the registry takes an extension's translation files through
+  `Registry::translations` (#24).
+- Properties is Rick's own dialogue on every platform; on Windows and
+  macOS *System properties…* opens the platform's own as before (#24).
+- `platform::Elevate` runs a command as the administrator on macOS and
+  Windows too, not Linux alone (#24).
+- The extension API is at version 10: the registry lends `Prompts` to
+  extensions, `Previewer` gained `reads()` (`Reads::Whole` or
+  `Reads::Prefix`), `Provider` gained `open_read_at()` and
+  `remote_preview_cap()`, `Connector::schema()` returns an owned schema
+  with `ConnectionFieldKind::Choice`, and the terminal emulator moved from
+  `ext-action-terminal` into `ext::terminal` so a plugin can open a console
+  on its own stream (#34).
+- A listing that fails is a banner with *Retry* over the empty list, not a
+  toast (#34).
+- The extension API is at version 8: a previewer can claim the pointer over
+  its content as `PreviewControl::Pointer` controls (a drag, the wheel, a
+  double-click), which the preview pane hands to `set_control` as
+  `ControlValue::Delta` or `Pressed` instead of panning, scrolling or
+  switching to 1:1; a control change keeps the last frame on screen until
+  the next one is rendered (#19).
+- The extension API is at version 7: `Provider` gained `transfer()` behind
+  `NATIVE_TRANSFER`, `Capabilities` gained `REMOTE` and the registry takes a
+  `Connector` per network provider (#21).
+- The extension API is version 6: actions show forms with a live preview
+  (`UiHost::form`), open a console or a comparison in a tab
+  (`ActionOutcome::View`) or change the selection (`ActionOutcome::Select`),
+  see the other pane's location, and make junctions and shortcuts where
+  the provider offers them; the name-conflict queue is the job runner's,
+  so a plugin's job asks the same dialogue as a copy; the platform knows
+  the applications for a file, opens with one, and opens the user's
+  terminal (#23).
+- The extension API is at version 5: `Filter` gained `NoHidden` and
+  `SkipNames`, the two things the subdirectory search takes from the pane
+  and `rick.toml`, and `SearchScope` gained `covers` (#22).
 - The preview is a dock tab: one Preview tab per window, right of the
   explorer by default, docked below or torn out at will, following the
   focus across panes and windows; its toolbar, badges, pinned section and
@@ -135,9 +458,20 @@ the pull request that brought the change.
 
 ### Removed
 
+- `ext-preview-csv`, superseded by the CSV previewer of `ext-preview-markup`
+  (#51).
+- `ext-vfs-sftp`, superseded by `ext-ssh` before release (it never
+  shipped; #48).
+- The environment variables `RICK_PDFIUM_DIR` and `RICK_SOFFICE`: the
+  library paths are the plugins' settings, which development and CI write
+  instead (#50).
+- The viewer of 0.2 milestone 3 (#29), withdrawn before any release: the
+  preview pane is the only viewer, and Enter opens files (#50).
+- The "not part of version 0.1" notices of Select by pattern, Paste as
+  link, Bulk rename, Open with… and Open console; the five rows of the
+  shortcut table dispatch to the actions (#23).
 - The 0.1 Recent feed (`recent.toml`, the watches and the scan at start),
   replaced by the system's recently-used list.
-
 
 ## [0.1.0] - 2026-11-06
 
@@ -230,5 +564,6 @@ text, code, images and PDF, and Git, on Linux, macOS and Windows.
   in the middle of a write can no longer read a truncated file and lose
   the pinned folders (#14).
 
-[Unreleased]: https://github.com/Open-Breach/rick/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/Open-Breach/rick/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/Open-Breach/rick/releases/tag/v0.2.0
 [0.1.0]: https://github.com/Open-Breach/rick/releases/tag/v0.1.0

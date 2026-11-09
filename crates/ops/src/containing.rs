@@ -6,6 +6,7 @@
 //! action was reachable. Registering them keeps them in the menus, the
 //! palette and the shortcut table like every other operation.
 
+use ext::t;
 use ext::{
     Action, ActionCtx, ActionGroup, ActionId, ActionOutcome, Availability, Shortcut, UiHost,
 };
@@ -18,14 +19,14 @@ use crate::edit::parent;
 /// location: search results, the flattened view, Recent.
 fn elsewhere(ctx: &ActionCtx) -> Availability {
     if ctx.selection.is_empty() {
-        return Availability::Disabled("select an entry first");
+        return Availability::Disabled(t!("reason-select-an-entry-first"));
     }
     let here = ctx
         .selection
         .iter()
         .all(|entry| parent(&entry.path) == ctx.location.path);
     if here {
-        Availability::Disabled("the selection is in this folder already")
+        Availability::Disabled(t!("reason-selection-in-this-folder"))
     } else {
         Availability::Enabled
     }
@@ -39,8 +40,8 @@ impl Action for OpenContaining {
     fn id(&self) -> ActionId {
         ActionId("core.open_containing")
     }
-    fn label(&self) -> &'static str {
-        "Open containing folder"
+    fn label(&self) -> String {
+        t!("action-open-containing-folder")
     }
     fn group(&self) -> ActionGroup {
         ActionGroup::Core
@@ -68,8 +69,8 @@ impl Action for OpenContainingInTab {
     fn id(&self) -> ActionId {
         ActionId("core.open_containing_tab")
     }
-    fn label(&self) -> &'static str {
-        "Open containing folder in new tab"
+    fn label(&self) -> String {
+        t!("action-open-containing-folder-in-new-tab")
     }
     fn group(&self) -> ActionGroup {
         ActionGroup::Core

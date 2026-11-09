@@ -1,7 +1,7 @@
 [package]
 name = "ext-vfs-archive"
 version.workspace = true
-description = "Rick's archive provider: zip, the tar family, 7z, RAR (read-only), ISO 9660 and UDF images and single-file codecs browsed in place as locations, with zip, tar and 7z writable."
+description = "Rick's archive provider: zip, the tar family, 7z, RAR (read-only), ISO 9660 and UDF images, the disk images read through the 7-Zip library (read-only) and single-file codecs browsed in place as locations, with zip, tar and 7z writable."
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
@@ -18,6 +18,7 @@ futures = { workspace = true }
 tokio = { workspace = true, features = ["fs", "io-util", "sync"] }
 tracing = { workspace = true }
 tempfile = { workspace = true }
+thiserror = { workspace = true }
 zip = { workspace = true }
 flate2 = { workspace = true }
 tar = { workspace = true }
@@ -36,6 +37,7 @@ hadris-storage = { workspace = true }
 
 [dev-dependencies]
 runtime = { workspace = true }
+platform = { workspace = true }
 # The ISO 9660 and UDF images the tests browse are written with the same
 # readers' writers.
 hadris-iso = { workspace = true, features = ["write"] }

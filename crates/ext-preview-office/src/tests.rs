@@ -55,7 +55,7 @@ fn detects_the_six_kinds_by_name_and_opendocument_by_content() {
     assert_eq!(detect("notes.docx", b""), Some((Kind::Docx, 180)));
     assert_eq!(detect("notes.doc", b"PK\x03\x04"), None);
     assert_eq!(detect("photo.zip", b"PK\x03\x04"), None);
-    let p = OfficePreviewer;
+    let p = OfficePreviewer::default();
     assert_eq!(p.score(&entry("a.xlsx"), b"PK\x03\x04"), 180);
     let mut dir = entry("a.xlsx");
     dir.kind = EntryKind::Dir;
@@ -109,15 +109,27 @@ fn metadata_comes_from_the_zip() {
 #[test]
 fn without_libreoffice_the_document_shows_metadata_and_the_hint() {
     let meta = meta::read(&sample_docx("Plan", "Ada", 2), Kind::Docx);
+    let lookup = Lookup::default().with_search(Search::SettingOnly);
+    let Err(missing) = lookup.find() else {
+        panic!("nothing to find with the setting alone");
+    };
+    let missing = *missing;
+    assert_eq!(missing.name, "LibreOffice");
+    assert_eq!(missing.setting, (ID, SOFFICE_SETTING));
+    assert_ne!(missing.install, "");
     let mut doc = OfficeDoc::new(
         Kind::Docx,
         meta,
-        Rendering::None(ConvertError::NotInstalled.to_string()),
+        Rendering::Missing(Arc::new(missing.clone())),
         Some(4096),
         false,
     );
     assert_eq!(doc.pages(), None);
     assert!(!doc.has_pages());
+    assert!(
+        matches!(doc.content(), Some(Content::MissingLibrary(m)) if *m == missing),
+        "the pane lays the message out"
+    );
     let Frame::Text(block) = doc.render(0, req()).unwrap_or_else(|e| panic!("{e}")) else {
         panic!("not text");
     };
@@ -214,9 +226,12 @@ fn converts_through_libreoffice_when_present() {
     let loc = Location::new(vfs_local::PROVIDER_ID, platform::paths::from_path(&path));
 
     let started = Instant::now();
-    let mut doc =
-        runtime::block_on(OfficePreviewer.open(&loc, Arc::clone(&provider), CancelToken::new()))
-            .unwrap_or_else(|e| panic!("{e}"));
+    let mut doc = runtime::block_on(OfficePreviewer::default().open(
+        &loc,
+        Arc::clone(&provider),
+        CancelToken::new(),
+    ))
+    .unwrap_or_else(|e| panic!("{e}"));
     let took = started.elapsed();
     eprintln!("conversion took {took:?}");
     assert_eq!(doc.pages(), Some(3), "{:?}", doc.sections());
@@ -246,9 +261,12 @@ fn converts_through_libreoffice_when_present() {
     );
 
     // The second look comes from the cache.
-    let doc =
-        runtime::block_on(OfficePreviewer.open(&loc, Arc::clone(&provider), CancelToken::new()))
-            .unwrap_or_else(|e| panic!("{e}"));
+    let doc = runtime::block_on(OfficePreviewer::default().open(
+        &loc,
+        Arc::clone(&provider),
+        CancelToken::new(),
+    ))
+    .unwrap_or_else(|e| panic!("{e}"));
     let rows = doc.sections().remove(0).rows;
     assert!(
         rows.iter()
@@ -260,7 +278,7 @@ fn converts_through_libreoffice_when_present() {
     std::fs::write(&path, sample_docx("Report", "Ada", 5)).unwrap_or_else(|e| panic!("{e}"));
     let cancel = CancelToken::new();
     cancel.cancel();
-    let outcome = runtime::block_on(OfficePreviewer.open(&loc, provider, cancel));
+    let outcome = runtime::block_on(OfficePreviewer::default().open(&loc, provider, cancel));
     assert!(
         matches!(outcome, Err(Error::Cancelled)),
         "{:?}",

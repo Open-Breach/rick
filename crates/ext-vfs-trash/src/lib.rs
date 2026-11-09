@@ -95,6 +95,7 @@ impl TrashExtension {
                 requires: Capabilities::empty(),
                 points: Points::PROVIDER | Points::DECORATOR | Points::ACTION,
                 platforms: Platforms::ALL,
+                previews: &[],
             },
         }
     }
@@ -106,6 +107,10 @@ impl Extension for TrashExtension {
     }
 
     fn register(&self, reg: &mut Registry) -> Result<(), Error> {
+        reg.translations(&[
+            ("en", include_str!("../locales/en.ftl")),
+            ("de", include_str!("../locales/de.ftl")),
+        ]);
         let platform = reg
             .platform()
             .ok_or(Error::Unsupported(

@@ -1,5 +1,6 @@
 //! Rename, New file and New folder.
 
+use ext::t;
 use std::sync::Arc;
 
 use ext::{
@@ -21,8 +22,8 @@ impl Action for Rename {
     fn id(&self) -> ActionId {
         ActionId("core.rename")
     }
-    fn label(&self) -> &'static str {
-        "Rename"
+    fn label(&self) -> String {
+        t!("action-rename")
     }
     fn group(&self) -> ActionGroup {
         ActionGroup::Core
@@ -40,8 +41,8 @@ impl Action for Rename {
         }
         match ctx.selection.len() {
             1 => Availability::Enabled,
-            0 => Availability::Disabled("select an entry first"),
-            _ => Availability::Disabled("select one entry to rename"),
+            0 => Availability::Disabled(t!("reason-select-an-entry-first")),
+            _ => Availability::Disabled(t!("reason-select-one-entry-to-rename")),
         }
     }
     fn run(
@@ -198,8 +199,8 @@ impl Action for NewFile {
     fn id(&self) -> ActionId {
         ActionId("core.new_file")
     }
-    fn label(&self) -> &'static str {
-        "New file"
+    fn label(&self) -> String {
+        t!("action-new-file")
     }
     fn group(&self) -> ActionGroup {
         ActionGroup::Core
@@ -237,8 +238,8 @@ impl Action for NewFolder {
     fn id(&self) -> ActionId {
         ActionId("core.new_folder")
     }
-    fn label(&self) -> &'static str {
-        "New folder"
+    fn label(&self) -> String {
+        t!("action-new-folder")
     }
     fn group(&self) -> ActionGroup {
         ActionGroup::Core

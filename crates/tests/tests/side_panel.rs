@@ -1279,3 +1279,117 @@ fn progress_over_the_200k_fixture_is_throttled_to_twenty_events_a_second() {
         "a poll took {worst_poll:?}"
     );
 }
+
+/// Opens the context menu on the file row `name` and says whether
+/// *Mount* is in it, then closes the menu.
+fn mount_offered(harness: &mut Harness<'_, RickUi>, name: &str) -> bool {
+    let at = harness.get_by_label(name).rect().center();
+    click_at(harness, at, egui::PointerButton::Secondary);
+    harness.step();
+    let offered = harness.query_by_label("Mount").is_some();
+    harness.key_press(egui::Key::Escape);
+    harness.step();
+    harness.step();
+    offered
+}
+
+/// The side panel rows whose label contains `text` but not the image
+/// file's name: the volume's row, not the "Mount disc.iso" job row of
+/// the operations area nor the file in the list.
+fn volume_rows(harness: &Harness<'_, RickUi>, text: &str) -> Vec<egui::Rect> {
+    let rect = pane_rect(harness);
+    let file: Vec<egui::Rect> = harness
+        .query_all_by_label_contains(&format!("{text}.iso"))
+        .map(|n| n.rect())
+        .collect();
+    harness
+        .query_all_by_label_contains(text)
+        .map(|n| n.rect())
+        .filter(|r| r.center().x < rect.left() && !file.contains(r))
+        .collect()
+}
+
+/// Issue 51: *Mount* in a disk image's context menu, shown on an ISO on
+/// every platform, on a VHDX only where Windows would show it, on a DMG
+/// only as macOS would, never on a QCOW2, through the fake platform's
+/// mountable formats; mounting an ISO adds a volume to This Machine, where
+/// that row's Eject takes it away again.
+#[test]
+fn mount_shows_on_the_images_this_os_mounts_and_a_mounted_iso_is_a_volume_until_eject() {
+    use platform::ImageFormat;
+
+    let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+    for name in ["disc.iso", "disk.vhdx", "disk.dmg", "disk.qcow2"] {
+        fs::write(dir.path().join(name), name).unwrap_or_else(|e| panic!("{e}"));
+    }
+    let (mut harness, fake) = harness(dir.path());
+
+    let as_platform: [(&str, &'static [ImageFormat], [bool; 4]); 3] = [
+        (
+            "Linux",
+            &[ImageFormat::Iso, ImageFormat::Img],
+            [true, false, false, false],
+        ),
+        (
+            "Windows",
+            &[ImageFormat::Iso, ImageFormat::Vhd, ImageFormat::Vhdx],
+            [true, true, false, false],
+        ),
+        (
+            "macOS",
+            &[ImageFormat::Dmg, ImageFormat::Iso, ImageFormat::Img],
+            [true, false, true, false],
+        ),
+    ];
+    for (platform, mountable, expected) in as_platform {
+        fake.set_mountable(mountable);
+        let offered: Vec<bool> = ["disc.iso", "disk.vhdx", "disk.dmg", "disk.qcow2"]
+            .iter()
+            .map(|name| mount_offered(&mut harness, name))
+            .collect();
+        assert_eq!(offered, expected, "as {platform}: iso, vhdx, dmg, qcow2");
+    }
+
+    // Mount the ISO: the fake mounts, the live volume watch shows the
+    // volume under This Machine within its poll.
+    fake.set_mountable(&[ImageFormat::Iso, ImageFormat::Img]);
+    assert_eq!(volume_rows(&harness, "disc"), Vec::<egui::Rect>::new());
+    let at = harness.get_by_label("disc.iso").rect().center();
+    click_at(&mut harness, at, egui::PointerButton::Secondary);
+    harness.step();
+    harness.get_by_label("Mount").click();
+    harness.step();
+    assert!(
+        step_until(&mut harness, Duration::from_secs(6), |h| {
+            h.state().app().model().volumes.len() == 1 && !volume_rows(h, "disc").is_empty()
+        }),
+        "the mounted image shows up as a volume"
+    );
+    assert_eq!(fake.mounted(), [dir.path().join("disc.iso")]);
+    let volumes = harness.state().app().model().volumes.clone();
+    assert_eq!(volumes.len(), 1);
+    assert!(
+        volumes[0].is_removable(),
+        "a removable volume: Eject applies"
+    );
+
+    // Eject from the row's context menu unmounts it; no Unmount action.
+    let row = volume_rows(&harness, "disc");
+    assert_eq!(row.len(), 1, "{row:?}");
+    click_at(
+        &mut harness,
+        row[0].center(),
+        egui::PointerButton::Secondary,
+    );
+    harness.step();
+    assert!(harness.query_by_label_contains("Unmount").is_none());
+    harness.get_by_label_contains("Eject").click();
+    harness.step();
+    assert!(
+        step_until(&mut harness, Duration::from_secs(6), |h| {
+            h.state().app().model().volumes.is_empty() && volume_rows(h, "disc").is_empty()
+        }),
+        "the volume goes with Eject"
+    );
+    assert_eq!(fake.ejected(), [volumes[0].mount_point.clone()]);
+}
