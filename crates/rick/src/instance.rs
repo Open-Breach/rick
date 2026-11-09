@@ -18,6 +18,7 @@
 //! extension that declared it, `--help` is the help, and a command line
 //! the parser refuses is answered with its message and [`EXIT_USAGE`].
 
+use std::io;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -54,7 +55,7 @@ pub enum Outcome {
 /// The I/O error of the endpoint when it can be neither reached nor
 /// bound: the runtime directory is not writable, the pipe refuses the
 /// user.
-pub fn hand_over(endpoint: &Endpoint, argv: Vec<String>, cwd: PathBuf) -> anyhow::Result<Outcome> {
+pub fn hand_over(endpoint: &Endpoint, argv: Vec<String>, cwd: PathBuf) -> io::Result<Outcome> {
     let request = Request::new(argv, cwd);
     runtime::block_on(async {
         match endpoint.hand_over(&request, PATIENCE).await? {
@@ -95,25 +96,39 @@ pub fn hand_over(endpoint: &Endpoint, argv: Vec<String>, cwd: PathBuf) -> anyhow
                         }),
                     }
                 }
-                Err(error) => Err(error.into()),
+                Err(error) => Err(error),
             },
         }
     })
 }
 
 /// A folder as a location of the local provider.
+#[must_use]
 pub fn location(path: &Path) -> Location {
     Location::new(vfs_local::PROVIDER_ID, platform::paths::from_path(path))
 }
 
 /// The plugin commands the loaded extensions declare, for the parser and
 /// the help.
+#[must_use]
 pub fn plugin_commands(app: &App) -> Vec<CommandSpec> {
     app.registry()
         .manifests()
         .iter()
         .flat_map(|m| m.commands.iter().copied())
         .collect()
+}
+
+/// The activation token a launch received from its launcher, for the
+/// platform to raise the window with: `XDG_ACTIVATION_TOKEN` (Wayland) or
+/// `DESKTOP_STARTUP_ID` (X11 startup notification).
+pub fn activation_token(request: &Request) -> Option<&str> {
+    request
+        .env
+        .get("XDG_ACTIVATION_TOKEN")
+        .or_else(|| request.env.get("DESKTOP_STARTUP_ID"))
+        .map(String::as_str)
+        .filter(|token| !token.is_empty())
 }
 
 /// Runs a request against the application: parses it as the command line
@@ -123,44 +138,57 @@ pub fn dispatch(app: &mut App, events: &mut Vec<Event>, request: &Request) -> Re
     let plugins = plugin_commands(app);
     match cli::parse(&request.argv, &request.cwd, &plugins) {
         Err(Usage(text)) => Reply::usage(text),
-        Ok(parsed) => apply(app, events, parsed, &request.cwd),
+        Ok(parsed) => apply(app, events, parsed, &request.cwd, activation_token(request)),
     }
 }
 
-/// Applies a parsed command line to the application: the paths open as
-/// tabs of the focused window, in a new window first when asked; `reveal`
-/// opens each file's folder; a plugin's command runs in the extension
-/// that declared it, its text or error going back to the caller; the help
-/// and the version are text for the caller.
-pub fn apply(app: &mut App, events: &mut Vec<Event>, parsed: Parsed, cwd: &Path) -> Reply {
+/// Applies a parsed command line to the application
+/// (specs/system-integration.md §3): the paths open as tabs of the most
+/// recently focused window, the first in a window of its own with
+/// `--new-window`; `reveal` opens each file's folder the same way and
+/// selects the files once listed; a plugin's command runs in the
+/// extension that declared it, its text or error going back to the
+/// caller; the help and the version are text for the caller. Whatever
+/// changed the window is followed by its activation, with the launcher's
+/// `token`, so the caller sees what happened.
+pub fn apply(
+    app: &mut App,
+    events: &mut Vec<Event>,
+    parsed: Parsed,
+    cwd: &Path,
+    token: Option<&str>,
+) -> Reply {
+    let activate = |app: &mut App, events: &mut Vec<Event>| {
+        app.handle(
+            Command::Activate {
+                token: token.map(str::to_owned),
+            },
+            events,
+        );
+    };
     match parsed {
         Parsed::Open { paths, new_window } => {
             tracing::info!(new_window, ?paths, "open from the command line");
-            if new_window {
-                app.handle(Command::NewWindow, events);
+            let mut paths = paths.into_iter();
+            if new_window && let Some(first) = paths.next() {
+                app.handle(Command::NewWindowAt(location(&first)), events);
             }
-            for path in &paths {
-                app.handle(Command::NewTab(location(path)), events);
+            for path in paths {
+                app.handle(Command::NewTab(location(&path)), events);
             }
+            activate(app, events);
             Reply::ok(None)
         }
         Parsed::Reveal { files, new_window } => {
             tracing::info!(new_window, ?files, "reveal from the command line");
-            if new_window {
-                app.handle(Command::NewWindow, events);
-            }
-            let mut folders: Vec<PathBuf> = Vec::new();
-            for file in &files {
-                let folder = file
-                    .parent()
-                    .map_or_else(|| file.clone(), Path::to_path_buf);
-                if !folders.contains(&folder) {
-                    folders.push(folder);
-                }
-            }
-            for folder in &folders {
-                app.handle(Command::NewTab(location(folder)), events);
-            }
+            app.handle(
+                Command::Reveal {
+                    items: files.iter().map(|f| location(f)).collect(),
+                    new_window,
+                },
+                events,
+            );
+            activate(app, events);
             Reply::ok(None)
         }
         Parsed::Plugin { name, args } => {
@@ -170,7 +198,12 @@ pub fn apply(app: &mut App, events: &mut Vec<Event>, parsed: Parsed, cwd: &Path)
                     "rick: unknown command `{name}`\n\n{}",
                     cli::help(&plugin_commands(app))
                 )),
-                Some(Ok(text)) => Reply::ok(text),
+                Some(Ok(Some(text))) => Reply::ok(Some(text)),
+                Some(Ok(None)) => {
+                    // The command did something in the window: show it.
+                    activate(app, events);
+                    Reply::ok(None)
+                }
                 Some(Err(error)) => Reply::failed(EXIT_FAILED, format!("rick {name}: {error}")),
             }
         }
@@ -357,11 +390,23 @@ mod tests {
         let windows_before = app.model().windows().count();
         let panes_before = app.model().panes().count();
 
-        let reply = dispatch(&mut app, &mut events, &request(&["sub"], dir.path()));
+        let mut with_token = request(&["sub"], dir.path());
+        with_token
+            .env
+            .insert("XDG_ACTIVATION_TOKEN".to_owned(), "tok-1".to_owned());
+        let reply = dispatch(&mut app, &mut events, &with_token);
         assert_eq!(reply, Reply::ok(None));
-        // A tab of its own, in a workspace of its own, in the same window.
+        // A tab of its own, in a workspace of its own, in the same window,
+        // which is then raised with the launcher's token.
         assert_eq!(app.model().panes().count(), panes_before + 1);
         assert_eq!(app.model().windows().count(), windows_before);
+        assert!(
+            events.iter().any(|e| matches!(
+                e,
+                Event::Activate { window, token } if *window == app.model().focused_window && token.as_deref() == Some("tok-1")
+            )),
+            "{events:?}"
+        );
         let focused = app.model().focused;
         let (_, tab) = app
             .model()
@@ -379,6 +424,9 @@ mod tests {
         );
         assert_eq!(reply.status, 0);
         assert_eq!(app.model().windows().count(), windows_before + 1);
+        // The new window holds that one tab, and is the focused one.
+        let new_window = app.model().focused_window;
+        assert_eq!(app.model().workspaces(new_window).len(), 1);
 
         // Reveal opens the file's folder, once for two files in it.
         let panes = app.model().panes().count();

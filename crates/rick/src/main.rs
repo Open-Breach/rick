@@ -22,9 +22,6 @@
 //! instance's status, within a second; only when nothing listens does it
 //! bind the endpoint and open the window itself.
 
-mod cli;
-mod instance;
-
 use std::ffi::OsString;
 use std::fmt::Write as _;
 use std::io::Write as _;
@@ -33,12 +30,9 @@ use std::process::ExitCode;
 use std::sync::Arc;
 
 use anyhow::Context as _;
-use platform::{ConfigDir as _, SingleInstance as _};
+use platform::{Activation as _, ConfigDir as _, SingleInstance as _};
 use plugins_native::{Host, Options, PluginStatus};
-
-/// The version and the git hash of this build, as the command line's
-/// `--version` reply of a running instance prints them.
-pub const VERSION: &str = concat!(env!("CARGO_PKG_VERSION"), " (", env!("RICK_GIT_HASH"), ")");
+use rick::{cli, instance};
 
 /// What this binary knows about its own build, for the About dialog and
 /// `--version`: the values `build.rs` records, the toolchain the plugin
@@ -246,6 +240,8 @@ fn run() -> anyhow::Result<ExitCode> {
         None
     } else {
         let endpoint = platform.instance_endpoint(&config_dir);
+        // The instance may take the foreground for the window it opens.
+        platform.allow_activation();
         match instance::hand_over(&endpoint, for_instance.clone(), cwd.clone()).with_context(
             || format!("the single-instance endpoint {}", endpoint.path().display()),
         )? {
@@ -356,7 +352,7 @@ fn run() -> anyhow::Result<ExitCode> {
     // app's polling like the start location's), and a plugin command's
     // reply has nobody to print it, so it is logged.
     let mut events = Vec::new();
-    let reply = instance::apply(&mut app, &mut events, parsed, &cwd);
+    let reply = instance::apply(&mut app, &mut events, parsed, &cwd, None);
     if reply.status != 0 {
         return exit_with(reply.status, reply.text);
     }
