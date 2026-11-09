@@ -298,7 +298,7 @@ mod tests {
         let names = include_str!(env!("RICK_CONTRIBUTORS"));
         for name in names.lines() {
             assert_eq!(name, name.trim());
-            assert!(!name.is_empty());
+            assert_ne!(name, "");
         }
         // The roles file is there, text, and empty until CONTRIBUTORS.md exists.
         let roles = include_str!(env!("RICK_CONTRIBUTOR_ROLES"));
