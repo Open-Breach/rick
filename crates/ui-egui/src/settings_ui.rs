@@ -1417,12 +1417,49 @@ pub fn label_of(intent: Intent, registry: &Registry) -> String {
 }
 
 /// The symbol the About window shows: the rings of the app icon alone, on
-/// nothing (specs/app-icons.md), rasterised by the SVG loader at the size
-/// it is drawn at, so it is sharp at every scale.
-const ABOUT_SYMBOL: egui::ImageSource<'static> =
-    egui::include_image!("../../../assets/icons/svg/rick-symbol.svg");
+/// nothing (specs/app-icons.md), rasterised at the size it is drawn at
+/// times the window's scale, so it is sharp at every scale.
+const ABOUT_SYMBOL_SVG: &[u8] = include_bytes!("../../../assets/icons/svg/rick-symbol.svg");
 /// The symbol's size in the About window, in points.
 const ABOUT_SYMBOL_SIZE: f32 = 64.0;
+
+/// The symbol as a texture of `ABOUT_SYMBOL_SIZE` points at the context's
+/// scale, rasterised once per scale and kept in the context; `None` when
+/// the SVG does not parse or the pixmap cannot be made, which is said once
+/// and leaves the window without the picture.
+fn about_symbol(ctx: &egui::Context) -> Option<egui::TextureHandle> {
+    let scale = ctx.pixels_per_point();
+    let key = egui::Id::new(("about-symbol", scale.to_bits()));
+    if let Some(texture) = ctx.data(|d| d.get_temp::<egui::TextureHandle>(key)) {
+        return Some(texture);
+    }
+    let tree =
+        match resvg::usvg::Tree::from_data(ABOUT_SYMBOL_SVG, &resvg::usvg::Options::default()) {
+            Ok(tree) => tree,
+            Err(error) => {
+                tracing::warn!(%error, "the About symbol did not parse");
+                return None;
+            }
+        };
+    let pixels = (ABOUT_SYMBOL_SIZE * scale).round().max(1.0);
+    // Rounded and at least one: the cast is exact.
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    let side = pixels as u32;
+    let mut pixmap = resvg::tiny_skia::Pixmap::new(side, side)?;
+    let size = tree.size();
+    let transform =
+        resvg::tiny_skia::Transform::from_scale(pixels / size.width(), pixels / size.height());
+    resvg::render(&tree, transform, &mut pixmap.as_mut());
+    let image =
+        egui::ColorImage::from_rgba_premultiplied([side as usize, side as usize], pixmap.data());
+    let texture = ctx.load_texture(
+        format!("about-symbol-{scale}"),
+        image,
+        egui::TextureOptions::LINEAR,
+    );
+    ctx.data_mut(|d| d.insert_temp(key, texture.clone()));
+    Some(texture)
+}
 
 /// The About window; `version` is the binary's version and git hash.
 pub fn about_window(ctx: &egui::Context, open: &mut bool, version: &str) {
@@ -1431,10 +1468,9 @@ pub fn about_window(ctx: &egui::Context, open: &mut bool, version: &str) {
         .resizable(false)
         .show(ctx, |ui| {
             ui.horizontal(|ui| {
-                ui.add(
-                    egui::Image::new(ABOUT_SYMBOL)
-                        .fit_to_exact_size(vec2(ABOUT_SYMBOL_SIZE, ABOUT_SYMBOL_SIZE)),
-                );
+                if let Some(texture) = about_symbol(ui.ctx()) {
+                    ui.image((texture.id(), vec2(ABOUT_SYMBOL_SIZE, ABOUT_SYMBOL_SIZE)));
+                }
                 ui.vertical(|ui| {
                     ui.heading(t!("rick"));
                     ui.label(t!("settings-a-god-like-file-manager"));
@@ -1530,34 +1566,23 @@ mod tests {
 
     use super::*;
 
-    /// The About window draws the rings-only symbol at 64 px: the SVG
-    /// loader rasterises it at that size times the window's scale.
+    /// The About window draws the rings-only symbol at 64 px, rasterised
+    /// at that size times the window's scale, once per scale.
     #[test]
     fn the_about_window_shows_the_symbol_at_64_px() {
         let mut open = true;
         let mut harness = egui_kittest::Harness::builder()
             .with_pixels_per_point(2.0)
             .build_ui(|ui| about_window(ui.ctx(), &mut open, "0.0.0 (test)"));
-        egui_extras::install_image_loaders(&harness.ctx);
         harness.run();
         harness.get_by_role(egui::accesskit::Role::Image);
-        let size = vec2(ABOUT_SYMBOL_SIZE, ABOUT_SYMBOL_SIZE);
-        let loaded = egui::Image::new(ABOUT_SYMBOL)
-            .fit_to_exact_size(size)
-            .load_for_size(&harness.ctx, size)
-            .unwrap_or_else(|e| panic!("the symbol did not load: {e}"));
-        match loaded {
-            egui::load::TexturePoll::Ready { texture } => {
-                // The texture's size is the SVG's own; the rasterised
-                // texels are 64 px times the scale of two.
-                let manager = harness.ctx.tex_manager();
-                let manager = manager.read();
-                let meta = manager
-                    .meta(texture.id)
-                    .unwrap_or_else(|| panic!("the symbol's texture has no metadata"));
-                assert_eq!(meta.size, [128, 128]);
-            }
-            egui::load::TexturePoll::Pending { .. } => panic!("the symbol is still pending"),
-        }
+        let texture =
+            about_symbol(&harness.ctx).unwrap_or_else(|| panic!("the symbol did not rasterise"));
+        assert_eq!(texture.size(), [128, 128]);
+        assert_eq!(
+            about_symbol(&harness.ctx).map(|t| t.id()),
+            Some(texture.id()),
+            "rasterised once per scale"
+        );
     }
 }

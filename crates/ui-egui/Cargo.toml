@@ -19,10 +19,12 @@ chrono = { workspace = true }
 eframe = { workspace = true }
 egui = { workspace = true }
 egui_dock = { workspace = true }
-# The `svg` loader rasterises the About window's symbol
-# (assets/icons/svg/rick-symbol.svg, specs/app-icons.md) through resvg.
-egui_extras = { workspace = true, features = ["svg"] }
+egui_extras = { workspace = true }
 image = { workspace = true }
+# Rasterises the About window's symbol (assets/icons/svg/rick-symbol.svg,
+# specs/app-icons.md) at the drawn size: the workspace's resvg, the one the
+# image previewer draws SVG with.
+resvg = { workspace = true }
 tracing = { workspace = true }
 egui-phosphor = { version = "0.14", features = ["fill"] }
 # Parses a system font file once before egui takes it (`fonts`), the

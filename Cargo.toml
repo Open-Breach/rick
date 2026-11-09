@@ -57,6 +57,12 @@ plugin-panic = { path = "crates/plugin-panic" }
 gix = { version = "0.90", default-features = false, features = ["status", "revision", "parallel", "sha1"] }
 encoding_rs = "0.8"
 image = { version = "0.25", default-features = false, features = ["bmp", "gif", "jpeg", "png", "tiff", "webp"] }
+# Vector images (issue 83): `resvg` rasterises SVG and SVGZ in pure Rust,
+# text through usvg's font database over the system fonts, embedded raster
+# images through the pure-Rust codecs. No gzip of its own: the image
+# previewer decompresses SVGZ itself, so the source is there for the text
+# layer.
+resvg = { version = "0.49", default-features = false, features = ["text", "system-fonts", "memmap-fonts", "raster-images"] }
 jpeg-decoder = { version = "0.3", default-features = false }
 kamadak-exif = "0.6"
 pdfium-render = { version = "0.9", default-features = false, features = ["pdfium_latest", "thread_safe"] }

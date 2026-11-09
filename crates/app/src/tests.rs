@@ -1953,3 +1953,34 @@ fn the_title_row_search_asks_every_available_index_and_lists_each_hit_once() {
     assert_eq!(first.queries().len(), 3);
     assert_eq!(second.queries().len(), 3);
 }
+
+/// Issue 83: the preview pane's *Copy* puts the inflated text of a
+/// gzip-compressed file (an SVGZ) on the clipboard, and the decoded text of
+/// any other file as before.
+#[test]
+fn copy_inflates_a_gzip_compressed_file_before_decoding_it() {
+    use std::io::Write as _;
+
+    let xml = "<svg xmlns=\"http://www.w3.org/2000/svg\"/>\n";
+    let mut gz = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+    gz.write_all(xml.as_bytes())
+        .unwrap_or_else(|e| panic!("{e}"));
+    let svgz = gz.finish().unwrap_or_else(|e| panic!("{e}"));
+    assert_eq!(
+        super::copied_text(&svgz).unwrap_or_else(|e| panic!("{e}")),
+        xml
+    );
+    assert_eq!(
+        super::copied_text(xml.as_bytes()).unwrap_or_else(|e| panic!("{e}")),
+        xml
+    );
+    // A byte order mark still decides the encoding.
+    let mut utf16 = vec![0xFF, 0xFE];
+    utf16.extend("hi".encode_utf16().flat_map(u16::to_le_bytes));
+    assert_eq!(
+        super::copied_text(&utf16).unwrap_or_else(|e| panic!("{e}")),
+        "hi"
+    );
+    // Gzip that does not inflate is an error, never a panic.
+    assert!(super::copied_text(&[0x1f, 0x8b, 8, 0, 1, 2, 3]).is_err());
+}

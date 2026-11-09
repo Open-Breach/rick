@@ -1,0 +1,7 @@
+<?xml version="1.0"?>
+<?xml-stylesheet href="file:///etc/rick-style.css" type="text/css"?>
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="32" height="32">
+  <image x="0" y="0" width="32" height="32" href="file:///etc/passwd"/>
+  <image x="0" y="0" width="32" height="32" xlink:href="https://example.org/picture.png"/>
+  <rect x="0" y="0" width="16" height="32" fill="#0000ff"/>
+</svg>
