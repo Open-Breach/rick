@@ -9,6 +9,42 @@ the pull request that brought the change.
 
 ### Added
 
+- Single instance, the command line and `rick://` (issue 103,
+  [`specs/system-integration.md`](specs/system-integration.md) §3 and
+  §4, milestone 1 of the integration track). One Rick per user session
+  and config directory: the first launch binds an endpoint named after
+  both — a Unix socket in `$XDG_RUNTIME_DIR` (Linux) or the user's
+  temporary directory (macOS), a named pipe on Windows — and a second
+  launch hands its command line over as one length-prefixed JSON message
+  with a protocol version, prints the reply and exits with the instance's
+  status within a second; an instance that does not answer is reported,
+  a socket a crash left behind is reclaimed, and a second window opens
+  only for `--new-window` when no instance answers (#106). The command
+  line is parsed with `clap`: `rick [<path>…]` opens each folder as a tab
+  of the most recently focused window (the working directory without
+  any), `rick reveal <file>…` opens the files' folders and selects the
+  files once listed, `--new-window` puts them in a window of their own,
+  `--config-dir <dir>` runs another install, and paths resolve against
+  the caller's working directory; plugins declare subcommands in their
+  manifest (`[[commands]]` in `plugin.toml`) and register an
+  `ext::CliCommand` the running instance dispatches to, `rick install
+  <archive>` of the tarball installer being the first, and `--help` lists
+  core and plugin commands; a bare word that names nothing is an unknown
+  command answered with the help and exit 2 (#108). The window a path
+  opened in is raised through the platform — `xdg_activation_v1` with the
+  launcher's token on Wayland, `_NET_ACTIVE_WINDOW` on X11,
+  `NSApp.activate` on macOS, `SetForegroundWindow` after the launch's
+  `AllowSetForegroundWindow` on Windows (#114). `rick:///<path>` opens an
+  existing folder, reveals an existing file and is an error toast
+  otherwise; the desktop entry (`%U`, `x-scheme-handler/rick`) and
+  `Info.plist` (`CFBundleURLTypes`) register the scheme (#115). The
+  embedded console reports its working directory through OSC 7 (the
+  session tells the shells a VTE version so they do) and the tab it was
+  opened from follows it; the tab's navigation types `cd` into the
+  console while the shell is at its prompt (Linux and macOS can tell; a
+  Windows pseudo console cannot, so nothing is typed there); the tarball
+  installer's `path.sh` defines a `rick` function for login shells that
+  lack `~/.local/bin` on their PATH (#116). Questions 264–267 (#117).
 - SVG and SVGZ previews in `ext-preview-image` (issue 83, SPEC.md *Vector
   images*): claimed by the `svg` root element, or the gzip magic with the
   `.svgz` name, never by the extension alone; rasterised with `resvg` at
