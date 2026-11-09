@@ -31,6 +31,8 @@ const FILTER_FIELD: egui::Vec2 = egui::vec2(200.0, FOOTER_CONTROL);
 const FIELD_PAD: f32 = 8.0;
 /// The include-subfolders toggle inside the field's right end.
 const FIELD_TOGGLE: f32 = 22.0;
+/// The horizontal padding inside the path field (SPEC.md *Path bar*).
+const PATH_FIELD_PAD: i8 = 10;
 
 /// Draws the whole tab.
 pub fn show(ui: &mut egui::Ui, cx: &mut PaneCx<'_>) {
@@ -641,22 +643,44 @@ fn path_bar(ui: &mut egui::Ui, cx: &mut PaneCx<'_>, rect: egui::Rect) {
     breadcrumb(ui, cx, rect);
 }
 
-/// The breadcrumb as an editable text field: the control height of Back
-/// and Forward, on their line, the breadcrumb's whole width (SPEC.md
-/// *Path bar*; issue 79 item 5).
+/// The breadcrumb as an editable text field (SPEC.md *Path bar*,
+/// *Editing*): the control height of Back and Forward, on their line, the
+/// breadcrumb's whole width; `bg/control` with a 1 px `accent/focus` ring
+/// and `radius/control` corners, the path in 13 px `text/primary`, the
+/// whole path selected on entry so typing replaces it. Enter navigates;
+/// Escape, and losing the focus, restore the breadcrumb unchanged.
 fn path_edit(ui: &mut egui::Ui, cx: &mut PaneCx<'_>, rect: egui::Rect) {
     remember(cx, "middle", rect);
     let height = button_size(ui);
+    let scheme = theme::scheme(ui);
+    let radius = theme::metrics(ui.ctx()).corner_radius();
     let Some(text) = cx.tab_ui.path_edit.as_mut() else {
         return;
     };
+    let frame = egui::Frame::new()
+        .inner_margin(egui::Margin::symmetric(PATH_FIELD_PAD, 0))
+        .fill(scheme.bg_control)
+        .stroke(egui::Stroke::new(1.0, scheme.accent_focus))
+        .corner_radius(radius);
     let output = egui::TextEdit::singleline(text)
+        .frame(frame)
         .desired_width(rect.width())
         .min_size(egui::vec2(rect.width(), height))
         .vertical_align(Align::Center)
+        .font(egui::TextStyle::Body)
+        .text_color(scheme.text_primary)
         .show(ui);
     if cx.tab_ui.focus_path {
         output.response.request_focus();
+        let end = text.chars().count();
+        let mut state = output.state;
+        state
+            .cursor
+            .set_char_range(Some(egui::text::CCursorRange::two(
+                egui::text::CCursor::new(0),
+                egui::text::CCursor::new(end),
+            )));
+        state.store(ui.ctx(), output.response.id);
         cx.tab_ui.focus_path = false;
     }
     let enter = output.response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
