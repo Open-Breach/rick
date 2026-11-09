@@ -43,6 +43,7 @@ pub mod icons;
 pub mod inline;
 pub mod inspector;
 pub mod keys;
+pub mod licences;
 pub mod menus;
 pub mod operations;
 pub mod overview;

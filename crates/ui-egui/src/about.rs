@@ -26,6 +26,7 @@ use percent_encoding::{NON_ALPHANUMERIC, utf8_percent_encode};
 use serde::{Deserialize, Deserializer};
 
 use crate::keys::Intent;
+use crate::licences::{self, LicencesPage};
 use crate::shell::Request;
 use crate::{icons, theme, widgets};
 
@@ -41,7 +42,7 @@ const CARD_RADIUS: u8 = 10;
 /// The round close and back buttons.
 const ROUND_BUTTON: f32 = 28.0;
 /// The title bar: 14 above the round button.
-const TITLE_BAR: f32 = 42.0;
+pub(crate) const TITLE_BAR: f32 = 42.0;
 /// The symbol in the hero.
 const SYMBOL: f32 = 96.0;
 /// The body's side padding.
@@ -66,6 +67,8 @@ pub const REPOSITORY: &str = env!("CARGO_PKG_REPOSITORY");
 const NEW_ISSUE: &str = "https://github.com/Open-Breach/rick/issues/new";
 /// The generated component list's name, beside the binary.
 pub const THIRD_PARTY_FILE: &str = "third-party.json";
+/// A plugin's own component list, beside its library.
+pub const PLUGIN_LICENCES_FILE: &str = "licenses.json";
 /// The changelog and the licence, embedded at build time.
 const CHANGELOG: &str = include_str!("../../../CHANGELOG.md");
 const LICENSE: &str = include_str!("../../../LICENSE");
@@ -100,6 +103,50 @@ pub struct Build {
     /// The crates of `third-party.json`, `None` in a build without the
     /// file.
     pub third_party: Option<Vec<Component>>,
+    /// The entries of the `licenses.json` files of the plugins loaded from
+    /// outside the release's `plugins/` folder, one list per plugin.
+    pub plugin_licences: Vec<PluginLicences>,
+}
+
+/// The third-party components a plugin brought along in a `licenses.json`
+/// beside its library (the shape of the generated file).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PluginLicences {
+    /// The plugin's name, the section's title.
+    pub name: String,
+    /// Its entries.
+    pub components: Vec<Component>,
+}
+
+/// The `licenses.json` of every plugin loaded from outside `plugins_dir`
+/// (a plugin from the release's own folder is covered by the generated
+/// list); a plugin without the file, or with one that does not parse
+/// (which is logged), contributes nothing.
+#[must_use]
+pub fn load_plugin_licences(plugins: &[Plugin], plugins_dir: Option<&Path>) -> Vec<PluginLicences> {
+    plugins
+        .iter()
+        .filter(|plugin| plugins_dir.is_some_and(|dir| !plugin.path.starts_with(dir)))
+        .filter_map(|plugin| {
+            let path = plugin.path.join(PLUGIN_LICENCES_FILE);
+            let text = std::fs::read_to_string(&path).ok()?;
+            match serde_json::from_str::<Vec<Component>>(&text) {
+                Ok(components) if !components.is_empty() => Some(PluginLicences {
+                    name: if plugin.name.is_empty() {
+                        plugin.id.clone()
+                    } else {
+                        plugin.name.clone()
+                    },
+                    components,
+                }),
+                Ok(_) => None,
+                Err(error) => {
+                    tracing::warn!(path = %path.display(), %error, "a plugin's licenses.json did not parse");
+                    None
+                }
+            }
+        })
+        .collect()
 }
 
 /// One third-party component: a crate of the generated list, a bundled
@@ -459,12 +506,14 @@ fn role_of(name: &str, roles: &str) -> Option<String> {
 }
 
 /// Which page the dialog shows.
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[derive(Debug, Default)]
 enum Page {
     #[default]
     About,
     /// A read-only text: the changelog section or the licence.
     Text { title: String, text: String },
+    /// The Third-party licences page, with its filters and open row.
+    Licences(LicencesPage),
 }
 
 /// Where a click takes the dialog.
@@ -543,27 +592,37 @@ impl AboutDialog {
     pub fn text_page(&self) -> Option<&str> {
         match &self.page {
             Page::Text { title, .. } => Some(title),
-            Page::About => None,
+            Page::About | Page::Licences(_) => None,
         }
     }
 
+    /// The Third-party licences page, while it is open.
+    #[must_use]
+    pub fn licences_page(&self) -> Option<&LicencesPage> {
+        match &self.page {
+            Page::Licences(page) => Some(page),
+            Page::About | Page::Text { .. } => None,
+        }
+    }
+
+    /// The sections of the Third-party licences page: the bundled runtimes,
+    /// the crates when the generated list is there, the plugins' entries.
+    fn sections(&self) -> Vec<licences::Section<'_>> {
+        licences::sections(
+            &self.bundled,
+            self.build.third_party.as_deref(),
+            &self.build.plugin_licences,
+        )
+    }
+
     /// The number of third-party components the licence card counts: the
-    /// bundled runtimes and the crates of the generated list, each crate
-    /// once whatever the number of its licence texts; `None` in a build
-    /// without the generated list.
+    /// bundled runtimes, the crates of the generated list and the plugins'
+    /// entries, each once by name and version; `None` in a build without
+    /// the generated list.
     #[must_use]
     pub fn component_count(&self) -> Option<usize> {
-        let crates = self.build.third_party.as_ref()?;
-        let mut seen: std::collections::BTreeSet<(&str, &str)> = crates
-            .iter()
-            .map(|c| (c.name.as_str(), c.version.as_str()))
-            .collect();
-        seen.extend(
-            self.bundled
-                .iter()
-                .map(|c| (c.name.as_str(), c.version.as_str())),
-        );
-        Some(seen.len())
+        self.build.third_party.as_ref()?;
+        Some(licences::counts(&self.sections()).0)
     }
 
     /// The plugins the app found and how many of them came from outside
@@ -600,24 +659,39 @@ impl AboutDialog {
             .inner_margin(0);
         let mut asked = Asked::default();
         let plugins = app.plugins();
+        // The page is taken out for the frame: the licences page draws
+        // with its own state while the dialog's fields stay readable.
+        let mut page = std::mem::take(&mut self.page);
         let id = egui::Id::new("about-dialog");
         let modal = egui::Modal::new(id).frame(frame).show(ctx, |ui| {
             ui.set_width(WIDTH);
             ui.spacing_mut().item_spacing = vec2(0.0, 0.0);
-            match &self.page {
+            match &mut page {
                 Page::About => self.about_page(ui, plugins, &mut asked),
                 Page::Text { title, text } => text_page(ui, title, text, &mut asked),
+                Page::Licences(licences) => {
+                    title_bar(ui, Some(&t!("about-third-party-licences")), &mut asked);
+                    licences.show(
+                        ui,
+                        &self.sections(),
+                        self.build.third_party.is_some(),
+                        &self.build.version,
+                        app,
+                        requests,
+                    );
+                }
             }
             // Escape, read as the other dialogues read it: a text page
             // goes back, the About page closes.
             if asked.go.is_none() && ui.input(|i| i.key_pressed(egui::Key::Escape)) {
-                asked.go = Some(if self.page == Page::About {
+                asked.go = Some(if matches!(page, Page::About) {
                     Go::Close
                 } else {
                     Go::Back
                 });
             }
         });
+        self.page = page;
         if modal.backdrop_response.clicked() && asked.go.is_none() {
             asked.go = Some(Go::Close);
         }
@@ -762,7 +836,7 @@ impl AboutDialog {
             )
             .clicked()
             {
-                // The Third-party licences page follows (issue 101, item 9).
+                asked.text = Some(Page::Licences(LicencesPage::new()));
             }
             if card_row(
                 ui,
@@ -1189,7 +1263,7 @@ fn credit_row(ui: &mut egui::Ui, index: usize, count: usize, credit: &Credit) {
 }
 
 /// A URL without its scheme, as the link rows show it.
-fn short_url(url: &str) -> String {
+pub(crate) fn short_url(url: &str) -> String {
     url.trim_start_matches("https://")
         .trim_start_matches("http://")
         .trim_end_matches('/')
@@ -1248,6 +1322,7 @@ mod tests {
             roles: "# Contributors\n\n- Ada Lovelace — Analytical engines\n- Serge Berwert: everything\n",
             plugins_dir: Some(PathBuf::from("/opt/rick/plugins")),
             third_party: None,
+            plugin_licences: Vec::new(),
         }
     }
 
@@ -1417,9 +1492,60 @@ mod tests {
         assert_eq!(dialog.component_count(), None);
         dialog.set_build(Build {
             third_party: Some(list),
+            plugin_licences: vec![PluginLicences {
+                name: "Probe".to_owned(),
+                components: vec![Component {
+                    name: "probe-dep".to_owned(),
+                    version: "2.0.0".to_owned(),
+                    license: "ISC".to_owned(),
+                    copyright: Vec::new(),
+                    repository: String::new(),
+                    text: "ISC License".to_owned(),
+                }],
+            }],
             ..build()
         });
-        assert_eq!(dialog.component_count(), Some(2 + 8));
+        assert_eq!(dialog.component_count(), Some(2 + 8 + 1));
+    }
+
+    /// A plugin from outside the release's folder contributes the entries
+    /// of its licenses.json; one from inside, or without the file, none.
+    #[test]
+    fn plugins_from_outside_the_release_contribute_their_licences() {
+        let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+        let release = dir.path().join("plugins");
+        let user = dir.path().join("user");
+        let inside = release.join("git");
+        let outside = user.join("probe");
+        let bare = user.join("bare");
+        for path in [&inside, &outside, &bare] {
+            std::fs::create_dir_all(path).unwrap_or_else(|e| panic!("{e}"));
+        }
+        let json = r#"[{"name": "probe-dep", "version": "2.0.0", "license": "ISC", "copyright": "Someone", "repository": "https://example.org", "text": "ISC License"}]"#;
+        std::fs::write(inside.join(PLUGIN_LICENCES_FILE), json).unwrap_or_else(|e| panic!("{e}"));
+        std::fs::write(outside.join(PLUGIN_LICENCES_FILE), json).unwrap_or_else(|e| panic!("{e}"));
+        let plugin = |id: &str, name: &str, path: &Path| Plugin {
+            id: id.to_owned(),
+            name: name.to_owned(),
+            version: "1".to_owned(),
+            points: ext::Points::empty(),
+            previews: Vec::new(),
+            status: PluginStatus::Loaded,
+            path: path.to_path_buf(),
+        };
+        let plugins = vec![
+            plugin("git", "Git", &inside),
+            plugin("probe", "Probe", &outside),
+            plugin("bare", "", &bare),
+        ];
+        let found = load_plugin_licences(&plugins, Some(&release));
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].name, "Probe");
+        assert_eq!(found[0].components[0].name, "probe-dep");
+        assert_eq!(
+            load_plugin_licences(&plugins, None),
+            Vec::<PluginLicences>::new()
+        );
     }
 
     #[test]

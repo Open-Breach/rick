@@ -383,3 +383,17 @@ about-built-with = Built with egui and eframe, wgpu, pdfium, GStreamer and Phosp
 about-copyright = © 2026 Open-Breach contributors
 about-back = Back
 about-details-copied = Details copied
+
+about-search-components = Search { $count } components
+about-all-licences = All licences
+about-bundled-runtimes = Bundled runtimes
+about-rust-crates = Rust crates
+about-no-matches = No component matches
+about-licences-footer = Generated at build time from Cargo.lock by cargo-about · { $count } components, { $types } licence types
+about-licences-footer-partial = The crates' list is not available in this build · { $count } components, { $types } licence types
+about-export = Export…
+about-export-title = Export the third-party licences
+about-exported = Exported to { $path }
+about-export-failed = Could not export: { $error }
+about-export-header = Third-party licences of Rick { $version }
+about-export-generated = Generated at build time from Cargo.lock by cargo-about.
