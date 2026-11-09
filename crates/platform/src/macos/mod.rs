@@ -265,9 +265,7 @@ const MNT_RDONLY: u32 = 0x0000_0001;
 /// Whether the file system at `mount_point` is mounted read-only, from
 /// `statfs`'s flags.
 fn read_only_of(mount_point: &Path) -> bool {
-    rustix::fs::statfs(mount_point)
-        .ok()
-        .is_some_and(|stat| stat.f_flags & MNT_RDONLY != 0)
+    rustix::fs::statfs(mount_point).is_ok_and(|stat| stat.f_flags & MNT_RDONLY != 0)
 }
 
 /// The kind of a mounted volume: network by file system type, optical by
@@ -702,7 +700,7 @@ impl Chrome for Native {
 
 impl Activation for Native {
     /// The window made key and ordered front, then the application
-    /// activated over the others; on the main thread, where AppKit lives.
+    /// activated over the others; on the main thread, where `AppKit` lives.
     fn activate_window(&self, window: &WindowRef, _token: Option<&str>) -> Result<(), Error> {
         let mtm = objc2::MainThreadMarker::new()
             .ok_or(Error::Unsupported("windows are raised on the main thread"))?;

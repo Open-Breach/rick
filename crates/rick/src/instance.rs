@@ -267,6 +267,7 @@ pub fn apply(
 /// request goes to the application's thread through `externals`, and the
 /// reply comes back the same way. A connection that sends nothing within
 /// [`PATIENCE`] is dropped. Returns the task, to abort at exit.
+#[must_use]
 pub fn serve(mut listener: Listener, externals: ExternalSender) -> tokio::task::JoinHandle<()> {
     runtime::handle().spawn(async move {
         loop {
