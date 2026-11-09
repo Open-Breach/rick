@@ -359,6 +359,13 @@ fn run() -> anyhow::Result<ExitCode> {
     // reports nothing the UI would miss (its listing arrives through the
     // app's polling like the start location's), and a plugin command's
     // reply has nobody to print it, so it is logged.
+    let activated_by_bus = parsed == cli::Parsed::Service;
+    let show_in_folder_is_set_up = app
+        .model()
+        .settings
+        .integration
+        .record(platform::integration::Item::ShowInFolder)
+        .is_some_and(|record| record.state == model::ItemState::SetUp);
     let mut events = Vec::new();
     let reply = instance::apply(&mut app, &mut events, parsed, &cwd, None);
     if reply.status != 0 {
@@ -375,13 +382,28 @@ fn run() -> anyhow::Result<ExitCode> {
     // launch's command line runs on the UI thread between two frames.
     let (externals, receiver) = app::external_channel();
     let endpoint = listener.as_ref().map(|l| l.endpoint().clone());
-    let serving: Serving = Arc::new(Mutex::new(
-        listener.map(|listener| instance::serve(listener, externals.clone())),
-    ));
+    // "Show in folder" from other apps (specs/system-integration.md
+    // §7.1): the instance owns org.freedesktop.FileManager1 when the item
+    // is set up, when the bus itself started this launch, and from the
+    // moment a later launch says the bus is asking.
+    let bus: Bus = Arc::new(tokio::sync::Mutex::new(None));
+    let take_name: instance::OnService = {
+        let bus = Arc::clone(&bus);
+        let externals = externals.clone();
+        Arc::new(move || serve_bus(&bus, &externals))
+    };
+    if listener.is_some() && (activated_by_bus || show_in_folder_is_set_up) {
+        take_name();
+    }
+    let serving: Serving = Arc::new(Mutex::new(listener.map(|listener| {
+        instance::serve(listener, externals.clone(), Some(Arc::clone(&take_name)))
+    })));
     let relaunch = endpoint.clone().map(|endpoint| {
         relauncher(
             endpoint,
             Arc::clone(&serving),
+            Arc::clone(&bus),
+            take_name,
             externals,
             launch.config_dir.clone(),
         )
@@ -407,6 +429,33 @@ fn run() -> anyhow::Result<ExitCode> {
 /// is the instance.
 type Serving = Arc<Mutex<Option<tokio::task::JoinHandle<()>>>>;
 
+/// `org.freedesktop.FileManager1` on the session bus, while this process
+/// owns or waits for the name. Held while the name is being asked for,
+/// so two askers end with one connection.
+type Bus = Arc<tokio::sync::Mutex<Option<platform::file_manager::Service>>>;
+
+/// Takes `org.freedesktop.FileManager1` on the session bus, unless this
+/// process has it already; its calls run against the application like a
+/// second launch's command line. Without a session bus nothing is
+/// served, which is logged and no error: the rest of Rick does not need
+/// the bus.
+fn serve_bus(bus: &Bus, externals: &app::ExternalSender) {
+    let bus = Arc::clone(bus);
+    let on_call = instance::bus_calls(externals.clone());
+    runtime::handle().spawn(async move {
+        let mut slot = bus.lock().await;
+        if slot.is_some() {
+            return;
+        }
+        match platform::file_manager::serve(None, on_call).await {
+            Ok(service) => *slot = Some(service),
+            Err(error) => {
+                tracing::debug!(%error, "org.freedesktop.FileManager1 is not served");
+            }
+        }
+    });
+}
+
 /// What continues Rick from the copy it was installed to
 /// (specs/system-integration.md §6.1), by the single instance's rules:
 /// this process stops serving and frees the endpoint, starts the
@@ -416,6 +465,8 @@ type Serving = Arc<Mutex<Option<tokio::task::JoinHandle<()>>>>;
 fn relauncher(
     endpoint: platform::instance::Endpoint,
     serving: Serving,
+    bus: Bus,
+    take_name: instance::OnService,
     externals: app::ExternalSender,
     config_dir: Option<PathBuf>,
 ) -> ui_egui::Relaunch {
@@ -423,6 +474,8 @@ fn relauncher(
         let binary = binary.to_path_buf();
         let endpoint = endpoint.clone();
         let serving = Arc::clone(&serving);
+        let bus = Arc::clone(&bus);
+        let take_name = Arc::clone(&take_name);
         let externals = externals.clone();
         let mut args: Vec<OsString> = Vec::new();
         if let Some(dir) = &config_dir {
@@ -440,6 +493,9 @@ fn relauncher(
                 let _ = running.await;
             }
             endpoint.unbind();
+            // The bus name goes with the endpoint: the installed copy is
+            // the file manager from here on.
+            let had_name = bus.lock().await.take().is_some();
             let outcome =
                 instance::relaunch(&endpoint, &binary, &args, instance::RELAUNCH_PATIENCE).await;
             match outcome {
@@ -448,10 +504,18 @@ fn relauncher(
                 }
                 Err(error) => {
                     tracing::warn!(%error, binary = %binary.display(), "not relaunched");
+                    if had_name {
+                        take_name();
+                    }
                     match endpoint.bind().await {
                         Ok(listener) => {
-                            *serving.lock().unwrap_or_else(PoisonError::into_inner) =
-                                Some(instance::serve(listener, externals.clone()));
+                            *serving.lock().unwrap_or_else(PoisonError::into_inner) = Some(
+                                instance::serve(
+                                    listener,
+                                    externals.clone(),
+                                    Some(Arc::clone(&take_name)),
+                                ),
+                            );
                         }
                         Err(error) => {
                             tracing::warn!(%error, "the single-instance endpoint was not taken back");

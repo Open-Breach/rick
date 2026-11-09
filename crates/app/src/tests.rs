@@ -2004,6 +2004,7 @@ fn reveal_opens_the_folder_in_a_tab_and_selects_the_files_once_listed() {
     h.send(Command::Reveal {
         items: vec![local(&root.join("a.txt")), local(&root.join("c.txt"))],
         new_window: false,
+        properties: false,
     });
     h.settle();
     let focused = h.app.model().focused;
@@ -2030,6 +2031,7 @@ fn reveal_opens_the_folder_in_a_tab_and_selects_the_files_once_listed() {
     h.send(Command::Reveal {
         items: vec![local(&root.join("sub")), local(&root.join("nowhere"))],
         new_window: true,
+        properties: false,
     });
     h.settle();
     assert_eq!(h.app.model().windows().count(), windows + 1);
@@ -2051,6 +2053,63 @@ fn reveal_opens_the_folder_in_a_tab_and_selects_the_files_once_listed() {
             e,
             Event::Activate { window, token } if *window == h.app.model().focused_window && token.as_deref() == Some("token-1")
         )),
+        "{:?}",
+        h.events
+    );
+}
+
+/// `Command::Reveal` with `properties` (specs/system-integration.md §4,
+/// `ShowItemProperties`): the Properties dialogue opens on the file once
+/// it is listed and selected, and not before.
+#[test]
+fn reveal_with_properties_opens_properties_on_the_selected_file() {
+    let mut h = harness();
+    h.settle();
+    let root = h.root.path().to_path_buf();
+    h.send(Command::Reveal {
+        items: vec![local(&root.join("c.txt"))],
+        new_window: false,
+        properties: true,
+    });
+    assert!(
+        !h.events.iter().any(|e| matches!(e, Event::Properties(_))),
+        "nothing is listed yet"
+    );
+    h.settle();
+    let focused = h.app.model().focused;
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while !h.events.iter().any(|e| {
+        matches!(e, Event::Properties(info) if info.pane == focused && info.entry.name == "c.txt")
+    }) {
+        assert!(
+            Instant::now() < deadline,
+            "no Properties: {:?}",
+            h.events
+        );
+        h.settle();
+    }
+    let (_, tab) = h
+        .app
+        .model()
+        .active_tab(focused)
+        .unwrap_or_else(|| panic!("a focused tab"));
+    assert_eq!(tab.location, local(&root));
+    assert_eq!(
+        tab.selected().map(|e| e.name.as_str()).collect::<Vec<_>>(),
+        ["c.txt"]
+    );
+
+    // A name that is not there selects nothing and opens nothing.
+    h.events.clear();
+    h.send(Command::Reveal {
+        items: vec![local(&root.join("sub").join("nowhere"))],
+        new_window: false,
+        properties: true,
+    });
+    h.settle();
+    h.settle();
+    assert!(
+        !h.events.iter().any(|e| matches!(e, Event::Properties(_))),
         "{:?}",
         h.events
     );

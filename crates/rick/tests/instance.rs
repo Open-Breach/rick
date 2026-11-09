@@ -219,6 +219,7 @@ mod routed {
     use std::path::Path;
     use std::process::Command;
     use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::time::{Duration, Instant};
 
     use app::{App, Config, Event};
@@ -236,8 +237,14 @@ mod routed {
         dir: tempfile::TempDir,
         fake: Arc<Fake>,
         app: App,
+        /// What the session bus's calls are queued through, as a second
+        /// launch's are.
+        #[cfg(target_os = "linux")]
+        externals: app::ExternalSender,
         receiver: app::ExternalReceiver,
         events: Vec<Event>,
+        /// How often a launch handed `--dbus-service` over.
+        asked_for_the_bus: Arc<AtomicUsize>,
     }
 
     impl Instance {
@@ -263,15 +270,26 @@ mod routed {
             let endpoint = platform::Native::new().instance_endpoint(&config);
             let listener = endpoint.bind().await.unwrap_or_else(|e| panic!("{e}"));
             let (externals, receiver) = app::external_channel();
+            let asked_for_the_bus = Arc::new(AtomicUsize::new(0));
+            let asked = Arc::clone(&asked_for_the_bus);
             // Served for the test's lifetime; the runtime drops it with the
             // process.
-            let _serving = rick::instance::serve(listener, externals);
+            let _serving = rick::instance::serve(
+                listener,
+                externals.clone(),
+                Some(Arc::new(move || {
+                    asked.fetch_add(1, Ordering::SeqCst);
+                })),
+            );
             Self {
                 dir,
                 fake,
                 app,
+                #[cfg(target_os = "linux")]
+                externals,
                 receiver,
                 events: Vec::new(),
+                asked_for_the_bus,
             }
         }
 
@@ -291,16 +309,21 @@ mod routed {
                 .env("RUST_LOG", "warn")
                 .env_remove("XDG_ACTIVATION_TOKEN")
                 .env_remove("DESKTOP_STARTUP_ID");
-            let launched = tokio::task::spawn_blocking(move || command.output());
+            self.run(command).await
+        }
+
+        /// Runs `command` to its end while the app is driven.
+        async fn run(&mut self, mut command: Command) -> std::process::Output {
+            let running = tokio::task::spawn_blocking(move || command.output());
             let deadline = Instant::now() + Duration::from_secs(20);
             loop {
                 self.drive().await;
-                if launched.is_finished() {
+                if running.is_finished() {
                     break;
                 }
-                assert!(Instant::now() < deadline, "the launch did not end");
+                assert!(Instant::now() < deadline, "the process did not end");
             }
-            launched
+            running
                 .await
                 .unwrap_or_else(|e| panic!("{e}"))
                 .unwrap_or_else(|e| panic!("{e}"))
@@ -405,5 +428,525 @@ mod routed {
                 "one tab in the new window"
             );
         });
+    }
+
+    #[test]
+    fn a_launch_for_the_bus_opens_nothing_and_tells_the_instance() {
+        /// The focused pane's tab and where it is.
+        fn focused(app: &App) -> Option<(model::TabId, Location)> {
+            app.model()
+                .active_tab(app.model().focused)
+                .map(|(id, tab)| (id, tab.location.clone()))
+        }
+        runtime::block_on(async {
+            let mut instance = Instance::start().await;
+            let before = focused(&instance.app);
+            let windows = instance.app.model().windows().count();
+            let out = instance
+                .launch(&[platform::file_manager::SERVICE_ARGUMENT])
+                .await;
+            assert!(
+                out.status.success(),
+                "{}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+            assert_eq!(String::from_utf8_lossy(&out.stdout), "");
+            // The instance was told the bus is asking for it, once…
+            assert_eq!(instance.asked_for_the_bus.load(Ordering::SeqCst), 1);
+            // …and nothing was opened for the launch: no tab of the
+            // working directory, no window, nothing raised.
+            for _ in 0..5 {
+                instance.drive().await;
+            }
+            assert_eq!(instance.app.model().windows().count(), windows);
+            assert_eq!(focused(&instance.app), before);
+            assert!(
+                !instance
+                    .events
+                    .iter()
+                    .any(|e| matches!(e, Event::Activate { .. })),
+                "{:?}",
+                instance.events
+            );
+        });
+    }
+
+    /// *"Show in folder" from other apps* (specs/system-integration.md
+    /// §7.1, issue 120): the calls of `org.freedesktop.FileManager1`,
+    /// made with `gdbus` as another application makes them, against a
+    /// session bus of the test's own — a `dbus-daemon` on a socket in the
+    /// test's directory, with that directory as its home, so neither the
+    /// user's bus nor a file of theirs is touched. Where `dbus-daemon` or
+    /// `gdbus` is not installed the tests say so and pass; Linux CI
+    /// requires both (`RICK_REQUIRE_GDBUS`).
+    #[cfg(target_os = "linux")]
+    mod bus {
+        use std::path::{Path, PathBuf};
+        use std::process::{Child, Command, Stdio};
+        use std::sync::{Arc, Mutex, PoisonError};
+        use std::time::{Duration, Instant};
+
+        use app::Event;
+        use platform::Integration as _;
+        use platform::file_manager::{
+            BUS_NAME, Call, OBJECT_PATH, SERVICE_ARGUMENT, Service, Show,
+        };
+        use platform::integration::{Actual, Item, Receipt, Request, Scope};
+
+        use super::{Instance, location};
+
+        /// Whether `name` is a program on the `PATH`.
+        fn installed(name: &str) -> bool {
+            std::env::var_os("PATH").is_some_and(|path| {
+                std::env::split_paths(&path).any(|dir| dir.join(name).is_file())
+            })
+        }
+
+        /// Whether the bus daemon and `gdbus` are here; a note where they
+        /// are not, and a failure where they are required.
+        fn tools() -> bool {
+            let missing: Vec<&str> = ["dbus-daemon", "gdbus"]
+                .into_iter()
+                .filter(|name| !installed(name))
+                .collect();
+            if missing.is_empty() {
+                return true;
+            }
+            assert!(
+                std::env::var_os("RICK_REQUIRE_GDBUS").is_none(),
+                "{missing:?} required here and not installed"
+            );
+            eprintln!("{missing:?} not installed; skipping");
+            false
+        }
+
+        /// A session bus of the test's own.
+        struct Bus {
+            daemon: Child,
+            address: String,
+        }
+
+        impl Bus {
+            /// Starts the daemon on a socket in `dir`, with `dir` as its
+            /// home; it starts the services whose files are in
+            /// `services`, in that same environment.
+            fn start(dir: &Path, services: Option<&Path>) -> Self {
+                let socket = dir.join("bus");
+                let servicedir = services.map_or_else(String::new, |services| {
+                    format!("<servicedir>{}</servicedir>", services.display())
+                });
+                let config = dir.join("bus.conf");
+                std::fs::write(
+                    &config,
+                    format!(
+                        "<!DOCTYPE busconfig PUBLIC \"-//freedesktop//DTD D-Bus Bus Configuration \
+                         1.0//EN\" \"http://www.freedesktop.org/standards/dbus/1.0/busconfig.dtd\">\n\
+                         <busconfig>\n<type>session</type>\n\
+                         <listen>unix:path={}</listen>\n{servicedir}\n\
+                         <policy context=\"default\">\n\
+                         <allow send_destination=\"*\" eavesdrop=\"true\"/>\n\
+                         <allow eavesdrop=\"true\"/>\n<allow own=\"*\"/>\n</policy>\n\
+                         </busconfig>\n",
+                        socket.display()
+                    ),
+                )
+                .unwrap_or_else(|e| panic!("{e}"));
+                let home = dir.join("bus-home");
+                for sub in ["data", "config", "run"] {
+                    std::fs::create_dir_all(home.join(sub)).unwrap_or_else(|e| panic!("{e}"));
+                }
+                let daemon = Command::new("dbus-daemon")
+                    .arg(format!("--config-file={}", config.display()))
+                    .arg("--nofork")
+                    .env("HOME", &home)
+                    .env("XDG_DATA_HOME", home.join("data"))
+                    .env("XDG_CONFIG_HOME", home.join("config"))
+                    .env("XDG_RUNTIME_DIR", home.join("run"))
+                    .env_remove("DBUS_SESSION_BUS_ADDRESS")
+                    .stdin(Stdio::null())
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::null())
+                    .spawn()
+                    .unwrap_or_else(|e| panic!("dbus-daemon: {e}"));
+                let deadline = Instant::now() + Duration::from_secs(10);
+                while std::os::unix::net::UnixStream::connect(&socket).is_err() {
+                    assert!(Instant::now() < deadline, "the bus did not come up");
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+                Self {
+                    daemon,
+                    address: format!("unix:path={}", socket.display()),
+                }
+            }
+
+            /// The acceptance line's call, word for word but for the
+            /// method and the files: `gdbus call --session --dest
+            /// org.freedesktop.FileManager1 --object-path
+            /// /org/freedesktop/FileManager1 --method
+            /// org.freedesktop.FileManager1.<method> "['file:///…']"
+            /// "<startup id>"`, the session being this bus.
+            fn call(&self, method: &str, files: &[PathBuf], startup_id: &str) -> Command {
+                let uris: Vec<String> = files
+                    .iter()
+                    .map(|file| format!("'{}'", platform::paths::file_uri(file)))
+                    .collect();
+                let mut command = Command::new("gdbus");
+                command
+                    .args(["call", "--session", "--dest", BUS_NAME])
+                    .args(["--object-path", OBJECT_PATH, "--method"])
+                    .arg(format!("{BUS_NAME}.{method}"))
+                    .arg(format!("[{}]", uris.join(", ")))
+                    .arg(startup_id)
+                    .env("DBUS_SESSION_BUS_ADDRESS", &self.address);
+                command
+            }
+        }
+
+        impl Bus {
+            /// The connection that owns the file manager's name now, as
+            /// the bus names it; `None` while nobody does.
+            fn owner(&self) -> Option<String> {
+                let out = Command::new("gdbus")
+                    .args(["call", "--session", "--dest", "org.freedesktop.DBus"])
+                    .args(["--object-path", "/org/freedesktop/DBus", "--method"])
+                    .args(["org.freedesktop.DBus.GetNameOwner", BUS_NAME])
+                    .env("DBUS_SESSION_BUS_ADDRESS", &self.address)
+                    .output()
+                    .unwrap_or_else(|e| panic!("gdbus: {e}"));
+                out.status
+                    .success()
+                    .then(|| String::from_utf8_lossy(&out.stdout).trim().to_owned())
+            }
+        }
+
+        impl Drop for Bus {
+            fn drop(&mut self) {
+                let _ = self.daemon.kill();
+                let _ = self.daemon.wait();
+            }
+        }
+
+        /// The instance takes the name on `bus`, as the running Rick
+        /// does: the calls go to the application the way a second
+        /// launch's command line does.
+        async fn serve(instance: &Instance, bus: &Bus) -> Service {
+            platform::file_manager::serve(
+                Some(&bus.address),
+                rick::instance::bus_calls(instance.externals.clone()),
+            )
+            .await
+            .unwrap_or_else(|e| panic!("{e}"))
+        }
+
+        /// Waits for `folder` as the focused pane's tab with exactly
+        /// `names` selected.
+        async fn shown(instance: &mut Instance, folder: &Path, names: &[&str]) {
+            let folder = location(folder);
+            instance
+                .wait_for("the folder's tab with the selection", |app| {
+                    app.model()
+                        .active_tab(app.model().focused)
+                        .is_some_and(|(_, tab)| {
+                            tab.location == folder
+                                && tab.selected().map(|e| e.name.as_str()).collect::<Vec<_>>()
+                                    == names
+                        })
+                })
+                .await;
+        }
+
+        fn succeeded(out: &std::process::Output) {
+            assert!(
+                out.status.success(),
+                "{}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+        }
+
+        #[test]
+        fn show_items_opens_the_folder_with_the_item_selected() {
+            if !tools() {
+                return;
+            }
+            runtime::block_on(async {
+                let mut instance = Instance::start().await;
+                let bus = Bus::start(instance.dir.path(), None);
+                let _service = serve(&instance, &bus).await;
+                let windows = instance.app.model().windows().count();
+                let folder = instance.dir.path().join("folder");
+                let out = instance
+                    .run(bus.call("ShowItems", &[folder.join("b.txt")], ""))
+                    .await;
+                succeeded(&out);
+                shown(&mut instance, &folder, &["b.txt"]).await;
+                assert_eq!(instance.app.model().windows().count(), windows);
+                // The window comes forward; the caller gave no startup id.
+                assert!(
+                    instance.events.iter().any(|e| matches!(
+                        e,
+                        Event::Activate { window, token: None }
+                            if *window == instance.app.model().focused_window
+                    )),
+                    "{:?}",
+                    instance.events
+                );
+            });
+        }
+
+        #[test]
+        fn show_folders_opens_each_folder_and_the_startup_id_is_the_activation_token() {
+            if !tools() {
+                return;
+            }
+            runtime::block_on(async {
+                let mut instance = Instance::start().await;
+                let bus = Bus::start(instance.dir.path(), None);
+                let _service = serve(&instance, &bus).await;
+                let folder = instance.dir.path().join("folder");
+                let out = instance
+                    .run(bus.call("ShowFolders", std::slice::from_ref(&folder), "token-7"))
+                    .await;
+                succeeded(&out);
+                // The folder itself, nothing selected in it.
+                shown(&mut instance, &folder, &[]).await;
+                assert!(
+                    instance.events.iter().any(|e| matches!(
+                        e,
+                        Event::Activate { token: Some(token), .. } if token == "token-7"
+                    )),
+                    "{:?}",
+                    instance.events
+                );
+            });
+        }
+
+        #[test]
+        fn show_item_properties_selects_the_item_and_opens_properties() {
+            if !tools() {
+                return;
+            }
+            runtime::block_on(async {
+                let mut instance = Instance::start().await;
+                let bus = Bus::start(instance.dir.path(), None);
+                let _service = serve(&instance, &bus).await;
+                let folder = instance.dir.path().join("folder");
+                let out = instance
+                    .run(bus.call("ShowItemProperties", &[folder.join("c.txt")], ""))
+                    .await;
+                succeeded(&out);
+                shown(&mut instance, &folder, &["c.txt"]).await;
+                let deadline = Instant::now() + Duration::from_secs(20);
+                while !instance
+                    .events
+                    .iter()
+                    .any(|e| matches!(e, Event::Properties(info) if info.entry.name == "c.txt"))
+                {
+                    assert!(
+                        Instant::now() < deadline,
+                        "no Properties: {:?}",
+                        instance.events
+                    );
+                    instance.drive().await;
+                }
+            });
+        }
+
+        /// Rick neither takes the name from a file manager that has it nor
+        /// gives up: it waits, and the calls are its own once the other
+        /// lets go.
+        #[test]
+        fn behind_another_file_manager_rick_waits_for_the_name() {
+            if !tools() {
+                return;
+            }
+            runtime::block_on(async {
+                let mut instance = Instance::start().await;
+                let bus = Bus::start(instance.dir.path(), None);
+                let others: Arc<Mutex<Vec<Call>>> = Arc::default();
+                let seen = Arc::clone(&others);
+                let other = platform::file_manager::serve(
+                    Some(&bus.address),
+                    Arc::new(move |call| {
+                        seen.lock()
+                            .unwrap_or_else(PoisonError::into_inner)
+                            .push(call);
+                    }),
+                )
+                .await
+                .unwrap_or_else(|e| panic!("{e}"));
+                let _service = serve(&instance, &bus).await;
+                let folder = instance.dir.path().join("folder");
+
+                // The first owner answers while it is there…
+                let out = instance
+                    .run(bus.call("ShowItems", &[folder.join("a.txt")], ""))
+                    .await;
+                succeeded(&out);
+                let taken: Vec<Call> = others
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .clone();
+                assert_eq!(
+                    taken,
+                    [Call {
+                        show: Show::Items,
+                        uris: vec![platform::paths::file_uri(&folder.join("a.txt"))],
+                        startup_id: String::new(),
+                    }]
+                );
+                assert!(
+                    !instance
+                        .events
+                        .iter()
+                        .any(|e| matches!(e, Event::Activate { .. })),
+                    "the call was the other file manager's"
+                );
+
+                // …and once it is gone the name is Rick's.
+                let first = bus.owner();
+                assert!(first.is_some(), "the other file manager owns the name");
+                drop(other);
+                let deadline = Instant::now() + Duration::from_secs(20);
+                loop {
+                    let owner = bus.owner();
+                    if owner.is_some() && owner != first {
+                        break;
+                    }
+                    assert!(Instant::now() < deadline, "the name did not pass on");
+                    instance.drive().await;
+                }
+                let out = instance
+                    .run(bus.call("ShowItems", &[folder.join("b.txt")], ""))
+                    .await;
+                succeeded(&out);
+                shown(&mut instance, &folder, &["b.txt"]).await;
+            });
+        }
+
+        /// A desktop's settings nobody asks in these tests.
+        struct NoSettings;
+
+        impl platform::Gsettings for NoSettings {
+            fn get(&self, _schema: &str, _key: &str) -> Result<String, types::Error> {
+                Err(types::Error::Unsupported(
+                    "no desktop settings in this test",
+                ))
+            }
+
+            fn set(&self, _schema: &str, _key: &str, _value: &str) -> Result<(), types::Error> {
+                Ok(())
+            }
+        }
+
+        /// The second half of the acceptance line: *with Rick not
+        /// running, the same call starts it*. The activation file is the
+        /// one the integration item writes, into a home of the test's
+        /// own; the bus reads that home's services, finds nobody owning
+        /// the name and starts what the file names. No window can open
+        /// here, so the file names a stand-in that records how it was
+        /// started; the test then does what the started Rick does with
+        /// `--dbus-service` — takes the name — and the call that started
+        /// it is answered like any other.
+        #[test]
+        fn the_same_call_starts_rick_through_the_activation_file() {
+            if !tools() {
+                return;
+            }
+            runtime::block_on(async {
+                let mut instance = Instance::start().await;
+                let dir = instance.dir.path().to_path_buf();
+                let record = dir.join("started-with");
+                let stand_in = dir.join("rick-stand-in");
+                std::fs::write(
+                    &stand_in,
+                    format!(
+                        "#!/bin/sh\nprintf '%s\\n' \"$@\" > '{}'\n",
+                        record.display()
+                    ),
+                )
+                .unwrap_or_else(|e| panic!("{e}"));
+                std::fs::set_permissions(
+                    &stand_in,
+                    std::os::unix::fs::PermissionsExt::from_mode(0o755),
+                )
+                .unwrap_or_else(|e| panic!("{e}"));
+
+                // The bus is up before the item is set up, as a session's
+                // is, and the folder of the user's services is not there
+                // yet.
+                let home = dir.join("item-home");
+                std::fs::create_dir_all(&home).unwrap_or_else(|e| panic!("{e}"));
+                let bus = Bus::start(&dir, Some(&home.join(".local/share/dbus-1/services")));
+
+                // The item, set up in a home of the test's own, on this
+                // bus, which is asked to read its services again
+                // (`dbus-broker` needs that; `dbus-daemon` also looks by
+                // itself when a name has no owner).
+                let mut env = platform::LinuxEnv::under(&home, &stand_in, "GNOME");
+                env.session_bus = Some(bus.address.clone());
+                env.path = std::env::var_os("PATH")
+                    .map(|path| std::env::split_paths(&path).collect())
+                    .unwrap_or_default();
+                let integration = platform::LinuxIntegration::new(env, Arc::new(NoSettings));
+                let request = Request {
+                    scope: Scope::User,
+                    binary: Some(stand_in.clone()),
+                    receipt: Receipt::default(),
+                    replace: false,
+                };
+                let receipt = integration
+                    .perform_integration(Item::ShowInFolder, &request)
+                    .unwrap_or_else(|e| panic!("{e}"));
+                assert_eq!(
+                    receipt.files,
+                    ["~/.local/share/dbus-1/services/org.freedesktop.FileManager1.service"]
+                );
+                assert_eq!(
+                    integration
+                        .check_integration(Item::ShowInFolder, &request)
+                        .actual,
+                    Actual::SetUp
+                );
+
+                // Nobody owns the name on this bus: the call starts what
+                // the file names, with the argument that opens no folder.
+                let folder = dir.join("folder");
+                let mut call = bus.call("ShowItems", &[folder.join("a.txt")], "");
+                let calling = tokio::task::spawn_blocking(move || call.output());
+                let deadline = Instant::now() + Duration::from_secs(20);
+                while !record.is_file() {
+                    assert!(Instant::now() < deadline, "the bus started nothing");
+                    assert!(
+                        !calling.is_finished(),
+                        "the call ended before Rick was started"
+                    );
+                    instance.drive().await;
+                }
+                let started_with = loop {
+                    // The stand-in may still be writing.
+                    let text = std::fs::read_to_string(&record).unwrap_or_default();
+                    if text.ends_with('\n') {
+                        break text;
+                    }
+                    assert!(Instant::now() < deadline, "the stand-in wrote nothing");
+                    instance.drive().await;
+                };
+                assert_eq!(started_with, format!("{SERVICE_ARGUMENT}\n"));
+
+                // The started Rick takes the name, and the call that
+                // started it reaches it.
+                let _service = serve(&instance, &bus).await;
+                while !calling.is_finished() {
+                    assert!(Instant::now() < deadline, "the call was not answered");
+                    instance.drive().await;
+                }
+                let out = calling
+                    .await
+                    .unwrap_or_else(|e| panic!("{e}"))
+                    .unwrap_or_else(|e| panic!("{e}"));
+                succeeded(&out);
+                shown(&mut instance, &folder, &["a.txt"]).await;
+            });
+        }
     }
 }

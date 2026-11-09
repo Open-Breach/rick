@@ -227,15 +227,11 @@ impl Start {
 
 /// The three rows this file applies; the others are switched off until
 /// their own tests further down.
-const ROWS: [Item; 3] = [
+const ROWS: [Item; 4] = [
     Item::LauncherEntry,
     Item::DefaultFileManager,
-    Item::RickCommand,
-];
-const OTHERS: [Item; 3] = [
-    Item::InstallLocation,
     Item::ShowInFolder,
-    Item::DockFavourite,
+    Item::RickCommand,
 ];
 
 fn apply(start: &mut Start, perform: &[Item], decline: &[Item], replace: &[Item]) -> Vec<Event> {
@@ -338,45 +334,10 @@ fn on_a_desktop_outside_the_four_the_dock_row_is_unsupported() {
     );
 }
 
-/// *Apply* with the launcher entry, the default file manager and the
-/// `rick` command switched on leaves the desktop entry, the icons, the
-/// `mimeapps.list` defaults, the link and the shell function in place,
-/// each pointing at the Rick that runs, and on record in `rick.toml`;
-/// starting again shows no dialog.
-#[test]
-fn apply_leaves_the_launcher_the_defaults_and_the_command_in_place() {
-    let scratch = Scratch::new("XFCE");
-    let rick = scratch.env.exe.clone();
-    let home = scratch.env.home.clone();
-    let mut first = Start::new(&scratch);
-    assert_eq!(first.startup_check(), Some(true), "the dialog opens once");
-    assert_eq!(
-        first.asked(),
-        [
-            Item::LauncherEntry,
-            Item::DefaultFileManager,
-            Item::ShowInFolder,
-            Item::RickCommand
-        ],
-        "no installer plugin and no dock Rick knows: both unsupported, the rest missing"
-    );
-    assert_eq!(
-        first.status(Item::InstallLocation),
-        Some(ItemStatus::Unsupported(Reason::Plugin(
-            "Installer".to_owned()
-        )))
-    );
-    let events = apply(&mut first, &ROWS, &OTHERS[1..2], &[]);
-    assert!(
-        events
-            .iter()
-            .any(|e| matches!(e, Event::IntegrationApplied { failed, .. } if failed.is_empty())),
-        "{events:?}"
-    );
-    for item in ROWS {
-        assert_eq!(first.status(item), Some(ItemStatus::SetUp), "{item:?}");
-    }
-
+/// What the four rows leave in `home` for the Rick at `rick`: the
+/// launcher entry with its icons, the defaults, the activation file, the
+/// link and the shell function.
+fn assert_in_place(home: &Path, rick: &Path) {
     // The launcher entry starts this Rick and is a valid desktop entry.
     let entry = home.join(".local/share/applications/rick.desktop");
     let text = fs::read_to_string(&entry).unwrap_or_else(|e| panic!("{e}"));
@@ -407,10 +368,21 @@ fn apply_leaves_the_launcher_the_defaults_and_the_command_in_place() {
         fs::read_to_string(home.join(".config/mimeapps.list")).unwrap_or_default(),
         "[Default Applications]\ninode/directory=rick.desktop\nx-scheme-handler/rick=rick.desktop\n"
     );
+    // The activation file other apps' "Show in folder" starts Rick with.
+    assert_eq!(
+        fs::read_to_string(
+            home.join(".local/share/dbus-1/services/org.freedesktop.FileManager1.service")
+        )
+        .unwrap_or_default(),
+        format!(
+            "[D-BUS Service]\nName=org.freedesktop.FileManager1\nExec={} --dbus-service\n",
+            rick.display()
+        )
+    );
     // The command: the link, the function, the profile that sources it.
     assert_eq!(
         fs::read_link(home.join(".local/bin/rick")).ok(),
-        Some(rick.clone())
+        Some(rick.to_path_buf())
     );
     let path_sh = fs::read_to_string(home.join(".config/rick/path.sh")).unwrap_or_default();
     assert!(
@@ -422,11 +394,57 @@ fn apply_leaves_the_launcher_the_defaults_and_the_command_in_place() {
             .unwrap_or_default()
             .contains("path.sh")
     );
+}
+
+/// *Apply* with the launcher entry, the default file manager, "Show in
+/// folder" and the `rick` command switched on leaves the desktop entry,
+/// the icons, the `mimeapps.list` defaults, the D-Bus service file, the
+/// link and the shell function in place, each pointing at the Rick that
+/// runs, and on record in `rick.toml`; starting again shows no dialog.
+#[test]
+fn apply_leaves_the_launcher_the_defaults_and_the_command_in_place() {
+    let scratch = Scratch::new("XFCE");
+    let rick = scratch.env.exe.clone();
+    let home = scratch.env.home.clone();
+    let mut first = Start::new(&scratch);
+    assert_eq!(first.startup_check(), Some(true), "the dialog opens once");
+    assert_eq!(
+        first.asked(),
+        [
+            Item::LauncherEntry,
+            Item::DefaultFileManager,
+            Item::ShowInFolder,
+            Item::RickCommand
+        ],
+        "no installer plugin and no dock Rick knows: both unsupported, the rest missing"
+    );
+    assert_eq!(
+        first.status(Item::InstallLocation),
+        Some(ItemStatus::Unsupported(Reason::Plugin(
+            "Installer".to_owned()
+        )))
+    );
+    let events = apply(&mut first, &ROWS, &[], &[]);
+    assert!(
+        events
+            .iter()
+            .any(|e| matches!(e, Event::IntegrationApplied { failed, .. } if failed.is_empty())),
+        "{events:?}"
+    );
+    for item in ROWS {
+        assert_eq!(first.status(item), Some(ItemStatus::SetUp), "{item:?}");
+    }
+
+    assert_in_place(&home, &rick);
 
     // On record, each with what it wrote.
-    let text = first.exit(|text| text.contains("path.sh") && text.contains("declined"));
+    let text = first.exit(|text| text.contains("path.sh") && text.contains("dbus-1"));
     assert!(
         text.contains("[integration.items.launcher-entry]\nstate = \"set-up\""),
+        "{text}"
+    );
+    assert!(
+        text.contains("\"~/.local/share/dbus-1/services/org.freedesktop.FileManager1.service\""),
         "{text}"
     );
     assert!(
@@ -454,8 +472,8 @@ fn a_launcher_entry_removed_by_hand_is_drifted_until_restored() {
     let scratch = Scratch::new("XFCE");
     let mut first = Start::new(&scratch);
     first.startup_check();
-    apply(&mut first, &ROWS, &OTHERS[1..2], &[]);
-    first.exit(|text| text.contains("path.sh") && text.contains("declined"));
+    apply(&mut first, &ROWS, &[], &[]);
+    first.exit(|text| text.contains("path.sh") && text.contains("dbus-1"));
 
     let entry = scratch
         .env
@@ -611,9 +629,10 @@ fn what_apply_wrote_is_on_record_and_undo_removes_exactly_that() {
 /// A Rick unpacked from the archive into a scratch folder and started
 /// shows the dialog once; *Apply* with the rows on leaves Rick under
 /// `~/.local/opt/rick/<version>` with `current` pointing at it, and the
-/// launcher entry, the defaults and the `rick` link in place, each on the
-/// installed copy; the apply ends naming that copy to continue from, and
-/// the installed copy, started, shows no dialog.
+/// launcher entry, the defaults, the D-Bus service file and the `rick`
+/// link in place, each on the installed copy; the apply ends naming that
+/// copy to continue from, and the installed copy, started, shows no
+/// dialog.
 #[test]
 fn apply_with_the_install_row_leaves_rick_in_the_standard_location() {
     let version = env!("CARGO_PKG_VERSION");
@@ -630,9 +649,10 @@ fn apply_with_the_install_row_leaves_rick_in_the_standard_location() {
         Item::InstallLocation,
         Item::LauncherEntry,
         Item::DefaultFileManager,
+        Item::ShowInFolder,
         Item::RickCommand,
     ];
-    let events = apply(&mut first, &rows, &[Item::ShowInFolder], &[]);
+    let events = apply(&mut first, &rows, &[], &[]);
     let installed = home.join(".local/opt/rick/current/rick");
     assert!(
         events.iter().any(|e| matches!(
@@ -668,25 +688,7 @@ fn apply_with_the_install_row_leaves_rick_in_the_standard_location() {
     );
 
     // The other rows act on the installed copy, through `current`.
-    let entry = fs::read_to_string(home.join(".local/share/applications/rick.desktop"))
-        .unwrap_or_else(|e| panic!("{e}"));
-    assert!(
-        entry.contains(&format!("Exec=\"{}\" %U\n", installed.display())),
-        "{entry}"
-    );
-    assert_eq!(
-        fs::read_link(home.join(".local/bin/rick")).ok(),
-        Some(installed.clone())
-    );
-    assert!(
-        fs::read_to_string(home.join(".config/rick/path.sh"))
-            .unwrap_or_default()
-            .contains(&format!("rick() {{ \"{}\"", installed.display()))
-    );
-    assert_eq!(
-        fs::read_to_string(home.join(".config/mimeapps.list")).unwrap_or_default(),
-        "[Default Applications]\ninode/directory=rick.desktop\nx-scheme-handler/rick=rick.desktop\n"
-    );
+    assert_in_place(&home, &installed);
     // Until the relaunch, the copy stands for the running Rick.
     for item in rows {
         assert_eq!(first.status(item), Some(ItemStatus::SetUp), "{item:?}");
@@ -704,10 +706,6 @@ fn apply_with_the_install_row_leaves_rick_in_the_standard_location() {
     for item in rows {
         assert_eq!(second.status(item), Some(ItemStatus::SetUp), "{item:?}");
     }
-    assert_eq!(
-        second.status(Item::ShowInFolder),
-        Some(ItemStatus::Declined)
-    );
 }
 
 /// The installer plugin's command is the one the core asks for.

@@ -62,10 +62,17 @@ the scripted one; performing and undoing are there for the launcher entry
 (the packaged desktop entry with `Exec` naming this Rick, the icons,
 `update-desktop-database` and `gtk-update-icon-cache` when installed), the
 default file manager (the two keys of `mimeapps.list`, what they named
-before put back by the undo) and the `rick` command (the link, and the
+before put back by the undo), the `rick` command (the link, and the
 shell function as a marked block of `path.sh` and the fish drop-in, with
-the profile line that sources it); a file of another origin in an item's
-way is replaced only when the request says the user agreed) the `process` module that asks whether a console's shell has handed its
+the profile line that sources it) and *"Show in folder"* (the activation
+file, which starts this Rick with `--dbus-service`, the session bus
+asked to read its services again); a file of another origin in an item's
+way is replaced only when the request says the user agreed), the
+`file_manager` module that serves `org.freedesktop.FileManager1` on the
+session bus and hands each call (`ShowItems`, `ShowFolders`,
+`ShowItemProperties`) to the caller's closure, waiting in the queue when
+another file manager owns the name (Linux, through `zbus`; `Unsupported`
+elsewhere), the `process` module that asks whether a console's shell has handed its
 terminal to a job (`/proc/<pid>/stat`, `proc_pidinfo`; Windows cannot say),
 and the `agent` module that opens the SSH
 agent's socket (`SSH_AUTH_SOCK`, or OpenSSH's named pipe on Windows),
@@ -82,4 +89,4 @@ allowed `unsafe` and `cfg(target_os)`. It depends on `types` and `runtime`;
 `vfs`, `vfs-local` and the crates above them may depend on it. It also uses
 `raw-window-handle`, `wayland-client` and `x11rb` on Linux, `objc2-app-kit`
 on macOS and the `windows` crate on Windows for the drag and drop halves the
-backend leaves to it.
+backend leaves to it, and `zbus` on Linux for the session bus.

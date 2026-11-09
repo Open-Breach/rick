@@ -18,7 +18,8 @@ panes through it;
 closing the last one asks the UI to exit. A second launch's command line
 reaches it through the external-work channel: `NewWindowAt` opens a
 window of its own, `Reveal` opens the files' folders as tabs and selects
-the files once listed, and `Activate` asks the UI to raise the focused
+the files once listed (and, asked to, opens Properties on them), and
+`Activate` asks the UI to raise the focused
 window with the launcher's token (`Event::Activate`). A console a
 tab opened follows that tab and the tab follows it: the shell's working
 directory (OSC 7, through `Console::cwd`) moves the explorer tab, and the

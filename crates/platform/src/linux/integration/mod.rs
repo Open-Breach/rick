@@ -60,6 +60,10 @@ pub struct LinuxEnv {
     pub exe: PathBuf,
     /// The directories of `$PATH`, where the desktop's tools are found.
     pub path: Vec<PathBuf>,
+    /// `$DBUS_SESSION_BUS_ADDRESS`: the bus that is told to read its
+    /// service files again after one was written. `None` without a bus,
+    /// and in a test.
+    pub session_bus: Option<String>,
 }
 
 impl LinuxEnv {
@@ -92,6 +96,9 @@ impl LinuxEnv {
             path: var("PATH")
                 .map(|path| std::env::split_paths(&path).collect())
                 .unwrap_or_default(),
+            session_bus: std::env::var("DBUS_SESSION_BUS_ADDRESS")
+                .ok()
+                .filter(|address| !address.is_empty()),
         }
     }
 
@@ -113,6 +120,7 @@ impl LinuxEnv {
             },
             exe: exe.to_path_buf(),
             path: Vec::new(),
+            session_bus: None,
         }
     }
 
@@ -412,7 +420,8 @@ impl Integration for LinuxIntegration {
             Item::LauncherEntry => launcher::perform(env, &binary, request),
             Item::DefaultFileManager => mime::perform(env, request),
             Item::RickCommand => command::perform(env, &binary, request),
-            Item::ShowInFolder | Item::DockFavourite => Err(Error::Unsupported(NOT_YET)),
+            Item::ShowInFolder => service::perform(env, &binary, request),
+            Item::DockFavourite => Err(Error::Unsupported(NOT_YET)),
         }
     }
 
@@ -423,7 +432,8 @@ impl Integration for LinuxIntegration {
             Item::LauncherEntry => launcher::undo(env, &request.receipt),
             Item::DefaultFileManager => mime::undo(env, &request.receipt),
             Item::RickCommand => command::undo(env, &request.receipt),
-            Item::ShowInFolder | Item::DockFavourite => Err(Error::Unsupported(NOT_YET)),
+            Item::ShowInFolder => service::undo(env, &request.receipt),
+            Item::DockFavourite => Err(Error::Unsupported(NOT_YET)),
         }
     }
 }

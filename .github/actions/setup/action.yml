@@ -100,6 +100,12 @@ runs:
         # installer writes; its tests fail rather than skip without it here.
         sudo apt-get install -y --no-install-recommends desktop-file-utils
         echo "RICK_REQUIRE_DESKTOP_FILE_VALIDATE=1" >> "$GITHUB_ENV"
+        # Issue 120: "Show in folder" from other apps is called with gdbus
+        # on a session bus of the test's own (crates/rick/tests/instance.rs);
+        # `dbus` above brings the daemon, this brings gdbus, and the tests
+        # fail rather than skip without either here.
+        sudo apt-get install -y --no-install-recommends libglib2.0-bin
+        echo "RICK_REQUIRE_GDBUS=1" >> "$GITHUB_ENV"
         # Issue 51: udisks2 with a polkit rule for the runner, so the real
         # mount of an ISO through `udisksctl loop-setup` runs
         # (crates/tests/tests/mount_linux.rs); where the daemon does not

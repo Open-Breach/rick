@@ -3480,3 +3480,47 @@ Once answered, an entry keeps its number and gains a dated decision line.
     shows *Rick could not be started from …*. Until the relaunch the
     installed copy stands for the running Rick in the checks, so the
     rows read *Set up*.
+
+297. (system integration, issue 120, 2026-11-09) §7.1: "The running
+    instance owns the name; activation starts Rick when it is not
+    running." Whether a Rick whose user switched the row off also takes
+    `org.freedesktop.FileManager1`, and with it "Show in folder" from the
+    desktop's own file manager while it runs, is not said.
+    Assumed: no. Rick asks for the name when the item is on record as
+    *set up* at its start, when the session bus itself started it, and
+    from the moment a later launch hands over the activation argument.
+    A row set up in a running Rick therefore takes effect at the first
+    call — the bus starts `rick --dbus-service`, that launch hands over
+    to the running instance, which takes the name and answers — or at
+    the next start. The check looks at the activation file only, never
+    at who owns the name.
+
+298. (system integration, issue 120, 2026-11-09) §7.1: "a service file
+    for D-Bus activation"; §4 lists the core command line and has
+    nothing the activation could run without opening the folder the bus
+    happens to start it in.
+    Assumed: one more flag, `rick --dbus-service`, which is what the
+    file's `Exec` runs. Started with it, Rick restores its session,
+    opens no tab for the working directory and takes the name; handed to
+    a running instance it opens nothing and makes that instance take the
+    name. `--help` lists it. After the file is written or removed Rick
+    asks the session bus to read its services again (`dbus-send …
+    ReloadConfig`, when there is a bus and the tool); a failure is
+    logged and the item is set up by the file all the same.
+
+299. (system integration, issue 120, 2026-11-09) §7.1: "The running
+    instance owns the name" — another file manager may own it already
+    when Rick starts.
+    Assumed: Rick does not take the name away and does not give up: it
+    waits in the bus's queue and has the name when the other lets go;
+    once it has the name it keeps it while it runs.
+
+300. (system integration, issue 120, 2026-11-09) §4: "`ShowItemProperties`
+    to open plus the Properties dialog". The call takes a list of
+    items; the Properties dialog shows one entry.
+    Assumed: every item is revealed and selected as for `ShowItems`, and
+    Properties opens on the first folder's selection once it is listed,
+    as the Properties command does for a selection of several. For all
+    three calls a URI that is not a `file://` path of this computer is
+    left out, and the caller's startup id is the activation token the
+    window is raised with.
