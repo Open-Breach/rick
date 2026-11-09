@@ -707,6 +707,13 @@ pub trait SystemFonts: Send + Sync {
     fn system_fonts(&self) -> Fonts;
 }
 
+/// The system's reduce-motion setting.
+pub trait Motion: Send + Sync {
+    /// Whether the user asked the system for less motion: Rick's loading
+    /// animations then stand still (SPEC.md *Loading animations*).
+    fn reduce_motion(&self) -> bool;
+}
+
 /// All platform services behind one object.
 pub trait Platform:
     Trash
@@ -727,6 +734,7 @@ pub trait Platform:
     + RecentlyUsed
     + Secrets
     + SystemFonts
+    + Motion
 {
 }
 
@@ -748,7 +756,8 @@ impl<
         + StandardFolders
         + RecentlyUsed
         + Secrets
-        + SystemFonts,
+        + SystemFonts
+        + Motion,
 > Platform for T
 {
 }

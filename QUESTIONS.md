@@ -2892,3 +2892,10 @@ Once answered, an entry keeps its number and gains a dated decision line.
     single source of defaults, has no F6 and no Dual pane row.
     Assumed: no Dual pane command until the table names it; Mod+Shift+R
     (Split right) stays the way to a second pane.
+
+249. (design refresh, 2026-11-09) The *Empty folder* frame's hint reads
+    "Drop files here, or press Ctrl+Shift+N for a new folder."; Rick spells
+    every shown shortcut in the table's text form, `Mod+Shift+N`, in menus
+    and tooltips alike. Assumed: the hint takes the key map's spelling like
+    the rest of the UI; a platform spelling (Ctrl, ⌘) for shown shortcuts
+    would be one change for all of them, not this hint's.

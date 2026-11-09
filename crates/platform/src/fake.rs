@@ -83,6 +83,9 @@ pub struct Fake {
     recent: Mutex<Vec<RecentItem>>,
     /// `list` answers `Unsupported`, as the macOS trash does.
     unlistable: Mutex<bool>,
+    /// What [`Motion::reduce_motion`](crate::traits::Motion) answers; off
+    /// unless a test turns it on.
+    reduce_motion: Mutex<bool>,
     /// The keychain: secrets by key.
     secrets: Mutex<std::collections::BTreeMap<String, String>>,
 }
@@ -138,6 +141,7 @@ impl Fake {
             mounted: Mutex::new(Vec::new()),
             recent: Mutex::new(Vec::new()),
             unlistable: Mutex::new(false),
+            reduce_motion: Mutex::new(false),
             secrets: Mutex::new(std::collections::BTreeMap::new()),
         })
     }
@@ -608,6 +612,25 @@ impl crate::traits::SystemFonts for Fake {
     /// what a user there sees; nothing where the machine names none.
     fn system_fonts(&self) -> crate::traits::Fonts {
         crate::fonts::system()
+    }
+}
+
+impl Fake {
+    /// Makes the fake report the system's reduce-motion setting as `on`.
+    pub fn set_reduce_motion(&self, on: bool) {
+        *self
+            .reduce_motion
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = on;
+    }
+}
+
+impl crate::traits::Motion for Fake {
+    fn reduce_motion(&self) -> bool {
+        *self
+            .reduce_motion
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
     }
 }
 

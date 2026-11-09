@@ -597,6 +597,167 @@ fn screenshots_of_the_panes() {
     }
 }
 
+/// Issue 60: the file list — the header band and the row states (a
+/// selection with the keyboard cursor in the focused pane, a selection in
+/// the other pane), the empty folder, and the portal burst at three
+/// moments of its loop — in Light and Dark at both densities.
+#[test]
+#[ignore = "needs a wgpu adapter; CI runs it and uploads the images"]
+fn screenshots_of_the_file_list() {
+    use egui_kittest::kittest::Queryable as _;
+    let (_dir, deep) = sample_tree();
+    let empty = deep.join("empty-folder");
+    fs::create_dir_all(&empty).unwrap_or_else(|e| panic!("{e}"));
+    // The `raw` folder gets pictures of its own for the right pane.
+    let raw = deep.join("raw");
+    for i in 0..5usize {
+        fs::write(
+            raw.join(format!("IMG_{:04}.jpg", 1200 + i)),
+            vec![0u8; 1200 + 300 * i],
+        )
+        .unwrap_or_else(|e| panic!("{e}"));
+    }
+    let mut harness = shell(&deep, egui::vec2(1920.0, 1000.0));
+    let pane = harness.state().app().model().focused;
+    harness.state_mut().app_mut().handle(
+        app::Command::Split {
+            pane,
+            dir: model::SplitDir::Right,
+        },
+        &mut Vec::new(),
+    );
+    settle(&mut harness);
+    let second = harness.state().app().model().focused;
+    harness.state_mut().app_mut().handle(
+        app::Command::Navigate {
+            pane: second,
+            to: local(&raw),
+        },
+        &mut Vec::new(),
+    );
+    settle(&mut harness);
+    step_until(&mut harness, Duration::from_secs(10), |h| {
+        h.state()
+            .app()
+            .model()
+            .active_tab(second)
+            .is_some_and(|(_, t)| t.rows().next().is_some())
+    });
+    // A selection in the right pane, then the focus and a selection with
+    // the cursor in the left one: blue there, grey in the other.
+    select_named(&mut harness, "IMG_1200.jpg");
+    harness
+        .state_mut()
+        .app_mut()
+        .handle(app::Command::FocusPane(pane), &mut Vec::new());
+    settle(&mut harness);
+    let row = harness.get_by_label("IMG_1201.png").rect().center();
+    harness.event(egui::Event::PointerMoved(row));
+    harness.step();
+    for pressed in [true, false] {
+        harness.event(egui::Event::PointerButton {
+            pos: row,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::default(),
+        });
+        harness.step();
+    }
+    harness.event(egui::Event::PointerMoved(egui::pos2(960.0, 30.0)));
+    settle(&mut harness);
+    for (theme, density) in [
+        (Theme::Light, Density::Comfortable),
+        (Theme::Light, Density::Compact),
+        (Theme::Dark, Density::Comfortable),
+        (Theme::Dark, Density::Compact),
+    ] {
+        for change in [
+            SettingsChange::Theme(theme),
+            SettingsChange::Density(density),
+        ] {
+            harness
+                .state_mut()
+                .app_mut()
+                .handle(app::Command::Settings(change), &mut Vec::new());
+        }
+        settle(&mut harness);
+        let theme_name = match theme {
+            Theme::Light => "light",
+            Theme::Dark => "dark",
+            Theme::System => "system",
+        };
+        let density_name = match density {
+            Density::Comfortable => "comfortable",
+            Density::Compact => "compact",
+        };
+        shoot(
+            &mut harness,
+            &format!("file-list-rows-{theme_name}-{density_name}"),
+        );
+    }
+    // The empty folder in the right pane.
+    harness.state_mut().app_mut().handle(
+        app::Command::Navigate {
+            pane: second,
+            to: local(&empty),
+        },
+        &mut Vec::new(),
+    );
+    settle(&mut harness);
+    for theme in [Theme::Light, Theme::Dark] {
+        harness.state_mut().app_mut().handle(
+            app::Command::Settings(SettingsChange::Theme(theme)),
+            &mut Vec::new(),
+        );
+        settle(&mut harness);
+        let theme_name = match theme {
+            Theme::Light => "light",
+            Theme::Dark => "dark",
+            Theme::System => "system",
+        };
+        shoot(&mut harness, &format!("file-list-empty-{theme_name}"));
+    }
+    // The portal burst on its own, at three moments of its loop.
+    for (theme, dark) in [("light", false), ("dark", true)] {
+        let scheme = if dark {
+            &ui_egui::theme::Scheme::DARK
+        } else {
+            &ui_egui::theme::Scheme::LIGHT
+        };
+        let mut portal = Harness::builder()
+            .with_size(egui::vec2(480.0, 160.0))
+            .with_pixels_per_point(2.0)
+            .build_ui(move |ui| {
+                let rect = ui.max_rect();
+                ui.painter().rect_filled(rect, 0.0, scheme.bg_pane);
+                for (i, time) in [0.0, 0.4, 0.8].into_iter().enumerate() {
+                    #[allow(clippy::cast_precision_loss)]
+                    let x = rect.left() + 80.0 + i as f32 * 160.0;
+                    ui_egui::portal::burst(
+                        ui.painter(),
+                        egui::pos2(x, rect.center().y),
+                        time,
+                        scheme.accent_focus,
+                        scheme.icon_default,
+                        false,
+                    );
+                }
+            });
+        // The glyphs come from the icon font, which the shell installs; a
+        // bare harness gets it here.
+        let fake = Fake::new().unwrap_or_else(|e| panic!("{e}"));
+        ui_egui::fonts::install(&portal.ctx, &platform::SystemFonts::system_fonts(&fake));
+        portal.step();
+        portal.step();
+        let image = portal
+            .render()
+            .unwrap_or_else(|e| panic!("no renderer for screenshots: {e}"));
+        let path = out_dir().join(format!("{}-portal-burst-{theme}.png", std::env::consts::OS));
+        image.save(&path).unwrap_or_else(|e| panic!("{e}"));
+        eprintln!("screenshot: {}", path.display());
+    }
+}
+
 /// Issue 17: the Preview tab docked below the explorer and torn out into a
 /// window of its own.
 #[test]

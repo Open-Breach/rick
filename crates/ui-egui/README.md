@@ -18,7 +18,7 @@ search box, the `egui_dock` tree of the shown workspace's split panes, whose
 divider positions it reports back for the session,
 each pane's toolbar (Back and Forward, the parent chip and breadcrumb, the view options menu with the per-type filter, the grab handle that docks the pane on another's dock tiles), path bar (breadcrumbs per provider: a `rick://` view's
 title, the folders above an archive as local segments and the archive and
-its contents on the archive provider), file list (details, tree, list or
+its contents on the archive provider), file list (the 34 px header band over the Name, Size, Type and Modified columns, rows with inset rounded hover and selection backgrounds and the cursor ring, the empty-folder message, the portal burst while a folder is read; details, tree, list or
 icon view, only the visible rows laid out, names edited in place for
 Rename, New file and New folder) and status line with the subtree-search
 toggle, the Preview tab (toolbar with the media transport and *Copy*, info
