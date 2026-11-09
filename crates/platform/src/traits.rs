@@ -10,6 +10,7 @@ use raw_window_handle::{RawDisplayHandle, RawWindowHandle};
 use types::Error;
 
 use crate::instance::Endpoint;
+use crate::integration::Integration;
 use crate::perms::Permissions;
 
 /// An entry in the trash, with enough to put it back.
@@ -784,6 +785,7 @@ pub trait Platform:
     + Motion
     + SingleInstance
     + Activation
+    + Integration
 {
 }
 
@@ -808,7 +810,8 @@ impl<
         + SystemFonts
         + Motion
         + SingleInstance
-        + Activation,
+        + Activation
+        + Integration,
 > Platform for T
 {
 }
