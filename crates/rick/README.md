@@ -31,10 +31,19 @@ standard location, the binary continues from that copy by the same rules
 (`instance::relaunch`): it stops serving and frees the endpoint, starts the
 installed binary on the same config directory, and exits once the new
 process answers as the instance; should nothing answer within twenty
-seconds it takes the endpoint back, stays and says so. It is the only crate that uses `anyhow`. Its second
+seconds it takes the endpoint back, stays and says so. On Linux the
+instance also answers *"Show in folder"* from other applications: it
+serves `org.freedesktop.FileManager1` on the session bus
+(`platform::file_manager`) when that integration item is set up, and each
+call runs like a second launch's command line (`instance::show`):
+`ShowItems` is `reveal`, `ShowFolders` opens the folders, and
+`ShowItemProperties` reveals and opens Properties. `rick --dbus-service`
+is what the item's activation file runs when nobody owns the name: the
+launch opens no folder of its own, and the instance, this one or the one
+it hands over to, takes the name. It is the only crate that uses `anyhow`. Its second
 binary, `rick-perms`, is the privileged helper: the one program Rick runs
 as the administrator, through the platform's prompt, to apply a permission
 change the user may not make by themselves (`platform::perms::helper`);
 the bundle lays it beside `rick`. It depends on `types`, `runtime`,
-`platform`, `vfs-local`, `app`, `ui-egui` and `plugins-native`; nothing
-depends on it.
+`platform`, `vfs-local`, `model`, `app`, `ui-egui` and `plugins-native`;
+nothing depends on it.

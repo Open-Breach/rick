@@ -41,6 +41,8 @@ wayland-client = { workspace = true }
 wayland-backend = { workspace = true }
 wayland-protocols = { workspace = true }
 x11rb = { workspace = true }
+# The session bus: `org.freedesktop.FileManager1` (`file_manager`).
+zbus = { workspace = true }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 libc = { workspace = true }

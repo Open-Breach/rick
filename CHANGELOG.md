@@ -352,7 +352,7 @@ the pull request that brought the change.
   switches the window to that workspace, where the pane can be docked; a
   dragged tab that holds one pane does the same when it is held still
   leaning on a neighbour, a quarter of a tab or more over it
-  (QUESTIONS.md 297). Let go where it cannot land, nothing moves and the
+  (QUESTIONS.md 301). Let go where it cannot land, nothing moves and the
   window shows the workspace the drag began in. Entries dragged from a
   list already switched the window this way; a test now holds it (#132).
 

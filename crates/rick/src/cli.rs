@@ -40,6 +40,9 @@ pub struct Cli {
     /// List the plugins found and whether each loaded, then exit
     #[arg(long, conflicts_with = "paths")]
     pub list_plugins: bool,
+    /// Start for the session bus and open no folder: what the D-Bus activation file of "Show in folder" runs
+    #[arg(long, conflicts_with = "paths")]
+    pub dbus_service: bool,
     #[command(subcommand)]
     pub command: Option<Core>,
     /// Folders to open, one tab each; the current directory without any
@@ -95,6 +98,9 @@ pub enum Parsed {
         /// Its arguments.
         args: Vec<String>,
     },
+    /// `--dbus-service`: the instance starts, or is running already, for
+    /// the session bus; no folder is opened for it.
+    Service,
     /// `--help`: the text, for the caller's standard output.
     Help(String),
     /// `--version`: the text, for the caller's standard output.
@@ -191,6 +197,9 @@ pub fn parse(argv: &[String], cwd: &Path, plugins: &[CommandSpec]) -> Result<Par
         });
     }
     let cli = Cli::from_arg_matches(&matches).map_err(|error| Usage(error.render().to_string()))?;
+    if cli.dbus_service && cli.command.is_none() {
+        return Ok(Parsed::Service);
+    }
     Ok(match cli.command {
         Some(Core::Reveal { files }) => Parsed::Reveal {
             files: files.iter().map(|f| resolve(cwd, f)).collect(),
@@ -267,6 +276,22 @@ mod tests {
 
     fn args(list: &[&str]) -> Vec<String> {
         list.iter().map(|a| (*a).to_owned()).collect()
+    }
+
+    #[test]
+    fn the_bus_activation_argument_opens_no_folder() {
+        let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(
+            parse(
+                &args(&[platform::file_manager::SERVICE_ARGUMENT]),
+                dir.path(),
+                &[]
+            ),
+            Ok(Parsed::Service)
+        );
+        // It is the instance's own start, not a place to open.
+        assert!(parse(&args(&["--dbus-service", "sub"]), dir.path(), &[]).is_err());
+        assert!(help(&[]).contains("--dbus-service"));
     }
 
     #[test]
