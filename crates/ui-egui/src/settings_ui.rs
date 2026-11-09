@@ -257,36 +257,13 @@ pub fn settings_window(
                     egui::ComboBox::from_id_salt("density")
                         .selected_text(density_name(density))
                         .show_ui(ui, |ui| {
-                            for d in [Density::Compact, Density::Normal, Density::Comfortable] {
+                            for d in [Density::Comfortable, Density::Compact] {
                                 ui.selectable_value(&mut density, d, density_name(d));
                             }
                         });
                     if density != settings.density {
                         change(SettingsChange::Density(density));
                     }
-                    ui.end_row();
-
-                    ui.label(t!("settings-accent-colour"));
-                    ui.horizontal(|ui| {
-                        let mut color = settings
-                            .accent
-                            .as_deref()
-                            .and_then(parse_hex)
-                            .unwrap_or(ui.visuals().selection.bg_fill);
-                        if ui.color_edit_button_srgba(&mut color).changed() {
-                            change(SettingsChange::Accent(Some(format!(
-                                "#{:02x}{:02x}{:02x}",
-                                color.r(),
-                                color.g(),
-                                color.b()
-                            ))));
-                        }
-                        if settings.accent.is_some()
-                            && ui.small_button(t!("settings-theme-default")).clicked()
-                        {
-                            change(SettingsChange::Accent(None));
-                        }
-                    });
                     ui.end_row();
                 });
             extension_settings(ui, app, &mut ext_changes);
@@ -414,24 +391,8 @@ fn after_drag_name(after: AfterDrag) -> String {
 fn density_name(density: Density) -> String {
     match density {
         Density::Compact => t!("settings-density-compact"),
-        Density::Normal => t!("settings-density-normal"),
         Density::Comfortable => t!("settings-density-comfortable"),
     }
-}
-
-/// `#rrggbb` to a colour.
-#[must_use]
-pub fn parse_hex(text: &str) -> Option<egui::Color32> {
-    let hex = text.trim().strip_prefix('#')?;
-    if hex.len() != 6 {
-        return None;
-    }
-    let channel = |i: usize| u8::from_str_radix(&hex[i..i + 2], 16).ok();
-    Some(egui::Color32::from_rgb(
-        channel(0)?,
-        channel(2)?,
-        channel(4)?,
-    ))
 }
 
 /// What the shortcuts screen is doing.

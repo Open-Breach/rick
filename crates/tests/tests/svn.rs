@@ -419,6 +419,9 @@ fn the_context_menu_shows_the_svn_group_only_inside_the_working_copy() {
     );
     harness.get_by_label("Modified");
     harness.get_by_label("tracked.txt").click_secondary();
+    // Two frames: the menu lays itself out in the first and, taller than
+    // the room below the row, moves up to fit the window in the second.
+    harness.step();
     harness.step();
     harness.get_by_label_contains("Properties");
     assert_eq!(

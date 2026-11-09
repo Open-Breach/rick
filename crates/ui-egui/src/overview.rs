@@ -29,19 +29,13 @@ pub fn volume_icon(kind: VolumeKind) -> &'static str {
 
 /// Paints a small utilisation bar in `rect`, `fraction` of it filled.
 pub fn utilisation_bar(ui: &egui::Ui, rect: egui::Rect, fraction: f32) {
-    let visuals = ui.visuals();
-    ui.painter()
-        .rect_filled(rect, 2.0, visuals.widgets.noninteractive.bg_fill);
+    let scheme = crate::theme::scheme(ui);
+    ui.painter().rect_filled(rect, 2.0, scheme.bg_track);
     let filled = egui::Rect::from_min_size(
         rect.min,
         egui::vec2(rect.width() * fraction.clamp(0.0, 1.0), rect.height()),
     );
-    let color = if fraction > 0.9 {
-        visuals.warn_fg_color
-    } else {
-        visuals.selection.bg_fill
-    };
-    ui.painter().rect_filled(filled, 2.0, color);
+    ui.painter().rect_filled(filled, 2.0, scheme.accent_usage);
 }
 
 /// `45%`, or an em dash when the volume's size is unknown.

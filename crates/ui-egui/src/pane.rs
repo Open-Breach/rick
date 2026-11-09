@@ -57,23 +57,17 @@ fn intent(cx: &mut PaneCx<'_>, intent: Intent) {
     });
 }
 
-/// Width of an icon-only toolbar button, so the two icon groups keep their
-/// width whatever the window size.
-const ICON_BUTTON: f32 = 28.0;
+/// The side of an icon-only tool button, `button/size` of the density, so
+/// the two icon groups keep their width whatever the window size.
+fn button_size(ui: &egui::Ui) -> f32 {
+    crate::theme::metrics(ui.ctx()).button_size
+}
 
-/// The toolbar: a fixed group of navigation icons on the left, a fixed group
-/// of view controls on the right, and the breadcrumb flexing in between,
-/// never overlapping either.
-/// The toolbar row's height for a density: room for the icon buttons plus
-/// padding above and below them, the density being the single knob.
+/// The toolbar row's height for a density: a tool button plus the toolbar
+/// padding above and below it, the density being the single knob.
 #[must_use]
 pub fn toolbar_height(density: model::Density) -> f32 {
-    ICON_BUTTON
-        + match density {
-            model::Density::Compact => 6.0,
-            model::Density::Normal => 10.0,
-            model::Density::Comfortable => 16.0,
-        }
+    crate::theme::Metrics::of(density).toolbar_height()
 }
 
 /// The toolbar: a fixed group of navigation icons on the left, a fixed group
@@ -119,9 +113,10 @@ fn toolbar(ui: &mut egui::Ui, cx: &mut PaneCx<'_>) {
 }
 
 fn icon_button(ui: &mut egui::Ui, glyph: &str, enabled: bool) -> egui::Response {
+    let size = button_size(ui);
     ui.add_enabled(
         enabled,
-        egui::Button::new(glyph).min_size(egui::vec2(ICON_BUTTON, ICON_BUTTON)),
+        egui::Button::new(glyph).min_size(egui::vec2(size, size)),
     )
 }
 
@@ -162,11 +157,12 @@ fn right_group(ui: &mut egui::Ui, cx: &mut PaneCx<'_>) {
     } else {
         icons::HIDDEN_HIDDEN
     };
+    let size = button_size(ui);
     let hidden = ui
         .add(
             egui::Button::new(hidden_glyph)
                 .selected(cx.tab.show_hidden)
-                .min_size(egui::vec2(ICON_BUTTON, ICON_BUTTON)),
+                .min_size(egui::vec2(size, size)),
         )
         .on_hover_text(if cx.tab.show_hidden {
             "Hide hidden files"
@@ -211,7 +207,7 @@ pub fn view_mode_icon(mode: ViewMode) -> &'static str {
 fn view_mode_dropdown(ui: &mut egui::Ui, cx: &mut PaneCx<'_>) {
     let current = cx.tab.view;
     let label = format!("{} {}", view_mode_icon(current), icons::DROPDOWN);
-    ui.style_mut().spacing.interact_size.y = ICON_BUTTON;
+    ui.style_mut().spacing.interact_size.y = button_size(ui);
     let response = ui.menu_button(label, |ui| {
         for (label, mode, available) in view_modes() {
             let marked = if mode == current {
@@ -316,8 +312,8 @@ fn breadcrumb(ui: &mut egui::Ui, cx: &mut PaneCx<'_>, rect: egui::Rect) {
         })
     };
     let separator_w = text_width(ui, icons::SEGMENT) + spacing;
-    let copy_w = ICON_BUTTON + spacing;
-    let chevron_w = ICON_BUTTON + separator_w;
+    let copy_w = button_size(ui) + spacing;
+    let chevron_w = button_size(ui) + separator_w;
     let widths: Vec<f32> = segments
         .iter()
         .map(|crumb| text_width(ui, &crumb.label) + pad)

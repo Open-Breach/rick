@@ -78,15 +78,11 @@ fn name_taken(tab: &Tab, name: &str) -> bool {
     tab.listing.entries().iter().any(|e| e.name == name)
 }
 
-/// Row height for the density setting.
+/// A row's height: the density's `row/height` token, less the spacing the
+/// table puts between rows, so the pitch of the rows is the token.
 #[must_use]
-pub fn row_height(ui: &egui::Ui, density: model::Density) -> f32 {
-    let text = ui.text_style_height(&egui::TextStyle::Body);
-    text + match density {
-        model::Density::Compact => 2.0,
-        model::Density::Normal => 6.0,
-        model::Density::Comfortable => 12.0,
-    }
+pub fn row_height(ui: &egui::Ui) -> f32 {
+    (crate::theme::metrics(ui.ctx()).row_height - ui.spacing().item_spacing.y).max(1.0)
 }
 
 /// Draws the active view of `cx`. A right click on empty space, below the
@@ -202,7 +198,7 @@ fn new_row_strip(ui: &mut egui::Ui, cx: &mut PaneCx<'_>) {
         EditKind::NewFile => crate::icons::by_extension(&edit.text),
         EditKind::Rename(_) => return,
     };
-    let height = row_height(ui, cx.app.model().settings.density);
+    let height = row_height(ui);
     let (rect, _) =
         ui.allocate_exact_size(egui::vec2(ui.available_width(), height), Sense::hover());
     let mut strip = ui.new_child(
@@ -516,7 +512,7 @@ fn icon_cell_ui(
 #[allow(clippy::too_many_lines)]
 pub fn details(ui: &mut egui::Ui, cx: &mut PaneCx<'_>) {
     let settings = &cx.app.model().settings;
-    let height = row_height(ui, settings.density);
+    let height = row_height(ui);
     let count = cx.tab.row_count();
     // A New file or New folder in progress is the first row.
     let new_row = usize::from(
@@ -880,7 +876,7 @@ fn sort_header(ui: &mut egui::Ui, label: &str, column: Column, sort: model::Sort
 /// The list grid: icon and name only, in as many columns as fit.
 pub fn list(ui: &mut egui::Ui, cx: &mut PaneCx<'_>) {
     let settings = &cx.app.model().settings;
-    let height = row_height(ui, settings.density);
+    let height = row_height(ui);
     let cell_width = 220.0;
     let columns = ((ui.available_width() / cell_width).floor() as usize).max(1);
     let count = cx.tab.row_count();

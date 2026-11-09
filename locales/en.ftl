@@ -124,8 +124,6 @@ settings-after-a-drag = After a drag
 settings-theme = Theme
 settings-font-size = Font size
 settings-density = Density
-settings-accent-colour = Accent colour
-settings-theme-default = Theme default
 keyboard-shortcuts = Keyboard shortcuts
 settings-filter = Filter
 settings-change = Change
@@ -174,7 +172,6 @@ settings-theme-dark = Dark
 settings-after-drag-stay = Stay in the folder
 settings-after-drag-return = Return to where the drag started
 settings-density-compact = Compact
-settings-density-normal = Normal
 settings-density-comfortable = Comfortable
 
 compare-failed = Could not compare: { $error }
