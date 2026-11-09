@@ -223,6 +223,14 @@ the pull request that brought the change.
   second line between the list and the footer, and the panel's margins
   had made the row taller than the toolbar. The preview pane's footer
   takes the same height and hairline (issue 79 item 4, QUESTIONS.md 254).
+- The preview pane's toolbar is the explorer toolbar's height, with
+  `space/toolbar-x` padding, and ends like every other pane's in the
+  hairline and the six-dot grab handle (`DOTS_SIX_VERTICAL`, named *Drag
+  pane*, the grab and grabbing cursors), which drags the pane onto the
+  dock tiles, the tab row or out of the window; it had been a 30 px row
+  with the close button alone. The handle and the hairline are one widget
+  shared with the explorer toolbar (`widgets::pane_handle`, `divider`)
+  (issue 79 items 2 and 3).
 
 ## [0.2.0] - 2026-11-08
 
