@@ -464,7 +464,7 @@ fn screenshots_of_the_title_row() {
 /// Issue 60: the panes — two panes with their toolbars (parent chip,
 /// breadcrumb, view options, handle), the view options menu open on the
 /// left one, and a pane dragged by its handle over the other with the dock
-/// cross and the ghost card — in Light and Dark at both densities.
+/// cross and its ghost — in Light and Dark at both densities.
 #[test]
 #[ignore = "needs a wgpu adapter; CI runs it and uploads the images"]
 fn screenshots_of_the_panes() {
@@ -594,6 +594,334 @@ fn screenshots_of_the_panes() {
         });
         harness.step();
         settle(&mut harness);
+    }
+}
+
+/// A renderer that draws the pointer as the cursor the frame asked for:
+/// the open hand for `Grab`, the closed hand for `Grabbing`, where
+/// kittest's own renderer draws one arrow-like triangle whatever the
+/// cursor is. The frame sequences of the drags are rendered through it, so
+/// a frame shows which cursor the user sees.
+struct HandCursor(egui_kittest::wgpu::WgpuTestRenderer);
+
+impl egui_kittest::TestRenderer for HandCursor {
+    fn handle_delta(&mut self, delta: &mut egui::TexturesDelta) {
+        self.0.handle_delta(delta);
+    }
+
+    fn render(
+        &mut self,
+        ctx: &egui::Context,
+        output: &egui::FullOutput,
+    ) -> Result<image::RgbaImage, String> {
+        let closed = match output.platform_output.cursor_icon {
+            egui::CursorIcon::Grab => false,
+            egui::CursorIcon::Grabbing => true,
+            _ => return self.0.render(ctx, output),
+        };
+        let Some(at) = ctx.input(|i| i.pointer.hover_pos()) else {
+            return self.0.render(ctx, output);
+        };
+        let mut output = output.clone();
+        // The harness appended its triangle last; the hand takes its place.
+        output.shapes.pop();
+        let clip_rect = ctx.content_rect();
+        output.shapes.extend(
+            hand(at, closed)
+                .into_iter()
+                .map(|shape| egui::epaint::ClippedShape { clip_rect, shape }),
+        );
+        self.0.render(ctx, &output)
+    }
+}
+
+/// A hand cursor around `at` as shapes: a palm with a thumb and four
+/// fingers, stretched for the open hand and curled into knuckles for the
+/// closed one; white with a black outline, like the system's.
+fn hand(at: egui::Pos2, closed: bool) -> Vec<egui::Shape> {
+    let outline = egui::Stroke::new(1.2, egui::Color32::BLACK);
+    let part = |min: egui::Vec2, size: egui::Vec2, radius: f32| {
+        egui::Shape::Rect(egui::epaint::RectShape::new(
+            egui::Rect::from_min_size(at + min, size),
+            radius,
+            egui::Color32::WHITE,
+            outline,
+            egui::StrokeKind::Middle,
+        ))
+    };
+    let finger = if closed { 5.0 } else { 10.0 };
+    let mut shapes = Vec::new();
+    // The thumb, then the fingers, then the palm over their roots.
+    let thumb = if closed {
+        part(egui::vec2(-10.0, 0.0), egui::vec2(5.0, 6.0), 2.5)
+    } else {
+        part(egui::vec2(-11.5, -1.0), egui::vec2(4.5, 9.0), 2.2)
+    };
+    shapes.push(thumb);
+    for i in 0..4u8 {
+        let x = -7.0 + f32::from(i) * 3.6;
+        shapes.push(part(
+            egui::vec2(x, -1.0 - finger),
+            egui::vec2(3.4, finger + 4.0),
+            1.7,
+        ));
+    }
+    shapes.push(part(egui::vec2(-7.5, 0.0), egui::vec2(15.0, 11.0), 4.0));
+    shapes
+}
+
+/// A window like [`shell`]'s whose frames show the hand cursors.
+fn shell_with_hands(start: &Path, size: egui::Vec2) -> Harness<'static, RickUi> {
+    let fake = Arc::new(Fake::new().unwrap_or_else(|e| panic!("{e}")));
+    let host = Arc::new(EguiHost::new());
+    let app = app::App::new(app::Config {
+        platform: fake.clone(),
+        ui: host.clone(),
+        extensions: Vec::new(),
+        config_dir: Some(fake.config_dir()),
+        start: Some(local(start)),
+    });
+    let mut harness = Harness::builder()
+        .with_size(size)
+        .with_pixels_per_point(2.0)
+        .renderer(HandCursor(egui_kittest::wgpu::WgpuTestRenderer::new()))
+        .build_eframe(move |cc| RickUi::new(app, host, &cc.egui_ctx));
+    settle(&mut harness);
+    harness
+}
+
+/// The frames of one sequence, to be laid out as a sheet.
+struct Frames {
+    name: String,
+    frames: Vec<image::RgbaImage>,
+}
+
+impl Frames {
+    fn new(name: String) -> Self {
+        Self {
+            name,
+            frames: Vec::new(),
+        }
+    }
+
+    /// Renders the frame as it stands, saves it as `<name>-<n>-<step>` and
+    /// keeps it for the sheet.
+    fn shoot(&mut self, harness: &mut Harness<'_, RickUi>, step: &str) {
+        let image = harness
+            .render()
+            .unwrap_or_else(|e| panic!("no renderer for screenshots: {e}"));
+        let n = self.frames.len() + 1;
+        let path = out_dir().join(format!(
+            "{}-{}-{n}-{step}.png",
+            std::env::consts::OS,
+            self.name
+        ));
+        image.save(&path).unwrap_or_else(|e| panic!("{e}"));
+        eprintln!("frame: {}", path.display());
+        self.frames.push(image);
+    }
+
+    /// Saves the sequence as one sheet, `<name>.png`: the frames at half
+    /// size, two to a row, in order.
+    fn sheet(&self) {
+        const GUTTER: u32 = 12;
+        let Some(first) = self.frames.first() else {
+            return;
+        };
+        let (w, h) = (first.width() / 2, first.height() / 2);
+        let rows = u32::try_from(self.frames.len().div_ceil(2)).unwrap_or(1);
+        let mut sheet = image::RgbaImage::from_pixel(
+            2 * w + 3 * GUTTER,
+            rows * h + (rows + 1) * GUTTER,
+            image::Rgba([128, 128, 128, 255]),
+        );
+        for (i, frame) in self.frames.iter().enumerate() {
+            let small = image::imageops::resize(frame, w, h, image::imageops::FilterType::Triangle);
+            let i = u32::try_from(i).unwrap_or(0);
+            let x = GUTTER + (i % 2) * (w + GUTTER);
+            let y = GUTTER + (i / 2) * (h + GUTTER);
+            image::imageops::overlay(&mut sheet, &small, i64::from(x), i64::from(y));
+        }
+        let path = out_dir().join(format!("{}-{}.png", std::env::consts::OS, self.name));
+        sheet.save(&path).unwrap_or_else(|e| panic!("{e}"));
+        eprintln!("sheet: {}", path.display());
+    }
+}
+
+/// Moves the pointer to `to` in `steps` frames.
+fn glide(harness: &mut Harness<'_, RickUi>, from: egui::Pos2, to: egui::Pos2, steps: u8) {
+    for i in 1..=steps {
+        let t = f32::from(i) / f32::from(steps);
+        harness.event(egui::Event::PointerMoved(from + (to - from) * t));
+        harness.step();
+    }
+    harness.step();
+}
+
+/// Presses or releases the primary button at `pos`.
+fn primary(harness: &mut Harness<'_, RickUi>, pos: egui::Pos2, pressed: bool) {
+    harness.event(egui::Event::PointerButton {
+        pos,
+        button: egui::PointerButton::Primary,
+        pressed,
+        modifiers: egui::Modifiers::default(),
+    });
+    harness.step();
+}
+
+/// Issue 80, rules 7 and 8, as frame sequences in Light and Dark at both
+/// densities. A pane: the open hand over its grip; grabbed, its ghost — the
+/// pane's own snapshot at a quarter — with its grip 8 px off the closed
+/// hand; over the other pane with the dock cross; over the tab row with
+/// the slot of a new tab. A tab: the open hand over it; riding the row,
+/// lifted with a shadow; off the row, following the closed hand.
+#[test]
+#[ignore = "needs a wgpu adapter; CI runs it and uploads the images"]
+fn frames_of_the_drag_ghost_and_the_cursors() {
+    use egui_kittest::kittest::Queryable as _;
+    let (_dir, deep) = sample_tree();
+    // Something to see in the pane that is dragged.
+    fs::create_dir_all(deep.join("raw/contact-sheets")).unwrap_or_else(|e| panic!("{e}"));
+    for i in 0..9u32 {
+        fs::write(
+            deep.join(format!("raw/DSC_{:04}.nef", 4310 + i)),
+            vec![0u8; 2048 * (i as usize + 3)],
+        )
+        .unwrap_or_else(|e| panic!("{e}"));
+    }
+    let mut harness = shell_with_hands(&deep, egui::vec2(1360.0, 800.0));
+    let pane = harness.state().app().model().focused;
+    harness.state_mut().app_mut().handle(
+        app::Command::Split {
+            pane,
+            dir: model::SplitDir::Right,
+        },
+        &mut Vec::new(),
+    );
+    settle(&mut harness);
+    let second = harness.state().app().model().focused;
+    harness.state_mut().app_mut().handle(
+        app::Command::Navigate {
+            pane: second,
+            to: local(&deep.join("raw")),
+        },
+        &mut Vec::new(),
+    );
+    settle(&mut harness);
+    // Two more workspaces, and the first one shown again.
+    let parent = deep
+        .parent()
+        .unwrap_or_else(|| panic!("parent"))
+        .to_path_buf();
+    for folder in [parent, deep.join("edited")] {
+        harness
+            .state_mut()
+            .app_mut()
+            .handle(app::Command::NewTab(local(&folder)), &mut Vec::new());
+        settle(&mut harness);
+    }
+    let model = harness.state().app().model();
+    let first = model.workspaces(model.focused_window)[0].id;
+    harness
+        .state_mut()
+        .app_mut()
+        .handle(app::Command::ActivateWorkspace(first), &mut Vec::new());
+    settle(&mut harness);
+    harness
+        .state_mut()
+        .app_mut()
+        .handle(app::Command::FocusPane(pane), &mut Vec::new());
+    settle(&mut harness);
+    for (theme, density) in [
+        (Theme::Light, Density::Comfortable),
+        (Theme::Light, Density::Compact),
+        (Theme::Dark, Density::Comfortable),
+        (Theme::Dark, Density::Compact),
+    ] {
+        for change in [
+            SettingsChange::Theme(theme),
+            SettingsChange::Density(density),
+        ] {
+            harness
+                .state_mut()
+                .app_mut()
+                .handle(app::Command::Settings(change), &mut Vec::new());
+        }
+        settle(&mut harness);
+        let theme_name = match theme {
+            Theme::Light => "light",
+            Theme::Dark => "dark",
+            Theme::System => "system",
+        };
+        let density_name = match density {
+            Density::Comfortable => "comfortable",
+            Density::Compact => "compact",
+        };
+        let mut frames = Frames::new(format!("issue80-ghost-{theme_name}-{density_name}"));
+        let rects = harness.state().pane_rects();
+        let left_rect = rects
+            .iter()
+            .find(|(p, _)| *p == pane)
+            .map_or_else(|| panic!("left pane"), |(_, r)| *r);
+        let right_rect = rects
+            .iter()
+            .find(|(p, _)| *p == second)
+            .map_or_else(|| panic!("right pane"), |(_, r)| *r);
+        let row = harness
+            .state()
+            .tab_row()
+            .unwrap_or_else(|| panic!("no tab row"));
+
+        // The pane, by its grip.
+        let grip = harness
+            .query_all_by_label("Drag pane")
+            .map(|n| n.rect())
+            .find(|r| right_rect.contains(r.center()))
+            .unwrap_or_else(|| panic!("handle of the right pane"))
+            .center();
+        glide(&mut harness, grip + egui::vec2(-80.0, 60.0), grip, 4);
+        frames.shoot(&mut harness, "pane-grip-open-hand");
+        primary(&mut harness, grip, true);
+        let near = grip + egui::vec2(-60.0, 90.0);
+        glide(&mut harness, grip, near, 6);
+        frames.shoot(&mut harness, "pane-grabbed");
+        let tile = left_rect.center() + egui::vec2(-ui_egui::DOCK_TILE_PITCH, 0.0);
+        glide(&mut harness, near, tile, 10);
+        frames.shoot(&mut harness, "pane-over-a-dock-target");
+        let on_row = egui::pos2(row.left() + 2.0 * 222.0 + 40.0, row.center().y);
+        glide(&mut harness, tile, on_row, 10);
+        frames.shoot(&mut harness, "pane-over-the-tab-row");
+        // Back to where it was: released beside every target.
+        let away = egui::pos2(right_rect.center().x, right_rect.bottom() - 40.0);
+        glide(&mut harness, on_row, away, 6);
+        primary(&mut harness, away, false);
+        settle(&mut harness);
+
+        // The middle tab, by its body: a little along the row, where the
+        // row still keeps its own place for it, then off the row.
+        let tab = ["edited", "holiday-2026"]
+            .iter()
+            .filter_map(|title| {
+                harness
+                    .query_all_by_label(title)
+                    .map(|n| n.rect())
+                    .find(|r| row.contains(r.center()))
+            })
+            .min_by(|a, b| a.left().total_cmp(&b.left()))
+            .unwrap_or_else(|| panic!("the middle tab"));
+        let hold = tab.center() + egui::vec2(-20.0, 0.0);
+        glide(&mut harness, away, hold, 6);
+        frames.shoot(&mut harness, "tab-open-hand");
+        primary(&mut harness, hold, true);
+        let along = hold + egui::vec2(-70.0, 0.0);
+        glide(&mut harness, hold, along, 8);
+        frames.shoot(&mut harness, "tab-riding-the-row");
+        let off = egui::pos2(along.x + 180.0, row.bottom() + 170.0);
+        glide(&mut harness, along, off, 8);
+        frames.shoot(&mut harness, "tab-off-the-row");
+        primary(&mut harness, off, false);
+        settle(&mut harness);
+        frames.sheet();
     }
 }
 

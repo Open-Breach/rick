@@ -309,6 +309,22 @@ the pull request that brought the change.
   Appearance Theme, Density and Font size; a plugin's page its schema as
   a card. The 0.2 settings screen with its grid and sliders is gone
   (#78).
+- The drag of a pane and of a workspace tab (issue 80, rules 7 and 8;
+  SPEC.md *Drag ghost*). The ghost of a pane dragged by its handle is the
+  pane itself — what it painted when it was grabbed, at a quarter of its
+  size and 70 % opacity inside a 1 px `border/strong` border with a soft
+  shadow — in place of the card with a title and skeleton rows, and it is
+  anchored to the grab point: its scaled grip sits 8 px down and right of
+  the cursor and moves rigidly with it. A dragged tab is its own ghost,
+  lifted with the same shadow: along the title row it rides the row held
+  where it was grabbed, off the row it follows the cursor the same 8 px
+  away while the row closes up behind it, and released off the row inside
+  the window it returns to its place, where it used to be reordered to
+  the room the row last kept for it. A tab shows the open hand over its
+  body, as a pane's grip does, and the closed hand stays for the whole of
+  either drag, whatever the cursor passes over. A screen reader is told
+  what is being dragged. The numbers — scale, opacity, offset — are
+  constants of `ui_egui::drag` (#125).
 
 ### Removed
 
