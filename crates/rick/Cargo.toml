@@ -95,6 +95,13 @@ anyhow = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 
+[build-dependencies]
+# The icon and version resource of `rick.exe` (specs/app-icons.md), compiled
+# by build.rs for Windows targets only; the crate builds everywhere, so the
+# script needs no `cfg` of its own. Without its `toml` feature: the fields
+# are set in the script, not read from this manifest.
+winresource = { version = "0.1", default-features = false }
+
 [dev-dependencies]
 # The tests of `rick-perms`, the privileged helper: run through the fake
 # platform, and as root through the polkit stand-in of Linux CI.
