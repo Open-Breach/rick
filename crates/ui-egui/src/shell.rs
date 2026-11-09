@@ -372,6 +372,13 @@ pub struct WindowUi {
     /// Where a pane dragged over the tab row would land as a new tab, in
     /// this frame.
     pane_drop_slot: Option<usize>,
+    /// The workspace tab a dragged pane or tab rests on, and since when:
+    /// after the spring-loading delay the window shows that workspace
+    /// (SPEC.md *Workspace tabs*, Spring-loaded tabs).
+    tab_rest: Option<TabRest>,
+    /// The workspace the window showed when the drag of a pane or a tab
+    /// began: what it shows again when the drag ends and nothing moved.
+    drag_origin: Option<WorkspaceId>,
     /// The restored geometry has been handed to the backend.
     placed: bool,
     /// The operations drawer shows its summary alone (SPEC.md *Operations
@@ -399,6 +406,8 @@ impl WindowUi {
             tab_slides: crate::drag::Slides::default(),
             slide_until: 0.0,
             pane_drop_slot: None,
+            tab_rest: None,
+            drag_origin: None,
             placed: false,
             drawer_collapsed: false,
         }
@@ -559,6 +568,19 @@ fn paint_dock_cross(
         };
         paint_split_icon(overlay, tile, zone, colour);
     }
+}
+
+/// The workspace tab a dragged pane or tab rests on.
+#[derive(Debug, Clone, Copy)]
+struct TabRest {
+    /// The workspace of the tab.
+    on: WorkspaceId,
+    /// Since when, in the frame clock's seconds.
+    since: f64,
+    /// Where the cursor was when the rest began.
+    at: egui::Pos2,
+    /// The window has switched to it already.
+    sprung: bool,
 }
 
 /// A workspace tab being dragged: along the title row, or off it as its
@@ -2867,7 +2889,10 @@ impl RickUi {
     /// none. Released outside the window a tab moves to the window under
     /// it or opens a new one, released anywhere else it returns to its
     /// place. A pane's tab dragged over the row shows the slot where it
-    /// would land as a new tab (SPEC.md *Workspace tabs*).
+    /// would land as a new tab. A dragged pane, or a dragged tab that
+    /// holds one pane, resting on another tab for the spring-loading
+    /// delay switches the window to that tab's workspace (SPEC.md
+    /// *Workspace tabs*).
     #[allow(clippy::too_many_lines, clippy::too_many_arguments)]
     fn title_tabs(
         &mut self,
@@ -2912,6 +2937,13 @@ impl RickUi {
         }
         let dragged = drag.and_then(|d| tabs.iter().position(|(id, _)| *id == d.id));
         let others = tabs.len() - usize::from(dragged.is_some());
+        // The workspace to come back to when the drag moves nothing: the
+        // one shown when it began.
+        if drag.is_some() || w.pane_drag.is_some() {
+            w.drag_origin = w.drag_origin.or(active);
+        } else {
+            w.drag_origin = None;
+        }
         // The dragged tab rides the row while the cursor is in the title
         // row; off it, the tab follows the cursor as its own ghost and the
         // row keeps no room for it (QUESTIONS.md 273).
@@ -2960,6 +2992,23 @@ impl RickUi {
         let sliding = !still && now <= w.slide_until;
         w.tab_slides
             .retain(|key| key.is_none_or(|id| tabs.iter().any(|(tab, _)| *tab == id)));
+
+        // What a dragged tab leans on: riding the row it is under the
+        // cursor, so it rests on a neighbour while it overlaps it by a
+        // quarter of a tab or more, short of the half where the two would
+        // swap (QUESTIONS.md 272). Only a tab of one pane spring-loads; it
+        // is the one that can be docked where the spring leads.
+        let lean = drag
+            .filter(|d| riding && model.sole_pane(d.id).is_some())
+            .zip(drag_slot)
+            .zip(pointer)
+            .map(|((d, slot), p)| {
+                let x =
+                    (p.x - d.grab.x).clamp(row.left(), (row.right() - TAB_WIDTH).max(row.left()));
+                (slot, x - (row.left() + slot as f32 * pitch))
+            });
+        let quarter = TAB_WIDTH / 4.0 + TAB_GAP;
+        let mut rested_on: Option<WorkspaceId> = None;
 
         let clip = row.intersect(ui.clip_rect());
         let mut child = ui.new_child(egui::UiBuilder::new().max_rect(row));
@@ -3012,6 +3061,23 @@ impl RickUi {
                 workspace_tab(&mut child, tab_rect, *id, label, Some(*id) == active);
             if let Some(tab) = label.tab {
                 w.tab_headers.insert(tab, tab_rect);
+            }
+            // Spring-loaded tabs: a dragged pane rests on the tab the
+            // cursor is on, a dragged tab on the neighbour it leans on —
+            // the one after its gap or the one before it. The shown tab
+            // has nothing to spring to.
+            if Some(*id) != active {
+                let rests = if w.pane_drag.is_some() {
+                    pointer.is_some_and(|p| tab_rect.contains(p))
+                } else {
+                    lean.is_some_and(|(slot, lean)| {
+                        (lean >= quarter && shown == slot)
+                            || (lean <= -quarter && shown + 1 == slot)
+                    })
+                };
+                if rests {
+                    rested_on = Some(*id);
+                }
             }
             if response.clicked() {
                 clicked = Some(*id);
@@ -3149,6 +3215,38 @@ impl RickUi {
         if sliding && w.tab_slides.moving(now) {
             ctx.request_repaint();
         }
+        // The spring: the same tab rested on for the delay — the one
+        // setting every kind of drag shares — shows its workspace, once.
+        // A dragged tab leans on a neighbour for most of the way past it,
+        // so it rests only where it is held still: a tab on the move
+        // starts the clock again, and a slow reorder switches nothing.
+        let at = pointer.unwrap_or_default();
+        let on_the_move = w.pane_drag.is_none()
+            && w.tab_rest
+                .is_some_and(|resting| (at - resting.at).length() > crate::drag::REST_SLOP);
+        w.tab_rest = match (w.tab_rest, rested_on) {
+            (Some(resting), Some(on)) if resting.on == on && !on_the_move => Some(resting),
+            (_, Some(on)) => Some(TabRest {
+                on,
+                since: now,
+                at,
+                sprung: false,
+            }),
+            (_, None) => None,
+        };
+        let mut spring: Option<WorkspaceId> = None;
+        if let Some(resting) = &mut w.tab_rest
+            && !resting.sprung
+        {
+            let delay = model.settings.drag.spring_delay_ms as f64 / 1000.0;
+            let left = delay - (now - resting.since);
+            if left <= 0.0 {
+                resting.sprung = true;
+                spring = Some(resting.on);
+            } else {
+                ctx.request_repaint_after(Duration::from_secs_f64(left));
+            }
+        }
         if let Some(d) = started {
             w.workspace_drag = Some(d);
         }
@@ -3173,6 +3271,10 @@ impl RickUi {
             self.requests
                 .push(Request::Command(Command::ActivateWorkspace(id)));
         }
+        if let Some(id) = spring {
+            self.requests
+                .push(Request::Command(Command::ActivateWorkspace(id)));
+        }
         if let Some(id) = closed {
             self.close_workspace(id);
         }
@@ -3192,11 +3294,35 @@ impl RickUi {
                         pane,
                         side,
                     });
+                } else {
+                    // Nothing moved: the window shows what it showed when
+                    // the drag began (QUESTIONS.md 276).
+                    let _ = self.return_to_origin(window);
                 }
             }
             Some((d, Some(pos))) => self.drop_workspace_outside(window, d.id, pos),
             _ => {}
         }
+    }
+
+    /// Shows again the workspace `window` showed when the drag of a pane or
+    /// a tab began, if spring-loading has switched it since: how such a
+    /// drag ends when it moved nothing (QUESTIONS.md 276). Returns whether
+    /// the window switched back, which whoever holds the dock's tree has
+    /// to know: the tree then shows a workspace the model no longer does.
+    fn return_to_origin(&mut self, window: WindowId) -> bool {
+        let Some(origin) = self.windows.get(&window).and_then(|w| w.drag_origin) else {
+            return false;
+        };
+        let back = self
+            .app
+            .model()
+            .window(window)
+            .is_some_and(|w| w.active != origin && w.position(origin).is_some());
+        if back {
+            self.handle(Command::ActivateWorkspace(origin));
+        }
+        back
     }
 
     /// A workspace tab released outside its window: onto another window's
@@ -4069,7 +4195,7 @@ impl RickUi {
             w.ghost = w.ghost.filter(|g| g.of != crate::drag::Dragged::Pane);
         }
         if !released {
-            return Some(false);
+            return Some(self.return_to_origin(window));
         }
         if let Some((pane, _, zone)) = zone {
             let to = match zone.side() {
@@ -4079,7 +4205,11 @@ impl RickUi {
             self.handle(Command::MoveTab { tab: drag.tab, to });
             return Some(true);
         }
-        Some(self.cross_window_drop(ctx, window, Some(drag.tab)))
+        // Released where it cannot land, nothing moved and the window
+        // shows what it showed when the drag began; that is a change of
+        // the model too, which the dock's tree has to follow, not report.
+        let handled = self.cross_window_drop(ctx, window, Some(drag.tab));
+        Some(handled || self.return_to_origin(window))
     }
 
     /// A pane released outside every dock tile: on this window's tab row it
