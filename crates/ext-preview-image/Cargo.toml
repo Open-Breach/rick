@@ -1,7 +1,7 @@
 [package]
 name = "ext-preview-image"
 version.workspace = true
-description = "Rick preview extension for images: the image crate's decoders, EXIF orientation, downscaling to the pane."
+description = "Rick preview extension for images: the image crate's decoders, EXIF orientation, downscaling to the pane; SVG and SVGZ rasterised with resvg at the size the pane asks for."
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
@@ -9,9 +9,18 @@ repository.workspace = true
 [dependencies]
 types = { workspace = true }
 ext = { workspace = true }
+# The source view behind an SVG's Rendered toggle: the code previewer's
+# highlighted XML, the same path the markup plugin takes for Markdown and
+# HTML (issue 83).
+ext-preview-code = { workspace = true }
 image = { workspace = true }
 jpeg-decoder = { workspace = true }
 kamadak-exif = { workspace = true }
+# SVG and SVGZ: resvg rasterises, flate2 decompresses the SVGZ for the
+# text layer, roxmltree reads the root element's size attributes.
+resvg = { workspace = true }
+flate2 = { workspace = true }
+roxmltree = { workspace = true }
 tracing = { workspace = true }
 
 [dev-dependencies]
