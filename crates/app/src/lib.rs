@@ -1540,6 +1540,9 @@ impl App {
             Command::MoveTab { tab, to } => {
                 self.model.move_tab(tab, to);
             }
+            Command::DockWorkspace { id, pane, side } => {
+                self.model.dock_workspace(id, pane, side);
+            }
             Command::TogglePreview { window, fraction } => {
                 let shown = self.model.window(window).map(|w| w.active);
                 let here = self.model.preview_tab(window).filter(|tab| {
