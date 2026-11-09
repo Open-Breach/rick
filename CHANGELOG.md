@@ -216,6 +216,13 @@ the pull request that brought the change.
   `bg/window` like the title row. The row keeps `space/toolbar-x` of
   padding at both ends, as the design has it, in place of the frame's
   (issue 79 item 1).
+- The footer is the Figma status bar's height — the hairline, then the
+  26 px filter field with `space/toolbar-y` above and below it: 39 px
+  Comfortable, 35 px Compact — with the hidden-files toggle 26 px like
+  the field, and one hairline over it: egui's panel separator had drawn a
+  second line between the list and the footer, and the panel's margins
+  had made the row taller than the toolbar. The preview pane's footer
+  takes the same height and hairline (issue 79 item 4, QUESTIONS.md 254).
 
 ## [0.2.0] - 2026-11-08
 

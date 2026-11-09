@@ -2943,3 +2943,15 @@ Once answered, an entry keeps its number and gains a dated decision line.
     category glyphs are chosen from the plugin's id (pdf, office, 3d,
     console, ssh, archive) with a puzzle piece otherwise, manifests having
     no icon.
+
+254. (design refresh fix round 1, 2026-11-09) *Footer*: "one row at the
+    foot of every pane, as tall as the toolbar (`button/size` plus twice
+    `space/toolbar-y`)"; the three *Rick — refined* frames draw the status
+    bar 39 px tall in Comfortable and 35 in Compact — the 26 px filter
+    field with `space/toolbar-y` above and below it under the hairline —
+    and the hidden-files toggle 26 px like the field, not `button/size`;
+    issue 79 item 4 asks for the Figma height.
+    Assumed: the footer takes the frames' height, the hairline, the field
+    and the toolbar padding (`Metrics::footer_height`), the toggle is the
+    field's 26 px, and the preview pane's footer follows; the spec's "as
+    tall as the toolbar" is for the author to reword.
