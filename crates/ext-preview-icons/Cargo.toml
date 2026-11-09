@@ -1,0 +1,31 @@
+[package]
+name = "ext-preview-icons"
+version.workspace = true
+description = "Rick preview plugin for icon containers: ICO, CUR, ICNS and XPM, every variant of a container as a page, magnified pixel-sharp, the CUR hotspot drawn."
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+# A plugin: the `cdylib` the host loads from `plugins/preview-icons/`, and
+# an `rlib` for the binary's opt-in `preview-icons` feature and the tests.
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+types = { workspace = true }
+ext = { workspace = true }
+# ICO and CUR with their BMP and PNG entries; ICNS with its PNG and
+# run-length encoded types, JPEG 2000 left out on purpose (SPEC.md, *Icon
+# containers*). XPM is parsed in the crate.
+ico = { workspace = true }
+icns = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+runtime = { workspace = true }
+vfs-local = { workspace = true }
+platform = { workspace = true }
+tempfile = { workspace = true }
+
+[lints]
+workspace = true
