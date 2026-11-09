@@ -12,7 +12,9 @@
 //! and [`Integration`] (the integration items of
 //! specs/system-integration.md §6 and §7: list those of this platform and
 //! desktop, check one, perform one, undo one; [`integration`]),
-//! bundled as [`Platform`]. [`process`] asks the system whether the shell
+//! bundled as [`Platform`]. [`file_manager`] is the freedesktop
+//! file-manager interface, `org.freedesktop.FileManager1`, which the
+//! running Rick owns on the Linux session bus. [`process`] asks the system whether the shell
 //! in a console has handed its terminal to a job. [`Native`] is the real
 //! implementation for the OS the binary runs on; [`Fake`] is the one tests
 //! use, with a private trash directory and recorded calls.
@@ -61,6 +63,7 @@ pub mod motion;
 #[cfg_attr(not(any(target_os = "linux", test)), allow(dead_code))]
 mod dnd;
 mod fake;
+pub mod file_manager;
 pub mod fs;
 pub mod instance;
 pub mod integration;

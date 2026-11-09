@@ -12,6 +12,7 @@ mod activate;
 mod apps;
 mod drag;
 mod elevate;
+pub(crate) mod file_manager;
 pub(crate) mod integration;
 mod mount;
 mod terminal;

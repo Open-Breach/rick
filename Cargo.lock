@@ -6450,6 +6450,7 @@ dependencies = [
  "windows",
  "windows-core",
  "x11rb",
+ "zbus",
 ]
 
 [[package]]

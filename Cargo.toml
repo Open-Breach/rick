@@ -191,6 +191,11 @@ objc2-app-kit = { version = "0.3", default-features = false }
 raw-window-handle = "0.6"
 rayon = "1"
 rfd = { version = "0.16", default-features = false }
+# The session bus, for the `org.freedesktop.FileManager1` service the
+# running instance owns on Linux (specs/system-integration.md §7.1): pure
+# Rust, on the one tokio runtime, and the version `rfd`'s portal backend
+# and the keychain already bring, so the lock file gains nothing.
+zbus = { version = "5", default-features = false, features = ["tokio"] }
 rustix = { version = "1", default-features = false }
 semver = "1"
 serde = { version = "1", features = ["derive"] }
