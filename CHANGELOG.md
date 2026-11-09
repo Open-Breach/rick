@@ -28,6 +28,24 @@ the pull request that brought the change.
   `SVG · 512 × 512 px · 14.2 KiB`, `viewBox 0 0 24 24` in place of the
   size when only a viewBox exists; File info plus an Image section
   (QUESTIONS.md 255, 256) (#91).
+- `ext-preview-icons`, a plugin for the icon containers ICO, CUR, ICNS
+  and XPM (issue 84, SPEC.md *Icon containers*): claimed by magic,
+  decoded in pure Rust (the `ico` and `icns` crates, an XPM parser of the
+  crate's own with the X11 colour names and `None` transparent), never
+  compiled into the default binary. The variants of a container are the
+  document's pages, largest first, stepped through with the pane's pager;
+  a variant the plugin cannot decode (an ICNS JPEG 2000 entry, an unknown
+  type, a corrupt entry) is listed in File info as not decodable and
+  counted in the footer, and a file with none fails to open with a clear
+  error. In Fit a variant is magnified by the largest whole factor up to
+  8, nearest-neighbour, so every pixel stays a crisp square, and the
+  pane's actual-size request gets the variant's own pixels; transparent
+  pixels stay transparent. A CUR draws its hotspot as a crosshair, with
+  the `icons.hotspot` toggle to hide it. XPM's source is the text layer,
+  so *Copy* copies it; the binary containers have no *Copy*. Footer
+  `ICO · 7 variants · 48 × 48 · 32-bit · PNG · 23.4 KiB`, `2 not shown`
+  when variants were skipped, `XPM · 32 × 32 · 16 colours · 2.1 KiB`
+  (QUESTIONS.md 257) (#99).
 
 ### Changed
 
