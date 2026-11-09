@@ -48,7 +48,6 @@ pane-not-implemented-yet = Not implemented yet
 pane-view-mode = View mode
 pane-hidden-ancestors = Hidden ancestors
 pane-copy-path = Copy path
-pane-clear-filter = Clear filter
 pane-view-options = View options
 pane-drag-pane = Drag pane
 pane-group-view = View
@@ -65,6 +64,25 @@ pane-folders-first = Folders first
 pane-refresh-now = Refresh now
 pane-show-all = Show all
 pane-type-folders = Folders
+footer-hide-hidden = Hide hidden files
+footer-folders = { $count ->
+    [one] { $count } folder
+   *[other] { $count } folders
+}
+footer-files = { $count ->
+    [one] { $count } file
+   *[other] { $count } files
+}
+footer-of = { $shown } of { $total }
+footer-folders-of = { $shown } of { $total } folders
+footer-files-of = { $shown } of { $total } files
+footer-total-size = { $size } in files
+footer-listing = listing…
+footer-selected = { $count } selected · { $size }
+footer-filter = Filter
+footer-subtree = Include subfolders
+footer-subtree-on = Searching the subfolders too; click to filter this folder only
+footer-subtree-off = Search the subfolders too
 list-column-name = Name
 list-column-size = Size
 list-column-type = Type

@@ -819,7 +819,7 @@ fn search_in_subdirectories_streams_matches_and_a_new_text_supersedes_the_walk()
     assert_eq!(row_names(&harness).len(), 11, "foo1 and foo10 to foo19");
 
     // The toggle off ends the search; the folder's own entries are back.
-    harness.get_by_label(icons::SUBTREE).click();
+    harness.get_by_label("Include subfolders").click();
     harness.step();
     settle(&mut harness);
     assert!(!tab(&harness).1.subtree);

@@ -85,6 +85,23 @@ the pull request that brought the change.
   platform reports the system's reduce-motion setting (`Motion`: GNOME's
   `enable-animations`, macOS's *Reduce motion*, Windows's client area
   animation), which stills the portal (#72).
+- The footer of the design refresh (issue 60, SPEC.md *Footer*): one row
+  at the foot of every pane, the toolbar's height under a hairline with
+  `space/toolbar-x` padding. Left to right the hidden-files toggle, icon
+  only — `EYE` on `bg/selected-soft` while hidden files are shown,
+  `EYE_SLASH` as a ghost button while they are hidden — the statistics in
+  12 px `text/secondary` (`FOLDER` and the folder count, `FILE` and the
+  file count, the files' total size; *12 of 340* while a filter narrows
+  the list, *listing…* while entries still arrive), a hairline and the
+  selection pill (`bg/selected-soft`, `text/on-selected`, *1 selected ·
+  568 B*) while something is selected, the pane's note; at the right the
+  200 × 26 filter field with a `MAGNIFYING_GLASS` at 60 %, the *Filter*
+  placeholder and, inside its right end, the include-subfolders toggle
+  (`TREE_STRUCTURE`, tinted while on). Escape in the field clears the
+  text and returns the focus to the list; the separate clear button is
+  gone. The counts and the pill are read aloud with their nouns. The
+  preview pane's footer takes the same height and the 12 px secondary
+  text (#73).
 
 ### Removed
 

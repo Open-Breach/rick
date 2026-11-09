@@ -65,6 +65,8 @@ pub struct TabUi {
     pub toolbar_rects: Vec<(&'static str, egui::Rect)>,
     /// The toolbar row itself in the last frame, `None` before the first.
     pub toolbar_row: Option<egui::Rect>,
+    /// The footer row in the last frame, for tests.
+    pub footer_row: Option<egui::Rect>,
     /// The details list's column header band in the last frame, for tests.
     pub header_band: Option<egui::Rect>,
     /// Forget the column widths on the next frame.
@@ -1140,6 +1142,12 @@ impl RickUi {
     #[must_use]
     pub fn toolbar_row(&self, tab: TabId) -> Option<egui::Rect> {
         self.tabs.get(&tab).and_then(|t| t.toolbar_row)
+    }
+
+    /// The footer row of a tab in the last frame, for tests.
+    #[must_use]
+    pub fn footer_row(&self, tab: TabId) -> Option<egui::Rect> {
+        self.tabs.get(&tab).and_then(|t| t.footer_row)
     }
 
     /// The content area inside Rick's own window frame in the root window's

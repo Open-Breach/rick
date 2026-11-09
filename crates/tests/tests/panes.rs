@@ -151,7 +151,6 @@ fn the_view_options_menu_switches_views_flips_switches_and_filters_types() {
         "Details",
         "List",
         "Icons",
-        "Show hidden files",
         "Folders first",
         "Refresh now",
         "Show all",
@@ -162,6 +161,8 @@ fn the_view_options_menu_switches_views_flips_switches_and_filters_types() {
     ] {
         harness.get_by_label(label);
     }
+    // The footer's toggle carries the same name; the menu's row is a switch.
+    harness.get_by_role_and_label(egui::accesskit::Role::CheckBox, "Show hidden files");
     // Folders first off: the subfolder sorts among the files.
     click(&mut harness, "Folders first");
     settle(&mut harness);
@@ -209,7 +210,11 @@ fn the_view_options_menu_switches_views_flips_switches_and_filters_types() {
     settle(&mut harness);
     assert!(!names(&harness).contains(&".hidden".to_owned()));
     click(&mut harness, "View options");
-    click(&mut harness, "Show hidden files");
+    harness
+        .get_by_role_and_label(egui::accesskit::Role::CheckBox, "Show hidden files")
+        .click();
+    harness.step();
+    harness.step();
     settle(&mut harness);
     assert!(tab(&harness).show_hidden);
     assert!(names(&harness).contains(&".hidden".to_owned()));

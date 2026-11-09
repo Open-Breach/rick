@@ -3,7 +3,6 @@
 
 use ext::t;
 use std::collections::{BTreeMap, BTreeSet};
-use std::fmt::Write as _;
 
 use app::Command;
 use egui::Align;
@@ -26,6 +25,12 @@ const MENU_WIDTH: f32 = 260.0;
 const MENU_ROW: f32 = 32.0;
 /// The parent chip's size.
 const CHIP: egui::Vec2 = egui::vec2(28.0, 26.0);
+/// The footer's filter field: 200 px wide, 26 px tall (SPEC.md *Footer*).
+const FILTER_FIELD: egui::Vec2 = egui::vec2(200.0, 26.0);
+/// The padding inside the filter field.
+const FIELD_PAD: f32 = 8.0;
+/// The include-subfolders toggle inside the field's right end.
+const FIELD_TOGGLE: f32 = 22.0;
 
 /// Draws the whole tab.
 pub fn show(ui: &mut egui::Ui, cx: &mut PaneCx<'_>) {
@@ -933,104 +938,327 @@ fn crumb_zone(
     }
 }
 
+/// The footer (SPEC.md *Footer*): as tall as the toolbar, under a
+/// hairline, with `space/toolbar-x` padding. Left to right: the
+/// hidden-files toggle, the statistics, a divider and the selection pill
+/// while something is selected, the pane's note; the filter field at the
+/// right.
 fn foot(ui: &mut egui::Ui, cx: &mut PaneCx<'_>) {
+    let metrics = theme::metrics(ui.ctx());
+    let height = metrics.toolbar_height();
+    let (row, _) = ui.allocate_exact_size(
+        egui::vec2(ui.available_width(), height),
+        egui::Sense::hover(),
+    );
+    cx.tab_ui.footer_row = Some(row);
+    let scheme = theme::scheme(ui);
+    ui.painter()
+        .hline(row.x_range(), row.top() + 0.5, scheme.hairline());
+    let inner = row.shrink2(egui::vec2(metrics.space_toolbar_x, 0.0));
+    // The filter field at the right, fixed.
+    let mut right = ui.new_child(
+        egui::UiBuilder::new()
+            .max_rect(inner)
+            .layout(egui::Layout::right_to_left(Align::Center)),
+    );
+    filter_field(&mut right, cx);
+    let right_edge = right.min_rect().left();
+    // The rest from the left, clipped before the field.
+    let gap = ui.spacing().item_spacing.x;
+    let left_rect = egui::Rect::from_min_max(
+        inner.min,
+        egui::pos2((right_edge - gap).max(inner.left()), inner.bottom()),
+    );
+    let mut left = ui.new_child(
+        egui::UiBuilder::new()
+            .max_rect(left_rect)
+            .layout(egui::Layout::left_to_right(Align::Center)),
+    );
+    left.set_clip_rect(left_rect.intersect(left.clip_rect()));
+    left.spacing_mut().item_spacing.x = 12.0;
+    hidden_toggle(&mut left, cx);
+    statistics(&mut left, cx);
+    if !cx.tab.selection.is_empty() {
+        divider(&mut left, 16.0);
+        selection_pill(&mut left, cx);
+    }
+    if let Some(note) = &cx.tab.note {
+        divider(&mut left, 16.0);
+        left.add(
+            egui::Label::new(
+                egui::RichText::new(note.as_str())
+                    .size(TEXT_SECONDARY)
+                    .color(scheme.text_secondary),
+            )
+            .selectable(false)
+            .truncate(),
+        );
+    }
+}
+
+/// The hidden-files toggle, icon only: `EYE` on `bg/selected-soft` while
+/// hidden files are shown, `EYE_SLASH` as a ghost button while they are
+/// hidden.
+fn hidden_toggle(ui: &mut egui::Ui, cx: &mut PaneCx<'_>) {
+    let shown = cx.tab.show_hidden;
+    let scheme = theme::scheme(ui);
+    let size = button_size(ui);
+    let (rect, response) = ui.allocate_exact_size(egui::vec2(size, size), egui::Sense::click());
+    let radius = theme::metrics(ui.ctx()).corner_radius();
+    let (glyph, colour) = if shown {
+        ui.painter()
+            .rect_filled(rect, radius, scheme.bg_selected_soft);
+        (icons::HIDDEN_SHOWN, scheme.text_on_selected)
+    } else {
+        if response.hovered() {
+            ui.painter().rect_filled(rect, radius, scheme.bg_subtle);
+        }
+        (icons::HIDDEN_HIDDEN, scheme.icon_default)
+    };
+    ui.painter().text(
+        rect.center(),
+        egui::Align2::CENTER_CENTER,
+        glyph,
+        egui::FontId::proportional(ICON),
+        colour,
+    );
+    let text = if shown {
+        t!("footer-hide-hidden")
+    } else {
+        t!("pane-show-hidden")
+    };
+    response.widget_info(|| {
+        egui::WidgetInfo::selected(egui::WidgetType::Button, true, shown, text.clone())
+    });
+    if response.on_hover_text(text).clicked() {
+        intent(cx, Intent::ToggleHidden);
+    }
+}
+
+/// The statistics in 12 px `text/secondary`: `FOLDER` and the folder
+/// count, `FILE` and the file count, the files' total size; while a filter
+/// narrows the list the counts read as *12 of 340*, and *listing…* follows
+/// while entries still arrive.
+fn statistics(ui: &mut egui::Ui, cx: &mut PaneCx<'_>) {
+    let listing = &cx.tab.listing;
+    let count = |entries: &mut dyn Iterator<Item = &types::Entry>| {
+        entries.fold((0usize, 0usize, 0u64), |(d, f, b), e| {
+            if e.kind == EntryKind::Dir {
+                (d + 1, f, b)
+            } else {
+                (d, f + 1, b + e.size.unwrap_or(0))
+            }
+        })
+    };
+    let (folders, files, bytes) = count(&mut listing.rows());
+    let narrowed = !cx.tab.filter.is_empty() && !cx.tab.is_searching();
+    let (folders_text, folders_label, files_text, files_label) = if narrowed {
+        let (all_folders, all_files, _) = count(&mut listing.entries().iter());
+        (
+            t!("footer-of", shown = folders, total = all_folders),
+            t!("footer-folders-of", shown = folders, total = all_folders),
+            t!("footer-of", shown = files, total = all_files),
+            t!("footer-files-of", shown = files, total = all_files),
+        )
+    } else {
+        (
+            folders.to_string(),
+            t!("footer-folders", count = folders),
+            files.to_string(),
+            t!("footer-files", count = files),
+        )
+    };
+    stat(ui, icons::FOLDER, &folders_text, &folders_label);
+    stat(ui, icons::FILE, &files_text, &files_label);
+    let size = format::size(Some(bytes));
+    secondary_text(ui, &size, &t!("footer-total-size", size = size.as_str()));
+    if !listing.complete {
+        let listing_text = t!("footer-listing");
+        secondary_text(ui, &listing_text, &listing_text);
+    }
+}
+
+/// One statistic: a 16 px glyph in `icon/default` and its number, read
+/// aloud as `label`.
+fn stat(ui: &mut egui::Ui, glyph: &str, text: &str, label: &str) {
     ui.horizontal(|ui| {
-        ui.label(status_line(cx));
-        ui.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
-            if !cx.tab.filter.is_empty()
-                && ui
-                    .small_button(icons::CLOSE)
-                    .on_hover_text(t!("pane-clear-filter"))
-                    .clicked()
-            {
-                cx.requests.push(Request::Command(Command::Filter {
-                    pane: cx.pane,
-                    text: String::new(),
-                }));
-            }
-            // Search in subdirectories: the filter text matches the
-            // subtree, when a search index that walks one is loaded.
-            if cx.app.model().subtree_search {
-                let subtree = ui
-                    .add(
-                        egui::Button::new(icons::SUBTREE)
-                            .small()
-                            .selected(cx.tab.subtree),
-                    )
-                    .on_hover_text(if cx.tab.subtree {
-                        "Searching in subdirectories; click to filter this folder only"
-                    } else {
-                        "Search in subdirectories"
-                    });
-                if subtree.clicked() {
-                    intent(cx, Intent::ToggleSubtree);
-                }
-            }
-            let mut text = cx.tab.filter.clone();
-            let output = egui::TextEdit::singleline(&mut text)
-                .hint_text(if cx.tab.subtree {
-                    "Search in subdirectories"
-                } else {
-                    "Filter"
-                })
-                .desired_width(180.0)
-                .show(ui);
-            if cx.tab_ui.focus_filter {
-                output.response.request_focus();
-                cx.tab_ui.focus_filter = false;
-            }
-            if output.response.changed() {
-                cx.requests.push(Request::Command(Command::Filter {
-                    pane: cx.pane,
-                    text,
-                }));
-            }
-            if output.response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
-                intent(cx, Intent::Open);
-            }
-        });
+        ui.spacing_mut().item_spacing.x = 6.0;
+        let scheme = theme::scheme(ui);
+        ui.add(
+            egui::Label::new(
+                egui::RichText::new(glyph)
+                    .size(ICON)
+                    .color(scheme.icon_default),
+            )
+            .selectable(false),
+        );
+        secondary_text(ui, text, label);
     });
 }
 
-/// "3 folders, 12 files, 4.2 MiB · 2 selected, 1.1 MiB", or "12 of 340
-/// entries" while a filter narrows the list.
-fn status_line(cx: &PaneCx<'_>) -> String {
-    let listing = &cx.tab.listing;
-    let (mut folders, mut files, mut bytes) = (0usize, 0usize, 0u64);
-    for entry in listing.rows() {
-        if entry.kind == EntryKind::Dir {
-            folders += 1;
-        } else {
-            files += 1;
-            bytes += entry.size.unwrap_or(0);
+/// A 12 px `text/secondary` label whose accessible name is `label`.
+fn secondary_text(ui: &mut egui::Ui, text: &str, label: &str) {
+    let scheme = theme::scheme(ui);
+    let response = ui.add(
+        egui::Label::new(
+            egui::RichText::new(text)
+                .size(TEXT_SECONDARY)
+                .color(scheme.text_secondary),
+        )
+        .selectable(false),
+    );
+    response
+        .widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Label, true, label.to_owned()));
+}
+
+/// The selection pill: `bg/selected-soft` with `text/on-selected`,
+/// *1 selected · 568 B*.
+fn selection_pill(ui: &mut egui::Ui, cx: &mut PaneCx<'_>) {
+    let (count, bytes) = cx
+        .tab
+        .selected()
+        .fold((0usize, 0u64), |(n, b), e| (n + 1, b + e.size.unwrap_or(0)));
+    let text = t!(
+        "footer-selected",
+        count = count,
+        size = format::size(Some(bytes)).as_str()
+    );
+    let scheme = theme::scheme(ui);
+    let galley = ui.painter().layout_no_wrap(
+        text.clone(),
+        egui::FontId::proportional(TEXT_SECONDARY),
+        scheme.text_on_selected,
+    );
+    let size = galley.size() + egui::vec2(16.0, 6.0);
+    let (rect, response) = ui.allocate_exact_size(size, egui::Sense::hover());
+    ui.painter()
+        .rect_filled(rect, rect.height() / 2.0, scheme.bg_selected_soft);
+    ui.painter().galley(
+        rect.center() - galley.size() / 2.0,
+        galley,
+        scheme.text_on_selected,
+    );
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Label, true, text.clone()));
+}
+
+/// The filter field (SPEC.md *Footer*): 200 × 26, a `MAGNIFYING_GLASS` at
+/// 60 % opacity, the placeholder *Filter*, and inside its right end the
+/// include-subfolders toggle when a subtree search is available. Typing
+/// narrows the list live, Escape clears the text and returns the focus to
+/// the list, Enter opens the first match.
+fn filter_field(ui: &mut egui::Ui, cx: &mut PaneCx<'_>) {
+    let scheme = theme::scheme(ui);
+    let radius = theme::metrics(ui.ctx()).corner_radius();
+    let (rect, _) = ui.allocate_exact_size(FILTER_FIELD, egui::Sense::hover());
+    ui.painter().rect(
+        rect,
+        radius,
+        scheme.bg_pane,
+        egui::Stroke::new(1.0, scheme.border_default),
+        egui::StrokeKind::Inside,
+    );
+    let glass = egui::Rect::from_min_size(
+        rect.min + egui::vec2(FIELD_PAD, 0.0),
+        egui::vec2(ICON, rect.height()),
+    );
+    ui.painter().text(
+        glass.center(),
+        egui::Align2::CENTER_CENTER,
+        icons::SEARCH,
+        egui::FontId::proportional(ICON),
+        scheme.icon_default.gamma_multiply(0.6),
+    );
+    let mut right = rect.right() - FIELD_PAD;
+    if cx.app.model().subtree_search {
+        let toggle = egui::Rect::from_center_size(
+            egui::pos2(rect.right() - 2.0 - FIELD_TOGGLE / 2.0, rect.center().y),
+            egui::vec2(FIELD_TOGGLE, FIELD_TOGGLE),
+        );
+        subtree_toggle(ui, cx, toggle);
+        right = toggle.left() - 4.0;
+    }
+    let text_rect = egui::Rect::from_min_max(
+        egui::pos2(glass.right() + 6.0, rect.top()),
+        egui::pos2(right.max(glass.right() + 6.0), rect.bottom()),
+    );
+    let mut field = ui.new_child(
+        egui::UiBuilder::new()
+            .max_rect(text_rect)
+            .layout(egui::Layout::left_to_right(Align::Center)),
+    );
+    field.set_clip_rect(text_rect.intersect(field.clip_rect()));
+    let mut text = cx.tab.filter.clone();
+    let output = egui::TextEdit::singleline(&mut text)
+        .frame(egui::Frame::NONE)
+        .margin(egui::Margin::ZERO)
+        .font(egui::FontId::proportional(TEXT_BODY))
+        .text_color(scheme.text_primary)
+        .hint_text(
+            egui::RichText::new(t!("footer-filter"))
+                .size(TEXT_BODY)
+                .color(scheme.text_placeholder),
+        )
+        .desired_width(text_rect.width())
+        .vertical_align(Align::Center)
+        .show(&mut field);
+    if cx.tab_ui.focus_filter {
+        output.response.request_focus();
+        cx.tab_ui.focus_filter = false;
+    }
+    if output.response.changed() {
+        cx.requests.push(Request::Command(Command::Filter {
+            pane: cx.pane,
+            text,
+        }));
+    }
+    if output.response.lost_focus() {
+        if ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+            intent(cx, Intent::Open);
+        } else if ui.input(|i| i.key_pressed(egui::Key::Escape)) && !cx.tab.filter.is_empty() {
+            cx.requests.push(Request::Command(Command::Filter {
+                pane: cx.pane,
+                text: String::new(),
+            }));
         }
     }
-    let mut text = if cx.tab.filter.is_empty() {
-        format!(
-            "{folders} folders, {files} files, {}",
-            format::size(Some(bytes))
-        )
-    } else if cx.tab.is_searching() {
-        format!("{} matches in subdirectories", listing.row_count())
+}
+
+/// The include-subfolders toggle inside the filter field: `TREE_STRUCTURE`,
+/// on `bg/selected-soft` while on.
+fn subtree_toggle(ui: &mut egui::Ui, cx: &mut PaneCx<'_>, rect: egui::Rect) {
+    let on = cx.tab.subtree;
+    let scheme = theme::scheme(ui);
+    let response = ui.interact(
+        rect,
+        ui.id().with(("subtree", cx.tab_id)),
+        egui::Sense::click(),
+    );
+    let colour = if on {
+        ui.painter().rect_filled(rect, 4.0, scheme.bg_selected_soft);
+        scheme.text_on_selected
     } else {
-        format!("{} of {} entries", listing.row_count(), listing.len())
+        if response.hovered() {
+            ui.painter().rect_filled(rect, 4.0, scheme.bg_subtle);
+        }
+        scheme.icon_default
     };
-    if !cx.tab.selection.is_empty() {
-        let (count, selected_bytes) = cx
-            .tab
-            .selected()
-            .fold((0usize, 0u64), |(n, b), e| (n + 1, b + e.size.unwrap_or(0)));
-        let _ = write!(
-            text,
-            " · {count} selected, {}",
-            format::size(Some(selected_bytes))
-        );
+    ui.painter().text(
+        rect.center(),
+        egui::Align2::CENTER_CENTER,
+        icons::SUBTREE,
+        egui::FontId::proportional(ICON),
+        colour,
+    );
+    let label = t!("footer-subtree");
+    response.widget_info(|| {
+        egui::WidgetInfo::selected(egui::WidgetType::Button, true, on, label.clone())
+    });
+    let hint = if on {
+        t!("footer-subtree-on")
+    } else {
+        t!("footer-subtree-off")
+    };
+    if response.on_hover_text(hint).clicked() {
+        intent(cx, Intent::ToggleSubtree);
     }
-    if !listing.complete {
-        text.push_str(" · listing…");
-    }
-    if let Some(note) = &cx.tab.note {
-        let _ = write!(text, " · {note}");
-    }
-    text
 }
