@@ -7,6 +7,28 @@ the pull request that brought the change.
 
 ## [Unreleased]
 
+### Added
+
+- SVG and SVGZ previews in `ext-preview-image` (issue 83, SPEC.md *Vector
+  images*): claimed by the `svg` root element, or the gzip magic with the
+  `.svgz` name, never by the extension alone; rasterised with `resvg` at
+  the exact size the pane asks for and again at every change of it — the
+  pane's size for Fit, the intrinsic size at the display scale for the
+  actual-size request — so the picture is sharp at any size and nothing
+  comes from a scaled-up bitmap; the long edge capped at 8192 px with the
+  footer saying so. The intrinsic size is `width` and `height`, else the
+  `viewBox`, else 300 × 150. Only data URIs are honoured: no `href` to a
+  file or URL is followed, no script runs, text is set through usvg's
+  font database over the system fonts. The *Rendered* toggle, on for
+  every newly shown file, switches to the highlighted XML, and the source
+  (inflated for SVGZ) is the text layer, so *Copy* copies the raw SVG and
+  find searches it; the pane's *Copy* inflates a gzip-compressed file
+  before decoding it. A document usvg rejects opens on the source with
+  the parser's message, line and column, in the footer. Footer
+  `SVG · 512 × 512 px · 14.2 KiB`, `viewBox 0 0 24 24` in place of the
+  size when only a viewBox exists; File info plus an Image section
+  (QUESTIONS.md 254, 255) (#91).
+
 ### Changed
 
 - The workspace version is `0.3.0-dev` until 0.3.0 is tagged.
