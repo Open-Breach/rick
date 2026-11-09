@@ -61,7 +61,13 @@ records and the model; the check at startup obeys *Check integration at
 startup* and says whether the dialog should open), performs the dialog's
 *Apply* and Settings' *Add* and *Restore* row by row through the platform,
 recording what each wrote and reporting a row that failed without stopping
-the others, and clears the declined marks on *Reset choices*; the
+the others, and clears the declined marks on *Reset choices*. The install
+location alone is not the platform's: the installer plugin performs it
+through its registered command `install-rick`, as a job of its own, the
+rows after it waiting for that job and then acting on the installed copy,
+and the apply's end names the copy for the UI to relaunch from; without the
+plugin the row is *Unsupported* and the others work against the folder
+Rick runs from. The
 *Shell integration* switch unties the console and the tab. It depends on `types`,
 `runtime`, `platform`, `ext`, `vfs`, `vfs-local`, `vfs-rick`, `model` and
 `ops` (the built-in operations it loads); only `ui-egui`, `rick` and

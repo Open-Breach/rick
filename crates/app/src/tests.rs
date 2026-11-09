@@ -2460,9 +2460,9 @@ mod integration {
         h.settle();
         let events = h.take_events();
         assert!(
-            events
-                .iter()
-                .any(|e| matches!(e, Event::IntegrationApplied { failed } if failed.is_empty())),
+            events.iter().any(
+                |e| matches!(e, Event::IntegrationApplied { failed, .. } if failed.is_empty())
+            ),
             "{events:?}"
         );
         assert_eq!(status(&h, Item::LauncherEntry), Some(ItemStatus::SetUp));
@@ -2612,7 +2612,7 @@ mod integration {
         assert!(
             events.iter().any(|e| matches!(
                 e,
-                Event::IntegrationApplied { failed } if failed == &[Item::DockFavourite]
+                Event::IntegrationApplied { failed, .. } if failed == &[Item::DockFavourite]
             )),
             "{events:?}"
         );
@@ -2666,7 +2666,7 @@ mod integration {
         assert_eq!(status(&h, Item::LauncherEntry), Some(ItemStatus::Missing));
         assert!(h.take_events().iter().any(|e| matches!(
             e,
-            Event::IntegrationApplied { failed } if failed == &[Item::LauncherEntry]
+            Event::IntegrationApplied { failed, .. } if failed == &[Item::LauncherEntry]
         )));
         h.send(Command::Integration(IntegrationCommand::Apply {
             scope: Scope::User,
@@ -2696,5 +2696,243 @@ mod integration {
             integration.system, "",
             "the status line still names the system"
         );
+    }
+
+    /// A stand-in for the installer plugin: its `install-rick` command
+    /// records what it was asked and starts a job that succeeds or fails.
+    struct FakeInstaller {
+        manifest: Manifest,
+        asked: Arc<Mutex<Vec<Vec<String>>>>,
+        fail: bool,
+    }
+
+    struct InstallRick {
+        asked: Arc<Mutex<Vec<Vec<String>>>>,
+        fail: bool,
+    }
+
+    impl ext::CliCommand for InstallRick {
+        fn name(&self) -> &'static str {
+            crate::INSTALL_RICK_COMMAND
+        }
+
+        fn run(
+            &self,
+            ctx: ext::CliCtx,
+            jobs: &ext::JobRunner,
+            _ui: &dyn UiHost,
+        ) -> Result<ext::CliOutcome, Error> {
+            self.asked
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .push(ctx.args);
+            let fail = self.fail;
+            let handle = jobs.spawn_named("Install Rick", move |_job| async move {
+                if fail {
+                    Err(Error::PermissionDenied)
+                } else {
+                    Ok(())
+                }
+            });
+            Ok(ext::CliOutcome::Outcome(ext::ActionOutcome::Started(
+                handle.id,
+            )))
+        }
+    }
+
+    impl Extension for FakeInstaller {
+        fn manifest(&self) -> &Manifest {
+            &self.manifest
+        }
+
+        fn register(&self, reg: &mut Registry) -> Result<(), Error> {
+            reg.command(Arc::new(InstallRick {
+                asked: Arc::clone(&self.asked),
+                fail: self.fail,
+            }));
+            Ok(())
+        }
+    }
+
+    const INSTALL_COMMANDS: &[ext::CommandSpec] = &[ext::CommandSpec {
+        name: crate::INSTALL_RICK_COMMAND,
+        help: "Install Rick",
+    }];
+
+    /// A harness with the stand-in installer loaded and an unpacked Rick:
+    /// the install location and the launcher entry missing.
+    fn unpacked(fail: bool) -> (Harness, FakeIntegration, Arc<Mutex<Vec<Vec<String>>>>) {
+        let asked = Arc::new(Mutex::new(Vec::new()));
+        let installer: Arc<dyn Extension> = Arc::new(FakeInstaller {
+            manifest: Manifest {
+                id: ExtId("installer"),
+                name: "Installer",
+                version: Version::new(0, 1, 0),
+                api_version: API_VERSION,
+                requires: Capabilities::empty(),
+                points: Points::empty(),
+                platforms: Platforms::ALL,
+                previews: &[],
+                commands: INSTALL_COMMANDS,
+            },
+            asked: Arc::clone(&asked),
+            fail,
+        });
+        let h = harness_with(vec![installer]);
+        let fake = FakeIntegration::new("Fedora Linux 43 · GNOME", Some(Desktop::Gnome));
+        fake.set(Item::InstallLocation, unpacked_check());
+        fake.set(Item::LauncherEntry, Check::missing());
+        h.fake.set_integration(Arc::new(fake.clone()));
+        (h, fake, asked)
+    }
+
+    /// What the platform finds of a Rick unpacked into Downloads.
+    fn unpacked_check() -> Check {
+        Check {
+            place: Some(std::path::PathBuf::from("/home/u/.local/opt/rick")),
+            target: Some(std::path::PathBuf::from("/home/u/Downloads/rick-0.3.0")),
+            ..Check::missing()
+        }
+    }
+
+    fn applied(events: &[Event]) -> Option<(Vec<Item>, Option<std::path::PathBuf>)> {
+        events.iter().find_map(|event| match event {
+            Event::IntegrationApplied { failed, relaunch } => {
+                Some((failed.clone(), relaunch.clone()))
+            }
+            _ => None,
+        })
+    }
+
+    #[test]
+    fn the_install_location_is_the_plugins_and_the_other_rows_act_on_the_installed_copy() {
+        let (mut h, fake, asked) = unpacked(false);
+        h.settle();
+        check(&mut h, true);
+        assert_eq!(status(&h, Item::InstallLocation), Some(ItemStatus::Missing));
+        h.take_events();
+        h.send(Command::Integration(IntegrationCommand::Apply {
+            scope: Scope::User,
+            perform: vec![Item::LauncherEntry, Item::InstallLocation],
+            decline: Vec::new(),
+            replace: Vec::new(),
+        }));
+        h.settle();
+        // The plugin's command got the folder Rick runs from and Rick's
+        // version; the platform was never asked to install.
+        assert_eq!(
+            *asked.lock().unwrap_or_else(PoisonError::into_inner),
+            [vec![
+                "/home/u/Downloads/rick-0.3.0".to_owned(),
+                env!("CARGO_PKG_VERSION").to_owned()
+            ]]
+        );
+        let installed = std::path::PathBuf::from("/home/u/.local/opt/rick/current/rick");
+        let performed: Vec<(Item, Option<std::path::PathBuf>)> = fake
+            .calls()
+            .into_iter()
+            .filter_map(|call| match call {
+                Call::Perform(item, request) => Some((item, request.binary)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            performed,
+            [(Item::LauncherEntry, Some(installed.clone()))],
+            "after the install, on the installed copy"
+        );
+        // The apply ends naming the copy to continue from.
+        let events = h.take_events();
+        assert_eq!(applied(&events), Some((Vec::new(), Some(installed))));
+        assert_eq!(state(&h, Item::InstallLocation), Some(ItemState::SetUp));
+        assert_eq!(status(&h, Item::InstallLocation), Some(ItemStatus::SetUp));
+        assert_eq!(status(&h, Item::LauncherEntry), Some(ItemStatus::SetUp));
+        assert!(
+            h.app
+                .model()
+                .settings
+                .integration
+                .receipt(Item::InstallLocation)
+                .is_empty(),
+            "the install's record is the installer's own"
+        );
+    }
+
+    #[test]
+    fn a_failed_install_leaves_the_rows_that_waited_for_it_alone() {
+        let (mut h, fake, _asked) = unpacked(true);
+        h.settle();
+        check(&mut h, true);
+        h.take_events();
+        h.send(Command::Integration(IntegrationCommand::Apply {
+            scope: Scope::User,
+            perform: vec![Item::InstallLocation, Item::LauncherEntry],
+            decline: Vec::new(),
+            replace: Vec::new(),
+        }));
+        h.settle();
+        let events = h.take_events();
+        assert_eq!(
+            applied(&events),
+            Some((vec![Item::InstallLocation], None)),
+            "{events:?}"
+        );
+        // The job's failure was shown under its own name.
+        assert!(
+            events.iter().any(|e| matches!(
+                e,
+                Event::Notify { level: Level::Error, text } if text.contains("Install Rick")
+            )),
+            "{events:?}"
+        );
+        assert!(
+            !fake
+                .calls()
+                .iter()
+                .any(|call| matches!(call, Call::Perform(..))),
+            "nothing else was set up"
+        );
+        assert_eq!(status(&h, Item::InstallLocation), Some(ItemStatus::Missing));
+        assert_eq!(h.app.model().integration.applying, None);
+    }
+
+    #[test]
+    fn without_the_installer_plugin_the_install_row_is_unsupported_and_the_rest_works() {
+        let mut h = harness();
+        let fake = FakeIntegration::new("Fedora Linux 43 · GNOME", Some(Desktop::Gnome));
+        fake.set(Item::InstallLocation, unpacked_check());
+        fake.set(Item::LauncherEntry, Check::missing());
+        h.fake.set_integration(Arc::new(fake.clone()));
+        h.settle();
+        check(&mut h, true);
+        assert_eq!(
+            status(&h, Item::InstallLocation),
+            Some(ItemStatus::Unsupported(Reason::Plugin(
+                "Installer".to_owned()
+            )))
+        );
+        let asked: Vec<Item> = h
+            .app
+            .model()
+            .integration
+            .asked()
+            .map(|row| row.item)
+            .collect();
+        assert_eq!(asked, [Item::LauncherEntry], "the row is not offered");
+        h.take_events();
+        h.send(Command::Integration(IntegrationCommand::Apply {
+            scope: Scope::User,
+            perform: vec![Item::LauncherEntry],
+            decline: Vec::new(),
+            replace: Vec::new(),
+        }));
+        h.settle();
+        assert_eq!(applied(&h.take_events()), Some((Vec::new(), None)));
+        // Against the folder Rick runs from: no other binary is named.
+        assert!(fake.calls().iter().any(|call| matches!(
+            call,
+            Call::Perform(Item::LauncherEntry, request) if request.binary.is_none()
+        )));
+        assert_eq!(status(&h, Item::LauncherEntry), Some(ItemStatus::SetUp));
     }
 }

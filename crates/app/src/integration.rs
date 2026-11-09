@@ -9,16 +9,36 @@
 //! through the platform, records what every perform wrote beside the
 //! item's state, reports a row that failed without stopping the others,
 //! and ends with a check, so the rows show what is there.
+//!
+//! The install location is the exception: the installer plugin performs
+//! it, through its registered command [`INSTALL_RICK_COMMAND`], as a job
+//! of its own in the operations area. The rows after it wait for that
+//! job and then act on the installed copy, and the apply's end names the
+//! copy for the UI to relaunch from. Without the plugin the row is
+//! unsupported and every other row works against the folder Rick runs
+//! from.
 
 use std::sync::Arc;
 use std::time::SystemTime;
 
-use ext::{Level, t};
+use std::path::PathBuf;
+
+use ext::{ActionOutcome, CliCtx, CliOutcome, Level, t};
 use model::{Applying, Integration, SettingsChange};
-use platform::integration::{Check, Item, Items, Receipt, Request, Scope};
+use platform::integration::{Actual, Check, Item, Items, Reason, Receipt, Request, Scope};
 use types::{Error, JobId};
 
 use crate::{App, Event, Msg};
+
+/// The installer plugin's subcommand that performs the install location:
+/// `rick install-rick <folder> <version>` (QUESTIONS.md, issue 120). The
+/// core owns the row and the check; the plugin, when it is loaded, does
+/// the install.
+pub const INSTALL_RICK_COMMAND: &str = "install-rick";
+/// The plugin's name, for the row that says it is not loaded.
+const INSTALLER: &str = "Installer";
+/// Rick's binary inside the folder it is installed to.
+const BINARY: &str = "rick";
 
 /// What the integration dialog and Settings → Integration ask of the
 /// application.
@@ -76,6 +96,27 @@ pub(crate) struct IntegrationRun {
     checking: Option<JobId>,
     /// The running apply.
     applying: Option<JobId>,
+    /// The install the installer plugin runs for the install location,
+    /// with the rows that wait for it.
+    installing: Option<Installing>,
+    /// The copy this process installed Rick to: what every other item
+    /// points at from then on, and what a relaunch continues from.
+    installed: Option<PathBuf>,
+}
+
+/// An apply waiting for the installer plugin's job.
+#[derive(Debug)]
+struct Installing {
+    /// The plugin's install job.
+    job: JobId,
+    /// The dialog's *Install for*.
+    scope: Scope,
+    /// The rows to perform once Rick is installed, in order.
+    rest: Vec<Item>,
+    /// The rows whose foreign files may be replaced.
+    replace: Vec<Item>,
+    /// The installed binary, through the `current` link.
+    binary: PathBuf,
 }
 
 /// An item's name in a notification: the title of its row in Settings.
@@ -92,7 +133,7 @@ fn item_name(item: Item) -> String {
 
 impl App {
     /// Handles a [`Command::Integration`](crate::Command::Integration).
-    pub(crate) fn integration(&mut self, command: IntegrationCommand) {
+    pub(crate) fn integration(&mut self, command: IntegrationCommand, events: &mut Vec<Event>) {
         match command {
             IntegrationCommand::Check { startup } => self.check_integration(startup),
             IntegrationCommand::Apply {
@@ -106,12 +147,12 @@ impl App {
                     model::decline(&mut records, &decline, model::day_of(SystemTime::now()));
                     self.change_settings(SettingsChange::IntegrationRecords(records));
                 }
-                self.apply_integration(scope, &perform, &replace);
+                self.apply_integration(scope, &perform, &replace, events);
             }
             IntegrationCommand::Add { item, replace }
             | IntegrationCommand::Restore { item, replace } => {
                 let replace = if replace { vec![item] } else { Vec::new() };
-                self.apply_integration(Scope::User, &[item], &replace);
+                self.apply_integration(Scope::User, &[item], &replace, events);
             }
             IntegrationCommand::Reset => {
                 let mut records = self.model.settings.integration.items.clone();
@@ -138,6 +179,7 @@ impl App {
         let generation = self.integration.generation;
         let platform = Arc::clone(&self.platform);
         let records = self.model.settings.integration.clone();
+        let installed = self.integration.installed.clone();
         let tx = self.mailbox.clone();
         self.model.integration.checking = true;
         let handle = self.jobs.spawn(move |job| async move {
@@ -154,11 +196,18 @@ impl App {
                         if records.declined(*item) {
                             continue;
                         }
+                        // The copy this process installed stands for the
+                        // running one until the relaunch.
                         let request = Request {
+                            binary: installed.clone(),
                             receipt: records.receipt(*item),
                             ..Request::default()
                         };
-                        found.push((*item, platform.check_integration(*item, &request)));
+                        let mut check = platform.check_integration(*item, &request);
+                        if *item == Item::InstallLocation && installed.is_some() {
+                            check.actual = Actual::SetUp;
+                        }
+                        found.push((*item, check));
                     }
                     Ok((listed, found))
                 })
@@ -191,9 +240,19 @@ impl App {
         }
         self.integration.checking = None;
         let now = SystemTime::now();
+        // The install location is the installer plugin's to perform: with
+        // the plugin not loaded the row is unsupported, and says why.
+        let mut found = found.to_vec();
+        if !self.can_install() {
+            for (item, check) in &mut found {
+                if *item == Item::InstallLocation && check.actual == Actual::Missing {
+                    check.actual = Actual::Unsupported(Reason::Plugin(INSTALLER.to_owned()));
+                }
+            }
+        }
         let settings = &self.model.settings.integration;
         let (records, rows) =
-            model::fold_check(&settings.items, &listed.items, found, model::day_of(now));
+            model::fold_check(&settings.items, &listed.items, &found, model::day_of(now));
         let ask = startup && settings.ask && rows.iter().any(|row| row.status.asked());
         if records != settings.items {
             self.change_settings(SettingsChange::IntegrationRecords(records));
@@ -210,10 +269,27 @@ impl App {
         events.push(Event::IntegrationChecked { ask });
     }
 
+    /// Whether the installer plugin's command is registered.
+    fn can_install(&self) -> bool {
+        self.registry
+            .commands()
+            .iter()
+            .any(|command| command.name() == INSTALL_RICK_COMMAND)
+    }
+
     /// Performs `perform`, in the order the platform lists the items, one
-    /// after the other; a row that fails does not stop the next.
-    fn apply_integration(&mut self, scope: Scope, perform: &[Item], replace: &[Item]) {
-        if self.integration.applying.is_some() {
+    /// after the other; a row that fails does not stop the next. The
+    /// install location goes first, through the installer plugin's
+    /// command, and the rows after it wait for its job: they then act on
+    /// the installed copy.
+    fn apply_integration(
+        &mut self,
+        scope: Scope,
+        perform: &[Item],
+        replace: &[Item],
+        events: &mut Vec<Event>,
+    ) {
+        if self.integration.applying.is_some() || self.integration.installing.is_some() {
             return;
         }
         // The listed order first; a row asked for before any check keeps
@@ -239,37 +315,174 @@ impl App {
             self.jobs.cancel(running);
             self.integration.generation += 1;
         }
+        let total = order.len();
+        if let Some(at) = order.iter().position(|item| *item == Item::InstallLocation) {
+            order.remove(at);
+            self.model.integration.applying = Some(Applying {
+                done: 0,
+                total,
+                current: Some(Item::InstallLocation),
+            });
+            if let Err(error) = self.start_install(scope, order, replace.to_vec()) {
+                // Without the install the other rows would point at the
+                // folder Rick was meant to leave: nothing else is done.
+                self.integration_applied(vec![(Item::InstallLocation, Err(error))], None, events);
+            }
+            return;
+        }
+        let binary = self.integration.installed.clone();
+        self.perform_rows(scope, &order, replace, binary.as_ref(), 0, total, None);
+    }
+
+    /// Starts the installer plugin's job for the folder Rick runs from,
+    /// and parks the rows that follow it.
+    fn start_install(
+        &mut self,
+        scope: Scope,
+        rest: Vec<Item>,
+        replace: Vec<Item>,
+    ) -> Result<(), Error> {
+        let row = self.model.integration.get(Item::InstallLocation);
+        let folder = row.and_then(|row| row.check.target.clone());
+        let place = row.and_then(|row| row.check.place.clone());
+        let (Some(folder), Some(place)) = (folder, place) else {
+            return Err(Error::Unsupported(
+                "the check did not say where Rick runs from and where it goes",
+            ));
+        };
+        let Some(command) = self
+            .registry
+            .commands()
+            .iter()
+            .find(|command| command.name() == INSTALL_RICK_COMMAND)
+            .cloned()
+        else {
+            return Err(Error::Unsupported("the installer plugin is not loaded"));
+        };
+        let pane = self.model.focused;
+        let ctx = CliCtx {
+            args: vec![
+                folder.to_string_lossy().into_owned(),
+                env!("CARGO_PKG_VERSION").to_owned(),
+            ],
+            cwd: folder,
+            pane,
+            location: self.pane_location(pane),
+        };
+        match command.run(ctx, &self.jobs, &*self.ui)? {
+            CliOutcome::Outcome(ActionOutcome::Started(job)) => {
+                self.integration.installing = Some(Installing {
+                    job,
+                    scope,
+                    rest,
+                    replace,
+                    binary: place.join("current").join(BINARY),
+                });
+                Ok(())
+            }
+            _ => Err(Error::Unsupported(
+                "the installer plugin did not start its install",
+            )),
+        }
+    }
+
+    /// A job ended: when it is the installer plugin's install, the rows
+    /// that waited for it are performed on the installed copy, or, the
+    /// install having failed, left alone.
+    pub(crate) fn integration_job_finished(
+        &mut self,
+        job: JobId,
+        result: &Result<(), Error>,
+        events: &mut Vec<Event>,
+    ) {
+        let Some(installing) = self.integration.installing.take_if(|i| i.job == job) else {
+            return;
+        };
+        if let Err(error) = result {
+            // The job's own failure was shown with its name already.
+            tracing::warn!(%error, "Rick was not installed to the standard location");
+            self.model.integration.applying = None;
+            events.push(Event::IntegrationApplied {
+                failed: vec![Item::InstallLocation],
+                relaunch: None,
+            });
+            self.check_integration(false);
+            return;
+        }
+        // Its record is the installer's own, in the app folder; here it
+        // is only marked as reached.
+        let mut records = self.model.settings.integration.items.clone();
+        model::set_up(
+            &mut records,
+            Item::InstallLocation,
+            Receipt::default(),
+            model::day_of(SystemTime::now()),
+        );
+        self.change_settings(SettingsChange::IntegrationRecords(records));
+        self.integration.installed = Some(installing.binary.clone());
+        let total = installing.rest.len() + 1;
+        if installing.rest.is_empty() {
+            self.integration_applied(Vec::new(), Some(installing.binary), events);
+            return;
+        }
+        self.perform_rows(
+            installing.scope,
+            &installing.rest,
+            &installing.replace,
+            Some(&installing.binary),
+            1,
+            total,
+            Some(installing.binary.clone()),
+        );
+    }
+
+    /// Performs `order` through the platform as one job off the loop's
+    /// thread, each row for `binary` (the running Rick for `None`);
+    /// `done` rows of `total` were performed before. `relaunch` travels
+    /// to the apply's end.
+    // The rows, how to perform them and where the apply stands.
+    #[allow(clippy::too_many_arguments)]
+    fn perform_rows(
+        &mut self,
+        scope: Scope,
+        order: &[Item],
+        replace: &[Item],
+        binary: Option<&PathBuf>,
+        done: usize,
+        total: usize,
+        relaunch: Option<PathBuf>,
+    ) {
         let records = &self.model.settings.integration;
         let requests: Vec<(Item, Request)> = order
             .iter()
             .map(|item| {
                 let request = Request {
                     scope,
-                    binary: None,
+                    binary: binary.cloned(),
                     receipt: records.receipt(*item),
                     replace: replace.contains(item),
                 };
                 (*item, request)
             })
             .collect();
-        let total = requests.len();
         self.model.integration.applying = Some(Applying {
-            done: 0,
+            done,
             total,
             current: order.first().copied(),
         });
         let platform = Arc::clone(&self.platform);
         let tx = self.mailbox.clone();
         let handle = self.jobs.spawn(move |job| async move {
-            let mut results: Vec<(Item, Result<Receipt, Error>)> = Vec::with_capacity(total);
-            for (done, (item, request)) in requests.into_iter().enumerate() {
+            let mut results: Vec<(Item, Result<Receipt, Error>)> =
+                Vec::with_capacity(requests.len());
+            for (index, (item, request)) in requests.into_iter().enumerate() {
                 // Cancelled between two rows: what is done stays done and
                 // is recorded; the rest is not started.
                 if job.cancel.is_cancelled() {
                     break;
                 }
                 tx.send(Msg::IntegrationProgress {
-                    done,
+                    done: done + index,
                     total,
                     current: item,
                 });
@@ -280,7 +493,7 @@ impl App {
                     .unwrap_or_else(|join| Err(Error::Io(std::io::Error::other(join))));
                 results.push((item, result));
             }
-            tx.send(Msg::IntegrationApplied { results });
+            tx.send(Msg::IntegrationApplied { results, relaunch });
             Ok(())
         });
         self.internal.insert(handle.id);
@@ -289,7 +502,7 @@ impl App {
 
     /// A row of the running apply is being set up.
     pub(crate) fn integration_progress(&mut self, done: usize, total: usize, current: Item) {
-        if self.integration.applying.is_some() {
+        if self.integration.applying.is_some() || self.integration.installing.is_some() {
             self.model.integration.applying = Some(Applying {
                 done,
                 total,
@@ -299,10 +512,13 @@ impl App {
     }
 
     /// The apply ended: what each row wrote is recorded, a row that failed
-    /// is reported, and a check shows what is there now.
+    /// is reported, and a check shows what is there now. `relaunch` is the
+    /// copy Rick was installed to in this apply, for the UI to continue
+    /// from.
     pub(crate) fn integration_applied(
         &mut self,
         results: Vec<(Item, Result<Receipt, Error>)>,
+        relaunch: Option<PathBuf>,
         events: &mut Vec<Event>,
     ) {
         self.integration.applying = None;
@@ -336,7 +552,7 @@ impl App {
         if records != self.model.settings.integration.items {
             self.change_settings(SettingsChange::IntegrationRecords(records));
         }
-        events.push(Event::IntegrationApplied { failed });
+        events.push(Event::IntegrationApplied { failed, relaunch });
         self.check_integration(false);
     }
 }

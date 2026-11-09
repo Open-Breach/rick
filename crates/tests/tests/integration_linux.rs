@@ -320,7 +320,7 @@ fn apply_leaves_the_launcher_the_defaults_and_the_command_in_place() {
     assert!(
         events
             .iter()
-            .any(|e| matches!(e, Event::IntegrationApplied { failed } if failed.is_empty())),
+            .any(|e| matches!(e, Event::IntegrationApplied { failed, .. } if failed.is_empty())),
         "{events:?}"
     );
     for item in ROWS {
@@ -478,7 +478,7 @@ fn files_of_another_origin_are_replaced_only_when_the_user_agreed() {
     assert!(
         events
             .iter()
-            .any(|e| matches!(e, Event::IntegrationApplied { failed } if failed == &rows)),
+            .any(|e| matches!(e, Event::IntegrationApplied { failed, .. } if failed == &rows)),
         "{events:?}"
     );
     assert!(
