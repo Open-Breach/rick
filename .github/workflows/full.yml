@@ -68,39 +68,52 @@ jobs:
       # Diagnostic (throwaway branch): is a new file under the fixture
       # directory indexed by Windows Search at all, and how soon, asked
       # through the index's own OLE DB provider rather than Rick.
-      - name: windows search indexing probe
+      - name: windows search query probe
         shell: pwsh
         run: |
-          Get-Service WSearch | Format-List Name, Status, StartType
           $fixture = $env:RICK_SEARCH_FIXTURE
           $stem = "ricksearchprobe$([DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds())"
           $file = Join-Path $fixture "$stem.txt"
           Set-Content -Path $file -Value "indexed by the probe"
-          $conn = New-Object System.Data.OleDb.OleDbConnection("Provider=Search.CollatorDSO;Extended Properties='Application=Windows';")
-          $conn.Open()
-          $sw = [Diagnostics.Stopwatch]::StartNew()
-          $found = $false
-          while ($sw.Elapsed.TotalSeconds -lt 600) {
-            $cmd = $conn.CreateCommand()
-            $cmd.CommandText = "SELECT System.ItemPathDisplay FROM SystemIndex WHERE System.FileName LIKE '$stem%'"
-            $r = $cmd.ExecuteReader()
-            while ($r.Read()) { $found = $true; Write-Host "found: $($r[0]) after $($sw.Elapsed)" }
-            $r.Close()
-            if ($found) { break }
-            Start-Sleep -Seconds 10
+          Start-Sleep -Seconds 20
+          $scopeFwd = "file:" + $fixture.Replace('\', '/')
+          $scopeBack = "file:" + $fixture
+          foreach ($scope in @($scopeFwd, $scopeBack, $null)) {
+            $where = if ($scope) { "SCOPE='$scope' AND " } else { "" }
+            $sql = "SELECT TOP 500 System.ItemPathDisplay FROM SYSTEMINDEX WHERE ${where}System.FileName LIKE '%$stem%'"
+            $lines = @(
+              '$ErrorActionPreference = ''Stop''',
+              'try {',
+              '  $conn = New-Object -ComObject ADODB.Connection',
+              '  $conn.Open("Provider=Search.CollatorDSO;Extended Properties=''Application=Windows'';")',
+              '  $rs = $conn.Execute(@''',
+              $sql,
+              '''@)',
+              '  while (-not $rs.EOF) {',
+              '    [Console]::Out.WriteLine([string]$rs.Fields.Item(''System.ItemPathDisplay'').Value)',
+              '    $rs.MoveNext()',
+              '  }',
+              '  $rs.Close()',
+              '  $conn.Close()',
+              '} catch {',
+              '  [Console]::Error.WriteLine($_.Exception.Message)',
+              '  exit 1',
+              '}'
+            )
+            $script = ($lines -join "`n") + "`n"
+            Write-Host "=== scope: [$scope]"
+            Write-Host "--- sql: $sql"
+            $tmp = Join-Path $env:RUNNER_TEMP "probe.ps1"
+            [IO.File]::WriteAllText($tmp, $script)
+            Write-Host "--- stdin form (powershell.exe -Command -):"
+            $out = $script | powershell.exe -NoProfile -NonInteractive -Command - 2>&1
+            Write-Host "exit $LASTEXITCODE"
+            $out | ForEach-Object { Write-Host "  > $_" }
+            Write-Host "--- file form (powershell.exe -File):"
+            $out2 = powershell.exe -NoProfile -NonInteractive -File $tmp 2>&1
+            Write-Host "exit $LASTEXITCODE"
+            $out2 | ForEach-Object { Write-Host "  > $_" }
           }
-          $cmd = $conn.CreateCommand()
-          $cmd.CommandText = "SELECT TOP 5 System.ItemPathDisplay FROM SystemIndex WHERE SCOPE='file:$fixture'"
-          $r = $cmd.ExecuteReader(); $n = 0
-          while ($r.Read()) { $n++; Write-Host "in scope: $($r[0])" }
-          $r.Close()
-          Write-Host "items under the fixture scope: $n"
-          $cmd.CommandText = "SELECT TOP 3 System.ItemPathDisplay FROM SystemIndex WHERE SCOPE='file:$env:USERPROFILE'"
-          $r = $cmd.ExecuteReader(); $n = 0
-          while ($r.Read()) { $n++; Write-Host "under the profile: $($r[0])" }
-          $r.Close()
-          Write-Host "profile items sampled: $n"
-          if (-not $found) { Write-Host "::warning::the file was not indexed within ten minutes" }
       - uses: actions/upload-artifact@v4
         if: always() && (matrix.os == 'ubuntu-24.04' || runner.os == 'macOS')
         with:
