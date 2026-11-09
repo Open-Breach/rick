@@ -330,6 +330,16 @@ the pull request that brought the change.
   `platform` crate reports `read_only` on every platform: the `ro` mount
   option on Linux, `MNT_RDONLY` on macOS, `FILE_READ_ONLY_VOLUME` on
   Windows, an ISO's mount everywhere (issue 79 item 8).
+- The column header as decided for the design refresh (SPEC.md *File
+  list*): no permanent divider between the titles; the boundary between
+  two headers has a 6 px hit zone that, hovered, shows a 1 px
+  `border/strong` divider across the band and the column-resize cursor;
+  dragging it resizes the column before it, Name included, a double-click
+  fits that column to the title and the rows in view, no column goes under
+  48 px, and the last column takes what is left. The widths are the tab's
+  (`Command::ColumnWidths`, `Tab::columns` by column id) and come back
+  with the session; *Size columns* puts the defaults back (issue 79
+  item 9).
 
 ## [0.2.0] - 2026-11-08
 
