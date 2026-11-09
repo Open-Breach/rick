@@ -1503,6 +1503,142 @@ fn frames_of_escape_cancelling_a_drag() {
     }
 }
 
+/// Issue 80, rule 6, as frame sequences in Light and Dark at both
+/// densities: a tab of one pane dragged from the first window onto the
+/// second window's tab row, then on over its pane and dropped on a dock
+/// target there; and a pane dragged by its handle over the second
+/// window's pane, then over its tab row and dropped. The harness draws
+/// the second window inside the first; on a desktop they are two windows.
+#[test]
+#[ignore = "needs a wgpu adapter; CI runs it and uploads the images"]
+fn frames_of_a_drag_between_two_windows() {
+    use egui_kittest::kittest::Queryable as _;
+    let (_dir, deep) = sample_tree();
+    let parent = deep
+        .parent()
+        .unwrap_or_else(|| panic!("parent"))
+        .to_path_buf();
+    for (theme, density) in LOOKS {
+        let mut harness = shell_with_hands(&deep, egui::vec2(1800.0, 1000.0));
+        let run = |harness: &mut Harness<'static, RickUi>, command: app::Command| {
+            harness
+                .state_mut()
+                .app_mut()
+                .handle(command, &mut Vec::new());
+            settle(harness);
+        };
+        for change in [
+            SettingsChange::Theme(theme),
+            SettingsChange::Density(density),
+        ] {
+            run(&mut harness, app::Command::Settings(change));
+        }
+        // The first window: `day-one` beside `raw`, and `edited` in a tab
+        // of its own. The second: `holiday-2026`.
+        let first = harness.state().app().model().focused_window;
+        let day_one = harness.state().app().model().focused;
+        run(
+            &mut harness,
+            app::Command::Split {
+                pane: day_one,
+                dir: model::SplitDir::Right,
+            },
+        );
+        let raw = harness.state().app().model().focused;
+        run(
+            &mut harness,
+            app::Command::Navigate {
+                pane: raw,
+                to: local(&deep.join("raw")),
+            },
+        );
+        run(
+            &mut harness,
+            app::Command::NewTab(local(&deep.join("edited"))),
+        );
+        let shown = harness.state().app().model().workspaces(first)[0].id;
+        run(&mut harness, app::Command::ActivateWorkspace(shown));
+        run(&mut harness, app::Command::NewWindow);
+        let second = harness.state().app().model().focused_window;
+        let holiday = harness.state().app().model().focused;
+        run(
+            &mut harness,
+            app::Command::Navigate {
+                pane: holiday,
+                to: local(&parent),
+            },
+        );
+        let mut frames = Frames::new(format!("issue80-windows-{}", look(theme, density)));
+        let row = |harness: &Harness<'_, RickUi>| {
+            harness
+                .state()
+                .tab_row_of(second)
+                .unwrap_or_else(|| panic!("the second window's tab row"))
+        };
+        let pane_there = |harness: &Harness<'_, RickUi>, pane: model::PaneId| {
+            harness
+                .state()
+                .pane_rects_of(second)
+                .into_iter()
+                .find(|(p, _)| *p == pane)
+                .map_or_else(|| panic!("no rect for {pane:?}"), |(_, r)| r)
+        };
+
+        // The tab of `edited`, taken in the top of its row, which the
+        // second window leaves free.
+        let tab = tab_in_row(&harness, "edited");
+        let hold = tab.center_top() + egui::vec2(0.0, 5.0);
+        let grab = hold - tab.min;
+        let there = row(&harness);
+        let in_row = egui::pos2(there.left() + grab.x, there.center().y);
+        glide(&mut harness, hold + egui::vec2(60.0, 0.0), hold, 3);
+        primary(&mut harness, hold, true);
+        glide(&mut harness, hold, in_row, 10);
+        hold_still(&mut harness, 2);
+        frames.shoot(&mut harness, "tab-in-the-other-windows-row");
+        let tile =
+            pane_there(&harness, holiday).center() + egui::vec2(ui_egui::DOCK_TILE_PITCH, 0.0);
+        glide(&mut harness, in_row, tile, 10);
+        hold_still(&mut harness, 2);
+        frames.shoot(&mut harness, "tab-on-a-target-of-the-other-windows-pane");
+        primary(&mut harness, tile, false);
+        settle(&mut harness);
+        frames.shoot(&mut harness, "docked-in-the-other-window");
+
+        // The pane of `raw`, by its handle.
+        let rect = harness
+            .state()
+            .pane_rects_of(first)
+            .into_iter()
+            .find(|(p, _)| *p == raw)
+            .map_or_else(|| panic!("no rect for {raw:?}"), |(_, r)| r);
+        let grip = harness
+            .query_all_by_label("Drag pane")
+            .map(|n| n.rect())
+            .find(|r| rect.contains(r.center()))
+            .map_or_else(|| panic!("no handle"), |r| r.center());
+        let tile =
+            pane_there(&harness, holiday).center() + egui::vec2(-ui_egui::DOCK_TILE_PITCH, 0.0);
+        glide(&mut harness, tile, grip, 4);
+        primary(&mut harness, grip, true);
+        glide(&mut harness, grip, tile, 12);
+        hold_still(&mut harness, 2);
+        frames.shoot(&mut harness, "pane-over-the-other-windows-pane");
+        let there = row(&harness);
+        let slot = egui::pos2(
+            there.left() + ui_egui::theme::TAB_WIDTH + 2.0,
+            there.center().y,
+        );
+        glide(&mut harness, tile, slot, 10);
+        hold_still(&mut harness, 2);
+        frames.shoot(&mut harness, "pane-over-the-other-windows-row");
+        primary(&mut harness, slot, false);
+        settle(&mut harness);
+        frames.shoot(&mut harness, "a-new-tab-in-the-other-window");
+        frames.sheet();
+    }
+}
+
 /// Issue 60: the file list — the header band and the row states (a
 /// selection with the keyboard cursor in the focused pane, a selection in
 /// the other pane), the empty folder, and the portal burst at three

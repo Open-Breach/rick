@@ -364,6 +364,18 @@ the pull request that brought the change.
   drag* says and through however many tabs it sprang (QUESTIONS.md 309);
   the folders its panes drilled into still follow the setting
   (QUESTIONS.md 276) (#137).
+- A workspace tab or a pane can be dragged onto another window (issue 80,
+  rule 6; SPEC.md *Windows*). Over the other window the drag shows what
+  it shows over its own: a tab rides that window's tab row, the tabs
+  there sliding apart for it, and lands in the gap; a tab that holds one
+  pane, and a pane dragged by its handle, are offered the dock targets of
+  the pane under the cursor there; a pane over the row shows the slot
+  where it becomes a new tab. The tabs of the other window spring-load
+  alike, the window the cursor is over paints the ghost
+  (QUESTIONS.md 311), and Escape or a release that lands nowhere leaves
+  every window on the workspace it showed. Where the system does not
+  tell a window its place on the screen (Wayland), a drag still knows
+  its own window alone (QUESTIONS.md 310) (#138).
 
 ### Removed
 
