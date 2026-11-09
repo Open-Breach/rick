@@ -3,7 +3,10 @@
 //! and the footer; *Copy details* puts the details text on the clipboard,
 //! the same text `rick --version` prints; *What's new* and *Licence* open
 //! the read-only text pages and the back button returns; *Loaded plugins*
-//! opens the Extensions screen; the close button closes.
+//! opens the Extensions screen; the close button closes. The Third-party
+//! licences page lists the bundled runtimes, the crates and a plugin's
+//! entries, filters by name, opens one row at a time and exports the whole
+//! list through the save dialog.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -33,9 +36,42 @@ fn build() -> Build {
             license: "MIT".to_owned(),
             copyright: vec!["Emil Ernerfeldt".to_owned()],
             repository: "https://github.com/emilk/egui".to_owned(),
-            text: "MIT License".to_owned(),
+            text: "MIT License\n\nCopyright (c) 2018 Emil Ernerfeldt\n\nPermission is hereby granted, free of charge, to any person".to_owned(),
         }]),
+        plugin_licences: Vec::new(),
     }
+}
+
+/// A build with two crates and a plugin's licences, for the page.
+fn build_with_licences() -> Build {
+    let mut build = build();
+    build.third_party = Some(vec![
+        about::Component {
+            name: "serde".to_owned(),
+            version: "1.0.228".to_owned(),
+            license: "Apache-2.0".to_owned(),
+            copyright: vec!["David Tolnay <dtolnay@gmail.com>".to_owned()],
+            repository: "https://github.com/serde-rs/serde".to_owned(),
+            text: "Apache License\nVersion 2.0, January 2004".to_owned(),
+        },
+        build
+            .third_party
+            .as_ref()
+            .and_then(|l| l.first().cloned())
+            .unwrap_or_else(|| panic!("the egui entry")),
+    ]);
+    build.plugin_licences = vec![about::PluginLicences {
+        name: "Probe".to_owned(),
+        components: vec![about::Component {
+            name: "probe-dep".to_owned(),
+            version: "2.0.0".to_owned(),
+            license: "ISC".to_owned(),
+            copyright: vec!["Someone".to_owned()],
+            repository: "https://example.org/probe-dep".to_owned(),
+            text: "ISC License\n\nPermission to use, copy, modify".to_owned(),
+        }],
+    }];
+    build
 }
 
 fn plugins() -> Vec<app::Plugin> {
@@ -62,6 +98,10 @@ fn plugins() -> Vec<app::Plugin> {
 }
 
 fn harness(start: &Path) -> (Harness<'static, RickUi>, Arc<Fake>) {
+    harness_with(start, build())
+}
+
+fn harness_with(start: &Path, build: Build) -> (Harness<'static, RickUi>, Arc<Fake>) {
     let fake = Arc::new(Fake::new().unwrap_or_else(|e| panic!("{e}")));
     let host = Arc::new(EguiHost::new());
     let mut app = app::App::new(app::Config {
@@ -74,7 +114,7 @@ fn harness(start: &Path) -> (Harness<'static, RickUi>, Arc<Fake>) {
     app.set_plugins(plugins());
     let mut harness = Harness::builder()
         .with_size(egui::vec2(1200.0, 1000.0))
-        .build_eframe(move |cc| RickUi::new(app, host, &cc.egui_ctx).with_build(build()));
+        .build_eframe(move |cc| RickUi::new(app, host, &cc.egui_ctx).with_build(build));
     settle(&mut harness);
     (harness, fake)
 }
@@ -265,4 +305,141 @@ fn a_build_without_the_generated_list_says_so() {
     open(&mut harness);
     assert_eq!(harness.state().about().component_count(), None);
     harness.get_by_label_contains("not available in this build");
+}
+
+/// The dialog's search field: the text input inside the modal, apart from
+/// the title row's search box and the footer's filter field.
+fn licences_search<'h>(harness: &'h Harness<'_, RickUi>) -> egui_kittest::Node<'h> {
+    let title = harness.get_by_label("Third-party licences").rect();
+    harness
+        .get_all_by_role(Role::TextInput)
+        .find(|node| {
+            let rect = node.rect();
+            rect.top() > title.bottom() && rect.top() < title.bottom() + 60.0
+        })
+        .unwrap_or_else(|| panic!("no search field under the title"))
+}
+
+#[test]
+fn the_third_party_page_lists_filters_expands_and_exports() {
+    let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+    let (mut harness, fake) = harness_with(dir.path(), build_with_licences());
+    open(&mut harness);
+    // Two crates, eight bundled runtimes and the plugin's one entry.
+    assert_eq!(harness.state().about().component_count(), Some(11));
+    click_button(&mut harness, "Third-party licences");
+    assert!(harness.state().about().licences_page().is_some());
+    harness.get_by_label("Third-party licences");
+    for section in ["BUNDLED RUNTIMES", "RUST CRATES", "PROBE"] {
+        harness.get_by_label(section);
+    }
+    for row in [
+        "pdfium chromium/8138",
+        "Phosphor Icons 2.1",
+        "egui 0.36.2",
+        "serde 1.0.228",
+        "probe-dep 2.0.0",
+    ] {
+        harness.get_by_role_and_label(Role::Button, row);
+    }
+    harness.get_by_label_contains("11 components, 7 licence types");
+
+    // A row opens in place with its copyright line and text; the same
+    // click closes it; another row replaces it.
+    assert!(
+        harness
+            .query_by_label_contains("Permission is hereby granted")
+            .is_none()
+    );
+    click_button(&mut harness, "egui 0.36.2");
+    assert!(
+        harness
+            .state()
+            .about()
+            .licences_page()
+            .is_some_and(|p| p.open_row().is_some())
+    );
+    harness.get_by_label("Copyright (c) 2018 Emil Ernerfeldt");
+    harness.get_by_label_contains("Permission is hereby granted");
+    click_button(&mut harness, "serde 1.0.228");
+    assert!(
+        harness
+            .query_by_label_contains("Permission is hereby granted")
+            .is_none()
+    );
+    harness.get_by_label_contains("Apache License");
+    click_button(&mut harness, "serde 1.0.228");
+    assert!(
+        harness
+            .state()
+            .about()
+            .licences_page()
+            .is_some_and(|p| p.open_row().is_none())
+    );
+
+    // The search narrows the rows to the names that contain the text.
+    let search = licences_search(&harness);
+    search.focus();
+    search.type_text("pdf");
+    for _ in 0..3 {
+        harness.step();
+    }
+    harness.get_by_role_and_label(Role::Button, "pdfium chromium/8138");
+    assert!(harness.query_by_label("egui 0.36.2").is_none());
+    assert!(harness.query_by_label("RUST CRATES").is_none());
+    assert_eq!(
+        harness
+            .state()
+            .about()
+            .licences_page()
+            .map(|p| p.search.as_str()),
+        Some("pdf")
+    );
+
+    // Export writes the whole list, filters or not, where the save dialog
+    // says, and a toast names the file.
+    let out = dir.path().join("licences.txt");
+    fake.answer_save(Some(out.clone()));
+    click_button(&mut harness, "Export…");
+    let deadline = Instant::now() + Duration::from_secs(20);
+    while harness
+        .state()
+        .about()
+        .licences_page()
+        .is_some_and(|p| p.exporting())
+    {
+        assert!(Instant::now() < deadline, "the export did not finish");
+        std::thread::sleep(Duration::from_millis(20));
+        harness.step();
+    }
+    let text = std::fs::read_to_string(&out).unwrap_or_else(|e| panic!("{e}"));
+    assert!(text.starts_with("Third-party licences of Rick 0.3.0-dev\n"));
+    for needle in [
+        "== Bundled runtimes ==",
+        "== Rust crates ==",
+        "== Probe ==",
+        "--- pdfium chromium/8138 (BSD-3-Clause) ---",
+        "--- egui 0.36.2 (MIT) ---",
+        "--- serde 1.0.228 (Apache-2.0) ---",
+        "--- probe-dep 2.0.0 (ISC) ---",
+        "Permission is hereby granted, free of charge",
+        "GNU LESSER GENERAL PUBLIC LICENSE",
+        "UBUNTU FONT LICENCE",
+    ] {
+        assert!(text.contains(needle), "the export lacks {needle}");
+    }
+    assert!(
+        harness
+            .state()
+            .toasts()
+            .iter()
+            .any(|(_, t)| t.starts_with("Exported to ")),
+        "{:?}",
+        harness.state().toasts()
+    );
+
+    // Back returns to the About page.
+    click_button(&mut harness, "Back");
+    assert!(harness.state().about().licences_page().is_none());
+    assert!(harness.state().about().is_open());
 }
