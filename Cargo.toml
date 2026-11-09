@@ -156,6 +156,8 @@ url = "2"
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 eframe = "0.36"
 egui = "0.36"
+# The font parser egui renders with, for checking a system font file.
+ab_glyph = "0.2"
 egui_dock = "0.21"
 egui_extras = { version = "0.36", default-features = false }
 egui_kittest = { version = "0.36", features = ["eframe"] }

@@ -5,7 +5,9 @@ through the `t!` lookup with a key of `locales/en.ftl`, which
 `.github/scripts/check-strings.py` enforces in CI. Every colour and size it
 draws comes from the scheme and density tokens of `theme` (the Figma
 collections *Rick* and *Density*, one to one; Light and Dark, Comfortable
-and Compact), from which egui's visuals and spacing are derived. It renders every window from
+and Compact), from which egui's visuals and spacing are derived; its type
+is the system's UI and monospace fonts (`fonts`, through the platform's
+`SystemFonts`), egui's bundled fonts behind them, and the Phosphor icons. It renders every window from
 the `model` the `app` owns, the first as eframe's root viewport and the
 others as viewports of their own drawn in the same frame: the window frame
 with its shadow and resize grips where the system draws none, the title row

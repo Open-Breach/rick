@@ -44,6 +44,7 @@
 pub mod agent;
 mod clipboard;
 mod dialogs;
+pub mod fonts;
 // The URI list is written and read on Linux only; macOS and Windows hand
 // the OS paths and get paths back. The tests exercise it everywhere.
 #[cfg_attr(not(any(target_os = "linux", test)), allow(dead_code))]
@@ -85,10 +86,10 @@ pub use raw_window_handle;
 pub use time::iso8601;
 pub use traits::{
     Application, Chrome, Clipboard, ConfigDir, ControlsSide, DialogFilter, DragSource, DropTarget,
-    Elevate, ElevatedOutput, ImageFormat, IncomingFiles, Mount, NativeDialogs, OpenWith, Platform,
-    Point, Properties, PropertiesOutcome, RecentItem, RecentlyUsed, Secrets, StandardFolder,
-    StandardFolders, Terminal, Trash, TrashedItem, Volume, VolumeKind, Volumes, WindowChrome,
-    WindowRef,
+    Elevate, ElevatedOutput, FontFile, Fonts, ImageFormat, IncomingFiles, Mount, NativeDialogs,
+    OpenWith, Platform, Point, Properties, PropertiesOutcome, RecentItem, RecentlyUsed, Secrets,
+    StandardFolder, StandardFolders, SystemFonts, Terminal, Trash, TrashedItem, Volume, VolumeKind,
+    Volumes, WindowChrome, WindowRef,
 };
 pub use trash_record::TRASH_FILE;
 use types::Error;
@@ -131,6 +132,12 @@ impl Native {
     #[must_use]
     pub const fn new() -> Self {
         Self
+    }
+}
+
+impl SystemFonts for Native {
+    fn system_fonts(&self) -> Fonts {
+        fonts::system()
     }
 }
 
