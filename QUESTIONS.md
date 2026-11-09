@@ -2955,3 +2955,12 @@ Once answered, an entry keeps its number and gains a dated decision line.
     and the toolbar padding (`Metrics::footer_height`), the toggle is the
     field's 26 px, and the preview pane's footer follows; the spec's "as
     tall as the toolbar" is for the author to reword.
+
+255. (issue 88, 2026-11-09) *About dialog*: specs/app-icons.md has it show
+    `rick-symbol.svg` at 64 px and forbids converting the icons; drawing an
+    SVG takes a rasteriser, and the one egui's SVG loader uses, resvg with
+    usvg, is MPL-2.0, which deny.toml's allow list did not carry.
+    Assumed: MPL-2.0 joins the allowed licences (a file-level copyleft that
+    leaves Rick's own code under Apache-2.0), as SPEC.md already plans
+    resvg for the SVG previews; egui_extras's `svg` loader draws the symbol
+    at the size it is laid out at times the window's scale.

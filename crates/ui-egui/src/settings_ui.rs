@@ -1416,16 +1416,32 @@ pub fn label_of(intent: Intent, registry: &Registry) -> String {
     }
 }
 
+/// The symbol the About window shows: the rings of the app icon alone, on
+/// nothing (specs/app-icons.md), rasterised by the SVG loader at the size
+/// it is drawn at, so it is sharp at every scale.
+const ABOUT_SYMBOL: egui::ImageSource<'static> =
+    egui::include_image!("../../../assets/icons/svg/rick-symbol.svg");
+/// The symbol's size in the About window, in points.
+const ABOUT_SYMBOL_SIZE: f32 = 64.0;
+
 /// The About window; `version` is the binary's version and git hash.
 pub fn about_window(ctx: &egui::Context, open: &mut bool, version: &str) {
     egui::Window::new(t!("about-rick"))
         .open(open)
         .resizable(false)
         .show(ctx, |ui| {
-            ui.heading(t!("rick"));
-            ui.label(t!("settings-a-god-like-file-manager"));
-            ui.label(t!("about-version", version = version));
-            ui.hyperlink("https://github.com/Open-Breach/rick");
+            ui.horizontal(|ui| {
+                ui.add(
+                    egui::Image::new(ABOUT_SYMBOL)
+                        .fit_to_exact_size(vec2(ABOUT_SYMBOL_SIZE, ABOUT_SYMBOL_SIZE)),
+                );
+                ui.vertical(|ui| {
+                    ui.heading(t!("rick"));
+                    ui.label(t!("settings-a-god-like-file-manager"));
+                    ui.label(t!("about-version", version = version));
+                    ui.hyperlink("https://github.com/Open-Breach/rick");
+                });
+            });
         });
 }
 
@@ -1506,4 +1522,42 @@ pub fn extensions_window(
                  on the next start.",
             );
         });
+}
+
+#[cfg(test)]
+mod tests {
+    use egui_kittest::kittest::Queryable as _;
+
+    use super::*;
+
+    /// The About window draws the rings-only symbol at 64 px: the SVG
+    /// loader rasterises it at that size times the window's scale.
+    #[test]
+    fn the_about_window_shows_the_symbol_at_64_px() {
+        let mut open = true;
+        let mut harness = egui_kittest::Harness::builder()
+            .with_pixels_per_point(2.0)
+            .build_ui(|ui| about_window(ui.ctx(), &mut open, "0.0.0 (test)"));
+        egui_extras::install_image_loaders(&harness.ctx);
+        harness.run();
+        harness.get_by_role(egui::accesskit::Role::Image);
+        let size = vec2(ABOUT_SYMBOL_SIZE, ABOUT_SYMBOL_SIZE);
+        let loaded = egui::Image::new(ABOUT_SYMBOL)
+            .fit_to_exact_size(size)
+            .load_for_size(&harness.ctx, size)
+            .unwrap_or_else(|e| panic!("the symbol did not load: {e}"));
+        match loaded {
+            egui::load::TexturePoll::Ready { texture } => {
+                // The texture's size is the SVG's own; the rasterised
+                // texels are 64 px times the scale of two.
+                let manager = harness.ctx.tex_manager();
+                let manager = manager.read();
+                let meta = manager
+                    .meta(texture.id)
+                    .unwrap_or_else(|| panic!("the symbol's texture has no metadata"));
+                assert_eq!(meta.size, [128, 128]);
+            }
+            egui::load::TexturePoll::Pending { .. } => panic!("the symbol is still pending"),
+        }
+    }
 }

@@ -902,6 +902,8 @@ impl RickUi {
     #[must_use]
     pub fn new(app: App, host: Arc<EguiHost>, ctx: &egui::Context) -> Self {
         crate::fonts::install(ctx, &app.platform().system_fonts());
+        // The SVG loader the About window's symbol is drawn through.
+        egui_extras::install_image_loaders(ctx);
         let viewports: Arc<Mutex<Vec<ViewportId>>> = Arc::new(Mutex::new(vec![ViewportId::ROOT]));
         let wake = ctx.clone();
         let open = Arc::clone(&viewports);

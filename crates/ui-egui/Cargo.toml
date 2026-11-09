@@ -19,7 +19,9 @@ chrono = { workspace = true }
 eframe = { workspace = true }
 egui = { workspace = true }
 egui_dock = { workspace = true }
-egui_extras = { workspace = true }
+# The `svg` loader rasterises the About window's symbol
+# (assets/icons/svg/rick-symbol.svg, specs/app-icons.md) through resvg.
+egui_extras = { workspace = true, features = ["svg"] }
 image = { workspace = true }
 tracing = { workspace = true }
 egui-phosphor = { version = "0.14", features = ["fill"] }
