@@ -6,7 +6,12 @@
 //!
 //! `rick install <archive>` is the installer's subcommand of the command
 //! line (specs/system-integration.md §4): it opens the same install form
-//! in the running Rick.
+//! in the running Rick. `rick install-rick <folder> <version>` installs
+//! the Rick unpacked in a folder to the standard location, copied from
+//! the folder as it is ([`archive::Format::Folder`]) with no form and
+//! nothing written outside the app folder: what the integration dialog's
+//! *Install to the standard location* runs (specs/system-integration.md
+//! §6.1).
 //!
 //! Linux only in this version: the plugin loads everywhere, its actions
 //! are hidden, its command refuses and its view answers "unsupported on

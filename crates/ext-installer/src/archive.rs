@@ -4,7 +4,9 @@
 //!
 //! The crate reads tar (plain, gzip, xz, bzip2, zstd) and zip with the
 //! `tar` and `zip` crates itself, so it depends on no other plugin
-//! (specs/ext-installer.md "Plugin architecture"). Every path is
+//! (specs/ext-installer.md "Plugin architecture"); an unpacked folder is
+//! walked as one more format, so installing from it goes through the same
+//! index, the same safety rules and the same extraction. Every path is
 //! normalised to `/`-separated components without `.`; an entry that is
 //! absolute or carries `..` is marked and never written; links are kept
 //! only when their target stays inside the folder; special entries are
@@ -44,6 +46,12 @@ pub enum Format {
     Tar(Codec),
     /// A zip file.
     Zip,
+    /// An unpacked folder on the disk, walked as an archive whose entries
+    /// are the files below it: the source of an application that is
+    /// unpacked already, as Rick is when it installs the folder it runs
+    /// from. No file name says it; a caller that has a folder names the
+    /// format itself.
+    Folder,
 }
 
 impl Format {
@@ -126,6 +134,7 @@ impl Format {
             Self::Tar(Codec::Bzip2) => "tar.bz2",
             Self::Tar(Codec::Zstd) => "tar.zst",
             Self::Zip => "zip",
+            Self::Folder => "folder",
         }
     }
 }
@@ -355,7 +364,118 @@ fn visit_counting(path: &Path, format: Format, f: &mut CountingVisitor<'_>) -> R
     match format {
         Format::Tar(codec) => visit_tar(path, codec, f),
         Format::Zip => visit_zip(path, f),
+        Format::Folder => visit_folder(path, f),
     }
+}
+
+/// A file of a folder as an entry's contents, opened when first read: an
+/// entry nobody reads costs no file handle.
+struct Lazy {
+    path: PathBuf,
+    file: Option<File>,
+}
+
+impl Read for Lazy {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        let file = match &mut self.file {
+            Some(file) => file,
+            None => self.file.insert(File::open(&self.path)?),
+        };
+        file.read(buf)
+    }
+}
+
+/// Walks the folder at `root` as an archive: every entry below it, each
+/// folder before what it holds and the names in order, with paths
+/// relative to `root`. A link is an entry with its target and is not
+/// followed; a name that is not UTF-8 is marked like a hostile path and
+/// never written. The third argument of `f` is the bytes of the files
+/// passed so far.
+fn visit_folder(root: &Path, f: &mut CountingVisitor<'_>) -> Result<(), Error> {
+    let mut count = 0usize;
+    let mut passed: u64 = 0;
+    // Folders still to walk, as paths relative to the root; the last one
+    // pushed is walked next.
+    let mut pending: Vec<String> = vec![String::new()];
+    while let Some(folder) = pending.pop() {
+        let dir = if folder.is_empty() {
+            root.to_path_buf()
+        } else {
+            root.join(&folder)
+        };
+        let mut entries = std::fs::read_dir(&dir)
+            .map_err(io_read)?
+            .collect::<io::Result<Vec<_>>>()
+            .map_err(io_read)?;
+        entries.sort_by_key(std::fs::DirEntry::file_name);
+        let mut folders: Vec<String> = Vec::new();
+        for entry in entries {
+            count += 1;
+            if count > MAX_ENTRIES {
+                return Err(err(InstallError::Corrupt(format!(
+                    "more than {MAX_ENTRIES} entries"
+                ))));
+            }
+            let name = entry.file_name();
+            let (name, hostile) = match name.to_str() {
+                Some(name) => (name.to_owned(), false),
+                None => (name.to_string_lossy().into_owned(), true),
+            };
+            let path = if folder.is_empty() {
+                name
+            } else {
+                format!("{folder}/{name}")
+            };
+            // The entry itself, a link not followed.
+            let meta = entry.metadata().map_err(io_read)?;
+            let kind = if meta.is_dir() {
+                ItemKind::Dir
+            } else if meta.file_type().is_symlink() {
+                ItemKind::Symlink
+            } else if meta.is_file() {
+                ItemKind::File
+            } else {
+                ItemKind::Other
+            };
+            let link = (kind == ItemKind::Symlink)
+                .then(|| std::fs::read_link(entry.path()).ok())
+                .flatten()
+                .map(|target| target.to_string_lossy().into_owned());
+            let mode = match kind {
+                ItemKind::Symlink => 0o777,
+                _ => ext::platform::fs::unix_mode(&entry.path())
+                    .ok()
+                    .flatten()
+                    .unwrap_or(if kind == ItemKind::Dir { 0o755 } else { 0o644 }),
+            };
+            let size = if kind == ItemKind::File {
+                meta.len()
+            } else {
+                0
+            };
+            let item = Item {
+                path,
+                kind,
+                size,
+                mode,
+                link,
+                hostile,
+            };
+            let mut reader = Lazy {
+                path: entry.path(),
+                file: None,
+            };
+            if f(&item, &mut reader, passed)? == Visit::Stop {
+                return Ok(());
+            }
+            passed = passed.saturating_add(size);
+            if kind == ItemKind::Dir && !hostile {
+                folders.push(item.path);
+            }
+        }
+        pending.extend(folders.into_iter().rev());
+    }
+    Ok(())
 }
 
 fn visit_tar(path: &Path, codec: Codec, f: &mut CountingVisitor<'_>) -> Result<(), Error> {
@@ -516,7 +636,13 @@ pub fn scan(
         Ok(Visit::Next)
     })?;
     let total_size = items.iter().map(|i| i.size).sum();
-    let top_level = top_level(&items);
+    // A folder is taken as it is: what is in it lands in the version
+    // folder, even when that is one folder alone.
+    let top_level = if format == Format::Folder {
+        None
+    } else {
+        top_level(&items)
+    };
     Ok(Index {
         items,
         total_size,

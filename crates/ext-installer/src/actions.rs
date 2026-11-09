@@ -153,16 +153,31 @@ impl Installer {
 /// The subcommand `rick install <archive>`.
 pub const INSTALL_COMMAND: &str = "install";
 
-/// What the manifest declares for the command line: `install`.
-pub const COMMANDS: &[CommandSpec] = &[CommandSpec {
-    name: INSTALL_COMMAND,
-    help: "Install a tar or zip archive as an application (Linux)",
-}];
+/// The subcommand `rick install-rick <folder> <version>`: what the
+/// integration dialog's *Install to the standard location* runs
+/// (specs/system-integration.md §6.1).
+pub const INSTALL_RICK_COMMAND: &str = "install-rick";
+
+/// What the manifest declares for the command line: `install` and
+/// `install-rick`.
+pub const COMMANDS: &[CommandSpec] = &[
+    CommandSpec {
+        name: INSTALL_COMMAND,
+        help: "Install a tar or zip archive as an application (Linux)",
+    },
+    CommandSpec {
+        name: INSTALL_RICK_COMMAND,
+        help: "Install the Rick unpacked in a folder to the standard location, as a version (Linux)",
+    },
+];
 
 /// Every command-line subcommand over `installer`.
 #[must_use]
 pub fn commands(installer: &Arc<Installer>) -> Vec<Arc<dyn CliCommand>> {
-    vec![Arc::new(InstallCommand(Arc::clone(installer)))]
+    vec![
+        Arc::new(InstallCommand(Arc::clone(installer))),
+        Arc::new(InstallRickCommand(Arc::clone(installer))),
+    ]
 }
 
 /// Every action over `installer`.
@@ -631,6 +646,7 @@ pub fn assemble(
         update_of: update_of.map(|u| u.record),
         overwrite: values.check(K_OVERWRITE) || collisions.is_empty(),
         bins: detected.bins.clone(),
+        launcher: true,
     });
     Assembled { plan, rows }
 }
@@ -1090,6 +1106,87 @@ impl CliCommand for InstallCommand {
         Ok(CliOutcome::Outcome(install_through_form(
             &self.0, &path, None, jobs,
         )))
+    }
+}
+
+/// `rick install-rick <folder> <version>`: installs the Rick unpacked in
+/// `folder` — the folder that holds the binary, its libraries, `plugins/`
+/// and `share/` — to the standard location, `~/.local/opt/rick/<version>`
+/// with the `current` link, as one job with progress and a cancel. No
+/// form: there is nothing to guess about Rick. The folder is copied as it
+/// is, never packed first; nothing is written outside the app folder (the
+/// launcher entry and the `rick` command are integration items of their
+/// own); a Rick installed before is updated, its version kept as the
+/// previous one. This is what the integration dialog's *Install to the
+/// standard location* runs (specs/system-integration.md §6.1), and the
+/// caller's terminal gets exit status zero once the job has started.
+pub struct InstallRickCommand(Arc<Installer>);
+
+impl CliCommand for InstallRickCommand {
+    fn name(&self) -> &'static str {
+        INSTALL_RICK_COMMAND
+    }
+
+    fn run(&self, ctx: CliCtx, jobs: &JobRunner, _ui: &dyn UiHost) -> Result<CliOutcome, Error> {
+        if !crate::supported() {
+            return Err(err(InstallError::Unsupported));
+        }
+        let [folder, version] = ctx.args.as_slice() else {
+            return Err(Error::Unsupported(
+                "usage: rick install-rick <folder> <version>",
+            ));
+        };
+        let folder = Path::new(folder);
+        let folder = if folder.is_absolute() {
+            folder.to_path_buf()
+        } else {
+            ctx.cwd.join(folder)
+        };
+        let folder = std::fs::canonicalize(&folder).unwrap_or(folder);
+        if !folder.join(install::RICK_MAIN).is_file() {
+            return Err(Error::Unsupported("the folder must hold the rick binary"));
+        }
+        if !detect::valid_version(version) {
+            return Err(err(InstallError::Invalid(format!(
+                "the version {version:?} cannot name a folder"
+            ))));
+        }
+        let version = version.clone();
+        let installer = Arc::clone(&self.0);
+        let layout = installer.provider.user_layout();
+        let staging = layout.staging(install::RICK_ID, &version);
+        installer.provider.set_busy(&staging, true);
+        let platform = Arc::clone(installer.provider.platform());
+        let name = format!("Install Rick {version}");
+        let handle = jobs.spawn_named(name, move |job| async move {
+            let progress = job.progress.clone();
+            let cancel = job.cancel.clone();
+            let provider = Arc::clone(&installer.provider);
+            let result = ext::blocking(move || {
+                let index = crate::archive::scan(
+                    &folder,
+                    Format::Folder,
+                    &cancel,
+                    &mut |_| {},
+                    &mut |_, _| Ok(()),
+                )?;
+                let scan = provider.rescan();
+                let update_of = scan
+                    .apps
+                    .iter()
+                    .find(|app| {
+                        app.layout.scope == layout.scope && app.record.id == install::RICK_ID
+                    })
+                    .map(|app| app.record.clone());
+                let plan =
+                    install::rick_plan(layout, &folder, &version, Arc::new(index), update_of);
+                install::install(&plan, &scan, &*platform, &progress, &cancel).map(drop)
+            })
+            .await;
+            installer.provider.set_busy(&staging, false);
+            result
+        });
+        Ok(CliOutcome::Outcome(ActionOutcome::Started(handle.id)))
     }
 }
 

@@ -24,7 +24,13 @@ items keeps is carried over as it is), all pointing through `current`. An archiv
 installed app opens the same form in update mode; one previous version is
 kept and *Revert* flips back to it; *Uninstall* removes exactly the files
 the record lists and the app folder; *Repair* rewrites what a messy state
-is missing. The Installed Apps view, `rick://apps`, lists every record with
+is missing. An unpacked folder is one more source beside tar and
+zip (`Format::Folder`, walked as an archive whose entries are its files, so
+the same index, safety rules, staging and `current` link apply): `rick
+install-rick <folder> <version>` installs the Rick unpacked in a folder to
+`~/.local/opt/rick/<version>` without a form and without a launcher entry
+or command link, which are integration items of Rick's own; it is what the
+integration dialog's *Install to the standard location* runs. The Installed Apps view, `rick://apps`, lists every record with
 its version, kind, scope, state and commands, browsable into the install
 folder, with the per-row actions; *Installed Apps…* opens it from the
 command palette and the burger menu's *Installer* submenu. System-wide
