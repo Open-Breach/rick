@@ -3129,3 +3129,71 @@ Once answered, an entry keeps its number and gains a dated decision line.
     shell sends it) but the console does not follow the tab, rather than
     risk typing into a running program; a Windows answer (the console
     host's process list) would lift that.
+
+268. (system integration, issue 120, 2026-11-09) §6.1: "Rick compares the
+    wanted state with the actual one, item by item" and "*Install to the
+    standard location*, which moves Rick to `~/.local/opt/rick` … through
+    `ext-installer`". The check and the dialog are the core's, the
+    installer is a plugin that may be switched off or removed, and a core
+    crate may not depend on a plugin.
+    Assumed (as the handoff of issue 120 sets out): the core owns the item
+    list, the check and the dialog. `platform::Integration` lists and
+    checks every item, the install location among them (set up when the
+    running binary is inside a version folder of `~/.local/opt/rick`);
+    performing the install location is the plugin's registered command,
+    the platform answers *unsupported* for it, and without the plugin the
+    row reads *Unsupported* with the reason while every other row works
+    against the folder Rick runs from.
+
+269. (system integration, issue 120, 2026-11-09) §6.1: "The *Install for*
+    segmented control (Just me / All users) at the top of the dialog sets
+    the scope for every row", with `/opt/rick` and `pkexec` "and the
+    installer's helper" for All users. That helper does not exist
+    (specs/ext-installer.md: "its own milestone"; `install()` refuses the
+    system scope).
+    Assumed (handoff of issue 120): this issue delivers *Just me*
+    completely. For *All users* the Linux items answer *unsupported* (not
+    available yet) and the dialog shows the segment disabled with the
+    tooltip *Not available yet*; the helper is not built here.
+
+270. (system integration, issue 120, 2026-11-09) §6.1: "The check reads
+    files and registry keys only" — but not what *set up* is for each
+    item of §7.1.
+    Assumed, for *Just me*: the **install location** when the running
+    binary is inside a version folder of `~/.local/opt/rick`; the
+    **launcher entry** when `$XDG_DATA_HOME/applications/rick.desktop` is
+    there with an `Exec` that starts this Rick and every hicolor icon
+    file is there; the **default file manager** when `rick.desktop` is
+    the first id of `inode/directory` and of `x-scheme-handler/rick`
+    under `[Default Applications]` of `$XDG_CONFIG_HOME/mimeapps.list`,
+    the file `xdg-mime default` writes; **"Show in folder"** when
+    `$XDG_DATA_HOME/dbus-1/services/org.freedesktop.FileManager1.service`
+    names that bus name and starts this Rick; the **`rick` command** when
+    `~/.local/bin/rick` is a link to this Rick and `path.sh` defines the
+    `rick` function for it; the **dock favourite** when the desktop's
+    favourites name `rick.desktop` (`rick` on COSMIC). "This Rick" is the
+    running binary, named through the `current` link when it runs from
+    the install location, so an update that flips the link takes every
+    item with it.
+
+271. (system integration, issue 120, 2026-11-09) §7.1: "`packaging/linux/
+    rick.desktop` and the icons installed under `share/applications` and
+    `share/icons/hicolor` of the chosen scope" — from where: the release
+    archive has `share/` beside the binary, a development build has not,
+    and an AppImage or a package will not have it beside the binary
+    either.
+    Assumed: the binary carries both, the desktop entry and the ten
+    hicolor files compiled into `platform`, so the item does the same
+    from every build; the archive's `share/` stays what a manual install
+    copies (specs/app-icons.md).
+
+272. (system integration, issue 120, 2026-11-09) §7.1, dock favourite:
+    "Other desktops: *Unsupported*" — but not what the item is on one of
+    the four desktops whose means are not there: no `gsettings` program,
+    a `gsettings` without the desktop's schema, no Plasma panel
+    configuration or no task manager in it, no favourites file of
+    COSMIC's dock.
+    Assumed: *Unsupported* with the reason, not *missing*, which would
+    list a row in the dialog whose Apply could only fail. COSMIC's
+    favourites are read from `~/.config/cosmic/
+    com.system76.CosmicAppList/v1/favorites`, the list its dock keeps.
