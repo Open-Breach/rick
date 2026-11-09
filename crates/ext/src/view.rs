@@ -33,6 +33,7 @@
 
 use std::fmt;
 use std::ops::Range;
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::SystemTime;
 
@@ -262,6 +263,22 @@ pub trait Console: Send + Sync {
     /// A counter that grows with every change to the screen, so the UI
     /// knows when to read it again.
     fn generation(&self) -> u64;
+
+    /// The shell's working directory, as it last reported it through
+    /// OSC 7 (specs/system-integration.md §4): the tab the console was
+    /// opened from follows it. `None` for a console whose shell reports
+    /// none.
+    fn cwd(&self) -> Option<PathBuf> {
+        None
+    }
+
+    /// Whether a program other than the shell has the terminal right now
+    /// (`Some(true)`), the shell is at its prompt (`Some(false)`), or the
+    /// session cannot tell (`None`): the application types `cd` into the
+    /// console on the tab's navigation only at the prompt.
+    fn foreground_job(&self) -> Option<bool> {
+        None
+    }
 }
 
 /// A console's screen: `cols × rows` cells, row by row.

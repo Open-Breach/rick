@@ -9,7 +9,8 @@
 //! [`Secrets`], [`SingleInstance`] and [`Activation`] (raising the window a
 //! second launch's path opened in: `xdg_activation_v1` with the launcher's
 //! token, `_NET_ACTIVE_WINDOW`, `NSApp.activate`, `SetForegroundWindow`),
-//! bundled as [`Platform`]. [`Native`] is the real
+//! bundled as [`Platform`]. [`process`] asks the system whether the shell
+//! in a console has handed its terminal to a job. [`Native`] is the real
 //! implementation for the OS the binary runs on; [`Fake`] is the one tests
 //! use, with a private trash directory and recorded calls.
 //!
@@ -61,6 +62,7 @@ pub mod fs;
 pub mod instance;
 pub mod paths;
 pub mod perms;
+pub mod process;
 pub mod secrets;
 pub mod sevenzip;
 // The Linux trash formats dates and macOS parses them (Spotlight's

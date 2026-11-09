@@ -1752,3 +1752,42 @@ fn the_system_scope_is_unavailable_in_this_version() {
         matches!(&scope.kind, ext::FieldKind::Segmented { options, selected: 0 } if options[1] == "All users")
     );
 }
+
+/// With Rick itself among the installed apps, `path.sh` and the fish
+/// drop-in define the `rick` function over its `current` binary
+/// (specs/system-integration.md §4); without it and without a PATH-mode
+/// app the files go.
+#[test]
+fn the_path_file_defines_the_rick_function_when_rick_is_installed() {
+    let h = harness();
+    if !supported() {
+        return;
+    }
+    let layout = h.layout();
+    fs::create_dir_all(h.home().join(".config/fish")).unwrap_or_else(|e| panic!("{e}"));
+    h.install(Fixture::GuiWithDesktop, Vec::new());
+    let mut record = h.record("fixture-gui");
+    record.id = "rick".to_owned();
+    record.main_executable = "rick".to_owned();
+    install::write_path_file(&layout, &[record.clone()]).unwrap_or_else(|e| panic!("{e}"));
+    let sh = fs::read_to_string(layout.path_file()).unwrap_or_else(|e| panic!("{e}"));
+    let binary = layout.current("rick").join("rick");
+    assert!(
+        sh.contains(&format!("rick() {{ \"{}\" \"$@\"; }}", binary.display())),
+        "{sh}"
+    );
+    assert!(!sh.contains("export PATH"), "no PATH-mode app: {sh}");
+    let fish = fs::read_to_string(h.home().join(".config/fish/conf.d/rick.fish"))
+        .unwrap_or_else(|e| panic!("{e}"));
+    assert!(
+        fish.contains("function rick") && fish.contains(&format!("\"{}\" $argv", binary.display())),
+        "{fish}"
+    );
+    let profile = fs::read_to_string(h.home().join(".profile")).unwrap_or_else(|e| panic!("{e}"));
+    assert!(profile.contains(&layout.path_file().display().to_string()));
+    // Rick uninstalled (the record gone), nothing else on the PATH: the
+    // files go.
+    install::write_path_file(&layout, &[]).unwrap_or_else(|e| panic!("{e}"));
+    assert!(!layout.path_file().exists());
+    assert!(!h.home().join(".config/fish/conf.d/rick.fish").exists());
+}

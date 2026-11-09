@@ -3107,3 +3107,25 @@ Once answered, an entry keeps its number and gains a dated decision line.
     names no path on this computer, so it shows the error toast and opens
     nothing; mapping `rick://<view>` to the virtual provider's view would
     be one more arm in the binary's `apply` if wanted.
+
+266. (system integration, 2026-11-09) §4: "the console reports its working
+    directory through OSC 7". No shell reports it to a terminal it does
+    not know: bash and zsh do so through the distributions' `vte.sh` and
+    fish by itself, and each checks the terminal by `VTE_VERSION`.
+    Assumed: the console's session sets `VTE_VERSION` (to a recent VTE's,
+    7800) in the shell's environment, so the three shells report the
+    directory where that script or that check is in place, and a shell
+    without either reports nothing and the tab stays where it was; the
+    emulator ignores the other sequences the variable may invite (OSC 777
+    notifications).
+
+267. (system integration, 2026-11-09) §4: "Rick emits `cd` on tab
+    navigation only while the console has no foreground job". Linux and
+    macOS say whether a job has the terminal (`/proc/<pid>/stat`,
+    `proc_pidinfo`); a Windows pseudo console has no foreground process
+    group to ask about.
+    Assumed: where the system cannot say, Rick does not type into the
+    console, so on Windows the tab follows the console (OSC 7, where the
+    shell sends it) but the console does not follow the tab, rather than
+    risk typing into a running program; a Windows answer (the console
+    host's process list) would lift that.

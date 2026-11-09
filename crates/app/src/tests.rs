@@ -2055,3 +2055,213 @@ fn reveal_opens_the_folder_in_a_tab_and_selects_the_files_once_listed() {
         h.events
     );
 }
+
+/// A console whose working directory and foreground job the test sets,
+/// and which records what is typed into it.
+#[derive(Default)]
+struct FakeConsole {
+    cwd: Mutex<Option<std::path::PathBuf>>,
+    job: Mutex<Option<bool>>,
+    typed: Mutex<Vec<u8>>,
+}
+
+impl ext::Console for FakeConsole {
+    fn title(&self) -> String {
+        "fake".to_owned()
+    }
+    fn screen(&self, _: usize) -> ext::Screen {
+        ext::Screen {
+            cols: 80,
+            rows: 24,
+            cells: Vec::new(),
+            cursor: None,
+            scrollback: 0,
+            application_cursor: false,
+        }
+    }
+    fn write(&self, bytes: &[u8]) {
+        self.typed
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .extend_from_slice(bytes);
+    }
+    fn resize(&self, _: u16, _: u16) {}
+    fn exit_status(&self) -> Option<i32> {
+        None
+    }
+    fn set_waker(&self, _: ext::ConsoleWaker) {}
+    fn generation(&self) -> u64 {
+        0
+    }
+    fn cwd(&self) -> Option<std::path::PathBuf> {
+        self.cwd
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+    }
+    fn foreground_job(&self) -> Option<bool> {
+        *self.job.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+}
+
+/// An extension whose one action opens the fake console as a view.
+struct ConsoleOpener {
+    manifest: Manifest,
+    console: Arc<FakeConsole>,
+}
+
+const OPEN_FAKE_CONSOLE: ActionId = ActionId("fake.console");
+
+struct OpenFakeConsole(Arc<FakeConsole>);
+
+impl ext::Action for OpenFakeConsole {
+    fn id(&self) -> ActionId {
+        OPEN_FAKE_CONSOLE
+    }
+    fn label(&self) -> String {
+        "Fake console".to_owned()
+    }
+    fn group(&self) -> ext::ActionGroup {
+        ext::ActionGroup::Core
+    }
+    fn default_shortcut(&self) -> Option<ext::Shortcut> {
+        None
+    }
+    fn availability(&self, _: &ext::ActionCtx) -> Availability {
+        Availability::Enabled
+    }
+    fn run(
+        &self,
+        _: ext::ActionCtx,
+        _: &ext::JobRunner,
+        _: &dyn UiHost,
+    ) -> Result<ext::ActionOutcome, Error> {
+        Ok(ext::ActionOutcome::View(ext::View::Console(
+            Arc::clone(&self.0) as Arc<dyn ext::Console>,
+        )))
+    }
+}
+
+impl Extension for ConsoleOpener {
+    fn manifest(&self) -> &Manifest {
+        &self.manifest
+    }
+    fn register(&self, reg: &mut Registry) -> Result<(), Error> {
+        reg.action(Arc::new(OpenFakeConsole(Arc::clone(&self.console))));
+        Ok(())
+    }
+}
+
+/// The console follows the tab and the tab follows the console
+/// (specs/system-integration.md §4): the shell's working directory moves
+/// the explorer tab the console was opened from; the explorer's
+/// navigation types `cd` into the console at the prompt, and nothing
+/// while a job has the terminal or the session cannot tell; a report of
+/// the directory the tab is at already types nothing back.
+#[test]
+fn a_console_follows_its_tab_and_the_tab_follows_the_console() {
+    let console = Arc::new(FakeConsole::default());
+    let opener: Arc<dyn Extension> = Arc::new(ConsoleOpener {
+        manifest: Manifest {
+            id: ExtId("fake-console"),
+            name: "Fake console",
+            version: Version::new(0, 1, 0),
+            api_version: API_VERSION,
+            requires: Capabilities::empty(),
+            points: Points::ACTION,
+            platforms: Platforms::ALL,
+            previews: &[],
+            commands: &[],
+        },
+        console: Arc::clone(&console),
+    });
+    let mut h = harness_with(vec![opener]);
+    h.settle();
+    let root = h
+        .root
+        .path()
+        .canonicalize()
+        .unwrap_or_else(|e| panic!("{e}"));
+    let sub = root.join("sub");
+    let pane = h.app.model().focused;
+    let ctx = h
+        .app
+        .action_ctx(pane, Invocation::Palette)
+        .unwrap_or_else(|| panic!("a context"));
+    h.send(Command::Run {
+        action: OPEN_FAKE_CONSOLE,
+        ctx,
+    });
+    h.settle();
+    assert!(
+        h.events
+            .iter()
+            .any(|e| matches!(e, Event::ViewOpened { pane: p, .. } if *p == pane)),
+        "{:?}",
+        h.events
+    );
+    let explorer = |h: &Harness| {
+        h.app.model().active_tab(pane).map_or_else(
+            || panic!("the explorer tab"),
+            |(_, tab)| tab.location.clone(),
+        )
+    };
+    assert_eq!(explorer(&h), local(h.root.path()));
+
+    // The shell changes directory: the tab follows on the next poll (the
+    // UI polls every frame, and the console's waker asks for one), and
+    // nothing is typed back for a move the console itself made.
+    *console.cwd.lock().unwrap_or_else(PoisonError::into_inner) = Some(sub.clone());
+    h.app.poll(&mut h.events);
+    h.settle();
+    assert_eq!(explorer(&h), local(&sub));
+    assert!(
+        console
+            .typed
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .is_empty()
+    );
+
+    // The tab navigates while the shell is at its prompt: `cd` is typed.
+    *console.job.lock().unwrap_or_else(PoisonError::into_inner) = Some(false);
+    h.send(Command::Navigate {
+        pane,
+        to: local(&root),
+    });
+    h.settle();
+    let typed =
+        String::from_utf8_lossy(&console.typed.lock().unwrap_or_else(PoisonError::into_inner))
+            .into_owned();
+    assert!(
+        typed.contains("cd ")
+            && typed.contains(&root.to_string_lossy().into_owned())
+            && typed.ends_with('\r'),
+        "{typed:?}"
+    );
+    let before = typed.len();
+
+    // A job has the terminal, or the session cannot tell: nothing is
+    // typed into it.
+    *console.job.lock().unwrap_or_else(PoisonError::into_inner) = Some(true);
+    h.send(Command::Navigate {
+        pane,
+        to: local(&sub),
+    });
+    h.settle();
+    *console.job.lock().unwrap_or_else(PoisonError::into_inner) = None;
+    h.send(Command::Navigate {
+        pane,
+        to: local(&root),
+    });
+    h.settle();
+    assert_eq!(
+        console
+            .typed
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .len(),
+        before,
+        "nothing typed while a job runs or the state is unknown"
+    );
+}

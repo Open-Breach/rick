@@ -47,7 +47,9 @@ stale socket and gives an unresponsive instance up after a second),
 `xdg_activation_v1` with the launcher's token on Wayland,
 `_NET_ACTIVE_WINDOW` on X11, the window made key and `NSApp.activate` on
 macOS, `SetForegroundWindow` on Windows after the launch's
-`AllowSetForegroundWindow`) and the `agent` module that opens the SSH
+`AllowSetForegroundWindow`) the `process` module that asks whether a console's shell has handed its
+terminal to a job (`/proc/<pid>/stat`, `proc_pidinfo`; Windows cannot say),
+and the `agent` module that opens the SSH
 agent's socket (`SSH_AUTH_SOCK`, or OpenSSH's named pipe on Windows),
 implemented for Linux (XDG trash, `xdg-open`), macOS
 (`NSFileManager`, `open`) and Windows (`IFileOperation`, `ShellExecute`), plus

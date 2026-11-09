@@ -80,6 +80,9 @@ pub struct Screen {
     origin_mode: bool,
     insert_mode: bool,
     title: Option<String>,
+    /// The working directory the shell reported through OSC 7, as the
+    /// `file://` URI it sent.
+    cwd: Option<String>,
     responses: Vec<u8>,
     generation: u64,
 }
@@ -110,6 +113,7 @@ impl Screen {
             origin_mode: false,
             insert_mode: false,
             title: None,
+            cwd: None,
             responses: Vec::new(),
             generation: 0,
         }
@@ -131,6 +135,14 @@ impl Screen {
     #[must_use]
     pub fn title(&self) -> Option<&str> {
         self.title.as_deref()
+    }
+
+    /// The working directory the shell reported through OSC 7
+    /// (`file://<host>/<percent-encoded path>`), as sent, if any
+    /// (specs/system-integration.md §4).
+    #[must_use]
+    pub fn cwd(&self) -> Option<&str> {
+        self.cwd.as_deref()
     }
 
     /// Whether the application asked for application cursor keys.
@@ -673,11 +685,17 @@ impl vte::Perform for Screen {
     }
 
     fn osc_dispatch(&mut self, params: &[&[u8]], _bell_terminated: bool) {
-        if let [kind, title, ..] = params
-            && matches!(*kind, b"0" | b"2")
-        {
-            self.title = Some(String::from_utf8_lossy(title).into_owned());
-            self.touch();
+        match params {
+            [kind, title, ..] if matches!(*kind, b"0" | b"2") => {
+                self.title = Some(String::from_utf8_lossy(title).into_owned());
+                self.touch();
+            }
+            // OSC 7: the shell's working directory as a file URI.
+            [b"7", uri, ..] => {
+                self.cwd = Some(String::from_utf8_lossy(uri).into_owned());
+                self.touch();
+            }
+            _ => {}
         }
     }
 
@@ -847,6 +865,20 @@ mod tests {
         let mut screen = Screen::new(cols, rows);
         feed(&mut screen, bytes);
         screen
+    }
+
+    /// OSC 7 carries the shell's working directory, OSC 0 and 2 the
+    /// title; each is kept as sent, the latest one.
+    #[test]
+    fn osc_7_reports_the_working_directory() {
+        let mut screen = fed(20, 2, b"\x1b]0;a title\x07");
+        assert_eq!(screen.title(), Some("a title"));
+        assert_eq!(screen.cwd(), None);
+        feed(&mut screen, b"\x1b]7;file://host/home/me/a%20b\x1b\\");
+        assert_eq!(screen.cwd(), Some("file://host/home/me/a%20b"));
+        feed(&mut screen, b"\x1b]7;file:///tmp\x07");
+        assert_eq!(screen.cwd(), Some("file:///tmp"));
+        assert_eq!(screen.title(), Some("a title"));
     }
 
     #[test]
