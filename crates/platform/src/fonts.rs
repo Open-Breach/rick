@@ -132,7 +132,7 @@ mod tests {
         let fonts = system();
         for file in [fonts.ui, fonts.mono].into_iter().flatten() {
             assert!(looks_like_font(&file.bytes), "{}", file.family);
-            assert!(!file.family.is_empty());
+            assert_ne!(file.family, "");
         }
     }
 
