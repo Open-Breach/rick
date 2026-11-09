@@ -131,10 +131,10 @@ Per the Figma frame: header with the app icon, title *Set up Rick on this system
 
 ### 10.3 Windows
 
-- **Installer:** Inno Setup (`packaging/windows/rick.iss`) — per-user by default, per-machine on request — installing the binary, plugins and the integration items of §7.2 the user ticks on the installer's task page; Authenticode-signed. Also a portable zip without integration.
-- **Uninstaller** removes the context-menu keys, the Start-menu shortcut, the PATH entry, the app registration, and **reverts *Make Rick the default*** when it was switched on.
-- **winget:** manifest in `microsoft/winget-pkgs` (`packaging/winget/`), submitted by the release workflow with `wingetcreate` from the Open-Breach fork; Scoop or Chocolatey only on request.
-- Open question, Serge's call before the Windows issue starts: Inno Setup or WiX. The text above assumes Inno Setup.
+- **Installer:** WiX (`packaging/windows/rick.wxs`, built with the `wix` .NET tool in the release workflow), an MSI — per-user by default, per-machine on request — installing the binary and the plugins, with the integration items of §7.2 as optional features the user ticks in the setup dialog; Authenticode-signed, the MSI and the binaries inside it. Also a portable zip without integration.
+- **Uninstall**, through the MSI from *Installed apps* or `msiexec /x`, removes the context-menu keys, the Start-menu shortcut, the PATH entry and the app registration, and a custom action **reverts *Make Rick the default*** when it was switched on.
+- **winget:** manifest in `microsoft/winget-pkgs` (`packaging/winget/`, installer type `wix`), submitted by the release workflow with `wingetcreate` from the Open-Breach fork; Scoop or Chocolatey only on request.
+- Decided 2026-11-09: WiX. Inno Setup was the assumption before the decision.
 
 ### 10.4 Update checks
 
@@ -147,7 +147,7 @@ Things only Serge can do: accounts, identities, certificates and secrets. Secret
 - Once: the publisher identity shown by code signing on every platform (Open-Breach or personal name) — consistent across Apple, Azure Trusted Signing and the Linux repository key; a reverse-DNS identifier (`org.open-breach.rick`, already in use); `id-token: write` and `attestations: write` permissions for the release workflow.
 - Linux: an account at build.opensuse.org and a home project for Rick; `osc` installed and logged in once; the OBS targets enabled; an AUR account with an SSH key (`AUR_SSH_KEY` secret).
 - macOS: a *Developer ID Application* certificate exported as `.p12` (`MACOS_CERT_P12`, `MACOS_CERT_PASSWORD`); an App Store Connect API key for `notarytool` (`NOTARY_KEY_ID`, `NOTARY_ISSUER_ID`, `NOTARY_KEY_P8`); the bundle identifier registered; the repository `Open-Breach/homebrew-rick`; a Sparkle EdDSA key pair (`SPARKLE_PRIVATE_KEY`).
-- Windows: an Azure Trusted Signing account and certificate profile (identity validation takes days — start early); an Entra app registration federated to GitHub Actions with the *Trusted Signing Certificate Profile Signer* role (`AZURE_TENANT_ID`, `AZURE_CLIENT_ID`, `AZURE_SUBSCRIPTION_ID`); a fork of `microsoft/winget-pkgs` under Open-Breach; the installer decision (§10.3).
+- Windows: an Azure Trusted Signing account and certificate profile (identity validation takes days — start early); an Entra app registration federated to GitHub Actions with the *Trusted Signing Certificate Profile Signer* role (`AZURE_TENANT_ID`, `AZURE_CLIENT_ID`, `AZURE_SUBSCRIPTION_ID`); a fork of `microsoft/winget-pkgs` under Open-Breach.
 
 ## 12. Milestones
 
