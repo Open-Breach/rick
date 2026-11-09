@@ -1441,14 +1441,14 @@ fn about_symbol(ctx: &egui::Context) -> Option<egui::TextureHandle> {
                 return None;
             }
         };
-    let pixels = (ABOUT_SYMBOL_SIZE * scale).round().max(1.0);
+    let edge = (ABOUT_SYMBOL_SIZE * scale).round().max(1.0);
     // Rounded and at least one: the cast is exact.
     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-    let side = pixels as u32;
+    let side = edge as u32;
     let mut pixmap = resvg::tiny_skia::Pixmap::new(side, side)?;
     let size = tree.size();
     let transform =
-        resvg::tiny_skia::Transform::from_scale(pixels / size.width(), pixels / size.height());
+        resvg::tiny_skia::Transform::from_scale(edge / size.width(), edge / size.height());
     resvg::render(&tree, transform, &mut pixmap.as_mut());
     let image =
         egui::ColorImage::from_rgba_premultiplied([side as usize, side as usize], pixmap.data());
