@@ -1,6 +1,7 @@
 //! Small controls shared by the menus, the dialogues and the settings
-//! (SPEC.md *Dialogues*, *Settings window*): the switch, the segmented
-//! control, a pill, the two button kinds; and the pane handle and the
+//! (SPEC.md *Dialogues*, *Settings window*): the switch, the checkbox,
+//! the segmented control, a pill, the two button kinds; and the pane
+//! handle and the
 //! hairline divider every pane's toolbar ends in (SPEC.md *Panes*).
 
 use egui::{Align2, FontId, Rect, Sense, pos2, vec2};
@@ -109,6 +110,54 @@ pub fn toggle(ui: &mut egui::Ui, on: bool, label: &str) -> egui::Response {
     response
 }
 
+/// A checkbox with its label: a 16 px box with a `border/strong` border,
+/// filled `accent/focus` with a white check when ticked, then `label` in
+/// the body size. The box and the label take the click; returns the
+/// response.
+pub fn checkbox(ui: &mut egui::Ui, on: bool, label: &str) -> egui::Response {
+    let scheme = theme::scheme(ui);
+    let galley = ui.painter().layout_no_wrap(
+        label.to_owned(),
+        FontId::proportional(TEXT_BODY),
+        scheme.text_primary,
+    );
+    let size = vec2(ICON + 8.0 + galley.size().x, ICON.max(galley.size().y));
+    let (rect, response) = ui.allocate_exact_size(size, Sense::click());
+    let box_rect = Rect::from_center_size(
+        pos2(rect.left() + ICON / 2.0, rect.center().y),
+        vec2(ICON, ICON),
+    );
+    if on {
+        ui.painter().rect_filled(box_rect, 3.0, scheme.accent_focus);
+        ui.painter().text(
+            box_rect.center(),
+            Align2::CENTER_CENTER,
+            icons::DONE,
+            FontId::proportional(12.0),
+            Scheme::ON_BUTTON,
+        );
+    } else {
+        ui.painter().rect_stroke(
+            box_rect,
+            3.0,
+            egui::Stroke::new(1.0, scheme.border_strong),
+            egui::StrokeKind::Inside,
+        );
+    }
+    ui.painter().galley(
+        pos2(
+            box_rect.right() + 8.0,
+            rect.center().y - galley.size().y / 2.0,
+        ),
+        galley,
+        scheme.text_primary,
+    );
+    response.widget_info(|| {
+        egui::WidgetInfo::selected(egui::WidgetType::Checkbox, true, on, label.to_owned())
+    });
+    response
+}
+
 /// A dropdown `width` wide: a `bg/pane` button with a `border/default`
 /// frame and `radius/control` corners showing the chosen option and a
 /// caret, the options listed when open. Returns the option clicked.
@@ -167,6 +216,20 @@ pub fn segmented(
     options: &[String],
     selected: usize,
 ) -> Option<usize> {
+    segmented_with(ui, rect, id, options, selected, None)
+}
+
+/// [`segmented`] with one option that cannot be chosen: `unavailable` is
+/// its index and why, shown as its tooltip. The option is drawn washed
+/// out, takes no click and is read aloud as disabled.
+pub fn segmented_with(
+    ui: &mut egui::Ui,
+    rect: Rect,
+    id: egui::Id,
+    options: &[String],
+    selected: usize,
+    unavailable: Option<(usize, &str)>,
+) -> Option<usize> {
     let scheme = theme::scheme(ui);
     let radius = theme::metrics(ui.ctx()).corner_radius();
     ui.painter().rect_filled(rect, radius, scheme.bg_control);
@@ -181,34 +244,49 @@ pub fn segmented(
             vec2(width, rect.height()),
         )
         .shrink(2.0);
-        let response = ui.interact(tile, id.with(index), Sense::click());
+        let why = unavailable
+            .filter(|(at, _)| *at == index)
+            .map(|(_, why)| why);
+        let sense = if why.is_some() {
+            Sense::hover()
+        } else {
+            Sense::click()
+        };
+        let response = ui.interact(tile, id.with(index), sense);
         if index == selected {
             ui.painter().rect_filled(tile, radius, scheme.bg_pane);
-        } else if response.hovered() {
+        } else if response.hovered() && why.is_none() {
             ui.painter().rect_filled(tile, radius, scheme.bg_subtle);
         }
+        let colour = if index == selected {
+            scheme.text_primary
+        } else if why.is_some() {
+            scheme.text_secondary.gamma_multiply(0.55)
+        } else {
+            scheme.text_secondary
+        };
         ui.painter().text(
             tile.center(),
             Align2::CENTER_CENTER,
             option,
             FontId::proportional(TEXT_BODY),
-            if index == selected {
-                scheme.text_primary
-            } else {
-                scheme.text_secondary
-            },
+            colour,
         );
         let spoken = option.clone();
+        let enabled = why.is_none();
         response.widget_info(|| {
             egui::WidgetInfo::selected(
                 egui::WidgetType::RadioButton,
-                true,
+                enabled,
                 index == selected,
                 spoken.clone(),
             )
         });
         if response.clicked() {
             clicked = Some(index);
+        }
+        if let Some(why) = why {
+            response.on_hover_text(why);
         }
     }
     clicked

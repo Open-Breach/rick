@@ -191,6 +191,8 @@ pub const INFO: &str = ph::INFO;
 pub const DOCUMENT: &str = ph::FILE_TEXT;
 /// The source-code row of the About dialog.
 pub const CODE: &str = ph::CODE;
+/// The app launcher entry among the integration items.
+pub const DESKTOP: &str = ph::DESKTOP;
 /// The EXIF badge.
 pub const CAMERA: &str = ph::CAMERA;
 /// The Git badge.
@@ -398,6 +400,7 @@ mod tests {
         FIT,
         ACTUAL_SIZE,
         INFO,
+        DESKTOP,
         CAMERA,
         BRANCH,
         FILM,

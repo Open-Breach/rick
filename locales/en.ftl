@@ -413,3 +413,38 @@ integration-item-rick-command = rick command
 integration-item-dock-favourite = Dock favourite
 integration-failed = { $item } could not be set up: { $error }
 integration-relaunch-failed = Rick could not be started from { $path }: { $error }
+
+# The integration dialog (specs/system-integration.md §6.2).
+integration-dialog-title = Set up Rick on this system
+integration-dialog-subtitle = { $system } — a few things are not set up yet
+integration-dialog-intro = Choose what Rick may set up. Anything you switch off is not asked again — you can change all of it later in Settings → Integration.
+integration-install-for = Install for
+integration-scope-user = Just me
+integration-scope-system = All users
+integration-not-available-yet = Not available yet
+integration-row-install-location = Install to the standard location
+integration-row-install-location-detail = Copy Rick from { $from } to { $to } and run it from there
+integration-row-launcher-entry-detail = Desktop entry and icon, so Rick appears in the application launcher
+integration-row-launcher-entry-detail-gnome = Desktop entry and icon, so Rick appears in the Activities overview
+integration-row-default-file-manager-detail = Open folders with Rick instead of { $name } (inode/directory)
+integration-row-default-file-manager-detail-none = Open folders with Rick (inode/directory)
+integration-row-show-in-folder-detail = D-Bus FileManager1 service, used by browsers, chat and download tools
+integration-row-rick-command = rick command in the terminal
+integration-row-rick-command-detail = Link in { $dir }, plus a shell helper so rick opens the current folder
+integration-row-dock-favourite-detail = Pin Rick to the dock
+integration-row-dock-favourite-detail-gnome = Pin Rick to the GNOME dash
+integration-row-dock-favourite-detail-plasma = Pin Rick to the Plasma task manager
+integration-row-dock-favourite-detail-cosmic = Pin Rick to the COSMIC dock
+integration-row-dock-favourite-detail-cinnamon = Add Rick to the favourites of the Cinnamon menu
+integration-best-effort = Best effort
+integration-foreign = { $path } is already there and was not written by Rick
+integration-replace = Replace
+integration-password-note = Nothing here needs a password. “All users” installs under /opt and asks for it once.
+integration-dont-ask = Don’t ask again
+integration-not-now = Not now
+integration-apply = { $count ->
+    [one] Apply 1 item
+   *[other] Apply { $count } items
+}
+integration-applying = Setting up { $item } — { $done } of { $total }
+integration-finishing = Finishing…

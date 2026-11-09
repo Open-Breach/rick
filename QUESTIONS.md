@@ -3562,3 +3562,51 @@ Once answered, an entry keeps its number and gains a dated decision line.
     itself. A COSMIC that has not written the file yet stays
     *Unsupported*, as in question 282: Rick does not create it, since a
     list of its own would replace the dock's defaults.
+
+304. (system integration, issue 120, 2026-11-09) §6.1: "each row with its
+    own switch (on by default for missing, on for drifted)"; the Figma
+    frame *Integration dialog — first run* draws the *Dock favourite*
+    switch off.
+    Assumed: the spec wins. Every listed row starts switched on, the
+    dock favourite included; the frame's "Apply 5 items" is that one
+    switched off by hand.
+
+305. (system integration, issue 120, 2026-11-09) Neither the spec nor
+    the frame shows a row whose place holds a file Rick did not write
+    (question 287).
+    Assumed (handoff of issue 120: "the row says so and asks"): under
+    its line the row names the file in `status/warning` — *~/.local/bin/
+    rick is already there and was not written by Rick* — with a
+    *Replace* checkbox. Ticked, the row is set up and the file replaced.
+    Not ticked, a row that is on is neither set up nor declined: it is
+    left out of *Apply N items* and asked about again at the next start.
+    Switched off it is declined like any other.
+
+306. (system integration, issue 120, 2026-11-09) §6.1: "**Not now**
+    closes without changes and asks again at the next start; the footer
+    checkbox **Don't ask again** silences the whole dialog". Which
+    button the checkbox goes with, and what *Apply* does with every row
+    off, is not said.
+    Assumed: the checkbox is stored with whichever button closes the
+    dialog, so *Don't ask again* with *Not now* stores `ask = false` and
+    nothing else. Escape and a click beside the dialog are *Not now*.
+    With every row off *Apply* reads *Apply 0 items*, stores the rows as
+    declined and closes. While the rows are set up the footer shows
+    *Setting up <row> — n of N* in place of the checkbox and the
+    controls rest; the dialog closes with the last row, and a row that
+    failed is a toast.
+
+307. (system integration, issue 120, 2026-11-09) The frame's lines are
+    worded for one machine: "so Rick appears in the Activities
+    overview", "instead of Files", "Pin Rick to the GNOME dash", "Move
+    Rick from …".
+    Assumed: the lines are worded from what the check found. The
+    launcher entry says *Activities overview* on GNOME and *application
+    launcher* elsewhere; the default file manager names the application
+    that opens folders now, or leaves "instead of …" out when there is
+    none; the `rick` command names the folder its link goes to; the dock
+    row names the desktop's own place (GNOME dash, Plasma task manager,
+    COSMIC dock, the favourites of the Cinnamon menu); the install row
+    says *Copy* (question 295). *All users* is drawn and cannot be
+    chosen, with the tooltip *Not available yet*; the frame's line about
+    passwords is kept as it is.
