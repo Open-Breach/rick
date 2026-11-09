@@ -123,21 +123,29 @@ fn bundle(args: &[String]) -> Result<()> {
     for name in KERNEL_DYLIBS {
         copy(&profile_dir.join(dylib(name)), &out)?;
     }
-    for lib in libstd(&cargo)? {
-        copy(&lib, &out)?;
+    let std_libs = libstd(&cargo)?;
+    for lib in &std_libs {
+        copy(lib, &out)?;
     }
     pdfium(&out)?;
     if let Some(dir) = std::env::var_os("RICK_GSTREAMER_DIR") {
         gstreamer(Path::new(&dir), &out)?;
     }
 
+    // The helper links the kernel dylibs and libstd dynamically, like every
+    // artifact of the build, and xtask runs under the library path cargo
+    // set for xtask's own profile (debug, whatever `--release` the bundle
+    // got), so a release bundle's helper looked for libext.so in
+    // target/debug and the Linux release builds stopped there (release.yml
+    // run 42546356745). Its search path is the bundle's profile directory,
+    // cargo's deps directory beside it and the toolchain's library
+    // directory, ahead of what the variable held.
     let helper = profile_dir.join(exe("rick-plugin-manifest"));
     for crate_name in &meta.plugin_crates {
         let library = profile_dir.join(dylib(&crate_name.replace('-', "_")));
-        let output = Command::new(&helper)
-            .arg(&library)
-            .arg(&plugins_dir)
-            .output()?;
+        let mut command = Command::new(&helper);
+        with_library_path(&mut command, &profile_dir, &std_libs)?;
+        let output = command.arg(&library).arg(&plugins_dir).output()?;
         if output.status.code() == Some(NOT_FOR_THIS_PLATFORM) {
             println!(
                 "plugin from {crate_name}: {}; not bundled",
@@ -439,6 +447,30 @@ fn libstd(cargo: &std::ffi::OsStr) -> Result<Vec<PathBuf>> {
         .into());
     }
     Ok(found)
+}
+
+/// Gives `command`, a program of `profile_dir` built with
+/// `-C prefer-dynamic`, the dynamic library search path it needs: the
+/// profile directory (the uplifted kernel dylibs), cargo's `deps` beside it
+/// and the directories of `libstd`, ahead of what the variable holds. Every
+/// platform's variable is set; the loader reads the one it knows.
+fn with_library_path(command: &mut Command, profile_dir: &Path, libstd: &[PathBuf]) -> Result<()> {
+    let mut dirs: Vec<PathBuf> = vec![profile_dir.to_path_buf(), profile_dir.join("deps")];
+    for lib in libstd {
+        if let Some(dir) = lib.parent()
+            && !dirs.iter().any(|known| known == dir)
+        {
+            dirs.push(dir.to_path_buf());
+        }
+    }
+    for var in ["LD_LIBRARY_PATH", "DYLD_LIBRARY_PATH", "PATH"] {
+        let mut paths = dirs.clone();
+        if let Some(existing) = std::env::var_os(var) {
+            paths.extend(std::env::split_paths(&existing));
+        }
+        command.env(var, std::env::join_paths(paths)?);
+    }
+    Ok(())
 }
 
 fn run(command: &mut Command) -> Result<()> {
