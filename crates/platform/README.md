@@ -37,7 +37,13 @@ UI and monospace fonts: fontconfig's `sans-serif` and `monospace` matches
 through `fc-match`, the San Francisco files, Segoe UI and Consolas; the
 fake answers like the machine it runs on), and `Motion` (the system's
 reduce-motion setting, read once from the desktop, which stills Rick's
-loading animations) and the `agent` module that opens the SSH
+loading animations), `SingleInstance` (the endpoint of the one Rick per
+user and config directory: a Unix socket in `$XDG_RUNTIME_DIR` or the
+user's temporary directory, a named pipe on Windows; the `instance` module
+frames the one message a second launch hands over it, *run command with
+arguments*, as length-prefixed JSON with a protocol version, reclaims a
+stale socket and gives an unresponsive instance up after a second) and
+the `agent` module that opens the SSH
 agent's socket (`SSH_AUTH_SOCK`, or OpenSSH's named pipe on Windows),
 implemented for Linux (XDG trash, `xdg-open`), macOS
 (`NSFileManager`, `open`) and Windows (`IFileOperation`, `ShellExecute`), plus
