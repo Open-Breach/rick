@@ -2686,35 +2686,48 @@ Once answered, an entry keeps its number and gains a dated decision line.
     Found through a stack sample of the hung test process on a throwaway
     branch (`ci/macos-hang`, which this session could not delete).
 
-223. (design refresh, issue 60, 2026-11-09) The Figma note *Spacing &
+223. (0.2.0 release, 2026-11-09) The close-out's order has the 0.3 kickoff
+    (workspace version 0.3.0-dev on dev) after the release is published;
+    the tag could not be pushed from the session that ran the close-out,
+    the kickoff was merged while the tag's release workflow still ran, and
+    that workflow then failed on three platforms, so the fixes must reach
+    main through dev while release.yml requires main's workspace version
+    to be the tag's.
+    Assumed: the kickoff is reverted on dev together with the release
+    fixes, the batch dev → main carries 0.2.0 again, the tag is deleted
+    and made anew on the new merge commit, and the kickoff is reapplied
+    once the release is out. The revert and the reapplication are plain
+    commits; nothing is rewritten.
+
+224. (design refresh, issue 60, 2026-11-09) The Figma note *Spacing &
     density* gives the title bar 46 px (Comfortable) and 36 px (Compact),
     while the *Density* variable collection, and the frames themselves,
     say 40 and 34.
     Assumed: the variables, since the token set matches the collection one
     to one; the note is out of date.
 
-224. (design refresh, 2026-11-09) The row-density setting had three levels
+225. (design refresh, 2026-11-09) The row-density setting had three levels
     (compact, normal, comfortable); the design has two (Comfortable, the
     default, and Compact).
     Assumed: `density = "normal"` in an existing `rick.toml` reads as
     Comfortable, `compact` and `comfortable` stay as they are, and the
     file is written with the new value the next time settings change.
 
-225. (design refresh, 2026-11-09) SPEC.md's Theming said "accent colour can
+226. (design refresh, 2026-11-09) SPEC.md's Theming said "accent colour can
     be chosen"; the handoff says every colour comes from the token set,
     whose pairs were checked for WCAG contrast, and that more colour comes
     as further schemes.
     Assumed: the accent-colour setting is withdrawn; an `accent` key in an
     existing `rick.toml` is ignored and dropped on the next write.
 
-226. (design refresh, 2026-11-09) SPEC.md's Icons marked an active toggle
+227. (design refresh, 2026-11-09) SPEC.md's Icons marked an active toggle
     with Phosphor's fill weight; the Figma note says toolbar buttons are
     ghost buttons and only active toggles keep a tint.
     Assumed: the tint (`bg/selected-soft` behind an `accent/focus` icon)
     and the regular weight everywhere; the fill-weight font stays loaded
     for a later use.
 
-227. (design refresh, 2026-11-09) The Figma context menus, labelled draft,
+228. (design refresh, 2026-11-09) The Figma context menus, labelled draft,
     show fewer entries than SPEC.md's groups: on a file no *Open in new
     tab*, *Open in terminal here*, *Duplicate*, *Paste as link*, *Compress
     to archive* or *Extract here*; on empty space no *Paste as link*, *Open
@@ -2730,7 +2743,7 @@ Once answered, an entry keeps its number and gains a dated decision line.
     view options menu holds them; sort stays on the column header and
     group in the command palette.
 
-228. (design refresh, 2026-11-09) With tabs in the title row and no
+229. (design refresh, 2026-11-09) With tabs in the title row and no
     per-pane strips, SPEC.md's tab operations (new tab, close tab, open in
     new tab, duplicate tab, next and previous tab) need a meaning.
     Assumed: a tab is a workspace. *New tab* and *Open in new tab* open a
@@ -2741,7 +2754,7 @@ Once answered, an entry keeps its number and gains a dated decision line.
     there is no *Close pane* command and a workspace never ends up empty.
     *Split right* and *Split down* keep their meaning.
 
-229. (design refresh, 2026-11-09) The operations drawer shows a round
+230. (design refresh, 2026-11-09) The operations drawer shows a round
     cancel button per job and nothing for pause and resume, which SPEC.md
     and the job table have; it also shows no finished or failed job, which
     SPEC.md keeps listed briefly or until dismissed. The summary's
@@ -2751,26 +2764,26 @@ Once answered, an entry keeps its number and gains a dated decision line.
     like the waiting ones, the failed one with its error in `status/danger`
     and a dismiss button; the percentage is `accent/focus`.
 
-230. (design refresh, 2026-11-09) SPEC.md left open which layout toggles
+231. (design refresh, 2026-11-09) SPEC.md left open which layout toggles
     sit in the title row. The Figma title bar has two icons, sidebar-left
     and sidebar-right, before the window controls.
     Assumed: the side panel toggle and the preview pane toggle, in that
     order; the open question is closed.
 
-231. (design refresh, 2026-11-09) The footer frames show the folder and
+232. (design refresh, 2026-11-09) The footer frames show the folder and
     file counts of an unfiltered list; SPEC.md's status line read "12 of
     340 files" while a filter narrows the list.
     Assumed: the counts read "12 of 340" while a filter is active, in the
     footer's form; nothing else changes.
 
-232. (design refresh, 2026-11-09) The hash dialogue is drawn for one file;
+233. (design refresh, 2026-11-09) The hash dialogue is drawn for one file;
     SPEC.md hashes several selected files in one job and showed a block
     per file.
     Assumed: with several files the body repeats the hash card per file,
     each under a row naming the file, Verify on top compares against every
     row, and the header names the count and the total size.
 
-233. (design refresh, 2026-11-09) Only the View page of the settings window
+234. (design refresh, 2026-11-09) Only the View page of the settings window
     is drawn; the category list names General, View, Appearance and the
     plugins.
     Assumed: View holds the list settings (Files, Sorting, Side panel);
@@ -2780,21 +2793,21 @@ Once answered, an entry keeps its number and gains a dated decision line.
     settings schema as cards; Keyboard shortcuts and Extensions stay their
     own screens, opened from the burger menu, in the dialogue frame.
 
-234. (design refresh, 2026-11-09) The Figma workspace tabs carry a folder
+235. (design refresh, 2026-11-09) The Figma workspace tabs carry a folder
     icon, a code icon and a download icon for three folders.
     Assumed: a tab's icon is the side panel's icon when the folder is a
     place (Downloads, Home, Trash and so on), the provider's icon for an
     archive, a remote host or a cloud account, and `FOLDER` otherwise; the
     code icon on *flowcpt* has no rule behind it that the file states.
 
-235. (design refresh, 2026-11-09) The Compact frame's toolbar is 42 px and
+236. (design refresh, 2026-11-09) The Compact frame's toolbar is 42 px and
     its preview toolbar 37 px, where the Density tokens give 28 + 2 × 4 =
     36 for both.
     Assumed: the formula from the tokens (button size plus twice the
     toolbar padding) in both densities; the Compact frame was not re-laid
     to its own tokens.
 
-236. (design refresh, 2026-11-09) The install dialogue labels the scope
+237. (design refresh, 2026-11-09) The install dialogue labels the scope
     *Install for: Just me / All users*; specs/ext-installer.md says *Scope:
     user space (recommended) / system-wide* and lists the fields in another
     order, with Category and the commands among them.
@@ -2803,25 +2816,25 @@ Once answered, an entry keeps its number and gains a dated decision line.
     among the files this task edits and keeps its wording, the GUI chapter
     governing the look.
 
-237. (design refresh, 2026-11-09) The view options menu lists Details, List
+238. (design refresh, 2026-11-09) The view options menu lists Details, List
     and three icon sizes; SPEC.md also has the Tree view and an extra-large
     icon size.
     Assumed: both stay reachable through the command palette and their
     shortcuts, and the menu lists what the design shows.
 
-238. (design refresh, 2026-11-09) The *Components* frame's FileRow uses
+239. (design refresh, 2026-11-09) The *Components* frame's FileRow uses
     `bg/selected` (`#90d1ff`) for its selected state, while every row in
     the main frames and the *States* frame uses `bg/selected-soft`.
     Assumed: `bg/selected-soft` for selected rows in the focused pane, as
     the frames show; `bg/selected` stays in the token set, reserved, and
     `bg/active` marks a pressed tool button.
 
-239. (design refresh, 2026-11-09) Saved layouts were "an arrangement of
+240. (design refresh, 2026-11-09) Saved layouts were "an arrangement of
     panels and tabs"; with workspaces the unit needs stating.
     Assumed: a saved layout is one window's arrangement — its workspace
     tabs and their panes — and the start layout restores all of them.
 
-240. (design refresh, 2026-11-09) The Portal spinner's component note says
+241. (design refresh, 2026-11-09) The Portal spinner's component note says
     reduce motion shows "a static ring or a plain bar"; the yellow note
     says "static portal, no flying files".
     Assumed: a still portal — the rings drawn at rest, no glyphs — in both
