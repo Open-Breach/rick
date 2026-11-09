@@ -455,8 +455,12 @@ impl LicencesPage {
             pos2(band.left() + PAD, band.top() + 1.0),
             pos2(band.right() - PAD - button_width - 10.0, band.bottom()),
         );
-        ui.put(
-            text_rect,
+        let mut note = ui.new_child(
+            egui::UiBuilder::new()
+                .max_rect(text_rect)
+                .layout(egui::Layout::left_to_right(Align::Center)),
+        );
+        note.add(
             egui::Label::new(
                 egui::RichText::new(text)
                     .size(theme::TEXT_SECONDARY)
@@ -688,8 +692,12 @@ fn expanded(ui: &mut egui::Ui, component: &Component, asked: &mut Asked) {
         egui::Stroke::new(1.0, scheme.border_default),
         egui::StrokeKind::Inside,
     );
-    ui.put(
-        text_box.shrink2(vec2(12.0, 10.0)),
+    let mut body = ui.new_child(
+        egui::UiBuilder::new()
+            .max_rect(text_box.shrink2(vec2(12.0, 10.0)))
+            .layout(egui::Layout::top_down(Align::Min)),
+    );
+    body.add(
         egui::Label::new(
             egui::RichText::new(component.text.trim_end())
                 .font(FontId::monospace(TEXT_SIZE))
