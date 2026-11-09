@@ -7,9 +7,11 @@ name: release
 # 89), `plugins/` with every plugin (QUESTIONS.md 81) and the 7-Zip library
 # with its licence beside the archive plugin (issue 51; built from the
 # pinned sources on Linux and macOS, the pinned installer's 7z.dll on
-# Windows, see .github/scripts/sevenzip.sh) — plus LICENSE,
-# README, CHANGELOG and the third-party
-# licenses, and on Linux the desktop entry and the icons under share/ in
+# Windows, see .github/scripts/sevenzip.sh) — plus LICENSE, README,
+# CHANGELOG and the third-party licences, as THIRD-PARTY-LICENSES.md at the
+# root and as third-party.json beside the binary, the component list the
+# About dialog shows (specs/about-dialog.md; issue 101), and on Linux the
+# desktop entry and the icons under share/ in
 # the XDG layout (specs/app-icons.md); on macOS the bundle goes into
 # Rick.app (Contents/MacOS/ with the plugins beside the binary as
 # everywhere, Info.plist from packaging/macos/ with the version filled in,
@@ -46,10 +48,24 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: taiki-e/install-action@v2
         with: { tool: cargo-about }
-      # about.toml lists the four release targets, so one run covers them all.
-      - run: cargo about generate about.hbs -o THIRD-PARTY-LICENSES.md
+      # about.toml lists the four release targets, so one run covers them
+      # all; the features are the release build's, so the GStreamer
+      # bindings the media previewer plays through are in the list. Twice:
+      # the Markdown for the archive's root and the JSON the About dialog
+      # reads (about-json.hbs). The release fails here when the JSON is
+      # missing or malformed, when a crate the release links on any of its
+      # targets is not in it, or when it names a crate Cargo.lock does not
+      # have (specs/about-dialog.md, Generation; QUESTIONS.md 261).
+      - run: cargo about generate --features ext-preview-media/gstreamer about.hbs -o THIRD-PARTY-LICENSES.md
+      - run: cargo about generate --features ext-preview-media/gstreamer about-json.hbs -o third-party.json
+      - run: python3 .github/scripts/check-third-party.py third-party.json --features ext-preview-media/gstreamer
       - uses: actions/upload-artifact@v4
-        with: { name: third-party-licenses, path: THIRD-PARTY-LICENSES.md }
+        with:
+          name: third-party-licenses
+          path: |
+            THIRD-PARTY-LICENSES.md
+            third-party.json
+          if-no-files-found: error
 
   build:
     needs: licenses
@@ -66,7 +82,11 @@ jobs:
     runs-on: ${{ matrix.os }}
     timeout-minutes: 45
     steps:
+      # The whole history: crates/rick/build.rs writes the names of `git
+      # shortlog` into the binary for the About dialog's credits, and a
+      # shallow clone would name one person.
       - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       # GStreamer for the media previewer (issue 18). Linux: the system
@@ -216,6 +236,14 @@ jobs:
             bin="dist/$NAME"
           fi
           cp LICENSE README.md CHANGELOG.md THIRD-PARTY-LICENSES.md "dist/$NAME/"
+          # The component list the About dialog reads at start: beside the
+          # binary, on macOS in the bundle's Resources
+          # (specs/about-dialog.md, Generation).
+          if [ "${{ runner.os }}" = "macOS" ]; then
+            cp third-party.json "$app/Resources/third-party.json"
+          else
+            cp third-party.json "$bin/third-party.json"
+          fi
           # Linux: the desktop entry and the icons in the XDG layout under
           # share/ (specs/app-icons.md), so that one copy of share/ into
           # ~/.local/share installs them and the installer plugin finds them
@@ -329,10 +357,16 @@ jobs:
             test -f Rick.app/Contents/Resources/Rick.icns || { echo "no Rick.icns in the bundle"; exit 1; }
             cmp Rick.app/Contents/Resources/Rick.icns "$GITHUB_WORKSPACE/assets/icons/macos/Rick.icns" || { echo "Rick.icns is not the committed one"; exit 1; }
             test -d Rick.app/Contents/MacOS/plugins || { echo "no plugins/ beside the binary in the bundle"; exit 1; }
+            test -f Rick.app/Contents/Resources/third-party.json || { echo "no third-party.json in the bundle's Resources"; exit 1; }
             cd Rick.app/Contents/MacOS
             ls -l
+          else
+            test -f third-party.json || { echo "no third-party.json beside the binary"; exit 1; }
           fi
           test -f "rick$exe" || { echo "missing rick$exe"; exit 1; }
+          # The About dialog's component list parses and names crates.
+          python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); assert isinstance(d,list) and len(d) > 100, "too few entries"; print(len(d), "third-party entries")' \
+            "$([ "${{ runner.os }}" = "macOS" ] && echo ../Resources/third-party.json || echo third-party.json)"
           test -f libpdfium.so || test -f libpdfium.dylib || test -f pdfium.dll || { echo "no pdfium library beside the binary"; exit 1; }
           # The GStreamer runtime the media previewer plays through, bundled
           # on macOS and Windows (QUESTIONS.md 106).
@@ -411,7 +445,7 @@ jobs:
           python3 .github/scripts/changelog-section.py "$TAG" CHANGELOG.md > body.md
           {
             echo
-            echo "Archives: the \`rick\` binary with the shared kernel libraries, libstd and the pdfium library beside it, \`plugins/\` with the Git, SVN, archive, trash, Office, media, archive-preview, markup (Markdown, HTML, CSV), hex-preview and subdirectory-search plugins and the platform's search-index connector (Windows Search, Spotlight, or Tracker and Baloo), the 7-Zip library (LGPL) beside the archive plugin for the disk images, the GStreamer runtime on macOS and Windows (Linux uses the system's: install the gstreamer1.0 plug-in packages for playback), on Linux the desktop entry and the icons under \`share/\` in the XDG layout (copy \`share/\` into \`~/.local/share/\` and put \`rick\` on the PATH, or install the tarball with Rick's installer plugin), on macOS all of it inside \`Rick.app\` (drag it to Applications), LICENSE, README, CHANGELOG, THIRD-PARTY-LICENSES and the 7-Zip licence; \`SHA256SUMS.txt\` has the checksums. Not signed or notarised (see README, Try it)."
+            echo "Archives: the \`rick\` binary with the shared kernel libraries, libstd and the pdfium library beside it, \`plugins/\` with the Git, SVN, archive, trash, Office, media, archive-preview, markup (Markdown, HTML, CSV), hex-preview and subdirectory-search plugins and the platform's search-index connector (Windows Search, Spotlight, or Tracker and Baloo), the 7-Zip library (LGPL) beside the archive plugin for the disk images, the GStreamer runtime on macOS and Windows (Linux uses the system's: install the gstreamer1.0 plug-in packages for playback), on Linux the desktop entry and the icons under \`share/\` in the XDG layout (copy \`share/\` into \`~/.local/share/\` and put \`rick\` on the PATH, or install the tarball with Rick's installer plugin), on macOS all of it inside \`Rick.app\` (drag it to Applications), LICENSE, README, CHANGELOG, THIRD-PARTY-LICENSES, the 7-Zip licence and \`third-party.json\` beside the binary (the component list the About dialog shows); \`SHA256SUMS.txt\` has the checksums. Not signed or notarised (see README, Try it)."
           } >> body.md
           cat body.md
       - uses: softprops/action-gh-release@v2
