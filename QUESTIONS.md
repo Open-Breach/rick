@@ -2839,3 +2839,17 @@ Once answered, an entry keeps its number and gains a dated decision line.
     says "static portal, no flying files".
     Assumed: a still portal — the rings drawn at rest, no glyphs — in both
     the spinner and the burst.
+
+242. (design refresh, 2026-11-09) The handoff says every text and control
+    pair of the "Rick" collection meets WCAG contrast. Computed from the
+    variables' values, three pairs do not: `text/secondary` on
+    `bg/control` and on `bg/selected-inactive` (4.19:1 in Light, 4.35:1
+    in Dark, under the 4.5:1 for text — the Size, Type and Modified
+    columns of a selected row in a pane without focus), `border/strong` on
+    `bg/pane` in Light (2.94:1, under the 3:1 for controls — a checkbox on
+    a pane) and `status/warning-border` on `bg/pane` and `dialog/bg` in
+    Light (2.61:1 — the border of the installer's version field).
+    Assumed: the tokens stay as the Figma file has them, the unit test
+    that holds the pairs to the rule leaves these three out and names
+    them, and the values are for the design to revisit; nothing is
+    invented in their place.
