@@ -9,7 +9,8 @@ name: release
 # pinned sources on Linux and macOS, the pinned installer's 7z.dll on
 # Windows, see .github/scripts/sevenzip.sh) — plus LICENSE,
 # README, CHANGELOG and the third-party
-# licenses; a smoke test of every archive; then a GitHub Release with the archives, their
+# licenses, and on Linux the desktop entry and the icons under share/ in
+# the XDG layout (specs/app-icons.md); a smoke test of every archive; then a GitHub Release with the archives, their
 # SHA-256 sums and the tag's changelog section as its body. A tag with a
 # pre-release suffix (v0.1.0-rc1) makes a draft pre-release; a plain tag
 # publishes. Run by hand from a branch with a tag name, it is a dry run: the
@@ -192,6 +193,15 @@ jobs:
           mkdir -p "dist/$NAME"
           cp -R target/release/bundle/. "dist/$NAME/"
           cp LICENSE README.md CHANGELOG.md THIRD-PARTY-LICENSES.md "dist/$NAME/"
+          # Linux: the desktop entry and the icons in the XDG layout under
+          # share/ (specs/app-icons.md), so that one copy of share/ into
+          # ~/.local/share installs them and the installer plugin finds them
+          # where it looks.
+          if [ "${{ runner.os }}" = "Linux" ]; then
+            mkdir -p "dist/$NAME/share/applications" "dist/$NAME/share/icons"
+            cp packaging/linux/rick.desktop "dist/$NAME/share/applications/"
+            cp -R assets/icons/linux/hicolor "dist/$NAME/share/icons/"
+          fi
           # The 7-Zip licence among the licences at the root as well as
           # beside the library.
           cp "dist/$NAME/plugins/vfs-archive/7-Zip-License.txt" "dist/$NAME/7-Zip-License.txt"
@@ -244,11 +254,11 @@ jobs:
       - uses: actions/checkout@v4
       # The Linux archives use the system GStreamer: the media plugin links
       # it and loads only where it is installed, as a user's desktop has it.
-      - name: gstreamer (linux)
+      - name: gstreamer and desktop-file-utils (linux)
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends libgstreamer1.0-0 libgstreamer-plugins-base1.0-0 gstreamer1.0-plugins-good
+          sudo apt-get install -y --no-install-recommends libgstreamer1.0-0 libgstreamer-plugins-base1.0-0 gstreamer1.0-plugins-good desktop-file-utils
       - uses: actions/download-artifact@v4
         with: { name: "archive-${{ matrix.platform }}", path: dist }
       - uses: actions/download-artifact@v4
@@ -279,6 +289,19 @@ jobs:
             Windows) test -f gstreamer-1.0-0.dll || { echo "no bundled GStreamer"; exit 1; }
                      ls gstreamer-1.0 | head -5 ;;
           esac
+          # Linux: the desktop entry and the icons under share/
+          # (specs/app-icons.md): the entry valid and naming the app id
+          # `rick` as its icon and its StartupWMClass, and every file of
+          # the repository's hicolor set at its place.
+          if [ "${{ runner.os }}" = "Linux" ]; then
+            desktop-file-validate share/applications/rick.desktop
+            grep -qx 'Icon=rick' share/applications/rick.desktop || { echo "the desktop entry's Icon is not rick"; exit 1; }
+            grep -qx 'StartupWMClass=rick' share/applications/rick.desktop || { echo "the desktop entry's StartupWMClass is not rick"; exit 1; }
+            diff <(cd "$GITHUB_WORKSPACE/assets/icons/linux/hicolor" && find . -type f | sort) <(cd share/icons/hicolor && find . -type f | sort) \
+              || { echo "the icons under share/ are not the repository's hicolor set"; exit 1; }
+            test -f share/icons/hicolor/scalable/apps/rick.svg || { echo "no scalable icon"; exit 1; }
+            find share -type f | sort
+          fi
           # The kernel dylibs and libstd the binary shares with the plugins.
           ls -1 | grep -Eq '^(lib)?std-' || { echo "no libstd beside the binary"; exit 1; }
           ls -1 | grep -Eq '^(lib)?ext\.' || { echo "no ext library beside the binary"; exit 1; }
@@ -331,7 +354,7 @@ jobs:
           python3 .github/scripts/changelog-section.py "$TAG" CHANGELOG.md > body.md
           {
             echo
-            echo "Archives: the \`rick\` binary with the shared kernel libraries, libstd and the pdfium library beside it, \`plugins/\` with the Git, SVN, archive, trash, Office, media, archive-preview, markup (Markdown, HTML, CSV), hex-preview and subdirectory-search plugins and the platform's search-index connector (Windows Search, Spotlight, or Tracker and Baloo), the 7-Zip library (LGPL) beside the archive plugin for the disk images, the GStreamer runtime on macOS and Windows (Linux uses the system's: install the gstreamer1.0 plug-in packages for playback), LICENSE, README, CHANGELOG, THIRD-PARTY-LICENSES and the 7-Zip licence; \`SHA256SUMS.txt\` has the checksums. Not signed or notarised (see README, Try it)."
+            echo "Archives: the \`rick\` binary with the shared kernel libraries, libstd and the pdfium library beside it, \`plugins/\` with the Git, SVN, archive, trash, Office, media, archive-preview, markup (Markdown, HTML, CSV), hex-preview and subdirectory-search plugins and the platform's search-index connector (Windows Search, Spotlight, or Tracker and Baloo), the 7-Zip library (LGPL) beside the archive plugin for the disk images, the GStreamer runtime on macOS and Windows (Linux uses the system's: install the gstreamer1.0 plug-in packages for playback), on Linux the desktop entry and the icons under \`share/\` in the XDG layout (copy \`share/\` into \`~/.local/share/\` and put \`rick\` on the PATH, or install the tarball with Rick's installer plugin), LICENSE, README, CHANGELOG, THIRD-PARTY-LICENSES and the 7-Zip licence; \`SHA256SUMS.txt\` has the checksums. Not signed or notarised (see README, Try it)."
           } >> body.md
           cat body.md
       - uses: softprops/action-gh-release@v2
