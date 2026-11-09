@@ -3525,16 +3525,40 @@ Once answered, an entry keeps its number and gains a dated decision line.
     left out, and the caller's startup id is the activation token the
     window is raised with.
 
-301. (issue 80, rule 4, 2026-11-09) *Spring-loaded tabs*: a dragged tab
-    "rests on a neighbour while it overlaps it by a quarter of a tab or
-    more, short of the half where the two would swap". A tab taken past a
-    neighbour overlaps it by a quarter or more for half the way — before
-    the swap from one side, after it from the other — so at an unhurried
-    pace an ordinary reorder would outlast the delay and switch the
-    window.
-    Assumed: "rests" is taken at its word. A dragged tab spring-loads the
-    neighbour it leans on only while it is held still, the cursor within
-    6 px (`ui_egui::drag::REST_SLOP`) of where the rest began; moving on
-    starts the clock again. The overlap counts on either side of the
-    swap. A dragged pane needs no such rule: its cursor is on the tab or
-    it is not.
+301. (system integration, issue 120, 2026-11-09) §7.1, dock favourite:
+    the spec names where each desktop keeps its favourites, not what
+    Rick writes there or what the undo puts back.
+    Assumed: Rick is appended at the end of the list and nothing else in
+    it changes; a list that has Rick already is left alone. The record
+    names the list and keeps it as it was, and the undo takes Rick out
+    of the list as it is by then rather than writing the old list back,
+    so favourites pinned or removed since stay. A favourite names the
+    launcher entry, so the row fails with a warning while that entry is
+    not installed, as the default file manager does.
+
+302. (system integration, issue 120, 2026-11-09) §7.1: "Plasma: the
+    task-manager launcher list in
+    `plasma-org.kde.plasma.desktop-appletsrc`". A panel may hold several
+    task managers; one whose configuration names no launchers shows
+    Plasma's defaults, which a list in the file replaces; and the
+    running shell reads the file at its start only.
+    Assumed: the first task manager of the file gets Rick. Where it
+    names no launchers, Plasma's own default list (System Settings,
+    Discover, the preferred file manager and browser) is written out
+    with Rick after it, and the undo removes the key again when only
+    that default is left. After the write Rick asks the running shell to
+    start over from its configuration (`org.kde.PlasmaShell.
+    refreshCurrentShell` through `dbus-send`, when there is a session
+    bus and the tool): the panel restarts once. Without that call the
+    favourite appears at the next login. Say so if Rick should not
+    restart the shell.
+
+303. (system integration, issue 120, 2026-11-09) §7.1: "COSMIC: the
+    dock's configuration under `~/.config/cosmic`" (question 282 has the
+    file). The file is a RON list that COSMIC's own configuration
+    library writes and watches.
+    Assumed: `rick` is appended and the list written back the way that
+    library writes it, an id a line; the dock picks the change up by
+    itself. A COSMIC that has not written the file yet stays
+    *Unsupported*, as in question 282: Rick does not create it, since a
+    list of its own would replace the dock's defaults.
