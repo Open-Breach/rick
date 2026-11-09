@@ -27,7 +27,9 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 pub use ext::PaneId;
 use ext::{CellValue, Decoration, FsChange};
-pub use listing::{Column, Group, IconSize, Listing, Sort, SortDir, ViewMode, ViewSpec, type_of};
+pub use listing::{
+    Column, FOLDER_TYPE, Group, IconSize, Listing, Sort, SortDir, ViewMode, ViewSpec, type_of,
+};
 pub use panel::{DEFAULT_PLACE_ICON, Place, Places, TrashView};
 pub use platform::{TrashedItem, Volume, VolumeKind};
 use serde::{Deserialize, Serialize};
@@ -354,6 +356,10 @@ pub struct Tab {
     pub group: Option<Column>,
     /// The type-to-filter text.
     pub filter: String,
+    /// The file types the list is narrowed to from the view options menu
+    /// (as the Type column names them); `None` shows every type. Cleared
+    /// on navigation, never saved.
+    pub types: Option<BTreeSet<String>>,
     /// Hidden entries shown in this tab.
     pub show_hidden: bool,
     /// Subfolders flattened into the list.
@@ -397,6 +403,7 @@ impl Tab {
             },
             group: None,
             filter: String::new(),
+            types: None,
             show_hidden: settings.show_hidden,
             flatten: false,
             subtree: false,
@@ -507,6 +514,7 @@ impl Tab {
     /// offset and note before the tab shows another location.
     fn leave(&mut self) {
         self.filter.clear();
+        self.types = None;
         self.listing.clear();
         self.selection.clear();
         self.decorations.clear();
@@ -522,6 +530,7 @@ impl Tab {
             sort: self.sort,
             folders_first: settings.folders_first,
             filter: &self.filter,
+            types: self.types.as_ref(),
             show_hidden: self.show_hidden,
             show_system: settings.show_system,
         }
@@ -542,12 +551,19 @@ impl Tab {
         }
     }
 
-    /// The view specification over `filter`, borrowing nothing of the tab.
-    fn spec_with<'a>(&self, settings: &Settings, filter: &'a str) -> ViewSpec<'a> {
+    /// The view specification over `filter` and `types`, borrowing nothing
+    /// of the tab, so the listing can change under it.
+    fn spec_with<'a>(
+        &self,
+        settings: &Settings,
+        filter: &'a str,
+        types: Option<&'a BTreeSet<String>>,
+    ) -> ViewSpec<'a> {
         ViewSpec {
             sort: self.sort,
             folders_first: settings.folders_first,
             filter,
+            types,
             show_hidden: self.show_hidden,
             show_system: settings.show_system,
         }
@@ -555,7 +571,8 @@ impl Tab {
 
     fn refresh_view(&mut self, settings: &Settings) {
         let filter = self.filter_text();
-        let spec = self.spec_with(settings, &filter);
+        let types = self.types.clone();
+        let spec = self.spec_with(settings, &filter, types.as_ref());
         self.listing.refresh_view(&spec);
         self.tree.refresh_views(&spec);
         self.rebuild_tree();
@@ -1725,6 +1742,19 @@ impl Model {
         true
     }
 
+    /// Narrows the pane's active tab to the entries of `types`, as the Type
+    /// column names them, or shows every type again for `None` or an empty
+    /// set (SPEC.md *View options menu*). Returns whether the tab exists.
+    pub fn set_types(&mut self, pane: PaneId, types: Option<BTreeSet<String>>) -> bool {
+        let settings = self.settings.clone();
+        let Some((_, tab)) = self.active_tab_mut(pane) else {
+            return false;
+        };
+        tab.types = types.filter(|t| !t.is_empty());
+        tab.refresh_view(&settings);
+        true
+    }
+
     /// Flips hidden entries in the pane's active tab. Returns the new state.
     pub fn toggle_hidden(&mut self, pane: PaneId) -> Option<bool> {
         let settings = self.settings.clone();
@@ -1823,7 +1853,8 @@ impl Model {
             return false;
         };
         let filter = tab.filter_text();
-        let spec = tab.spec_with(&settings, &filter);
+        let types = tab.types.clone();
+        let spec = tab.spec_with(&settings, &filter, types.as_ref());
         let took = tab.tree.extend(folder, batch, &spec);
         tab.rebuild_tree();
         took
@@ -1837,7 +1868,8 @@ impl Model {
             return false;
         };
         let filter = tab.filter_text();
-        let spec = tab.spec_with(&settings, &filter);
+        let types = tab.types.clone();
+        let spec = tab.spec_with(&settings, &filter, types.as_ref());
         let took = tab.tree.replace(folder, entries, &spec);
         if took {
             let listing = &tab.listing;
@@ -2185,7 +2217,8 @@ impl Model {
             return false;
         };
         let filter = tab.filter_text();
-        let spec = tab.spec_with(&settings, &filter);
+        let types = tab.types.clone();
+        let spec = tab.spec_with(&settings, &filter, types.as_ref());
         tab.listing.extend(batch, &spec);
         tab.rebuild_tree();
         true
@@ -2215,7 +2248,8 @@ impl Model {
             return false;
         };
         let filter = tab.filter_text();
-        let spec = tab.spec_with(&settings, &filter);
+        let types = tab.types.clone();
+        let spec = tab.spec_with(&settings, &filter, types.as_ref());
         tab.listing.clear();
         tab.listing.extend(entries, &spec);
         tab.listing.complete = true;
@@ -2294,7 +2328,8 @@ impl Model {
             return true;
         };
         let filter = tab.filter_text();
-        let spec = tab.spec_with(&settings, &filter);
+        let types = tab.types.clone();
+        let spec = tab.spec_with(&settings, &filter, types.as_ref());
         match change {
             FsChange::Created(entry) | FsChange::Modified(entry) => {
                 tab.listing.upsert(entry, &spec);

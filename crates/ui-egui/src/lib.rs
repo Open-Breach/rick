@@ -65,8 +65,10 @@ use app::App;
 pub use host::{Ask, EguiHost};
 pub use inline::{EditKind, RowEdit};
 pub use keys::{Intent, KeyMap};
-pub use pane::toolbar_height;
-pub use shell::{Dispatched, Request, RickUi, TabUi, WindowUi, viewport_builder};
+pub use pane::{HANDLE_WIDTH, toolbar_height};
+pub use shell::{
+    DOCK_TILE, DOCK_TILE_PITCH, Dispatched, Request, RickUi, TabUi, WindowUi, viewport_builder,
+};
 
 /// Opens the first window and runs until the last one closes. `version` is
 /// what the About window shows: the binary's version and git hash.

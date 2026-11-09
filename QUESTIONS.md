@@ -2880,3 +2880,15 @@ Once answered, an entry keeps its number and gains a dated decision line.
     covers for workspace tabs only.
     Assumed: the pane becomes a new workspace tab of that window, as it
     does on its own window's row.
+
+247. (design refresh, 2026-11-09) *Controls* gives menu entries 30 px; the
+    *View options menu* frame draws its rows 32 px tall, with 18 px
+    switches and a 28 px segmented control in them.
+    Assumed: the view options menu takes the frame's 32 px rows; plain
+    menus keep 30 px.
+
+248. (design refresh, 2026-11-09) *Panes* says "F6 (Dual pane) splits the
+    focused pane to the right … and back again"; the shortcut table, the
+    single source of defaults, has no F6 and no Dual pane row.
+    Assumed: no Dual pane command until the table names it; Mod+Shift+R
+    (Split right) stays the way to a second pane.

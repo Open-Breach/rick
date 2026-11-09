@@ -2,17 +2,30 @@
 //! with the status line and the filter.
 
 use ext::t;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
 
 use app::Command;
 use egui::Align;
-use model::{IconSize, ViewMode};
+use model::{IconSize, SettingsChange, ViewMode};
 use types::{EntryKind, Location};
 
 use crate::dnd::{self, Spring, Target, Zone};
 use crate::keys::Intent;
-use crate::shell::{PaneCx, Request};
+use crate::shell::{PaneCx, PaneDrag, Request};
+use crate::theme::{self, ICON, TEXT_BODY, TEXT_CAPS, TEXT_SECONDARY};
 use crate::{format, icons, paths, views};
+
+/// The grab handle's width.
+pub const HANDLE_WIDTH: f32 = 28.0;
+/// The view options button's width: the sliders and the caret.
+const VIEW_OPTIONS_WIDTH: f32 = 48.0;
+/// The view options menu card's width.
+const MENU_WIDTH: f32 = 260.0;
+/// A row of the view options menu.
+const MENU_ROW: f32 = 32.0;
+/// The parent chip's size.
+const CHIP: egui::Vec2 = egui::vec2(28.0, 26.0);
 
 /// Draws the whole tab.
 pub fn show(ui: &mut egui::Ui, cx: &mut PaneCx<'_>) {
@@ -120,6 +133,16 @@ fn icon_button(ui: &mut egui::Ui, glyph: &str, enabled: bool) -> egui::Response 
     )
 }
 
+/// A 1 px hairline, `height` tall, centred in the row.
+fn divider(ui: &mut egui::Ui, height: f32) {
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(1.0, height), egui::Sense::hover());
+    let x = rect.center().x.round() + 0.5;
+    ui.painter().line_segment(
+        [egui::pos2(x, rect.top()), egui::pos2(x, rect.bottom())],
+        theme::scheme(ui).hairline(),
+    );
+}
+
 fn remember(cx: &mut PaneCx<'_>, group: &'static str, rect: egui::Rect) {
     cx.tab_ui.toolbar_rects.push((group, rect));
 }
@@ -137,60 +160,56 @@ fn left_group(ui: &mut egui::Ui, cx: &mut PaneCx<'_>) {
     if forward.clicked() {
         intent(cx, Intent::Forward);
     }
-    let has_parent = cx.tab_ui.crumbs_of(&cx.tab.location).len() >= 2;
-    let up = icon_button(ui, icons::UP, has_parent).on_hover_text(t!("pane-parent-directory"));
-    remember(cx, "left", up.rect);
-    if up.clicked() {
-        intent(cx, Intent::Parent);
-    }
 }
 
-/// View mode dropdown, hidden-files toggle and refresh, right to left.
+/// The grab handle, a hairline and the view options button, right to left
+/// (SPEC.md *Toolbar*).
 fn right_group(ui: &mut egui::Ui, cx: &mut PaneCx<'_>) {
-    let refresh = icon_button(ui, icons::REFRESH, true).on_hover_text(t!("pane-refresh"));
-    remember(cx, "right", refresh.rect);
-    if refresh.clicked() {
-        intent(cx, Intent::Refresh);
-    }
-    let hidden_glyph = if cx.tab.show_hidden {
-        icons::HIDDEN_SHOWN
-    } else {
-        icons::HIDDEN_HIDDEN
-    };
-    let size = button_size(ui);
-    let hidden = ui
-        .add(
-            egui::Button::new(hidden_glyph)
-                .selected(cx.tab.show_hidden)
-                .min_size(egui::vec2(size, size)),
-        )
-        .on_hover_text(if cx.tab.show_hidden {
-            "Hide hidden files"
-        } else {
-            "Show hidden files"
-        });
-    remember(cx, "right", hidden.rect);
-    if hidden.clicked() {
-        intent(cx, Intent::ToggleHidden);
-    }
-    view_mode_dropdown(ui, cx);
+    handle(ui, cx);
+    divider(ui, 16.0);
+    view_options(ui, cx);
 }
 
-/// The view modes the dropdown offers, in order: label, mode, available.
-fn view_modes() -> [(&'static str, ViewMode, bool); 7] {
-    [
-        ("List", ViewMode::List, true),
-        ("Details", ViewMode::Details, true),
-        ("Tree", ViewMode::Tree, true),
-        ("Icons, small", ViewMode::Icons(IconSize::Small), true),
-        ("Icons, medium", ViewMode::Icons(IconSize::Medium), true),
-        ("Icons, large", ViewMode::Icons(IconSize::Large), true),
-        (
-            "Icons, extra large",
-            ViewMode::Icons(IconSize::ExtraLarge),
-            true,
-        ),
-    ]
+/// The pane's grab handle: a `HANDLE_WIDTH` wide ghost area with
+/// `DOTS_SIX_VERTICAL` at 70 % opacity; the grab cursor over it, the
+/// grabbing cursor while it drags the pane (SPEC.md *Panes*).
+fn handle(ui: &mut egui::Ui, cx: &mut PaneCx<'_>) {
+    let size = button_size(ui);
+    let (rect, response) = ui.allocate_exact_size(
+        egui::vec2(HANDLE_WIDTH, size),
+        egui::Sense::click_and_drag(),
+    );
+    response.widget_info(|| {
+        egui::WidgetInfo::labeled(egui::WidgetType::Button, true, t!("pane-drag-pane"))
+    });
+    remember(cx, "right", rect);
+    let scheme = theme::scheme(ui);
+    if response.hovered() || response.dragged() {
+        ui.painter().rect_filled(
+            rect,
+            theme::metrics(ui.ctx()).corner_radius(),
+            scheme.bg_subtle,
+        );
+    }
+    ui.painter().text(
+        rect.center(),
+        egui::Align2::CENTER_CENTER,
+        icons::HANDLE,
+        egui::FontId::proportional(ICON),
+        scheme.icon_default.gamma_multiply(0.7),
+    );
+    if response.dragged() {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
+    } else if response.hovered() {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::Grab);
+    }
+    if response.drag_started() {
+        *cx.pane_drag = Some(PaneDrag {
+            tab: cx.tab_id,
+            pane: cx.pane,
+        });
+    }
+    response.on_hover_text(t!("pane-drag-pane"));
 }
 
 /// The glyph of a view mode.
@@ -204,32 +223,451 @@ pub fn view_mode_icon(mode: ViewMode) -> &'static str {
     }
 }
 
-fn view_mode_dropdown(ui: &mut egui::Ui, cx: &mut PaneCx<'_>) {
-    let current = cx.tab.view;
-    let label = format!("{} {}", view_mode_icon(current), icons::DROPDOWN);
-    ui.style_mut().spacing.interact_size.y = button_size(ui);
-    let response = ui.menu_button(label, |ui| {
-        for (label, mode, available) in view_modes() {
-            let marked = if mode == current {
-                format!("{} {label}", icons::DONE)
-            } else {
-                format!("   {label}")
-            };
-            let clicked = ui
-                .add_enabled(available, egui::Button::new(marked))
-                .on_disabled_hover_text(t!("pane-not-implemented-yet"))
-                .clicked();
-            if clicked {
-                cx.requests.push(Request::Command(Command::SetView {
-                    pane: cx.pane,
-                    mode,
-                }));
-                ui.close();
-            }
-        }
+/// The view options button — the sliders with a caret, a 7 px
+/// `accent/focus` dot at the top right while a type filter is on — and its
+/// menu (SPEC.md *View options menu*).
+fn view_options(ui: &mut egui::Ui, cx: &mut PaneCx<'_>) {
+    let size = button_size(ui);
+    let scheme = theme::scheme(ui);
+    let label = egui::RichText::new(format!("{} {}", icons::VIEW_OPTIONS, icons::DROPDOWN))
+        .color(scheme.icon_default);
+    // A ghost button: no frame at rest, the hover frame when hovered.
+    let button = egui::Button::new(label)
+        .frame_when_inactive(false)
+        .min_size(egui::vec2(VIEW_OPTIONS_WIDTH, size));
+    let response = egui::containers::menu::MenuButton::from_button(button)
+        // The switches and the type checkboxes flip without closing the
+        // menu; a view pick or Refresh closes it themselves.
+        .config(
+            egui::containers::menu::MenuConfig::new()
+                .style(menu_style)
+                .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside),
+        )
+        .ui(ui, |ui| view_options_menu(ui, cx))
+        .0;
+    response.widget_info(|| {
+        egui::WidgetInfo::labeled(egui::WidgetType::Button, true, t!("pane-view-options"))
     });
-    remember(cx, "right", response.response.rect);
-    response.response.on_hover_text(t!("pane-view-mode"));
+    remember(cx, "right", response.rect);
+    if cx.tab.types.is_some() {
+        // The filter-active dot, over the icon's top right corner.
+        let at = egui::pos2(response.rect.left() + 8.0 + ICON, response.rect.top() + 8.0);
+        ui.painter().circle_filled(at, 3.5, scheme.accent_focus);
+    }
+    response.on_hover_text(t!("pane-view-options"));
+}
+
+/// The menu as a `bg/card` card with no padding of its own: the rows pad
+/// themselves.
+fn menu_style(style: &mut egui::Style) {
+    style.spacing.menu_margin = egui::Margin::same(7);
+    style.spacing.item_spacing = egui::Vec2::ZERO;
+}
+
+/// The three titled groups of the view options menu: *View*, *Refresh*
+/// and *Filter*.
+fn view_options_menu(ui: &mut egui::Ui, cx: &mut PaneCx<'_>) {
+    ui.set_width(MENU_WIDTH - 14.0);
+    let keys = cx.keys;
+    let text_for = |intent: Intent| keys.text_for(intent).unwrap_or_default();
+
+    group_title(ui, &t!("pane-group-view"));
+    let modes = [
+        (
+            icons::VIEW_DETAILS,
+            t!("pane-view-details"),
+            ViewMode::Details,
+            text_for(Intent::ViewDetails),
+        ),
+        (
+            icons::VIEW_LIST,
+            t!("pane-view-list"),
+            ViewMode::List,
+            text_for(Intent::ViewList),
+        ),
+    ];
+    for (icon, label, mode, shortcut) in modes {
+        let row = menu_row(ui, icon, &label, cx.tab.view == mode, |ui| {
+            ui.label(
+                egui::RichText::new(shortcut)
+                    .size(TEXT_SECONDARY)
+                    .color(theme::scheme(ui).text_secondary),
+            );
+        });
+        if row.clicked() {
+            cx.requests.push(Request::Command(Command::SetView {
+                pane: cx.pane,
+                mode,
+            }));
+            ui.close();
+        }
+    }
+    let icons_on = matches!(cx.tab.view, ViewMode::Icons(_));
+    let current_size = match cx.tab.view {
+        ViewMode::Icons(size) => Some(size),
+        _ => None,
+    };
+    let mut picked: Option<IconSize> = None;
+    let row = menu_row(
+        ui,
+        icons::VIEW_ICONS,
+        &t!("pane-view-icons"),
+        icons_on,
+        |ui| {
+            picked = icon_sizes(ui, current_size);
+        },
+    );
+    if let Some(size) = picked {
+        cx.requests.push(Request::Command(Command::SetView {
+            pane: cx.pane,
+            mode: ViewMode::Icons(size),
+        }));
+        ui.close();
+    } else if row.clicked() {
+        cx.requests.push(Request::Command(Command::SetView {
+            pane: cx.pane,
+            mode: ViewMode::Icons(current_size.unwrap_or(IconSize::Medium)),
+        }));
+        ui.close();
+    }
+    let hidden = cx.tab.show_hidden;
+    let row = switch_row(ui, icons::HIDDEN_SHOWN, &t!("pane-show-hidden"), hidden);
+    if row.clicked() {
+        intent(cx, Intent::ToggleHidden);
+    }
+    let folders_first = cx.app.model().settings.folders_first;
+    let row = switch_row(ui, icons::FOLDER, &t!("pane-folders-first"), folders_first);
+    if row.clicked() {
+        cx.requests.push(Request::Command(Command::Settings(
+            SettingsChange::FoldersFirst(!folders_first),
+        )));
+    }
+
+    menu_separator(ui);
+    group_title(ui, &t!("pane-group-refresh"));
+    let shortcut = text_for(Intent::Refresh);
+    let row = menu_row(ui, icons::REFRESH, &t!("pane-refresh-now"), false, |ui| {
+        ui.label(
+            egui::RichText::new(shortcut)
+                .size(TEXT_SECONDARY)
+                .color(theme::scheme(ui).text_secondary),
+        );
+    });
+    if row.clicked() {
+        intent(cx, Intent::Refresh);
+        ui.close();
+    }
+
+    menu_separator(ui);
+    group_title(ui, &t!("pane-group-filter"));
+    type_filter_rows(ui, cx);
+}
+
+/// *Show all*, then one checkbox row per file type in the folder with its
+/// icon and count, folders as *Folders*; ticking types narrows the list to
+/// them.
+fn type_filter_rows(ui: &mut egui::Ui, cx: &mut PaneCx<'_>) {
+    // Every entry of the folder, the view's filter notwithstanding.
+    let mut counts: BTreeMap<String, (usize, &'static str)> = BTreeMap::new();
+    for entry in cx.tab.listing.entries() {
+        let slot = counts
+            .entry(model::type_of(entry))
+            .or_insert((0, icons::for_entry(entry)));
+        slot.0 += 1;
+    }
+    let all = cx.tab.types.is_none();
+    let row = check_row(ui, all, None, &t!("pane-show-all"), None);
+    if row.clicked() && !all {
+        cx.requests.push(Request::Command(Command::TypeFilter {
+            pane: cx.pane,
+            types: None,
+        }));
+    }
+    let folder = model::FOLDER_TYPE;
+    let mut ordered: Vec<(&String, &(usize, &'static str))> = counts.iter().collect();
+    // Folders first, then the types by count, the biggest first.
+    ordered.sort_by(|(a, (na, _)), (b, (nb, _))| {
+        (*b == folder)
+            .cmp(&(*a == folder))
+            .then(nb.cmp(na))
+            .then(a.cmp(b))
+    });
+    for (type_name, (count, icon)) in ordered {
+        let on = cx.tab.types.as_ref().is_some_and(|t| t.contains(type_name));
+        let label = if type_name == folder {
+            t!("pane-type-folders")
+        } else {
+            type_name.clone()
+        };
+        let row = check_row(ui, on, Some(icon), &label, Some(*count));
+        if row.clicked() {
+            let mut types: BTreeSet<String> = cx.tab.types.clone().unwrap_or_default();
+            if on {
+                types.remove(type_name);
+            } else {
+                types.insert(type_name.clone());
+            }
+            cx.requests.push(Request::Command(Command::TypeFilter {
+                pane: cx.pane,
+                types: Some(types),
+            }));
+        }
+    }
+}
+
+/// A group title: 11 px capitals in `text/secondary`.
+fn group_title(ui: &mut egui::Ui, text: &str) {
+    let (rect, _) =
+        ui.allocate_exact_size(egui::vec2(ui.available_width(), 27.0), egui::Sense::hover());
+    ui.painter().text(
+        egui::pos2(rect.left() + 10.0, rect.center().y + 2.0),
+        egui::Align2::LEFT_CENTER,
+        text.to_uppercase(),
+        egui::FontId::proportional(TEXT_CAPS),
+        theme::scheme(ui).text_secondary,
+    );
+}
+
+/// A hairline between two groups, with 4 px of air on each side.
+fn menu_separator(ui: &mut egui::Ui) {
+    let (rect, _) =
+        ui.allocate_exact_size(egui::vec2(ui.available_width(), 9.0), egui::Sense::hover());
+    let y = rect.center().y.round() + 0.5;
+    ui.painter().line_segment(
+        [
+            egui::pos2(rect.left() + 6.0, y),
+            egui::pos2(rect.right() - 6.0, y),
+        ],
+        theme::scheme(ui).hairline(),
+    );
+}
+
+/// A row with a switch at its right: the whole row flips it, and the row
+/// is the checkbox a screen reader hears.
+fn switch_row(ui: &mut egui::Ui, icon: &str, label: &str, on: bool) -> egui::Response {
+    menu_row_with(ui, icon, label, false, Some(on), |ui| switch(ui, on))
+}
+
+/// One row of the menu: a 16 px icon slot at 10 px, the label at 36 px,
+/// and `right` laid out from the right edge. The active entry and the
+/// hovered one are `bg/selected-soft`.
+fn menu_row(
+    ui: &mut egui::Ui,
+    icon: &str,
+    label: &str,
+    active: bool,
+    right: impl FnOnce(&mut egui::Ui),
+) -> egui::Response {
+    menu_row_with(ui, icon, label, active, None, right)
+}
+
+/// [`menu_row`] whose accessible node is a checkbox in state `toggled`
+/// when that is given, a button otherwise.
+fn menu_row_with(
+    ui: &mut egui::Ui,
+    icon: &str,
+    label: &str,
+    active: bool,
+    toggled: Option<bool>,
+    right: impl FnOnce(&mut egui::Ui),
+) -> egui::Response {
+    let scheme = theme::scheme(ui);
+    let (rect, response) = ui.allocate_exact_size(
+        egui::vec2(ui.available_width(), MENU_ROW),
+        egui::Sense::click(),
+    );
+    response.widget_info(|| match toggled {
+        Some(on) => egui::WidgetInfo::selected(egui::WidgetType::Checkbox, true, on, label),
+        None => egui::WidgetInfo::labeled(egui::WidgetType::Button, true, label),
+    });
+    if active || response.hovered() {
+        ui.painter().rect_filled(
+            rect,
+            theme::metrics(ui.ctx()).corner_radius(),
+            scheme.bg_selected_soft,
+        );
+    }
+    let colour = if active {
+        scheme.text_on_selected
+    } else {
+        scheme.text_primary
+    };
+    ui.painter().text(
+        egui::pos2(rect.left() + 10.0 + ICON / 2.0, rect.center().y),
+        egui::Align2::CENTER_CENTER,
+        icon,
+        egui::FontId::proportional(ICON),
+        if active {
+            scheme.text_on_selected
+        } else {
+            scheme.icon_default
+        },
+    );
+    ui.painter().text(
+        egui::pos2(rect.left() + 36.0, rect.center().y),
+        egui::Align2::LEFT_CENTER,
+        label,
+        egui::FontId::proportional(TEXT_BODY),
+        colour,
+    );
+    let mut side = ui.new_child(
+        egui::UiBuilder::new()
+            .max_rect(egui::Rect::from_min_max(
+                egui::pos2(rect.left() + 36.0, rect.top()),
+                egui::pos2(rect.right() - 10.0, rect.bottom()),
+            ))
+            .layout(egui::Layout::right_to_left(Align::Center)),
+    );
+    right(&mut side);
+    response
+}
+
+/// A checkbox row: a 16 px box with a `border/strong` border, filled
+/// `accent/focus` with a white check when ticked; then the icon slot, the
+/// label and the count at the right.
+fn check_row(
+    ui: &mut egui::Ui,
+    on: bool,
+    icon: Option<&str>,
+    label: &str,
+    count: Option<usize>,
+) -> egui::Response {
+    let scheme = theme::scheme(ui);
+    let (rect, response) = ui.allocate_exact_size(
+        egui::vec2(ui.available_width(), MENU_ROW),
+        egui::Sense::click(),
+    );
+    response
+        .widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Checkbox, true, on, label));
+    if response.hovered() {
+        ui.painter().rect_filled(
+            rect,
+            theme::metrics(ui.ctx()).corner_radius(),
+            scheme.bg_selected_soft,
+        );
+    }
+    let box_rect = egui::Rect::from_center_size(
+        egui::pos2(rect.left() + 10.0 + ICON / 2.0, rect.center().y),
+        egui::Vec2::splat(ICON),
+    );
+    if on {
+        ui.painter().rect_filled(box_rect, 3.0, scheme.accent_focus);
+        ui.painter().text(
+            box_rect.center(),
+            egui::Align2::CENTER_CENTER,
+            icons::DONE,
+            egui::FontId::proportional(12.0),
+            theme::Scheme::ON_BUTTON,
+        );
+    } else {
+        ui.painter().rect_stroke(
+            box_rect,
+            3.0,
+            egui::Stroke::new(1.0, scheme.border_strong),
+            egui::StrokeKind::Inside,
+        );
+    }
+    let mut x = rect.left() + 36.0;
+    if let Some(icon) = icon {
+        ui.painter().text(
+            egui::pos2(x + ICON / 2.0, rect.center().y),
+            egui::Align2::CENTER_CENTER,
+            icon,
+            egui::FontId::proportional(ICON),
+            scheme.icon_default,
+        );
+        x += ICON + 10.0;
+    }
+    ui.painter().text(
+        egui::pos2(x, rect.center().y),
+        egui::Align2::LEFT_CENTER,
+        label,
+        egui::FontId::proportional(TEXT_BODY),
+        scheme.text_primary,
+    );
+    if let Some(count) = count {
+        ui.painter().text(
+            egui::pos2(rect.right() - 10.0, rect.center().y),
+            egui::Align2::RIGHT_CENTER,
+            count.to_string(),
+            egui::FontId::proportional(TEXT_SECONDARY),
+            scheme.text_secondary,
+        );
+    }
+    response
+}
+
+/// A 32 × 18 switch: `accent/focus` when on, `bg/switch-off` when off,
+/// with a white knob. The row around it takes the clicks.
+fn switch(ui: &mut egui::Ui, on: bool) {
+    let scheme = theme::scheme(ui);
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(32.0, 18.0), egui::Sense::hover());
+    let fill = if on {
+        scheme.accent_focus
+    } else {
+        scheme.bg_switch_off
+    };
+    ui.painter().rect_filled(rect, 9.0, fill);
+    let knob_x = if on {
+        rect.right() - 9.0
+    } else {
+        rect.left() + 9.0
+    };
+    ui.painter().circle_filled(
+        egui::pos2(knob_x, rect.center().y),
+        7.0,
+        theme::Scheme::ON_BUTTON,
+    );
+}
+
+/// The segmented control of the three icon sizes: a `bg/control` track
+/// with the chosen size raised as a `bg/card` tile. Returns a size that
+/// was clicked.
+fn icon_sizes(ui: &mut egui::Ui, current: Option<IconSize>) -> Option<IconSize> {
+    let scheme = theme::scheme(ui);
+    let (track, _) = ui.allocate_exact_size(egui::vec2(92.0, 28.0), egui::Sense::hover());
+    ui.painter().rect_filled(track, 6.0, scheme.bg_control);
+    let mut picked = None;
+    let sizes = [
+        (IconSize::Small, icons::ICONS_SMALL, t!("pane-icons-small")),
+        (
+            IconSize::Medium,
+            icons::ICONS_MEDIUM,
+            t!("pane-icons-medium"),
+        ),
+        (IconSize::Large, icons::ICONS_LARGE, t!("pane-icons-large")),
+    ];
+    for (i, (size, glyph, name)) in sizes.into_iter().enumerate() {
+        #[allow(clippy::cast_precision_loss)]
+        let x = track.left() + 2.0 + i as f32 * 30.0;
+        let tile =
+            egui::Rect::from_min_size(egui::pos2(x, track.top() + 2.0), egui::vec2(28.0, 24.0));
+        let response = ui.interact(tile, ui.id().with(("icon-size", i)), egui::Sense::click());
+        response.widget_info(|| {
+            egui::WidgetInfo::selected(
+                egui::WidgetType::RadioButton,
+                true,
+                current == Some(size),
+                &name,
+            )
+        });
+        if current == Some(size) {
+            ui.painter().rect_filled(tile, 4.0, scheme.bg_card);
+        } else if response.hovered() {
+            ui.painter().rect_filled(tile, 4.0, scheme.bg_subtle);
+        }
+        ui.painter().text(
+            tile.center(),
+            egui::Align2::CENTER_CENTER,
+            glyph,
+            egui::FontId::proportional(ICON),
+            scheme.icon_default,
+        );
+        if response.on_hover_text(name).clicked() {
+            picked = Some(size);
+        }
+    }
+    picked
 }
 
 /// The path bar in `rect`: the breadcrumb, or the text field while editing.
@@ -319,9 +757,13 @@ fn breadcrumb(ui: &mut egui::Ui, cx: &mut PaneCx<'_>, rect: egui::Rect) {
         .map(|crumb| text_width(ui, &crumb.label) + pad)
         .collect();
 
-    let available = (rect.width() - copy_w).max(0.0);
+    // The parent chip and its divider come first and take their room off
+    // the segments'.
+    let chip_w = CHIP.x + 4.0 + 1.0 + 6.0 + spacing;
+    let available = (rect.width() - copy_w - chip_w).max(0.0);
     let (first_shown, used) = fit_segments(&widths, separator_w, chevron_w, available);
     remember(cx, "middle", rect);
+    parent_chip(ui, cx);
 
     if first_shown > 0 {
         let hidden: Vec<paths::Crumb> = segments[..first_shown].to_vec();
@@ -404,6 +846,62 @@ fn breadcrumb(ui: &mut egui::Ui, cx: &mut PaneCx<'_>, rect: egui::Rect) {
     if response.clicked() {
         cx.tab_ui.path_edit = Some(paths::text_of(&cx.tab.location));
         cx.tab_ui.focus_path = true;
+    }
+}
+
+/// The parent chip: `ARROW_UP` on a `bg/subtle` chip with `radius/control`
+/// corners, click for the parent folder, then a 14 px hairline (SPEC.md
+/// *Path bar*). A location without a parent shows the chip faded.
+fn parent_chip(ui: &mut egui::Ui, cx: &mut PaneCx<'_>) {
+    let has_parent = cx.tab_ui.crumbs_of(&cx.tab.location).len() >= 2;
+    ui.add_space(4.0);
+    let (rect, response) = ui.allocate_exact_size(
+        CHIP,
+        if has_parent {
+            egui::Sense::click()
+        } else {
+            egui::Sense::hover()
+        },
+    );
+    response.widget_info(|| {
+        egui::WidgetInfo::labeled(
+            egui::WidgetType::Button,
+            has_parent,
+            t!("pane-parent-directory"),
+        )
+    });
+    let scheme = theme::scheme(ui);
+    let fill = if response.hovered() && has_parent {
+        scheme.bg_control
+    } else {
+        scheme.bg_subtle
+    };
+    ui.painter()
+        .rect_filled(rect, theme::metrics(ui.ctx()).corner_radius(), fill);
+    let colour = if has_parent {
+        scheme.icon_default
+    } else {
+        scheme.icon_default.gamma_multiply(0.5)
+    };
+    ui.painter().text(
+        rect.center(),
+        egui::Align2::CENTER_CENTER,
+        icons::UP,
+        egui::FontId::proportional(ICON),
+        colour,
+    );
+    if response
+        .on_hover_text(t!("pane-parent-directory"))
+        .clicked()
+    {
+        intent(cx, Intent::Parent);
+    }
+    ui.add_space(6.0);
+    divider(ui, 14.0);
+    ui.add_space(6.0);
+    // A drop on the chip goes to the parent folder, as on a segment.
+    if has_parent && let Some(parent) = paths::parent_of(cx.tab_ui.crumbs_of(&cx.tab.location)) {
+        crumb_zone(ui, cx, usize::MAX, true, &parent, rect);
     }
 }
 

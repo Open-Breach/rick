@@ -59,6 +59,16 @@ pub const VIEW_DETAILS: &str = ph::LIST_DASHES;
 pub const VIEW_TREE: &str = ph::TREE_STRUCTURE;
 /// The Icons view.
 pub const VIEW_ICONS: &str = ph::SQUARES_FOUR;
+/// The view options button.
+pub const VIEW_OPTIONS: &str = ph::SLIDERS_HORIZONTAL;
+/// A pane's grab handle.
+pub const HANDLE: &str = ph::DOTS_SIX_VERTICAL;
+/// The three icon sizes of the view options menu.
+pub const ICONS_SMALL: &str = ph::DOTS_NINE;
+/// See [`ICONS_SMALL`].
+pub const ICONS_MEDIUM: &str = ph::SQUARES_FOUR;
+/// See [`ICONS_SMALL`].
+pub const ICONS_LARGE: &str = ph::SQUARE;
 /// Home.
 pub const HOME: &str = ph::HOUSE;
 /// Pinned.

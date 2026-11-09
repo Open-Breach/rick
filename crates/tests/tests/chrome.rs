@@ -156,11 +156,11 @@ fn tab_of(harness: &Harness<'_, RickUi>, name: &str) -> (model::TabId, model::Pa
         .unwrap_or_else(|| panic!("no tab at {name}"))
 }
 
-/// Dragging the tab of pane B onto pane A's bar makes B a workspace of its
-/// own, shown, and A's workspace keeps A alone (SPEC.md *Workspace tabs*:
-/// panes have no tab strips, the centre target opens a new tab).
+/// Dragging pane B by its handle onto the centre tile of pane A makes B a
+/// workspace of its own, shown, and A's workspace keeps A alone (SPEC.md
+/// *Panes*: the centre target opens a new tab).
 #[test]
-fn a_tab_dragged_onto_another_panes_bar_becomes_a_workspace() {
+fn a_pane_dragged_onto_another_panes_centre_tile_becomes_a_workspace() {
     let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
     let left = dir.path().join("left-pane");
     let right = dir.path().join("right-pane");
@@ -171,13 +171,10 @@ fn a_tab_dragged_onto_another_panes_bar_becomes_a_workspace() {
     let (tab_b, home_b) = tab_of(&harness, "right-pane");
     assert_eq!(home_b, pane_b);
 
-    // Drag right-pane's tab onto the bar of pane A, to the right of its
-    // tab. The bars are found from the pane rectangles: each bar is the top
-    // row of its pane and its tab starts at the left.
-    let (rect_a, rect_b) = (rect_of(&harness, pane_a), rect_of(&harness, pane_b));
-    let from = egui::pos2(rect_b.left() + 50.0, rect_b.top() + 14.0);
-    let to = egui::pos2(rect_a.left() + 220.0, rect_a.top() + 14.0);
-    drag(&mut harness, from, to);
+    // Drag right-pane's handle onto the centre tile of pane A.
+    let rect_a = rect_of(&harness, pane_a);
+    let from = handle_of(&harness, pane_b);
+    drag(&mut harness, from, tile(rect_a, 0.0, 0.0));
 
     let model = harness.state().app().model();
     let window = model.focused_window;
@@ -261,11 +258,28 @@ fn rect_of(harness: &Harness<'_, RickUi>, pane: model::PaneId) -> egui::Rect {
         .map_or_else(|| panic!("no rect for {pane:?}"), |(_, r)| *r)
 }
 
-/// Dragging the only tab of the right pane onto the left pane's "left" drop
-/// zone puts its pane left of the other; onto the "below" zone, under it.
-/// Before the fix the tree snapped back because no tab changed pane.
+/// The centre of `pane`'s grab handle in the last frame: the toolbar's
+/// button named *Drag pane* inside the pane.
+fn handle_of(harness: &Harness<'_, RickUi>, pane: model::PaneId) -> egui::Pos2 {
+    let rect = rect_of(harness, pane);
+    harness
+        .query_all_by_label("Drag pane")
+        .map(|n| n.rect())
+        .find(|r| rect.contains(r.center()))
+        .map_or_else(|| panic!("no handle in {pane:?}"), |r| r.center())
+}
+
+/// The centre of a dock tile over `rect`: the cross of five tiles around
+/// the pane's centre, `DOCK_TILE_PITCH` apart.
+fn tile(rect: egui::Rect, dx: f32, dy: f32) -> egui::Pos2 {
+    rect.center() + egui::vec2(dx, dy) * ui_egui::DOCK_TILE_PITCH
+}
+
+/// Dragging the right pane by its handle onto the left pane's "left" tile
+/// puts it left of the other; onto the "below" tile, under it (SPEC.md
+/// *Panes*: the dock cross).
 #[test]
-fn a_tab_dragged_onto_another_panes_edge_moves_its_pane_there() {
+fn a_pane_dragged_onto_another_panes_side_tile_docks_there() {
     let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
     let left = dir.path().join("left-pane");
     let right = dir.path().join("right-pane");
@@ -275,23 +289,10 @@ fn a_tab_dragged_onto_another_panes_edge_moves_its_pane_there() {
     let (pane_a, pane_b) = two_panes(&mut harness, &right);
     let (tab_b, _) = tab_of(&harness, "right-pane");
 
-    // egui_dock's drop zones are five buttons around the centre of the
-    // hovered pane body, each a square of a third of the body's shorter
-    // side at most 100 px, 10 px apart. The strip takes the top 30 px.
-    let zone = |rect: egui::Rect, dx: f32, dy: f32| {
-        let body = egui::Rect::from_min_max(egui::pos2(rect.left(), rect.top() + 30.0), rect.max)
-            .shrink(10.0);
-        let side = ((body.width() - 20.0) / 3.0)
-            .min((body.height() - 20.0) / 3.0)
-            .min(100.0);
-        body.center() + egui::vec2(dx, dy) * (side + 10.0)
-    };
-
-    // Left zone of pane A: B's pane goes to the left of A.
+    // Left tile of pane A: B's pane goes to the left of A.
     let rect_a = rect_of(&harness, pane_a);
-    let rect_b = rect_of(&harness, pane_b);
-    let from = egui::pos2(rect_b.left() + 50.0, rect_b.top() + 14.0);
-    drag(&mut harness, from, zone(rect_a, -1.0, 0.0));
+    let from = handle_of(&harness, pane_b);
+    drag(&mut harness, from, tile(rect_a, -1.0, 0.0));
     let model = harness.state().app().model();
     let home = model.pane_of(tab_b).unwrap_or_else(|| panic!("tab b lost"));
     assert_ne!(home, pane_a, "tab B keeps its own pane");
@@ -305,11 +306,10 @@ fn a_tab_dragged_onto_another_panes_edge_moves_its_pane_there() {
         "B's pane is left of A"
     );
 
-    // Below zone of pane A: B's pane goes under A.
+    // Below tile of pane A: B's pane goes under A.
     let rect_a = rect_of(&harness, pane_a);
-    let rect_b = rect_of(&harness, home);
-    let from = egui::pos2(rect_b.left() + 50.0, rect_b.top() + 14.0);
-    drag(&mut harness, from, zone(rect_a, 0.0, 1.0));
+    let from = handle_of(&harness, home);
+    drag(&mut harness, from, tile(rect_a, 0.0, 1.0));
     let model = harness.state().app().model();
     let home = model.pane_of(tab_b).unwrap_or_else(|| panic!("tab b lost"));
     assert_eq!(
@@ -434,8 +434,9 @@ fn the_toolbar_groups_never_overlap_and_the_right_group_keeps_its_width() {
             .model()
             .active_tab(pane)
             .unwrap_or_else(|| panic!("tab"));
+        // Back and Forward, the breadcrumb, the view options and the handle.
         let rects = harness.state().toolbar_rects(tab);
-        assert!(rects.len() >= 7, "{width}: {rects:?}");
+        assert!(rects.len() >= 5, "{width}: {rects:?}");
         // The row is as high as the density says and holds every widget.
         let row = harness
             .state()

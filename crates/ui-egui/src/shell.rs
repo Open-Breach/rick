@@ -245,6 +245,8 @@ pub struct PaneCx<'a> {
     pub thumbnails: &'a mut Thumbnails,
     /// The drag in progress and its drop zones.
     pub dnd: &'a mut Dnd,
+    /// The pane drag by a handle, started by the toolbar's handle.
+    pub pane_drag: &'a mut Option<PaneDrag>,
 }
 
 /// One dispatched intent, for the palette's recents and for tests.
@@ -340,8 +342,8 @@ pub struct WindowUi {
     window_frame: Option<frame::Frame>,
     /// Drag and drop of entries.
     dnd: Dnd,
-    /// The tab a drag out of a pane's bar carried in the last frame.
-    tab_drag: Option<TabId>,
+    /// The pane being dragged by its handle, with its tab.
+    pane_drag: Option<PaneDrag>,
     /// The content rectangle of the last frame, window coordinates.
     content: Option<egui::Rect>,
     /// The window's inner rectangle on the screen, from the last frame.
@@ -368,7 +370,7 @@ impl WindowUi {
             tab_headers: HashMap::new(),
             window_frame: None,
             dnd: Dnd::default(),
-            tab_drag: None,
+            pane_drag: None,
             content: None,
             screen: None,
             tab_row: None,
@@ -377,6 +379,90 @@ impl WindowUi {
             placed: false,
         }
     }
+}
+
+/// A pane being dragged by its handle (SPEC.md *Panes*).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PaneDrag {
+    /// The pane's tab, what the model moves.
+    pub tab: TabId,
+    /// The pane.
+    pub pane: PaneId,
+}
+
+/// Where a dragged pane can land on the pane under it: the five tiles of
+/// the dock cross.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DockZone {
+    Left,
+    Right,
+    Top,
+    Bottom,
+    Centre,
+}
+
+/// The side of a dock tile, in points.
+pub const DOCK_TILE: f32 = 40.0;
+/// The distance between the centres of two neighbouring dock tiles.
+pub const DOCK_TILE_PITCH: f32 = 48.0;
+
+/// The five dock tiles over a pane's rectangle, in a cross around its
+/// centre.
+fn dock_tiles(rect: egui::Rect) -> [(DockZone, egui::Rect); 5] {
+    let tile = |dx: f32, dy: f32| {
+        egui::Rect::from_center_size(
+            rect.center() + egui::vec2(dx, dy) * DOCK_TILE_PITCH,
+            egui::Vec2::splat(DOCK_TILE),
+        )
+    };
+    [
+        (DockZone::Left, tile(-1.0, 0.0)),
+        (DockZone::Right, tile(1.0, 0.0)),
+        (DockZone::Top, tile(0.0, -1.0)),
+        (DockZone::Bottom, tile(0.0, 1.0)),
+        (DockZone::Centre, tile(0.0, 0.0)),
+    ]
+}
+
+/// The half of `rect` a pane dropped on `zone` would take.
+fn dock_half(rect: egui::Rect, zone: DockZone) -> Option<egui::Rect> {
+    let c = rect.center();
+    Some(match zone {
+        DockZone::Left => egui::Rect::from_min_max(rect.min, egui::pos2(c.x, rect.max.y)),
+        DockZone::Right => egui::Rect::from_min_max(egui::pos2(c.x, rect.min.y), rect.max),
+        DockZone::Top => egui::Rect::from_min_max(rect.min, egui::pos2(rect.max.x, c.y)),
+        DockZone::Bottom => egui::Rect::from_min_max(egui::pos2(rect.min.x, c.y), rect.max),
+        DockZone::Centre => return None,
+    })
+}
+
+/// A dock tile's icon: a window outline with the half the pane would take
+/// filled, or a top bar for the centre's new tab.
+fn paint_split_icon(
+    painter: &egui::Painter,
+    tile: egui::Rect,
+    zone: DockZone,
+    colour: egui::Color32,
+) {
+    let frame = egui::Rect::from_center_size(tile.center(), egui::Vec2::splat(16.0));
+    painter.rect_stroke(
+        frame,
+        3.0,
+        egui::Stroke::new(1.5, colour),
+        egui::StrokeKind::Inside,
+    );
+    let inner = frame.shrink(3.0);
+    let c = inner.center();
+    let filled = match zone {
+        DockZone::Left => egui::Rect::from_min_max(inner.min, egui::pos2(c.x - 1.0, inner.max.y)),
+        DockZone::Right => egui::Rect::from_min_max(egui::pos2(c.x + 1.0, inner.min.y), inner.max),
+        DockZone::Top => egui::Rect::from_min_max(inner.min, egui::pos2(inner.max.x, c.y - 1.0)),
+        DockZone::Bottom => egui::Rect::from_min_max(egui::pos2(inner.min.x, c.y + 1.0), inner.max),
+        DockZone::Centre => {
+            egui::Rect::from_min_max(inner.min, egui::pos2(inner.max.x, inner.min.y + 3.0))
+        }
+    };
+    painter.rect_filled(filled, 1.0, colour);
 }
 
 /// A workspace tab being dragged along the title row.
@@ -643,9 +729,6 @@ pub struct RickUi {
 
 /// How many dispatched intents are remembered.
 const RECENTS: usize = 64;
-/// The height of a pane's bar in points, the one tab of the pane as its
-/// handle until the pane toolbar takes over.
-const STRIP_HEIGHT: f32 = 30.0;
 /// The room between two workspace tabs.
 const TAB_GAP: f32 = 2.0;
 /// The new-tab button's width.
@@ -657,39 +740,64 @@ const DEFAULT_SIZE: [f32; 2] = [1100.0, 720.0];
 /// The smallest inner size.
 const MIN_SIZE: [f32; 2] = [480.0, 320.0];
 
-/// The pane bar's look: rounded top corners, the bar on the window's
-/// background and the leaf on the pane's. The bar holds the pane's one tab
-/// as its drag handle until the pane toolbar's handle replaces it.
-fn tab_strip_style(egui_style: &egui::Style, scheme: &crate::theme::Scheme) -> egui_dock::Style {
+/// The dock's look (SPEC.md *Panes*): no tab bars, no border around the
+/// focused pane, every pane a `bg/pane` surface, the panes separated by a
+/// hairline that drags to resize.
+fn dock_style(egui_style: &egui::Style, scheme: &crate::theme::Scheme) -> egui_dock::Style {
     let mut style = egui_dock::Style::from_egui(egui_style);
-    style.tab_bar.bg_fill = scheme.bg_window;
+    style.dock_area_padding = None;
+    style.main_surface_border_stroke = egui::Stroke::NONE;
+    style.main_surface_border_rounding = egui::CornerRadius::ZERO;
+    style.separator.width = 1.0;
+    style.separator.extra_interact_width = 4.0;
+    style.separator.color_idle = scheme.border_default;
+    style.separator.color_hovered = scheme.accent_focus;
+    style.separator.color_dragged = scheme.accent_focus;
+    style.tab_bar.bg_fill = scheme.bg_pane;
     style.tab.tab_body.bg_fill = scheme.bg_pane;
     style.tab.tab_body.stroke = egui::Stroke::NONE;
-    style.buttons.add_tab_align = egui_dock::TabAddAlign::Left;
-    style.tab_bar.height = STRIP_HEIGHT;
-    style.tab_bar.show_scroll_bar_on_overflow = true;
-    style.tab_bar.fill_tab_bar = false;
-    style.tab.spacing = 2.0;
-    style.tab.minimum_width = Some(96.0);
-    style.tab.hline_below_active_tab_name = false;
-    let top = egui::CornerRadius {
-        nw: 4,
-        ne: 4,
-        sw: 0,
-        se: 0,
-    };
-    for interaction in [
-        &mut style.tab.active,
-        &mut style.tab.inactive,
-        &mut style.tab.focused,
-        &mut style.tab.hovered,
-        &mut style.tab.inactive_with_kb_focus,
-        &mut style.tab.active_with_kb_focus,
-        &mut style.tab.focused_with_kb_focus,
-    ] {
-        interaction.corner_radius = top;
-    }
+    style.tab.tab_body.corner_radius = egui::CornerRadius::ZERO;
+    style.tab.tab_body.inner_margin = egui::Margin::ZERO;
+    // The bars are hidden: no strip to drag by and no button to show one.
+    style.tab.tab_body.hidden_tab_bar_drag_height = Some(0.0);
+    style.buttons.show_tab_bar_size = 0.0;
     style
+}
+
+/// The ghost card that follows a dragged pane: its title over skeleton
+/// rows, a `bg/card` card with a soft shadow.
+fn ghost_card(painter: &egui::Painter, at: egui::Pos2, title: &str, scheme: &crate::theme::Scheme) {
+    let rect = egui::Rect::from_min_size(at, egui::vec2(220.0, 140.0));
+    let shadow = egui::epaint::Shadow {
+        offset: [0, 6],
+        blur: 18,
+        spread: 0,
+        color: scheme.shadow(),
+    };
+    painter.add(shadow.as_shape(rect, crate::theme::CARD_RADIUS));
+    painter.rect_filled(rect, crate::theme::CARD_RADIUS, scheme.bg_card);
+    painter.rect_stroke(
+        rect,
+        crate::theme::CARD_RADIUS,
+        scheme.hairline(),
+        egui::StrokeKind::Inside,
+    );
+    painter.text(
+        rect.min + egui::vec2(12.0, 14.0),
+        egui::Align2::LEFT_CENTER,
+        title,
+        egui::FontId::proportional(crate::theme::TEXT_BODY),
+        scheme.text_primary,
+    );
+    for (i, width) in [150.0, 130.0, 140.0, 110.0, 120.0].into_iter().enumerate() {
+        #[allow(clippy::cast_precision_loss)]
+        let y = rect.min.y + 40.0 + i as f32 * 18.0;
+        painter.rect_filled(
+            egui::Rect::from_min_size(egui::pos2(rect.min.x + 12.0, y), egui::vec2(width, 8.0)),
+            4.0,
+            scheme.bg_subtle,
+        );
+    }
 }
 
 /// An icon-only toggle; the fill weight marks it active.
@@ -2578,7 +2686,7 @@ impl RickUi {
         };
         let drag_slot =
             drag.and_then(|d| pointer.map(|p| slot_of(p.x - d.grab, others.saturating_sub(1))));
-        let pane_over_row = w.tab_drag.is_some()
+        let pane_over_row = w.pane_drag.is_some()
             && pointer.is_some_and(|p| row.expand2(egui::vec2(0.0, 6.0)).contains(p));
         let drop_slot = pane_over_row.then(|| pointer.map(|p| slot_of(p.x, tabs.len())));
         w.pane_drop_slot = drop_slot.flatten();
@@ -3426,6 +3534,8 @@ struct Viewer<'a> {
     hovered_now: &'a mut Option<TabId>,
     thumbnails: &'a mut Thumbnails,
     dnd: &'a mut Dnd,
+    /// The pane drag by a handle.
+    pane_drag: &'a mut Option<PaneDrag>,
     /// The pane keyboard input goes to in this window.
     focused: PaneId,
     /// The previews, for the Preview tab.
@@ -3554,6 +3664,7 @@ impl TabViewer for Viewer<'_> {
             focused: self.focused == pane && model.focused == pane,
             thumbnails: self.thumbnails,
             dnd: self.dnd,
+            pane_drag: self.pane_drag,
         };
         pane::show(ui, &mut cx);
     }
@@ -3586,7 +3697,6 @@ impl RickUi {
         self.side_panel(ui, ctx, window);
 
         let dock_id = egui::Id::new(("dock", window.0));
-        let drag_before = self.windows.get(&window).and_then(|w| w.tab_drag);
         egui::CentralPanel::no_frame().show(ui, |ui| {
             let Some(w) = self.windows.get_mut(&window) else {
                 return;
@@ -3603,6 +3713,7 @@ impl RickUi {
                 hovered_now: &mut w.hovered_tab,
                 thumbnails: &mut self.thumbnails,
                 dnd: &mut w.dnd,
+                pane_drag: &mut w.pane_drag,
                 focused,
                 previews: &mut self.previews,
                 inspector_state: &mut self.inspector_state,
@@ -3611,14 +3722,15 @@ impl RickUi {
             };
             DockArea::new(&mut w.dock.state)
                 .id(dock_id)
-                .style(tab_strip_style(ui.style(), crate::theme::scheme(ui)))
+                .style(dock_style(ui.style(), crate::theme::scheme(ui)))
+                .hidable_tab_bars(true)
+                .draggable_tabs(false)
                 .show_add_buttons(false)
-                .show_close_buttons(true)
+                .show_close_buttons(false)
                 .show_leaf_close_all_buttons(false)
                 .show_leaf_collapse_buttons(false)
                 .show_inside(ui, &mut viewer);
-            w.tab_drag = w.dock.dragged_tab(ctx, dock_id);
-            // The Preview tab's leaf below its strip, for tests.
+            // The Preview tab's leaf, for tests.
             let model = self.app.model();
             w.preview_rect = model
                 .preview_tab(window)
@@ -3631,17 +3743,12 @@ impl RickUi {
                         .pane_rects(model)
                         .into_iter()
                         .find(|(p, _)| *p == pane)
-                        .map(|(_, rect)| {
-                            egui::Rect::from_min_max(
-                                egui::pos2(rect.left(), rect.top() + STRIP_HEIGHT),
-                                rect.max,
-                            )
-                        })
+                        .map(|(_, rect)| rect)
                 });
         });
         let may_focus = ctx.input(|i| i.viewport().focused.unwrap_or(true));
         let mut events = Vec::new();
-        if self.cross_window_drop(ctx, window, drag_before) {
+        if self.pane_drag(ctx, window) == Some(true) {
             // The model moved on: the tree follows it, there is nothing of
             // the user's left in the tree to read.
             if let Some(w) = self.windows.get_mut(&window) {
@@ -3659,10 +3766,114 @@ impl RickUi {
         self.apply_requests(ctx);
     }
 
-    /// A pane's tab dragged out of its bar and released outside the dock:
-    /// on this window's tab row it becomes a new workspace tab at the slot
-    /// shown, on another window's tab row a new workspace there, on nothing
-    /// a window of its own. Returns whether a drop was handled.
+    /// The drag of a pane by its handle (SPEC.md *Panes*): while it lasts,
+    /// the ghost card follows the pointer, the pane under it shows the five
+    /// dock tiles with the hovered one lit and the half the pane would take
+    /// previewed; on release the pane docks there, or lands on the tab row
+    /// or outside the window as [`cross_window_drop`](Self::cross_window_drop)
+    /// says. Returns `Some(handled)` when the drag ended this frame,
+    /// `handled` telling whether the model changed.
+    fn pane_drag(&mut self, ctx: &egui::Context, window: WindowId) -> Option<bool> {
+        let w = self.windows.get(&window)?;
+        let drag = w.pane_drag?;
+        let (pointer, down, released) = ctx.input(|i| {
+            (
+                i.pointer.latest_pos(),
+                i.pointer.primary_down(),
+                i.pointer.any_released(),
+            )
+        });
+        let model = self.app.model();
+        let under = pointer.and_then(|p| {
+            w.dock
+                .pane_rects(model)
+                .into_iter()
+                .find(|(pane, rect)| *pane != drag.pane && rect.contains(p))
+        });
+        let zone = under.and_then(|(pane, rect)| {
+            let p = pointer?;
+            dock_tiles(rect)
+                .into_iter()
+                .find(|(_, tile)| tile.contains(p))
+                .map(|(zone, _)| (pane, rect, zone))
+        });
+        if down && !released {
+            let scheme = crate::theme::scheme_of(ctx);
+            let overlay = ctx.layer_painter(egui::LayerId::new(
+                egui::Order::Tooltip,
+                egui::Id::new(("pane-drag", window.0)),
+            ));
+            if let Some((_, rect)) = under {
+                if let Some(half) = zone.and_then(|(_, rect, zone)| dock_half(rect, zone)) {
+                    overlay.rect_filled(half, 0.0, scheme.accent_button.gamma_multiply(0.35));
+                }
+                for (tile_zone, tile) in dock_tiles(rect) {
+                    let hot = zone.is_some_and(|(_, _, z)| z == tile_zone);
+                    let fill = if hot {
+                        scheme.accent_button
+                    } else {
+                        scheme.bg_card
+                    };
+                    overlay.rect_filled(tile, 8.0, fill);
+                    overlay.rect_stroke(tile, 8.0, scheme.hairline(), egui::StrokeKind::Inside);
+                    let colour = if hot {
+                        crate::theme::Scheme::ON_BUTTON
+                    } else {
+                        scheme.icon_default
+                    };
+                    paint_split_icon(&overlay, tile, tile_zone, colour);
+                }
+            }
+            if let Some(p) = pointer {
+                let title = model
+                    .tab(drag.tab)
+                    .map(|t| tab_label(model, t).1)
+                    .unwrap_or_default();
+                // Below the pointer, clear of the dock cross under it.
+                ghost_card(&overlay, p + egui::vec2(24.0, 72.0), &title, scheme);
+            }
+            ctx.set_cursor_icon(egui::CursorIcon::Grabbing);
+            ctx.request_repaint();
+            return None;
+        }
+        // The drag ended: with a release it may land somewhere; without one
+        // (the button came up unseen) it just stops.
+        if let Some(w) = self.windows.get_mut(&window) {
+            w.pane_drag = None;
+        }
+        if !released {
+            return Some(false);
+        }
+        if let Some((pane, _, zone)) = zone {
+            let to = match zone {
+                DockZone::Centre => DockTarget::NewWorkspace,
+                DockZone::Left => DockTarget::Beside {
+                    pane,
+                    side: model::Side::Left,
+                },
+                DockZone::Right => DockTarget::Beside {
+                    pane,
+                    side: model::Side::Right,
+                },
+                DockZone::Top => DockTarget::Beside {
+                    pane,
+                    side: model::Side::Top,
+                },
+                DockZone::Bottom => DockTarget::Beside {
+                    pane,
+                    side: model::Side::Bottom,
+                },
+            };
+            self.handle(Command::MoveTab { tab: drag.tab, to });
+            return Some(true);
+        }
+        Some(self.cross_window_drop(ctx, window, Some(drag.tab)))
+    }
+
+    /// A pane released outside every dock tile: on this window's tab row it
+    /// becomes a new workspace tab at the slot shown, on another window's
+    /// tab row a new workspace there, on nothing a window of its own.
+    /// Returns whether a drop was handled.
     fn cross_window_drop(
         &mut self,
         ctx: &egui::Context,
