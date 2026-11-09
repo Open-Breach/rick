@@ -22,6 +22,14 @@ the pull request that brought the change.
   pairs that fall short) (#68).
 - The density setting has two levels, Comfortable and Compact; `normal` in
   an existing `rick.toml` reads as Comfortable (QUESTIONS.md 225) (#68).
+- The interface is set in the system's UI font and its monospace font
+  (issue 60): the platform reports them (`SystemFonts`: fontconfig's
+  `sans-serif` and `monospace` on Linux, San Francisco or Helvetica Neue
+  and Menlo on macOS, Segoe UI and Cascadia Mono or Consolas on Windows),
+  egui's bundled Ubuntu and Hack stay behind them as fallbacks, and the
+  Phosphor icons come first in both families with their text code points
+  moved out of a letter's way, so no letter shows for an icon and no icon
+  for a letter (#69).
 
 ### Removed
 
