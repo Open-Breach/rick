@@ -11,7 +11,7 @@ use std::time::{Duration, Instant};
 
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable as _;
-use model::SelectionChange;
+use model::{Density, SelectionChange, SettingsChange, Theme};
 use platform::{ConfigDir, Fake};
 use tests::{local, media};
 use ui_egui::keys::Intent;
@@ -705,4 +705,81 @@ fn screenshots_of_the_side_panel_and_list() {
     harness.step();
     shoot(&mut harness, "operations-area-mid-copy");
     settle(&mut harness);
+}
+
+/// The scheme and density tokens (issue 60): the Figma main frame's
+/// layout — two panes and the preview — in Light and Dark, Comfortable
+/// and Compact, for the comparison with the frames.
+#[test]
+#[ignore = "needs a wgpu adapter; CI runs it and uploads the images"]
+fn screenshots_of_the_schemes_and_densities() {
+    let (_dir, deep) = sample_tree();
+    let mut harness = shell(&deep, egui::vec2(1920.0, 1000.0));
+    let pane = harness.state().app().model().focused;
+    harness.state_mut().app_mut().handle(
+        app::Command::Split {
+            pane,
+            dir: model::SplitDir::Right,
+        },
+        &mut Vec::new(),
+    );
+    settle(&mut harness);
+    let second = harness
+        .state()
+        .app()
+        .model()
+        .panes()
+        .map(|(p, _)| p)
+        .find(|p| *p != pane)
+        .unwrap_or_else(|| panic!("second pane"));
+    harness.state_mut().app_mut().handle(
+        app::Command::Navigate {
+            pane: second,
+            to: local(&deep.join("raw")),
+        },
+        &mut Vec::new(),
+    );
+    settle(&mut harness);
+    harness
+        .state_mut()
+        .app_mut()
+        .handle(app::Command::FocusPane(second), &mut Vec::new());
+    harness.step();
+    let name = harness
+        .state()
+        .app()
+        .model()
+        .active_tab(second)
+        .and_then(|(_, t)| t.rows().next().map(|e| e.name.clone()))
+        .unwrap_or_else(|| panic!("a row in raw"));
+    preview(&mut harness, &name);
+    for (theme, density) in [
+        (Theme::Light, Density::Comfortable),
+        (Theme::Light, Density::Compact),
+        (Theme::Dark, Density::Comfortable),
+        (Theme::Dark, Density::Compact),
+    ] {
+        for change in [
+            SettingsChange::Theme(theme),
+            SettingsChange::Density(density),
+        ] {
+            harness
+                .state_mut()
+                .app_mut()
+                .handle(app::Command::Settings(change), &mut Vec::new());
+        }
+        settle(&mut harness);
+        harness.step();
+        harness.step();
+        let theme_name = match theme {
+            Theme::Light => "light",
+            Theme::Dark => "dark",
+            Theme::System => "system",
+        };
+        let density_name = match density {
+            Density::Comfortable => "comfortable",
+            Density::Compact => "compact",
+        };
+        shoot(&mut harness, &format!("scheme-{theme_name}-{density_name}"));
+    }
 }
