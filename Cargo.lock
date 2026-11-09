@@ -6944,6 +6944,7 @@ dependencies = [
  "plugins-native",
  "runtime",
  "tempfile",
+ "tokio",
  "tracing",
  "tracing-subscriber",
  "types",

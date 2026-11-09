@@ -75,13 +75,21 @@ pub use shell::{
 };
 
 /// Opens the first window and runs until the last one closes. `version` is
-/// what the About window shows: the binary's version and git hash.
+/// what the About window shows: the binary's version and git hash;
+/// `externals` is where the single-instance endpoint delivers a second
+/// launch's command line, drained before every frame of the first window.
 ///
 /// # Errors
 ///
 /// The error eframe reports when the window or its renderer cannot be set
 /// up.
-pub fn run(title: &str, version: &str, app: App, host: Arc<EguiHost>) -> eframe::Result {
+pub fn run(
+    title: &str,
+    version: &str,
+    app: App,
+    host: Arc<EguiHost>,
+    externals: Option<app::ExternalReceiver>,
+) -> eframe::Result {
     // Rick draws its own title row. Where the system keeps its controls
     // (macOS), the title bar goes but the window keeps its buttons; elsewhere
     // the decorations go altogether. The restored session's focused window
@@ -93,15 +101,18 @@ pub fn run(title: &str, version: &str, app: App, host: Arc<EguiHost>) -> eframe:
         ..Default::default()
     };
     let mut app = Some(app);
+    let mut externals = externals;
     let version = version.to_owned();
     eframe::run_native(
         title,
         options,
         Box::new(move |cc| {
             let app = app.take().ok_or("the app was already taken")?;
-            Ok(Box::new(
-                RickUi::new(app, host, &cc.egui_ctx).with_version(version),
-            ))
+            let mut ui = RickUi::new(app, host, &cc.egui_ctx).with_version(version);
+            if let Some(externals) = externals.take() {
+                ui = ui.with_externals(externals);
+            }
+            Ok(Box::new(ui))
         }),
     )
 }
