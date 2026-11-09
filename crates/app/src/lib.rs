@@ -1563,6 +1563,9 @@ impl App {
             Command::Scroll { tab, offset } => {
                 self.model.set_scroll(tab, offset);
             }
+            Command::ColumnWidths { tab, columns } => {
+                self.model.set_column_widths(tab, columns);
+            }
             Command::WindowGeometry { window, geometry } => {
                 self.model.set_geometry(window, geometry);
             }

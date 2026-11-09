@@ -69,8 +69,9 @@ pub struct TabUi {
     pub footer_row: Option<egui::Rect>,
     /// The details list's column header band in the last frame, for tests.
     pub header_band: Option<egui::Rect>,
-    /// Forget the column widths on the next frame.
-    pub reset_columns: bool,
+    /// The x of every boundary between two columns in the last frame, for
+    /// tests.
+    pub column_boundaries: Vec<f32>,
     /// How many rows the last frame could show, for Page Up and Down.
     pub visible_rows: usize,
     /// The list's vertical scroll offset in the last frame.
@@ -1191,6 +1192,16 @@ impl RickUi {
         self.tabs.get(&tab).and_then(|t| t.header_band)
     }
 
+    /// The x of every boundary between two columns of a tab's details
+    /// list in the last frame, left to right, for tests.
+    #[must_use]
+    pub fn column_boundaries(&self, tab: TabId) -> Vec<f32> {
+        self.tabs
+            .get(&tab)
+            .map(|t| t.column_boundaries.clone())
+            .unwrap_or_default()
+    }
+
     /// The toolbar row of a tab in the last frame, for tests.
     #[must_use]
     pub fn toolbar_row(&self, tab: TabId) -> Option<egui::Rect> {
@@ -2309,8 +2320,11 @@ impl RickUi {
                 mode: ViewMode::Details,
             }),
             Intent::SizeColumns => {
-                if let Some((tab_id, _)) = self.app.model().active_tab(pane) {
-                    self.tab_ui(tab_id).reset_columns = true;
+                if let Some((tab, _)) = self.app.model().active_tab(pane) {
+                    self.handle(Command::ColumnWidths {
+                        tab,
+                        columns: BTreeMap::new(),
+                    });
                 }
             }
             Intent::Sort(column) => {

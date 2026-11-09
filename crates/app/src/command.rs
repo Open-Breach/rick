@@ -468,6 +468,14 @@ pub enum Command {
         /// The vertical offset in logical points.
         offset: f32,
     },
+    /// The widths the user gave a tab's details columns, by column id
+    /// (SPEC.md *File list*); an empty map restores the defaults.
+    ColumnWidths {
+        /// The tab.
+        tab: TabId,
+        /// The widths in logical points.
+        columns: std::collections::BTreeMap<String, f32>,
+    },
     /// Where a window is on the screen.
     WindowGeometry {
         /// The window.
