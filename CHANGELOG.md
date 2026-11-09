@@ -128,6 +128,20 @@ the pull request that brought the change.
   line *473 MiB of 2.2 GiB · 33.7 MiB/s · 53 s left*; the waiting jobs
   under *WAITING* with why each waits; finished jobs as compact rows. The
   app sums the trashed items' sizes when it lists the trash (#74).
+- The context menu of the design refresh (issue 60, SPEC.md *Context
+  menu*): a 260 px card of 30 px entries, each with a 16 px icon slot, its
+  label in 13 px and its shortcut in 12 px `text/secondary` at the right,
+  the hovered entry `bg/selected-soft`, groups separated by hairlines in
+  the spec's order — Open (Open, Open with, Open in new tab, Open in
+  terminal here, Pin to side panel), Edit (Cut, Copy, Paste, Paste as
+  link, *Copy as* with Name, Path and Path and name, Duplicate), Change
+  (Rename, Move to trash and Delete permanently in `status/danger`), the
+  extension groups (*Compress* and the plugins' groups as submenus opening
+  to the right, a group with one entry as that entry, Install as
+  application, Compute hash…) and Info (Properties). The empty area's
+  menu: New folder and New file; Paste, Paste as link, Select all; Open
+  terminal here, Open in system file manager, Refresh; Folder properties,
+  which opens the Properties dialogue of the folder itself (#75).
 
 ### Removed
 
