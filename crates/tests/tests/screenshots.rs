@@ -860,6 +860,144 @@ fn screenshots_of_the_footer() {
     }
 }
 
+/// Issue 60: the side panel — the Places rows with the Trash pill, the
+/// section headers, the drive cards and the operations drawer with two
+/// running jobs — in Light and Dark at both densities.
+#[test]
+#[ignore = "needs a wgpu adapter; CI runs it and uploads the images"]
+fn screenshots_of_the_side_panel() {
+    use platform::Trash as _;
+    let (_dir, deep) = sample_tree();
+    let fake = Arc::new(Fake::new().unwrap_or_else(|e| panic!("{e}")));
+    let stick = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+    // The trash's disk: the fake's own folder, small, so the pill is tinted.
+    let fake_root = fake
+        .config_dir()
+        .parent()
+        .map(std::path::Path::to_path_buf)
+        .unwrap_or_else(|| fake.config_dir());
+    fake.add_volume(platform::Volume {
+        name: "System".into(),
+        mount_point: fake_root,
+        kind: platform::VolumeKind::Fixed,
+        fs_type: "ext4".into(),
+        device: None,
+        total: Some(64 << 20),
+        free: Some(38 << 20),
+    });
+    fake.add_volume(platform::Volume {
+        name: "HOLIDAY".into(),
+        mount_point: stick.path().to_path_buf(),
+        kind: platform::VolumeKind::Removable,
+        fs_type: "exfat".into(),
+        device: None,
+        total: Some(64 << 30),
+        free: Some(21 << 30),
+    });
+    fake.add_volume(platform::Volume {
+        name: "nas".into(),
+        mount_point: stick.path().join("nas"),
+        kind: platform::VolumeKind::Network,
+        fs_type: "cifs".into(),
+        device: None,
+        total: Some(4 << 40),
+        free: Some(1 << 40),
+    });
+    // 2.3 MiB in the trash: about 3.5 % of the small disk, the mid tint.
+    let junk = deep.join("old-export.bin");
+    fs::write(&junk, vec![0u8; 2_400_000]).unwrap_or_else(|e| panic!("{e}"));
+    fake.trash(&junk).unwrap_or_else(|e| panic!("{e}"));
+    let host = Arc::new(EguiHost::new());
+    let app = app::App::new(app::Config {
+        platform: fake.clone(),
+        ui: host.clone(),
+        extensions: vec![Arc::new(ext_vfs_trash::TrashExtension::new())],
+        config_dir: Some(fake.config_dir()),
+        start: Some(local(&deep)),
+    });
+    let mut harness = Harness::builder()
+        .with_size(egui::vec2(1920.0, 1000.0))
+        .with_pixels_per_point(2.0)
+        .build_eframe(move |cc| RickUi::new(app, host, &cc.egui_ctx));
+    settle(&mut harness);
+    step_until(&mut harness, Duration::from_secs(5), |h| {
+        h.state().app().model().volumes.len() == 3 && h.state().app().model().trash.size > 0
+    });
+    // Two jobs held half way: a copy with the spinner, an archive job.
+    let (go_tx, go_rx) = runtime::watch::channel(false);
+    let jobs = harness.state().app().jobs().clone();
+    for (name, total) in [
+        ("Copy holiday-2026 to HOLIDAY", 2_300_000_000u64),
+        ("Extract archive.tar.gz", 1_900_000_000u64),
+    ] {
+        let mut go = go_rx.clone();
+        jobs.spawn_named(name, move |ctx| async move {
+            let report = |done| {
+                ctx.progress.report(types::Progress::Bytes {
+                    done,
+                    total: Some(total),
+                });
+            };
+            for step in 0..40u64 {
+                report(total / 100 * step);
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+            while !*go.borrow_and_update() {
+                tokio::select! {
+                    changed = go.changed() => {
+                        if changed.is_err() {
+                            break;
+                        }
+                    }
+                    () = tokio::time::sleep(Duration::from_millis(50)) => report(total / 100 * 40),
+                }
+            }
+            Ok::<(), types::Error>(())
+        });
+    }
+    step_until(&mut harness, Duration::from_secs(5), |h| {
+        h.state().app().model().jobs.len() == 2
+            && h.query_all_by_label_contains(" of ").count() >= 2
+    });
+    harness.event(egui::Event::PointerMoved(egui::pos2(960.0, 30.0)));
+    for (theme, density) in [
+        (Theme::Light, Density::Comfortable),
+        (Theme::Light, Density::Compact),
+        (Theme::Dark, Density::Comfortable),
+        (Theme::Dark, Density::Compact),
+    ] {
+        for change in [
+            SettingsChange::Theme(theme),
+            SettingsChange::Density(density),
+        ] {
+            harness
+                .state_mut()
+                .app_mut()
+                .handle(app::Command::Settings(change), &mut Vec::new());
+        }
+        for _ in 0..6 {
+            harness.step();
+        }
+        let theme_name = match theme {
+            Theme::Light => "light",
+            Theme::Dark => "dark",
+            Theme::System => "system",
+        };
+        let density_name = match density {
+            Density::Comfortable => "comfortable",
+            Density::Compact => "compact",
+        };
+        shoot(
+            &mut harness,
+            &format!("side-panel-{theme_name}-{density_name}"),
+        );
+    }
+    let _ = go_tx.send(true);
+    step_until(&mut harness, Duration::from_secs(20), |h| {
+        h.state().app().model().jobs.is_empty()
+    });
+}
+
 /// Issue 17: the Preview tab docked below the explorer and torn out into a
 /// window of its own.
 #[test]

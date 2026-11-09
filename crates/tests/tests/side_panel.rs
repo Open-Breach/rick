@@ -148,13 +148,24 @@ fn pane_rect(harness: &Harness<'_, RickUi>) -> egui::Rect {
 
 /// The side panel rows whose label contains `text`, top to bottom: the
 /// panel sits left of the focused pane.
+/// The side panel widgets named `text`: those with exactly that name, or,
+/// when there are none, those whose name contains it (a section's title is
+/// also part of its caret's name).
 fn panel_rects(harness: &Harness<'_, RickUi>, text: &str) -> Vec<egui::Rect> {
     let rect = pane_rect(harness);
+    let in_panel = |r: &egui::Rect| r.center().x < rect.left();
     let mut rects: Vec<egui::Rect> = harness
-        .query_all_by_label_contains(text)
+        .query_all_by_label(text)
         .map(|n| n.rect())
-        .filter(|r| r.center().x < rect.left())
+        .filter(in_panel)
         .collect();
+    if rects.is_empty() {
+        rects = harness
+            .query_all_by_label_contains(text)
+            .map(|n| n.rect())
+            .filter(in_panel)
+            .collect();
+    }
     rects.sort_by(|a, b| a.top().total_cmp(&b.top()));
     rects
 }
@@ -757,7 +768,7 @@ fn sections_fold_with_the_chevron_and_the_fold_survives_a_restart() {
         let network = panel_row(&harness, "Network");
         // The chevron sits left of the title.
         let chevron = egui::pos2(network.x - 60.0, network.y);
-        let chevrons: Vec<egui::Rect> = panel_rects(&harness, icons::TREE_OPEN);
+        let chevrons: Vec<egui::Rect> = panel_rects(&harness, "Fold ");
         let on_row = chevrons
             .iter()
             .find(|r| (r.center().y - network.y).abs() < 4.0)
@@ -1031,7 +1042,7 @@ fn copies_on_one_volume_run_in_turn_and_on_disjoint_volumes_together() {
         "{:?}",
         states(&harness)
     );
-    harness.get_by_label_contains("Waiting for Copy two.bin to dst");
+    harness.get_by_label_contains("Queued behind Copy two.bin to dst");
     assert!(
         !s3.paths().contains(&"/other/one.bin".to_owned()),
         "not yet"
@@ -1169,7 +1180,10 @@ fn the_operations_area_shows_a_bar_per_row_and_stays_responsive_with_many_jobs()
     assert!(worst < Duration::from_millis(100), "worst frame {worst:?}");
     // The header counts them and every job has a row with a bar of
     // `done of total`.
-    harness.get_by_label_contains("8 jobs running");
+    assert!(
+        !panel_rects(&harness, "8 running").is_empty(),
+        "the drawer's summary"
+    );
     assert!(
         harness.query_all_by_label_contains("of 2000").count() >= 5,
         "the rows show done of total (at least the capped five are visible)"

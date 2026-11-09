@@ -30,16 +30,21 @@ explorer, docked and torn out like any tab; Rick's only viewer, laying out
 every kind of content a previewer returns itself in `content.rs`: a file
 list in the explorer's columns, a grid, a rendered document, and the
 message for a missing third-party library with *Browse…* and *Retry*; the
-placeholder for a file no previewer claims), the side panel (the
-editable Places list with its drag reorder, Edit… dialogue
-and keyboard, Favorites, Recent and the Trash view among the places; the
-This Machine, Network and Cloud sections with their utilisation bars, Eject
-and Add… rows, folding without an indent guide; the section overviews drawn
-as drive tables in the pane) with the operations area at its foot (a header
-with the running count and an overall bar, one row per job with its progress
-bar, bytes or items done of total, throughput and remaining time, the
-*Waiting* state, pause, resume and cancel, a height that grows with the jobs
-up to a cap), the conflict dialogue, the question dialogue an extension asks through, the
+placeholder for a file no previewer claims), the side panel (rows
+`sidebar/item-height` tall inset from the panel's edges; the editable
+Places list with its drag reorder, Edit… dialogue and keyboard, Favorites,
+Recent and the Trash view among the places, the Trash row's pill with the
+trash's size tinted by its disk share; the This Machine, Network and Cloud
+sections under small-capitals headers with a folding caret, This Machine
+as drive cards with a usage bar, Eject and Add… rows, nothing indented;
+the section overviews drawn as drive tables in the pane) with the
+operations drawer floating over its foot — along the window's foot while
+the panel is hidden — (a `bg/card` card with its summary *2 running ·
+2 waiting*, the overall percentage and bar, collapsible to that line; a
+block per running job with its icon, title, pause and cancel, a thin bar
+and the bytes or items done of total with throughput and time left; the
+waiting jobs with why they wait; finished jobs as compact rows; rows that
+scroll beyond a cap), the conflict dialogue, the question dialogue an extension asks through, the
 Properties dialogue (the general rows and, for a local entry, its owner,
 group, mode bits and ACL edited in place, applied to the enclosed entries
 too when asked), the Hash dialogue (a block per selected file with the

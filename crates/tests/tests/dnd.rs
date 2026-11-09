@@ -204,6 +204,16 @@ fn drag(
     modifiers: egui::Modifiers,
 ) -> Option<ui_egui::dnd::DragView> {
     let from = centre_of(harness, label);
+    drag_from(harness, from, to, modifiers)
+}
+
+/// A drag from `from` to `to` with the primary button, `modifiers` held.
+fn drag_from(
+    harness: &mut Harness<'_, RickUi>,
+    from: egui::Pos2,
+    to: egui::Pos2,
+    modifiers: egui::Modifiers,
+) -> Option<ui_egui::dnd::DragView> {
     hold(harness, modifiers);
     press(harness, from, egui::PointerButton::Primary);
     move_to(harness, from, to);
@@ -542,8 +552,11 @@ fn a_folder_dropped_on_places_becomes_a_place_and_files_are_refused() {
         view.as_ref().and_then(|v| v.indicator),
         Some(Indicator::Refused)
     );
-    // And so is a folder anywhere but the Places list.
-    let view = drag(&mut harness, "sub", machine, egui::Modifiers::NONE);
+    // And so is a folder anywhere but the Places list; `sub` is a place
+    // now too, so the row is the one inside the pane.
+    let pane = harness.state().app().model().focused;
+    let from = centre_in(&harness, pane, "sub");
+    let view = drag_from(&mut harness, from, machine, egui::Modifiers::NONE);
     assert_eq!(
         view.as_ref().and_then(|v| v.indicator),
         Some(Indicator::Refused)

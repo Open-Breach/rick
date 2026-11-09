@@ -137,6 +137,12 @@ pub struct TrashView {
     pub listed: bool,
     /// The platform's trash could not be read at all; the text says why.
     pub error: Option<String>,
+    /// The bytes the items take, for the Trash row's pill (SPEC.md *Trash
+    /// pill*).
+    pub size: u64,
+    /// The share of its disk the trash takes, 0 to 1, when the disk's size
+    /// is known.
+    pub share: Option<f32>,
 }
 
 impl TrashView {
@@ -146,6 +152,12 @@ impl TrashView {
         self.items = items;
         self.listed = listed;
         self.error = None;
+    }
+
+    /// Records the trash's size and the share of its disk it takes.
+    pub fn set_stats(&mut self, size: u64, share: Option<f32>) {
+        self.size = size;
+        self.share = share;
     }
 }
 

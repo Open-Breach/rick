@@ -1,8 +1,12 @@
 //! The side panel: the Places list, the This Machine, Network and Cloud
-//! sections, and nothing else; the operations area sits under it in the
-//! shell. The panel is navigation only: it takes the user places and never
-//! performs a file operation, highlights no current location and draws no
-//! indent guide.
+//! sections, and nothing else; the operations drawer floats over its foot
+//! from the shell. The panel is navigation only: it takes the user places
+//! and never performs a file operation, highlights no current location and
+//! draws no indent guide. Rows are `sidebar/item-height` tall with
+//! `radius/control` corners, inset 6 px from the panel's edges; the Trash
+//! row carries the trash's size in a pill tinted by the share of its disk;
+//! This Machine lists drive cards with a usage bar; section headers are
+//! small capitals with a caret.
 //!
 //! Places is a flat, headerless, user-owned list: a click opens the row in
 //! the focused pane, a middle click, a Mod+click or the context menu's
@@ -35,12 +39,168 @@ use types::{Entry, Location, ProviderId};
 use vfs_rick::Virtual;
 
 use crate::dnd::{Dnd, Target, Zone};
-use crate::icons;
 use crate::overview::{percent, utilisation_bar, volume_icon};
 use crate::shell::Request;
+use crate::theme::{self, BAR, ICON, Scheme, TEXT_BODY, TEXT_CAPS, TEXT_SECONDARY};
+use crate::{format, icons};
 
-/// The height of a utilisation bar under a drive row.
-const BAR_HEIGHT: f32 = 4.0;
+/// How far a row sits in from the panel's edges (SPEC.md *Rows*).
+const INSET: f32 = 6.0;
+/// The gap between a row's icon and its label.
+const ICON_GAP: f32 = 12.0;
+/// A drive card's corners and the gap between cards (SPEC.md *This
+/// Machine*).
+const CARD_RADIUS: f32 = 8.0;
+const CARD_GAP: f32 = 6.0;
+/// A drive card's height in Comfortable and in Compact.
+const DRIVE_CARD: f32 = 44.0;
+const DRIVE_CARD_COMPACT: f32 = 26.0;
+/// The air above and below a section header (SPEC.md *Section headers*).
+const SECTION_AIR_ABOVE: f32 = 18.0;
+const SECTION_AIR_BELOW: f32 = 6.0;
+/// A section header's height.
+const SECTION_HEADER: f32 = 20.0;
+/// The letter spacing of a section header's capitals.
+const CAPS_SPACING: f32 = 0.66;
+/// The trash pill's height and side padding.
+const PILL_HEIGHT: f32 = 20.0;
+const PILL_PAD: f32 = 8.0;
+
+/// What sits at the right end of a row.
+enum Right {
+    Nothing,
+    /// 12 px `text/secondary`, a drive's percentage.
+    Text(String),
+    /// A tinted pill, the Trash row's size.
+    Pill {
+        text: String,
+        bg: egui::Color32,
+        fg: egui::Color32,
+    },
+}
+
+/// A row's content: a 16 px glyph, its label and what sits at the right.
+struct RowContent<'a> {
+    glyph: &'a str,
+    label: &'a str,
+    right: Right,
+}
+
+/// The rectangle a row paints: the allocated one inset from the panel's
+/// edges.
+fn inset(outer: egui::Rect) -> egui::Rect {
+    egui::Rect::from_min_max(
+        egui::pos2(outer.left() + INSET, outer.top()),
+        egui::pos2(
+            (outer.right() - INSET).max(outer.left() + INSET),
+            outer.bottom(),
+        ),
+    )
+}
+
+/// One line of `text` at `size`, cut with an ellipsis to `max_width`.
+fn truncated(
+    ui: &egui::Ui,
+    text: &str,
+    size: f32,
+    colour: egui::Color32,
+    max_width: f32,
+) -> std::sync::Arc<egui::Galley> {
+    let mut job = egui::text::LayoutJob::simple_singleline(
+        text.to_owned(),
+        egui::FontId::proportional(size),
+        colour,
+    );
+    job.wrap = egui::text::TextWrapping::truncate_at_width(max_width.max(0.0));
+    ui.fonts_mut(|f| f.layout_job(job))
+}
+
+/// A row (SPEC.md *Rows*): `sidebar/item-height` tall with `radius/control`
+/// corners and `space/row-x` padding, inset from the panel's edges; the
+/// glyph, 12 px of gap, the label in 13 px, and the right end's content.
+/// Hover is `bg/subtle`. Its accessible name is the label with the right
+/// end's text after a dot.
+fn row_widget(ui: &mut egui::Ui, content: &RowContent<'_>, sense: egui::Sense) -> egui::Response {
+    let metrics = theme::metrics(ui.ctx());
+    let scheme = theme::scheme(ui);
+    let (outer, response) = ui.allocate_exact_size(
+        egui::vec2(ui.available_width(), metrics.sidebar_item_height),
+        sense,
+    );
+    let rect = inset(outer);
+    let painter = ui.painter();
+    if response.hovered() {
+        painter.rect_filled(rect, metrics.corner_radius(), scheme.bg_subtle);
+    }
+    let glyph_x = rect.left() + metrics.space_row_x;
+    painter.text(
+        egui::pos2(glyph_x + ICON / 2.0, rect.center().y),
+        egui::Align2::CENTER_CENTER,
+        content.glyph,
+        egui::FontId::proportional(ICON),
+        scheme.icon_default,
+    );
+    let mut right_edge = rect.right() - metrics.space_row_x;
+    let mut spoken = content.label.to_owned();
+    match &content.right {
+        Right::Nothing => {}
+        Right::Text(text) => {
+            let galley = painter.layout_no_wrap(
+                text.clone(),
+                egui::FontId::proportional(TEXT_SECONDARY),
+                scheme.text_secondary,
+            );
+            let size = galley.size();
+            painter.galley(
+                egui::pos2(right_edge - size.x, rect.center().y - size.y / 2.0),
+                galley,
+                scheme.text_secondary,
+            );
+            right_edge -= size.x + ICON_GAP;
+            spoken = format!("{spoken} · {text}");
+        }
+        Right::Pill { text, bg, fg } => {
+            let galley = painter.layout_no_wrap(
+                text.clone(),
+                egui::FontId::proportional(TEXT_SECONDARY),
+                *fg,
+            );
+            let size = galley.size();
+            let pill = egui::Rect::from_min_max(
+                egui::pos2(
+                    right_edge - size.x - 2.0 * PILL_PAD,
+                    rect.center().y - PILL_HEIGHT / 2.0,
+                ),
+                egui::pos2(right_edge, rect.center().y + PILL_HEIGHT / 2.0),
+            );
+            painter.rect_filled(pill, PILL_HEIGHT / 2.0, *bg);
+            painter.galley(
+                egui::pos2(pill.left() + PILL_PAD, rect.center().y - size.y / 2.0),
+                galley,
+                *fg,
+            );
+            right_edge = pill.left() - ICON_GAP;
+            spoken = format!("{spoken} · {text}");
+        }
+    }
+    let label_x = glyph_x + ICON + ICON_GAP;
+    let galley = truncated(
+        ui,
+        content.label,
+        TEXT_BODY,
+        scheme.text_primary,
+        right_edge - label_x,
+    );
+    let size = galley.size();
+    ui.painter().galley(
+        egui::pos2(label_x, rect.center().y - size.y / 2.0),
+        galley,
+        scheme.text_primary,
+    );
+    response
+        .widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, spoken.clone()));
+    response
+}
 
 /// One row the keyboard can land on.
 #[derive(Debug, Clone)]
@@ -296,6 +456,7 @@ fn focused_pane(app: &App, window: WindowId) -> PaneId {
 
 /// Draws the panel for `window`: navigation goes out as requests, drop
 /// zones into `dnd`.
+#[allow(clippy::too_many_arguments)]
 pub fn show(
     ui: &mut egui::Ui,
     app: &App,
@@ -304,6 +465,7 @@ pub fn show(
     state: &mut SidePanelState,
     requests: &mut Vec<Request>,
     dnd: &mut Dnd,
+    drawer_room: f32,
 ) {
     let pane = focused_pane(app, window);
     let rect = ui.max_rect();
@@ -325,19 +487,21 @@ pub fn show(
             target: Target::Refused,
         });
     }
-    ui.visuals_mut().indent_has_left_vline = false;
     egui::ScrollArea::vertical()
         .id_salt(("side-panel", window.0))
         .auto_shrink([false, false])
         .show(ui, |ui| {
+            ui.spacing_mut().item_spacing.y = 0.0;
+            ui.add_space(4.0);
             places(ui, app, pane, state, requests, dnd);
-            ui.add_space(6.0);
             for section in Section::ALL {
                 if section == Section::Cloud && app.model().cloud_providers.is_empty() {
                     continue;
                 }
                 titled_section(ui, app, window, pane, panel, section, state, requests);
             }
+            // Room for the operations drawer floating over the lists' end.
+            ui.add_space(drawer_room + 8.0);
         });
     edit_dialog(ui.ctx(), app, state, requests);
     connection_dialog(ui.ctx(), app, state, requests);
@@ -723,9 +887,11 @@ fn provider_row(
         Section::Cloud => icons::CLOUD,
         _ => icons::NETWORK,
     };
-    let button = egui::Button::new(format!("{glyph} {}", entry.name))
-        .frame(false)
-        .truncate();
+    let content = RowContent {
+        glyph,
+        label: &entry.name,
+        right: Right::Nothing,
+    };
     let connection = connection_of(app, entry);
     let action_ctx = ActionCtx {
         pane,
@@ -748,7 +914,8 @@ fn provider_row(
         requests,
         pane,
         egui::Id::new(("side-provider-row", section.name(), index)),
-        button,
+        &content,
+        egui::Sense::click(),
         &location,
         &mut extra,
     );
@@ -762,13 +929,14 @@ fn provider_row(
     }
 }
 
-/// Paints the keyboard focus around a row when the panel has it.
+/// Paints the keyboard focus around a row when the panel has it: the 2 px
+/// `accent/focus` ring inside the row's rectangle.
 fn focus_ring(ui: &egui::Ui, state: &SidePanelState, id: egui::Id, rect: egui::Rect) {
     if state.focused && state.focus == Some(id) {
         ui.painter().rect_stroke(
-            rect.shrink(0.5),
-            3.0,
-            crate::theme::scheme(ui).focus_ring(),
+            rect,
+            theme::metrics(ui.ctx()).corner_radius(),
+            theme::scheme(ui).focus_ring(),
             egui::StrokeKind::Inside,
         );
     }
@@ -784,13 +952,14 @@ fn location_row(
     requests: &mut Vec<Request>,
     pane: PaneId,
     id: egui::Id,
-    button: egui::Button<'_>,
+    content: &RowContent<'_>,
+    sense: egui::Sense,
     location: &Location,
     extra: &mut dyn FnMut(&mut egui::Ui, &mut Vec<Request>),
 ) -> egui::Response {
-    let response = ui.add(button.min_size(egui::vec2(ui.available_width(), 0.0)));
+    let response = row_widget(ui, content, sense);
     state.row(id, Some(location.clone()));
-    focus_ring(ui, state, id, response.rect);
+    focus_ring(ui, state, id, inset(response.rect));
     if response.clicked() {
         state.take_focus(id);
         let new_tab = ui.input(|i| i.modifiers.command);
@@ -836,6 +1005,7 @@ fn insertion_line(ui: &egui::Ui, x_range: egui::Rangef, y: f32) {
 }
 
 /// The Places list.
+#[allow(clippy::too_many_lines)]
 fn places(
     ui: &mut egui::Ui,
     app: &App,
@@ -845,20 +1015,32 @@ fn places(
     dnd: &mut Dnd,
 ) {
     let rows: Vec<Place> = app.model().places.rows().to_vec();
-    let trash_count = app.model().trash.items.len();
+    let trash = &app.model().trash;
+    let scheme = theme::scheme(ui);
     let mut rects = Vec::with_capacity(rows.len());
     let mut lines: Vec<f32> = Vec::new();
     let list_top = ui.cursor().top();
     for (index, place) in rows.iter().enumerate() {
         let id = egui::Id::new(("side-place", index, &place.location));
         let glyph = icons::named(&place.icon);
-        let mut button = egui::Button::new(format!("{glyph} {}", place.title))
-            .frame(false)
-            .truncate()
-            .sense(egui::Sense::click_and_drag());
-        if trash_count > 0 && Virtual::of(&place.location) == Some(Virtual::Trash) {
-            button = button.right_text(egui::RichText::new(trash_count.to_string()).weak());
-        }
+        // The Trash pill: the trash's size, tinted by the share of its disk
+        // it takes; nothing while the trash is empty.
+        let right =
+            if !trash.items.is_empty() && Virtual::of(&place.location) == Some(Virtual::Trash) {
+                let (bg, fg) = trash_tint(scheme, trash.share);
+                Right::Pill {
+                    text: format::size(Some(trash.size)),
+                    bg,
+                    fg,
+                }
+            } else {
+                Right::Nothing
+            };
+        let content = RowContent {
+            glyph,
+            label: &place.title,
+            right,
+        };
         let location = place.location.clone();
         let mut extra = |ui: &mut egui::Ui, requests: &mut Vec<Request>| {
             if ui.button(format!("{} Edit…", icons::EDIT)).clicked() {
@@ -870,7 +1052,17 @@ fn places(
                 ui.close();
             }
         };
-        let response = location_row(ui, state, requests, pane, id, button, &location, &mut extra);
+        let response = location_row(
+            ui,
+            state,
+            requests,
+            pane,
+            id,
+            &content,
+            egui::Sense::click_and_drag(),
+            &location,
+            &mut extra,
+        );
         rects.push(response.rect);
         // Dragging a row reorders the list; a drag of entries is the
         // shell's drag and never starts here.
@@ -947,6 +1139,17 @@ fn places(
     }
     if rows.is_empty() {
         ui.weak(t!("panel-drop-a-folder-here-to"));
+    }
+}
+
+/// The Trash pill's colours for the share of its disk the trash takes
+/// (SPEC.md *Trash pill*): `trash/low-*` under 1 %, `trash/mid-*` to 5 %,
+/// `trash/high-*` over; low while the share is unknown.
+fn trash_tint(scheme: &Scheme, share: Option<f32>) -> (egui::Color32, egui::Color32) {
+    match share {
+        Some(share) if share >= 0.05 => (scheme.trash_high_bg, scheme.trash_high_text),
+        Some(share) if share >= 0.01 => (scheme.trash_mid_bg, scheme.trash_mid_text),
+        _ => (scheme.trash_low_bg, scheme.trash_low_text),
     }
 }
 
@@ -1046,10 +1249,12 @@ fn edit_dialog(
     }
 }
 
-/// A titled section: the header with its chevron and its rows, indented
-/// without a guide line.
-// One section, header then rows, top to bottom.
-#[allow(clippy::too_many_arguments, clippy::too_many_lines)]
+/// A titled section (SPEC.md *Section headers*): the header with its caret
+/// and small capitals, itself the row of the section's overview, then the
+/// rows — drive cards under This Machine, network volumes and connections
+/// under Network, accounts under Cloud — or the *Add…* row of an empty
+/// section. Nothing is indented.
+#[allow(clippy::too_many_arguments)]
 fn titled_section(
     ui: &mut egui::Ui,
     app: &App,
@@ -1067,78 +1272,338 @@ fn titled_section(
         Section::Cloud => Virtual::Cloud,
     }
     .location();
-    ui.horizontal(|ui| {
-        let chevron = ui.add(
-            egui::Button::new(if folded {
-                icons::TREE_CLOSED
-            } else {
-                icons::TREE_OPEN
-            })
-            .frame(false)
-            .small(),
-        );
-        if chevron.clicked() {
-            requests.push(Request::Command(Command::SidePanel {
-                window,
-                change: SidePanelChange::Fold {
-                    section,
-                    folded: !folded,
-                },
-            }));
-        }
-        let id = egui::Id::new(("side-section", section.name()));
-        let button = egui::Button::new(egui::RichText::new(section.title()).strong())
-            .frame(false)
-            .truncate();
-        let connectors = connectors_of(app, section);
-        location_row(
-            ui,
-            state,
-            requests,
-            pane,
-            id,
-            button,
-            &overview,
-            &mut |ui, requests| add_connection_items(ui, requests, &connectors),
-        )
-        .on_hover_text(t!("panel-open-overview", section = section.title()));
-    });
+    section_header(
+        ui, app, window, pane, section, folded, &overview, state, requests,
+    );
     if folded {
         return;
     }
-    ui.indent(("side-section-body", section.name()), |ui| {
-        let mut any = false;
-        let volumes: Vec<Volume> = app
-            .model()
-            .volumes
-            .iter()
-            .filter(|v| (v.kind == VolumeKind::Network) == (section == Section::Network))
-            .cloned()
-            .collect();
-        if section != Section::Cloud {
+    let mut any = false;
+    let volumes: Vec<Volume> = app
+        .model()
+        .volumes
+        .iter()
+        .filter(|v| (v.kind == VolumeKind::Network) == (section == Section::Network))
+        .cloned()
+        .collect();
+    let density = app.model().settings.density;
+    match section {
+        Section::Machine => {
             for volume in &volumes {
                 any = true;
-                volume_row(ui, state, requests, pane, volume);
+                drive_card(ui, state, requests, pane, volume, density);
             }
         }
-        let rows: &[Entry] = match section {
-            Section::Machine => &[],
-            Section::Network => &app.model().network,
-            Section::Cloud => &app.model().cloud,
-        };
-        for (index, entry) in rows.iter().enumerate() {
-            any = true;
-            provider_row(ui, app, state, requests, pane, section, index, entry);
+        Section::Network => {
+            for volume in &volumes {
+                any = true;
+                network_volume_row(ui, state, requests, pane, volume);
+            }
         }
-        if !any {
-            add_row(ui, app, state, requests, section);
-        }
-    });
+        Section::Cloud => {}
+    }
+    let rows: &[Entry] = match section {
+        Section::Machine => &[],
+        Section::Network => &app.model().network,
+        Section::Cloud => &app.model().cloud,
+    };
+    for (index, entry) in rows.iter().enumerate() {
+        any = true;
+        provider_row(ui, app, state, requests, pane, section, index, entry);
+    }
+    if !any {
+        add_row(ui, app, state, requests, section);
+    }
 }
 
-/// A drive row: icon, name and the utilisation percentage, with a small bar
-/// under it; Eject in the context menu of removable media.
-fn volume_row(
+/// The header of a titled section: 18 px of air, a `CARET_DOWN` at 60 %
+/// (`CARET_RIGHT` when folded) that folds the section, and the title in
+/// 11 px letter-spaced capitals, which opens the section's overview like a
+/// row; 6 px of air below.
+#[allow(clippy::too_many_arguments)]
+fn section_header(
+    ui: &mut egui::Ui,
+    app: &App,
+    window: WindowId,
+    pane: PaneId,
+    section: Section,
+    folded: bool,
+    overview: &Location,
+    state: &mut SidePanelState,
+    requests: &mut Vec<Request>,
+) {
+    let metrics = theme::metrics(ui.ctx());
+    let scheme = theme::scheme(ui);
+    ui.add_space(SECTION_AIR_ABOVE);
+    let (outer, _) = ui.allocate_exact_size(
+        egui::vec2(ui.available_width(), SECTION_HEADER),
+        egui::Sense::hover(),
+    );
+    let rect = inset(outer);
+    // Salted with the window: every window draws its own header.
+    let id = egui::Id::new(("side-section", window.0, section.name()));
+    // The caret.
+    let caret_rect = egui::Rect::from_center_size(
+        egui::pos2(
+            rect.left() + metrics.space_row_x + ICON / 2.0,
+            rect.center().y,
+        ),
+        egui::vec2(ICON + 4.0, SECTION_HEADER),
+    );
+    let caret = ui.interact(caret_rect, id.with("caret"), egui::Sense::click());
+    ui.painter().text(
+        caret_rect.center(),
+        egui::Align2::CENTER_CENTER,
+        if folded {
+            icons::TREE_CLOSED
+        } else {
+            icons::TREE_OPEN
+        },
+        egui::FontId::proportional(ICON),
+        scheme.icon_default.gamma_multiply(0.6),
+    );
+    let fold_text = if folded {
+        t!("panel-unfold-section", section = section.title())
+    } else {
+        t!("panel-fold-section", section = section.title())
+    };
+    caret.widget_info(|| {
+        egui::WidgetInfo::labeled(egui::WidgetType::Button, true, fold_text.clone())
+    });
+    if caret.on_hover_text(fold_text).clicked() {
+        requests.push(Request::Command(Command::SidePanel {
+            window,
+            change: SidePanelChange::Fold {
+                section,
+                folded: !folded,
+            },
+        }));
+    }
+    // The title, the overview's row.
+    let title_rect =
+        egui::Rect::from_min_max(egui::pos2(caret_rect.right() + 6.0, rect.top()), rect.max);
+    let title = ui.interact(title_rect, id, egui::Sense::click());
+    if title.hovered() {
+        ui.painter()
+            .rect_filled(title_rect, metrics.corner_radius(), scheme.bg_subtle);
+    }
+    let caps = egui::WidgetText::from(
+        egui::RichText::new(section.title().to_uppercase())
+            .size(TEXT_CAPS)
+            .color(scheme.text_secondary)
+            .extra_letter_spacing(CAPS_SPACING),
+    )
+    .into_galley(
+        ui,
+        Some(egui::TextWrapMode::Truncate),
+        title_rect.width() - 2.0 * metrics.space_row_x,
+        egui::TextStyle::Body,
+    );
+    let size = caps.size();
+    ui.painter().galley(
+        egui::pos2(
+            title_rect.left() + metrics.space_row_x,
+            title_rect.center().y - size.y / 2.0,
+        ),
+        caps,
+        scheme.text_secondary,
+    );
+    state.row(id, Some(overview.clone()));
+    focus_ring(ui, state, id, title_rect);
+    title
+        .widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, section.title()));
+    if title.clicked() {
+        state.take_focus(id);
+        let new_tab = ui.input(|i| i.modifiers.command);
+        open(requests, pane, overview.clone(), new_tab);
+    }
+    if title.middle_clicked() {
+        state.take_focus(id);
+        open(requests, pane, overview.clone(), true);
+    }
+    if title.secondary_clicked() {
+        state.take_focus(id);
+    }
+    let connectors = connectors_of(app, section);
+    title
+        .on_hover_text(t!("panel-open-overview", section = section.title()))
+        .context_menu(|ui| {
+            if ui.button(t!("open-in-new-tab")).clicked() {
+                open(requests, pane, overview.clone(), true);
+                ui.close();
+            }
+            add_connection_items(ui, requests, &connectors);
+        });
+    ui.add_space(SECTION_AIR_BELOW);
+}
+
+/// A drive card (SPEC.md *This Machine*): a `bg/subtle` card with 8 px
+/// corners, 44 px tall in Comfortable — the drive's icon at the left, the
+/// name with the utilisation percentage at the right end of the first line,
+/// a 4 px usage bar under them — and 26 px in Compact, one line: icon,
+/// name, bar, percentage. A click opens the drive's root; Eject is in the
+/// context menu of removable media.
+#[allow(clippy::too_many_lines)]
+fn drive_card(
+    ui: &mut egui::Ui,
+    state: &mut SidePanelState,
+    requests: &mut Vec<Request>,
+    pane: PaneId,
+    volume: &Volume,
+    density: model::Density,
+) {
+    let metrics = theme::metrics(ui.ctx());
+    let scheme = theme::scheme(ui);
+    let compact = density == model::Density::Compact;
+    let height = if compact {
+        DRIVE_CARD_COMPACT
+    } else {
+        DRIVE_CARD
+    };
+    let (outer, response) = ui.allocate_exact_size(
+        egui::vec2(ui.available_width(), height),
+        egui::Sense::click(),
+    );
+    ui.add_space(CARD_GAP);
+    let rect = inset(outer);
+    let painter = ui.painter();
+    painter.rect_filled(rect, CARD_RADIUS, scheme.bg_subtle);
+    let glyph_x = rect.left() + metrics.space_row_x;
+    painter.text(
+        egui::pos2(glyph_x + ICON / 2.0, rect.center().y),
+        egui::Align2::CENTER_CENTER,
+        volume_icon(volume.kind),
+        egui::FontId::proportional(ICON),
+        scheme.icon_default,
+    );
+    let label_x = glyph_x + ICON + ICON_GAP;
+    let right = rect.right() - metrics.space_row_x;
+    let percent_text = percent(volume);
+    let percent_galley = painter.layout_no_wrap(
+        percent_text.clone(),
+        egui::FontId::proportional(TEXT_SECONDARY),
+        scheme.text_secondary,
+    );
+    let percent_size = percent_galley.size();
+    let fraction = volume.utilisation().unwrap_or(0.0);
+    if compact {
+        // One line: name, the bar, the percentage.
+        let bar_width = 48.0;
+        painter.galley(
+            egui::pos2(
+                right - percent_size.x,
+                rect.center().y - percent_size.y / 2.0,
+            ),
+            percent_galley,
+            scheme.text_secondary,
+        );
+        let bar = egui::Rect::from_min_size(
+            egui::pos2(
+                right - percent_size.x - ICON_GAP - bar_width,
+                rect.center().y - BAR / 2.0,
+            ),
+            egui::vec2(bar_width, BAR),
+        );
+        utilisation_bar(ui, bar, fraction);
+        let name = truncated(
+            ui,
+            &volume.name,
+            TEXT_BODY,
+            scheme.text_primary,
+            bar.left() - ICON_GAP - label_x,
+        );
+        let size = name.size();
+        ui.painter().galley(
+            egui::pos2(label_x, rect.center().y - size.y / 2.0),
+            name,
+            scheme.text_primary,
+        );
+    } else {
+        let line_y = rect.top() + 15.0;
+        painter.galley(
+            egui::pos2(right - percent_size.x, line_y - percent_size.y / 2.0),
+            percent_galley,
+            scheme.text_secondary,
+        );
+        let name = truncated(
+            ui,
+            &volume.name,
+            TEXT_BODY,
+            scheme.text_primary,
+            right - percent_size.x - ICON_GAP - label_x,
+        );
+        let size = name.size();
+        ui.painter().galley(
+            egui::pos2(label_x, line_y - size.y / 2.0),
+            name,
+            scheme.text_primary,
+        );
+        let bar = egui::Rect::from_min_size(
+            egui::pos2(label_x, rect.top() + 30.0),
+            egui::vec2((right - label_x).max(0.0), BAR),
+        );
+        utilisation_bar(ui, bar, fraction);
+    }
+    let location = Location::new(
+        vfs_local::PROVIDER_ID,
+        platform::paths::from_path(&volume.mount_point),
+    );
+    let id = egui::Id::new(("side-volume", &volume.mount_point));
+    state.row(id, Some(location.clone()));
+    // The ring follows the card's corners.
+    if state.focused && state.focus == Some(id) {
+        ui.painter().rect_stroke(
+            rect,
+            CARD_RADIUS,
+            scheme.focus_ring(),
+            egui::StrokeKind::Inside,
+        );
+    }
+    let spoken = format!("{} · {percent_text}", volume.name);
+    response
+        .widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, spoken.clone()));
+    if response.clicked() {
+        state.take_focus(id);
+        let new_tab = ui.input(|i| i.modifiers.command);
+        open(requests, pane, location.clone(), new_tab);
+    }
+    if response.middle_clicked() {
+        state.take_focus(id);
+        open(requests, pane, location.clone(), true);
+    }
+    if response.secondary_clicked() {
+        state.take_focus(id);
+    }
+    let mount_point = volume.mount_point.clone();
+    let removable = volume.is_removable();
+    response
+        .on_hover_text(volume_hint(volume))
+        .context_menu(|ui| {
+            if ui.button(t!("open-in-new-tab")).clicked() {
+                open(requests, pane, location.clone(), true);
+                ui.close();
+            }
+            if removable && ui.button(format!("{} Eject", icons::EJECT)).clicked() {
+                requests.push(Request::Command(Command::Eject(mount_point.clone())));
+                ui.close();
+            }
+        });
+}
+
+/// The hover text of a drive: mount point, file system, free of total.
+fn volume_hint(volume: &Volume) -> String {
+    format!(
+        "{}\n{} · {} free of {}",
+        volume.mount_point.display(),
+        volume.fs_type,
+        format::size(volume.free),
+        format::size(volume.total)
+    )
+}
+
+/// A mounted network file system under Network: a row with the network
+/// icon, the share's name and its utilisation percentage at the right.
+fn network_volume_row(
     ui: &mut egui::Ui,
     state: &mut SidePanelState,
     requests: &mut Vec<Request>,
@@ -1150,12 +1615,16 @@ fn volume_row(
         platform::paths::from_path(&volume.mount_point),
     );
     let id = egui::Id::new(("side-volume", &volume.mount_point));
-    let mut button = egui::Button::new(format!("{} {}", volume_icon(volume.kind), volume.name))
-        .frame(false)
-        .truncate();
-    if volume.total.is_some() {
-        button = button.right_text(egui::RichText::new(percent(volume)).weak());
-    }
+    let right = if volume.total.is_some() {
+        Right::Text(percent(volume))
+    } else {
+        Right::Nothing
+    };
+    let content = RowContent {
+        glyph: volume_icon(volume.kind),
+        label: &volume.name,
+        right,
+    };
     let mount_point = volume.mount_point.clone();
     let removable = volume.is_removable();
     let mut extra = |ui: &mut egui::Ui, requests: &mut Vec<Request>| {
@@ -1164,28 +1633,24 @@ fn volume_row(
             ui.close();
         }
     };
-    let response = location_row(ui, state, requests, pane, id, button, &location, &mut extra)
-        .on_hover_text(format!(
-            "{}\n{} · {} free of {}",
-            volume.mount_point.display(),
-            volume.fs_type,
-            crate::format::size(volume.free),
-            crate::format::size(volume.total)
-        ));
-    if let Some(fraction) = volume.utilisation() {
-        let width = response.rect.width() - 2.0 * ui.spacing().button_padding.x;
-        let (rect, _) = ui.allocate_exact_size(
-            egui::vec2(width.max(20.0), BAR_HEIGHT),
-            egui::Sense::hover(),
-        );
-        utilisation_bar(ui, rect, fraction);
-    }
+    location_row(
+        ui,
+        state,
+        requests,
+        pane,
+        id,
+        &content,
+        egui::Sense::click(),
+        &location,
+        &mut extra,
+    )
+    .on_hover_text(volume_hint(volume));
 }
 
-/// The *Add…* row of an empty section: how connections and accounts are
-/// created. With one provider plugin of the section it opens that
-/// plugin's *Add connection…* dialogue, with several it offers one entry
-/// per plugin, and without any it says what would create them.
+/// The *Add…* row of an empty section (`PLUS_CIRCLE`): how connections and
+/// accounts are created. With one provider plugin of the section it opens
+/// that plugin's *Add connection…* dialogue, with several it offers one
+/// entry per plugin, and without any it says what would create them.
 fn add_row(
     ui: &mut egui::Ui,
     app: &App,
@@ -1196,17 +1661,18 @@ fn add_row(
     let id = egui::Id::new(("side-add", section.name()));
     let connectors = connectors_of(app, section);
     let label = if connectors.len() == 1 {
-        format!("{} Add connection…", icons::ADD)
+        t!("panel-add-connection")
     } else {
-        format!("{} Add…", icons::ADD)
+        t!("panel-add")
     };
-    let response = ui.add(
-        egui::Button::new(egui::RichText::new(label).weak())
-            .frame(false)
-            .min_size(egui::vec2(ui.available_width(), 0.0)),
-    );
+    let content = RowContent {
+        glyph: icons::ADD,
+        label: &label,
+        right: Right::Nothing,
+    };
+    let response = row_widget(ui, &content, egui::Sense::click());
     state.row(id, None);
-    focus_ring(ui, state, id, response.rect);
+    focus_ring(ui, state, id, inset(response.rect));
     if connectors.len() > 1 {
         egui::Popup::menu(&response).show(|ui| add_connection_items(ui, requests, &connectors));
     }

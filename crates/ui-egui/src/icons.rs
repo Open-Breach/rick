@@ -99,6 +99,8 @@ pub const FAILED: &str = ph::WARNING;
 pub const TREE_CLOSED: &str = ph::CARET_RIGHT;
 /// An expanded tree node.
 pub const TREE_OPEN: &str = ph::CARET_DOWN;
+/// The operations drawer's caret while it is collapsed.
+pub const CARET_UP: &str = ph::CARET_UP;
 /// An open folder, for the expanded folder tree node.
 pub const FOLDER_OPEN: &str = ph::FOLDER_OPEN;
 /// Pause a job.
@@ -382,6 +384,7 @@ mod tests {
         FAILED,
         TREE_CLOSED,
         TREE_OPEN,
+        CARET_UP,
         FOLDER_OPEN,
         PAUSE,
         PLAY,
