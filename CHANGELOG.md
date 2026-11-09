@@ -325,6 +325,14 @@ the pull request that brought the change.
   either drag, whatever the cursor passes over. A screen reader is told
   what is being dragged. The numbers — scale, opacity, offset — are
   constants of `ui_egui::drag` (#125).
+- Reordering workspace tabs by drag, Chrome-style (issue 80, rule 1;
+  SPEC.md *Workspace tabs*, Dragging a tab). The tabs a dragged tab passes
+  slide, over 150 ms and eased out, to open the gap where it will land,
+  and close it again when the tab leaves the row; let go, the tab settles
+  into the gap. Nothing marks the place but the gap: there is no
+  insertion line. Under the system's reduce-motion setting the tabs take
+  their places at once. The slide's duration is `ui_egui::drag::TAB_SLIDE`
+  (#129).
 
 ### Removed
 
@@ -335,6 +343,11 @@ the pull request that brought the change.
 
 ### Fixed
 
+- A workspace tab can be dragged to the last place of its row: the row
+  never opened its gap after the last of the other tabs, so the first of
+  two tabs could not be dragged past the second at all, and a tab pulled
+  to the end of a longer row landed one place short (issue 80, rule 1)
+  (#129).
 - The pane toolbar sits on the pane's `bg/pane`, the active workspace
   tab's colour, so the tab reads as attached to its pane and only the
   column header band is tinted; egui's panel frame had painted it
