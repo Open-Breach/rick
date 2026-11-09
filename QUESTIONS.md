@@ -2685,3 +2685,16 @@ Once answered, an entry keeps its number and gains a dated decision line.
     send, which keep the watcher from dropping events, stay as they are.
     Found through a stack sample of the hung test process on a throwaway
     branch (`ci/macos-hang`, which this session could not delete).
+
+223. (0.2.0 release, 2026-11-09) The close-out's order has the 0.3 kickoff
+    (workspace version 0.3.0-dev on dev) after the release is published;
+    the tag could not be pushed from the session that ran the close-out,
+    the kickoff was merged while the tag's release workflow still ran, and
+    that workflow then failed on three platforms, so the fixes must reach
+    main through dev while release.yml requires main's workspace version
+    to be the tag's.
+    Assumed: the kickoff is reverted on dev together with the release
+    fixes, the batch dev → main carries 0.2.0 again, the tag is deleted
+    and made anew on the new merge commit, and the kickoff is reapplied
+    once the release is out. The revert and the reapplication are plain
+    commits; nothing is rewritten.

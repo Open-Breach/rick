@@ -28,10 +28,14 @@ mkdir -p "$out"
 
 verify() {
   local file="$1" expected="$2" actual
+  # The file comes in on standard input: given a name with a backslash
+  # (a Windows path under Git Bash), coreutils' sha256sum prefixes the
+  # hash with a backslash to mark the escaped name, and the comparison
+  # fails on the release runner (release.yml run 42546356745).
   if command -v sha256sum > /dev/null; then
-    actual="$(sha256sum "$file" | cut -d' ' -f1)"
+    actual="$(sha256sum < "$file" | cut -d' ' -f1)"
   else
-    actual="$(shasum -a 256 "$file" | cut -d' ' -f1)"
+    actual="$(shasum -a 256 < "$file" | cut -d' ' -f1)"
   fi
   if [ "$actual" != "$expected" ]; then
     echo "checksum of $file: $actual, expected $expected" >&2
