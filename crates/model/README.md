@@ -10,12 +10,19 @@ scroll offset, the explorer tab the preview follows, the job table every
 window shares (with a job's *Waiting* state when it queues behind another on
 its volume), the side panel's data (the Places list, the mounted volumes,
 the cloud providers' rows, the trash's count), the name conflicts jobs wait
-on, and the settings snapshot, with the pinned locations, the drag and the
-search settings among them. It turns
+on, the settings snapshot, with the pinned locations, the drag and the
+search settings among them, and the integration items of
+specs/system-integration.md §6: the records of `rick.toml`'s
+`[integration]` table (one per item with its state, the date of the last
+check and what Rick wrote for it, plus the `ask`, startup-check and
+shell-integration switches), the folding of a check's findings into them
+(a set-up item found missing is *drifted*, a declined one is left alone),
+and the rows the dialog and Settings → Integration show. It turns
 itself into the `Session` that `session.toml` and the saved layouts hold, and
 is rebuilt from one. It knows how to apply a listing batch or a filesystem
 change and how to derive the visible, sorted, grouped rows, but it performs
 no I/O and knows nothing about the OS or the UI. It depends on `types`,
-`runtime` (sorting on the compute pool), `platform` (the volume values),
-`ext` and `serde`; `ops`, `app` and the crates above
+`runtime` (sorting on the compute pool), `platform` (the volume values and
+the integration items' types), `ext`, `serde` and `toml` (the date type of
+a record); `ops`, `app` and the crates above
 them may depend on it.
