@@ -2152,14 +2152,9 @@ impl Extension for ConsoleOpener {
     }
 }
 
-/// The console follows the tab and the tab follows the console
-/// (specs/system-integration.md §4): the shell's working directory moves
-/// the explorer tab the console was opened from; the explorer's
-/// navigation types `cd` into the console at the prompt, and nothing
-/// while a job has the terminal or the session cannot tell; a report of
-/// the directory the tab is at already types nothing back.
-#[test]
-fn a_console_follows_its_tab_and_the_tab_follows_the_console() {
+/// A harness with the fake console opened from its explorer tab: the
+/// harness, the console and the pane both are in.
+fn with_fake_console() -> (Harness, Arc<FakeConsole>, model::PaneId) {
     let console = Arc::new(FakeConsole::default());
     let opener: Arc<dyn Extension> = Arc::new(ConsoleOpener {
         manifest: Manifest {
@@ -2177,12 +2172,6 @@ fn a_console_follows_its_tab_and_the_tab_follows_the_console() {
     });
     let mut h = harness_with(vec![opener]);
     h.settle();
-    let root = h
-        .root
-        .path()
-        .canonicalize()
-        .unwrap_or_else(|e| panic!("{e}"));
-    let sub = root.join("sub");
     let pane = h.app.model().focused;
     let ctx = h
         .app
@@ -2200,12 +2189,33 @@ fn a_console_follows_its_tab_and_the_tab_follows_the_console() {
         "{:?}",
         h.events
     );
-    let explorer = |h: &Harness| {
-        h.app.model().active_tab(pane).map_or_else(
-            || panic!("the explorer tab"),
-            |(_, tab)| tab.location.clone(),
-        )
-    };
+    (h, console, pane)
+}
+
+/// The location of the explorer tab in `pane`.
+fn explorer_at(h: &Harness, pane: model::PaneId) -> Location {
+    h.app.model().active_tab(pane).map_or_else(
+        || panic!("the explorer tab"),
+        |(_, tab)| tab.location.clone(),
+    )
+}
+
+/// The console follows the tab and the tab follows the console
+/// (specs/system-integration.md §4): the shell's working directory moves
+/// the explorer tab the console was opened from; the explorer's
+/// navigation types `cd` into the console at the prompt, and nothing
+/// while a job has the terminal or the session cannot tell; a report of
+/// the directory the tab is at already types nothing back.
+#[test]
+fn a_console_follows_its_tab_and_the_tab_follows_the_console() {
+    let (mut h, console, pane) = with_fake_console();
+    let root = h
+        .root
+        .path()
+        .canonicalize()
+        .unwrap_or_else(|e| panic!("{e}"));
+    let sub = root.join("sub");
+    let explorer = |h: &Harness| explorer_at(h, pane);
     assert_eq!(explorer(&h), local(h.root.path()));
 
     // The shell changes directory: the tab follows on the next poll (the
@@ -2264,4 +2274,427 @@ fn a_console_follows_its_tab_and_the_tab_follows_the_console() {
         before,
         "nothing typed while a job runs or the state is unknown"
     );
+}
+
+/// *Shell integration* switched off in Settings → Integration
+/// (specs/system-integration.md §6.1): the console and the tab go their
+/// own ways in both directions, and switching it on again catches up on
+/// nothing — the next move is followed.
+#[test]
+fn shell_integration_switched_off_unties_the_console_and_the_tab() {
+    let (mut h, console, pane) = with_fake_console();
+    let root = h
+        .root
+        .path()
+        .canonicalize()
+        .unwrap_or_else(|e| panic!("{e}"));
+    let sub = root.join("sub");
+    let typed = |console: &FakeConsole| {
+        console
+            .typed
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .len()
+    };
+    h.send(Command::Settings(SettingsChange::ShellIntegration(false)));
+    *console.job.lock().unwrap_or_else(PoisonError::into_inner) = Some(false);
+    h.send(Command::Navigate {
+        pane,
+        to: local(&sub),
+    });
+    h.settle();
+    assert_eq!(typed(&console), 0, "no cd typed with shell integration off");
+    *console.cwd.lock().unwrap_or_else(PoisonError::into_inner) = Some(root.clone());
+    h.app.poll(&mut h.events);
+    h.settle();
+    assert_eq!(explorer_at(&h, pane), local(&sub), "the tab stays put");
+    // Switched on again, nothing is caught up on: the next move follows.
+    h.send(Command::Settings(SettingsChange::ShellIntegration(true)));
+    h.app.poll(&mut h.events);
+    h.settle();
+    assert_eq!(explorer_at(&h, pane), local(&sub));
+    assert_eq!(typed(&console), 0);
+    let elsewhere = root.join("elsewhere");
+    fs::create_dir(&elsewhere).unwrap_or_else(|e| panic!("{e}"));
+    *console.cwd.lock().unwrap_or_else(PoisonError::into_inner) = Some(elsewhere.clone());
+    h.app.poll(&mut h.events);
+    h.settle();
+    assert_eq!(
+        explorer_at(&h, pane),
+        local(&elsewhere),
+        "the tab follows the console again"
+    );
+}
+
+mod integration {
+    //! The integration check and apply (specs/system-integration.md §6.1)
+    //! against a scripted platform: nothing here touches a real system.
+
+    use model::{ItemState, ItemStatus};
+    use platform::FakeIntegration;
+    use platform::integration::{Actual, Call, Check, Desktop, Item, Reason, Scope};
+
+    use super::*;
+    use crate::IntegrationCommand;
+
+    /// A harness on a GNOME desktop with three items: the launcher entry
+    /// missing, the `rick` command set up, the dock favourite missing.
+    fn scripted() -> (Harness, FakeIntegration) {
+        let h = harness();
+        let fake = FakeIntegration::new("Fedora Linux 43 · GNOME", Some(Desktop::Gnome));
+        fake.set(Item::LauncherEntry, Check::missing());
+        fake.set(Item::RickCommand, Check::set_up());
+        fake.set(Item::DockFavourite, Check::missing());
+        h.fake.set_integration(Arc::new(fake.clone()));
+        (h, fake)
+    }
+
+    fn check(h: &mut Harness, startup: bool) {
+        h.send(Command::Integration(IntegrationCommand::Check { startup }));
+        h.settle();
+    }
+
+    fn status(h: &Harness, item: Item) -> Option<ItemStatus> {
+        h.app
+            .model()
+            .integration
+            .get(item)
+            .map(|row| row.status.clone())
+    }
+
+    fn state(h: &Harness, item: Item) -> Option<ItemState> {
+        h.app
+            .model()
+            .settings
+            .integration
+            .record(item)
+            .map(|record| record.state)
+    }
+
+    /// Whether the events hold the check's answer, and what it says about
+    /// asking.
+    fn asked(events: &[Event]) -> Option<bool> {
+        events.iter().find_map(|event| match event {
+            Event::IntegrationChecked { ask } => Some(*ask),
+            _ => None,
+        })
+    }
+
+    #[test]
+    fn the_startup_check_reads_every_item_and_asks_about_the_missing_ones() {
+        let (mut h, fake) = scripted();
+        h.settle();
+        assert!(
+            h.app.model().integration.items.is_empty(),
+            "before the check"
+        );
+        check(&mut h, true);
+        let integration = &h.app.model().integration;
+        assert_eq!(integration.system, "Fedora Linux 43 · GNOME");
+        assert_eq!(integration.desktop, Some(Desktop::Gnome));
+        assert!(integration.checked_at.is_some() && integration.at_startup);
+        assert!(!integration.checking);
+        assert_eq!(status(&h, Item::LauncherEntry), Some(ItemStatus::Missing));
+        assert_eq!(status(&h, Item::RickCommand), Some(ItemStatus::SetUp));
+        assert_eq!(status(&h, Item::DockFavourite), Some(ItemStatus::Missing));
+        assert_eq!(asked(&h.take_events()), Some(true), "something is missing");
+        // The check read and changed nothing.
+        assert_eq!(
+            fake.calls(),
+            [
+                Call::Check(Item::LauncherEntry),
+                Call::Check(Item::RickCommand),
+                Call::Check(Item::DockFavourite)
+            ]
+        );
+        assert_eq!(fake.actual(Item::LauncherEntry), Some(Actual::Missing));
+        // The records are in rick.toml, each with the day of the check.
+        assert_eq!(state(&h, Item::RickCommand), Some(ItemState::SetUp));
+        let text = read_until(h.app.settings_path(), |text| text.contains("rick-command"));
+        assert!(text.contains("[integration.items.rick-command]"), "{text}");
+        assert!(text.contains("state = \"set-up\""), "{text}");
+        assert!(text.contains("state = \"missing\""), "{text}");
+        assert!(text.contains("checked = 20"), "{text}");
+    }
+
+    #[test]
+    fn the_startup_check_can_be_switched_off_and_the_dialog_silenced() {
+        let (mut h, fake) = scripted();
+        h.settle();
+        // *Don't ask again*: the check still runs, the dialog stays shut.
+        h.send(Command::Settings(SettingsChange::IntegrationAsk(false)));
+        check(&mut h, true);
+        assert_eq!(asked(&h.take_events()), Some(false));
+        assert_eq!(status(&h, Item::LauncherEntry), Some(ItemStatus::Missing));
+        // *Check integration at startup* off: no check at startup at all,
+        // while *Check again* still checks.
+        h.send(Command::Settings(
+            SettingsChange::IntegrationCheckAtStartup(false),
+        ));
+        let before = fake.calls().len();
+        check(&mut h, true);
+        assert_eq!(asked(&h.take_events()), None);
+        assert_eq!(fake.calls().len(), before);
+        check(&mut h, false);
+        assert_eq!(
+            asked(&h.take_events()),
+            Some(false),
+            "not the startup check"
+        );
+        assert!(fake.calls().len() > before);
+        assert!(!h.app.model().integration.at_startup);
+    }
+
+    #[test]
+    fn apply_performs_the_rows_on_declines_the_rows_off_and_records_both() {
+        let (mut h, fake) = scripted();
+        h.settle();
+        check(&mut h, true);
+        h.take_events();
+        h.send(Command::Integration(IntegrationCommand::Apply {
+            scope: Scope::User,
+            perform: vec![Item::LauncherEntry],
+            decline: vec![Item::DockFavourite],
+            replace: Vec::new(),
+        }));
+        h.settle();
+        let events = h.take_events();
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e, Event::IntegrationApplied { failed } if failed.is_empty())),
+            "{events:?}"
+        );
+        assert_eq!(status(&h, Item::LauncherEntry), Some(ItemStatus::SetUp));
+        assert_eq!(status(&h, Item::DockFavourite), Some(ItemStatus::Declined));
+        assert_eq!(h.app.model().integration.applying, None);
+        // What the perform wrote is on record, for the undo.
+        let record = h
+            .app
+            .model()
+            .settings
+            .integration
+            .record(Item::LauncherEntry)
+            .cloned()
+            .unwrap_or_else(|| panic!("a record"));
+        assert_eq!(record.state, ItemState::SetUp);
+        assert_eq!(record.files, ["fake/launcher-entry"]);
+        assert_eq!(state(&h, Item::DockFavourite), Some(ItemState::Declined));
+        // The declined row was neither performed nor checked again.
+        let calls = fake.calls();
+        assert!(
+            calls
+                .iter()
+                .any(|c| matches!(c, Call::Perform(Item::LauncherEntry, _)))
+        );
+        assert!(
+            !calls
+                .iter()
+                .any(|c| matches!(c, Call::Perform(Item::DockFavourite, _)))
+        );
+        assert_eq!(
+            calls
+                .iter()
+                .filter(|c| **c == Call::Check(Item::DockFavourite))
+                .count(),
+            1,
+            "only the first check read the dock"
+        );
+        // At the next start nothing is asked: declined counts as done.
+        check(&mut h, true);
+        assert_eq!(asked(&h.take_events()), Some(false));
+        let text = read_until(h.app.settings_path(), |text| text.contains("declined"));
+        assert!(
+            text.contains("[integration.items.dock-favourite]\nstate = \"declined\""),
+            "{text}"
+        );
+    }
+
+    #[test]
+    fn add_sets_a_declined_item_up_and_reset_makes_the_dialog_ask_again() {
+        let (mut h, fake) = scripted();
+        h.settle();
+        check(&mut h, true);
+        h.send(Command::Integration(IntegrationCommand::Apply {
+            scope: Scope::User,
+            perform: Vec::new(),
+            decline: vec![Item::LauncherEntry, Item::DockFavourite],
+            replace: Vec::new(),
+        }));
+        h.settle();
+        assert_eq!(status(&h, Item::LauncherEntry), Some(ItemStatus::Declined));
+        // *Add* in Settings: performed, and set-up from then on.
+        h.send(Command::Integration(IntegrationCommand::Add {
+            item: Item::DockFavourite,
+            replace: false,
+        }));
+        h.settle();
+        assert_eq!(status(&h, Item::DockFavourite), Some(ItemStatus::SetUp));
+        assert_eq!(state(&h, Item::DockFavourite), Some(ItemState::SetUp));
+        assert_eq!(fake.actual(Item::DockFavourite), Some(Actual::SetUp));
+        // *Reset choices*: the declined mark goes, the dialog asks again,
+        // and a *Don't ask again* is taken back with it.
+        h.send(Command::Settings(SettingsChange::IntegrationAsk(false)));
+        h.send(Command::Integration(IntegrationCommand::Reset));
+        h.settle();
+        assert_eq!(status(&h, Item::LauncherEntry), Some(ItemStatus::Missing));
+        assert!(h.app.model().settings.integration.ask);
+        h.take_events();
+        check(&mut h, true);
+        assert_eq!(asked(&h.take_events()), Some(true));
+    }
+
+    #[test]
+    fn an_item_that_was_set_up_and_is_gone_is_drifted_until_restored() {
+        let (mut h, fake) = scripted();
+        h.settle();
+        check(&mut h, true);
+        assert_eq!(status(&h, Item::RickCommand), Some(ItemStatus::SetUp));
+        // Removed behind Rick's back.
+        fake.set(Item::RickCommand, Check::missing());
+        h.take_events();
+        check(&mut h, true);
+        assert_eq!(status(&h, Item::RickCommand), Some(ItemStatus::Drifted));
+        assert_eq!(
+            state(&h, Item::RickCommand),
+            Some(ItemState::SetUp),
+            "the record keeps what was wanted"
+        );
+        assert_eq!(
+            asked(&h.take_events()),
+            Some(true),
+            "drift opens the dialog"
+        );
+        h.send(Command::Integration(IntegrationCommand::Restore {
+            item: Item::RickCommand,
+            replace: false,
+        }));
+        h.settle();
+        assert_eq!(status(&h, Item::RickCommand), Some(ItemStatus::SetUp));
+        // A declined item is not watched for drift, whatever happens to it.
+        h.send(Command::Integration(IntegrationCommand::Apply {
+            scope: Scope::User,
+            perform: Vec::new(),
+            decline: vec![Item::RickCommand],
+            replace: Vec::new(),
+        }));
+        h.settle();
+        fake.set(Item::RickCommand, Check::missing());
+        check(&mut h, true);
+        assert_eq!(status(&h, Item::RickCommand), Some(ItemStatus::Declined));
+    }
+
+    #[test]
+    fn a_row_that_fails_is_reported_and_does_not_stop_the_others() {
+        let (mut h, fake) = scripted();
+        fake.set(
+            Item::ShowInFolder,
+            Check::unsupported(Reason::Program("dbus".to_owned())),
+        );
+        fake.fail(Item::DockFavourite);
+        h.settle();
+        check(&mut h, true);
+        assert_eq!(
+            status(&h, Item::ShowInFolder),
+            Some(ItemStatus::Unsupported(Reason::Program("dbus".to_owned())))
+        );
+        assert_eq!(state(&h, Item::ShowInFolder), Some(ItemState::Unsupported));
+        h.take_events();
+        // Given out of order: performed in the order the rows are listed.
+        h.send(Command::Integration(IntegrationCommand::Apply {
+            scope: Scope::User,
+            perform: vec![Item::DockFavourite, Item::LauncherEntry],
+            decline: Vec::new(),
+            replace: Vec::new(),
+        }));
+        h.settle();
+        let events = h.take_events();
+        assert!(
+            events.iter().any(|e| matches!(
+                e,
+                Event::IntegrationApplied { failed } if failed == &[Item::DockFavourite]
+            )),
+            "{events:?}"
+        );
+        // Best effort: a warning, naming the row.
+        assert!(
+            events.iter().any(|e| matches!(
+                e,
+                Event::Notify { level: Level::Warning, text } if text.contains("Dock favourite")
+            )),
+            "{events:?}"
+        );
+        assert_eq!(status(&h, Item::LauncherEntry), Some(ItemStatus::SetUp));
+        assert_eq!(status(&h, Item::DockFavourite), Some(ItemStatus::Missing));
+        let performed: Vec<Item> = fake
+            .calls()
+            .iter()
+            .filter_map(|call| match call {
+                Call::Perform(item, _) => Some(*item),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(performed, [Item::LauncherEntry, Item::DockFavourite]);
+    }
+
+    #[test]
+    fn a_file_of_another_origin_is_replaced_only_when_the_user_agreed() {
+        let (mut h, fake) = scripted();
+        fake.set(
+            Item::LauncherEntry,
+            Check {
+                foreign: vec![std::path::PathBuf::from("/home/u/rick.desktop")],
+                ..Check::missing()
+            },
+        );
+        h.settle();
+        check(&mut h, true);
+        let row = h.app.model().integration.get(Item::LauncherEntry).cloned();
+        assert_eq!(
+            row.map(|row| row.check.foreign.len()),
+            Some(1),
+            "the row knows what is in its way"
+        );
+        h.take_events();
+        h.send(Command::Integration(IntegrationCommand::Apply {
+            scope: Scope::User,
+            perform: vec![Item::LauncherEntry],
+            decline: Vec::new(),
+            replace: Vec::new(),
+        }));
+        h.settle();
+        assert_eq!(status(&h, Item::LauncherEntry), Some(ItemStatus::Missing));
+        assert!(h.take_events().iter().any(|e| matches!(
+            e,
+            Event::IntegrationApplied { failed } if failed == &[Item::LauncherEntry]
+        )));
+        h.send(Command::Integration(IntegrationCommand::Apply {
+            scope: Scope::User,
+            perform: vec![Item::LauncherEntry],
+            decline: Vec::new(),
+            replace: vec![Item::LauncherEntry],
+        }));
+        h.settle();
+        assert_eq!(status(&h, Item::LauncherEntry), Some(ItemStatus::SetUp));
+        assert!(fake.calls().iter().any(|call| matches!(
+            call,
+            Call::Perform(Item::LauncherEntry, request) if request.replace
+        )));
+    }
+
+    #[test]
+    fn a_platform_without_items_checks_to_an_empty_list_and_never_asks() {
+        // The fake's own integration lists nothing, as Windows and macOS do.
+        let mut h = harness();
+        h.settle();
+        check(&mut h, true);
+        assert_eq!(asked(&h.take_events()), Some(false));
+        let integration = &h.app.model().integration;
+        assert_eq!(integration.items, []);
+        assert!(integration.checked_at.is_some());
+        assert_ne!(
+            integration.system, "",
+            "the status line still names the system"
+        );
+    }
 }

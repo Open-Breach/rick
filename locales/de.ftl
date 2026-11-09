@@ -302,3 +302,12 @@ about-export-header = Lizenzen Dritter von Rick { $version }
 about-export-generated = Beim Bauen aus Cargo.lock mit cargo-about erzeugt.
 
 cli-url-not-local = { $url } nennt keinen Ordner und keine Datei auf diesem Rechner
+
+# Systemintegration (specs/system-integration.md §6, Issue 120).
+integration-item-install-location = Installationsort
+integration-item-launcher-entry = Eintrag im App-Starter
+integration-item-default-file-manager = Standard-Dateimanager
+integration-item-show-in-folder = „Im Ordner anzeigen“ aus anderen Apps
+integration-item-rick-command = Befehl rick
+integration-item-dock-favourite = Dock-Favorit
+integration-failed = { $item } konnte nicht eingerichtet werden: { $error }

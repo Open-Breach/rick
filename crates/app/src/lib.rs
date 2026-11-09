@@ -29,6 +29,14 @@
 //! watch it (an archive) is polled instead: its `stat` every few seconds, a
 //! change of size or time listing it again.
 //!
+//! The integration items (specs/system-integration.md §6) are checked by
+//! [`IntegrationCommand::Check`]: a job off the loop's thread that reads
+//! what the platform finds of every item the user has not declined, folds
+//! it into the records of `rick.toml`'s `[integration]` table and into
+//! [`model::Integration`], and answers [`Event::IntegrationChecked`]. The
+//! dialog's *Apply* and Settings' *Add* and *Restore* perform their rows
+//! through the platform and record what each wrote.
+//!
 //! The session (every window, pane and tab, see [`model::Session`]) is
 //! written to `session.toml` after every change, at most once per second,
 //! and once more by [`App::save_session`] on exit. A start restores it, or
@@ -70,6 +78,7 @@
 mod command;
 mod ext_settings;
 mod external;
+mod integration;
 mod places;
 mod session;
 pub mod settings;
@@ -77,6 +86,7 @@ pub mod settings;
 pub use command::{Command, ConnectionOp, Event, PropertiesInfo, TransferMode};
 pub use ext_settings::ExtSettings;
 pub use external::{External, ExternalReceiver, ExternalSender, external_channel};
+pub use integration::IntegrationCommand;
 /// What the Hash dialogue draws with (the format, the rendering, the
 /// Verify logic), re-exported for the UI.
 pub use ops::hash;
@@ -318,6 +328,27 @@ enum Msg {
     /// A connection of this provider was connected or disconnected: its
     /// rows may read differently.
     ConnectionChanged(ProviderId),
+    /// The integration check answered: the platform's items and what it
+    /// found of each one that is not declined.
+    IntegrationChecked {
+        generation: u64,
+        startup: bool,
+        listed: platform::integration::Items,
+        found: Vec<(platform::integration::Item, platform::integration::Check)>,
+    },
+    /// The integration apply starts on a row.
+    IntegrationProgress {
+        done: usize,
+        total: usize,
+        current: platform::integration::Item,
+    },
+    /// The integration apply ended: each row's receipt, or why it failed.
+    IntegrationApplied {
+        results: Vec<(
+            platform::integration::Item,
+            Result<platform::integration::Receipt, Error>,
+        )>,
+    },
 }
 
 /// How long changes are collected before the decorators run again.
@@ -612,6 +643,8 @@ pub struct App {
     properties_shown: Option<(PaneId, PathBuf)>,
     /// Numbers the index searches, so a superseded one's hits are dropped.
     index_generation: u64,
+    /// The integration check or apply in flight.
+    integration: integration::IntegrationRun,
 }
 
 impl App {
@@ -892,6 +925,7 @@ impl App {
             index_search: None,
             properties_shown: None,
             index_generation: 0,
+            integration: integration::IntegrationRun::default(),
         };
         app.watch_settings();
         if seeded {
@@ -1657,6 +1691,7 @@ impl App {
             }
             Command::DeleteLayout(name) => self.delete_layout(&name, events),
             Command::RenameLayout { from, to } => self.rename_layout(&from, &to, events),
+            Command::Integration(command) => self.integration(command),
         }
         self.sync_panes(events);
         self.sync_preview();
@@ -3815,6 +3850,18 @@ impl App {
             }
             Msg::ConnectionSaved(entry) => self.connection_saved(entry),
             Msg::ConnectionChanged(provider) => self.refresh_rows_of(provider),
+            Msg::IntegrationChecked {
+                generation,
+                startup,
+                listed,
+                found,
+            } => self.integration_checked(generation, startup, listed, &found, events),
+            Msg::IntegrationProgress {
+                done,
+                total,
+                current,
+            } => self.integration_progress(done, total, current),
+            Msg::IntegrationApplied { results } => self.integration_applied(results, events),
             Msg::Invalidate { pane, generation } => {
                 if self
                     .live
@@ -4289,6 +4336,16 @@ impl App {
             };
             let pane = link.pane;
             let cwd = link.console.cwd();
+            if !self.model.settings.integration.shell_integration {
+                // Switched off in Settings → Integration: neither follows
+                // the other, and what happened meanwhile is not caught up
+                // on when it is switched on again.
+                if let Some(link) = self.console_links.get_mut(&tab) {
+                    link.cwd_seen = cwd;
+                    link.location_seen = location;
+                }
+                continue;
+            }
             if cwd != link.cwd_seen {
                 let to = cwd
                     .as_deref()

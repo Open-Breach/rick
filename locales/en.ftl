@@ -400,3 +400,13 @@ about-export-header = Third-party licences of Rick { $version }
 about-export-generated = Generated at build time from Cargo.lock by cargo-about.
 
 cli-url-not-local = { $url } names no folder or file on this computer
+
+# System integration (specs/system-integration.md §6, issue 120): the
+# items by the titles of their rows in Settings → Integration.
+integration-item-install-location = Install location
+integration-item-launcher-entry = App launcher entry
+integration-item-default-file-manager = Default file manager
+integration-item-show-in-folder = “Show in folder” from other apps
+integration-item-rick-command = rick command
+integration-item-dock-favourite = Dock favourite
+integration-failed = { $item } could not be set up: { $error }
