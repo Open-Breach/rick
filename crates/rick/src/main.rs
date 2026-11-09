@@ -3,8 +3,9 @@
 //! Wires the native platform, the local provider, the built-in operations,
 //! the previewers compiled in as features and the plugins found beside the
 //! binary and in the config directory into the `app`, and runs the egui
-//! shell. `rick --version` prints the version and the git hash of the build
-//! and exits; `rick --list-plugins` prints the table the Extensions screen
+//! shell. `rick --version` prints the build's details — the text the About
+//! dialog's *Copy details* copies (specs/about-dialog.md) — and exits;
+//! `rick --list-plugins` prints the table the Extensions screen
 //! shows and exits; every other argument is a folder to open, each in a
 //! tab of its own (`rick <folder>…`, as the desktop entry's `%F` passes the
 //! selected folders; specs/app-icons.md).
@@ -21,9 +22,25 @@ use platform::ConfigDir as _;
 use plugins_native::{Host, Options, PluginStatus};
 use types::Location;
 
-/// The version and the git hash of this build, as `--version` prints them
-/// and the About window shows them.
-pub const VERSION: &str = concat!(env!("CARGO_PKG_VERSION"), " (", env!("RICK_GIT_HASH"), ")");
+/// What this binary knows about its own build, for the About dialog and
+/// `--version`: the values `build.rs` records, the toolchain the plugin
+/// host was built with, the contributors, and the component list of the
+/// release beside the binary (`None` in a build without one).
+fn build(exe: &Path) -> ui_egui::about::Build {
+    ui_egui::about::Build {
+        version: env!("CARGO_PKG_VERSION").to_owned(),
+        commit: env!("RICK_GIT_HASH").to_owned(),
+        target: env!("RICK_TARGET").to_owned(),
+        date: env!("RICK_BUILD_DATE").to_owned(),
+        toolchain: plugins_native::HOST_TOOLCHAIN.to_owned(),
+        contributors: include_str!(env!("RICK_CONTRIBUTORS")),
+        roles: include_str!(env!("RICK_CONTRIBUTOR_ROLES")),
+        plugins_dir: exe
+            .parent()
+            .map(|dir| dir.join(plugins_native::PLUGINS_DIR)),
+        third_party: ui_egui::about::load_third_party(exe),
+    }
+}
 
 /// The extensions compiled in, one per enabled feature.
 // Each push sits behind its feature, which `vec![]` cannot express.
@@ -94,11 +111,10 @@ fn built_ins() -> Vec<Arc<dyn ext::Extension>> {
 fn main() -> anyhow::Result<()> {
     let args: Vec<OsString> = std::env::args_os().skip(1).collect();
     let first = args.first().map(OsString::as_os_str);
-    if first.is_some_and(|arg| arg == "--version" || arg == "-V") {
-        writeln!(std::io::stdout().lock(), "{VERSION}").context("writing the version")?;
-        return Ok(());
-    }
-    let list_plugins = first.is_some_and(|arg| arg == "--list-plugins");
+    // Both print and exit once the plugins are known: the version text
+    // lists them with their status.
+    let version = first.is_some_and(|arg| arg == "--version" || arg == "-V");
+    let list_plugins = version || first.is_some_and(|arg| arg == "--list-plugins");
 
     tracing_subscriber::fmt()
         .with_env_filter(
@@ -151,12 +167,22 @@ fn main() -> anyhow::Result<()> {
         prompts: Some(Arc::clone(&prompts)),
         settings: Some(Arc::clone(&ext_settings) as Arc<dyn ext::SettingsStore>),
     });
+    let rows: Vec<app::Plugin> = host.plugins().iter().map(row).collect();
+    let build = build(&exe);
+    if version {
+        writeln!(
+            std::io::stdout().lock(),
+            "{}",
+            ui_egui::about::details(&build, &rows)
+        )
+        .context("writing the version")?;
+        return Ok(());
+    }
     if list_plugins {
         write!(std::io::stdout().lock(), "{}", table(host.plugins()))
             .context("writing the plugins table")?;
         return Ok(());
     }
-    let rows: Vec<app::Plugin> = host.plugins().iter().map(row).collect();
     let mut extensions = built_ins;
     extensions.extend(host.extensions());
     // The loaded libraries stay mapped for the process lifetime: every
@@ -186,7 +212,7 @@ fn main() -> anyhow::Result<()> {
     if !events.is_empty() {
         tracing::debug!(count = events.len(), "events of the start-up tabs dropped");
     }
-    ui_egui::run("Rick", VERSION, app, ui).context("the window could not be opened")
+    ui_egui::run("Rick", build, app, ui).context("the window could not be opened")
 }
 
 /// The folders of the command line, in order: every argument, made

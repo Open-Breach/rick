@@ -27,6 +27,7 @@ use platform::raw_window_handle::{HasDisplayHandle as _, HasWindowHandle as _};
 use platform::{ControlsSide, WindowRef};
 use types::{EntryId, Location};
 
+use crate::about::{self, AboutDialog};
 use crate::console::ConsoleUi;
 use crate::dnd::{Dnd, DragView, Source, Spring, Target, Zone};
 use crate::dock::DockSync;
@@ -676,10 +677,9 @@ pub struct RickUi {
     settings: settings_ui::SettingsWindow,
     shortcuts: ShortcutsScreen,
     extensions_open: bool,
-    about_open: bool,
-    /// What the About window shows as the version: the binary's version
-    /// and git hash, or this crate's version until the binary says.
-    version: String,
+    /// The About dialog (specs/about-dialog.md), with the binary's build
+    /// details once it says them.
+    about: AboutDialog,
     /// The Preview tab's own state: pinned-panel search, what it drew. One
     /// preview, shown in every window that opens the tab.
     inspector_state: inspector::PaneState,
@@ -890,11 +890,11 @@ pub fn viewport_builder(
 }
 
 impl RickUi {
-    /// The version the About window shows, as the binary reports it
-    /// (`rick --version`).
+    /// The build details the About dialog shows, as the binary knows them
+    /// (`rick --version` prints the same).
     #[must_use]
-    pub fn with_version(mut self, version: impl Into<String>) -> Self {
-        self.version = version.into();
+    pub fn with_build(mut self, build: about::Build) -> Self {
+        self.about.set_build(build);
         self
     }
 
@@ -933,8 +933,7 @@ impl RickUi {
             settings: settings_ui::SettingsWindow::default(),
             shortcuts: ShortcutsScreen::default(),
             extensions_open: false,
-            about_open: false,
-            version: env!("CARGO_PKG_VERSION").to_owned(),
+            about: AboutDialog::default(),
             inspector_state: inspector::PaneState::default(),
             inspector_width,
             properties: properties::PropertiesDialog::default(),
@@ -1093,6 +1092,23 @@ impl RickUi {
     #[must_use]
     pub fn extensions_open(&self) -> bool {
         self.extensions_open
+    }
+
+    /// The About dialog, for the tests.
+    #[must_use]
+    pub fn about(&self) -> &AboutDialog {
+        &self.about
+    }
+
+    /// Opens the About dialog, as the menu's *About Rick* does; for the
+    /// tests.
+    pub fn open_about(&mut self) {
+        self.about.open();
+    }
+
+    /// Replaces the build details the About dialog shows; for the tests.
+    pub fn set_build(&mut self, build: about::Build) {
+        self.about.set_build(build);
     }
 
     /// The question a dialogue is showing, if any.
@@ -1484,6 +1500,7 @@ impl RickUi {
         if self.dialog.is_some()
             || self.name_prompt.is_some()
             || self.shortcuts.rebinding.is_some()
+            || self.about.is_open()
             || !self.app.model().conflicts.is_empty()
             || !self.app.model().questions.is_empty()
         {
@@ -1586,7 +1603,7 @@ impl RickUi {
                     Request::NewTabAt(location) => self.handle(Command::NewTab(location)),
                     Request::FocusPane(pane) => self.handle(Command::FocusPane(pane)),
                     Request::Toast(level, text) => self.toast(level, text),
-                    Request::About => self.about_open = true,
+                    Request::About => self.about.open(),
                     Request::StartDrag {
                         pane,
                         tab,
@@ -3971,7 +3988,7 @@ impl RickUi {
                 &self.app,
                 &mut self.requests,
             );
-            settings_ui::about_window(ctx, &mut self.about_open, &self.version);
+            self.about.show(ctx, &self.app, &mut self.requests);
             self.properties.show(ctx, &mut self.requests);
             self.hash.show(ctx, &self.app, &mut self.requests);
             self.show_texts(ctx);

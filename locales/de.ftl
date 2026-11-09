@@ -257,3 +257,31 @@ settings-milliseconds = { $value } ms
 settings-points = { $value } pt
 settings-group-interface = Oberfläche
 settings-group-colours = Farben
+
+# Der Über-Dialog (specs/about-dialog.md, issue 101).
+about-tagline = ein gottgleicher Dateimanager
+about-copy-details = Details kopieren
+about-whats-new = Was ist neu
+about-whats-new-title = Was ist neu in { $version }
+about-website = Website
+about-source-code = Quelltext
+about-report-an-issue = Problem melden
+about-licence = Lizenz
+about-third-party-licences = Lizenzen Dritter
+about-components = { $count ->
+    [one] { $count } Komponente
+   *[other] { $count } Komponenten
+}
+about-not-available = in diesem Build nicht verfügbar
+about-loaded-plugins = Geladene Plugins
+about-plugins-summary = { $count ->
+    [one] { $count } Plugin
+   *[other] { $count } Plugins
+} · { $third } von Dritten
+about-credits = Mitwirkende
+about-role-serge = Spezifikation, Gestaltung und Leitung
+about-role-claude = Umsetzung mit Claude Code, Mitarbeit an Gestaltung und Spezifikation
+about-built-with = Gebaut mit egui und eframe, wgpu, pdfium, GStreamer und Phosphor-Icons. Zum größten Teil von einem KI-Programmieragenten nach einer von Menschen geschriebenen Spezifikation geschrieben — mit Bedacht verwenden.
+about-copyright = © 2026 Open-Breach contributors
+about-back = Zurück
+about-details-copied = Details kopiert

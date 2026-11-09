@@ -392,12 +392,19 @@ jobs:
           # The kernel dylibs and libstd the binary shares with the plugins.
           ls -1 | grep -Eq '^(lib)?std-' || { echo "no libstd beside the binary"; exit 1; }
           ls -1 | grep -Eq '^(lib)?ext\.' || { echo "no ext library beside the binary"; exit 1; }
-          # The version line: the workspace version (the tag without any
-          # pre-release suffix, a `-dev` workspace keeps its suffix) and the
-          # git hash in brackets.
+          # The version text, the About dialog's details
+          # (specs/about-dialog.md): the first line the name and the
+          # workspace version (the tag without any pre-release suffix, a
+          # `-dev` workspace keeps its suffix), the second the build line
+          # with the short commit, this OS and architecture, the plugin ABI
+          # and the build date; then the toolchain, the OS, and one line
+          # per plugin.
           out="$("./rick$exe" --version)"
-          echo "rick --version: $out"
-          echo "$out" | grep -Eq "^${version%%-*}(-[0-9A-Za-z.]+)? \([0-9a-f]{7,}\)$" || { echo "unexpected version line"; exit 1; }
+          echo "rick --version:"; echo "$out"
+          printf '%s\n' "$out" | sed -n 1p | grep -Eq "^Rick ${version%%-*}(-[0-9A-Za-z.]+)?$" || { echo "unexpected version line"; exit 1; }
+          printf '%s\n' "$out" | sed -n 2p | grep -Eq "^[0-9a-f]{7,} · (Linux|macOS|Windows) [a-z0-9_]+ · plugin ABI [0-9]+ · built [0-9]{4}-[0-9]{2}-[0-9]{2}$" || { echo "unexpected build line"; exit 1; }
+          printf '%s\n' "$out" | sed -n 3p | grep -q "^rustc " || { echo "no toolchain line"; exit 1; }
+          printf '%s\n' "$out" | grep -Eq "^git [0-9][^ ]* loaded$" || { echo "the git plugin is not listed as loaded"; exit 1; }
           # The plugins, bundled and loaded from plugins/<id>/: Git and SVN,
           # the archive and trash providers of issue 20, the previewers of
           # issue 18 and the markup previewer of issue 51, the hex fallback

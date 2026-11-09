@@ -26,6 +26,7 @@
     clippy::cast_possible_wrap
 )]
 
+pub mod about;
 pub mod compare;
 pub mod conflict;
 pub mod console;
@@ -74,14 +75,16 @@ pub use shell::{
     viewport_builder,
 };
 
-/// Opens the first window and runs until the last one closes. `version` is
-/// what the About window shows: the binary's version and git hash.
+/// Opens the first window and runs until the last one closes. `build` is
+/// what the About dialog shows and `rick --version` prints: the binary's
+/// version, commit, target, build date, toolchain, contributors and the
+/// generated component list ([`about::Build`]).
 ///
 /// # Errors
 ///
 /// The error eframe reports when the window or its renderer cannot be set
 /// up.
-pub fn run(title: &str, version: &str, app: App, host: Arc<EguiHost>) -> eframe::Result {
+pub fn run(title: &str, build: about::Build, app: App, host: Arc<EguiHost>) -> eframe::Result {
     // Rick draws its own title row. Where the system keeps its controls
     // (macOS), the title bar goes but the window keeps its buttons; elsewhere
     // the decorations go altogether. The restored session's focused window
@@ -93,14 +96,15 @@ pub fn run(title: &str, version: &str, app: App, host: Arc<EguiHost>) -> eframe:
         ..Default::default()
     };
     let mut app = Some(app);
-    let version = version.to_owned();
+    let mut build = Some(build);
     eframe::run_native(
         title,
         options,
         Box::new(move |cc| {
             let app = app.take().ok_or("the app was already taken")?;
+            let build = build.take().unwrap_or_default();
             Ok(Box::new(
-                RickUi::new(app, host, &cc.egui_ctx).with_version(version),
+                RickUi::new(app, host, &cc.egui_ctx).with_build(build),
             ))
         }),
     )
