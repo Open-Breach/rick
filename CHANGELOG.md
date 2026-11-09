@@ -208,6 +208,15 @@ the pull request that brought the change.
   `rick.toml` is ignored and dropped on the next write (QUESTIONS.md 226)
   (#68).
 
+### Fixed
+
+- The pane toolbar sits on the pane's `bg/pane`, the active workspace
+  tab's colour, so the tab reads as attached to its pane and only the
+  column header band is tinted; egui's panel frame had painted it
+  `bg/window` like the title row. The row keeps `space/toolbar-x` of
+  padding at both ends, as the design has it, in place of the frame's
+  (issue 79 item 1).
+
 ## [0.2.0] - 2026-11-08
 
 The plugin release, on Linux, macOS and Windows: the native plugin host and
