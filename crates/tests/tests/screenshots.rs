@@ -860,6 +860,52 @@ fn screenshots_of_the_footer() {
     }
 }
 
+/// Issue 79 item 5: the path field in edit mode — Mod+L on the focused
+/// pane — in Light and Dark at both densities, for the comparison with
+/// the frame *Toolbar — path editing*.
+#[test]
+#[ignore = "needs a wgpu adapter; CI runs it and uploads the images"]
+fn screenshots_of_the_path_field() {
+    let (_dir, deep) = sample_tree();
+    let mut harness = shell(&deep, egui::vec2(1920.0, 1000.0));
+    let pane = harness.state().app().model().focused;
+    for (theme, density) in [
+        (Theme::Light, Density::Comfortable),
+        (Theme::Light, Density::Compact),
+        (Theme::Dark, Density::Comfortable),
+        (Theme::Dark, Density::Compact),
+    ] {
+        for change in [
+            SettingsChange::Theme(theme),
+            SettingsChange::Density(density),
+        ] {
+            harness
+                .state_mut()
+                .app_mut()
+                .handle(app::Command::Settings(change), &mut Vec::new());
+        }
+        settle(&mut harness);
+        harness.state_mut().queue(Intent::FocusPath, pane);
+        harness.step();
+        harness.step();
+        let theme_name = match theme {
+            Theme::Light => "light",
+            Theme::Dark => "dark",
+            Theme::System => "system",
+        };
+        let density_name = match density {
+            Density::Comfortable => "comfortable",
+            Density::Compact => "compact",
+        };
+        shoot(
+            &mut harness,
+            &format!("path-field-{theme_name}-{density_name}"),
+        );
+        harness.key_press(egui::Key::Escape);
+        harness.step();
+    }
+}
+
 /// Issue 60: the side panel — the Places rows with the Trash pill, the
 /// section headers, the drive cards and the operations drawer with two
 /// running jobs — in Light and Dark at both densities.

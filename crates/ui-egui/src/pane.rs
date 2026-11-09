@@ -641,13 +641,19 @@ fn path_bar(ui: &mut egui::Ui, cx: &mut PaneCx<'_>, rect: egui::Rect) {
     breadcrumb(ui, cx, rect);
 }
 
-/// The breadcrumb as an editable text field.
+/// The breadcrumb as an editable text field: the control height of Back
+/// and Forward, on their line, the breadcrumb's whole width (SPEC.md
+/// *Path bar*; issue 79 item 5).
 fn path_edit(ui: &mut egui::Ui, cx: &mut PaneCx<'_>, rect: egui::Rect) {
+    remember(cx, "middle", rect);
+    let height = button_size(ui);
     let Some(text) = cx.tab_ui.path_edit.as_mut() else {
         return;
     };
     let output = egui::TextEdit::singleline(text)
         .desired_width(rect.width())
+        .min_size(egui::vec2(rect.width(), height))
+        .vertical_align(Align::Center)
         .show(ui);
     if cx.tab_ui.focus_path {
         output.response.request_focus();
