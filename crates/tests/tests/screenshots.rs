@@ -1085,6 +1085,135 @@ fn frames_of_a_tab_dragged_along_the_row() {
     }
 }
 
+/// Issue 80, rules 2 and 3, as frame sequences in Light and Dark at both
+/// densities: the open hand over a tab that holds one pane; the tab
+/// dragged down into the shown workspace, the four side targets on the
+/// pane under the cursor; on the left target, lit, with the preview of the
+/// half; dropped, its pane docked there and the tab gone from the row; and
+/// a tab that holds two panes dragged over the same pane, offered nothing.
+#[test]
+#[ignore = "needs a wgpu adapter; CI runs it and uploads the images"]
+fn frames_of_a_tab_docked_as_a_pane() {
+    use egui_kittest::kittest::Queryable as _;
+    let (_dir, deep) = sample_tree();
+    fs::create_dir_all(deep.join("raw/contact-sheets")).unwrap_or_else(|e| panic!("{e}"));
+    for i in 0..9u32 {
+        fs::write(
+            deep.join(format!("raw/DSC_{:04}.nef", 4310 + i)),
+            vec![0u8; 2048 * (i as usize + 3)],
+        )
+        .unwrap_or_else(|e| panic!("{e}"));
+    }
+    for (theme, density) in [
+        (Theme::Light, Density::Comfortable),
+        (Theme::Light, Density::Compact),
+        (Theme::Dark, Density::Comfortable),
+        (Theme::Dark, Density::Compact),
+    ] {
+        // A window of its own for each: the drop changes the layout.
+        let mut harness = shell_with_hands(&deep, egui::vec2(1360.0, 800.0));
+        let shown_pane = harness.state().app().model().focused;
+        // A tab of one pane, then a tab of two.
+        harness.state_mut().app_mut().handle(
+            app::Command::NewTab(local(&deep.join("raw"))),
+            &mut Vec::new(),
+        );
+        settle(&mut harness);
+        let parent = deep
+            .parent()
+            .unwrap_or_else(|| panic!("parent"))
+            .to_path_buf();
+        harness
+            .state_mut()
+            .app_mut()
+            .handle(app::Command::NewTab(local(&parent)), &mut Vec::new());
+        settle(&mut harness);
+        let pane = harness.state().app().model().focused;
+        harness.state_mut().app_mut().handle(
+            app::Command::Split {
+                pane,
+                dir: model::SplitDir::Right,
+            },
+            &mut Vec::new(),
+        );
+        settle(&mut harness);
+        harness
+            .state_mut()
+            .app_mut()
+            .handle(app::Command::FocusPane(shown_pane), &mut Vec::new());
+        for change in [
+            SettingsChange::Theme(theme),
+            SettingsChange::Density(density),
+        ] {
+            harness
+                .state_mut()
+                .app_mut()
+                .handle(app::Command::Settings(change), &mut Vec::new());
+        }
+        settle(&mut harness);
+        let theme_name = match theme {
+            Theme::Light => "light",
+            Theme::Dark => "dark",
+            Theme::System => "system",
+        };
+        let density_name = match density {
+            Density::Comfortable => "comfortable",
+            Density::Compact => "compact",
+        };
+        let mut frames = Frames::new(format!("issue80-tab-to-pane-{theme_name}-{density_name}"));
+        let row = harness
+            .state()
+            .tab_row()
+            .unwrap_or_else(|| panic!("no tab row"));
+        let tab = |harness: &Harness<'_, RickUi>, title: &str| {
+            harness
+                .query_all_by_label(title)
+                .map(|n| n.rect())
+                .find(|r| row.contains(r.center()))
+                .unwrap_or_else(|| panic!("no tab {title}"))
+                .center()
+        };
+        let pane_rect = harness
+            .state()
+            .pane_rects()
+            .into_iter()
+            .find(|(p, _)| *p == shown_pane)
+            .map_or_else(|| panic!("the shown pane"), |(_, r)| r);
+        let tile = pane_rect.center() + egui::vec2(-ui_egui::DOCK_TILE_PITCH, 0.0);
+        let beside = pane_rect.center() + egui::vec2(150.0, 120.0);
+
+        // The tab of two panes first, while the layout is still one pane:
+        // nothing is offered.
+        let two = tab(&harness, "holiday-2026");
+        glide(&mut harness, two + egui::vec2(0.0, 120.0), two, 4);
+        primary(&mut harness, two, true);
+        glide(&mut harness, two, tile, 12);
+        let nothing = harness
+            .render()
+            .unwrap_or_else(|e| panic!("no renderer for screenshots: {e}"));
+        let away = egui::pos2(pane_rect.center().x, pane_rect.bottom() - 60.0);
+        glide(&mut harness, tile, away, 4);
+        primary(&mut harness, away, false);
+        settle(&mut harness);
+
+        // The tab of one pane.
+        let one = tab(&harness, "raw");
+        glide(&mut harness, away, one, 6);
+        frames.shoot(&mut harness, "open-hand");
+        primary(&mut harness, one, true);
+        glide(&mut harness, one, beside, 12);
+        frames.shoot(&mut harness, "four-targets");
+        glide(&mut harness, beside, tile, 8);
+        frames.shoot(&mut harness, "left-target");
+        primary(&mut harness, tile, false);
+        settle(&mut harness);
+        frames.shoot(&mut harness, "docked");
+        // The frame taken first closes the sequence.
+        frames.frames.push(nothing);
+        frames.sheet();
+    }
+}
+
 /// Issue 60: the file list — the header band and the row states (a
 /// selection with the keyboard cursor in the focused pane, a selection in
 /// the other pane), the empty folder, and the portal burst at three
