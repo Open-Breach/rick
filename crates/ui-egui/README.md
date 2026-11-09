@@ -13,7 +13,7 @@ others as viewports of their own drawn in the same frame: the window frame
 with its shadow and resize grips where the system draws none, the title row
 with the burger menu (New window, the Layouts submenu), the workspace tabs
 (one per workspace, titled after the folder in its focused pane, reordered
-by drag with the neighbours sliding apart for the gap where it will land, the dragged tab its own ghost lifted with a shadow, a tab of one pane docking into the shown layout on the side targets of the pane under it, the tabs spring-loading under a dragged pane, tab or entries, Escape cancelling the drag of a tab or a pane, a tab dragged outside every window opening a new one) and the
+by drag with the neighbours sliding apart for the gap where it will land, the dragged tab its own ghost lifted with a shadow, a tab of one pane docking into the shown layout on the side targets of the pane under it, the tabs spring-loading under a dragged pane, tab or entries, Escape cancelling the drag of a tab or a pane, a tab dragged outside every window opening a new one, a tab or a pane dragged onto another window landing in its tab row or on its dock targets) and the
 search box, the `egui_dock` tree of the shown workspace's split panes, whose
 divider positions it reports back for the session,
 each pane's toolbar (Back and Forward, the parent chip and breadcrumb, the view options menu with the per-type filter, the grab handle that docks the pane on another's dock tiles, the pane's ghost — its own snapshot at a quarter, anchored to the grab point, `drag.rs` — following the cursor), path bar (breadcrumbs per provider: a `rick://` view's
