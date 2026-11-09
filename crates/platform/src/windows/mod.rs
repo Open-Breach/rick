@@ -20,9 +20,8 @@ use types::Error;
 use windows::Win32::Foundation::{CloseHandle, ERROR_SUCCESS, GENERIC_READ, GENERIC_WRITE, HANDLE};
 use windows::Win32::Foundation::{HWND, PROPERTYKEY, RPC_E_CHANGED_MODE};
 use windows::Win32::Storage::FileSystem::{
-    CreateFileW, FILE_FLAGS_AND_ATTRIBUTES, FILE_READ_ONLY_VOLUME, FILE_SHARE_READ,
-    FILE_SHARE_WRITE, GetDiskFreeSpaceExW, GetDriveTypeW, GetLogicalDrives, GetVolumeInformationW,
-    OPEN_EXISTING,
+    CreateFileW, FILE_FLAGS_AND_ATTRIBUTES, FILE_SHARE_READ, FILE_SHARE_WRITE, GetDiskFreeSpaceExW,
+    GetDriveTypeW, GetLogicalDrives, GetVolumeInformationW, OPEN_EXISTING,
 };
 use windows::Win32::System::Com::{
     CLSCTX_ALL, CLSCTX_INPROC_SERVER, COINIT_APARTMENTTHREADED, COINIT_DISABLE_OLE1DDE,
@@ -36,6 +35,7 @@ use windows::Win32::System::Ioctl::{
 };
 use windows::Win32::System::Registry::{HKEY_LOCAL_MACHINE, RRF_RT_REG_SZ, RegGetValueW};
 use windows::Win32::System::SystemInformation::GetWindowsDirectoryW;
+use windows::Win32::System::SystemServices::FILE_READ_ONLY_VOLUME;
 use windows::Win32::UI::Shell::{
     ASSOC_FILTER_RECOMMENDED, BHID_DataObject, BHID_EnumItems, FOF_ALLOWUNDO, FOF_NO_UI,
     FOFX_RECYCLEONDELETE, FOLDERID_Desktop, FOLDERID_Documents, FOLDERID_Downloads, FOLDERID_Music,

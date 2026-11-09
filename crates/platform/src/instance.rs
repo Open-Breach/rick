@@ -574,6 +574,9 @@ mod imp {
         }
     }
 
+    // One signature with the Unix bind, which awaits a probe of a stale
+    // socket; a pipe needs no probe, so nothing is awaited here.
+    #[allow(clippy::unused_async)]
     pub(super) async fn bind(path: &Path) -> io::Result<Listener> {
         // A named pipe dies with its process: there is no stale pipe to
         // remove, and a pipe that exists has an owner.
