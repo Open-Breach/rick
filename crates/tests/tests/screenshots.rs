@@ -3280,3 +3280,250 @@ fn screenshots_of_the_schemes_and_densities() {
         shoot(&mut harness, &format!("scheme-{theme_name}-{density_name}"));
     }
 }
+
+/// [`settle`], and no integration check or apply in flight: the answer of
+/// a job that has ended may still be waiting for the frame that folds it
+/// into the model.
+fn settle_integration(harness: &mut Harness<'_, RickUi>) {
+    let deadline = Instant::now() + Duration::from_secs(30);
+    loop {
+        settle(harness);
+        let integration = &harness.state().app().model().integration;
+        if !integration.checking && integration.applying.is_none() {
+            break;
+        }
+        assert!(Instant::now() < deadline, "the integration did not settle");
+    }
+}
+
+/// Issue 120: the integration dialog as a Rick unpacked from the archive
+/// shows it at its first start on a GNOME desktop — every row on, then
+/// with the dock favourite switched off and a `rick` link of another
+/// origin in the command's way — in Light and Dark.
+#[test]
+#[ignore = "needs a wgpu adapter; CI runs it and uploads the images"]
+fn screenshots_of_the_integration_dialog() {
+    use egui::accesskit::Role;
+    use platform::integration::{Check, Desktop, Item};
+    let (dir, deep) = sample_tree();
+    let fake = Arc::new(Fake::new().unwrap_or_else(|e| panic!("{e}")));
+    let home = fake.home_dir();
+    let integration =
+        platform::FakeIntegration::new("Fedora Linux 43 · GNOME", Some(Desktop::Gnome));
+    integration.set(
+        Item::InstallLocation,
+        Check {
+            place: Some(home.join(".local/opt/rick")),
+            target: Some(home.join("Downloads/rick-0.3.0")),
+            ..Check::missing()
+        },
+    );
+    integration.set(Item::LauncherEntry, Check::missing());
+    integration.set(
+        Item::DefaultFileManager,
+        Check {
+            name: Some("Files".to_owned()),
+            ..Check::missing()
+        },
+    );
+    integration.set(Item::ShowInFolder, Check::missing());
+    integration.set(
+        Item::RickCommand,
+        Check {
+            place: Some(home.join(".local/bin/rick")),
+            ..Check::missing()
+        },
+    );
+    integration.set(Item::DockFavourite, Check::missing());
+    fake.set_integration(Arc::new(integration.clone()));
+    let host = Arc::new(EguiHost::new());
+    // The installer's command makes the install row one Rick can perform.
+    let app = app::App::new(app::Config {
+        platform: fake.clone(),
+        ui: host.clone(),
+        extensions: vec![Arc::new(ext_installer::InstallerExtension::new())],
+        config_dir: Some(fake.config_dir()),
+        start: Some(local(&deep)),
+    });
+    let mut harness = Harness::builder()
+        .with_size(egui::vec2(1280.0, 900.0))
+        .with_pixels_per_point(2.0)
+        .build_eframe(move |cc| RickUi::new(app, host, &cc.egui_ctx));
+    settle_integration(&mut harness);
+    assert!(harness.state().integration_dialog().is_open());
+    let set_theme = |harness: &mut Harness<'_, RickUi>, theme: Theme| {
+        harness.state_mut().app_mut().handle(
+            app::Command::Settings(SettingsChange::Theme(theme)),
+            &mut Vec::new(),
+        );
+        settle_integration(harness);
+        harness.step();
+    };
+    for (theme, name) in [(Theme::Light, "light"), (Theme::Dark, "dark")] {
+        set_theme(&mut harness, theme);
+        shoot(&mut harness, &format!("integration-dialog-{name}"));
+    }
+
+    // A row switched off, and a link of another origin in a row's way.
+    integration.set(
+        Item::RickCommand,
+        Check {
+            place: Some(home.join(".local/bin/rick")),
+            foreign: vec![home.join(".local/bin/rick")],
+            ..Check::missing()
+        },
+    );
+    harness.state_mut().app_mut().handle(
+        app::Command::Integration(app::IntegrationCommand::Check { startup: false }),
+        &mut Vec::new(),
+    );
+    settle_integration(&mut harness);
+    let at = harness
+        .get_by_role_and_label(Role::CheckBox, "Dock favourite")
+        .rect()
+        .center();
+    harness.event(egui::Event::PointerMoved(at));
+    harness.step();
+    for pressed in [true, false] {
+        harness.event(egui::Event::PointerButton {
+            pos: at,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::default(),
+        });
+        harness.step();
+    }
+    harness.event(egui::Event::PointerMoved(egui::pos2(40.0, 880.0)));
+    harness.step();
+    harness.step();
+    for (theme, name) in [(Theme::Light, "light"), (Theme::Dark, "dark")] {
+        set_theme(&mut harness, theme);
+        shoot(&mut harness, &format!("integration-dialog-choices-{name}"));
+    }
+    std::mem::drop(dir);
+}
+
+/// Issue 120: Settings → Integration on a GNOME desktop where Rick is
+/// installed and set up but for the default file manager, which the
+/// system reset, and the dock favourite, which was skipped — the top of
+/// the page and its end, in Light and Dark.
+#[test]
+#[ignore = "needs a wgpu adapter; CI runs it and uploads the images"]
+fn screenshots_of_the_integration_settings() {
+    use egui::accesskit::Role;
+    use platform::integration::{Check, Desktop, Item};
+    let (dir, deep) = sample_tree();
+    let fake = Arc::new(Fake::new().unwrap_or_else(|e| panic!("{e}")));
+    let home = fake.home_dir();
+    let integration =
+        platform::FakeIntegration::new("Fedora Linux 43 · GNOME", Some(Desktop::Gnome));
+    integration.set(
+        Item::InstallLocation,
+        Check {
+            place: Some(home.join(".local/opt/rick/0.3.0")),
+            ..Check::set_up()
+        },
+    );
+    integration.set(
+        Item::LauncherEntry,
+        Check {
+            place: Some(home.join(".local/share")),
+            ..Check::set_up()
+        },
+    );
+    integration.set(
+        Item::DefaultFileManager,
+        Check {
+            name: Some("Files".to_owned()),
+            ..Check::missing()
+        },
+    );
+    integration.set(Item::ShowInFolder, Check::set_up());
+    integration.set(
+        Item::RickCommand,
+        Check {
+            place: Some(home.join(".local/bin/rick")),
+            target: Some(home.join(".local/opt/rick/current/rick")),
+            ..Check::set_up()
+        },
+    );
+    integration.set(Item::DockFavourite, Check::missing());
+    fake.set_integration(Arc::new(integration));
+    // An earlier start's choices, with the dialog silenced so the page is
+    // not under it.
+    let config = fake.config_dir();
+    fs::create_dir_all(&config).unwrap_or_else(|e| panic!("{e}"));
+    fs::write(
+        config.join(app::SETTINGS_FILE),
+        "[integration]\nask = false\n\n\
+         [integration.items.default-file-manager]\nstate = \"set-up\"\nchecked = 2026-11-08\n\n\
+         [integration.items.dock-favourite]\nstate = \"declined\"\nchecked = 2026-11-08\n",
+    )
+    .unwrap_or_else(|e| panic!("{e}"));
+    let host = Arc::new(EguiHost::new());
+    let app = app::App::new(app::Config {
+        platform: fake.clone(),
+        ui: host.clone(),
+        extensions: Vec::new(),
+        config_dir: Some(config),
+        start: Some(local(&deep)),
+    });
+    let mut harness = Harness::builder()
+        .with_size(egui::vec2(1280.0, 800.0))
+        .with_pixels_per_point(2.0)
+        .build_eframe(move |cc| RickUi::new(app, host, &cc.egui_ctx));
+    settle_integration(&mut harness);
+    harness.state_mut().open_settings();
+    for _ in 0..3 {
+        harness.step();
+    }
+    let at = harness
+        .get_by_role_and_label(Role::RadioButton, "Integration")
+        .rect()
+        .center();
+    harness.event(egui::Event::PointerMoved(at));
+    harness.step();
+    for pressed in [true, false] {
+        harness.event(egui::Event::PointerButton {
+            pos: at,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::default(),
+        });
+        harness.step();
+    }
+    harness.event(egui::Event::PointerMoved(egui::pos2(640.0, 20.0)));
+    settle_integration(&mut harness);
+    let set_theme = |harness: &mut Harness<'_, RickUi>, theme: Theme| {
+        harness.state_mut().app_mut().handle(
+            app::Command::Settings(SettingsChange::Theme(theme)),
+            &mut Vec::new(),
+        );
+        settle_integration(harness);
+        harness.step();
+    };
+    for (theme, name) in [(Theme::Light, "light"), (Theme::Dark, "dark")] {
+        set_theme(&mut harness, theme);
+        shoot(&mut harness, &format!("integration-settings-{name}"));
+    }
+    // The end of the page: the switches and Reset choices.
+    let over = harness.get_by_label("Terminal and links").rect().center();
+    harness.event(egui::Event::PointerMoved(over));
+    harness.step();
+    for _ in 0..4 {
+        harness.event(egui::Event::MouseWheel {
+            unit: egui::MouseWheelUnit::Point,
+            delta: egui::vec2(0.0, -400.0),
+            phase: egui::TouchPhase::Move,
+            modifiers: egui::Modifiers::default(),
+        });
+        harness.step();
+    }
+    harness.event(egui::Event::PointerMoved(egui::pos2(640.0, 20.0)));
+    harness.step();
+    for (theme, name) in [(Theme::Light, "light"), (Theme::Dark, "dark")] {
+        set_theme(&mut harness, theme);
+        shoot(&mut harness, &format!("integration-settings-end-{name}"));
+    }
+    std::mem::drop(dir);
+}
