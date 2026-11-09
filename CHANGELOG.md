@@ -340,6 +340,14 @@ the pull request that brought the change.
   (`Command::ColumnWidths`, `Tab::columns` by column id) and come back
   with the session; *Size columns* puts the defaults back (issue 79
   item 9).
+- Path editing as decided for the design refresh (SPEC.md *Path bar*):
+  Mod+L, or a click on the empty part of the breadcrumb bar, swaps the
+  breadcrumbs for a text field in place — `button/size` tall on the Back /
+  Forward line and as wide as the breadcrumb, `bg/control` with a 1 px
+  `accent/focus` ring and `radius/control` corners, the path in 13 px
+  `text/primary` — with the whole path selected on entry, so typing
+  replaces it; Enter navigates, Escape and losing the focus restore the
+  breadcrumbs unchanged (issue 79 item 10).
 
 ## [0.2.0] - 2026-11-08
 
