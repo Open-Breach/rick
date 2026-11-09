@@ -172,7 +172,10 @@ fn a_viewbox_only_document_shows_its_viewbox_and_one_without_any_size_renders_at
     assert_eq!(doc.status()[1], "300 × 150 px");
     let (w, h, data) = pixels(&mut doc, actual(1.0));
     assert_eq!((w, h), (300, 150));
-    assert_eq!((w, h), (DEFAULT_SIZE.0 as u32, DEFAULT_SIZE.1 as u32));
+    assert_eq!(
+        (f64::from(w), f64::from(h)),
+        (f64::from(DEFAULT_SIZE.0), f64::from(DEFAULT_SIZE.1))
+    );
     assert_eq!(at(&data, w, 150, 75), [0x33, 0x66, 0x99, 255]);
 }
 
