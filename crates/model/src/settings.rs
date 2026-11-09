@@ -23,16 +23,16 @@ pub enum Theme {
     Dark,
 }
 
-/// Row density of lists.
+/// The density of the interface: the *Density* token set of SPEC.md's
+/// *Look and feel*, two levels.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum Density {
-    /// Tight rows.
+    /// Tight rows and small controls.
     Compact,
-    /// The default.
+    /// The default; the `normal` of 0.1 and 0.2 reads as this.
     #[default]
-    Normal,
-    /// Roomy rows.
+    #[serde(alias = "normal")]
     Comfortable,
 }
 
@@ -61,10 +61,8 @@ pub struct Settings {
     pub theme: Theme,
     /// UI font size in points.
     pub font_size: u8,
-    /// Row density.
+    /// The density of the interface.
     pub density: Density,
-    /// Accent colour as `#rrggbb`, or the theme's own.
-    pub accent: Option<String>,
     /// The language of the user interface as a tag (`de`), or `None` for
     /// the system's; applied live, English the fallback for a missing key.
     pub language: Option<String>,
@@ -441,8 +439,7 @@ impl Default for Settings {
             sort_dir: SortDir::Ascending,
             theme: Theme::System,
             font_size: 13,
-            density: Density::Normal,
-            accent: None,
+            density: Density::Comfortable,
             shortcuts: BTreeMap::new(),
             session: SessionSettings::default(),
             pinned: Vec::new(),
@@ -476,10 +473,8 @@ pub enum SettingsChange {
     Theme(Theme),
     /// Font size in points.
     FontSize(u8),
-    /// Row density.
+    /// The density of the interface.
     Density(Density),
-    /// Accent colour, `None` for the theme's own.
-    Accent(Option<String>),
     /// The language, `None` for the system's.
     Language(Option<String>),
     /// Rebind an action; `None` restores its default.
@@ -546,7 +541,6 @@ impl Settings {
             SettingsChange::FontSize(v) => self.font_size = v,
             SettingsChange::Density(v) => self.density = v,
             SettingsChange::Language(v) => self.language = v,
-            SettingsChange::Accent(v) => self.accent = v,
             SettingsChange::Shortcut { action, binding } => match binding {
                 Some(binding) => {
                     self.shortcuts.insert(action, binding);
@@ -617,6 +611,23 @@ mod tests {
         assert_eq!(s.archives.on_open, OnOpen::System);
         let text = toml::to_string(&s).unwrap_or_default();
         assert!(text.contains("[archives]\non_open = \"system\""), "{text}");
+    }
+
+    #[test]
+    fn the_old_density_and_accent_keys_still_read() {
+        // 0.1 and 0.2 had three densities and an accent colour (QUESTIONS.md
+        // 225 and 226): `normal` is Comfortable now and `accent` is dropped
+        // on the next write.
+        let s: Settings = toml::from_str("density = \"normal\"\naccent = \"#ff0000\"\n")
+            .unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(s.density, Density::Comfortable);
+        let s: Settings =
+            toml::from_str("density = \"compact\"\n").unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(s.density, Density::Compact);
+        assert_eq!(Settings::default().density, Density::Comfortable);
+        let text = toml::to_string(&s).unwrap_or_else(|e| panic!("{e}"));
+        assert!(!text.contains("accent"), "{text}");
+        assert!(text.contains("density = \"compact\""), "{text}");
     }
 
     #[test]

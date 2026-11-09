@@ -14,7 +14,6 @@ use std::time::Duration;
 
 use app::hash::{self, Format};
 use app::{App, Command};
-use egui::Color32;
 use ext::t;
 use ext::{Algorithm, Hashes, Level};
 use model::JobState;
@@ -42,17 +41,6 @@ impl std::fmt::Debug for HashDialog {
         f.debug_struct("HashDialog")
             .field("open", &self.open.as_ref().map(|o| &o.hashes))
             .finish()
-    }
-}
-
-/// The green of a matching row: egui's visuals name an error and a
-/// warning colour but no success one, so the dialogue picks one that
-/// reads on each theme.
-fn success_color(visuals: &egui::Visuals) -> Color32 {
-    if visuals.dark_mode {
-        Color32::from_rgb(0x5c, 0xd0, 0x6a)
-    } else {
-        Color32::from_rgb(0x1e, 0x8a, 0x32)
     }
 }
 
@@ -292,7 +280,7 @@ fn block(
     asked: &mut Asked,
 ) {
     let width = value_width(ui);
-    let success = success_color(ui.visuals());
+    let success = crate::theme::scheme(ui).status_success;
     let error = ui.visuals().error_fg_color;
     egui::Grid::new(("hash-rows", index))
         .num_columns(4)

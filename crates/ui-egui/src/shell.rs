@@ -428,7 +428,7 @@ pub struct RickUi {
     /// Set while the inline editor commits through the action, so the shell
     /// runs the action instead of starting another edit.
     inline_commit: bool,
-    applied: Option<(Theme, u8, Density, Option<String>)>,
+    applied: Option<(Theme, u8, Density)>,
     now: SystemTime,
     /// Each model window's state.
     windows: BTreeMap<WindowId, WindowUi>,
@@ -456,9 +456,13 @@ const DEFAULT_SIZE: [f32; 2] = [1100.0, 720.0];
 const MIN_SIZE: [f32; 2] = [480.0, 320.0];
 
 /// The tab strip's look: VS Code-like padding, rounded top corners, the
-/// new-tab button right after the last tab, a scroll bar on overflow.
-fn tab_strip_style(egui_style: &egui::Style) -> egui_dock::Style {
+/// new-tab button right after the last tab, a scroll bar on overflow; the
+/// strip on the window's background and the leaf on the pane's.
+fn tab_strip_style(egui_style: &egui::Style, scheme: &crate::theme::Scheme) -> egui_dock::Style {
     let mut style = egui_dock::Style::from_egui(egui_style);
+    style.tab_bar.bg_fill = scheme.bg_window;
+    style.tab.tab_body.bg_fill = scheme.bg_pane;
+    style.tab.tab_body.stroke = egui::Stroke::NONE;
     style.buttons.add_tab_align = egui_dock::TabAddAlign::Left;
     style.tab_bar.height = TITLE_ROW_HEIGHT;
     style.tab_bar.show_scroll_bar_on_overflow = true;
@@ -1022,39 +1026,17 @@ impl RickUi {
 
     fn apply_settings(&mut self, ctx: &egui::Context) {
         let settings = &self.app.model().settings;
-        let key = (
-            settings.theme,
-            settings.font_size,
-            settings.density,
-            settings.accent.clone(),
-        );
-        if self.applied.as_ref() != Some(&key) {
+        let key = (settings.theme, settings.font_size, settings.density);
+        if self.applied != Some(key) {
             ctx.set_theme(match settings.theme {
                 Theme::System => egui::ThemePreference::System,
                 Theme::Light => egui::ThemePreference::Light,
                 Theme::Dark => egui::ThemePreference::Dark,
             });
-            ctx.set_zoom_factor(f32::from(settings.font_size) / 13.0);
-            let accent = settings.accent.as_deref().and_then(settings_ui::parse_hex);
-            let spacing = match settings.density {
-                Density::Compact => 2.0,
-                Density::Normal => 4.0,
-                Density::Comfortable => 8.0,
-            };
-            for theme in [egui::Theme::Light, egui::Theme::Dark] {
-                ctx.style_mut_of(theme, |style| {
-                    let defaults = match theme {
-                        egui::Theme::Light => egui::Visuals::light(),
-                        egui::Theme::Dark => egui::Visuals::dark(),
-                    };
-                    style.visuals.selection = defaults.selection;
-                    if let Some(color) = accent {
-                        style.visuals.selection.bg_fill = color;
-                    }
-                    style.spacing.item_spacing.y = spacing;
-                    style.spacing.button_padding.y = spacing / 2.0 + 1.0;
-                });
-            }
+            ctx.set_zoom_factor(f32::from(settings.font_size) / crate::theme::TEXT_BODY);
+            // The scheme and density tokens on both of egui's themes, so
+            // following the system keeps working.
+            crate::theme::apply(ctx, settings.density);
             self.applied = Some(key);
         }
         if settings.shortcuts != self.keys_from {
@@ -2306,6 +2288,7 @@ impl RickUi {
             return;
         };
         let shown = panel
+            .frame(egui::Frame::side_top_panel(ui.style()).fill(crate::theme::scheme(ui).bg_panel))
             .resizable(true)
             .default_size(f32::from(side.width))
             .size_range(120.0..=600.0)
@@ -3102,7 +3085,7 @@ impl RickUi {
             };
             DockArea::new(&mut w.dock.state)
                 .id(dock_id)
-                .style(tab_strip_style(ui.style()))
+                .style(tab_strip_style(ui.style(), crate::theme::scheme(ui)))
                 .show_add_buttons(true)
                 .show_close_buttons(true)
                 .show_leaf_close_all_buttons(false)

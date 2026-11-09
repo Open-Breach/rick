@@ -24,7 +24,7 @@ use std::collections::{BTreeSet, HashMap};
 use std::path::PathBuf;
 
 use app::{App, Command, TransferMode};
-use egui::{Color32, Id, LayerId, Order, Pos2, Rect, Stroke, Vec2, pos2, vec2};
+use egui::{Id, LayerId, Order, Pos2, Rect, Stroke, Vec2, pos2, vec2};
 use model::{AfterDrag, PaneId, Place, Tab, TabId};
 use platform::WindowRef;
 use types::{Entry, EntryId, EntryKind, Location};
@@ -1056,10 +1056,15 @@ fn paint_ghost(ctx: &egui::Context, drag: &Drag, pos: Pos2) {
     if count > 1 {
         let centre = pos2(rect.right(), rect.top());
         let label = count.to_string();
-        let badge = painter.layout_no_wrap(label, font, Color32::WHITE);
+        let scheme = crate::theme::scheme_of(ctx);
+        let badge = painter.layout_no_wrap(label, font, crate::theme::Scheme::ON_BUTTON);
         let radius = (badge.size().x / 2.0 + 4.0).max(9.0);
-        painter.circle_filled(centre, radius, visuals.selection.bg_fill);
-        painter.galley(centre - badge.size() / 2.0, badge, Color32::WHITE);
+        painter.circle_filled(centre, radius, scheme.accent_button);
+        painter.galley(
+            centre - badge.size() / 2.0,
+            badge,
+            crate::theme::Scheme::ON_BUTTON,
+        );
     }
     if let Some(indicator) = drag.indicator {
         let glyph = painter.layout_no_wrap(

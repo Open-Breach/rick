@@ -768,7 +768,7 @@ fn focus_ring(ui: &egui::Ui, state: &SidePanelState, id: egui::Id, rect: egui::R
         ui.painter().rect_stroke(
             rect.shrink(0.5),
             3.0,
-            egui::Stroke::new(1.0, ui.visuals().selection.stroke.color),
+            crate::theme::scheme(ui).focus_ring(),
             egui::StrokeKind::Inside,
         );
     }
@@ -831,11 +831,8 @@ fn target_of(from: usize, gap: usize) -> usize {
 
 /// Paints the insertion line at `y` across the list.
 fn insertion_line(ui: &egui::Ui, x_range: egui::Rangef, y: f32) {
-    ui.painter().hline(
-        x_range,
-        y,
-        egui::Stroke::new(2.0, ui.visuals().selection.stroke.color),
-    );
+    ui.painter()
+        .hline(x_range, y, crate::theme::scheme(ui).focus_ring());
 }
 
 /// The Places list.
