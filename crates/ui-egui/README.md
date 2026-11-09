@@ -44,7 +44,14 @@ the panel is hidden — (a `bg/card` card with its summary *2 running ·
 block per running job with its icon, title, pause and cancel, a thin bar
 and the bytes or items done of total with throughput and time left; the
 waiting jobs with why they wait; finished jobs as compact rows; rows that
-scroll beyond a cap), the conflict dialogue, the question dialogue an extension asks through, the
+scroll beyond a cap), the dialogue frame in `dialog.rs` (a `dialog/bg`
+modal with 12 px corners and a shadow: the header with an icon, title and
+secondary line, a scrolling body, the footer with the note and the
+buttons; a form's fields in a label-left grid with cards, disclosure
+cards, segmented controls, switches, file pickers and the preview as a
+card of effects — the install dialogue's shape — taken by every form,
+prompt and confirmation an action asks), the shared controls in
+`widgets.rs`, the conflict dialogue, the question dialogue an extension asks through, the
 Properties dialogue (the general rows and, for a local entry, its owner,
 group, mode bits and ACL edited in place, applied to the enclosed entries
 too when asked), the Hash dialogue (a block per selected file with the

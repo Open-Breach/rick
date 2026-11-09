@@ -52,6 +52,16 @@ pub struct Form {
     pub ok: String,
     /// The fields, in display order.
     pub fields: Vec<Field>,
+    /// The header band under the title (SPEC.md *Dialogues*): an icon, a
+    /// mode pill and a secondary line. Without one the title stands alone.
+    pub header: Option<Header>,
+    /// A note at the footer's left, before the buttons: the archive's
+    /// name, a hint.
+    pub note: Option<String>,
+    /// A caps heading over the preview's rows, which are then drawn as a
+    /// card of label and detail rows (*WHAT RICK WILL DO*) rather than as
+    /// a from → to table.
+    pub preview_title: Option<String>,
     /// The live preview, if the form has one: computed again whenever a
     /// value changes; a row with a problem disables the confirming button.
     pub preview: Option<Preview>,
@@ -64,6 +74,9 @@ impl fmt::Debug for Form {
             .field("ok", &self.ok)
             .field("fields", &self.fields)
             .field("preview", &self.preview.is_some())
+            .field("header", &self.header)
+            .field("note", &self.note)
+            .field("preview_title", &self.preview_title)
             .finish()
     }
 }
@@ -77,7 +90,31 @@ impl Form {
             ok: ok.into(),
             fields: Vec::new(),
             preview: None,
+            header: None,
+            note: None,
+            preview_title: None,
         }
+    }
+
+    /// Sets the header band.
+    #[must_use]
+    pub fn header(mut self, header: Header) -> Self {
+        self.header = Some(header);
+        self
+    }
+
+    /// Sets the footer's note.
+    #[must_use]
+    pub fn note(mut self, note: impl Into<String>) -> Self {
+        self.note = Some(note.into());
+        self
+    }
+
+    /// Draws the preview as a titled card of effects.
+    #[must_use]
+    pub fn preview_title(mut self, title: impl Into<String>) -> Self {
+        self.preview_title = Some(title.into());
+        self
     }
 
     /// Adds a field.
@@ -115,6 +152,78 @@ impl Form {
     }
 }
 
+/// The header band of a dialogue: the icon at the left of the title, a
+/// mode pill (*Update*, *Reinstall*) and a secondary line under the title
+/// (*2026.2.3 → 2026.2.4.1*).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Header {
+    /// The icon.
+    pub icon: HeaderIcon,
+    /// The title shown in the header when it is not the form's: an app's
+    /// name over its version change, say.
+    pub title: Option<String>,
+    /// A short pill before the secondary line, if any.
+    pub pill: Option<String>,
+    /// The secondary line, if any.
+    pub subtitle: Option<String>,
+}
+
+impl Header {
+    /// A header with `icon` and nothing else yet.
+    #[must_use]
+    pub fn new(icon: HeaderIcon) -> Self {
+        Self {
+            icon,
+            title: None,
+            pill: None,
+            subtitle: None,
+        }
+    }
+
+    /// Shows `title` in the header instead of the form's title.
+    #[must_use]
+    pub fn title(mut self, title: impl Into<String>) -> Self {
+        self.title = Some(title.into());
+        self
+    }
+
+    /// Sets the pill.
+    #[must_use]
+    pub fn pill(mut self, pill: impl Into<String>) -> Self {
+        self.pill = Some(pill.into());
+        self
+    }
+
+    /// Sets the secondary line.
+    #[must_use]
+    pub fn subtitle(mut self, subtitle: impl Into<String>) -> Self {
+        self.subtitle = Some(subtitle.into());
+        self
+    }
+}
+
+/// A dialogue header's icon.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum HeaderIcon {
+    /// A 16 px glyph of the icon set, by its name in the UI's icon table.
+    Glyph(&'static str),
+    /// A generated monogram: the letter, white on a colour derived from
+    /// `seed`, at 48 px with 12 px corners.
+    Monogram {
+        /// The letter shown.
+        letter: char,
+        /// What the colour is derived from, an app id for instance.
+        seed: String,
+    },
+    /// An image at 48 px with 12 px corners: a PNG or an SVG.
+    Image {
+        /// The file's bytes.
+        bytes: Arc<Vec<u8>>,
+        /// `true` for an SVG, `false` for a PNG.
+        svg: bool,
+    },
+}
+
 /// One field of a form.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Field {
@@ -124,6 +233,112 @@ pub struct Field {
     pub label: String,
     /// What kind of field, with its initial value.
     pub kind: FieldKind,
+    /// The value is set in the monospace font: a path, an id, a hash.
+    pub mono: bool,
+    /// The field must not be empty: while it is, this warning shows under
+    /// it in `status/warning` and the confirming button is disabled.
+    pub required: Option<String>,
+}
+
+impl Field {
+    /// Sets the value in the monospace font.
+    #[must_use]
+    pub fn mono(mut self) -> Self {
+        self.mono = true;
+        self
+    }
+
+    /// Requires a value, with the warning shown while there is none.
+    #[must_use]
+    pub fn required(mut self, warning: impl Into<String>) -> Self {
+        self.required = Some(warning.into());
+        self
+    }
+
+    /// A section of the fields that follow, up to the next section: with a
+    /// title in small capitals over it, and as a `bg/card` card when
+    /// `card`. `key` is unused and the field holds no value.
+    #[must_use]
+    pub fn section(title: Option<String>, card: bool) -> Self {
+        Self::of("", String::new(), FieldKind::Section { title, card })
+    }
+
+    /// A disclosure card: `label` in medium weight with `summary` under it
+    /// while collapsed, the fields up to the next section inside it when
+    /// expanded. Its value is whether it is open.
+    #[must_use]
+    pub fn disclosure(
+        key: &'static str,
+        label: impl Into<String>,
+        summary: impl Into<String>,
+        open: bool,
+    ) -> Self {
+        Self::of(
+            key,
+            label,
+            FieldKind::Disclosure {
+                summary: summary.into(),
+                open,
+                counted: false,
+            },
+        )
+    }
+
+    /// A disclosure that counts the ticked checkboxes inside it in a pill
+    /// (*3 of 7*) and offers *Select all*.
+    #[must_use]
+    pub fn counted(mut self) -> Self {
+        if let FieldKind::Disclosure { counted, .. } = &mut self.kind {
+            *counted = true;
+        }
+        self
+    }
+
+    /// Where the preview's card sits among the fields.
+    #[must_use]
+    pub fn preview_here() -> Self {
+        Self::of("", String::new(), FieldKind::Preview)
+    }
+
+    /// One of a few options as a segmented control.
+    #[must_use]
+    pub fn segmented(
+        key: &'static str,
+        label: impl Into<String>,
+        options: Vec<String>,
+        selected: usize,
+    ) -> Self {
+        Self::of(key, label, FieldKind::Segmented { options, selected })
+    }
+
+    /// A file path, typed or picked with the platform's dialogue, limited
+    /// to `filters`: each a name and its extensions.
+    #[must_use]
+    pub fn file(
+        key: &'static str,
+        label: impl Into<String>,
+        value: impl Into<String>,
+        filters: Vec<(&'static str, &'static [&'static str])>,
+    ) -> Self {
+        Self::of(
+            key,
+            label,
+            FieldKind::File {
+                value: value.into(),
+                filters,
+            },
+        )
+    }
+
+    fn of(key: &'static str, label: impl Into<String>, kind: FieldKind) -> Self {
+        Self {
+            key,
+            label: label.into(),
+            kind,
+            mono: false,
+            required: None,
+        }
+    }
 }
 
 impl Field {
@@ -135,24 +350,20 @@ impl Field {
         value: impl Into<String>,
         hint: impl Into<String>,
     ) -> Self {
-        Self {
+        Self::of(
             key,
-            label: label.into(),
-            kind: FieldKind::Text {
+            label,
+            FieldKind::Text {
                 value: value.into(),
                 hint: hint.into(),
             },
-        }
+        )
     }
 
     /// A checkbox.
     #[must_use]
     pub fn check(key: &'static str, label: impl Into<String>, on: bool) -> Self {
-        Self {
-            key,
-            label: label.into(),
-            kind: FieldKind::Check { on },
-        }
+        Self::of(key, label, FieldKind::Check { on })
     }
 
     /// One of a list.
@@ -163,23 +374,19 @@ impl Field {
         options: Vec<String>,
         selected: usize,
     ) -> Self {
-        Self {
-            key,
-            label: label.into(),
-            kind: FieldKind::Choice { options, selected },
-        }
+        Self::of(key, label, FieldKind::Choice { options, selected })
     }
 
     /// A folder path, typed or picked with the platform's dialogue.
     #[must_use]
     pub fn folder(key: &'static str, label: impl Into<String>, value: impl Into<String>) -> Self {
-        Self {
+        Self::of(
             key,
-            label: label.into(),
-            kind: FieldKind::Folder {
+            label,
+            FieldKind::Folder {
                 value: value.into(),
             },
-        }
+        )
     }
 }
 
@@ -211,6 +418,45 @@ pub enum FieldKind {
         /// The initial path.
         value: String,
     },
+    /// A file path, with a *Choose…* button that opens the platform's file
+    /// dialogue limited to `filters`.
+    File {
+        /// The initial path.
+        value: String,
+        /// The file dialogue's filters: a name and its extensions.
+        filters: Vec<(&'static str, &'static [&'static str])>,
+    },
+    /// A section of the fields that follow (SPEC.md *Dialogues*): a caps
+    /// title over them, a `bg/card` card around them when `card`. Holds no
+    /// value.
+    Section {
+        /// The title in small capitals, if any.
+        title: Option<String>,
+        /// Whether the fields sit in a card with hairlines between rows.
+        card: bool,
+    },
+    /// A disclosure card holding the fields up to the next section: the
+    /// label with `summary` under it while collapsed. Its value is whether
+    /// it is open.
+    Disclosure {
+        /// One line of what the card holds, shown while collapsed.
+        summary: String,
+        /// Whether it opens expanded.
+        open: bool,
+        /// Whether a pill counts the ticked checkboxes inside (*3 of 7*)
+        /// with a *Select all* link.
+        counted: bool,
+    },
+    /// One of a few options as a segmented control.
+    Segmented {
+        /// The options, in display order.
+        options: Vec<String>,
+        /// The index selected at first.
+        selected: usize,
+    },
+    /// Where the preview's card is drawn among the fields; without this
+    /// marker it follows the last field. Holds no value.
+    Preview,
 }
 
 impl FieldKind {
@@ -218,9 +464,15 @@ impl FieldKind {
     #[must_use]
     pub fn default(&self) -> Value {
         match self {
-            Self::Text { value, .. } | Self::Folder { value } => Value::Text(value.clone()),
+            Self::Text { value, .. } | Self::Folder { value } | Self::File { value, .. } => {
+                Value::Text(value.clone())
+            }
             Self::Check { on } => Value::Check(*on),
-            Self::Choice { selected, .. } => Value::Choice(*selected),
+            Self::Choice { selected, .. } | Self::Segmented { selected, .. } => {
+                Value::Choice(*selected)
+            }
+            Self::Section { .. } | Self::Preview => Value::Check(false),
+            Self::Disclosure { open, .. } => Value::Check(*open),
         }
     }
 }

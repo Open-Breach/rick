@@ -790,7 +790,7 @@ fn the_icon_field_is_one_list_of_the_archives_icons() {
         matches!(
             field(&form, "icon"),
             ext::FieldKind::Choice { options, selected: 1 }
-                if *options == ["(none)", "bin/app.svg (scalable)", "bin/app.png (128×128)"]
+                if *options == ["(none)", "bin/app.svg · scalable", "bin/app.png · 128×128"]
         ),
         "{:?}",
         field(&form, "icon")
@@ -834,7 +834,7 @@ fn the_icon_field_is_one_list_of_the_archives_icons() {
         matches!(
             field(&form, "icon"),
             ext::FieldKind::Choice { options, selected: 0 }
-                if *options == ["(none)", "docs/shot.png (32×32)"]
+                if *options == ["(none)", "docs/shot.png · 32×32"]
         ),
         "{:?}",
         field(&form, "icon")
@@ -1688,6 +1688,6 @@ fn the_system_scope_is_unavailable_in_this_version() {
         .find(|f| f.key == "scope")
         .unwrap_or_else(|| panic!("no scope field"));
     assert!(
-        matches!(&scope.kind, ext::FieldKind::Choice { options, selected: 0 } if options[1].contains("unavailable"))
+        matches!(&scope.kind, ext::FieldKind::Segmented { options, selected: 0 } if options[1] == "All users")
     );
 }

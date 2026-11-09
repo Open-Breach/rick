@@ -21,6 +21,11 @@ use crate::record::Kind;
 const ELF_HEAD: u64 = 1 << 20;
 /// How much of a text or icon file is read.
 const TEXT_MAX: u64 = 1 << 20;
+/// An icon file up to this size is kept whole, for the dialogue's header.
+const ICON_MAX: u64 = 256 << 10;
+/// What the scan keeps of an icon file: the raster's size and, for a
+/// small file, its bytes.
+pub(crate) type IconHead = (Option<(u32, u32)>, Option<Arc<Vec<u8>>>);
 
 /// Top-level files that mean a source tree.
 const SOURCE_MARKERS: [&str; 11] = [
@@ -118,6 +123,9 @@ pub struct IconFile {
     pub size: Option<(u32, u32)>,
     /// Its file size.
     pub bytes: u64,
+    /// The file's bytes when it is small enough to show in the dialogue's
+    /// header (see `ICON_MAX`).
+    pub data: Option<Arc<Vec<u8>>>,
 }
 
 impl IconFile {
@@ -238,8 +246,9 @@ pub(crate) struct Heads {
     pub(crate) elves: HashMap<String, Elf>,
     /// The desktop entries' text.
     pub(crate) desktops: HashMap<String, String>,
-    /// The PNG and SVG files, with the raster's size when read.
-    pub(crate) icons: HashMap<String, Option<(u32, u32)>>,
+    /// The PNG and SVG files, with the raster's size when read and the
+    /// bytes of a file small enough to show in the dialogue.
+    pub(crate) icons: HashMap<String, IconHead>,
     /// The shebang scripts, in archive order.
     pub(crate) shebangs: Vec<String>,
 }
@@ -262,9 +271,16 @@ impl Heads {
             return Ok(());
         }
         if is_icon_name(name).is_some() {
-            let mut head = [0u8; 24];
-            let got = read_up_to(reader, &mut head)?;
-            self.icons.insert(item.path.clone(), png_size(&head[..got]));
+            // The whole file when it is small, for the dialogue's header;
+            // the header's 24 bytes otherwise, for the raster's size.
+            let mut bytes = Vec::new();
+            reader
+                .take(ICON_MAX)
+                .read_to_end(&mut bytes)
+                .map_err(crate::error::io_read)?;
+            let size = png_size(&bytes[..bytes.len().min(24)]);
+            let data = (item.size <= ICON_MAX).then(|| Arc::new(bytes));
+            self.icons.insert(item.path.clone(), (size, data));
             return Ok(());
         }
         if is_library_name(name) || item.size < 2 {
@@ -570,11 +586,13 @@ pub fn detect_with(
         .filter_map(|i| {
             let rel = index.relative(&i.path)?;
             let ext = is_icon_name(i.name())?;
+            let (size, data) = heads.icons.get(&i.path).cloned().unwrap_or_default();
             Some(IconFile {
                 rel: rel.to_owned(),
                 ext: ext.to_owned(),
-                size: heads.icons.get(&i.path).copied().flatten(),
+                size,
                 bytes: i.size,
+                data,
             })
         })
         .collect();

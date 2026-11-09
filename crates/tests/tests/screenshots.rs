@@ -1083,6 +1083,158 @@ fn screenshots_of_the_context_menus() {
     }
 }
 
+/// Issue 60: the install dialogue — the JetBrains-shaped archive with its
+/// icon, the effects card and the collapsed Advanced options — in Light
+/// and Dark at both densities, then with Advanced options expanded, and
+/// the archive whose version is missing.
+#[test]
+#[ignore = "needs a wgpu adapter; CI runs it and uploads the images"]
+fn screenshots_of_the_install_dialogue() {
+    use egui_kittest::kittest::Queryable as _;
+    use ext_installer::fixtures::Fixture;
+    let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+    for fixture in [Fixture::JetBrains, Fixture::Tarbomb] {
+        fixture.write(dir.path()).unwrap_or_else(|e| panic!("{e}"));
+    }
+    let fake = Arc::new(Fake::new().unwrap_or_else(|e| panic!("{e}")));
+    let host = Arc::new(EguiHost::new());
+    let app = app::App::new(app::Config {
+        platform: fake.clone(),
+        ui: host.clone(),
+        extensions: vec![Arc::new(ext_installer::InstallerExtension::new())],
+        config_dir: Some(fake.config_dir()),
+        start: Some(local(dir.path())),
+    });
+    let mut harness = Harness::builder()
+        .with_size(egui::vec2(1920.0, 1000.0))
+        .with_pixels_per_point(2.0)
+        .build_eframe(move |cc| RickUi::new(app, host, &cc.egui_ctx));
+    settle(&mut harness);
+    let open = |harness: &mut Harness<'_, RickUi>, archive: &str| {
+        let pane = harness.state().app().model().focused;
+        let id = harness
+            .state()
+            .app()
+            .model()
+            .active_tab(pane)
+            .and_then(|(_, t)| t.rows().find(|e| e.name == archive).map(|e| e.id))
+            .unwrap_or_else(|| panic!("no row {archive}"));
+        harness.state_mut().app_mut().handle(
+            app::Command::Select {
+                pane,
+                change: SelectionChange::Set(vec![id]),
+            },
+            &mut Vec::new(),
+        );
+        settle(harness);
+        harness
+            .state_mut()
+            .queue(Intent::Action(ext::ActionId("installer.install")), pane);
+        step_until(harness, Duration::from_secs(15), |h| {
+            h.query_by_label("Install for").is_some()
+        });
+        harness.event(egui::Event::PointerMoved(egui::pos2(960.0, 30.0)));
+        // The modal grows to its body's share of the screen over a few
+        // frames.
+        for _ in 0..8 {
+            harness.step();
+        }
+    };
+    let close = |harness: &mut Harness<'_, RickUi>| {
+        harness.key_press(egui::Key::Escape);
+        harness.step();
+        harness.step();
+        settle(harness);
+    };
+    for (theme, density) in [
+        (Theme::Light, Density::Comfortable),
+        (Theme::Light, Density::Compact),
+        (Theme::Dark, Density::Comfortable),
+        (Theme::Dark, Density::Compact),
+    ] {
+        for change in [
+            SettingsChange::Theme(theme),
+            SettingsChange::Density(density),
+        ] {
+            harness
+                .state_mut()
+                .app_mut()
+                .handle(app::Command::Settings(change), &mut Vec::new());
+        }
+        settle(&mut harness);
+        let theme_name = match theme {
+            Theme::Light => "light",
+            Theme::Dark => "dark",
+            Theme::System => "system",
+        };
+        let density_name = match density {
+            Density::Comfortable => "comfortable",
+            Density::Compact => "compact",
+        };
+        open(&mut harness, Fixture::JetBrains.file_name());
+        shoot(
+            &mut harness,
+            &format!("install-dialogue-{theme_name}-{density_name}"),
+        );
+        close(&mut harness);
+    }
+    // Light, Comfortable: Advanced options expanded, and the archive
+    // without a version.
+    for change in [
+        SettingsChange::Theme(Theme::Light),
+        SettingsChange::Density(Density::Comfortable),
+    ] {
+        harness
+            .state_mut()
+            .app_mut()
+            .handle(app::Command::Settings(change), &mut Vec::new());
+    }
+    settle(&mut harness);
+    open(&mut harness, Fixture::JetBrains.file_name());
+    // The body scrolls: a touch-phased wheel over it, applied at once,
+    // brings the card into view before the click.
+    let body = harness.get_by_label("Install for").rect().center();
+    harness.event(egui::Event::PointerMoved(body));
+    harness.step();
+    for (phase, delta) in [
+        (egui::TouchPhase::Start, 0.0),
+        (egui::TouchPhase::Move, -4000.0),
+        (egui::TouchPhase::End, 0.0),
+    ] {
+        harness.event(egui::Event::MouseWheel {
+            unit: egui::MouseWheelUnit::Point,
+            delta: egui::vec2(0.0, delta),
+            modifiers: egui::Modifiers::default(),
+            phase,
+        });
+        harness.step();
+    }
+    harness.step();
+    let advanced = harness
+        .get_by_role_and_label(egui::accesskit::Role::CheckBox, "Advanced options")
+        .rect()
+        .center();
+    harness.event(egui::Event::PointerMoved(advanced));
+    harness.step();
+    for pressed in [true, false] {
+        harness.event(egui::Event::PointerButton {
+            pos: advanced,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::default(),
+        });
+        harness.step();
+    }
+    harness.event(egui::Event::PointerMoved(egui::pos2(960.0, 30.0)));
+    harness.step();
+    harness.step();
+    shoot(&mut harness, "install-dialogue-advanced");
+    close(&mut harness);
+    open(&mut harness, Fixture::Tarbomb.file_name());
+    shoot(&mut harness, "install-dialogue-no-version");
+    close(&mut harness);
+}
+
 /// Issue 17: the Preview tab docked below the explorer and torn out into a
 /// window of its own.
 #[test]

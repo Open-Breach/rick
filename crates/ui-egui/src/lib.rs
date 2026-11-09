@@ -30,6 +30,7 @@ pub mod compare;
 pub mod conflict;
 pub mod console;
 pub mod content;
+pub mod dialog;
 pub mod dnd;
 pub mod dock;
 pub mod fonts;
@@ -58,6 +59,7 @@ pub mod side_panel;
 pub mod theme;
 pub mod thumbs;
 pub mod views;
+pub mod widgets;
 
 use std::sync::Arc;
 

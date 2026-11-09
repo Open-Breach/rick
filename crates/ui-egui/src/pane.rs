@@ -13,6 +13,7 @@ use crate::dnd::{self, Spring, Target, Zone};
 use crate::keys::Intent;
 use crate::shell::{PaneCx, PaneDrag, Request};
 use crate::theme::{self, ICON, TEXT_BODY, TEXT_CAPS, TEXT_SECONDARY};
+use crate::widgets::switch;
 use crate::{format, icons, paths, views};
 
 /// The grab handle's width.
@@ -600,29 +601,6 @@ fn check_row(
         );
     }
     response
-}
-
-/// A 32 × 18 switch: `accent/focus` when on, `bg/switch-off` when off,
-/// with a white knob. The row around it takes the clicks.
-fn switch(ui: &mut egui::Ui, on: bool) {
-    let scheme = theme::scheme(ui);
-    let (rect, _) = ui.allocate_exact_size(egui::vec2(32.0, 18.0), egui::Sense::hover());
-    let fill = if on {
-        scheme.accent_focus
-    } else {
-        scheme.bg_switch_off
-    };
-    ui.painter().rect_filled(rect, 9.0, fill);
-    let knob_x = if on {
-        rect.right() - 9.0
-    } else {
-        rect.left() + 9.0
-    };
-    ui.painter().circle_filled(
-        egui::pos2(knob_x, rect.center().y),
-        7.0,
-        theme::Scheme::ON_BUTTON,
-    );
 }
 
 /// The segmented control of the three icon sizes: a `bg/control` track

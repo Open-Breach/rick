@@ -3236,220 +3236,47 @@ impl RickUi {
                 }
             }
         }
-        let mut outcome: Option<bool> = None;
-        let wide = matches!(dialog.ask, Ask::Form(_));
-        let modal = egui::Modal::new(egui::Id::new(t!("shell-ask"))).show(ctx, |ui| {
-            ui.set_width(if wide { 560.0 } else { 360.0 });
-            match &dialog.ask {
-                Ask::Form(form) => {
-                    ui.heading(&form.title);
-                    let mut changed = false;
-                    let mut browse: Option<&'static str> = None;
-                    egui::Grid::new("ask-form")
-                        .num_columns(2)
-                        .spacing([12.0, 6.0])
-                        .show(ui, |ui| {
-                            for (index, field) in form.fields.iter().enumerate() {
-                                ui.label(&field.label);
-                                match &field.kind {
-                                    ext::FieldKind::Text { hint, .. } => {
-                                        let mut text = dialog.values.text(field.key).to_owned();
-                                        let output = egui::TextEdit::singleline(&mut text)
-                                            .hint_text(hint)
-                                            .desired_width(f32::INFINITY)
-                                            .show(ui);
-                                        if dialog.focus && index == 0 {
-                                            output.response.request_focus();
-                                            let end = output.galley.text().len();
-                                            let mut state = output.state;
-                                            state.cursor.set_char_range(Some(
-                                                egui::text::CCursorRange::two(
-                                                    egui::text::CCursor::new(0),
-                                                    egui::text::CCursor::new(end),
-                                                ),
-                                            ));
-                                            state.store(ctx, output.response.id);
-                                        }
-                                        if output.response.changed() {
-                                            dialog.values.set(field.key, ext::Value::Text(text));
-                                            changed = true;
-                                        }
-                                        if output.response.lost_focus()
-                                            && ui.input(|i| i.key_pressed(egui::Key::Enter))
-                                        {
-                                            outcome = Some(true);
-                                        }
-                                    }
-                                    ext::FieldKind::Folder { .. } => {
-                                        ui.horizontal(|ui| {
-                                            let mut text = dialog.values.text(field.key).to_owned();
-                                            let response = ui.add(
-                                                egui::TextEdit::singleline(&mut text)
-                                                    .desired_width(ui.available_width() - 40.0),
-                                            );
-                                            if response.changed() {
-                                                dialog
-                                                    .values
-                                                    .set(field.key, ext::Value::Text(text));
-                                                changed = true;
-                                            }
-                                            if response.lost_focus()
-                                                && ui.input(|i| i.key_pressed(egui::Key::Enter))
-                                            {
-                                                outcome = Some(true);
-                                            }
-                                            if ui
-                                                .button(icons::BROWSE)
-                                                .on_hover_text(t!("shell-browse"))
-                                                .clicked()
-                                            {
-                                                browse = Some(field.key);
-                                            }
-                                        });
-                                    }
-                                    ext::FieldKind::Check { .. } => {
-                                        let mut on = dialog.values.check(field.key);
-                                        if ui.checkbox(&mut on, "").changed() {
-                                            dialog.values.set(field.key, ext::Value::Check(on));
-                                            changed = true;
-                                        }
-                                    }
-                                    ext::FieldKind::Choice { options, .. } => {
-                                        let mut selected = dialog.values.choice(field.key);
-                                        let current = options
-                                            .get(selected)
-                                            .map_or("", String::as_str)
-                                            .to_owned();
-                                        egui::ComboBox::from_id_salt(("ask-choice", field.key))
-                                            .selected_text(current)
-                                            .width(ui.available_width())
-                                            .show_ui(ui, |ui| {
-                                                for (i, option) in options.iter().enumerate() {
-                                                    ui.selectable_value(&mut selected, i, option);
-                                                }
-                                            });
-                                        if selected != dialog.values.choice(field.key) {
-                                            dialog
-                                                .values
-                                                .set(field.key, ext::Value::Choice(selected));
-                                            changed = true;
-                                        }
-                                    }
-                                }
-                                ui.end_row();
-                            }
-                        });
-                    dialog.focus = false;
-                    if changed {
-                        dialog.rows = form.preview_rows(&dialog.values);
-                    }
-                    if let Some(key) = browse
-                        && dialog.browse.is_none()
-                    {
-                        let (tx, rx) = runtime::oneshot::channel();
-                        let title = format!("{} — choose a folder", form.title);
-                        let platform = Arc::clone(&platform);
-                        runtime::handle().spawn(async move {
-                            let _ = tx.send(platform.pick_folder(&title).await);
-                        });
-                        dialog.browse = Some((key, rx));
-                    }
-                    if form.preview.is_some() {
-                        ui.add_space(6.0);
-                        let problems = dialog.rows.iter().filter(|r| r.problem.is_some()).count();
-                        ui.weak(match (dialog.rows.len(), problems) {
-                            (0, _) => "Nothing to preview".to_owned(),
-                            (n, 0) => format!("{n} entries"),
-                            (n, p) => format!("{n} entries, {p} with a problem"),
-                        });
-                        let row_height = ui.text_style_height(&egui::TextStyle::Body) + 4.0;
-                        egui::ScrollArea::vertical()
-                            .max_height(240.0)
-                            .auto_shrink([false, true])
-                            .show_rows(ui, row_height, dialog.rows.len(), |ui, range| {
-                                egui::Grid::new(("ask-preview", range.start))
-                                    .num_columns(3)
-                                    .striped(true)
-                                    .min_col_width(80.0)
-                                    .show(ui, |ui| {
-                                        for row in &dialog.rows[range] {
-                                            ui.label(&row.from);
-                                            ui.label(icons::FORWARD);
-                                            match &row.problem {
-                                                Some(problem) => {
-                                                    ui.colored_label(
-                                                        ui.visuals().error_fg_color,
-                                                        format!("{} — {problem}", row.to),
-                                                    );
-                                                }
-                                                None => {
-                                                    ui.label(&row.to);
-                                                }
-                                            }
-                                            ui.end_row();
-                                        }
-                                    });
-                            });
-                    }
-                }
-                Ask::Prompt { title, .. } => {
-                    ui.heading(title);
-                    let output = egui::TextEdit::singleline(&mut dialog.input)
-                        .desired_width(f32::INFINITY)
-                        .show(ui);
-                    if dialog.focus {
-                        output.response.request_focus();
-                        let end = output.galley.text().len();
-                        let mut state = output.state;
-                        state
-                            .cursor
-                            .set_char_range(Some(egui::text::CCursorRange::two(
-                                egui::text::CCursor::new(0),
-                                egui::text::CCursor::new(end),
-                            )));
-                        state.store(ctx, output.response.id);
-                        dialog.focus = false;
-                    }
-                    if output.response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter))
-                    {
-                        outcome = Some(true);
-                    }
-                }
-                Ask::Confirm { title, text } => {
-                    ui.heading(title);
-                    ui.label(text);
-                    if ui.input(|i| i.key_pressed(egui::Key::Enter)) {
-                        outcome = Some(true);
-                    }
-                }
-            }
-            ui.add_space(8.0);
-            // A form with a problem in its preview cannot be confirmed.
-            let blocked = matches!(&dialog.ask, Ask::Form(form) if form.preview.is_some())
-                && dialog.rows.iter().any(|r| r.problem.is_some());
-            let ok_label = match &dialog.ask {
-                Ask::Form(form) => form.ok.as_str(),
-                _ => "OK",
+        let decided = crate::dialog::show(
+            ctx,
+            egui::Id::new(t!("shell-ask")),
+            &dialog.ask,
+            crate::dialog::State {
+                values: &mut dialog.values,
+                rows: &mut dialog.rows,
+                input: &mut dialog.input,
+                focus: &mut dialog.focus,
+            },
+        );
+        if let Some((key, browse)) = decided.browse
+            && dialog.browse.is_none()
+        {
+            let (tx, rx) = runtime::oneshot::channel();
+            let title = match &dialog.ask {
+                Ask::Form(form) => form.title.clone(),
+                _ => String::new(),
             };
-            ui.horizontal(|ui| {
-                if ui
-                    .add_enabled(!blocked, egui::Button::new(ok_label))
-                    .clicked()
-                {
-                    outcome = Some(true);
-                }
-                if ui.button(t!("cancel")).clicked() {
-                    outcome = Some(false);
-                }
+            let platform = Arc::clone(&platform);
+            runtime::handle().spawn(async move {
+                let picked = match browse {
+                    crate::dialog::Browse::Folder => platform.pick_folder(&title).await,
+                    crate::dialog::Browse::Files(filters) => {
+                        let filters: Vec<platform::DialogFilter> = filters
+                            .into_iter()
+                            .map(|(name, extensions)| platform::DialogFilter { name, extensions })
+                            .collect();
+                        platform
+                            .pick_files(&title, &filters)
+                            .await
+                            .into_iter()
+                            .next()
+                    }
+                };
+                let _ = tx.send(picked);
             });
-            if blocked && outcome == Some(true) {
-                outcome = None;
-            }
-            if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
-                outcome = Some(false);
-            }
-        });
-        if modal.should_close() && outcome.is_none() {
+            dialog.browse = Some((key, rx));
+        }
+        let mut outcome = decided.decided;
+        if decided.dismissed && outcome.is_none() {
             outcome = Some(false);
         }
         let Some(ok) = outcome else {

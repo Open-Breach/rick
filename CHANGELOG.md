@@ -142,6 +142,27 @@ the pull request that brought the change.
   menu: New folder and New file; Paste, Paste as link, Select all; Open
   terminal here, Open in system file manager, Refresh; Folder properties,
   which opens the Properties dialogue of the folder itself (#75).
+- The dialogue frame of the design refresh (issue 60, SPEC.md
+  *Dialogues*, *Install dialogue*): a `dialog/bg` window with 12 px
+  corners and a soft shadow in three bands — a header with an icon, the
+  title and a secondary line, a body that scrolls when the window is too
+  short, a footer under a hairline with a note at the left and *Cancel*
+  before the primary button filled `accent/button` — which the form,
+  prompt and confirmation dialogues now take. Forms gained a header with
+  an icon (a glyph, a generated monogram or a PNG), a pill and a subtitle,
+  a footer note, a titled preview drawn as a card of effects, sections and
+  cards, disclosure cards (counted ones with a *n of m* pill and *Select
+  all*), segmented controls, file fields with *Choose…*, monospace values
+  and required fields whose warning disables the primary. The install
+  dialogue uses them: the archive's icon or a monogram at 48 px with the
+  *Update* or *Reinstall* pill and the version change; Name, App ID and
+  Version; *Install for* as *Just me* / *All users*; the Kind, Main
+  executable and Icon card, the icon rows reading *path · size*; the
+  *WHAT RICK WILL DO* card from the live summary; *Commands to link* for
+  a toolchain; *Advanced options* collapsed with its summary. A missing
+  version warns under its field and holds the primary; an archive without
+  an icon offers *Choose…*. Detection keeps the bytes of icon files up to
+  256 KiB for the header (#76).
 
 ### Removed
 
