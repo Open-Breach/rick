@@ -2997,3 +2997,58 @@ Once answered, an entry keeps its number and gains a dated decision line.
     gives the variant's own pixels), proven by its tests; the hotspot
     toggle shows the `Tag` glyph until the set has a crosshair; both are
     the pane's to change under the design refresh.
+
+258. (issue 101, 2026-11-09) *About dialog*, Generation: "`RICK_CONTRIBUTORS`
+    (newline-separated names) from `crates/rick/build.rs`". A build script
+    hands cargo one `cargo:rustc-env` directive per line, so a value with a
+    newline in it cannot travel through the environment.
+    Assumed: `build.rs` writes the names, one per line, into
+    `OUT_DIR/contributors.txt` and `RICK_CONTRIBUTORS` names that file,
+    which the binary embeds with `include_str!`; `RICK_CONTRIBUTOR_ROLES`
+    names a copy of the repository's `CONTRIBUTORS.md` the same way (empty
+    when there is none), for the roles of the credits card. The release
+    build checks the repository out with its whole history, since a shallow
+    clone's shortlog names one person.
+
+259. (issue 101, 2026-11-09) *About dialog*, Third-party licences page:
+    the bundled runtimes are "listed by hand in `about/bundled.toml` with
+    name, version, …". `release.yml` pins the GStreamer and 7-Zip releases
+    but downloads the latest pdfium build of bblanchon/pdfium-binaries, so
+    pdfium's version in the file can drift from the archive's.
+    Assumed: `bundled.toml` records the pdfium build current when the file
+    was written (chromium/8138, 2026-11-04) and says so in a comment; the
+    fonts are egui's bundled four (Ubuntu Light, Hack, Noto Emoji, the
+    emoji icon font) and Phosphor Icons, with the versions from the font
+    files' name tables. Pinning pdfium in `release.yml`, or reading the
+    version from the downloaded release, would close the gap.
+
+260. (issue 101, 2026-11-09) *About dialog*, Generation: "The bundle puts
+    `third-party.json` beside the binary (macOS: `Contents/Resources/`).
+    The dialog reads it once at startup."
+    Assumed: the release's package step copies the file beside `rick` on
+    Linux and Windows and into `Rick.app/Contents/Resources/` on macOS; the
+    binary looks beside itself first and in `../Resources/` second, so a
+    bundle and a flat directory both work, and `cargo xtask bundle` (a
+    developer's layout) carries no file: a build without it shows "not
+    available in this build", as the spec says for `cargo run`.
+
+261. (issue 101, 2026-11-09) *About dialog*, Generation: "The release
+    workflow fails when the file is missing or when the set of crates in it
+    differs from `Cargo.lock`." `Cargo.lock` holds crates of every platform
+    (wasm, Android), the build and dev dependencies and the workspace's own
+    crates, none of which the release links, so the two sets never match
+    as they are; and cargo-about lists the workspace crates themselves
+    (they do not say `publish = false`, which is what its `private.ignore`
+    reads) plus a few crates of target expressions it cannot evaluate
+    (`windows_x86_64_gnu`, `schannel`).
+    Assumed: `.github/scripts/check-third-party.py` fails the `licenses`
+    job when the file is missing or malformed, when a crate `cargo tree`
+    resolves for any release target with the release build's features is
+    not in it, or when an entry names a crate `Cargo.lock` lacks; the extra
+    entries are reported and allowed (over-attribution harms no one), and
+    the dialog leaves out the entries whose repository is Rick's own. The
+    `copyright` of an entry is the crate's authors from Cargo's metadata,
+    an array of strings, Cargo having no copyright field; the dialog shows
+    the first "Copyright" line of the licence text when there is one.
+    Marking the workspace crates `publish = false` would take them out of
+    the generated file at the source.
