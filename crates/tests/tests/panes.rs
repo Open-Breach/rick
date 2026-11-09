@@ -11,7 +11,7 @@ use std::time::{Duration, Instant};
 
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable as _;
-use model::ViewMode;
+use model::{SettingsChange, Theme, ViewMode};
 use platform::{ConfigDir, Fake};
 use tests::local;
 use ui_egui::{EguiHost, RickUi};
@@ -74,6 +74,30 @@ fn click(harness: &mut Harness<'_, RickUi>, label: &str) {
     harness.get_by_label(label).click();
     harness.step();
     harness.step();
+}
+
+/// The topmost opaque fill painted under `at` in the last frame.
+fn fill_under(harness: &Harness<'_, RickUi>, at: egui::Pos2) -> Option<egui::Color32> {
+    fn walk(shape: &egui::Shape, at: egui::Pos2, found: &mut Option<egui::Color32>) {
+        match shape {
+            egui::Shape::Rect(r) if r.rect.contains(at) && r.fill.a() == 255 => {
+                *found = Some(r.fill);
+            }
+            egui::Shape::Vec(shapes) => {
+                for shape in shapes {
+                    walk(shape, at, found);
+                }
+            }
+            _ => {}
+        }
+    }
+    let mut found = None;
+    for clipped in &harness.output().shapes {
+        if clipped.clip_rect.contains(at) {
+            walk(&clipped.shape, at, &mut found);
+        }
+    }
+    found
 }
 
 /// A folder with two SVG files, a PNG, a TOML file and a subfolder.
@@ -218,4 +242,44 @@ fn the_view_options_menu_switches_views_flips_switches_and_filters_types() {
     settle(&mut harness);
     assert!(tab(&harness).show_hidden);
     assert!(names(&harness).contains(&".hidden".to_owned()));
+}
+
+/// Issue 79 item 1: the toolbar row sits on the pane's `bg/pane`, the
+/// colour of the active workspace tab, so the tab reads as attached to its
+/// pane; only the column header band is tinted.
+#[test]
+fn the_toolbar_shares_the_panes_background_and_only_the_header_band_is_tinted() {
+    let dir = tree();
+    let mut harness = harness(dir.path(), egui::vec2(1200.0, 700.0));
+    harness.state_mut().app_mut().handle(
+        app::Command::Settings(SettingsChange::Theme(Theme::Light)),
+        &mut Vec::new(),
+    );
+    harness.step();
+    harness.step();
+    let model = harness.state().app().model();
+    let pane = model.focused;
+    let (tab_id, _) = model.active_tab(pane).unwrap_or_else(|| panic!("tab"));
+    let row = harness
+        .state()
+        .toolbar_row(tab_id)
+        .unwrap_or_else(|| panic!("no toolbar row"));
+    let band = harness
+        .state()
+        .header_band(tab_id)
+        .unwrap_or_else(|| panic!("no header band"));
+    let scheme = ui_egui::theme::Scheme::LIGHT;
+    // The padding before Back has nothing but the pane under it.
+    let probe = egui::pos2(row.left() + 3.0, row.center().y);
+    assert_eq!(
+        fill_under(&harness, probe),
+        Some(scheme.bg_pane),
+        "the toolbar at {probe:?}"
+    );
+    assert_eq!(
+        fill_under(&harness, band.center()),
+        Some(scheme.bg_subtle),
+        "the header band at {:?}",
+        band.center()
+    );
 }
