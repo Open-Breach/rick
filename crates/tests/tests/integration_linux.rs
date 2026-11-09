@@ -9,6 +9,7 @@
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
@@ -22,23 +23,44 @@ use types::Error;
 
 /// `gsettings` in memory: the keys a test set.
 #[derive(Debug, Default)]
-struct Settings(Mutex<BTreeMap<String, String>>);
+struct Settings {
+    values: Mutex<BTreeMap<String, String>>,
+    /// Whether a write is refused, as on a desktop whose settings are
+    /// locked down.
+    refuse: AtomicBool,
+    /// How many writes were asked for.
+    writes: AtomicUsize,
+}
 
-impl Gsettings for Settings {
-    fn get(&self, schema: &str, key: &str) -> Result<String, Error> {
-        self.0
+impl Settings {
+    fn value(&self, schema: &str, key: &str) -> Option<String> {
+        self.values
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .get(&format!("{schema} {key}"))
             .cloned()
+    }
+
+    fn put(&self, schema: &str, key: &str, value: &str) {
+        self.values
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .insert(format!("{schema} {key}"), value.to_owned());
+    }
+}
+
+impl Gsettings for Settings {
+    fn get(&self, schema: &str, key: &str) -> Result<String, Error> {
+        self.value(schema, key)
             .ok_or(Error::Unsupported("no such key"))
     }
 
     fn set(&self, schema: &str, key: &str, value: &str) -> Result<(), Error> {
-        self.0
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .insert(format!("{schema} {key}"), value.to_owned());
+        self.writes.fetch_add(1, Ordering::SeqCst);
+        if self.refuse.load(Ordering::SeqCst) {
+            return Err(Error::PermissionDenied);
+        }
+        self.put(schema, key, value);
         Ok(())
     }
 }
@@ -51,6 +73,7 @@ struct Scratch {
     dir: tempfile::TempDir,
     fake: Arc<Fake>,
     env: LinuxEnv,
+    settings: Arc<Settings>,
 }
 
 impl Scratch {
@@ -76,11 +99,16 @@ impl Scratch {
             b"[Desktop Entry]\nName=Rick\n",
         );
         let env = LinuxEnv::under(&home, &unpacked.join("rick"), desktop);
-        Self { dir, fake, env }
+        Self {
+            dir,
+            fake,
+            env,
+            settings: Arc::default(),
+        }
     }
 
     fn integration(&self) -> LinuxIntegration {
-        LinuxIntegration::new(self.env.clone(), Arc::new(Settings::default()))
+        LinuxIntegration::new(self.env.clone(), self.settings.clone())
     }
 
     /// Everything the test could have written to: the scratch folder and
@@ -331,6 +359,132 @@ fn on_a_desktop_outside_the_four_the_dock_row_is_unsupported() {
             .check_integration(Item::LauncherEntry, &Request::default())
             .actual,
         Actual::Missing
+    );
+}
+
+/// On GNOME the dock row is the last of the dialog; *Apply* with every
+/// row on appends Rick to the dash's favourites, after the launcher
+/// entry the favourite names, and the record says where.
+#[test]
+fn on_gnome_apply_pins_rick_to_the_dash() {
+    let scratch = Scratch::new("GNOME");
+    scratch.settings.put(
+        "org.gnome.shell",
+        "favorite-apps",
+        "['org.gnome.Nautilus.desktop', 'firefox.desktop']",
+    );
+    let mut first = Start::new(&scratch);
+    assert_eq!(first.startup_check(), Some(true));
+    assert_eq!(first.asked().last(), Some(&Item::DockFavourite));
+    assert_eq!(first.status(Item::DockFavourite), Some(ItemStatus::Missing));
+    let mut rows = ROWS.to_vec();
+    rows.push(Item::DockFavourite);
+    let events = apply(&mut first, &rows, &[], &[]);
+    assert!(
+        events
+            .iter()
+            .any(|e| matches!(e, Event::IntegrationApplied { failed, .. } if failed.is_empty())),
+        "{events:?}"
+    );
+    assert_eq!(
+        scratch
+            .settings
+            .value("org.gnome.shell", "favorite-apps")
+            .as_deref(),
+        Some("['org.gnome.Nautilus.desktop', 'firefox.desktop', 'rick.desktop']")
+    );
+    assert_eq!(first.status(Item::DockFavourite), Some(ItemStatus::SetUp));
+    let text = first.exit(|text| text.contains("dock-favourite"));
+    assert!(
+        text.contains("[integration.items.dock-favourite]\nstate = \"set-up\""),
+        "{text}"
+    );
+    assert!(text.contains("\"org.gnome.shell favorite-apps\""), "{text}");
+
+    // Started again there is nothing to ask; unpinned by hand, the row
+    // has drifted and *Restore* pins Rick again.
+    let mut second = Start::new(&scratch);
+    assert_eq!(second.startup_check(), Some(false), "no dialog");
+    drop(second);
+    scratch
+        .settings
+        .put("org.gnome.shell", "favorite-apps", "['firefox.desktop']");
+    let mut third = Start::new(&scratch);
+    assert_eq!(third.startup_check(), Some(true));
+    assert_eq!(third.asked(), [Item::DockFavourite]);
+    assert_eq!(third.status(Item::DockFavourite), Some(ItemStatus::Drifted));
+    third.send(IntegrationCommand::Restore {
+        item: Item::DockFavourite,
+        replace: false,
+    });
+    assert_eq!(
+        scratch
+            .settings
+            .value("org.gnome.shell", "favorite-apps")
+            .as_deref(),
+        Some("['firefox.desktop', 'rick.desktop']")
+    );
+}
+
+/// *Best effort*: a dock that cannot be pinned to is reported once, as a
+/// warning, is not tried again, and the other rows are set up all the
+/// same.
+#[test]
+fn a_dock_that_refuses_is_reported_and_blocks_nothing() {
+    let scratch = Scratch::new("GNOME");
+    scratch
+        .settings
+        .put("org.gnome.shell", "favorite-apps", "['firefox.desktop']");
+    scratch.settings.refuse.store(true, Ordering::SeqCst);
+    let mut start = Start::new(&scratch);
+    start.startup_check();
+    let mut rows = ROWS.to_vec();
+    rows.push(Item::DockFavourite);
+    let events = apply(&mut start, &rows, &[], &[]);
+    assert!(
+        events.iter().any(|e| matches!(
+            e,
+            Event::IntegrationApplied { failed, .. } if *failed == [Item::DockFavourite]
+        )),
+        "{events:?}"
+    );
+    let warnings: Vec<&String> = events
+        .iter()
+        .filter_map(|e| match e {
+            Event::Notify {
+                level: Level::Warning,
+                text,
+            } => Some(text),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(warnings.len(), 1, "{events:?}");
+    assert!(
+        !events.iter().any(|e| matches!(
+            e,
+            Event::Notify {
+                level: Level::Error,
+                ..
+            }
+        )),
+        "{events:?}"
+    );
+    for item in ROWS {
+        assert_eq!(start.status(item), Some(ItemStatus::SetUp), "{item:?}");
+    }
+    assert_in_place(&scratch.env.home, &scratch.env.exe);
+    assert_eq!(start.status(Item::DockFavourite), Some(ItemStatus::Missing));
+    assert_eq!(
+        scratch.settings.writes.load(Ordering::SeqCst),
+        1,
+        "tried once"
+    );
+    assert_eq!(
+        scratch
+            .settings
+            .value("org.gnome.shell", "favorite-apps")
+            .as_deref(),
+        Some("['firefox.desktop']")
     );
 }
 

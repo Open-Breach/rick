@@ -381,8 +381,6 @@ impl LinuxIntegration {
 const NO_SYSTEM_SCOPE: &str = "setting Rick up for all users is not available yet";
 /// What the platform answers for the item the installer plugin performs.
 const INSTALLERS: &str = "the install location is set up by the installer plugin";
-/// What the items whose write half has not landed answer.
-const NOT_YET: &str = "this item cannot be set up yet";
 
 impl Integration for LinuxIntegration {
     fn integration_items(&self) -> Items {
@@ -421,7 +419,7 @@ impl Integration for LinuxIntegration {
             Item::DefaultFileManager => mime::perform(env, request),
             Item::RickCommand => command::perform(env, &binary, request),
             Item::ShowInFolder => service::perform(env, &binary, request),
-            Item::DockFavourite => Err(Error::Unsupported(NOT_YET)),
+            Item::DockFavourite => dock::perform(env, &*self.gsettings, request),
         }
     }
 
@@ -433,7 +431,7 @@ impl Integration for LinuxIntegration {
             Item::DefaultFileManager => mime::undo(env, &request.receipt),
             Item::RickCommand => command::undo(env, &request.receipt),
             Item::ShowInFolder => service::undo(env, &request.receipt),
-            Item::DockFavourite => Err(Error::Unsupported(NOT_YET)),
+            Item::DockFavourite => dock::undo(env, &*self.gsettings, &request.receipt),
         }
     }
 }

@@ -4,6 +4,11 @@
 //! Plasma's task manager in `plasma-org.kde.plasma.desktop-appletsrc`,
 //! and the favourites of COSMIC's dock under `~/.config/cosmic`. Every
 //! other desktop is unsupported.
+//!
+//! Setting the favourite up appends Rick to the desktop's list and puts
+//! on record where, with the list as it was; the undo takes Rick out of
+//! the list as it is by then, so favourites the user added or removed
+//! since stay as they are.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -11,8 +16,8 @@ use std::process::{Command, Stdio};
 
 use types::Error;
 
-use super::{APP_ID, DESKTOP_ID, LinuxEnv};
-use crate::integration::{Actual, Check, Desktop, Reason};
+use super::{APP_ID, DESKTOP_ID, LinuxEnv, run_tool, write_file};
+use crate::integration::{Actual, Check, Desktop, Reason, Receipt, Request};
 
 /// The `gsettings` program, as far as the favourites need it. Behind a
 /// trait so no test reads or writes the settings of the machine it runs
@@ -231,11 +236,329 @@ pub(super) fn check(env: &LinuxEnv, gsettings: &dyn Gsettings) -> Check {
     }
 }
 
+/// A string list as `gsettings set` takes it: `['a', 'b']`, and
+/// `@as []` for none, which needs its type said.
+fn gvariant_list(items: &[String]) -> String {
+    if items.is_empty() {
+        return "@as []".to_owned();
+    }
+    let quoted: Vec<String> = items
+        .iter()
+        .map(|item| {
+            let mut out = String::from("'");
+            for c in item.chars() {
+                if matches!(c, '\'' | '\\') {
+                    out.push('\\');
+                }
+                out.push(c);
+            }
+            out.push('\'');
+            out
+        })
+        .collect();
+    format!("[{}]", quoted.join(", "))
+}
+
+/// A string list as COSMIC's configuration writes one: RON, an item a
+/// line, each with its comma.
+fn ron_list(items: &[String]) -> String {
+    if items.is_empty() {
+        return "[]".to_owned();
+    }
+    let mut out = String::from("[\n");
+    for item in items {
+        out.push_str("    \"");
+        for c in item.chars() {
+            if matches!(c, '"' | '\\') {
+                out.push('\\');
+            }
+            out.push(c);
+        }
+        out.push_str("\",\n");
+    }
+    out.push(']');
+    out
+}
+
+/// Rick as a launcher of Plasma's task manager.
+const PLASMA_LAUNCHER: &str = "applications:rick.desktop";
+/// The launchers a Plasma task manager shows while its configuration
+/// names none: the default of the applet's own configuration schema.
+/// Written out before Rick is added, since a list in the file replaces
+/// the default instead of adding to it.
+const PLASMA_DEFAULT: &str = "applications:systemsettings.desktop,applications:org.kde.discover.desktop,preferred://filemanager,preferred://browser";
+
+/// The header of the group a task manager keeps its launchers in.
+fn plasma_general(manager: &str) -> String {
+    format!("{manager}[Configuration][General]")
+}
+
+/// Plasma's panel configuration with the launcher list of the task
+/// manager `manager` set to `value`, or without the key for `None`.
+/// Every other line stays as it is; the group is added at the end when
+/// it is not there, and goes again when its last key does.
+fn plasma_with_launchers(text: &str, manager: &str, value: Option<&str>) -> String {
+    let general = plasma_general(manager);
+    let mut lines: Vec<String> = text.split_inclusive('\n').map(str::to_owned).collect();
+    let mut start = None;
+    let mut end = lines.len();
+    for (index, line) in lines.iter().enumerate() {
+        let line = line.trim();
+        if !line.starts_with('[') {
+            continue;
+        }
+        if start.is_some() {
+            end = index;
+            break;
+        }
+        if line == general {
+            start = Some(index);
+        }
+    }
+    let Some(start) = start else {
+        let Some(value) = value else {
+            return text.to_owned();
+        };
+        let mut out = text.to_owned();
+        if !out.is_empty() && !out.ends_with('\n') {
+            out.push('\n');
+        }
+        if !out.is_empty() {
+            out.push('\n');
+        }
+        out.push_str(&general);
+        out.push_str("\nlaunchers=");
+        out.push_str(value);
+        out.push('\n');
+        return out;
+    };
+    let key = (start + 1..end).find(|index| {
+        lines[*index]
+            .split_once('=')
+            .is_some_and(|(key, _)| key.trim() == "launchers")
+    });
+    match (key, value) {
+        (Some(index), Some(value)) => lines[index] = format!("launchers={value}\n"),
+        (None, Some(value)) => {
+            // After the group's last line that says something.
+            let at = (start + 1..end)
+                .rev()
+                .find(|index| !lines[*index].trim().is_empty())
+                .map_or(start + 1, |index| index + 1);
+            if at > 0 && !lines[at - 1].ends_with('\n') {
+                lines[at - 1].push('\n');
+            }
+            lines.insert(at, format!("launchers={value}\n"));
+        }
+        (Some(index), None) => {
+            lines.remove(index);
+            let end = end - 1;
+            if lines[start + 1..end]
+                .iter()
+                .all(|line| line.trim().is_empty())
+            {
+                // The group says nothing any more: it goes, with the
+                // empty line that set it apart at the end of the file.
+                let mut from = start;
+                if end == lines.len() && from > 0 && lines[from - 1].trim().is_empty() {
+                    from -= 1;
+                }
+                lines.drain(from..end);
+            }
+        }
+        (None, None) => {}
+    }
+    lines.concat()
+}
+
+/// Asks the running Plasma shell to start over from its configuration,
+/// which it otherwise reads at login only. Only with a session bus and
+/// `dbus-send`; a failure is logged.
+fn reload_plasma(env: &LinuxEnv) {
+    let Some(address) = &env.session_bus else {
+        return;
+    };
+    let bus = format!("--bus={address}");
+    run_tool(
+        env,
+        "dbus-send",
+        &[
+            bus.as_ref(),
+            "--dest=org.kde.plasmashell".as_ref(),
+            "--type=method_call".as_ref(),
+            "/PlasmaShell".as_ref(),
+            "org.kde.PlasmaShell.refreshCurrentShell".as_ref(),
+        ],
+    );
+}
+
+/// What a desktop outside the four answers.
+const NO_DOCK: &str = "this desktop has no dock Rick knows how to pin to";
+
+/// Adds Rick to the desktop's favourites and records where, with the
+/// list as it was. Nothing is written when Rick is among them already.
+///
+/// The favourite names the launcher entry, so there is nothing to pin
+/// while that is not installed.
+pub(super) fn perform(
+    env: &LinuxEnv,
+    gsettings: &dyn Gsettings,
+    request: &Request,
+) -> Result<Receipt, Error> {
+    let Some(desktop) = Desktop::from_current_desktop(&env.current_desktop) else {
+        return Err(Error::Unsupported(NO_DOCK));
+    };
+    if !super::mime::entry_installed(env) {
+        return Err(Error::Unsupported(
+            "the dock favourite needs the app launcher entry, which is not set up",
+        ));
+    }
+    let mut receipt = request.receipt.clone();
+    match desktop {
+        Desktop::Gnome | Desktop::Cinnamon => {
+            let Some((schema, key)) = gsettings_key(desktop) else {
+                return Err(Error::Unsupported(NO_DOCK));
+            };
+            let value = gsettings.get(schema, key)?;
+            let mut ids = strings_in(&value);
+            if !ids.iter().any(|id| id == DESKTOP_ID) {
+                ids.push(DESKTOP_ID.to_owned());
+                gsettings.set(schema, key, &gvariant_list(&ids))?;
+                receipt.previous.insert(format!("{schema} {key}"), value);
+            }
+        }
+        Desktop::Plasma => {
+            let file = plasma_file(env);
+            let text = fs::read_to_string(&file).map_err(Error::from_io)?;
+            let managers = plasma_task_managers(&text);
+            if managers
+                .iter()
+                .any(|(_, launchers)| launchers.as_deref().is_some_and(plasma_has_rick))
+            {
+                return Ok(receipt);
+            }
+            let Some((manager, launchers)) = managers.into_iter().next() else {
+                return Err(Error::Unsupported("Plasma's panels have no task manager"));
+            };
+            let list = match launchers.as_deref() {
+                None => format!("{PLASMA_DEFAULT},{PLASMA_LAUNCHER}"),
+                Some("") => PLASMA_LAUNCHER.to_owned(),
+                Some(list) => format!("{list},{PLASMA_LAUNCHER}"),
+            };
+            let out = plasma_with_launchers(&text, &manager, Some(&list));
+            write_file(&file, out.as_bytes())?;
+            receipt.previous.insert(
+                format!("{} {manager}", env.tilde(&file)),
+                launchers.unwrap_or_default(),
+            );
+            reload_plasma(env);
+        }
+        Desktop::Cosmic => {
+            let file = cosmic_file(env);
+            let text = fs::read_to_string(&file).map_err(Error::from_io)?;
+            let mut ids = strings_in(&text);
+            if !ids.iter().any(|id| id == APP_ID) {
+                ids.push(APP_ID.to_owned());
+                let mut out = ron_list(&ids);
+                if text.ends_with('\n') {
+                    out.push('\n');
+                }
+                write_file(&file, out.as_bytes())?;
+                receipt.previous.insert(env.tilde(&file), text);
+            }
+        }
+    }
+    Ok(receipt)
+}
+
+/// Takes Rick out of the favourites the receipt names, wherever the
+/// desktop keeps them, leaving the rest of each list as it is by now. A
+/// list that is no longer there is skipped.
+pub(super) fn undo(
+    env: &LinuxEnv,
+    gsettings: &dyn Gsettings,
+    receipt: &Receipt,
+) -> Result<(), Error> {
+    for desktop in [Desktop::Gnome, Desktop::Cinnamon] {
+        let Some((schema, key)) = gsettings_key(desktop) else {
+            continue;
+        };
+        if !receipt.previous.contains_key(&format!("{schema} {key}")) {
+            continue;
+        }
+        // No gsettings or no such key any more: nothing to take Rick
+        // out of.
+        let Ok(value) = gsettings.get(schema, key) else {
+            continue;
+        };
+        let ids = strings_in(&value);
+        let kept: Vec<String> = ids.iter().filter(|id| *id != DESKTOP_ID).cloned().collect();
+        if kept.len() != ids.len() {
+            gsettings.set(schema, key, &gvariant_list(&kept))?;
+        }
+    }
+
+    let file = plasma_file(env);
+    let prefix = format!("{} ", env.tilde(&file));
+    let managers: Vec<(&str, &str)> = receipt
+        .previous
+        .iter()
+        .filter_map(|(key, previous)| Some((key.strip_prefix(&prefix)?, previous.as_str())))
+        .collect();
+    if !managers.is_empty()
+        && let Ok(text) = fs::read_to_string(&file)
+    {
+        let mut out = text.clone();
+        for (manager, previous) in managers {
+            let Some((_, Some(launchers))) = plasma_task_managers(&out)
+                .into_iter()
+                .find(|(group, _)| group == manager)
+            else {
+                continue;
+            };
+            if !plasma_has_rick(&launchers) {
+                continue;
+            }
+            let kept: Vec<&str> = launchers
+                .split(',')
+                .filter(|launcher| !plasma_has_rick(launcher))
+                .collect();
+            let kept = kept.join(",");
+            // The default Rick wrote out for a task manager that named
+            // no launchers goes back to being unsaid.
+            let unsaid = previous.is_empty() && kept == PLASMA_DEFAULT;
+            let value = (!unsaid).then_some(kept.as_str());
+            out = plasma_with_launchers(&out, manager, value);
+        }
+        if out != text {
+            write_file(&file, out.as_bytes())?;
+            reload_plasma(env);
+        }
+    }
+
+    let file = cosmic_file(env);
+    if receipt.previous.contains_key(&env.tilde(&file))
+        && let Ok(text) = fs::read_to_string(&file)
+    {
+        let ids = strings_in(&text);
+        let kept: Vec<String> = ids.iter().filter(|id| *id != APP_ID).cloned().collect();
+        if kept.len() != ids.len() {
+            let mut out = ron_list(&kept);
+            if text.ends_with('\n') {
+                out.push('\n');
+            }
+            write_file(&file, out.as_bytes())?;
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 pub(crate) mod tests {
     use std::collections::BTreeMap;
-    use std::sync::{Mutex, PoisonError};
+    use std::sync::{Arc, Mutex, PoisonError};
 
+    use super::super::LinuxIntegration;
     use super::super::tests::{Home, snapshot, write};
     use super::*;
     use crate::integration::{Integration as _, Item, Request};
@@ -418,6 +741,348 @@ pub(crate) mod tests {
         let before = snapshot(home.dir.path());
         let _ = dock(&home, Settings::default());
         assert_eq!(snapshot(home.dir.path()), before);
+    }
+
+    /// A home whose launcher entry is installed: what a favourite names.
+    fn with_entry(desktop: &str) -> Home {
+        let home = Home::new(desktop);
+        write(
+            &home.env.data_home.join("applications").join(DESKTOP_ID),
+            "[Desktop Entry]\nName=Rick\n",
+        );
+        home
+    }
+
+    fn with_receipt(receipt: &Receipt) -> Request {
+        Request {
+            receipt: receipt.clone(),
+            ..Request::default()
+        }
+    }
+
+    #[test]
+    fn gnome_and_cinnamon_get_rick_appended_and_the_undo_takes_only_rick_out() {
+        for (desktop, schema) in [
+            ("ubuntu:GNOME", "org.gnome.shell"),
+            ("X-Cinnamon", "org.cinnamon"),
+        ] {
+            let home = with_entry(desktop);
+            let before = "['org.gnome.Nautilus.desktop', 'firefox.desktop']";
+            let settings = Arc::new(Settings::with(schema, "favorite-apps", before));
+            let favourites = || settings.get(schema, "favorite-apps").unwrap_or_default();
+            let integration = LinuxIntegration::new(home.env.clone(), settings.clone());
+            let receipt = integration
+                .perform_integration(Item::DockFavourite, &Request::default())
+                .unwrap_or_else(|e| panic!("{desktop}: {e}"));
+            assert_eq!(
+                favourites(),
+                "['org.gnome.Nautilus.desktop', 'firefox.desktop', 'rick.desktop']",
+                "{desktop}"
+            );
+            assert_eq!(
+                receipt
+                    .previous
+                    .get(&format!("{schema} favorite-apps"))
+                    .map(String::as_str),
+                Some(before)
+            );
+            assert_eq!(receipt.files, [] as [String; 0]);
+            let request = with_receipt(&receipt);
+            assert_eq!(
+                integration
+                    .check_integration(Item::DockFavourite, &request)
+                    .actual,
+                Actual::SetUp
+            );
+            // Once more: Rick is there, nothing is written or recorded.
+            assert_eq!(
+                integration
+                    .perform_integration(Item::DockFavourite, &request)
+                    .ok(),
+                Some(receipt)
+            );
+            assert_eq!(
+                favourites(),
+                "['org.gnome.Nautilus.desktop', 'firefox.desktop', 'rick.desktop']"
+            );
+
+            // The user rearranged the favourites since: the undo takes
+            // Rick out and leaves the rest as it is by now.
+            settings
+                .set(
+                    schema,
+                    "favorite-apps",
+                    "['rick.desktop', 'org.gnome.Terminal.desktop', 'firefox.desktop']",
+                )
+                .unwrap_or_else(|e| panic!("{e}"));
+            integration
+                .undo_integration(Item::DockFavourite, &request)
+                .unwrap_or_else(|e| panic!("{desktop}: {e}"));
+            assert_eq!(
+                favourites(),
+                "['org.gnome.Terminal.desktop', 'firefox.desktop']"
+            );
+            // Without a record there is nothing of Rick's to take out.
+            settings
+                .set(schema, "favorite-apps", "['rick.desktop']")
+                .unwrap_or_else(|e| panic!("{e}"));
+            integration
+                .undo_integration(Item::DockFavourite, &Request::default())
+                .unwrap_or_else(|e| panic!("{e}"));
+            assert_eq!(favourites(), "['rick.desktop']");
+            // The last favourite gone leaves the empty list, typed.
+            integration
+                .undo_integration(Item::DockFavourite, &request)
+                .unwrap_or_else(|e| panic!("{e}"));
+            assert_eq!(favourites(), "@as []");
+            integration
+                .perform_integration(Item::DockFavourite, &Request::default())
+                .unwrap_or_else(|e| panic!("{e}"));
+            assert_eq!(favourites(), "['rick.desktop']");
+        }
+    }
+
+    #[test]
+    fn nothing_is_pinned_without_the_launcher_entry_or_the_means() {
+        // No launcher entry: the favourite would name nothing.
+        let home = Home::new("GNOME");
+        let settings = Arc::new(Settings::with(
+            "org.gnome.shell",
+            "favorite-apps",
+            "['firefox.desktop']",
+        ));
+        let integration = LinuxIntegration::new(home.env.clone(), settings.clone());
+        assert!(matches!(
+            integration.perform_integration(Item::DockFavourite, &Request::default()),
+            Err(Error::Unsupported(_))
+        ));
+        assert_eq!(
+            settings.get("org.gnome.shell", "favorite-apps").ok(),
+            Some("['firefox.desktop']".to_owned())
+        );
+
+        // No gsettings, and a desktop Rick knows no dock of.
+        let home = with_entry("GNOME");
+        let integration = LinuxIntegration::new(
+            home.env.clone(),
+            Arc::new(Settings {
+                missing: true,
+                ..Settings::default()
+            }),
+        );
+        assert!(matches!(
+            integration.perform_integration(Item::DockFavourite, &Request::default()),
+            Err(Error::NotFound)
+        ));
+        let home = with_entry("XFCE");
+        assert!(matches!(
+            home.integration()
+                .perform_integration(Item::DockFavourite, &Request::default()),
+            Err(Error::Unsupported(_))
+        ));
+
+        // Plasma without a panel configuration, COSMIC without its list.
+        for desktop in ["KDE", "COSMIC"] {
+            let home = with_entry(desktop);
+            let before = snapshot(home.dir.path());
+            assert!(
+                home.integration()
+                    .perform_integration(Item::DockFavourite, &Request::default())
+                    .is_err(),
+                "{desktop}"
+            );
+            assert_eq!(snapshot(home.dir.path()), before, "{desktop}");
+        }
+    }
+
+    #[test]
+    fn plasma_gets_rick_at_the_end_of_the_first_task_managers_launchers() {
+        let home = with_entry("KDE");
+        let file = plasma_file(&home.env);
+        let launchers = "applications:systemsettings.desktop,preferred://filemanager";
+        let original = plasma_fixture(Some(launchers));
+        write(&file, &original);
+        let integration = home.integration();
+        let receipt = integration
+            .perform_integration(Item::DockFavourite, &Request::default())
+            .unwrap_or_else(|e| panic!("{e}"));
+        let text = fs::read_to_string(&file).unwrap_or_else(|e| panic!("{e}"));
+        assert!(
+            text.contains(&format!(
+                "launchers={launchers},applications:rick.desktop\n"
+            )),
+            "{text}"
+        );
+        assert_eq!(
+            text.replace(",applications:rick.desktop", ""),
+            original,
+            "every other line is as it was"
+        );
+        assert_eq!(
+            receipt.previous,
+            BTreeMap::from([(
+                "~/.config/plasma-org.kde.plasma.desktop-appletsrc [Containments][2][Applets][5]"
+                    .to_owned(),
+                launchers.to_owned()
+            )])
+        );
+        let request = with_receipt(&receipt);
+        assert_eq!(
+            integration
+                .check_integration(Item::DockFavourite, &request)
+                .actual,
+            Actual::SetUp
+        );
+        assert_eq!(
+            integration
+                .perform_integration(Item::DockFavourite, &request)
+                .ok(),
+            Some(receipt)
+        );
+        assert_eq!(fs::read_to_string(&file).ok(), Some(text));
+
+        // The user pinned something after Rick: it stays.
+        write(
+            &file,
+            &plasma_fixture(Some(&format!(
+                "{launchers},applications:rick.desktop,applications:org.kde.konsole.desktop"
+            ))),
+        );
+        integration
+            .undo_integration(Item::DockFavourite, &request)
+            .unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(
+            fs::read_to_string(&file).ok(),
+            Some(plasma_fixture(Some(&format!(
+                "{launchers},applications:org.kde.konsole.desktop"
+            ))))
+        );
+    }
+
+    #[test]
+    fn a_plasma_task_manager_that_names_no_launchers_keeps_its_defaults() {
+        let home = with_entry("KDE");
+        let file = plasma_file(&home.env);
+        let general = "[Containments][2][Applets][5][Configuration][General]";
+        let integration = home.integration();
+
+        // No group at all: it is added at the end with the defaults and
+        // Rick, and goes again with the undo.
+        let original = plasma_fixture(None);
+        write(&file, &original);
+        let receipt = integration
+            .perform_integration(Item::DockFavourite, &Request::default())
+            .unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(
+            fs::read_to_string(&file).ok(),
+            Some(format!(
+                "{original}\n{general}\nlaunchers={PLASMA_DEFAULT},applications:rick.desktop\n"
+            ))
+        );
+        assert_eq!(
+            receipt
+                .previous
+                .values()
+                .map(String::as_str)
+                .collect::<Vec<_>>(),
+            [""]
+        );
+        integration
+            .undo_integration(Item::DockFavourite, &with_receipt(&receipt))
+            .unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(fs::read_to_string(&file).ok(), Some(original.clone()));
+
+        // The group with other keys: the list joins them, and only it
+        // goes again.
+        let with_group = format!("{original}\n{general}\nshowOnlyCurrentDesktop=false\n");
+        write(&file, &with_group);
+        let receipt = integration
+            .perform_integration(Item::DockFavourite, &Request::default())
+            .unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(
+            fs::read_to_string(&file).ok(),
+            Some(format!(
+                "{with_group}launchers={PLASMA_DEFAULT},applications:rick.desktop\n"
+            ))
+        );
+        integration
+            .undo_integration(Item::DockFavourite, &with_receipt(&receipt))
+            .unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(fs::read_to_string(&file).ok(), Some(with_group));
+
+        // A list the user emptied gets Rick alone and is empty again.
+        let emptied = plasma_fixture(Some(""));
+        write(&file, &emptied);
+        let receipt = integration
+            .perform_integration(Item::DockFavourite, &Request::default())
+            .unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(
+            fs::read_to_string(&file).ok(),
+            Some(plasma_fixture(Some("applications:rick.desktop")))
+        );
+        integration
+            .undo_integration(Item::DockFavourite, &with_receipt(&receipt))
+            .unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(fs::read_to_string(&file).ok(), Some(emptied));
+    }
+
+    #[test]
+    fn cosmic_gets_rick_at_the_end_of_its_favourites() {
+        let home = with_entry("COSMIC");
+        let file = cosmic_file(&home.env);
+        let original = "[\n    \"firefox\",\n    \"com.system76.CosmicFiles\",\n]";
+        write(&file, original);
+        let integration = home.integration();
+        let receipt = integration
+            .perform_integration(Item::DockFavourite, &Request::default())
+            .unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(
+            fs::read_to_string(&file).ok().as_deref(),
+            Some("[\n    \"firefox\",\n    \"com.system76.CosmicFiles\",\n    \"rick\",\n]")
+        );
+        assert_eq!(
+            receipt.previous,
+            BTreeMap::from([(
+                "~/.config/cosmic/com.system76.CosmicAppList/v1/favorites".to_owned(),
+                original.to_owned()
+            )])
+        );
+        let request = with_receipt(&receipt);
+        assert_eq!(
+            integration
+                .check_integration(Item::DockFavourite, &request)
+                .actual,
+            Actual::SetUp
+        );
+        integration
+            .undo_integration(Item::DockFavourite, &request)
+            .unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(fs::read_to_string(&file).ok().as_deref(), Some(original));
+
+        // The only favourite, in a file that ends with a line break.
+        write(&file, "[]\n");
+        let receipt = integration
+            .perform_integration(Item::DockFavourite, &Request::default())
+            .unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(
+            fs::read_to_string(&file).ok().as_deref(),
+            Some("[\n    \"rick\",\n]\n")
+        );
+        integration
+            .undo_integration(Item::DockFavourite, &with_receipt(&receipt))
+            .unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(fs::read_to_string(&file).ok().as_deref(), Some("[]\n"));
+    }
+
+    #[test]
+    fn lists_are_written_as_each_desktop_reads_them() {
+        let items = ["a.desktop".to_owned(), "it's.desktop".to_owned()];
+        assert_eq!(gvariant_list(&items), "['a.desktop', 'it\\'s.desktop']");
+        assert_eq!(strings_in(&gvariant_list(&items)), items);
+        assert_eq!(gvariant_list(&[]), "@as []");
+        let items = ["a".to_owned(), "say \"hi\"".to_owned()];
+        assert_eq!(strings_in(&ron_list(&items)), items);
+        assert_eq!(ron_list(&[]), "[]");
     }
 
     #[test]

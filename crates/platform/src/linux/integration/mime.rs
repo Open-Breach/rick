@@ -167,7 +167,7 @@ fn has_keys(text: &str) -> bool {
 /// Whether `rick.desktop` is where the desktop looks for it; a default
 /// that names a desktop file nobody finds would open folders with
 /// nothing.
-fn entry_installed(env: &LinuxEnv) -> bool {
+pub(super) fn entry_installed(env: &LinuxEnv) -> bool {
     std::iter::once(&env.data_home)
         .chain(&env.data_dirs)
         .any(|dir| dir.join("applications").join(DESKTOP_ID).is_file())
