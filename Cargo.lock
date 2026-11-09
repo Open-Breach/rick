@@ -2150,6 +2150,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "ext-preview-icons"
+version = "0.3.0-dev"
+dependencies = [
+ "ext",
+ "icns",
+ "ico",
+ "platform",
+ "runtime",
+ "tempfile",
+ "tracing",
+ "types",
+ "vfs-local",
+]
+
+[[package]]
 name = "ext-preview-image"
 version = "0.3.0-dev"
 dependencies = [
@@ -4496,6 +4511,26 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f31827a206f56af32e590ba56d5d2d085f558508192593743f16b2306495269f"
 dependencies = [
  "cc",
+]
+
+[[package]]
+name = "icns"
+version = "0.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f55019ac1db606ff01afed8a9d18d91b83e6463da421084f767c89026467b619"
+dependencies = [
+ "byteorder",
+ "png",
+]
+
+[[package]]
+name = "ico"
+version = "0.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d75e94d66081e4d8dcd098bd8dc5254800fea14a26389b298410158d834de167"
+dependencies = [
+ "byteorder",
+ "png",
 ]
 
 [[package]]
@@ -6885,6 +6920,7 @@ dependencies = [
  "ext-preview-archive",
  "ext-preview-code",
  "ext-preview-hex",
+ "ext-preview-icons",
  "ext-preview-image",
  "ext-preview-markup",
  "ext-preview-media",
@@ -7999,6 +8035,7 @@ dependencies = [
  "ext-preview-archive",
  "ext-preview-code",
  "ext-preview-hex",
+ "ext-preview-icons",
  "ext-preview-image",
  "ext-preview-markup",
  "ext-preview-media",

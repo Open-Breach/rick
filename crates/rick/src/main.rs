@@ -50,6 +50,8 @@ fn built_ins() -> Vec<Arc<dyn ext::Extension>> {
     extensions.push(Arc::new(ext_preview_markup::MarkupPreview::new()));
     #[cfg(feature = "preview-3d")]
     extensions.push(Arc::new(ext_preview_3d::Preview3d::new()));
+    #[cfg(feature = "preview-icons")]
+    extensions.push(Arc::new(ext_preview_icons::IconsPreview::new()));
     #[cfg(feature = "git")]
     extensions.push(Arc::new(ext_git::GitExtension::new()));
     #[cfg(feature = "vfs-trash")]
