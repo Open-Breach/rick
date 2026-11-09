@@ -17,6 +17,21 @@ use types::{Attrs, CancelToken, Entry, EntryId, EntryKind, Error, ExtId, Locatio
 
 use super::{App, Command, Config, Event, SETTINGS_FILE};
 
+/// The text of the file at `path` once `done` holds for it, or as it is
+/// after ten seconds: the settings saver writes on a task of the runtime
+/// after the command, which `settle` does not wait for, so a test reads the
+/// file this way rather than once (the Linux arm64 runner read it early).
+fn read_until(path: &Path, done: impl Fn(&str) -> bool) -> String {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let text = fs::read_to_string(path).unwrap_or_default();
+        if done(&text) || Instant::now() >= deadline {
+            return text;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
 #[derive(Default)]
 struct Scripted {
     prompt: Mutex<Option<String>>,
@@ -286,7 +301,7 @@ fn settings_changes_are_saved_and_disk_edits_are_picked_up() {
         SortDir::Descending,
     )));
     h.settle();
-    let text = fs::read_to_string(&path).unwrap_or_else(|e| panic!("{e}"));
+    let text = read_until(&path, |t| t.contains("sort_by = \"size\""));
     assert!(text.contains("sort_by = \"size\""), "{text}");
     assert_eq!(h.app.model().settings.sort_by, Column::Size);
 
@@ -596,7 +611,8 @@ fn pin_and_unpin_edit_the_settings_and_undo() {
     h.send(Command::Undo);
     assert_eq!(h.app.model().settings.pinned, [local(&sub), local(&a)]);
     h.settle();
-    let text = fs::read_to_string(h.app.settings_path()).unwrap_or_else(|e| panic!("{e}"));
+    let settings_path = h.app.settings_path();
+    let text = read_until(Path::new(&settings_path), |t| t.contains("local:"));
     assert!(
         text.contains("local:"),
         "pins are saved as locations: {text}"
@@ -1726,7 +1742,7 @@ fn a_connection_keeps_its_secret_in_the_keychain_and_the_rest_in_the_settings() 
     });
     h.settle();
     let settings_path = h.fake.config_dir().join(SETTINGS_FILE);
-    let text = fs::read_to_string(&settings_path).unwrap_or_else(|e| panic!("{e}"));
+    let text = read_until(&settings_path, |t| t.contains("name = \"nas\""));
     assert!(text.contains("[[connections]]"), "{text}");
     assert!(text.contains("provider = \"ssh\""), "{text}");
     assert!(text.contains("name = \"nas\""), "{text}");
@@ -1812,7 +1828,7 @@ fn a_connection_keeps_its_secret_in_the_keychain_and_the_rest_in_the_settings() 
         op: super::ConnectionOp::Remove,
     });
     h.settle();
-    let text = fs::read_to_string(&settings_path).unwrap_or_else(|e| panic!("{e}"));
+    let text = read_until(&settings_path, |t| !t.contains("nas"));
     assert!(!text.contains("nas"), "{text}");
     assert!(h.fake.secrets().is_empty());
     assert!(
