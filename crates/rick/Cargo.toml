@@ -93,7 +93,11 @@ ext-search-tracker = { workspace = true, optional = true }
 ext-search-baloo = { workspace = true, optional = true }
 ext-preview-3d = { workspace = true, optional = true }
 ext-preview-icons = { workspace = true, optional = true }
+runtime = { workspace = true }
 anyhow = { workspace = true }
+# The single-instance endpoint's serving loop (`instance`): the timers and
+# the task handle, on the one runtime.
+tokio = { workspace = true, features = ["time", "rt"] }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 
@@ -108,7 +112,6 @@ winresource = { version = "0.1", default-features = false }
 # The tests of `rick-perms`, the privileged helper: run through the fake
 # platform, and as root through the polkit stand-in of Linux CI.
 ops = { workspace = true }
-runtime = { workspace = true }
 tempfile = { workspace = true }
 
 [lints]
