@@ -345,6 +345,16 @@ the pull request that brought the change.
   (`Model::sole_pane`), every pane counting, the preview too
   (QUESTIONS.md 270), and the move is the model's `dock_workspace`
   behind `Command::DockWorkspace` (#130).
+- Spring-loaded workspace tabs for every kind of drag (issue 80, rules 4
+  and 5; SPEC.md *Workspace tabs*, Spring-loaded tabs). A pane dragged by
+  its handle and rested on another workspace's tab for the spring-loading
+  delay — the one setting of Settings → General, a second by default —
+  switches the window to that workspace, where the pane can be docked; a
+  dragged tab that holds one pane does the same when it is held still
+  leaning on a neighbour, a quarter of a tab or more over it. Let go
+  where it cannot land, nothing moves and the window shows the workspace
+  the drag began in. Entries dragged from a list already switched the
+  window this way; a test now holds it (#132).
 
 ### Removed
 

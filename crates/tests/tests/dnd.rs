@@ -1156,3 +1156,57 @@ fn pin_and_unpin_from_the_context_menu_flip_and_undo() {
     );
     let _ = icons::PIN;
 }
+
+/// Issue 80, rule 5 (SPEC.md *Spring-loading*): entries held over another
+/// workspace's tab for the spring-loading delay switch the window to that
+/// workspace, so the drop can land in a folder there; a drag that only
+/// passes over the tab switches nothing.
+#[test]
+fn entries_held_over_a_workspace_tab_show_its_workspace_and_drop_into_a_folder_there() {
+    let dir = tree();
+    let other = dir.path().join("sub");
+    let (mut harness, _fake) = harness(dir.path());
+    let pane_a = harness.state().app().model().focused;
+    let (first_tab, _) = tab(&harness, pane_a);
+    command(&mut harness, app::Command::NewTab(local(&other)));
+    let other_pane = harness.state().app().model().focused;
+    let (other_tab, _) = tab(&harness, other_pane);
+    command(&mut harness, app::Command::ActivateTab(first_tab));
+    let window = harness.state().app().model().focused_window;
+    let shown = |harness: &Harness<'_, RickUi>| {
+        let model = harness.state().app().model();
+        model
+            .window(window)
+            .map_or_else(|| panic!("window"), model::Window::focused)
+    };
+    assert_eq!(shown(&harness), pane_a);
+    let header = harness
+        .state()
+        .tab_header_rect(other_tab)
+        .unwrap_or_else(|| panic!("no header for the other tab"));
+
+    // Over the tab and on at once: the first workspace stays.
+    let from = centre_in(&harness, pane_a, "a.txt");
+    press(&mut harness, from, egui::PointerButton::Primary);
+    move_to(&mut harness, from, header.center());
+    assert_eq!(
+        shown(&harness),
+        pane_a,
+        "passing over a tab switches nothing"
+    );
+
+    // Held there for the delay: the window shows the other workspace, and
+    // the drag goes on into a folder of it.
+    hover_for_spring(&mut harness);
+    assert_eq!(shown(&harness), other_pane, "resting on the tab shows it");
+    assert!(harness.state().drag().is_some(), "still dragging");
+    let child = centre_in(&harness, other_pane, "child");
+    move_to(&mut harness, header.center(), child);
+    release(&mut harness, child, egui::PointerButton::Primary);
+    assert!(
+        other.join("child/a.txt").exists(),
+        "dropped into a folder of the other workspace"
+    );
+    assert!(!dir.path().join("a.txt").exists());
+    assert_eq!(shown(&harness), other_pane, "After a drag: stay");
+}
