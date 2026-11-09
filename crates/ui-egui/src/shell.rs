@@ -511,13 +511,14 @@ fn paint_dock_cross(
     }
 }
 
-/// A workspace tab being dragged along the title row.
+/// A workspace tab being dragged: along the title row, or off it as its
+/// own ghost.
 #[derive(Debug, Clone, Copy)]
 struct TabDrag {
     /// The workspace.
     id: WorkspaceId,
-    /// Where the pointer took the tab, from its left edge.
-    grab: f32,
+    /// Where the pointer took the tab, from its top left corner.
+    grab: egui::Vec2,
 }
 
 /// What a workspace tab shows: the folder in the workspace's focused pane.
@@ -2763,10 +2764,12 @@ impl RickUi {
     /// The workspace tabs from `left` to `right`, each `TAB_WIDTH` wide and
     /// `tab/height` tall on the bottom edge of the row, the new-tab button
     /// directly after the last; the row clips what does not fit. A tab
-    /// dragged along the row reorders the tabs, one released outside the
-    /// window moves to the window under it or opens a new one; a pane's
-    /// tab dragged over the row shows the slot where it would land as a
-    /// new tab (SPEC.md *Workspace tabs*).
+    /// dragged along the row reorders the tabs, one dragged off the row
+    /// follows the cursor as its ghost: released outside the window it
+    /// moves to the window under it or opens a new one, released anywhere
+    /// else it returns to its place. A pane's tab dragged over the row
+    /// shows the slot where it would land as a new tab (SPEC.md *Workspace
+    /// tabs*).
     #[allow(clippy::too_many_lines, clippy::too_many_arguments)]
     fn title_tabs(
         &mut self,
@@ -2802,21 +2805,26 @@ impl RickUi {
         let primary_down = ctx.input(|i| i.pointer.primary_down());
         let released = ctx.input(|i| i.pointer.any_released());
 
-        // A drag along the row ends when the button comes up.
+        // A drag of a tab ends when the button comes up.
         let drag = w.workspace_drag.filter(|_| primary_down || released);
         if drag.is_none() {
             w.workspace_drag = None;
         }
         let dragged = drag.and_then(|d| tabs.iter().position(|(id, _)| *id == d.id));
         let others = tabs.len() - usize::from(dragged.is_some());
+        // The dragged tab rides the row while the cursor is in the title
+        // row; off it, the tab follows the cursor as its own ghost and the
+        // row keeps no room for it (QUESTIONS.md 273).
+        let riding = dragged.is_some() && pointer.is_some_and(|p| rect.contains(p));
         // The slot a tab's left edge at `x` lands in, among `count` tabs.
         let slot_of = |x: f32, count: usize| -> usize {
             #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
             let slot = ((x - row.left()) / pitch).round().max(0.0) as usize;
             slot.min(count)
         };
-        let drag_slot =
-            drag.and_then(|d| pointer.map(|p| slot_of(p.x - d.grab, others.saturating_sub(1))));
+        let drag_slot = drag
+            .filter(|_| riding)
+            .and_then(|d| pointer.map(|p| slot_of(p.x - d.grab.x, others.saturating_sub(1))));
         let pane_over_row = w.pane_drag.is_some()
             && pointer.is_some_and(|p| row.expand2(egui::vec2(0.0, 6.0)).contains(p));
         let drop_slot = pane_over_row.then(|| pointer.map(|p| slot_of(p.x, tabs.len())));
@@ -2878,9 +2886,12 @@ impl RickUi {
             if response.drag_started()
                 && let Some(p) = pointer
             {
+                // Taken where the button went down, not where the drag was
+                // recognised a few points on.
+                let press = ctx.input(|i| i.pointer.press_origin()).unwrap_or(p);
                 started = Some(TabDrag {
                     id: *id,
-                    grab: p.x - tab_rect.left(),
+                    grab: press - tab_rect.min,
                 });
             }
             if let Some(location) = &label.location {
@@ -2938,19 +2949,49 @@ impl RickUi {
         );
         let plus_clicked = plus.on_hover_text(t!("shell-new-tab")).clicked();
 
-        // The dragged tab floats along the row under the pointer.
+        // The dragged tab is its own ghost (SPEC.md *Drag ghost*): the tab
+        // itself, lifted with a shadow. In the title row it rides the row
+        // under the pointer, held where it was grabbed; off the row it
+        // follows the pointer, the grab point `GHOST_OFFSET` away from it.
+        w.ghost = w.ghost.filter(|g| g.of != crate::drag::Dragged::Tab);
         if let (Some(d), Some(i), Some(p)) = (drag, dragged, pointer) {
-            let x = (p.x - d.grab).clamp(row.left(), (row.right() - TAB_WIDTH).max(row.left()));
-            let float = egui::Rect::from_min_size(
-                egui::pos2(x, row.top()),
-                egui::vec2(TAB_WIDTH, row.height()),
-            );
+            let size = egui::vec2(TAB_WIDTH, row.height());
+            let float = if riding {
+                let x =
+                    (p.x - d.grab.x).clamp(row.left(), (row.right() - TAB_WIDTH).max(row.left()));
+                egui::Rect::from_min_size(egui::pos2(x, row.top()), size)
+            } else {
+                egui::Rect::from_min_size(p + crate::drag::GHOST_OFFSET - d.grab, size)
+            };
             let layer = egui::LayerId::new(
                 egui::Order::Tooltip,
                 egui::Id::new(("workspace-drag", window.0)),
             );
             let mut top = ui.new_child(egui::UiBuilder::new().layer_id(layer).max_rect(float));
+            // Over the whole window, not the title row alone: off the row
+            // the tab is over the panes, and its shadow falls on them.
+            top.set_clip_rect(ctx.content_rect());
+            crate::drag::lift(
+                top.painter(),
+                float,
+                egui::CornerRadius {
+                    nw: crate::theme::TAB_CORNER,
+                    ne: crate::theme::TAB_CORNER,
+                    sw: 0,
+                    se: 0,
+                },
+            );
             let (_, _) = workspace_tab(&mut top, float, tabs[i].0, &tabs[i].1, true);
+            crate::drag::announce(
+                &top,
+                egui::Id::new(("drag-status", window.0)),
+                &t!("shell-dragging-tab", title = tabs[i].1.title.as_str()),
+            );
+            w.ghost = Some(crate::drag::Ghost {
+                of: crate::drag::Dragged::Tab,
+                rect: float,
+                shapes: 0,
+            });
         }
         if let Some(d) = started {
             w.workspace_drag = Some(d);
@@ -2980,6 +3021,9 @@ impl RickUi {
             self.close_workspace(id);
         }
         match dropped {
+            // Released on the row: into the room the row kept for it.
+            // Anywhere else in the window it returns to its place
+            // (QUESTIONS.md 274).
             Some((d, _)) if in_window => {
                 if let Some(to) = drag_slot {
                     self.handle(Command::MoveWorkspace { id: d.id, to });

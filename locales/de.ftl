@@ -156,6 +156,7 @@ shell-new-tab = Neuer Tab
 shell-close-tab = Tab schließen
 shell-drop-for-new-tab = Für neuen Tab ablegen
 shell-dragging-pane = Bereich { $title } wird gezogen
+shell-dragging-tab = Tab { $title } wird gezogen
 shell-preview-tab = Vorschau
 shell-console-tab = Konsole
 shell-compare-tab = Vergleich
