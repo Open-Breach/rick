@@ -7,6 +7,10 @@ the pull request that brought the change.
 
 ## [Unreleased]
 
+### Changed
+
+- The workspace version is `0.3.0-dev` until 0.3.0 is tagged.
+
 ## [0.2.0] - 2026-11-08
 
 The plugin release, on Linux, macOS and Windows: the native plugin host and
