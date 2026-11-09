@@ -9,9 +9,17 @@ crate, default-on: the text, code, image and PDF previewers; `git` and
 `preview-hex` compile the Git and hex-preview plugins in instead of loading
 them, default off. `rick --version`
 prints the version and the git hash, `rick --list-plugins` the plugins table
-the Extensions screen shows. It is the only crate that uses `anyhow`. Its second
+the Extensions screen shows. One Rick runs per user session and config
+directory (`--config-dir <dir>` picks another): a launch first hands its
+command line to the running instance over the platform's single-instance
+endpoint, prints the reply and exits with the instance's status within a
+second, and only binds the endpoint and opens the window itself when
+nothing listens; the instance runs every request on the UI thread
+between two frames, through the app's external-work channel. It is the
+only crate that uses `anyhow`. Its second
 binary, `rick-perms`, is the privileged helper: the one program Rick runs
 as the administrator, through the platform's prompt, to apply a permission
 change the user may not make by themselves (`platform::perms::helper`);
-the bundle lays it beside `rick`. It depends on `types`, `platform`,
-`vfs-local`, `app`, `ui-egui` and `plugins-native`; nothing depends on it.
+the bundle lays it beside `rick`. It depends on `types`, `runtime`,
+`platform`, `vfs-local`, `app`, `ui-egui` and `plugins-native`; nothing
+depends on it.

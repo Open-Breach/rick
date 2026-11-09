@@ -69,12 +69,14 @@
 
 mod command;
 mod ext_settings;
+mod external;
 mod places;
 mod session;
 pub mod settings;
 
 pub use command::{Command, ConnectionOp, Event, PropertiesInfo, TransferMode};
 pub use ext_settings::ExtSettings;
+pub use external::{External, ExternalReceiver, ExternalSender, external_channel};
 /// What the Hash dialogue draws with (the format, the rendering, the
 /// Verify logic), re-exported for the UI.
 pub use ops::hash;

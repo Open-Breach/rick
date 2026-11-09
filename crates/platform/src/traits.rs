@@ -9,6 +9,7 @@ use async_trait::async_trait;
 use raw_window_handle::{RawDisplayHandle, RawWindowHandle};
 use types::Error;
 
+use crate::instance::Endpoint;
 use crate::perms::Permissions;
 
 /// An entry in the trash, with enough to put it back.
@@ -722,6 +723,18 @@ pub trait Motion: Send + Sync {
     fn reduce_motion(&self) -> bool;
 }
 
+/// The single-instance endpoint (specs/system-integration.md §3): where
+/// the one Rick of this user and config directory listens for the command
+/// line of a second launch.
+pub trait SingleInstance: Send + Sync {
+    /// The endpoint for `config_dir`: a Unix socket in `$XDG_RUNTIME_DIR`
+    /// (Linux) or the user's temporary directory (macOS), a named pipe
+    /// under `\\.\pipe\` (Windows), named after the user and the
+    /// directory, so two installs with different config directories
+    /// coexist. The fake answers one inside its own directory.
+    fn instance_endpoint(&self, config_dir: &Path) -> Endpoint;
+}
+
 /// All platform services behind one object.
 pub trait Platform:
     Trash
@@ -743,6 +756,7 @@ pub trait Platform:
     + Secrets
     + SystemFonts
     + Motion
+    + SingleInstance
 {
 }
 
@@ -765,7 +779,8 @@ impl<
         + RecentlyUsed
         + Secrets
         + SystemFonts
-        + Motion,
+        + Motion
+        + SingleInstance,
 > Platform for T
 {
 }
