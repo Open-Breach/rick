@@ -319,6 +319,17 @@ the pull request that brought the change.
   named *Eject <drive>* for the tooltip and the screen reader; a click
   ejects the drive, as the context menu's *Eject* does. The usage bar's
   colours and the read-only drives are issue 79 item 8 (issue 79 item 7).
+- Drive cards as decided for the design refresh (SPEC.md *This Machine*):
+  the usage bar's fill follows how full the drive is, like the Trash pill
+  — `accent/usage` below 80 %, `status/warning` from 80 %, `status/danger`
+  from 90 % — in the card and in the This Machine overview; a drive the
+  operating system mounted read-only (a live USB, an optical disc, a
+  mounted ISO) shows a full bar in `text/placeholder`, no percentage and
+  nothing else in the row, the bar's tooltip and accessible description
+  *Read-only*; the name stays on one line with an ellipsis. `Volume` of the
+  `platform` crate reports `read_only` on every platform: the `ro` mount
+  option on Linux, `MNT_RDONLY` on macOS, `FILE_READ_ONLY_VOLUME` on
+  Windows, an ISO's mount everywhere (issue 79 item 8).
 
 ## [0.2.0] - 2026-11-08
 
