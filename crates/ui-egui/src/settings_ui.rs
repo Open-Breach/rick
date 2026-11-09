@@ -1,7 +1,7 @@
 //! The Settings window, the Keyboard shortcuts and Extensions screens; the
 //! About dialog is [`crate::about`].
 
-use app::{App, Command, PluginStatus};
+use app::{App, Command, IntegrationCommand, PluginStatus};
 use egui::{Align, Align2, FontId, Rect, Sense, pos2, vec2};
 use ext::t;
 use ext::{Registry, Shortcut};
@@ -9,10 +9,11 @@ use model::{
     AfterDrag, Column, Density, OnOpen, PanelSide, SettingsChange, SidePanelChange, SortDir, Theme,
     WindowId,
 };
+use platform::integration::Item;
 
 use crate::keys::{Intent, KeyMap, UI_INTENTS, from_egui_key, from_egui_modifiers};
 use crate::shell::Request;
-use crate::{dialog, icons, theme, widgets};
+use crate::{dialog, icons, integration, theme, widgets};
 
 /// The window's size, as the spec gives it.
 const SIZE: egui::Vec2 = vec2(880.0, 640.0);
@@ -69,6 +70,9 @@ enum Page {
     General,
     View,
     Appearance,
+    /// The integration items and their preferences
+    /// (specs/system-integration.md §6.1).
+    Integration,
     /// A plugin's page, by the extension's id.
     Plugin(String),
 }
@@ -256,10 +260,15 @@ impl SettingsWindow {
         ui.allocate_rect(rect, Sense::hover());
     }
 
-    /// The pages, in the list's order: the three of Rick's own, then one
+    /// The pages, in the list's order: the four of Rick's own, then one
     /// per plugin that declares settings.
     fn pages(app: &App) -> Vec<Page> {
-        let mut pages = vec![Page::General, Page::View, Page::Appearance];
+        let mut pages = vec![
+            Page::General,
+            Page::View,
+            Page::Appearance,
+            Page::Integration,
+        ];
         for schema in app.registry().settings_schemas() {
             if !schema.fields.is_empty() {
                 pages.push(Page::Plugin(schema.ext.0.to_owned()));
@@ -478,6 +487,10 @@ impl SettingsWindow {
                     .show(ui, |ui| {
                         ui.set_width(ui.available_width());
                         ui.spacing_mut().item_spacing = vec2(0.0, 0.0);
+                        if page == Page::Integration {
+                            integration_status(ui, &mut cx);
+                            ui.add_space(20.0);
+                        }
                         for (index, group) in groups.iter().enumerate() {
                             let visible: Vec<bool> =
                                 group.rows.iter().map(|row| row.matches(&search)).collect();
@@ -527,6 +540,7 @@ fn page_icon(page: &Page) -> &'static str {
         Page::General => icons::GEAR,
         Page::View => icons::VIEW_LIST,
         Page::Appearance => icons::HIDDEN_SHOWN,
+        Page::Integration => icons::LINK,
         Page::Plugin(id) => {
             let id = id.to_lowercase();
             if id.contains("pdf") {
@@ -554,6 +568,7 @@ fn page_name(page: &Page, app: &App) -> String {
         Page::General => t!("settings-general"),
         Page::View => t!("settings-view"),
         Page::Appearance => t!("settings-appearance"),
+        Page::Integration => t!("settings-integration"),
         Page::Plugin(id) => app
             .registry()
             .manifests()
@@ -653,6 +668,7 @@ fn groups_of(page: &Page, app: &App) -> Vec<Group> {
                 ],
             },
         ],
+        Page::Integration => integration_groups(app),
         Page::Plugin(id) => app
             .registry()
             .settings_schemas()
@@ -1144,8 +1160,170 @@ fn rows_of(page: &Page, index: usize, card: &mut Card<'_>, cx: &mut PageCx<'_>) 
                 },
             );
         }
+        (Page::Integration, group) => integration_rows(group, card, cx),
         (Page::Plugin(id), 0) => plugin_rows(id, card, cx),
         _ => {}
+    }
+}
+
+/// The groups of the settings' Integration page (specs/system-integration.md
+/// §6.1): the items of *This system* and the `rick` command under
+/// *Terminal and links*, each with the line its state words, then the
+/// preferences. A platform that lists no item has no row of the first
+/// kind, and a group without rows is not drawn.
+fn integration_groups(app: &App) -> Vec<Group> {
+    let integration = &app.model().integration;
+    let records = &app.model().settings.integration;
+    let home = app.platform().home_dir();
+    let specs = |terminal: bool| -> Vec<Spec> {
+        integration::settings_rows(integration, terminal)
+            .into_iter()
+            .map(|row| {
+                Spec::described(
+                    integration::item_name(row.item),
+                    integration::settings_line(
+                        row,
+                        integration.desktop,
+                        records.record(row.item),
+                        &home,
+                    ),
+                )
+            })
+            .collect()
+    };
+    let mut terminal = specs(true);
+    terminal.push(Spec::described(
+        t!("integration-shell-integration"),
+        t!("integration-shell-integration-desc"),
+    ));
+    vec![
+        Group {
+            title: t!("integration-group-system"),
+            rows: specs(false),
+        },
+        Group {
+            title: t!("integration-group-terminal"),
+            rows: terminal,
+        },
+        Group {
+            title: t!("integration-group-startup"),
+            rows: vec![
+                Spec::described(
+                    t!("integration-check-at-startup"),
+                    t!("integration-check-at-startup-desc"),
+                ),
+                Spec::described(
+                    t!("integration-skipped-items"),
+                    t!("integration-skipped-items-desc"),
+                ),
+            ],
+        },
+    ]
+}
+
+/// The line over the groups of the settings' Integration page: the system, the
+/// desktop and the last check at the left, *Check again* at the right. A
+/// page opened before any check asks for one.
+fn integration_status(ui: &mut egui::Ui, cx: &mut PageCx<'_>) {
+    let scheme = theme::scheme(ui);
+    let found = &cx.app.model().integration;
+    let busy = found.checking || found.applying.is_some();
+    if found.checked_at.is_none() && !busy {
+        cx.requests.push(Request::Command(Command::Integration(
+            IntegrationCommand::Check { startup: false },
+        )));
+    }
+    let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), 36.0), Sense::hover());
+    let mut side = ui.new_child(
+        egui::UiBuilder::new()
+            .max_rect(rect)
+            .layout(egui::Layout::right_to_left(Align::Center)),
+    );
+    let again = widgets::icon_button(
+        &mut side,
+        Some(icons::REFRESH),
+        &t!("integration-check-again"),
+        false,
+        !busy,
+    );
+    if again.clicked() && !busy {
+        cx.requests.push(Request::Command(Command::Integration(
+            IntegrationCommand::Check { startup: false },
+        )));
+    }
+    let mut text = ui.new_child(
+        egui::UiBuilder::new()
+            .max_rect(Rect::from_min_max(
+                rect.min,
+                pos2(side.min_rect().left() - 12.0, rect.bottom()),
+            ))
+            .layout(egui::Layout::left_to_right(Align::Center)),
+    );
+    text.add(
+        egui::Label::new(
+            egui::RichText::new(integration::checked_line(found))
+                .size(theme::TEXT_SECONDARY)
+                .color(scheme.text_secondary),
+        )
+        .truncate()
+        .selectable(false),
+    );
+}
+
+/// The rows of group `group` of the settings' Integration page: an item's pill
+/// and, where its state has one, its button; the switches for shell
+/// integration and the check at startup; *Reset choices*.
+fn integration_rows(group: usize, card: &mut Card<'_>, cx: &mut PageCx<'_>) {
+    let app = cx.app;
+    let found = &app.model().integration;
+    let settings = &app.model().settings.integration;
+    let busy = found.checking || found.applying.is_some();
+    if group == 2 {
+        switch_row(card, 0, settings.check_at_startup, |on| {
+            cx.change(SettingsChange::IntegrationCheckAtStartup(on));
+        });
+        // Something to ask again about: a row switched off, or the whole
+        // dialog silenced.
+        let choices = !settings.ask || Item::ALL.iter().any(|item| settings.declined(*item));
+        card.row(1, |ui| {
+            let reset = widgets::button(ui, &t!("integration-reset-choices"), false, choices);
+            if reset.clicked() && choices && !busy {
+                cx.requests.push(Request::Command(Command::Integration(
+                    IntegrationCommand::Reset,
+                )));
+            }
+        });
+        return;
+    }
+    let rows = integration::settings_rows(found, group == 1);
+    for (index, row) in rows.iter().enumerate() {
+        card.row(index, |ui| {
+            let scheme = theme::scheme(ui);
+            if let Some((label, primary, command)) = integration::status_action(row) {
+                let button = widgets::button(ui, &label, primary, !busy);
+                // Read aloud with its row's name: several rows have an
+                // *Add*.
+                let spoken = t!(
+                    "integration-action-of",
+                    action = label.as_str(),
+                    item = integration::item_name(row.item)
+                );
+                button.widget_info(|| {
+                    egui::WidgetInfo::labeled(egui::WidgetType::Button, !busy, spoken.clone())
+                });
+                if button.clicked() && !busy {
+                    cx.requests
+                        .push(Request::Command(Command::Integration(command)));
+                }
+            }
+            let (text, bg, fg) = integration::status_pill(&row.status, scheme);
+            widgets::pill(ui, &text, bg, fg);
+        });
+    }
+    if group == 1 {
+        switch_row(card, rows.len(), settings.shell_integration, |on| {
+            cx.change(SettingsChange::ShellIntegration(on));
+        });
     }
 }
 
