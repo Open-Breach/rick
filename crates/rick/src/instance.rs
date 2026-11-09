@@ -207,6 +207,7 @@ pub fn apply(
                     Command::Reveal {
                         items: reveal,
                         new_window: new_window && first,
+                        properties: false,
                     },
                     events,
                 );
@@ -237,6 +238,7 @@ pub fn apply(
                 Command::Reveal {
                     items: files.iter().map(|f| location(f)).collect(),
                     new_window,
+                    properties: false,
                 },
                 events,
             );

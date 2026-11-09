@@ -499,12 +499,17 @@ pub enum Command {
     NewWindowAt(Location),
     /// `rick reveal <file>…`: open each file's folder in a new tab of the
     /// focused window — a window of its own for the first with
-    /// `new_window` — and select the files there once they are listed.
+    /// `new_window` — and select the files there once they are listed;
+    /// with `properties`, the Properties dialogue follows the selection.
     Reveal {
         /// The files.
         items: Vec<Location>,
         /// The first folder's tab opens in a new window.
         new_window: bool,
+        /// Open Properties on the first folder's files once they are
+        /// selected: `ShowItemProperties` of the freedesktop file-manager
+        /// interface (specs/system-integration.md §4).
+        properties: bool,
     },
     /// Raise and focus the focused window, as a second launch's command
     /// line asks: the UI gets [`Event::Activate`] with the window and the

@@ -606,6 +606,9 @@ pub struct App {
     /// is listed, with when it asked; a name that never shows is dropped
     /// after [`REVEAL_FOR`].
     reveal_pending: BTreeMap<PaneId, (Vec<Vec<u8>>, std::time::Instant)>,
+    /// The pane whose reveal ends with the Properties dialogue on what it
+    /// selected.
+    reveal_properties: Option<PaneId>,
     /// The console tabs open and the explorer tabs they follow, by the
     /// console's tab.
     console_links: BTreeMap<TabId, ConsoleLink>,
@@ -911,6 +914,7 @@ impl App {
             pending,
             later: Vec::new(),
             reveal_pending: BTreeMap::new(),
+            reveal_properties: None,
             console_links: BTreeMap::new(),
             places_saver,
             volumes_watch: CancelToken::new(),
@@ -1666,7 +1670,11 @@ impl App {
             Command::NewWindowAt(location) => {
                 self.model.new_window(location);
             }
-            Command::Reveal { items, new_window } => self.reveal(&items, new_window),
+            Command::Reveal {
+                items,
+                new_window,
+                properties,
+            } => self.reveal(&items, new_window, properties),
             Command::Activate { token } => events.push(Event::Activate {
                 window: self.model.focused_window,
                 token,
@@ -4260,7 +4268,7 @@ impl App {
     /// `Command::Reveal`: one tab per folder of `items`, in the focused
     /// window (the first in a window of its own with `new_window`), each
     /// selecting its files once listed.
-    fn reveal(&mut self, items: &[Location], new_window: bool) {
+    fn reveal(&mut self, items: &[Location], new_window: bool, properties: bool) {
         let mut folders: Vec<(Location, Vec<Vec<u8>>)> = Vec::new();
         for item in items {
             let Some(parent) = item.path.parent() else {
@@ -4283,6 +4291,9 @@ impl App {
             };
             self.reveal_pending
                 .insert(pane, (names, std::time::Instant::now()));
+            if index == 0 && properties {
+                self.reveal_properties = Some(pane);
+            }
         }
     }
 
@@ -4313,11 +4324,15 @@ impl App {
             return;
         }
         self.reveal_pending.remove(&pane);
+        let properties = self.reveal_properties.take_if(|p| *p == pane).is_some();
         if ids.is_empty() {
             return;
         }
         if let Some(ids) = self.model.select(pane, SelectionChange::Set(ids)) {
             events.push(Event::SelectionChanged { pane, ids });
+        }
+        if properties {
+            self.show_properties(pane, events);
         }
     }
 
