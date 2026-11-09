@@ -2662,13 +2662,17 @@ Once answered, an entry keeps its number and gains a dated decision line.
     profile probe with BSD; the fixture and the expectations follow.
 
 221. (0.2.0 release, 2026-11-08) The Windows Search acceptance writes a
-    file into the fixture directory and expects the index to find it; the
-    runner's indexer, started by CI's setup, backs off while the build and
-    the tests load the machine and did not index the file within five
-    minutes, where a probe on an idle runner found it after ten seconds.
-    Assumed: CI's setup sets the "Disable indexer backoff" policy before
-    it starts the service, and the test allows five minutes, reached only
-    on failure; the acceptance itself is unchanged.
+    file into the fixture directory and expects the index to find it; on
+    the Windows runner the service starts in CI's setup and then crawls
+    the whole profile, the cargo registry the build fills included, and a
+    file written at test time was not indexed within five minutes, with
+    the indexer's backoff disabled or not. A probe on an idle runner found
+    such a file within twenty seconds through the connector's own script
+    and SQL, in both scope spellings.
+    Assumed: the connector works; the Windows job requires the service
+    (RICK_REQUIRE_WINDOWS_SEARCH) but names no fixture, so the test there
+    checks availability and a broad query; the fixture check stays on
+    macOS and Linux, and the test keeps its minute and a half.
 
 222. (0.2.0 release, 2026-11-08) `vfs-local`'s watch handed every event to
     its stream through a bounded channel whose sender blocks while the
