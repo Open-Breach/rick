@@ -11,15 +11,16 @@ use async_trait::async_trait;
 use tempfile::TempDir;
 use types::Error;
 
+use crate::instance::Endpoint;
 use crate::perms::{
     FilePermissions, PermissionChange, Permissions, Principal, PrincipalKind, Principals,
 };
 use crate::traits::{
     Application, Chrome, Clipboard, ConfigDir, ControlsSide, DialogFilter, DragSource, DropTarget,
     Elevate, ElevatedOutput, ImageFormat, IncomingFiles, Mount, NativeDialogs, OpenWith, Point,
-    Properties, PropertiesOutcome, RecentItem, RecentlyUsed, Secrets, StandardFolder,
-    StandardFolders, Terminal, Trash, TrashedItem, Volume, VolumeKind, Volumes, WindowChrome,
-    WindowRef,
+    Properties, PropertiesOutcome, RecentItem, RecentlyUsed, Secrets, SingleInstance,
+    StandardFolder, StandardFolders, Terminal, Trash, TrashedItem, Volume, VolumeKind, Volumes,
+    WindowChrome, WindowRef,
 };
 
 /// The applications the fake offers for every file, the default first.
@@ -608,6 +609,14 @@ impl ConfigDir for Fake {
 
     fn home_dir(&self) -> PathBuf {
         self.dir.path().join("home")
+    }
+}
+
+impl SingleInstance for Fake {
+    /// An endpoint inside the fake's own directory, whatever the config
+    /// directory: a test's instance is nobody else's.
+    fn instance_endpoint(&self, _config_dir: &Path) -> Endpoint {
+        Endpoint::in_dir(self.dir.path())
     }
 }
 

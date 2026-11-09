@@ -8,19 +8,30 @@
 //! `rick --list-plugins` prints the table the Extensions screen
 //! shows and exits; every other argument is a folder to open, each in a
 //! tab of its own (`rick <folder>…`, as the desktop entry's `%F` passes the
-//! selected folders; specs/app-icons.md).
+//! selected folders; specs/app-icons.md), `--new-window` in a window of
+//! their own.
+//!
+//! One Rick runs per user session and config directory
+//! (specs/system-integration.md §3, [`instance`]): a launch first hands
+//! its command line to the Rick already running on the endpoint the
+//! platform names for the config directory (`--config-dir <dir>` picks
+//! another, so two installs coexist), prints the reply and exits with the
+//! instance's status, within a second; only when nothing listens does it
+//! bind the endpoint and open the window itself.
+
+mod instance;
 
 use std::ffi::OsString;
 use std::fmt::Write as _;
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
+use std::process::ExitCode;
 use std::sync::Arc;
 
 use anyhow::Context as _;
 use app::Command;
-use platform::ConfigDir as _;
+use platform::{ConfigDir as _, SingleInstance as _};
 use plugins_native::{Host, Options, PluginStatus};
-use types::Location;
 
 /// What this binary knows about its own build, for the About dialog and
 /// `--version`: the values `build.rs` records, the toolchain the plugin
@@ -108,13 +119,113 @@ fn built_ins() -> Vec<Arc<dyn ext::Extension>> {
     extensions
 }
 
-fn main() -> anyhow::Result<()> {
+/// The help `rick --help` prints, and the instance's reply to a command it
+/// does not know.
+const HELP: &str = "\
+Rick, a god-like file manager
+
+Usage: rick [OPTIONS] [PATH]...
+
+Arguments:
+  [PATH]...  Folders to open, one tab each; the current directory without any
+
+Options:
+      --new-window        Open the paths in a new window
+      --config-dir <DIR>  Use this config directory instead of the platform's; each
+                          config directory is a Rick of its own
+      --list-plugins      List the plugins found and whether each loaded
+  -V, --version           Print the build's details: version, commit, toolchain, OS, plugins
+  -h, --help              Print this help";
+
+/// The arguments the launch itself acts on, before any instance is asked.
+#[derive(Debug, Default, PartialEq, Eq)]
+struct Launch {
+    /// `--version`.
+    version: bool,
+    /// `--help`.
+    help: bool,
+    /// `--list-plugins`.
+    list_plugins: bool,
+    /// `--config-dir <dir>`.
+    config_dir: Option<PathBuf>,
+    /// Everything else, for the instance: `--new-window` and the paths.
+    rest: Vec<OsString>,
+}
+
+/// Splits the command line into what the launch does itself and what it
+/// hands the instance.
+///
+/// # Errors
+///
+/// `--config-dir` without a directory.
+fn launch(args: &[OsString]) -> Result<Launch, String> {
+    let mut launch = Launch::default();
+    let mut args = args.iter();
+    while let Some(arg) = args.next() {
+        if arg == "--version" || arg == "-V" {
+            launch.version = true;
+        } else if arg == "--help" || arg == "-h" {
+            launch.help = true;
+        } else if arg == "--list-plugins" {
+            launch.list_plugins = true;
+        } else if arg == "--config-dir" {
+            let dir = args
+                .next()
+                .filter(|d| !d.is_empty())
+                .ok_or_else(|| "--config-dir takes a directory".to_owned())?;
+            launch.config_dir = Some(PathBuf::from(dir));
+        } else if let Some(dir) = arg
+            .to_str()
+            .and_then(|a| a.strip_prefix("--config-dir="))
+            .filter(|d| !d.is_empty())
+        {
+            launch.config_dir = Some(PathBuf::from(dir));
+        } else {
+            launch.rest.push(arg.clone());
+        }
+    }
+    Ok(launch)
+}
+
+fn main() -> ExitCode {
+    match run() {
+        Ok(code) => code,
+        Err(error) => {
+            // The binary's own report of why it stopped.
+            let _ = writeln!(std::io::stderr().lock(), "rick: {error:#}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+/// Prints a reply's text where it belongs and turns its status into the
+/// process's exit code.
+fn exit_with(status: i32, text: Option<String>) -> anyhow::Result<ExitCode> {
+    if let Some(text) = text {
+        if status == 0 {
+            writeln!(std::io::stdout().lock(), "{text}").context("writing the reply")?;
+        } else {
+            writeln!(std::io::stderr().lock(), "{text}").context("writing the reply")?;
+        }
+    }
+    Ok(u8::try_from(status).map_or(ExitCode::FAILURE, ExitCode::from))
+}
+
+// Start-up is one straight line: the launch's own arguments, the handover
+// or the endpoint, the plugins, the app, the window.
+#[allow(clippy::too_many_lines)]
+fn run() -> anyhow::Result<ExitCode> {
     let args: Vec<OsString> = std::env::args_os().skip(1).collect();
-    let first = args.first().map(OsString::as_os_str);
-    // Both print and exit once the plugins are known: the version text
-    // lists them with their status.
-    let version = first.is_some_and(|arg| arg == "--version" || arg == "-V");
-    let list_plugins = version || first.is_some_and(|arg| arg == "--list-plugins");
+    let launch = match launch(&args) {
+        Ok(launch) => launch,
+        Err(message) => {
+            return exit_with(instance::USAGE, Some(format!("rick: {message}\n\n{HELP}")));
+        }
+    };
+    if launch.help {
+        writeln!(std::io::stdout().lock(), "{HELP}").context("writing the help")?;
+        return Ok(ExitCode::SUCCESS);
+    }
 
     tracing_subscriber::fmt()
         .with_env_filter(
@@ -124,15 +235,46 @@ fn main() -> anyhow::Result<()> {
         .with_writer(std::io::stderr)
         .init();
 
+    let platform = Arc::new(platform::Native::new());
+    let config_dir = launch
+        .config_dir
+        .clone()
+        .unwrap_or_else(|| platform.config_dir());
+
+    // One Rick per user and config directory: a running one takes the
+    // command line and this launch exits with its status; none, and this
+    // launch holds the endpoint from here on.
+    let cwd = std::env::current_dir().context("the working directory")?;
+    // `--version` and `--list-plugins` print and exit once the plugins are
+    // known: the version text lists them with their status.
+    let listener = if launch.list_plugins || launch.version {
+        None
+    } else {
+        let endpoint = platform.instance_endpoint(&config_dir);
+        let for_instance = launch
+            .rest
+            .iter()
+            .map(|a| a.to_string_lossy().into_owned())
+            .collect();
+        match instance::hand_over(&endpoint, for_instance, cwd.clone()).with_context(|| {
+            format!("the single-instance endpoint {}", endpoint.path().display())
+        })? {
+            instance::Outcome::Exit { status, text } => return exit_with(status, text),
+            instance::Outcome::Become(listener) => Some(listener),
+        }
+    };
+
     // The folders on the command line each open in a tab of the restored
     // session's focused window, the first as the start location and the
     // others after it; without any the session comes back as it was. An
     // argument that is no folder is handed on as a location all the same:
     // the pane says what it cannot list, and the start never fails on it.
-    let mut folders = if list_plugins {
+    // `--new-window` means nothing to a launch that opens the first window
+    // anyway.
+    let mut folders = if launch.list_plugins || launch.version {
         Vec::new()
     } else {
-        folders(&args)
+        folders(&launch.rest, &cwd)
     }
     .into_iter();
     let start = folders.next();
@@ -142,8 +284,6 @@ fn main() -> anyhow::Result<()> {
         tracing::info!("starting");
     }
 
-    let platform = Arc::new(platform::Native::new());
-    let config_dir = platform.config_dir();
     let built_ins = built_ins();
     // The question queue the plugins ask the user through (a host key, a
     // passphrase), and the settings they declared: one of each for the
@@ -169,19 +309,19 @@ fn main() -> anyhow::Result<()> {
     });
     let rows: Vec<app::Plugin> = host.plugins().iter().map(row).collect();
     let build = build(&exe);
-    if version {
+    if launch.version {
         writeln!(
             std::io::stdout().lock(),
             "{}",
             ui_egui::about::details(&build, &rows)
         )
         .context("writing the version")?;
-        return Ok(());
+        return Ok(ExitCode::SUCCESS);
     }
-    if list_plugins {
+    if launch.list_plugins {
         write!(std::io::stdout().lock(), "{}", table(host.plugins()))
             .context("writing the plugins table")?;
-        return Ok(());
+        return Ok(ExitCode::SUCCESS);
     }
     let mut extensions = built_ins;
     extensions.extend(host.extensions());
@@ -195,8 +335,8 @@ fn main() -> anyhow::Result<()> {
             platform,
             ui: ui.clone(),
             extensions,
-            config_dir: None,
-            start: start.as_deref().map(location),
+            config_dir: launch.config_dir.clone(),
+            start: start.as_deref().map(instance::location),
         },
         prompts,
         ext_settings,
@@ -207,27 +347,36 @@ fn main() -> anyhow::Result<()> {
     // app's polling like the start location's).
     let mut events = Vec::new();
     for folder in folders {
-        app.handle(Command::NewTab(location(&folder)), &mut events);
+        app.handle(Command::NewTab(instance::location(&folder)), &mut events);
     }
     if !events.is_empty() {
         tracing::debug!(count = events.len(), "events of the start-up tabs dropped");
     }
-    ui_egui::run("Rick", build, app, ui).context("the window could not be opened")
+
+    // The endpoint, served for as long as the window is open: a second
+    // launch's command line runs on the UI thread between two frames.
+    let (externals, receiver) = app::external_channel();
+    let endpoint = listener.as_ref().map(|l| l.endpoint().clone());
+    let serving = listener.map(|listener| instance::serve(listener, externals, Arc::from(HELP)));
+    let result = ui_egui::run("Rick", build, app, ui, Some(receiver))
+        .context("the window could not be opened");
+    if let Some(serving) = serving {
+        serving.abort();
+    }
+    if let Some(endpoint) = endpoint {
+        endpoint.unbind();
+    }
+    result.map(|()| ExitCode::SUCCESS)
 }
 
-/// The folders of the command line, in order: every argument, made
-/// absolute where it names something (a relative path from a launcher
-/// resolves against its working directory), kept as given otherwise.
-fn folders(args: &[OsString]) -> Vec<PathBuf> {
+/// The folders of the command line, in order: every argument but
+/// `--new-window`, resolved against `cwd` (made canonical where it exists
+/// and kept where it does not).
+fn folders(args: &[OsString], cwd: &Path) -> Vec<PathBuf> {
     args.iter()
-        .map(PathBuf::from)
-        .map(|p| std::fs::canonicalize(&p).unwrap_or(p))
+        .filter(|a| *a != "--new-window")
+        .map(|a| instance::resolve(cwd, Path::new(a)))
         .collect()
-}
-
-/// A folder as a location of the local provider.
-fn location(path: &Path) -> Location {
-    Location::new(vfs_local::PROVIDER_ID, platform::paths::from_path(path))
 }
 
 /// A plugin as the Extensions screen lists it.
@@ -346,13 +495,42 @@ mod tests {
             .into_iter()
             .map(|p| p.as_os_str().to_owned())
             .collect();
-        let found = folders(&args);
+        let found = folders(&args, dir.path());
         assert_eq!(found.len(), 3);
         assert_eq!(found[0], a.canonicalize().unwrap_or(a));
         assert_eq!(found[1], b.canonicalize().unwrap_or(b));
         assert_eq!(found[2], missing);
-        assert_eq!(folders(&[]), Vec::<PathBuf>::new());
-        let location = location(&found[0]);
+        assert_eq!(folders(&[], dir.path()), Vec::<PathBuf>::new());
+        let location = instance::location(&found[0]);
         assert_eq!(location.provider, vfs_local::PROVIDER_ID);
+        // A relative argument resolves against the working directory
+        // given, and `--new-window` is no folder.
+        let relative = folders(&["--new-window".into(), "a".into()], dir.path());
+        assert_eq!(relative, [found[0].clone()]);
+    }
+
+    /// The launch's own arguments come out, the rest stays for the
+    /// instance; `--config-dir` takes a directory either way.
+    #[test]
+    fn the_launch_takes_its_own_arguments_and_keeps_the_rest() {
+        let parsed = launch(&[
+            "--config-dir".into(),
+            "/c".into(),
+            "--new-window".into(),
+            "x".into(),
+        ])
+        .unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(parsed.config_dir, Some(PathBuf::from("/c")));
+        assert_eq!(parsed.rest, ["--new-window", "x"]);
+        assert!(!parsed.version && !parsed.help && !parsed.list_plugins);
+        let parsed =
+            launch(&["--config-dir=/d".into(), "-V".into()]).unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(parsed.config_dir, Some(PathBuf::from("/d")));
+        assert!(parsed.version);
+        let parsed =
+            launch(&["--list-plugins".into(), "-h".into()]).unwrap_or_else(|e| panic!("{e}"));
+        assert!(parsed.list_plugins && parsed.help);
+        assert!(launch(&["--config-dir".into()]).is_err());
+        assert!(HELP.contains("--new-window") && HELP.contains("--config-dir"));
     }
 }

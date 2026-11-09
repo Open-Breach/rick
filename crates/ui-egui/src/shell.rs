@@ -733,6 +733,10 @@ pub struct RickUi {
     window_ref: Option<WindowRef>,
     /// The platform has been told about `window_ref`.
     attached: bool,
+    /// Work from outside the windows (a second launch's command line,
+    /// handed over through the single-instance endpoint), run against the
+    /// application before the root window's frame.
+    externals: Option<app::ExternalReceiver>,
 }
 
 /// How many dispatched intents are remembered.
@@ -960,7 +964,19 @@ impl RickUi {
             window_ref: None,
             attached: false,
             viewports,
+            externals: None,
         }
+    }
+
+    /// Takes the work from outside the windows: the single-instance
+    /// endpoint's deliveries, run against the application before the root
+    /// window's frame; a delivery wakes the window.
+    #[must_use]
+    pub fn with_externals(mut self, externals: app::ExternalReceiver) -> Self {
+        let wake = self.ctx.clone();
+        externals.set_waker(Arc::new(move || wake.request_repaint()));
+        self.externals = Some(externals);
+        self
     }
 
     /// The application, for reading the model.
@@ -3894,6 +3910,11 @@ impl RickUi {
         }
         self.now = SystemTime::now();
         let mut events = Vec::new();
+        if window == self.root
+            && let Some(externals) = &mut self.externals
+        {
+            externals.drain(&mut self.app, &mut events);
+        }
         self.app.poll(&mut events);
         self.absorb(events);
         self.adopt_tabs(window);

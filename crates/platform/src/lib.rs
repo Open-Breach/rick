@@ -5,8 +5,8 @@
 //! [`Properties`], [`ConfigDir`], [`NativeDialogs`], [`Clipboard`],
 //! [`Chrome`], [`DragSource`], [`DropTarget`], [`Volumes`], [`Mount`] (a
 //! disk image mounted through the OS: `udisksctl loop-setup`, `hdiutil
-//! attach`, `Mount-DiskImage`), [`StandardFolders`], [`RecentlyUsed`] and
-//! [`Secrets`], bundled as [`Platform`]. [`Native`] is the real
+//! attach`, `Mount-DiskImage`), [`StandardFolders`], [`RecentlyUsed`],
+//! [`Secrets`] and [`SingleInstance`], bundled as [`Platform`]. [`Native`] is the real
 //! implementation for the OS the binary runs on; [`Fake`] is the one tests
 //! use, with a private trash directory and recorded calls.
 //!
@@ -26,7 +26,10 @@
 //! speaks to `rick-perms`, the helper that does so as the administrator;
 //! [`sevenzip`] binds the 7-Zip library (`7z.so`, `7z.dll`) at run time
 //! for the disk images the archive plugins browse, the one place its
-//! `unsafe` lives.
+//! `unsafe` lives; [`instance`] is the single-instance endpoint
+//! ([`SingleInstance`] names it per user and config directory: a Unix
+//! socket or a named pipe) and the one message a second launch hands the
+//! running Rick over it.
 //!
 //! Where the OS keeps the original paths of trashed items to itself
 //! (macOS), the trash lists Rick's own record of what it trashed instead,
@@ -52,6 +55,7 @@ pub mod motion;
 mod dnd;
 mod fake;
 pub mod fs;
+pub mod instance;
 pub mod paths;
 pub mod perms;
 pub mod secrets;
@@ -89,8 +93,8 @@ pub use traits::{
     Application, Chrome, Clipboard, ConfigDir, ControlsSide, DialogFilter, DragSource, DropTarget,
     Elevate, ElevatedOutput, FontFile, Fonts, ImageFormat, IncomingFiles, Motion, Mount,
     NativeDialogs, OpenWith, Platform, Point, Properties, PropertiesOutcome, RecentItem,
-    RecentlyUsed, Secrets, StandardFolder, StandardFolders, SystemFonts, Terminal, Trash,
-    TrashedItem, Volume, VolumeKind, Volumes, WindowChrome, WindowRef,
+    RecentlyUsed, Secrets, SingleInstance, StandardFolder, StandardFolders, SystemFonts, Terminal,
+    Trash, TrashedItem, Volume, VolumeKind, Volumes, WindowChrome, WindowRef,
 };
 pub use trash_record::TRASH_FILE;
 use types::Error;
@@ -168,6 +172,12 @@ impl SystemFonts for Native {
 impl Motion for Native {
     fn reduce_motion(&self) -> bool {
         motion::system()
+    }
+}
+
+impl SingleInstance for Native {
+    fn instance_endpoint(&self, config_dir: &std::path::Path) -> instance::Endpoint {
+        instance::Endpoint::for_config_dir(config_dir)
     }
 }
 

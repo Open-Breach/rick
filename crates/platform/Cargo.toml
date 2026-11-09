@@ -18,8 +18,10 @@ serde = { workspace = true }
 # The request and reply of `rick-perms`, the privileged helper (`perms::helper`).
 serde_json = { workspace = true }
 # The SSH agent's socket (`agent`): a Unix socket on Linux and macOS, the
-# OpenSSH agent's named pipe on Windows, opened on the one runtime.
-tokio = { workspace = true, features = ["net", "time", "io-util"] }
+# OpenSSH agent's named pipe on Windows, opened on the one runtime; the
+# single-instance endpoint (`instance`) is the same kind of socket or pipe,
+# with the one message framed over it.
+tokio = { workspace = true, features = ["net", "time", "io-util", "macros"] }
 tempfile = { workspace = true }
 thiserror = { workspace = true }
 toml = { workspace = true }
