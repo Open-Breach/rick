@@ -3344,7 +3344,69 @@ Once answered, an entry keeps its number and gains a dated decision line.
     record stays as it was — *missing*, so the next start asks again, or
     *set-up* for a drifted one. Nothing is retried by itself.
 
-287. (issue 80, rule 7, 2026-11-09) *Drag ghost*: "a real snapshot of the
+287. (system integration, issue 120, 2026-11-09) §6.1 has "every item with
+    its own switch" and the installer's spec has "Rick never overwrites
+    silently" for its own collisions, but the integration spec does not
+    say what a row does when a `rick.desktop`, a `rick` link or a
+    `org.freedesktop.FileManager1.service` is already there from
+    somewhere else.
+    Assumed (handoff of issue 120: "never overwritten silently: the row
+    says so and asks"): Rick tells its own files by the item's record —
+    a file the record lists is Rick's and is rewritten freely; a file
+    that is there, is not listed and does not already do what Rick's
+    would (the entry or the service file starts another program, the
+    link points elsewhere, an icon has other contents) is *in the way*.
+    The check reports it, the row says so, and performing the item
+    refuses with *exists and was not written by Rick* unless the user
+    agreed to replace it; once replaced it is on record as Rick's. A
+    file that already is what Rick would write is left as it is and
+    stays off the record, so an undo never removes what Rick did not
+    make.
+
+288. (system integration, issue 120, 2026-11-09) §7.1: "**Default file
+    manager** — `xdg-mime default rick.desktop inode/directory` and
+    `x-scheme-handler/rick` for the scope's `mimeapps.list`". The spec
+    names the command; a test may not run it against the real system,
+    and an undo needs what the two types named before.
+    Assumed: Rick edits `$XDG_CONFIG_HOME/mimeapps.list` itself, to what
+    `xdg-mime default` leaves — each of the two keys under `[Default
+    Applications]` set to `rick.desktop`, every other line untouched,
+    the group or the file created when missing — and records each key's
+    previous value. The undo puts a previous value back (or removes the
+    key) only where the type still names Rick, and removes a file Rick
+    created once it names nothing. The item refuses while no
+    `rick.desktop` is where the desktop looks for it: a default that
+    names no application would open folders with nothing.
+
+289. (system integration, issue 120, 2026-11-09) §7.1: "**`rick` command**
+    — a symlink in `~/.local/bin` …, plus the shell function of §4 in
+    Rick's `path.sh` (the one the installer plugin sources from the
+    profile)". The installer regenerates `path.sh` from its install
+    records and writes the function only when Rick is among them; a Rick
+    that runs from where it was unpacked has no record, the plugin may
+    not be loaded, and a regeneration would drop a line it does not
+    know.
+    Assumed: the item writes the function itself, as a block between two
+    marker lines (`# >>> rick command >>>` … `# <<< rick command <<<`) in
+    `path.sh` and, where `fish` is configured, in its drop-in, and adds
+    the installer's own profile line (same text, same marker) where it is
+    missing. The installer carries the block over when it regenerates
+    either file, in place of its own function, and keeps a file alive
+    that only the block still needs. A `path.sh` that already defines the
+    function for this Rick gets no second one. The undo removes the
+    block, the files once they say nothing else, and the profile line
+    Rick added once `path.sh` is gone.
+
+290. (system integration, issue 120, 2026-11-09) §7.1: "`update-desktop-
+    database` and `gtk-update-icon-cache` run when present" — what a
+    failure of either means for the launcher entry is not said.
+    Assumed: nothing. Each is looked up on the `PATH` and run after the
+    entry and the icons are written or removed; a tool that is missing
+    or fails (a user's hicolor folder has no theme index) is logged at
+    debug level and the item is still set up, since the desktops read
+    the entry and the icons without the caches.
+
+291. (issue 80, rule 7, 2026-11-09) *Drag ghost*: "a real snapshot of the
     grabbed pane … drawn at 70 % opacity". A picture of the frame would
     give one even 70 %, but the backend delivers a screenshot for its
     root viewport only (eframe 0.36 paints an immediate viewport with no
@@ -3358,7 +3420,7 @@ Once answered, an entry keeps its number and gains a dated decision line.
     corners are cut square under the rounded border. A paint callback in
     the pane is left out of its ghost.
 
-288. (issue 80, rule 7, 2026-11-09) *Drag ghost*: the ghost "moves rigidly
+292. (issue 80, rule 7, 2026-11-09) *Drag ghost*: the ghost "moves rigidly
     with the cursor". A window paints inside itself only: once the cursor
     leaves the window a pane or a tab was dragged from, nothing of Rick
     is under it to paint the ghost on, unless it is over another Rick
