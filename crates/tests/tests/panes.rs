@@ -283,3 +283,60 @@ fn the_toolbar_shares_the_panes_background_and_only_the_header_band_is_tinted() 
         band.center()
     );
 }
+
+/// Issue 79 item 5: in edit mode the path field has the control height of
+/// Back and Forward, sits on their line and fills the breadcrumb's width.
+#[test]
+fn the_path_field_has_the_control_height_and_fills_the_breadcrumb() {
+    let dir = tree();
+    let mut harness = harness(dir.path(), egui::vec2(1200.0, 700.0));
+    harness.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::L);
+    harness.step();
+    harness.step();
+    let model = harness.state().app().model();
+    let (tab_id, _) = model
+        .active_tab(model.focused)
+        .unwrap_or_else(|| panic!("tab"));
+    let density = model.settings.density;
+    let row = harness
+        .state()
+        .toolbar_row(tab_id)
+        .unwrap_or_else(|| panic!("no toolbar row"));
+    let rects = harness.state().toolbar_rects(tab_id);
+    let back = rects
+        .iter()
+        .find(|(g, _)| *g == "left")
+        .map_or_else(|| panic!("no Back: {rects:?}"), |(_, r)| *r);
+    let middle = rects
+        .iter()
+        .find(|(g, _)| *g == "middle")
+        .map_or_else(|| panic!("no breadcrumb: {rects:?}"), |(_, r)| *r);
+    let field = harness
+        .get_all_by_role(egui::accesskit::Role::TextInput)
+        .map(|n| n.rect())
+        .find(|r| row.contains(r.center()))
+        .unwrap_or_else(|| panic!("no path field in the toolbar {row:?}"));
+    let size = ui_egui::theme::Metrics::of(density).button_size;
+    assert!(
+        (field.height() - size).abs() < 0.5,
+        "field {field:?} against {size}"
+    );
+    assert!(
+        (field.center().y - back.center().y).abs() < 0.5,
+        "field {field:?} on the line of Back {back:?}"
+    );
+    assert!(
+        (field.left() - middle.left()).abs() < 1.0 && (field.width() - middle.width()).abs() < 1.0,
+        "field {field:?} fills the breadcrumb {middle:?}"
+    );
+    // Escape leaves edit mode and brings the breadcrumb back.
+    harness.key_press(egui::Key::Escape);
+    harness.step();
+    harness.step();
+    assert!(
+        harness
+            .get_all_by_role(egui::accesskit::Role::TextInput)
+            .all(|n| !row.contains(n.rect().center())),
+        "the field is gone"
+    );
+}
