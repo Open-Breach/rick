@@ -3226,3 +3226,27 @@ Once answered, an entry keeps its number and gains a dated decision line.
     the new-tab button keep the cursor they have. The closed hand stays
     for the whole of a pane or tab drag, also where a release would move
     nothing. Rule 8 does not touch a drag of entries.
+
+278. (issue 80, rule 7, 2026-11-09) *Drag ghost*: "a real snapshot of the
+    grabbed pane … drawn at 70 % opacity". A picture of the frame would
+    give one even 70 %, but the backend delivers a screenshot for its
+    root viewport only (eframe 0.36 paints an immediate viewport with no
+    screenshot request), and every Rick window beyond the first is such a
+    viewport.
+    Assumed: the snapshot is the pane's own shapes, kept from the frame it
+    was grabbed in and painted again at a quarter, each shape at 70 %. It
+    is the same in every window and needs no frame of delay; where shapes
+    lie over one another — a name on a selected row — a little less than
+    30 % of what is under the ghost shows through, and the snapshot's
+    corners are cut square under the rounded border. A paint callback in
+    the pane is left out of its ghost.
+
+279. (issue 80, rule 7, 2026-11-09) *Drag ghost*: the ghost "moves rigidly
+    with the cursor". A window paints inside itself only: once the cursor
+    leaves the window a pane or a tab was dragged from, nothing of Rick
+    is under it to paint the ghost on, unless it is over another Rick
+    window.
+    Assumed for now: the ghost shows while the cursor is inside the
+    window the drag began in, and the closed hand alone follows the
+    cursor outside it; another window painting the ghost, and what shows
+    over the desktop, are part of rule 6 and are asked there.
