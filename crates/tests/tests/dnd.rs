@@ -234,12 +234,15 @@ fn two_panes(harness: &mut Harness<'_, RickUi>, right: &Path) -> (model::PaneId,
             dir: model::SplitDir::Right,
         },
     );
+    // The split pane: the other pane of the shown workspace, not one of
+    // another workspace.
     let pane_b = harness
         .state()
         .app()
         .model()
+        .dock()
         .panes()
-        .map(|(p, _)| p)
+        .into_iter()
         .find(|p| *p != pane_a)
         .unwrap_or_else(|| panic!("no second pane"));
     command(
@@ -431,7 +434,8 @@ fn drops_onto_a_breadcrumb_a_tab_header_and_another_panes_space_move_the_file() 
     );
     assert!(!dir.path().join("sub/child/deep.txt").exists());
 
-    // Tab header: a second tab at `other`, a file dropped on its header.
+    // Workspace tab: a second workspace at `other`, a file dropped on its
+    // tab in the title row.
     command(
         &mut harness,
         app::Command::Navigate {
@@ -441,7 +445,9 @@ fn drops_onto_a_breadcrumb_a_tab_header_and_another_panes_space_move_the_file() 
     );
     let (first_tab, _) = tab(&harness, pane_a);
     command(&mut harness, app::Command::NewTab(local(&other)));
-    let (other_tab, _) = tab(&harness, pane_a);
+    let other_pane = harness.state().app().model().focused;
+    assert_ne!(other_pane, pane_a, "a new tab is a workspace of its own");
+    let (other_tab, _) = tab(&harness, other_pane);
     command(&mut harness, app::Command::ActivateTab(first_tab));
     let header = harness
         .state()
@@ -456,9 +462,9 @@ fn drops_onto_a_breadcrumb_a_tab_header_and_another_panes_space_move_the_file() 
     assert!(other.join("a.txt").exists(), "moved into the tab's folder");
     assert!(!dir.path().join("a.txt").exists());
     assert_eq!(
-        tab(&harness, pane_a).0,
-        first_tab,
-        "a drop on a header does not switch tabs"
+        harness.state().app().model().focused,
+        pane_a,
+        "a drop on a tab does not switch workspaces"
     );
 
     // Another pane's empty space.

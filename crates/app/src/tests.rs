@@ -233,25 +233,31 @@ fn tabs_and_splits_keep_their_listings_live() {
     let mut h = harness();
     h.settle();
     let pane = h.app.model().focused;
+    let window = h.app.model().focused_window;
     let sub = h.root.path().join("sub");
-
-    h.send(Command::NewTab(local(&sub)));
-    h.settle();
-    assert_eq!(h.names(), [] as [String; 0]);
-    let (second, _) = h
+    let (first, _) = h
         .app
         .model()
         .active_tab(pane)
         .unwrap_or_else(|| panic!("tab"));
-    let first = h
+
+    // A new tab is a workspace of its own, shown and listed.
+    h.send(Command::NewTab(local(&sub)));
+    h.settle();
+    assert_eq!(h.app.model().workspaces(window).len(), 2);
+    let second_pane = h.app.model().focused;
+    assert_ne!(second_pane, pane);
+    assert_eq!(h.names(), [] as [String; 0], "an empty folder, listed");
+    let (second, _) = h
         .app
         .model()
-        .pane(pane)
-        .unwrap_or_else(|| panic!("pane"))
-        .tabs()[0];
+        .active_tab(second_pane)
+        .unwrap_or_else(|| panic!("tab"));
 
+    // Activating a tab shows its workspace again, its listing kept.
     h.send(Command::ActivateTab(first));
     h.settle();
+    assert_eq!(h.app.model().focused, pane);
     assert_eq!(h.names().len(), 4);
 
     h.send(Command::Split {
@@ -272,8 +278,11 @@ fn tabs_and_splits_keep_their_listings_live() {
         "the split pane lists the same location"
     );
 
+    // Closing the one tab of the other workspace closes the workspace.
     h.send(Command::CloseTab(second));
     h.settle();
+    assert_eq!(h.app.model().workspaces(window).len(), 1);
+    assert!(h.app.model().pane(second_pane).is_none());
     assert_eq!(
         h.app
             .model()

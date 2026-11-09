@@ -185,7 +185,7 @@ fn screenshots_of_the_chrome() {
     let mut harness = shell(&deep, egui::vec2(1280.0, 800.0));
     shoot(&mut harness, "title-row-and-details");
 
-    // Two panes, each with its tab strip.
+    // Two panes and a second workspace tab.
     let pane = harness.state().app().model().focused;
     harness.state_mut().app_mut().handle(
         app::Command::Split {
@@ -215,7 +215,7 @@ fn screenshots_of_the_chrome() {
         &mut Vec::new(),
     );
     settle(&mut harness);
-    shoot(&mut harness, "two-panes-tab-strips");
+    shoot(&mut harness, "two-panes-and-tabs");
 
     // Extra-large icon view with thumbnails.
     let mut harness = shell(&deep, egui::vec2(1280.0, 800.0));
@@ -397,6 +397,68 @@ fn screenshots_of_the_preview_pane() {
     harness.state_mut().set_inspector_width(300.0);
     preview(&mut harness, "map-a3.pdf");
     shoot(&mut harness, "preview-pdf-narrow-pane");
+}
+
+/// Issue 60: the title row with three workspace tabs, the second one
+/// shown, in Light and Dark at both densities, as the Figma frame *Main
+/// view*.
+#[test]
+#[ignore = "needs a wgpu adapter; CI runs it and uploads the images"]
+fn screenshots_of_the_title_row() {
+    let (_dir, deep) = sample_tree();
+    let mut harness = shell(&deep, egui::vec2(1920.0, 1000.0));
+    let parent = deep
+        .parent()
+        .unwrap_or_else(|| panic!("parent"))
+        .to_path_buf();
+    // Three workspaces: the deep folder, its parent, the raw folder; the
+    // middle one shown.
+    for folder in [parent, deep.join("raw")] {
+        harness
+            .state_mut()
+            .app_mut()
+            .handle(app::Command::NewTab(local(&folder)), &mut Vec::new());
+        settle(&mut harness);
+    }
+    let model = harness.state().app().model();
+    let middle = model.workspaces(model.focused_window)[1].id;
+    harness
+        .state_mut()
+        .app_mut()
+        .handle(app::Command::ActivateWorkspace(middle), &mut Vec::new());
+    settle(&mut harness);
+    for (theme, density) in [
+        (Theme::Light, Density::Comfortable),
+        (Theme::Light, Density::Compact),
+        (Theme::Dark, Density::Comfortable),
+        (Theme::Dark, Density::Compact),
+    ] {
+        for change in [
+            SettingsChange::Theme(theme),
+            SettingsChange::Density(density),
+        ] {
+            harness
+                .state_mut()
+                .app_mut()
+                .handle(app::Command::Settings(change), &mut Vec::new());
+        }
+        settle(&mut harness);
+        harness.step();
+        harness.step();
+        let theme_name = match theme {
+            Theme::Light => "light",
+            Theme::Dark => "dark",
+            Theme::System => "system",
+        };
+        let density_name = match density {
+            Density::Comfortable => "comfortable",
+            Density::Compact => "compact",
+        };
+        shoot(
+            &mut harness,
+            &format!("title-row-{theme_name}-{density_name}"),
+        );
+    }
 }
 
 /// Issue 17: the Preview tab docked below the explorer and torn out into a

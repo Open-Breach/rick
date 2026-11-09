@@ -2853,3 +2853,30 @@ Once answered, an entry keeps its number and gains a dated decision line.
     that holds the pairs to the rule leaves these three out and names
     them, and the values are for the design to revisit; nothing is
     invented in their place.
+
+243. (design refresh, 2026-11-09) The shortcut table says Mod+W closes the
+    workspace tab; the spec says nothing about the last tab of the last
+    window, and *Windows* says closing the last window asks to exit.
+    Assumed: Mod+W on the last workspace tab of the last window does
+    nothing, as the model keeps the last pane; closing the window is
+    Mod+Shift+W's job (the window's close button).
+
+244. (design refresh, 2026-11-09) The shortcut table keeps *Duplicate tab*
+    (Mod+Shift+D); a workspace tab is a whole layout, and whether a
+    duplicate copies the layout or only the folder is not said.
+    Assumed: a new workspace with one pane at the focused pane's folder,
+    the same as Mod+T, until the layout copy is designed.
+
+245. (design refresh, 2026-11-09) *Workspace tabs* makes the tab row a
+    target for a dragged pane; files and folders dragged from a list over
+    a workspace tab are not mentioned.
+    Assumed: a workspace tab takes a drop into the folder of its focused
+    pane, and resting on it while dragging shows the workspace, as the
+    pane tabs of 0.2 did.
+
+246. (design refresh, 2026-11-09) Until the pane handle of the panes PR
+    exists, a pane's one tab in its bar stays its drag handle, and such a
+    tab can be released on another window's title row, which the spec
+    covers for workspace tabs only.
+    Assumed: the pane becomes a new workspace tab of that window, as it
+    does on its own window's row.

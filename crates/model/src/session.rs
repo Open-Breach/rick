@@ -1,14 +1,22 @@
 //! The session: everything that comes back on the next start, as plain data
 //! that serialises to `session.toml` and to a saved layout.
 //!
-//! A [`Session`] holds every window with its geometry, side panel, dock tree
-//! (splits with their fractions, panes with their tabs in strip order and
-//! the active one) and every tab's kind, location, view mode, sort, group,
-//! filter, flatten, hidden flag, selection ids and scroll offset. Panes are indexed
-//! within their window, so a file written by hand needs no ids. The
+//! A [`Session`] holds every window with its geometry, side panel and
+//! workspaces, every workspace with its dock tree (splits with their
+//! fractions over its panes) and its panes with their tab, and every tab's
+//! kind, location, view mode, sort, group, filter, flatten, hidden flag,
+//! selection ids and scroll offset. Panes are indexed within their
+//! workspace, so a file written by hand needs no ids. The
 //! [`Model`](crate::Model) turns itself into one with
 //! [`Model::session`](crate::Model::session) and is rebuilt from one with
 //! [`Model::from_session`](crate::Model::from_session).
+//!
+//! A file of 0.2 holds the window's one layout directly in the window, its
+//! panes with several tabs each; [`WindowSession::workspaces`] reads it as
+//! one workspace, and the model opens the further tabs as workspaces of
+//! their own.
+
+use std::borrow::Cow;
 
 use serde::{Deserialize, Serialize};
 use types::{EntryId, Location, ProviderId};
@@ -50,10 +58,54 @@ pub struct WindowSession {
     /// Position, size and maximised state; `None` before the window
     /// reported them.
     pub geometry: Option<Geometry>,
-    /// Index of the pane that had the focus.
-    pub focused_pane: usize,
     /// The side panel: docked side, width, collapsed state, folded sections.
     pub side_panel: SidePanel,
+    /// Index into `workspaces` of the one shown.
+    pub active_workspace: usize,
+    /// The workspaces, in the order of the title row's tabs.
+    pub workspaces: Vec<WorkspaceSession>,
+    /// Index of the pane that had the focus, in a file of 0.2 holding the
+    /// window's one layout directly; never written.
+    #[serde(skip_serializing_if = "is_zero")]
+    pub focused_pane: usize,
+    /// The tree of splits over pane indices, in a file of 0.2; never
+    /// written.
+    #[serde(skip_serializing_if = "DockSession::is_default")]
+    pub dock: DockSession,
+    /// The panes the dock refers to, in a file of 0.2; never written.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub panes: Vec<PaneSession>,
+}
+
+// Serde hands the field by reference.
+#[allow(clippy::trivially_copy_pass_by_ref)]
+fn is_zero(n: &usize) -> bool {
+    *n == 0
+}
+
+impl WindowSession {
+    /// The workspaces, a file of 0.2 holding one layout directly in the
+    /// window read as one workspace.
+    #[must_use]
+    pub fn workspaces(&self) -> Cow<'_, [WorkspaceSession]> {
+        if self.workspaces.is_empty() && !self.panes.is_empty() {
+            Cow::Owned(vec![WorkspaceSession {
+                focused_pane: self.focused_pane,
+                dock: self.dock.clone(),
+                panes: self.panes.clone(),
+            }])
+        } else {
+            Cow::Borrowed(&self.workspaces)
+        }
+    }
+}
+
+/// One workspace of a window: a layout of panes.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[serde(default)]
+pub struct WorkspaceSession {
+    /// Index of the pane that had the focus.
+    pub focused_pane: usize,
     /// The tree of splits over pane indices.
     pub dock: DockSession,
     /// The panes the dock refers to.
@@ -86,6 +138,10 @@ impl Default for DockSession {
 }
 
 impl DockSession {
+    fn is_default(&self) -> bool {
+        *self == Self::Pane(0)
+    }
+
     /// Every pane index in the tree, left-to-right, top-to-bottom.
     #[must_use]
     pub fn panes(&self) -> Vec<usize> {
@@ -145,7 +201,7 @@ impl DockSession {
 pub struct PaneSession {
     /// Index into `tabs` of the active tab.
     pub active: Option<usize>,
-    /// The tabs in strip order.
+    /// The pane's tab; several in a file of 0.2, whose panes had strips.
     pub tabs: Vec<TabSession>,
 }
 

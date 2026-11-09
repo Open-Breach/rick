@@ -8,7 +8,7 @@ use std::sync::Arc;
 use ext::{ActionCtx, ActionId, Continuation, Decoration, FsChange, Level, PreviewDoc, Values};
 use model::{
     Column, Dock, DockTarget, Geometry, PaneId, Place, SelectionChange, SettingsChange,
-    SidePanelChange, SortDir, SplitDir, TabId, ViewMode, WindowId,
+    SidePanelChange, SortDir, SplitDir, TabId, ViewMode, WindowId, WorkspaceId,
 };
 use ops::PermissionRequest;
 use platform::{FilePermissions, Principals};
@@ -238,14 +238,35 @@ pub enum Command {
         /// The form's values, or `None` when the dialogue was dismissed.
         values: Option<Values>,
     },
-    /// Open a tab at the location in the focused pane.
+    /// Open a new workspace tab with one pane at the location, in the
+    /// focused pane's window, right after the shown workspace, and show it
+    /// (SPEC.md *Workspace tabs*).
     NewTab(Location),
-    /// Close a tab.
+    /// Close a tab with its pane; a workspace left empty closes with it.
     CloseTab(TabId),
-    /// Make a tab its pane's active one.
+    /// Give a tab's pane the keyboard focus, showing its workspace.
     ActivateTab(TabId),
-    /// Give a pane the keyboard focus.
+    /// Give a pane the keyboard focus, showing its workspace.
     FocusPane(PaneId),
+    /// Show a workspace tab of the title row.
+    ActivateWorkspace(WorkspaceId),
+    /// Close a workspace with every pane in it; the neighbour shows.
+    CloseWorkspace(WorkspaceId),
+    /// Move a workspace tab to a position in its window's title row.
+    MoveWorkspace {
+        /// The workspace.
+        id: WorkspaceId,
+        /// The index it takes, clamped to the row.
+        to: usize,
+    },
+    /// Move a workspace to the end of another window's title row, or into a
+    /// window of its own for `None`.
+    WorkspaceToWindow {
+        /// The workspace.
+        id: WorkspaceId,
+        /// The window, or `None` for a new one.
+        window: Option<WindowId>,
+    },
     /// Split a pane, opening a new pane with a tab at the same location.
     Split {
         /// The pane.
@@ -253,16 +274,19 @@ pub enum Command {
         /// To the right or below.
         dir: SplitDir,
     },
-    /// Dock a tab somewhere else.
+    /// Dock a tab with its pane somewhere else: beside a pane of any
+    /// window, in a new workspace or in a new window.
     MoveTab {
         /// The tab.
         tab: TabId,
         /// Where it goes.
         to: DockTarget,
     },
-    /// Open the window's Preview tab, in a new pane right of every other,
-    /// or close it when it is open. The preview is one tab per window that
-    /// follows the focus; it docks and tears out like any other tab.
+    /// Open the window's Preview tab, in a new pane right of every other
+    /// pane of the shown workspace, or close it when it is open there. The
+    /// preview is one tab per window that follows the focus; toggled on in
+    /// another workspace it moves there; it docks and tears out like any
+    /// other tab.
     TogglePreview {
         /// The window.
         window: WindowId,
@@ -420,16 +444,8 @@ pub enum Command {
     },
     /// Unpin from the side panel, undoable.
     Unpin(Location),
-    /// The strip order of a pane's tabs, as the dock shows them; display
-    /// state the session keeps.
-    TabOrder {
-        /// The pane.
-        pane: PaneId,
-        /// Its tabs, left to right.
-        order: Vec<TabId>,
-    },
-    /// A window's split fractions, as the dock shows them: `dock` has the
-    /// window's panes in the window's splits.
+    /// The shown workspace's split fractions, as the dock shows them:
+    /// `dock` has the workspace's panes in its splits.
     Layout {
         /// The window.
         window: WindowId,

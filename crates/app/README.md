@@ -13,7 +13,8 @@ a language change live), and the session: `session.toml`, written
 after every change at most once per second through a temporary file and once
 more on exit, restored at start (or the start layout the settings name, with
 a vanished folder's tab opened at its nearest ancestor), and the saved
-layouts in `layouts/`. Windows open, close and exchange tabs through it;
+layouts in `layouts/`. Windows open, close and exchange workspace tabs and
+panes through it;
 closing the last one asks the UI to exit. A drag and drop's `Transfer`, `Receive`,
 `SpringLoad`, `Pin` and `Unpin` are commands it handles itself, and so is
 `Open`: a folder navigates, a local file is offered to the archive provider

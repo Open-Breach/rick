@@ -200,52 +200,56 @@ fn restore_brings_every_detail_back_and_writes_at_most_once_per_second() {
         offset: 12.5,
     });
 
-    // A second tab in folder a, sorted by size, filtered, grouped, hidden
-    // files on, icons, with a selection and a scroll offset.
+    // A second workspace tab with a pane in folder a, sorted by size,
+    // filtered, grouped, hidden files on, icons, with a selection and a
+    // scroll offset.
     d.step(Command::NewTab(local(&root.join("a"))));
+    let second = d.app.model().focused;
+    assert_ne!(
+        second, pane,
+        "a new tab is a new workspace with its own pane"
+    );
+    assert_eq!(d.app.model().workspaces(window).len(), 2);
     let (second_tab, _) = d
         .app
         .model()
-        .active_tab(pane)
+        .active_tab(second)
         .unwrap_or_else(|| panic!("tab"));
     d.step(Command::Sort {
-        pane,
+        pane: second,
         by: Column::Size,
         dir: SortDir::Descending,
     });
     d.step(Command::Filter {
-        pane,
+        pane: second,
         text: "t".into(),
     });
     d.step(Command::GroupBy {
-        pane,
+        pane: second,
         by: Some(Column::Type),
     });
-    d.step(Command::ToggleHidden(pane));
+    d.step(Command::ToggleHidden(second));
     d.step(Command::SetView {
-        pane,
+        pane: second,
         mode: ViewMode::Icons(model::IconSize::Large),
     });
-    d.select(pane, &["two.txt", "three.txt"]);
-    let selected = d.tab(pane).selection.clone();
+    d.select(second, &["two.txt", "three.txt"]);
+    let selected = d.tab(second).selection.clone();
     d.step(Command::Scroll {
         tab: second_tab,
         offset: 80.0,
     });
-    // The strip order the dock shows: the second tab first.
-    d.step(Command::TabOrder {
-        pane,
-        order: vec![second_tab, first_tab],
-    });
 
-    // Split right, with a divider the user moved; collapse and move the
-    // side panel; the window's place on the screen.
+    // Back in the first workspace: split right, with a divider the user
+    // moved; collapse and move the side panel; the window's place on the
+    // screen.
     d.step(Command::Split {
         pane,
         dir: SplitDir::Right,
     });
     let right = d.app.model().focused;
     assert_ne!(right, pane);
+    assert_eq!(d.app.model().dock().panes(), [pane, right]);
     let mut layout = d.app.model().dock().clone();
     if let Dock::Split { fraction, .. } = &mut layout {
         *fraction = 0.3;
@@ -306,22 +310,27 @@ fn restore_brings_every_detail_back_and_writes_at_most_once_per_second() {
         w.geometry.map(|g| (g.x, g.y, g.width, g.height)),
         Some((10.0, 20.0, 900.0, 600.0))
     );
-    let panes = w.dock.panes();
+    assert_eq!(w.workspaces.len(), 2, "both workspace tabs");
+    assert_eq!(w.active, w.workspaces[0].id, "the first one shown");
+    let panes = w.dock().panes();
     assert_eq!(panes.len(), 2, "split right");
     assert!(
-        matches!(w.dock, Dock::Split { dir: SplitDir::Right, fraction, .. } if (fraction - 0.3).abs() < 1e-6)
+        matches!(w.dock(), Dock::Split { dir: SplitDir::Right, fraction, .. } if (fraction - 0.3).abs() < 1e-6)
     );
     assert_eq!(model.focused, panes[0]);
 
-    let left = model.pane(panes[0]).unwrap_or_else(|| panic!("pane"));
-    assert_eq!(left.tabs().len(), 2);
-    let (active, tab) = model.active_tab(panes[0]).unwrap_or_else(|| panic!("tab"));
+    let (_, first) = model.active_tab(panes[0]).unwrap_or_else(|| panic!("tab"));
     assert_eq!(
-        active,
-        left.tabs()[0],
-        "the active tab is first in the strip"
+        platform::paths::to_path(&first.location.path).ok(),
+        Some(root.clone())
     );
-    assert_eq!(d.location(panes[0]), root.join("a"));
+    assert!((first.scroll - 12.5).abs() < f32::EPSILON);
+    assert_eq!(first.sort.by, Column::Name);
+    assert_eq!(d.location(panes[1]), root.clone(), "the split pane too");
+
+    let second = w.workspaces[1].focused;
+    let (_, tab) = model.active_tab(second).unwrap_or_else(|| panic!("tab"));
+    assert_eq!(d.location(second), root.join("a"));
     assert_eq!(tab.sort.by, Column::Size);
     assert_eq!(tab.sort.dir, SortDir::Descending);
     assert_eq!(tab.filter, "t");
@@ -331,21 +340,11 @@ fn restore_brings_every_detail_back_and_writes_at_most_once_per_second() {
     assert_eq!(tab.selection, selected);
     assert!((tab.scroll - 80.0).abs() < f32::EPSILON);
     assert!(tab.note.is_none());
-    let other = model
-        .tab(left.tabs()[1])
-        .unwrap_or_else(|| panic!("other tab"));
-    assert_eq!(
-        platform::paths::to_path(&other.location.path).ok(),
-        Some(root.clone())
-    );
-    assert!((other.scroll - 12.5).abs() < f32::EPSILON);
-    assert_eq!(other.sort.by, Column::Name);
-    assert_eq!(d.location(panes[1]), root.join("a"));
 
     // The selected entries are rows again once the listing is in.
-    let rows: Vec<String> = d.names(panes[0]);
+    let rows: Vec<String> = d.names(second);
     assert!(rows.contains(&"two.txt".to_owned()), "{rows:?}");
-    assert_eq!(d.tab(panes[0]).selected().count(), 2);
+    assert_eq!(d.tab(second).selected().count(), 2);
 }
 
 #[test]
@@ -377,9 +376,9 @@ fn a_crash_keeps_the_last_written_session() {
     );
     let pane = d.app.model().focused;
     assert_eq!(
-        d.app.model().pane(pane).map(|p| p.tabs().len()),
-        Some(2),
-        "both tabs are back"
+        d.app.model().workspaces(d.app.model().focused_window).len(),
+        2,
+        "both workspace tabs are back"
     );
     assert_eq!(d.location(pane), root.join("a"));
 }
@@ -542,10 +541,8 @@ fn a_second_window_shares_the_jobs_and_the_undo_log() {
         .model()
         .window(third)
         .unwrap_or_else(|| panic!("window"));
-    assert_eq!(
-        d.app.model().pane(w.focused).map(|p| p.tabs().len()),
-        Some(2)
-    );
+    assert_eq!(w.workspaces.len(), 2, "the layout's two tabs");
+    assert!(d.app.model().pane(w.focused()).is_some());
     d.step(Command::CloseWindow(third));
     assert_eq!(d.app.model().windows().count(), 2);
 
@@ -563,7 +560,12 @@ fn a_second_window_shares_the_jobs_and_the_undo_log() {
     );
     d.step(Command::FocusWindow(second));
     assert_eq!(d.app.model().focused_window, second);
-    assert_eq!(d.app.model().focused, pane_2);
+    // The window shows the workspace opened last, the one at `a`; the
+    // first workspace's pane keeps listing behind it.
+    let shown = d.app.model().focused;
+    assert_ne!(shown, pane_2);
+    assert_eq!(d.app.model().window_of(shown), Some(second));
+    assert_eq!(d.location(shown), root.join("a"));
     d.step(Command::Undo);
     assert!(root.join("one.txt").exists());
     assert!(!root.join("renamed.txt").exists());
@@ -778,7 +780,7 @@ fn through_the_window_the_layout_scroll_and_side_panel_come_back() {
         .model()
         .active_tab(left)
         .unwrap_or_else(|| panic!("tab"));
-    let wanted = session.windows[0].panes[0].tabs[0].scroll;
+    let wanted = session.windows[0].workspaces[0].panes[0].tabs[0].scroll;
     assert!(wanted > 0.0);
     let deadline = Instant::now() + Duration::from_secs(5);
     while (harness.state().scroll_offset(tab) - wanted).abs() > 0.5 {

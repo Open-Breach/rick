@@ -291,7 +291,7 @@ fn open(requests: &mut Vec<Request>, pane: PaneId, location: Location, new_tab: 
 fn focused_pane(app: &App, window: WindowId) -> PaneId {
     app.model()
         .window(window)
-        .map_or(app.model().focused, |w| w.focused)
+        .map_or(app.model().focused, model::Window::focused)
 }
 
 /// Draws the panel for `window`: navigation goes out as requests, drop

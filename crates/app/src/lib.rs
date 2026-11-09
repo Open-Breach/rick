@@ -1037,6 +1037,15 @@ impl App {
         let mut model = Model::from_session(settings, &session, &self.home);
         model.jobs = jobs;
         self.model = model;
+        // The new model numbers its panes and tabs from one again: a
+        // listing of the old model under the same numbers would pass for
+        // the new pane's and leave it empty, so every pane lists afresh.
+        for (_, live) in std::mem::take(&mut self.live) {
+            live.cancel.cancel();
+            for child in live.children.values() {
+                child.cancel.cancel();
+            }
+        }
     }
 
     fn save_layout(&mut self, name: &str, events: &mut Vec<Event>) {
@@ -1217,8 +1226,11 @@ impl App {
     /// The location of the first other pane of the pane's window whose
     /// active tab is an explorer: the other side of a two-pane layout.
     fn other_location(&self, pane: PaneId) -> Option<Location> {
-        let window = self.model.window(self.model.window_of(pane)?)?;
-        window
+        let (window, workspace) = self.model.workspace_of(pane)?;
+        self.model
+            .workspaces(window)
+            .iter()
+            .find(|ws| ws.id == workspace)?
             .dock
             .panes()
             .into_iter()
@@ -1427,20 +1439,42 @@ impl App {
             Command::FocusPane(pane) => {
                 self.model.focus(pane);
             }
+            Command::ActivateWorkspace(id) => {
+                self.model.activate_workspace(id);
+            }
+            Command::CloseWorkspace(id) => {
+                self.model.close_workspace(id);
+            }
+            Command::MoveWorkspace { id, to } => {
+                self.model.move_workspace(id, to);
+            }
+            Command::WorkspaceToWindow { id, window } => {
+                self.model.workspace_to_window(id, window);
+            }
             Command::Split { pane, dir } => {
                 self.model.split(pane, dir);
             }
             Command::MoveTab { tab, to } => {
                 self.model.move_tab(tab, to);
             }
-            Command::TogglePreview { window, fraction } => match self.model.preview_tab(window) {
-                Some(tab) => {
-                    self.model.close_tab(tab);
+            Command::TogglePreview { window, fraction } => {
+                let shown = self.model.window(window).map(|w| w.active);
+                let here = self.model.preview_tab(window).filter(|tab| {
+                    self.model
+                        .pane_of(*tab)
+                        .and_then(|pane| self.model.workspace_of(pane))
+                        .map(|(_, ws)| ws)
+                        == shown
+                });
+                match here {
+                    Some(tab) => {
+                        self.model.close_tab(tab);
+                    }
+                    None => {
+                        self.model.open_preview(window, fraction);
+                    }
                 }
-                None => {
-                    self.model.open_preview(window, fraction);
-                }
-            },
+            }
             Command::CancelJob(id) => {
                 self.jobs.cancel(id);
             }
@@ -1518,9 +1552,6 @@ impl App {
             }
             Command::PreviewRetry(pane) => self.restart_preview(pane),
             Command::PreviewCopy(pane) => self.copy_preview_text(pane),
-            Command::TabOrder { pane, order } => {
-                self.model.set_tab_order(pane, order);
-            }
             Command::Layout { window, dock } => {
                 self.model.set_layout(window, dock);
             }
@@ -4217,7 +4248,11 @@ fn repair(mounts: &Mounts, home: &Location, session: &mut Session) {
     for tab in session
         .windows
         .iter_mut()
-        .flat_map(|w| w.panes.iter_mut())
+        .flat_map(|w| {
+            w.panes
+                .iter_mut()
+                .chain(w.workspaces.iter_mut().flat_map(|ws| ws.panes.iter_mut()))
+        })
         .flat_map(|p| p.tabs.iter_mut())
     {
         if mounts.provider(tab.location.provider).is_none() {
