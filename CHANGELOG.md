@@ -30,6 +30,25 @@ the pull request that brought the change.
   Phosphor icons come first in both families with their text code points
   moved out of a letter's way, so no letter shows for an icon and no icon
   for a letter (#69).
+- Workspace tabs in the title row (issue 60, SPEC.md *Title row* and
+  *Workspace tabs*): each tab is a whole workspace — a layout of panes
+  with their locations, histories, selections and dividers — titled after
+  the folder in its focused pane with the place's, the view's or the
+  provider's icon, 220 px wide on the bottom edge of a `titlebar/height`
+  row, the active one filled `bg/pane` and joined to the panes below; the
+  new-tab button follows the last tab, a middle click or the close button
+  closes a tab, a drag along the row reorders them, a tab dropped outside
+  every window opens a new one and one dropped on another window's row
+  moves there, and a pane dropped on the row, or on the centre target of
+  another pane, becomes a workspace of its own. Panes hold one tab each
+  and have no tab strips; *Open in new tab* everywhere, Mod+T, Mod+W,
+  Mod+Tab, Mod+1 to 9 and the Move tab shortcuts act on workspaces. The
+  menu slot of the title row is as wide as the side panel, so the first
+  tab starts where the panes begin; the search box is 320 px before the
+  window group and gives way only when the row is short of room. The
+  session and the saved layouts hold the workspaces in order with the
+  active one; a `session.toml` of 0.2 reads as one workspace per window,
+  its panes' further tabs opening as workspaces of their own (#70).
 
 ### Removed
 
