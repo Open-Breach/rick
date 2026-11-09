@@ -375,7 +375,7 @@ fn references_outside_the_file_are_not_followed() {
         panic!("not pixels")
     };
     assert!(
-        data.chunks_exact(4).all(|px| px[3] == 0),
+        data.as_chunks::<4>().0.iter().all(|px| px[3] == 0),
         "a referenced picture was drawn: {:?}",
         at(&data, width, 4, 4)
     );
