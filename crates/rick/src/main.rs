@@ -35,9 +35,13 @@ use plugins_native::{Host, Options, PluginStatus};
 
 /// What this binary knows about its own build, for the About dialog and
 /// `--version`: the values `build.rs` records, the toolchain the plugin
-/// host was built with, the contributors, and the component list of the
-/// release beside the binary (`None` in a build without one).
-fn build(exe: &Path) -> ui_egui::about::Build {
+/// host was built with, the contributors, the component list of the
+/// release beside the binary (`None` in a build without one), and the
+/// licence lists of the plugins loaded from outside the release's folder.
+fn build(exe: &Path, plugins: &[app::Plugin]) -> ui_egui::about::Build {
+    let plugins_dir = exe
+        .parent()
+        .map(|dir| dir.join(plugins_native::PLUGINS_DIR));
     ui_egui::about::Build {
         version: env!("CARGO_PKG_VERSION").to_owned(),
         commit: env!("RICK_GIT_HASH").to_owned(),
@@ -46,10 +50,9 @@ fn build(exe: &Path) -> ui_egui::about::Build {
         toolchain: plugins_native::HOST_TOOLCHAIN.to_owned(),
         contributors: include_str!(env!("RICK_CONTRIBUTORS")),
         roles: include_str!(env!("RICK_CONTRIBUTOR_ROLES")),
-        plugins_dir: exe
-            .parent()
-            .map(|dir| dir.join(plugins_native::PLUGINS_DIR)),
         third_party: ui_egui::about::load_third_party(exe),
+        plugin_licences: ui_egui::about::load_plugin_licences(plugins, plugins_dir.as_deref()),
+        plugins_dir,
     }
 }
 
@@ -308,7 +311,7 @@ fn run() -> anyhow::Result<ExitCode> {
         settings: Some(Arc::clone(&ext_settings) as Arc<dyn ext::SettingsStore>),
     });
     let rows: Vec<app::Plugin> = host.plugins().iter().map(row).collect();
-    let build = build(&exe);
+    let build = build(&exe, &rows);
     if launch.version {
         writeln!(
             std::io::stdout().lock(),

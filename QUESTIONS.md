@@ -3070,3 +3070,16 @@ Once answered, an entry keeps its number and gains a dated decision line.
     frames is drawn in the system font's one weight, egui having no
     medium face.
 
+
+263. (issue 101, 2026-11-09) *About dialog*, Third-party licences page: the
+    footer reads "Generated at build time from Cargo.lock by cargo-about ·
+    N components, M licence types", and a build without the generated file
+    "shows the Third-party licences row as 'not available in this build'
+    and no count; the Bundled runtimes section still shows" — but not what
+    the page's footer says then, nor whether the plugins' entries count
+    among the N components.
+    Assumed: without the file the footer says the crates' list is not
+    available in this build and gives the counts of what is shown; the
+    plugins' entries count as components and their licence ids as types,
+    on the About page's row too; *Export…* writes every section shown,
+    the plugins' included, whatever the search and the filter show.

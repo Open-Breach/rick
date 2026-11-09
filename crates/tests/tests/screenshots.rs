@@ -1911,6 +1911,7 @@ fn screenshots_of_the_about_dialog() {
         roles: "",
         plugins_dir: None,
         third_party: None,
+        plugin_licences: Vec::new(),
     };
     harness.state_mut().set_build(build);
     for (theme, density) in [
@@ -1970,6 +1971,144 @@ fn screenshots_of_the_about_dialog() {
         harness.key_press(egui::Key::Escape);
         harness.step();
     }
+}
+
+/// The Third-party licences page (specs/about-dialog.md) beside the Figma
+/// frame *About — Third-party licences*: the list with a few crates, and
+/// the list with a row open.
+#[test]
+#[ignore = "needs a wgpu adapter; CI runs it and uploads the images"]
+fn screenshots_of_the_third_party_licences() {
+    let (_dir, deep) = sample_tree();
+    let mut harness = shell(&deep, egui::vec2(1100.0, 1000.0));
+    let component =
+        |name: &str, version: &str, license: &str, author: &str, repo: &str, text: &str| {
+            ui_egui::about::Component {
+                name: name.to_owned(),
+                version: version.to_owned(),
+                license: license.to_owned(),
+                copyright: vec![author.to_owned()],
+                repository: repo.to_owned(),
+                text: text.to_owned(),
+            }
+        };
+    let mit = "MIT License\n\nCopyright (c) 2018 Emil Ernerfeldt\n\nPermission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the \"Software\"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:\n\nThe above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.";
+    let apache = "Apache License\nVersion 2.0, January 2004\nhttp://www.apache.org/licenses/\n\nTERMS AND CONDITIONS FOR USE, REPRODUCTION, AND DISTRIBUTION";
+    let build = ui_egui::about::Build {
+        version: "0.3.0-dev".to_owned(),
+        commit: "a1b2c3d".to_owned(),
+        target: "x86_64-unknown-linux-gnu".to_owned(),
+        date: "2026-11-09".to_owned(),
+        toolchain: "rustc 1.97.0".to_owned(),
+        contributors: "Claude\nSerge\n",
+        roles: "",
+        plugins_dir: None,
+        third_party: Some(vec![
+            component(
+                "egui",
+                "0.36.2",
+                "MIT",
+                "Emil Ernerfeldt",
+                "https://github.com/emilk/egui",
+                mit,
+            ),
+            component(
+                "eframe",
+                "0.36.2",
+                "Apache-2.0",
+                "Emil Ernerfeldt",
+                "https://github.com/emilk/egui",
+                apache,
+            ),
+            component(
+                "egui_dock",
+                "0.21.0",
+                "MIT",
+                "Adam Gąsior",
+                "https://github.com/Adanos020/egui_dock",
+                mit,
+            ),
+            component(
+                "wgpu",
+                "30.0.1",
+                "Apache-2.0",
+                "gfx-rs developers",
+                "https://github.com/gfx-rs/wgpu",
+                apache,
+            ),
+            component(
+                "tokio",
+                "1.49.0",
+                "MIT",
+                "Tokio Contributors",
+                "https://github.com/tokio-rs/tokio",
+                mit,
+            ),
+            component(
+                "serde",
+                "1.0.228",
+                "Apache-2.0",
+                "David Tolnay",
+                "https://github.com/serde-rs/serde",
+                apache,
+            ),
+            component(
+                "gix",
+                "0.90.0",
+                "Apache-2.0",
+                "Sebastian Thiel",
+                "https://github.com/GitoxideLabs/gitoxide",
+                apache,
+            ),
+            component(
+                "image",
+                "0.25.9",
+                "Apache-2.0",
+                "The image-rs Developers",
+                "https://github.com/image-rs/image",
+                apache,
+            ),
+        ]),
+        plugin_licences: Vec::new(),
+    };
+    harness.state_mut().set_build(build);
+    harness.state_mut().app_mut().handle(
+        app::Command::Settings(SettingsChange::Theme(Theme::Light)),
+        &mut Vec::new(),
+    );
+    harness.state_mut().open_about();
+    settle(&mut harness);
+    let click = |harness: &mut Harness<'_, RickUi>, label: &str| {
+        let at = harness
+            .get_by_role_and_label(egui::accesskit::Role::Button, label)
+            .rect()
+            .center();
+        harness.event(egui::Event::PointerMoved(at));
+        harness.step();
+        for pressed in [true, false] {
+            harness.event(egui::Event::PointerButton {
+                pos: at,
+                button: egui::PointerButton::Primary,
+                pressed,
+                modifiers: egui::Modifiers::default(),
+            });
+            harness.step();
+        }
+        harness.event(egui::Event::PointerMoved(egui::pos2(20.0, 980.0)));
+        harness.step();
+        harness.step();
+    };
+    click(&mut harness, "Third-party licences");
+    shoot(&mut harness, "about-licences");
+    click(&mut harness, "egui 0.36.2");
+    shoot(&mut harness, "about-licences-open");
+    harness.state_mut().app_mut().handle(
+        app::Command::Settings(SettingsChange::Theme(Theme::Dark)),
+        &mut Vec::new(),
+    );
+    settle(&mut harness);
+    harness.step();
+    shoot(&mut harness, "about-licences-dark");
 }
 
 #[test]
