@@ -747,6 +747,34 @@ const DROP_SLOT_WIDTH: f32 = 160.0;
 const DEFAULT_SIZE: [f32; 2] = [1100.0, 720.0];
 /// The smallest inner size.
 const MIN_SIZE: [f32; 2] = [480.0, 320.0];
+/// The one identifier of the application (specs/app-icons.md): the Wayland
+/// app id and the X11 `WM_CLASS` of every window, and so the name of the
+/// desktop entry (`rick.desktop`), of its `Icon=` in the hicolor theme and
+/// of its `StartupWMClass=`. A compositor takes the running window's icon
+/// from the desktop entry this id names; were any of them to differ, GNOME
+/// and KDE would show a generic icon and a second launcher entry.
+pub const APP_ID: &str = "rick";
+/// The window icon, the 256 px tile of the Portal burst icon: the title
+/// bar, taskbar and Alt-Tab on Windows and X11 (Wayland takes the desktop
+/// entry's, macOS the bundle's).
+const WINDOW_ICON_PNG: &[u8] = include_bytes!("../../../assets/icons/png/rick-256.png");
+
+/// The window icon decoded once; `None` when the bundled PNG does not
+/// decode, which is said once and leaves the window with the system's
+/// default icon.
+fn window_icon() -> Option<Arc<egui::IconData>> {
+    static ICON: std::sync::OnceLock<Option<Arc<egui::IconData>>> = std::sync::OnceLock::new();
+    ICON.get_or_init(
+        || match eframe::icon_data::from_png_bytes(WINDOW_ICON_PNG) {
+            Ok(icon) => Some(Arc::new(icon)),
+            Err(error) => {
+                tracing::warn!(%error, "the window icon did not decode");
+                None
+            }
+        },
+    )
+    .clone()
+}
 
 /// The dock's look (SPEC.md *Panes*): no tab bars, no border around the
 /// focused pane, every pane a `bg/pane` surface, the panes separated by a
@@ -827,8 +855,8 @@ fn viewport_of(window: WindowId) -> ViewportId {
     ViewportId::from_hash_of(("rick-window", window.0))
 }
 
-/// The viewport builder for a window: Rick's own chrome, at the window's
-/// restored geometry when it has one.
+/// The viewport builder for a window: Rick's own chrome, the app id and the
+/// window icon, at the window's restored geometry when it has one.
 #[must_use]
 pub fn viewport_builder(
     title: &str,
@@ -837,7 +865,11 @@ pub fn viewport_builder(
 ) -> ViewportBuilder {
     let mut viewport = ViewportBuilder::default()
         .with_title(title)
+        .with_app_id(APP_ID)
         .with_min_inner_size(MIN_SIZE);
+    if let Some(icon) = window_icon() {
+        viewport = viewport.with_icon(icon);
+    }
     viewport = match geometry {
         Some(g) => viewport
             .with_position([g.x, g.y])
@@ -4077,5 +4109,41 @@ pub fn column_label(column: Column) -> String {
         Column::Accessed => t!("column-accessed-lower"),
         Column::Size => t!("column-size-lower"),
         Column::Items => t!("column-items-lower"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The bundled icon is the 256 px tile, decoded once.
+    #[test]
+    fn the_window_icon_is_the_256_px_tile() {
+        let icon = window_icon().unwrap_or_else(|| panic!("the window icon did not decode"));
+        assert_eq!((icon.width, icon.height), (256, 256));
+        assert_eq!(icon.rgba.len(), 256 * 256 * 4);
+        assert!(Arc::ptr_eq(
+            &icon,
+            &window_icon().unwrap_or_else(|| panic!("the window icon did not decode"))
+        ));
+    }
+
+    /// Every window carries the app id and the icon, whatever its chrome.
+    #[test]
+    fn every_viewport_carries_the_app_id_and_the_icon() {
+        for native_controls in [false, true] {
+            let chrome = platform::WindowChrome {
+                controls: ControlsSide::Right,
+                native_controls,
+                native_controls_width: 0.0,
+            };
+            let viewport = viewport_builder("Rick", chrome, None);
+            assert_eq!(viewport.app_id.as_deref(), Some(APP_ID));
+            assert_eq!(APP_ID, "rick");
+            let icon = viewport
+                .icon
+                .unwrap_or_else(|| panic!("the viewport has no icon"));
+            assert_eq!((icon.width, icon.height), (256, 256));
+        }
     }
 }
