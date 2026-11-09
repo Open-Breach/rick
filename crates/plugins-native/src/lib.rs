@@ -38,7 +38,7 @@ use std::path::Path;
 
 pub use host::{Host, Options, PLUGINS_DIR, Plugin, PluginStatus, Source};
 pub use load::{LoadError, Loaded, crate_stem, load_library};
-pub use manifest::{Library, MANIFEST_FILE, ManifestError, PluginToml};
+pub use manifest::{CommandToml, Library, MANIFEST_FILE, ManifestError, PluginToml};
 
 /// The toolchain this host was built with, as `rustc -V` prints it. A
 /// plugin's manifest must name the same one.

@@ -64,6 +64,7 @@ impl RenameExtension {
                 points: Points::ACTION,
                 platforms: Platforms::ALL,
                 previews: &[],
+                commands: &[],
             },
         }
     }

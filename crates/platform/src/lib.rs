@@ -5,8 +5,12 @@
 //! [`Properties`], [`ConfigDir`], [`NativeDialogs`], [`Clipboard`],
 //! [`Chrome`], [`DragSource`], [`DropTarget`], [`Volumes`], [`Mount`] (a
 //! disk image mounted through the OS: `udisksctl loop-setup`, `hdiutil
-//! attach`, `Mount-DiskImage`), [`StandardFolders`], [`RecentlyUsed`] and
-//! [`Secrets`], bundled as [`Platform`]. [`Native`] is the real
+//! attach`, `Mount-DiskImage`), [`StandardFolders`], [`RecentlyUsed`],
+//! [`Secrets`], [`SingleInstance`] and [`Activation`] (raising the window a
+//! second launch's path opened in: `xdg_activation_v1` with the launcher's
+//! token, `_NET_ACTIVE_WINDOW`, `NSApp.activate`, `SetForegroundWindow`),
+//! bundled as [`Platform`]. [`process`] asks the system whether the shell
+//! in a console has handed its terminal to a job. [`Native`] is the real
 //! implementation for the OS the binary runs on; [`Fake`] is the one tests
 //! use, with a private trash directory and recorded calls.
 //!
@@ -26,7 +30,10 @@
 //! speaks to `rick-perms`, the helper that does so as the administrator;
 //! [`sevenzip`] binds the 7-Zip library (`7z.so`, `7z.dll`) at run time
 //! for the disk images the archive plugins browse, the one place its
-//! `unsafe` lives.
+//! `unsafe` lives; [`instance`] is the single-instance endpoint
+//! ([`SingleInstance`] names it per user and config directory: a Unix
+//! socket or a named pipe) and the one message a second launch hands the
+//! running Rick over it.
 //!
 //! Where the OS keeps the original paths of trashed items to itself
 //! (macOS), the trash lists Rick's own record of what it trashed instead,
@@ -52,8 +59,10 @@ pub mod motion;
 mod dnd;
 mod fake;
 pub mod fs;
+pub mod instance;
 pub mod paths;
 pub mod perms;
+pub mod process;
 pub mod secrets;
 pub mod sevenzip;
 // The Linux trash formats dates and macOS parses them (Spotlight's
@@ -86,11 +95,11 @@ pub use perms::{
 pub use raw_window_handle;
 pub use time::iso8601;
 pub use traits::{
-    Application, Chrome, Clipboard, ConfigDir, ControlsSide, DialogFilter, DragSource, DropTarget,
-    Elevate, ElevatedOutput, FontFile, Fonts, ImageFormat, IncomingFiles, Motion, Mount,
-    NativeDialogs, OpenWith, Platform, Point, Properties, PropertiesOutcome, RecentItem,
-    RecentlyUsed, Secrets, StandardFolder, StandardFolders, SystemFonts, Terminal, Trash,
-    TrashedItem, Volume, VolumeKind, Volumes, WindowChrome, WindowRef,
+    Activation, Application, Chrome, Clipboard, ConfigDir, ControlsSide, DialogFilter, DragSource,
+    DropTarget, Elevate, ElevatedOutput, FontFile, Fonts, ImageFormat, IncomingFiles, Motion,
+    Mount, NativeDialogs, OpenWith, Platform, Point, Properties, PropertiesOutcome, RecentItem,
+    RecentlyUsed, Secrets, SingleInstance, StandardFolder, StandardFolders, SystemFonts, Terminal,
+    Trash, TrashedItem, Volume, VolumeKind, Volumes, WindowChrome, WindowRef,
 };
 pub use trash_record::TRASH_FILE;
 use types::Error;
@@ -113,6 +122,29 @@ const fn native_mountable() -> &'static [ImageFormat] {
     #[cfg(windows)]
     {
         &[ImageFormat::Iso, ImageFormat::Vhd, ImageFormat::Vhdx]
+    }
+}
+
+/// The operating system and desktop this process runs on, one line for the
+/// About dialog's details (specs/about-dialog.md): on Linux the
+/// distribution's `PRETTY_NAME` from `/etc/os-release` and
+/// `XDG_CURRENT_DESKTOP` when set (`Ubuntu 24.04.1 LTS · GNOME`); on macOS
+/// the product version (`macOS 15.1`); on Windows the edition, display
+/// version and build (`Windows 11 Pro 24H2 (build 26100)`). Never fails:
+/// what cannot be read is left out, down to the bare name of the system.
+#[must_use]
+pub fn os_description() -> String {
+    #[cfg(target_os = "linux")]
+    {
+        linux::os_description()
+    }
+    #[cfg(target_os = "macos")]
+    {
+        macos::os_description()
+    }
+    #[cfg(windows)]
+    {
+        windows::os_description()
     }
 }
 
@@ -145,6 +177,12 @@ impl SystemFonts for Native {
 impl Motion for Native {
     fn reduce_motion(&self) -> bool {
         motion::system()
+    }
+}
+
+impl SingleInstance for Native {
+    fn instance_endpoint(&self, config_dir: &std::path::Path) -> instance::Endpoint {
+        instance::Endpoint::for_config_dir(config_dir)
     }
 }
 

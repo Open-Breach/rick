@@ -136,6 +136,52 @@ disagrees with the file; `cargo xtask bundle` leaves out a plugin whose
 plugins of its own platform (QUESTIONS.md 121). Add the crate to `deny.toml` (`wrappers = ["rick",
 "tests"]`) like `ext-git`.
 
+**A subcommand of the command line.** A plugin can add `rick <command>
+<args…>` (specs/system-integration.md §4): the manifest declares the
+command and its help line, `register` adds an `ext::CliCommand` of that
+name, and the host dispatches the command to it — in the running Rick
+when there is one, so the command works on the window the user sees. The
+command runs on the application thread like an action: it answers with
+text for the caller's terminal, or with what an action would return (a
+job, a form, a view), which the application applies to the focused pane
+while the caller gets exit status zero. `ext-installer`'s `rick install
+<archive>` opens the install form this way. The manifest's `[[commands]]`
+land in `plugin.toml`, so `rick --help` lists them without loading the
+plugin:
+
+```rust
+use ext::{CliCommand, CliCtx, CliOutcome, CommandSpec, JobRunner, UiHost};
+
+// In the manifest:
+//     commands: &[CommandSpec { name: "greet", help: "Say hello to someone" }],
+
+struct Greet;
+
+impl CliCommand for Greet {
+    fn name(&self) -> &'static str {
+        "greet"
+    }
+    fn run(&self, ctx: CliCtx, _jobs: &JobRunner, _ui: &dyn UiHost) -> Result<CliOutcome, Error> {
+        match ctx.args.as_slice() {
+            [name] => Ok(CliOutcome::Text(format!("hello, {name}"))),
+            _ => Err(Error::Unsupported("usage: rick greet <name>")),
+        }
+    }
+}
+
+// In `register`:
+//     reg.command(Arc::new(Greet));
+```
+
+```toml
+[[commands]]
+name = "greet"
+help = "Say hello to someone"
+```
+
+A relative path among the arguments resolves against `ctx.cwd`, the
+caller's working directory, never the instance's.
+
 **Where it goes.** `cargo xtask bundle` puts the plugin under
 `target/<profile>/bundle/plugins/<id>/`; the release archives carry the same
 `plugins/` directory beside the binary. A user drops a plugin into the

@@ -58,6 +58,7 @@ impl CompressExtension {
                 points: Points::ACTION,
                 platforms: Platforms::ALL,
                 previews: &[],
+                commands: &[],
             },
         }
     }

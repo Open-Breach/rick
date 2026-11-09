@@ -9,7 +9,12 @@ parsing into a screen of cells with colours, attributes, a scroll region, an
 alternate screen, tab stops and a scrollback of 10 000 lines, shared with
 `ext-ssh`'s console over SSH) that the UI draws, and
 what is typed in the tab goes to the shell; closing the tab ends the
-shell. The setting `console` in `action-terminal.toml` (a choice in the
+shell. The shell's working directory, reported through OSC 7 (the session
+tells the shells a VTE version so they do), is the console's `cwd`, which
+the tab the console was opened from follows, and the platform says
+whether a job has the terminal, so the application types `cd` into the
+console on the tab's navigation only at the prompt
+(specs/system-integration.md §4). The setting `console` in `action-terminal.toml` (a choice in the
 Settings window: `embedded` or `system`) sends the action to the user's
 terminal emulator through `platform::Terminal` instead. *Open in system
 file manager* stays a core action. It is a plugin

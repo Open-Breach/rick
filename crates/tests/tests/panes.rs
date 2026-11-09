@@ -340,3 +340,145 @@ fn the_path_field_has_the_control_height_and_fills_the_breadcrumb() {
         "the field is gone"
     );
 }
+
+/// The text field inside the toolbar `row`, the path field, if one is
+/// shown.
+fn toolbar_field(harness: &Harness<'_, RickUi>, row: egui::Rect) -> Option<egui::Rect> {
+    harness
+        .get_all_by_role(egui::accesskit::Role::TextInput)
+        .map(|n| n.rect())
+        .find(|r| row.contains(r.center()))
+}
+
+/// The text of the path field inside the toolbar `row`.
+fn toolbar_field_value(harness: &Harness<'_, RickUi>, row: egui::Rect) -> Option<String> {
+    harness
+        .get_all_by_role(egui::accesskit::Role::TextInput)
+        .find(|n| row.contains(n.rect().center()))
+        .and_then(|n| n.value())
+}
+
+/// Issue 79 item 10 (SPEC.md *Path bar*, *Editing*): the path field is
+/// `bg/control` with an `accent/focus` ring, the whole path is selected on
+/// entry so typing replaces it, Escape restores the breadcrumbs unchanged
+/// and so does losing the focus; a click on the empty part of the
+/// breadcrumb bar opens the field too.
+#[test]
+// One scenario: the look, the selection, Escape, the click and the focus.
+#[allow(clippy::too_many_lines)]
+fn the_path_field_is_styled_selects_the_path_and_cancels_on_escape_or_focus_loss() {
+    let dir = tree();
+    let mut harness = harness(dir.path(), egui::vec2(1200.0, 700.0));
+    harness.state_mut().app_mut().handle(
+        app::Command::Settings(SettingsChange::Theme(Theme::Light)),
+        &mut Vec::new(),
+    );
+    harness.step();
+    harness.step();
+    let model = harness.state().app().model();
+    let (tab_id, before) = model
+        .active_tab(model.focused)
+        .unwrap_or_else(|| panic!("tab"));
+    let location = before.location.clone();
+    let row = harness
+        .state()
+        .toolbar_row(tab_id)
+        .unwrap_or_else(|| panic!("no toolbar row"));
+
+    // Mod+L: the field in the design's colours.
+    harness.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::L);
+    harness.step();
+    harness.step();
+    let field = toolbar_field(&harness, row).unwrap_or_else(|| panic!("no path field"));
+    let scheme = ui_egui::theme::Scheme::LIGHT;
+    assert_eq!(
+        fill_under(&harness, egui::pos2(field.right() - 4.0, field.center().y)),
+        Some(scheme.bg_control),
+        "bg/control behind the path"
+    );
+    let ring = harness
+        .output()
+        .shapes
+        .iter()
+        .any(|clipped| match &clipped.shape {
+            egui::Shape::Rect(r) => {
+                r.stroke.color == scheme.accent_focus
+                    && (r.stroke.width - 1.0).abs() < 0.01
+                    && r.rect.expand(1.0).contains_rect(field)
+                    && field.expand(1.0).contains_rect(r.rect)
+            }
+            _ => false,
+        });
+    assert!(ring, "a 1 px accent/focus ring around {field:?}");
+
+    // The whole path is selected: typing replaces it.
+    harness.event(egui::Event::Text("x".to_owned()));
+    harness.step();
+    harness.step();
+    let value = toolbar_field_value(&harness, row).unwrap_or_default();
+    assert_eq!(value, "x", "the typed text replaces the selected path");
+
+    // Escape: the breadcrumbs are back and nothing moved.
+    harness.key_press(egui::Key::Escape);
+    harness.step();
+    harness.step();
+    assert!(toolbar_field(&harness, row).is_none(), "the field is gone");
+    harness.get_by_label("Parent directory");
+    let model = harness.state().app().model();
+    assert_eq!(
+        model
+            .active_tab(model.focused)
+            .map(|(_, t)| t.location.clone()),
+        Some(location.clone())
+    );
+
+    // A click on the empty part of the breadcrumb bar opens the field; a
+    // click elsewhere takes the focus and cancels it.
+    let rects = harness.state().toolbar_rects(tab_id);
+    let middle = rects
+        .iter()
+        .find(|(g, _)| *g == "middle")
+        .map_or_else(|| panic!("no breadcrumb: {rects:?}"), |(_, r)| *r);
+    let empty = egui::pos2(middle.right() - 60.0, middle.center().y);
+    harness.event(egui::Event::PointerMoved(empty));
+    harness.step();
+    for pressed in [true, false] {
+        harness.event(egui::Event::PointerButton {
+            pos: empty,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::default(),
+        });
+        harness.step();
+    }
+    harness.step();
+    assert!(
+        toolbar_field(&harness, row).is_some(),
+        "a click on the empty breadcrumb edits"
+    );
+    let list = harness.get_by_label("Cargo.toml").rect().center();
+    harness.event(egui::Event::PointerMoved(list));
+    harness.step();
+    for pressed in [true, false] {
+        harness.event(egui::Event::PointerButton {
+            pos: list,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::default(),
+        });
+        harness.step();
+    }
+    harness.step();
+    harness.step();
+    assert!(
+        toolbar_field(&harness, row).is_none(),
+        "losing the focus cancels"
+    );
+    let model = harness.state().app().model();
+    assert_eq!(
+        model
+            .active_tab(model.focused)
+            .map(|(_, t)| t.location.clone()),
+        Some(location)
+    );
+}

@@ -27,6 +27,7 @@ use platform::raw_window_handle::{HasDisplayHandle as _, HasWindowHandle as _};
 use platform::{ControlsSide, WindowRef};
 use types::{EntryId, Location};
 
+use crate::about::{self, AboutDialog};
 use crate::console::ConsoleUi;
 use crate::dnd::{Dnd, DragView, Source, Spring, Target, Zone};
 use crate::dock::DockSync;
@@ -69,8 +70,9 @@ pub struct TabUi {
     pub footer_row: Option<egui::Rect>,
     /// The details list's column header band in the last frame, for tests.
     pub header_band: Option<egui::Rect>,
-    /// Forget the column widths on the next frame.
-    pub reset_columns: bool,
+    /// The x of every boundary between two columns in the last frame, for
+    /// tests.
+    pub column_boundaries: Vec<f32>,
     /// How many rows the last frame could show, for Page Up and Down.
     pub visible_rows: usize,
     /// The list's vertical scroll offset in the last frame.
@@ -676,10 +678,9 @@ pub struct RickUi {
     settings: settings_ui::SettingsWindow,
     shortcuts: ShortcutsScreen,
     extensions_open: bool,
-    about_open: bool,
-    /// What the About window shows as the version: the binary's version
-    /// and git hash, or this crate's version until the binary says.
-    version: String,
+    /// The About dialog (specs/about-dialog.md), with the binary's build
+    /// details once it says them.
+    about: AboutDialog,
     /// The Preview tab's own state: pinned-panel search, what it drew. One
     /// preview, shown in every window that opens the tab.
     inspector_state: inspector::PaneState,
@@ -733,6 +734,10 @@ pub struct RickUi {
     window_ref: Option<WindowRef>,
     /// The platform has been told about `window_ref`.
     attached: bool,
+    /// Work from outside the windows (a second launch's command line,
+    /// handed over through the single-instance endpoint), run against the
+    /// application before the root window's frame.
+    externals: Option<app::ExternalReceiver>,
 }
 
 /// How many dispatched intents are remembered.
@@ -890,11 +895,11 @@ pub fn viewport_builder(
 }
 
 impl RickUi {
-    /// The version the About window shows, as the binary reports it
-    /// (`rick --version`).
+    /// The build details the About dialog shows, as the binary knows them
+    /// (`rick --version` prints the same).
     #[must_use]
-    pub fn with_version(mut self, version: impl Into<String>) -> Self {
-        self.version = version.into();
+    pub fn with_build(mut self, build: about::Build) -> Self {
+        self.about.set_build(build);
         self
     }
 
@@ -933,8 +938,7 @@ impl RickUi {
             settings: settings_ui::SettingsWindow::default(),
             shortcuts: ShortcutsScreen::default(),
             extensions_open: false,
-            about_open: false,
-            version: env!("CARGO_PKG_VERSION").to_owned(),
+            about: AboutDialog::default(),
             inspector_state: inspector::PaneState::default(),
             inspector_width,
             properties: properties::PropertiesDialog::default(),
@@ -961,7 +965,19 @@ impl RickUi {
             window_ref: None,
             attached: false,
             viewports,
+            externals: None,
         }
+    }
+
+    /// Takes the work from outside the windows: the single-instance
+    /// endpoint's deliveries, run against the application before the root
+    /// window's frame; a delivery wakes the window.
+    #[must_use]
+    pub fn with_externals(mut self, externals: app::ExternalReceiver) -> Self {
+        let wake = self.ctx.clone();
+        externals.set_waker(Arc::new(move || wake.request_repaint()));
+        self.externals = Some(externals);
+        self
     }
 
     /// The application, for reading the model.
@@ -1095,6 +1111,23 @@ impl RickUi {
         self.extensions_open
     }
 
+    /// The About dialog, for the tests.
+    #[must_use]
+    pub fn about(&self) -> &AboutDialog {
+        &self.about
+    }
+
+    /// Opens the About dialog, as the menu's *About Rick* does; for the
+    /// tests.
+    pub fn open_about(&mut self) {
+        self.about.open();
+    }
+
+    /// Replaces the build details the About dialog shows; for the tests.
+    pub fn set_build(&mut self, build: about::Build) {
+        self.about.set_build(build);
+    }
+
     /// The question a dialogue is showing, if any.
     #[must_use]
     pub fn asking(&self) -> Option<&Ask> {
@@ -1173,6 +1206,16 @@ impl RickUi {
     #[must_use]
     pub fn header_band(&self, tab: TabId) -> Option<egui::Rect> {
         self.tabs.get(&tab).and_then(|t| t.header_band)
+    }
+
+    /// The x of every boundary between two columns of a tab's details
+    /// list in the last frame, left to right, for tests.
+    #[must_use]
+    pub fn column_boundaries(&self, tab: TabId) -> Vec<f32> {
+        self.tabs
+            .get(&tab)
+            .map(|t| t.column_boundaries.clone())
+            .unwrap_or_default()
     }
 
     /// The toolbar row of a tab in the last frame, for tests.
@@ -1305,6 +1348,29 @@ impl RickUi {
         self.windows.get_mut(&window)
     }
 
+    /// Raises and focuses a window, as a second launch's command line
+    /// asks: through the backend for every window, and through the
+    /// platform's activation for the root window, whose handles the
+    /// backend gives out (`xdg_activation` with the launcher's token,
+    /// `_NET_ACTIVE_WINDOW`, `NSApp.activate`, `SetForegroundWindow`).
+    fn activate(&mut self, window: WindowId, token: Option<&str>) {
+        let viewport = if window == self.root {
+            ViewportId::ROOT
+        } else {
+            viewport_of(window)
+        };
+        self.ctx
+            .send_viewport_cmd_to(viewport, ViewportCommand::Minimized(false));
+        self.ctx
+            .send_viewport_cmd_to(viewport, ViewportCommand::Focus);
+        if window == self.root
+            && let Some(window_ref) = &self.window_ref
+            && let Err(error) = self.app.platform().activate_window(window_ref, token)
+        {
+            tracing::debug!(%error, "the window was not raised through the platform");
+        }
+    }
+
     fn toast(&mut self, level: Level, text: impl Into<String>) {
         self.toasts.push(Toast {
             level,
@@ -1320,6 +1386,7 @@ impl RickUi {
                     self.thumbnails.arrived(&self.ctx, id, size, frame);
                 }
                 Event::Notify { level, text } => self.toast(level, text),
+                Event::Activate { window, token } => self.activate(window, token.as_deref()),
                 Event::Properties(info) => self.properties.open(*info),
                 Event::HashesOpened { hashes, format, .. } => self.hash.open(hashes, format),
                 Event::PreviewReady { pane, doc } => {
@@ -1484,6 +1551,7 @@ impl RickUi {
         if self.dialog.is_some()
             || self.name_prompt.is_some()
             || self.shortcuts.rebinding.is_some()
+            || self.about.is_open()
             || !self.app.model().conflicts.is_empty()
             || !self.app.model().questions.is_empty()
         {
@@ -1586,7 +1654,7 @@ impl RickUi {
                     Request::NewTabAt(location) => self.handle(Command::NewTab(location)),
                     Request::FocusPane(pane) => self.handle(Command::FocusPane(pane)),
                     Request::Toast(level, text) => self.toast(level, text),
-                    Request::About => self.about_open = true,
+                    Request::About => self.about.open(),
                     Request::StartDrag {
                         pane,
                         tab,
@@ -2293,8 +2361,11 @@ impl RickUi {
                 mode: ViewMode::Details,
             }),
             Intent::SizeColumns => {
-                if let Some((tab_id, _)) = self.app.model().active_tab(pane) {
-                    self.tab_ui(tab_id).reset_columns = true;
+                if let Some((tab, _)) = self.app.model().active_tab(pane) {
+                    self.handle(Command::ColumnWidths {
+                        tab,
+                        columns: BTreeMap::new(),
+                    });
                 }
             }
             Intent::Sort(column) => {
@@ -3877,6 +3948,11 @@ impl RickUi {
         }
         self.now = SystemTime::now();
         let mut events = Vec::new();
+        if window == self.root
+            && let Some(externals) = &mut self.externals
+        {
+            externals.drain(&mut self.app, &mut events);
+        }
         self.app.poll(&mut events);
         self.absorb(events);
         self.adopt_tabs(window);
@@ -3971,7 +4047,7 @@ impl RickUi {
                 &self.app,
                 &mut self.requests,
             );
-            settings_ui::about_window(ctx, &mut self.about_open, &self.version);
+            self.about.show(ctx, &self.app, &mut self.requests);
             self.properties.show(ctx, &mut self.requests);
             self.hash.show(ctx, &self.app, &mut self.requests);
             self.show_texts(ctx);

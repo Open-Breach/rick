@@ -8,6 +8,13 @@ repository.workspace = true
 
 build = "build.rs"
 
+# The command line and the single instance as a library (`cli`,
+# `instance`), so the binary's integration tests drive them against the
+# built binary.
+[lib]
+name = "rick"
+path = "src/lib.rs"
+
 [[bin]]
 name = "rick"
 path = "src/main.rs"
@@ -93,7 +100,12 @@ ext-search-tracker = { workspace = true, optional = true }
 ext-search-baloo = { workspace = true, optional = true }
 ext-preview-3d = { workspace = true, optional = true }
 ext-preview-icons = { workspace = true, optional = true }
+runtime = { workspace = true }
 anyhow = { workspace = true }
+clap = { workspace = true }
+# The single-instance endpoint's serving loop (`instance`): the timers and
+# the task handle, on the one runtime.
+tokio = { workspace = true, features = ["time", "rt"] }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 
@@ -108,7 +120,6 @@ winresource = { version = "0.1", default-features = false }
 # The tests of `rick-perms`, the privileged helper: run through the fake
 # platform, and as root through the polkit stand-in of Linux CI.
 ops = { workspace = true }
-runtime = { workspace = true }
 tempfile = { workspace = true }
 
 [lints]

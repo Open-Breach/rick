@@ -9,6 +9,42 @@ the pull request that brought the change.
 
 ### Added
 
+- Single instance, the command line and `rick://` (issue 103,
+  [`specs/system-integration.md`](specs/system-integration.md) §3 and
+  §4, milestone 1 of the integration track). One Rick per user session
+  and config directory: the first launch binds an endpoint named after
+  both — a Unix socket in `$XDG_RUNTIME_DIR` (Linux) or the user's
+  temporary directory (macOS), a named pipe on Windows — and a second
+  launch hands its command line over as one length-prefixed JSON message
+  with a protocol version, prints the reply and exits with the instance's
+  status within a second; an instance that does not answer is reported,
+  a socket a crash left behind is reclaimed, and a second window opens
+  only for `--new-window` when no instance answers (#106). The command
+  line is parsed with `clap`: `rick [<path>…]` opens each folder as a tab
+  of the most recently focused window (the working directory without
+  any), `rick reveal <file>…` opens the files' folders and selects the
+  files once listed, `--new-window` puts them in a window of their own,
+  `--config-dir <dir>` runs another install, and paths resolve against
+  the caller's working directory; plugins declare subcommands in their
+  manifest (`[[commands]]` in `plugin.toml`) and register an
+  `ext::CliCommand` the running instance dispatches to, `rick install
+  <archive>` of the tarball installer being the first, and `--help` lists
+  core and plugin commands; a bare word that names nothing is an unknown
+  command answered with the help and exit 2 (#108). The window a path
+  opened in is raised through the platform — `xdg_activation_v1` with the
+  launcher's token on Wayland, `_NET_ACTIVE_WINDOW` on X11,
+  `NSApp.activate` on macOS, `SetForegroundWindow` after the launch's
+  `AllowSetForegroundWindow` on Windows (#114). `rick:///<path>` opens an
+  existing folder, reveals an existing file and is an error toast
+  otherwise; the desktop entry (`%U`, `x-scheme-handler/rick`) and
+  `Info.plist` (`CFBundleURLTypes`) register the scheme (#115). The
+  embedded console reports its working directory through OSC 7 (the
+  session tells the shells a VTE version so they do) and the tab it was
+  opened from follows it; the tab's navigation types `cd` into the
+  console while the shell is at its prompt (Linux and macOS can tell; a
+  Windows pseudo console cannot, so nothing is typed there); the tarball
+  installer's `path.sh` defines a `rick` function for login shells that
+  lack `~/.local/bin` on their PATH (#116). Questions 264–267 (#117).
 - SVG and SVGZ previews in `ext-preview-image` (issue 83, SPEC.md *Vector
   images*): claimed by the `svg` root element, or the gzip magic with the
   `.svgz` name, never by the extension alone; rasterised with `resvg` at
@@ -319,6 +355,35 @@ the pull request that brought the change.
   named *Eject <drive>* for the tooltip and the screen reader; a click
   ejects the drive, as the context menu's *Eject* does. The usage bar's
   colours and the read-only drives are issue 79 item 8 (issue 79 item 7).
+- Drive cards as decided for the design refresh (SPEC.md *This Machine*):
+  the usage bar's fill follows how full the drive is, like the Trash pill
+  — `accent/usage` below 80 %, `status/warning` from 80 %, `status/danger`
+  from 90 % — in the card and in the This Machine overview; a drive the
+  operating system mounted read-only (a live USB, an optical disc, a
+  mounted ISO) shows a full bar in `text/placeholder`, no percentage and
+  nothing else in the row, the bar's tooltip and accessible description
+  *Read-only*; the name stays on one line with an ellipsis. `Volume` of the
+  `platform` crate reports `read_only` on every platform: the `ro` mount
+  option on Linux, `MNT_RDONLY` on macOS, `FILE_READ_ONLY_VOLUME` on
+  Windows, an ISO's mount everywhere (issue 79 item 8).
+- The column header as decided for the design refresh (SPEC.md *File
+  list*): no permanent divider between the titles; the boundary between
+  two headers has a 6 px hit zone that, hovered, shows a 1 px
+  `border/strong` divider across the band and the column-resize cursor;
+  dragging it resizes the column before it, Name included, a double-click
+  fits that column to the title and the rows in view, no column goes under
+  48 px, and the last column takes what is left. The widths are the tab's
+  (`Command::ColumnWidths`, `Tab::columns` by column id) and come back
+  with the session; *Size columns* puts the defaults back (issue 79
+  item 9).
+- Path editing as decided for the design refresh (SPEC.md *Path bar*):
+  Mod+L, or a click on the empty part of the breadcrumb bar, swaps the
+  breadcrumbs for a text field in place — `button/size` tall on the Back /
+  Forward line and as wide as the breadcrumb, `bg/control` with a 1 px
+  `accent/focus` ring and `radius/control` corners, the path in 13 px
+  `text/primary` — with the whole path selected on entry, so typing
+  replaces it; Enter navigates, Escape and losing the focus restore the
+  breadcrumbs unchanged (issue 79 item 10).
 
 ## [0.2.0] - 2026-11-08
 

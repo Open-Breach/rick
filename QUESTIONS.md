@@ -2997,3 +2997,135 @@ Once answered, an entry keeps its number and gains a dated decision line.
     gives the variant's own pixels), proven by its tests; the hotspot
     toggle shows the `Tag` glyph until the set has a crosshair; both are
     the pane's to change under the design refresh.
+
+258. (issue 101, 2026-11-09) *About dialog*, Generation: "`RICK_CONTRIBUTORS`
+    (newline-separated names) from `crates/rick/build.rs`". A build script
+    hands cargo one `cargo:rustc-env` directive per line, so a value with a
+    newline in it cannot travel through the environment.
+    Assumed: `build.rs` writes the names, one per line, into
+    `OUT_DIR/contributors.txt` and `RICK_CONTRIBUTORS` names that file,
+    which the binary embeds with `include_str!`; `RICK_CONTRIBUTOR_ROLES`
+    names a copy of the repository's `CONTRIBUTORS.md` the same way (empty
+    when there is none), for the roles of the credits card. The release
+    build checks the repository out with its whole history, since a shallow
+    clone's shortlog names one person.
+
+259. (issue 101, 2026-11-09) *About dialog*, Third-party licences page:
+    the bundled runtimes are "listed by hand in `about/bundled.toml` with
+    name, version, …". `release.yml` pins the GStreamer and 7-Zip releases
+    but downloads the latest pdfium build of bblanchon/pdfium-binaries, so
+    pdfium's version in the file can drift from the archive's.
+    Assumed: `bundled.toml` records the pdfium build current when the file
+    was written (chromium/8138, 2026-11-04) and says so in a comment; the
+    fonts are egui's bundled four (Ubuntu Light, Hack, Noto Emoji, the
+    emoji icon font) and Phosphor Icons, with the versions from the font
+    files' name tables. Pinning pdfium in `release.yml`, or reading the
+    version from the downloaded release, would close the gap.
+
+260. (issue 101, 2026-11-09) *About dialog*, Generation: "The bundle puts
+    `third-party.json` beside the binary (macOS: `Contents/Resources/`).
+    The dialog reads it once at startup."
+    Assumed: the release's package step copies the file beside `rick` on
+    Linux and Windows and into `Rick.app/Contents/Resources/` on macOS; the
+    binary looks beside itself first and in `../Resources/` second, so a
+    bundle and a flat directory both work, and `cargo xtask bundle` (a
+    developer's layout) carries no file: a build without it shows "not
+    available in this build", as the spec says for `cargo run`.
+
+261. (issue 101, 2026-11-09) *About dialog*, Generation: "The release
+    workflow fails when the file is missing or when the set of crates in it
+    differs from `Cargo.lock`." `Cargo.lock` holds crates of every platform
+    (wasm, Android), the build and dev dependencies and the workspace's own
+    crates, none of which the release links, so the two sets never match
+    as they are; and cargo-about lists the workspace crates themselves
+    (they do not say `publish = false`, which is what its `private.ignore`
+    reads) plus a few crates of target expressions it cannot evaluate
+    (`windows_x86_64_gnu`, `schannel`).
+    Assumed: `.github/scripts/check-third-party.py` fails the `licenses`
+    job when the file is missing or malformed, when a crate `cargo tree`
+    resolves for any release target with the release build's features is
+    not in it, or when an entry names a crate `Cargo.lock` lacks; the extra
+    entries are reported and allowed (over-attribution harms no one), and
+    the dialog leaves out the entries whose repository is Rick's own. The
+    `copyright` of an entry is the crate's authors from Cargo's metadata,
+    an array of strings, Cargo having no copyright field; the dialog shows
+    the first "Copyright" line of the licence text when there is one.
+    Marking the workspace crates `publish = false` would take them out of
+    the generated file at the source.
+
+262. (issue 101, 2026-11-09) *About dialog*, Credits card: "fixed rows first
+    — Serge …; Claude (Anthropic) … — then the GitHub contributors appended
+    at build time (`git shortlog -sn --no-merges` …), each with the role
+    from `CONTRIBUTORS.md` when a line matches the name". The shortlog of
+    this repository names "Claude", "Serge" and "Serge Berwert", the two
+    people of the fixed rows, and the spec does not say how a line of
+    `CONTRIBUTORS.md` (which does not exist yet) matches a name.
+    Assumed: a contributor whose first word is a fixed row's first word
+    (case aside) is that person and is not repeated; a line matches when,
+    after a list marker, it starts with the name, and what follows a dash,
+    a colon or a comma is the role. Two more small calls of this item: the
+    OS and desktop line needs the operating system's version, so a
+    `platform::os_description()` was added to the platform crate rather
+    than a `cfg(target_os)` elsewhere; and the "medium" weight of the
+    frames is drawn in the system font's one weight, egui having no
+    medium face.
+
+
+263. (issue 101, 2026-11-09) *About dialog*, Third-party licences page: the
+    footer reads "Generated at build time from Cargo.lock by cargo-about ·
+    N components, M licence types", and a build without the generated file
+    "shows the Third-party licences row as 'not available in this build'
+    and no count; the Bundled runtimes section still shows" — but not what
+    the page's footer says then, nor whether the plugins' entries count
+    among the N components.
+    Assumed: without the file the footer says the crates' list is not
+    available in this build and gives the counts of what is shown; the
+    plugins' entries count as components and their licence ids as types,
+    on the About page's row too; *Export…* writes every section shown,
+    the plugins' included, whatever the search and the filter show.
+
+264. (system integration, 2026-11-09) §4: "`rick [<path>…]` (no argument:
+    the current directory …)". The desktop entry runs `rick %F`, so a
+    launcher click without a selection is also a launch with no argument,
+    with the launcher's working directory (usually the home) — before the
+    single instance it restored the session as it was, now the spec's
+    reading adds a tab at that directory to the restored session, and a
+    second click while Rick runs opens a home tab in the running window.
+    Assumed: the spec's reading, literally, for every entry point, since
+    the binary cannot tell a terminal from a launcher and the spec names
+    no flag that would; if the launcher should only raise the window, the
+    desktop entry needs an argument form of its own, Serge's call.
+
+265. (system integration, 2026-11-09) §4: "`rick://<path>` URL scheme …
+    `rick:///home/serge/Apps` opens the folder … anything that is not an
+    existing local path shows an error toast and opens nothing." Rick's
+    own virtual locations are spelled `rick://apps`, `rick://trash` (the
+    `rick` provider of `vfs-rick`), so a link `rick://apps` reads as the
+    Installed Apps view to anyone who knows them, while the spec's grammar
+    has an empty host and a local path only.
+    Assumed: the spec's grammar, literally — a `rick://` URL with a host
+    names no path on this computer, so it shows the error toast and opens
+    nothing; mapping `rick://<view>` to the virtual provider's view would
+    be one more arm in the binary's `apply` if wanted.
+
+266. (system integration, 2026-11-09) §4: "the console reports its working
+    directory through OSC 7". No shell reports it to a terminal it does
+    not know: bash and zsh do so through the distributions' `vte.sh` and
+    fish by itself, and each checks the terminal by `VTE_VERSION`.
+    Assumed: the console's session sets `VTE_VERSION` (to a recent VTE's,
+    7800) in the shell's environment, so the three shells report the
+    directory where that script or that check is in place, and a shell
+    without either reports nothing and the tab stays where it was; the
+    emulator ignores the other sequences the variable may invite (OSC 777
+    notifications).
+
+267. (system integration, 2026-11-09) §4: "Rick emits `cd` on tab
+    navigation only while the console has no foreground job". Linux and
+    macOS say whether a job has the terminal (`/proc/<pid>/stat`,
+    `proc_pidinfo`); a Windows pseudo console has no foreground process
+    group to ask about.
+    Assumed: where the system cannot say, Rick does not type into the
+    console, so on Windows the tab follows the console (OSC 7, where the
+    shell sends it) but the console does not follow the tab, rather than
+    risk typing into a running program; a Windows answer (the console
+    host's process list) would lift that.

@@ -16,8 +16,9 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::SystemTime;
 
 use ext::{
-    Action, ActionCtx, ActionGroup, ActionId, ActionOutcome, Availability, Continuation, Field,
-    Form, FormLater, Header, HeaderIcon, JobRunner, PreviewRow, Shortcut, UiHost, Values,
+    Action, ActionCtx, ActionGroup, ActionId, ActionOutcome, Availability, CliCommand, CliCtx,
+    CliOutcome, CommandSpec, Continuation, Field, Form, FormLater, Header, HeaderIcon, JobRunner,
+    PreviewRow, Shortcut, UiHost, Values,
 };
 use types::{CancelToken, Entry, EntryKind, Error, Location, Progress, ProviderId};
 
@@ -147,6 +148,21 @@ impl Installer {
         lock(&self.detections).insert(path.to_path_buf(), (stamp, Arc::clone(&detected)));
         Ok(detected)
     }
+}
+
+/// The subcommand `rick install <archive>`.
+pub const INSTALL_COMMAND: &str = "install";
+
+/// What the manifest declares for the command line: `install`.
+pub const COMMANDS: &[CommandSpec] = &[CommandSpec {
+    name: INSTALL_COMMAND,
+    help: "Install a tar or zip archive as an application (Linux)",
+}];
+
+/// Every command-line subcommand over `installer`.
+#[must_use]
+pub fn commands(installer: &Arc<Installer>) -> Vec<Arc<dyn CliCommand>> {
+    vec![Arc::new(InstallCommand(Arc::clone(installer)))]
 }
 
 /// Every action over `installer`.
@@ -1030,6 +1046,51 @@ fn install_through_form(
         Ok(())
     });
     ActionOutcome::Later(later)
+}
+
+/// `rick install <archive>`: *Install as application…* from the command
+/// line. The archive, resolved against the caller's working directory, is
+/// read by the job *Reading archive…* and the install form opens in the
+/// running Rick with every guess editable; the caller's terminal gets
+/// exit status zero at once, and an error (no such file, not an archive,
+/// another platform) with status 1.
+pub struct InstallCommand(Arc<Installer>);
+
+impl CliCommand for InstallCommand {
+    fn name(&self) -> &'static str {
+        INSTALL_COMMAND
+    }
+
+    fn run(&self, ctx: CliCtx, jobs: &JobRunner, _ui: &dyn UiHost) -> Result<CliOutcome, Error> {
+        if !crate::supported() {
+            return Err(err(InstallError::Unsupported));
+        }
+        let [archive] = ctx.args.as_slice() else {
+            return Err(Error::Unsupported("usage: rick install <archive>"));
+        };
+        let path = Path::new(archive);
+        let path = if path.is_absolute() {
+            path.to_path_buf()
+        } else {
+            ctx.cwd.join(path)
+        };
+        let path = std::fs::canonicalize(&path).unwrap_or(path);
+        let name = path
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        if Format::by_name(&name).is_none() {
+            return Err(Error::Unsupported(
+                "the archive must be a tar (gz, xz, bz2, zst) or zip file",
+            ));
+        }
+        if !std::fs::metadata(&path).map_err(Error::from_io)?.is_file() {
+            return Err(Error::Unsupported("the archive must be a file"));
+        }
+        Ok(CliOutcome::Outcome(install_through_form(
+            &self.0, &path, None, jobs,
+        )))
+    }
 }
 
 /// *Install as application…* on a selected archive.

@@ -25,10 +25,10 @@ use types::Error;
 use crate::Native;
 use crate::time::parse_iso8601;
 use crate::traits::{
-    Application, Chrome, ConfigDir, ControlsSide, DragSource, DropTarget, Elevate, ElevatedOutput,
-    ImageFormat, IncomingFiles, Mount, OpenWith, Point, Properties, PropertiesOutcome, RecentItem,
-    RecentlyUsed, StandardFolder, StandardFolders, Terminal, Trash, TrashedItem, Volume,
-    VolumeKind, Volumes, WindowChrome, WindowRef,
+    Activation, Application, Chrome, ConfigDir, ControlsSide, DragSource, DropTarget, Elevate,
+    ElevatedOutput, ImageFormat, IncomingFiles, Mount, OpenWith, Point, Properties,
+    PropertiesOutcome, RecentItem, RecentlyUsed, StandardFolder, StandardFolders, Terminal, Trash,
+    TrashedItem, Volume, VolumeKind, Volumes, WindowChrome, WindowRef,
 };
 use crate::trash_record::{self, TRASH_FILE};
 
@@ -40,6 +40,23 @@ const RECENT_WINDOW_SECS: u64 = 30 * 24 * 3600;
 fn utf8(path: &Path) -> Result<&str, Error> {
     path.to_str()
         .ok_or(Error::Unsupported("path is not valid UTF-8"))
+}
+
+/// `macOS` with the product version `sw_vers` reports, `macOS` alone when
+/// it does not answer.
+pub(crate) fn os_description() -> String {
+    let version = Command::new("sw_vers")
+        .arg("-productVersion")
+        .stdin(Stdio::null())
+        .output()
+        .ok()
+        .filter(|out| out.status.success())
+        .map(|out| String::from_utf8_lossy(&out.stdout).trim().to_owned())
+        .filter(|v| !v.is_empty());
+    match version {
+        Some(version) => format!("macOS {version}"),
+        None => "macOS".to_owned(),
+    }
 }
 
 impl Trash for Native {
@@ -180,6 +197,7 @@ impl Volumes for Native {
             };
             let (total, free) = crate::volumes::space(&mount_point)
                 .map_or((None, None), |(t, f)| (Some(t), Some(f)));
+            let read_only = read_only_of(&mount_point);
             out.push(Volume {
                 name,
                 mount_point,
@@ -188,6 +206,7 @@ impl Volumes for Native {
                 device: None,
                 total,
                 free,
+                read_only,
             });
         }
         out.sort_by(|a, b| a.mount_point.cmp(&b.mount_point));
@@ -238,6 +257,17 @@ fn fs_type_of(mount_point: &Path) -> String {
             String::from_utf8_lossy(&bytes).into_owned()
         })
         .unwrap_or_default()
+}
+
+/// `MNT_RDONLY` of `sys/mount.h`: the volume is mounted read-only.
+const MNT_RDONLY: u32 = 0x0000_0001;
+
+/// Whether the file system at `mount_point` is mounted read-only, from
+/// `statfs`'s flags.
+fn read_only_of(mount_point: &Path) -> bool {
+    rustix::fs::statfs(mount_point)
+        .ok()
+        .is_some_and(|stat| stat.f_flags & MNT_RDONLY != 0)
 }
 
 /// The kind of a mounted volume: network by file system type, optical by
@@ -321,6 +351,7 @@ impl Mount for Native {
             device: None,
             total,
             free,
+            read_only: format == ImageFormat::Iso,
         })
     }
 }
@@ -667,6 +698,28 @@ impl Chrome for Native {
             native_controls_width: 78.0,
         }
     }
+}
+
+impl Activation for Native {
+    /// The window made key and ordered front, then the application
+    /// activated over the others; on the main thread, where AppKit lives.
+    fn activate_window(&self, window: &WindowRef, _token: Option<&str>) -> Result<(), Error> {
+        let mtm = objc2::MainThreadMarker::new()
+            .ok_or(Error::Unsupported("windows are raised on the main thread"))?;
+        let view = drag::view_of(window, mtm)?;
+        let ns_window = view
+            .window()
+            .ok_or(Error::Unsupported("the view is not in a window"))?;
+        ns_window.makeKeyAndOrderFront(None);
+        let app = objc2_app_kit::NSApplication::sharedApplication(mtm);
+        // `activate()` exists from macOS 14 only; the older call still
+        // works everywhere Rick runs.
+        #[allow(deprecated)]
+        app.activateIgnoringOtherApps(true);
+        Ok(())
+    }
+
+    fn allow_activation(&self) {}
 }
 
 impl DragSource for Native {

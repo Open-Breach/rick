@@ -80,6 +80,7 @@ impl TrackerExtension {
                 points: Points::SEARCH_INDEX,
                 platforms: Platforms::LINUX,
                 previews: &[],
+                commands: &[],
             },
         }
     }

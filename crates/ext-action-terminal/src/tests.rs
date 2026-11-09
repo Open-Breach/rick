@@ -113,6 +113,40 @@ fn the_console_opens_at_the_location_and_runs_pwd() {
     );
 }
 
+/// The shell's OSC 7 is the console's working directory, decoded: a
+/// shell that reports it (bash or zsh with vte.sh, fish) reports the
+/// folder it was moved to at its next prompt, and one that does not gets
+/// the same sequence typed in for it; the session answers the
+/// foreground-job question (or says it cannot) without a panic.
+#[test]
+fn osc_7_from_the_shell_is_the_consoles_working_directory() {
+    let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+    let dir = dir.path().canonicalize().unwrap_or_else(|e| panic!("{e}"));
+    let sub = dir.join("sub dir");
+    std::fs::create_dir(&sub).unwrap_or_else(|e| panic!("{e}"));
+    let session = Session::spawn(&dir, 80, 24).unwrap_or_else(|e| panic!("{e}"));
+    let console: &dyn ext::Console = &*session;
+    let _ = console.foreground_job();
+    if std::env::consts::OS == "windows" {
+        // No printf with escapes in cmd; the decoding is tested in `ext`.
+        return;
+    }
+    // Into the folder, then the report a shell without vte.sh would not
+    // send by itself; a shell that does sends the same at its prompt.
+    let uri = ext::platform::paths::file_uri(&sub);
+    let encoded = &uri["file://".len()..];
+    console.write(format!("cd '{}'\r", sub.display()).as_bytes());
+    // `%s` takes the path, so printf never reads its percent escapes.
+    console.write(format!("printf '\\033]7;file://somehost%s\\033\\\\' '{encoded}'\r").as_bytes());
+    assert!(
+        wait_for(Duration::from_secs(10), || console.cwd().as_deref()
+            == Some(sub.as_path())),
+        "cwd {:?}, screen:\n{}",
+        console.cwd(),
+        session.text()
+    );
+}
+
 #[test]
 fn the_setting_sends_the_console_to_the_system_terminal() {
     let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));

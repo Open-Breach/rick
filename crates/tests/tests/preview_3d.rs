@@ -270,6 +270,7 @@ impl GestureExtension {
                 points: Points::PREVIEWER,
                 platforms: Platforms::ALL,
                 previews: &[],
+                commands: &[],
             },
             log,
         }

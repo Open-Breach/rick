@@ -133,6 +133,9 @@ similar = "2"
 portable-pty = "0.9"
 vte = "0.15"
 anyhow = "1"
+# The command line of the binary (specs/system-integration.md §4): the core
+# subcommands by derive, the plugins' added from their manifests.
+clap = { version = "4", features = ["derive"] }
 # The platform keychain (SPEC.md "Package layout": `Secrets`, 0.2).
 keyring = "4"
 # The provider plugins of issue 21 and the SSH plugin of issue 34. SSH
@@ -204,6 +207,9 @@ tracing = "0.1"
 # system backend without dlopen, x11rb's Rust connection.
 wayland-client = { version = "0.31", features = ["system"] }
 wayland-backend = { version = "0.3", features = ["client_system"] }
+# `xdg_activation_v1`, which raises the running instance's window with the
+# token a second launch received from its launcher (issue 103).
+wayland-protocols = { version = "0.32", default-features = false, features = ["client", "staging"] }
 x11rb = "0.13"
 windows = "0.62"
 # Named directly for the `implement` macro, which spells out its paths.

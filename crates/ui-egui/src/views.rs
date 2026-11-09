@@ -3,6 +3,8 @@
 //! the rows in view, so a 200k-entry listing costs the same as a small one.
 //! Rename, New file and New folder edit a name in the row itself.
 
+use std::collections::BTreeMap;
+
 use egui::{Align, Sense};
 use egui_extras::{Column as TableColumn, TableBuilder};
 use ext::{ActionId, Badge, CellValue, ColumnDef, Decoration, t};
@@ -23,13 +25,16 @@ const ROW_INSET: f32 = 6.0;
 /// row background, which is itself `ROW_INSET` from the pane's edge.
 const NAME_INSET: f32 = ROW_INSET + 6.0;
 
-/// The columns' first widths and Name's floor, in points; the last column
-/// takes what is left.
-const NAME_MIN: f32 = 140.0;
+/// The columns' default widths in points; Name's default is what the
+/// others leave, and the last column takes what is left.
 const SIZE_WIDTH: f32 = 80.0;
 const TYPE_WIDTH: f32 = 110.0;
 const MODIFIED_WIDTH: f32 = 130.0;
 const EXTRA_WIDTH: f32 = 90.0;
+/// No column gets narrower than this (SPEC.md *File list*).
+pub const COLUMN_MIN: f32 = 48.0;
+/// The hit zone of the boundary between two headers.
+const BOUNDARY_HIT: f32 = 6.0;
 
 /// Indent per tree level, in points.
 const TREE_INDENT: f32 = 16.0;
@@ -680,54 +685,27 @@ pub fn details(ui: &mut egui::Ui, cx: &mut PaneCx<'_>) {
     }
     let row_x = egui::Rangef::new(outer.left() + ROW_INSET, outer.right() - ROW_INSET);
     let clip = ui.clip_rect();
-    // Every column resizes, Name included, and the last one takes the
-    // remaining width (issue 79 item 6): a resizable column keeps the
-    // width it was given, so Name starts at what the fixed columns leave
-    // on the first frame and the last column flexes from then on.
+    // The columns' widths are the tab's (SPEC.md *File list*): the ones the
+    // user gave, or the defaults, Name's being what the others leave; the
+    // last column takes what is left. The table lays them out as given and
+    // the header's boundaries below do the resizing.
     let spacing_x = ui.spacing().item_spacing.x;
-    let fixed: f32 = SIZE_WIDTH + TYPE_WIDTH + extra.len() as f32 * EXTRA_WIDTH;
-    let columns = 3 + extra.len();
-    let name_initial =
-        (outer.width() - fixed - MODIFIED_WIDTH - columns as f32 * spacing_x).max(NAME_MIN);
+    let ids = column_ids(&extra);
+    let widths = column_widths(cx.tab, &ids, outer.width(), spacing_x);
     let mut builder = TableBuilder::new(ui)
         .id_salt(("details", cx.tab_id))
         .striped(false)
-        .resizable(true)
+        .resizable(false)
         .sense(Sense::click_and_drag())
         .auto_shrink([false, false])
-        .cell_layout(egui::Layout::left_to_right(Align::Center))
-        .column(
-            TableColumn::initial(name_initial)
-                .at_least(NAME_MIN)
-                .clip(true),
-        )
-        .column(TableColumn::initial(SIZE_WIDTH).at_least(50.0))
-        .column(TableColumn::initial(TYPE_WIDTH).at_least(60.0).clip(true));
-    if extra.is_empty() {
-        builder = builder.column(
-            TableColumn::remainder()
-                .at_least(60.0)
-                .clip(true)
-                .resizable(false),
-        );
-    } else {
-        builder = builder.column(
-            TableColumn::initial(MODIFIED_WIDTH)
-                .at_least(60.0)
-                .clip(true),
-        );
-        for (i, _) in extra.iter().enumerate() {
-            let column = if i + 1 == extra.len() {
-                TableColumn::remainder().at_least(40.0).resizable(false)
-            } else {
-                TableColumn::initial(EXTRA_WIDTH).at_least(40.0)
-            };
-            builder = builder.column(column.clip(true));
-        }
-    }
-    if cx.tab_ui.reset_columns {
-        builder.reset();
-        cx.tab_ui.reset_columns = false;
+        .cell_layout(egui::Layout::left_to_right(Align::Center));
+    let last = widths.len() - 1;
+    for (i, width) in widths.iter().enumerate() {
+        builder = builder.column(if i == last {
+            TableColumn::remainder().at_least(COLUMN_MIN).clip(true)
+        } else {
+            TableColumn::exact(*width).clip(true)
+        });
     }
     if let Some(row) = cx.tab_ui.scroll_to.take() {
         builder = builder.scroll_to_row(row + new_row, Some(Align::Center));
@@ -739,9 +717,8 @@ pub fn details(ui: &mut egui::Ui, cx: &mut PaneCx<'_>) {
     let sort = cx.tab.sort;
     let mut sort_request = None;
     // The right edge of every header cell, the cell's own rectangle: the
-    // separators are painted after the table, so a clipped cell cannot
-    // cut its own away.
-    let mut edges: Vec<f32> = Vec::with_capacity(columns + 1);
+    // boundaries between the columns, handled after the table.
+    let mut edges: Vec<f32> = Vec::with_capacity(widths.len());
     let table = builder.header(COLUMN_HEADER, |mut row| {
         for (label, column) in [
             (t!("list-column-name"), Column::Name),
@@ -838,7 +815,7 @@ pub fn details(ui: &mut egui::Ui, cx: &mut PaneCx<'_>) {
         });
     });
     cx.tab_ui.scroll_offset = out.state.offset.y;
-    header_separators(ui, band, &edges);
+    column_boundaries(ui, cx, band, &edges, &ids, &widths, &extra);
     if let Some(outcome) = outcome {
         finish_edit(cx, outcome);
     }
@@ -1143,17 +1120,194 @@ pub fn badge_text(badge: Badge) -> egui::RichText {
         .strong()
 }
 
-/// The vertical hairlines between column titles, one at every boundary
-/// where a resize handle is, in the header band and nowhere else: the
-/// only vertical separators of the list. `edges` are the header cells'
-/// right edges; the last one, the table's edge, gets none.
-fn header_separators(ui: &egui::Ui, band: egui::Rect, edges: &[f32]) {
-    let half_gap = ui.spacing().item_spacing.x / 2.0;
-    let stroke = theme::scheme(ui).hairline();
-    for right in edges.iter().take(edges.len().saturating_sub(1)) {
-        let x = (right + half_gap).round() + 0.5;
-        ui.painter().vline(x, band.y_range().shrink(9.0), stroke);
+/// The id of a column in the tab's width map: the four of the list, then
+/// the decorators' columns by their own ids.
+fn column_key(column: Column) -> &'static str {
+    match column {
+        Column::Name => "name",
+        Column::Size => "size",
+        Column::Type => "type",
+        Column::Modified => "modified",
+        Column::Created => "created",
+        Column::Accessed => "accessed",
+        Column::Items => "items",
     }
+}
+
+/// The ids of the details list's columns in display order.
+fn column_ids(extra: &[ColumnDef]) -> Vec<&'static str> {
+    let mut ids = vec![
+        column_key(Column::Name),
+        column_key(Column::Size),
+        column_key(Column::Type),
+        column_key(Column::Modified),
+    ];
+    ids.extend(extra.iter().map(|def| def.id.0));
+    ids
+}
+
+/// The default width of a column: Name's is what the others leave of
+/// `available`, never under [`COLUMN_MIN`].
+fn default_width(id: &str, ids: &[&str], available: f32, spacing: f32) -> f32 {
+    match id {
+        "name" => {
+            let others: f32 = ids
+                .iter()
+                .filter(|other| **other != "name")
+                .map(|other| default_width(other, ids, available, spacing))
+                .sum();
+            (available - others - ids.len() as f32 * spacing).max(COLUMN_MIN)
+        }
+        "size" => SIZE_WIDTH,
+        "type" => TYPE_WIDTH,
+        "modified" => MODIFIED_WIDTH,
+        _ => EXTRA_WIDTH,
+    }
+}
+
+/// The widths the table lays the columns out with: the tab's where the
+/// user set one, the default otherwise, none under [`COLUMN_MIN`].
+fn column_widths(tab: &Tab, ids: &[&str], available: f32, spacing: f32) -> Vec<f32> {
+    ids.iter()
+        .map(|id| {
+            tab.columns
+                .get(*id)
+                .copied()
+                .unwrap_or_else(|| default_width(id, ids, available, spacing))
+                .max(COLUMN_MIN)
+        })
+        .collect()
+}
+
+/// The boundaries between the columns (SPEC.md *File list*): no permanent
+/// line; a hit zone about 6 px wide over the header band that, hovered,
+/// shows a 1 px `border/strong` divider across the band and the
+/// column-resize cursor. Dragging it resizes the column before it, a
+/// double-click fits that column to its content, and no column gets
+/// narrower than [`COLUMN_MIN`]. A change goes to the model as the tab's
+/// widths, every column's, so the last one takes what is left from then
+/// on. `edges` are the header cells' right edges; the last, the table's
+/// edge, has no boundary.
+#[allow(clippy::too_many_arguments)]
+fn column_boundaries(
+    ui: &mut egui::Ui,
+    cx: &mut PaneCx<'_>,
+    band: egui::Rect,
+    edges: &[f32],
+    ids: &[&str],
+    widths: &[f32],
+    extra: &[ColumnDef],
+) {
+    let half_gap = ui.spacing().item_spacing.x / 2.0;
+    let scheme = theme::scheme(ui);
+    cx.tab_ui.column_boundaries.clear();
+    let mut changed: Option<BTreeMap<String, f32>> = None;
+    for (i, right) in edges.iter().enumerate().take(edges.len().saturating_sub(1)) {
+        let x = right + half_gap;
+        cx.tab_ui.column_boundaries.push(x);
+        let hit = egui::Rect::from_center_size(
+            egui::pos2(x, band.center().y),
+            egui::vec2(BOUNDARY_HIT, band.height()),
+        );
+        let response = ui.interact(
+            hit,
+            egui::Id::new(("column-boundary", cx.tab_id, i)),
+            Sense::click_and_drag(),
+        );
+        if response.hovered() || response.dragged() {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeColumn);
+            ui.painter().vline(
+                x.round() + 0.5,
+                band.y_range(),
+                egui::Stroke::new(1.0, scheme.border_strong),
+            );
+        }
+        let new_width = if response.double_clicked() {
+            Some(fit_width(ui, cx, i, ids[i], extra))
+        } else if response.dragged() {
+            Some(widths[i] + response.drag_delta().x)
+        } else {
+            None
+        };
+        if let Some(width) = new_width {
+            let columns = changed.get_or_insert_with(|| {
+                ids.iter()
+                    .zip(widths)
+                    .take(edges.len().saturating_sub(1))
+                    .map(|(id, w)| ((*id).to_owned(), *w))
+                    .collect()
+            });
+            columns.insert(ids[i].to_owned(), width.max(COLUMN_MIN));
+        }
+    }
+    if let Some(columns) = changed {
+        cx.requests
+            .push(Request::Command(app::Command::ColumnWidths {
+                tab: cx.tab_id,
+                columns,
+            }));
+    }
+}
+
+/// The width that fits column `index` to its content: the widest of its
+/// title and the cells of the rows in view, with the cells' padding, the
+/// Name column's icon and inset included.
+fn fit_width(ui: &egui::Ui, cx: &PaneCx<'_>, index: usize, id: &str, extra: &[ColumnDef]) -> f32 {
+    let body = egui::TextStyle::Body.resolve(ui.style());
+    let small = egui::FontId::proportional(TEXT_SECONDARY);
+    let spacing = ui.spacing().item_spacing.x;
+    let pad = 2.0 * ui.spacing().button_padding.x;
+    let measure = |text: &str, font: &egui::FontId| {
+        ui.fonts_mut(|f| {
+            f.layout_no_wrap(text.to_owned(), font.clone(), egui::Color32::WHITE)
+                .size()
+                .x
+        })
+    };
+    let title = match index {
+        0 => t!("list-column-name"),
+        1 => t!("list-column-size"),
+        2 => t!("list-column-type"),
+        3 => t!("list-column-modified"),
+        _ => extra
+            .get(index - 4)
+            .map(|d| d.label.get())
+            .unwrap_or_default(),
+    };
+    let mut widest =
+        measure(&title, &small) + pad + spacing + measure(crate::icons::SORT_ASC, &small);
+    let show_extensions = cx.app.model().settings.show_extensions;
+    let first = (cx.tab_ui.scroll_offset / row_height(ui).max(1.0)) as usize;
+    for entry in cx
+        .tab
+        .rows()
+        .skip(first)
+        .take(cx.tab_ui.visible_rows.max(1))
+    {
+        let width = match id {
+            "name" => {
+                NAME_INSET
+                    + measure(icon(entry), &body)
+                    + spacing
+                    + measure(&shown_name(cx.tab, entry, show_extensions), &body)
+            }
+            "size" => measure(&format::size(entry.size), &body),
+            "type" => measure(&model::type_of(entry), &body),
+            "modified" => measure(&format::date(entry.modified, cx.now).0, &body),
+            _ => cx
+                .tab
+                .decorations
+                .get(&entry.id)
+                .and_then(|d| d.cells.iter().find(|(c, _)| c.0 == id))
+                .map_or(0.0, |(_, value)| match value {
+                    CellValue::Text(text) => measure(text, &body),
+                    CellValue::Number(n) => measure(&n.to_string(), &body),
+                    CellValue::Pending => 0.0,
+                }),
+        };
+        widest = widest.max(width + pad);
+    }
+    widest.max(COLUMN_MIN)
 }
 
 /// A column title in 12 px `text/secondary` with the sort glyph after the

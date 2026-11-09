@@ -226,17 +226,55 @@ fn drag(harness: &mut Harness<'_, RickUi>, from: egui::Pos2, to: egui::Pos2) {
     harness.step();
 }
 
-/// Issue 79 item 6: a separator stands between every pair of titles, not
-/// only between Size and Type, and every column resizes by its boundary,
-/// Name included; the last column takes the remaining width.
+/// Steps until egui's double-click window has passed, so two clicks are
+/// not read as one double-click.
+fn settle_clicks(harness: &mut Harness<'_, RickUi>) {
+    std::thread::sleep(Duration::from_millis(400));
+    harness.step();
+    harness.step();
+}
+
+/// Clicks at `at` twice within the double-click window: the harness's
+/// clock advances a quarter second per frame, so both clicks go into one
+/// frame's input.
+fn double_click(harness: &mut Harness<'_, RickUi>, at: egui::Pos2) {
+    harness.event(egui::Event::PointerMoved(at));
+    harness.step();
+    for _ in 0..2 {
+        for pressed in [true, false] {
+            harness.input_mut().events.push(egui::Event::PointerButton {
+                pos: at,
+                button: egui::PointerButton::Primary,
+                pressed,
+                modifiers: egui::Modifiers::default(),
+            });
+        }
+    }
+    harness.step();
+    harness.step();
+}
+
+/// Issue 79 item 9 (SPEC.md *File list*): no permanent divider between the
+/// headers; hovering a boundary shows a 1 px `border/strong` divider
+/// across the band and the column-resize cursor; dragging resizes the
+/// column before it, Name included, and the last column takes what is
+/// left; a double-click fits the column to its content; no column goes
+/// under 48 px; the widths survive a restart.
 #[test]
-fn every_column_resizes_name_included_and_every_boundary_has_a_separator() {
+// One scenario, boundary by boundary.
+#[allow(clippy::too_many_lines)]
+fn column_boundaries_show_on_hover_resize_fit_and_survive_a_restart() {
+    use model::{SettingsChange, Theme};
     let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
-    for name in ["a.txt", "b.svg"] {
+    for name in ["a.txt", "b.svg", "a-rather-long-file-name-to-fit.txt"] {
         fs::write(dir.path().join(name), name).unwrap_or_else(|e| panic!("{e}"));
     }
     let fake = Arc::new(Fake::new().unwrap_or_else(|e| panic!("{e}")));
     let mut harness = harness(dir.path(), &fake);
+    command(
+        &mut harness,
+        app::Command::Settings(SettingsChange::Theme(Theme::Light)),
+    );
     let model = harness.state().app().model();
     let (tab, _) = model
         .active_tab(model.focused)
@@ -245,41 +283,143 @@ fn every_column_resizes_name_included_and_every_boundary_has_a_separator() {
         .state()
         .header_band(tab)
         .unwrap_or_else(|| panic!("no header band"));
-    let separators = separators_in(&harness, band);
+    let boundaries = harness.state().column_boundaries(tab);
     assert_eq!(
-        separators.len(),
+        boundaries.len(),
         3,
-        "Name|Size, Size|Type and Type|Modified: {separators:?}"
+        "Name|Size, Size|Type, Type|Modified: {boundaries:?}"
+    );
+    assert!(
+        separators_in(&harness, band).is_empty(),
+        "no permanent divider: {:?}",
+        separators_in(&harness, band)
     );
     let size = title_x(&harness, band, "Size");
     let kind = title_x(&harness, band, "Type");
     let modified = title_x(&harness, band, "Modified");
-    assert!(separators[0] < size && size < separators[1]);
-    assert!(separators[1] < kind && kind < separators[2]);
-    assert!(separators[2] < modified);
 
-    // Name grows by 60 px: Size, Type and Modified move right together
-    // and Modified, the last column, gives the room.
-    let from = egui::pos2(separators[0], band.center().y);
-    drag(&mut harness, from, from + egui::vec2(60.0, 0.0));
-    let moved = separators_in(&harness, band);
-    assert_eq!(moved.len(), 3, "{moved:?}");
+    // Hovering the Size|Type boundary: one divider across the band in
+    // border/strong, and the column-resize cursor.
+    let at = egui::pos2(boundaries[1], band.center().y);
+    harness.hover_at(at);
+    harness.step();
+    harness.step();
+    let lines = separators_in(&harness, band);
+    assert_eq!(lines.len(), 1, "one divider while hovered: {lines:?}");
     assert!(
-        (moved[0] - separators[0] - 60.0).abs() < 2.0,
-        "Name|Size {separators:?} -> {moved:?}"
+        (lines[0] - boundaries[1]).abs() < 1.0,
+        "{lines:?} at {at:?}"
+    );
+    let strong = ui_egui::theme::Scheme::LIGHT.border_strong;
+    let coloured = harness
+        .output()
+        .shapes
+        .iter()
+        .any(|clipped| match &clipped.shape {
+            egui::Shape::LineSegment { points, stroke } => {
+                (points[0].x - points[1].x).abs() < 0.5
+                    && band.y_range().contains(points[0].y)
+                    && stroke.color == strong
+            }
+            _ => false,
+        });
+    assert!(coloured, "the divider is border/strong");
+    assert_eq!(
+        harness.output().platform_output.cursor_icon,
+        egui::CursorIcon::ResizeColumn
+    );
+    harness.hover_at(egui::pos2(band.center().x, band.bottom() + 200.0));
+    harness.step();
+    harness.step();
+    assert!(
+        separators_in(&harness, band).is_empty(),
+        "gone when the pointer leaves"
+    );
+
+    // Name grows by 60 px: Size, Type and Modified move right together.
+    let from = egui::pos2(boundaries[0], band.center().y);
+    drag(&mut harness, from, from + egui::vec2(60.0, 0.0));
+    let moved = harness.state().column_boundaries(tab);
+    assert!(
+        (moved[0] - boundaries[0] - 60.0).abs() < 2.0,
+        "Name|Size {boundaries:?} -> {moved:?}"
     );
     assert!((title_x(&harness, band, "Size") - size - 60.0).abs() < 2.0);
     assert!((title_x(&harness, band, "Type") - kind - 60.0).abs() < 2.0);
     assert!((title_x(&harness, band, "Modified") - modified - 60.0).abs() < 2.0);
+    settle_clicks(&mut harness);
 
-    // Type shrinks by 30 px from its right boundary: only Modified moves.
-    let from = egui::pos2(moved[2], band.center().y);
-    drag(&mut harness, from, from - egui::vec2(30.0, 0.0));
-    let shrunk = separators_in(&harness, band);
+    // Size cannot go under 48 px: a long drag to the left stops there.
+    let from = egui::pos2(moved[1], band.center().y);
+    drag(&mut harness, from, from - egui::vec2(300.0, 0.0));
+    let narrow = harness.state().column_boundaries(tab);
+    let size_width = narrow[1] - narrow[0] - 6.0;
     assert!(
-        (shrunk[2] - moved[2] + 30.0).abs() < 2.0,
-        "Type|Modified {moved:?} -> {shrunk:?}"
+        (size_width - ui_egui::views::COLUMN_MIN).abs() < 2.0,
+        "Size is {size_width} wide after {narrow:?}"
     );
-    assert!((title_x(&harness, band, "Type") - kind - 60.0).abs() < 2.0);
-    assert!((title_x(&harness, band, "Modified") - modified - 30.0).abs() < 2.0);
+    settle_clicks(&mut harness);
+
+    // A double-click on the Name|Size boundary fits Name to its content:
+    // narrower than the 60 px it was given, wider than the longest name.
+    let at = egui::pos2(narrow[0], band.center().y);
+    double_click(&mut harness, at);
+    let fitted = harness.state().column_boundaries(tab);
+    assert!(
+        fitted[0] < moved[0] - 10.0,
+        "fitted {fitted:?} from {moved:?}"
+    );
+    let longest = harness
+        .get_by_label("a-rather-long-file-name-to-fit.txt")
+        .rect();
+    assert!(
+        fitted[0] > longest.right(),
+        "the longest name {longest:?} fits before {fitted:?}"
+    );
+    settle_clicks(&mut harness);
+
+    // The widths are the tab's and come back with the session.
+    let model = harness.state().app().model();
+    let saved = model
+        .tab(tab)
+        .map(|t| t.columns.clone())
+        .unwrap_or_default();
+    assert!(
+        saved.contains_key("name") && saved.contains_key("size"),
+        "{saved:?}"
+    );
+    harness
+        .state_mut()
+        .app_mut()
+        .save_session()
+        .unwrap_or_else(|e| panic!("{e}"));
+    drop(harness);
+    // A start folder would open a new tab beside the restored one: the
+    // restarted app opens on the session alone.
+    let host = Arc::new(EguiHost::new());
+    let app = app::App::new(app::Config {
+        platform: fake.clone(),
+        ui: host.clone(),
+        extensions: Vec::new(),
+        config_dir: Some(fake.config_dir()),
+        start: None,
+    });
+    let mut restarted = Harness::builder()
+        .with_size(egui::vec2(1200.0, 700.0))
+        .build_eframe(move |cc| RickUi::new(app, host, &cc.egui_ctx));
+    settle(&mut restarted);
+    let model = restarted.state().app().model();
+    let (tab, restored) = model
+        .active_tab(model.focused)
+        .unwrap_or_else(|| panic!("tab after restart"));
+    assert_eq!(restored.columns, saved, "the widths survive the restart");
+    let band = restarted
+        .state()
+        .header_band(tab)
+        .unwrap_or_else(|| panic!("no header band after restart"));
+    let again = restarted.state().column_boundaries(tab);
+    assert!(
+        again.iter().zip(&fitted).all(|(a, b)| (a - b).abs() < 2.0),
+        "{again:?} against {fitted:?} in {band:?}"
+    );
 }
