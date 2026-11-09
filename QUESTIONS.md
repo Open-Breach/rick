@@ -2981,3 +2981,19 @@ Once answered, an entry keeps its number and gains a dated decision line.
     which serves SVGZ and any gzip-compressed text alike and keeps the
     previewers out of *Copy*; a hook on the Previewer trait for the text of
     a whole file would be a change to the versioned contract.
+
+257. (preview formats, 2026-11-09) *Icon containers*: the variants of an
+    ICO, CUR or ICNS are pages, "the pane's standard pager steps through
+    them", and "1:1 shows actual pixels … both are the previewer's own
+    work on the frame it returns at the size the pane asked for, so the
+    pane needs nothing new"; XPM is text with *Copy*. As in 255, the pane
+    sends the actual-size request only for a document with neither pages
+    nor a text layer, so a container with two or more variants, and an
+    XPM, get the pager or *Copy* but no 1:1 button; a single-variant
+    container gets Fit and 1:1. The toolbar's `Icon` set has no crosshair
+    for the hotspot toggle either.
+    Assumed: the document answers both kinds of request (a fitted request
+    magnifies by the largest whole factor up to 8, a `MAX_ACTUAL` request
+    gives the variant's own pixels), proven by its tests; the hotspot
+    toggle shows the `Tag` glyph until the set has a crosshair; both are
+    the pane's to change under the design refresh.
