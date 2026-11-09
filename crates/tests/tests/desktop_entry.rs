@@ -39,9 +39,10 @@ fn the_desktop_entry_names_the_app_id_as_icon_and_window_class() {
     assert_eq!(ui_egui::APP_ID, "rick");
     assert_eq!(value(&text, "Icon"), Some(ui_egui::APP_ID));
     assert_eq!(value(&text, "StartupWMClass"), Some(ui_egui::APP_ID));
+    // `%U`: the selected folders, and a `rick://` link the entry handles.
     assert_eq!(
         value(&text, "Exec"),
-        Some(format!("{} %F", ui_egui::APP_ID).as_str())
+        Some(format!("{} %U", ui_egui::APP_ID).as_str())
     );
     assert_eq!(text.lines().next(), Some("[Desktop Entry]"));
     assert_eq!(value(&text, "Type"), Some("Application"));
@@ -53,7 +54,10 @@ fn the_desktop_entry_names_the_app_id_as_icon_and_window_class() {
         value(&text, "Categories"),
         Some("System;FileTools;FileManager;Utility;")
     );
-    assert_eq!(value(&text, "MimeType"), Some("inode/directory;"));
+    assert_eq!(
+        value(&text, "MimeType"),
+        Some("inode/directory;x-scheme-handler/rick;")
+    );
     assert_eq!(
         value(&text, "Keywords"),
         Some("files;folders;explorer;browse;")

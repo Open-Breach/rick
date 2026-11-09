@@ -398,3 +398,5 @@ about-exported = Exported to { $path }
 about-export-failed = Could not export: { $error }
 about-export-header = Third-party licences of Rick { $version }
 about-export-generated = Generated at build time from Cargo.lock by cargo-about.
+
+cli-url-not-local = { $url } names no folder or file on this computer

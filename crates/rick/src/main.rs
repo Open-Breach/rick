@@ -314,14 +314,22 @@ fn run() -> anyhow::Result<ExitCode> {
             return exit_with(0, Some(text));
         }
         cli::Parsed::Open {
-            mut paths,
+            mut targets,
             new_window: false,
         } => {
-            let start = (!paths.is_empty()).then(|| paths.remove(0));
+            // A `rick://` URL is resolved once the app is up, like the
+            // rest; a plain first folder is the start location.
+            let start = match targets.first() {
+                Some(cli::Target::Path(_)) => match targets.remove(0) {
+                    cli::Target::Path(path) => Some(path),
+                    cli::Target::Url(_) => None,
+                },
+                _ => None,
+            };
             (
                 start,
                 cli::Parsed::Open {
-                    paths,
+                    targets,
                     new_window: false,
                 },
             )

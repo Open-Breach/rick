@@ -30,7 +30,7 @@ use platform::instance::{
 use runtime::oneshot;
 use types::Location;
 
-use crate::cli::{self, Parsed, Usage};
+use crate::cli::{self, Parsed, Target, Usage};
 
 /// What the launch does next, once it has looked for an instance.
 pub enum Outcome {
@@ -167,17 +167,69 @@ pub fn apply(
         );
     };
     match parsed {
-        Parsed::Open { paths, new_window } => {
-            tracing::info!(new_window, ?paths, "open from the command line");
-            let mut paths = paths.into_iter();
-            if new_window && let Some(first) = paths.next() {
-                app.handle(Command::NewWindowAt(location(&first)), events);
+        Parsed::Open {
+            targets,
+            new_window,
+        } => {
+            tracing::info!(new_window, ?targets, "open from the command line");
+            // A `rick://` URL names an existing folder, to open, or an
+            // existing file, to reveal; anything else is an error toast in
+            // the window and nothing opens for it.
+            let mut first = true;
+            let mut reveal: Vec<Location> = Vec::new();
+            let mut problems: Vec<String> = Vec::new();
+            for target in targets {
+                let folder = match target {
+                    Target::Path(path) => Some(path),
+                    Target::Url(url) => match platform::paths::from_uri(&url, "rick") {
+                        Some(path) if path.is_dir() => Some(path),
+                        Some(path) if path.is_file() => {
+                            reveal.push(location(&path));
+                            None
+                        }
+                        _ => {
+                            problems.push(url);
+                            None
+                        }
+                    },
+                };
+                if let Some(path) = folder {
+                    if first && new_window {
+                        app.handle(Command::NewWindowAt(location(&path)), events);
+                    } else {
+                        app.handle(Command::NewTab(location(&path)), events);
+                    }
+                    first = false;
+                }
             }
-            for path in paths {
-                app.handle(Command::NewTab(location(&path)), events);
+            if !reveal.is_empty() {
+                app.handle(
+                    Command::Reveal {
+                        items: reveal,
+                        new_window: new_window && first,
+                    },
+                    events,
+                );
+                first = false;
             }
-            activate(app, events);
-            Reply::ok(None)
+            let problems: Vec<String> = problems
+                .iter()
+                .map(|url| ext::t!("cli-url-not-local", url = url.as_str()))
+                .collect();
+            for text in &problems {
+                events.push(Event::Notify {
+                    level: ext::Level::Error,
+                    text: text.clone(),
+                });
+            }
+            if !first {
+                activate(app, events);
+            }
+            if problems.is_empty() {
+                Reply::ok(None)
+            } else {
+                Reply::failed(EXIT_FAILED, problems.join("\n"))
+            }
         }
         Parsed::Reveal { files, new_window } => {
             tracing::info!(new_window, ?files, "reveal from the command line");
@@ -454,6 +506,102 @@ mod tests {
                 .as_deref()
                 .is_some_and(|t| t.contains("--new-window")),
             "{reply:?}"
+        );
+    }
+
+    /// `rick:///<folder>` opens the folder, `rick:///<file>` reveals it,
+    /// anything else is an error toast and opens nothing
+    /// (specs/system-integration.md §4).
+    #[test]
+    fn a_rick_url_opens_a_folder_reveals_a_file_and_is_a_toast_otherwise() {
+        let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+        let home = dir.path().join("home");
+        let sub = dir.path().join("sub");
+        std::fs::create_dir_all(&home).unwrap_or_else(|e| panic!("{e}"));
+        std::fs::create_dir_all(&sub).unwrap_or_else(|e| panic!("{e}"));
+        std::fs::write(sub.join("a.txt"), b"a").unwrap_or_else(|e| panic!("{e}"));
+        let fake = Arc::new(Fake::new().unwrap_or_else(|e| panic!("{e}")));
+        let mut app = app(&fake, &home, Vec::new());
+        let mut events = Vec::new();
+        let url = |path: &Path| format!("rick{}", &platform::paths::file_uri(path)["file".len()..]);
+
+        let panes = app.model().panes().count();
+        let reply = dispatch(&mut app, &mut events, &request(&[&url(&sub)], dir.path()));
+        assert_eq!(reply, Reply::ok(None));
+        assert_eq!(app.model().panes().count(), panes + 1);
+        let focused = app.model().focused;
+        let (_, tab) = app
+            .model()
+            .active_tab(focused)
+            .unwrap_or_else(|| panic!("a focused tab"));
+        assert_eq!(
+            tab.location,
+            location(&sub.canonicalize().unwrap_or(sub.clone()))
+        );
+
+        // A file: its folder opens and the file is selected once listed.
+        let panes = app.model().panes().count();
+        let reply = dispatch(
+            &mut app,
+            &mut events,
+            &request(&[&url(&sub.join("a.txt"))], dir.path()),
+        );
+        assert_eq!(reply, Reply::ok(None));
+        assert_eq!(app.model().panes().count(), panes + 1);
+        let pane = app.model().focused;
+        runtime::block_on(async {
+            let deadline = std::time::Instant::now() + Duration::from_secs(10);
+            loop {
+                let _ =
+                    tokio::time::timeout(Duration::from_millis(50), app.tick(&mut events)).await;
+                let selected: Vec<String> = app
+                    .model()
+                    .active_tab(pane)
+                    .map(|(_, tab)| tab.selected().map(|e| e.name.clone()).collect())
+                    .unwrap_or_default();
+                if selected == ["a.txt"] {
+                    break;
+                }
+                assert!(std::time::Instant::now() < deadline, "{selected:?}");
+            }
+        });
+
+        // Nothing of that name, or a host: a toast and no tab.
+        let panes = app.model().panes().count();
+        let activations = events
+            .iter()
+            .filter(|e| matches!(e, Event::Activate { .. }))
+            .count();
+        let missing = url(&dir.path().join("nowhere"));
+        let reply = dispatch(
+            &mut app,
+            &mut events,
+            &request(&[&missing, "rick://apps"], dir.path()),
+        );
+        assert_eq!(reply.status, EXIT_FAILED);
+        assert_eq!(app.model().panes().count(), panes);
+        let toasts: Vec<&String> = events
+            .iter()
+            .filter_map(|e| match e {
+                Event::Notify {
+                    level: ext::Level::Error,
+                    text,
+                } => Some(text),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(toasts.len(), 2, "{events:?}");
+        assert!(
+            toasts[0].contains(&missing) && toasts[1].contains("rick://apps"),
+            "{toasts:?}"
+        );
+        assert_eq!(
+            events
+                .iter()
+                .filter(|e| matches!(e, Event::Activate { .. }))
+                .count(),
+            activations,
+            "nothing opened, nothing to raise"
         );
     }
 
