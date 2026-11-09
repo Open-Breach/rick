@@ -5,14 +5,18 @@
 //! binary and in the config directory into the `app`, and runs the egui
 //! shell. `rick --version` prints the version and the git hash of the build
 //! and exits; `rick --list-plugins` prints the table the Extensions screen
-//! shows and exits; the only other argument is the folder to start in.
+//! shows and exits; every other argument is a folder to open, each in a
+//! tab of its own (`rick <folder>…`, as the desktop entry's `%F` passes the
+//! selected folders; specs/app-icons.md).
 
+use std::ffi::OsString;
 use std::fmt::Write as _;
 use std::io::Write as _;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use anyhow::Context as _;
+use app::Command;
 use platform::ConfigDir as _;
 use plugins_native::{Host, Options, PluginStatus};
 use types::Location;
@@ -86,15 +90,13 @@ fn built_ins() -> Vec<Arc<dyn ext::Extension>> {
 }
 
 fn main() -> anyhow::Result<()> {
-    let arg = std::env::args_os().nth(1);
-    if arg
-        .as_deref()
-        .is_some_and(|arg| arg == "--version" || arg == "-V")
-    {
+    let args: Vec<OsString> = std::env::args_os().skip(1).collect();
+    let first = args.first().map(OsString::as_os_str);
+    if first.is_some_and(|arg| arg == "--version" || arg == "-V") {
         writeln!(std::io::stdout().lock(), "{VERSION}").context("writing the version")?;
         return Ok(());
     }
-    let list_plugins = arg.as_deref().is_some_and(|arg| arg == "--list-plugins");
+    let list_plugins = first.is_some_and(|arg| arg == "--list-plugins");
 
     tracing_subscriber::fmt()
         .with_env_filter(
@@ -104,12 +106,18 @@ fn main() -> anyhow::Result<()> {
         .with_writer(std::io::stderr)
         .init();
 
-    // A path on the command line opens in a new tab of the restored
-    // session; without one the session comes back as it was.
-    let start = arg
-        .filter(|_| !list_plugins)
-        .map(PathBuf::from)
-        .map(|p| std::fs::canonicalize(&p).unwrap_or(p));
+    // The folders on the command line each open in a tab of the restored
+    // session's focused window, the first as the start location and the
+    // others after it; without any the session comes back as it was. An
+    // argument that is no folder is handed on as a location all the same:
+    // the pane says what it cannot list, and the start never fails on it.
+    let mut folders = if list_plugins {
+        Vec::new()
+    } else {
+        folders(&args)
+    }
+    .into_iter();
+    let start = folders.next();
     if let Some(start) = &start {
         tracing::info!(start = %start.display(), "starting");
     } else {
@@ -160,14 +168,38 @@ fn main() -> anyhow::Result<()> {
             ui: ui.clone(),
             extensions,
             config_dir: None,
-            start: start
-                .map(|p| Location::new(vfs_local::PROVIDER_ID, platform::paths::from_path(&p))),
+            start: start.as_deref().map(location),
         },
         prompts,
         ext_settings,
     );
     app.set_plugins(rows);
+    // The further folders, one tab each, before the first frame; a new tab
+    // reports nothing the UI would miss (its listing arrives through the
+    // app's polling like the start location's).
+    let mut events = Vec::new();
+    for folder in folders {
+        app.handle(Command::NewTab(location(&folder)), &mut events);
+    }
+    if !events.is_empty() {
+        tracing::debug!(count = events.len(), "events of the start-up tabs dropped");
+    }
     ui_egui::run("Rick", VERSION, app, ui).context("the window could not be opened")
+}
+
+/// The folders of the command line, in order: every argument, made
+/// absolute where it names something (a relative path from a launcher
+/// resolves against its working directory), kept as given otherwise.
+fn folders(args: &[OsString]) -> Vec<PathBuf> {
+    args.iter()
+        .map(PathBuf::from)
+        .map(|p| std::fs::canonicalize(&p).unwrap_or(p))
+        .collect()
+}
+
+/// A folder as a location of the local provider.
+fn location(path: &Path) -> Location {
+    Location::new(vfs_local::PROVIDER_ID, platform::paths::from_path(path))
 }
 
 /// A plugin as the Extensions screen lists it.
@@ -238,4 +270,34 @@ fn table(plugins: &[plugins_native::Plugin]) -> String {
         out.push_str("(no plugins found)\n");
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Every argument is a folder to open, in order, made absolute where
+    /// it exists and kept where it does not; nothing is dropped and
+    /// nothing fails.
+    #[test]
+    fn every_argument_is_a_folder_in_order() {
+        let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+        let a = dir.path().join("a");
+        let b = dir.path().join("b");
+        std::fs::create_dir_all(&a).unwrap_or_else(|e| panic!("{e}"));
+        std::fs::create_dir_all(&b).unwrap_or_else(|e| panic!("{e}"));
+        let missing = dir.path().join("nowhere");
+        let args: Vec<OsString> = [&a, &b, &missing]
+            .into_iter()
+            .map(|p| p.as_os_str().to_owned())
+            .collect();
+        let found = folders(&args);
+        assert_eq!(found.len(), 3);
+        assert_eq!(found[0], a.canonicalize().unwrap_or(a));
+        assert_eq!(found[1], b.canonicalize().unwrap_or(b));
+        assert_eq!(found[2], missing);
+        assert!(folders(&[]).is_empty());
+        let location = location(&found[0]);
+        assert_eq!(location.provider, vfs_local::PROVIDER_ID);
+    }
 }
