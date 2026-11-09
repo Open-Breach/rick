@@ -7,7 +7,7 @@ use std::sync::Arc;
 
 use ext::{ActionCtx, ActionId, Continuation, Decoration, FsChange, Level, PreviewDoc, Values};
 use model::{
-    Column, Dock, DockTarget, Geometry, PaneId, Place, SelectionChange, SettingsChange,
+    Column, Dock, DockTarget, Geometry, PaneId, Place, SelectionChange, SettingsChange, Side,
     SidePanelChange, SortDir, SplitDir, TabId, ViewMode, WindowId, WorkspaceId,
 };
 use ops::PermissionRequest;
@@ -267,6 +267,18 @@ pub enum Command {
         id: WorkspaceId,
         /// The index it takes, clamped to the row.
         to: usize,
+    },
+    /// Dock the one pane of a workspace beside a pane of any layout, the
+    /// workspace's tab leaving its row: a tab holding exactly one pane
+    /// dropped on a dock target. The model refuses a workspace of several
+    /// panes.
+    DockWorkspace {
+        /// The workspace whose pane moves.
+        id: WorkspaceId,
+        /// The pane it docks beside.
+        pane: PaneId,
+        /// On which side of that pane.
+        side: Side,
     },
     /// Move a workspace to the end of another window's title row, or into a
     /// window of its own for `None`.

@@ -333,6 +333,18 @@ the pull request that brought the change.
   insertion line. Under the system's reduce-motion setting the tabs take
   their places at once. The slide's duration is `ui_egui::drag::TAB_SLIDE`
   (#129).
+- A workspace tab that holds exactly one pane can be dragged down into the
+  workspace the window shows (issue 80, rules 2 and 3; SPEC.md *Workspace
+  tabs*, Dragging a tab): off the row, the pane under the cursor shows the
+  four side dock targets — no centre, the tab being a tab already — with
+  the preview of the half, and dropped on one the tab's pane docks there
+  and the tab leaves the row; it is the reverse of dropping a pane on the
+  tab row. A tab that holds several panes is offered no target: it
+  reorders, changes window or tears off, and its panes move by their
+  handles. Whether a tab holds one pane is the model's answer
+  (`Model::sole_pane`), every pane counting, the preview too
+  (QUESTIONS.md 270), and the move is the model's `dock_workspace`
+  behind `Command::DockWorkspace` (#130).
 
 ### Removed
 

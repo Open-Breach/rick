@@ -1050,6 +1050,42 @@ impl Model {
             .map(|(window, _)| *window)
     }
 
+    /// The pane of a workspace that holds exactly one, whatever the pane
+    /// shows — the preview, a console and a comparison count like an
+    /// explorer (QUESTIONS.md 270); `None` for a workspace of several panes
+    /// and for one the model does not have. Only the tab of such a
+    /// workspace can be docked into another layout (SPEC.md *Workspace
+    /// tabs*, Dragging a tab).
+    #[must_use]
+    pub fn sole_pane(&self, id: WorkspaceId) -> Option<PaneId> {
+        let window = self.window_of_workspace(id)?;
+        let workspace = self.workspaces(window).iter().find(|ws| ws.id == id)?;
+        match workspace.dock {
+            Dock::Pane(pane) => Some(pane),
+            Dock::Split { .. } => None,
+        }
+    }
+
+    /// Docks the one pane of workspace `id` beside `pane` on `side`, in
+    /// whichever workspace and window `pane` is: the reverse of a pane
+    /// dropped on the tab row. The workspace, emptied, leaves its row, and
+    /// the layout that took the pane is shown with the pane focused.
+    /// Refused for a workspace of several panes — its panes move one at a
+    /// time by their handles — and for a `pane` that is the workspace's
+    /// own. Returns whether the pane was docked.
+    pub fn dock_workspace(&mut self, id: WorkspaceId, pane: PaneId, side: Side) -> bool {
+        let Some(sole) = self.sole_pane(id) else {
+            return false;
+        };
+        if sole == pane {
+            return false;
+        }
+        let Some(tab) = self.pane(sole).and_then(Pane::active) else {
+            return false;
+        };
+        self.move_tab(tab, DockTarget::Beside { pane, side })
+    }
+
     /// Opens a new workspace in `window`, right after the shown one, with one
     /// pane at `location`, and shows it. Returns the workspace, the pane and
     /// the tab.
@@ -2737,6 +2773,72 @@ mod tests {
                 side: Side::Left
             }
         ));
+    }
+
+    #[test]
+    fn a_workspace_of_one_pane_docks_into_another_layout_and_one_of_several_does_not() {
+        let mut model = Model::new(Settings::default(), loc("/a"));
+        let window = model.focused_window;
+        let pane_a = model.focused;
+        let first = model.workspaces(window)[0].id;
+        let (second, pane_b, _) = model
+            .new_workspace(window, loc("/b"))
+            .unwrap_or_else(|| panic!("workspace"));
+        let (third, pane_c, _) = model
+            .new_workspace(window, loc("/c"))
+            .unwrap_or_else(|| panic!("workspace"));
+        let (pane_d, _) = model
+            .split(pane_c, SplitDir::Right)
+            .unwrap_or_else(|| panic!("split"));
+        assert!(model.activate_workspace(first));
+
+        // Exactly one pane, or none to speak of.
+        assert_eq!(model.sole_pane(first), Some(pane_a));
+        assert_eq!(model.sole_pane(second), Some(pane_b));
+        assert_eq!(model.sole_pane(third), None, "two panes");
+        assert_eq!(model.sole_pane(WorkspaceId(99)), None);
+
+        // A workspace of several panes is not docked, nor one onto itself,
+        // nor onto a pane that is not there.
+        let before = model.clone();
+        assert!(!model.dock_workspace(third, pane_a, Side::Left));
+        assert!(!model.dock_workspace(second, pane_b, Side::Left));
+        assert!(!model.dock_workspace(second, PaneId(99), Side::Left));
+        assert!(!model.dock_workspace(WorkspaceId(99), pane_a, Side::Left));
+        assert_eq!(model.workspaces(window), before.workspaces(window));
+
+        // The one pane of the second workspace, docked left of the first's:
+        // the second leaves the row, the first holds both and is shown, and
+        // the docked pane has the keyboard.
+        assert!(model.dock_workspace(second, pane_a, Side::Left));
+        let order: Vec<WorkspaceId> = model.workspaces(window).iter().map(|w| w.id).collect();
+        assert_eq!(order, [first, third]);
+        assert_eq!(
+            model.workspaces(window)[0].dock,
+            Dock::split_of(SplitDir::Right, Dock::Pane(pane_b), Dock::Pane(pane_a))
+        );
+        assert_eq!(model.window(window).map(|w| w.active), Some(first));
+        assert_eq!(model.focused, pane_b);
+        assert_eq!(model.sole_pane(first), None, "it holds two now");
+
+        // Into a layout that is not shown: it is shown afterwards. The
+        // first workspace is down to one pane again after its other pane
+        // goes below a pane of the third.
+        assert_eq!(
+            model.close_tab(
+                model
+                    .pane(pane_b)
+                    .and_then(Pane::active)
+                    .unwrap_or(TabId(0))
+            ),
+            Some(pane_b)
+        );
+        assert_eq!(model.sole_pane(first), Some(pane_a));
+        assert!(model.dock_workspace(first, pane_d, Side::Bottom));
+        let order: Vec<WorkspaceId> = model.workspaces(window).iter().map(|w| w.id).collect();
+        assert_eq!(order, [third]);
+        assert_eq!(model.dock().panes(), [pane_c, pane_d, pane_a]);
+        assert_eq!(model.focused, pane_a);
     }
 
     #[test]

@@ -425,6 +425,47 @@ enum DockZone {
     Centre,
 }
 
+impl DockZone {
+    /// The side of the pane under it a pane dropped here docks on; the
+    /// centre is no side, it makes a new tab.
+    fn side(self) -> Option<model::Side> {
+        match self {
+            Self::Left => Some(model::Side::Left),
+            Self::Right => Some(model::Side::Right),
+            Self::Top => Some(model::Side::Top),
+            Self::Bottom => Some(model::Side::Bottom),
+            Self::Centre => None,
+        }
+    }
+}
+
+/// Which dock targets a drag is offered on the pane under the cursor.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Cross {
+    /// A pane dragged by its handle: the four sides and the centre, which
+    /// makes it a new tab.
+    Pane,
+    /// A tab that holds exactly one pane: the four sides, and no centre,
+    /// the tab being a tab already (SPEC.md *Workspace tabs*).
+    Tab,
+}
+
+impl Cross {
+    /// The tiles of the cross over a pane's rectangle.
+    fn tiles(self, rect: egui::Rect) -> impl Iterator<Item = (DockZone, egui::Rect)> {
+        dock_tiles(rect)
+            .into_iter()
+            .filter(move |(zone, _)| self == Self::Pane || *zone != DockZone::Centre)
+    }
+
+    /// The tile of the cross over `rect` that `pointer` is on.
+    fn zone_at(self, rect: egui::Rect, pointer: egui::Pos2) -> Option<DockZone> {
+        self.tiles(rect)
+            .find(|(_, tile)| tile.contains(pointer))
+            .map(|(zone, _)| zone)
+    }
+}
+
 /// The side of a dock tile, in points.
 pub const DOCK_TILE: f32 = 40.0;
 /// The distance between the centres of two neighbouring dock tiles.
@@ -489,19 +530,20 @@ fn paint_split_icon(
     painter.rect_filled(filled, 1.0, colour);
 }
 
-/// The dock targets over the pane at `rect`: the five tiles, the one of
-/// `hot` filled `accent/button`, and a translucent preview of the half a
-/// pane dropped there would take (SPEC.md *Panes*).
+/// The dock targets over the pane at `rect`: the tiles of `cross`, the
+/// one of `hot` filled `accent/button`, and a translucent preview of the
+/// half a pane dropped there would take (SPEC.md *Panes*).
 fn paint_dock_cross(
     overlay: &egui::Painter,
     rect: egui::Rect,
     hot: Option<DockZone>,
+    cross: Cross,
     scheme: &crate::theme::Scheme,
 ) {
     if let Some(half) = hot.and_then(|zone| dock_half(rect, zone)) {
         overlay.rect_filled(half, 0.0, scheme.accent_button.gamma_multiply(0.35));
     }
-    for (zone, tile) in dock_tiles(rect) {
+    for (zone, tile) in cross.tiles(rect) {
         let lit = hot == Some(zone);
         let fill = if lit {
             scheme.accent_button
@@ -2818,11 +2860,14 @@ impl RickUi {
     /// directly after the last; the row clips what does not fit. A tab
     /// dragged along the row reorders the tabs, its neighbours sliding
     /// apart to open the gap where it will land; one dragged off the row
-    /// follows the cursor as its ghost: released outside the window it
-    /// moves to the window under it or opens a new one, released anywhere
-    /// else it returns to its place. A pane's tab dragged over the row
-    /// shows the slot where it would land as a new tab (SPEC.md *Workspace
-    /// tabs*).
+    /// follows the cursor as its ghost. A tab holding exactly one pane —
+    /// the model says so — is then offered the four side dock targets of
+    /// the pane under the cursor, and released on one its pane docks
+    /// there, the tab leaving the row; a tab of several panes is offered
+    /// none. Released outside the window a tab moves to the window under
+    /// it or opens a new one, released anywhere else it returns to its
+    /// place. A pane's tab dragged over the row shows the slot where it
+    /// would land as a new tab (SPEC.md *Workspace tabs*).
     #[allow(clippy::too_many_lines, clippy::too_many_arguments)]
     fn title_tabs(
         &mut self,
@@ -2886,6 +2931,24 @@ impl RickUi {
             && pointer.is_some_and(|p| row.expand2(egui::vec2(0.0, 6.0)).contains(p));
         let drop_slot = pane_over_row.then(|| pointer.map(|p| slot_of(p.x, tabs.len())));
         w.pane_drop_slot = drop_slot.flatten();
+        // Off the row, a tab that holds exactly one pane can be docked: the
+        // pane under the cursor shows the four side targets, and the tile
+        // under the cursor is where the tab's pane would go. The model says
+        // whether the tab holds one pane; a tab of several is offered
+        // nothing. The tab's own pane, when its workspace is the one shown,
+        // is no target for itself.
+        let dock = drag
+            .filter(|_| dragged.is_some() && !riding)
+            .and_then(|d| model.sole_pane(d.id))
+            .zip(pointer)
+            .and_then(|(sole, p)| {
+                let (pane, rect) = w
+                    .dock
+                    .pane_rects(model)
+                    .into_iter()
+                    .find(|(pane, rect)| *pane != sole && rect.contains(p))?;
+                Some((pane, rect, Cross::Tab.zone_at(rect, p)))
+            });
         // The tabs slide to their places while something is dragged over
         // the row and for one slide after it, so the gap opens and closes
         // animated and a dropped tab settles into it; at any other time,
@@ -3066,6 +3129,12 @@ impl RickUi {
                 },
             );
             let (_, _) = workspace_tab(&mut top, float, tabs[i].0, &tabs[i].1, true);
+            // The dock targets over the lifted tab, not under it: the
+            // cursor is inside the tab, which is wider than the cross and
+            // would hide the targets it is being taken to.
+            if let Some((_, rect, zone)) = dock {
+                paint_dock_cross(top.painter(), rect, zone, Cross::Tab, scheme);
+            }
             crate::drag::announce(
                 &top,
                 egui::Id::new(("drag-status", window.0)),
@@ -3108,12 +3177,21 @@ impl RickUi {
             self.close_workspace(id);
         }
         match dropped {
-            // Released on the row: into the room the row kept for it.
-            // Anywhere else in the window it returns to its place
-            // (QUESTIONS.md 274).
+            // Released on the row: into the room the row kept for it. On
+            // a dock target: its one pane docks there, and the model takes
+            // the tab out of the row. Anywhere else in the window it
+            // returns to its place (QUESTIONS.md 274).
             Some((d, _)) if in_window => {
                 if let Some(to) = drag_slot {
                     self.handle(Command::MoveWorkspace { id: d.id, to });
+                } else if let Some((pane, _, Some(zone))) = dock
+                    && let Some(side) = zone.side()
+                {
+                    self.handle(Command::DockWorkspace {
+                        id: d.id,
+                        pane,
+                        side,
+                    });
                 }
             }
             Some((d, Some(pos))) => self.drop_workspace_outside(window, d.id, pos),
@@ -3937,11 +4015,9 @@ impl RickUi {
                 .find(|(pane, rect)| *pane != drag.pane && rect.contains(p))
         });
         let zone = under.and_then(|(pane, rect)| {
-            let p = pointer?;
-            dock_tiles(rect)
-                .into_iter()
-                .find(|(_, tile)| tile.contains(p))
-                .map(|(zone, _)| (pane, rect, zone))
+            Cross::Pane
+                .zone_at(rect, pointer?)
+                .map(|zone| (pane, rect, zone))
         });
         if down && !released {
             let scheme = crate::theme::scheme_of(ctx);
@@ -3950,7 +4026,13 @@ impl RickUi {
                 egui::Id::new(("pane-drag", window.0)),
             ));
             if let Some((_, rect)) = under {
-                paint_dock_cross(&overlay, rect, zone.map(|(_, _, zone)| zone), scheme);
+                paint_dock_cross(
+                    &overlay,
+                    rect,
+                    zone.map(|(_, _, zone)| zone),
+                    Cross::Pane,
+                    scheme,
+                );
             }
             // The ghost: the pane as it was grabbed, anchored to the grab
             // point (SPEC.md *Drag ghost*).
@@ -3990,24 +4072,9 @@ impl RickUi {
             return Some(false);
         }
         if let Some((pane, _, zone)) = zone {
-            let to = match zone {
-                DockZone::Centre => DockTarget::NewWorkspace,
-                DockZone::Left => DockTarget::Beside {
-                    pane,
-                    side: model::Side::Left,
-                },
-                DockZone::Right => DockTarget::Beside {
-                    pane,
-                    side: model::Side::Right,
-                },
-                DockZone::Top => DockTarget::Beside {
-                    pane,
-                    side: model::Side::Top,
-                },
-                DockZone::Bottom => DockTarget::Beside {
-                    pane,
-                    side: model::Side::Bottom,
-                },
+            let to = match zone.side() {
+                Some(side) => DockTarget::Beside { pane, side },
+                None => DockTarget::NewWorkspace,
             };
             self.handle(Command::MoveTab { tab: drag.tab, to });
             return Some(true);
