@@ -344,8 +344,9 @@ fn the_third_party_page_lists_filters_expands_and_exports() {
     }
     harness.get_by_label_contains("11 components, 7 licence types");
 
-    // A row opens in place with its copyright line and text; the same
-    // click closes it; another row replaces it.
+    // A row opens in place with its copyright line and text; another row
+    // replaces it (one at the top, so the open text does not scroll the
+    // second row out of the list); the same click closes it.
     assert!(
         harness
             .query_by_label_contains("Permission is hereby granted")
@@ -361,20 +362,26 @@ fn the_third_party_page_lists_filters_expands_and_exports() {
     );
     harness.get_by_label("Copyright (c) 2018 Emil Ernerfeldt");
     harness.get_by_label_contains("Permission is hereby granted");
-    click_button(&mut harness, "serde 1.0.228");
+    click_button(&mut harness, "pdfium chromium/8138");
     assert!(
         harness
             .query_by_label_contains("Permission is hereby granted")
             .is_none()
     );
-    harness.get_by_label_contains("Apache License");
-    click_button(&mut harness, "serde 1.0.228");
+    harness.get_by_label("Copyright 2014 The PDFium Authors");
+    harness.get_by_label_contains("Redistribution and use in source and binary forms");
+    click_button(&mut harness, "pdfium chromium/8138");
     assert!(
         harness
             .state()
             .about()
             .licences_page()
             .is_some_and(|p| p.open_row().is_none())
+    );
+    assert!(
+        harness
+            .query_by_label_contains("Redistribution and use")
+            .is_none()
     );
 
     // The search narrows the rows to the names that contain the text.

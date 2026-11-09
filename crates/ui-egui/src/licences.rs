@@ -602,28 +602,10 @@ fn row(
     response
 }
 
-/// The open row's block: the copyright line and the repository link, then
-/// the licence text in a mono box on `bg/card`, all on `bg/selected-soft`.
-fn expanded(ui: &mut egui::Ui, component: &Component, asked: &mut Asked) {
+/// The open row's meta line: the copyright holder in `text/secondary` and
+/// the repository as a link in `text/on-selected`, 8 under the row.
+fn meta_line(ui: &mut egui::Ui, rect: Rect, component: &Component, asked: &mut Asked) {
     let scheme = theme::scheme(ui);
-    let width = ui.available_width();
-    let box_width = width - 2.0 * PAD;
-    let text_width = box_width - 24.0 - 2.0;
-    let galley = ui.fonts_mut(|f| {
-        f.layout(
-            component.text.trim_end().to_owned(),
-            FontId::monospace(TEXT_SIZE),
-            scheme.text_secondary,
-            text_width,
-        )
-    });
-    let box_height = galley.size().y + 20.0;
-    let height = 8.0 + 14.0 + 8.0 + box_height + 14.0;
-    let (rect, _) = ui.allocate_exact_size(vec2(width, height), Sense::hover());
-    if !ui.is_rect_visible(rect) {
-        return;
-    }
-    ui.painter().rect_filled(rect, 0.0, scheme.bg_selected_soft);
     let meta_y = rect.top() + 8.0 + 7.0;
     let copyright = component.copyright_line();
     let copyright_width = if copyright.is_empty() {
@@ -650,37 +632,63 @@ fn expanded(ui: &mut egui::Ui, component: &Component, asked: &mut Asked) {
         });
         size.x + 14.0
     };
-    if !component.repository.is_empty() {
-        let link = ui.painter().layout_no_wrap(
-            crate::about::short_url(&component.repository),
-            FontId::proportional(theme::TEXT_SECONDARY),
-            scheme.text_on_selected,
-        );
-        let link_rect = Rect::from_min_size(
-            pos2(
-                rect.left() + PAD + copyright_width,
-                meta_y - link.size().y / 2.0,
-            ),
-            link.size(),
-        );
-        ui.painter()
-            .galley(link_rect.min, link, scheme.text_on_selected);
-        let response = ui.interact(
-            link_rect,
-            ui.id()
-                .with(("about-repo", &component.name, &component.version)),
-            Sense::click(),
-        );
-        response.widget_info(|| {
-            egui::WidgetInfo::labeled(egui::WidgetType::Link, true, component.repository.clone())
-        });
-        if response.hovered() {
-            ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
-        }
-        if response.clicked() {
-            asked.open_url = Some(component.repository.clone());
-        }
+    if component.repository.is_empty() {
+        return;
     }
+    let link = ui.painter().layout_no_wrap(
+        crate::about::short_url(&component.repository),
+        FontId::proportional(theme::TEXT_SECONDARY),
+        scheme.text_on_selected,
+    );
+    let link_rect = Rect::from_min_size(
+        pos2(
+            rect.left() + PAD + copyright_width,
+            meta_y - link.size().y / 2.0,
+        ),
+        link.size(),
+    );
+    ui.painter()
+        .galley(link_rect.min, link, scheme.text_on_selected);
+    let response = ui.interact(
+        link_rect,
+        ui.id()
+            .with(("about-repo", &component.name, &component.version)),
+        Sense::click(),
+    );
+    response.widget_info(|| {
+        egui::WidgetInfo::labeled(egui::WidgetType::Link, true, component.repository.clone())
+    });
+    if response.hovered() {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+    }
+    if response.clicked() {
+        asked.open_url = Some(component.repository.clone());
+    }
+}
+
+/// The open row's block: the meta line, then the licence text in a mono
+/// box on `bg/card`, all on `bg/selected-soft`.
+fn expanded(ui: &mut egui::Ui, component: &Component, asked: &mut Asked) {
+    let scheme = theme::scheme(ui);
+    let width = ui.available_width();
+    let box_width = width - 2.0 * PAD;
+    let text_width = box_width - 24.0 - 2.0;
+    let galley = ui.fonts_mut(|f| {
+        f.layout(
+            component.text.trim_end().to_owned(),
+            FontId::monospace(TEXT_SIZE),
+            scheme.text_secondary,
+            text_width,
+        )
+    });
+    let box_height = galley.size().y + 20.0;
+    let height = 8.0 + 14.0 + 8.0 + box_height + 14.0;
+    let (rect, _) = ui.allocate_exact_size(vec2(width, height), Sense::hover());
+    if !ui.is_rect_visible(rect) {
+        return;
+    }
+    ui.painter().rect_filled(rect, 0.0, scheme.bg_selected_soft);
+    meta_line(ui, rect, component, asked);
     let text_box = Rect::from_min_size(
         pos2(rect.left() + PAD, rect.top() + 8.0 + 14.0 + 8.0),
         vec2(box_width, box_height),
