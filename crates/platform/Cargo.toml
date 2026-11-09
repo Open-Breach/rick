@@ -39,6 +39,7 @@ libc = { workspace = true }
 rustix = { workspace = true, features = ["fs", "pipe", "process", "std"] }
 wayland-client = { workspace = true }
 wayland-backend = { workspace = true }
+wayland-protocols = { workspace = true }
 x11rb = { workspace = true }
 
 [target.'cfg(target_os = "macos")'.dependencies]

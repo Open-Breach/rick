@@ -46,16 +46,19 @@ use windows::Win32::UI::Shell::{
     SHERB_NOSOUND, SHEmptyRecycleBinW, SHGetKnownFolderItem, SHGetKnownFolderPath,
     SIGDN_FILESYSPATH, SIGDN_NORMALDISPLAY, ShellExecuteExW, ShellExecuteW, ShellLink,
 };
-use windows::Win32::UI::WindowsAndMessaging::{SW_SHOW, SW_SHOWNORMAL};
+use windows::Win32::UI::WindowsAndMessaging::{
+    ASFW_ANY, AllowSetForegroundWindow, IsIconic, SW_RESTORE, SW_SHOW, SW_SHOWNORMAL,
+    SetForegroundWindow, ShowWindow,
+};
 use windows::core::{GUID, Interface, PCWSTR, PWSTR, w};
 
 use crate::Native;
 use crate::fs::windows::{filetime, io_error, wide};
 use crate::traits::{
-    Application, Chrome, ConfigDir, ControlsSide, DragSource, DropTarget, Elevate, ElevatedOutput,
-    ImageFormat, IncomingFiles, Mount, OpenWith, Point, Properties, PropertiesOutcome, RecentItem,
-    RecentlyUsed, StandardFolder, StandardFolders, Terminal, Trash, TrashedItem, Volume,
-    VolumeKind, Volumes, WindowChrome, WindowRef,
+    Activation, Application, Chrome, ConfigDir, ControlsSide, DragSource, DropTarget, Elevate,
+    ElevatedOutput, ImageFormat, IncomingFiles, Mount, OpenWith, Point, Properties,
+    PropertiesOutcome, RecentItem, RecentlyUsed, StandardFolder, StandardFolders, Terminal, Trash,
+    TrashedItem, Volume, VolumeKind, Volumes, WindowChrome, WindowRef,
 };
 
 /// `System.Recycle.DeletedFrom`: the folder a recycled item came from.
@@ -1119,6 +1122,35 @@ impl Chrome for Native {
             native_controls: false,
             native_controls_width: 0.0,
         }
+    }
+}
+
+impl Activation for Native {
+    /// Restored when minimised, then brought to the foreground: allowed
+    /// because the launch called `AllowSetForegroundWindow` before it
+    /// handed over.
+    fn activate_window(&self, window: &WindowRef, _token: Option<&str>) -> Result<(), Error> {
+        let hwnd = drag::hwnd_of(window)?;
+        // SAFETY: plain window-manager calls on the handle the backend gave
+        // out for a live window of this process.
+        unsafe {
+            if IsIconic(hwnd).as_bool() {
+                let _ = ShowWindow(hwnd, SW_RESTORE);
+            }
+            if !SetForegroundWindow(hwnd).as_bool() {
+                return Err(Error::Unsupported(
+                    "the window could not be brought to the foreground",
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    fn allow_activation(&self) {
+        // SAFETY: a plain call with the constant that lets any process take
+        // the foreground once; it fails only when this process may not
+        // give that away, which is not an error for the launch.
+        let _ = unsafe { AllowSetForegroundWindow(ASFW_ANY) };
     }
 }
 

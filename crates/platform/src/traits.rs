@@ -738,6 +738,29 @@ pub trait SingleInstance: Send + Sync {
     fn instance_endpoint(&self, config_dir: &Path) -> Endpoint;
 }
 
+/// Raising a window the system did not focus itself
+/// (specs/system-integration.md §3): what the running instance does when
+/// a second launch hands it a path, so the tab it opened is seen.
+pub trait Activation: Send + Sync {
+    /// Raises and focuses `window`: `xdg_activation_v1` with the launcher's
+    /// `token` on Wayland, `_NET_ACTIVE_WINDOW` on X11, `NSApp.activate`
+    /// with the window made key on macOS, `SetForegroundWindow` on
+    /// Windows.
+    ///
+    /// # Errors
+    ///
+    /// `Error::Unsupported` when the platform cannot raise the window
+    /// (no token on Wayland, a handle of another windowing system), the
+    /// I/O error of the display connection otherwise; the caller still
+    /// asks its windowing backend to focus the window.
+    fn activate_window(&self, window: &WindowRef, token: Option<&str>) -> Result<(), Error>;
+
+    /// What a launch does before it hands its command line to the running
+    /// instance, so the instance may take the foreground:
+    /// `AllowSetForegroundWindow` on Windows, nothing elsewhere.
+    fn allow_activation(&self);
+}
+
 /// All platform services behind one object.
 pub trait Platform:
     Trash
@@ -760,6 +783,7 @@ pub trait Platform:
     + SystemFonts
     + Motion
     + SingleInstance
+    + Activation
 {
 }
 
@@ -783,7 +807,8 @@ impl<
         + Secrets
         + SystemFonts
         + Motion
-        + SingleInstance,
+        + SingleInstance
+        + Activation,
 > Platform for T
 {
 }

@@ -25,10 +25,10 @@ use types::Error;
 use crate::Native;
 use crate::time::parse_iso8601;
 use crate::traits::{
-    Application, Chrome, ConfigDir, ControlsSide, DragSource, DropTarget, Elevate, ElevatedOutput,
-    ImageFormat, IncomingFiles, Mount, OpenWith, Point, Properties, PropertiesOutcome, RecentItem,
-    RecentlyUsed, StandardFolder, StandardFolders, Terminal, Trash, TrashedItem, Volume,
-    VolumeKind, Volumes, WindowChrome, WindowRef,
+    Activation, Application, Chrome, ConfigDir, ControlsSide, DragSource, DropTarget, Elevate,
+    ElevatedOutput, ImageFormat, IncomingFiles, Mount, OpenWith, Point, Properties,
+    PropertiesOutcome, RecentItem, RecentlyUsed, StandardFolder, StandardFolders, Terminal, Trash,
+    TrashedItem, Volume, VolumeKind, Volumes, WindowChrome, WindowRef,
 };
 use crate::trash_record::{self, TRASH_FILE};
 
@@ -698,6 +698,28 @@ impl Chrome for Native {
             native_controls_width: 78.0,
         }
     }
+}
+
+impl Activation for Native {
+    /// The window made key and ordered front, then the application
+    /// activated over the others; on the main thread, where AppKit lives.
+    fn activate_window(&self, window: &WindowRef, _token: Option<&str>) -> Result<(), Error> {
+        let mtm = objc2::MainThreadMarker::new()
+            .ok_or(Error::Unsupported("windows are raised on the main thread"))?;
+        let view = drag::view_of(window, mtm)?;
+        let ns_window = view
+            .window()
+            .ok_or(Error::Unsupported("the view is not in a window"))?;
+        ns_window.makeKeyAndOrderFront(None);
+        let app = objc2_app_kit::NSApplication::sharedApplication(mtm);
+        // `activate()` exists from macOS 14 only; the older call still
+        // works everywhere Rick runs.
+        #[allow(deprecated)]
+        app.activateIgnoringOtherApps(true);
+        Ok(())
+    }
+
+    fn allow_activation(&self) {}
 }
 
 impl DragSource for Native {

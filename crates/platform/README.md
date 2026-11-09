@@ -42,8 +42,12 @@ user and config directory: a Unix socket in `$XDG_RUNTIME_DIR` or the
 user's temporary directory, a named pipe on Windows; the `instance` module
 frames the one message a second launch hands over it, *run command with
 arguments*, as length-prefixed JSON with a protocol version, reclaims a
-stale socket and gives an unresponsive instance up after a second) and
-the `agent` module that opens the SSH
+stale socket and gives an unresponsive instance up after a second),
+`Activation` (raising the window a second launch's path opened in:
+`xdg_activation_v1` with the launcher's token on Wayland,
+`_NET_ACTIVE_WINDOW` on X11, the window made key and `NSApp.activate` on
+macOS, `SetForegroundWindow` on Windows after the launch's
+`AllowSetForegroundWindow`) and the `agent` module that opens the SSH
 agent's socket (`SSH_AUTH_SOCK`, or OpenSSH's named pipe on Windows),
 implemented for Linux (XDG trash, `xdg-open`), macOS
 (`NSFileManager`, `open`) and Windows (`IFileOperation`, `ShellExecute`), plus

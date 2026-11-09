@@ -3,9 +3,11 @@
 //! the terminal, `pkexec` for a command run as root, Rick's own properties
 //! rows, `$XDG_CONFIG_HOME/rick`, the mount table from `/proc/mounts` with
 //! `udisksctl` for ejecting and for mounting a disk image through a loop
-//! device, XDG user-dirs and `recently-used.xbel`, and drag and drop
-//! through a Wayland data device or XDND.
+//! device, XDG user-dirs and `recently-used.xbel`, drag and drop
+//! through a Wayland data device or XDND, and the window raised through
+//! `xdg_activation_v1` or `_NET_ACTIVE_WINDOW`.
 
+mod activate;
 mod apps;
 mod drag;
 mod elevate;
@@ -27,10 +29,10 @@ use types::Error;
 use crate::Native;
 use crate::time::iso8601;
 use crate::traits::{
-    Application, Chrome, ConfigDir, ControlsSide, DragSource, DropTarget, Elevate, ElevatedOutput,
-    ImageFormat, IncomingFiles, Mount, OpenWith, Point, Properties, PropertiesOutcome, RecentItem,
-    RecentlyUsed, StandardFolder, StandardFolders, Terminal, Trash, TrashedItem, Volume, Volumes,
-    WindowChrome, WindowRef,
+    Activation, Application, Chrome, ConfigDir, ControlsSide, DragSource, DropTarget, Elevate,
+    ElevatedOutput, ImageFormat, IncomingFiles, Mount, OpenWith, Point, Properties,
+    PropertiesOutcome, RecentItem, RecentlyUsed, StandardFolder, StandardFolders, Terminal, Trash,
+    TrashedItem, Volume, Volumes, WindowChrome, WindowRef,
 };
 
 /// The distribution and the desktop: `PRETTY_NAME` of `/etc/os-release`
@@ -309,6 +311,16 @@ impl Chrome for Native {
             native_controls_width: 0.0,
         }
     }
+}
+
+impl Activation for Native {
+    fn activate_window(&self, window: &WindowRef, token: Option<&str>) -> Result<(), Error> {
+        activate::activate(window, token)
+    }
+
+    /// Nothing: a Wayland compositor decides by the token, an X11 window
+    /// manager by the message's source indication.
+    fn allow_activation(&self) {}
 }
 
 impl DragSource for Native {

@@ -8,6 +8,13 @@ repository.workspace = true
 
 build = "build.rs"
 
+# The command line and the single instance as a library (`cli`,
+# `instance`), so the binary's integration tests drive them against the
+# built binary.
+[lib]
+name = "rick"
+path = "src/lib.rs"
+
 [[bin]]
 name = "rick"
 path = "src/main.rs"
