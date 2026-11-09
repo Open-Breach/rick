@@ -22,9 +22,11 @@ inputs:
       milestone 5 (issue 22), Subversion on every runner with
       RICK_REQUIRE_SVN set, Tracker and Baloo on Linux (their tests run
       through .github/scripts/with-indexers.sh), and the Windows Search
-      service started on Windows, with RICK_SEARCH_FIXTURE naming a
-      directory under the home the platform index covers and
-      RICK_REQUIRE_SPOTLIGHT or RICK_REQUIRE_WINDOWS_SEARCH set. "none"
+      service started on Windows, with RICK_REQUIRE_SPOTLIGHT or
+      RICK_REQUIRE_WINDOWS_SEARCH set and, on macOS, RICK_SEARCH_FIXTURE
+      naming a directory under the home the platform index covers (the
+      Windows index is too busy with its first crawl to take a fixture
+      within the job). "none"
       installs nothing. The GStreamer and LibreOffice parts are Linux only;
       macOS and Windows skip those tests with a note. On Windows "test" also
       sets RICK_REQUIRE_WGPU, since the dx12 software adapter (WARP) is part
@@ -130,17 +132,16 @@ runs:
         # the steps after this one do not see; they see GITHUB_PATH.
         echo "C:\Program Files (x86)\Subversion\bin" >> $env:GITHUB_PATH
         echo "RICK_REQUIRE_SVN=1" >> $env:GITHUB_ENV
-        # The indexer backs off while the machine is busy, and the build
-        # and the tests keep it busy: a file written at test time was not
-        # indexed within five minutes, where an idle runner takes ten
-        # seconds. The policy "Disable indexer backoff" keeps it indexing.
-        New-Item -Path "HKLM:\SOFTWARE\Policies\Microsoft\Windows\Windows Search" -Force | Out-Null
-        Set-ItemProperty -Path "HKLM:\SOFTWARE\Policies\Microsoft\Windows\Windows Search" -Name DisableBackOff -Value 1 -Type DWord
         Set-Service WSearch -StartupType Automatic
         Start-Service WSearch
         Get-Service WSearch
-        New-Item -ItemType Directory -Force -Path "$env:USERPROFILE\rick-search-fixture" | Out-Null
-        echo "RICK_SEARCH_FIXTURE=$env:USERPROFILE\rick-search-fixture" >> $env:GITHUB_ENV
+        # The service is required, a fixture is not: the index starts here
+        # and crawls the whole profile, the cargo registry the build fills
+        # included, which outlasts the job (a file written at test time was
+        # not indexed within five minutes; an idle runner takes ten
+        # seconds, and the connector's script and SQL find it there). The
+        # test checks the service and a broad query; Spotlight and the
+        # Linux indexers check the fixture.
         echo "RICK_REQUIRE_WINDOWS_SEARCH=1" >> $env:GITHUB_ENV
     # Issue 19: the 3D previewer renders on WARP, Windows' software adapter,
     # which wgpu's dx12 backend finds by itself; the tests must not skip.
