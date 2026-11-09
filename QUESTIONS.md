@@ -2915,3 +2915,13 @@ Once answered, an entry keeps its number and gains a dated decision line.
     (a folder is walked once, links are not followed) and takes the share
     against the volume whose mount point contains them; no pill while the
     trash is empty, the low tint while the disk's size is unknown.
+
+252. (design refresh, 2026-11-09) *Hash dialogue*: a match gives the Verify field a
+    `status/success-bg` pill; no match "a `status/danger` border and a *No
+    match* pill", whose colours neither the tokens nor the Figma file (only
+    the matching state is drawn) give.
+    Assumed: the *No match* pill is `status/danger` text on `status/danger`
+    at 15 % over the field; a `status/danger-bg` token would replace it. The
+    clipboard is read on the dialogue's first frame, hex of either case
+    before Base64, and anything that is not a digest's length leaves the
+    field empty.

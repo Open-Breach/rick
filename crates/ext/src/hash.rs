@@ -105,6 +105,7 @@ impl Digests {
 /// job that reads them.
 pub struct Hashes {
     names: Vec<String>,
+    sizes: Vec<Option<u64>>,
     job: OnceLock<JobId>,
     results: Vec<Mutex<Option<Result<Digests, String>>>>,
 }
@@ -123,12 +124,33 @@ impl Hashes {
     /// A slot per file name, none with a result yet.
     #[must_use]
     pub fn pending(names: Vec<String>) -> Arc<Self> {
-        let results = names.iter().map(|_| Mutex::new(None)).collect();
+        Self::pending_sized(names.into_iter().map(|name| (name, None)).collect())
+    }
+
+    /// A slot per file name with the file's size where the listing knows
+    /// it, for the dialogue's header.
+    #[must_use]
+    pub fn pending_sized(files: Vec<(String, Option<u64>)>) -> Arc<Self> {
+        let results = files.iter().map(|_| Mutex::new(None)).collect();
+        let (names, sizes) = files.into_iter().unzip();
         Arc::new(Self {
             names,
+            sizes,
             job: OnceLock::new(),
             results,
         })
+    }
+
+    /// File `index`'s size, when the listing knew it.
+    #[must_use]
+    pub fn size(&self, index: usize) -> Option<u64> {
+        self.sizes.get(index).copied().flatten()
+    }
+
+    /// The files' sizes summed, when every one is known.
+    #[must_use]
+    pub fn total_size(&self) -> Option<u64> {
+        self.sizes.iter().copied().sum()
     }
 
     /// The files' names, in the selection's order; one block each.

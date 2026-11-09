@@ -293,21 +293,23 @@ link-shortcut = Shortcut (.lnk)
 
 # The Hash dialogue (Compute hash…): one row per algorithm, Copy all, the
 # format toggle and the Verify field.
-hash-title = Hash — { $name }
+hash-title = File hashes
+hash-files = { $count } files
 hash-hashing = Hashing…
 hash-cancelled = Cancelled
 hash-failed = Could not hash: { $error }
-hash-copy = Copy
+hash-copy = Copy { $algorithm }
 hash-copy-all = Copy all
+hash-done = Done
 hash-format = Format
-hash-format-hex = Lowercase hex
-hash-format-hex-upper = Uppercase hex
+hash-format-hex = hex
+hash-format-hex-upper = HEX
 hash-format-base64 = Base64
 hash-verify = Verify
 hash-verify-hint = Paste the expected hash
-hash-match = Match
-hash-mismatch = Mismatch
-hash-unrecognised-length = Unrecognised length
+hash-matches = Matches { $algorithm }
+hash-no-match = No match
+hash-from-clipboard = from clipboard
 menu-copy-as = Copy as
 menu-select-all = Select all
 menu-refresh = Refresh

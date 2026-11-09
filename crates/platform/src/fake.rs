@@ -566,6 +566,10 @@ impl Clipboard for Fake {
         *lock(&self.clipboard) = Some(text.to_owned());
         Ok(())
     }
+
+    fn text(&self) -> Result<Option<String>, Error> {
+        Ok(lock(&self.clipboard).clone())
+    }
 }
 
 impl DragSource for Fake {

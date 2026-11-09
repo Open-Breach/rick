@@ -11,6 +11,15 @@ impl Clipboard for Native {
         let mut clipboard = arboard::Clipboard::new().map_err(convert)?;
         clipboard.set_text(text).map_err(convert)
     }
+
+    fn text(&self) -> Result<Option<String>, Error> {
+        let mut clipboard = arboard::Clipboard::new().map_err(convert)?;
+        match clipboard.get_text() {
+            Ok(text) => Ok(Some(text)),
+            Err(arboard::Error::ContentNotAvailable) => Ok(None),
+            Err(error) => Err(convert(error)),
+        }
+    }
 }
 
 fn convert(error: arboard::Error) -> Error {

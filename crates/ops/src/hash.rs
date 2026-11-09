@@ -377,12 +377,12 @@ impl Action for Hash {
                 })
             })
             .collect::<Result<Vec<Target>, Error>>()?;
-        let names = ctx
+        let files = ctx
             .selection
             .iter()
-            .map(|entry| entry.name.clone())
+            .map(|entry| (entry.name.clone(), entry.size))
             .collect();
-        let hashes = Hashes::pending(names);
+        let hashes = Hashes::pending_sized(files);
         let filled = Arc::clone(&hashes);
         let handle = jobs.spawn_named(format!("Hash {}", describe(&ctx.selection)), move |job| {
             hash_all(targets, filled, job)
