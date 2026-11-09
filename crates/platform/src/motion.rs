@@ -40,7 +40,8 @@ fn probe() -> bool {
     use windows::Win32::UI::WindowsAndMessaging::{
         SPI_GETCLIENTAREAANIMATION, SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS, SystemParametersInfoW,
     };
-    let mut animate: windows::Win32::Foundation::BOOL = windows::Win32::Foundation::TRUE;
+    // The `BOOL` of windows 0.62 lives in `windows::core`; `TRUE` is one.
+    let mut animate: windows::core::BOOL = windows::Win32::Foundation::TRUE;
     // SAFETY: SPI_GETCLIENTAREAANIMATION writes one BOOL into the buffer it
     // is given, which outlives the call.
     let read = unsafe {
