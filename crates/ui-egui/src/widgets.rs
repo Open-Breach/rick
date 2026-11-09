@@ -1,13 +1,63 @@
 //! Small controls shared by the menus, the dialogues and the settings
 //! (SPEC.md *Dialogues*, *Settings window*): the switch, the segmented
-//! control, a pill, the two button kinds.
+//! control, a pill, the two button kinds; and the pane handle and the
+//! hairline divider every pane's toolbar ends in (SPEC.md *Panes*).
 
 use egui::{Align2, FontId, Rect, Sense, pos2, vec2};
+use ext::t;
 
-use crate::theme::{self, Scheme, TEXT_BODY, TEXT_SECONDARY};
+use crate::icons;
+use crate::theme::{self, ICON, Scheme, TEXT_BODY, TEXT_SECONDARY};
 
 /// The height of a field or dropdown in a dialogue.
 pub const FIELD_HEIGHT: f32 = 36.0;
+/// The grab handle's width.
+pub const HANDLE_WIDTH: f32 = 28.0;
+
+/// A pane's grab handle (SPEC.md *Panes*): a [`HANDLE_WIDTH`] wide,
+/// `button/size` tall ghost area with `DOTS_SIX_VERTICAL` at 70 %
+/// opacity, `bg/subtle` while hovered or dragged, the grab cursor over it
+/// and the grabbing cursor while it drags; *Drag pane* as its accessible
+/// name and tooltip. The caller starts the pane drag on `drag_started`.
+pub fn pane_handle(ui: &mut egui::Ui) -> egui::Response {
+    let size = theme::metrics(ui.ctx()).button_size;
+    let (rect, response) =
+        ui.allocate_exact_size(vec2(HANDLE_WIDTH, size), Sense::click_and_drag());
+    response.widget_info(|| {
+        egui::WidgetInfo::labeled(egui::WidgetType::Button, true, t!("pane-drag-pane"))
+    });
+    let scheme = theme::scheme(ui);
+    if response.hovered() || response.dragged() {
+        ui.painter().rect_filled(
+            rect,
+            theme::metrics(ui.ctx()).corner_radius(),
+            scheme.bg_subtle,
+        );
+    }
+    ui.painter().text(
+        rect.center(),
+        Align2::CENTER_CENTER,
+        icons::HANDLE,
+        FontId::proportional(ICON),
+        scheme.icon_default.gamma_multiply(0.7),
+    );
+    if response.dragged() {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
+    } else if response.hovered() {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::Grab);
+    }
+    response.on_hover_text(t!("pane-drag-pane"))
+}
+
+/// A 1 px hairline, `height` tall, centred in the row.
+pub fn divider(ui: &mut egui::Ui, height: f32) {
+    let (rect, _) = ui.allocate_exact_size(vec2(1.0, height), Sense::hover());
+    let x = rect.center().x.round() + 0.5;
+    ui.painter().line_segment(
+        [pos2(x, rect.top()), pos2(x, rect.bottom())],
+        theme::scheme(ui).hairline(),
+    );
+}
 
 /// A switch, 32 × 18: `accent/focus` with the knob at the right while on,
 /// `bg/switch-off` with it at the left while off. Paint only; the caller
