@@ -35,8 +35,13 @@ const FIELD_TOGGLE: f32 = 22.0;
 
 /// Draws the whole tab.
 pub fn show(ui: &mut egui::Ui, cx: &mut PaneCx<'_>) {
+    // No frame of its own: the toolbar sits on the pane's `bg/pane`, the
+    // active workspace tab's colour, so the tab reads as attached to its
+    // pane; only the column header band is tinted (SPEC.md *Workspace
+    // tabs*, *File list*). egui's panel frame would paint `bg/window`.
     egui::Panel::top(egui::Id::new(("toolbar", cx.tab_id)))
         .show_separator_line(false)
+        .frame(egui::Frame::NONE)
         .show(ui, |ui| toolbar(ui, cx));
     if cx.tab.failure.is_some() {
         egui::Panel::top(egui::Id::new(("failure", cx.tab_id)))
@@ -91,19 +96,22 @@ pub fn toolbar_height(density: model::Density) -> f32 {
 
 /// The toolbar: a fixed group of navigation icons on the left, a fixed group
 /// of view controls on the right, and the breadcrumb flexing in between,
-/// never overlapping either.
+/// never overlapping either; `space/toolbar-x` of padding at both ends
+/// (SPEC.md *Toolbar*).
 fn toolbar(ui: &mut egui::Ui, cx: &mut PaneCx<'_>) {
     cx.tab_ui.toolbar_rects.clear();
-    let height = toolbar_height(cx.app.model().settings.density);
+    let metrics = theme::metrics(ui.ctx());
+    let height = metrics.toolbar_height();
     let (row, _) = ui.allocate_exact_size(
         egui::vec2(ui.available_width(), height),
         egui::Sense::hover(),
     );
     cx.tab_ui.toolbar_row = Some(row);
+    let inner = row.shrink2(egui::vec2(metrics.space_toolbar_x, 0.0));
     // Left group, fixed.
     let mut left = ui.new_child(
         egui::UiBuilder::new()
-            .max_rect(row)
+            .max_rect(inner)
             .layout(egui::Layout::left_to_right(Align::Center)),
     );
     left_group(&mut left, cx);
@@ -111,7 +119,7 @@ fn toolbar(ui: &mut egui::Ui, cx: &mut PaneCx<'_>) {
     // Right group, fixed.
     let mut right = ui.new_child(
         egui::UiBuilder::new()
-            .max_rect(row)
+            .max_rect(inner)
             .layout(egui::Layout::right_to_left(Align::Center)),
     );
     right_group(&mut right, cx);
@@ -119,8 +127,8 @@ fn toolbar(ui: &mut egui::Ui, cx: &mut PaneCx<'_>) {
     // The breadcrumb gets what is left, clipped to it.
     let gap = ui.spacing().item_spacing.x;
     let middle = egui::Rect::from_min_max(
-        egui::pos2(left_edge + gap, row.top()),
-        egui::pos2((right_edge - gap).max(left_edge + gap), row.bottom()),
+        egui::pos2(left_edge + gap, inner.top()),
+        egui::pos2((right_edge - gap).max(left_edge + gap), inner.bottom()),
     );
     let mut centre = ui.new_child(
         egui::UiBuilder::new()
