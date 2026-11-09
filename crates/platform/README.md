@@ -58,7 +58,14 @@ file, the `rick` link with the shell function of `path.sh`, and the dock
 favourite of GNOME, KDE Plasma, COSMIC and Cinnamon with `gsettings`
 behind a trait — on a `LinuxEnv` of the caller's choosing, so tests run on
 a temporary home; Windows and macOS list none yet; `FakeIntegration` is
-the scripted one) the `process` module that asks whether a console's shell has handed its
+the scripted one; performing and undoing are there for the launcher entry
+(the packaged desktop entry with `Exec` naming this Rick, the icons,
+`update-desktop-database` and `gtk-update-icon-cache` when installed), the
+default file manager (the two keys of `mimeapps.list`, what they named
+before put back by the undo) and the `rick` command (the link, and the
+shell function as a marked block of `path.sh` and the fish drop-in, with
+the profile line that sources it); a file of another origin in an item's
+way is replaced only when the request says the user agreed) the `process` module that asks whether a console's shell has handed its
 terminal to a job (`/proc/<pid>/stat`, `proc_pidinfo`; Windows cannot say),
 and the `agent` module that opens the SSH
 agent's socket (`SSH_AUTH_SOCK`, or OpenSSH's named pipe on Windows),
