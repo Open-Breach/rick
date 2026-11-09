@@ -3480,3 +3480,17 @@ Once answered, an entry keeps its number and gains a dated decision line.
     shows *Rick could not be started from …*. Until the relaunch the
     installed copy stands for the running Rick in the checks, so the
     rows read *Set up*.
+
+297. (issue 80, rule 4, 2026-11-09) *Spring-loaded tabs*: a dragged tab
+    "rests on a neighbour while it overlaps it by a quarter of a tab or
+    more, short of the half where the two would swap". A tab taken past a
+    neighbour overlaps it by a quarter or more for half the way — before
+    the swap from one side, after it from the other — so at an unhurried
+    pace an ordinary reorder would outlast the delay and switch the
+    window.
+    Assumed: "rests" is taken at its word. A dragged tab spring-loads the
+    neighbour it leans on only while it is held still, the cursor within
+    6 px (`ui_egui::drag::REST_SLOP`) of where the rest began; moving on
+    starts the clock again. The overlap counts on either side of the
+    swap. A dragged pane needs no such rule: its cursor is on the tab or
+    it is not.
