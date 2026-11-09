@@ -419,6 +419,11 @@ fn the_extension_registers_the_view_the_columns_and_the_actions() {
     let mut bare = Registry::new();
     assert!(bare.load(&InstallerExtension::new()).is_err());
 
+    // From here on Linux only: elsewhere the view answers "unsupported on
+    // this platform" and the actions hide (the host test checks that).
+    if !supported() {
+        return;
+    }
     // The view is empty at first and the archive action is enabled on an
     // archive only.
     let rows = h.rows();

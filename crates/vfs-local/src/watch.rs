@@ -92,6 +92,17 @@ struct State {
     queue: VecDeque<FsChange>,
 }
 
+impl Drop for State {
+    fn drop(&mut self) {
+        // The watcher's callback blocks in its send while the channel is
+        // full, and FSEvents joins that thread when the watcher drops: the
+        // receiver closes first, so the send fails and the thread ends
+        // (three workers of the macOS runner hung in a relist's drop over
+        // a bulk rename of a thousand files, full.yml run 42528319760).
+        self.rx.close();
+    }
+}
+
 /// A reported path reduced to the watched directory's child.
 struct Child {
     /// `dir` joined with the name: the key in the id map.
@@ -293,6 +304,33 @@ mod tests {
     use notify::event::{CreateKind, RemoveKind};
 
     use super::*;
+
+    /// More events than the channel holds while nothing reads them, then
+    /// the stream is dropped: the watcher thread is blocked in its send,
+    /// and `FSEvents` joins that thread on drop, so the drop must close the
+    /// receiver first or wait for ever, as the macOS runner did.
+    #[test]
+    fn dropping_a_full_watch_does_not_wait_for_its_blocked_thread() {
+        let tmp = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+        let location = Location::new(PROVIDER_ID, platform::paths::from_path(tmp.path()));
+        let watch = stream(&location).unwrap_or_else(|e| panic!("{e}"));
+        for i in 0..CHANNEL_DEPTH + 256 {
+            fs::write(tmp.path().join(format!("f{i}")), b"").unwrap_or_else(|e| panic!("{e}"));
+        }
+        // Time for the events to reach the callback and fill the channel.
+        std::thread::sleep(std::time::Duration::from_millis(1500));
+        let (done_tx, done_rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            drop(watch);
+            let _ = done_tx.send(());
+        });
+        assert!(
+            done_rx
+                .recv_timeout(std::time::Duration::from_secs(20))
+                .is_ok(),
+            "dropping the watch waited for its blocked thread"
+        );
+    }
 
     /// Events may name the directory the way the OS spells it, not the way
     /// it was watched; `FSEvents` does, and also reports the directory itself.

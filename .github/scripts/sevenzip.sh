@@ -49,12 +49,21 @@ build_from_source() {
   curl -sSL -o "$work/src.tar.xz" "https://7-zip.org/a/7z$tag-src.tar.xz"
   verify "$work/src.tar.xz" "$src_sha256"
   tar xJf "$work/src.tar.xz" -C "$work"
+  local -a make_vars=()
   case "$os" in
     macOS|Darwin)
-      if [ "$(uname -m)" = "arm64" ]; then mak=cmpl_mac_arm64.mak; else mak=cmpl_mac_x64.mak; fi ;;
+      if [ "$(uname -m)" = "arm64" ]; then mak=cmpl_mac_arm64.mak; else mak=cmpl_mac_x64.mak; fi
+      # The mac makefile compiles with -Weverything -Werror, so every
+      # warning a newer Apple clang adds stops the build: clang 17 brought
+      # -Wc++-keyword on the `and` mnemonic in the arm64 assembly macros
+      # and -Wimplicit-void-ptr-cast in LzmaEnc.c. The warnings are the
+      # library's, not Rick's, so on macOS the build keeps -Wall -Wextra
+      # and drops -Werror and -Weverything; the two variables are the
+      # makefile's own (7zip_gcc.mak, warn_clang_mac.mak).
+      make_vars=("CFLAGS_WARN_WALL=-Wall -Wextra" "CFLAGS_WARN=-Wno-poison-system-directories") ;;
     *) mak=cmpl_gcc.mak ;;
   esac
-  (cd "$work/CPP/7zip/Bundles/Format7zF" && make -j"$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 4)" -f "../../$mak" > "$work/build.log" 2>&1) \
+  (cd "$work/CPP/7zip/Bundles/Format7zF" && make -j"$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 4)" -f "../../$mak" "${make_vars[@]}" > "$work/build.log" 2>&1) \
     || { tail -50 "$work/build.log" >&2; echo "building 7z.so failed" >&2; exit 1; }
   object_dir="$(find "$work/CPP/7zip/Bundles/Format7zF/b" -name 7z.so -print -quit)"
   test -n "$object_dir" || { echo "no 7z.so under $work/CPP/7zip/Bundles/Format7zF/b" >&2; exit 1; }

@@ -3,8 +3,12 @@
 //! The session opens a pty, starts the user's shell in the folder, reads
 //! what the shell writes on the runtime's blocking pool and feeds it
 //! through the `vte` parser into a [`Screen`]; the UI reads the screen and
-//! writes what is typed. The waker rings after every change, so the tab
-//! repaints only then. Dropping the session ends the shell.
+//! writes what is typed. A second task of the pool waits for the shell to
+//! end and records its exit status: on Windows the reader sees no end of
+//! file while the pseudo console is open, so that task closes it once the
+//! shell is gone, and the reader stops. The waker rings after every
+//! change, so the tab repaints only then. Dropping the session ends the
+//! shell.
 
 use std::io::{Read, Write};
 use std::path::Path;
@@ -13,7 +17,7 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use ext::terminal::Screen;
 use ext::{Console, ConsoleWaker};
-use portable_pty::{Child, CommandBuilder, MasterPty, PtySize};
+use portable_pty::{ChildKiller, CommandBuilder, MasterPty, PtySize};
 use types::Error;
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -24,9 +28,11 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
 /// A shell in a pseudo-terminal, with the screen of its output.
 pub struct Session {
     screen: Mutex<Screen>,
-    master: Mutex<Box<dyn MasterPty + Send>>,
+    /// The pty, until the shell has ended; the waiter closes it then.
+    master: Mutex<Option<Box<dyn MasterPty + Send>>>,
     writer: Mutex<Box<dyn Write + Send>>,
-    child: Mutex<Box<dyn Child + Send + Sync>>,
+    /// Ends the shell without the child, which the waiter owns.
+    killer: Mutex<Box<dyn ChildKiller + Send + Sync>>,
     exit: Mutex<Option<i32>>,
     waker: Mutex<Option<ConsoleWaker>>,
     generation: AtomicU64,
@@ -86,17 +92,37 @@ impl Session {
         );
         let session = Arc::new(Self {
             screen: Mutex::new(Screen::new(cols, rows)),
-            master: Mutex::new(pair.master),
+            master: Mutex::new(Some(pair.master)),
             writer: Mutex::new(writer),
-            child: Mutex::new(child),
+            killer: Mutex::new(child.clone_killer()),
             exit: Mutex::new(None),
             waker: Mutex::new(None),
             generation: AtomicU64::new(0),
             folder,
         });
         session.start_reader(reader);
+        session.start_waiter(child);
         tracing::info!(dir = %dir.display(), "console opened");
         Ok(session)
+    }
+
+    /// Waits for the shell to end, on the blocking pool, and records its
+    /// exit status; the session is held weakly, so a closed tab (whose
+    /// drop kills the shell) ends the wait without keeping the session.
+    /// Closing the pty then stops the reader where the shell's end alone
+    /// does not (Windows).
+    fn start_waiter(self: &Arc<Self>, mut child: Box<dyn portable_pty::Child + Send + Sync>) {
+        let weak = Arc::downgrade(self);
+        ext::runtime::handle().spawn_blocking(move || {
+            let status = child.wait().ok();
+            let Some(session) = weak.upgrade() else {
+                return;
+            };
+            let code = status.map_or(-1, |s| i32::try_from(s.exit_code()).unwrap_or(i32::MAX));
+            *lock(&session.exit) = Some(code);
+            drop(lock(&session.master).take());
+            session.changed();
+        });
     }
 
     /// Reads the shell's output until it ends, on the blocking pool; the
@@ -124,13 +150,10 @@ impl Session {
                 }
                 session.changed();
             }
-            let Some(session) = weak.upgrade() else {
-                return;
-            };
-            let status = lock(&session.child).wait().ok();
-            let code = status.map_or(-1, |s| i32::try_from(s.exit_code()).unwrap_or(i32::MAX));
-            *lock(&session.exit) = Some(code);
-            session.changed();
+            // The output has ended; the waiter records the exit status.
+            if let Some(session) = weak.upgrade() {
+                session.changed();
+            }
         });
     }
 
@@ -151,8 +174,9 @@ impl Session {
 
 impl Drop for Session {
     fn drop(&mut self) {
-        // Ending the shell closes the pty; the reader then stops.
-        let _ = lock(&self.child).kill();
+        // Ending the shell ends the waiter; the pty closes with the
+        // session, and the reader then stops.
+        let _ = lock(&self.killer).kill();
     }
 }
 
@@ -186,12 +210,14 @@ impl Console for Session {
             let mut screen = lock(&self.screen);
             screen.resize(cols, rows);
         }
-        let _ = lock(&self.master).resize(PtySize {
-            rows,
-            cols,
-            pixel_width: 0,
-            pixel_height: 0,
-        });
+        if let Some(master) = lock(&self.master).as_ref() {
+            let _ = master.resize(PtySize {
+                rows,
+                cols,
+                pixel_width: 0,
+                pixel_height: 0,
+            });
+        }
         self.changed();
     }
 

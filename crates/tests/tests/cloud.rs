@@ -449,8 +449,9 @@ fn add_connection_opens_the_dialogue_and_a_row_connects_and_removes_from_its_men
             .any(|e| e.name == "acme-prod")
     }));
     settle(&mut harness);
-    let settings = fs::read_to_string(fake.config_dir().join(app::SETTINGS_FILE))
-        .unwrap_or_else(|e| panic!("{e}"));
+    let settings = tests::read_until(&fake.config_dir().join(app::SETTINGS_FILE), |t| {
+        t.contains("access_key = \"minio\"")
+    });
     assert!(settings.contains("[[connections]]"), "{settings}");
     assert!(settings.contains("access_key = \"minio\""), "{settings}");
     assert!(
@@ -486,8 +487,9 @@ fn add_connection_opens_the_dialogue_and_a_row_connects_and_removes_from_its_men
         h.state().app().model().cloud.is_empty()
     }));
     settle(&mut harness);
-    let settings = fs::read_to_string(fake.config_dir().join(app::SETTINGS_FILE))
-        .unwrap_or_else(|e| panic!("{e}"));
+    let settings = tests::read_until(&fake.config_dir().join(app::SETTINGS_FILE), |t| {
+        !t.contains("acme-prod")
+    });
     assert!(!settings.contains("acme-prod"), "{settings}");
     assert!(fake.secrets().is_empty());
     // The empty section offers Add connection… again (the finished job's
@@ -590,7 +592,20 @@ fn a_100_mb_upload_streams_with_progress_and_cancelled_half_way_leaves_no_object
         peaks.len() >= 2,
         "progress was reported along the way: {peaks:?}"
     );
-    assert_eq!(peaks.last().copied(), Some(100 * 1024 * 1024));
+    // The job reports its item count right after the copy, and reports
+    // closer together than the runtime's window go out as the last one
+    // (`runtime::PROGRESS_EVERY`), so the final byte count is seen unless
+    // the item count took its window; then that count is the complete one.
+    let last = d.events.iter().rev().find_map(|e| match e {
+        Event::JobProgress { progress, .. } => Some(progress.clone()),
+        _ => None,
+    });
+    match last {
+        Some(types::Progress::Items { done, total }) => {
+            assert_eq!(Some(done), total, "the job's final item count is complete");
+        }
+        _ => assert_eq!(peaks.last().copied(), Some(100 * 1024 * 1024)),
+    }
     for event in &d.events {
         if let Event::JobDone { result: Err(e), .. } = event {
             panic!("the upload job failed: {e}");

@@ -7,6 +7,16 @@ the pull request that brought the change.
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-11-08
+
+The plugin release, on Linux, macOS and Windows: the native plugin host and
+the split of every non-essential feature into a plugin file, the side panel
+reworked, archives, disk images, the Trash, SSH hosts and the S3, Azure and
+Google Cloud stores as providers, the Office, media, archive, markup, hex and
+3D previewers, the search connectors, Subversion, the compress, compare,
+console and bulk-rename actions, permissions, localisation, the native drag
+source, Compute hash, and the tarball installer on Linux.
+
 ### Added
 
 - The burger menu lists the actions extensions put in the application
@@ -294,7 +304,7 @@ the pull request that brought the change.
 - A location its provider cannot watch (an archive, a trashed folder
   browsed in the Trash view) is polled: every three seconds and right after
   an operation, a change lists it again (#20).
-- Five previewers as plugins, every one in `plugins/` of the archives
+- Three previewers as plugins, every one in `plugins/` of the archives
   (#18): `preview-office` converts DOCX, XLSX, PPTX, ODT, ODS and ODP to
   PDF with an installed LibreOffice, cached by path and modification time,
   and shows the metadata with a hint to install it otherwise; `preview-
@@ -303,10 +313,9 @@ the pull request that brought the change.
   audio, tags and stream details, and shows the metadata and what is
   missing without GStreamer; `preview-archive` lists zip, tar (plain and
   gzip, zstd, xz, bzip2, lz4), 7z, RAR and ISO 9660 contents without
-  extracting, encrypted entries marked; `preview-csv` shows CSV and TSV as
-  a grid with a sniffed delimiter and a header row, parsing only the rows
-  on screen. The code previewer renders Markdown and HTML as documents
-  behind a Rendered toggle, with images from the file's folder.
+  extracting, encrypted entries marked. The CSV grid and the rendered
+  Markdown and HTML of the same change were superseded by
+  `ext-preview-markup` before release (#51).
 - The release archives bundle the GStreamer runtime on macOS and Windows;
   Linux uses the system's (#18).
 - `cargo xtask bundle --features <spec>` hands features to the build, and
@@ -400,8 +409,8 @@ the pull request that brought the change.
   toast (#34).
 - The extension API is at version 8: a previewer can claim the pointer over
   its content as `PreviewControl::Pointer` controls (a drag, the wheel, a
-  double-click), which the preview pane and the viewer hand to `set_control`
-  as `ControlValue::Delta` or `Pressed` instead of panning, scrolling or
+  double-click), which the preview pane hands to `set_control` as
+  `ControlValue::Delta` or `Pressed` instead of panning, scrolling or
   switching to 1:1; a control change keeps the last frame on screen until
   the next one is rendered (#19).
 - The extension API is at version 7: `Provider` gained `transfer()` behind
@@ -555,5 +564,6 @@ text, code, images and PDF, and Git, on Linux, macOS and Windows.
   in the middle of a write can no longer read a truncated file and lose
   the pinned folders (#14).
 
-[Unreleased]: https://github.com/Open-Breach/rick/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/Open-Breach/rick/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/Open-Breach/rick/releases/tag/v0.2.0
 [0.1.0]: https://github.com/Open-Breach/rick/releases/tag/v0.1.0

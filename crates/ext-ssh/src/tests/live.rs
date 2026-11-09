@@ -25,10 +25,13 @@ use crate::profile::Profile;
 use crate::provider::SshProvider;
 use crate::{PROVIDER_ID, location};
 
-/// An SSH agent that holds whatever keys the test adds.
+/// An SSH agent that holds whatever keys the test adds; it serves over a
+/// Unix socket, so only the Unix test runs it.
+#[cfg(unix)]
 #[derive(Clone)]
 struct Agent;
 
+#[cfg(unix)]
 impl russh::keys::agent::server::Agent for Agent {}
 
 /// A UI host that answers nothing: the actions under test ask nothing.
@@ -149,6 +152,17 @@ fn trust_and_save(q: &Question) -> Answer {
     }
 }
 
+/// Whether this machine can stand in for a remote host: the in-process
+/// server runs its commands through `sh`, and the plugin serves Unix-like
+/// hosts only, so on Windows the tests against it say so and stop.
+fn unix_shell_or_skip() -> bool {
+    if std::env::consts::OS == "windows" {
+        eprintln!("no Unix shell on Windows; the in-process server's tests are not run here");
+        return false;
+    }
+    true
+}
+
 /// A "remote home" with the awkward names of the acceptance test.
 fn remote_home() -> tempfile::TempDir {
     let home = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
@@ -162,12 +176,32 @@ fn remote_home() -> tempfile::TempDir {
     #[cfg(unix)]
     {
         use std::os::unix::ffi::OsStrExt as _;
+        // A name that is not UTF-8; the file systems of macOS refuse one
+        // (EILSEQ), and the home then does without it.
         let raw = std::ffi::OsStr::from_bytes(b"not\xffutf8.bin");
-        std::fs::write(home.path().join(raw), b"raw").unwrap_or_else(|e| panic!("{e}"));
+        if let Err(error) = std::fs::write(home.path().join(raw), b"raw") {
+            eprintln!("no non-UTF-8 name on this file system: {error}");
+        }
         std::os::unix::fs::symlink("plain.txt", home.path().join("link"))
             .unwrap_or_else(|e| panic!("{e}"));
     }
     home
+}
+
+/// Whether the remote home got the name that is not UTF-8.
+fn has_raw_name(home: &Path) -> bool {
+    #[cfg(unix)]
+    let present = {
+        use std::os::unix::ffi::OsStrExt as _;
+        home.join(std::ffi::OsStr::from_bytes(b"not\xffutf8.bin"))
+            .exists()
+    };
+    #[cfg(not(unix))]
+    let present = {
+        let _ = home;
+        false
+    };
+    present
 }
 
 fn at(alias: &str, path: &str) -> Location {
@@ -178,6 +212,9 @@ fn at(alias: &str, path: &str) -> Location {
 // One scenario start to finish; splitting it would repeat the server.
 #[allow(clippy::too_many_lines)]
 fn against_the_server_browse_read_write_rename_delete_and_transfer_round_trip() {
+    if !unix_shell_or_skip() {
+        return;
+    }
     let home = remote_home();
     let world = World::new(trust_and_save);
     world.remember("box", "password", "rickpass");
@@ -200,10 +237,17 @@ fn against_the_server_browse_read_write_rename_delete_and_transfer_round_trip() 
             .await
             .unwrap_or_else(|e| panic!("connect: {e}"));
         assert!(world.connector.is_connected("box"));
+        // The fake server runs this machine's `sh`: GNU on Linux and in
+        // Git Bash, BSD on macOS.
+        let local = if std::env::consts::OS == "macos" {
+            Profile::Bsd
+        } else {
+            Profile::Gnu
+        };
         assert_eq!(
             world.pool.profile("box").await.ok(),
-            Some(Profile::Gnu),
-            "the local userland is GNU"
+            Some(local),
+            "the local userland"
         );
         // The unknown host key was asked about once and saved.
         let questions = world.questions();
@@ -231,8 +275,9 @@ fn against_the_server_browse_read_write_rename_delete_and_transfer_round_trip() 
             "plain.txt",
             "with space.txt",
         ];
-        #[cfg(unix)]
-        expected.push("not\u{fffd}utf8.bin");
+        if has_raw_name(home.path()) {
+            expected.push("not\u{fffd}utf8.bin");
+        }
         expected.sort_unstable();
         assert_eq!(names, expected);
         let visible = world
@@ -255,7 +300,13 @@ fn against_the_server_browse_read_write_rename_delete_and_transfer_round_trip() 
         assert_eq!(plain.size, Some(5));
         assert!(plain.modified.is_some());
         let home_text = home.path().to_string_lossy();
-        assert_eq!(plain.path.to_string(), format!("/box{home_text}/plain.txt"));
+        // The host names its paths canonically: /private/var/… on macOS
+        // for a /var/… home.
+        let canonical = std::fs::canonicalize(home.path())
+            .unwrap_or_else(|_| home.path().to_path_buf())
+            .to_string_lossy()
+            .into_owned();
+        assert_eq!(plain.path.to_string(), format!("/box{canonical}/plain.txt"));
         let folder = visible
             .iter()
             .find(|e| e.name == "folder")
@@ -489,6 +540,9 @@ fn against_the_server_browse_read_write_rename_delete_and_transfer_round_trip() 
 
 #[test]
 fn eleven_channels_open_a_second_connection_and_a_closed_one_is_replaced() {
+    if !unix_shell_or_skip() {
+        return;
+    }
     let home = remote_home();
     let world = World::new(trust_and_save);
     world.remember("box", "password", "rickpass");
@@ -545,6 +599,9 @@ fn eleven_channels_open_a_second_connection_and_a_closed_one_is_replaced() {
 // One scenario start to finish; splitting it would repeat the server.
 #[allow(clippy::too_many_lines)]
 fn a_host_behind_a_bastion_and_a_two_hop_chain_browse_like_a_direct_one() {
+    if !unix_shell_or_skip() {
+        return;
+    }
     let home = remote_home();
     let world = World::new(trust_and_save);
     for alias in ["bastion", "hop", "target", "other"] {
@@ -662,6 +719,9 @@ fn a_host_behind_a_bastion_and_a_two_hop_chain_browse_like_a_direct_one() {
 // One scenario start to finish; splitting it would repeat the server.
 #[allow(clippy::too_many_lines)]
 fn host_keys_are_never_trusted_silently() {
+    if !unix_shell_or_skip() {
+        return;
+    }
     let home = remote_home();
     runtime::block_on(async {
         let server = FakeSshd::start(
@@ -815,6 +875,9 @@ fn host_keys_are_never_trusted_silently() {
 // One scenario start to finish; splitting it would repeat the server.
 #[allow(clippy::too_many_lines)]
 fn identity_files_passphrases_keyboard_interactive_and_passwords_authenticate() {
+    if !unix_shell_or_skip() {
+        return;
+    }
     let home = remote_home();
     runtime::block_on(async {
         let identity = fake_sshd::test_key(11);
@@ -1005,6 +1068,9 @@ fn identity_files_passphrases_keyboard_interactive_and_passwords_authenticate() 
 fn the_agent_authenticates_when_it_holds_a_key() {
     use futures::StreamExt as _;
 
+    if !unix_shell_or_skip() {
+        return;
+    }
     let home = remote_home();
     runtime::block_on(async {
         let identity = fake_sshd::test_key(12);
@@ -1058,6 +1124,9 @@ fn the_agent_authenticates_when_it_holds_a_key() {
 fn the_console_opens_a_shell_in_the_folder_and_the_terminal_gets_the_command() {
     use ext::Console as _;
 
+    if !unix_shell_or_skip() {
+        return;
+    }
     let home = remote_home();
     let world = World::new(trust_and_save);
     world.remember("box", "password", "rickpass");

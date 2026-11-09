@@ -574,14 +574,13 @@ impl Mount for Native {
         let letter = stdout
             .lines()
             .map(str::trim)
-            .filter_map(|line| {
+            .find_map(|line| {
                 let mut chars = line.chars();
                 match (chars.next(), chars.next()) {
                     (Some(c), None) if c.is_ascii_alphabetic() => Some(c.to_ascii_uppercase()),
                     _ => None,
                 }
             })
-            .next()
             .ok_or_else(|| {
                 Error::Io(io::Error::other(
                     "Mount-DiskImage gave the image no drive letter",

@@ -16,7 +16,7 @@ Target user: someone who normally installs via the package manager or Flatpak an
 - Detection only produces defaults. The install dialog always shows them, editable, before anything is written.
 - Source tarballs are refused with a clear message.
 - Rick never checks for new versions itself; it has no knowledge of where an archive came from.
-- Does its own extraction with the tar and zip crates: no dependency on the archives plugin and no ordering constraint. Target version: 0.3.
+- Does its own extraction with the tar and zip crates: no dependency on the archives plugin and no ordering constraint. Ships with 0.2 (Linux only).
 
 ## Scope
 
@@ -230,7 +230,7 @@ In addition: unit tests for the version parser and the app-id slug; an integrati
 
 All open questions were settled on 2026-11-07.
 
-- **Target version:** 0.3 (system integration).
+- **Target version:** ships with 0.2 (Linux only).
 - **Zip support:** yes, from the first version.
 - **Previous versions kept:** exactly one, not configurable.
 - **`StartupWMClass` auto-detection:** no; editable in the Installed Apps view is enough.

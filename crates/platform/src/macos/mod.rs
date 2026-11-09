@@ -708,7 +708,7 @@ mod tests {
             plist_mount_points(text),
             [PathBuf::from("/Volumes/Tom & Jerry")]
         );
-        assert!(plist_mount_points("<plist/>").is_empty());
+        assert_eq!(plist_mount_points("<plist/>"), Vec::<PathBuf>::new());
         assert!(matches!(
             Native.mount_image(Path::new("/tmp/disk.vhdx")),
             Err(Error::Unsupported(_))
