@@ -305,6 +305,11 @@ jobs:
           chmod +x "pdfium_check$exe"
           LD_LIBRARY_PATH=. DYLD_LIBRARY_PATH=. "./pdfium_check$exe" | tee check.txt
           grep -q "^pdfium ok" check.txt
+          # Windows: the icon and version resource of rick.exe
+          # (specs/app-icons.md), as Explorer's Properties dialog reads it.
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            pwsh -NoProfile -File "$GITHUB_WORKSPACE/.github/scripts/check-exe-resource.ps1" rick.exe "$version"
+          fi
 
   release:
     needs: [build, smoke]
