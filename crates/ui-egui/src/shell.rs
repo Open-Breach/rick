@@ -363,6 +363,12 @@ pub struct WindowUi {
     tab_row: Option<egui::Rect>,
     /// A workspace tab being dragged along the title row.
     workspace_drag: Option<TabDrag>,
+    /// Where each tab of the row is drawn while the tabs slide apart for
+    /// a dragged one; `None` is the new-tab button after them.
+    tab_slides: crate::drag::Slides<Option<WorkspaceId>>,
+    /// Until when the row's tabs slide to their places: while a tab or a
+    /// pane is dragged over the row and for one slide after.
+    slide_until: f64,
     /// Where a pane dragged over the tab row would land as a new tab, in
     /// this frame.
     pane_drop_slot: Option<usize>,
@@ -390,6 +396,8 @@ impl WindowUi {
             screen: None,
             tab_row: None,
             workspace_drag: None,
+            tab_slides: crate::drag::Slides::default(),
+            slide_until: 0.0,
             pane_drop_slot: None,
             placed: false,
             drawer_collapsed: false,
@@ -2771,7 +2779,8 @@ impl RickUi {
     /// The workspace tabs from `left` to `right`, each `TAB_WIDTH` wide and
     /// `tab/height` tall on the bottom edge of the row, the new-tab button
     /// directly after the last; the row clips what does not fit. A tab
-    /// dragged along the row reorders the tabs, one dragged off the row
+    /// dragged along the row reorders the tabs, its neighbours sliding
+    /// apart to open the gap where it will land; one dragged off the row
     /// follows the cursor as its ghost: released outside the window it
     /// moves to the window under it or opens a new one, released anywhere
     /// else it returns to its place. A pane's tab dragged over the row
@@ -2802,6 +2811,8 @@ impl RickUi {
             .iter()
             .map(|ws| (ws.id, workspace_label(model, ws)))
             .collect();
+        let still = self.app.platform().reduce_motion();
+        let now = ctx.input(|i| i.time);
         let Some(w) = self.windows.get_mut(&window) else {
             return;
         };
@@ -2829,13 +2840,26 @@ impl RickUi {
             let slot = ((x - row.left()) / pitch).round().max(0.0) as usize;
             slot.min(count)
         };
+        // The gap is where the dragged tab would land: any place of the
+        // row, the last one included.
         let drag_slot = drag
             .filter(|_| riding)
-            .and_then(|d| pointer.map(|p| slot_of(p.x - d.grab.x, others.saturating_sub(1))));
+            .and_then(|d| pointer.map(|p| slot_of(p.x - d.grab.x, others)));
         let pane_over_row = w.pane_drag.is_some()
             && pointer.is_some_and(|p| row.expand2(egui::vec2(0.0, 6.0)).contains(p));
         let drop_slot = pane_over_row.then(|| pointer.map(|p| slot_of(p.x, tabs.len())));
         w.pane_drop_slot = drop_slot.flatten();
+        // The tabs slide to their places while something is dragged over
+        // the row and for one slide after it, so the gap opens and closes
+        // animated and a dropped tab settles into it; at any other time,
+        // and under the system's reduce-motion setting, they are simply
+        // where they belong (QUESTIONS.md 269).
+        if drag.is_some() || pane_over_row {
+            w.slide_until = now + crate::drag::TAB_SLIDE;
+        }
+        let sliding = !still && now <= w.slide_until;
+        w.tab_slides
+            .retain(|key| key.is_none_or(|id| tabs.iter().any(|(tab, _)| *tab == id)));
 
         let clip = row.intersect(ui.clip_rect());
         let mut child = ui.new_child(egui::UiBuilder::new().max_rect(row));
@@ -2872,11 +2896,16 @@ impl RickUi {
                 x += DROP_SLOT_WIDTH + TAB_GAP;
             }
             if drag_slot == Some(shown) {
-                // The dragged tab's room.
+                // The dragged tab's room: a gap, never an insertion line.
                 x += pitch;
             }
+            let drawn = if sliding {
+                w.tab_slides.at(Some(*id), x, now)
+            } else {
+                w.tab_slides.put(Some(*id), x, now)
+            };
             let tab_rect = egui::Rect::from_min_size(
-                egui::pos2(x, row.top()),
+                egui::pos2(drawn, row.top()),
                 egui::vec2(TAB_WIDTH, row.height()),
             );
             let (response, close) =
@@ -2929,9 +2958,15 @@ impl RickUi {
             x += pitch;
         }
 
-        // The new-tab button, a ghost button directly after the last tab.
+        // The new-tab button, a ghost button directly after the last tab,
+        // sliding with the tabs.
+        let drawn = if sliding {
+            w.tab_slides.at(None, x, now)
+        } else {
+            w.tab_slides.put(None, x, now)
+        };
         let plus_rect = egui::Rect::from_min_size(
-            egui::pos2(x, row.top()),
+            egui::pos2(drawn, row.top()),
             egui::vec2(NEW_TAB_WIDTH, row.height()),
         );
         let plus = child.interact(
@@ -2966,8 +3001,13 @@ impl RickUi {
             let float = if riding {
                 let x =
                     (p.x - d.grab.x).clamp(row.left(), (row.right() - TAB_WIDTH).max(row.left()));
+                // Released, it settles into the gap from where it rides.
+                w.tab_slides.put(Some(d.id), x, now);
                 egui::Rect::from_min_size(egui::pos2(x, row.top()), size)
             } else {
+                // Off the row its place in the row is the one it came from.
+                w.tab_slides
+                    .put(Some(d.id), row.left() + i as f32 * pitch, now);
                 egui::Rect::from_min_size(p + crate::drag::GHOST_OFFSET - d.grab, size)
             };
             let layer = egui::LayerId::new(
@@ -2999,6 +3039,9 @@ impl RickUi {
                 rect: float,
                 shapes: 0,
             });
+        }
+        if sliding && w.tab_slides.moving(now) {
+            ctx.request_repaint();
         }
         if let Some(d) = started {
             w.workspace_drag = Some(d);

@@ -6,7 +6,9 @@
 //! for a screen reader. Issue 80, rules 7 and 8: a dragged tab is its own
 //! ghost, lifted with a shadow — riding the row, or off it anchored to the
 //! grab point — under the open hand before the drag and the closed hand
-//! during it.
+//! during it. Rule 1: the neighbours of a tab dragged along the row slide
+//! apart to open the gap where it will land, with no insertion line, and
+//! the tab can land anywhere in the row.
 
 use std::fs;
 use std::path::Path;
@@ -20,6 +22,13 @@ use tests::local;
 use ui_egui::{EguiHost, RickUi};
 
 fn harness(start: &Path, size: egui::Vec2) -> Harness<'static, RickUi> {
+    harness_at(start, size, 0.25).0
+}
+
+/// A window whose frames are `dt` seconds apart, with its platform: a
+/// quarter of a second is the harness's own step, a sixtieth shows an
+/// animation frame by frame.
+fn harness_at(start: &Path, size: egui::Vec2, dt: f32) -> (Harness<'static, RickUi>, Arc<Fake>) {
     let fake = Arc::new(Fake::new().unwrap_or_else(|e| panic!("{e}")));
     let host = Arc::new(EguiHost::new());
     let app = app::App::new(app::Config {
@@ -31,9 +40,10 @@ fn harness(start: &Path, size: egui::Vec2) -> Harness<'static, RickUi> {
     });
     let mut harness = Harness::builder()
         .with_size(size)
+        .with_step_dt(dt)
         .build_eframe(move |cc| RickUi::new(app, host, &cc.egui_ctx));
     settle(&mut harness);
-    harness
+    (harness, fake)
 }
 
 /// Runs frames until the app has nothing in flight and a quiet moment
@@ -521,4 +531,236 @@ fn a_dragged_tab_is_its_own_ghost_lifted_with_a_shadow() {
         .find(|r| row.contains(r.center()))
         .unwrap_or_else(|| panic!("no beta tab"));
     assert_eq!(back, tab, "the tab is where it was");
+}
+
+/// The rectangle of the workspace tab labelled `title` in the title row.
+fn tab_rect(harness: &Harness<'_, RickUi>, title: &str) -> egui::Rect {
+    let row = harness
+        .state()
+        .tab_row()
+        .unwrap_or_else(|| panic!("no tab row"));
+    harness
+        .query_all_by_label(title)
+        .map(|n| n.rect())
+        .find(|r| row.contains(r.center()))
+        .unwrap_or_else(|| panic!("no tab {title} in the row {row:?}"))
+}
+
+/// Whether the last frame painted anything in `colour` inside `area`: a
+/// filled or outlined rectangle, or a line.
+fn painted_in(harness: &Harness<'_, RickUi>, area: egui::Rect, colour: egui::Color32) -> bool {
+    harness
+        .output()
+        .shapes
+        .iter()
+        .any(|clipped| match &clipped.shape {
+            egui::Shape::Rect(r) => {
+                area.intersects(r.rect.intersect(clipped.clip_rect))
+                    && (r.fill == colour || (r.stroke.width > 0.0 && r.stroke.color == colour))
+            }
+            egui::Shape::LineSegment { points, stroke } => {
+                stroke.color == colour && points.iter().any(|p| area.contains(*p))
+            }
+            _ => false,
+        })
+}
+
+/// Issue 80, rule 1 (SPEC.md *Workspace tabs*, Dragging a tab): a tab
+/// dragged along the row follows the cursor; the neighbour it passes
+/// slides, frame by frame, into the place the tab came from, so the gap
+/// opens where the tab will land; nothing in an accent colour marks the
+/// place — no insertion line; the tab can be taken to the last place of
+/// the row, and released it settles into the gap. Under the system's
+/// reduce-motion setting the neighbours take their places at once.
+#[test]
+// One drag from the first place to the last, then one back.
+#[allow(clippy::too_many_lines)]
+fn the_neighbours_of_a_dragged_tab_slide_apart_and_it_lands_anywhere_in_the_row() {
+    let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+    let folders = ["alpha-folder", "beta-folder", "gamma-folder"].map(|name| {
+        let folder = dir.path().join(name);
+        fs::create_dir(&folder).unwrap_or_else(|e| panic!("{e}"));
+        folder
+    });
+    let (mut harness, fake) = harness_at(&folders[0], egui::vec2(1400.0, 800.0), 1.0 / 60.0);
+    command(
+        &mut harness,
+        app::Command::Settings(model::SettingsChange::Theme(model::Theme::Light)),
+    );
+    for folder in &folders[1..] {
+        command(&mut harness, app::Command::NewTab(local(folder)));
+    }
+    assert_eq!(
+        titles(&harness),
+        ["alpha-folder", "beta-folder", "gamma-folder"]
+    );
+    let row = harness
+        .state()
+        .tab_row()
+        .unwrap_or_else(|| panic!("no tab row"));
+    let title_row = row.expand2(egui::vec2(0.0, 8.0));
+    let first = tab_rect(&harness, "alpha-folder");
+    let pitch = tab_rect(&harness, "beta-folder").left() - first.left();
+    let place = |n: f32| first.left() + n * pitch;
+    assert!((tab_rect(&harness, "gamma-folder").left() - place(2.0)).abs() < 0.01);
+    let scheme = ui_egui::theme::Scheme::LIGHT;
+    // How many frames a slide takes at this pace, and one to spare.
+    let slide = (1u32..=600)
+        .find(|frames| f64::from(*frames) / 60.0 >= ui_egui::drag::TAB_SLIDE)
+        .unwrap_or(10)
+        + 1;
+
+    // The first tab, taken by its middle and pulled right: until it is
+    // half over its neighbour, the neighbour stays.
+    let grab = first.center();
+    harness.event(egui::Event::PointerMoved(grab));
+    harness.step();
+    harness.event(egui::Event::PointerButton {
+        pos: grab,
+        button: egui::PointerButton::Primary,
+        pressed: true,
+        modifiers: egui::Modifiers::default(),
+    });
+    harness.step();
+    let mut travelled = 0.0;
+    while travelled < pitch / 2.0 - 10.0 {
+        travelled += 6.0;
+        harness.event(egui::Event::PointerMoved(grab + egui::vec2(travelled, 0.0)));
+        harness.step();
+    }
+    for _ in 0..slide {
+        harness.step();
+    }
+    let ghost = harness
+        .state()
+        .drag_ghost()
+        .unwrap_or_else(|| panic!("no ghost"));
+    assert!(
+        (ghost.rect.left() - (first.left() + travelled)).abs() < 0.01,
+        "the tab follows the cursor along the row: {:?}",
+        ghost.rect
+    );
+    assert!(
+        (tab_rect(&harness, "beta-folder").left() - place(1.0)).abs() < 0.01,
+        "not yet passed"
+    );
+
+    // Past the neighbour's middle: the neighbour slides to the first
+    // place, a little further every frame and never back, and no line or
+    // slot in an accent colour marks where the tab will land.
+    travelled = pitch / 2.0 + 8.0;
+    harness.event(egui::Event::PointerMoved(grab + egui::vec2(travelled, 0.0)));
+    harness.step();
+    let mut seen = vec![tab_rect(&harness, "beta-folder").left()];
+    for _ in 0..slide {
+        harness.step();
+        seen.push(tab_rect(&harness, "beta-folder").left());
+        for accent in [scheme.accent_button, scheme.accent_focus] {
+            assert!(
+                !painted_in(&harness, title_row, accent),
+                "no insertion line in the row"
+            );
+        }
+    }
+    assert!(
+        seen.windows(2).all(|pair| pair[1] <= pair[0]),
+        "it slides one way: {seen:?}"
+    );
+    let underway = seen
+        .iter()
+        .filter(|x| **x < place(1.0) - 1.0 && **x > place(0.0) + 1.0)
+        .count();
+    assert!(
+        underway >= 4,
+        "{underway} frames between the two places: {seen:?}"
+    );
+    assert!(
+        (seen[seen.len() - 1] - place(0.0)).abs() < 0.01,
+        "it arrives at the first place: {seen:?}"
+    );
+    assert!(
+        (tab_rect(&harness, "gamma-folder").left() - place(2.0)).abs() < 0.01,
+        "the tab beyond the gap stays"
+    );
+
+    // On to the end of the row, the last place of all; released a little
+    // short of it, the tab settles into the gap.
+    while travelled < 2.0 * pitch - 40.0 {
+        travelled += 6.0;
+        harness.event(egui::Event::PointerMoved(grab + egui::vec2(travelled, 0.0)));
+        harness.step();
+    }
+    for _ in 0..slide {
+        harness.step();
+    }
+    assert!(
+        (tab_rect(&harness, "gamma-folder").left() - place(1.0)).abs() < 0.01,
+        "the last tab made room too"
+    );
+    let end = grab + egui::vec2(travelled, 0.0);
+    harness.event(egui::Event::PointerButton {
+        pos: end,
+        button: egui::PointerButton::Primary,
+        pressed: false,
+        modifiers: egui::Modifiers::default(),
+    });
+    harness.step();
+    harness.step();
+    assert_eq!(
+        titles(&harness),
+        ["beta-folder", "gamma-folder", "alpha-folder"],
+        "dragged from the first place to the last"
+    );
+    let settling = tab_rect(&harness, "alpha-folder").left();
+    assert!(
+        settling > first.left() + travelled - 0.01 && settling < place(2.0) - 1.0,
+        "settling from where it was let go: {settling}"
+    );
+    for _ in 0..slide {
+        harness.step();
+    }
+    assert!((tab_rect(&harness, "alpha-folder").left() - place(2.0)).abs() < 0.01);
+    assert_eq!(harness.state().drag_ghost(), None);
+
+    // With reduced motion the neighbour is in its new place in the frame
+    // the tab passes its middle.
+    fake.set_reduce_motion(true);
+    let last = tab_rect(&harness, "alpha-folder");
+    let grab = last.center();
+    harness.event(egui::Event::PointerMoved(grab));
+    harness.step();
+    harness.event(egui::Event::PointerButton {
+        pos: grab,
+        button: egui::PointerButton::Primary,
+        pressed: true,
+        modifiers: egui::Modifiers::default(),
+    });
+    harness.step();
+    let mut travelled = 0.0;
+    while travelled < pitch / 2.0 - 10.0 {
+        travelled += 6.0;
+        harness.event(egui::Event::PointerMoved(grab - egui::vec2(travelled, 0.0)));
+        harness.step();
+    }
+    assert!((tab_rect(&harness, "gamma-folder").left() - place(1.0)).abs() < 0.01);
+    travelled = pitch / 2.0 + 8.0;
+    let over = grab - egui::vec2(travelled, 0.0);
+    harness.event(egui::Event::PointerMoved(over));
+    harness.step();
+    assert!(
+        (tab_rect(&harness, "gamma-folder").left() - place(2.0)).abs() < 0.01,
+        "no slide under reduced motion"
+    );
+    harness.event(egui::Event::PointerButton {
+        pos: over,
+        button: egui::PointerButton::Primary,
+        pressed: false,
+        modifiers: egui::Modifiers::default(),
+    });
+    harness.step();
+    settle(&mut harness);
+    assert_eq!(
+        titles(&harness),
+        ["beta-folder", "alpha-folder", "gamma-folder"]
+    );
 }

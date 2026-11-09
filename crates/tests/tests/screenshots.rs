@@ -672,6 +672,12 @@ fn hand(at: egui::Pos2, closed: bool) -> Vec<egui::Shape> {
 
 /// A window like [`shell`]'s whose frames show the hand cursors.
 fn shell_with_hands(start: &Path, size: egui::Vec2) -> Harness<'static, RickUi> {
+    shell_with_hands_at(start, size, 0.25)
+}
+
+/// [`shell_with_hands`] with frames `dt` seconds apart: a sixtieth shows an
+/// animation frame by frame.
+fn shell_with_hands_at(start: &Path, size: egui::Vec2, dt: f32) -> Harness<'static, RickUi> {
     let fake = Arc::new(Fake::new().unwrap_or_else(|e| panic!("{e}")));
     let host = Arc::new(EguiHost::new());
     let app = app::App::new(app::Config {
@@ -684,6 +690,7 @@ fn shell_with_hands(start: &Path, size: egui::Vec2) -> Harness<'static, RickUi> 
     let mut harness = Harness::builder()
         .with_size(size)
         .with_pixels_per_point(2.0)
+        .with_step_dt(dt)
         .renderer(HandCursor(egui_kittest::wgpu::WgpuTestRenderer::new()))
         .build_eframe(move |cc| RickUi::new(app, host, &cc.egui_ctx));
     settle(&mut harness);
@@ -694,6 +701,9 @@ fn shell_with_hands(start: &Path, size: egui::Vec2) -> Harness<'static, RickUi> 
 struct Frames {
     name: String,
     frames: Vec<image::RgbaImage>,
+    /// Keep only this many pixel rows from the top of each frame: a
+    /// sequence that plays in the title row is laid out as a film strip.
+    strip: Option<u32>,
 }
 
 impl Frames {
@@ -701,15 +711,29 @@ impl Frames {
         Self {
             name,
             frames: Vec::new(),
+            strip: None,
+        }
+    }
+
+    /// A sequence of which only the top `rows` pixel rows matter.
+    fn strip(name: String, rows: u32) -> Self {
+        Self {
+            name,
+            frames: Vec::new(),
+            strip: Some(rows),
         }
     }
 
     /// Renders the frame as it stands, saves it as `<name>-<n>-<step>` and
     /// keeps it for the sheet.
     fn shoot(&mut self, harness: &mut Harness<'_, RickUi>, step: &str) {
-        let image = harness
+        let mut image = harness
             .render()
             .unwrap_or_else(|e| panic!("no renderer for screenshots: {e}"));
+        if let Some(rows) = self.strip {
+            let (w, h) = (image.width(), rows.min(image.height()));
+            image = image::imageops::crop_imm(&image, 0, 0, w, h).to_image();
+        }
         let n = self.frames.len() + 1;
         let path = out_dir().join(format!(
             "{}-{}-{n}-{step}.png",
@@ -722,12 +746,31 @@ impl Frames {
     }
 
     /// Saves the sequence as one sheet, `<name>.png`: the frames at half
-    /// size, two to a row, in order.
+    /// size, two to a row, in order; a film strip at full size, one frame
+    /// under the other.
     fn sheet(&self) {
         const GUTTER: u32 = 12;
         let Some(first) = self.frames.first() else {
             return;
         };
+        if self.strip.is_some() {
+            let (w, h) = (first.width(), first.height());
+            let rows = u32::try_from(self.frames.len()).unwrap_or(1);
+            let mut sheet = image::RgbaImage::from_pixel(
+                w + 2 * GUTTER,
+                rows * h + (rows + 1) * GUTTER,
+                image::Rgba([128, 128, 128, 255]),
+            );
+            for (i, frame) in self.frames.iter().enumerate() {
+                let i = u32::try_from(i).unwrap_or(0);
+                let y = GUTTER + i * (h + GUTTER);
+                image::imageops::overlay(&mut sheet, frame, i64::from(GUTTER), i64::from(y));
+            }
+            let path = out_dir().join(format!("{}-{}.png", std::env::consts::OS, self.name));
+            sheet.save(&path).unwrap_or_else(|e| panic!("{e}"));
+            eprintln!("sheet: {}", path.display());
+            return;
+        }
         let (w, h) = (first.width() / 2, first.height() / 2);
         let rows = u32::try_from(self.frames.len().div_ceil(2)).unwrap_or(1);
         let mut sheet = image::RgbaImage::from_pixel(
@@ -921,6 +964,123 @@ fn frames_of_the_drag_ghost_and_the_cursors() {
         frames.shoot(&mut harness, "tab-off-the-row");
         primary(&mut harness, off, false);
         settle(&mut harness);
+        frames.sheet();
+    }
+}
+
+/// Issue 80, rule 1, as a film strip of the title row in Light and Dark at
+/// both densities, a sixtieth of a second per step: the first of three
+/// tabs taken by its middle; pulled along the row, lifted; past its
+/// neighbour's middle, the neighbour on its way to the place the tab came
+/// from, in three frames of the slide; arrived, the gap open where the tab
+/// will land and no insertion line anywhere; at the last place of the row;
+/// let go a little short of it, settling; settled, in the new order.
+#[test]
+#[ignore = "needs a wgpu adapter; CI runs it and uploads the images"]
+fn frames_of_a_tab_dragged_along_the_row() {
+    use egui_kittest::kittest::Queryable as _;
+    let (_dir, deep) = sample_tree();
+    for (theme, density) in [
+        (Theme::Light, Density::Comfortable),
+        (Theme::Light, Density::Compact),
+        (Theme::Dark, Density::Comfortable),
+        (Theme::Dark, Density::Compact),
+    ] {
+        // A window of its own for each: the drag ends with the tabs in
+        // another order.
+        let mut harness = shell_with_hands_at(&deep, egui::vec2(1360.0, 800.0), 1.0 / 60.0);
+        let parent = deep
+            .parent()
+            .unwrap_or_else(|| panic!("parent"))
+            .to_path_buf();
+        for folder in [parent, deep.join("raw")] {
+            harness
+                .state_mut()
+                .app_mut()
+                .handle(app::Command::NewTab(local(&folder)), &mut Vec::new());
+            settle(&mut harness);
+        }
+        for change in [
+            SettingsChange::Theme(theme),
+            SettingsChange::Density(density),
+        ] {
+            harness
+                .state_mut()
+                .app_mut()
+                .handle(app::Command::Settings(change), &mut Vec::new());
+        }
+        settle(&mut harness);
+        let theme_name = match theme {
+            Theme::Light => "light",
+            Theme::Dark => "dark",
+            Theme::System => "system",
+        };
+        let density_name = match density {
+            Density::Comfortable => "comfortable",
+            Density::Compact => "compact",
+        };
+        let row = harness
+            .state()
+            .tab_row()
+            .unwrap_or_else(|| panic!("no tab row"));
+        // The title row and the top of the panes, in pixels at 2×.
+        let rows = ((row.bottom() + 60.0) * 2.0) as u32;
+        let mut frames =
+            Frames::strip(format!("issue80-reorder-{theme_name}-{density_name}"), rows);
+        let tab = |harness: &Harness<'_, RickUi>, title: &str| {
+            harness
+                .query_all_by_label(title)
+                .map(|n| n.rect())
+                .find(|r| row.contains(r.center()))
+                .unwrap_or_else(|| panic!("no tab {title}"))
+        };
+        let first = tab(&harness, "day-one");
+        let pitch = tab(&harness, "holiday-2026").left() - first.left();
+        let grab = first.center();
+        let at = |travelled: f32| grab + egui::vec2(travelled, 0.0);
+        let still = |harness: &mut Harness<'_, RickUi>| {
+            for _ in 0..12 {
+                harness.step();
+            }
+        };
+
+        glide(&mut harness, at(-30.0) + egui::vec2(0.0, 90.0), grab, 6);
+        frames.shoot(&mut harness, "open-hand");
+        primary(&mut harness, grab, true);
+        glide(&mut harness, grab, at(70.0), 8);
+        still(&mut harness);
+        frames.shoot(&mut harness, "lifted");
+        // Past the neighbour's middle: its slide, frame by frame.
+        glide(&mut harness, at(70.0), at(pitch / 2.0 - 6.0), 6);
+        still(&mut harness);
+        harness.event(egui::Event::PointerMoved(at(pitch / 2.0 + 8.0)));
+        harness.step();
+        harness.step();
+        frames.shoot(&mut harness, "neighbour-slides-1");
+        harness.step();
+        harness.step();
+        frames.shoot(&mut harness, "neighbour-slides-2");
+        harness.step();
+        harness.step();
+        harness.step();
+        frames.shoot(&mut harness, "neighbour-slides-3");
+        still(&mut harness);
+        frames.shoot(&mut harness, "gap-open");
+        glide(
+            &mut harness,
+            at(pitch / 2.0 + 8.0),
+            at(2.0 * pitch - 50.0),
+            20,
+        );
+        still(&mut harness);
+        frames.shoot(&mut harness, "last-place");
+        primary(&mut harness, at(2.0 * pitch - 50.0), false);
+        harness.step();
+        harness.step();
+        frames.shoot(&mut harness, "settling");
+        still(&mut harness);
+        settle(&mut harness);
+        frames.shoot(&mut harness, "settled");
         frames.sheet();
     }
 }
