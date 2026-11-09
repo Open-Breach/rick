@@ -78,6 +78,7 @@ impl BalooExtension {
                 points: Points::SEARCH_INDEX,
                 platforms: Platforms::LINUX,
                 previews: &[],
+                commands: &[],
             },
         }
     }

@@ -177,6 +177,7 @@ impl Core {
                 points: Points::ACTION,
                 platforms: Platforms::ALL,
                 previews: &[],
+                commands: &[],
             },
             state: Arc::new(State {
                 mounts,

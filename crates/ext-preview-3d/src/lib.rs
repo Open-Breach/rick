@@ -94,6 +94,7 @@ impl Preview3d {
                 points: Points::PREVIEWER,
                 platforms: Platforms::ALL,
                 previews: &["stl", "obj", "3mf"],
+                commands: &[],
             },
         }
     }

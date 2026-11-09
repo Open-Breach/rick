@@ -877,6 +877,7 @@ fn a_vhdx_without_the_library_shows_the_instructions_and_browsing_to_it_lists() 
             points: ext::Points::PREVIEWER,
             platforms: ext::Platforms::ALL,
             previews: &["vhdx"],
+            commands: &[],
         },
         vec![nowhere.join(platform::sevenzip::LIBRARY_FILE)],
     );

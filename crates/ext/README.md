@@ -16,7 +16,11 @@ application runs with the values through `UiHost::form_later`; an
 action's `app_menu` puts it in the burger menu under its extension), the
 `Manifest` every extension declares (with `previews`, the
 file extensions its previewers claim, so the host can say a disabled
-plugin is available for a file without loading it), the `Extension` trait
+plugin is available for a file without loading it, and `commands`, the
+subcommands of the `rick` command line it provides, each a `CliCommand`
+registered under a declared name and run by the host on the application
+thread like an action, with text for the caller's terminal or an action's
+outcome for the focused pane), the `Extension` trait
 that registers contributions, and the `Registry` that collects them and
 refuses manifests of another API version. The registry is also the
 extension context: the host builds it with `Registry::with_platform`, so
