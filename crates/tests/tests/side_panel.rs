@@ -14,7 +14,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use egui_kittest::Harness;
-use egui_kittest::kittest::Queryable as _;
+use egui_kittest::kittest::{By, Queryable as _};
 use ext::{ActionId, Extension};
 use model::{JobState, Section, SelectionChange};
 use platform::{ConfigDir, Fake, Trash as _};
@@ -149,8 +149,10 @@ fn pane_rect(harness: &Harness<'_, RickUi>) -> egui::Rect {
 /// The side panel rows whose label contains `text`, top to bottom: the
 /// panel sits left of the focused pane.
 /// The side panel widgets named `text`: those with exactly that name, or,
-/// when there are none, those whose name contains it (a section's title is
-/// also part of its caret's name).
+/// when there are none, those whose name starts with it (a drive card's
+/// name carries its percentage, its eject button the drive's name after
+/// *Eject*), or, failing that, those whose name contains it (a section's
+/// title is also part of its caret's name).
 fn panel_rects(harness: &Harness<'_, RickUi>, text: &str) -> Vec<egui::Rect> {
     let rect = pane_rect(harness);
     let in_panel = |r: &egui::Rect| r.center().x < rect.left();
@@ -159,6 +161,17 @@ fn panel_rects(harness: &Harness<'_, RickUi>, text: &str) -> Vec<egui::Rect> {
         .map(|n| n.rect())
         .filter(in_panel)
         .collect();
+    if rects.is_empty() {
+        rects = harness
+            .query_all(
+                By::new()
+                    .label_contains(text)
+                    .predicate(|n| n.label().is_some_and(|l| l.starts_with(text))),
+            )
+            .map(|n| n.rect())
+            .filter(in_panel)
+            .collect();
+    }
     if rects.is_empty() {
         rects = harness
             .query_all_by_label_contains(text)
@@ -659,8 +672,14 @@ fn this_machine_shows_utilisation_the_header_opens_the_overview_and_eject_works(
     assert_eq!(row_names(&harness), ["data", "STICK"]);
 
     // Eject from the overview: the platform ejects and the list follows.
-    harness.get_by_label_contains("Eject").click();
-    harness.step();
+    // (The card's own eject button is item 7's; this is the table's.)
+    let table = pane_rect(&harness);
+    let eject = harness
+        .query_all_by_label_contains("Eject")
+        .map(|n| n.rect())
+        .find(|r| table.contains(r.center()))
+        .map_or_else(|| panic!("no Eject in the table"), |r| r.center());
+    click_at(&mut harness, eject, egui::PointerButton::Primary);
     assert!(step_until(&mut harness, Duration::from_secs(5), |h| {
         h.state().app().model().volumes.len() == 1
     }));
@@ -697,10 +716,14 @@ fn this_machine_shows_utilisation_the_header_opens_the_overview_and_eject_works(
         h.state().app().model().volumes.len() == 2
     }));
     click_row(&mut harness, "STICK", egui::PointerButton::Secondary);
-    // The menu's Eject, not the table's button.
+    // The menu's Eject: not the table's button, not the card's.
     let table = pane_rect(&harness);
     let item = harness
-        .query_all_by_label_contains("Eject")
+        .query_all(
+            By::new()
+                .label_contains("Eject")
+                .predicate(|n| n.label().is_some_and(|l| !l.contains("STICK"))),
+        )
         .map(|n| n.rect())
         .find(|r| !table.contains(r.center()))
         .map_or_else(|| panic!("no Eject in the menu"), |r| r.center());
@@ -1305,9 +1328,10 @@ fn mount_offered(harness: &mut Harness<'_, RickUi>, name: &str) -> bool {
     offered
 }
 
-/// The side panel rows whose label contains `text` but not the image
-/// file's name: the volume's row, not the "Mount disc.iso" job row of
-/// the operations area nor the file in the list.
+/// The side panel rows whose label starts with `text` but is not the
+/// image file's name: the volume's card, not the "Mount disc.iso" job row
+/// of the operations area, the file in the list nor the card's own
+/// *Eject disc* button.
 fn volume_rows(harness: &Harness<'_, RickUi>, text: &str) -> Vec<egui::Rect> {
     let rect = pane_rect(harness);
     let file: Vec<egui::Rect> = harness
@@ -1315,7 +1339,11 @@ fn volume_rows(harness: &Harness<'_, RickUi>, text: &str) -> Vec<egui::Rect> {
         .map(|n| n.rect())
         .collect();
     harness
-        .query_all_by_label_contains(text)
+        .query_all(
+            By::new()
+                .label_contains(text)
+                .predicate(|n| n.label().is_some_and(|l| l.starts_with(text))),
+        )
         .map(|n| n.rect())
         .filter(|r| r.center().x < rect.left() && !file.contains(r))
         .collect()
@@ -1395,7 +1423,14 @@ fn mount_shows_on_the_images_this_os_mounts_and_a_mounted_iso_is_a_volume_until_
     );
     harness.step();
     assert!(harness.query_by_label_contains("Unmount").is_none());
-    harness.get_by_label_contains("Eject").click();
+    // The menu's Eject, not the card's own button (issue 79 item 7).
+    harness
+        .get(
+            By::new()
+                .label_contains("Eject")
+                .predicate(|n| n.label().is_some_and(|l| !l.contains("disc"))),
+        )
+        .click();
     harness.step();
     assert!(
         step_until(&mut harness, Duration::from_secs(6), |h| {
@@ -1404,4 +1439,46 @@ fn mount_shows_on_the_images_this_os_mounts_and_a_mounted_iso_is_a_volume_until_
         "the volume goes with Eject"
     );
     assert_eq!(fake.ejected(), [volumes[0].mount_point.clone()]);
+}
+
+/// Issue 79 item 7: a removable drive's card carries an eject button at
+/// its right edge, vertically centred and always visible, named after the
+/// drive; a fixed drive's card has none; a click ejects the drive.
+#[test]
+fn a_removable_drives_card_has_an_eject_button_at_its_right_edge() {
+    let dir = tree();
+    let fake = Arc::new(Fake::new().unwrap_or_else(|e| panic!("{e}")));
+    let stick = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+    fake.add_volume(volume("data", dir.path(), platform::VolumeKind::Fixed));
+    fake.add_volume(volume(
+        "STICK",
+        stick.path(),
+        platform::VolumeKind::Removable,
+    ));
+    let mut harness = harness_with(dir.path(), &fake.config_dir(), fake.clone(), Vec::new());
+    assert!(step_until(&mut harness, Duration::from_secs(5), |h| {
+        h.state().app().model().volumes.len() == 2
+    }));
+    assert!(
+        harness.query_by_label("Eject data").is_none(),
+        "a fixed drive has no eject button"
+    );
+    let button = harness.get_by_label("Eject STICK").rect();
+    let card = panel_row(&harness, "STICK");
+    let card_rect = panel_rects(&harness, "STICK")[0];
+    assert!(
+        (button.center().y - card.y).abs() < 1.0,
+        "vertically centred: {button:?} in {card_rect:?}"
+    );
+    // At the right edge: inside the card, with only the card's 6 px inset
+    // and its 12 px padding after it.
+    assert!(
+        card_rect.contains_rect(button) && card_rect.right() - button.right() < 20.0,
+        "at the right edge: {button:?} in {card_rect:?}"
+    );
+    harness.get_by_label("Eject STICK").click();
+    harness.step();
+    assert!(step_until(&mut harness, Duration::from_secs(5), |_| {
+        fake.ejected() == [stick.path().to_path_buf()]
+    }));
 }
