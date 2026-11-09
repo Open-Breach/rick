@@ -3610,3 +3610,61 @@ Once answered, an entry keeps its number and gains a dated decision line.
     says *Copy* (question 295). *All users* is drawn and cannot be
     chosen, with the tooltip *Not available yet*; the frame's line about
     passwords is kept as it is.
+
+308. (issue 80, rule 4, 2026-11-09) *Spring-loaded tabs*: a dragged tab
+    "rests on a neighbour while it overlaps it by a quarter of a tab or
+    more, short of the half where the two would swap". A tab taken past a
+    neighbour overlaps it by a quarter or more for half the way — before
+    the swap from one side, after it from the other — so at an unhurried
+    pace an ordinary reorder would outlast the delay and switch the
+    window.
+    Assumed: "rests" is taken at its word. A dragged tab spring-loads the
+    neighbour it leans on only while it is held still, the cursor within
+    6 px (`ui_egui::drag::REST_SLOP`) of where the rest began; moving on
+    starts the clock again. The overlap counts on either side of the
+    swap. A dragged pane needs no such rule: its cursor is on the tab or
+    it is not.
+
+309. (issue 80, rule 9, 2026-11-09) *No-ops and cancel*: Escape leaves
+    "every window showing the workspace it showed". A drag of entries that
+    spring-loaded through two tabs records each switch, and *After a
+    drag: return* undoes them in the order they happened, which ends on
+    the second-to-last workspace, not the first.
+    Assumed: a cancelled drag undoes the switches last first, so the
+    window ends on the workspace the drag began in. The order for a
+    dropped drag with *return* is left as it is: it is not part of issue
+    80, and is noted for the maintainer.
+
+310. (issue 80, rule 6, 2026-11-09) *Windows*: "the dock targets appear on
+    the pane under the cursor in whichever window that is". While a
+    button is down the pointer belongs to the window the drag began in;
+    another window hears nothing of the drag, so the first has to say
+    where the cursor is, which takes each window's place on the screen. A
+    Wayland compositor does not tell a window its place.
+    Assumed: the window the drag began in publishes the drag with the
+    cursor's place on the screen, and the window under the cursor shows
+    the gap, the slot, the targets and the ghost and says where a drop
+    lands. Where windows overlap, the one the drag began in counts as in
+    front, having been clicked last. Where the system gives no positions
+    (Wayland), a drag knows its own window alone: nothing shows over
+    another window, and a release outside the window does nothing, as
+    before this issue. Reaching another window there takes the
+    compositor's own drag and drop with a payload of Rick's; not built,
+    noted for the maintainer.
+
+311. (issue 80, rules 6 and 7, 2026-11-09) *Drag ghost*: the ghost "moves
+    rigidly with" the cursor; question 292 left open what paints it
+    outside the window the drag began in.
+    Assumed: the window the cursor is over paints the ghost, a tab from
+    the tab's own label, a pane from the snapshot its window took.
+    Between windows, over the desktop, no window can paint: the closed
+    hand alone shows there. A borderless, transparent window of its own
+    that follows the cursor would carry the ghost everywhere; not built.
+
+312. (issue 80, rule 6, 2026-11-09) *Panes*: "the centre, or the tab row,
+    makes the dragged pane a new workspace tab", and "another window
+    takes the pane on its tab row or on its dock targets". Where in the
+    other window's row a pane dropped on a centre target becomes a tab is
+    not said.
+    Assumed: at the end of that window's row, shown; dropped on the row
+    itself, at the slot the row shows.
