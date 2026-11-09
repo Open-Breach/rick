@@ -158,6 +158,16 @@ pub const CLOUD: &str = ph::CLOUD;
 pub const EJECT: &str = ph::EJECT;
 /// A drop the panel refuses.
 pub const REFUSED: &str = ph::PROHIBIT;
+/// The General page of the settings.
+pub const GEAR: &str = ph::GEAR;
+/// A plugin without an icon of its own, in the settings' category list.
+pub const PLUGIN: &str = ph::PUZZLE_PIECE;
+/// A PDF plugin.
+pub const FILE_PDF: &str = ph::FILE_PDF;
+/// An office-documents plugin.
+pub const FILE_DOC: &str = ph::FILE_DOC;
+/// A 3D-models plugin.
+pub const CUBE: &str = ph::CUBE;
 /// Edit a place.
 pub const EDIT: &str = ph::PENCIL_SIMPLE;
 /// Add a connection or an account.
@@ -432,6 +442,11 @@ mod tests {
         EDIT,
         ADD,
         WAITING,
+        GEAR,
+        PLUGIN,
+        FILE_PDF,
+        FILE_DOC,
+        CUBE,
     ];
 
     #[test]

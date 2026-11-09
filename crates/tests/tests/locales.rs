@@ -145,8 +145,8 @@ fn switching_the_language_relabels_the_settings_screen_and_the_menus_live() {
     harness.step();
     harness.step();
     assert!(
-        harness.query_by_label("Theme").is_some(),
-        "the Settings screen in English"
+        harness.query_by_label("Appearance").is_some(),
+        "the Settings window in English"
     );
     let copy = harness
         .state()
@@ -167,9 +167,9 @@ fn switching_the_language_relabels_the_settings_screen_and_the_menus_live() {
     harness.step();
     assert!(
         harness.query_by_label("Erscheinungsbild").is_some(),
-        "the Settings screen in German"
+        "the Settings window in German"
     );
-    assert!(harness.query_by_label("Theme").is_none());
+    assert!(harness.query_by_label("Appearance").is_none());
     assert!(
         harness.query_by_label("Sprache").is_some(),
         "the language row itself"
@@ -199,5 +199,5 @@ fn switching_the_language_relabels_the_settings_screen_and_the_menus_live() {
     );
     harness.step();
     harness.step();
-    assert!(harness.query_by_label("Theme").is_some());
+    assert!(harness.query_by_label("Appearance").is_some());
 }

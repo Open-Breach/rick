@@ -1377,6 +1377,116 @@ fn screenshots_of_the_hash_dialogue() {
     close(&mut harness);
 }
 
+/// Issue 60: the settings window — the View page in Light and Dark at both
+/// densities, then the General and Appearance pages, the PDF plugin's page
+/// and a search that narrows the rows.
+#[test]
+#[ignore = "needs a wgpu adapter; CI runs it and uploads the images"]
+fn screenshots_of_the_settings_window() {
+    use egui::accesskit::Role;
+    let (dir, deep) = sample_tree();
+    let fake = Arc::new(Fake::new().unwrap_or_else(|e| panic!("{e}")));
+    let host = Arc::new(EguiHost::new());
+    let app = app::App::new(app::Config {
+        platform: fake.clone(),
+        ui: host.clone(),
+        extensions: vec![Arc::new(ext_preview_pdf::PdfPreview::new())],
+        config_dir: Some(fake.config_dir()),
+        start: Some(local(&deep)),
+    });
+    let mut harness = Harness::builder()
+        .with_size(egui::vec2(1920.0, 1000.0))
+        .with_pixels_per_point(2.0)
+        .build_eframe(move |cc| RickUi::new(app, host, &cc.egui_ctx));
+    settle(&mut harness);
+    let click = |harness: &mut Harness<'_, RickUi>, role: Role, label: &str| {
+        let at = harness.get_by_role_and_label(role, label).rect().center();
+        harness.event(egui::Event::PointerMoved(at));
+        harness.step();
+        for pressed in [true, false] {
+            harness.event(egui::Event::PointerButton {
+                pos: at,
+                button: egui::PointerButton::Primary,
+                pressed,
+                modifiers: egui::Modifiers::default(),
+            });
+            harness.step();
+        }
+        harness.event(egui::Event::PointerMoved(egui::pos2(960.0, 30.0)));
+        harness.step();
+        harness.step();
+    };
+    harness.state_mut().open_settings();
+    for _ in 0..3 {
+        harness.step();
+    }
+    click(&mut harness, Role::RadioButton, "View");
+    for (theme, density) in [
+        (Theme::Light, Density::Comfortable),
+        (Theme::Light, Density::Compact),
+        (Theme::Dark, Density::Comfortable),
+        (Theme::Dark, Density::Compact),
+    ] {
+        for change in [
+            SettingsChange::Theme(theme),
+            SettingsChange::Density(density),
+        ] {
+            harness
+                .state_mut()
+                .app_mut()
+                .handle(app::Command::Settings(change), &mut Vec::new());
+        }
+        settle(&mut harness);
+        let theme_name = match theme {
+            Theme::Light => "light",
+            Theme::Dark => "dark",
+            Theme::System => "system",
+        };
+        let density_name = match density {
+            Density::Comfortable => "comfortable",
+            Density::Compact => "compact",
+        };
+        shoot(
+            &mut harness,
+            &format!("settings-window-{theme_name}-{density_name}"),
+        );
+    }
+    for change in [
+        SettingsChange::Theme(Theme::Light),
+        SettingsChange::Density(Density::Comfortable),
+    ] {
+        harness
+            .state_mut()
+            .app_mut()
+            .handle(app::Command::Settings(change), &mut Vec::new());
+    }
+    settle(&mut harness);
+    click(&mut harness, Role::RadioButton, "General");
+    shoot(&mut harness, "settings-window-general");
+    click(&mut harness, Role::RadioButton, "Appearance");
+    shoot(&mut harness, "settings-window-appearance");
+    click(&mut harness, Role::RadioButton, "PDF preview");
+    shoot(&mut harness, "settings-window-plugin");
+    click(&mut harness, Role::RadioButton, "View");
+    let title = harness.get_by_label("Settings").rect();
+    let search = harness
+        .get_all_by_role(Role::TextInput)
+        .find(|node| {
+            let rect = node.rect();
+            (rect.left() - title.left()).abs() < 40.0
+                && rect.top() > title.bottom()
+                && rect.top() < title.bottom() + 80.0
+        })
+        .unwrap_or_else(|| panic!("no search field under the Settings title"));
+    search.focus();
+    search.type_text("hidden");
+    harness.step();
+    harness.step();
+    shoot(&mut harness, "settings-window-search");
+    // The folder outlives the harness.
+    let _folder = dir;
+}
+
 /// Issue 17: the Preview tab docked below the explorer and torn out into a
 /// window of its own.
 #[test]
