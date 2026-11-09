@@ -717,9 +717,26 @@ fn write_desktop(
 /// The marker on the line Rick adds to a shell profile.
 const PROFILE_MARK: &str = "# added by rick";
 
+/// The installed Rick among `records`, by its main executable's name, and
+/// the binary the shell function runs.
+fn rick_binary(layout: &Layout, records: &[Record]) -> Option<PathBuf> {
+    records
+        .iter()
+        .find(|r| {
+            Path::new(&r.main_executable)
+                .file_name()
+                .is_some_and(|n| n == "rick")
+        })
+        .map(|r| layout.current(&r.id).join(&r.main_executable))
+}
+
 /// Regenerates `~/.config/rick/path.sh` (and the fish drop-in when fish is
-/// configured) from the PATH-mode records of `records`, and makes sure the
-/// profiles source it; removes the files when no record needs them.
+/// configured) from the PATH-mode records of `records`, with the `rick`
+/// shell function when Rick itself is installed (so `rick` with no
+/// argument opens the shell's current directory from a login shell that
+/// lacks `~/.local/bin` on its PATH; specs/system-integration.md §4), and
+/// makes sure the profiles source it; removes the files when no record
+/// needs them.
 ///
 /// # Errors
 ///
@@ -729,10 +746,11 @@ pub fn write_path_file(layout: &Layout, records: &[Record]) -> Result<(), Error>
         .iter()
         .filter(|r| r.path_mode == Some(PathMode::Path))
         .collect();
+    let rick = rick_binary(layout, records);
     let file = layout.path_file();
     let fish_dir = layout.home.join(".config/fish");
     let fish_file = fish_dir.join("conf.d/rick.fish");
-    if path_mode.is_empty() {
+    if path_mode.is_empty() && rick.is_none() {
         let _ = fs::remove_file(&file);
         let _ = fs::remove_file(&fish_file);
         return Ok(());
@@ -750,6 +768,17 @@ pub fn write_path_file(layout: &Layout, records: &[Record]) -> Result<(), Error>
             let _ = writeln!(sh, "export {var}=\"{dir}\"");
             let _ = writeln!(fish, "set -gx {var} \"{dir}\"");
         }
+    }
+    if let Some(binary) = rick {
+        let binary = binary.to_string_lossy();
+        let _ = writeln!(
+            sh,
+            "# `rick` for a login shell without ~/.local/bin on its PATH: no argument opens the shell's directory.\nrick() {{ \"{binary}\" \"$@\"; }}"
+        );
+        let _ = writeln!(
+            fish,
+            "# `rick` for a login shell without ~/.local/bin on its PATH: no argument opens the shell's directory.\nfunction rick\n    \"{binary}\" $argv\nend"
+        );
     }
     if let Some(parent) = file.parent() {
         fs::create_dir_all(parent).map_err(io_write)?;

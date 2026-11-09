@@ -69,12 +69,14 @@
 
 mod command;
 mod ext_settings;
+mod external;
 mod places;
 mod session;
 pub mod settings;
 
 pub use command::{Command, ConnectionOp, Event, PropertiesInfo, TransferMode};
 pub use ext_settings::ExtSettings;
+pub use external::{External, ExternalReceiver, ExternalSender, external_channel};
 /// What the Hash dialogue draws with (the format, the rendering, the
 /// Verify logic), re-exported for the UI.
 pub use ops::hash;
@@ -90,10 +92,10 @@ use std::sync::{Arc, Mutex, PoisonError, RwLock};
 use std::time::Duration;
 
 use ext::{
-    ActionCtx, ActionOutcome, Availability, Capabilities, DecorateCtx, Decoration, Decorator,
-    Depth, Extension, Filter, FormLater, FormLaterState, FsChange, Invocation, Level, ListOptions,
-    Points, PreviewDoc, Previewer, Prompts, Query, QueryKind, Reads, Registry, SearchIndex,
-    SearchScope, UiHost, UndoCommand,
+    ActionCtx, ActionOutcome, Availability, Capabilities, CliCtx, CliOutcome, DecorateCtx,
+    Decoration, Decorator, Depth, Extension, Filter, FormLater, FormLaterState, FsChange,
+    Invocation, Level, ListOptions, Points, PreviewDoc, Previewer, Prompts, Query, QueryKind,
+    Reads, Registry, SearchIndex, SearchScope, UiHost, UndoCommand,
 };
 use futures::StreamExt;
 use model::{
@@ -328,6 +330,21 @@ const POLL_EVERY: Duration = Duration::from_secs(3);
 /// How long one [`App::poll`] may spend applying messages before it leaves
 /// the rest to the next one.
 const POLL_BUDGET: Duration = Duration::from_millis(8);
+/// How long a reveal waits for its files to be listed before it selects
+/// what is there.
+const REVEAL_FOR: Duration = Duration::from_secs(5);
+
+/// The line typed into a console to take its shell to `path`: quoted for
+/// the shell, with a leading space so a shell that ignores such lines
+/// keeps it out of its history, and Enter.
+fn cd_command(path: &Path) -> Vec<u8> {
+    if ext::Platforms::current() == ext::Platforms::WINDOWS {
+        format!(" cd /d \"{}\"\r", path.display()).into_bytes()
+    } else {
+        let quoted = path.to_string_lossy().replace('\'', "'\\''");
+        format!(" cd '{quoted}'\r").into_bytes()
+    }
+}
 /// How long the title-row search box's text must stand before the search
 /// indexes are asked, so a typist does not start a query per keystroke.
 const INDEX_SEARCH_AFTER: Duration = Duration::from_millis(150);
@@ -477,6 +494,25 @@ struct Live {
     children: BTreeMap<EntryId, Child>,
 }
 
+/// A console tab and the explorer tab it was opened from
+/// (specs/system-integration.md §4): the tab follows the shell's working
+/// directory, and the shell is told `cd` when the tab navigates while it
+/// is at its prompt.
+struct ConsoleLink {
+    /// The explorer's pane.
+    pane: PaneId,
+    /// The explorer tab, which must be its pane's active tab to be moved.
+    explorer: TabId,
+    /// The console.
+    console: Arc<dyn ext::Console>,
+    /// The working directory the console last reported, so a report is
+    /// acted on once.
+    cwd_seen: Option<PathBuf>,
+    /// The explorer's location last seen, so a navigation is typed once,
+    /// and one the console itself caused not at all.
+    location_seen: Location,
+}
+
 /// The application: model, registry, jobs, undo log and settings.
 pub struct App {
     model: Model,
@@ -533,6 +569,13 @@ pub struct App {
     /// ([`ActionOutcome::Later`]), with the pane each ran in; looked at on
     /// every poll.
     later: Vec<(PaneId, FormLater)>,
+    /// The file names `Command::Reveal` selects in a pane once its folder
+    /// is listed, with when it asked; a name that never shows is dropped
+    /// after [`REVEAL_FOR`].
+    reveal_pending: BTreeMap<PaneId, (Vec<Vec<u8>>, std::time::Instant)>,
+    /// The console tabs open and the explorer tabs they follow, by the
+    /// console's tab.
+    console_links: BTreeMap<TabId, ConsoleLink>,
     /// Writes `places.toml`, latest snapshot wins.
     places_saver: mpsc::UnboundedSender<Vec<Place>>,
     /// Stops the volume poll.
@@ -832,6 +875,8 @@ impl App {
             thumbnails: BTreeSet::new(),
             pending,
             later: Vec::new(),
+            reveal_pending: BTreeMap::new(),
+            console_links: BTreeMap::new(),
             places_saver,
             volumes_watch: CancelToken::new(),
             poke: runtime::watch::channel(0).0,
@@ -1248,6 +1293,7 @@ impl App {
         debug!(?command, "command");
         self.dispatch(command, events);
         self.sync_panes(events);
+        self.sync_consoles(events);
         self.sync_preview();
         self.sync_session();
     }
@@ -1561,6 +1607,9 @@ impl App {
             Command::Scroll { tab, offset } => {
                 self.model.set_scroll(tab, offset);
             }
+            Command::ColumnWidths { tab, columns } => {
+                self.model.set_column_widths(tab, columns);
+            }
             Command::WindowGeometry { window, geometry } => {
                 self.model.set_geometry(window, geometry);
             }
@@ -1571,6 +1620,14 @@ impl App {
                 self.model.focus_window(window);
             }
             Command::NewWindow => self.new_window(events),
+            Command::NewWindowAt(location) => {
+                self.model.new_window(location);
+            }
+            Command::Reveal { items, new_window } => self.reveal(&items, new_window),
+            Command::Activate { token } => events.push(Event::Activate {
+                window: self.model.focused_window,
+                token,
+            }),
             Command::CloseWindow(window) => {
                 if !self.model.close_window(window) && self.model.window(window).is_some() {
                     self.exit = true;
@@ -1636,6 +1693,7 @@ impl App {
                 break;
             }
         }
+        self.sync_consoles(events);
         if handled > 0 {
             self.sync_preview();
             self.sync_session();
@@ -2634,6 +2692,47 @@ impl App {
         }
     }
 
+    /// Runs the plugin subcommand `name` of the command line
+    /// (specs/system-integration.md §4, [`ext::cli`]) with `args`, typed
+    /// from the working directory `cwd`, on the focused pane: what an
+    /// action would return is applied there like an action's outcome,
+    /// text is handed back for the caller's terminal. `None` when no
+    /// loaded extension provides the command; the command's own error
+    /// otherwise, for the caller rather than a notification.
+    pub fn run_cli(
+        &mut self,
+        name: &str,
+        args: Vec<String>,
+        cwd: PathBuf,
+        events: &mut Vec<Event>,
+    ) -> Option<Result<Option<String>, Error>> {
+        let command = self
+            .registry
+            .commands()
+            .iter()
+            .find(|c| c.name() == name)
+            .cloned()?;
+        let pane = self.model.focused;
+        let location = self.pane_location(pane);
+        let ctx = CliCtx {
+            args,
+            cwd,
+            pane,
+            location: location.clone(),
+        };
+        let label = format!("rick {name}");
+        Some(match command.run(ctx, &self.jobs, &*self.ui) {
+            Ok(CliOutcome::Text(text)) => Ok(Some(text)),
+            Ok(CliOutcome::Outcome(outcome)) => {
+                self.outcome(pane, location, &label, Ok(outcome), events);
+                // A form filled from an earlier look opens at once.
+                self.check_later(events);
+                Ok(None)
+            }
+            Err(error) => Err(error),
+        })
+    }
+
     fn run(&mut self, action: ext::ActionId, ctx: ActionCtx, events: &mut Vec<Event>) {
         let Some(action) = self
             .registry
@@ -2746,7 +2845,28 @@ impl App {
                     ext::View::Compare(_) => model::TabKind::Compare,
                     ext::View::Console(_) => model::TabKind::Console,
                 };
+                // The explorer tab a console follows: the pane's active
+                // tab the action ran in.
+                let explorer = self
+                    .model
+                    .active_tab(pane)
+                    .filter(|(_, tab)| tab.kind == model::TabKind::Explorer)
+                    .map(|(id, tab)| (id, tab.location.clone()));
                 if let Some(tab) = self.model.open_view(pane, kind, location, view.title()) {
+                    if let (ext::View::Console(console), Some((explorer, location_seen))) =
+                        (&view, explorer)
+                    {
+                        self.console_links.insert(
+                            tab,
+                            ConsoleLink {
+                                pane,
+                                explorer,
+                                console: Arc::clone(console),
+                                cwd_seen: console.cwd(),
+                                location_seen,
+                            },
+                        );
+                    }
                     events.push(Event::ViewOpened { pane, tab, view });
                 }
             }
@@ -3363,6 +3483,7 @@ impl App {
                     batch,
                     done: false,
                 });
+                self.resolve_reveal(pane, false, events);
             }
             Msg::ListDone {
                 pane,
@@ -4011,6 +4132,7 @@ impl App {
                 Vec::new()
             }
         };
+        self.resolve_reveal(pane, true, events);
         // The Cloud overview's rows are the side panel's Cloud rows too, and
         // the Network overview's provider rows its Network rows (the
         // mounted shares are the volumes' own rows).
@@ -4074,6 +4196,129 @@ impl App {
         } else {
             debug!(?pane, "rescan");
             self.refresh(pane);
+        }
+    }
+
+    /// `Command::Reveal`: one tab per folder of `items`, in the focused
+    /// window (the first in a window of its own with `new_window`), each
+    /// selecting its files once listed.
+    fn reveal(&mut self, items: &[Location], new_window: bool) {
+        let mut folders: Vec<(Location, Vec<Vec<u8>>)> = Vec::new();
+        for item in items {
+            let Some(parent) = item.path.parent() else {
+                continue;
+            };
+            let Some(name) = item.path.file_name() else {
+                continue;
+            };
+            let folder = Location::new(item.provider, parent);
+            match folders.iter_mut().find(|(f, _)| *f == folder) {
+                Some((_, names)) => names.push(name.to_vec()),
+                None => folders.push((folder, vec![name.to_vec()])),
+            }
+        }
+        for (index, (folder, names)) in folders.into_iter().enumerate() {
+            let pane = if index == 0 && new_window {
+                self.model.new_window(folder).1
+            } else {
+                self.model.new_tab(None, folder).0
+            };
+            self.reveal_pending
+                .insert(pane, (names, std::time::Instant::now()));
+        }
+    }
+
+    /// Selects what a reveal asked for in `pane` once its names are
+    /// listed: all of them as soon as every name has a row, what is there
+    /// when the listing is `complete` or the wait is over.
+    fn resolve_reveal(&mut self, pane: PaneId, complete: bool, events: &mut Vec<Event>) {
+        let Some((names, since)) = self.reveal_pending.get(&pane) else {
+            return;
+        };
+        let ids: Vec<EntryId> = self
+            .model
+            .active_tab(pane)
+            .map(|(_, tab)| {
+                tab.listing
+                    .rows()
+                    .filter(|e| {
+                        e.path
+                            .file_name()
+                            .is_some_and(|n| names.iter().any(|w| w == n))
+                    })
+                    .map(|e| e.id)
+                    .collect()
+            })
+            .unwrap_or_default();
+        let all = ids.len() >= names.len();
+        if !all && !complete && since.elapsed() < REVEAL_FOR {
+            return;
+        }
+        self.reveal_pending.remove(&pane);
+        if ids.is_empty() {
+            return;
+        }
+        if let Some(ids) = self.model.select(pane, SelectionChange::Set(ids)) {
+            events.push(Event::SelectionChanged { pane, ids });
+        }
+    }
+
+    /// Keeps each console and the explorer tab it was opened from in step
+    /// (specs/system-integration.md §4): a working directory the shell
+    /// reported (OSC 7) since the last look moves the explorer tab there,
+    /// when it is its pane's active tab; the explorer's own navigation
+    /// types `cd` into the console while the shell is at its prompt, never
+    /// while a job has the terminal or the session cannot tell. A console
+    /// or explorer tab that closed ends the link.
+    fn sync_consoles(&mut self, events: &mut Vec<Event>) {
+        let model = &self.model;
+        self.console_links
+            .retain(|tab, link| model.tab(*tab).is_some() && model.tab(link.explorer).is_some());
+        let tabs: Vec<TabId> = self.console_links.keys().copied().collect();
+        for tab in tabs {
+            let Some(link) = self.console_links.get(&tab) else {
+                continue;
+            };
+            let Some(location) = self
+                .model
+                .active_tab(link.pane)
+                .filter(|(id, _)| *id == link.explorer)
+                .map(|(_, t)| t.location.clone())
+            else {
+                continue;
+            };
+            let pane = link.pane;
+            let cwd = link.console.cwd();
+            if cwd != link.cwd_seen {
+                let to = cwd
+                    .as_deref()
+                    .map(|path| Location::new(ProviderId::LOCAL, platform::paths::from_path(path)));
+                if let Some(link) = self.console_links.get_mut(&tab) {
+                    link.cwd_seen = cwd;
+                    if let Some(to) = &to {
+                        link.location_seen = to.clone();
+                    }
+                }
+                if let Some(to) = to
+                    && to != location
+                {
+                    self.dispatch(Command::Navigate { pane, to }, events);
+                }
+                continue;
+            }
+            if location != link.location_seen {
+                let path = (location.provider == ProviderId::LOCAL)
+                    .then(|| platform::paths::to_path(&location.path).ok())
+                    .flatten();
+                if let Some(path) = path
+                    && link.console.foreground_job() == Some(false)
+                {
+                    link.console.write(&cd_command(&path));
+                }
+                if let Some(link) = self.console_links.get_mut(&tab) {
+                    link.location_seen = location;
+                }
+            }
         }
     }
 

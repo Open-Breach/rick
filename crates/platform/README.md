@@ -37,7 +37,19 @@ UI and monospace fonts: fontconfig's `sans-serif` and `monospace` matches
 through `fc-match`, the San Francisco files, Segoe UI and Consolas; the
 fake answers like the machine it runs on), and `Motion` (the system's
 reduce-motion setting, read once from the desktop, which stills Rick's
-loading animations) and the `agent` module that opens the SSH
+loading animations), `SingleInstance` (the endpoint of the one Rick per
+user and config directory: a Unix socket in `$XDG_RUNTIME_DIR` or the
+user's temporary directory, a named pipe on Windows; the `instance` module
+frames the one message a second launch hands over it, *run command with
+arguments*, as length-prefixed JSON with a protocol version, reclaims a
+stale socket and gives an unresponsive instance up after a second),
+`Activation` (raising the window a second launch's path opened in:
+`xdg_activation_v1` with the launcher's token on Wayland,
+`_NET_ACTIVE_WINDOW` on X11, the window made key and `NSApp.activate` on
+macOS, `SetForegroundWindow` on Windows after the launch's
+`AllowSetForegroundWindow`) the `process` module that asks whether a console's shell has handed its
+terminal to a job (`/proc/<pid>/stat`, `proc_pidinfo`; Windows cannot say),
+and the `agent` module that opens the SSH
 agent's socket (`SSH_AUTH_SOCK`, or OpenSSH's named pipe on Windows),
 implemented for Linux (XDG trash, `xdg-open`), macOS
 (`NSFileManager`, `open`) and Windows (`IFileOperation`, `ShellExecute`), plus
@@ -45,7 +57,9 @@ a `Fake` for tests. It also owns the
 filesystem fast paths other crates program against: the bulk directory reader
 (`statx`, `getattrlistbulk`, `GetFileInformationByHandleEx`), the native copy
 (`FICLONE`/`copy_file_range`, `clonefile`, `CopyFileExW`), allocated sizes and
-extent sharing, the `VPath` ↔ `Path` conversion and `file://` URIs. It is the only crate
+extent sharing, the `VPath` ↔ `Path` conversion and `file://` URIs both
+ways (`paths::from_uri` decodes a `file:///…` or `rick:///…` URI to a
+path of this machine). It is the only crate
 allowed `unsafe` and `cfg(target_os)`. It depends on `types` and `runtime`;
 `vfs`, `vfs-local` and the crates above them may depend on it. It also uses
 `raw-window-handle`, `wayland-client` and `x11rb` on Linux, `objc2-app-kit`

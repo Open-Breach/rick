@@ -17,6 +17,7 @@
 //! their own.
 
 use std::borrow::Cow;
+use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 use types::{EntryId, Location, ProviderId};
@@ -231,6 +232,10 @@ pub struct TabSession {
     pub selection: Vec<EntryId>,
     /// The list's vertical scroll offset in logical points.
     pub scroll: f32,
+    /// The widths the user gave the details list's columns, by column id;
+    /// absent in a file written before they were kept.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub columns: BTreeMap<String, f32>,
     /// A note for the status line, set while restoring when the tab could
     /// not open where it was; never written to the file.
     #[serde(skip)]
@@ -253,6 +258,7 @@ impl Default for TabSession {
             flatten: false,
             selection: Vec::new(),
             scroll: 0.0,
+            columns: BTreeMap::new(),
             note: None,
         }
     }

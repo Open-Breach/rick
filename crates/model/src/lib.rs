@@ -378,6 +378,11 @@ pub struct Tab {
     /// The list's vertical scroll offset in logical points, as the UI last
     /// reported it; restored with the session.
     pub scroll: f32,
+    /// The widths the user gave the details list's columns, in logical
+    /// points by column id (`name`, `size`, `type`, `modified`, a decorator
+    /// column's id); a column not in the map takes its default width.
+    /// Restored with the session (SPEC.md *File list*).
+    pub columns: BTreeMap<String, f32>,
     /// A note for the status line: why the tab is not where the session
     /// left it. Cleared by the next navigation.
     pub note: Option<String>,
@@ -412,6 +417,7 @@ impl Tab {
             decorations: HashMap::new(),
             tree: Tree::default(),
             scroll: 0.0,
+            columns: BTreeMap::new(),
             note: None,
             failure: None,
             title: None,
@@ -1298,6 +1304,12 @@ impl Model {
                     state.flatten = saved_tab.flatten;
                     state.selection = saved_tab.selection.iter().copied().collect();
                     state.scroll = saved_tab.scroll.max(0.0);
+                    state.columns = saved_tab
+                        .columns
+                        .iter()
+                        .filter(|(_, w)| w.is_finite() && **w > 0.0)
+                        .map(|(id, w)| (id.clone(), *w))
+                        .collect();
                     state.note.clone_from(&saved_tab.note);
                 }
                 if i == kept {
@@ -1434,6 +1446,7 @@ impl Model {
                                 flatten: tab.flatten,
                                 selection: tab.selection.iter().copied().collect(),
                                 scroll: tab.scroll,
+                                columns: tab.columns.clone(),
                                 note: None,
                             })
                             .collect(),
@@ -1564,6 +1577,22 @@ impl Model {
         match self.tabs.get_mut(&tab) {
             Some(t) => {
                 t.scroll = offset.max(0.0);
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// Records the widths the user gave a tab's columns, by column id; an
+    /// empty map puts every column back to its default. A width that is
+    /// not a positive number is dropped. `false` when the tab is unknown.
+    pub fn set_column_widths(&mut self, tab: TabId, columns: BTreeMap<String, f32>) -> bool {
+        match self.tabs.get_mut(&tab) {
+            Some(t) => {
+                t.columns = columns
+                    .into_iter()
+                    .filter(|(_, w)| w.is_finite() && *w > 0.0)
+                    .collect();
                 true
             }
             None => false,

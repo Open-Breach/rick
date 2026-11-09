@@ -17,11 +17,12 @@ use std::process::Stdio;
 use std::time::SystemTime;
 
 use types::Error;
-use windows::Win32::Foundation::{CloseHandle, GENERIC_READ, GENERIC_WRITE, HANDLE};
+use windows::Win32::Foundation::{CloseHandle, ERROR_SUCCESS, GENERIC_READ, GENERIC_WRITE, HANDLE};
 use windows::Win32::Foundation::{HWND, PROPERTYKEY, RPC_E_CHANGED_MODE};
 use windows::Win32::Storage::FileSystem::{
-    CreateFileW, FILE_FLAGS_AND_ATTRIBUTES, FILE_SHARE_READ, FILE_SHARE_WRITE, GetDiskFreeSpaceExW,
-    GetDriveTypeW, GetLogicalDrives, GetVolumeInformationW, OPEN_EXISTING,
+    CreateFileW, FILE_FLAGS_AND_ATTRIBUTES, FILE_READ_ONLY_VOLUME, FILE_SHARE_READ,
+    FILE_SHARE_WRITE, GetDiskFreeSpaceExW, GetDriveTypeW, GetLogicalDrives, GetVolumeInformationW,
+    OPEN_EXISTING,
 };
 use windows::Win32::System::Com::{
     CLSCTX_ALL, CLSCTX_INPROC_SERVER, COINIT_APARTMENTTHREADED, COINIT_DISABLE_OLE1DDE,
@@ -33,6 +34,7 @@ use windows::Win32::System::Ioctl::{
     FSCTL_DISMOUNT_VOLUME, FSCTL_LOCK_VOLUME, IOCTL_STORAGE_EJECT_MEDIA,
     IOCTL_STORAGE_MEDIA_REMOVAL, PREVENT_MEDIA_REMOVAL,
 };
+use windows::Win32::System::Registry::{HKEY_LOCAL_MACHINE, RRF_RT_REG_SZ, RegGetValueW};
 use windows::Win32::System::SystemInformation::GetWindowsDirectoryW;
 use windows::Win32::UI::Shell::{
     ASSOC_FILTER_RECOMMENDED, BHID_DataObject, BHID_EnumItems, FOF_ALLOWUNDO, FOF_NO_UI,
@@ -44,16 +46,19 @@ use windows::Win32::UI::Shell::{
     SHERB_NOSOUND, SHEmptyRecycleBinW, SHGetKnownFolderItem, SHGetKnownFolderPath,
     SIGDN_FILESYSPATH, SIGDN_NORMALDISPLAY, ShellExecuteExW, ShellExecuteW, ShellLink,
 };
-use windows::Win32::UI::WindowsAndMessaging::{SW_SHOW, SW_SHOWNORMAL};
+use windows::Win32::UI::WindowsAndMessaging::{
+    ASFW_ANY, AllowSetForegroundWindow, IsIconic, SW_RESTORE, SW_SHOW, SW_SHOWNORMAL,
+    SetForegroundWindow, ShowWindow,
+};
 use windows::core::{GUID, Interface, PCWSTR, PWSTR, w};
 
 use crate::Native;
 use crate::fs::windows::{filetime, io_error, wide};
 use crate::traits::{
-    Application, Chrome, ConfigDir, ControlsSide, DragSource, DropTarget, Elevate, ElevatedOutput,
-    ImageFormat, IncomingFiles, Mount, OpenWith, Point, Properties, PropertiesOutcome, RecentItem,
-    RecentlyUsed, StandardFolder, StandardFolders, Terminal, Trash, TrashedItem, Volume,
-    VolumeKind, Volumes, WindowChrome, WindowRef,
+    Activation, Application, Chrome, ConfigDir, ControlsSide, DragSource, DropTarget, Elevate,
+    ElevatedOutput, ImageFormat, IncomingFiles, Mount, OpenWith, Point, Properties,
+    PropertiesOutcome, RecentItem, RecentlyUsed, StandardFolder, StandardFolders, Terminal, Trash,
+    TrashedItem, Volume, VolumeKind, Volumes, WindowChrome, WindowRef,
 };
 
 /// `System.Recycle.DeletedFrom`: the folder a recycled item came from.
@@ -217,6 +222,76 @@ fn same_name(a: &Path, b: &Path) -> bool {
     }
 }
 
+/// The edition, display version and build from the registry's
+/// `CurrentVersion` key: `Windows 11 Pro 24H2 (build 26100)`; `Windows`
+/// alone when nothing reads. The key still says "Windows 10" on Windows
+/// 11, which the build number tells apart.
+pub(crate) fn os_description() -> String {
+    let product = version_value("ProductName").unwrap_or_else(|| "Windows".to_owned());
+    let display = version_value("DisplayVersion");
+    let build = version_value("CurrentBuildNumber");
+    let mut text = match build.as_deref().and_then(|b| b.parse::<u32>().ok()) {
+        Some(number) if number >= 22000 => product.replacen("Windows 10", "Windows 11", 1),
+        _ => product,
+    };
+    if let Some(display) = display {
+        text.push(' ');
+        text.push_str(&display);
+    }
+    if let Some(build) = build {
+        text.push_str(" (build ");
+        text.push_str(&build);
+        text.push(')');
+    }
+    text
+}
+
+/// A string value of `HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion`,
+/// trimmed; `None` when it is missing, not a string, or empty.
+fn version_value(value: &str) -> Option<String> {
+    let subkey = w!("SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion");
+    let name: Vec<u16> = value.encode_utf16().chain(std::iter::once(0)).collect();
+    let mut size: u32 = 0;
+    // SAFETY: `name` is a NUL-terminated UTF-16 string that outlives the
+    // call; with no buffer the function only writes the size the value
+    // needs into `size`.
+    let status = unsafe {
+        RegGetValueW(
+            HKEY_LOCAL_MACHINE,
+            subkey,
+            PCWSTR(name.as_ptr()),
+            RRF_RT_REG_SZ,
+            None,
+            None,
+            Some(&raw mut size),
+        )
+    };
+    if status != ERROR_SUCCESS || size == 0 {
+        return None;
+    }
+    let mut buffer = vec![0u16; (size as usize).div_ceil(2)];
+    // SAFETY: `buffer` holds the `size` bytes the query asked for; the
+    // function writes at most `size` bytes into it and the number written
+    // back into `size`.
+    let status = unsafe {
+        RegGetValueW(
+            HKEY_LOCAL_MACHINE,
+            subkey,
+            PCWSTR(name.as_ptr()),
+            RRF_RT_REG_SZ,
+            None,
+            Some(buffer.as_mut_ptr().cast::<c_void>()),
+            Some(&raw mut size),
+        )
+    };
+    if status != ERROR_SUCCESS {
+        return None;
+    }
+    let text = String::from_utf16_lossy(&buffer);
+    let text = text.trim_end_matches('\0').trim();
+    (!text.is_empty()).then(|| text.to_owned())
+}
+
 impl Trash for Native {
     fn trash(&self, path: &Path) -> Result<TrashedItem, Error> {
         fs::symlink_metadata(path).map_err(Error::from_io)?;
@@ -365,7 +440,7 @@ impl Volumes for Native {
             let root_wide = wide(Path::new(&root));
             // SAFETY: the root string is NUL-terminated and outlives the
             // calls; the out-pointers point at locals of the right type.
-            let (kind, label, fs_type, space) = unsafe {
+            let (kind, label, fs_type, space, read_only) = unsafe {
                 let drive_type = GetDriveTypeW(PCWSTR(root_wide.as_ptr()));
                 let kind = match drive_type {
                     DRIVE_REMOVABLE => VolumeKind::Removable,
@@ -376,15 +451,17 @@ impl Volumes for Native {
                 };
                 let mut label = [0u16; 261];
                 let mut fs_name = [0u16; 261];
+                let mut flags = 0u32;
                 let labelled = GetVolumeInformationW(
                     PCWSTR(root_wide.as_ptr()),
                     Some(&mut label),
                     None,
                     None,
-                    None,
+                    Some(&raw mut flags),
                     Some(&mut fs_name),
                 )
                 .is_ok();
+                let read_only = labelled && flags & FILE_READ_ONLY_VOLUME != 0;
                 let text = |buffer: &[u16]| {
                     let end = buffer.iter().position(|&c| c == 0).unwrap_or(buffer.len());
                     String::from_utf16_lossy(&buffer[..end])
@@ -404,7 +481,7 @@ impl Volumes for Native {
                 )
                 .is_ok()
                 .then_some((total, free));
-                (kind, label, fs_type, space)
+                (kind, label, fs_type, space, read_only)
             };
             let name = match label {
                 Some(label) => label,
@@ -420,6 +497,7 @@ impl Volumes for Native {
                 device: None,
                 total,
                 free,
+                read_only,
             });
         }
         // The system drive first, the rest by letter.
@@ -604,6 +682,7 @@ impl Mount for Native {
             device: None,
             total: None,
             free: None,
+            read_only: format == ImageFormat::Iso,
         })
     }
 }
@@ -1043,6 +1122,35 @@ impl Chrome for Native {
             native_controls: false,
             native_controls_width: 0.0,
         }
+    }
+}
+
+impl Activation for Native {
+    /// Restored when minimised, then brought to the foreground: allowed
+    /// because the launch called `AllowSetForegroundWindow` before it
+    /// handed over.
+    fn activate_window(&self, window: &WindowRef, _token: Option<&str>) -> Result<(), Error> {
+        let hwnd = drag::hwnd_of(window)?;
+        // SAFETY: plain window-manager calls on the handle the backend gave
+        // out for a live window of this process.
+        unsafe {
+            if IsIconic(hwnd).as_bool() {
+                let _ = ShowWindow(hwnd, SW_RESTORE);
+            }
+            if !SetForegroundWindow(hwnd).as_bool() {
+                return Err(Error::Unsupported(
+                    "the window could not be brought to the foreground",
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    fn allow_activation(&self) {
+        // SAFETY: a plain call with the constant that lets any process take
+        // the foreground once; it fails only when this process may not
+        // give that away, which is not an error for the launch.
+        let _ = unsafe { AllowSetForegroundWindow(ASFW_ANY) };
     }
 }
 

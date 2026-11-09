@@ -11,15 +11,16 @@ use async_trait::async_trait;
 use tempfile::TempDir;
 use types::Error;
 
+use crate::instance::Endpoint;
 use crate::perms::{
     FilePermissions, PermissionChange, Permissions, Principal, PrincipalKind, Principals,
 };
 use crate::traits::{
-    Application, Chrome, Clipboard, ConfigDir, ControlsSide, DialogFilter, DragSource, DropTarget,
-    Elevate, ElevatedOutput, ImageFormat, IncomingFiles, Mount, NativeDialogs, OpenWith, Point,
-    Properties, PropertiesOutcome, RecentItem, RecentlyUsed, Secrets, StandardFolder,
-    StandardFolders, Terminal, Trash, TrashedItem, Volume, VolumeKind, Volumes, WindowChrome,
-    WindowRef,
+    Activation, Application, Chrome, Clipboard, ConfigDir, ControlsSide, DialogFilter, DragSource,
+    DropTarget, Elevate, ElevatedOutput, ImageFormat, IncomingFiles, Mount, NativeDialogs,
+    OpenWith, Point, Properties, PropertiesOutcome, RecentItem, RecentlyUsed, Secrets,
+    SingleInstance, StandardFolder, StandardFolders, Terminal, Trash, TrashedItem, Volume,
+    VolumeKind, Volumes, WindowChrome, WindowRef,
 };
 
 /// The applications the fake offers for every file, the default first.
@@ -56,6 +57,9 @@ pub struct Fake {
     trashed_count: Mutex<u64>,
     opened: Mutex<Vec<PathBuf>>,
     opened_with: Mutex<Vec<(PathBuf, Application)>>,
+    /// The tokens handed to [`Activation::activate_window`], oldest first;
+    /// nothing is raised.
+    activations: Mutex<Vec<Option<String>>>,
     terminals: Mutex<Vec<(PathBuf, Option<Vec<String>>)>>,
     /// The programs handed to [`Elevate::run_elevated`]; nothing runs
     /// unless `elevate_runs` says so.
@@ -125,6 +129,7 @@ impl Fake {
             trashed_count: Mutex::new(0),
             opened: Mutex::new(Vec::new()),
             opened_with: Mutex::new(Vec::new()),
+            activations: Mutex::new(Vec::new()),
             terminals: Mutex::new(Vec::new()),
             elevated: Mutex::new(Vec::new()),
             elevate_runs: Mutex::new(false),
@@ -179,6 +184,13 @@ impl Fake {
     #[must_use]
     pub fn opened(&self) -> Vec<PathBuf> {
         lock(&self.opened).clone()
+    }
+
+    /// The tokens handed to [`Activation::activate_window`], oldest
+    /// first.
+    #[must_use]
+    pub fn activations(&self) -> Vec<Option<String>> {
+        lock(&self.activations).clone()
     }
 
     /// Paths handed to [`OpenWith::reveal`], oldest first.
@@ -363,6 +375,7 @@ impl Mount for Fake {
             device: None,
             total: None,
             free: None,
+            read_only: format == ImageFormat::Iso,
         };
         lock(&self.mounted).push(path.to_path_buf());
         lock(&self.volumes).push(volume.clone());
@@ -611,6 +624,23 @@ impl ConfigDir for Fake {
     }
 }
 
+impl Activation for Fake {
+    fn activate_window(&self, _window: &WindowRef, token: Option<&str>) -> Result<(), Error> {
+        lock(&self.activations).push(token.map(str::to_owned));
+        Ok(())
+    }
+
+    fn allow_activation(&self) {}
+}
+
+impl SingleInstance for Fake {
+    /// An endpoint inside the fake's own directory, whatever the config
+    /// directory: a test's instance is nobody else's.
+    fn instance_endpoint(&self, _config_dir: &Path) -> Endpoint {
+        Endpoint::in_dir(self.dir.path())
+    }
+}
+
 impl crate::traits::SystemFonts for Fake {
     /// The fonts of the machine the tests run on, so a screenshot shows
     /// what a user there sees; nothing where the machine names none.
@@ -818,6 +848,7 @@ mod tests {
             device: None,
             total: Some(10),
             free: Some(5),
+            read_only: false,
         };
         assert_eq!(usb.used(), Some(5));
         assert!(usb.utilisation().is_some_and(|u| (u - 0.5).abs() < 1e-6));

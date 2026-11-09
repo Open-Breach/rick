@@ -127,6 +127,7 @@ fn volume(fake: &Fake, mount: &Path) {
         device: None,
         total: Some(100 << 30),
         free: Some(60 << 30),
+        read_only: false,
     });
 }
 

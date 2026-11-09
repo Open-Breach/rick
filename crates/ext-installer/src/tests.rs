@@ -7,8 +7,8 @@ use std::time::{Duration, Instant};
 use ext::platform::{ConfigDir, Fake};
 use ext::runtime::JobEvent;
 use ext::{
-    ActionCtx, ActionOutcome, Availability, CellValue, DecorateCtx, Depth, Form, Invocation, Level,
-    ListOptions, PaneId, Provider, Registry, UiHost, Value, Values,
+    ActionCtx, ActionOutcome, Availability, CellValue, CliCtx, CliOutcome, DecorateCtx, Depth,
+    Form, Invocation, Level, ListOptions, PaneId, Provider, Registry, UiHost, Value, Values,
 };
 use futures::StreamExt;
 use runtime::JobRunner;
@@ -16,8 +16,8 @@ use types::{Attrs, CancelToken, Entry, EntryId, EntryKind, Error, Location, Prov
 
 use super::*;
 use crate::actions::{
-    APPS, EDIT_LAUNCHER, FORGET, INSTALL, LAUNCH, OPEN_FOLDER, REMOVE_STAGING, REPAIR, REVERT,
-    UNINSTALL, UPDATE,
+    APPS, EDIT_LAUNCHER, FORGET, INSTALL, INSTALL_COMMAND, LAUNCH, OPEN_FOLDER, REMOVE_STAGING,
+    REPAIR, REVERT, UNINSTALL, UPDATE,
 };
 use crate::archive::{Format, ItemKind};
 use crate::detect::{compare_versions, slug, split_version, strip_version};
@@ -448,6 +448,67 @@ fn the_extension_registers_the_view_the_columns_and_the_actions() {
     );
     let outcome = h.ok(APPS, h.ctx_archive(Fixture::GuiWithDesktop));
     assert!(matches!(outcome, ActionOutcome::Navigate(to) if to == location()));
+}
+
+/// `rick install <archive>` (specs/system-integration.md §4): the
+/// manifest declares the command, the registry holds it, and it opens the
+/// install form on the archive named relative to the caller's directory;
+/// wrong arguments and a file that is no archive are the caller's errors.
+#[test]
+fn the_install_command_opens_the_form_on_an_archive_from_the_command_line() {
+    let h = harness();
+    let manifest = InstallerExtension::new().manifest().clone();
+    assert_eq!(manifest.commands.len(), 1);
+    assert_eq!(manifest.commands[0].name, INSTALL_COMMAND);
+    let command = h
+        .registry
+        .commands()
+        .iter()
+        .find(|c| c.name() == INSTALL_COMMAND)
+        .cloned()
+        .unwrap_or_else(|| panic!("the install command is registered"));
+    let cwd = h.dir.path().to_path_buf();
+    let ctx = |args: &[&str]| CliCtx {
+        args: args.iter().map(|a| (*a).to_owned()).collect(),
+        cwd: cwd.clone(),
+        pane: PaneId(1),
+        location: Location::new(ProviderId::LOCAL, ext::platform::paths::from_path(&cwd)),
+    };
+    let name = Fixture::GuiWithDesktop.file_name();
+    if !supported() {
+        let refused = command.run(ctx(&[name]), &h.jobs, &h.ui);
+        assert!(refused.is_err(), "Linux only: {refused:?}");
+        return;
+    }
+    assert!(matches!(
+        command.run(ctx(&[]), &h.jobs, &h.ui),
+        Err(Error::Unsupported(_))
+    ));
+    assert!(matches!(
+        command.run(ctx(&["nowhere.tar.gz"]), &h.jobs, &h.ui),
+        Err(Error::NotFound)
+    ));
+    fs::write(h.dir.path().join("notes.txt"), b"x").unwrap_or_else(|e| panic!("{e}"));
+    assert!(matches!(
+        command.run(ctx(&["notes.txt"]), &h.jobs, &h.ui),
+        Err(Error::Unsupported(_))
+    ));
+    // The archive by its name relative to the caller's directory: the
+    // detection job reads it and the form arrives for the application to
+    // show, as *Install as application…* would.
+    let outcome = command
+        .run(ctx(&[name]), &h.jobs, &h.ui)
+        .unwrap_or_else(|e| panic!("{e}"));
+    let CliOutcome::Outcome(ActionOutcome::Later(later)) = outcome else {
+        panic!("the form comes later: {outcome:?}");
+    };
+    let (form, _then) =
+        runtime::block_on(later.wait()).unwrap_or_else(|| panic!("the detection fills the form"));
+    assert!(
+        !form.title.is_empty() && !form.fields.is_empty(),
+        "{form:?}"
+    );
+    h.settle();
 }
 
 #[test]
@@ -1690,4 +1751,43 @@ fn the_system_scope_is_unavailable_in_this_version() {
     assert!(
         matches!(&scope.kind, ext::FieldKind::Segmented { options, selected: 0 } if options[1] == "All users")
     );
+}
+
+/// With Rick itself among the installed apps, `path.sh` and the fish
+/// drop-in define the `rick` function over its `current` binary
+/// (specs/system-integration.md §4); without it and without a PATH-mode
+/// app the files go.
+#[test]
+fn the_path_file_defines_the_rick_function_when_rick_is_installed() {
+    let h = harness();
+    if !supported() {
+        return;
+    }
+    let layout = h.layout();
+    fs::create_dir_all(h.home().join(".config/fish")).unwrap_or_else(|e| panic!("{e}"));
+    h.install(Fixture::GuiWithDesktop, Vec::new());
+    let mut record = h.record("fixture-gui");
+    record.id = "rick".to_owned();
+    record.main_executable = "rick".to_owned();
+    install::write_path_file(&layout, &[record.clone()]).unwrap_or_else(|e| panic!("{e}"));
+    let sh = fs::read_to_string(layout.path_file()).unwrap_or_else(|e| panic!("{e}"));
+    let binary = layout.current("rick").join("rick");
+    assert!(
+        sh.contains(&format!("rick() {{ \"{}\" \"$@\"; }}", binary.display())),
+        "{sh}"
+    );
+    assert!(!sh.contains("export PATH"), "no PATH-mode app: {sh}");
+    let fish = fs::read_to_string(h.home().join(".config/fish/conf.d/rick.fish"))
+        .unwrap_or_else(|e| panic!("{e}"));
+    assert!(
+        fish.contains("function rick") && fish.contains(&format!("\"{}\" $argv", binary.display())),
+        "{fish}"
+    );
+    let profile = fs::read_to_string(h.home().join(".profile")).unwrap_or_else(|e| panic!("{e}"));
+    assert!(profile.contains(&layout.path_file().display().to_string()));
+    // Rick uninstalled (the record gone), nothing else on the PATH: the
+    // files go.
+    install::write_path_file(&layout, &[]).unwrap_or_else(|e| panic!("{e}"));
+    assert!(!layout.path_file().exists());
+    assert!(!h.home().join(".config/fish/conf.d/rick.fish").exists());
 }

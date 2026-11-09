@@ -85,6 +85,7 @@ impl GitExtension {
                 points: Points::DECORATOR | Points::ACTION,
                 platforms: Platforms::ALL,
                 previews: &[],
+                commands: &[],
             },
             repos: Arc::new(Repos::default()),
         }

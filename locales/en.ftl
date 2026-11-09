@@ -240,6 +240,7 @@ panel-unfold-section = Unfold { $section }
 panel-add = Add…
 panel-add-connection = Add connection…
 panel-eject = Eject { $name }
+panel-read-only = Read-only
 overview-no = No
 deny = Deny
 properties-user = (user)
@@ -354,3 +355,48 @@ settings-milliseconds = { $value } ms
 settings-points = { $value } pt
 settings-group-interface = Interface
 settings-group-colours = Colours
+
+# The About dialog (specs/about-dialog.md, issue 101). The build line, the
+# licence texts, the crate names and the copyright lines are data.
+about-tagline = a god-like file manager
+about-copy-details = Copy details
+about-whats-new = What's new
+about-whats-new-title = What's new in { $version }
+about-website = Website
+about-source-code = Source code
+about-report-an-issue = Report an issue
+about-licence = Licence
+about-third-party-licences = Third-party licences
+about-components = { $count ->
+    [one] { $count } component
+   *[other] { $count } components
+}
+about-not-available = not available in this build
+about-loaded-plugins = Loaded plugins
+about-plugins-summary = { $count ->
+    [one] { $count } plugin
+   *[other] { $count } plugins
+} · { $third } third-party
+about-credits = Credits
+about-role-serge = Specification, design and direction
+about-role-claude = Implementation through Claude Code, design and spec assistance
+about-built-with = Built with egui and eframe, wgpu, pdfium, GStreamer and Phosphor icons. Written largely by an AI coding agent from a human-written specification — use with care.
+about-copyright = © 2026 Open-Breach contributors
+about-back = Back
+about-details-copied = Details copied
+
+about-search-components = Search { $count } components
+about-all-licences = All licences
+about-bundled-runtimes = Bundled runtimes
+about-rust-crates = Rust crates
+about-no-matches = No component matches
+about-licences-footer = Generated at build time from Cargo.lock by cargo-about · { $count } components, { $types } licence types
+about-licences-footer-partial = The crates' list is not available in this build · { $count } components, { $types } licence types
+about-export = Export…
+about-export-title = Export the third-party licences
+about-exported = Exported to { $path }
+about-export-failed = Could not export: { $error }
+about-export-header = Third-party licences of Rick { $version }
+about-export-generated = Generated at build time from Cargo.lock by cargo-about.
+
+cli-url-not-local = { $url } names no folder or file on this computer

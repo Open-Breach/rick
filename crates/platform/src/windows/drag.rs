@@ -200,7 +200,7 @@ impl IDropSource_Impl for Source_Impl {
     }
 }
 
-fn hwnd_of(window: &WindowRef) -> Result<HWND, Error> {
+pub(super) fn hwnd_of(window: &WindowRef) -> Result<HWND, Error> {
     match window.window {
         RawWindowHandle::Win32(handle) => Ok(HWND(handle.hwnd.get() as *mut std::ffi::c_void)),
         _ => Err(Error::Unsupported("the window is not a Win32 window")),

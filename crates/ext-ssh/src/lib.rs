@@ -159,6 +159,7 @@ impl SshExtension {
                 points: Points::PROVIDER | Points::ACTION,
                 platforms: Platforms::ALL,
                 previews: &[],
+                commands: &[],
             },
         }
     }

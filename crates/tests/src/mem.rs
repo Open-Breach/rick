@@ -458,6 +458,7 @@ impl MemExtension {
                 points: Points::PROVIDER,
                 platforms: Platforms::ALL,
                 previews: &[],
+                commands: &[],
             },
             provider,
         }

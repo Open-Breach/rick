@@ -187,6 +187,10 @@ pub const FIT: &str = ph::ARROWS_IN;
 pub const ACTUAL_SIZE: &str = ph::FRAME_CORNERS;
 /// The File info badge.
 pub const INFO: &str = ph::INFO;
+/// The licence row of the About dialog.
+pub const DOCUMENT: &str = ph::FILE_TEXT;
+/// The source-code row of the About dialog.
+pub const CODE: &str = ph::CODE;
 /// The EXIF badge.
 pub const CAMERA: &str = ph::CAMERA;
 /// The Git badge.

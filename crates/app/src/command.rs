@@ -468,6 +468,14 @@ pub enum Command {
         /// The vertical offset in logical points.
         offset: f32,
     },
+    /// The widths the user gave a tab's details columns, by column id
+    /// (SPEC.md *File list*); an empty map restores the defaults.
+    ColumnWidths {
+        /// The tab.
+        tab: TabId,
+        /// The widths in logical points.
+        columns: std::collections::BTreeMap<String, f32>,
+    },
     /// Where a window is on the screen.
     WindowGeometry {
         /// The window.
@@ -486,6 +494,25 @@ pub enum Command {
     FocusWindow(WindowId),
     /// Open a window with the start layout.
     NewWindow,
+    /// Open a window of its own with one tab at the location, focused:
+    /// `rick --new-window <path>` (specs/system-integration.md §3).
+    NewWindowAt(Location),
+    /// `rick reveal <file>…`: open each file's folder in a new tab of the
+    /// focused window — a window of its own for the first with
+    /// `new_window` — and select the files there once they are listed.
+    Reveal {
+        /// The files.
+        items: Vec<Location>,
+        /// The first folder's tab opens in a new window.
+        new_window: bool,
+    },
+    /// Raise and focus the focused window, as a second launch's command
+    /// line asks: the UI gets [`Event::Activate`] with the window and the
+    /// launcher's activation token, when the launch had one.
+    Activate {
+        /// `XDG_ACTIVATION_TOKEN` or `DESKTOP_STARTUP_ID` of the launch.
+        token: Option<String>,
+    },
     /// Close a window; closing the last one asks the application to exit
     /// ([`App::exit_requested`](crate::App::exit_requested)).
     CloseWindow(WindowId),
@@ -644,6 +671,14 @@ pub enum Event {
         /// The text.
         text: String,
     },
+    /// Raise and focus a window through the windowing backend and the
+    /// platform's activation (`Command::Activate`).
+    Activate {
+        /// The window.
+        window: WindowId,
+        /// The launcher's activation token, for the platform.
+        token: Option<String>,
+    },
     /// What `Command::ShowProperties` found: the dialogue's contents.
     Properties(Box<PropertiesInfo>),
     /// Compute hash started on the pane's selection: open the Hash
@@ -696,6 +731,8 @@ fn pane_struct(
 }
 
 impl fmt::Debug for Event {
+    // One arm per event, each naming what the UI would want in a log.
+    #[allow(clippy::too_many_lines)]
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Listed { pane, batch, done } => f
@@ -781,6 +818,11 @@ impl fmt::Debug for Event {
                 .debug_struct("Notify")
                 .field("level", level)
                 .field("text", text)
+                .finish(),
+            Self::Activate { window, token } => f
+                .debug_struct("Activate")
+                .field("window", window)
+                .field("token", token)
                 .finish(),
             Self::HashesOpened {
                 pane,
