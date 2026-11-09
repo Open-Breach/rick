@@ -75,7 +75,7 @@ mod tests {
         // The link alone is half of it.
         let found = integration.check_integration(Item::RickCommand, &request);
         assert_eq!(found.actual, Actual::Missing);
-        assert!(found.foreign.is_empty());
+        assert_eq!(found.foreign, [] as [PathBuf; 0]);
         write(
             &path_file(&home.env),
             &format!(

@@ -118,7 +118,7 @@ mod tests {
         let found = check(Receipt::default());
         assert_eq!(found.actual, Actual::Missing);
         assert_eq!(found.place, Some(home.env.data_home.clone()));
-        assert!(found.foreign.is_empty());
+        assert_eq!(found.foreign, [] as [PathBuf; 0]);
 
         // The entry alone is not the item.
         let entry = entry_path(&home.env);
@@ -133,7 +133,7 @@ mod tests {
         install_icons(&home.env);
         let found = check(Receipt::default());
         assert_eq!(found.actual, Actual::SetUp);
-        assert!(found.foreign.is_empty());
+        assert_eq!(found.foreign, [] as [PathBuf; 0]);
 
         // Removed by hand: missing again.
         fs::remove_file(&entry).unwrap_or_else(|e| panic!("{e}"));
@@ -164,7 +164,7 @@ mod tests {
         };
         let found = integration.check_integration(Item::LauncherEntry, &request);
         assert_eq!(found.actual, Actual::Missing);
-        assert!(found.foreign.is_empty());
+        assert_eq!(found.foreign, [] as [PathBuf; 0]);
         // An icon with other contents is in the way too.
         let icon = icon_path(&home.env, &ICONS[0]);
         fs::write(&icon, b"not rick's icon").unwrap_or_else(|e| panic!("{e}"));

@@ -539,10 +539,9 @@ mod tests {
             fake.perform_integration(Item::RickCommand, &replace)
                 .is_ok()
         );
-        assert!(
-            fake.check_integration(Item::RickCommand, &request)
-                .foreign
-                .is_empty()
+        assert_eq!(
+            fake.check_integration(Item::RickCommand, &request).foreign,
+            [] as [PathBuf; 0]
         );
         assert!(
             fake.perform_integration(Item::DockFavourite, &request)

@@ -36,7 +36,7 @@ fn the_native_platform_lists_the_items_of_its_system() {
 #[test]
 fn the_fake_platform_lists_what_a_test_scripts() {
     let fake = Fake::new().unwrap_or_else(|e| panic!("{e}"));
-    assert!(fake.integration_items().items.is_empty());
+    assert_eq!(fake.integration_items().items, [] as [Item; 0]);
 
     let scripted = FakeIntegration::new("Fedora Linux 43 · GNOME", Some(Desktop::Gnome));
     scripted.set(Item::LauncherEntry, Check::missing());
