@@ -19,7 +19,8 @@ staging folder into `~/.local/opt/<app-id>/<version>/`, writes
 `rick-install.toml` beside it, flips the `current` symlink atomically and
 writes the desktop entry, the icon into the hicolor theme and the command
 symlinks in `~/.local/bin` (or the PATH-mode file `~/.config/rick/path.sh`
-for toolchains), all pointing through `current`. An archive that matches an
+for toolchains, in which the block the `rick` command of the integration
+items keeps is carried over as it is), all pointing through `current`. An archive that matches an
 installed app opens the same form in update mode; one previous version is
 kept and *Revert* flips back to it; *Uninstall* removes exactly the files
 the record lists and the app folder; *Repair* rewrites what a messy state

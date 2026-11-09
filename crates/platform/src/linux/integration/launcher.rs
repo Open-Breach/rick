@@ -8,8 +8,15 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use super::{DESKTOP_ID, LinuxEnv, ini_value, is_foreign};
-use crate::integration::{Actual, Check, Receipt};
+use types::Error;
+
+use super::{
+    DESKTOP_ID, LinuxEnv, ini_value, is_foreign, refuse_foreign, remove, run_tool, write_recorded,
+};
+use crate::integration::{Actual, Check, Receipt, Request};
+
+/// The desktop entry as the repository packages it.
+const DESKTOP_ENTRY: &str = include_str!("../../../../../packaging/linux/rick.desktop");
 
 /// One icon of the hicolor theme: its path under `icons/hicolor` and its
 /// bytes.
@@ -86,6 +93,98 @@ pub(super) fn check(env: &LinuxEnv, binary: &Path, receipt: &Receipt) -> Check {
         check.actual = Actual::SetUp;
     }
     check
+}
+
+/// A path as one quoted argument of a desktop `Exec` line: double quotes,
+/// with `"`, `` ` ``, `$` and `\` escaped as the desktop entry
+/// specification asks, and `%` doubled so it is no field code.
+fn quote(path: &Path) -> String {
+    let mut out = String::from("\"");
+    for c in path.to_string_lossy().chars() {
+        match c {
+            '"' | '`' | '$' | '\\' => {
+                out.push('\\');
+                out.push(c);
+            }
+            '%' => out.push_str("%%"),
+            c => out.push(c),
+        }
+    }
+    out.push('"');
+    out
+}
+
+/// The packaged desktop entry with its `Exec` starting `binary` by its
+/// full path, the arguments (`%U`) kept: the entry launches this Rick
+/// wherever the `PATH` of the session points.
+pub(super) fn entry_text(binary: &Path) -> String {
+    let mut out = String::with_capacity(DESKTOP_ENTRY.len() + 64);
+    for line in DESKTOP_ENTRY.lines() {
+        match line.strip_prefix("Exec=") {
+            Some(exec) => {
+                out.push_str("Exec=");
+                out.push_str(&quote(binary));
+                if let Some((_, arguments)) = exec.trim().split_once(char::is_whitespace) {
+                    out.push(' ');
+                    out.push_str(arguments.trim());
+                }
+            }
+            None => out.push_str(line),
+        }
+        out.push('\n');
+    }
+    out
+}
+
+/// Tells the desktop about the change, where its tools are installed:
+/// `update-desktop-database` for the entry's MIME types and
+/// `gtk-update-icon-cache` for the icons.
+fn refresh_caches(env: &LinuxEnv) {
+    let applications = env.data_home.join("applications");
+    run_tool(
+        env,
+        "update-desktop-database",
+        &["-q".as_ref(), applications.as_os_str()],
+    );
+    let icons = env.data_home.join("icons/hicolor");
+    run_tool(
+        env,
+        "gtk-update-icon-cache",
+        &[
+            "-q".as_ref(),
+            "-t".as_ref(),
+            "-f".as_ref(),
+            icons.as_os_str(),
+        ],
+    );
+}
+
+/// Writes the desktop entry and the icons; what was written is added to
+/// the receipt, and a file that was there with the same contents is left
+/// out of it.
+pub(super) fn perform(env: &LinuxEnv, binary: &Path, request: &Request) -> Result<Receipt, Error> {
+    refuse_foreign(&check(env, binary, &request.receipt), request)?;
+    let mut receipt = request.receipt.clone();
+    write_recorded(
+        env,
+        &entry_path(env),
+        entry_text(binary).as_bytes(),
+        &mut receipt,
+    )?;
+    for icon in &ICONS {
+        write_recorded(env, &icon_path(env, icon), icon.bytes, &mut receipt)?;
+    }
+    refresh_caches(env);
+    Ok(receipt)
+}
+
+/// Removes the entry and the icons the receipt lists.
+pub(super) fn undo(env: &LinuxEnv, receipt: &Receipt) -> Result<(), Error> {
+    for file in &receipt.files {
+        remove(&env.expand(file))?;
+    }
+    refresh_caches(env);
+    Ok(())
 }
 
 #[cfg(test)]
@@ -170,6 +269,121 @@ mod tests {
         fs::write(&icon, b"not rick's icon").unwrap_or_else(|e| panic!("{e}"));
         let found = integration.check_integration(Item::LauncherEntry, &request);
         assert_eq!(found.foreign, [icon]);
+    }
+
+    #[test]
+    fn performing_writes_the_entry_and_the_icons_and_undo_removes_them() {
+        let home = Home::new("GNOME");
+        let integration = home.integration();
+        let receipt = integration
+            .perform_integration(Item::LauncherEntry, &Request::default())
+            .unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(receipt.files.len(), 11, "the entry and ten icons");
+        assert!(
+            receipt
+                .files
+                .contains(&"~/.local/share/applications/rick.desktop".to_owned())
+        );
+        let entry = fs::read_to_string(entry_path(&home.env)).unwrap_or_else(|e| panic!("{e}"));
+        assert!(
+            entry.contains(&format!("Exec=\"{}\" %U\n", home.env.exe.display())),
+            "{entry}"
+        );
+        assert!(entry.contains("MimeType=inode/directory;x-scheme-handler/rick;"));
+        assert!(entry.contains("StartupWMClass=rick"));
+        let request = Request {
+            receipt: receipt.clone(),
+            ..Request::default()
+        };
+        assert_eq!(
+            integration
+                .check_integration(Item::LauncherEntry, &request)
+                .actual,
+            Actual::SetUp
+        );
+        // Again: nothing to write, nothing new on record.
+        let again = integration
+            .perform_integration(Item::LauncherEntry, &request)
+            .unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(again, receipt);
+
+        integration
+            .undo_integration(Item::LauncherEntry, &request)
+            .unwrap_or_else(|e| panic!("{e}"));
+        assert!(!entry_path(&home.env).exists());
+        for icon in &ICONS {
+            assert!(!icon_path(&home.env, icon).exists(), "{}", icon.rel);
+        }
+        // Undoing twice is fine: what is gone is skipped.
+        integration
+            .undo_integration(Item::LauncherEntry, &request)
+            .unwrap_or_else(|e| panic!("{e}"));
+    }
+
+    #[test]
+    fn a_foreign_entry_is_replaced_only_on_request_and_identical_icons_stay_foreign() {
+        let home = Home::new("GNOME");
+        let integration = home.integration();
+        let entry = entry_path(&home.env);
+        let foreign = "[Desktop Entry]\nType=Application\nName=Rick\nExec=/opt/other/rick %U\n";
+        write(&entry, foreign);
+        // A manual install copied one icon already, byte for byte.
+        let copied = icon_path(&home.env, &ICONS[4]);
+        fs::create_dir_all(copied.parent().unwrap_or(&copied)).unwrap_or_else(|e| panic!("{e}"));
+        fs::write(&copied, ICONS[4].bytes).unwrap_or_else(|e| panic!("{e}"));
+
+        let refused = integration.perform_integration(Item::LauncherEntry, &Request::default());
+        assert!(
+            matches!(&refused, Err(Error::Io(e)) if e.kind() == std::io::ErrorKind::AlreadyExists),
+            "{refused:?}"
+        );
+        assert_eq!(
+            fs::read_to_string(&entry).unwrap_or_default(),
+            foreign,
+            "nothing was overwritten"
+        );
+        assert!(
+            !icon_path(&home.env, &ICONS[0]).exists(),
+            "nothing was written"
+        );
+
+        let receipt = integration
+            .perform_integration(
+                Item::LauncherEntry,
+                &Request {
+                    replace: true,
+                    ..Request::default()
+                },
+            )
+            .unwrap_or_else(|e| panic!("{e}"));
+        assert!(receipt.files.contains(&home.env.tilde(&entry)));
+        assert!(
+            !receipt.files.contains(&home.env.tilde(&copied)),
+            "the icon that was there is not Rick's"
+        );
+        assert_eq!(receipt.files.len(), 10);
+        let request = Request {
+            receipt,
+            ..Request::default()
+        };
+        integration
+            .undo_integration(Item::LauncherEntry, &request)
+            .unwrap_or_else(|e| panic!("{e}"));
+        assert!(!entry.exists());
+        assert!(copied.exists(), "what Rick did not write stays");
+    }
+
+    #[test]
+    fn a_path_with_spaces_and_signs_is_one_quoted_argument() {
+        let text = entry_text(Path::new("/home/a b/50% $HOME/rick"));
+        assert!(
+            text.contains("Exec=\"/home/a b/50%% \\$HOME/rick\" %U\n"),
+            "{text}"
+        );
+        let home = Home::new("GNOME");
+        let exec = ini_value(&entry_text(&home.env.exe), "Desktop Entry", "Exec")
+            .unwrap_or_else(|| panic!("an Exec line"));
+        assert!(home.env.launches(&exec, &home.env.exe), "{exec}");
     }
 
     #[test]

@@ -225,6 +225,91 @@ fn is_foreign(env: &LinuxEnv, path: &Path, receipt: &Receipt) -> bool {
     fs::symlink_metadata(path).is_ok() && !receipt.files.contains(&env.tilde(path))
 }
 
+/// Refuses a perform while files Rick did not write are in the item's way
+/// and the request does not say to replace them.
+fn refuse_foreign(check: &Check, request: &Request) -> Result<(), Error> {
+    match check.foreign.first() {
+        Some(path) if !request.replace => Err(Error::Io(std::io::Error::new(
+            std::io::ErrorKind::AlreadyExists,
+            format!("{} exists and was not written by Rick", path.display()),
+        ))),
+        _ => Ok(()),
+    }
+}
+
+/// Lists `path` in the receipt, once.
+fn record(env: &LinuxEnv, receipt: &mut Receipt, path: &Path) {
+    let text = env.tilde(path);
+    if !receipt.files.contains(&text) {
+        receipt.files.push(text);
+    }
+}
+
+/// Writes `bytes` to `path` through a temporary file renamed over it,
+/// creating the directories above it.
+fn write_file(path: &Path, bytes: &[u8]) -> Result<(), Error> {
+    let parent = path.parent().unwrap_or(Path::new("."));
+    fs::create_dir_all(parent).map_err(Error::from_io)?;
+    let mut tmp = path.as_os_str().to_owned();
+    tmp.push(format!(".tmp-{}", std::process::id()));
+    let tmp = PathBuf::from(tmp);
+    fs::write(&tmp, bytes).map_err(Error::from_io)?;
+    fs::rename(&tmp, path).map_err(|error| {
+        let _ = fs::remove_file(&tmp);
+        Error::from_io(error)
+    })
+}
+
+/// Writes `bytes` to `path` unless the file holds them already, and lists
+/// the path in the receipt when it was written: a file that was there
+/// with the same contents is not Rick's to remove later.
+fn write_recorded(
+    env: &LinuxEnv,
+    path: &Path,
+    bytes: &[u8],
+    receipt: &mut Receipt,
+) -> Result<(), Error> {
+    if fs::read(path).is_ok_and(|existing| existing == bytes) {
+        return Ok(());
+    }
+    // A link or a directory under the name is replaced by the file.
+    if fs::symlink_metadata(path).is_ok_and(|meta| meta.is_symlink()) {
+        fs::remove_file(path).map_err(Error::from_io)?;
+    }
+    write_file(path, bytes)?;
+    record(env, receipt, path);
+    Ok(())
+}
+
+/// Removes the file or link at `path`; one that is gone is fine.
+fn remove(path: &Path) -> Result<(), Error> {
+    match fs::remove_file(path) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(Error::from_io(error)),
+    }
+}
+
+/// Runs a desktop tool when it is on the `PATH` of the environment, and
+/// waits for it; a missing tool or one that fails is only logged, the
+/// desktop picks the change up without it sooner or later.
+fn run_tool(env: &LinuxEnv, name: &str, args: &[&std::ffi::OsStr]) {
+    let Some(program) = env.program(name) else {
+        return;
+    };
+    let status = std::process::Command::new(program)
+        .args(args)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status();
+    match status {
+        Ok(status) if status.success() => {}
+        Ok(status) => tracing::debug!(%status, tool = name, "desktop tool failed"),
+        Err(error) => tracing::debug!(%error, tool = name, "desktop tool not run"),
+    }
+}
+
 /// The integration items of a Linux desktop, on one [`LinuxEnv`].
 #[derive(Clone)]
 pub struct LinuxIntegration {
@@ -320,16 +405,25 @@ impl Integration for LinuxIntegration {
         if request.scope == crate::integration::Scope::System {
             return Err(Error::Unsupported(NO_SYSTEM_SCOPE));
         }
+        let env = &self.env;
+        let binary = request.binary.clone().unwrap_or_else(|| env.binary());
         match item {
             Item::InstallLocation => Err(Error::Unsupported(INSTALLERS)),
-            _ => Err(Error::Unsupported(NOT_YET)),
+            Item::LauncherEntry => launcher::perform(env, &binary, request),
+            Item::DefaultFileManager => mime::perform(env, request),
+            Item::RickCommand => command::perform(env, &binary, request),
+            Item::ShowInFolder | Item::DockFavourite => Err(Error::Unsupported(NOT_YET)),
         }
     }
 
-    fn undo_integration(&self, item: Item, _request: &Request) -> Result<(), Error> {
+    fn undo_integration(&self, item: Item, request: &Request) -> Result<(), Error> {
+        let env = &self.env;
         match item {
             Item::InstallLocation => Err(Error::Unsupported(INSTALLERS)),
-            _ => Err(Error::Unsupported(NOT_YET)),
+            Item::LauncherEntry => launcher::undo(env, &request.receipt),
+            Item::DefaultFileManager => mime::undo(env, &request.receipt),
+            Item::RickCommand => command::undo(env, &request.receipt),
+            Item::ShowInFolder | Item::DockFavourite => Err(Error::Unsupported(NOT_YET)),
         }
     }
 }
