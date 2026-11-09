@@ -46,8 +46,9 @@ deny = [
     # Extensions see `ext` and `types` only; only the binary and the tests load them.
     { crate = "ext-preview-text", wrappers = ["rick", "tests"] },
     # The markup plugin builds its source view on the code previewer's
-    # highlighting (issue 51).
-    { crate = "ext-preview-code", wrappers = ["rick", "tests", "ext-preview-markup"] },
+    # highlighting (issue 51), and so does the image previewer for the
+    # source of an SVG (issue 83).
+    { crate = "ext-preview-code", wrappers = ["rick", "tests", "ext-preview-markup", "ext-preview-image"] },
     { crate = "ext-preview-image", wrappers = ["rick", "tests"] },
     { crate = "ext-preview-pdf", wrappers = ["rick", "tests"] },
     { crate = "ext-preview-hex", wrappers = ["rick", "tests"] },

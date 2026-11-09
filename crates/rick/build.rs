@@ -1,6 +1,7 @@
 //! Records the git hash of the build, which `rick --version` prints after the
-//! version and the About window shows, and gives the binary a run path so
-//! it finds the kernel dylibs and `libstd` beside itself in the bundle.
+//! version and the About window shows, gives the binary a run path so it
+//! finds the kernel dylibs and `libstd` beside itself in the bundle, and on
+//! Windows embeds the icon and the version resource into `rick.exe`.
 //!
 //! The hash comes from `RICK_GIT_HASH` when set (a build outside a checkout
 //! can pass it), else from `git rev-parse`, else it is `unknown`.
@@ -56,6 +57,41 @@ fn main() {
             println!("cargo:rustc-link-arg-bins=-Wl,-rpath,@executable_path");
             println!("cargo:rustc-link-arg-bins=-Wl,-rpath,@executable_path/gstreamer/lib");
         }
+        // The icon and version resource (specs/app-icons.md): Explorer and
+        // the Properties dialog show the Portal burst icon, "Rick" and the
+        // version of Cargo.toml. Windows targets only, and `rick.exe` alone:
+        // the helper `rick-perms` is no application. Build configuration
+        // again, decided by the target.
+        Ok("windows") => windows_resource(manifest),
         _ => {}
+    }
+}
+
+/// Compiles `assets/icons/windows/rick.ico` and the version information
+/// into a resource linked into `rick.exe`. winresource takes `FileVersion`
+/// and `ProductVersion` from the package version cargo hands the build
+/// script (the numbers from major, minor and patch, the strings whole, a
+/// pre-release suffix included). A resource that does not compile fails
+/// the build: an executable without its icon is not the product.
+fn windows_resource(manifest: &Path) {
+    let icon = manifest.join("../../assets/icons/windows/rick.ico");
+    println!("cargo:rerun-if-changed={}", icon.display());
+    let mut resource = winresource::WindowsResource::new();
+    resource
+        .set_icon(&icon.to_string_lossy())
+        .set("ProductName", "Rick")
+        .set("FileDescription", "Rick file manager")
+        .set("OriginalFilename", "rick.exe")
+        .set("InternalName", "rick")
+        .set(
+            "LegalCopyright",
+            "Copyright © 2026 Open-Breach and the Rick contributors. \
+             Licensed under the Apache License, Version 2.0.",
+        );
+    if let Err(error) = resource.compile_for("rick") {
+        println!(
+            "cargo:warning=the icon and version resource of rick.exe did not compile: {error}"
+        );
+        std::process::exit(1);
     }
 }

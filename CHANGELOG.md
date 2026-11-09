@@ -9,6 +9,25 @@ the pull request that brought the change.
 
 ### Added
 
+- SVG and SVGZ previews in `ext-preview-image` (issue 83, SPEC.md *Vector
+  images*): claimed by the `svg` root element, or the gzip magic with the
+  `.svgz` name, never by the extension alone; rasterised with `resvg` at
+  the exact size the pane asks for and again at every change of it — the
+  pane's size for Fit, the intrinsic size at the display scale for the
+  actual-size request — so the picture is sharp at any size and nothing
+  comes from a scaled-up bitmap; the long edge capped at 8192 px with the
+  footer saying so. The intrinsic size is `width` and `height`, else the
+  `viewBox`, else 300 × 150. Only data URIs are honoured: no `href` to a
+  file or URL is followed, no script runs, text is set through usvg's
+  font database over the system fonts. The *Rendered* toggle, on for
+  every newly shown file, switches to the highlighted XML, and the source
+  (inflated for SVGZ) is the text layer, so *Copy* copies the raw SVG and
+  find searches it; the pane's *Copy* inflates a gzip-compressed file
+  before decoding it. A document usvg rejects opens on the source with
+  the parser's message, line and column, in the footer. Footer
+  `SVG · 512 × 512 px · 14.2 KiB`, `viewBox 0 0 24 24` in place of the
+  size when only a viewBox exists; File info plus an Image section
+  (QUESTIONS.md 255, 256) (#91).
 - The app icon on all three platforms and a Linux desktop entry (issue
   88, [`specs/app-icons.md`](specs/app-icons.md), #92). One identifier,
   `rick`, ties the desktop file, the hicolor icon name, the Wayland app id
@@ -16,9 +35,9 @@ the pull request that brought the change.
   to its launcher entry. Every window carries the Portal burst icon from
   `assets/icons/png/rick-256.png` and the app id through eframe (the title
   bar, taskbar and Alt-Tab on Windows and X11), and the About window shows
-  the rings-only symbol at 64 px, rasterised from the SVG by egui_extras's
-  loader; resvg and usvg bring MPL-2.0 into the allowed licences
-  (QUESTIONS.md 255) (#93).
+  the rings-only symbol at 64 px, rasterised from the SVG with resvg, the
+  image previewer's rasteriser, at the drawn size times the window's
+  scale (#93).
 - `rick.exe` carries its icon and version resource: ProductName "Rick",
   FileDescription "Rick file manager", FileVersion and ProductVersion from
   `Cargo.toml` and the Apache-2.0 notice, embedded by `build.rs` through
