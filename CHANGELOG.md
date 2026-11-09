@@ -65,6 +65,26 @@ the pull request that brought the change.
   list, clears on navigation and lights a dot on the button while it is
   on (`Command::TypeFilter`). Panes are separated by a hairline that
   drags to resize; the focused pane shows no border (#71).
+- The file list of the design refresh (issue 60, SPEC.md *File list*,
+  *Row states*, *Empty folder*, *Loading*, *Loading animations*): the
+  columns Name, Size, Type and Modified in that order, Size right-aligned
+  with an em dash for a folder, the three secondary columns in
+  `text/secondary`; the column header a 34 px `bg/subtle` band between two
+  hairlines with 12 px titles and the sort glyph after the sorted one, its
+  separators the only vertical lines of the list; rows with
+  `radius/control` corners inset 6 px from the pane's edges, `bg/subtle`
+  on hover, `bg/selected-soft` with `text/on-selected` when selected in
+  the focused pane and `bg/selected-inactive` in another, a 2 px
+  `accent/focus` ring on the keyboard cursor, the same in the list and
+  icon views. An empty folder shows `FOLDER_OPEN`, *This folder is empty*
+  and the new-folder hint, a filter that matches nothing *No entries match
+  the filter*; while a folder is read and no row has arrived the list
+  shows the **portal burst** — Rick's loading animation, three arc rings
+  around a glow with folder and file glyphs spiralling out, in
+  `accent/focus` — with *Reading folder…* and the count so far. The
+  platform reports the system's reduce-motion setting (`Motion`: GNOME's
+  `enable-animations`, macOS's *Reduce motion*, Windows's client area
+  animation), which stills the portal (#72).
 
 ### Removed
 

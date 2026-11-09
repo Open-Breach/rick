@@ -47,6 +47,7 @@ pub mod overview;
 pub mod palette;
 pub mod pane;
 pub mod paths;
+pub mod portal;
 pub mod preview;
 pub mod properties;
 pub mod question;

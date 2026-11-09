@@ -83,6 +83,8 @@ pub const NETWORK: &str = ph::NETWORK;
 pub const TRASH: &str = ph::TRASH;
 /// A folder.
 pub const FOLDER: &str = ph::FOLDER;
+/// A plain file: the footer's file count, the portal burst's flyers.
+pub const FILE: &str = ph::FILE;
 /// A location on a provider that is not the local disk.
 pub const PROVIDER: &str = ph::HARD_DRIVES;
 /// An archive browsed as a location.
