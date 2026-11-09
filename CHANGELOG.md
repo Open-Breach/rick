@@ -241,6 +241,11 @@ the pull request that brought the change.
   clipped cells had cut all but the one between Size and Type away. The
   hover and drag visuals of the boundaries, the fit on double-click and
   the widths' persistence are issue 79 item 9 (issue 79 item 6).
+- A removable drive's card in This Machine carries an eject button
+  (`EJECT`) at its right edge, vertically centred and always visible,
+  named *Eject <drive>* for the tooltip and the screen reader; a click
+  ejects the drive, as the context menu's *Eject* does. The usage bar's
+  colours and the read-only drives are issue 79 item 8 (issue 79 item 7).
 
 ## [0.2.0] - 2026-11-08
 
