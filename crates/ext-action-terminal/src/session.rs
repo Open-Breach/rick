@@ -8,7 +8,10 @@
 //! file while the pseudo console is open, so that task closes it once the
 //! shell is gone, and the reader stops. The waker rings after every
 //! change, so the tab repaints only then. Dropping the session ends the
-//! shell.
+//! shell. The shell's working directory comes through OSC 7
+//! ([`Console::cwd`]) and whether a job has its terminal from the platform
+//! ([`Console::foreground_job`]), for the tab that follows the console
+//! (specs/system-integration.md §4).
 
 use std::io::{Read, Write};
 use std::path::Path;
@@ -37,6 +40,8 @@ pub struct Session {
     waker: Mutex<Option<ConsoleWaker>>,
     generation: AtomicU64,
     folder: String,
+    /// The shell's process id, for the foreground-job question.
+    shell: Option<u32>,
 }
 
 impl std::fmt::Debug for Session {
@@ -79,10 +84,17 @@ impl Session {
         command.cwd(&dir);
         command.env("TERM", "xterm-256color");
         command.env("COLORTERM", "truecolor");
+        // The shells report their working directory through OSC 7 when
+        // the terminal says it understands it, and the way they all check
+        // is the VTE version (bash and zsh through the distributions'
+        // vte.sh, fish by itself): the version is a recent VTE's
+        // (QUESTIONS.md 265).
+        command.env("VTE_VERSION", "7800");
         let child = pair
             .slave
             .spawn_command(command)
             .map_err(|e| pty_error(&e))?;
+        let shell = child.process_id();
         drop(pair.slave);
         let reader = pair.master.try_clone_reader().map_err(|e| pty_error(&e))?;
         let writer = pair.master.take_writer().map_err(|e| pty_error(&e))?;
@@ -99,6 +111,7 @@ impl Session {
             waker: Mutex::new(None),
             generation: AtomicU64::new(0),
             folder,
+            shell,
         });
         session.start_reader(reader);
         session.start_waiter(child);
@@ -231,5 +244,21 @@ impl Console for Session {
 
     fn generation(&self) -> u64 {
         self.generation.load(Ordering::Relaxed)
+    }
+
+    /// The directory of the shell's last OSC 7: `file://<host>/<path>`,
+    /// the host being this machine's since the shell runs here.
+    fn cwd(&self) -> Option<std::path::PathBuf> {
+        let uri = lock(&self.screen).cwd()?.to_owned();
+        let rest = uri.strip_prefix("file://")?;
+        let path = rest.find('/').map(|i| &rest[i..])?;
+        ext::platform::paths::from_uri(&format!("file://{path}"), "file")
+    }
+
+    fn foreground_job(&self) -> Option<bool> {
+        if lock(&self.exit).is_some() {
+            return None;
+        }
+        ext::platform::process::foreground_job(self.shell?)
     }
 }
