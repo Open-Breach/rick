@@ -1408,6 +1408,7 @@ fn eject_goes_through_the_platform_and_the_list_follows() {
         device: None,
         total: Some(100),
         free: Some(50),
+        read_only: false,
     });
     h.fake.add_volume(platform::Volume {
         name: "data".into(),
@@ -1417,6 +1418,7 @@ fn eject_goes_through_the_platform_and_the_list_follows() {
         device: None,
         total: Some(100),
         free: Some(50),
+        read_only: false,
     });
     h.send(Command::RefreshVolumes);
     assert!(wait_until(&mut h, Duration::from_secs(5), |h| {
@@ -1479,6 +1481,7 @@ fn the_volumes_reach_the_model() {
         device: None,
         total: Some(100),
         free: Some(50),
+        read_only: false,
     });
     h.send(Command::RefreshVolumes);
     assert!(wait_until(&mut h, Duration::from_secs(5), |h| {

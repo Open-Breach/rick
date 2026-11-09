@@ -197,6 +197,7 @@ impl Volumes for Native {
             };
             let (total, free) = crate::volumes::space(&mount_point)
                 .map_or((None, None), |(t, f)| (Some(t), Some(f)));
+            let read_only = read_only_of(&mount_point);
             out.push(Volume {
                 name,
                 mount_point,
@@ -205,6 +206,7 @@ impl Volumes for Native {
                 device: None,
                 total,
                 free,
+                read_only,
             });
         }
         out.sort_by(|a, b| a.mount_point.cmp(&b.mount_point));
@@ -255,6 +257,17 @@ fn fs_type_of(mount_point: &Path) -> String {
             String::from_utf8_lossy(&bytes).into_owned()
         })
         .unwrap_or_default()
+}
+
+/// `MNT_RDONLY` of `sys/mount.h`: the volume is mounted read-only.
+const MNT_RDONLY: u32 = 0x0000_0001;
+
+/// Whether the file system at `mount_point` is mounted read-only, from
+/// `statfs`'s flags.
+fn read_only_of(mount_point: &Path) -> bool {
+    rustix::fs::statfs(mount_point)
+        .ok()
+        .is_some_and(|stat| stat.f_flags & MNT_RDONLY != 0)
 }
 
 /// The kind of a mounted volume: network by file system type, optical by
@@ -338,6 +351,7 @@ impl Mount for Native {
             device: None,
             total,
             free,
+            read_only: format == ImageFormat::Iso,
         })
     }
 }

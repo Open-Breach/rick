@@ -320,6 +320,7 @@ fn volume(name: &str, mount: &Path, kind: platform::VolumeKind) -> platform::Vol
         device: None,
         total: Some(100 << 20),
         free: Some(40 << 20),
+        read_only: false,
     }
 }
 
@@ -1481,4 +1482,51 @@ fn a_removable_drives_card_has_an_eject_button_at_its_right_edge() {
     assert!(step_until(&mut harness, Duration::from_secs(5), |_| {
         fake.ejected() == [stick.path().to_path_buf()]
     }));
+}
+
+/// Issue 79 item 8: a read-only drive's card shows no percentage, its bar
+/// is named *Read-only* for the tooltip and the screen reader, and the
+/// card itself says so; a writable drive keeps its percentage.
+#[test]
+fn a_read_only_drives_card_has_no_percentage_and_its_bar_says_read_only() {
+    let dir = tree();
+    let fake = Arc::new(Fake::new().unwrap_or_else(|e| panic!("{e}")));
+    let live = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+    fake.add_volume(volume("data", dir.path(), platform::VolumeKind::Fixed));
+    let mut iso = volume("LIVE", live.path(), platform::VolumeKind::Removable);
+    iso.read_only = true;
+    iso.total = Some(4 << 30);
+    iso.free = Some(1 << 30);
+    fake.add_volume(iso);
+    let mut harness = harness_with(dir.path(), &fake.config_dir(), fake.clone(), Vec::new());
+    assert!(step_until(&mut harness, Duration::from_secs(5), |h| {
+        h.state().app().model().volumes.len() == 2
+    }));
+    // The writable drive's card carries its percentage, the read-only
+    // drive's the word instead, and nothing says 75 %.
+    harness.get_by_label("data · 60%");
+    harness.get_by_label("LIVE · Read-only");
+    assert!(harness.query_by_label_contains("75%").is_none());
+    // The bar is a widget named Read-only inside the card, and hovering it
+    // shows the tooltip.
+    let card = panel_rects(&harness, "LIVE")[0];
+    let bar = harness.get_by_label("Read-only").rect();
+    assert!(card.contains_rect(bar), "bar {bar:?} in card {card:?}");
+    // One move, then the pointer rests: egui shows the tooltip after its
+    // delay.
+    harness.hover_at(bar.center());
+    let started = Instant::now();
+    loop {
+        harness.step();
+        if harness.query_all_by_label("Read-only").count() >= 2 {
+            break;
+        }
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "hovering the bar never showed the tooltip"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    // The eject button is there too: the drive is removable.
+    harness.get_by_label("Eject LIVE");
 }

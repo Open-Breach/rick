@@ -183,6 +183,9 @@ pub(super) fn mount(path: &Path) -> Result<Volume, Error> {
         device: Some(target),
         total,
         free,
+        // An ISO is read-only by nature; a raw image's mount reports itself
+        // through the volume list the moment it is listed.
+        read_only: format == ImageFormat::Iso,
     })
 }
 
