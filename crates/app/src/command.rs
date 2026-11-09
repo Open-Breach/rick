@@ -530,6 +530,10 @@ pub enum Command {
         /// The new name.
         to: String,
     },
+    /// System integration (specs/system-integration.md §6): run the
+    /// check, apply the dialog's rows, add or restore one item from
+    /// Settings → Integration, reset the choices.
+    Integration(crate::IntegrationCommand),
 }
 
 /// What the application tells the UI happened. The model already reflects
@@ -691,6 +695,22 @@ pub enum Event {
         /// The format remembered in `core.toml`, for the toggle.
         format: ops::hash::Format,
     },
+    /// An integration check finished
+    /// ([`IntegrationCommand::Check`](crate::IntegrationCommand::Check));
+    /// the model's `integration` holds what it found.
+    IntegrationChecked {
+        /// The check at startup found an item missing or drifted and the
+        /// user has not said *Don't ask again*: open the dialog.
+        ask: bool,
+    },
+    /// The rows of an apply, an add or a restore were performed; the
+    /// records hold what each wrote, and a check of what is there now
+    /// follows.
+    IntegrationApplied {
+        /// The rows that could not be set up; each was reported through
+        /// [`Event::Notify`].
+        failed: Vec<platform::integration::Item>,
+    },
 }
 
 /// What the Properties dialogue shows for one entry.
@@ -833,6 +853,14 @@ impl fmt::Debug for Event {
                 .field("pane", pane)
                 .field("hashes", hashes)
                 .field("format", format)
+                .finish(),
+            Self::IntegrationChecked { ask } => f
+                .debug_struct("IntegrationChecked")
+                .field("ask", ask)
+                .finish(),
+            Self::IntegrationApplied { failed } => f
+                .debug_struct("IntegrationApplied")
+                .field("failed", failed)
                 .finish(),
         }
     }

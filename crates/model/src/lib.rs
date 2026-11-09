@@ -6,8 +6,9 @@
 //! [`Listing`] with its sort, group, filter and selection, the [`ViewMode`]
 //! with the [`Tree`] state of expanded folders and the scroll offset, plus
 //! the job table, the side panel's data (the [`Places`], the volumes, the
-//! cloud and network rows, the [`TrashView`]), the name conflicts jobs wait on and the
-//! [`Settings`] snapshot. All windows share the one model, so a job
+//! cloud and network rows, the [`TrashView`]), the name conflicts jobs wait on, the
+//! [`Settings`] snapshot and the [`Integration`] items as the last check
+//! left them. All windows share the one model, so a job
 //! started in one shows in every other. It applies listing batches and
 //! filesystem changes and derives the visible rows; it performs no I/O.
 //! `app` mutates it in response to `Command`s; the UI only reads it.
@@ -16,6 +17,7 @@
 
 #![forbid(unsafe_code)]
 
+mod integration;
 mod listing;
 mod panel;
 mod session;
@@ -27,6 +29,10 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 pub use ext::PaneId;
 use ext::{CellValue, Decoration, FsChange};
+pub use integration::{
+    Applying, Integration, IntegrationItem, IntegrationSettings, ItemRecord, ItemState, ItemStatus,
+    day_of, decline, fold_check, reset_choices, set_up,
+};
 pub use listing::{
     Column, FOLDER_TYPE, Group, IconSize, Listing, Sort, SortDir, ViewMode, ViewSpec, type_of,
 };
@@ -807,6 +813,10 @@ pub struct Model {
     pub trash: TrashView,
     /// The settings snapshot.
     pub settings: Settings,
+    /// The integration items as the last check left them
+    /// (specs/system-integration.md §6): what the dialog and Settings →
+    /// Integration show.
+    pub integration: Integration,
     /// The title-row search box's query over the search indexes.
     pub index_search: IndexSearch,
     /// The search indexes available right now, by extension id: the ones
@@ -852,6 +862,7 @@ impl Model {
             network: Vec::new(),
             trash: TrashView::default(),
             settings,
+            integration: Integration::default(),
             index_search: IndexSearch::default(),
             search_indexes: Vec::new(),
             subtree_search: false,

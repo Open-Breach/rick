@@ -3295,7 +3295,56 @@ Once answered, an entry keeps its number and gains a dated decision line.
     favourites are read from `~/.config/cosmic/
     com.system76.CosmicAppList/v1/favorites`, the list its dock keeps.
 
-283. (issue 80, rule 7, 2026-11-09) *Drag ghost*: "a real snapshot of the
+283. (system integration, issue 120, 2026-11-09) §6.1: "one record per
+    integration item (§7): `state = "set-up" | "declined" | "unsupported"
+    | "missing"` and the date of the last check". Three things the record
+    does not settle: where what Rick wrote for an item is kept, so it can
+    be undone (§7.2 keeps the previous values of *Make Rick the default*
+    "in `rick.toml`"); how *drifted* is remembered between starts, there
+    being no fifth state; and how fine the date is — a time would rewrite
+    `rick.toml` at every start.
+    Assumed: the record is `[integration.items.<item>]` with `state`,
+    `checked`, and, when Rick wrote something, `files` (the files and
+    links created, `~` for the home) and `previous` (the values replaced,
+    as they were). A drifted item's record keeps `state = "set-up"`:
+    drift is a set-up record meeting an item the check finds missing, at
+    this start and every later one until it is restored or switched off.
+    `checked` is the calendar day in UTC, so checks change the file at
+    most once a day; the time on Settings' status line is the running
+    session's.
+
+284. (system integration, issue 120, 2026-11-09) §6.1: "the preference
+    switches (shell integration, *Check integration at startup*)" and
+    "`[integration] ask = false`" — the two switches have no key, and the
+    spec does not say what each leaves running.
+    Assumed: `[integration] check_at_startup` and `shell_integration`,
+    both `true` by default, beside `ask`. With `ask = false` the startup
+    check still runs, so Settings shows drift, and only the dialog stays
+    closed; with `check_at_startup = false` nothing is checked until
+    *Check again* (or Settings → Integration is opened). With
+    `shell_integration = false` the embedded console and its tab stop
+    following each other, both ways, and switching it on again catches up
+    on nothing.
+
+285. (system integration, issue 120, 2026-11-09) §6.1: "**Reset choices**,
+    which clears every declined mark so the dialog asks once more", while
+    the Figma notes say of the per-row switch and of the footer checkbox
+    "Both are reversible in Settings → Integration (“Reset choices”)".
+    Assumed: *Reset choices* turns every declined record into *missing*
+    and sets `ask = true` as well, so the dialog does ask at the next
+    start whichever way it was silenced.
+
+286. (system integration, issue 120, 2026-11-09) §6.1: "**Apply N items**
+    performs the switched-on rows"; only the dock is said to be one whose
+    failure "never blocks the rest". What a failing row of any other item
+    does to the rows after it, and what its record becomes, is not said.
+    Assumed: every row is performed for itself, in the dialog's order; a
+    row that fails is reported (a warning for a *Best effort* item, an
+    error otherwise), the rows after it are still performed, and its
+    record stays as it was — *missing*, so the next start asks again, or
+    *set-up* for a drifted one. Nothing is retried by itself.
+
+287. (issue 80, rule 7, 2026-11-09) *Drag ghost*: "a real snapshot of the
     grabbed pane … drawn at 70 % opacity". A picture of the frame would
     give one even 70 %, but the backend delivers a screenshot for its
     root viewport only (eframe 0.36 paints an immediate viewport with no
@@ -3309,7 +3358,7 @@ Once answered, an entry keeps its number and gains a dated decision line.
     corners are cut square under the rounded border. A paint callback in
     the pane is left out of its ghost.
 
-284. (issue 80, rule 7, 2026-11-09) *Drag ghost*: the ghost "moves rigidly
+288. (issue 80, rule 7, 2026-11-09) *Drag ghost*: the ghost "moves rigidly
     with the cursor". A window paints inside itself only: once the cursor
     leaves the window a pane or a tab was dragged from, nothing of Rick
     is under it to paint the ghost on, unless it is over another Rick
