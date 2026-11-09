@@ -82,7 +82,10 @@ line and files are refused with the not-allowed indicator; a drag that
 leaves the window is handed to the platform's drag source one frame later,
 once the ghost is gone, and followed until the platform says it ended; a
 drop from outside lands where the platform says the cursor is, or in the
-focused pane's folder where it cannot say. It never mutates
+focused pane's folder where it cannot say. When an integration apply
+ends with Rick installed to the standard location, the shell saves the
+session and hands the installed binary to the `Relaunch` hook the binary
+gave it. It never mutates
 the model: everything the user does becomes a `Command` handed to `app`,
 and it re-renders from the model. It depends on `types`, `runtime`,
 `platform`, `ext`, `vfs-local` (the local provider's id, for dropped

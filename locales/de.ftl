@@ -311,3 +311,4 @@ integration-item-show-in-folder = „Im Ordner anzeigen“ aus anderen Apps
 integration-item-rick-command = Befehl rick
 integration-item-dock-favourite = Dock-Favorit
 integration-failed = { $item } konnte nicht eingerichtet werden: { $error }
+integration-relaunch-failed = Rick konnte nicht von { $path } gestartet werden: { $error }

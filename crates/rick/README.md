@@ -26,7 +26,12 @@ runs every request on the UI thread between two frames, through the app's
 external-work channel, and raises the window it changed through the
 platform's activation. The command line and the instance are the crate's
 library (`cli`, `instance`), so the integration tests drive them against
-the built binary. It is the only crate that uses `anyhow`. Its second
+the built binary. When the integration dialog has installed Rick to the
+standard location, the binary continues from that copy by the same rules
+(`instance::relaunch`): it stops serving and frees the endpoint, starts the
+installed binary on the same config directory, and exits once the new
+process answers as the instance; should nothing answer within twenty
+seconds it takes the endpoint back, stays and says so. It is the only crate that uses `anyhow`. Its second
 binary, `rick-perms`, is the privileged helper: the one program Rick runs
 as the administrator, through the platform's prompt, to apply a permission
 change the user may not make by themselves (`platform::perms::helper`);

@@ -410,3 +410,4 @@ integration-item-show-in-folder = “Show in folder” from other apps
 integration-item-rick-command = rick command
 integration-item-dock-favourite = Dock favourite
 integration-failed = { $item } could not be set up: { $error }
+integration-relaunch-failed = Rick could not be started from { $path }: { $error }

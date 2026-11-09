@@ -72,7 +72,7 @@ pub use inline::{EditKind, RowEdit};
 pub use keys::{Intent, KeyMap};
 pub use pane::{HANDLE_WIDTH, footer_height, toolbar_height};
 pub use shell::{
-    APP_ID, DOCK_TILE, DOCK_TILE_PITCH, Dispatched, Request, RickUi, TabUi, WindowUi,
+    APP_ID, DOCK_TILE, DOCK_TILE_PITCH, Dispatched, Relaunch, Request, RickUi, TabUi, WindowUi,
     viewport_builder,
 };
 
@@ -81,7 +81,9 @@ pub use shell::{
 /// version, commit, target, build date, toolchain, contributors and the
 /// generated component list ([`about::Build`]); `externals` is where the
 /// single-instance endpoint delivers a second launch's command line,
-/// drained before every frame of the first window.
+/// drained before every frame of the first window; `relaunch` continues
+/// Rick from the copy the integration dialog installed it to
+/// ([`Relaunch`]).
 ///
 /// # Errors
 ///
@@ -93,6 +95,7 @@ pub fn run(
     app: App,
     host: Arc<EguiHost>,
     externals: Option<app::ExternalReceiver>,
+    relaunch: Option<Relaunch>,
 ) -> eframe::Result {
     // Rick draws its own title row. Where the system keeps its controls
     // (macOS), the title bar goes but the window keeps its buttons; elsewhere
@@ -106,6 +109,7 @@ pub fn run(
     };
     let mut app = Some(app);
     let mut externals = externals;
+    let mut relaunch = relaunch;
     let mut build = Some(build);
     eframe::run_native(
         title,
@@ -116,6 +120,9 @@ pub fn run(
             let mut ui = RickUi::new(app, host, &cc.egui_ctx).with_build(build);
             if let Some(externals) = externals.take() {
                 ui = ui.with_externals(externals);
+            }
+            if let Some(relaunch) = relaunch.take() {
+                ui = ui.with_relaunch(relaunch);
             }
             Ok(Box::new(ui))
         }),

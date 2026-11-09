@@ -738,7 +738,17 @@ pub struct RickUi {
     /// handed over through the single-instance endpoint), run against the
     /// application before the root window's frame.
     externals: Option<app::ExternalReceiver>,
+    /// Continues from the copy Rick was installed to: the binary's hook,
+    /// called with the installed binary once the session is saved.
+    relaunch: Option<Relaunch>,
 }
+
+/// What continues Rick from the copy it was installed to
+/// (specs/system-integration.md §6.1): given the installed binary, it
+/// starts that copy and has the running process exit once the new one
+/// answers on the single-instance endpoint. The binary's, since it holds
+/// the endpoint; without one (the tests) nothing is relaunched.
+pub type Relaunch = Arc<dyn Fn(&std::path::Path) + Send + Sync>;
 
 /// How many dispatched intents are remembered.
 const RECENTS: usize = 64;
@@ -966,7 +976,17 @@ impl RickUi {
             attached: false,
             viewports,
             externals: None,
+            relaunch: None,
         }
+    }
+
+    /// Takes the hook that continues Rick from the copy it was installed
+    /// to: called when an integration apply ends with an install, after
+    /// the session was saved.
+    #[must_use]
+    pub fn with_relaunch(mut self, relaunch: Relaunch) -> Self {
+        self.relaunch = Some(relaunch);
+        self
     }
 
     /// Takes the work from outside the windows: the single-instance
@@ -1423,9 +1443,26 @@ impl RickUi {
                     }
                     self.views.insert(tab, view);
                 }
+                Event::IntegrationApplied {
+                    relaunch: Some(binary),
+                    ..
+                } => self.relaunch_from(&binary),
                 _ => {}
             }
         }
+    }
+
+    /// Rick was installed to the standard location: the session is saved
+    /// for the installed copy to restore, and the binary's hook starts it.
+    fn relaunch_from(&mut self, binary: &std::path::Path) {
+        let Some(relaunch) = self.relaunch.clone() else {
+            return;
+        };
+        if let Err(error) = self.app.save_session() {
+            tracing::warn!(%error, "session not saved before the relaunch");
+        }
+        tracing::info!(binary = %binary.display(), "continuing from the installed copy");
+        relaunch(binary);
     }
 
     /// Draws the text windows and drops the closed ones.

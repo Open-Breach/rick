@@ -27,7 +27,7 @@ use std::fmt::Write as _;
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, PoisonError};
 
 use anyhow::Context as _;
 use platform::{Activation as _, ConfigDir as _, SingleInstance as _};
@@ -375,16 +375,103 @@ fn run() -> anyhow::Result<ExitCode> {
     // launch's command line runs on the UI thread between two frames.
     let (externals, receiver) = app::external_channel();
     let endpoint = listener.as_ref().map(|l| l.endpoint().clone());
-    let serving = listener.map(|listener| instance::serve(listener, externals));
-    let result = ui_egui::run("Rick", build, app, ui, Some(receiver))
+    let serving: Serving = Arc::new(Mutex::new(
+        listener.map(|listener| instance::serve(listener, externals.clone())),
+    ));
+    let relaunch = endpoint.clone().map(|endpoint| {
+        relauncher(
+            endpoint,
+            Arc::clone(&serving),
+            externals,
+            launch.config_dir.clone(),
+        )
+    });
+    let result = ui_egui::run("Rick", build, app, ui, Some(receiver), relaunch)
         .context("the window could not be opened");
+    let serving = serving
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .take();
+    // A relaunch that handed the endpoint to the installed copy left no
+    // task behind, and the endpoint is the new instance's now.
     if let Some(serving) = serving {
         serving.abort();
-    }
-    if let Some(endpoint) = endpoint {
-        endpoint.unbind();
+        if let Some(endpoint) = endpoint {
+            endpoint.unbind();
+        }
     }
     result.map(|()| ExitCode::SUCCESS)
+}
+
+/// The task that serves the single-instance endpoint, while this process
+/// is the instance.
+type Serving = Arc<Mutex<Option<tokio::task::JoinHandle<()>>>>;
+
+/// What continues Rick from the copy it was installed to
+/// (specs/system-integration.md §6.1), by the single instance's rules:
+/// this process stops serving and frees the endpoint, starts the
+/// installed binary on the same config directory, and exits once the new
+/// process answers as the instance. Should it not answer, this process
+/// takes the endpoint back, stays, and says so.
+fn relauncher(
+    endpoint: platform::instance::Endpoint,
+    serving: Serving,
+    externals: app::ExternalSender,
+    config_dir: Option<PathBuf>,
+) -> ui_egui::Relaunch {
+    Arc::new(move |binary: &Path| {
+        let binary = binary.to_path_buf();
+        let endpoint = endpoint.clone();
+        let serving = Arc::clone(&serving);
+        let externals = externals.clone();
+        let mut args: Vec<OsString> = Vec::new();
+        if let Some(dir) = &config_dir {
+            args.push("--config-dir".into());
+            args.push(dir.clone().into_os_string());
+        }
+        runtime::handle().spawn(async move {
+            let running = serving
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .take();
+            if let Some(running) = running {
+                running.abort();
+                // The listener is gone when the task is.
+                let _ = running.await;
+            }
+            endpoint.unbind();
+            let outcome =
+                instance::relaunch(&endpoint, &binary, &args, instance::RELAUNCH_PATIENCE).await;
+            match outcome {
+                Ok(()) => {
+                    externals.send(Box::new(|app, _events| app.request_exit()));
+                }
+                Err(error) => {
+                    tracing::warn!(%error, binary = %binary.display(), "not relaunched");
+                    match endpoint.bind().await {
+                        Ok(listener) => {
+                            *serving.lock().unwrap_or_else(PoisonError::into_inner) =
+                                Some(instance::serve(listener, externals.clone()));
+                        }
+                        Err(error) => {
+                            tracing::warn!(%error, "the single-instance endpoint was not taken back");
+                        }
+                    }
+                    let text = ext::t!(
+                        "integration-relaunch-failed",
+                        path = binary.display().to_string(),
+                        error = error.to_string()
+                    );
+                    externals.send(Box::new(move |_app, events| {
+                        events.push(app::Event::Notify {
+                            level: ext::Level::Error,
+                            text,
+                        });
+                    }));
+                }
+            }
+        });
+    })
 }
 
 /// A plugin as the Extensions screen lists it.
