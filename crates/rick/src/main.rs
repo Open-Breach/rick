@@ -296,7 +296,7 @@ mod tests {
         assert_eq!(found[0], a.canonicalize().unwrap_or(a));
         assert_eq!(found[1], b.canonicalize().unwrap_or(b));
         assert_eq!(found[2], missing);
-        assert!(folders(&[]).is_empty());
+        assert_eq!(folders(&[]), Vec::<PathBuf>::new());
         let location = location(&found[0]);
         assert_eq!(location.provider, vfs_local::PROVIDER_ID);
     }
