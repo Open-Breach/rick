@@ -116,6 +116,29 @@ const fn native_mountable() -> &'static [ImageFormat] {
     }
 }
 
+/// The operating system and desktop this process runs on, one line for the
+/// About dialog's details (specs/about-dialog.md): on Linux the
+/// distribution's `PRETTY_NAME` from `/etc/os-release` and
+/// `XDG_CURRENT_DESKTOP` when set (`Ubuntu 24.04.1 LTS · GNOME`); on macOS
+/// the product version (`macOS 15.1`); on Windows the edition, display
+/// version and build (`Windows 11 Pro 24H2 (build 26100)`). Never fails:
+/// what cannot be read is left out, down to the bare name of the system.
+#[must_use]
+pub fn os_description() -> String {
+    #[cfg(target_os = "linux")]
+    {
+        linux::os_description()
+    }
+    #[cfg(target_os = "macos")]
+    {
+        macos::os_description()
+    }
+    #[cfg(windows)]
+    {
+        windows::os_description()
+    }
+}
+
 /// Whether the platform has a properties dialogue of its own
 /// ([`Properties::show`] opens it): Windows and macOS. Rick's own dialogue
 /// offers it as *System properties…* there.
