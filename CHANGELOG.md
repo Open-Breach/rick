@@ -7,6 +7,42 @@ the pull request that brought the change.
 
 ## [Unreleased]
 
+### Added
+
+- The app icon on all three platforms and a Linux desktop entry (issue
+  88, [`specs/app-icons.md`](specs/app-icons.md), #92). One identifier,
+  `rick`, ties the desktop file, the hicolor icon name, the Wayland app id
+  and `StartupWMClass` together, so GNOME and KDE match the running window
+  to its launcher entry. Every window carries the Portal burst icon from
+  `assets/icons/png/rick-256.png` and the app id through eframe (the title
+  bar, taskbar and Alt-Tab on Windows and X11), and the About window shows
+  the rings-only symbol at 64 px, rasterised from the SVG by egui_extras's
+  loader; resvg and usvg bring MPL-2.0 into the allowed licences
+  (QUESTIONS.md 255) (#93).
+- `rick.exe` carries its icon and version resource: ProductName "Rick",
+  FileDescription "Rick file manager", FileVersion and ProductVersion from
+  `Cargo.toml` and the Apache-2.0 notice, embedded by `build.rs` through
+  `winresource` for Windows targets only, so Explorer and the Properties
+  dialog show them (#95).
+- The macOS archive is `Rick.app` zipped: the release workflow lays the
+  whole bundle out in `Contents/MacOS` (plugins beside the binary as
+  everywhere), `Info.plist` from `packaging/macos/Info.plist` with the
+  release's version and `Contents/Resources/Rick.icns`, so Finder and the
+  Dock show the icon; unsigned, as before (#97).
+- The Linux archive carries `share/applications/rick.desktop`
+  (`packaging/linux/rick.desktop`: `Exec=rick %F`, `Icon=rick`,
+  `StartupWMClass=rick`, `MimeType=inode/directory;`) and the icons under
+  `share/icons/hicolor/` in the XDG layout, so one copy of `share/` into
+  `~/.local/share/` plus `rick` on the PATH installs it, and the tarball
+  installer finds the entry and the icons where it looks (#96).
+- `rick <folder>…` opens every folder on the command line in a tab of its
+  own, as the desktop entry's `%F` passes the selected folders; an argument
+  that names nothing is passed on as a location rather than failing the
+  start (#94).
+- The README's install paragraph: `share/` and the PATH or the installer
+  plugin on Linux, `Rick.app` to Applications on macOS, nothing new on
+  Windows; no install script (#98).
+
 ### Changed
 
 - The workspace version is `0.3.0-dev` until 0.3.0 is tagged.
