@@ -451,9 +451,13 @@ fn libstd(cargo: &std::ffi::OsStr) -> Result<Vec<PathBuf>> {
 
 /// Gives `command`, a program of `profile_dir` built with
 /// `-C prefer-dynamic`, the dynamic library search path it needs: the
-/// profile directory (the uplifted kernel dylibs), cargo's `deps` beside it
-/// and the directories of `libstd`, ahead of what the variable holds. Every
-/// platform's variable is set; the loader reads the one it knows.
+/// profile directory (the uplifted kernel dylibs), cargo's `deps` beside it,
+/// the directories of `libstd` and, when `RICK_GSTREAMER_DIR` names a
+/// GStreamer runtime, its `lib` and `bin` (the media plugin built with its
+/// `gstreamer` feature names the libraries through `@rpath` on macOS, which
+/// only the `rick` binary's run path resolves), ahead of what the variable
+/// holds. Every platform's variable is set; the loader reads the one it
+/// knows.
 fn with_library_path(command: &mut Command, profile_dir: &Path, libstd: &[PathBuf]) -> Result<()> {
     let mut dirs: Vec<PathBuf> = vec![profile_dir.to_path_buf(), profile_dir.join("deps")];
     for lib in libstd {
@@ -461,6 +465,14 @@ fn with_library_path(command: &mut Command, profile_dir: &Path, libstd: &[PathBu
             && !dirs.iter().any(|known| known == dir)
         {
             dirs.push(dir.to_path_buf());
+        }
+    }
+    if let Some(gstreamer) = std::env::var_os("RICK_GSTREAMER_DIR") {
+        for sub in ["lib", "bin"] {
+            let dir = Path::new(&gstreamer).join(sub);
+            if dir.is_dir() {
+                dirs.push(dir);
+            }
         }
     }
     for var in ["LD_LIBRARY_PATH", "DYLD_LIBRARY_PATH", "PATH"] {
