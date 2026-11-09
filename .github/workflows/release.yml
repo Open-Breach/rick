@@ -10,7 +10,11 @@ name: release
 # Windows, see .github/scripts/sevenzip.sh) — plus LICENSE,
 # README, CHANGELOG and the third-party
 # licenses, and on Linux the desktop entry and the icons under share/ in
-# the XDG layout (specs/app-icons.md); a smoke test of every archive; then a GitHub Release with the archives, their
+# the XDG layout (specs/app-icons.md); on macOS the bundle goes into
+# Rick.app (Contents/MacOS/ with the plugins beside the binary as
+# everywhere, Info.plist from packaging/macos/ with the version filled in,
+# Resources/Rick.icns) and the archive is the folder with Rick.app and the
+# texts, zipped with ditto; a smoke test of every archive; then a GitHub Release with the archives, their
 # SHA-256 sums and the tag's changelog section as its body. A tag with a
 # pre-release suffix (v0.1.0-rc1) makes a draft pre-release; a plain tag
 # publishes. Run by hand from a branch with a tag name, it is a dry run: the
@@ -191,7 +195,26 @@ jobs:
           exe=""
           if [ "${{ runner.os }}" = "Windows" ]; then exe=".exe"; fi
           mkdir -p "dist/$NAME"
-          cp -R target/release/bundle/. "dist/$NAME/"
+          # macOS: Rick.app (specs/app-icons.md). Contents/MacOS holds the
+          # whole bundle — the binary, the kernel dylibs and libstd, pdfium,
+          # the GStreamer runtime and plugins/, as the binary's run path and
+          # the plugin lookup expect them beside it; Info.plist comes from
+          # the template with the release's version (the tag's release
+          # part as the short version, the whole tag as the build version);
+          # the icon set is the committed .icns. The texts sit beside the
+          # bundle in the archive's folder.
+          if [ "${{ runner.os }}" = "macOS" ]; then
+            app="dist/$NAME/Rick.app/Contents"
+            mkdir -p "$app/MacOS" "$app/Resources"
+            cp -R target/release/bundle/. "$app/MacOS/"
+            cp assets/icons/macos/Rick.icns "$app/Resources/Rick.icns"
+            sed -e "s/@SHORT_VERSION@/${VERSION%%-*}/g" -e "s/@VERSION@/$VERSION/g" packaging/macos/Info.plist > "$app/Info.plist"
+            plutil -lint "$app/Info.plist"
+            bin="$app/MacOS"
+          else
+            cp -R target/release/bundle/. "dist/$NAME/"
+            bin="dist/$NAME"
+          fi
           cp LICENSE README.md CHANGELOG.md THIRD-PARTY-LICENSES.md "dist/$NAME/"
           # Linux: the desktop entry and the icons in the XDG layout under
           # share/ (specs/app-icons.md), so that one copy of share/ into
@@ -204,11 +227,16 @@ jobs:
           fi
           # The 7-Zip licence among the licences at the root as well as
           # beside the library.
-          cp "dist/$NAME/plugins/vfs-archive/7-Zip-License.txt" "dist/$NAME/7-Zip-License.txt"
+          cp "$bin/plugins/vfs-archive/7-Zip-License.txt" "dist/$NAME/7-Zip-License.txt"
           ls -lR "dist/$NAME"
           cd dist
           if [ "${{ runner.os }}" = "Windows" ]; then
             7z a -tzip "$NAME.zip" "$NAME" > /dev/null
+            archive="$NAME.zip"
+          elif [ "${{ runner.os }}" = "macOS" ]; then
+            # ditto keeps the bundle's permissions and attributes, as
+            # Finder's own Compress does.
+            ditto -c -k --keepParent "$NAME" "$NAME.zip"
             archive="$NAME.zip"
           else
             tar czf "$NAME.tar.gz" "$NAME"
@@ -274,12 +302,37 @@ jobs:
           cd dist
           if command -v sha256sum > /dev/null; then sha256sum -c "$name".*.sha256; else shasum -a 256 -c "$name".*.sha256; fi
           mkdir empty && cd empty
-          if [ -f "../$name.zip" ]; then 7z x "../$name.zip" > /dev/null; else tar xzf "../$name.tar.gz"; fi
+          case "${{ runner.os }}" in
+            Windows) 7z x "../$name.zip" > /dev/null ;;
+            macOS) ditto -x -k "../$name.zip" . ;;
+            *) tar xzf "../$name.tar.gz" ;;
+          esac
           cd "$name"
           ls -l
-          for file in "rick$exe" LICENSE README.md CHANGELOG.md THIRD-PARTY-LICENSES.md 7-Zip-License.txt; do
+          for file in LICENSE README.md CHANGELOG.md THIRD-PARTY-LICENSES.md 7-Zip-License.txt; do
             test -f "$file" || { echo "missing $file"; exit 1; }
           done
+          # macOS: the bundle (specs/app-icons.md) — a valid Info.plist
+          # naming the binary and the icon, the icon set, and the binary
+          # with everything beside it in Contents/MacOS, where the checks
+          # below look.
+          if [ "${{ runner.os }}" = "macOS" ]; then
+            plist=Rick.app/Contents/Info.plist
+            plutil -lint "$plist"
+            for key in CFBundleIdentifier CFBundleExecutable CFBundleIconFile CFBundleShortVersionString CFBundleVersion; do
+              echo "$key = $(/usr/libexec/PlistBuddy -c "Print :$key" "$plist")"
+            done
+            test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$plist")" = "org.open-breach.rick" || { echo "wrong bundle identifier"; exit 1; }
+            test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$plist")" = "rick" || { echo "wrong bundle executable"; exit 1; }
+            test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIconFile' "$plist")" = "Rick" || { echo "wrong bundle icon"; exit 1; }
+            test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$plist")" = "$version" || { echo "wrong bundle version"; exit 1; }
+            test -f Rick.app/Contents/Resources/Rick.icns || { echo "no Rick.icns in the bundle"; exit 1; }
+            cmp Rick.app/Contents/Resources/Rick.icns "$GITHUB_WORKSPACE/assets/icons/macos/Rick.icns" || { echo "Rick.icns is not the committed one"; exit 1; }
+            test -d Rick.app/Contents/MacOS/plugins || { echo "no plugins/ beside the binary in the bundle"; exit 1; }
+            cd Rick.app/Contents/MacOS
+            ls -l
+          fi
+          test -f "rick$exe" || { echo "missing rick$exe"; exit 1; }
           test -f libpdfium.so || test -f libpdfium.dylib || test -f pdfium.dll || { echo "no pdfium library beside the binary"; exit 1; }
           # The GStreamer runtime the media previewer plays through, bundled
           # on macOS and Windows (QUESTIONS.md 106).
@@ -324,7 +377,11 @@ jobs:
           # next to rick, with no setting (a fresh runner) and no system
           # pdfium. The example has no run path of its own, so the library
           # path names the directory for the kernel dylibs and libstd.
-          cp "../../../check/pdfium_check$exe" .
+          if [ "${{ runner.os }}" = "macOS" ]; then
+            cp "../../../../../../check/pdfium_check$exe" .
+          else
+            cp "../../../check/pdfium_check$exe" .
+          fi
           chmod +x "pdfium_check$exe"
           LD_LIBRARY_PATH=. DYLD_LIBRARY_PATH=. "./pdfium_check$exe" | tee check.txt
           grep -q "^pdfium ok" check.txt
@@ -349,7 +406,7 @@ jobs:
           python3 .github/scripts/changelog-section.py "$TAG" CHANGELOG.md > body.md
           {
             echo
-            echo "Archives: the \`rick\` binary with the shared kernel libraries, libstd and the pdfium library beside it, \`plugins/\` with the Git, SVN, archive, trash, Office, media, archive-preview, markup (Markdown, HTML, CSV), hex-preview and subdirectory-search plugins and the platform's search-index connector (Windows Search, Spotlight, or Tracker and Baloo), the 7-Zip library (LGPL) beside the archive plugin for the disk images, the GStreamer runtime on macOS and Windows (Linux uses the system's: install the gstreamer1.0 plug-in packages for playback), on Linux the desktop entry and the icons under \`share/\` in the XDG layout (copy \`share/\` into \`~/.local/share/\` and put \`rick\` on the PATH, or install the tarball with Rick's installer plugin), LICENSE, README, CHANGELOG, THIRD-PARTY-LICENSES and the 7-Zip licence; \`SHA256SUMS.txt\` has the checksums. Not signed or notarised (see README, Try it)."
+            echo "Archives: the \`rick\` binary with the shared kernel libraries, libstd and the pdfium library beside it, \`plugins/\` with the Git, SVN, archive, trash, Office, media, archive-preview, markup (Markdown, HTML, CSV), hex-preview and subdirectory-search plugins and the platform's search-index connector (Windows Search, Spotlight, or Tracker and Baloo), the 7-Zip library (LGPL) beside the archive plugin for the disk images, the GStreamer runtime on macOS and Windows (Linux uses the system's: install the gstreamer1.0 plug-in packages for playback), on Linux the desktop entry and the icons under \`share/\` in the XDG layout (copy \`share/\` into \`~/.local/share/\` and put \`rick\` on the PATH, or install the tarball with Rick's installer plugin), on macOS all of it inside \`Rick.app\` (drag it to Applications), LICENSE, README, CHANGELOG, THIRD-PARTY-LICENSES and the 7-Zip licence; \`SHA256SUMS.txt\` has the checksums. Not signed or notarised (see README, Try it)."
           } >> body.md
           cat body.md
       - uses: softprops/action-gh-release@v2
