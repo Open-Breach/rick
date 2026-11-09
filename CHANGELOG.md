@@ -9,6 +9,7 @@ the pull request that brought the change.
 
 ### Changed
 
+- The workspace version is `0.3.0-dev` until 0.3.0 is tagged.
 - The scheme and density tokens of the design refresh (issue 60;
   `ui_egui::theme`): every colour comes from a scheme, the Figma collection
   *Rick* one to one with *Light* and *Dark* as the two schemes Rick ships,
