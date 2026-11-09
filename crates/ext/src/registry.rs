@@ -170,8 +170,11 @@ use crate::search::SearchIndex;
 /// §4): [`Manifest`] gained `commands`, the [`CommandSpec`]s
 /// a plugin declares and `plugin.toml` carries as `[[commands]]`, and the
 /// registry takes a [`CliCommand`] per declared name
-/// through [`Registry::command`].
-pub const API_VERSION: u32 = 15;
+/// through [`Registry::command`]; 16 the shell integration of the same
+/// spec: `Console` gained `cwd`, the working directory the shell reports
+/// through OSC 7, and `foreground_job`, whether a program other than the
+/// shell has the terminal.
+pub const API_VERSION: u32 = 16;
 
 bitflags::bitflags! {
     /// The extension points an extension fills, as its manifest declares
