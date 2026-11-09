@@ -128,8 +128,11 @@ jobs:
           $base = "https://gstreamer.freedesktop.org/data/pkg/windows/$env:GSTREAMER_VERSION/msvc"
           $installer = "$env:RUNNER_TEMP\gstreamer.exe"
           # The installer is large and the server cuts a transfer short now
-          # and then (release.yml run 42664667120): five tries with a pause.
-          Invoke-WebRequest -Uri "$base/gstreamer-1.0-msvc-x86_64-$env:GSTREAMER_VERSION.exe" -OutFile $installer -MaximumRetryCount 5 -RetryIntervalSec 15
+          # and then (release.yml run 42664667120); Invoke-WebRequest retries
+          # error codes only, not a response that ends early, so curl does
+          # the download: HTTP/1.1, five tries with a pause between them.
+          curl.exe -sSL --http1.1 --retry 5 --retry-all-errors --retry-delay 15 -o $installer "$base/gstreamer-1.0-msvc-x86_64-$env:GSTREAMER_VERSION.exe"
+          if ($LASTEXITCODE -ne 0) { throw "the GStreamer installer did not download (curl exit $LASTEXITCODE)" }
           $root = "C:\gstreamer\1.0\msvc_x86_64"
           Start-Process -FilePath $installer -ArgumentList "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/TYPE=full", "/DIR=$root" -Wait
           if (-not (Test-Path "$root\lib\pkgconfig\gstreamer-1.0.pc")) {
