@@ -63,7 +63,16 @@ compared live against every row — a `status/success` border, the
 BLAKE3 rows, each with its monospace value and a copy icon; the *Format*
 segmented control; *Copy all* and *Done* in the footer; the portal burst
 with the progress line and bar while the job runs, when *Cancel* stops it
-and closes the dialogue), the context menu (a 260 px card of the spec's groups — Open, Edit with the *Copy as* submenu, Change with the destructive pair in `status/danger`, the extension groups as submenus or single entries, Info — each entry with an icon slot, its label and its shortcut, hidden when it does not apply; on the empty area New folder and New file, Paste, Select all, Open terminal here, Refresh and Folder properties) and command palette
+and closes the dialogue), the integration dialog in `integration.rs`
+(*Set up Rick on this system*, 560 px in the dialogue frame, opened once
+when the check the shell asks for after its first frame finds an item
+missing or reset: the app icon, the title and the line naming the system
+and the desktop; *Install for* with *All users* shown and not yet to be
+chosen; a card with a row per item — icon, title, the line that says what
+is written where, a *Best effort* pill, a switch that starts on, and for
+a file of another origin in the item's way a notice with *Replace*; the
+line about passwords; *Don't ask again*, *Not now* and *Apply N items*,
+with the progress line in the footer while the rows are set up), the context menu (a 260 px card of the spec's groups — Open, Edit with the *Copy as* submenu, Change with the destructive pair in `status/danger`, the extension groups as submenus or single entries, Info — each entry with an icon slot, its label and its shortcut, hidden when it does not apply; on the empty area New folder and New file, Paste, Select all, Open terminal here, Refresh and Folder properties) and command palette
 built from the action registry, the keyboard shortcut table, the Settings
 window in `settings_ui.rs` (880 × 640, a viewport of its own where the
 backend has them and an area over the main window otherwise: the

@@ -44,7 +44,7 @@ use crate::{compare, console};
 use crate::{
     conflict, frame, icons, inspector, menus, pane, paths, question, settings_ui, side_panel,
 };
-use crate::{hash, properties};
+use crate::{hash, integration, properties};
 
 /// Per-tab view state that is the UI's business, not the model's.
 #[derive(Debug, Default)]
@@ -787,6 +787,9 @@ pub struct RickUi {
     library_browse: Option<LibraryBrowse>,
     /// The Hash dialogue, open or not.
     hash: hash::HashDialog,
+    /// The integration dialog, open or not, and the check after the
+    /// first frame that may open it.
+    integration: integration::IntegrationDialog,
     /// Read-only texts actions asked to show, each in its own window.
     texts: Vec<TextWindow>,
     next_text: u64,
@@ -1012,6 +1015,7 @@ impl RickUi {
             properties: properties::PropertiesDialog::default(),
             library_browse: None,
             hash: hash::HashDialog::default(),
+            integration: integration::IntegrationDialog::default(),
             texts: Vec::new(),
             next_text: 0,
             thumbnails: Thumbnails::default(),
@@ -1124,6 +1128,12 @@ impl RickUi {
     #[must_use]
     pub fn hash_dialog(&self) -> &hash::HashDialog {
         &self.hash
+    }
+
+    /// The integration dialog, for the tests.
+    #[must_use]
+    pub fn integration_dialog(&self) -> &integration::IntegrationDialog {
+        &self.integration
     }
 
     #[must_use]
@@ -1508,10 +1518,15 @@ impl RickUi {
                     }
                     self.views.insert(tab, view);
                 }
-                Event::IntegrationApplied {
-                    relaunch: Some(binary),
-                    ..
-                } => self.relaunch_from(&binary),
+                Event::IntegrationChecked { ask: true } => {
+                    self.integration.open(&self.app.model().integration);
+                }
+                Event::IntegrationApplied { relaunch, .. } => {
+                    self.integration.applied();
+                    if let Some(binary) = relaunch {
+                        self.relaunch_from(&binary);
+                    }
+                }
                 _ => {}
             }
         }
@@ -4276,6 +4291,7 @@ impl RickUi {
             self.about.show(ctx, &self.app, &mut self.requests);
             self.properties.show(ctx, &mut self.requests);
             self.hash.show(ctx, &self.app, &mut self.requests);
+            self.integration.show(ctx, &self.app, &mut self.requests);
             self.show_texts(ctx);
             self.show_toasts(ctx);
             self.apply_requests(ctx);
@@ -4375,6 +4391,8 @@ impl eframe::App for RickUi {
         let root = self.root;
         let ctx = ui.ctx().clone();
         self.sync_window_ref(frame, &ctx);
+        // The integration check: asked for once the first frame is drawn.
+        self.integration.frame(&mut self.requests);
         self.draw_window(ui, root);
         // The Settings window: its own viewport, or an area over the root
         // window where the backend embeds viewports.

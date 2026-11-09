@@ -314,3 +314,38 @@ integration-item-rick-command = Befehl rick
 integration-item-dock-favourite = Dock-Favorit
 integration-failed = { $item } konnte nicht eingerichtet werden: { $error }
 integration-relaunch-failed = Rick konnte nicht von { $path } gestartet werden: { $error }
+
+# Der Integrationsdialog (specs/system-integration.md §6.2).
+integration-dialog-title = Rick auf diesem System einrichten
+integration-dialog-subtitle = { $system } — einiges ist noch nicht eingerichtet
+integration-dialog-intro = Wähle, was Rick einrichten darf. Was du ausschaltest, wird nicht wieder gefragt — alles lässt sich später unter Einstellungen → Integration ändern.
+integration-install-for = Installieren für
+integration-scope-user = Nur mich
+integration-scope-system = Alle Benutzer
+integration-not-available-yet = Noch nicht verfügbar
+integration-row-install-location = Am Standardort installieren
+integration-row-install-location-detail = Rick von { $from } nach { $to } kopieren und von dort ausführen
+integration-row-launcher-entry-detail = Desktop-Eintrag und Symbol, damit Rick im App-Starter erscheint
+integration-row-launcher-entry-detail-gnome = Desktop-Eintrag und Symbol, damit Rick in der Aktivitäten-Übersicht erscheint
+integration-row-default-file-manager-detail = Ordner mit Rick statt mit { $name } öffnen (inode/directory)
+integration-row-default-file-manager-detail-none = Ordner mit Rick öffnen (inode/directory)
+integration-row-show-in-folder-detail = D-Bus-Dienst FileManager1, den Browser, Chat- und Download-Programme nutzen
+integration-row-rick-command = Befehl rick im Terminal
+integration-row-rick-command-detail = Verknüpfung in { $dir } und eine Shell-Funktion, damit rick den aktuellen Ordner öffnet
+integration-row-dock-favourite-detail = Rick an das Dock anheften
+integration-row-dock-favourite-detail-gnome = Rick an das GNOME-Dash anheften
+integration-row-dock-favourite-detail-plasma = Rick an die Plasma-Fensterleiste anheften
+integration-row-dock-favourite-detail-cosmic = Rick an das COSMIC-Dock anheften
+integration-row-dock-favourite-detail-cinnamon = Rick zu den Favoriten des Cinnamon-Menüs hinzufügen
+integration-best-effort = Nach Möglichkeit
+integration-foreign = { $path } ist bereits vorhanden und stammt nicht von Rick
+integration-replace = Ersetzen
+integration-password-note = Nichts hiervon braucht ein Passwort. „Alle Benutzer“ installiert unter /opt und fragt einmal danach.
+integration-dont-ask = Nicht mehr fragen
+integration-not-now = Jetzt nicht
+integration-apply = { $count ->
+    [one] 1 Eintrag anwenden
+   *[other] { $count } Einträge anwenden
+}
+integration-applying = { $item } wird eingerichtet — { $done } von { $total }
+integration-finishing = Wird abgeschlossen …
