@@ -11,21 +11,25 @@
 //! (or a socket file a crash left, which nothing answers on) makes the
 //! launch the instance: it binds the endpoint and opens the window as
 //! before. The instance runs every request on the UI thread between two
-//! frames, through the application's external-work channel, and replies
-//! with what it made of it: a path opens as a tab, `--new-window` opens a
-//! window first, an argument it does not know is answered with the help
-//! and [`EXIT_USAGE`].
+//! frames, through the application's external-work channel, parses it as
+//! the command line ([`cli`], the parser) with the loaded plugins'
+//! commands known, and replies with what it made of it: paths open as
+//! tabs, `reveal` opens the files' folders, a plugin's command runs in the
+//! extension that declared it, `--help` is the help, and a command line
+//! the parser refuses is answered with its message and [`EXIT_USAGE`].
 
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 use std::time::Duration;
 
 use app::{App, Command, Event, ExternalSender};
+use ext::CommandSpec;
 use platform::instance::{
     Connection, EXIT_FAILED, EXIT_USAGE, Endpoint, Handover, Listener, PATIENCE, Reply, Request,
 };
 use runtime::oneshot;
 use types::Location;
+
+use crate::cli::{self, Parsed, Usage};
 
 /// What the launch does next, once it has looked for an instance.
 pub enum Outcome {
@@ -97,101 +101,94 @@ pub fn hand_over(endpoint: &Endpoint, argv: Vec<String>, cwd: PathBuf) -> anyhow
     })
 }
 
-/// What the instance makes of a request's arguments.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Parsed {
-    /// `--new-window` was given: the paths open in a window of their own.
-    pub new_window: bool,
-    /// The folders to open, resolved against the caller's working
-    /// directory; the working directory itself when none was given.
-    pub paths: Vec<PathBuf>,
-}
-
-/// Parses a request's arguments: `--new-window` and paths, resolved
-/// against `cwd` (made canonical where they exist, kept as given
-/// otherwise).
-///
-/// # Errors
-///
-/// The unknown argument, for the usage reply.
-pub fn parse(argv: &[String], cwd: &Path) -> Result<Parsed, String> {
-    let mut new_window = false;
-    let mut paths = Vec::new();
-    let mut only_paths = false;
-    for arg in argv {
-        if !only_paths && arg == "--" {
-            only_paths = true;
-        } else if !only_paths && arg == "--new-window" {
-            new_window = true;
-        } else if !only_paths && arg.starts_with('-') && arg != "-" {
-            return Err(arg.clone());
-        } else {
-            paths.push(resolve(cwd, Path::new(arg)));
-        }
-    }
-    if paths.is_empty() {
-        paths.push(resolve(cwd, Path::new(".")));
-    }
-    Ok(Parsed { new_window, paths })
-}
-
-/// `path` against `cwd`: canonical where it names something, so a launcher's
-/// relative path and a symlink both reach the folder itself; as joined
-/// otherwise, for the pane to say what it cannot list.
-pub fn resolve(cwd: &Path, path: &Path) -> PathBuf {
-    let joined = if path.is_absolute() {
-        path.to_path_buf()
-    } else {
-        cwd.join(path)
-    };
-    std::fs::canonicalize(&joined).unwrap_or(joined)
-}
-
 /// A folder as a location of the local provider.
 pub fn location(path: &Path) -> Location {
     Location::new(vfs_local::PROVIDER_ID, platform::paths::from_path(path))
 }
 
-/// Runs a request against the application: the paths open as tabs of the
-/// focused window, in a new window first when asked; an argument the
-/// instance does not know is answered with the help and [`EXIT_USAGE`].
-pub fn dispatch(app: &mut App, events: &mut Vec<Event>, request: &Request, help: &str) -> Reply {
-    let parsed = match parse(&request.argv, &request.cwd) {
-        Ok(parsed) => parsed,
-        Err(unknown) => {
-            return Reply::usage(format!("rick: unknown argument `{unknown}`\n\n{help}"));
+/// The plugin commands the loaded extensions declare, for the parser and
+/// the help.
+pub fn plugin_commands(app: &App) -> Vec<CommandSpec> {
+    app.registry()
+        .manifests()
+        .iter()
+        .flat_map(|m| m.commands.iter().copied())
+        .collect()
+}
+
+/// Runs a request against the application: parses it as the command line
+/// with the loaded plugins' commands known and applies it; the reply is
+/// what the launch prints and exits with.
+pub fn dispatch(app: &mut App, events: &mut Vec<Event>, request: &Request) -> Reply {
+    let plugins = plugin_commands(app);
+    match cli::parse(&request.argv, &request.cwd, &plugins) {
+        Err(Usage(text)) => Reply::usage(text),
+        Ok(parsed) => apply(app, events, parsed, &request.cwd),
+    }
+}
+
+/// Applies a parsed command line to the application: the paths open as
+/// tabs of the focused window, in a new window first when asked; `reveal`
+/// opens each file's folder; a plugin's command runs in the extension
+/// that declared it, its text or error going back to the caller; the help
+/// and the version are text for the caller.
+pub fn apply(app: &mut App, events: &mut Vec<Event>, parsed: Parsed, cwd: &Path) -> Reply {
+    match parsed {
+        Parsed::Open { paths, new_window } => {
+            tracing::info!(new_window, ?paths, "open from the command line");
+            if new_window {
+                app.handle(Command::NewWindow, events);
+            }
+            for path in &paths {
+                app.handle(Command::NewTab(location(path)), events);
+            }
+            Reply::ok(None)
         }
-    };
-    tracing::info!(
-        new_window = parsed.new_window,
-        paths = ?parsed.paths,
-        "command line from a second launch"
-    );
-    if parsed.new_window {
-        app.handle(Command::NewWindow, events);
+        Parsed::Reveal { files, new_window } => {
+            tracing::info!(new_window, ?files, "reveal from the command line");
+            if new_window {
+                app.handle(Command::NewWindow, events);
+            }
+            let mut folders: Vec<PathBuf> = Vec::new();
+            for file in &files {
+                let folder = file
+                    .parent()
+                    .map_or_else(|| file.clone(), Path::to_path_buf);
+                if !folders.contains(&folder) {
+                    folders.push(folder);
+                }
+            }
+            for folder in &folders {
+                app.handle(Command::NewTab(location(folder)), events);
+            }
+            Reply::ok(None)
+        }
+        Parsed::Plugin { name, args } => {
+            tracing::info!(command = %name, ?args, "plugin command from the command line");
+            match app.run_cli(&name, args, cwd.to_path_buf(), events) {
+                None => Reply::usage(format!(
+                    "rick: unknown command `{name}`\n\n{}",
+                    cli::help(&plugin_commands(app))
+                )),
+                Some(Ok(text)) => Reply::ok(text),
+                Some(Err(error)) => Reply::failed(EXIT_FAILED, format!("rick {name}: {error}")),
+            }
+        }
+        Parsed::Help(text) | Parsed::Version(text) => Reply::ok(Some(text)),
     }
-    for path in &parsed.paths {
-        app.handle(Command::NewTab(location(path)), events);
-    }
-    Reply::ok(None)
 }
 
 /// Serves the endpoint for the rest of the process: every connection's
 /// request goes to the application's thread through `externals`, and the
 /// reply comes back the same way. A connection that sends nothing within
 /// [`PATIENCE`] is dropped. Returns the task, to abort at exit.
-pub fn serve(
-    mut listener: Listener,
-    externals: ExternalSender,
-    help: Arc<str>,
-) -> tokio::task::JoinHandle<()> {
+pub fn serve(mut listener: Listener, externals: ExternalSender) -> tokio::task::JoinHandle<()> {
     runtime::handle().spawn(async move {
         loop {
             match listener.accept().await {
                 Ok(connection) => {
                     let externals = externals.clone();
-                    let help = Arc::clone(&help);
-                    runtime::handle().spawn(answer(connection, externals, help));
+                    runtime::handle().spawn(answer(connection, externals));
                 }
                 Err(error) => {
                     tracing::warn!(%error, "the single-instance endpoint failed to accept");
@@ -205,7 +202,7 @@ pub fn serve(
 
 /// One launch's connection: its request run on the application's thread,
 /// its reply written back.
-async fn answer(mut connection: Connection, externals: ExternalSender, help: Arc<str>) {
+async fn answer(mut connection: Connection, externals: ExternalSender) {
     let request = match connection.request(PATIENCE).await {
         Ok(request) => request,
         Err(error) => {
@@ -215,7 +212,7 @@ async fn answer(mut connection: Connection, externals: ExternalSender, help: Arc
     };
     let (tx, rx) = oneshot::channel();
     let queued = externals.send(Box::new(move |app, events| {
-        let reply = dispatch(app, events, &request, &help);
+        let reply = dispatch(app, events, &request);
         let _ = tx.send(reply);
     }));
     let reply = if queued {
@@ -240,17 +237,99 @@ pub const USAGE: i32 = EXIT_USAGE;
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
+    use std::sync::{Arc, Mutex, PoisonError};
 
+    use ext::{
+        API_VERSION, Capabilities, CliCommand, CliCtx, CliOutcome, Extension, JobRunner, Manifest,
+        Platforms, Points, Registry, UiHost, Version,
+    };
     use platform::{ConfigDir as _, Fake};
+    use types::{Error, ExtId};
 
     use super::*;
 
-    fn app(fake: &Arc<Fake>, start: &Path) -> App {
+    /// A plugin with two commands: `echo`, which answers its arguments
+    /// and the working directory as text, and `navigate`, which takes the
+    /// focused pane to its argument through an action's outcome.
+    struct Echoer(Manifest);
+
+    const SPECS: &[CommandSpec] = &[
+        CommandSpec {
+            name: "echo",
+            help: "Echo the arguments",
+        },
+        CommandSpec {
+            name: "navigate",
+            help: "Take the focused pane somewhere",
+        },
+    ];
+
+    struct Echo;
+
+    impl CliCommand for Echo {
+        fn name(&self) -> &'static str {
+            "echo"
+        }
+        fn run(&self, ctx: CliCtx, _: &JobRunner, _: &dyn UiHost) -> Result<CliOutcome, Error> {
+            if ctx.args.first().is_some_and(|a| a == "--fail") {
+                return Err(Error::Unsupported("asked to fail"));
+            }
+            Ok(CliOutcome::Text(format!(
+                "{} from {}",
+                ctx.args.join(" "),
+                ctx.cwd.display()
+            )))
+        }
+    }
+
+    struct NavigateTo(Arc<Mutex<Option<PathBuf>>>);
+
+    impl CliCommand for NavigateTo {
+        fn name(&self) -> &'static str {
+            "navigate"
+        }
+        fn run(&self, ctx: CliCtx, _: &JobRunner, _: &dyn UiHost) -> Result<CliOutcome, Error> {
+            let [target] = ctx.args.as_slice() else {
+                return Err(Error::Unsupported("usage: rick navigate <folder>"));
+            };
+            let path = cli::resolve(&ctx.cwd, Path::new(target));
+            *self.0.lock().unwrap_or_else(PoisonError::into_inner) = Some(path.clone());
+            Ok(CliOutcome::Outcome(ext::ActionOutcome::Navigate(location(
+                &path,
+            ))))
+        }
+    }
+
+    impl Extension for Echoer {
+        fn manifest(&self) -> &Manifest {
+            &self.0
+        }
+        fn register(&self, reg: &mut Registry) -> Result<(), Error> {
+            reg.command(Arc::new(Echo));
+            reg.command(Arc::new(NavigateTo(Arc::new(Mutex::new(None)))));
+            Ok(())
+        }
+    }
+
+    fn echoer() -> Arc<dyn Extension> {
+        Arc::new(Echoer(Manifest {
+            id: ExtId("echoer"),
+            name: "Echoer",
+            version: Version::new(0, 1, 0),
+            api_version: API_VERSION,
+            requires: Capabilities::empty(),
+            points: Points::empty(),
+            platforms: Platforms::ALL,
+            previews: &[],
+            commands: SPECS,
+        }))
+    }
+
+    fn app(fake: &Arc<Fake>, start: &Path, extensions: Vec<Arc<dyn Extension>>) -> App {
         App::new(app::Config {
             platform: fake.clone(),
             ui: Arc::new(ui_egui::EguiHost::new()),
-            extensions: Vec::new(),
+            extensions,
             config_dir: Some(fake.config_dir()),
             start: Some(location(start)),
         })
@@ -266,52 +345,19 @@ mod tests {
     }
 
     #[test]
-    fn paths_resolve_against_the_callers_directory_and_none_is_the_directory_itself() {
-        let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
-        let sub = dir.path().join("sub");
-        std::fs::create_dir(&sub).unwrap_or_else(|e| panic!("{e}"));
-        let canonical = dir.path().canonicalize().unwrap_or_else(|e| panic!("{e}"));
-        let parsed = parse(&["sub".to_owned(), "nowhere".to_owned()], dir.path())
-            .unwrap_or_else(|e| panic!("{e}"));
-        assert!(!parsed.new_window);
-        assert_eq!(
-            parsed.paths,
-            [canonical.join("sub"), dir.path().join("nowhere")]
-        );
-        let none = parse(&[], dir.path()).unwrap_or_else(|e| panic!("{e}"));
-        assert_eq!(none.paths, std::slice::from_ref(&canonical));
-        let window = parse(
-            &["--new-window".to_owned(), "--".to_owned(), "-x".to_owned()],
-            dir.path(),
-        )
-        .unwrap_or_else(|e| panic!("{e}"));
-        assert!(window.new_window);
-        assert_eq!(window.paths, [dir.path().join("-x")]);
-        assert_eq!(
-            parse(&["--frobnicate".to_owned()], dir.path()),
-            Err("--frobnicate".to_owned())
-        );
-    }
-
-    #[test]
-    fn a_dispatched_path_opens_a_tab_and_an_unknown_argument_gets_the_help() {
+    fn paths_open_tabs_a_new_window_opens_first_and_an_unknown_argument_gets_the_help() {
         let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
         let home = dir.path().join("home");
         let sub = dir.path().join("sub");
         std::fs::create_dir_all(&home).unwrap_or_else(|e| panic!("{e}"));
         std::fs::create_dir_all(&sub).unwrap_or_else(|e| panic!("{e}"));
         let fake = Arc::new(Fake::new().unwrap_or_else(|e| panic!("{e}")));
-        let mut app = app(&fake, &home);
+        let mut app = app(&fake, &home, Vec::new());
         let mut events = Vec::new();
         let windows_before = app.model().windows().count();
         let panes_before = app.model().panes().count();
 
-        let reply = dispatch(
-            &mut app,
-            &mut events,
-            &request(&["sub"], dir.path()),
-            "HELP",
-        );
+        let reply = dispatch(&mut app, &mut events, &request(&["sub"], dir.path()));
         assert_eq!(reply, Reply::ok(None));
         // A tab of its own, in a workspace of its own, in the same window.
         assert_eq!(app.model().panes().count(), panes_before + 1);
@@ -323,26 +369,121 @@ mod tests {
             .unwrap_or_else(|| panic!("a focused tab"));
         assert_eq!(
             tab.location,
-            location(&resolve(dir.path(), Path::new("sub")))
+            location(&cli::resolve(dir.path(), Path::new("sub")))
         );
 
         let reply = dispatch(
             &mut app,
             &mut events,
             &request(&["--new-window", "sub"], dir.path()),
-            "HELP",
         );
         assert_eq!(reply.status, 0);
         assert_eq!(app.model().windows().count(), windows_before + 1);
 
+        // Reveal opens the file's folder, once for two files in it.
+        let panes = app.model().panes().count();
         let reply = dispatch(
             &mut app,
             &mut events,
-            &request(&["--bogus"], dir.path()),
-            "HELP",
+            &request(&["reveal", "sub/a.txt", "sub/b.txt"], dir.path()),
+        );
+        assert_eq!(reply, Reply::ok(None));
+        assert_eq!(app.model().panes().count(), panes + 1);
+
+        let reply = dispatch(&mut app, &mut events, &request(&["--bogus"], dir.path()));
+        assert_eq!(reply.status, EXIT_USAGE);
+        let text = reply.text.unwrap_or_default();
+        assert!(
+            text.contains("--bogus") && text.contains("reveal"),
+            "{text}"
+        );
+
+        let reply = dispatch(&mut app, &mut events, &request(&["--help"], dir.path()));
+        assert_eq!(reply.status, 0);
+        assert!(
+            reply
+                .text
+                .as_deref()
+                .is_some_and(|t| t.contains("--new-window")),
+            "{reply:?}"
+        );
+    }
+
+    #[test]
+    fn a_plugin_command_runs_in_its_extension_and_answers_the_caller() {
+        let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+        let home = dir.path().join("home");
+        let sub = dir.path().join("sub");
+        std::fs::create_dir_all(&home).unwrap_or_else(|e| panic!("{e}"));
+        std::fs::create_dir_all(&sub).unwrap_or_else(|e| panic!("{e}"));
+        let fake = Arc::new(Fake::new().unwrap_or_else(|e| panic!("{e}")));
+        let mut app = app(&fake, &home, vec![echoer()]);
+        let mut events = Vec::new();
+        assert_eq!(plugin_commands(&app), SPECS);
+
+        // Text goes back to the caller, with the arguments as typed.
+        let reply = dispatch(
+            &mut app,
+            &mut events,
+            &request(&["echo", "--loud", "hi"], dir.path()),
+        );
+        assert_eq!(
+            reply,
+            Reply::ok(Some(format!("--loud hi from {}", dir.path().display())))
+        );
+
+        // An error is the caller's exit status 1 with the text.
+        let reply = dispatch(
+            &mut app,
+            &mut events,
+            &request(&["echo", "--fail"], dir.path()),
+        );
+        assert_eq!(reply.status, EXIT_FAILED);
+        assert!(
+            reply
+                .text
+                .as_deref()
+                .is_some_and(|t| t.contains("asked to fail")),
+            "{reply:?}"
+        );
+
+        // An action's outcome applies to the focused pane: here a
+        // navigation, resolved against the caller's directory.
+        let reply = dispatch(
+            &mut app,
+            &mut events,
+            &request(&["navigate", "sub"], dir.path()),
+        );
+        assert_eq!(reply, Reply::ok(None));
+        let focused = app.model().focused;
+        let (_, tab) = app
+            .model()
+            .active_tab(focused)
+            .unwrap_or_else(|| panic!("a focused tab"));
+        assert_eq!(
+            tab.location,
+            location(&cli::resolve(dir.path(), Path::new("sub")))
+        );
+
+        // The help lists the plugin's commands.
+        let reply = dispatch(&mut app, &mut events, &request(&["--help"], dir.path()));
+        let text = reply.text.unwrap_or_default();
+        assert!(
+            text.contains("echo") && text.contains("Echo the arguments"),
+            "{text}"
+        );
+
+        // An unknown command is a usage error with the help.
+        let reply = dispatch(
+            &mut app,
+            &mut events,
+            &request(&["frobnicate", "x"], dir.path()),
         );
         assert_eq!(reply.status, EXIT_USAGE);
         let text = reply.text.unwrap_or_default();
-        assert!(text.contains("--bogus") && text.ends_with("HELP"), "{text}");
+        assert!(
+            text.contains("frobnicate") && text.contains("echo"),
+            "{text}"
+        );
     }
 }

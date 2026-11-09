@@ -3083,3 +3083,15 @@ Once answered, an entry keeps its number and gains a dated decision line.
     plugins' entries count as components and their licence ids as types,
     on the About page's row too; *Export…* writes every section shown,
     the plugins' included, whatever the search and the filter show.
+
+264. (system integration, 2026-11-09) §4: "`rick [<path>…]` (no argument:
+    the current directory …)". The desktop entry runs `rick %F`, so a
+    launcher click without a selection is also a launch with no argument,
+    with the launcher's working directory (usually the home) — before the
+    single instance it restored the session as it was, now the spec's
+    reading adds a tab at that directory to the restored session, and a
+    second click while Rick runs opens a home tab in the running window.
+    Assumed: the spec's reading, literally, for every entry point, since
+    the binary cannot tell a terminal from a launcher and the spec names
+    no flag that would; if the launcher should only raise the window, the
+    desktop entry needs an argument form of its own, Serge's call.
