@@ -511,6 +511,14 @@ pub trait Clipboard: Send + Sync {
     /// `Error::Unsupported` when no clipboard is reachable (no display
     /// server); otherwise the platform error.
     fn set_text(&self, text: &str) -> Result<(), Error>;
+
+    /// The clipboard's text, `None` when it holds none.
+    ///
+    /// # Errors
+    ///
+    /// `Error::Unsupported` when no clipboard is reachable; otherwise the
+    /// platform error.
+    fn text(&self) -> Result<Option<String>, Error>;
 }
 
 /// Which side of the title row the window controls sit on.

@@ -163,6 +163,26 @@ the pull request that brought the change.
   version warns under its field and holds the primary; an archive without
   an icon offers *Choose…*. Detection keeps the bytes of icon files up to
   256 KiB for the header (#76).
+- The hash dialogue of the design refresh (issue 60, SPEC.md *Hash
+  dialogue*): 620 px in the dialogue frame, the header with the `HASH`
+  glyph, *File hashes*, the file's name and size and a round close
+  button. The *VERIFY* field comes first: when the clipboard holds
+  something that looks like a hash — hex of MD5, SHA-1, SHA-256 or BLAKE3
+  length, or Base64 of one — the field is prefilled with it, compared at
+  once and carries a *from clipboard* hint until edited; a match gives it
+  a `status/success` border and a *Matches SHA-256* pill and tints the
+  row `status/success-row` with its label in `status/success`, anything
+  else a `status/danger` border and a *No match* pill. Under it a card
+  per file with one row per algorithm — the label, the value in 11 px
+  monospace, a copy icon named after the algorithm — each file under a
+  row with its name and size when several are selected, then the
+  *Format* segmented control (*hex*, *HEX*, *Base64*). The footer has
+  *Copy all* with the `COPY` glyph and *Done*. While the job runs the
+  card gives way to the portal burst with *Hashing…*, the bytes done of
+  the total, the throughput and the time left over a 4 px bar; *Copy all*
+  is disabled and *Cancel* stops the job and closes the dialogue at once.
+  The platform's clipboard can be read (`Clipboard::text`) and the hash
+  slots carry the files' sizes (#77).
 
 ### Removed
 

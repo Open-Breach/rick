@@ -57,12 +57,13 @@ const TEXT_HEADER: f32 = 10.0;
 
 /// Progress samples of one job, for its throughput.
 #[derive(Debug, Default)]
-struct Rate {
+pub(crate) struct Rate {
     samples: VecDeque<(Instant, u64)>,
 }
 
 impl Rate {
-    fn push(&mut self, now: Instant, done: u64) {
+    /// Records `done` at `now`; a repeat of the last count is ignored.
+    pub(crate) fn push(&mut self, now: Instant, done: u64) {
         if self.samples.back().is_some_and(|(_, d)| *d == done) {
             return;
         }
@@ -78,7 +79,7 @@ impl Rate {
     }
 
     /// Units per second over the window, if there are two samples.
-    fn per_second(&self) -> Option<f64> {
+    pub(crate) fn per_second(&self) -> Option<f64> {
         let (first, last) = (self.samples.front()?, self.samples.back()?);
         let seconds = last.0.duration_since(first.0).as_secs_f64();
         if seconds <= 0.0 || last.1 <= first.1 {
@@ -98,7 +99,7 @@ pub struct Operations {
 }
 
 /// `12.3 MiB/s`, or `48 items/s`.
-fn throughput(progress: &Progress, rate: f64) -> String {
+pub(crate) fn throughput(progress: &Progress, rate: f64) -> String {
     match progress {
         Progress::Bytes { .. } => format!("{}/s", format::size(Some(rate as u64))),
         Progress::Items { .. } => format!("{} items/s", rate.round() as u64),
@@ -107,7 +108,7 @@ fn throughput(progress: &Progress, rate: f64) -> String {
 }
 
 /// `53 s left`, `10 min left`, `2 h left`.
-fn remaining(left: f64) -> String {
+pub(crate) fn remaining(left: f64) -> String {
     if left < 1.0 {
         "less than a second left".to_owned()
     } else if left < 90.0 {
@@ -128,7 +129,7 @@ fn counts(progress: &Progress) -> Option<(u64, Option<u64>)> {
 }
 
 /// `473 MiB of 2.2 GiB`, `12 of 40 items`, or the job's message.
-fn progress_text(progress: &Progress) -> String {
+pub(crate) fn progress_text(progress: &Progress) -> String {
     match progress {
         Progress::Bytes { done, total } => match total {
             Some(total) => format!(

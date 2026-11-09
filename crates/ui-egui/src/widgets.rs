@@ -102,30 +102,59 @@ pub fn pill(ui: &mut egui::Ui, text: &str, bg: egui::Color32, fg: egui::Color32)
 
 /// A dialogue button, 36 px tall with `radius/control` corners: the
 /// primary filled `accent/button` with white text, a secondary one on
-/// `bg/control`. Disabled, the primary is washed out.
+/// `bg/control`. Disabled, the primary is washed out and the secondary's
+/// text goes `text/secondary`.
 pub fn button(ui: &mut egui::Ui, label: &str, primary: bool, enabled: bool) -> egui::Response {
+    icon_button(ui, None, label, primary, enabled)
+}
+
+/// [`button`] with a 16 px glyph before its label.
+pub fn icon_button(
+    ui: &mut egui::Ui,
+    glyph: Option<&str>,
+    label: &str,
+    primary: bool,
+    enabled: bool,
+) -> egui::Response {
     let scheme = theme::scheme(ui);
     let radius = theme::metrics(ui.ctx()).corner_radius();
-    let galley = ui.painter().layout_no_wrap(
-        label.to_owned(),
-        FontId::proportional(TEXT_BODY),
-        scheme.text_primary,
-    );
-    let size = vec2(galley.size().x + 32.0, 36.0);
-    let (rect, response) = ui.allocate_exact_size(size, Sense::click());
     let (fill, fg) = match (primary, enabled) {
         (true, true) => (scheme.accent_button, Scheme::ON_BUTTON),
         (true, false) => (scheme.accent_button.gamma_multiply(0.45), Scheme::ON_BUTTON),
-        (false, _) => (scheme.bg_control, scheme.text_primary),
+        (false, true) => (scheme.bg_control, scheme.text_primary),
+        (false, false) => (scheme.bg_control, scheme.text_secondary),
     };
+    let galley = ui
+        .painter()
+        .layout_no_wrap(label.to_owned(), FontId::proportional(TEXT_BODY), fg);
+    let glyph_room = if glyph.is_some() {
+        theme::ICON + 8.0
+    } else {
+        0.0
+    };
+    let size = vec2(galley.size().x + glyph_room + 32.0, 36.0);
+    let (rect, response) = ui.allocate_exact_size(size, Sense::click());
     let fill = if response.hovered() && enabled {
         fill.gamma_multiply(0.9)
     } else {
         fill
     };
     ui.painter().rect_filled(rect, radius, fill);
-    ui.painter()
-        .galley(rect.center() - galley.size() / 2.0, galley, fg);
+    let text_left = rect.left() + 16.0 + glyph_room;
+    if let Some(glyph) = glyph {
+        ui.painter().text(
+            pos2(rect.left() + 16.0 + theme::ICON / 2.0, rect.center().y),
+            Align2::CENTER_CENTER,
+            glyph,
+            FontId::proportional(theme::ICON),
+            fg,
+        );
+    }
+    ui.painter().galley(
+        pos2(text_left, rect.center().y - galley.size().y / 2.0),
+        galley,
+        fg,
+    );
     response.widget_info(|| {
         egui::WidgetInfo::labeled(egui::WidgetType::Button, enabled, label.to_owned())
     });

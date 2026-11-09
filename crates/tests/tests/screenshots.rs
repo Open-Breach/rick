@@ -1235,6 +1235,148 @@ fn screenshots_of_the_install_dialogue() {
     close(&mut harness);
 }
 
+/// Issue 60: the hash dialogue — a file's four digests with the Verify
+/// field prefilled from the clipboard and matching its SHA-256 — in Light
+/// and Dark at both densities, then the hashing state with the portal
+/// burst and the progress line.
+#[test]
+#[ignore = "needs a wgpu adapter; CI runs it and uploads the images"]
+fn screenshots_of_the_hash_dialogue() {
+    use platform::Clipboard as _;
+    let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+    // A deterministic 300 KiB of noise, and 160 MiB of zeros the job takes
+    // long enough over to be caught hashing.
+    let mut state: u64 = 0x9e37_79b9_7f4a_7c15;
+    let small: Vec<u8> = (0..300 * 1024)
+        .map(|_| {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            (state >> 24) as u8
+        })
+        .collect();
+    let archive = "rick-0.3.0-linux-x64.tar.gz";
+    let image = "rick-0.3.0-linux-x64.AppImage";
+    fs::write(dir.path().join(archive), &small).unwrap_or_else(|e| panic!("{e}"));
+    fs::write(dir.path().join(image), vec![0u8; 160 << 20]).unwrap_or_else(|e| panic!("{e}"));
+    let sha256 = app::hash::render(
+        &app::hash::digests_of(&small).sha256,
+        app::hash::Format::Hex,
+    );
+    let fake = Arc::new(Fake::new().unwrap_or_else(|e| panic!("{e}")));
+    let host = Arc::new(EguiHost::new());
+    let app = app::App::new(app::Config {
+        platform: fake.clone(),
+        ui: host.clone(),
+        extensions: Vec::new(),
+        config_dir: Some(fake.config_dir()),
+        start: Some(local(dir.path())),
+    });
+    let mut harness = Harness::builder()
+        .with_size(egui::vec2(1920.0, 1000.0))
+        .with_pixels_per_point(2.0)
+        .build_eframe(move |cc| RickUi::new(app, host, &cc.egui_ctx));
+    settle(&mut harness);
+    let open = |harness: &mut Harness<'_, RickUi>, name: &str| {
+        let pane = harness.state().app().model().focused;
+        let id = harness
+            .state()
+            .app()
+            .model()
+            .active_tab(pane)
+            .and_then(|(_, t)| t.rows().find(|e| e.name == name).map(|e| e.id))
+            .unwrap_or_else(|| panic!("no row {name}"));
+        harness.state_mut().app_mut().handle(
+            app::Command::Select {
+                pane,
+                change: SelectionChange::Set(vec![id]),
+            },
+            &mut Vec::new(),
+        );
+        settle(harness);
+        harness
+            .state_mut()
+            .queue(Intent::Action(ext::ActionId("core.hash")), pane);
+        step_until(harness, Duration::from_secs(15), |h| {
+            h.state().hash_dialog().is_open()
+        });
+        harness.event(egui::Event::PointerMoved(egui::pos2(960.0, 30.0)));
+        harness.step();
+    };
+    let wait_done = |harness: &mut Harness<'_, RickUi>| {
+        step_until(harness, Duration::from_secs(30), |h| {
+            h.state()
+                .hash_dialog()
+                .hashes()
+                .is_some_and(|hashes| hashes.is_complete())
+        });
+        for _ in 0..8 {
+            harness.step();
+        }
+    };
+    let close = |harness: &mut Harness<'_, RickUi>| {
+        harness.key_press(egui::Key::Escape);
+        harness.step();
+        harness.step();
+        settle(harness);
+    };
+    for (theme, density) in [
+        (Theme::Light, Density::Comfortable),
+        (Theme::Light, Density::Compact),
+        (Theme::Dark, Density::Comfortable),
+        (Theme::Dark, Density::Compact),
+    ] {
+        for change in [
+            SettingsChange::Theme(theme),
+            SettingsChange::Density(density),
+        ] {
+            harness
+                .state_mut()
+                .app_mut()
+                .handle(app::Command::Settings(change), &mut Vec::new());
+        }
+        settle(&mut harness);
+        let theme_name = match theme {
+            Theme::Light => "light",
+            Theme::Dark => "dark",
+            Theme::System => "system",
+        };
+        let density_name = match density {
+            Density::Comfortable => "comfortable",
+            Density::Compact => "compact",
+        };
+        fake.set_text(&sha256).unwrap_or_else(|e| panic!("{e}"));
+        open(&mut harness, archive);
+        wait_done(&mut harness);
+        shoot(
+            &mut harness,
+            &format!("hash-dialogue-{theme_name}-{density_name}"),
+        );
+        close(&mut harness);
+    }
+    // Light, Comfortable: caught hashing the large file, nothing on the
+    // clipboard that looks like a hash.
+    for change in [
+        SettingsChange::Theme(Theme::Light),
+        SettingsChange::Density(Density::Comfortable),
+    ] {
+        harness
+            .state_mut()
+            .app_mut()
+            .handle(app::Command::Settings(change), &mut Vec::new());
+    }
+    settle(&mut harness);
+    fake.set_text("release notes")
+        .unwrap_or_else(|e| panic!("{e}"));
+    open(&mut harness, image);
+    for _ in 0..3 {
+        harness.step();
+        std::thread::sleep(Duration::from_millis(40));
+    }
+    shoot(&mut harness, "hash-dialogue-hashing");
+    close(&mut harness);
+}
+
 /// Issue 17: the Preview tab docked below the explorer and torn out into a
 /// window of its own.
 #[test]

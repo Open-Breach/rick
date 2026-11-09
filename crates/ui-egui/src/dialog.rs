@@ -25,15 +25,17 @@ pub const FORM_WIDTH: f32 = 560.0;
 /// A prompt's or a confirmation's width.
 const NARROW_WIDTH: f32 = 400.0;
 /// The padding inside the bands.
-const PAD: f32 = 24.0;
+pub(crate) const PAD: f32 = 24.0;
 /// The label column of the field grid.
 const LABEL_COLUMN: f32 = 128.0;
 /// A control's height.
-const FIELD_HEIGHT: f32 = 36.0;
+pub(crate) const FIELD_HEIGHT: f32 = 36.0;
 /// The gap between rows.
 const ROW_GAP: f32 = 12.0;
 /// The header's app icon.
 const HEADER_ICON: f32 = 48.0;
+/// The round close button in a header.
+const CLOSE_BUTTON: f32 = 28.0;
 /// The title's size.
 const TEXT_TITLE: f32 = 15.0;
 /// The body scrolls beyond this share of the screen's height.
@@ -81,24 +83,12 @@ pub fn show(ctx: &egui::Context, id: egui::Id, ask: &Ask, mut state: State<'_>) 
         Ask::Form(_) => FORM_WIDTH,
         _ => NARROW_WIDTH,
     };
-    let frame = egui::Frame::new()
-        .fill(scheme.dialog_bg)
-        .corner_radius(DIALOG_RADIUS)
-        .shadow(egui::epaint::Shadow {
-            offset: [0, 8],
-            blur: 32,
-            spread: 0,
-            color: scheme.shadow(),
-        })
-        .inner_margin(0);
-    let modal = egui::Modal::new(id).frame(frame).show(ctx, |ui| {
-        ui.set_width(width);
-        ui.spacing_mut().item_spacing = vec2(0.0, 0.0);
+    let modal = modal(ctx, id, width, |ui| {
         match ask {
             Ask::Form(form) => form_ui(ui, form, &mut state, &mut outcome),
             Ask::Prompt { title, .. } => {
-                header_ui(ui, title, None);
-                body_frame(ui, |ui| {
+                header(ui, title, None, false);
+                body(ui, |ui| {
                     let output = text_field(ui, state.input, "", false, None, *state.focus);
                     *state.focus = false;
                     if output.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
@@ -108,8 +98,8 @@ pub fn show(ctx: &egui::Context, id: egui::Id, ask: &Ask, mut state: State<'_>) 
                 footer_ui(ui, None, &t!("shell-ok"), true, &mut outcome);
             }
             Ask::Confirm { title, text } => {
-                header_ui(ui, title, None);
-                body_frame(ui, |ui| {
+                header(ui, title, None, false);
+                body(ui, |ui| {
                     ui.add(
                         egui::Label::new(
                             egui::RichText::new(text)
@@ -135,6 +125,33 @@ pub fn show(ctx: &egui::Context, id: egui::Id, ask: &Ask, mut state: State<'_>) 
     outcome
 }
 
+/// The dialogue window: a `dialog/bg` modal `width` wide with 12 px
+/// corners and a soft shadow, its content laid out without gaps so the
+/// header, body and footer bands meet.
+pub(crate) fn modal<R>(
+    ctx: &egui::Context,
+    id: egui::Id,
+    width: f32,
+    content: impl FnOnce(&mut egui::Ui) -> R,
+) -> egui::ModalResponse<R> {
+    let scheme = theme::scheme_of(ctx);
+    let frame = egui::Frame::new()
+        .fill(scheme.dialog_bg)
+        .corner_radius(DIALOG_RADIUS)
+        .shadow(egui::epaint::Shadow {
+            offset: [0, 8],
+            blur: 32,
+            spread: 0,
+            color: scheme.shadow(),
+        })
+        .inner_margin(0);
+    egui::Modal::new(id).frame(frame).show(ctx, |ui| {
+        ui.set_width(width);
+        ui.spacing_mut().item_spacing = vec2(0.0, 0.0);
+        content(ui)
+    })
+}
+
 /// The form: header, the fields in their groups with the preview, footer.
 fn form_ui(ui: &mut egui::Ui, form: &Form, state: &mut State<'_>, outcome: &mut Outcome) {
     let title = form
@@ -142,9 +159,9 @@ fn form_ui(ui: &mut egui::Ui, form: &Form, state: &mut State<'_>, outcome: &mut 
         .as_ref()
         .and_then(|h| h.title.as_deref())
         .unwrap_or(&form.title);
-    header_ui(ui, title, form.header.as_ref());
+    header(ui, title, form.header.as_ref(), false);
     let mut changed = false;
-    body_frame(ui, |ui| {
+    body(ui, |ui| {
         fields_ui(ui, form, state, outcome, &mut changed);
     });
     if changed {
@@ -159,8 +176,9 @@ fn form_ui(ui: &mut egui::Ui, form: &Form, state: &mut State<'_>, outcome: &mut 
 }
 
 /// The header band: the icon, the title in medium weight and, under it,
-/// the pill and the secondary line; a hairline below.
-fn header_ui(ui: &mut egui::Ui, title: &str, header: Option<&Header>) {
+/// the pill and the secondary line; a round close button at the right
+/// when `close` is asked, whose click is the return; a hairline below.
+pub(crate) fn header(ui: &mut egui::Ui, title: &str, header: Option<&Header>, close: bool) -> bool {
     let scheme = theme::scheme(ui);
     let icon_size = match header.map(|h| &h.icon) {
         Some(HeaderIcon::Glyph(_)) | None => ICON,
@@ -206,7 +224,7 @@ fn header_ui(ui: &mut egui::Ui, title: &str, header: Option<&Header>) {
     // The title is read aloud as the dialogue's heading.
     let heading = Rect::from_min_max(
         pos2(text_x, title_y - 10.0),
-        pos2(band.right() - PAD, title_y + 10.0),
+        pos2(band.right() - PAD - CLOSE_BUTTON - 12.0, title_y + 10.0),
     );
     let response = ui.interact(heading, ui.id().with("dialog-title"), Sense::hover());
     response
@@ -254,6 +272,34 @@ fn header_ui(ui: &mut egui::Ui, title: &str, header: Option<&Header>) {
     }
     ui.painter()
         .hline(band.x_range(), band.bottom() - 0.5, scheme.hairline());
+    close && close_button(ui, band)
+}
+
+/// The round close button at the right of a header band: `bg/control`,
+/// `bg/active` under the pointer, the `CLOSE` glyph; named *Close*.
+fn close_button(ui: &mut egui::Ui, band: Rect) -> bool {
+    let scheme = theme::scheme(ui);
+    let center = pos2(band.right() - PAD - CLOSE_BUTTON / 2.0, band.center().y);
+    let rect = Rect::from_center_size(center, vec2(CLOSE_BUTTON, CLOSE_BUTTON));
+    let response = ui.interact(rect, ui.id().with("dialog-close"), Sense::click());
+    ui.painter().circle_filled(
+        center,
+        CLOSE_BUTTON / 2.0,
+        if response.hovered() {
+            scheme.bg_active
+        } else {
+            scheme.bg_control
+        },
+    );
+    ui.painter().text(
+        center,
+        Align2::CENTER_CENTER,
+        icons::CLOSE,
+        FontId::proportional(14.0),
+        scheme.icon_default,
+    );
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, t!("close")));
+    response.clicked()
 }
 
 /// The monogram: the letter, white on a colour derived from `seed`.
@@ -309,7 +355,7 @@ fn png_icon(ui: &egui::Ui, rect: Rect, bytes: &[u8]) -> bool {
 
 /// The body: a scroll area with the band's padding, capped at a share of
 /// the screen's height.
-fn body_frame(ui: &mut egui::Ui, content: impl FnOnce(&mut egui::Ui)) {
+pub(crate) fn body(ui: &mut egui::Ui, content: impl FnOnce(&mut egui::Ui)) {
     let max_height = ui.ctx().content_rect().height() * BODY_SHARE;
     egui::ScrollArea::vertical()
         .id_salt("dialog-body")
@@ -326,8 +372,41 @@ fn body_frame(ui: &mut egui::Ui, content: impl FnOnce(&mut egui::Ui)) {
         });
 }
 
-/// The footer: a hairline, the note at the left, *Cancel* and the primary
-/// at the right.
+/// The footer band under a hairline: `right` lays out the buttons from
+/// the right edge inwards, `left` whatever sits at the left in the room
+/// that remains.
+pub(crate) fn footer(
+    ui: &mut egui::Ui,
+    left: impl FnOnce(&mut egui::Ui),
+    right: impl FnOnce(&mut egui::Ui),
+) {
+    let scheme = theme::scheme(ui);
+    let (band, _) = ui.allocate_exact_size(vec2(ui.available_width(), 68.0), Sense::hover());
+    ui.painter()
+        .hline(band.x_range(), band.top() + 0.5, scheme.hairline());
+    let inner = band.shrink2(vec2(PAD, 16.0));
+    let mut buttons = ui.new_child(
+        egui::UiBuilder::new()
+            .max_rect(inner)
+            .layout(egui::Layout::right_to_left(Align::Center)),
+    );
+    buttons.spacing_mut().item_spacing.x = 10.0;
+    right(&mut buttons);
+    let limit = buttons.min_rect().left() - 16.0;
+    let mut rest = ui.new_child(
+        egui::UiBuilder::new()
+            .max_rect(Rect::from_min_max(
+                inner.min,
+                pos2(limit.max(inner.left()), inner.bottom()),
+            ))
+            .layout(egui::Layout::left_to_right(Align::Center)),
+    );
+    rest.spacing_mut().item_spacing.x = 10.0;
+    left(&mut rest);
+}
+
+/// A form's footer: the note at the left, *Cancel* and the primary at the
+/// right.
 fn footer_ui(
     ui: &mut egui::Ui,
     note: Option<&str>,
@@ -336,42 +415,30 @@ fn footer_ui(
     outcome: &mut Outcome,
 ) {
     let scheme = theme::scheme(ui);
-    let (band, _) = ui.allocate_exact_size(vec2(ui.available_width(), 68.0), Sense::hover());
-    ui.painter()
-        .hline(band.x_range(), band.top() + 0.5, scheme.hairline());
-    let inner = band.shrink2(vec2(PAD, 16.0));
-    let mut right = ui.new_child(
-        egui::UiBuilder::new()
-            .max_rect(inner)
-            .layout(egui::Layout::right_to_left(Align::Center)),
+    footer(
+        ui,
+        |left| {
+            if let Some(note) = note {
+                left.add(
+                    egui::Label::new(
+                        egui::RichText::new(note)
+                            .size(TEXT_SECONDARY)
+                            .color(scheme.text_secondary),
+                    )
+                    .truncate()
+                    .selectable(false),
+                );
+            }
+        },
+        |right| {
+            if widgets::button(right, ok, true, enabled).clicked() && enabled {
+                outcome.decided = Some(true);
+            }
+            if widgets::button(right, &t!("cancel"), false, true).clicked() {
+                outcome.decided = Some(false);
+            }
+        },
     );
-    right.spacing_mut().item_spacing.x = 10.0;
-    if widgets::button(&mut right, ok, true, enabled).clicked() && enabled {
-        outcome.decided = Some(true);
-    }
-    if widgets::button(&mut right, &t!("cancel"), false, true).clicked() {
-        outcome.decided = Some(false);
-    }
-    if let Some(note) = note {
-        let limit = right.min_rect().left() - 16.0;
-        let mut left = ui.new_child(
-            egui::UiBuilder::new()
-                .max_rect(Rect::from_min_max(
-                    inner.min,
-                    pos2(limit.max(inner.left()), inner.bottom()),
-                ))
-                .layout(egui::Layout::left_to_right(Align::Center)),
-        );
-        left.add(
-            egui::Label::new(
-                egui::RichText::new(note)
-                    .size(TEXT_SECONDARY)
-                    .color(scheme.text_secondary),
-            )
-            .truncate()
-            .selectable(false),
-        );
-    }
 }
 
 /// A group of fields: the implicit first one, a titled section, or a
@@ -568,7 +635,7 @@ fn fields_ui(
 
 /// A `bg/card` card with `border/default` around rows separated by
 /// hairlines.
-fn card_frame(ui: &mut egui::Ui, content: impl FnOnce(&mut egui::Ui)) {
+pub(crate) fn card_frame(ui: &mut egui::Ui, content: impl FnOnce(&mut egui::Ui)) {
     let scheme = theme::scheme(ui);
     egui::Frame::new()
         .fill(scheme.bg_card)
@@ -787,13 +854,27 @@ fn field_row(
 /// A text field: a `border/default` frame with `radius/control` corners,
 /// `border` in another colour when given, the text in the body or the
 /// monospace font, the hint in `text/placeholder`.
-fn text_field(
+pub(crate) fn text_field(
     ui: &mut egui::Ui,
     text: &mut String,
     hint: &str,
     mono: bool,
     border: Option<egui::Color32>,
     focus: bool,
+) -> egui::Response {
+    text_field_with(ui, text, hint, mono, border, focus, |_| {})
+}
+
+/// [`text_field`] with `trailing` laid out inside its right end, from the
+/// right edge inwards — a pill, a hint — and the text kept clear of it.
+pub(crate) fn text_field_with(
+    ui: &mut egui::Ui,
+    text: &mut String,
+    hint: &str,
+    mono: bool,
+    border: Option<egui::Color32>,
+    focus: bool,
+    trailing: impl FnOnce(&mut egui::Ui),
 ) -> egui::Response {
     let scheme = theme::scheme(ui);
     let radius = theme::metrics(ui.ctx()).corner_radius();
@@ -806,9 +887,28 @@ fn text_field(
         egui::Stroke::new(1.0, border.unwrap_or(scheme.border_default)),
         egui::StrokeKind::Inside,
     );
-    let mut inner = ui.new_child(
+    let mut tail = ui.new_child(
         egui::UiBuilder::new()
             .max_rect(rect.shrink2(vec2(10.0, 0.0)))
+            .layout(egui::Layout::right_to_left(Align::Center)),
+    );
+    tail.spacing_mut().item_spacing.x = 8.0;
+    trailing(&mut tail);
+    let taken = if tail.min_rect().is_positive() {
+        tail.min_rect().width() + 8.0
+    } else {
+        0.0
+    };
+    let text_rect = Rect::from_min_max(
+        rect.min + vec2(10.0, 0.0),
+        pos2(
+            (rect.right() - 10.0 - taken).max(rect.left() + 10.0),
+            rect.bottom(),
+        ),
+    );
+    let mut inner = ui.new_child(
+        egui::UiBuilder::new()
+            .max_rect(text_rect)
             .layout(egui::Layout::left_to_right(Align::Center)),
     );
     let font = if mono {
