@@ -1416,16 +1416,70 @@ pub fn label_of(intent: Intent, registry: &Registry) -> String {
     }
 }
 
+/// The symbol the About window shows: the rings of the app icon alone, on
+/// nothing (specs/app-icons.md), rasterised at the size it is drawn at
+/// times the window's scale, so it is sharp at every scale.
+const ABOUT_SYMBOL_SVG: &[u8] = include_bytes!("../../../assets/icons/svg/rick-symbol.svg");
+/// The symbol's size in the About window, in points.
+const ABOUT_SYMBOL_SIZE: f32 = 64.0;
+
+/// The symbol as a texture of `ABOUT_SYMBOL_SIZE` points at the context's
+/// scale, rasterised once per scale and kept in the context; `None` when
+/// the SVG does not parse or the pixmap cannot be made, which is said once
+/// and leaves the window without the picture.
+fn about_symbol(ctx: &egui::Context) -> Option<egui::TextureHandle> {
+    let scale = ctx.pixels_per_point();
+    let key = egui::Id::new(("about-symbol", scale.to_bits()));
+    if let Some(texture) = ctx.data(|d| d.get_temp::<egui::TextureHandle>(key)) {
+        return Some(texture);
+    }
+    let tree =
+        match resvg::usvg::Tree::from_data(ABOUT_SYMBOL_SVG, &resvg::usvg::Options::default()) {
+            Ok(tree) => tree,
+            Err(error) => {
+                tracing::warn!(%error, "the About symbol did not parse");
+                return None;
+            }
+        };
+    let edge = (ABOUT_SYMBOL_SIZE * scale).round().max(1.0);
+    // Rounded and at least one: the cast is exact.
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    let side = edge as u32;
+    let mut pixmap = resvg::tiny_skia::Pixmap::new(side, side)?;
+    let intrinsic = tree.size();
+    let transform = resvg::tiny_skia::Transform::from_scale(
+        edge / intrinsic.width(),
+        edge / intrinsic.height(),
+    );
+    resvg::render(&tree, transform, &mut pixmap.as_mut());
+    let image =
+        egui::ColorImage::from_rgba_premultiplied([side as usize, side as usize], pixmap.data());
+    let texture = ctx.load_texture(
+        format!("about-symbol-{scale}"),
+        image,
+        egui::TextureOptions::LINEAR,
+    );
+    ctx.data_mut(|d| d.insert_temp(key, texture.clone()));
+    Some(texture)
+}
+
 /// The About window; `version` is the binary's version and git hash.
 pub fn about_window(ctx: &egui::Context, open: &mut bool, version: &str) {
     egui::Window::new(t!("about-rick"))
         .open(open)
         .resizable(false)
         .show(ctx, |ui| {
-            ui.heading(t!("rick"));
-            ui.label(t!("settings-a-god-like-file-manager"));
-            ui.label(t!("about-version", version = version));
-            ui.hyperlink("https://github.com/Open-Breach/rick");
+            ui.horizontal(|ui| {
+                if let Some(texture) = about_symbol(ui.ctx()) {
+                    ui.image((texture.id(), vec2(ABOUT_SYMBOL_SIZE, ABOUT_SYMBOL_SIZE)));
+                }
+                ui.vertical(|ui| {
+                    ui.heading(t!("rick"));
+                    ui.label(t!("settings-a-god-like-file-manager"));
+                    ui.label(t!("about-version", version = version));
+                    ui.hyperlink("https://github.com/Open-Breach/rick");
+                });
+            });
         });
 }
 
@@ -1506,4 +1560,31 @@ pub fn extensions_window(
                  on the next start.",
             );
         });
+}
+
+#[cfg(test)]
+mod tests {
+    use egui_kittest::kittest::Queryable as _;
+
+    use super::*;
+
+    /// The About window draws the rings-only symbol at 64 px, rasterised
+    /// at that size times the window's scale, once per scale.
+    #[test]
+    fn the_about_window_shows_the_symbol_at_64_px() {
+        let mut open = true;
+        let mut harness = egui_kittest::Harness::builder()
+            .with_pixels_per_point(2.0)
+            .build_ui(|ui| about_window(ui.ctx(), &mut open, "0.0.0 (test)"));
+        harness.run();
+        harness.get_by_role(egui::accesskit::Role::Image);
+        let texture =
+            about_symbol(&harness.ctx).unwrap_or_else(|| panic!("the symbol did not rasterise"));
+        assert_eq!(texture.size(), [128, 128]);
+        assert_eq!(
+            about_symbol(&harness.ctx).map(|t| t.id()),
+            Some(texture.id()),
+            "rasterised once per scale"
+        );
+    }
 }

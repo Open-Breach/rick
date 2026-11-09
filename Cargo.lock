@@ -8496,6 +8496,7 @@ dependencies = [
  "image",
  "model",
  "platform",
+ "resvg",
  "runtime",
  "tempfile",
  "tracing",
