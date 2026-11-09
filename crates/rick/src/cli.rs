@@ -58,14 +58,26 @@ pub enum Core {
     },
 }
 
+/// A positional argument of `rick [<path>…]`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Target {
+    /// A folder to open, resolved against the caller's working directory;
+    /// a `file://` URL is decoded to its path here.
+    Path(PathBuf),
+    /// A `rick://` URL (specs/system-integration.md §4), resolved in the
+    /// window: an existing folder opens, an existing file is revealed,
+    /// anything else is an error toast there and nothing opens.
+    Url(String),
+}
+
 /// What a command line asks for, paths resolved.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Parsed {
-    /// Open each path in a tab; the caller's working directory when none
+    /// Open each target in a tab; the caller's working directory when none
     /// was given.
     Open {
-        /// The folders, resolved against the caller's working directory.
-        paths: Vec<PathBuf>,
+        /// The folders and `rick://` URLs.
+        targets: Vec<Target>,
         /// In a window of their own.
         new_window: bool,
     },
@@ -189,24 +201,46 @@ pub fn parse(argv: &[String], cwd: &Path, plugins: &[CommandSpec]) -> Result<Par
             // a command the command line does not know (a typo of one, a
             // plugin that is not loaded), not a folder to open: the help
             // says what the commands are. A path with a separator, or
-            // one that exists, is a folder whatever it is called.
-            if let Some(word) = cli.paths.iter().find(|p| is_unknown_command(cwd, p)) {
-                return Err(Usage(format!(
-                    "rick: unknown command `{}`\n\n{}",
-                    word.display(),
-                    command.render_long_help()
-                )));
+            // one that exists, is a folder whatever it is called; a
+            // `file://` URL (the desktop entry's `%U`) is its path, and a
+            // `rick://` URL is the window's to resolve.
+            let mut targets = Vec::with_capacity(cli.paths.len().max(1));
+            for arg in &cli.paths {
+                let text = arg.to_string_lossy();
+                if is_url(&text, "rick") {
+                    targets.push(Target::Url(text.into_owned()));
+                } else if is_url(&text, "file") {
+                    let path = platform::paths::from_uri(&text, "file").ok_or_else(|| {
+                        Usage(format!("rick: `{text}` is not a file URL of this computer"))
+                    })?;
+                    targets.push(Target::Path(resolve(cwd, &path)));
+                } else if is_unknown_command(cwd, arg) {
+                    return Err(Usage(format!(
+                        "rick: unknown command `{}`\n\n{}",
+                        arg.display(),
+                        command.render_long_help()
+                    )));
+                } else {
+                    targets.push(Target::Path(resolve(cwd, arg)));
+                }
             }
-            let mut paths: Vec<PathBuf> = cli.paths.iter().map(|p| resolve(cwd, p)).collect();
-            if paths.is_empty() {
-                paths.push(resolve(cwd, Path::new(".")));
+            if targets.is_empty() {
+                targets.push(Target::Path(resolve(cwd, Path::new("."))));
             }
             Parsed::Open {
-                paths,
+                targets,
                 new_window: cli.new_window,
             }
         }
     })
+}
+
+/// Whether `text` is a URL of `scheme` (`rick://…`), the scheme matched
+/// regardless of case.
+fn is_url(text: &str, scheme: &str) -> bool {
+    text.get(..scheme.len())
+        .is_some_and(|head| head.eq_ignore_ascii_case(scheme))
+        && text[scheme.len()..].starts_with("://")
 }
 
 /// Whether a positional argument reads as a command rather than a path:
@@ -246,7 +280,10 @@ mod tests {
         assert_eq!(
             parsed,
             Parsed::Open {
-                paths: vec![canonical.join("sub"), dir.path().join("nowhere")],
+                targets: vec![
+                    Target::Path(canonical.join("sub")),
+                    Target::Path(dir.path().join("nowhere"))
+                ],
                 new_window: false
             }
         );
@@ -263,7 +300,7 @@ mod tests {
         assert_eq!(
             parsed,
             Parsed::Open {
-                paths: vec![canonical.clone()],
+                targets: vec![Target::Path(canonical.clone())],
                 new_window: false
             }
         );
@@ -272,7 +309,7 @@ mod tests {
         assert_eq!(
             parsed,
             Parsed::Open {
-                paths: vec![canonical.join("sub")],
+                targets: vec![Target::Path(canonical.join("sub"))],
                 new_window: true
             }
         );
@@ -332,15 +369,48 @@ mod tests {
         assert_eq!(
             parsed,
             Parsed::Open {
-                paths: vec![
+                targets: vec![Target::Path(
                     dir.path()
                         .join("install")
                         .canonicalize()
                         .unwrap_or_else(|e| panic!("{e}"))
+                )],
+                new_window: false
+            }
+        );
+    }
+
+    /// A `rick://` URL is the window's to resolve, whatever its case; a
+    /// `file://` URL is its path; one of another machine is refused.
+    #[test]
+    fn urls_are_targets_of_their_own() {
+        let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+        let sub = dir.path().join("sub");
+        std::fs::create_dir(&sub).unwrap_or_else(|e| panic!("{e}"));
+        let canonical = sub.canonicalize().unwrap_or_else(|e| panic!("{e}"));
+        let file_url = platform::paths::file_uri(&sub);
+        let rick_url = format!("RICK{}", &file_url["file".len()..]);
+        let parsed = parse(
+            &args(&[&rick_url, &file_url, "rick://apps"]),
+            dir.path(),
+            &[],
+        )
+        .unwrap_or_else(|e| panic!("{e:?}"));
+        assert_eq!(
+            parsed,
+            Parsed::Open {
+                targets: vec![
+                    Target::Url(rick_url),
+                    Target::Path(canonical),
+                    Target::Url("rick://apps".to_owned())
                 ],
                 new_window: false
             }
         );
+        assert!(matches!(
+            parse(&args(&["file://server/share/x"]), dir.path(), &[]),
+            Err(Usage(text)) if text.contains("file URL")
+        ));
     }
 
     #[test]

@@ -3095,3 +3095,15 @@ Once answered, an entry keeps its number and gains a dated decision line.
     the binary cannot tell a terminal from a launcher and the spec names
     no flag that would; if the launcher should only raise the window, the
     desktop entry needs an argument form of its own, Serge's call.
+
+265. (system integration, 2026-11-09) §4: "`rick://<path>` URL scheme …
+    `rick:///home/serge/Apps` opens the folder … anything that is not an
+    existing local path shows an error toast and opens nothing." Rick's
+    own virtual locations are spelled `rick://apps`, `rick://trash` (the
+    `rick` provider of `vfs-rick`), so a link `rick://apps` reads as the
+    Installed Apps view to anyone who knows them, while the spec's grammar
+    has an empty host and a local path only.
+    Assumed: the spec's grammar, literally — a `rick://` URL with a host
+    names no path on this computer, so it shows the error toast and opens
+    nothing; mapping `rick://<view>` to the virtual provider's view would
+    be one more arm in the binary's `apply` if wanted.

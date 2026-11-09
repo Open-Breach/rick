@@ -12,8 +12,11 @@ prints the version and the git hash, `rick --list-plugins` the plugins table
 the Extensions screen shows; `rick [<path>…]` opens each folder in a tab
 of the most recently focused window (the working directory without any),
 `rick reveal <file>…` opens the files' folders and selects the files,
-`--new-window` puts them in a window of their own, and `rick <command>
-<args…>` runs a plugin's subcommand, listed by `--help` with the core ones.
+`--new-window` puts them in a window of their own, `rick <command>
+<args…>` runs a plugin's subcommand, listed by `--help` with the core ones,
+and a `rick:///<path>` URL (the scheme the desktop entry and `Info.plist`
+register) opens an existing folder, reveals an existing file and is an
+error toast otherwise.
 One Rick runs per user session and config directory (`--config-dir <dir>`
 picks another): a launch first hands its command line to the running
 instance over the platform's single-instance endpoint, prints the reply

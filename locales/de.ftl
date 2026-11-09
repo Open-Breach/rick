@@ -300,3 +300,5 @@ about-exported = Exportiert nach { $path }
 about-export-failed = Export fehlgeschlagen: { $error }
 about-export-header = Lizenzen Dritter von Rick { $version }
 about-export-generated = Beim Bauen aus Cargo.lock mit cargo-about erzeugt.
+
+cli-url-not-local = { $url } nennt keinen Ordner und keine Datei auf diesem Rechner
