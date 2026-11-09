@@ -109,8 +109,12 @@ jobs:
         run: |
           set -euo pipefail
           base="https://gstreamer.freedesktop.org/data/pkg/osx/$GSTREAMER_VERSION"
+          # The packages are large and the server cuts a transfer short
+          # now and then (release.yml run 42664667120): HTTP/1.1, and five
+          # tries with a pause between them.
           for pkg in gstreamer-1.0 gstreamer-1.0-devel; do
-            curl -sSL -o "$RUNNER_TEMP/$pkg.pkg" "$base/$pkg-$GSTREAMER_VERSION-universal.pkg"
+            curl -sSL --http1.1 --retry 5 --retry-all-errors --retry-delay 15 \
+              -o "$RUNNER_TEMP/$pkg.pkg" "$base/$pkg-$GSTREAMER_VERSION-universal.pkg"
             sudo installer -pkg "$RUNNER_TEMP/$pkg.pkg" -target /
           done
           framework="/Library/Frameworks/GStreamer.framework/Versions/1.0"
@@ -123,7 +127,9 @@ jobs:
         run: |
           $base = "https://gstreamer.freedesktop.org/data/pkg/windows/$env:GSTREAMER_VERSION/msvc"
           $installer = "$env:RUNNER_TEMP\gstreamer.exe"
-          Invoke-WebRequest -Uri "$base/gstreamer-1.0-msvc-x86_64-$env:GSTREAMER_VERSION.exe" -OutFile $installer
+          # The installer is large and the server cuts a transfer short now
+          # and then (release.yml run 42664667120): five tries with a pause.
+          Invoke-WebRequest -Uri "$base/gstreamer-1.0-msvc-x86_64-$env:GSTREAMER_VERSION.exe" -OutFile $installer -MaximumRetryCount 5 -RetryIntervalSec 15
           $root = "C:\gstreamer\1.0\msvc_x86_64"
           Start-Process -FilePath $installer -ArgumentList "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/TYPE=full", "/DIR=$root" -Wait
           if (-not (Test-Path "$root\lib\pkgconfig\gstreamer-1.0.pc")) {
