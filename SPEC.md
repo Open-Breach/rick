@@ -1203,5 +1203,4 @@ Some plugins are specified in their own file under `specs/`, so they can be hand
 - Extension security model: what a WASM plugin may touch (capabilities per extension point). Native plugins are settled in `specs/system-integration.md` §9: declared permissions, release-signature verification for first-party plugins, trust on first use for third-party ones.
 - Testing strategy for the performance targets: a generated 200k-entry fixture and a benchmark harness in CI.
 - Accessibility: egui's AccessKit support is young; screen-reader support is a known weakness to state and track.
-- Distribution is decided in `specs/system-integration.md` §10; what remains open there is the Windows installer technology (Inno Setup assumed, WiX the alternative).
 - Design, not drawn yet (issue 60): what happens when workspace tabs outgrow the title row; the context menus for a folder and for a multiple selection; the contents of *Open with*; the permission-denied state of a pane; the look of the preview pane's content; further colour schemes beyond Light and Dark; a customisable toolbar.
