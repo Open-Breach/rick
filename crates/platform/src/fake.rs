@@ -12,6 +12,7 @@ use tempfile::TempDir;
 use types::Error;
 
 use crate::instance::Endpoint;
+use crate::integration::{self, FakeIntegration, Integration};
 use crate::perms::{
     FilePermissions, PermissionChange, Permissions, Principal, PrincipalKind, Principals,
 };
@@ -92,6 +93,18 @@ pub struct Fake {
     reduce_motion: Mutex<bool>,
     /// The keychain: secrets by key.
     secrets: Mutex<std::collections::BTreeMap<String, String>>,
+    /// Who answers [`Integration`]: a [`FakeIntegration`] without items
+    /// unless a test puts another in its place.
+    integration: Mutex<IntegrationSlot>,
+}
+
+/// The fake's [`Integration`], whatever implements it.
+struct IntegrationSlot(Arc<dyn Integration>);
+
+impl std::fmt::Debug for IntegrationSlot {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Integration")
+    }
 }
 
 #[derive(Debug, Default)]
@@ -148,7 +161,22 @@ impl Fake {
             unlistable: Mutex::new(false),
             reduce_motion: Mutex::new(false),
             secrets: Mutex::new(std::collections::BTreeMap::new()),
+            integration: Mutex::new(IntegrationSlot(Arc::new(FakeIntegration::new(
+                &crate::os_description(),
+                None,
+            )))),
         })
+    }
+
+    /// Puts `integration` in place of the fake's own, which lists no
+    /// items: a [`FakeIntegration`] the test scripted, or the real items
+    /// of a platform on a temporary home.
+    pub fn set_integration(&self, integration: Arc<dyn Integration>) {
+        lock(&self.integration).0 = integration;
+    }
+
+    fn integration(&self) -> Arc<dyn Integration> {
+        Arc::clone(&lock(&self.integration).0)
     }
 
     /// Paths and applications handed to [`OpenWith::open_with`], oldest
@@ -631,6 +659,36 @@ impl Activation for Fake {
     }
 
     fn allow_activation(&self) {}
+}
+
+impl Integration for Fake {
+    fn integration_items(&self) -> integration::Items {
+        self.integration().integration_items()
+    }
+
+    fn check_integration(
+        &self,
+        item: integration::Item,
+        request: &integration::Request,
+    ) -> integration::Check {
+        self.integration().check_integration(item, request)
+    }
+
+    fn perform_integration(
+        &self,
+        item: integration::Item,
+        request: &integration::Request,
+    ) -> Result<integration::Receipt, Error> {
+        self.integration().perform_integration(item, request)
+    }
+
+    fn undo_integration(
+        &self,
+        item: integration::Item,
+        request: &integration::Request,
+    ) -> Result<(), Error> {
+        self.integration().undo_integration(item, request)
+    }
 }
 
 impl SingleInstance for Fake {

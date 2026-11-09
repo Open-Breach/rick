@@ -4,13 +4,15 @@
 //! rows, `$XDG_CONFIG_HOME/rick`, the mount table from `/proc/mounts` with
 //! `udisksctl` for ejecting and for mounting a disk image through a loop
 //! device, XDG user-dirs and `recently-used.xbel`, drag and drop
-//! through a Wayland data device or XDND, and the window raised through
-//! `xdg_activation_v1` or `_NET_ACTIVE_WINDOW`.
+//! through a Wayland data device or XDND, the window raised through
+//! `xdg_activation_v1` or `_NET_ACTIVE_WINDOW`, and the integration items
+//! of specs/system-integration.md §7.1 ([`integration`]).
 
 mod activate;
 mod apps;
 mod drag;
 mod elevate;
+pub(crate) mod integration;
 mod mount;
 mod terminal;
 mod trash;

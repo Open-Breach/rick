@@ -373,8 +373,9 @@ jobs:
             test -f third-party.json || { echo "no third-party.json beside the binary"; exit 1; }
           fi
           test -f "rick$exe" || { echo "missing rick$exe"; exit 1; }
-          # The About dialog's component list parses and names crates.
-          python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); assert isinstance(d,list) and len(d) > 100, "too few entries"; print(len(d), "third-party entries")' \
+          # The About dialog's component list parses and names crates. Read as
+          # UTF-8: the licence texts are not in Windows' default code page.
+          python3 -c 'import json,sys; d=json.load(open(sys.argv[1], encoding="utf-8")); assert isinstance(d,list) and len(d) > 100, "too few entries"; print(len(d), "third-party entries")' \
             "$([ "${{ runner.os }}" = "macOS" ] && echo ../Resources/third-party.json || echo third-party.json)"
           test -f libpdfium.so || test -f libpdfium.dylib || test -f pdfium.dll || { echo "no pdfium library beside the binary"; exit 1; }
           # The GStreamer runtime the media previewer plays through, bundled

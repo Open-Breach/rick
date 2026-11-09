@@ -140,7 +140,7 @@ pub(crate) fn mime_of(path: &Path) -> String {
 
 /// The desktop ids listed for `mime` under `section` of an INI-like file:
 /// `mime=a.desktop;b.desktop;`.
-fn ids_in(text: &str, section: &str, mime: &str) -> Vec<String> {
+pub(crate) fn ids_in(text: &str, section: &str, mime: &str) -> Vec<String> {
     let mut inside = false;
     let mut ids = Vec::new();
     for line in text.lines() {
