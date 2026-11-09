@@ -21,6 +21,9 @@ serde = { workspace = true }
 tokio = { workspace = true, features = ["sync", "time", "macros"] }
 toml = { workspace = true }
 encoding_rs = { workspace = true }
+# The preview pane's Copy inflates a gzip-compressed file (an SVGZ) before
+# decoding its text (issue 83).
+flate2 = { workspace = true }
 tracing = { workspace = true }
 
 [dev-dependencies]

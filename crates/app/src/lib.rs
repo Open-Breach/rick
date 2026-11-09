@@ -3818,9 +3818,10 @@ impl App {
 
     /// Reads the whole file the pane previews and puts its text on the
     /// clipboard: a job, answered by [`Msg::PreviewText`]. The bytes are
-    /// decoded by their byte-order mark (UTF-8, UTF-16) and as UTF-8
-    /// otherwise, lossily; a file above [`COPY_LIMIT`] is refused with a
-    /// notification.
+    /// inflated when the file is gzip-compressed (an SVGZ: the text shown is
+    /// the inflated one), then decoded by their byte-order mark (UTF-8,
+    /// UTF-16) and as UTF-8 otherwise, lossily; a file above [`COPY_LIMIT`]
+    /// is refused with a notification.
     fn copy_preview_text(&mut self, pane: PaneId) {
         let Some(job) = self.preview.get(&pane) else {
             return;
@@ -3841,7 +3842,7 @@ impl App {
                     if bytes.len() > COPY_LIMIT {
                         return Err(Error::Unsupported("the file is larger than the copy limit"));
                     }
-                    Ok(decode_text(&bytes))
+                    copied_text(&bytes)
                 }
                 .await;
                 tx.send(Msg::PreviewText { result });
@@ -4281,6 +4282,34 @@ pub fn decode_text(bytes: &[u8]) -> String {
         return text.into_owned();
     }
     String::from_utf8_lossy(bytes).into_owned()
+}
+
+/// The text the preview pane's *Copy* puts on the clipboard for a file's
+/// bytes: a gzip-compressed file (an SVGZ, whose previewer shows the
+/// inflated XML) is inflated first, within [`COPY_LIMIT`]; then
+/// [`decode_text`].
+///
+/// # Errors
+///
+/// `Error::Unsupported` when the file inflates beyond the limit, `Error::Io`
+/// for gzip that does not inflate.
+pub fn copied_text(bytes: &[u8]) -> Result<String, Error> {
+    use std::io::Read as _;
+
+    if !bytes.starts_with(&[0x1f, 0x8b]) {
+        return Ok(decode_text(bytes));
+    }
+    let mut inflated = Vec::new();
+    flate2::read::GzDecoder::new(bytes)
+        .take(COPY_LIMIT as u64 + 1)
+        .read_to_end(&mut inflated)
+        .map_err(Error::from_io)?;
+    if inflated.len() > COPY_LIMIT {
+        return Err(Error::Unsupported(
+            "the file inflates beyond the copy limit",
+        ));
+    }
+    Ok(decode_text(&inflated))
 }
 
 /// The tab's one selected entry, when exactly one is selected and it is not

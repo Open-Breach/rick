@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- A red disc over nothing, with a translucent square in the corner. -->
+<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64">
+  <circle cx="32" cy="32" r="24" fill="#ff0000"/>
+  <rect x="48" y="48" width="16" height="16" fill="#0000ff" fill-opacity="0.5"/>
+</svg>

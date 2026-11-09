@@ -2955,3 +2955,29 @@ Once answered, an entry keeps its number and gains a dated decision line.
     and the toolbar padding (`Metrics::footer_height`), the toggle is the
     field's 26 px, and the preview pane's footer follows; the spec's "as
     tall as the toolbar" is for the author to reword.
+
+255. (preview formats, 2026-11-09) *Vector images* gives an SVG "the
+    raster images' Fit and 1:1 plus the *Rendered* toggle", makes its
+    source the text layer, and shows transparent regions "over the
+    checkerboard raster images with alpha use". The pane offers Fit and
+    1:1 — and so sends the actual-size request — only to a document with
+    neither pages nor a text layer, and draws no checkerboard behind any
+    frame; the GUI chapter is the design refresh's.
+    Assumed: the document answers both kinds of request as the spec says
+    (a fitted request rasterises to fit the pane, a `MAX_ACTUAL` request
+    gives the intrinsic size at the display scale, both proven by its
+    tests) and keeps the text layer so *Copy* and find work, while the
+    pane shows an SVG as text for the toolbar's purposes: Fit, with
+    *Rendered* and *Copy*, no 1:1 button until the pane's rule becomes
+    "a raster is any document whose frames are pixels", one change in the
+    pane for the design refresh, with the checkerboard.
+
+256. (preview formats, 2026-11-09) *Vector images*: "*Copy* copies the raw
+    SVG as text — decompressed for SVGZ". *Copy* is the app's: it reads the
+    whole file itself (the whole file, not the window the pane loaded) and
+    decodes the bytes as text, so it never asks the previewer what the text
+    of a file is, and the gzip of an SVGZ would land on the clipboard.
+    Assumed: the app inflates a gzip-compressed file before decoding it,
+    which serves SVGZ and any gzip-compressed text alike and keeps the
+    previewers out of *Copy*; a hook on the Previewer trait for the text of
+    a whole file would be a change to the versioned contract.
