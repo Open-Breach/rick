@@ -2829,9 +2829,11 @@ impl RickUi {
             let slot = ((x - row.left()) / pitch).round().max(0.0) as usize;
             slot.min(count)
         };
+        // The gap is where the dragged tab would land: any place of the
+        // row, the last one included.
         let drag_slot = drag
             .filter(|_| riding)
-            .and_then(|d| pointer.map(|p| slot_of(p.x - d.grab.x, others.saturating_sub(1))));
+            .and_then(|d| pointer.map(|p| slot_of(p.x - d.grab.x, others)));
         let pane_over_row = w.pane_drag.is_some()
             && pointer.is_some_and(|p| row.expand2(egui::vec2(0.0, 6.0)).contains(p));
         let drop_slot = pane_over_row.then(|| pointer.map(|p| slot_of(p.x, tabs.len())));
