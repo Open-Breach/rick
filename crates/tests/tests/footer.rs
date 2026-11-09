@@ -83,8 +83,40 @@ fn entry_id(harness: &Harness<'_, RickUi>, name: &str) -> types::EntryId {
         .unwrap_or_else(|| panic!("no entry {name}"))
 }
 
+/// The horizontal hairlines painted in the last frame within `band`, a
+/// strip of the window: egui draws them as line segments.
+fn hairlines_in(harness: &Harness<'_, RickUi>, band: egui::Rect) -> usize {
+    fn walk(shape: &egui::Shape, band: egui::Rect, count: &mut usize) {
+        match shape {
+            egui::Shape::LineSegment { points, .. }
+                if (points[0].y - points[1].y).abs() < 0.5
+                    && band.y_range().contains(points[0].y)
+                    && points[0].x.min(points[1].x) <= band.center().x
+                    && points[0].x.max(points[1].x) >= band.center().x =>
+            {
+                *count += 1;
+            }
+            egui::Shape::Vec(shapes) => {
+                for shape in shapes {
+                    walk(shape, band, count);
+                }
+            }
+            _ => {}
+        }
+    }
+    let mut count = 0;
+    for clipped in &harness.output().shapes {
+        walk(&clipped.shape, band, &mut count);
+    }
+    count
+}
+
+/// Issue 79 item 4: the footer is the Figma status bar's height (the
+/// hairline, the 26 px field and the toolbar padding; QUESTIONS.md 254),
+/// not the toolbar's, and one hairline, its own, separates it from the
+/// list — egui's panel separator had drawn a second one.
 #[test]
-fn the_footer_is_the_toolbar_tall_and_counts_folders_files_and_the_selection() {
+fn the_footer_is_the_status_bars_height_under_one_hairline_and_counts_the_folder() {
     let dir = tree();
     let fake = Arc::new(Fake::new().unwrap_or_else(|e| panic!("{e}")));
     let mut harness = harness(dir.path(), &fake);
@@ -100,14 +132,23 @@ fn the_footer_is_the_toolbar_tall_and_counts_folders_files_and_the_selection() {
         .state()
         .footer_row(tab)
         .unwrap_or_else(|| panic!("no footer"));
-    let toolbar = ui_egui::toolbar_height(Density::Comfortable);
+    let footer = ui_egui::footer_height(Density::Comfortable);
     assert!(
-        (row.height() - toolbar).abs() < 0.5,
-        "{} against {toolbar}",
+        (row.height() - footer).abs() < 0.5,
+        "{} against {footer}",
         row.height()
     );
     let last = harness.get_by_label("cherry.rs").rect();
     assert!(row.top() >= last.bottom(), "under the list");
+    // One hairline at the footer's top edge, and no other line near it.
+    let edge = egui::Rect::from_x_y_ranges(row.x_range(), row.top() - 4.0..=row.top() + 4.0);
+    assert_eq!(hairlines_in(&harness, edge), 1, "hairlines at {edge:?}");
+    // The toggle is the field's height, not a tool button's.
+    let toggle = harness.get_by_label("Show hidden files").rect();
+    assert!(
+        (toggle.height() - 26.0).abs() < 0.5,
+        "toggle {toggle:?} is 26 px tall"
+    );
     // The counts, read aloud with their nouns; no pill without a selection.
     harness.get_by_label("2 folders");
     harness.get_by_label("3 files");

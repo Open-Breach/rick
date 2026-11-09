@@ -68,7 +68,7 @@ use app::App;
 pub use host::{Ask, EguiHost};
 pub use inline::{EditKind, RowEdit};
 pub use keys::{Intent, KeyMap};
-pub use pane::{HANDLE_WIDTH, toolbar_height};
+pub use pane::{HANDLE_WIDTH, footer_height, toolbar_height};
 pub use shell::{
     DOCK_TILE, DOCK_TILE_PITCH, Dispatched, Request, RickUi, TabUi, WindowUi, viewport_builder,
 };
