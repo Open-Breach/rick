@@ -3052,3 +3052,21 @@ Once answered, an entry keeps its number and gains a dated decision line.
     the first "Copyright" line of the licence text when there is one.
     Marking the workspace crates `publish = false` would take them out of
     the generated file at the source.
+
+262. (issue 101, 2026-11-09) *About dialog*, Credits card: "fixed rows first
+    — Serge …; Claude (Anthropic) … — then the GitHub contributors appended
+    at build time (`git shortlog -sn --no-merges` …), each with the role
+    from `CONTRIBUTORS.md` when a line matches the name". The shortlog of
+    this repository names "Claude", "Serge" and "Serge Berwert", the two
+    people of the fixed rows, and the spec does not say how a line of
+    `CONTRIBUTORS.md` (which does not exist yet) matches a name.
+    Assumed: a contributor whose first word is a fixed row's first word
+    (case aside) is that person and is not repeated; a line matches when,
+    after a list marker, it starts with the name, and what follows a dash,
+    a colon or a comma is the role. Two more small calls of this item: the
+    OS and desktop line needs the operating system's version, so a
+    `platform::os_description()` was added to the platform crate rather
+    than a `cfg(target_os)` elsewhere; and the "medium" weight of the
+    frames is drawn in the system font's one weight, egui having no
+    medium face.
+

@@ -3,8 +3,9 @@
 //! Wires the native platform, the local provider, the built-in operations,
 //! the previewers compiled in as features and the plugins found beside the
 //! binary and in the config directory into the `app`, and runs the egui
-//! shell. `rick --version` prints the version and the git hash of the build
-//! and exits; `rick --list-plugins` prints the table the Extensions screen
+//! shell. `rick --version` prints the build's details — the text the About
+//! dialog's *Copy details* copies (specs/about-dialog.md) — and exits;
+//! `rick --list-plugins` prints the table the Extensions screen
 //! shows and exits; every other argument is a folder to open, each in a
 //! tab of its own (`rick <folder>…`, as the desktop entry's `%F` passes the
 //! selected folders; specs/app-icons.md), `--new-window` in a window of
@@ -32,9 +33,25 @@ use app::Command;
 use platform::{ConfigDir as _, SingleInstance as _};
 use plugins_native::{Host, Options, PluginStatus};
 
-/// The version and the git hash of this build, as `--version` prints them
-/// and the About window shows them.
-pub const VERSION: &str = concat!(env!("CARGO_PKG_VERSION"), " (", env!("RICK_GIT_HASH"), ")");
+/// What this binary knows about its own build, for the About dialog and
+/// `--version`: the values `build.rs` records, the toolchain the plugin
+/// host was built with, the contributors, and the component list of the
+/// release beside the binary (`None` in a build without one).
+fn build(exe: &Path) -> ui_egui::about::Build {
+    ui_egui::about::Build {
+        version: env!("CARGO_PKG_VERSION").to_owned(),
+        commit: env!("RICK_GIT_HASH").to_owned(),
+        target: env!("RICK_TARGET").to_owned(),
+        date: env!("RICK_BUILD_DATE").to_owned(),
+        toolchain: plugins_native::HOST_TOOLCHAIN.to_owned(),
+        contributors: include_str!(env!("RICK_CONTRIBUTORS")),
+        roles: include_str!(env!("RICK_CONTRIBUTOR_ROLES")),
+        plugins_dir: exe
+            .parent()
+            .map(|dir| dir.join(plugins_native::PLUGINS_DIR)),
+        third_party: ui_egui::about::load_third_party(exe),
+    }
+}
 
 /// The extensions compiled in, one per enabled feature.
 // Each push sits behind its feature, which `vec![]` cannot express.
@@ -117,7 +134,7 @@ Options:
       --config-dir <DIR>  Use this config directory instead of the platform's; each
                           config directory is a Rick of its own
       --list-plugins      List the plugins found and whether each loaded
-  -V, --version           Print the version and the git hash of the build
+  -V, --version           Print the build's details: version, commit, toolchain, OS, plugins
   -h, --help              Print this help";
 
 /// The arguments the launch itself acts on, before any instance is asked.
@@ -205,10 +222,6 @@ fn run() -> anyhow::Result<ExitCode> {
             return exit_with(instance::USAGE, Some(format!("rick: {message}\n\n{HELP}")));
         }
     };
-    if launch.version {
-        writeln!(std::io::stdout().lock(), "{VERSION}").context("writing the version")?;
-        return Ok(ExitCode::SUCCESS);
-    }
     if launch.help {
         writeln!(std::io::stdout().lock(), "{HELP}").context("writing the help")?;
         return Ok(ExitCode::SUCCESS);
@@ -232,7 +245,9 @@ fn run() -> anyhow::Result<ExitCode> {
     // command line and this launch exits with its status; none, and this
     // launch holds the endpoint from here on.
     let cwd = std::env::current_dir().context("the working directory")?;
-    let listener = if launch.list_plugins {
+    // `--version` and `--list-plugins` print and exit once the plugins are
+    // known: the version text lists them with their status.
+    let listener = if launch.list_plugins || launch.version {
         None
     } else {
         let endpoint = platform.instance_endpoint(&config_dir);
@@ -256,7 +271,7 @@ fn run() -> anyhow::Result<ExitCode> {
     // the pane says what it cannot list, and the start never fails on it.
     // `--new-window` means nothing to a launch that opens the first window
     // anyway.
-    let mut folders = if launch.list_plugins {
+    let mut folders = if launch.list_plugins || launch.version {
         Vec::new()
     } else {
         folders(&launch.rest, &cwd)
@@ -292,12 +307,22 @@ fn run() -> anyhow::Result<ExitCode> {
         prompts: Some(Arc::clone(&prompts)),
         settings: Some(Arc::clone(&ext_settings) as Arc<dyn ext::SettingsStore>),
     });
+    let rows: Vec<app::Plugin> = host.plugins().iter().map(row).collect();
+    let build = build(&exe);
+    if launch.version {
+        writeln!(
+            std::io::stdout().lock(),
+            "{}",
+            ui_egui::about::details(&build, &rows)
+        )
+        .context("writing the version")?;
+        return Ok(ExitCode::SUCCESS);
+    }
     if launch.list_plugins {
         write!(std::io::stdout().lock(), "{}", table(host.plugins()))
             .context("writing the plugins table")?;
         return Ok(ExitCode::SUCCESS);
     }
-    let rows: Vec<app::Plugin> = host.plugins().iter().map(row).collect();
     let mut extensions = built_ins;
     extensions.extend(host.extensions());
     // The loaded libraries stay mapped for the process lifetime: every
@@ -333,7 +358,7 @@ fn run() -> anyhow::Result<ExitCode> {
     let (externals, receiver) = app::external_channel();
     let endpoint = listener.as_ref().map(|l| l.endpoint().clone());
     let serving = listener.map(|listener| instance::serve(listener, externals, Arc::from(HELP)));
-    let result = ui_egui::run("Rick", VERSION, app, ui, Some(receiver))
+    let result = ui_egui::run("Rick", build, app, ui, Some(receiver))
         .context("the window could not be opened");
     if let Some(serving) = serving {
         serving.abort();

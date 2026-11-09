@@ -33,6 +33,43 @@ use crate::traits::{
     WindowChrome, WindowRef,
 };
 
+/// The distribution and the desktop: `PRETTY_NAME` of `/etc/os-release`
+/// (`NAME` and `VERSION_ID` when it has none, `Linux` when the file is
+/// missing), then `XDG_CURRENT_DESKTOP` after a middle dot when set.
+pub(crate) fn os_description() -> String {
+    let release = fs::read_to_string("/etc/os-release").unwrap_or_default();
+    let mut text = distribution(&release).unwrap_or_else(|| "Linux".to_owned());
+    if let Some(desktop) = std::env::var("XDG_CURRENT_DESKTOP")
+        .ok()
+        .map(|d| d.trim().to_owned())
+        .filter(|d| !d.is_empty())
+    {
+        text.push_str(" · ");
+        text.push_str(&desktop);
+    }
+    text
+}
+
+/// The distribution's name from an `os-release` text: `PRETTY_NAME`, else
+/// `NAME` with `VERSION_ID`, else nothing.
+fn distribution(release: &str) -> Option<String> {
+    let value = |key: &str| {
+        release.lines().find_map(|line| {
+            let (name, value) = line.split_once('=')?;
+            (name.trim() == key)
+                .then(|| value.trim().trim_matches('"').trim_matches('\'').to_owned())
+        })
+    };
+    if let Some(pretty) = value("PRETTY_NAME").filter(|p| !p.is_empty()) {
+        return Some(pretty);
+    }
+    let name = value("NAME").filter(|n| !n.is_empty())?;
+    Some(match value("VERSION_ID").filter(|v| !v.is_empty()) {
+        Some(version) => format!("{name} {version}"),
+        None => name,
+    })
+}
+
 impl Trash for Native {
     fn trash(&self, path: &Path) -> Result<TrashedItem, Error> {
         trash::trash(path)
@@ -309,6 +346,21 @@ impl DropTarget for Native {
 
 #[cfg(test)]
 mod tests {
+    /// The distribution line: the pretty name first, the name and version
+    /// when there is none, nothing from an empty file.
+    #[test]
+    fn the_distribution_comes_from_os_release() {
+        let full = "NAME=\"Ubuntu\"\nVERSION_ID=\"24.04\"\nPRETTY_NAME=\"Ubuntu 24.04.5 LTS\"\n";
+        assert_eq!(
+            super::distribution(full).as_deref(),
+            Some("Ubuntu 24.04.5 LTS")
+        );
+        let bare = "NAME=Fedora\nVERSION_ID=41\n";
+        assert_eq!(super::distribution(bare).as_deref(), Some("Fedora 41"));
+        assert_eq!(super::distribution("").as_deref(), None);
+        assert_ne!(super::os_description(), "");
+    }
+
     use super::*;
 
     #[test]

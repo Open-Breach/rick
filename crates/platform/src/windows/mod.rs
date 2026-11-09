@@ -17,7 +17,7 @@ use std::process::Stdio;
 use std::time::SystemTime;
 
 use types::Error;
-use windows::Win32::Foundation::{CloseHandle, GENERIC_READ, GENERIC_WRITE, HANDLE};
+use windows::Win32::Foundation::{CloseHandle, ERROR_SUCCESS, GENERIC_READ, GENERIC_WRITE, HANDLE};
 use windows::Win32::Foundation::{HWND, PROPERTYKEY, RPC_E_CHANGED_MODE};
 use windows::Win32::Storage::FileSystem::{
     CreateFileW, FILE_FLAGS_AND_ATTRIBUTES, FILE_SHARE_READ, FILE_SHARE_WRITE, GetDiskFreeSpaceExW,
@@ -33,6 +33,7 @@ use windows::Win32::System::Ioctl::{
     FSCTL_DISMOUNT_VOLUME, FSCTL_LOCK_VOLUME, IOCTL_STORAGE_EJECT_MEDIA,
     IOCTL_STORAGE_MEDIA_REMOVAL, PREVENT_MEDIA_REMOVAL,
 };
+use windows::Win32::System::Registry::{HKEY_LOCAL_MACHINE, RRF_RT_REG_SZ, RegGetValueW};
 use windows::Win32::System::SystemInformation::GetWindowsDirectoryW;
 use windows::Win32::UI::Shell::{
     ASSOC_FILTER_RECOMMENDED, BHID_DataObject, BHID_EnumItems, FOF_ALLOWUNDO, FOF_NO_UI,
@@ -215,6 +216,76 @@ fn same_name(a: &Path, b: &Path) -> bool {
             .eq_ignore_ascii_case(&b.to_string_lossy()),
         _ => false,
     }
+}
+
+/// The edition, display version and build from the registry's
+/// `CurrentVersion` key: `Windows 11 Pro 24H2 (build 26100)`; `Windows`
+/// alone when nothing reads. The key still says "Windows 10" on Windows
+/// 11, which the build number tells apart.
+pub(crate) fn os_description() -> String {
+    let product = version_value("ProductName").unwrap_or_else(|| "Windows".to_owned());
+    let display = version_value("DisplayVersion");
+    let build = version_value("CurrentBuildNumber");
+    let mut text = match build.as_deref().and_then(|b| b.parse::<u32>().ok()) {
+        Some(number) if number >= 22000 => product.replacen("Windows 10", "Windows 11", 1),
+        _ => product,
+    };
+    if let Some(display) = display {
+        text.push(' ');
+        text.push_str(&display);
+    }
+    if let Some(build) = build {
+        text.push_str(" (build ");
+        text.push_str(&build);
+        text.push(')');
+    }
+    text
+}
+
+/// A string value of `HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion`,
+/// trimmed; `None` when it is missing, not a string, or empty.
+fn version_value(value: &str) -> Option<String> {
+    let subkey = w!("SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion");
+    let name: Vec<u16> = value.encode_utf16().chain(std::iter::once(0)).collect();
+    let mut size: u32 = 0;
+    // SAFETY: `name` is a NUL-terminated UTF-16 string that outlives the
+    // call; with no buffer the function only writes the size the value
+    // needs into `size`.
+    let status = unsafe {
+        RegGetValueW(
+            HKEY_LOCAL_MACHINE,
+            subkey,
+            PCWSTR(name.as_ptr()),
+            RRF_RT_REG_SZ,
+            None,
+            None,
+            Some(&raw mut size),
+        )
+    };
+    if status != ERROR_SUCCESS || size == 0 {
+        return None;
+    }
+    let mut buffer = vec![0u16; (size as usize).div_ceil(2)];
+    // SAFETY: `buffer` holds the `size` bytes the query asked for; the
+    // function writes at most `size` bytes into it and the number written
+    // back into `size`.
+    let status = unsafe {
+        RegGetValueW(
+            HKEY_LOCAL_MACHINE,
+            subkey,
+            PCWSTR(name.as_ptr()),
+            RRF_RT_REG_SZ,
+            None,
+            Some(buffer.as_mut_ptr().cast::<c_void>()),
+            Some(&raw mut size),
+        )
+    };
+    if status != ERROR_SUCCESS {
+        return None;
+    }
+    let text = String::from_utf16_lossy(&buffer);
+    let text = text.trim_end_matches('\0').trim();
+    (!text.is_empty()).then(|| text.to_owned())
 }
 
 impl Trash for Native {

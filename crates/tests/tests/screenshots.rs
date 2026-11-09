@@ -1894,6 +1894,84 @@ fn screenshots_of_the_side_panel_and_list() {
 /// The scheme and density tokens (issue 60): the Figma main frame's
 /// layout — two panes and the preview — in Light and Dark, Comfortable
 /// and Compact, for the comparison with the frames.
+/// The About dialog (specs/about-dialog.md) in both schemes and both
+/// densities, beside the Figma frame *About Rick*, and its What's new page.
+#[test]
+#[ignore = "needs a wgpu adapter; CI runs it and uploads the images"]
+fn screenshots_of_the_about_dialog() {
+    let (_dir, deep) = sample_tree();
+    let mut harness = shell(&deep, egui::vec2(1100.0, 1000.0));
+    let build = ui_egui::about::Build {
+        version: "0.3.0-dev".to_owned(),
+        commit: "a1b2c3d".to_owned(),
+        target: "x86_64-unknown-linux-gnu".to_owned(),
+        date: "2026-11-09".to_owned(),
+        toolchain: "rustc 1.97.0".to_owned(),
+        contributors: "Claude\nSerge\n",
+        roles: "",
+        plugins_dir: None,
+        third_party: None,
+    };
+    harness.state_mut().set_build(build);
+    for (theme, density) in [
+        (Theme::Light, Density::Comfortable),
+        (Theme::Light, Density::Compact),
+        (Theme::Dark, Density::Comfortable),
+        (Theme::Dark, Density::Compact),
+    ] {
+        for change in [
+            SettingsChange::Theme(theme),
+            SettingsChange::Density(density),
+        ] {
+            harness
+                .state_mut()
+                .app_mut()
+                .handle(app::Command::Settings(change), &mut Vec::new());
+        }
+        harness.state_mut().open_about();
+        // The pointer out of the way, so no button shows a hover tint.
+        harness.event(egui::Event::PointerMoved(egui::pos2(20.0, 980.0)));
+        settle(&mut harness);
+        harness.step();
+        harness.step();
+        let theme_name = match theme {
+            Theme::Light => "light",
+            Theme::Dark => "dark",
+            Theme::System => "system",
+        };
+        let density_name = match density {
+            Density::Comfortable => "comfortable",
+            Density::Compact => "compact",
+        };
+        shoot(&mut harness, &format!("about-{theme_name}-{density_name}"));
+        if theme == Theme::Light && density == Density::Comfortable {
+            let at = harness
+                .get_by_role_and_label(egui::accesskit::Role::Button, "What's new")
+                .rect()
+                .center();
+            harness.event(egui::Event::PointerMoved(at));
+            harness.step();
+            for pressed in [true, false] {
+                harness.event(egui::Event::PointerButton {
+                    pos: at,
+                    button: egui::PointerButton::Primary,
+                    pressed,
+                    modifiers: egui::Modifiers::default(),
+                });
+                harness.step();
+            }
+            harness.event(egui::Event::PointerMoved(egui::pos2(20.0, 980.0)));
+            harness.step();
+            harness.step();
+            shoot(&mut harness, "about-whats-new");
+        }
+        harness.key_press(egui::Key::Escape);
+        harness.step();
+        harness.key_press(egui::Key::Escape);
+        harness.step();
+    }
+}
+
 #[test]
 #[ignore = "needs a wgpu adapter; CI runs it and uploads the images"]
 fn screenshots_of_the_schemes_and_densities() {

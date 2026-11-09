@@ -111,7 +111,13 @@ fn the_launch_answers_version_and_help_without_an_instance() {
         let (out, _) = launch(&config, dir.path(), &["--version"]).await;
         assert!(out.status.success());
         let stdout = String::from_utf8_lossy(&out.stdout);
-        assert!(stdout.starts_with(env!("CARGO_PKG_VERSION")), "{stdout}");
+        // The About dialog's details (specs/about-dialog.md): the name and
+        // version first, the build line second.
+        assert!(
+            stdout.starts_with(&format!("Rick {}\n", env!("CARGO_PKG_VERSION"))),
+            "{stdout}"
+        );
+        assert!(stdout.contains("plugin ABI "), "{stdout}");
         let (out, _) = launch(&config, dir.path(), &["--help"]).await;
         assert!(out.status.success());
         let stdout = String::from_utf8_lossy(&out.stdout);

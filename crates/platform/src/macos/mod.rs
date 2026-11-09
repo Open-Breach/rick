@@ -42,6 +42,23 @@ fn utf8(path: &Path) -> Result<&str, Error> {
         .ok_or(Error::Unsupported("path is not valid UTF-8"))
 }
 
+/// `macOS` with the product version `sw_vers` reports, `macOS` alone when
+/// it does not answer.
+pub(crate) fn os_description() -> String {
+    let version = Command::new("sw_vers")
+        .arg("-productVersion")
+        .stdin(Stdio::null())
+        .output()
+        .ok()
+        .filter(|out| out.status.success())
+        .map(|out| String::from_utf8_lossy(&out.stdout).trim().to_owned())
+        .filter(|v| !v.is_empty());
+    match version {
+        Some(version) => format!("macOS {version}"),
+        None => "macOS".to_owned(),
+    }
+}
+
 impl Trash for Native {
     fn trash(&self, path: &Path) -> Result<TrashedItem, Error> {
         let original = std::path::absolute(path).map_err(Error::from_io)?;

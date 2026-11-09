@@ -26,6 +26,7 @@
     clippy::cast_possible_wrap
 )]
 
+pub mod about;
 pub mod compare;
 pub mod conflict;
 pub mod console;
@@ -74,10 +75,12 @@ pub use shell::{
     viewport_builder,
 };
 
-/// Opens the first window and runs until the last one closes. `version` is
-/// what the About window shows: the binary's version and git hash;
-/// `externals` is where the single-instance endpoint delivers a second
-/// launch's command line, drained before every frame of the first window.
+/// Opens the first window and runs until the last one closes. `build` is
+/// what the About dialog shows and `rick --version` prints: the binary's
+/// version, commit, target, build date, toolchain, contributors and the
+/// generated component list ([`about::Build`]); `externals` is where the
+/// single-instance endpoint delivers a second launch's command line,
+/// drained before every frame of the first window.
 ///
 /// # Errors
 ///
@@ -85,7 +88,7 @@ pub use shell::{
 /// up.
 pub fn run(
     title: &str,
-    version: &str,
+    build: about::Build,
     app: App,
     host: Arc<EguiHost>,
     externals: Option<app::ExternalReceiver>,
@@ -102,13 +105,14 @@ pub fn run(
     };
     let mut app = Some(app);
     let mut externals = externals;
-    let version = version.to_owned();
+    let mut build = Some(build);
     eframe::run_native(
         title,
         options,
         Box::new(move |cc| {
             let app = app.take().ok_or("the app was already taken")?;
-            let mut ui = RickUi::new(app, host, &cc.egui_ctx).with_version(version);
+            let build = build.take().unwrap_or_default();
+            let mut ui = RickUi::new(app, host, &cc.egui_ctx).with_build(build);
             if let Some(externals) = externals.take() {
                 ui = ui.with_externals(externals);
             }
