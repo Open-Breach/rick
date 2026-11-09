@@ -504,8 +504,11 @@ pub fn visuals(s: &Scheme, m: &Metrics) -> Visuals {
 /// keeps egui's value.
 pub fn spacing(spacing: &mut egui::style::Spacing, m: &Metrics) {
     spacing.item_spacing = Vec2::splat(m.space_toolbar_y);
+    // A text button is its text plus this padding: 30 px menu entries in
+    // Comfortable. Tool buttons size themselves to `button/size`; the
+    // minimum interactive height stays egui's, so menus and rows do not
+    // grow with it.
     spacing.button_padding = Vec2::new(m.space_toolbar_x, m.space_toolbar_y);
-    spacing.interact_size = Vec2::new(40.0, m.button_size);
     spacing.menu_margin = Margin::same(6);
     spacing.window_margin = Margin::same(12);
     spacing.icon_width = ICON;
@@ -771,7 +774,10 @@ mod tests {
             light.visuals.weak_text_color,
             Some(Scheme::LIGHT.text_secondary)
         );
-        assert_eq!(light.spacing.interact_size.y, Metrics::COMPACT.button_size);
+        assert_eq!(
+            light.spacing.button_padding.y,
+            Metrics::COMPACT.space_toolbar_y
+        );
         assert_eq!(
             dark.spacing.item_spacing.y,
             Metrics::COMPACT.space_toolbar_y
@@ -784,8 +790,8 @@ mod tests {
         apply(&ctx, Density::Comfortable);
         assert_eq!(metrics(&ctx), &Metrics::COMFORTABLE);
         assert_eq!(
-            ctx.style_of(egui::Theme::Light).spacing.interact_size.y,
-            Metrics::COMFORTABLE.button_size
+            ctx.style_of(egui::Theme::Light).spacing.button_padding.y,
+            Metrics::COMFORTABLE.space_toolbar_y
         );
     }
 
