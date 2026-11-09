@@ -1446,9 +1446,11 @@ fn about_symbol(ctx: &egui::Context) -> Option<egui::TextureHandle> {
     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
     let side = edge as u32;
     let mut pixmap = resvg::tiny_skia::Pixmap::new(side, side)?;
-    let size = tree.size();
-    let transform =
-        resvg::tiny_skia::Transform::from_scale(edge / size.width(), edge / size.height());
+    let intrinsic = tree.size();
+    let transform = resvg::tiny_skia::Transform::from_scale(
+        edge / intrinsic.width(),
+        edge / intrinsic.height(),
+    );
     resvg::render(&tree, transform, &mut pixmap.as_mut());
     let image =
         egui::ColorImage::from_rgba_premultiplied([side as usize, side as usize], pixmap.data());
