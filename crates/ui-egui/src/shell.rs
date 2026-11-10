@@ -888,6 +888,9 @@ pub struct RickUi {
     /// The window of the pane a job that just failed was started from:
     /// where the notice that follows is shown.
     failed_in: Option<WindowId>,
+    /// What each window has seen of the copy, cut and paste chords, which
+    /// do not arrive as key presses.
+    chords: HashMap<WindowId, crate::chords::ClipboardChords>,
     dialog: Option<Dialog>,
     name_prompt: Option<NamePrompt>,
     settings: settings_ui::SettingsWindow,
@@ -1180,6 +1183,7 @@ impl RickUi {
             dispatched: VecDeque::new(),
             toasts: Vec::new(),
             failed_in: None,
+            chords: HashMap::new(),
             dialog: None,
             name_prompt: None,
             settings: settings_ui::SettingsWindow::default(),
@@ -1927,9 +1931,10 @@ impl RickUi {
 
     /// Turns this frame's key presses into intents, unless a text field, a
     /// dialogue, the palette or the shortcuts screen wants them.
-    fn handle_keys(&mut self, ctx: &egui::Context, window: WindowId) {
-        let pane = self.explorer_pane(self.focused_in(window));
-        if self.dialog.is_some()
+    /// Whether a dialogue is open: it has the keyboard, not the list
+    /// behind it.
+    fn dialogue_open(&self) -> bool {
+        self.dialog.is_some()
             || self.name_prompt.is_some()
             || self.shortcuts.open
             || self.extensions.is_open()
@@ -1937,7 +1942,35 @@ impl RickUi {
             || self.properties.is_open()
             || !self.app.model().conflicts.is_empty()
             || !self.app.model().questions.is_empty()
-        {
+    }
+
+    /// The intents of the copy, cut and paste chords of this frame, for a
+    /// list that has the keyboard: the window delivers them as events of
+    /// their own, and they go through the keymap like any key press.
+    fn clipboard_intents(
+        &mut self,
+        ctx: &egui::Context,
+        window: WindowId,
+        in_preview: bool,
+    ) -> Vec<Intent> {
+        let chords = self.chords.entry(window).or_default();
+        ctx.input_mut(|input| chords.take(input))
+            .into_iter()
+            .filter_map(|chord| {
+                self.keys
+                    .match_key(chord.modifiers, chord.key, None, in_preview)
+            })
+            .collect()
+    }
+
+    fn handle_keys(&mut self, ctx: &egui::Context, window: WindowId) {
+        // The copy, cut and paste chords are followed in every frame,
+        // whoever has the keyboard: a paste is told by its key's release.
+        let now = Instant::now();
+        let chords = self.chords.entry(window).or_default();
+        ctx.input(|input| chords.track(input, now));
+        let pane = self.explorer_pane(self.focused_in(window));
+        if self.dialogue_open() {
             return;
         }
         // An open menu owns the keyboard: Escape closes it, nothing else —
@@ -1977,6 +2010,7 @@ impl RickUi {
         let mut intents = Vec::new();
         let mut typed = String::new();
         let mut backspace = false;
+        intents.extend(self.clipboard_intents(ctx, window, in_preview));
         ctx.input_mut(|input| {
             input.events.retain(|event| match event {
                 egui::Event::Key {
