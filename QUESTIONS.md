@@ -4231,3 +4231,22 @@ Once answered, an entry keeps its number and gains a dated decision line.
     scrolls sideways, its header with it. The tree's titles follow the
     rule: *Modified* and *Packed*, where 0.3 had *Date modified* and
     *Compressed*.
+
+362. (GUI fixes, remote size cap, issue 139 item 7, 2026-11-10) Five
+    things the frame and the rule leave open. The centred card is "400
+    px wide"; the frame of the size limit draws it 440 px, with both
+    buttons on one line. "Always preview must hold on every remote
+    provider", and only the SSH provider reads the switch. The progress
+    needs the bytes as they arrive, which a previewer does not report.
+    Escape "returns to the card", also for a file that had none — one
+    under the limit, or on a source that is always previewed. And the
+    switch is "shown and reversible in the host or account editor".
+    Assumed: the size-limit card is 440 px as drawn, the other centred
+    cards 400 px. The application reads the switch from the source's
+    connection itself, whatever the provider answers. It hands a
+    whole-file previewer on a remote source a provider that counts what
+    is read, and tells the pane every 128 KiB and whenever the stream
+    stalls. After Escape the card is shown for every such file, since
+    that is where the fetch can be asked for again. The switch is
+    reversible in the source row's context menu, as in 0.3; the editors
+    do not show it in this round, as decided on the spec pull request.

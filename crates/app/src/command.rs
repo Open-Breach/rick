@@ -361,6 +361,10 @@ pub enum Command {
     /// A remote file held behind the size cap (`Event::PreviewCapped`):
     /// open the preview whatever its size.
     PreviewAnyway(PaneId),
+    /// Stop fetching the remote file the pane is about to preview —
+    /// Escape during the download — and show the size-limit card again
+    /// (`Event::PreviewCapped`), from which it can be fetched after all.
+    PreviewCancel(PaneId),
     /// Show the pane's file through one previewer whatever the scores say
     /// — *Open as hex* on a file no previewer claims. It holds for this
     /// file only, until the selection moves on.
@@ -676,6 +680,19 @@ pub enum Event {
         /// The source the file is on, when its provider keeps connections:
         /// the host or account *Always preview on <source>* names.
         source: Option<String>,
+        /// The provider's name, as its connections are titled (*Azure
+        /// Blob*, *SSH*), for the card's head.
+        provider: Option<String>,
+    },
+    /// A whole file is being fetched from a remote source for the pane's
+    /// preview: how far it is.
+    PreviewProgress {
+        /// The pane.
+        pane: PaneId,
+        /// The bytes read so far.
+        read: u64,
+        /// The file's size, when it is known.
+        total: Option<u64>,
     },
     /// A thumbnail finished: the frame, or `None` when no previewer claims
     /// the entry or the render failed.
@@ -899,12 +916,20 @@ impl fmt::Debug for Event {
                 size,
                 cap,
                 source,
+                provider,
             } => f
                 .debug_struct("PreviewCapped")
                 .field("pane", pane)
                 .field("size", size)
                 .field("cap", cap)
                 .field("source", source)
+                .field("provider", provider)
+                .finish(),
+            Self::PreviewProgress { pane, read, total } => f
+                .debug_struct("PreviewProgress")
+                .field("pane", pane)
+                .field("read", read)
+                .field("total", total)
                 .finish(),
             Self::Conflict(conflict) => f.debug_tuple("Conflict").field(&conflict.id).finish(),
             Self::Question(question) => f.debug_tuple("Question").field(&question.id).finish(),

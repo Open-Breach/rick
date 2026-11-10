@@ -2744,6 +2744,133 @@ fn screenshots_of_the_preview_tables() {
     eprintln!("the preview pane: {:?}", harness.state().inspector_rect());
 }
 
+/// Issue 139, item 7: the size limit of remote previews as the Figma
+/// frame has it (`151:4550`) — the File info card for a picture above the
+/// limit on a cloud account, and the download half way, with its progress
+/// under the Portal burst — in Light and Dark at both densities. The
+/// account is an in-memory stand-in whose reads a gate holds.
+#[test]
+#[ignore = "needs a wgpu adapter; CI runs it and uploads the images"]
+fn screenshots_of_the_remote_size_cap() {
+    use egui_kittest::kittest::Queryable as _;
+    use tests::mem::{MemExtension, MemProvider};
+    use types::{Location, ProviderId};
+    const MIB: f64 = 1024.0 * 1024.0;
+    let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+    let mem = Arc::new(MemProvider::new(ProviderId("azure"), Duration::ZERO));
+    mem.set_native(true);
+    mem.dir("/flowcptstorage/media");
+    let mut photo = media::photo_jpeg(64, 48);
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    photo.resize((18.4 * MIB) as usize, 0);
+    mem.file("/flowcptstorage/media/3K6ehNLhnRsPfWhzju8Qe2Lk.jpg", &photo);
+    ext::i18n::add_bundled("en", "screenshot-cloud-provider = Azure Blob");
+    let fake = Arc::new(Fake::new().unwrap_or_else(|e| panic!("{e}")));
+    let host = Arc::new(EguiHost::new());
+    let app = app::App::new(app::Config {
+        platform: fake.clone(),
+        ui: host.clone(),
+        extensions: vec![
+            Arc::new(ext_preview_image::ImagePreview::new()),
+            Arc::new(MemExtension::with_accounts(
+                Arc::clone(&mem),
+                "screenshot-cloud-provider",
+            )),
+        ],
+        config_dir: Some(fake.config_dir()),
+        start: Some(local(dir.path())),
+    });
+    let mut harness = Harness::builder()
+        .with_size(egui::vec2(1280.0, 800.0))
+        .with_pixels_per_point(2.0)
+        .build_eframe(move |cc| RickUi::new(app, host, &cc.egui_ctx));
+    settle(&mut harness);
+    harness.state_mut().set_inspector_width(600.0);
+    let pane = harness.state().app().model().focused;
+    harness.state_mut().queue(Intent::ToggleInspector, pane);
+    harness.state_mut().app_mut().handle(
+        app::Command::Navigate {
+            pane,
+            to: Location::new(ProviderId("azure"), "/flowcptstorage/media"),
+        },
+        &mut Vec::new(),
+    );
+    settle(&mut harness);
+    let id = harness
+        .state()
+        .app()
+        .model()
+        .active_tab(pane)
+        .and_then(|(_, t)| t.listing.rows().next().map(|e| e.id))
+        .unwrap_or_else(|| panic!("the picture is listed"));
+    harness.state_mut().app_mut().handle(
+        app::Command::Select {
+            pane,
+            change: SelectionChange::Set(vec![id]),
+        },
+        &mut Vec::new(),
+    );
+    let wait = |harness: &mut Harness<'_, RickUi>,
+                what: &str,
+                done: &dyn Fn(&ui_egui::preview::Slot) -> bool| {
+        let deadline = Instant::now() + Duration::from_secs(20);
+        while !harness.state().previews().get(pane).is_some_and(done) {
+            assert!(Instant::now() < deadline, "{what}");
+            harness.step();
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        for _ in 0..6 {
+            harness.step();
+        }
+    };
+    let modes = [
+        (Theme::Light, Density::Comfortable, "light-comfortable"),
+        (Theme::Light, Density::Compact, "light-compact"),
+        (Theme::Dark, Density::Comfortable, "dark-comfortable"),
+        (Theme::Dark, Density::Compact, "dark-compact"),
+    ];
+    let set = |harness: &mut Harness<'_, RickUi>, theme: Theme, density: Density| {
+        for change in [
+            SettingsChange::Theme(theme),
+            SettingsChange::Density(density),
+        ] {
+            harness
+                .state_mut()
+                .app_mut()
+                .handle(app::Command::Settings(change), &mut Vec::new());
+        }
+        // The pointer rests on nothing.
+        harness.event(egui::Event::PointerMoved(egui::pos2(300.0, 780.0)));
+        for _ in 0..4 {
+            harness.step();
+        }
+    };
+
+    // Above the limit: the card.
+    wait(&mut harness, "no size-limit card", &|slot| {
+        slot.capped().is_some()
+    });
+    for (theme, density, mode) in modes {
+        set(&mut harness, theme, density);
+        shoot(&mut harness, &format!("preview-size-limit-{mode}"));
+    }
+
+    // Preview this file, held at 7.7 of 18.4 MiB.
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    let held = (7.7 * MIB) as u64;
+    mem.hold_reads_at(held);
+    harness.get_by_label("Preview this file").click();
+    wait(&mut harness, "no download half way", &|slot| {
+        slot.download().is_some_and(|(read, _)| read >= held)
+    });
+    for (theme, density, mode) in modes {
+        set(&mut harness, theme, density);
+        shoot(&mut harness, &format!("preview-downloading-{mode}"));
+    }
+    mem.release_reads();
+    settle(&mut harness);
+}
+
 /// Issue 139, item 4: the Properties dialogue as the Figma frames have it
 /// (`144:4115`) — a folder and a symbolic link on the General tab, the
 /// Permissions tab, and the tab with the access control list open — in

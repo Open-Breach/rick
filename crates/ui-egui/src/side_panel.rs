@@ -790,9 +790,10 @@ fn connection_items(
     }
 }
 
-/// *Always preview* in a connection row's menu, for a provider whose
-/// editor has the switch (`preview_always` in its schema): the preview
-/// size cap on or off for this source, as its connection entry has it.
+/// *Always preview* in a connection row's menu, for every source that has
+/// connections — an SSH host and a cloud account alike: the size limit of
+/// previews on or off for this source, as its connection entry has it.
+/// It is where the switch of the size-limit card is taken back.
 fn preview_always_item(
     ui: &mut egui::Ui,
     app: &App,
@@ -801,9 +802,6 @@ fn preview_always_item(
     name: &str,
 ) {
     let provider = connector.provider();
-    if connector.schema().field(app::PREVIEW_ALWAYS).is_none() {
-        return;
-    }
     let mut on = app
         .model()
         .settings
