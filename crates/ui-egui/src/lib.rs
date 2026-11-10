@@ -60,6 +60,7 @@ pub mod question;
 pub mod search;
 pub mod settings_ui;
 pub mod shell;
+pub mod shortcuts;
 pub mod side_panel;
 pub mod table;
 pub mod theme;

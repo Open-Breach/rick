@@ -1,7 +1,7 @@
 # ext-svn — English, the fallback language.
 
 svn-update = Update
-svn-commit = Commit
+svn-commit = SVN commit
 svn-revert = Revert
 svn-log = Log
 svn-add = Add

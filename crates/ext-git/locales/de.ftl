@@ -1,6 +1,6 @@
 # ext-git — Deutsch: die Aktionen der Kontextmenüs; was fehlt, erscheint auf Englisch.
 
-git-commit = Commit
+git-commit = Git-Commit
 git-stash = Stash
 git-stash-pop = Stash anwenden
 git-pull = Pull

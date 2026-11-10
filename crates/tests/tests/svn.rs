@@ -436,7 +436,7 @@ fn the_context_menu_shows_the_svn_group_only_inside_the_working_copy() {
     harness.get_by_label("Update");
     harness.get_by_label("Revert");
     assert!(
-        harness.query_by_label("Commit").is_some(),
-        "Commit is in the group"
+        harness.query_by_label("SVN commit").is_some(),
+        "SVN commit is in the group"
     );
 }

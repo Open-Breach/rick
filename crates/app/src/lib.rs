@@ -661,6 +661,9 @@ pub struct App {
     exit: bool,
     /// The plugins the host found, for the Extensions screen.
     plugins: Vec<Plugin>,
+    /// The extension that registered each action, by the action's id; the
+    /// kernel's own actions are not in it.
+    action_owners: BTreeMap<&'static str, ExtId>,
     /// The values of the settings extensions declared, one TOML file each;
     /// shared with the extensions through the registry.
     ext_settings: Arc<ExtSettings>,
@@ -742,14 +745,28 @@ impl App {
             Arc::clone(&conflicts),
             Arc::clone(&scheduler),
         );
-        for ext in std::iter::once(&core as &dyn Extension).chain(extensions.iter().map(|e| &**e)) {
-            if let Err(error) = registry.load(ext) {
-                let id = ext.manifest().id;
-                warn!(%error, ext = id.0, "extension refused");
-                pending.push(Event::Notify {
-                    level: Level::Error,
-                    text: format!("Extension {} refused: {error}", id.0),
-                });
+        // Which extension an action came from, the kernel's own apart: the
+        // Keyboard shortcuts dialogue files a plugin's actions under the
+        // plugin.
+        let mut action_owners = BTreeMap::new();
+        let plugins = extensions.iter().map(|e| (&**e, true));
+        for (ext, plugin) in std::iter::once((&core as &dyn Extension, false)).chain(plugins) {
+            let id = ext.manifest().id;
+            let before = registry.actions().len();
+            match registry.load(ext) {
+                Ok(()) if plugin => {
+                    for action in &registry.actions()[before..] {
+                        action_owners.insert(action.id().0, id);
+                    }
+                }
+                Ok(()) => {}
+                Err(error) => {
+                    warn!(%error, ext = id.0, "extension refused");
+                    pending.push(Event::Notify {
+                        level: Level::Error,
+                        text: format!("Extension {} refused: {error}", id.0),
+                    });
+                }
             }
         }
         for provider in registry.providers() {
@@ -954,6 +971,7 @@ impl App {
             layouts,
             exit: false,
             plugins: Vec::new(),
+            action_owners,
             ext_settings,
             index_search: None,
             properties_shown: None,
@@ -1032,6 +1050,16 @@ impl App {
     #[must_use]
     pub fn plugins(&self) -> &[Plugin] {
         &self.plugins
+    }
+
+    /// The extension an action came from, as its manifest describes it:
+    /// the plugin the Keyboard shortcuts dialogue files the action under.
+    /// `None` for the kernel's own actions, the file operations of
+    /// [`ops::Core`].
+    #[must_use]
+    pub fn action_extension(&self, action: ext::ActionId) -> Option<&ext::Manifest> {
+        let id = self.action_owners.get(action.0)?;
+        self.registry.manifests().iter().find(|m| m.id == *id)
     }
 
     /// The id of a disabled plugin in the plugins directory whose manifest

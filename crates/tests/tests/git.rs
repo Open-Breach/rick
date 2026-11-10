@@ -551,7 +551,7 @@ fn the_context_menu_shows_the_git_group_only_inside_the_repository() {
     harness.get_by_label("Show log");
     harness.get_by_label("Blame");
     assert!(
-        harness.query_by_label("Commit").is_some(),
-        "Commit is in the group"
+        harness.query_by_label("Git commit").is_some(),
+        "Git commit is in the group"
     );
 }

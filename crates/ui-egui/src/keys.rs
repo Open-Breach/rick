@@ -8,11 +8,14 @@
 //! [`UI_INTENTS`]. Both kinds are rebound through
 //! `Settings::shortcuts`, keyed by the intent's id (`core.copy`,
 //! `nav.back`), with an empty text meaning unbound.
-
-use std::collections::BTreeMap;
+//!
+//! [`rows`] is the table as the Keyboard shortcuts dialogue lists it, each
+//! row under its [`Category`]; the [`KeyMap`] keeps that order, which
+//! decides what a chord bound twice runs.
 
 use ext::{ActionId, Key, Modifiers, Registry, Shortcut};
 use model::{Column, Settings};
+use types::ExtId;
 
 /// A direction between panes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -729,6 +732,160 @@ impl Intent {
     }
 }
 
+/// Where the Keyboard shortcuts dialogue files a row (SPEC.md *Keyboard
+/// shortcuts dialogue*).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Category {
+    /// Navigation.
+    Navigation,
+    /// File operations: the kernel's actions, with inspect, undo and redo.
+    FileOperations,
+    /// View.
+    View,
+    /// Selection.
+    Selection,
+    /// Panes & tabs, the window commands among them.
+    Panes,
+    /// Search: the search box in both its modes, the filter and the
+    /// search in subdirectories.
+    Search,
+    /// The preview pane's own table.
+    Preview,
+    /// The list's cursor keys: bound, and rebound in the file, but not
+    /// listed in the dialogue.
+    List,
+    /// A plugin's actions, filed under the plugin and nowhere else.
+    Plugin {
+        /// The plugin's id.
+        id: ExtId,
+        /// Its name, as its manifest gives it.
+        name: &'static str,
+    },
+}
+
+/// The categories of Rick's own rows, in the order of the dialogue's
+/// list; the plugins' follow, by name.
+const BUILT_IN: [Category; 8] = [
+    Category::Navigation,
+    Category::FileOperations,
+    Category::View,
+    Category::Selection,
+    Category::Panes,
+    Category::Search,
+    Category::Preview,
+    Category::List,
+];
+
+impl IntentSpec {
+    /// The category the row is filed under: its table's, with the window
+    /// commands among *Panes & tabs* and the search commands — the search
+    /// box in both modes, the filter, the search in subdirectories —
+    /// under *Search*.
+    #[must_use]
+    pub fn category(&self) -> Category {
+        match self.intent {
+            Intent::Palette | Intent::QuickOpen | Intent::Filter | Intent::ToggleSubtree => {
+                return Category::Search;
+            }
+            _ => {}
+        }
+        match self.group {
+            NAV => Category::Navigation,
+            SEL => Category::Selection,
+            OPS => Category::FileOperations,
+            TABS | WINDOW => Category::Panes,
+            VIEW => Category::View,
+            PREVIEW => Category::Preview,
+            _ => Category::List,
+        }
+    }
+}
+
+/// One row of the shortcut table: what it does, what it is called, where
+/// it is filed and what it is bound to before any rebinding.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Row {
+    /// The intent.
+    pub intent: Intent,
+    /// Its name: the action's label, or the table row's.
+    pub label: String,
+    /// The category it is filed under.
+    pub category: Category,
+    /// The default bindings.
+    pub defaults: Vec<Shortcut>,
+}
+
+/// Every intent that takes a shortcut, in the order of the Keyboard
+/// shortcuts dialogue's list: Rick's own categories first — the kernel's
+/// actions at the head of *File operations* — then the plugins' actions,
+/// plugin by plugin in the order of their names. `plugin_of` gives the id
+/// and the name of the plugin that registered an action, `None` for the
+/// kernel's own, so an action is filed under its plugin and nowhere else.
+#[must_use]
+pub fn rows(
+    registry: &Registry,
+    plugin_of: &dyn Fn(ActionId) -> Option<(ExtId, &'static str)>,
+) -> Vec<Row> {
+    let mut core = Vec::new();
+    let mut plugins = Vec::new();
+    for action in registry.actions() {
+        let plugin = plugin_of(action.id());
+        let row = Row {
+            intent: Intent::Action(action.id()),
+            label: action.label(),
+            category: plugin.map_or(Category::FileOperations, |(id, name)| Category::Plugin {
+                id,
+                name,
+            }),
+            defaults: action.default_shortcut().into_iter().collect(),
+        };
+        if plugin.is_some() {
+            plugins.push(row);
+        } else {
+            core.push(row);
+        }
+    }
+    let mut rows = Vec::new();
+    for category in BUILT_IN {
+        if category == Category::FileOperations {
+            rows.append(&mut core);
+        }
+        rows.extend(
+            UI_INTENTS
+                .iter()
+                .filter(|spec| spec.category() == category)
+                .map(|spec| Row {
+                    intent: spec.intent,
+                    label: spec.label.to_owned(),
+                    category,
+                    defaults: spec
+                        .defaults
+                        .iter()
+                        .filter_map(|text| text.parse().ok())
+                        .collect(),
+                }),
+        );
+    }
+    // By name, and as registered within a plugin.
+    plugins.sort_by_key(|row| match row.category {
+        Category::Plugin { id, name } => (name.to_lowercase(), id),
+        _ => (String::new(), ExtId("")),
+    });
+    rows.append(&mut plugins);
+    rows
+}
+
+/// The rows of an application: [`rows`] with every plugin's actions
+/// filed under the plugin, as the application recorded where each action
+/// came from.
+#[must_use]
+pub fn rows_of(app: &app::App) -> Vec<Row> {
+    rows(app.registry(), &|action| {
+        app.action_extension(action)
+            .map(|manifest| (manifest.id, manifest.name))
+    })
+}
+
 /// One binding and what it does.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Binding {
@@ -756,44 +913,37 @@ pub struct KeyMap {
 impl KeyMap {
     /// Defaults from the registry's actions and [`UI_INTENTS`], then the
     /// settings' rebindings: a text replaces the defaults of its id, an
-    /// empty text unbinds it, and an unparsable text is ignored.
+    /// empty text unbinds it, and of a text only the chords that parse
+    /// count. Every action counts as the kernel's own; [`of`](Self::of)
+    /// is the table when plugins are told apart.
     #[must_use]
     pub fn new(registry: &Registry, settings: &Settings) -> Self {
-        let mut defaults: BTreeMap<Intent, Vec<Shortcut>> = BTreeMap::new();
-        for spec in UI_INTENTS {
-            let shortcuts = spec
-                .defaults
-                .iter()
-                .filter_map(|t| t.parse().ok())
-                .collect();
-            defaults.insert(spec.intent, shortcuts);
+        Self::of(&rows(registry, &|_| None), settings)
+    }
+
+    /// The live table of `rows`, in their order, with the settings'
+    /// rebindings applied. The order is what a chord bound to two rows
+    /// runs: the first of them, so Rick's own action before a plugin's
+    /// and otherwise the one higher up in the dialogue's list.
+    #[must_use]
+    pub fn of(rows: &[Row], settings: &Settings) -> Self {
+        let mut bindings = Vec::new();
+        for row in rows {
+            let preview = row.category == Category::Preview;
+            let rebound = settings.shortcuts.get(row.intent.id()).map(|text| {
+                text.split(',')
+                    .map(str::trim)
+                    .filter(|chord| !chord.is_empty())
+                    .filter_map(|chord| chord.parse().ok())
+                    .collect::<Vec<Shortcut>>()
+            });
+            let shortcuts = rebound.unwrap_or_else(|| row.defaults.clone());
+            bindings.extend(shortcuts.into_iter().map(|shortcut| Binding {
+                shortcut,
+                intent: row.intent,
+                preview,
+            }));
         }
-        for action in registry.actions() {
-            let intent = Intent::Action(action.id());
-            defaults.insert(intent, action.default_shortcut().into_iter().collect());
-        }
-        for (id, text) in &settings.shortcuts {
-            let Some(intent) = Intent::from_id(id, registry) else {
-                continue;
-            };
-            let shortcuts: Vec<Shortcut> = text
-                .split(',')
-                .map(str::trim)
-                .filter(|t| !t.is_empty())
-                .filter_map(|t| t.parse().ok())
-                .collect();
-            defaults.insert(intent, shortcuts);
-        }
-        let bindings = defaults
-            .into_iter()
-            .flat_map(|(intent, shortcuts)| {
-                shortcuts.into_iter().map(move |shortcut| Binding {
-                    shortcut,
-                    intent,
-                    preview: is_preview(intent),
-                })
-            })
-            .collect();
         Self { bindings }
     }
 
@@ -809,6 +959,28 @@ impl KeyMap {
             .iter()
             .filter(move |b| b.intent == intent)
             .map(|b| b.shortcut)
+    }
+
+    /// The other intents bound to a chord of `intent`, each once and in
+    /// table order: what the Keyboard shortcuts dialogue names in the
+    /// *also:* chip. The preview pane's table is bound only while the
+    /// preview has the focus, so a chord there and the same chord in the
+    /// list are not in conflict.
+    #[must_use]
+    pub fn conflicts(&self, intent: Intent) -> Vec<Intent> {
+        let mut others = Vec::new();
+        for own in self.bindings.iter().filter(|b| b.intent == intent) {
+            for other in &self.bindings {
+                if other.intent != intent
+                    && other.shortcut == own.shortcut
+                    && other.preview == own.preview
+                    && !others.contains(&other.intent)
+                {
+                    others.push(other.intent);
+                }
+            }
+        }
+        others
     }
 
     /// The first binding of an intent as a hint for menus, spelled as the
@@ -877,23 +1049,6 @@ impl KeyMap {
                     )
                 })
             })
-    }
-}
-
-// `Intent` needs an order for the map above; derive would expose the
-// variant order as API, so it is a plain id comparison.
-impl PartialOrd for Intent {
-    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        Some(self.cmp(other))
-    }
-}
-
-impl Ord for Intent {
-    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        self.id().cmp(other.id()).then_with(|| {
-            // Two ids never collide between tables, but keep a total order.
-            format!("{self:?}").cmp(&format!("{other:?}"))
-        })
     }
 }
 
@@ -1087,6 +1242,132 @@ mod tests {
         assert_eq!(spelled(key("Alt+Left")), "Alt+Left");
         assert_eq!(spelled(key("F2")), "F2");
         assert_eq!(key("Mod+N").text(), "Mod+N");
+    }
+
+    /// An action for the table: an id, a default chord, a label.
+    struct Act(&'static str, Option<&'static str>);
+
+    impl ext::Action for Act {
+        fn id(&self) -> ActionId {
+            ActionId(self.0)
+        }
+        fn label(&self) -> String {
+            self.0.to_owned()
+        }
+        fn group(&self) -> ext::ActionGroup {
+            ext::ActionGroup::Core
+        }
+        fn default_shortcut(&self) -> Option<Shortcut> {
+            self.1.and_then(|text| text.parse().ok())
+        }
+        fn availability(&self, _: &ext::ActionCtx) -> ext::Availability {
+            ext::Availability::Enabled
+        }
+        fn run(
+            &self,
+            _: ext::ActionCtx,
+            _: &runtime::JobRunner,
+            _: &dyn ext::UiHost,
+        ) -> Result<ext::ActionOutcome, types::Error> {
+            Ok(ext::ActionOutcome::Done)
+        }
+    }
+
+    /// A registry with the kernel's `core.copy` and two plugins' actions,
+    /// and who registered which.
+    fn with_plugins() -> (Registry, impl Fn(ActionId) -> Option<(ExtId, &'static str)>) {
+        let mut registry = Registry::new();
+        // Registered before the kernel's own, to show that the order of
+        // the list does not follow it.
+        registry.action(std::sync::Arc::new(Act("zip.pack", Some("Mod+C"))));
+        registry.action(std::sync::Arc::new(Act("core.copy", Some("Mod+C"))));
+        registry.action(std::sync::Arc::new(Act("git.commit", None)));
+        registry.action(std::sync::Arc::new(Act("git.push", Some("Mod+T"))));
+        let plugin_of = |action: ActionId| match action.0.split_once('.') {
+            Some(("git", _)) => Some((ExtId("git"), "Git")),
+            Some(("zip", _)) => Some((ExtId("action-zip"), "archives")),
+            _ => None,
+        };
+        (registry, plugin_of)
+    }
+
+    #[test]
+    fn rows_file_a_plugin_s_actions_under_the_plugin_after_rick_s_own() {
+        let (registry, plugin_of) = with_plugins();
+        let rows = rows(&registry, &plugin_of);
+        let place = |id: &str| {
+            rows.iter()
+                .position(|row| row.intent.id() == id)
+                .unwrap_or_else(|| panic!("{id} is not a row"))
+        };
+        let category = |id: &str| rows[place(id)].category;
+        // The kernel's action heads File operations, before undo and redo.
+        assert_eq!(category("core.copy"), Category::FileOperations);
+        assert!(place("nav.back") < place("core.copy"));
+        assert!(place("core.copy") < place("ops.undo"));
+        assert!(place("ops.undo") < place("view.hidden"));
+        // The tables' rows under the dialogue's categories.
+        assert_eq!(category("window.fullscreen"), Category::Panes);
+        assert_eq!(category("tabs.new"), Category::Panes);
+        assert_eq!(category("nav.palette"), Category::Search);
+        assert_eq!(category("view.filter"), Category::Search);
+        assert_eq!(category("preview.play"), Category::Preview);
+        assert_eq!(category("list.down"), Category::List);
+        // The plugins' follow everything of Rick's, by the plugins' names
+        // whatever their case, and as registered within a plugin.
+        let git = Category::Plugin {
+            id: ExtId("git"),
+            name: "Git",
+        };
+        assert_eq!(category("git.commit"), git);
+        assert_eq!(category("git.push"), git);
+        assert!(place("list.extend_end") < place("zip.pack"));
+        assert!(place("zip.pack") < place("git.commit"));
+        assert!(place("git.commit") < place("git.push"));
+        assert_eq!(rows.len(), UI_INTENTS.len() + 4, "every row once");
+    }
+
+    #[test]
+    fn a_chord_bound_twice_runs_rick_s_own_action_and_names_the_other() {
+        let (registry, plugin_of) = with_plugins();
+        let rows = rows(&registry, &plugin_of);
+        let key = |text: &str| -> Shortcut { text.parse().unwrap_or_else(|e| panic!("{e}")) };
+        let copy = Intent::Action(ActionId("core.copy"));
+        let pack = Intent::Action(ActionId("zip.pack"));
+        let push = Intent::Action(ActionId("git.push"));
+
+        // Mod+C is the kernel's and a plugin's: the kernel's runs, though
+        // the plugin registered first, and each names the other.
+        let map = KeyMap::of(&rows, &Settings::default());
+        assert_eq!(map.lookup(key("Mod+C")), Some(copy));
+        assert_eq!(map.conflicts(copy), [pack]);
+        assert_eq!(map.conflicts(pack), [copy]);
+        // Mod+T is New tab's and a plugin's.
+        assert_eq!(map.lookup(key("Mod+T")), Some(Intent::NewTab));
+        assert_eq!(map.conflicts(push), [Intent::NewTab]);
+        assert_eq!(map.conflicts(Intent::Back), Vec::new());
+
+        // Between two plugins the first in the list runs.
+        let mut settings = Settings::default();
+        settings.shortcuts.insert("git.commit".into(), "F9".into());
+        settings.shortcuts.insert("zip.pack".into(), "F9".into());
+        let map = KeyMap::of(&rows, &settings);
+        assert_eq!(map.lookup(key("F9")), Some(pack));
+        assert_eq!(
+            map.conflicts(copy),
+            Vec::new(),
+            "Mod+C is Copy's alone again"
+        );
+
+        // The preview pane's table is bound only in the preview: Space
+        // there and Space in the list are not in conflict.
+        assert_eq!(map.conflicts(Intent::PreviewPlay), Vec::new());
+        assert_eq!(map.conflicts(Intent::ToggleFocused), Vec::new());
+        // The same chord on another row of the list is.
+        settings.shortcuts.insert("nav.back".into(), "Space".into());
+        let map = KeyMap::of(&rows, &settings);
+        assert_eq!(map.conflicts(Intent::ToggleFocused), [Intent::Back]);
+        assert_eq!(map.conflicts(Intent::PreviewPlay), Vec::new());
     }
 
     #[test]

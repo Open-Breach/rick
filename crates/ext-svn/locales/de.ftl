@@ -1,7 +1,7 @@
 # ext-svn — Deutsch: die Aktionen der Kontextmenüs; was fehlt, erscheint auf Englisch.
 
 svn-update = Aktualisieren
-svn-commit = Commit
+svn-commit = SVN-Commit
 svn-revert = Zurücksetzen
 svn-log = Log
 svn-add = Hinzufügen

@@ -4,14 +4,12 @@
 use app::{App, Command, IntegrationCommand, PluginStatus};
 use egui::{Align, Align2, FontId, Rect, Sense, pos2, vec2};
 use ext::t;
-use ext::{Registry, Shortcut};
 use model::{
     AfterDrag, Column, Density, OnOpen, PanelSide, SettingsChange, SidePanelChange, SortDir, Theme,
     WindowId,
 };
 use platform::integration::Item;
 
-use crate::keys::{Intent, KeyMap, UI_INTENTS, from_egui_key, from_egui_modifiers};
 use crate::shell::Request;
 use crate::{dialog, icons, integration, theme, widgets};
 
@@ -541,24 +539,7 @@ fn page_icon(page: &Page) -> &'static str {
         Page::View => icons::VIEW_LIST,
         Page::Appearance => icons::HIDDEN_SHOWN,
         Page::Integration => icons::LINK,
-        Page::Plugin(id) => {
-            let id = id.to_lowercase();
-            if id.contains("pdf") {
-                icons::FILE_PDF
-            } else if id.contains("office") {
-                icons::FILE_DOC
-            } else if id.contains("3d") {
-                icons::CUBE
-            } else if id.contains("console") || id.contains("terminal") {
-                icons::TERMINAL
-            } else if id.contains("ssh") || id.contains("network") {
-                icons::NETWORK
-            } else if id.contains("archive") {
-                icons::ARCHIVE
-            } else {
-                icons::PLUGIN
-            }
-        }
+        Page::Plugin(id) => icons::for_plugin(id),
     }
 }
 
@@ -1421,176 +1402,6 @@ fn density_name(density: Density) -> String {
     match density {
         Density::Compact => t!("settings-density-compact"),
         Density::Comfortable => t!("settings-density-comfortable"),
-    }
-}
-
-/// What the shortcuts screen is doing.
-#[derive(Debug, Default)]
-pub struct ShortcutsScreen {
-    /// Shown.
-    pub open: bool,
-    /// Waiting for a key press to bind to this intent.
-    pub rebinding: Option<Intent>,
-    /// Filter text.
-    pub filter: String,
-}
-
-impl ShortcutsScreen {
-    /// The Keyboard shortcuts screen: the live table, with Change and Reset
-    /// per row. A change is a `SettingsChange::Shortcut`.
-    // Capture, header and table are one screen.
-    #[allow(clippy::too_many_lines)]
-    pub fn show(
-        &mut self,
-        ctx: &egui::Context,
-        keys: &KeyMap,
-        registry: &Registry,
-        requests: &mut Vec<Request>,
-    ) {
-        if !self.open {
-            return;
-        }
-        if let Some(intent) = self.rebinding {
-            let captured = ctx.input_mut(|i| {
-                let mut found = None;
-                i.events.retain(|event| {
-                    if found.is_some() {
-                        return true;
-                    }
-                    if let egui::Event::Key {
-                        key,
-                        modifiers,
-                        pressed: true,
-                        ..
-                    } = event
-                    {
-                        found = Some((*modifiers, *key));
-                        return false;
-                    }
-                    true
-                });
-                found
-            });
-            if let Some((modifiers, key)) = captured {
-                self.rebinding = None;
-                if key != egui::Key::Escape
-                    && let Some(key) = from_egui_key(key)
-                {
-                    let shortcut = Shortcut {
-                        modifiers: from_egui_modifiers(modifiers),
-                        key,
-                    };
-                    requests.push(Request::Command(Command::Settings(
-                        SettingsChange::Shortcut {
-                            action: intent.id().to_owned(),
-                            binding: Some(shortcut.text()),
-                        },
-                    )));
-                }
-            }
-        }
-
-        let mut open = self.open;
-        egui::Window::new(t!("keyboard-shortcuts"))
-            .open(&mut open)
-            .default_width(560.0)
-            .show(ctx, |ui| {
-                ui.horizontal(|ui| {
-                    ui.label(t!("settings-filter"));
-                    ui.text_edit_singleline(&mut self.filter);
-                    if let Some(intent) = self.rebinding {
-                        ui.strong(format!(
-                            "Press the new shortcut for {}; Escape cancels",
-                            label_of(intent, registry)
-                        ));
-                    }
-                });
-                ui.separator();
-                let filter = self.filter.to_lowercase();
-                egui::ScrollArea::vertical()
-                    .max_height(480.0)
-                    .show(ui, |ui| {
-                        egui::Grid::new("shortcuts-grid")
-                            .num_columns(4)
-                            .striped(true)
-                            .spacing([16.0, 4.0])
-                            .show(ui, |ui| {
-                                let mut rows: Vec<(String, Intent, String)> = registry
-                                    .actions()
-                                    .iter()
-                                    .map(|a| {
-                                        (
-                                            "File operations".to_owned(),
-                                            Intent::Action(a.id()),
-                                            a.label(),
-                                        )
-                                    })
-                                    .chain(UI_INTENTS.iter().filter(|s| s.group != "List").map(
-                                        |s| (s.group.to_owned(), s.intent, s.label.to_owned()),
-                                    ))
-                                    .collect();
-                                rows.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.2.cmp(&b.2)));
-                                for (group, intent, label) in rows {
-                                    if !filter.is_empty()
-                                        && !label.to_lowercase().contains(&filter)
-                                        && !group.to_lowercase().contains(&filter)
-                                    {
-                                        continue;
-                                    }
-                                    ui.weak(group);
-                                    ui.label(&label);
-                                    let bound: Vec<String> =
-                                        keys.shortcuts_for(intent).map(|s| s.text()).collect();
-                                    if bound.is_empty() {
-                                        ui.weak("—");
-                                    } else {
-                                        ui.monospace(bound.join(", "));
-                                    }
-                                    ui.horizontal(|ui| {
-                                        if ui.small_button(t!("settings-change")).clicked() {
-                                            self.rebinding = Some(intent);
-                                        }
-                                        if ui.small_button(t!("settings-reset")).clicked() {
-                                            requests.push(Request::Command(Command::Settings(
-                                                SettingsChange::Shortcut {
-                                                    action: intent.id().to_owned(),
-                                                    binding: None,
-                                                },
-                                            )));
-                                        }
-                                        if ui.small_button(t!("settings-unbind")).clicked() {
-                                            requests.push(Request::Command(Command::Settings(
-                                                SettingsChange::Shortcut {
-                                                    action: intent.id().to_owned(),
-                                                    binding: Some(String::new()),
-                                                },
-                                            )));
-                                        }
-                                    });
-                                    ui.end_row();
-                                }
-                            });
-                    });
-            });
-        self.open = open;
-        if !self.open {
-            self.rebinding = None;
-        }
-    }
-}
-
-/// The label of an intent: the action's, or the table row's.
-#[must_use]
-pub fn label_of(intent: Intent, registry: &Registry) -> String {
-    match intent {
-        Intent::Action(id) => registry
-            .actions()
-            .iter()
-            .find(|a| a.id() == id)
-            .map_or_else(|| id.0.to_owned(), |a| a.label()),
-        other => other
-            .spec()
-            .map_or_else(|| format!("{other:?}"), |s| s.label.to_owned()),
     }
 }
 
