@@ -1213,10 +1213,18 @@ impl RickUi {
         ids
     }
 
-    /// Whether the root window has its Preview tab open.
+    /// Whether the root window shows its Preview tab: one in a workspace
+    /// that is not shown (a restored session's, when the start folder
+    /// opened a workspace of its own) is out of sight, and the toggle
+    /// opens it in the shown workspace (QUESTIONS.md 317).
     #[must_use]
     pub fn inspector_open(&self) -> bool {
-        self.app.model().preview_tab(self.root).is_some()
+        let model = self.app.model();
+        model
+            .preview_tab(self.root)
+            .and_then(|tab| model.pane_of(tab))
+            .zip(model.window(self.root))
+            .is_some_and(|(pane, window)| window.dock().panes().contains(&pane))
     }
 
     /// The width the Preview tab's pane opens at; for tests, before it
