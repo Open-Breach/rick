@@ -191,7 +191,11 @@ fn a_long_name_keeps_the_dialogue_at_520_px_and_enter_keeps_both() {
     harness.key_press(egui::Key::Enter);
     harness.step();
     settle(&mut harness);
-    assert!(harness.state().app().model().conflicts.is_empty());
+    assert_eq!(
+        harness.state().app().model().conflicts,
+        Vec::new(),
+        "the question is answered"
+    );
     let kept =
         "Camera white appartment 5-14-2026 1.32.41pm GMT2 - 5-14-2026 1.33.08pm GMT2a (2).mp4";
     assert_eq!(
@@ -277,7 +281,11 @@ fn two_folders_merge_or_are_skipped_and_cannot_be_kept_twice() {
     harness.key_press(egui::Key::Enter);
     harness.step();
     settle(&mut harness);
-    assert!(harness.state().app().model().conflicts.is_empty());
+    assert_eq!(
+        harness.state().app().model().conflicts,
+        Vec::new(),
+        "the question is answered"
+    );
     assert!(!dir.path().join("sub/photos/new.jpg").exists(), "skipped");
     assert!(!dir.path().join("sub/photos (2)").exists());
 
