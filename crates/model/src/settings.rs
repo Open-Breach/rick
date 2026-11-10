@@ -37,6 +37,45 @@ pub enum Density {
     Comfortable,
 }
 
+/// How a date is written (SPEC.md *Dates*): in the list's date columns, the
+/// File info card, the footers and the tooltips.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
+#[serde(rename_all = "kebab-case")]
+pub enum DateFormat {
+    /// *Today 15:58*, *Yesterday 09:17*, *Tue 21:24*, *Aug 24 14:12*, and
+    /// the year when it is not this year; the default.
+    #[default]
+    SmartTime,
+    /// The same without the clock: *Today*, *Tue*, *Aug 24*.
+    Smart,
+    /// *2026-08-24 14:12*.
+    Iso,
+    /// The short date and time of the operating system's locale.
+    System,
+}
+
+impl DateFormat {
+    /// The four formats, in the order the settings list them.
+    pub const ALL: [Self; 4] = [Self::SmartTime, Self::Smart, Self::Iso, Self::System];
+}
+
+/// The `date_format` key: a name that is no format reads as the default
+/// instead of failing the whole file.
+fn lenient_date_format<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<DateFormat, D::Error> {
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Value {
+        Known(DateFormat),
+        Other(serde::de::IgnoredAny),
+    }
+    Ok(match Value::deserialize(deserializer)? {
+        Value::Known(format) => format,
+        Value::Other(_) => DateFormat::default(),
+    })
+}
+
 /// A colour as `rick.toml` writes it, `#rrggbb`: red, green, blue.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Rgb(pub [u8; 3]);
@@ -203,6 +242,12 @@ pub struct Settings {
     pub font_size: u8,
     /// The density of the interface.
     pub density: Density,
+    /// How a date is written: `smart-time`, `smart`, `iso` or `system`.
+    #[serde(deserialize_with = "lenient_date_format")]
+    pub date_format: DateFormat,
+    /// Whether a second click on the one selected row renames it; F2 and
+    /// *Rename* in the context menu always do (SPEC.md *Inline rename*).
+    pub rename_on_click: bool,
     /// The colour of the title row's band: a preset, or `custom`.
     #[serde(deserialize_with = "lenient_titlebar")]
     pub titlebar_colour: TitlebarColour,
@@ -680,6 +725,8 @@ impl Default for Settings {
             theme: Theme::System,
             font_size: 13,
             density: Density::Comfortable,
+            date_format: DateFormat::default(),
+            rename_on_click: false,
             titlebar_colour: TitlebarColour::default(),
             titlebar_custom_light: custom_light(),
             titlebar_custom_dark: custom_dark(),
@@ -720,6 +767,10 @@ pub enum SettingsChange {
     FontSize(u8),
     /// The density of the interface.
     Density(Density),
+    /// How a date is written.
+    DateFormat(DateFormat),
+    /// Whether a second click on the selected row renames it.
+    RenameOnClick(bool),
     /// The title row's band: a preset, or the custom pair.
     TitlebarColour(TitlebarColour),
     /// One colour of the custom pair: the light scheme's, or the dark
@@ -812,6 +863,8 @@ impl Settings {
             SettingsChange::Theme(v) => self.theme = v,
             SettingsChange::FontSize(v) => self.font_size = v,
             SettingsChange::Density(v) => self.density = v,
+            SettingsChange::DateFormat(v) => self.date_format = v,
+            SettingsChange::RenameOnClick(v) => self.rename_on_click = v,
             SettingsChange::TitlebarColour(v) => self.titlebar_colour = v,
             SettingsChange::TitlebarCustom { dark: true, colour } => {
                 self.titlebar_custom_dark = colour;
@@ -1054,6 +1107,38 @@ mod tests {
         // A file from before the table reads as the defaults.
         let old: Settings = toml::from_str("theme = \"dark\"\n").unwrap_or_else(|e| panic!("{e}"));
         assert_eq!(old.integration, IntegrationSettings::default());
+    }
+
+    #[test]
+    fn the_date_format_and_the_rename_click_read_and_write_their_keys() {
+        // Issue 149: smart with the time, and no rename on a click, unless
+        // the file says otherwise.
+        let s = Settings::default();
+        assert_eq!(s.date_format, DateFormat::SmartTime);
+        assert!(!s.rename_on_click);
+        let text = toml::to_string(&s).unwrap_or_else(|e| panic!("{e}"));
+        assert!(text.contains("date_format = \"smart-time\""), "{text}");
+        assert!(text.contains("rename_on_click = false"), "{text}");
+        for (key, format) in [
+            ("smart-time", DateFormat::SmartTime),
+            ("smart", DateFormat::Smart),
+            ("iso", DateFormat::Iso),
+            ("system", DateFormat::System),
+        ] {
+            let s: Settings = toml::from_str(&format!("date_format = \"{key}\"\n"))
+                .unwrap_or_else(|e| panic!("{e}"));
+            assert_eq!(s.date_format, format);
+        }
+        // A name that is no format is the default, and the rest still reads.
+        let s: Settings = toml::from_str("date_format = \"roman\"\nrename_on_click = true\n")
+            .unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(s.date_format, DateFormat::SmartTime);
+        assert!(s.rename_on_click);
+        let mut s = Settings::default();
+        s.apply(SettingsChange::DateFormat(DateFormat::Iso));
+        s.apply(SettingsChange::RenameOnClick(true));
+        assert_eq!(s.date_format, DateFormat::Iso);
+        assert!(s.rename_on_click);
     }
 
     #[test]
