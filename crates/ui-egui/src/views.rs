@@ -142,7 +142,11 @@ pub fn show(ui: &mut egui::Ui, cx: &mut PaneCx<'_>) {
     // empty-folder message take the view's place, unless a New file or New
     // folder is being named.
     let bare = overview.is_none() && cx.tab.row_count() == 0 && cx.tab_ui.edit.is_none();
-    if bare && !cx.tab.listing.complete {
+    if let Some(lost) = cx.tab.lost.clone() {
+        // The connection is lost: the card takes the list's place, and the
+        // tab stays where it is.
+        connection_lost(ui, cx, &lost);
+    } else if bare && !cx.tab.listing.complete {
         loading_state(ui, cx);
     } else if bare && cx.tab.failure.is_none() {
         empty_state(ui, cx);
@@ -339,6 +343,34 @@ fn new_row_strip(ui: &mut egui::Ui, cx: &mut PaneCx<'_>) {
         name_taken(tab, name)
     });
     finish_edit(cx, outcome);
+}
+
+/// A remote location that stopped answering (SPEC.md *Removed and
+/// unreachable locations*): the File info card, centred in place of the
+/// list — the source's icon, *Connection lost to <account>* with the
+/// provider's name under it, one row, *Error*, holding the provider's
+/// message, and **Retry**, which lists the location again.
+fn connection_lost(ui: &mut egui::Ui, cx: &mut PaneCx<'_>, lost: &model::ConnectionLost) {
+    use crate::info_card::{self, Action, Card, Row};
+    let name = t!("pane-connection-lost", source = lost.source.clone());
+    let rows = [Row::new(t!("pane-connection-error"), lost.message.as_str())];
+    let actions = [Action {
+        glyph: None,
+        label: t!("retry"),
+    }];
+    let card = Card {
+        glyph: crate::icons::CLOUD,
+        name: &name,
+        line: &lost.provider,
+        rows: &rows,
+        actions: &actions,
+        ..Card::default()
+    };
+    let outcome = info_card::show_centred(ui, &card, &mut cx.tab_ui.lost_card, info_card::CENTRED);
+    if outcome.action.is_some() {
+        cx.requests
+            .push(Request::Command(app::Command::Refresh(cx.pane)));
+    }
 }
 
 /// Turns an editor's outcome into the shell's requests.
