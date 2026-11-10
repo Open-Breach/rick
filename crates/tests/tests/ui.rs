@@ -274,6 +274,12 @@ fn every_shortcut_in_the_spec_table_reaches_its_intent() {
                 .handle(app::Command::CloseTab(tab), &mut events);
         }
         settle(&mut harness);
+        // A dialogue whose contents are read first — Properties — opens
+        // only once they are in, which may be after the Escape above; the
+        // wait covers the read, so leave what it brought too. Left open, it
+        // would keep the next row's keys from the list.
+        harness.key_press(egui::Key::Escape);
+        harness.step();
     }
     assert!(missed.is_empty(), "{}", missed.join("\n"));
 }
