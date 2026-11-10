@@ -746,6 +746,15 @@ pub enum Event {
         /// The launcher's activation token, for the platform.
         token: Option<String>,
     },
+    /// A job failed. `pane` is the pane it was started from, when it has
+    /// one: the failure is reported in that pane's window. The
+    /// [`Event::Notify`] that words the failure follows at once.
+    JobFailed {
+        /// The job.
+        id: JobId,
+        /// Where the user acted.
+        pane: Option<PaneId>,
+    },
     /// A plugin package was unpacked into the per-user plugins folder:
     /// `App::plugins` has its row, under this path.
     PluginInstalled {
@@ -950,6 +959,11 @@ impl fmt::Debug for Event {
                 .finish(),
             Self::Conflict(conflict) => f.debug_tuple("Conflict").field(&conflict.id).finish(),
             Self::Question(question) => f.debug_tuple("Question").field(&question.id).finish(),
+            Self::JobFailed { id, pane } => f
+                .debug_struct("JobFailed")
+                .field("id", id)
+                .field("pane", pane)
+                .finish(),
             Self::PluginInstalled { path } => f
                 .debug_struct("PluginInstalled")
                 .field("path", path)
