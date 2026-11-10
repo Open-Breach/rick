@@ -3700,3 +3700,17 @@ Once answered, an entry keeps its number and gains a dated decision line.
     rest while a check or an apply runs. *Reset choices* is there to
     press when a row is declined or the dialog is silenced, and undoes
     both. Opening the page before any check ran asks for one.
+
+316. (system integration, tier 2 on Windows and macOS, 2026-11-10) §4 says
+    paths "are resolved against the caller's working directory before they
+    are sent" and nothing about their form. `cli::resolve` makes a path
+    that exists canonical, so a launcher's relative path and a symlink
+    reach the thing itself; a `rick://` URL's path went through as spelled.
+    On macOS the temporary directory is a symlink (`/var` → `/private/var`)
+    and on Windows `canonicalize` returns the verbatim `\\?\C:\…` form, so
+    the two forms differ there and the tests that compared them failed.
+    Assumed: a `rick://` path is resolved exactly like a command-line path
+    (canonical where it names something), and the tests expect the
+    canonical form. Open: whether a tab's location should carry the
+    `\\?\` prefix on Windows at all, or be simplified to `C:\…` where
+    that is the same path; the path bar shows the location as stored.

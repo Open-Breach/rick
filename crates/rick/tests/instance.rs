@@ -223,11 +223,19 @@ mod routed {
     use std::time::{Duration, Instant};
 
     use app::{App, Config, Event};
+    use ext::PaneId;
     use platform::{ConfigDir as _, Fake, SingleInstance as _};
     use types::Location;
 
     fn location(path: &Path) -> Location {
         Location::new(vfs_local::PROVIDER_ID, platform::paths::from_path(path))
+    }
+
+    /// The location a launch opens for `path`: canonical, as `cli::resolve`
+    /// makes a path that exists (`/private/var/…` for a macOS temporary
+    /// directory, the `\\?\` form on Windows).
+    fn opened(path: &Path) -> Location {
+        location(&path.canonicalize().unwrap_or_else(|_| path.to_path_buf()))
     }
 
     /// A folder with three files and a home, the app on the fake platform
@@ -344,11 +352,26 @@ mod routed {
             while !check(&self.app) {
                 assert!(
                     Instant::now() < deadline,
-                    "{what} did not happen: {:?}",
-                    self.app
+                    "{what} did not happen: {:?}, tabs {:?}",
+                    self.app,
+                    self.tabs()
                 );
                 self.drive().await;
             }
+        }
+
+        /// Each pane's active tab's location, for a failure's message.
+        fn tabs(&self) -> Vec<(PaneId, Option<String>)> {
+            let model = self.app.model();
+            model
+                .panes()
+                .map(|(pane, _)| {
+                    let location = model
+                        .active_tab(pane)
+                        .map(|(_, tab)| tab.location.to_string());
+                    (pane, location)
+                })
+                .collect()
         }
     }
 
@@ -363,7 +386,7 @@ mod routed {
                 "{}",
                 String::from_utf8_lossy(&out.stderr)
             );
-            let folder = location(&instance.dir.path().join("folder"));
+            let folder = opened(&instance.dir.path().join("folder"));
             // The folder is the focused pane's tab, in the same window…
             instance
                 .wait_for("the folder's tab", |app| {
@@ -411,7 +434,7 @@ mod routed {
                 "{}",
                 String::from_utf8_lossy(&out.stderr)
             );
-            let folder = location(&instance.dir.path().join("folder"));
+            let folder = opened(&instance.dir.path().join("folder"));
             instance
                 .wait_for("the new window", |app| {
                     app.model().windows().count() == windows + 1
