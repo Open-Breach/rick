@@ -113,10 +113,18 @@ fn the_search_box_searches_names_and_runs_commands() {
     harness.step();
     assert!(harness.state().search_active());
     assert_eq!(harness.state().search_text(), ">");
-    harness.get_by_label_contains("Toggle side panel");
+    // The command is listed under the box; the title row's own toggle
+    // carries the same name, above it.
+    let listed = |harness: &Harness<'_, RickUi>| {
+        harness
+            .query_all_by_label_contains("Toggle side panel")
+            .filter(|node| node.rect().top() > 44.0)
+            .count()
+    };
+    assert_eq!(listed(&harness), 1);
     harness.event(egui::Event::Text("toggle side".to_owned()));
     harness.step();
-    harness.get_by_label_contains("Toggle side panel");
+    assert_eq!(listed(&harness), 1);
     assert!(side_panel_visible(&harness));
     harness.key_press(egui::Key::Enter);
     harness.step();

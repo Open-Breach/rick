@@ -338,6 +338,7 @@ shell-phosphor-fill = phosphor-fill
 close = Close
 shell-restore = Restore
 shell-minimise = Minimise
+shell-close-window = Close window
 shell-toggle-preview-pane = Toggle preview pane
 shell-toggle-side-panel = Toggle side panel
 shell-ask = ask
