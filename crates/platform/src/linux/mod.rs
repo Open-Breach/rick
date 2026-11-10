@@ -33,9 +33,9 @@ use crate::Native;
 use crate::time::iso8601;
 use crate::traits::{
     Activation, Application, Chrome, ConfigDir, ControlsSide, DragSource, DropTarget, Elevate,
-    ElevatedOutput, ImageFormat, IncomingFiles, Mount, OpenWith, Point, Properties,
-    PropertiesOutcome, RecentItem, RecentlyUsed, StandardFolder, StandardFolders, Terminal, Trash,
-    TrashedItem, Volume, Volumes, WindowChrome, WindowRef,
+    ElevatedOutput, ImageFormat, IncomingFiles, Mount, MountWatch, MountsChanged, OpenWith, Point,
+    Properties, PropertiesOutcome, RecentItem, RecentlyUsed, StandardFolder, StandardFolders,
+    Terminal, Trash, TrashedItem, Volume, Volumes, WindowChrome, WindowRef,
 };
 
 /// The distribution and the desktop: `PRETTY_NAME` of `/etc/os-release`
@@ -104,6 +104,19 @@ impl Volumes for Native {
 
     fn eject(&self, volume: &Volume) -> Result<(), Error> {
         volumes::eject(volume)
+    }
+
+    fn has_format_tool(&self) -> bool {
+        volumes::format_tool().is_some()
+    }
+
+    fn open_format_tool(&self, volume: &Volume) -> Result<(), Error> {
+        volumes::open_format_tool(volume)
+    }
+
+    /// The kernel's own notice of a change to the mount table.
+    fn watch_mounts(&self, changed: MountsChanged) -> Option<MountWatch> {
+        volumes::watch_mounts(changed)
     }
 }
 

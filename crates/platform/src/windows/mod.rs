@@ -46,6 +46,7 @@ use windows::Win32::UI::Shell::{
     SHERB_NOSOUND, SHEmptyRecycleBinW, SHGetKnownFolderItem, SHGetKnownFolderPath,
     SIGDN_FILESYSPATH, SIGDN_NORMALDISPLAY, ShellExecuteExW, ShellExecuteW, ShellLink,
 };
+use windows::Win32::UI::Shell::{SHFMT_ID_DEFAULT, SHFMT_OPT_NONE, SHFormatDrive};
 use windows::Win32::UI::WindowsAndMessaging::{
     ASFW_ANY, AllowSetForegroundWindow, IsIconic, SW_RESTORE, SW_SHOW, SW_SHOWNORMAL,
     SetForegroundWindow, ShowWindow,
@@ -556,6 +557,38 @@ impl Volumes for Native {
         // SAFETY: balances the successful `CreateFileW` above.
         let _ = unsafe { CloseHandle(handle) };
         result
+    }
+
+    /// The shell's format dialogue is part of the system.
+    fn has_format_tool(&self) -> bool {
+        true
+    }
+
+    /// Opens the shell's format dialogue on the volume's drive letter. The
+    /// dialogue is modal to its own thread, which this starts and leaves;
+    /// whether anything is formatted is the user's answer to it.
+    fn open_format_tool(&self, volume: &Volume) -> Result<(), Error> {
+        let letter = volume
+            .mount_point
+            .to_string_lossy()
+            .chars()
+            .next()
+            .filter(char::is_ascii_alphabetic)
+            .ok_or(Error::Unsupported("the volume has no drive letter"))?;
+        let drive = u32::from(letter.to_ascii_uppercase()) - u32::from('A');
+        std::thread::Builder::new()
+            .name("format-dialogue".to_owned())
+            .spawn(move || {
+                // SAFETY: `SHFormatDrive` takes no pointer but the owner
+                // window, which may be null; the drive number is one of
+                // the 26 letters, and the two ids are the documented
+                // defaults.
+                let _ = unsafe {
+                    SHFormatDrive(HWND::default(), drive, SHFMT_ID_DEFAULT, SHFMT_OPT_NONE)
+                };
+            })
+            .map(drop)
+            .map_err(Error::from_io)
     }
 }
 
