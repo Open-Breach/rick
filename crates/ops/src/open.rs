@@ -5,11 +5,11 @@ use ext::t;
 use std::sync::Arc;
 
 use ext::{
-    Action, ActionCtx, ActionGroup, ActionId, ActionOutcome, Availability, Key, Modifiers,
-    Shortcut, UiHost,
+    Action, ActionCtx, ActionGroup, ActionId, ActionOutcome, Availability, Capabilities, Key,
+    Modifiers, Shortcut, UiHost,
 };
 use runtime::JobRunner;
-use types::Error;
+use types::{Entry, EntryKind, Error};
 
 use crate::{State, is_trash, local_path, location_of, needs_entries};
 
@@ -186,9 +186,26 @@ impl Action for OpenDefault {
     fn run(
         &self,
         ctx: ActionCtx,
-        _jobs: &JobRunner,
+        jobs: &JobRunner,
         _ui: &dyn UiHost,
     ) -> Result<ActionOutcome, Error> {
+        // A remote file is not on the machine: nothing is handed to the
+        // system, and opening it brings it down to Downloads (SPEC.md,
+        // *Remote files*). Without `DOWNLOAD` it does nothing.
+        let caps = self.0.capabilities(&ctx.location);
+        if caps.contains(Capabilities::REMOTE) {
+            let files: Vec<Entry> = ctx
+                .selection
+                .iter()
+                .filter(|e| e.kind != EntryKind::Dir)
+                .cloned()
+                .collect();
+            if files.is_empty() || !caps.contains(Capabilities::DOWNLOAD) {
+                return Ok(ActionOutcome::Done);
+            }
+            let to = crate::download::downloads(&*self.0.platform);
+            return Ok(crate::download::start(&self.0, jobs, &files, &to));
+        }
         for entry in &ctx.selection {
             let path = local_path(&location_of(entry))?;
             self.0.platform.open(&path)?;
