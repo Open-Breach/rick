@@ -59,6 +59,15 @@ impl Mode {
         matches!(self, Self::Shadow)
     }
 
+    /// The frame's name, as `rick.toml` and the log spell it.
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Shadow => "shadow",
+            Self::Plain => "plain",
+        }
+    }
+
     /// The margin between the window's edge and the border.
     #[must_use]
     pub const fn margin(self) -> f32 {
@@ -435,6 +444,8 @@ mod tests {
         assert!(!asks_transparency(WindowFrame::Plain));
         assert!(Mode::Shadow.transparent());
         assert!(!Mode::Plain.transparent());
+        assert_eq!(Mode::Shadow.name(), "shadow");
+        assert_eq!(Mode::Plain.name(), "plain");
     }
 
     /// As before, and in both modes: a maximised or fullscreen window has

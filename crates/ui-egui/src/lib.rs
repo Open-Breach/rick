@@ -136,6 +136,27 @@ pub fn run(
             // to be transparent gets the plain one.
             let blends = probe.as_ref().and_then(surface::Probe::blends);
             let mode = frame::Mode::of(setting, blends);
+            // One line for whoever reads the log: what draws, and which
+            // frame came of it. The fallback is silent for the user.
+            let adapter = cc
+                .wgpu_render_state
+                .as_ref()
+                .map(|state| state.adapter.get_info());
+            tracing::info!(
+                backend = adapter.as_ref().map_or("none", |a| a.backend.to_str()),
+                adapter = adapter.as_ref().map_or("none", |a| a.name.as_str()),
+                frame = if chrome.native_controls {
+                    "system"
+                } else {
+                    mode.name()
+                },
+                surface = match blends {
+                    Some(true) => "transparent",
+                    Some(false) => "opaque",
+                    None => "not checked",
+                },
+                "graphics and window frame"
+            );
             let mut ui = RickUi::new(app, host, &cc.egui_ctx)
                 .with_build(build)
                 .with_frame(mode);
