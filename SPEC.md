@@ -708,13 +708,14 @@ One Cargo workspace, one crate per concern, grouped by layer. Kernel crates carr
 - `ext-vfs-azure` — Azure Blob.
 - `ext-vfs-gcs` — Google Cloud Storage.
 - `ext-ssh` — remote hosts over SSH, one plugin with several contributions like `ext-git`: a Provider driven by shell commands over `exec` channels (no SFTP), the hosts of `~/.ssh/config` and Rick's own in the Network section, and the *Open console here* and *Open in external terminal* actions. Specified in [`specs/ext-ssh.md`](specs/ext-ssh.md).
+- `ext-zfs` — OpenZFS snapshots, one plugin with several contributions like `ext-git`: a read-only Provider (`zfs:`: the datasets with snapshots, each dataset's snapshots newest first, each snapshot's files as they were, and the versions of one file across snapshots), the "ZFS" Action group (*Browse snapshots*, *Back to live folder*, *Versions*, *Restore*, *Create*, *Rename* and *Destroy snapshot*), and an Info panel section (dataset, snapshots, main properties with their source). It talks to the `zfs` command line; changes ZFS refuses for lack of permission run through a privileged helper under its own polkit action, as `ext-installer` does, and Rick itself never runs as root. Linux only. Specified in [`specs/ext-zfs.md`](specs/ext-zfs.md).
 - `ext-vfs-trash` — the trash as a browsable location with restore.
 
 **Decorators** (`ext-deco-*`)
 
 - `ext-git` — one plugin, several contributions: a Decorator (status badges, branch, ahead and behind, via gix), an Action group for the context menu (Git commit, Stash, Stash pop, Pull, Push, Checkout branch, Discard changes, Show log, Blame), and an Info panel section (current branch, last commit). The Action group appears under "Git" in the Extensions part of the context menu and in the command palette, only when the location is inside a repository.
 - `ext-svn` — the same shape through the svn command line: Decorator plus Update, SVN commit, Revert, Log actions.
-- `ext-deco-fs` — later: Btrfs subvolumes, ZFS snapshots, NTFS alternate streams.
+- `ext-deco-fs` — later: Btrfs subvolumes, NTFS alternate streams. ZFS snapshots are `ext-zfs`.
 
 **Previewers** (`ext-preview-*`)
 
@@ -1318,6 +1319,7 @@ Some plugins are specified in their own file under `specs/`, so they can be hand
 - [`specs/app-icons.md`](specs/app-icons.md) — the app icon on all three platforms and the Linux desktop entry: one identifier, `rick`, for the desktop file, the hicolor icon name, the Wayland app id and `StartupWMClass`; the window icon through eframe and the rings-only symbol in the About dialog; the icon and version resource of `rick.exe`; the `Rick.app` bundle the release workflow assembles, plugins still beside the binary; the desktop entry and the `share/` layout of the Linux archive, which installs by one copy of `share/` or through `ext-installer`. No signing, notarisation or package formats: those are Version 0.3 System Integration & Distribution.
 - [`specs/about-dialog.md`](specs/about-dialog.md) — the About dialog: a modal in the settings window's chrome with the build details (commit, target, plugin ABI, build date, toolchain, OS and desktop, loaded plugins; *Copy details* and `rick --version` print the same text), *What's new* from the embedded changelog, the link, licence and credits cards, and a second page listing every third-party component — the bundled runtimes from `about/bundled.toml` and every crate from `third-party.json`, which `cargo about` generates at release time — with search, a licence filter, expandable licence texts and *Export…*. Version 0.3.
 - [`specs/system-integration.md`](specs/system-integration.md) — system integration and distribution, the second track of 0.3: single instance and the command line, `rick://`, clipboard interoperability, the integration check and its dialog, the integration items per platform and desktop (GNOME, Plasma, COSMIC, Cinnamon first-class), notifications and progress, signing and provenance, plugin load rules and trust, the release channels per platform, update checks, uninstall, the operator checklist and the ten milestones.
+- [`specs/ext-zfs.md`](specs/ext-zfs.md) — `ext-zfs`, OpenZFS snapshots: finding the dataset a folder lies in through the `zfs` command line, the read-only `zfs` location (datasets, snapshots, a snapshot's files, a file's versions), restore with the replaced live item in the trash, create, rename and destroy snapshots with a confirmation naming them, the privileged helper and its polkit action for changes ZFS refuses, and the Info panel section with the dataset's properties and their source. Linux only. Version 0.4.
 
 ### Still open
 
