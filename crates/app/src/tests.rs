@@ -1465,6 +1465,302 @@ fn eject_goes_through_the_platform_and_the_list_follows() {
     assert_eq!(h.fake.ejected().len(), 1);
 }
 
+/// A stick mounted at `sub` of the harness's root, as the platform lists it.
+fn stick(h: &Harness) -> platform::Volume {
+    platform::Volume {
+        name: "STICK".into(),
+        mount_point: h.root.path().join("sub"),
+        kind: platform::VolumeKind::Removable,
+        fs_type: "vfat".into(),
+        device: None,
+        total: Some(100),
+        free: Some(50),
+        read_only: false,
+    }
+}
+
+/// The texts of the notices in `events` that say something was removed.
+fn removal_notices(events: &[Event]) -> Vec<(Level, String)> {
+    events
+        .iter()
+        .filter_map(|event| match event {
+            Event::Notify { level, text } if text.contains("was removed") => {
+                Some((*level, text.clone()))
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+/// Acceptance (issue 149, item 3): with a tab three folders deep on a
+/// stick, pulling the stick sends every pane on it Home at once, with one
+/// notice that names the drive, and Back never returns to what is gone.
+#[test]
+fn pulling_a_stick_sends_every_pane_on_it_home_and_says_so_once() {
+    let mut h = harness();
+    h.settle();
+    let sub = h.root.path().join("sub");
+    let deep = sub.join("one").join("two").join("three");
+    fs::create_dir_all(&deep).unwrap_or_else(|e| panic!("{e}"));
+    h.fake.add_volume(stick(&h));
+    h.send(Command::RefreshVolumes);
+    assert!(wait_until(&mut h, Duration::from_secs(5), |h| {
+        h.app.model().volumes.len() == 1
+    }));
+    // One pane walks down the stick, a second tab opens on its root.
+    let first = h.app.model().focused;
+    for folder in [
+        sub.clone(),
+        sub.join("one"),
+        sub.join("one").join("two"),
+        deep.clone(),
+    ] {
+        h.send(Command::Navigate {
+            pane: first,
+            to: local(&folder),
+        });
+        h.settle();
+    }
+    h.send(Command::NewTab(local(&sub)));
+    h.settle();
+    let second = h.app.model().focused;
+    assert_ne!(second, first);
+    h.take_events();
+
+    h.fake.remove_volume(&sub);
+    h.send(Command::RefreshVolumes);
+    assert!(wait_until(&mut h, Duration::from_secs(5), |h| {
+        h.app.model().volumes.is_empty()
+    }));
+    let home = local(&h.fake.home_dir());
+    assert_eq!(explorer_at(&h, first), home);
+    assert_eq!(explorer_at(&h, second), home);
+    h.settle();
+    let events = h.take_events();
+    assert_eq!(
+        removal_notices(&events),
+        [(Level::Info, "STICK was removed".to_owned())]
+    );
+    assert!(
+        !events.iter().any(|e| matches!(
+            e,
+            Event::Notify {
+                level: Level::Error | Level::Warning,
+                ..
+            }
+        )),
+        "a removed drive is no error: {events:?}"
+    );
+    assert_eq!(h.tab(first).failure, None);
+
+    // The steps on the stick left the history with it.
+    h.send(Command::Back(first));
+    h.settle();
+    assert_eq!(explorer_at(&h, first), local(h.root.path()));
+}
+
+/// Eject sends the panes Home first and unmounts afterwards, so no pane
+/// points at a drive that is gone; the list that follows the unmount says
+/// nothing a second time.
+#[test]
+fn eject_sends_the_panes_home_before_it_unmounts() {
+    let mut h = harness();
+    h.settle();
+    let sub = h.root.path().join("sub");
+    h.fake.add_volume(stick(&h));
+    h.send(Command::RefreshVolumes);
+    assert!(wait_until(&mut h, Duration::from_secs(5), |h| {
+        h.app.model().volumes.len() == 1
+    }));
+    let pane = h.app.model().focused;
+    h.send(Command::Navigate {
+        pane,
+        to: local(&sub),
+    });
+    h.settle();
+    h.take_events();
+
+    h.send(Command::Eject(sub.clone()));
+    // Before the loop has run once more, and so before the unmount is
+    // reported: the pane is Home already.
+    let home = local(&h.fake.home_dir());
+    assert_eq!(explorer_at(&h, pane), home);
+    assert_eq!(
+        removal_notices(&h.events),
+        [(Level::Info, "STICK was removed".to_owned())]
+    );
+    assert!(wait_until(&mut h, Duration::from_secs(5), |h| {
+        h.fake.ejected() == [sub.clone()] && h.app.model().volumes.is_empty()
+    }));
+    h.settle();
+    assert_eq!(removal_notices(&h.take_events()).len(), 1);
+    assert_eq!(explorer_at(&h, pane), home);
+}
+
+/// The drive list is read again on the platform's mount event, not only at
+/// its interval: a partition that mounts a moment after the first is there
+/// well before the next interval.
+#[test]
+fn a_mount_event_reads_the_drive_list_again_at_once() {
+    let mut h = harness();
+    h.settle();
+    // The first partition, seen by the interval: a read has just happened,
+    // and the next one by the clock is a whole interval away.
+    h.fake.add_volume(stick(&h));
+    assert!(wait_until(&mut h, super::VOLUMES_EVERY * 3, |h| {
+        h.app.model().volumes.len() == 1
+    }));
+    h.fake.add_volume(platform::Volume {
+        name: "SECOND".into(),
+        mount_point: h.root.path().to_path_buf(),
+        ..stick(&h)
+    });
+    h.fake.mounts_changed();
+    assert!(
+        wait_until(&mut h, super::VOLUMES_EVERY / 2, |h| {
+            h.app.model().volumes.len() == 2
+        }),
+        "the second partition waits for the interval"
+    );
+}
+
+/// A harness with the stub network provider and its one host `nas`, the
+/// focused pane on it.
+fn harness_on_a_host() -> (Harness, Arc<net::Stub>, model::PaneId, Location) {
+    let stub = net::Stub::new();
+    let mut h = harness_with(vec![Arc::new(net::StubExtension::new(Arc::clone(&stub)))]);
+    h.settle();
+    h.send(Command::AddConnection {
+        provider: net::ID,
+        name: "nas".into(),
+        values: vec![("host".into(), "10.0.0.2".into())],
+    });
+    h.settle();
+    let pane = h.app.model().focused;
+    let host = Location::new(net::ID, "/nas/share");
+    h.send(Command::Navigate {
+        pane,
+        to: host.clone(),
+    });
+    h.settle();
+    assert_eq!(explorer_at(&h, pane), host);
+    assert_eq!(h.tab(pane).failure, None);
+    h.take_events();
+    (h, stub, pane, host)
+}
+
+/// Removing a host from the side panel sends the panes on it Home with
+/// `<host> was removed`.
+#[test]
+fn removing_a_connection_sends_the_panes_on_it_home() {
+    let (mut h, _stub, pane, _host) = harness_on_a_host();
+    h.send(Command::Connection {
+        provider: net::ID,
+        name: "nas".into(),
+        op: super::ConnectionOp::Remove,
+    });
+    assert_eq!(explorer_at(&h, pane), local(&h.fake.home_dir()));
+    h.settle();
+    assert_eq!(
+        removal_notices(&h.take_events()),
+        [(Level::Info, "nas was removed".to_owned())]
+    );
+    assert_eq!(explorer_at(&h, pane), local(&h.fake.home_dir()));
+}
+
+/// Acceptance (issue 149, item 3): a connection that drops keeps the pane
+/// where it is and shows *Connection lost to <host>* with the provider's
+/// message; Rick tries again by itself, and the listing is back once the
+/// host answers. A missing path is not a lost connection.
+#[test]
+fn a_lost_connection_keeps_the_pane_and_is_tried_again_until_it_answers() {
+    let (mut h, stub, pane, host) = harness_on_a_host();
+    stub.set_down(Some("connection timed out"));
+    h.send(Command::Refresh(pane));
+    assert!(wait_until(&mut h, Duration::from_secs(5), |h| {
+        h.tab(pane).lost.is_some()
+    }));
+    let lost = h.tab(pane).lost.clone().unwrap_or_else(|| panic!("lost"));
+    assert_eq!(lost.source, "nas");
+    assert_eq!(lost.provider, "Stub");
+    assert_eq!(lost.message, "connection timed out");
+    assert_eq!(explorer_at(&h, pane), host, "the pane stays where it is");
+    assert_eq!(h.tab(pane).failure, None, "the card, not the banner");
+
+    // Rick tries again by itself: the first time after two seconds.
+    assert!(wait_until(
+        &mut h,
+        super::RETRY_LOST_AFTER[0] + Duration::from_secs(3),
+        |h| h.tab(pane).lost.as_ref().is_some_and(|l| l.retries == 1)
+    ));
+    assert_eq!(explorer_at(&h, pane), host);
+    // Retry, the card's button, is a refresh: the host still does not
+    // answer, and the card stays.
+    h.send(Command::Refresh(pane));
+    h.settle();
+    assert!(h.tab(pane).lost.is_some());
+
+    // The host answers again: the next try shows the listing where the
+    // pane was, with nothing asked of the user.
+    stub.set_down(None);
+    assert!(wait_until(
+        &mut h,
+        super::RETRY_LOST_AFTER[1] + Duration::from_secs(3),
+        |h| h.tab(pane).lost.is_none()
+    ));
+    assert_eq!(explorer_at(&h, pane), host);
+    assert_eq!(h.tab(pane).failure, None);
+    let events = h.take_events();
+    assert!(
+        !events.iter().any(|e| matches!(
+            e,
+            Event::Notify {
+                level: Level::Error,
+                ..
+            }
+        )),
+        "a lost connection is shown in the pane, not as a notice: {events:?}"
+    );
+
+    // A folder that is not there is a failed listing, as it was.
+    h.send(Command::Navigate {
+        pane,
+        to: Location::new(net::ID, "/gone"),
+    });
+    h.settle();
+    assert_eq!(h.tab(pane).lost, None);
+    assert!(h.tab(pane).failure.is_some());
+}
+
+/// Format… opens the system's tool on the drive, and says so where the
+/// system has none.
+#[test]
+fn format_opens_the_systems_tool_on_the_drive() {
+    let mut h = harness();
+    h.settle();
+    let sub = h.root.path().join("sub");
+    h.fake.add_volume(stick(&h));
+    h.send(Command::RefreshVolumes);
+    assert!(wait_until(&mut h, Duration::from_secs(5), |h| {
+        h.app.model().volumes.len() == 1
+    }));
+    assert!(h.app.model().format_tool);
+    h.send(Command::Format(sub.clone()));
+    assert!(wait_until(&mut h, Duration::from_secs(5), |h| {
+        h.fake.format_opened() == [sub.clone()]
+    }));
+
+    h.fake.set_format_tool(false);
+    h.take_events();
+    h.send(Command::Format(sub.clone()));
+    h.settle();
+    assert_eq!(h.fake.format_opened().len(), 1);
+    assert!(h.take_events().iter().any(|e| matches!(
+        e,
+        Event::Notify { level: Level::Warning, text } if text == "No disk utility is installed"
+    )));
+}
+
 #[test]
 fn a_virtual_location_comes_back_with_the_session() {
     let mut h = harness();
@@ -1564,6 +1860,8 @@ mod net {
     pub(super) struct Stub {
         pub(super) connections: Mutex<Vec<Connection>>,
         pub(super) connected: Mutex<Vec<String>>,
+        /// What the hosts answer with while they cannot be reached.
+        down: Mutex<Option<&'static str>>,
         schema: Option<ConnectionSchema>,
     }
 
@@ -1608,6 +1906,14 @@ mod net {
         }
     }
 
+    impl Stub {
+        /// From now on the hosts cannot be reached and say `why`, or
+        /// answer again with `None`.
+        pub(super) fn set_down(&self, why: Option<&'static str>) {
+            *lock(&self.down) = why;
+        }
+    }
+
     #[async_trait]
     impl Connector for Stub {
         fn provider(&self) -> ProviderId {
@@ -1646,7 +1952,17 @@ mod net {
         }
         fn list(&self, loc: &Location, _opts: ListOptions, _cancel: CancelToken) -> EntryStream {
             if loc.path.as_bytes() != b"/" {
-                return stream::once(async { Err(Error::NotFound) }).boxed();
+                // A host's own folder is empty, while the host answers.
+                let host = loc.path.as_bytes()[1..].split(|b| *b == b'/').next();
+                let known = lock(&self.connections)
+                    .iter()
+                    .any(|c| Some(c.name.as_bytes()) == host);
+                let answer = match *lock(&self.down) {
+                    _ if !known => Err(Error::NotFound),
+                    Some(why) => Err(Error::unreachable(why)),
+                    None => Ok(Vec::new()),
+                };
+                return stream::once(async { answer }).boxed();
             }
             let entries: Vec<Entry> = lock(&self.connections)
                 .iter()
