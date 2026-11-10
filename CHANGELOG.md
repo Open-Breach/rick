@@ -117,6 +117,15 @@ open is in `QUESTIONS.md` 323 to 366. The rules went into SPEC.md first
   written to, greyed with *nothing to paste* until something is copied or
   cut. On a folder it pastes into that folder, and *Paste as link* with it;
   on the empty area into the folder the pane shows (issue 176, #179).
+- **A click on the launcher only raises the window.** The desktop entry
+  runs `rick --activate %U`: a click on the launcher entry or on a dock
+  favourite brings the window of the running Rick forward and opens no
+  tab, and starts Rick with its session when none runs. A folder dropped
+  on the icon, *Open with* and a `rick://` link open as before, and `rick`
+  typed in a terminal keeps opening the current directory. A launcher
+  entry written by an earlier version reads as changed in the integration
+  dialog and is rewritten when its row is applied (specs/decisions.md
+  Q264).
 - The workspace version is `0.4.0-dev` until 0.4.0 is tagged (#154).
 
 ### Fixed

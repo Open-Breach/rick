@@ -5,8 +5,11 @@
 //! `rick [<path>…]` opens each path in a tab (the caller's working
 //! directory without any), `rick reveal <file>…` opens the folders and
 //! selects the files, `--new-window` puts them in a window of their own;
-//! `rick <command> <args…>` is a plugin's, dispatched to the extension
-//! that declared it. Paths are resolved against the caller's working
+//! `rick --activate` is what a launcher runs: without a path it brings the
+//! window forward and opens nothing, so a click on the launcher entry or
+//! on a dock favourite never opens a tab, and with paths it opens them
+//! like a plain `rick`. `rick <command> <args…>` is a plugin's, dispatched
+//! to the extension that declared it. Paths are resolved against the caller's working
 //! directory before anything is sent to the instance, so a relative path
 //! typed in a terminal means the same in the window. An argument the
 //! command line does not know is a usage error: the error and the help,
@@ -19,6 +22,8 @@ use clap::{ColorChoice, CommandFactory as _, FromArgMatches as _, Parser, Subcom
 use ext::CommandSpec;
 
 /// The command line, as the launch and the instance both parse it.
+// The options are what they are: one flag each, as clap derives them.
+#[allow(clippy::struct_excessive_bools)]
 #[derive(Parser, Debug, PartialEq, Eq)]
 #[command(
     name = "rick",
@@ -43,6 +48,9 @@ pub struct Cli {
     /// Start for the session bus and open no folder: what the D-Bus activation file of "Show in folder" runs
     #[arg(long, conflicts_with = "paths")]
     pub dbus_service: bool,
+    /// Bring Rick's window forward and open no folder where a plain `rick` opens the current directory: what the launcher entry runs
+    #[arg(long, conflicts_with = "new_window")]
+    pub activate: bool,
     #[command(subcommand)]
     pub command: Option<Core>,
     /// Folders to open, one tab each; the current directory without any
@@ -101,6 +109,12 @@ pub enum Parsed {
     /// `--dbus-service`: the instance starts, or is running already, for
     /// the session bus; no folder is opened for it.
     Service,
+    /// `--activate` without a path, what a click on the launcher entry or
+    /// on a dock favourite runs (specs/system-integration.md §4): the
+    /// running instance brings its window forward and opens nothing; a
+    /// launch that finds no instance becomes it, with its session and no
+    /// tab for the working directory.
+    Activate,
     /// `--help`: the text, for the caller's standard output.
     Help(String),
     /// `--version`: the text, for the caller's standard output.
@@ -234,6 +248,11 @@ pub fn parse(argv: &[String], cwd: &Path, plugins: &[CommandSpec]) -> Result<Par
                 }
             }
             if targets.is_empty() {
+                // A launcher has no working directory worth a tab; a
+                // terminal has, and a plain `rick` opens it.
+                if cli.activate {
+                    return Ok(Parsed::Activate);
+                }
                 targets.push(Target::Path(resolve(cwd, Path::new("."))));
             }
             Parsed::Open {
@@ -292,6 +311,46 @@ mod tests {
         // It is the instance's own start, not a place to open.
         assert!(parse(&args(&["--dbus-service", "sub"]), dir.path(), &[]).is_err());
         assert!(help(&[]).contains("--dbus-service"));
+    }
+
+    /// The launcher's own argument form (specs/system-integration.md §4):
+    /// alone it opens nothing, with what the launcher hands over it opens
+    /// that, and a plain `rick` keeps opening the working directory.
+    #[test]
+    fn the_launchers_argument_opens_nothing_without_a_path() {
+        let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+        let sub = dir.path().join("sub");
+        std::fs::create_dir(&sub).unwrap_or_else(|e| panic!("{e}"));
+        let canonical = sub.canonicalize().unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(
+            parse(&args(&["--activate"]), dir.path(), &[]),
+            Ok(Parsed::Activate)
+        );
+        // A folder dropped on the launcher, *Open with* and a `rick://`
+        // link arrive as the desktop entry's `%U`.
+        let open = |targets: Vec<Target>| -> Result<Parsed, Usage> {
+            Ok(Parsed::Open {
+                targets,
+                new_window: false,
+            })
+        };
+        assert_eq!(
+            parse(&args(&["--activate", "sub"]), dir.path(), &[]),
+            open(vec![Target::Path(canonical.clone())])
+        );
+        let url = platform::paths::file_uri(&sub);
+        assert_eq!(
+            parse(&args(&["--activate", &url]), dir.path(), &[]),
+            open(vec![Target::Path(canonical)])
+        );
+        // Typed in a terminal without it, the working directory opens.
+        assert!(matches!(
+            parse(&[], dir.path(), &[]),
+            Ok(Parsed::Open { targets, .. }) if targets.len() == 1
+        ));
+        // A window of its own is asked for by its own option.
+        assert!(parse(&args(&["--activate", "--new-window"]), dir.path(), &[]).is_err());
+        assert!(help(&[]).contains("--activate"));
     }
 
     #[test]

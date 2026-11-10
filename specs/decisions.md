@@ -278,7 +278,7 @@ Q261. `check-third-party.py` fails the `licenses` job when a release crate is mi
 
 Q262. A contributor matching a fixed credits row is not repeated; `platform::os_description()` was added.
 
-Q264. `rick` without an argument opens the current directory, also from a launcher click. (provisional)
+Q264. A launcher or dock click runs `rick --activate`: it only raises a running Rick; `rick` in a terminal opens the current directory (decided 2026-11-10).
 
 Q265. A `rick://` URL takes an empty host and a local path only; `rick://apps` is an error.
 
