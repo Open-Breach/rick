@@ -93,6 +93,12 @@ impl SearchBox {
 
     /// Draws the box in `rect` and its dropdown below; returns what the user
     /// picked, if anything. `salt` tells one window's box from another's.
+    ///
+    /// The box sits on the title row's band (SPEC.md *Title row*): a field
+    /// in the band's search fill with no border at rest — `bg/pane` on a
+    /// band that agrees with the scheme — its text and its placeholder in
+    /// the band's colours for them; the focus ring shows while it has the
+    /// focus.
     #[allow(clippy::too_many_arguments)]
     pub fn show(
         &mut self,
@@ -105,13 +111,24 @@ impl SearchBox {
         salt: u64,
     ) -> Option<Pick> {
         let id = egui::Id::new(("title-search", salt));
+        let band = crate::theme::band(ui);
         let hint = format!("{}  Search, or > for commands", crate::icons::SEARCH);
         let edit = egui::TextEdit::singleline(&mut self.text)
             .id(id)
-            .hint_text(hint)
+            .hint_text(egui::RichText::new(hint).color(band.search_placeholder))
+            .text_color(band.search_text)
             .desired_width(rect.width())
             .vertical_align(egui::Align::Center);
-        let output = ui.put(rect, edit);
+        let output = ui
+            .scope(|ui| {
+                let visuals = ui.visuals_mut();
+                visuals.text_edit_bg_color = Some(band.search_fill);
+                visuals.extreme_bg_color = band.search_fill;
+                visuals.widgets.inactive.bg_stroke = egui::Stroke::NONE;
+                visuals.widgets.hovered.bg_stroke = egui::Stroke::NONE;
+                ui.put(rect, edit)
+            })
+            .inner;
         if self.focus {
             output.request_focus();
             // Place the caret after the text, so `>` stays in front.

@@ -769,11 +769,13 @@ fn tab_label(model: &model::Model, tab: &Tab) -> (&'static str, String) {
 }
 
 /// Draws one workspace tab at `rect`: a 16 px icon, the title truncated
-/// with an ellipsis and a close button; filled `bg/pane` when active,
-/// `bg/subtle` when hovered, the inactive title in `text/secondary` and its
-/// close button at half opacity; the grab cursor over its body (SPEC.md
-/// *Workspace tabs*). Returns the tab's response and whether the close
-/// button was pressed.
+/// with an ellipsis and a close button. The active tab is filled `bg/pane`
+/// and drawn in the scheme's own colours, lifting out of the title row's
+/// band; an inactive one shows the band and takes its colours from it —
+/// the band's hover under the pointer, its title and icon colours, the
+/// close button at half opacity (SPEC.md *Workspace tabs*, *On the
+/// band*). The grab cursor is over the tab's body. Returns the tab's
+/// response and whether the close button was pressed.
 fn workspace_tab(
     ui: &mut egui::Ui,
     rect: egui::Rect,
@@ -783,6 +785,7 @@ fn workspace_tab(
 ) -> (egui::Response, bool) {
     use crate::theme::{ICON, TAB_CORNER, TEXT_BODY};
     let scheme = crate::theme::scheme(ui);
+    let band = crate::theme::band(ui);
     let response = ui.interact(
         rect,
         egui::Id::new(("workspace-tab", id.0)),
@@ -819,21 +822,22 @@ fn workspace_tab(
     if active {
         painter.rect_filled(rect, corners, scheme.bg_pane);
     } else if response.hovered() || close.hovered() {
-        painter.rect_filled(rect, corners, scheme.bg_subtle);
+        painter.rect_filled(rect, corners, band.tab_hover);
     }
+    // The active tab is the scheme's; the others sit on the band.
+    let (icon, colour, close_hover) = if active {
+        (scheme.icon_default, scheme.text_primary, scheme.bg_control)
+    } else {
+        (band.icon, band.title, band.hover)
+    };
     let icon_font = egui::FontId::proportional(ICON);
     painter.text(
         egui::pos2(rect.left() + 14.0, rect.center().y),
         egui::Align2::LEFT_CENTER,
         label.icon,
         icon_font.clone(),
-        scheme.icon_default,
+        icon,
     );
-    let colour = if active {
-        scheme.text_primary
-    } else {
-        scheme.text_secondary
-    };
     let title_left = rect.left() + 38.0;
     let title_width = (close_rect.left() - 6.0 - title_left).max(0.0);
     let mut job = egui::text::LayoutJob::simple_singleline(
@@ -846,13 +850,13 @@ fn workspace_tab(
     let text_pos = egui::pos2(title_left, rect.center().y - galley.size().y / 2.0);
     ui.painter().galley(text_pos, galley, colour);
     let x_colour = if active {
-        scheme.icon_default
+        icon
     } else {
-        scheme.icon_default.gamma_multiply(0.5)
+        icon.gamma_multiply(0.5)
     };
     if close.hovered() {
         ui.painter()
-            .circle_filled(close_rect.center(), 10.0, scheme.bg_control);
+            .circle_filled(close_rect.center(), 10.0, close_hover);
     }
     ui.painter().text(
         close_rect.center(),
@@ -925,7 +929,7 @@ pub struct RickUi {
     /// Set while the inline editor commits through the action, so the shell
     /// runs the action instead of starting another edit.
     inline_commit: bool,
-    applied: Option<(Theme, u8, Density)>,
+    applied: Option<(Theme, u8, Density, (model::Rgb, model::Rgb))>,
     now: SystemTime,
     /// Each model window's state.
     windows: BTreeMap<WindowId, WindowUi>,
@@ -1758,7 +1762,12 @@ impl RickUi {
 
     fn apply_settings(&mut self, ctx: &egui::Context) {
         let settings = &self.app.model().settings;
-        let key = (settings.theme, settings.font_size, settings.density);
+        let key = (
+            settings.theme,
+            settings.font_size,
+            settings.density,
+            settings.titlebar(),
+        );
         if self.applied != Some(key) {
             ctx.set_theme(match settings.theme {
                 Theme::System => egui::ThemePreference::System,
@@ -1768,7 +1777,9 @@ impl RickUi {
             ctx.set_zoom_factor(f32::from(settings.font_size) / crate::theme::TEXT_BODY);
             // The scheme and density tokens on both of egui's themes, so
             // following the system keeps working.
-            crate::theme::apply(ctx, settings.density);
+            let (light, dark) = settings.titlebar();
+            let band = (crate::theme::rgb(light), crate::theme::rgb(dark));
+            crate::theme::apply(ctx, settings.density, band);
             self.applied = Some(key);
         }
         if settings.shortcuts != self.keys_from {
@@ -2993,7 +3004,7 @@ impl RickUi {
         egui::Panel::top(egui::Id::new(("title", window.0)))
             .exact_size(height)
             .show_separator_line(false)
-            .frame(egui::Frame::NONE.fill(crate::theme::scheme_of(ctx).bg_window))
+            .frame(egui::Frame::NONE.fill(crate::theme::band_of(ctx).fill))
             .show(ui, |ui| {
                 let rect = ui.max_rect();
                 // The background first, so every widget drawn after it wins
@@ -3051,6 +3062,24 @@ impl RickUi {
                         .layout(egui::Layout::right_to_left(egui::Align::Center)),
                 );
                 right.add_space(metrics.space_toolbar_x);
+                // The window group is drawn on the band, in its colours:
+                // the icons, the divider and the running count.
+                let band = crate::theme::band(&right);
+                let visuals = right.visuals_mut();
+                for widget in [
+                    &mut visuals.widgets.inactive,
+                    &mut visuals.widgets.hovered,
+                    &mut visuals.widgets.active,
+                ] {
+                    widget.fg_stroke.color = band.icon;
+                }
+                visuals.widgets.noninteractive.bg_stroke.color = band.divider;
+                visuals.weak_text_color = Some(band.title);
+                if band.contrary {
+                    // An active toggle is told by its filled glyph alone:
+                    // the scheme's tint is not made for this band.
+                    visuals.selection.stroke.color = band.icon;
+                }
                 self.title_right(&mut right, ctx, chrome, window, focused);
                 let right_edge = right.min_rect().left();
 
@@ -3365,17 +3394,18 @@ impl RickUi {
         plus.widget_info(|| {
             egui::WidgetInfo::labeled(egui::WidgetType::Button, true, t!("shell-new-tab"))
         });
+        let band = crate::theme::band(&child);
         if plus.hovered() {
             child
                 .painter()
-                .rect_filled(plus_rect, metrics.corner_radius(), scheme.bg_subtle);
+                .rect_filled(plus_rect, metrics.corner_radius(), band.hover);
         }
         child.painter().text(
             plus_rect.center(),
             egui::Align2::CENTER_CENTER,
             icons::PLUS,
             egui::FontId::proportional(ICON),
-            scheme.icon_default,
+            band.icon,
         );
         let plus_clicked = plus.on_hover_text(t!("shell-new-tab")).clicked();
 

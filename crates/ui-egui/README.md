@@ -11,6 +11,11 @@ is the system's UI and monospace fonts (`fonts`, through the platform's
 the `model` the `app` owns, the first as eframe's root viewport and the
 others as viewports of their own drawn in the same frame: the window frame
 with its shadow and resize grips where the system draws none, the title row
+on its band (`theme::band`: `bg/titlebar` with the pair the *Title bar
+colour* setting wrote into it, the active tab lifting out of it in
+`bg/pane`, and everything else in the row — inactive titles, icons, the
+divider, hovers, the search box — chosen by contrast with the band, so a
+dark band in Light turns the row to light text)
 with the burger menu (the application menu, `menus.rs`: a card in the form of
 the other menus, 280 px at least, 6 px under its button — New window, the
 Layouts submenu and the extensions' submenus; Settings, Keyboard shortcuts
