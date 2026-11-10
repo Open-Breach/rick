@@ -3829,6 +3829,104 @@ fn screenshots_of_the_install_dialogue() {
     close(&mut harness);
 }
 
+/// Issue 173: the Git clone dialogue — opened on the empty area with a
+/// Git URL on the clipboard, in Light and Dark; then with the options
+/// open; and with nothing on the clipboard, where the field asks for the
+/// URL.
+#[test]
+#[ignore = "needs a wgpu adapter; CI runs it and uploads the images"]
+fn screenshots_of_the_git_clone_dialogue() {
+    use egui_kittest::kittest::Queryable as _;
+    let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+    let projects = dir.path().join("projects");
+    fs::create_dir_all(projects.join("notes")).unwrap_or_else(|e| panic!("{e}"));
+    let fake = Arc::new(Fake::new().unwrap_or_else(|e| panic!("{e}")));
+    let host = Arc::new(EguiHost::new());
+    let app = app::App::new(app::Config {
+        platform: fake.clone(),
+        ui: host.clone(),
+        extensions: vec![Arc::new(ext_git::GitExtension::new())],
+        config_dir: Some(fake.config_dir()),
+        start: Some(local(&projects)),
+    });
+    let mut harness = Harness::builder()
+        .with_size(egui::vec2(1920.0, 1000.0))
+        .with_pixels_per_point(2.0)
+        .build_eframe(move |cc| RickUi::new(app, host, &cc.egui_ctx));
+    settle(&mut harness);
+    let open = |harness: &mut Harness<'_, RickUi>, clipboard: &str| {
+        platform::Clipboard::set_text(&*fake, clipboard).unwrap_or_else(|e| panic!("{e}"));
+        let pane = harness.state().app().model().focused;
+        harness.state_mut().app_mut().handle(
+            app::Command::Select {
+                pane,
+                change: SelectionChange::Set(Vec::new()),
+            },
+            &mut Vec::new(),
+        );
+        settle(harness);
+        harness
+            .state_mut()
+            .queue(Intent::Action(ext::ActionId("git.clone")), pane);
+        step_until(harness, Duration::from_secs(15), |h| {
+            h.query_by_label("Clone repository").is_some()
+        });
+        harness.event(egui::Event::PointerMoved(egui::pos2(960.0, 30.0)));
+        for _ in 0..8 {
+            harness.step();
+        }
+    };
+    let close = |harness: &mut Harness<'_, RickUi>| {
+        harness.key_press(egui::Key::Escape);
+        harness.step();
+        harness.step();
+        settle(harness);
+    };
+    let url = "https://github.com/Open-Breach/rick.git";
+    for (theme, name) in [(Theme::Light, "light"), (Theme::Dark, "dark")] {
+        harness.state_mut().app_mut().handle(
+            app::Command::Settings(SettingsChange::Theme(theme)),
+            &mut Vec::new(),
+        );
+        settle(&mut harness);
+        open(&mut harness, url);
+        shoot(&mut harness, &format!("git-clone-dialogue-{name}"));
+        close(&mut harness);
+    }
+    harness.state_mut().app_mut().handle(
+        app::Command::Settings(SettingsChange::Theme(Theme::Light)),
+        &mut Vec::new(),
+    );
+    settle(&mut harness);
+    // The options open.
+    open(&mut harness, url);
+    let options = harness
+        .get_by_role_and_label(egui::accesskit::Role::CheckBox, "Options")
+        .rect()
+        .center();
+    harness.event(egui::Event::PointerMoved(options));
+    harness.step();
+    for pressed in [true, false] {
+        harness.event(egui::Event::PointerButton {
+            pos: options,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::default(),
+        });
+        harness.step();
+    }
+    harness.event(egui::Event::PointerMoved(egui::pos2(960.0, 30.0)));
+    for _ in 0..8 {
+        harness.step();
+    }
+    shoot(&mut harness, "git-clone-dialogue-options");
+    close(&mut harness);
+    // Nothing on the clipboard that is a Git URL.
+    open(&mut harness, "meeting notes");
+    shoot(&mut harness, "git-clone-dialogue-blank");
+    close(&mut harness);
+}
+
 /// Issue 60: the hash dialogue — a file's four digests with the Verify
 /// field prefilled from the clipboard and matching its SHA-256 — in Light
 /// and Dark at both densities, then the hashing state with the portal
