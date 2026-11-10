@@ -21,7 +21,7 @@ The bundle reuses the dialogue frame, the scheme and density tokens and the Port
 
 **The functional fixes of the same session (issue 149).** The second bundle of 0.4, taken once the GUI bundle is finished: three of its items use what that bundle introduced — the download job asks with the paste-conflict dialogue, a lost connection shows the File info card, and the Tracker connector reports through the attention dot of the Extensions dialogue. Every item is a bug to fix or a behaviour that was decided, not a design; only the List view was drawn, in the frame *List view mode* of the same Figma section, with its notes frame. This document records the rules in the places named below. The spec lands first; then one pull request per item into `dev`, in this order, and every bug fixed gets a test that fails before the fix.
 
-1. **Remote providers** (Azure Blob, S3, GCS, SSH) — the capability flags and `unavailable_reason` under *Provider* in Core types; *Object storage* under Supported scope; *Remote files* under *Opening files*; *Context menu* and the *Footer*'s include-subfolders toggle under Main area; *Download* under Operations.
+1. **Remote providers** (Azure Blob, S3, GCS, SSH) — the capability flags, `unavailable_reason` and `name_problem` under *Provider* in Core types; *Object storage* under Supported scope; *Remote files* under *Opening files*; *Context menu* and the *Footer*'s include-subfolders toggle under Main area; *Download* under Operations.
 2. **Removable media and connections** — *Removed and unreachable locations* under General behaviour; *This Machine* under Side panel (*Format…*, and the list re-read on every mount and unmount event).
 3. **File list** — *List view*, *Sorting*, *Dates* and *Inline rename* under Main area; *Select all* under Operations; the Appearance and Behaviour pages of the *Settings window*.
 4. **Window** — *Window geometry* under General behaviour; and a bug without a rule of its own: the corner resize grip goes dead after one resize until a click elsewhere.
@@ -30,7 +30,7 @@ The bundle reuses the dialogue frame, the scheme and density tokens and the Port
 
 It ends with the changelog entry, the new settings in the README where settings are listed, and a screenshot of the List view in Light and Dark.
 
-Item 1 raises the extension API version to 19, for the four capability flags and `unavailable_reason`. Every plugin is rebuilt against it; one that was built against 18 and is not in the workspace yet — `ext-zfs`, pull request 156 — is refused by the registry until it is rebuilt.
+Item 1 raises the extension API version to 19, for the four capability flags, `unavailable_reason` and `name_problem`. Every plugin is rebuilt against it; one that was built against 18 and is not in the workspace yet — `ext-zfs`, pull request 156 — is refused by the registry until it is rebuilt.
 
 **Not in the second bundle.** The five identical `tmp` rows at `/` of the same session were not reproduced and are left out on purpose; subfolder search over SSH; a plugin permission model. Nothing visual of the first bundle is changed along the way, but for that one button.
 
