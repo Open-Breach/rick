@@ -735,6 +735,7 @@ fn a_new_text_cancels_the_running_walk_on_the_200k_fixture() {
     let (mut harness, _) = harness(fixture.root());
     let pane = pane(&harness);
     command(&mut harness, app::Command::Subtree { pane, on: true });
+    let mut running_after_each = Vec::new();
     for text in ["f0", "f00"] {
         harness.state_mut().app_mut().handle(
             app::Command::Filter {
@@ -743,13 +744,21 @@ fn a_new_text_cancels_the_running_walk_on_the_200k_fixture() {
             },
             &mut Vec::new(),
         );
+        running_after_each.push(harness.state().app().jobs().running());
     }
+    let settled = Instant::now();
     settle(&mut harness);
     let states = search_states(&harness);
+    // The first walk is cancelled by the second text while it runs; a
+    // run that saw it end Done (CI run 42692336940, Linux x64) is told
+    // which jobs ran at each text and how long the settle took.
     assert_eq!(
         states,
         [JobState::Cancelled, JobState::Done],
-        "the first walk is cancelled, the second runs through"
+        "the first walk is cancelled, the second runs through; jobs running after each text \
+         {running_after_each:?}, settled in {:?}, jobs {:?}",
+        settled.elapsed(),
+        harness.state().app().model().jobs
     );
 }
 
