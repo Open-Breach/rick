@@ -178,7 +178,10 @@ pub fn read(zfs: &dyn Zfs, dataset: &str) -> Result<Vec<Property>, Error> {
             let Some(unknown) = rejected(&message).filter(|u| list.contains(u)) else {
                 return Err(to_error(ZfsError::Other(message)));
             };
-            tracing::debug!(property = unknown, "zfs does not know a property; read without it");
+            tracing::debug!(
+                property = unknown,
+                "zfs does not know a property; read without it"
+            );
             list.retain(|p| *p != unknown);
             let again: Output = zfs.run(&get_args(&list, dataset))?;
             classify(again).map_err(to_error)?
@@ -212,7 +215,7 @@ mod tests {
     use crate::zfs::ScriptedZfs;
 
     /// `zfs get` for `rpool/ROOT/ubuntu_62wyjh/var/lib` on the development
-    /// machine (OpenZFS 2.4.1, an encrypted pool).
+    /// machine (`OpenZFS` 2.4.1, an encrypted pool).
     const ENCRYPTED: &str = "guid\t2701085171283325975\t-
 type\tfilesystem\t-
 mountpoint\t/var/lib\tinherited from rpool/ROOT/ubuntu_62wyjh
@@ -249,17 +252,37 @@ readonly\toff\tdefault
             compression.map(|p| p.source.clone()),
             Some(Source::Inherited("rpool".to_owned()))
         );
-        assert_eq!(find(&props, "quota").map(|p| p.source.clone()), Some(Source::Default));
-        assert_eq!(find(&props, "guid").map(|p| p.source.clone()), Some(Source::None));
+        assert_eq!(
+            find(&props, "quota").map(|p| p.source.clone()),
+            Some(Source::Default)
+        );
+        assert_eq!(
+            find(&props, "guid").map(|p| p.source.clone()),
+            Some(Source::None)
+        );
         assert_eq!(
             find(&props, "guid").map(Property::shown).as_deref(),
             Some("2701085171283325975"),
             "a guid stays a plain number"
         );
-        assert_eq!(find(&props, "used").map(Property::shown).as_deref(), Some("43.6 GiB"));
-        assert_eq!(find(&props, "quota").map(Property::shown).as_deref(), Some("none"));
-        assert_eq!(find(&props, "recordsize").map(Property::shown).as_deref(), Some("128.0 KiB"));
-        assert_eq!(find(&props, "compressratio").map(Property::shown).as_deref(), Some("1.14x"));
+        assert_eq!(
+            find(&props, "used").map(Property::shown).as_deref(),
+            Some("43.6 GiB")
+        );
+        assert_eq!(
+            find(&props, "quota").map(Property::shown).as_deref(),
+            Some("none")
+        );
+        assert_eq!(
+            find(&props, "recordsize").map(Property::shown).as_deref(),
+            Some("128.0 KiB")
+        );
+        assert_eq!(
+            find(&props, "compressratio")
+                .map(Property::shown)
+                .as_deref(),
+            Some("1.14x")
+        );
     }
 
     #[test]
@@ -268,7 +291,10 @@ readonly\toff\tdefault
             .replace("encryption\taes-256-gcm\t-", "encryption\toff\tdefault")
             .replace("keystatus\tavailable\t-", "keystatus\t-\t-");
         let props = parse(&plain);
-        assert_eq!(find(&props, "encryption").map(|p| p.value.as_str()), Some("off"));
+        assert_eq!(
+            find(&props, "encryption").map(|p| p.value.as_str()),
+            Some("off")
+        );
         assert!(find(&props, "keystatus").is_none());
         assert_eq!(props.len(), PROPERTIES.len() - 1);
     }
@@ -280,7 +306,7 @@ readonly\toff\tdefault
         assert_eq!(source("compression"), Some(Source::Local));
         assert_eq!(source("atime"), Some(Source::Received));
         assert_eq!(source("copies"), Some(Source::None));
-        assert!(parse("nonsense\nfoo\tbar\tlocal\n").is_empty());
+        assert_eq!(parse("nonsense\nfoo\tbar\tlocal\n"), []);
     }
 
     #[test]
@@ -290,20 +316,36 @@ readonly\toff\tdefault
         let all: Vec<&str> = all.iter().map(String::as_str).collect();
         zfs.on(
             &all,
-            Output::failed(2, "bad property list: invalid property 'keystatus'\nusage:\n\tget ...\n"),
+            Output::failed(
+                2,
+                "bad property list: invalid property 'keystatus'\nusage:\n\tget ...\n",
+            ),
         );
-        let without: Vec<&str> = PROPERTIES.iter().copied().filter(|p| *p != "keystatus").collect();
+        let without: Vec<&str> = PROPERTIES
+            .iter()
+            .copied()
+            .filter(|p| *p != "keystatus")
+            .collect();
         let retry = get_args(&without, "tank");
         let retry: Vec<&str> = retry.iter().map(String::as_str).collect();
-        zfs.on(&retry, Output::ok("guid\t42\t-\ncompression\tzstd\tlocal\n"));
+        zfs.on(
+            &retry,
+            Output::ok("guid\t42\t-\ncompression\tzstd\tlocal\n"),
+        );
         let props = read(&zfs, "tank").unwrap_or_default();
         assert_eq!(props.len(), 2);
         assert_eq!(zfs.calls().len(), 2);
 
         // A second unknown property is not chased: the read fails.
         let stubborn = ScriptedZfs::new();
-        stubborn.on(&all, Output::failed(2, "bad property list: invalid property 'keystatus'\n"));
-        stubborn.on(&retry, Output::failed(2, "bad property list: invalid property 'dedup'\n"));
+        stubborn.on(
+            &all,
+            Output::failed(2, "bad property list: invalid property 'keystatus'\n"),
+        );
+        stubborn.on(
+            &retry,
+            Output::failed(2, "bad property list: invalid property 'dedup'\n"),
+        );
         assert!(read(&stubborn, "tank").is_err());
         assert_eq!(stubborn.calls().len(), 2);
     }

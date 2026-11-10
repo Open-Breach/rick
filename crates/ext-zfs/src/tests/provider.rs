@@ -4,7 +4,9 @@
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
-use ext::{Capabilities, CopyOptions, Depth, LinkKind, ListOptions, Provider, RemoveMode, WriteOptions};
+use ext::{
+    Capabilities, CopyOptions, Depth, LinkKind, ListOptions, Provider, RemoveMode, WriteOptions,
+};
 use tokio::io::AsyncReadExt as _;
 use types::{Attrs, CancelToken, EntryKind, Error, Location, ProviderId};
 
@@ -81,7 +83,10 @@ fn locations_round_trip_and_a_snapshot_s_parent_is_its_dataset() {
         root.path.parent().map(|p| p.to_string_lossy().into_owned()),
         Some("/tank/home".to_owned())
     );
-    assert_eq!(dataset_location("tank/home").path.to_string_lossy(), "/tank/home");
+    assert_eq!(
+        dataset_location("tank/home").path.to_string_lossy(),
+        "/tank/home"
+    );
     let versions = versions_location(Path::new("/home/ann/report.txt"));
     assert_eq!(
         target(&versions).ok(),
@@ -211,18 +216,28 @@ fn nothing_can_be_changed() {
     let provider = fx.provider();
     let file = snapshot_location("tank/home", "b", Path::new("ann/old.txt"));
     let dir = snapshot_location("tank/home", "b", Path::new("ann"));
-    for at in [loc("/"), dataset_location("tank/home"), file.clone(), dir.clone()] {
+    for at in [
+        loc("/"),
+        dataset_location("tank/home"),
+        file.clone(),
+        dir.clone(),
+    ] {
         assert_eq!(provider.capabilities(&at), Capabilities::empty());
     }
     let unsupported = |result: Result<(), Error>| matches!(result, Err(Error::Unsupported(_)));
     runtime::block_on(async {
         assert!(unsupported(
-            provider.open_write(&file, WriteOptions::default()).await.map(|_| ())
+            provider
+                .open_write(&file, WriteOptions::default())
+                .await
+                .map(|_| ())
         ));
         assert!(unsupported(provider.create_dir(&dir).await.map(|_| ())));
         assert!(unsupported(provider.rename(&file, &dir).await.map(|_| ())));
         assert!(unsupported(provider.remove(&file, RemoveMode::Trash).await));
-        assert!(unsupported(provider.remove(&file, RemoveMode::Permanent).await));
+        assert!(unsupported(
+            provider.remove(&file, RemoveMode::Permanent).await
+        ));
         assert!(unsupported(
             provider
                 .link(&file, &dir, LinkKind::Symbolic)

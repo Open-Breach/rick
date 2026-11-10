@@ -88,7 +88,11 @@ fn ann(b: &Bench, snap: &str) -> Location {
 fn a_deleted_file_is_restored_with_its_snapshot_content() {
     let b = bench();
     let live = b.fx.home().join("ann/old.txt");
-    let result = b.run(ann(&b, "b"), vec![b.entry("b", "ann/old.txt")], &Scripted::default());
+    let result = b.run(
+        ann(&b, "b"),
+        vec![b.entry("b", "ann/old.txt")],
+        &Scripted::default(),
+    );
     assert!(matches!(result, Some(Ok(()))), "{result:?}");
     assert_eq!(fs::read_to_string(&live).ok().as_deref(), Some("gone live"));
     assert!(b.trashed().is_empty(), "nothing was in the way");
@@ -103,7 +107,7 @@ fn a_live_file_is_trashed_and_replaced_after_confirmation() {
     let result = b.run(docs, vec![b.entry("b", "ann/docs/report.txt")], &ui);
     assert!(matches!(result, Some(Ok(()))), "{result:?}");
     assert_eq!(fs::read_to_string(&live).ok().as_deref(), Some("same"));
-    assert_eq!(b.trashed(), [live.clone()]);
+    assert_eq!(b.trashed(), std::slice::from_ref(&live));
     let asked = ui.asked();
     assert_eq!(asked.len(), 1, "one confirmation: {asked:?}");
     assert!(asked[0].contains(&live.display().to_string()), "{asked:?}");
@@ -124,16 +128,23 @@ fn a_declined_replacement_changes_nothing() {
     let result = b.run(docs, vec![b.entry("b", "ann/docs/report.txt")], &ui);
     assert!(result.is_none(), "no job: {result:?}");
     assert_eq!(fs::read_to_string(&live).ok().as_deref(), Some("live"));
-    assert!(b.trashed().is_empty());
+    assert_eq!(b.trashed(), Vec::<std::path::PathBuf>::new());
     assert_eq!(ui.asked().len(), 1);
 }
 
 #[test]
 fn missing_live_parents_are_created() {
     let b = bench();
-    write(&b.fx.snapshot_dir("b").join("ann/gone/deeper/f.txt"), "deep");
+    write(
+        &b.fx.snapshot_dir("b").join("ann/gone/deeper/f.txt"),
+        "deep",
+    );
     let at = snapshot_location("tank/home", "b", Path::new("ann/gone/deeper"));
-    let result = b.run(at, vec![b.entry("b", "ann/gone/deeper/f.txt")], &Scripted::default());
+    let result = b.run(
+        at,
+        vec![b.entry("b", "ann/gone/deeper/f.txt")],
+        &Scripted::default(),
+    );
     assert!(matches!(result, Some(Ok(()))), "{result:?}");
     assert_eq!(
         fs::read_to_string(b.fx.home().join("ann/gone/deeper/f.txt"))
@@ -155,11 +166,21 @@ fn a_folder_comes_back_with_its_files_and_links() {
         ext::platform::fs::set_unix_mode(&proj.join("a.txt"), 0o640)
             .unwrap_or_else(|e| panic!("{e}"));
     }
-    let result = b.run(ann(&b, "b"), vec![b.entry("b", "ann/proj")], &Scripted::default());
+    let result = b.run(
+        ann(&b, "b"),
+        vec![b.entry("b", "ann/proj")],
+        &Scripted::default(),
+    );
     assert!(matches!(result, Some(Ok(()))), "{result:?}");
     let live = b.fx.home().join("ann/proj");
-    assert_eq!(fs::read_to_string(live.join("a.txt")).ok().as_deref(), Some("a"));
-    assert_eq!(fs::read_to_string(live.join("sub/b.txt")).ok().as_deref(), Some("b"));
+    assert_eq!(
+        fs::read_to_string(live.join("a.txt")).ok().as_deref(),
+        Some("a")
+    );
+    assert_eq!(
+        fs::read_to_string(live.join("sub/b.txt")).ok().as_deref(),
+        Some("b")
+    );
     assert_eq!(
         fs::read_link(live.join("ln")).ok(),
         Some(std::path::PathBuf::from("a.txt"))
@@ -174,7 +195,11 @@ fn a_version_from_the_versions_view_is_restored() {
     let b = bench();
     let live = b.fx.home().join("ann/old.txt");
     let version = b.entry("b", "ann/old.txt");
-    let result = b.run(versions_location(&live), vec![version], &Scripted::default());
+    let result = b.run(
+        versions_location(&live),
+        vec![version],
+        &Scripted::default(),
+    );
     assert!(matches!(result, Some(Ok(()))), "{result:?}");
     assert!(live.exists());
 }
@@ -222,7 +247,11 @@ fn a_cancelled_restore_stops_before_copying() {
     let b = bench();
     let restore_items = items(
         &b.shared,
-        &[snapshot_location("tank/home", "b", Path::new("ann/old.txt"))],
+        &[snapshot_location(
+            "tank/home",
+            "b",
+            Path::new("ann/old.txt"),
+        )],
     )
     .unwrap_or_else(|e| panic!("{e}"));
     let cancel = CancelToken::new();
@@ -255,7 +284,10 @@ fn restore_is_offered_inside_snapshots_and_versions_only() {
         Availability::Hidden
     );
     assert_eq!(
-        action.availability(&ctx(crate::provider::dataset_location("tank/home"), selected.clone())),
+        action.availability(&ctx(
+            crate::provider::dataset_location("tank/home"),
+            selected.clone()
+        )),
         Availability::Hidden
     );
     let without_platform = Restore(Arc::new(Shared {
@@ -268,5 +300,11 @@ fn restore_is_offered_inside_snapshots_and_versions_only() {
         Availability::Hidden
     );
     // A whole snapshot is never restored over its dataset.
-    assert!(items(&b.shared, &[snapshot_location("tank/home", "b", Path::new(""))]).is_err());
+    assert!(
+        items(
+            &b.shared,
+            &[snapshot_location("tank/home", "b", Path::new(""))]
+        )
+        .is_err()
+    );
 }

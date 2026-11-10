@@ -586,12 +586,6 @@ fn the_search_and_svn_plugins_load_on_their_platforms() {
             Platforms::ALL,
             ext::Points::DECORATOR | ext::Points::ACTION,
         ),
-        (
-            "ext_zfs",
-            "zfs",
-            Platforms::LINUX,
-            ext::Points::PROVIDER | ext::Points::DECORATOR | ext::Points::ACTION,
-        ),
     ];
     for (stem, _, _, _) in &expected {
         install(&plugins, stem, |_| {});

@@ -216,7 +216,12 @@ impl Action for Restore {
         }
     }
 
-    fn run(&self, ctx: ActionCtx, jobs: &JobRunner, ui: &dyn UiHost) -> Result<ActionOutcome, Error> {
+    fn run(
+        &self,
+        ctx: ActionCtx,
+        jobs: &JobRunner,
+        ui: &dyn UiHost,
+    ) -> Result<ActionOutcome, Error> {
         let platform = self
             .0
             .platform

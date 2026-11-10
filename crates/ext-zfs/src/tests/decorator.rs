@@ -27,7 +27,10 @@ fn script_properties(fx: &Fixture) {
 fn decorate(decorator: &ZfsDecorator, at: Location, entries: &[types::Entry]) {
     let (jobs, mut events) = JobRunner::with_events();
     let ctx = DecorateCtx::new(at, CancelToken::new(), jobs, |_| {});
-    assert!(decorator.decorate(entries, &ctx).is_empty(), "no decorations");
+    assert!(
+        decorator.decorate(entries, &ctx).is_empty(),
+        "no decorations"
+    );
     runtime::block_on(async {
         loop {
             match tokio::time::timeout(Duration::from_secs(30), events.recv()).await {
@@ -49,17 +52,24 @@ fn the_section_shows_the_dataset_its_snapshots_and_properties() {
     let decorator = ZfsDecorator::new(Arc::clone(&fx.datasets));
     let folder = local(&fx.home().join("ann/docs"));
     assert!(decorator.applies_to(&folder));
-    assert!(decorator.columns().is_empty());
+    assert_eq!(decorator.columns().len(), 0);
     let file = live_entry(&fx.home().join("ann/docs/report.txt"));
 
     // Before the read: the dataset and a loading row.
-    let before = decorator.panel(&file).unwrap_or_else(|| panic!("no section"));
+    let before = decorator
+        .panel(&file)
+        .unwrap_or_else(|| panic!("no section"));
     assert_eq!(before.title, "ZFS");
-    assert_eq!(before.rows[0], ("Dataset".to_owned(), "tank/home".to_owned()));
+    assert_eq!(
+        before.rows[0],
+        ("Dataset".to_owned(), "tank/home".to_owned())
+    );
     assert_eq!(before.rows[1].0, "Loading…");
 
     decorate(&decorator, folder, std::slice::from_ref(&file));
-    let after = decorator.panel(&file).unwrap_or_else(|| panic!("no section"));
+    let after = decorator
+        .panel(&file)
+        .unwrap_or_else(|| panic!("no section"));
     let row = |label: &str| {
         after
             .rows
@@ -69,9 +79,15 @@ fn the_section_shows_the_dataset_its_snapshots_and_properties() {
     };
     assert_eq!(row("Dataset").as_deref(), Some("tank/home"));
     assert_eq!(row("Snapshots").as_deref(), Some("2"));
-    assert!(row("Newest snapshot").is_some_and(|v| v.starts_with("b (")), "{after:?}");
+    assert!(
+        row("Newest snapshot").is_some_and(|v| v.starts_with("b (")),
+        "{after:?}"
+    );
     assert_eq!(row("guid").as_deref(), Some("2701085171283325975"));
-    assert_eq!(row("compression · inherited from tank").as_deref(), Some("zstd"));
+    assert_eq!(
+        row("compression · inherited from tank").as_deref(),
+        Some("zstd")
+    );
     assert_eq!(row("encryption · default").as_deref(), Some("off"));
     assert!(!after.rows.iter().any(|(l, _)| l.starts_with("keystatus")));
     // The order of the fixed list.
@@ -101,10 +117,16 @@ fn an_entry_outside_a_dataset_has_no_section() {
 
 #[test]
 fn without_zfs_nothing_appears() {
-    let datasets = Arc::new(crate::datasets::Datasets::new(Arc::new(crate::zfs::ScriptedZfs::missing())));
+    let datasets = Arc::new(crate::datasets::Datasets::new(Arc::new(
+        crate::zfs::ScriptedZfs::missing(),
+    )));
     let decorator = ZfsDecorator::new(datasets);
     let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
     write(&dir.path().join("x"), "x");
     assert!(!decorator.applies_to(&local(dir.path())));
-    assert!(decorator.panel(&live_entry(&dir.path().join("x"))).is_none());
+    assert!(
+        decorator
+            .panel(&live_entry(&dir.path().join("x")))
+            .is_none()
+    );
 }

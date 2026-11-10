@@ -199,8 +199,18 @@ pub fn snapshot_entry(snapshot: &Snapshot) -> Entry {
 /// An entry read from inside a snapshot: `raw` lies in `dir`, its path in
 /// the provider is `vpath`.
 pub(crate) fn entry_from_raw(dir: &Path, vpath: VPath, raw: RawEntry) -> Entry {
-    let full = dir.join(&raw.name);
-    let kind = match raw.kind {
+    let RawEntry {
+        name,
+        id,
+        kind,
+        size,
+        created,
+        modified,
+        accessed,
+        attrs,
+    } = raw;
+    let full = dir.join(&name);
+    let kind = match kind {
         RawKind::File => EntryKind::File,
         RawKind::Dir => EntryKind::Dir,
         RawKind::Other => EntryKind::Other,
@@ -212,15 +222,15 @@ pub(crate) fn entry_from_raw(dir: &Path, vpath: VPath, raw: RawEntry) -> Entry {
         },
     };
     Entry {
-        id: EntryId::new(PROVIDER_ID, raw.id),
-        name: raw.name.to_string_lossy().into_owned(),
+        id: EntryId::new(PROVIDER_ID, id),
+        name: name.to_string_lossy().into_owned(),
         path: vpath,
         kind,
-        size: raw.size,
-        created: raw.created,
-        modified: raw.modified,
-        accessed: raw.accessed,
-        attrs: raw.attrs,
+        size,
+        created,
+        modified,
+        accessed,
+        attrs,
         mime: None,
     }
 }
@@ -425,12 +435,7 @@ impl Provider for ZfsProvider {
 
     async fn stat(&self, loc: &Location) -> Result<Entry, Error> {
         match target(loc)? {
-            Target::Root => Ok(folder(
-                "ZFS".to_owned(),
-                VPath::from("/"),
-                None,
-                None,
-            )),
+            Target::Root => Ok(folder("ZFS".to_owned(), VPath::from("/"), None, None)),
             Target::Dataset(name) => {
                 let datasets = Arc::clone(&self.datasets);
                 let path = loc.path.clone();
@@ -523,6 +528,8 @@ impl Provider for ZfsProvider {
     }
 
     fn watch(&self, _loc: &Location) -> Result<ChangeStream, Error> {
-        Err(Error::Unsupported("snapshots do not change; the lists are re-read"))
+        Err(Error::Unsupported(
+            "snapshots do not change; the lists are re-read",
+        ))
     }
 }

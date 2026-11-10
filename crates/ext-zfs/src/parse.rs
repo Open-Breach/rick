@@ -94,11 +94,9 @@ pub fn filesystems(output: &str) -> Vec<FileSystem> {
                 return None;
             };
             let mountpoint = PathBuf::from(mountpoint);
-            (!name.is_empty() && mounted == "yes" && mountpoint.is_absolute()).then(|| {
-                FileSystem {
-                    name: name.to_owned(),
-                    mountpoint,
-                }
+            (!name.is_empty() && mounted == "yes" && mountpoint.is_absolute()).then(|| FileSystem {
+                name: name.to_owned(),
+                mountpoint,
             })
         })
         .collect()
@@ -207,7 +205,7 @@ mod tests {
     use super::*;
 
     /// `zfs list -H -p -o name,mountpoint,mounted -t filesystem` on the
-    /// development machine (OpenZFS 2.4.1, root on ZFS), shortened, with a
+    /// development machine (`OpenZFS` 2.4.1, root on ZFS), shortened, with a
     /// dataset whose mount point has a space added.
     const FILESYSTEMS: &str = "bpool\t/boot\tno
 bpool/BOOT\tnone\tno
@@ -227,7 +225,8 @@ rpool/USERDATA/My Files\t/srv/my files\tyes
     /// `zfs list -H -p -t snapshot -o name,creation,used -s creation -d 1`
     /// on the development machine, with a second snapshot and a name with
     /// a space added.
-    const SNAPSHOTS: &str = "rpool/ROOT/ubuntu_62wyjh/var/lib@pre-26.04-upgrade\t1790877375\t11363057664
+    const SNAPSHOTS: &str =
+        "rpool/ROOT/ubuntu_62wyjh/var/lib@pre-26.04-upgrade\t1790877375\t11363057664
 rpool/ROOT/ubuntu_62wyjh/var/lib@before update\t1790963775\t81920
 ";
 
@@ -277,8 +276,8 @@ rpool/ROOT/ubuntu_62wyjh/var/lib@before update\t1790963775\t81920
         );
         assert_eq!(snaps.len(), 1);
         assert_eq!(snaps[0].name, "c");
-        assert!(snapshots("").is_empty());
-        assert!(filesystems("garbage without tabs").is_empty());
+        assert_eq!(snapshots(""), []);
+        assert_eq!(filesystems("garbage without tabs"), []);
     }
 
     #[test]

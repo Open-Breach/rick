@@ -30,6 +30,9 @@ struct Read {
     snapshots: Arc<Vec<Snapshot>>,
 }
 
+/// A property read and when it was made.
+type ReadProperties = (Instant, Arc<Vec<Property>>);
+
 /// The datasets of this machine and their snapshots, as far as `zfs`
 /// tells.
 #[derive(Debug)]
@@ -38,7 +41,7 @@ pub struct Datasets {
     ttl: Duration,
     filesystems: OnceLock<Vec<FileSystem>>,
     snapshots: Mutex<HashMap<String, Read>>,
-    properties: Mutex<HashMap<String, (Instant, Arc<Vec<Property>>)>>,
+    properties: Mutex<HashMap<String, ReadProperties>>,
     told: AtomicBool,
 }
 
@@ -88,8 +91,8 @@ impl Datasets {
     /// The mounted file systems, read on the first call.
     #[must_use]
     pub fn filesystems(&self) -> &[FileSystem] {
-        self.filesystems.get_or_init(|| {
-            match self.run(&parse::list_filesystems_args()) {
+        self.filesystems
+            .get_or_init(|| match self.run(&parse::list_filesystems_args()) {
                 Ok(out) => {
                     let read = parse::filesystems(&out);
                     if read.is_empty() {
@@ -101,8 +104,7 @@ impl Datasets {
                     self.tell_once(&error);
                     Vec::new()
                 }
-            }
-        })
+            })
     }
 
     /// The file system `path` lies in: the one with the longest mount
@@ -280,9 +282,9 @@ mod tests {
         assert_eq!(name("/tank/homework/x"), Some("tank/homework".to_owned()));
         assert_eq!(name("/tank/homes"), Some("tank".to_owned()));
         assert_eq!(name("/tank"), Some("tank".to_owned()));
-        let (fs, rel) = sets.split(Path::new("/tank/home/ann/docs")).unwrap_or_else(|| {
-            panic!("no split")
-        });
+        let (fs, rel) = sets
+            .split(Path::new("/tank/home/ann/docs"))
+            .unwrap_or_else(|| panic!("no split"));
         assert_eq!(fs.name, "tank/home");
         assert_eq!(rel, PathBuf::from("ann/docs"));
         // One file-system list serves every question.
@@ -301,13 +303,26 @@ mod tests {
     #[test]
     fn snapshot_lists_are_cached_newest_first_until_the_ttl() {
         let zfs = scripted();
-        on_snapshots(&zfs, "tank/home", "tank/home@a\t100\t1\ntank/home@b\t200\t2\n");
+        on_snapshots(
+            &zfs,
+            "tank/home",
+            "tank/home@a\t100\t1\ntank/home@b\t200\t2\n",
+        );
         let sets = Datasets::new(zfs.clone());
         assert!(sets.cached("tank/home").is_none());
         let names = |list: Vec<Snapshot>| list.into_iter().map(|s| s.name).collect::<Vec<_>>();
-        assert_eq!(names(sets.snapshots("tank/home").unwrap_or_default()), ["b", "a"]);
-        assert_eq!(names(sets.snapshots("tank/home").unwrap_or_default()), ["b", "a"]);
-        assert_eq!(names(sets.cached("tank/home").unwrap_or_default()), ["b", "a"]);
+        assert_eq!(
+            names(sets.snapshots("tank/home").unwrap_or_default()),
+            ["b", "a"]
+        );
+        assert_eq!(
+            names(sets.snapshots("tank/home").unwrap_or_default()),
+            ["b", "a"]
+        );
+        assert_eq!(
+            names(sets.cached("tank/home").unwrap_or_default()),
+            ["b", "a"]
+        );
         assert_eq!(zfs.calls().len(), 1, "read once: {:?}", zfs.calls());
 
         let expired = Datasets::with_ttl(zfs.clone(), Duration::ZERO);
@@ -323,7 +338,11 @@ mod tests {
         on_snapshots(&zfs, "tank/home", "tank/home@a\t100\t1\n");
         let sets = Datasets::new(zfs.clone());
         let _ = sets.snapshots("tank/home");
-        on_snapshots(&zfs, "tank/home", "tank/home@a\t100\t1\ntank/home@c\t300\t3\n");
+        on_snapshots(
+            &zfs,
+            "tank/home",
+            "tank/home@a\t100\t1\ntank/home@c\t300\t3\n",
+        );
         assert_eq!(sets.snapshots("tank/home").unwrap_or_default().len(), 1);
         sets.invalidate("tank/home");
         assert_eq!(sets.snapshots("tank/home").unwrap_or_default().len(), 2);
@@ -347,9 +366,9 @@ mod tests {
     #[test]
     fn without_zfs_there_are_no_datasets() {
         let sets = Datasets::new(Arc::new(ScriptedZfs::missing()));
-        assert!(sets.filesystems().is_empty());
+        assert_eq!(sets.filesystems(), []);
         assert!(sets.dataset_of(Path::new("/tank/home")).is_none());
-        assert!(sets.with_snapshots().is_empty());
+        assert_eq!(sets.with_snapshots(), []);
         assert!(sets.told.load(Ordering::Relaxed));
     }
 
@@ -370,7 +389,7 @@ mod tests {
         );
         let sets = Datasets::new(zfs.clone());
         assert!(sets.dataset_of(Path::new("/tank")).is_none());
-        assert!(sets.filesystems().is_empty());
+        assert_eq!(sets.filesystems(), []);
         assert_eq!(zfs.calls().len(), 1, "the failure is remembered");
         assert!(sets.told.load(Ordering::Relaxed));
     }

@@ -9,7 +9,7 @@ use types::Location;
 
 use super::*;
 use crate::actions::{self, Browse, Live, Shared, Versions, local};
-use crate::provider::{snapshot_location, target, versions_location, Target};
+use crate::provider::{Target, snapshot_location, target, versions_location};
 
 fn shared(fx: &Fixture) -> Arc<Shared> {
     Arc::new(Shared {
@@ -33,14 +33,20 @@ fn browse_goes_into_the_newest_snapshot_holding_the_folder() {
     let docs = ctx(local(&fx.home().join("ann/docs")), Vec::new());
     assert_eq!(browse.availability(&docs), Availability::Enabled);
     let to = navigated(browse.run(docs, &JobRunner::new(), &Scripted::default()));
-    assert_eq!(to, snapshot_location("tank/home", "b", Path::new("ann/docs")));
+    assert_eq!(
+        to,
+        snapshot_location("tank/home", "b", Path::new("ann/docs"))
+    );
 
     // A folder only the older snapshot holds.
     fs::create_dir_all(fx.snapshot_dir("a").join("ann/kept")).unwrap_or_else(|e| panic!("{e}"));
     fs::create_dir_all(fx.home().join("ann/kept")).unwrap_or_else(|e| panic!("{e}"));
     let kept = ctx(local(&fx.home().join("ann/kept")), Vec::new());
     let to = navigated(browse.run(kept, &JobRunner::new(), &Scripted::default()));
-    assert_eq!(to, snapshot_location("tank/home", "a", Path::new("ann/kept")));
+    assert_eq!(
+        to,
+        snapshot_location("tank/home", "a", Path::new("ann/kept"))
+    );
 
     // The dataset's own root.
     let root = ctx(local(&fx.home()), Vec::new());
@@ -54,8 +60,15 @@ fn browse_is_disabled_for_a_folder_no_snapshot_holds() {
     fs::create_dir_all(fx.home().join("ann/fresh")).unwrap_or_else(|e| panic!("{e}"));
     let browse = Browse(shared(&fx));
     let fresh = ctx(local(&fx.home().join("ann/fresh")), Vec::new());
-    assert!(matches!(browse.availability(&fresh), Availability::Disabled(_)));
-    assert!(browse.run(fresh, &JobRunner::new(), &Scripted::default()).is_err());
+    assert!(matches!(
+        browse.availability(&fresh),
+        Availability::Disabled(_)
+    ));
+    assert!(
+        browse
+            .run(fresh, &JobRunner::new(), &Scripted::default())
+            .is_err()
+    );
 }
 
 #[test]
@@ -64,7 +77,10 @@ fn browse_is_hidden_off_zfs_and_inside_a_snapshot() {
     let browse = Browse(shared(&fx));
     let off = ctx(local(Path::new("/definitely/not/zfs")), Vec::new());
     assert_eq!(browse.availability(&off), Availability::Hidden);
-    let inside = ctx(snapshot_location("tank/home", "b", Path::new("ann")), Vec::new());
+    let inside = ctx(
+        snapshot_location("tank/home", "b", Path::new("ann")),
+        Vec::new(),
+    );
     assert_eq!(browse.availability(&inside), Availability::Hidden);
 }
 
@@ -72,14 +88,21 @@ fn browse_is_hidden_off_zfs_and_inside_a_snapshot() {
 fn back_to_live_goes_to_the_folder_or_its_nearest_parent() {
     let fx = Fixture::new();
     let live = Live(shared(&fx));
-    let docs = ctx(snapshot_location("tank/home", "b", Path::new("ann/docs")), Vec::new());
+    let docs = ctx(
+        snapshot_location("tank/home", "b", Path::new("ann/docs")),
+        Vec::new(),
+    );
     assert_eq!(live.availability(&docs), Availability::Enabled);
     let to = navigated(live.run(docs, &JobRunner::new(), &Scripted::default()));
     assert_eq!(to, local(&fx.home().join("ann/docs")));
 
     // A folder gone live: its nearest existing parent.
-    fs::create_dir_all(fx.snapshot_dir("b").join("ann/gone/deeper")).unwrap_or_else(|e| panic!("{e}"));
-    let gone = ctx(snapshot_location("tank/home", "b", Path::new("ann/gone/deeper")), Vec::new());
+    fs::create_dir_all(fx.snapshot_dir("b").join("ann/gone/deeper"))
+        .unwrap_or_else(|e| panic!("{e}"));
+    let gone = ctx(
+        snapshot_location("tank/home", "b", Path::new("ann/gone/deeper")),
+        Vec::new(),
+    );
     let to = navigated(live.run(gone, &JobRunner::new(), &Scripted::default()));
     assert_eq!(to, local(&fx.home().join("ann")));
 
@@ -101,9 +124,18 @@ fn versions_opens_for_one_live_or_snapshot_file() {
     let folder = local(&fx.home().join("ann/docs"));
 
     let none = ctx(folder.clone(), Vec::new());
-    assert!(matches!(versions.availability(&none), Availability::Disabled(_)));
-    let dir = ctx(folder.clone(), vec![live_entry(&fx.home().join("ann/docs"))]);
-    assert!(matches!(versions.availability(&dir), Availability::Disabled(_)));
+    assert!(matches!(
+        versions.availability(&none),
+        Availability::Disabled(_)
+    ));
+    let dir = ctx(
+        folder.clone(),
+        vec![live_entry(&fx.home().join("ann/docs"))],
+    );
+    assert!(matches!(
+        versions.availability(&dir),
+        Availability::Disabled(_)
+    ));
 
     let one = ctx(folder, vec![live_entry(&report)]);
     assert_eq!(versions.availability(&one), Availability::Enabled);
@@ -133,12 +165,19 @@ fn the_group_registers_with_the_extension() {
     let fx = Fixture::new();
     let mut registry = ext::Registry::new();
     registry
-        .load(&crate::ZfsExtension::with_datasets(Arc::clone(&fx.datasets)))
+        .load(&crate::ZfsExtension::with_datasets(Arc::clone(
+            &fx.datasets,
+        )))
         .unwrap_or_else(|e| panic!("{e}"));
     let ids: Vec<&str> = registry.actions().iter().map(|a| a.id().0).collect();
     for id in [actions::BROWSE.0, actions::LIVE.0, actions::VERSIONS.0] {
         assert!(ids.contains(&id), "{id} in {ids:?}");
     }
-    assert!(registry.actions().iter().all(|a| a.group() == actions::GROUP));
+    assert!(
+        registry
+            .actions()
+            .iter()
+            .all(|a| a.group() == actions::GROUP)
+    );
     assert_eq!(registry.providers().len(), 1);
 }

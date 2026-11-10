@@ -1,4 +1,4 @@
-//! The ZFS extension: the snapshots of OpenZFS datasets as a read-only
+//! The ZFS extension: the snapshots of `OpenZFS` datasets as a read-only
 //! location, file versions, restore, snapshot management and the dataset's
 //! properties in the info panel, on Linux.
 //!
@@ -29,9 +29,7 @@ pub mod zfs;
 
 use std::sync::Arc;
 
-use ext::{
-    API_VERSION, Capabilities, Extension, Manifest, Platforms, Points, Registry, Version,
-};
+use ext::{API_VERSION, Capabilities, Extension, Manifest, Platforms, Points, Registry, Version};
 use types::{Error, ExtId};
 
 pub use datasets::Datasets;
@@ -109,8 +107,13 @@ impl Extension for ZfsExtension {
             ("en", include_str!("../locales/en.ftl")),
             ("de", include_str!("../locales/de.ftl")),
         ]);
-        reg.provider(Arc::new(ZfsProvider::new(Arc::clone(&self.datasets))) as Arc<dyn ext::Provider>);
-        reg.decorator(Arc::new(decorator::ZfsDecorator::new(Arc::clone(&self.datasets))) as Arc<dyn ext::Decorator>);
+        reg.provider(
+            Arc::new(ZfsProvider::new(Arc::clone(&self.datasets))) as Arc<dyn ext::Provider>
+        );
+        reg.decorator(
+            Arc::new(decorator::ZfsDecorator::new(Arc::clone(&self.datasets)))
+                as Arc<dyn ext::Decorator>,
+        );
         let shared = Arc::new(actions::Shared {
             datasets: Arc::clone(&self.datasets),
             platform: reg.platform().cloned(),

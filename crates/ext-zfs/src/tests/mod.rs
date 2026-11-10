@@ -5,8 +5,8 @@ mod actions;
 mod decorator;
 mod live;
 mod manage;
-mod restore;
 mod provider;
+mod restore;
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -177,7 +177,6 @@ impl Scripted {
     pub fn asked(&self) -> Vec<String> {
         guard(&self.asked).clone()
     }
-
 }
 
 impl ext::UiHost for Scripted {
@@ -218,7 +217,8 @@ pub(crate) fn ctx(location: Location, selection: Vec<Entry>) -> ext::ActionCtx {
 pub(crate) fn live_entry(path: &Path) -> Entry {
     let raw = ext::platform::fs::stat(path).unwrap_or_else(|e| panic!("{e}"));
     let dir = path.parent().unwrap_or(path).to_path_buf();
-    let mut entry = crate::provider::entry_from_raw(&dir, ext::platform::paths::from_path(path), raw);
+    let mut entry =
+        crate::provider::entry_from_raw(&dir, ext::platform::paths::from_path(path), raw);
     entry.id.provider = types::ProviderId("local");
     entry
 }

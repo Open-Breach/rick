@@ -366,10 +366,7 @@ mod tests {
                 "cannot destroy 'tank/home@a': snapshot has dependent clones\nuse '-R' to destroy the following datasets:\ntank/clone\n",
                 "busy",
             ),
-            (
-                "cannot open 'tank/nope': dataset does not exist\n",
-                "other",
-            ),
+            ("cannot open 'tank/nope': dataset does not exist\n", "other"),
         ];
         for (stderr, class) in cases {
             let error = classify(Output::failed(1, stderr)).err();

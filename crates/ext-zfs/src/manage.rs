@@ -15,7 +15,7 @@ use std::fmt::Write as _;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use ext::platform::{ElevatedOutput, Elevate};
+use ext::platform::{Elevate, ElevatedOutput};
 use ext::{
     Action, ActionCtx, ActionGroup, ActionId, ActionOutcome, Availability, Continuation, Field,
     Form, FormLater, JobRunner, PreviewRow, Shortcut, UiHost, Values, t,
@@ -24,7 +24,7 @@ use types::{Error, Progress};
 
 use crate::actions::{GROUP, Shared, local_path};
 use crate::datasets::Datasets;
-use crate::parse::{check_name, default_name};
+use crate::parse::{NameProblem, check_name, default_name};
 use crate::provider::{PROVIDER_ID, Target, target};
 use crate::zfs::{Output, ZfsError, classify, os_args};
 
@@ -213,6 +213,7 @@ pub fn run_elevated(
 /// Spawns `batch` as a job named `name`. Refused commands lead to the
 /// question whether to run them as administrator, through the returned
 /// [`ActionOutcome::Later`]; everything else ends in the job's result.
+#[must_use]
 pub fn spawn(shared: &Arc<Shared>, jobs: &JobRunner, name: String, batch: Batch) -> ActionOutcome {
     let (sender, later) = FormLater::channel();
     let shared = Arc::clone(shared);
@@ -242,13 +243,18 @@ pub fn spawn(shared: &Arc<Shared>, jobs: &JobRunner, name: String, batch: Batch)
                     }
                     return Err(refused(message));
                 };
-                let form = Form::new(t!("zfs-run-as-administrator"), t!("zfs-run-as-administrator-ok"))
-                    .note(t!("zfs-permission-denied-ask", name = job_name.clone()));
+                let form = Form::new(
+                    t!("zfs-run-as-administrator"),
+                    t!("zfs-run-as-administrator-ok"),
+                )
+                .note(t!("zfs-permission-denied-ask", name = job_name.clone()));
                 let then = Continuation::new(job_name.clone(), move |values: Option<Values>| {
                     if values.is_none() {
                         return Err(refused(t!("zfs-permission-denied")));
                     }
-                    Ok(spawn_elevated(&shared, &runner, job_name, elevate, program, denied))
+                    Ok(spawn_elevated(
+                        &shared, &runner, job_name, elevate, program, denied,
+                    ))
                 });
                 let _ = sender.send((form, then));
                 if failed.is_empty() {
@@ -271,9 +277,12 @@ fn spawn_elevated(
     batch: Batch,
 ) -> ActionOutcome {
     let datasets = Arc::clone(&shared.datasets);
-    let handle = jobs.spawn_named(t!("zfs-as-administrator", name = name), move |_job| async move {
-        ext::blocking(move || run_elevated(&datasets, &*elevate, &program, &batch)).await
-    });
+    let handle = jobs.spawn_named(
+        t!("zfs-as-administrator", name = name),
+        move |_job| async move {
+            ext::blocking(move || run_elevated(&datasets, &*elevate, &program, &batch)).await
+        },
+    );
     ActionOutcome::Started(handle.id)
 }
 
@@ -295,7 +304,7 @@ fn name_form(title: String, ok: String, dataset: &str, name: String, extra: Opti
         vec![PreviewRow {
             from: dataset.clone(),
             to: format!("{dataset}@{name}"),
-            problem: check_name(&dataset, name).err().map(|p| p.text()),
+            problem: check_name(&dataset, name).err().map(NameProblem::text),
         }]
     }))
 }
@@ -315,14 +324,16 @@ fn selected_snapshots(ctx: &ActionCtx) -> Option<(String, Vec<String>)> {
     let names = ctx
         .selection
         .iter()
-        .filter_map(|e| match target(&types::Location::new(PROVIDER_ID, e.path.clone())) {
-            Ok(Target::Snapshot {
-                dataset: of,
-                snapshot,
-                rel,
-            }) if of == dataset && rel.as_os_str().is_empty() => Some(snapshot),
-            _ => None,
-        })
+        .filter_map(
+            |e| match target(&types::Location::new(PROVIDER_ID, e.path.clone())) {
+                Ok(Target::Snapshot {
+                    dataset: of,
+                    snapshot,
+                    rel,
+                }) if of == dataset && rel.as_os_str().is_empty() => Some(snapshot),
+                _ => None,
+            },
+        )
         .collect();
     Some((dataset, names))
 }
@@ -356,7 +367,12 @@ impl Action for Create {
         }
     }
 
-    fn run(&self, ctx: ActionCtx, jobs: &JobRunner, ui: &dyn UiHost) -> Result<ActionOutcome, Error> {
+    fn run(
+        &self,
+        ctx: ActionCtx,
+        jobs: &JobRunner,
+        ui: &dyn UiHost,
+    ) -> Result<ActionOutcome, Error> {
         let dataset = live_dataset(&self.0, &ctx)
             .ok_or(Error::Unsupported("the folder is in no ZFS dataset"))?;
         let form = name_form(
@@ -420,7 +436,12 @@ impl Action for Rename {
         }
     }
 
-    fn run(&self, ctx: ActionCtx, jobs: &JobRunner, ui: &dyn UiHost) -> Result<ActionOutcome, Error> {
+    fn run(
+        &self,
+        ctx: ActionCtx,
+        jobs: &JobRunner,
+        ui: &dyn UiHost,
+    ) -> Result<ActionOutcome, Error> {
         let Some((dataset, names)) = selected_snapshots(&ctx) else {
             return Err(Error::Unsupported("not in a snapshot list"));
         };
@@ -489,7 +510,12 @@ impl Action for Destroy {
         }
     }
 
-    fn run(&self, ctx: ActionCtx, jobs: &JobRunner, ui: &dyn UiHost) -> Result<ActionOutcome, Error> {
+    fn run(
+        &self,
+        ctx: ActionCtx,
+        jobs: &JobRunner,
+        ui: &dyn UiHost,
+    ) -> Result<ActionOutcome, Error> {
         let Some((dataset, names)) = selected_snapshots(&ctx) else {
             return Err(Error::Unsupported("not in a snapshot list"));
         };

@@ -67,22 +67,25 @@ impl ZfsDecorator {
         }
         let datasets = Arc::clone(&self.datasets);
         let reading = Arc::clone(&self.reading);
-        ctx.jobs.spawn_named(t!("zfs-reading", dataset = dataset.clone()), move |_job| async move {
-            let read = dataset.clone();
-            let result = ext::blocking(move || {
-                datasets.snapshots(&read)?;
-                datasets.properties(&read).map(|_| ())
-            })
-            .await;
-            reading
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner)
-                .remove(&dataset);
-            if let Err(error) = &result {
-                tracing::debug!(%dataset, %error, "ZFS info not read");
-            }
-            result
-        });
+        ctx.jobs.spawn_named(
+            t!("zfs-reading", dataset = dataset.clone()),
+            move |_job| async move {
+                let read = dataset.clone();
+                let result = ext::blocking(move || {
+                    datasets.snapshots(&read)?;
+                    datasets.properties(&read).map(|_| ())
+                })
+                .await;
+                reading
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .remove(&dataset);
+                if let Err(error) = &result {
+                    tracing::debug!(%dataset, %error, "ZFS info not read");
+                }
+                result
+            },
+        );
     }
 }
 
