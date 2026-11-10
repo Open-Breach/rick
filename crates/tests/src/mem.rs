@@ -5,7 +5,11 @@
 //! [`MemProvider::set_native`] on, it moves and copies through
 //! [`Provider::transfer`] under `NATIVE_TRANSFER`, like a cloud provider,
 //! and counts the bytes read through `open_read`, so a test can prove a
-//! transfer streamed nothing.
+//! transfer streamed nothing. With [`MemProvider::set_store`] on, it
+//! offers what an object store offers place by place (issue 149): its
+//! root folders are accounts, which take a folder — a container, whose
+//! name has rules — and no file, and everything below is searched beneath
+//! and downloaded from.
 
 use std::collections::BTreeMap;
 use std::pin::Pin;
@@ -16,7 +20,7 @@ use std::time::{Duration, SystemTime};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use ext::{
-    API_VERSION, Capabilities, ChangeStream, CopyOptions, EntryStream, Extension, LinkKind,
+    API_VERSION, Capabilities, ChangeStream, CopyOptions, Depth, EntryStream, Extension, LinkKind,
     ListOptions, Manifest, Platforms, Points, Provider, ReadHandle, Registry, RemoveMode,
     TransferMode, Version, WriteHandle, WriteOptions, async_trait,
 };
@@ -45,6 +49,10 @@ pub struct MemProvider {
     copy_delay: Duration,
     /// Moves and copies run through `transfer`, as a cloud provider's do.
     native: AtomicBool,
+    /// The capabilities are an object store's, place by place.
+    store: AtomicBool,
+    /// Every `create_dir` call, by path, whatever came of it.
+    made: Mutex<Vec<String>>,
     /// Bytes handed out through `open_read`.
     read_bytes: Arc<AtomicU64>,
     /// Every `transfer` call: the mode, the items and the target folder.
@@ -86,6 +94,11 @@ fn name(path: &str) -> &str {
     path.rsplit('/').next().unwrap_or(path)
 }
 
+/// How deep a path lies: 0 for the root, 1 for `/a`, 2 for `/a/b`.
+fn depth(path: &str) -> usize {
+    path.split('/').filter(|part| !part.is_empty()).count()
+}
+
 fn key(loc: &Location) -> String {
     let text = loc.path.to_string_lossy().into_owned();
     let trimmed = text.trim_end_matches('/');
@@ -107,6 +120,8 @@ impl MemProvider {
             tree: Arc::new(Mutex::new(tree)),
             copy_delay,
             native: AtomicBool::new(false),
+            store: AtomicBool::new(false),
+            made: Mutex::new(Vec::new()),
             read_bytes: Arc::new(AtomicU64::new(0)),
             transfers: Mutex::new(Vec::new()),
             gate: Arc::new(Gate {
@@ -142,6 +157,25 @@ impl MemProvider {
     /// the provider go through [`Provider::transfer`] and are recorded.
     pub fn set_native(&self, on: bool) {
         self.native.store(on, Ordering::SeqCst);
+    }
+
+    /// Makes the provider an object store, place by place: its root lists
+    /// accounts and is only remote; an account takes a folder, which is a
+    /// container with a name of lowercase letters, digits and hyphens, and
+    /// no file, and says why; a container and every folder below take
+    /// both. Everything from an account down is listed beneath in one
+    /// pass (`SEARCH_SUBTREE`) and downloaded from (`DOWNLOAD`).
+    pub fn set_store(&self, on: bool) {
+        self.store.store(on, Ordering::SeqCst);
+    }
+
+    /// Every `create_dir` call so far, by path.
+    #[must_use]
+    pub fn made(&self) -> Vec<String> {
+        self.made
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
     }
 
     /// Bytes handed out through `open_read` so far.
@@ -247,23 +281,66 @@ impl Provider for MemProvider {
         self.id
     }
 
-    fn capabilities(&self, _loc: &Location) -> Capabilities {
-        let mut caps = Capabilities::WRITE | Capabilities::RENAME;
+    fn capabilities(&self, loc: &Location) -> Capabilities {
+        if self.store.load(Ordering::SeqCst) {
+            let below = Capabilities::REMOTE
+                | Capabilities::WRITE
+                | Capabilities::NATIVE_TRANSFER
+                | Capabilities::CREATE_DIR
+                | Capabilities::SEARCH_SUBTREE
+                | Capabilities::DOWNLOAD;
+            return match depth(&key(loc)) {
+                0 => Capabilities::REMOTE,
+                1 => below,
+                _ => below | Capabilities::CREATE_FILE,
+            };
+        }
+        let mut caps = Capabilities::WRITE
+            | Capabilities::RENAME
+            | Capabilities::CREATE_DIR
+            | Capabilities::CREATE_FILE;
         if self.native.load(Ordering::SeqCst) {
-            caps |= Capabilities::NATIVE_TRANSFER | Capabilities::REMOTE;
+            caps |= Capabilities::NATIVE_TRANSFER | Capabilities::REMOTE | Capabilities::DOWNLOAD;
         }
         caps
     }
 
-    fn list(&self, loc: &Location, _opts: ListOptions, _cancel: CancelToken) -> EntryStream {
+    fn unavailable_reason(&self, loc: &Location, capability: Capabilities) -> Option<String> {
+        (self.store.load(Ordering::SeqCst)
+            && depth(&key(loc)) == 1
+            && capability.contains(Capabilities::CREATE_FILE))
+        .then(|| "Files live inside a container".to_owned())
+    }
+
+    fn name_problem(&self, loc: &Location) -> Option<String> {
+        let path = key(loc);
+        let plain = name(&path)
+            .chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-');
+        (self.store.load(Ordering::SeqCst) && depth(&path) == 2 && !plain)
+            .then(|| "A container name has lowercase letters, digits and hyphens only".to_owned())
+    }
+
+    fn list(&self, loc: &Location, opts: ListOptions, _cancel: CancelToken) -> EntryStream {
         let dir = key(loc);
         let tree = lock(&self.tree);
         if !matches!(tree.get(&dir), Some(Node::Dir)) {
             return stream::once(async { Err(Error::NotFound) }).boxed();
         }
+        let below = if dir == "/" {
+            "/".to_owned()
+        } else {
+            format!("{dir}/")
+        };
         let entries: Vec<Entry> = tree
             .iter()
-            .filter(|(path, _)| path.as_str() != "/" && parent(path) == dir)
+            .filter(|(path, _)| {
+                path.as_str() != "/"
+                    && match opts.depth {
+                        Depth::One => parent(path) == dir,
+                        Depth::Unlimited => path.starts_with(&below),
+                    }
+            })
             .map(|(path, node)| self.entry(path, node))
             .collect();
         stream::once(async move { Ok(entries) }).boxed()
@@ -306,6 +383,10 @@ impl Provider for MemProvider {
 
     async fn create_dir(&self, loc: &Location) -> Result<Entry, Error> {
         let path = key(loc);
+        self.made
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push(path.clone());
         {
             let mut tree = lock(&self.tree);
             if tree.contains_key(&path) {

@@ -150,6 +150,8 @@ impl Provider for LocalProvider {
     /// shortcuts where the platform has them (Windows).
     fn capabilities(&self, _loc: &Location) -> Capabilities {
         let mut caps = Capabilities::WRITE
+            | Capabilities::CREATE_DIR
+            | Capabilities::CREATE_FILE
             | Capabilities::TRASH
             | Capabilities::RENAME
             | Capabilities::SYMLINK
