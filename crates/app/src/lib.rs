@@ -1650,8 +1650,24 @@ impl App {
             }
             Command::Refresh(pane) => self.refresh(pane),
             Command::Select { pane, change } => {
+                // Select all selects what the list shows and nothing else;
+                // the hidden entries it leaves out are named by their
+                // number (SPEC.md *Select all*).
+                let left_out = if change == SelectionChange::All {
+                    self.model
+                        .active_tab(pane)
+                        .map_or(0, |(_, tab)| tab.hidden_left_out(&self.model.settings))
+                } else {
+                    0
+                };
                 if let Some(ids) = self.model.select(pane, change) {
                     events.push(Event::SelectionChanged { pane, ids });
+                }
+                if left_out > 0 {
+                    events.push(Event::Notify {
+                        level: Level::Info,
+                        text: ext::t!("notice-hidden-not-selected", count = left_out),
+                    });
                 }
             }
             Command::SetView { pane, mode } => {
@@ -3606,7 +3622,14 @@ impl App {
         }
         let tx = self.mailbox.clone();
         let location = key.location.clone();
-        let opts = key.opts;
+        // A folder is listed with its hidden entries whatever the tab
+        // shows: the view leaves them out, and Select all can say how many
+        // it did not select (SPEC.md *Select all*). A flattened listing is
+        // not, so that hidden folders are not walked.
+        let opts = ListOptions {
+            hidden: key.opts.hidden || key.opts.depth == Depth::One,
+            ..key.opts
+        };
         let poke = self.poke.clone();
         let handle = self
             .jobs
