@@ -1955,7 +1955,8 @@ impl RickUi {
     /// Turns this frame's key presses into intents, unless a text field, a
     /// dialogue, the palette or the shortcuts screen wants them.
     /// Whether a dialogue is open: it has the keyboard, not the list
-    /// behind it.
+    /// behind it. Every dialogue the window shows is named here — one left
+    /// out lets the list take its keys, Escape before all (issue 177).
     fn dialogue_open(&self) -> bool {
         self.dialog.is_some()
             || self.name_prompt.is_some()
@@ -1963,6 +1964,8 @@ impl RickUi {
             || self.extensions.is_open()
             || self.about.is_open()
             || self.properties.is_open()
+            || self.hash.is_open()
+            || self.integration.is_open()
             || !self.app.model().conflicts.is_empty()
             || !self.app.model().questions.is_empty()
     }
