@@ -15,7 +15,7 @@ Most file managers show you names in a column and leave the rest to a dozen othe
 Select a file and the preview pane shows it, whatever it is: the pane is Rick's only viewer. Press Enter to open it with the application the system has for it. No app launch to look at a file, no switching windows:
 
 - **An image** opens scaled to fit, with 1:1, pan and zoom, EXIF and the camera data one click away.
-- **A Git repository** shows its status on every entry: badges, branch, ahead and behind, folder roll-ups. Commit, stash, pull, push, checkout and blame are in the right-click menu, only when you're inside a repo.
+- **A Git repository** shows its status on every entry: badges, branch, ahead and behind, folder roll-ups. Commit, stash, pull, push, checkout and blame are in the right-click menu, only when you're inside a repo. *Git clone…* is there on any folder: paste the URL, and the clone runs as a job you can watch and cancel.
 - **A zip, 7z, tar or RAR** opens like a folder. Browse it, look at a file inside it, extract what you need, and never unpack the whole thing.
 - **An ISO or a disk image** (raw, DMG, VHD, VHDX, VMDK, VDI, QCOW2) is browsable the same way, no mounting required; *Mount* in its menu hands it to the system where the system can mount it, and the mounted volume ejects from the side panel.
 - **A PDF** renders page by page with a searchable text layer; Office documents go through the same path when LibreOffice is installed.
