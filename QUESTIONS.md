@@ -4027,6 +4027,14 @@ Once answered, an entry keeps its number and gains a dated decision line.
     added beyond what the loader does today: §9 arrives with its
     milestone. If the two buttons should wait for that milestone
     instead, they are left out of item 9.
+    Decided (2026-11-10): build both buttons, zip-based, with no checks
+    and no confirmation; the trust check comes later (Serge). So an
+    `.rkp` is a zip of the plugin's folder; install unpacks it and
+    replaces what is there without asking, and does not look for a
+    manifest — the loader judges the result at the next start; *Remove*
+    deletes the folder without a question. SPEC.md's Extensions dialogue
+    is changed to say so. One thing stays, which is not a check of the
+    plugin: nothing in an archive is written outside the plugins folder.
 
 346. (GUI fixes, title bar colour, 2026-11-10) The notes say "contrast
     of text/secondary on every light preset is ≥ 4.5:1; verify after
