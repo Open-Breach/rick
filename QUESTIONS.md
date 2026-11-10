@@ -3976,6 +3976,13 @@ Once answered, an entry keeps its number and gains a dated decision line.
     Assumed: the fix is the filing — each under its plugin — and nothing
     changes in what `ext-git` registers. Under *All* the two rows remain,
     one under *GIT · PLUGIN* and one under *SVN · PLUGIN*.
+    Decided (2026-11-10): as found, and the two get names of their own —
+    Serge: "then it should say git commit and svn commit". The actions
+    are *Git commit* and *SVN commit*; SPEC.md's Keyboard shortcuts
+    dialogue and the two plugins' lines in the package layout say so.
+    Assumed with it: the name is the action's one label, so the command
+    palette and the *Git* and *SVN* submenus of the context menu read
+    the same as the shortcuts list.
 
 343. (GUI fixes, keyboard shortcuts, 2026-11-10) Four details the frame
     leaves open. The conflict chip is drawn with `text/primary` on
