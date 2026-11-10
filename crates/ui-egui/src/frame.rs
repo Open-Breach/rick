@@ -215,6 +215,11 @@ impl Frame {
             if response.drag_started() {
                 ui.ctx()
                     .send_viewport_cmd(ViewportCommand::BeginResize(direction));
+                // The window manager has the pointer from here on, and the
+                // button's release goes to it, not to this window: without
+                // this the grip would count as dragged until a click
+                // elsewhere, and the next press on it would start nothing.
+                ui.ctx().stop_dragging();
             }
         }
     }
@@ -395,6 +400,63 @@ mod tests {
         assert_eq!(at(2.0, 590.0), Some(ResizeDirection::SouthWest));
         assert_eq!(at(898.0, 598.0), Some(ResizeDirection::SouthEast));
         assert_eq!(at(2.0, 30.0), Some(ResizeDirection::West));
+    }
+
+    /// The resizes the grips of a plain 900 by 600 frame begin when
+    /// `events` arrive, one batch a frame.
+    fn resizes_begun(ctx: &egui::Context, events: Vec<egui::Event>) -> Vec<ResizeDirection> {
+        let input = egui::RawInput {
+            screen_rect: Some(WINDOW),
+            events,
+            ..egui::RawInput::default()
+        };
+        let mut output = ctx.run_ui(input, |ui| {
+            Frame::of(WINDOW, Mode::Plain).grips(ui, 0);
+        });
+        output.textures_delta.clear();
+        output
+            .viewport_output
+            .values()
+            .flat_map(|viewport| viewport.commands.iter())
+            .filter_map(|command| match command {
+                ViewportCommand::BeginResize(direction) => Some(*direction),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// Issue 149: the corner grip resizes every time. The window manager
+    /// takes the pointer when a resize begins and keeps the button's
+    /// release to itself, so the second press arrives without a release
+    /// before it, and must begin a resize all the same.
+    #[test]
+    fn a_grip_resizes_again_after_a_resize_whose_release_never_arrived() {
+        let ctx = egui::Context::default();
+        let corner = pos2(898.0, 598.0);
+        let press = || egui::Event::PointerButton {
+            pos: corner,
+            button: egui::PointerButton::Primary,
+            pressed: true,
+            modifiers: egui::Modifiers::NONE,
+        };
+        let begun = |events| resizes_begun(&ctx, events);
+        assert_eq!(begun(vec![egui::Event::PointerMoved(corner)]), []);
+        let mut first = begun(vec![press()]);
+        // A drag is known as one a frame after the press at the latest.
+        first.extend(begun(vec![egui::Event::PointerMoved(corner)]));
+        assert_eq!(first, [ResizeDirection::SouthEast]);
+        // The resize runs and ends in the window manager's hands: frames
+        // pass, and no release is ever seen.
+        for _ in 0..3 {
+            assert_eq!(begun(vec![egui::Event::PointerMoved(corner)]), []);
+        }
+        let mut second = begun(vec![press()]);
+        second.extend(begun(vec![egui::Event::PointerMoved(corner)]));
+        assert_eq!(
+            second,
+            [ResizeDirection::SouthEast],
+            "the grip is dead after one resize"
+        );
     }
 
     /// What `paint` hands the renderer for a 900 by 600 window: the rects
