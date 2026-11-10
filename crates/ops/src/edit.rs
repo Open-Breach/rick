@@ -330,7 +330,9 @@ fn spawn_transfer(
         let keys = schedule::volume_keys(&mounts, &pairs).await;
         let _lease = scheduler.acquire(&job, &name, keys).await;
         let total = pairs.len() as u64;
-        let mut policy = Policy::default();
+        // The names are compared with the destination before anything is
+        // brought, so the first question knows how many conflicts there are.
+        let mut policy = Policy::counted(crate::conflict::count(&mounts, &pairs).await);
         let mut batch = Batch::default();
         for (done, (from, to)) in pairs.iter().enumerate() {
             job.pause.wait().await;
@@ -338,10 +340,8 @@ fn spawn_transfer(
                 done: done as u64,
                 total: Some(total),
             });
-            let remaining = total - done as u64 - 1;
-            let Landing::At { to, overwrite } = policy
-                .land(&conflicts, &job, &mounts, from, to, remaining)
-                .await?
+            let Landing::At { to, overwrite } =
+                policy.land(&conflicts, &job, &mounts, from, to).await?
             else {
                 continue;
             };

@@ -6,6 +6,7 @@
 //! they live here.
 
 use std::fmt;
+use std::time::SystemTime;
 
 use crate::{JobId, Location};
 
@@ -19,6 +20,38 @@ impl fmt::Display for ConflictId {
     }
 }
 
+/// What the dialogue shows of one side of a conflict, the existing entry
+/// or the one that arrives, so the two can be compared before choosing.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ConflictSide {
+    /// Whether it is a folder.
+    pub is_dir: bool,
+    /// Its size in bytes, when it is known.
+    pub size: Option<u64>,
+    /// When it was last modified, when that is known.
+    pub modified: Option<SystemTime>,
+}
+
+/// What a job knows about a conflict when it asks: the two sides, the
+/// name *Keep both* would give, and where the conflict stands among the
+/// job's.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ConflictDetails {
+    /// The entry that is already there.
+    pub existing: ConflictSide,
+    /// The entry that would land on it.
+    pub incoming: ConflictSide,
+    /// The first free numbered name beside the existing entry, `name
+    /// (2).ext` or the next; `None` proposes `name (2).ext` unchecked.
+    pub proposed: Option<String>,
+    /// This conflict's number and the number of conflicts in all, `(3,
+    /// 12)`, when the job counted them before it began.
+    pub position: Option<(u64, u64)>,
+    /// How many conflicts are still to come after this one; where the job
+    /// did not count them, how many items are.
+    pub remaining: u64,
+}
+
 /// An existing name a job would land on.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Conflict {
@@ -30,14 +63,29 @@ pub struct Conflict {
     pub source: Location,
     /// The existing entry it would replace.
     pub target: Location,
-    /// Whether the existing entry is a folder (overwrite merges) or a file
-    /// (overwrite replaces).
-    pub target_is_dir: bool,
-    /// The name the dialogue proposes for Rename: `name (2)`, or the next
-    /// free number.
+    /// The existing entry: a folder (overwrite merges) or a file
+    /// (overwrite replaces), its size and its date.
+    pub existing: ConflictSide,
+    /// The entry that arrives.
+    pub incoming: ConflictSide,
+    /// The name *Keep both* gives the arriving entry: `name (2).ext`, or
+    /// the next free number.
     pub proposed: String,
-    /// How many items of the job are still to come after this one.
+    /// This conflict's number and the job's number of conflicts, when the
+    /// job counted them.
+    pub position: Option<(u64, u64)>,
+    /// How many conflicts of the job are still to come after this one;
+    /// how many items, where the job did not count its conflicts.
     pub remaining: u64,
+}
+
+impl Conflict {
+    /// Whether a folder meets a folder: the two merge, and there is no
+    /// keeping both.
+    #[must_use]
+    pub fn between_folders(&self) -> bool {
+        self.existing.is_dir && self.incoming.is_dir
+    }
 }
 
 /// What to do with a conflicting item.
@@ -47,7 +95,8 @@ pub enum Resolution {
     Skip,
     /// Replace a file, merge into a folder.
     Overwrite,
-    /// Put the item under this name instead.
+    /// Put the item under this name instead: *Keep both*, with the
+    /// conflict's proposed name.
     Rename(String),
     /// End the job with `Error::Cancelled`.
     Cancel,
@@ -59,7 +108,8 @@ pub struct ConflictAnswer {
     /// What to do with this item.
     pub resolution: Resolution,
     /// Apply the same to every remaining conflict of the job. A `Rename`
-    /// applied to all numbers each remaining name the same way.
+    /// applied to all numbers each remaining name the same way, and does
+    /// not answer for two folders, which merge or are skipped.
     pub apply_to_all: bool,
 }
 

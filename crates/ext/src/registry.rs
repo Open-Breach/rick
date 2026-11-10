@@ -173,8 +173,12 @@ use crate::search::SearchIndex;
 /// through [`Registry::command`]; 16 the shell integration of the same
 /// spec: `Console` gained `cwd`, the working directory the shell reports
 /// through OSC 7, and `foreground_job`, whether a program other than the
-/// shell has the terminal.
-pub const API_VERSION: u32 = 16;
+/// shell has the terminal; 17 a name conflict carries what its dialogue
+/// shows (issue 139): `Conflicts::ask` takes a `ConflictDetails` — both
+/// sides of the conflict, the name *Keep both* would give and the
+/// conflict's place among the job's — where it took `target_is_dir` and
+/// `remaining` (QUESTIONS.md 350).
+pub const API_VERSION: u32 = 17;
 
 bitflags::bitflags! {
     /// The extension points an extension fills, as its manifest declares

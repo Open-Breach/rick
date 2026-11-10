@@ -275,6 +275,56 @@ pub(crate) fn header(ui: &mut egui::Ui, title: &str, header: Option<&Header>, cl
     close && close_button(ui, band)
 }
 
+/// The side of the icon tile in a [`band`].
+const TILE: f32 = 40.0;
+
+/// The header band of the dialogues of 0.4 (SPEC.md *Dialogues*): the
+/// title and, under it, the secondary line, each on one line and cut with
+/// an ellipsis before the close button, so nothing runs under the button
+/// and no dialogue grows for a long name; before them, when `icon` gives
+/// a glyph, a 40 px `bg/subtle` tile holding it; the round close button at
+/// the right, whose click is the return; a hairline below.
+pub(crate) fn band(ui: &mut egui::Ui, icon: Option<&str>, title: &str, subtitle: &str) -> bool {
+    let scheme = theme::scheme(ui);
+    let height = if icon.is_some() { 72.0 } else { 64.0 };
+    let (band, _) = ui.allocate_exact_size(vec2(ui.available_width(), height), Sense::hover());
+    let mut text_x = band.left() + PAD;
+    if let Some(glyph) = icon {
+        let rect =
+            Rect::from_min_size(pos2(text_x, band.center().y - TILE / 2.0), vec2(TILE, TILE));
+        ui.painter()
+            .rect_filled(rect, CARD_RADIUS, scheme.bg_subtle);
+        ui.painter().text(
+            rect.center(),
+            Align2::CENTER_CENTER,
+            glyph,
+            FontId::proportional(20.0),
+            scheme.icon_default,
+        );
+        text_x = rect.right() + 12.0;
+    }
+    let width = band.right() - PAD - CLOSE_BUTTON - 12.0 - text_x;
+    widgets::line(
+        ui,
+        pos2(text_x, band.center().y - 8.0),
+        title,
+        FontId::proportional(TEXT_TITLE),
+        scheme.text_primary,
+        width,
+    );
+    widgets::line(
+        ui,
+        pos2(text_x, band.center().y + 11.0),
+        subtitle,
+        FontId::proportional(TEXT_SECONDARY),
+        scheme.text_secondary,
+        width,
+    );
+    ui.painter()
+        .hline(band.x_range(), band.bottom() - 0.5, scheme.hairline());
+    close_button(ui, band)
+}
+
 /// The round close button at the right of a header band: `bg/control`,
 /// `bg/active` under the pointer, the `CLOSE` glyph; named *Close*.
 fn close_button(ui: &mut egui::Ui, band: Rect) -> bool {

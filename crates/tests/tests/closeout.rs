@@ -630,7 +630,8 @@ fn pasting_over_an_existing_name_opens_the_dialogue_and_cancel_touches_nothing()
     }));
     harness.step();
     harness.step();
-    harness.get_by_label_contains("a.txt already exists");
+    // The title is the question; the name is in the cards, not in it.
+    harness.get_by_label("Replace file?");
     harness.get_by_label("Cancel").click();
     harness.step();
     settle(&mut harness);

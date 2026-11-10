@@ -1,21 +1,56 @@
 //! Name conflicts: where a copy or move that would land on an existing
-//! name decides what to do — Skip, Overwrite, Rename, Cancel, apply to all
-//! remaining — through the dialogue the [`Conflicts`] queue of
-//! `runtime` serves.
+//! name decides what to do — Skip, Replace (Merge between two folders),
+//! Keep both, Cancel, the same for the remaining — through the dialogue
+//! the [`Conflicts`] queue of `runtime` serves (SPEC.md *Execution*).
 //!
 //! Jobs ask through the queue their [`JobCtx`] carries; the application
 //! drains the new questions into the model, the UI shows the dialogue for
 //! the first, and the answer comes back through [`Conflicts::answer`].
-//! [`Policy`] remembers an "apply to all" answer for the rest of one job.
+//! [`Policy`] remembers a "do the same for the remaining" answer for the
+//! rest of one job, and counts the job's conflicts so the dialogue can say
+//! "3 of 12".
 
 use runtime::JobCtx;
 pub use runtime::{ConflictWaker, Conflicts, name_of};
-use types::{Error, Location, Resolution};
+use types::{ConflictDetails, ConflictSide, Entry, EntryKind, Error, Location, Resolution};
 
-/// What one job remembers from "apply to all remaining".
+/// What one job remembers from "do the same for the remaining", and where
+/// it stands among its conflicts.
 #[derive(Debug, Default)]
 pub(crate) struct Policy {
     all: Option<Resolution>,
+    /// The conflicts counted before the job began.
+    total: u64,
+    /// The conflicts met so far, asked about or answered by `all`.
+    met: u64,
+}
+
+/// How many of `pairs` would land on an existing name: what the job
+/// compares with the destination before it brings anything, so the first
+/// question already says how many there are. A target that cannot be
+/// examined is not counted; the job meets its error when it gets there.
+pub(crate) async fn count(mounts: &vfs::Mounts, pairs: &[(Location, Location)]) -> u64 {
+    let mut conflicts = 0;
+    for (_, to) in pairs {
+        let Ok(provider) = mounts.resolve(to) else {
+            continue;
+        };
+        if provider.stat(to).await.is_ok() {
+            conflicts += 1;
+        }
+    }
+    conflicts
+}
+
+/// One side of a conflict as the dialogue shows it.
+fn side(entry: &Entry) -> ConflictSide {
+    let is_dir = entry.kind == EntryKind::Dir;
+    ConflictSide {
+        is_dir,
+        // A folder's size is not known without counting it.
+        size: if is_dir { None } else { entry.size },
+        modified: entry.modified,
+    }
 }
 
 /// Where an item goes after its conflict, if anywhere.
@@ -29,8 +64,19 @@ pub(crate) enum Landing {
 }
 
 impl Policy {
+    /// A policy for a job with `total` conflicts, as [`count`] found them.
+    pub(crate) fn counted(total: u64) -> Self {
+        Self {
+            total,
+            ..Self::default()
+        }
+    }
+
     /// Decides where `from` lands when going to `to`, asking through
-    /// `conflicts` when `to` is taken and no standing answer applies.
+    /// `conflicts` when `to` is taken and no standing answer applies. The
+    /// question carries both sides, the first free numbered name for
+    /// *Keep both*, and the conflict's place among the job's. A standing
+    /// *Keep both* does not answer for two folders: they are asked about.
     ///
     /// # Errors
     ///
@@ -43,10 +89,11 @@ impl Policy {
         mounts: &vfs::Mounts,
         from: &Location,
         to: &Location,
-        remaining: u64,
     ) -> Result<Landing, Error> {
         let provider = mounts.resolve(to)?;
+        let dir = Location::new(to.provider, crate::edit::parent(&to.path));
         let mut target = to.clone();
+        let mut counted = false;
         loop {
             let existing = match provider.stat(&target).await {
                 Ok(entry) => entry,
@@ -58,11 +105,35 @@ impl Policy {
                 }
                 Err(e) => return Err(e),
             };
-            let is_dir = existing.kind == types::EntryKind::Dir;
-            let resolution = if let Some(standing) = &self.all {
-                standing.clone()
+            if !counted {
+                counted = true;
+                self.met += 1;
+                // A name taken since the count still has its number.
+                self.total = self.total.max(self.met);
+            }
+            let incoming = match mounts.resolve(from) {
+                Ok(source) => source.stat(from).await.map(|e| side(&e)).ok(),
+                Err(_) => None,
+            }
+            .unwrap_or_default();
+            let existing = side(&existing);
+            let folders = existing.is_dir && incoming.is_dir;
+            let standing = self
+                .all
+                .clone()
+                .filter(|all| !(folders && matches!(all, Resolution::Rename(_))));
+            let held = standing.is_some();
+            let resolution = if let Some(standing) = standing {
+                standing
             } else {
-                let answer = conflicts.ask(job, from, &target, is_dir, remaining).await;
+                let details = ConflictDetails {
+                    existing,
+                    incoming,
+                    proposed: Some(free_name(&*provider, &dir, &name_of(to)).await),
+                    position: Some((self.met, self.total)),
+                    remaining: self.total - self.met,
+                };
+                let answer = conflicts.ask(job, from, &target, details).await;
                 if answer.apply_to_all {
                     self.all = Some(answer.resolution.clone());
                 }
@@ -78,16 +149,17 @@ impl Policy {
                     });
                 }
                 Resolution::Rename(name) => {
-                    let dir = Location::new(to.provider, crate::edit::parent(&to.path));
-                    let proposed = if self.all.is_some() {
-                        // Applied to all: number each remaining name itself.
+                    let applies_to_all = held || self.all.is_some();
+                    let proposed = if applies_to_all {
+                        // For all: number each remaining name itself.
                         free_name(&*provider, &dir, &name_of(to)).await
                     } else {
                         name
                     };
                     target = crate::inside(&dir, proposed.as_bytes());
-                    // An explicit new name that is taken too asks again.
-                    if self.all.is_some() {
+                    // A name given for this one item that is taken too
+                    // asks again.
+                    if applies_to_all {
                         return Ok(Landing::At {
                             to: target,
                             overwrite: false,

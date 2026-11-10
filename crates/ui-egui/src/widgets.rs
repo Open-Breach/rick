@@ -324,13 +324,54 @@ pub fn icon_button(
     primary: bool,
     enabled: bool,
 ) -> egui::Response {
+    let kind = if primary {
+        ButtonKind::Primary
+    } else {
+        ButtonKind::Secondary
+    };
+    button_of(ui, glyph, label, kind, enabled)
+}
+
+/// What a dialogue button is for, which decides its colours (SPEC.md
+/// *Controls*).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ButtonKind {
+    /// The dialogue's main action: `accent/button` with white text.
+    Primary,
+    /// Any other action: `bg/control` with `text/primary`.
+    Secondary,
+    /// A choice that overwrites something: `trash/mid-bg` with
+    /// `trash/mid-text`, amber and not the red of a destructive entry.
+    Caution,
+}
+
+/// A caution button: [`button`] in the amber of [`ButtonKind::Caution`].
+pub fn caution_button(ui: &mut egui::Ui, label: &str, enabled: bool) -> egui::Response {
+    button_of(ui, None, label, ButtonKind::Caution, enabled)
+}
+
+/// [`icon_button`] of the given kind.
+pub fn button_of(
+    ui: &mut egui::Ui,
+    glyph: Option<&str>,
+    label: &str,
+    kind: ButtonKind,
+    enabled: bool,
+) -> egui::Response {
     let scheme = theme::scheme(ui);
     let radius = theme::metrics(ui.ctx()).corner_radius();
-    let (fill, fg) = match (primary, enabled) {
-        (true, true) => (scheme.accent_button, Scheme::ON_BUTTON),
-        (true, false) => (scheme.accent_button.gamma_multiply(0.45), Scheme::ON_BUTTON),
-        (false, true) => (scheme.bg_control, scheme.text_primary),
-        (false, false) => (scheme.bg_control, scheme.text_secondary),
+    let (fill, fg) = match (kind, enabled) {
+        (ButtonKind::Primary, true) => (scheme.accent_button, Scheme::ON_BUTTON),
+        (ButtonKind::Primary, false) => {
+            (scheme.accent_button.gamma_multiply(0.45), Scheme::ON_BUTTON)
+        }
+        (ButtonKind::Secondary, true) => (scheme.bg_control, scheme.text_primary),
+        (ButtonKind::Secondary, false) => (scheme.bg_control, scheme.text_secondary),
+        (ButtonKind::Caution, true) => (scheme.trash_mid_bg, scheme.trash_mid_text),
+        (ButtonKind::Caution, false) => (
+            scheme.trash_mid_bg.gamma_multiply(0.5),
+            scheme.trash_mid_text,
+        ),
     };
     let galley = ui
         .painter()
@@ -369,6 +410,56 @@ pub fn icon_button(
     response
 }
 
+/// One line of text laid out for `width`: cut with an ellipsis at its end
+/// when it is longer, never wrapped. The galley's `elided` says whether it
+/// was cut.
+#[must_use]
+pub fn elided(
+    ui: &egui::Ui,
+    text: &str,
+    font: FontId,
+    colour: egui::Color32,
+    width: f32,
+) -> std::sync::Arc<egui::Galley> {
+    let mut job = egui::text::LayoutJob::simple_singleline(text.to_owned(), font, colour);
+    job.wrap = egui::text::TextWrapping {
+        max_width: width.max(0.0),
+        max_rows: 1,
+        break_anywhere: true,
+        overflow_character: Some('…'),
+    };
+    ui.painter().layout_job(job)
+}
+
+/// Paints one line of text at `pos` (its left centre), cut with an
+/// ellipsis at `width`. The line is a label for a screen reader, with the
+/// whole text as its name, and shows the whole text as its tooltip when
+/// it was cut. Returns the rect it took.
+pub fn line(
+    ui: &mut egui::Ui,
+    pos: egui::Pos2,
+    text: &str,
+    font: FontId,
+    colour: egui::Color32,
+    width: f32,
+) -> Rect {
+    let galley = elided(ui, text, font, colour, width);
+    let size = galley.size();
+    let rect = Rect::from_min_size(pos2(pos.x, pos.y - size.y / 2.0), size);
+    let cut = galley.elided;
+    ui.painter().galley(rect.min, galley, colour);
+    // The same text may stand twice in one dialogue: the place tells them
+    // apart.
+    let place = (rect.left().to_bits(), rect.top().to_bits());
+    let response = ui.interact(rect, ui.id().with(("line", text, place)), Sense::hover());
+    response
+        .widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Label, true, text.to_owned()));
+    if cut {
+        response.on_hover_text(text);
+    }
+    rect
+}
+
 /// A caps heading in 11 px letter-spaced `text/secondary`, as the
 /// dialogues and the settings title their groups.
 pub fn caps_heading(ui: &mut egui::Ui, text: &str) {
@@ -383,4 +474,31 @@ pub fn caps_heading(ui: &mut egui::Ui, text: &str) {
         .selectable(false),
     );
     let _ = TEXT_SECONDARY;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_long_line_ends_in_an_ellipsis_at_its_width_and_a_short_one_is_whole() {
+        let ctx = egui::Context::default();
+        let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+            let font = FontId::proportional(TEXT_BODY);
+            let name =
+                "Camera white appartment 5-14-2026 1.32.41pm GMT2 - 5-14-2026 1.33.08pm GMT2.mp4";
+            let cut = elided(ui, name, font.clone(), egui::Color32::WHITE, 398.0);
+            assert!(cut.elided, "the name is longer than its card");
+            assert!(cut.size().x <= 398.0, "{} px", cut.size().x);
+            assert_eq!(cut.rows.len(), 1, "one line, never wrapped");
+            let last = cut.rows[0].glyphs.last().map(|g| g.chr);
+            assert_eq!(last, Some('…'), "it ends in an ellipsis");
+
+            let whole = elided(ui, "notes.md", font, egui::Color32::WHITE, 398.0);
+            assert!(!whole.elided);
+            assert_eq!(whole.text(), "notes.md");
+        });
+        // No renderer takes the font atlas in a unit test.
+        output.textures_delta.clear();
+    }
 }

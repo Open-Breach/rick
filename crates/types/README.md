@@ -4,7 +4,9 @@
 and entry identities (`ProviderId`, `EntryId`, `ExtId`), the provider-neutral
 byte path `VPath` and `Location`, the directory `Entry` with its `EntryKind`,
 `Attrs` and `Mime`, the cooperative `CancelToken`, job `Progress` and `JobId`,
-the name `Conflict` a job asks about with its `ConflictAnswer`, and the
+the name `Conflict` a job asks about — both of its sides, the name *Keep
+both* would give and its place among the job's conflicts — with its
+`ConflictAnswer`, and the
 single kernel `Error`. It performs no I/O, spawns no threads and knows
 nothing about any operating system; it depends on no other Rick crate and only
 on `bitflags` and `thiserror` from the ecosystem, so every other crate in the

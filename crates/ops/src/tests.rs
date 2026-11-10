@@ -780,13 +780,23 @@ fn a_paste_over_existing_names_asks_and_skip_leaves_the_target_alone() {
     };
     let first = answer_conflict(&h, types::ConflictAnswer::once(types::Resolution::Skip));
     assert_eq!(first.job, id);
-    assert!(!first.target_is_dir);
+    // Both sides are there to compare: a file meets a file.
+    assert!(!first.existing.is_dir && !first.incoming.is_dir);
+    assert_eq!(first.existing.size, Some(5), "old a");
+    assert_eq!(first.incoming.size, Some(5), "new a");
+    assert!(first.existing.modified.is_some() && first.incoming.modified.is_some());
     assert_eq!(first.proposed, "a (2).txt");
+    // The job counted its conflicts before it brought anything.
+    assert_eq!(first.position, Some((1, 3)));
     assert_eq!(first.remaining, 2);
     let second = answer_conflict(&h, types::ConflictAnswer::once(types::Resolution::Skip));
     assert_eq!(second.proposed, "b (2).txt");
+    assert_eq!(second.position, Some((2, 3)));
     let third = answer_conflict(&h, types::ConflictAnswer::once(types::Resolution::Skip));
-    assert!(third.target_is_dir);
+    assert!(third.between_folders());
+    assert_eq!(third.existing.size, None, "a folder's size is not counted");
+    assert_eq!(third.position, Some((3, 3)));
+    assert_eq!(third.remaining, 0);
     h.settle();
     assert_eq!(
         fs::read_to_string(dst.join("a.txt")).ok(),
@@ -827,7 +837,52 @@ fn overwrite_replaces_files_and_merges_folders() {
 }
 
 #[test]
-fn rename_puts_the_item_under_the_proposed_name_and_apply_to_all_numbers_the_rest() {
+fn keep_both_lands_under_the_first_free_number_and_leaves_the_existing_file() {
+    let h = harness();
+    let (src, dst) = conflicting_tree(&h);
+    // `a (2).txt` is taken too: the first free number is 3.
+    write(&dst.join("a (2).txt"), "an earlier copy");
+    let ctx = h.ctx(&src, &[&src.join("a.txt")]);
+    h.run("core.copy", ctx);
+    h.action("core.paste")
+        .run(h.ctx(&dst, &[]), &h.jobs, &h.ui)
+        .unwrap_or_else(|e| panic!("{e}"));
+    let asked = h.conflicts.take_new();
+    let deadline = Instant::now() + Duration::from_secs(2);
+    let mut asked = asked;
+    while asked.is_empty() {
+        assert!(Instant::now() < deadline, "no conflict was asked");
+        std::thread::sleep(Duration::from_millis(5));
+        asked = h.conflicts.take_new();
+    }
+    let conflict = asked.remove(0);
+    assert_eq!(conflict.proposed, "a (3).txt");
+    // One conflict: no "n of m", nothing remaining.
+    assert_eq!(conflict.position, Some((1, 1)));
+    assert_eq!(conflict.remaining, 0);
+    // Keep both is the proposed name.
+    assert!(h.conflicts.answer(
+        conflict.id,
+        types::ConflictAnswer::once(types::Resolution::Rename(conflict.proposed.clone())),
+    ));
+    h.settle();
+    assert_eq!(
+        fs::read_to_string(dst.join("a (3).txt")).ok(),
+        Some("new a".into())
+    );
+    assert_eq!(
+        fs::read_to_string(dst.join("a.txt")).ok(),
+        Some("old a".into()),
+        "the existing file is untouched"
+    );
+    assert_eq!(
+        fs::read_to_string(dst.join("a (2).txt")).ok(),
+        Some("an earlier copy".into())
+    );
+}
+
+#[test]
+fn keep_both_for_the_remaining_numbers_the_files_and_still_asks_about_two_folders() {
     let h = harness();
     let (src, dst) = conflicting_tree(&h);
     paste_all(&h, &src, &dst);
@@ -839,6 +894,13 @@ fn rename_puts_the_item_under_the_proposed_name_and_apply_to_all_numbers_the_res
         &h,
         types::ConflictAnswer::for_all(types::Resolution::Rename(String::new())),
     );
+    // Keeping both does not answer for a folder that meets a folder.
+    let folders = answer_conflict(
+        &h,
+        types::ConflictAnswer::once(types::Resolution::Overwrite),
+    );
+    assert!(folders.between_folders());
+    assert_eq!(folders.position, Some((3, 3)));
     h.settle();
     assert_eq!(
         fs::read_to_string(dst.join("fresh.txt")).ok(),
@@ -852,10 +914,8 @@ fn rename_puts_the_item_under_the_proposed_name_and_apply_to_all_numbers_the_res
         fs::read_to_string(dst.join("b (2).txt")).ok(),
         Some("new b".into())
     );
-    assert!(
-        dst.join("sub (2)/inner.txt").exists(),
-        "folders are numbered too"
-    );
+    assert!(dst.join("sub/inner.txt").exists(), "the folders merged");
+    assert!(!dst.join("sub (2)").exists(), "a folder is not kept twice");
     assert!(dst.join("sub/other.txt").exists());
 }
 

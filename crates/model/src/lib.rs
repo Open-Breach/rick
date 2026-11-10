@@ -3425,8 +3425,10 @@ mod tests {
             job: JobId(7),
             source: loc("/s"),
             target: loc("/t"),
-            target_is_dir: false,
+            existing: types::ConflictSide::default(),
+            incoming: types::ConflictSide::default(),
             proposed: "t (2)".into(),
+            position: None,
             remaining: 0,
         };
         model.conflict_opened(conflict.clone());
