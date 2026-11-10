@@ -2,11 +2,15 @@
 //!
 //! Turning the decorations off, which every platform but macOS does for the
 //! title row, takes the system's border, shadow and resize handles with it.
-//! This module puts them back: a transparent margin around the content holds
-//! a light shadow, a one-point border runs around the content, and grips along
-//! the edges and corners resize the window through the backend. A maximised
-//! or fullscreen window has no frame, and neither has one whose system keeps
-//! its own controls.
+//! This module puts them back, in one of two ways ([`Mode`];
+//! specs/gui-title-row.md, *Window frame*). Around a transparent window, the
+//! shadow frame: a transparent margin around the content holds a light
+//! shadow, a one-point border runs around the content, and grips along the
+//! edges and corners resize the window through the backend. Around a window
+//! that cannot be transparent, where that margin would be composited as a
+//! black band, the plain frame: no margin and no shadow, the border at the
+//! window's edge and the grips on it. A maximised or fullscreen window has
+//! no frame, and neither has one whose system keeps its own controls.
 
 use egui::viewport::{ResizeDirection, ViewportCommand};
 use egui::{CursorIcon, Pos2, Rect, Sense, StrokeKind, Vec2, pos2};
@@ -39,7 +43,8 @@ impl Mode {
     #[must_use]
     pub const fn margin(self) -> f32 {
         match self {
-            Self::Shadow | Self::Plain => MARGIN,
+            Self::Shadow => MARGIN,
+            Self::Plain => 0.0,
         }
     }
 }
@@ -76,21 +81,23 @@ impl Frame {
         }
     }
 
-    /// Paints the frame of `mode` into `outer`: the shadow, the fill and
-    /// the border.
+    /// Paints the frame of `mode` into `outer`: the shadow in the margin
+    /// of the shadow frame, then the fill and the border, square-cornered.
     #[must_use]
     pub fn paint(ui: &egui::Ui, outer: Rect, mode: Mode) -> Self {
         let frame = Self::of(outer, mode);
         let inner = frame.inner;
         let visuals = ui.visuals();
-        let shadow = egui::epaint::Shadow {
-            offset: [0, 2],
-            blur: 14,
-            spread: 0,
-            color: crate::theme::scheme(ui).shadow(),
-        };
         let painter = ui.painter();
-        painter.add(shadow.as_shape(inner, 0));
+        if mode == Mode::Shadow {
+            let shadow = egui::epaint::Shadow {
+                offset: [0, 2],
+                blur: 14,
+                spread: 0,
+                color: crate::theme::scheme(ui).shadow(),
+            };
+            painter.add(shadow.as_shape(inner, 0));
+        }
         painter.rect(
             inner,
             0,
@@ -108,7 +115,9 @@ impl Frame {
     }
 
     /// Registers the resize grips along the edges, after the content so they
-    /// win the pointer where they overlap it. Hovering shows the resize
+    /// win the pointer where they overlap it: each covers the margin and
+    /// reaches `GRIP_INSIDE` inside the border, which for the plain frame is
+    /// a band of that width on the window's edge. Hovering shows the resize
     /// cursor; a drag starts a resize through the backend. `salt` tells one
     /// window's grips from another's.
     pub fn grips(&self, ui: &mut egui::Ui, salt: u64) {
