@@ -16,6 +16,7 @@
 // allowance (QUESTIONS.md 82).
 #![deny(unsafe_code)]
 
+pub mod datasets;
 pub mod parse;
 pub mod zfs;
 

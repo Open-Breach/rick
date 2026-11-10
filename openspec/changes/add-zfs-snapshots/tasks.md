@@ -15,8 +15,8 @@
 
 ## 3. Dataset cache and detection
 
-- [ ] 3.1 Implement `Datasets`: one file-system list, longest mount-point prefix on path components, per-dataset snapshot lists with a 30 s TTL and explicit invalidation (design Decisions 4 and 8); verify unit tests for nested datasets, a path outside every dataset, TTL expiry and invalidation
-- [ ] 3.2 Treat a missing `zfs` or a failed list as "no datasets", logged once at `debug`; verify a unit test with the fake returning `Unsupported` and one with a non-zero exit (spec: Dataset detection, No ZFS tooling)
+- [x] 3.1 Implement `Datasets`: one file-system list, longest mount-point prefix on path components, per-dataset snapshot lists with a 30 s TTL and explicit invalidation (design Decisions 4 and 8); verify unit tests for nested datasets, a path outside every dataset, TTL expiry and invalidation
+- [x] 3.2 Treat a missing `zfs` or a failed list as "no datasets", logged once at `debug`; verify a unit test with the fake returning `Unsupported` and one with a non-zero exit (spec: Dataset detection, No ZFS tooling)
 
 ## 4. Read-only `zfs` provider
 
