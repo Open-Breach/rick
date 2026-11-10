@@ -2,8 +2,9 @@
 //!
 //! It runs only when `RICK_REQUIRE_ZFS=1` is set and `RICK_ZFS_TEST_DATASET`
 //! names a mounted dataset the user may snapshot, rename and destroy
-//! snapshots of without elevation (`zfs allow <user>
-//! snapshot,rename,mount,create,destroy <dataset>`); otherwise it prints a
+//! snapshots of and set `compression` and `quota` on without elevation
+//! (`zfs allow <user> snapshot,rename,mount,create,destroy,compression,quota
+//! <dataset>`); otherwise it prints a
 //! note and passes. CI has no pool and never sets it. The test works in a
 //! folder of its own under the mount point and on a snapshot of its own,
 //! and removes both.
@@ -44,13 +45,7 @@ fn a_real_pool_creates_browses_restores_renames_and_destroys() {
     write(&work.join("report.txt"), "as it was\n");
 
     let run = |commands: Vec<Vec<String>>| {
-        let outcome = run_first(
-            &datasets,
-            &Batch {
-                dataset: dataset.clone(),
-                commands,
-            },
-        );
+        let outcome = run_first(&datasets, &Batch::new(dataset.clone(), commands));
         assert!(matches!(outcome, FirstRun::Done), "{outcome:?}");
     };
     let name = format!("{stamp}-test");
@@ -99,4 +94,56 @@ fn a_real_pool_creates_browses_restores_renames_and_destroys() {
     assert!(!snaps.iter().any(|e| e.name == renamed));
     fs::remove_dir_all(&work).unwrap_or_else(|e| panic!("{e}"));
     assert!(!Path::new(&work).exists());
+
+    properties_round_trip(&datasets, &dataset);
+}
+
+/// The property editor's commands (change `add-zfs-property-editor`): set
+/// `compression` and `quota`, read them back, inherit them again.
+fn properties_round_trip(datasets: &Arc<Datasets>, dataset: &str) {
+    let ordered = |commands: Vec<Vec<String>>| {
+        let outcome = run_first(datasets, &Batch::ordered(dataset.to_owned(), commands));
+        assert!(matches!(outcome, FirstRun::Done), "{outcome:?}");
+    };
+    let before = crate::edit::read(&**datasets.zfs(), dataset).unwrap_or_else(|e| panic!("{e}"));
+    let value = |current: &crate::edit::Current, name: &str| {
+        current
+            .properties
+            .iter()
+            .find(|p| p.name == name)
+            .map(|p| (p.value.clone(), p.source.clone()))
+    };
+    let quota = before.used + 1024 * 1024 * 1024;
+    ordered(vec![vec![
+        "set".to_owned(),
+        "compression=zle".to_owned(),
+        format!("quota={quota}"),
+        dataset.to_owned(),
+    ]]);
+    let after = crate::edit::read(&**datasets.zfs(), dataset).unwrap_or_else(|e| panic!("{e}"));
+    assert_eq!(
+        value(&after, "compression"),
+        Some(("zle".to_owned(), crate::props::Source::Local))
+    );
+    assert_eq!(
+        value(&after, "quota"),
+        Some((quota.to_string(), crate::props::Source::Local))
+    );
+    ordered(vec![
+        vec![
+            "inherit".to_owned(),
+            "compression".to_owned(),
+            dataset.to_owned(),
+        ],
+        vec!["inherit".to_owned(), "quota".to_owned(), dataset.to_owned()],
+    ]);
+    let back = crate::edit::read(&**datasets.zfs(), dataset).unwrap_or_else(|e| panic!("{e}"));
+    assert_ne!(
+        value(&back, "compression").map(|(_, s)| s),
+        Some(crate::props::Source::Local)
+    );
+    assert_ne!(
+        value(&back, "quota").map(|(_, s)| s),
+        Some(crate::props::Source::Local)
+    );
 }

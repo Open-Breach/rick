@@ -19,6 +19,7 @@
 pub mod actions;
 pub mod datasets;
 pub mod decorator;
+pub mod edit;
 pub mod helper;
 pub mod manage;
 pub mod parse;
@@ -77,7 +78,7 @@ impl ZfsExtension {
             manifest: Manifest {
                 id: ID,
                 name: "ZFS",
-                description: "Shows the snapshots of OpenZFS datasets as read-only folders, lists the versions of a file, restores from a snapshot and manages snapshots.",
+                description: "Shows the snapshots of OpenZFS datasets as read-only folders, lists the versions of a file, restores from a snapshot, manages snapshots and edits a dataset's safe properties.",
                 version: Version::parse(env!("CARGO_PKG_VERSION"))
                     .unwrap_or_else(|_| Version::new(0, 0, 0)),
                 api_version: API_VERSION,

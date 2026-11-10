@@ -3,6 +3,7 @@
 
 mod actions;
 mod decorator;
+mod edit;
 mod live;
 mod manage;
 mod provider;

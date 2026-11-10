@@ -8,10 +8,14 @@
 //! - `snapshot [-r] <dataset>@<name>`
 //! - `rename <dataset>@<old> <dataset>@<new>`, both of one dataset
 //! - `destroy <dataset>@<name>`
+//! - `set <property>=<value>… <dataset>` and `inherit <property> <dataset>`
+//!   for the properties of the editor ([`crate::edit::EDITABLE`]), each
+//!   value checked as the editor checks it
 //!
-//! Every name must be a snapshot (`@` present), so the helper can never
-//! destroy or rename a dataset, and nothing may start with `-`, so no
-//! further option reaches `zfs`. It runs `zfs` from the system's own
+//! Every snapshot command needs a snapshot's full name (`@` present), so
+//! the helper can never destroy or rename a dataset; the property commands
+//! take a dataset without `@`. Nothing may start with `-`, so no further
+//! option reaches `zfs`. It runs `zfs` from the system's own
 //! directories, never from the caller's `PATH`, in the C locale, with
 //! its output passed through and its exit code returned.
 //!
@@ -51,7 +55,7 @@ pub enum Refusal {
     /// Not one of `snapshot`, `rename` and `destroy`, or the wrong number
     /// of arguments for it.
     #[error(
-        "rick-zfs runs only: snapshot [-r] DATASET@NAME, rename DATASET@OLD DATASET@NEW, destroy DATASET@NAME"
+        "rick-zfs runs only: snapshot [-r] DATASET@NAME, rename DATASET@OLD DATASET@NEW, destroy DATASET@NAME, set PROPERTY=VALUE… DATASET, inherit PROPERTY DATASET"
     )]
     Usage,
     /// An argument that is not a snapshot's full name.
@@ -60,6 +64,12 @@ pub enum Refusal {
     /// A rename between two datasets.
     #[error("a snapshot is renamed within its dataset only")]
     OtherDataset,
+    /// Not a dataset's name.
+    #[error("not a dataset name: {0}")]
+    NotDataset(String),
+    /// A property the editor does not offer, or a value it would not send.
+    #[error("not an editable property or value: {0}")]
+    Property(String),
 }
 
 /// Checks `args` against the three forms the helper runs.
@@ -71,6 +81,26 @@ pub fn check(args: &[String]) -> Result<(), Refusal> {
     let args: Vec<&str> = args.iter().map(String::as_str).collect();
     match args.as_slice() {
         ["snapshot", "-r", full] | ["snapshot" | "destroy", full] => snapshot(full).map(|_| ()),
+        ["inherit", property, dataset] => {
+            self::dataset(dataset)?;
+            if crate::edit::EDITABLE.contains(property) {
+                Ok(())
+            } else {
+                Err(Refusal::Property((*property).to_owned()))
+            }
+        }
+        ["set", assignments @ .., dataset] if !assignments.is_empty() => {
+            self::dataset(dataset)?;
+            for assignment in assignments {
+                let ok = assignment.split_once('=').is_some_and(|(p, v)| {
+                    crate::edit::EDITABLE.contains(&p) && crate::edit::value_ok(p, v)
+                });
+                if !ok {
+                    return Err(Refusal::Property((*assignment).to_owned()));
+                }
+            }
+            Ok(())
+        }
         ["rename", old, new] => {
             let (from, _) = snapshot(old)?;
             let (to, _) = snapshot(new)?;
@@ -92,6 +122,15 @@ fn snapshot(full: &str) -> Result<(&str, &str), Refusal> {
         return Err(bad());
     }
     Ok((dataset, name))
+}
+
+/// Checks a dataset's name for the property commands.
+fn dataset(name: &str) -> Result<(), Refusal> {
+    if dataset_ok(name) {
+        Ok(())
+    } else {
+        Err(Refusal::NotDataset(name.to_owned()))
+    }
 }
 
 /// Whether `dataset` is a dataset name: components of letters, digits and
@@ -218,7 +257,6 @@ mod tests {
             &["destroy", "tank/home@a", "tank/home@b"],
             &["snapshot", "-o", "x=y", "tank/home@a"],
             &["rollback", "tank/home@a"],
-            &["set", "compression=zstd", "tank/home"],
             &["list"],
         ] {
             assert_eq!(check(&args(bad)), Err(Refusal::Usage), "{bad:?}");
@@ -235,6 +273,60 @@ mod tests {
                 "{bad:?}"
             );
         }
+    }
+
+    #[test]
+    fn the_property_commands_pass_for_the_editable_properties() {
+        for ok in [
+            &["set", "compression=zstd", "tank/home"][..],
+            &[
+                "set",
+                "compression=zstd-3",
+                "quota=53687091200",
+                "atime=off",
+                "tank/home",
+            ],
+            &["set", "quota=none", "refquota=50G", "tank/home"],
+            &["set", "recordsize=1M", "copies=2", "tank"],
+            &["inherit", "atime", "tank/home"],
+        ] {
+            assert_eq!(check(&args(ok)), Ok(()), "{ok:?}");
+        }
+    }
+
+    #[test]
+    fn other_properties_and_values_are_refused() {
+        for bad in [
+            &["set", "mountpoint=/x", "tank/home"][..],
+            &["set", "readonly=on", "tank/home"],
+            &["set", "compression=zstd", "dedup=on", "tank/home"],
+            &["set", "copies=4", "tank/home"],
+            &["set", "atime=maybe", "tank/home"],
+            &["set", "quota=fifty", "tank/home"],
+            &["set", "compression=-o", "tank/home"],
+            &["set", "compression", "tank/home"],
+            &["inherit", "mountpoint", "tank/home"],
+        ] {
+            assert!(
+                matches!(check(&args(bad)), Err(Refusal::Property(_))),
+                "{bad:?}"
+            );
+        }
+        for bad in [
+            &["set", "compression=zstd", "tank/home@a"][..],
+            &["inherit", "atime", "-r"],
+            &["set", "atime=on", "tank//home"],
+        ] {
+            assert!(
+                matches!(check(&args(bad)), Err(Refusal::NotDataset(_))),
+                "{bad:?}"
+            );
+        }
+        assert_eq!(check(&args(&["set", "tank/home"])), Err(Refusal::Usage));
+        assert_eq!(
+            check(&args(&["inherit", "-r", "atime", "tank/home"])),
+            Err(Refusal::Usage)
+        );
     }
 
     #[test]

@@ -17,7 +17,7 @@ use crate::manage::{Create, Destroy, Rename};
 use crate::provider::{dataset_location, snapshot_location};
 
 /// Where the tests say the privileged helper is.
-const HELPER: &str = "/opt/rick/rick-zfs";
+pub(super) const HELPER: &str = "/opt/rick/rick-zfs";
 
 const DENIED: &str = "cannot create snapshot 'tank/home@x': permission denied\n";
 
@@ -37,7 +37,7 @@ impl Elevate for Prompt {
     }
 }
 
-fn shared(fx: &Fixture, elevate: Option<Arc<dyn Elevate>>) -> Arc<Shared> {
+pub(super) fn shared(fx: &Fixture, elevate: Option<Arc<dyn Elevate>>) -> Arc<Shared> {
     Arc::new(Shared {
         datasets: Arc::clone(&fx.datasets),
         platform: None,
@@ -46,12 +46,15 @@ fn shared(fx: &Fixture, elevate: Option<Arc<dyn Elevate>>) -> Arc<Shared> {
     })
 }
 
-fn fake() -> Arc<Fake> {
+pub(super) fn fake() -> Arc<Fake> {
     Arc::new(Fake::new().unwrap_or_else(|e| panic!("{e}")))
 }
 
 /// Waits for the job `id` to end.
-fn finish(events: &mut UnboundedReceiver<JobEvent>, id: Option<JobId>) -> Result<(), Error> {
+pub(super) fn finish(
+    events: &mut UnboundedReceiver<JobEvent>,
+    id: Option<JobId>,
+) -> Result<(), Error> {
     runtime::block_on(async {
         loop {
             match tokio::time::timeout(Duration::from_secs(30), events.recv()).await {
@@ -137,7 +140,7 @@ fn with_name(name: &str) -> Scripted {
     ui
 }
 
-fn message(result: &Result<(), Error>) -> String {
+pub(super) fn message(result: &Result<(), Error>) -> String {
     result
         .as_ref()
         .err()

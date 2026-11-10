@@ -312,5 +312,6 @@ pub fn all(shared: &Arc<Shared>) -> Vec<Arc<dyn Action>> {
         Arc::new(crate::manage::Create(Arc::clone(shared))),
         Arc::new(crate::manage::Rename(Arc::clone(shared))),
         Arc::new(crate::manage::Destroy(Arc::clone(shared))),
+        Arc::new(crate::edit::EditProperties(Arc::clone(shared))),
     ]
 }

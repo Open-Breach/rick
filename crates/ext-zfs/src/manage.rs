@@ -60,18 +60,62 @@ fn refused(text: String) -> Error {
 /// What a batch of management commands works on.
 #[derive(Debug, Clone)]
 pub struct Batch {
-    /// The dataset whose snapshot list the commands change.
+    /// The dataset whose snapshot list or properties the commands change.
     pub dataset: String,
     /// The commands, each `zfs` arguments.
     pub commands: Vec<Vec<String>>,
+    /// Whether the commands depend on each other's order: the batch stops
+    /// at the first failure, and a refusal hands that command and every
+    /// one after it to the elevated run (property changes). Otherwise each
+    /// command runs on its own (one destroy per snapshot).
+    pub ordered: bool,
 }
 
 impl Batch {
+    /// A batch of independent commands.
+    #[must_use]
+    pub fn new(dataset: String, commands: Vec<Vec<String>>) -> Self {
+        Self {
+            dataset,
+            commands,
+            ordered: false,
+        }
+    }
+
+    /// A batch whose commands run in order, stopping at the first failure.
+    #[must_use]
+    pub fn ordered(dataset: String, commands: Vec<Vec<String>>) -> Self {
+        Self {
+            dataset,
+            commands,
+            ordered: true,
+        }
+    }
+
     fn verb(&self) -> &str {
         self.commands
             .first()
             .and_then(|c| c.first())
             .map_or("", String::as_str)
+    }
+
+    /// The `zfs allow` permissions the batch needs: by its verb, and for
+    /// property changes the names of the properties it sets or resets.
+    fn permissions(&self) -> String {
+        match self.verb() {
+            "set" | "inherit" => {
+                let mut names: Vec<&str> = Vec::new();
+                for command in &self.commands {
+                    for name in changed_properties(command) {
+                        if !names.contains(&name) {
+                            names.push(name);
+                        }
+                    }
+                }
+                names.join(",")
+            }
+            verb => permissions(verb).to_owned(),
+        }
     }
 
     /// The message for a refusal nobody can lift here: the permissions
@@ -81,11 +125,7 @@ impl Batch {
         t!(
             "zfs-needs-permission",
             dataset = self.dataset.clone(),
-            command = format!(
-                "zfs allow {user} {} {}",
-                permissions(self.verb()),
-                self.dataset
-            )
+            command = format!("zfs allow {user} {} {}", self.permissions(), self.dataset)
         )
     }
 }
@@ -107,9 +147,30 @@ pub enum FirstRun {
     Failed(String),
 }
 
+/// The properties a `zfs set p=v … ds` or `zfs inherit p ds` changes;
+/// empty for other commands.
+fn changed_properties(command: &[String]) -> Vec<&str> {
+    match command.first().map(String::as_str) {
+        Some("set") => command[1..command.len().saturating_sub(1)]
+            .iter()
+            .filter_map(|a| a.split_once('=').map(|(p, _)| p))
+            .collect(),
+        Some("inherit") => command.get(1).map(String::as_str).into_iter().collect(),
+        _ => Vec::new(),
+    }
+}
+
 /// The message for one failure, by its class.
 fn describe(command: &[String], error: &ZfsError) -> String {
     let name = command.last().cloned().unwrap_or_default();
+    let properties = changed_properties(command);
+    if !properties.is_empty() {
+        return t!(
+            "zfs-property-failed",
+            properties = properties.join(", "),
+            reason = error.message().to_owned()
+        );
+    }
     match error {
         ZfsError::AlreadyExists(_) if command.first().is_some_and(|v| v == "snapshot") => {
             t!("zfs-snapshot-exists", name = name)
@@ -125,7 +186,7 @@ fn describe(command: &[String], error: &ZfsError) -> String {
 pub fn run_first(datasets: &Datasets, batch: &Batch) -> FirstRun {
     let mut denied = Vec::new();
     let mut failed = String::new();
-    for command in &batch.commands {
+    for (i, command) in batch.commands.iter().enumerate() {
         let outcome = datasets
             .zfs()
             .run(command)
@@ -133,9 +194,16 @@ pub fn run_first(datasets: &Datasets, batch: &Batch) -> FirstRun {
             .and_then(classify);
         match outcome {
             Ok(_) => {}
+            Err(ZfsError::PermissionDenied(_)) if batch.ordered => {
+                denied.extend(batch.commands[i..].iter().cloned());
+                break;
+            }
             Err(ZfsError::PermissionDenied(_)) => denied.push(command.clone()),
             Err(error) => {
                 let _ = writeln!(failed, "{}", describe(command, &error));
+                if batch.ordered {
+                    break;
+                }
             }
         }
     }
@@ -186,6 +254,9 @@ pub fn run_elevated(
                         let _ = writeln!(failed, "{}", describe(command, &error));
                     }
                 }
+                if batch.ordered && (denied || !failed.is_empty()) {
+                    break;
+                }
             }
             Err(Error::PermissionDenied) => {
                 denied = true;
@@ -234,6 +305,7 @@ pub fn spawn(shared: &Arc<Shared>, jobs: &JobRunner, name: String, batch: Batch)
                 let denied = Batch {
                     dataset: batch.dataset.clone(),
                     commands,
+                    ordered: batch.ordered,
                 };
                 let (Some(elevate), Some(program)) =
                     (shared.elevate.clone(), shared.helper.clone())
@@ -398,10 +470,7 @@ impl Action for Create {
             &self.0,
             jobs,
             t!("zfs-creating", name = full),
-            Batch {
-                dataset,
-                commands: vec![command],
-            },
+            Batch::new(dataset, vec![command]),
         ))
     }
 }
@@ -473,10 +542,7 @@ impl Action for Rename {
             &self.0,
             jobs,
             t!("zfs-renaming", name = format!("{dataset}@{old}")),
-            Batch {
-                dataset,
-                commands: vec![command],
-            },
+            Batch::new(dataset, vec![command]),
         ))
     }
 }
@@ -538,7 +604,7 @@ impl Action for Destroy {
             &self.0,
             jobs,
             t!("zfs-destroying", count = full.len()),
-            Batch { dataset, commands },
+            Batch::new(dataset, commands),
         ))
     }
 }

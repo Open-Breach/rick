@@ -135,6 +135,14 @@ pub fn get_args(properties: &[&str], dataset: &str) -> Vec<String> {
 /// the order of [`PROPERTIES`]; `-` values and unknown names are dropped.
 #[must_use]
 pub fn parse(output: &str) -> Vec<Property> {
+    parse_named(output, &PROPERTIES)
+}
+
+/// The properties of `names` in `zfs get -H -p -o property,value,source`
+/// output, in the order of `names`; `-` values and other names are
+/// dropped.
+#[must_use]
+pub fn parse_named(output: &str, names: &[&str]) -> Vec<Property> {
     let mut read: Vec<Property> = output
         .lines()
         .filter_map(|line| {
@@ -145,14 +153,14 @@ pub fn parse(output: &str) -> Vec<Property> {
                 tracing::debug!(line, "zfs get: malformed line skipped");
                 return None;
             };
-            (value != "-" && PROPERTIES.contains(&name)).then(|| Property {
+            (value != "-" && names.contains(&name)).then(|| Property {
                 name: name.to_owned(),
                 value: value.to_owned(),
                 source: Source::parse(source),
             })
         })
         .collect();
-    read.sort_by_key(|p| PROPERTIES.iter().position(|n| *n == p.name));
+    read.sort_by_key(|p| names.iter().position(|n| *n == p.name));
     read
 }
 
