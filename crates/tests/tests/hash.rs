@@ -651,3 +651,166 @@ fn rows_fit_their_values(harness: &egui_kittest::Harness<'_, RickUi>, digests: &
         );
     }
 }
+
+/// A shell on `start` with `extensions` loaded, settled.
+fn shell(
+    start: Location,
+    extensions: Vec<Arc<dyn Extension>>,
+) -> egui_kittest::Harness<'static, RickUi> {
+    let fake = Arc::new(Fake::new().unwrap_or_else(|e| panic!("{e}")));
+    let host = Arc::new(EguiHost::new());
+    let app = App::new(Config {
+        platform: fake.clone(),
+        ui: host.clone(),
+        extensions,
+        config_dir: Some(fake.config_dir()),
+        start: Some(start),
+    });
+    let mut harness = egui_kittest::Harness::builder()
+        .with_size(egui::vec2(1400.0, 900.0))
+        .with_step_dt(0.05)
+        .build_eframe(move |cc| RickUi::new(app, host, &cc.egui_ctx));
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while harness.state().app().is_busy() {
+        harness.step();
+        assert!(Instant::now() < deadline);
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    harness.step();
+    harness
+}
+
+/// Selects `name` in the focused pane and opens the hash dialogue on it.
+fn open_hashes(harness: &mut egui_kittest::Harness<'_, RickUi>, name: &str) {
+    let pane = harness.state().app().model().focused;
+    let id = harness
+        .state()
+        .app()
+        .model()
+        .active_tab(pane)
+        .and_then(|(_, tab)| tab.listing.rows().find(|e| e.name == name))
+        .map_or_else(|| panic!("{name} is not listed"), |e| e.id);
+    harness.state_mut().app_mut().handle(
+        Command::Select {
+            pane,
+            change: SelectionChange::Set(vec![id]),
+        },
+        &mut Vec::new(),
+    );
+    harness.step();
+    harness
+        .state_mut()
+        .queue(Intent::Action(ActionId("core.hash")), pane);
+    harness.step();
+    harness.step();
+    assert!(harness.state().hash_dialog().is_open());
+}
+
+fn steps(harness: &mut egui_kittest::Harness<'_, RickUi>) {
+    for _ in 0..4 {
+        harness.step();
+    }
+}
+
+/// Issue 177: Escape closes the dialogue while its Verify field has the
+/// focus, which it has when the dialogue opens; and the list behind the
+/// dialogue gets none of its keys — not Escape, and not Delete.
+#[test]
+fn escape_closes_the_dialogue_and_the_list_behind_it_gets_no_keys() {
+    let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+    fs::write(dir.path().join("notes.txt"), noise(4_000, 9)).unwrap_or_else(|e| panic!("{e}"));
+    let mut harness = shell(local(dir.path()), Vec::new());
+
+    // As it opens, the Verify field focused: one Escape closes it.
+    open_hashes(&mut harness, "notes.txt");
+    steps(&mut harness);
+    harness.key_press(egui::Key::Escape);
+    steps(&mut harness);
+    assert!(
+        !harness.state().hash_dialog().is_open(),
+        "Escape closes the dialogue with the field focused"
+    );
+
+    // Open again, and take the focus off the field with a click on the
+    // title. The keys are still the dialogue's: nothing reaches the list.
+    open_hashes(&mut harness, "notes.txt");
+    steps(&mut harness);
+    harness.get_by_label("File hashes").click();
+    steps(&mut harness);
+    harness.state_mut().clear_dispatched();
+    harness.key_press(egui::Key::Delete);
+    harness.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+    harness.event(egui::Event::Text("no".to_owned()));
+    steps(&mut harness);
+    assert_eq!(
+        harness
+            .state()
+            .dispatched()
+            .iter()
+            .map(|d| d.intent)
+            .collect::<Vec<_>>(),
+        Vec::new(),
+        "no key of the dialogue's is the list's"
+    );
+    let model = harness.state().app().model();
+    let filter = model
+        .active_tab(model.focused)
+        .map(|(_, tab)| tab.filter.clone());
+    assert_eq!(filter.as_deref(), Some(""), "and no typing filters it");
+    assert!(dir.path().join("notes.txt").exists());
+    assert!(harness.state().hash_dialog().is_open());
+
+    // And Escape closes it from there too.
+    harness.key_press(egui::Key::Escape);
+    steps(&mut harness);
+    assert!(!harness.state().hash_dialog().is_open());
+}
+
+/// Issue 177: while the hashes are still being computed, Escape is Cancel
+/// — the job stops with the dialogue and stores nothing.
+#[test]
+fn escape_while_the_hashes_are_computed_cancels_the_job() {
+    let bytes = noise(3 * hash::CHUNK, 5);
+    let mem = Arc::new(MemProvider::new(ProviderId("mem"), Duration::ZERO));
+    mem.file("/data/blob.bin", &bytes);
+    let ext: Arc<dyn Extension> = Arc::new(MemExtension::new(Arc::clone(&mem)));
+    let mut harness = shell(Location::new(ProviderId("mem"), "/data"), vec![ext]);
+    // The read stops part of the way in, as on a slow link.
+    mem.hold_reads_at(1024);
+    open_hashes(&mut harness, "blob.bin");
+    steps(&mut harness);
+    let hashes = harness
+        .state()
+        .hash_dialog()
+        .hashes()
+        .cloned()
+        .unwrap_or_else(|| panic!("no slot"));
+    let id = hashes.job().unwrap_or_else(|| panic!("the job's id"));
+    assert!(!hashes.is_complete(), "the job is held");
+    harness.get_by_role_and_label(egui::accesskit::Role::Button, "Cancel");
+
+    harness.key_press(egui::Key::Escape);
+    steps(&mut harness);
+    assert!(!harness.state().hash_dialog().is_open());
+    // The link comes back: the job ends cancelled, not done.
+    mem.release_reads();
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while harness.state().app().is_busy() {
+        harness.step();
+        assert!(Instant::now() < deadline, "the job did not end");
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    steps(&mut harness);
+    assert!(hashes.result(0).is_none(), "nothing is stored");
+    let state = harness
+        .state()
+        .app()
+        .model()
+        .jobs
+        .get(&id)
+        .map(|j| j.state.clone());
+    assert!(
+        matches!(state, None | Some(JobState::Cancelled)),
+        "cancelled, not done: {state:?}"
+    );
+}
