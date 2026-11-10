@@ -3728,3 +3728,49 @@ Once answered, an entry keeps its number and gains a dated decision line.
     the test accessor `inspector_open` means shown; whether a start with a
     path should instead carry the Preview tab over into the new workspace
     is open.
+
+318. (0.3.0 release, 2026-11-10) SPEC.md's *Version 0.3* says the two
+    tracks "ship in one release", and the integration track has ten
+    milestones (specs/system-integration.md §12). Milestones 1 and 3 are
+    merged; 2 and 4 to 10 are not: clipboard interoperability, the Windows
+    and macOS integration items, notifications and progress, signing and
+    plugin security, and the three distribution channels. Serge asked for
+    the release on 2026-11-10 with `main` as it stood, and issues 139 and
+    149 start "once 0.3.0 is tagged".
+    Assumed: 0.3.0 ships what is merged and the remaining milestones move
+    to a later release. SPEC.md is not edited: its scope chapter, §12 of
+    the integration spec and a "Released" paragraph like 0.1's are Serge's
+    to write. The README says what is not in the release yet.
+
+319. (0.3.0 release, 2026-11-10) The date of CHANGELOG.md's release
+    heading, as question 213 for 0.2.0.
+    Assumed: `## [0.3.0] - 2026-11-10`, the day of preparation, unless the
+    tag is made on a later day and Serge asks for that day.
+
+320. (0.3.0 release, 2026-11-10) The Unreleased section had no line for
+    the About dialog (issue 101, #105, #107, #109) and none for the fixes
+    the first tier 2 runs of the batch brought (#144, #145, #146, #148),
+    and the section is the release body and the text of *What's new*.
+    Assumed: the lines are added with the release, written from the pull
+    requests' own descriptions, and the section gets the one-paragraph
+    summary of question 214. The pull requests that changed tests, CI or
+    specs alone (#143, #147, #150, #151 among them) get no line.
+
+321. (0.3.0 release, 2026-11-10) After the version bump `0.3.0-dev` is
+    still named in the fixtures of `ui_egui::about` and
+    `ui_egui::licences`, of `crates/tests/tests/about.rs` and
+    `screenshots.rs`, in the changelog's own line and in questions 223 and
+    the About dialog's.
+    Assumed: all are example data or records and stay, as question 216;
+    the unit test that reads the repository's changelog asks for the
+    section of a `-dev` version, which is still Unreleased.
+
+322. (0.3.0 release, 2026-11-10) The README said the archives are "not
+    signed or notarised yet (planned for 0.3)" and unpacked the macOS
+    archive with `tar` into a folder with a `rick` binary; BENCHMARKS.md
+    describes the benchmarks of 0.2.
+    Assumed: the parenthesis goes, since signing is milestones 7, 9 and
+    10 and no version is promised in its place; the macOS lines unpack
+    the zip with `ditto` and open `Rick.app`, as the release workflow's
+    smoke test does; BENCHMARKS.md stays, the `bench` workflow measuring
+    again on the tag.
