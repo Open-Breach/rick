@@ -1,10 +1,11 @@
 //! *Git clone…*: the one action of the group that is offered outside a
 //! work tree. On the empty area of a pane it clones into the folder the
 //! pane shows, on a folder into that folder. It asks for the repository's
-//! URL in a form, prefilled from the clipboard when that holds a Git URL,
-//! and runs `git clone <url>` in the target folder as a job: git names the
-//! new folder as it always does, its progress lines are the job's
-//! progress, and cancelling the job stops git.
+//! URL in a form, prefilled from the clipboard when that holds a Git URL
+//! or the path of a local repository, and runs `git clone <url>` in the
+//! target folder as a job: git names the new folder as it always does,
+//! its progress lines are the job's progress, and cancelling the job stops
+//! git.
 
 use std::collections::VecDeque;
 use std::io::Read as _;
@@ -48,29 +49,56 @@ const REMOVE_TRIES: usize = 10;
 const CREATES_WIDTH: usize = 44;
 /// The characters of a depth that is not one, shown before what is wrong.
 const DEPTH_WIDTH: usize = 6;
+/// The characters of a text that is no repository, shown before that.
+const REFUSED_WIDTH: usize = 12;
 
-/// Whether `text` is a Git URL the dialogue takes: `https://…`, `ssh://…`
-/// or `git://…` with a host and a path, or the scp-like `user@host:path` —
-/// and in each case one whose last segment names the folder to create
-/// ([`repo_name`]). Anything else git might accept (a local path, another
-/// transport) is not a URL here, so the clipboard prefills the field with
-/// nothing that only looks like one.
+/// The local folder `text` names when it is an absolute path: a rooted
+/// one, or on Windows one with its drive or share.
+fn absolute(text: &str) -> Option<&Path> {
+    let path = Path::new(text);
+    path.is_absolute().then_some(path)
+}
+
+/// Whether the folder at `path` is a Git repository, a work tree or a bare
+/// one: what `git clone <path>` clones from.
+fn is_repository(path: &Path) -> bool {
+    path.is_dir() && gix::open(path).is_ok()
+}
+
+/// Whether `text` is something the dialogue clones from. That is a Git
+/// URL — `https://…`, `ssh://…` or `git://…` with a host and a path,
+/// `file://…` with a path, or the scp-like `user@host:path` — or a local
+/// repository by its absolute path, and in each case one whose last
+/// segment names the folder to create ([`repo_name`]).
+///
+/// A URL is taken by its shape. A local path is taken when a repository is
+/// there: paths are on the clipboard all the time, and the field opens
+/// with the clipboard's text only when this holds. Nothing else is taken:
+/// not `http://`, not a relative path, not another transport.
 #[must_use]
 pub fn is_git_url(text: &str) -> bool {
-    if text.is_empty() || text.chars().any(|c| c.is_whitespace() || c.is_control()) {
+    if text.is_empty() || text.chars().any(char::is_control) {
+        return false;
+    }
+    if let Some(folder) = absolute(text) {
+        return repo_name(text).is_some() && is_repository(folder);
+    }
+    if text.chars().any(char::is_whitespace) {
         return false;
     }
     let host = |host: &str| !host.is_empty() && !host.starts_with('-');
     let path = |path: &str| !path.trim_matches('/').is_empty();
+    let is = |scheme: &str, known: &[&str]| known.iter().any(|k| scheme.eq_ignore_ascii_case(k));
     let shaped = match text.split_once("://") {
-        Some((scheme, rest)) => {
-            ["https", "ssh", "git"]
-                .iter()
-                .any(|known| scheme.eq_ignore_ascii_case(known))
-                && rest
-                    .split_once('/')
-                    .is_some_and(|(authority, rest)| host(authority) && path(rest))
-        }
+        Some((scheme, rest)) => rest.split_once('/').is_some_and(|(authority, rest)| {
+            // A `file://` URL needs no host before its path.
+            let named = if is(scheme, &["file"]) {
+                !authority.starts_with('-')
+            } else {
+                is(scheme, &["https", "ssh", "git"]) && host(authority)
+            };
+            named && path(rest)
+        }),
         None => text.split_once(':').is_some_and(|(login, rest)| {
             !login.contains('/')
                 && !login.starts_with('-')
@@ -84,10 +112,21 @@ pub fn is_git_url(text: &str) -> bool {
 }
 
 /// The folder `git clone <url>` creates: the last segment of the URL's
-/// path without a trailing `.git`, as git derives it. `None` when the URL
-/// has no such segment.
+/// path, or of the local path, without a trailing `.git`, as git derives
+/// it. `None` when there is no such segment.
 #[must_use]
 pub fn repo_name(url: &str) -> Option<String> {
+    if let Some(folder) = absolute(url) {
+        // `…/rick/.git` is the repository `rick`.
+        let named = if folder.file_name().is_some_and(|name| name == ".git") {
+            folder.parent()?
+        } else {
+            folder
+        };
+        let name = named.file_name()?.to_str()?;
+        let name = name.strip_suffix(".git").unwrap_or(name);
+        return (!name.is_empty()).then(|| name.to_owned());
+    }
     let mut rest = url.trim_end_matches('/');
     if let Some(stem) = rest.strip_suffix("/.git") {
         rest = stem.trim_end_matches('/');
@@ -402,7 +441,7 @@ fn preview(target: &Path, values: &Values) -> Vec<PreviewRow> {
         },
         None => PreviewRow {
             from: t!("git-clone-creates"),
-            to: elided(url, CREATES_WIDTH / 2),
+            to: elided(url, REFUSED_WIDTH),
             problem: Some(t!("git-clone-not-a-git-url")),
         },
     }];
@@ -489,8 +528,8 @@ fn target_of(ctx: &ActionCtx) -> Target {
 pub struct CloneRepository(pub Arc<Shared>);
 
 impl CloneRepository {
-    /// The clipboard's text when it is a Git URL: what the field opens
-    /// with.
+    /// The clipboard's text when it is a Git URL or a local repository's
+    /// path: what the field opens with.
     fn clipboard_url(&self) -> Option<String> {
         let text = self.0.platform.as_ref()?.text().ok().flatten()?;
         let text = text.trim();

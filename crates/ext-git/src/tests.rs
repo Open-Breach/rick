@@ -592,7 +592,7 @@ fn log_and_blame_show_text() {
 }
 
 #[test]
-fn a_git_url_is_one_of_the_four_forms_and_nothing_else() {
+fn a_git_url_is_one_of_the_forms_and_nothing_else() {
     for url in [
         "https://github.com/Open-Breach/rick.git",
         "https://github.com/Open-Breach/rick",
@@ -601,6 +601,9 @@ fn a_git_url_is_one_of_the_four_forms_and_nothing_else() {
         "git://example.com/repo.git",
         "git@github.com:Open-Breach/rick.git",
         "deploy@build.example.com:repo",
+        "file:///srv/git/repo.git",
+        "file:///C:/work/repo",
+        "file://fileserver/share/repo.git",
     ] {
         assert!(clone::is_git_url(url), "{url}");
     }
@@ -611,11 +614,10 @@ fn a_git_url_is_one_of_the_four_forms_and_nothing_else() {
         "https://github.com/",
         "https:///rick.git",
         "http://example.com/repo.git",
-        "file:///srv/repo.git",
+        "file://",
+        "file:///",
         "ext::sh -c id",
         "ext::sh://x/y",
-        "/srv/git/repo.git",
-        "C:/work/repo",
         "serge@example.com",
         "git@github.com:",
         "-oProxyCommand=id@host:repo",
@@ -623,9 +625,50 @@ fn a_git_url_is_one_of_the_four_forms_and_nothing_else() {
         "see https://github.com/Open-Breach/rick.git",
         "https://github.com/Open-Breach/rick.git\nand more",
         "git clone https://github.com/Open-Breach/rick.git",
+        // Paths that are not absolute, or that lead to nothing.
+        "work",
+        "./work",
+        "../origin.git",
+        "~/work",
+        "/no/such/folder/repo.git",
     ] {
         assert!(!clone::is_git_url(text), "{text:?}");
     }
+}
+
+#[test]
+fn a_local_path_is_taken_when_a_repository_is_there() {
+    let (dir, work) = repo();
+    // A work tree, its `.git`, a bare repository, and one whose path has a
+    // space in it.
+    let spaced = dir.path().join("my projects");
+    fs::create_dir(&spaced).unwrap_or_else(|e| panic!("{e}"));
+    git(&spaced, &["clone", "-q", "../origin.git", "the tool"]);
+    for (path, name) in [
+        (work.clone(), "work"),
+        (work.join(".git"), "work"),
+        (dir.path().join("origin.git"), "origin"),
+        (spaced.join("the tool"), "the tool"),
+    ] {
+        let text = path.to_string_lossy();
+        assert!(clone::is_git_url(&text), "{text}");
+        assert_eq!(clone::repo_name(&text).as_deref(), Some(name), "{text}");
+    }
+    // A folder that is no repository, a folder inside one, a file, and a
+    // path that leads nowhere.
+    for path in [
+        dir.path().to_path_buf(),
+        spaced,
+        work.join("sub"),
+        work.join("tracked.txt"),
+        dir.path().join("gone.git"),
+    ] {
+        let text = path.to_string_lossy();
+        assert!(!clone::is_git_url(&text), "{text}");
+    }
+    // The same repositories by a path that is not absolute.
+    assert!(!clone::is_git_url("origin.git"));
+    assert!(!clone::is_git_url("work/.git"));
 }
 
 #[test]
@@ -639,6 +682,8 @@ fn the_new_folder_is_named_as_git_names_it() {
         ("git@github.com:Open-Breach/rick.git", "rick"),
         ("git@example.com:repo.git", "repo"),
         ("git://example.com/a.b.git", "a.b"),
+        ("file:///srv/git/repo.git", "repo"),
+        ("file:///C:/work/repo", "repo"),
     ] {
         assert_eq!(clone::repo_name(url).as_deref(), Some(name), "{url}");
     }
@@ -735,21 +780,41 @@ fn the_dialogue_opens_with_a_git_url_from_the_clipboard_and_blank_otherwise() {
         clone_form(&h, ctx(dir.path(), &[])).defaults().text("url"),
         ""
     );
+    // A repository and a plain folder beside it, for the paths.
+    let local = dir.path().join("local");
+    fs::create_dir(&local).unwrap_or_else(|e| panic!("{e}"));
+    git(&local, &["init", "-q", "-b", "main"]);
+    let plain = dir.path().join("plain");
+    fs::create_dir(&plain).unwrap_or_else(|e| panic!("{e}"));
+    fs::write(plain.join("notes.txt"), "notes").unwrap_or_else(|e| panic!("{e}"));
+    let path_of = |path: &Path| path.to_string_lossy().into_owned();
     for (clipboard, field) in [
         (
-            "https://github.com/Open-Breach/rick.git",
-            "https://github.com/Open-Breach/rick.git",
+            "https://github.com/Open-Breach/rick.git".to_owned(),
+            "https://github.com/Open-Breach/rick.git".to_owned(),
         ),
         // Copied with the line's end.
         (
-            "  git@github.com:Open-Breach/rick.git\n",
-            "git@github.com:Open-Breach/rick.git",
+            "  git@github.com:Open-Breach/rick.git\n".to_owned(),
+            "git@github.com:Open-Breach/rick.git".to_owned(),
         ),
-        ("just some text", ""),
-        ("/home/serge/notes.txt", ""),
-        ("git clone https://github.com/Open-Breach/rick.git", ""),
+        (
+            "file:///srv/git/rick.git".to_owned(),
+            "file:///srv/git/rick.git".to_owned(),
+        ),
+        // A local repository's path, and paths that are none.
+        (format!("{}\n", path_of(&local)), path_of(&local)),
+        (path_of(&plain), String::new()),
+        (path_of(&plain.join("notes.txt")), String::new()),
+        (path_of(&dir.path().join("gone")), String::new()),
+        ("http://example.com/rick.git".to_owned(), String::new()),
+        ("just some text".to_owned(), String::new()),
+        (
+            "git clone https://github.com/Open-Breach/rick.git".to_owned(),
+            String::new(),
+        ),
     ] {
-        fake.set_text(clipboard).unwrap_or_else(|e| panic!("{e}"));
+        fake.set_text(&clipboard).unwrap_or_else(|e| panic!("{e}"));
         let form = clone_form(&h, ctx(dir.path(), &[]));
         assert_eq!(form.defaults().text("url"), field, "{clipboard:?}");
     }
@@ -854,6 +919,9 @@ fn what_the_dialogue_would_not_confirm_starts_no_clone() {
         ("", "", false),
         ("not a url", "", true),
         ("ext::sh -c id", "", true),
+        ("http://example.com/team/tool.git", "", true),
+        ("../tool", "", true),
+        ("/no/such/folder/tool.git", "", true),
         ("https://example.com/team/tool.git", "many", true),
     ] {
         let h = harness();
@@ -934,6 +1002,36 @@ fn a_clone_creates_the_repositorys_folder_in_the_target_as_git_clone_does() {
     assert_eq!(
         git(&cloned, &["remote", "get-url", "origin"]),
         git(&plain.join("origin"), &["remote", "get-url", "origin"])
+    );
+}
+
+#[test]
+fn a_local_repository_is_cloned_from_its_path_through_the_action() {
+    let (dir, work) = repo();
+    let h = harness();
+    let into = dir.path().join("into");
+    fs::create_dir(&into).unwrap_or_else(|e| panic!("{e}"));
+    // The bare origin by its path, typed with white space around it, into
+    // the folder the pane shows; then the work tree into a folder selected.
+    let origin = dir.path().join("origin.git");
+    h.ui.type_text("url", &format!(" {} ", origin.display()));
+    let outcome = h.run("git.clone", ctx(&into, &[]));
+    assert!(matches!(outcome, ActionOutcome::Started(_)), "{outcome:?}");
+    assert_eq!(
+        fs::read_to_string(into.join("origin/tracked.txt"))
+            .ok()
+            .as_deref(),
+        Some("one\n")
+    );
+    let nested = into.join("nested");
+    fs::create_dir(&nested).unwrap_or_else(|e| panic!("{e}"));
+    let h = harness();
+    h.ui.type_text("url", &work.to_string_lossy());
+    h.run("git.clone", ctx(&into, &[&nested]));
+    assert!(nested.join("work/.git").is_dir());
+    assert_eq!(
+        git(&nested.join("work"), &["rev-parse", "HEAD"]),
+        git(&work, &["rev-parse", "HEAD"])
     );
 }
 
