@@ -344,6 +344,21 @@ pub struct History {
     pub forward: Vec<HistoryEntry>,
 }
 
+/// A remote location that stopped answering (SPEC.md *Removed and
+/// unreachable locations*): what the pane shows in place of the list, as
+/// the File info card with *Retry*, while its tab stays where it is.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConnectionLost {
+    /// The account or the host the connection was to.
+    pub source: String,
+    /// The provider's name, as its connections are titled.
+    pub provider: String,
+    /// What the provider said.
+    pub message: String,
+    /// How many times Rick has tried again by itself so far.
+    pub retries: u8,
+}
+
 /// One tab: a location and everything shown for it. An explorer shows the
 /// location's entries; the preview tab carries a location for form's sake
 /// and lists nothing.
@@ -397,6 +412,10 @@ pub struct Tab {
     /// *Retry* over the empty list (a connection that failed, a folder that
     /// refused); cleared by the next listing that works.
     pub failure: Option<String>,
+    /// The connection the location is on was lost: the pane shows the card
+    /// with *Retry* in place of the list. Cleared by the next listing that
+    /// works and by a navigation.
+    pub lost: Option<ConnectionLost>,
     /// The title of a console or compare tab, as the action named it; the
     /// other kinds are titled from their location.
     pub title: Option<String>,
@@ -427,6 +446,7 @@ impl Tab {
             columns: BTreeMap::new(),
             note: None,
             failure: None,
+            lost: None,
             title: None,
         }
     }
@@ -534,6 +554,7 @@ impl Tab {
         self.tree.clear();
         self.scroll = 0.0;
         self.note = None;
+        self.lost = None;
     }
 
     /// The view specification this tab's listing follows.
@@ -798,6 +819,9 @@ pub struct Model {
     pub places: Places,
     /// The mounted volumes: the machine's drives and the network mounts.
     pub volumes: Vec<Volume>,
+    /// Whether the system has a tool of its own for formatting a drive:
+    /// without one the side panel's *Format…* is disabled.
+    pub format_tool: bool,
     /// The cloud providers mounted, sorted; the Cloud section shows while
     /// there is one.
     pub cloud_providers: Vec<ProviderId>,
@@ -854,6 +878,7 @@ impl Model {
             questions: Vec::new(),
             places: Places::default(),
             volumes: Vec::new(),
+            format_tool: false,
             cloud_providers: Vec::new(),
             cloud: Vec::new(),
             network_providers: Vec::new(),
@@ -2379,6 +2404,44 @@ impl Model {
             }
             None => false,
         }
+    }
+
+    /// Records that the connection of the pane's active tab's location was
+    /// lost, for the card with *Retry*; `None` clears it.
+    pub fn connection_lost(&mut self, pane: PaneId, lost: Option<ConnectionLost>) -> bool {
+        match self.active_tab_mut(pane) {
+            Some((_, tab)) => {
+                tab.lost = lost;
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// Sends every explorer tab whose location `gone` names to `home`: what
+    /// happens when a medium is removed or ejected, an account or a host is
+    /// removed, or a provider is unmounted (SPEC.md *Removed and
+    /// unreachable locations*). The steps of its history that lead to such
+    /// a location go with it, so that Back never returns to what is gone.
+    /// Returns how many tabs moved.
+    pub fn evacuate(&mut self, gone: &dyn Fn(&Location) -> bool, home: &Location) -> usize {
+        let mut moved = 0;
+        for tab in self.tabs.values_mut() {
+            if !tab.kind.lists() {
+                continue;
+            }
+            tab.history.back.retain(|step| !gone(&step.location));
+            tab.history.forward.retain(|step| !gone(&step.location));
+            if gone(&tab.location) {
+                tab.location = home.clone();
+                tab.flatten = false;
+                tab.subtree = false;
+                tab.failure = None;
+                tab.leave();
+                moved += 1;
+            }
+        }
+        moved
     }
 
     /// Records why the pane's active tab's listing failed, for the banner
