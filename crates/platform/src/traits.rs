@@ -553,6 +553,17 @@ pub trait Chrome: Send + Sync {
     /// How this platform's windows are decorated when the title bar is
     /// Rick's own.
     fn window_chrome(&self) -> WindowChrome;
+
+    /// Whether the windows are X11 windows, as against Wayland ones on
+    /// Linux; `false` on every other platform. It matters for the frame
+    /// Rick draws around a window: on X11 a transparent window is blended
+    /// with the desktop only while a compositing manager runs, and its
+    /// surface offers an alpha mode whether one runs or not, so what the
+    /// surface says about transparency cannot be relied on there. Asked
+    /// before the first window exists.
+    fn on_x11(&self) -> bool {
+        false
+    }
 }
 
 /// The window a drag starts from or a drop lands in, as the windowing
