@@ -866,12 +866,73 @@ fn available<'a>(
         .collect()
 }
 
+/// Where a paste from the menu on `target` goes: into the folder the menu
+/// was opened on, when that one folder is what the menu is about; into the
+/// pane's folder on a file, on several entries and on the empty area.
+fn paste_ctx(cx: &PaneCx<'_>, action_ctx: &ActionCtx, target: Option<&Entry>) -> ActionCtx {
+    match target {
+        Some(folder)
+            if folder.kind == types::EntryKind::Dir
+                && matches!(action_ctx.selection.as_slice(), [one] if one.id == folder.id) =>
+        {
+            ActionCtx {
+                location: cx.tab.location_of(folder),
+                selection: Vec::new(),
+                ..action_ctx.clone()
+            }
+        }
+        _ => action_ctx.clone(),
+    }
+}
+
+/// The *Paste* and *Paste as link* entries (issue 176). *Paste* is always
+/// there where the folder can be written to: greyed, with the reason as its
+/// tooltip, while there is nothing to paste. *Paste as link* is hidden
+/// when it does not apply, as every other entry. Returns whether a row was
+/// drawn.
+fn paste_entry(
+    ui: &mut egui::Ui,
+    cx: &mut PaneCx<'_>,
+    into: &ActionCtx,
+    action: &dyn ext::Action,
+    start: impl FnOnce(&mut egui::Ui),
+) {
+    match action.availability(into) {
+        Availability::Enabled => {
+            start(ui);
+            action_entry(ui, cx, into, action);
+        }
+        Availability::Disabled(why) if action.id().0 == "core.paste" => {
+            start(ui);
+            let label = menu_label(action);
+            let shortcut = cx.keys.text_for(Intent::Action(action.id()));
+            let row = entry_button(
+                ui,
+                action_icon(action.id().0),
+                &label,
+                shortcut,
+                false,
+                None,
+                CONTEXT,
+            );
+            let response = ui.add_enabled(false, row);
+            let spoken = label.clone();
+            response.widget_info(|| {
+                egui::WidgetInfo::labeled(egui::WidgetType::Button, false, spoken.clone())
+            });
+            response.on_disabled_hover_text(why);
+        }
+        Availability::Disabled(_) | Availability::Hidden => {}
+    }
+}
+
 /// The context menu (SPEC.md *Context menu*): a 260 px card of groups
 /// separated by hairlines, each entry with an icon slot, its label and its
 /// shortcut, destructive entries in `status/danger`, submenus opening to
 /// the right. On `entry` the file's menu — Open, Edit, Change, the
 /// extension groups and Info — on `None` the empty area's. Entries that
-/// do not apply are hidden.
+/// do not apply are hidden; *Paste* alone is greyed while the clipboard is
+/// empty, and on a folder it pastes into that folder.
 #[allow(clippy::too_many_lines)]
 pub fn context_menu(
     ui: &mut egui::Ui,
@@ -937,6 +998,13 @@ pub fn context_menu(
                 let Some(action) = actions.iter().find(|a| a.id().0 == *id) else {
                     continue;
                 };
+                if matches!(*id, "core.paste" | "core.paste_link") {
+                    let into = paste_ctx(cx, action_ctx, entry_of);
+                    paste_entry(ui, cx, &into, &**action, |ui| {
+                        group_start(ui, &mut any, &mut shown);
+                    });
+                    continue;
+                }
                 if action.availability(action_ctx) != Availability::Enabled {
                     continue;
                 }
@@ -973,6 +1041,12 @@ pub fn context_menu(
                         let Some(action) = actions.iter().find(|a| a.id().0 == id) else {
                             continue;
                         };
+                        if id == "core.paste" {
+                            paste_entry(ui, cx, action_ctx, &**action, |ui| {
+                                group_start(ui, &mut any, &mut shown);
+                            });
+                            continue;
+                        }
                         if action.availability(action_ctx) != Availability::Enabled {
                             continue;
                         }
