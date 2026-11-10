@@ -70,6 +70,7 @@ impl TextPreview {
             manifest: Manifest {
                 id: ID,
                 name: "Text preview",
+                description: "Previews plain text in any encoding, large files included, with find.",
                 version: Version::new(0, 1, 0),
                 api_version: API_VERSION,
                 requires: Capabilities::empty(),

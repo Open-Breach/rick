@@ -158,6 +158,7 @@ impl AzureExtension {
             manifest: Manifest {
                 id: ID,
                 name: "Azure Blob",
+                description: "Browse Azure Blob Storage accounts as folders. Containers appear at the root; copy and move inside one account run server-side.",
                 version: Version::parse(env!("CARGO_PKG_VERSION"))
                     .unwrap_or_else(|_| Version::new(0, 0, 0)),
                 api_version: API_VERSION,

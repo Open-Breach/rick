@@ -111,6 +111,7 @@ impl InstallerExtension {
             manifest: Manifest {
                 id: ID,
                 name: "Installer",
+                description: "Installs a tar or zip archive as an application under ~/.local/opt, with its desktop entry, icon and commands, and updates, reverts, repairs and uninstalls it. Linux only.",
                 version: Version::parse(env!("CARGO_PKG_VERSION"))
                     .unwrap_or_else(|_| Version::new(0, 0, 0)),
                 api_version: API_VERSION,

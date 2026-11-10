@@ -68,6 +68,7 @@ impl ImagePreview {
             manifest: Manifest {
                 id: ID,
                 name: "Image preview",
+                description: "Previews images: the common raster formats with their EXIF data, and SVG drawn at the size of the pane.",
                 version: Version::new(0, 1, 0),
                 api_version: API_VERSION,
                 requires: Capabilities::empty(),

@@ -200,6 +200,7 @@ impl FixedIndex {
             manifest: Manifest {
                 id: ExtId("search-fixed"),
                 name: "Fixed index",
+                description: "",
                 version: Version::new(0, 1, 0),
                 api_version: API_VERSION,
                 requires: Capabilities::empty(),

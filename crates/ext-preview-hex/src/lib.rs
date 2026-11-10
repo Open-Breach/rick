@@ -62,6 +62,7 @@ impl HexPreview {
             manifest: Manifest {
                 id: ID,
                 name: "Hex preview",
+                description: "Shows any file as a hex dump with an ASCII column: the preview of last resort.",
                 version: Version::parse(env!("CARGO_PKG_VERSION"))
                     .unwrap_or_else(|_| Version::new(0, 0, 0)),
                 api_version: API_VERSION,

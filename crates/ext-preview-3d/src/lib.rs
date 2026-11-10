@@ -87,6 +87,7 @@ impl Preview3d {
             manifest: Manifest {
                 id: ID,
                 name: "3D model preview",
+                description: "",
                 version: Version::parse(env!("CARGO_PKG_VERSION"))
                     .unwrap_or_else(|_| Version::new(0, 0, 0)),
                 api_version: API_VERSION,

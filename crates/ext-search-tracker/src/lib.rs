@@ -73,6 +73,7 @@ impl TrackerExtension {
             manifest: Manifest {
                 id: ID,
                 name: "Tracker",
+                description: "Searches the GNOME file index (Tracker 3) from the search box.",
                 version: Version::parse(env!("CARGO_PKG_VERSION"))
                     .unwrap_or_else(|_| Version::new(0, 0, 0)),
                 api_version: API_VERSION,

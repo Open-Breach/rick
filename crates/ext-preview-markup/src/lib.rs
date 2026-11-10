@@ -153,6 +153,7 @@ impl MarkupPreview {
             manifest: Manifest {
                 id: ID,
                 name: "Markup preview",
+                description: "Shows Markdown and HTML as documents and CSV and TSV as a table, each with a switch to the source.",
                 version: Version::parse(env!("CARGO_PKG_VERSION"))
                     .unwrap_or_else(|_| Version::new(0, 0, 0)),
                 api_version: API_VERSION,

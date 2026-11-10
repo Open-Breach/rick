@@ -152,6 +152,7 @@ impl SshExtension {
             manifest: Manifest {
                 id: ID,
                 name: "SSH",
+                description: "Browses remote hosts over SSH as folders: the hosts of ~/.ssh/config and your own in the Network section, with a console on the host.",
                 version: Version::parse(env!("CARGO_PKG_VERSION"))
                     .unwrap_or_else(|_| Version::new(0, 0, 0)),
                 api_version: API_VERSION,

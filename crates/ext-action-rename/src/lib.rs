@@ -57,6 +57,7 @@ impl RenameExtension {
             manifest: Manifest {
                 id: ID,
                 name: "Bulk rename",
+                description: "Renames many files at once: a pattern with name, extension, counter and date, find and replace with regular expressions and case changes, with a live preview. One undo takes it all back.",
                 version: Version::parse(env!("CARGO_PKG_VERSION"))
                     .unwrap_or_else(|_| Version::new(0, 0, 0)),
                 api_version: API_VERSION,

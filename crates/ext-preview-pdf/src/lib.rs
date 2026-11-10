@@ -77,6 +77,7 @@ impl PdfPreview {
             manifest: Manifest {
                 id: ID,
                 name: "PDF preview",
+                description: "Previews PDF files page by page with pdfium, with find in the text.",
                 version: Version::new(0, 1, 0),
                 api_version: API_VERSION,
                 requires: Capabilities::empty(),
