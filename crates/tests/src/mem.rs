@@ -49,6 +49,17 @@ pub struct MemProvider {
     read_bytes: Arc<AtomicU64>,
     /// Every `transfer` call: the mode, the items and the target folder.
     transfers: Mutex<Vec<(TransferMode, Vec<String>, String)>>,
+    /// Where reads wait, for a test that looks at a download half way.
+    gate: Arc<Gate>,
+}
+
+/// Holds every reader at a byte position until it is opened again.
+struct Gate {
+    /// Readers stop once this many bytes of their file are handed out;
+    /// `u64::MAX` lets them run.
+    limit: AtomicU64,
+    /// The readers waiting at the gate.
+    waiting: Mutex<Vec<std::task::Waker>>,
 }
 
 impl std::fmt::Debug for MemProvider {
@@ -98,6 +109,32 @@ impl MemProvider {
             native: AtomicBool::new(false),
             read_bytes: Arc::new(AtomicU64::new(0)),
             transfers: Mutex::new(Vec::new()),
+            gate: Arc::new(Gate {
+                limit: AtomicU64::new(u64::MAX),
+                waiting: Mutex::new(Vec::new()),
+            }),
+        }
+    }
+
+    /// Makes every read stop after `bytes` of its file, as a slow link
+    /// would leave it for a while, until [`release_reads`](Self::release_reads).
+    pub fn hold_reads_at(&self, bytes: u64) {
+        self.gate.limit.store(bytes, Ordering::SeqCst);
+    }
+
+    /// Lets the reads held by [`hold_reads_at`](Self::hold_reads_at) run
+    /// to their end.
+    pub fn release_reads(&self) {
+        self.gate.limit.store(u64::MAX, Ordering::SeqCst);
+        let waiting = std::mem::take(
+            &mut *self
+                .gate
+                .waiting
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner),
+        );
+        for waker in waiting {
+            waker.wake();
         }
     }
 
@@ -246,6 +283,7 @@ impl Provider for MemProvider {
             Some(Node::File(bytes)) => Ok(Box::new(Counted {
                 inner: std::io::Cursor::new(bytes.clone()),
                 count: Arc::clone(&self.read_bytes),
+                gate: Arc::clone(&self.gate),
             })),
             Some(Node::Dir) => Err(Error::Unsupported("a folder cannot be read")),
             None => Err(Error::NotFound),
@@ -421,25 +459,77 @@ impl Provider for MemProvider {
 struct Counted {
     inner: std::io::Cursor<Vec<u8>>,
     count: Arc<AtomicU64>,
+    gate: Arc<Gate>,
 }
 
 impl tokio::io::AsyncRead for Counted {
     fn poll_read(
         mut self: Pin<&mut Self>,
-        _cx: &mut Context<'_>,
+        cx: &mut Context<'_>,
         buf: &mut tokio::io::ReadBuf<'_>,
     ) -> Poll<std::io::Result<()>> {
-        let n = std::io::Read::read(&mut self.inner, buf.initialize_unfilled())?;
+        // Up to the gate and no further while it is shut.
+        let limit = self.gate.limit.load(Ordering::SeqCst);
+        let room = limit.saturating_sub(self.inner.position());
+        let left = (self.inner.get_ref().len() as u64).saturating_sub(self.inner.position());
+        if room == 0 && left > 0 {
+            self.gate
+                .waiting
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .push(cx.waker().clone());
+            // The gate may have opened while the waker was being left.
+            if self.gate.limit.load(Ordering::SeqCst) == limit {
+                return Poll::Pending;
+            }
+        }
+        let unfilled = buf.initialize_unfilled();
+        let take = usize::try_from(room.max(1))
+            .unwrap_or(usize::MAX)
+            .min(unfilled.len());
+        let n = std::io::Read::read(&mut self.inner, &mut unfilled[..take])?;
         buf.advance(n);
         self.count.fetch_add(n as u64, Ordering::SeqCst);
         Poll::Ready(Ok(()))
     }
 }
 
-/// An extension that registers one [`MemProvider`].
+/// An extension that registers one [`MemProvider`] and, asked to, a
+/// connector for it, so the folders at its root are accounts as a cloud
+/// provider has them.
 pub struct MemExtension {
     manifest: Manifest,
     provider: Arc<MemProvider>,
+    /// The connector's title, a Fluent key, when it has one.
+    accounts: Option<&'static str>,
+}
+
+/// The connector of a [`MemProvider`] with accounts: it keeps nothing and
+/// every account is always connected.
+struct MemConnector {
+    provider: ProviderId,
+    title: &'static str,
+}
+
+#[async_trait]
+impl ext::Connector for MemConnector {
+    fn provider(&self) -> ProviderId {
+        self.provider
+    }
+    fn schema(&self) -> ext::ConnectionSchema {
+        ext::ConnectionSchema {
+            title: ext::Text(self.title),
+            fields: Vec::new(),
+        }
+    }
+    fn update(&self, _connections: Vec<ext::Connection>) {}
+    async fn connect(&self, _name: &str) -> Result<(), Error> {
+        Ok(())
+    }
+    fn disconnect(&self, _name: &str) {}
+    fn is_connected(&self, _name: &str) -> bool {
+        true
+    }
 }
 
 impl MemExtension {
@@ -461,6 +551,18 @@ impl MemExtension {
                 commands: &[],
             },
             provider,
+            accounts: None,
+        }
+    }
+
+    /// [`new`](Self::new) with a connector whose connections are titled by
+    /// the Fluent key `title`: the provider's root folders are its
+    /// accounts, as *Always preview on ‹account›* needs them.
+    #[must_use]
+    pub fn with_accounts(provider: Arc<MemProvider>, title: &'static str) -> Self {
+        Self {
+            accounts: Some(title),
+            ..Self::new(provider)
         }
     }
 }
@@ -472,6 +574,12 @@ impl Extension for MemExtension {
 
     fn register(&self, reg: &mut Registry) -> Result<(), Error> {
         reg.provider(Arc::clone(&self.provider) as Arc<dyn Provider>);
+        if let Some(title) = self.accounts {
+            reg.connector(Arc::new(MemConnector {
+                provider: self.provider.id,
+                title,
+            }));
+        }
         Ok(())
     }
 }

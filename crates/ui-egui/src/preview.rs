@@ -283,6 +283,11 @@ pub struct Slot {
     capped: Option<(u64, u64)>,
     /// The source the capped file is on, for *Always preview on <source>*.
     cap_source: Option<String>,
+    /// The name of the provider that source is on, for the card's head.
+    cap_provider: Option<String>,
+    /// A whole remote file is being fetched for the preview: the bytes
+    /// read so far and the file's size.
+    download: Option<(u64, Option<u64>)>,
     /// No previewer claims the file: the pane shows the File info card,
     /// centred, and this says whether a disabled plugin would claim it.
     placeholder: Option<Placeholder>,
@@ -344,6 +349,7 @@ impl Slot {
     }
 
     fn set_doc(&mut self, doc: Box<dyn PreviewDoc>) {
+        self.download = None;
         self.pages = None;
         self.text_layer = None;
         self.take_facts(&*doc);
@@ -365,10 +371,24 @@ impl Slot {
         self.prefix
     }
 
-    /// The size and the cap of a remote file held behind *Preview anyway*.
+    /// The size and the cap of a remote file held behind *Preview this
+    /// file*.
     #[must_use]
     pub fn capped(&self) -> Option<(u64, u64)> {
         self.capped
+    }
+
+    /// Whether a whole remote file is being fetched for the preview, which
+    /// Escape cancels.
+    #[must_use]
+    pub fn downloading(&self) -> bool {
+        self.download.is_some() && self.doc.is_none()
+    }
+
+    /// How far that download is: the bytes read and the file's size.
+    #[must_use]
+    pub fn download(&self) -> Option<(u64, Option<u64>)> {
+        self.download
     }
 
     /// The placeholder shown because no previewer claims the file, if so.
@@ -852,6 +872,7 @@ impl Previews {
             slot.reset(entry);
         }
         slot.capped = None;
+        slot.download = None;
         slot.placeholder = None;
         slot.error = Some(error.to_string());
     }
@@ -875,6 +896,7 @@ impl Previews {
         slot.previewer = None;
         slot.error = None;
         slot.capped = None;
+        slot.download = None;
         slot.placeholder = Some(Placeholder {
             plugin,
             permissions,
@@ -888,13 +910,15 @@ impl Previews {
     }
 
     /// `pane`'s selection is a remote file of `size` bytes above `cap`,
-    /// about `entry`; nothing opens until *Preview anyway*.
+    /// about `entry`; nothing opens until *Preview this file*. `source`
+    /// is the account or host the file is on and the name of its
+    /// provider.
     pub fn capped(
         &mut self,
         pane: PaneId,
         size: u64,
         cap: u64,
-        source: Option<String>,
+        source: (Option<String>, Option<String>),
         entry: Option<EntryId>,
     ) {
         let slot = self.slot(pane);
@@ -902,10 +926,30 @@ impl Previews {
             slot.reset(entry);
         }
         slot.doc = None;
+        slot.previewer = None;
         slot.error = None;
         slot.placeholder = None;
+        slot.download = None;
         slot.capped = Some((size, cap));
-        slot.cap_source = source;
+        (slot.cap_source, slot.cap_provider) = source;
+    }
+
+    /// A whole remote file is being fetched for `pane`'s preview: `read`
+    /// of `total` bytes so far. The size-limit card, if it was shown,
+    /// gives way to the download.
+    pub fn progress(&mut self, pane: PaneId, read: u64, total: Option<u64>) {
+        let slot = self.slot(pane);
+        slot.capped = None;
+        slot.download = Some((read, total));
+    }
+
+    /// The size-limit card's button was pressed: the card goes at once,
+    /// and the pane shows the download until the file arrives.
+    pub fn fetching(&mut self, pane: PaneId) {
+        let slot = self.slot(pane);
+        if let Some((size, _)) = slot.capped.take() {
+            slot.download = Some((0, Some(size)));
+        }
     }
 
     /// Brings `pane`'s slot up to date with the entry the app is following:
@@ -938,10 +982,13 @@ impl Previews {
         around: &Around<'_>,
     ) -> Option<PreviewAct> {
         let slot = self.slot(pane);
-        if let Some((size, cap)) = slot.capped.filter(|_| target.is_some()) {
-            return capped_message(ui, size, cap, slot.cap_source.as_deref());
-        }
         let shown = entry.filter(|e| Some(e.id) == target);
+        if let Some((size, cap)) = slot.capped
+            && let Some(entry) = shown
+        {
+            let source = (slot.cap_source.clone(), slot.cap_provider.clone());
+            return capped_card(ui, entry, (size, cap), &source, &mut slot.card);
+        }
         if let Some(placeholder) = slot.placeholder.as_ref().filter(|_| target.is_some())
             && let Some(entry) = shown
         {
@@ -1010,7 +1057,7 @@ impl Previews {
             slot.h_scroll = h_scroll;
             slot.frame_rect = Some(body);
         } else if target.is_some() && slot.error.is_none() {
-            draw_loading(ui, around.still);
+            draw_loading(ui, around.still, slot.download);
         }
         act
     }
@@ -1101,10 +1148,39 @@ pub struct Around<'a> {
     pub columns: &'a std::collections::BTreeMap<String, Vec<u16>>,
 }
 
+/// `read` of `total` in the unit `total` is written in, `7.7 of 18.4 MiB`;
+/// without a total, the bytes read alone.
+fn download_text(read: u64, total: Option<u64>) -> String {
+    const UNITS: [(&str, u64); 4] = [
+        ("GiB", 1 << 30),
+        ("MiB", 1 << 20),
+        ("KiB", 1 << 10),
+        ("B", 1),
+    ];
+    let Some(total) = total.filter(|total| *total > 0) else {
+        return t!("preview-downloading-some", read = format::size(Some(read)));
+    };
+    let (unit, scale) = UNITS
+        .into_iter()
+        .find(|(_, scale)| total >= *scale)
+        .unwrap_or(("B", 1));
+    // Sizes of files: the precision of an f64 is plenty.
+    #[allow(clippy::cast_precision_loss)]
+    let in_unit = |bytes: u64| bytes as f64 / scale as f64;
+    t!(
+        "preview-downloading",
+        read = format!("{:.1}", in_unit(read.min(total))),
+        total = format!("{:.1} {unit}", in_unit(total))
+    )
+}
+
 /// The loading state (SPEC.md *Preview*): the Portal burst centred in the
 /// content with *Loading preview…* under it — for a local file and for a
-/// download alike, never a spinner in a corner.
-fn draw_loading(ui: &mut egui::Ui, still: bool) {
+/// download alike, never a spinner in a corner. While a whole file is
+/// fetched from a remote source, `download` says how far it is: a slim
+/// progress line, 220 × 4 px in `accent/focus` on `bg/track`, and
+/// *Downloading…  7.7 of 18.4 MiB* under the burst.
+fn draw_loading(ui: &mut egui::Ui, still: bool, download: Option<(u64, Option<u64>)>) {
     let rect = ui.available_rect_before_wrap();
     let scheme = theme::scheme(ui);
     let time = ui.input(|i| i.time);
@@ -1117,13 +1193,30 @@ fn draw_loading(ui: &mut egui::Ui, still: bool) {
         scheme.icon_default,
         still,
     );
-    let text = t!("preview-loading");
+    let mut text_y = centre.y + 48.0;
+    let text = match download {
+        Some((read, total)) => {
+            let track = Rect::from_center_size(pos2(centre.x, centre.y + 44.0), vec2(220.0, 4.0));
+            ui.painter().rect_filled(track, 2.0, scheme.bg_track);
+            // The share fetched; nothing of the line without a size.
+            #[allow(clippy::cast_precision_loss)]
+            let share = total
+                .filter(|total| *total > 0)
+                .map_or(0.0, |total| (read as f64 / total as f64).clamp(0.0, 1.0));
+            #[allow(clippy::cast_possible_truncation)]
+            let filled = Rect::from_min_size(track.min, vec2(track.width() * share as f32, 4.0));
+            ui.painter().rect_filled(filled, 2.0, scheme.accent_focus);
+            text_y = track.bottom() + 18.0;
+            download_text(read, total)
+        }
+        None => t!("preview-loading"),
+    };
     let galley = ui.painter().layout_no_wrap(
         text.clone(),
         FontId::proportional(theme::TEXT_SECONDARY),
         scheme.text_secondary,
     );
-    let at = Rect::from_center_size(centre + vec2(0.0, 48.0), galley.size());
+    let at = Rect::from_center_size(pos2(centre.x, text_y), galley.size());
     ui.painter().galley(at.min, galley, scheme.text_secondary);
     ui.interact(at, ui.id().with("preview-loading"), egui::Sense::hover())
         .widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Label, true, text.clone()));
@@ -1230,7 +1323,7 @@ fn no_previewer_card(
         actions: &actions,
         ..Card::default()
     };
-    let outcome = info_card::show_centred(ui, &card, state);
+    let outcome = info_card::show_centred(ui, &card, state, info_card::CENTRED);
     outcome.action.and_then(|index| acts.get(index).cloned())
 }
 
@@ -1302,7 +1395,7 @@ fn missing_card(
         looked: Some(missing.detail.as_str()).filter(|detail| !detail.is_empty()),
         ..Card::default()
     };
-    let outcome = info_card::show_centred(ui, &card, state);
+    let outcome = info_card::show_centred(ui, &card, state, info_card::CENTRED);
     if outcome.row_button.is_some() {
         return Some(PreviewAct::OpenFolder(around.plugins.to_path_buf()));
     }
@@ -1331,7 +1424,7 @@ fn error_card(
         actions: &actions,
         ..Card::default()
     };
-    info_card::show_centred(ui, &card, state)
+    info_card::show_centred(ui, &card, state, info_card::CENTRED)
         .action
         .map(|_| PreviewAct::Retry)
 }
@@ -1397,42 +1490,68 @@ pub fn prefix_bar(ui: &mut egui::Ui, served: u64, total: Option<u64>) -> Option<
     act
 }
 
-/// The cap message: the file's size against the cap, *Preview anyway*
-/// and, for a file on a source with a connection, *Always preview on
-/// <source>*.
-pub fn capped_message(
+/// A size limit in words: whole mebibytes without a fraction, `4 MiB`.
+fn limit_text(cap: u64) -> String {
+    const MIB: u64 = 1024 * 1024;
+    if cap >= MIB && cap.is_multiple_of(MIB) {
+        format!("{} MiB", cap / MIB)
+    } else {
+        format::size(Some(cap))
+    }
+}
+
+/// The card for a remote file above the size limit (SPEC.md *Remote
+/// sources*): the head reads the name and, under it, the type, the size
+/// and the source — the provider's name and the account or host; in place
+/// of rows *Not previewed automatically* and a sentence that names the
+/// limit; **Preview this file** and, for a source with a connection,
+/// **Always preview on ‹source›**, wrapping when the name is long.
+fn capped_card(
     ui: &mut egui::Ui,
-    size: u64,
-    cap: u64,
-    source: Option<&str>,
+    entry: &Entry,
+    (size, cap): (u64, u64),
+    (source, provider): &(Option<String>, Option<String>),
+    state: &mut info_card::State,
 ) -> Option<PreviewAct> {
-    let mut act = None;
-    ui.add_space(12.0);
-    ui.vertical_centered(|ui| {
-        ui.label(
-            egui::RichText::new(format!(
-                "{} on a remote host, above the {} preview cap",
-                crate::format::size(Some(size)),
-                crate::format::size(Some(cap))
-            ))
-            .strong(),
-        );
-        ui.weak(t!("preview-the-whole-file-would-be"));
-        ui.add_space(6.0);
-        ui.horizontal(|ui| {
-            if ui.button(t!("preview-preview-anyway")).clicked() {
-                act = Some(PreviewAct::PreviewAnyway);
-            }
-            if let Some(source) = source
-                && ui
-                    .button(t!("preview-always-preview-on", source = source))
-                    .clicked()
-            {
-                act = Some(PreviewAct::PreviewAlways);
-            }
+    let executable = entry.attrs.contains(Attrs::EXECUTABLE);
+    let mut line = format!(
+        "{}  ·  {}",
+        format::type_name(&entry.kind, &entry.name, executable),
+        format::size(Some(size))
+    );
+    let place = match (provider, source) {
+        (Some(provider), Some(source)) => Some(format!("{provider}, {source}")),
+        (Some(one), None) | (None, Some(one)) => Some(one.clone()),
+        (None, None) => None,
+    };
+    if let Some(place) = place {
+        line = format!("{line}  ·  {place}");
+    }
+    let title = t!("preview-not-previewed");
+    let sentence = t!("preview-over-limit", limit = limit_text(cap));
+    let mut actions = vec![Action {
+        glyph: Some(icons::INSTALL),
+        label: t!("preview-preview-this-file"),
+    }];
+    if let Some(source) = source {
+        actions.push(Action {
+            glyph: None,
+            label: t!("preview-always-preview-on", source = source.as_str()),
         });
-    });
-    act
+    }
+    let card = Card {
+        glyph: icons::for_entry(entry),
+        name: &entry.name,
+        line: &line,
+        note: Some((&title, &sentence)),
+        actions: &actions,
+        ..Card::default()
+    };
+    match info_card::show_centred(ui, &card, state, info_card::CENTRED_WIDE).action {
+        Some(0) => Some(PreviewAct::PreviewAnyway),
+        Some(_) => Some(PreviewAct::PreviewAlways),
+        None => None,
+    }
 }
 
 /// Points to pixels, rounded up to the [`QUANTUM`].

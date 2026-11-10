@@ -302,6 +302,13 @@ enum Msg {
         size: u64,
         cap: u64,
     },
+    /// A whole remote file is being read for a preview.
+    PreviewProgress {
+        pane: PaneId,
+        generation: u64,
+        read: u64,
+        total: Option<u64>,
+    },
     /// A job started waiting for its volume, or stopped.
     Schedule,
     /// The mounted volumes were enumerated.
@@ -1674,6 +1681,7 @@ impl App {
                     self.restart_preview(pane);
                 }
             }
+            Command::PreviewCancel(pane) => self.cancel_preview(pane, events),
             Command::PreviewWith { pane, previewer } => {
                 if let Some(job) = self.preview.get(&pane) {
                     self.preview_with.insert(pane, (job.entry, previewer));
@@ -2284,6 +2292,57 @@ impl App {
             .next()
             .filter(|first| !first.is_empty())?;
         Some(String::from_utf8_lossy(first).into_owned())
+    }
+
+    /// The size-limit card's event for `entry`: its size against the cap,
+    /// its source and the name of the provider the source is on.
+    fn capped_event(&self, pane: PaneId, entry: &Entry, size: u64, cap: u64) -> Event {
+        Event::PreviewCapped {
+            pane,
+            size,
+            cap,
+            source: self.source_of(entry),
+            provider: self
+                .registry
+                .connector_of(entry.id.provider)
+                .map(|connector| connector.schema().title.get()),
+        }
+    }
+
+    /// Whether *Always preview* is on for the source `entry` is on: the
+    /// switch in the source's connection, whichever provider keeps it.
+    fn always_previewed(&self, entry: &Entry) -> bool {
+        self.source_of(entry).is_some_and(|source| {
+            self.model.settings.connections.iter().any(|c| {
+                c.provider == entry.id.provider.0
+                    && c.name == source
+                    && c.settings
+                        .get(PREVIEW_ALWAYS)
+                        .is_some_and(|on| on == "true")
+            })
+        })
+    }
+
+    /// Escape during a download: the fetch stops, the file is no longer
+    /// previewed whatever its size, and the size-limit card is back.
+    fn cancel_preview(&mut self, pane: PaneId, events: &mut Vec<Event>) {
+        let Some(job) = self.preview.get(&pane) else {
+            return;
+        };
+        job.cancel.cancel();
+        self.preview_force.remove(&pane);
+        let entry = job.full.clone();
+        let Ok(provider) = self
+            .mounts
+            .resolve(&Location::new(entry.id.provider, entry.path.clone()))
+        else {
+            return;
+        };
+        let loc = Location::new(entry.id.provider, entry.path.clone());
+        let cap = provider
+            .remote_preview_cap(&loc)
+            .unwrap_or(REMOTE_PREVIEW_CAP);
+        events.push(self.capped_event(pane, &entry, entry.size.unwrap_or(0), cap));
     }
 
     /// *Always preview on <source>*: the switch goes on for the source of
@@ -3793,21 +3852,26 @@ impl App {
                 size,
                 cap,
             } => {
+                if let Some(job) = self
+                    .preview
+                    .get(&pane)
+                    .filter(|job| job.generation == generation)
+                {
+                    events.push(self.capped_event(pane, &job.full, size, cap));
+                }
+            }
+            Msg::PreviewProgress {
+                pane,
+                generation,
+                read,
+                total,
+            } => {
                 if self
                     .preview
                     .get(&pane)
                     .is_some_and(|job| job.generation == generation)
                 {
-                    let source = self
-                        .preview
-                        .get(&pane)
-                        .and_then(|job| self.source_of(&job.full));
-                    events.push(Event::PreviewCapped {
-                        pane,
-                        size,
-                        cap,
-                        source,
-                    });
+                    events.push(Event::PreviewProgress { pane, read, total });
                 }
             }
             Msg::Decorated {
@@ -4219,8 +4283,11 @@ impl App {
         let cap = provider
             .remote_preview_cap(&loc)
             .unwrap_or(REMOTE_PREVIEW_CAP);
-        // The source's *Always preview* switch takes the cap off there.
-        let always = remote && provider.remote_preview_always(&loc);
+        // The source's *Always preview* switch takes the cap off there,
+        // on every remote provider: the provider's own answer, or the
+        // switch in the source's connection.
+        let always =
+            remote && (provider.remote_preview_always(&loc) || self.always_previewed(&entry));
         let more = self
             .preview_more
             .get(&pane)
@@ -4233,69 +4300,26 @@ impl App {
             .get(&pane)
             .filter(|(id, _)| *id == entry.id)
             .map(|(_, previewer)| *previewer);
-        let previewers: Vec<Arc<dyn Previewer>> = self.registry.previewers().to_vec();
-        let platform = Arc::clone(&self.platform);
-        let local = local_path(&entry);
-        let tx = self.mailbox.clone();
         let id = entry.id;
-        let handle =
-            self.jobs
-                .spawn_named(format!("Preview {}", entry.name), move |job| async move {
-                    let sniff = ext::read_bytes(&*provider, &loc, Some(4096), &job.cancel).await?;
-                    let best = choose_previewer(&previewers, with, &entry, &sniff);
-                    let Some(previewer) = best.as_ref().map(|p| p.id()) else {
-                        let permissions = permissions_of(platform, local, entry.kind.clone()).await;
-                        tx.send(Msg::PreviewNone {
-                            pane,
-                            generation,
-                            permissions,
-                        });
-                        return Ok(());
-                    };
-                    let mut prefix = None;
-                    let result = match best {
-                        Some(previewer) if remote && previewer.reads() == Reads::Prefix => {
-                            let limit = REMOTE_PREFIX_CHUNK * (u64::from(more) + 1);
-                            if entry.size.is_none_or(|size| size > limit) {
-                                prefix =
-                                    Some((entry.size.map_or(limit, |s| s.min(limit)), entry.size));
-                            }
-                            let limited: Arc<dyn ext::Provider> = Arc::new(Prefixed {
-                                inner: provider,
-                                limit,
-                            });
-                            previewer.open(&loc, limited, job.cancel.clone()).await
-                        }
-                        Some(_)
-                            if remote
-                                && !force
-                                && !always
-                                && entry.size.is_some_and(|size| size > cap) =>
-                        {
-                            tx.send(Msg::PreviewCapped {
-                                pane,
-                                generation,
-                                size: entry.size.unwrap_or(0),
-                                cap,
-                            });
-                            return Ok(());
-                        }
-                        Some(previewer) => previewer.open(&loc, provider, job.cancel.clone()).await,
-                        // Answered above.
-                        None => return Ok(()),
-                    };
-                    if job.cancel.is_cancelled() {
-                        return Err(Error::Cancelled);
-                    }
-                    tx.send(Msg::Preview {
-                        pane,
-                        generation,
-                        result,
-                        previewer,
-                        prefix,
-                    });
-                    Ok(())
-                });
+        let name = format!("Preview {}", entry.name);
+        let run = PreviewRun {
+            pane,
+            generation,
+            previewers: self.registry.previewers().to_vec(),
+            with,
+            platform: Arc::clone(&self.platform),
+            local: local_path(&entry),
+            entry,
+            loc,
+            provider,
+            remote,
+            // Held behind the size limit unless something lifts it.
+            capped: remote && !force && !always,
+            cap,
+            more,
+            tx: self.mailbox.clone(),
+        };
+        let handle = self.jobs.spawn_named(name, move |job| run.open(job.cancel));
         self.internal.insert(handle.id);
         self.preview.insert(
             pane,
@@ -4996,6 +5020,106 @@ fn count_tree(path: &Path, cancel: &CancelToken) -> Option<FolderContents> {
     Some(contents)
 }
 
+/// One opening of a preview: what [`App::start_preview`] gathered for the
+/// job.
+struct PreviewRun {
+    pane: PaneId,
+    generation: u64,
+    entry: Entry,
+    loc: Location,
+    provider: Arc<dyn ext::Provider>,
+    previewers: Vec<Arc<dyn Previewer>>,
+    /// The previewer asked for whatever the scores say.
+    with: Option<ExtId>,
+    /// The entry is on a remote source.
+    remote: bool,
+    /// A whole-file preview above `cap` waits for the user.
+    capped: bool,
+    cap: u64,
+    /// How many times *Load more* was pressed.
+    more: u32,
+    platform: Arc<dyn Platform>,
+    local: Option<PathBuf>,
+    tx: Mailbox,
+}
+
+impl PreviewRun {
+    /// Sniffs the file, chooses its previewer and opens it, answering
+    /// through the mailbox: a document or its error, nobody's file, or a
+    /// file held behind the size limit.
+    async fn open(self, cancel: CancelToken) -> Result<(), Error> {
+        let Self {
+            pane,
+            generation,
+            entry,
+            loc,
+            provider,
+            previewers,
+            with,
+            remote,
+            capped,
+            cap,
+            more,
+            platform,
+            local,
+            tx,
+        } = self;
+        let sniff = ext::read_bytes(&*provider, &loc, Some(4096), &cancel).await?;
+        let Some(previewer) = choose_previewer(&previewers, with, &entry, &sniff) else {
+            let permissions = permissions_of(platform, local, entry.kind.clone()).await;
+            tx.send(Msg::PreviewNone {
+                pane,
+                generation,
+                permissions,
+            });
+            return Ok(());
+        };
+        let mut prefix = None;
+        let result = if remote && previewer.reads() == Reads::Prefix {
+            let limit = REMOTE_PREFIX_CHUNK * (u64::from(more) + 1);
+            if entry.size.is_none_or(|size| size > limit) {
+                prefix = Some((entry.size.map_or(limit, |s| s.min(limit)), entry.size));
+            }
+            let limited: Arc<dyn ext::Provider> = Arc::new(Prefixed {
+                inner: provider,
+                limit,
+                meter: None,
+            });
+            previewer.open(&loc, limited, cancel.clone()).await
+        } else if capped && entry.size.is_some_and(|size| size > cap) {
+            tx.send(Msg::PreviewCapped {
+                pane,
+                generation,
+                size: entry.size.unwrap_or(0),
+                cap,
+            });
+            return Ok(());
+        } else if remote {
+            // A whole file from a remote source: its bytes are counted as
+            // they arrive, for the pane's progress.
+            let metered: Arc<dyn ext::Provider> = Arc::new(Prefixed {
+                inner: provider,
+                limit: u64::MAX,
+                meter: Some(Meter::new(tx.clone(), pane, generation, entry.size)),
+            });
+            previewer.open(&loc, metered, cancel.clone()).await
+        } else {
+            previewer.open(&loc, provider, cancel.clone()).await
+        };
+        if cancel.is_cancelled() {
+            return Err(Error::Cancelled);
+        }
+        tx.send(Msg::Preview {
+            pane,
+            generation,
+            result,
+            previewer: previewer.id(),
+            prefix,
+        });
+        Ok(())
+    }
+}
+
 /// The entry as a path on this machine, for an entry of the local
 /// provider.
 fn local_path(entry: &Entry) -> Option<PathBuf> {
@@ -5093,6 +5217,95 @@ struct PropertiesCount {
 struct Prefixed {
     inner: Arc<dyn ext::Provider>,
     limit: u64,
+    /// Counts what is read and tells the pane, for a whole file fetched
+    /// from a remote source.
+    meter: Option<Meter>,
+}
+
+/// How often a download tells how far it is.
+const PROGRESS_STEP: u64 = 128 * 1024;
+
+/// Counts the bytes a preview reads from a remote file and reports them
+/// to the application's loop, every [`PROGRESS_STEP`] and at the end.
+#[derive(Clone)]
+struct Meter {
+    tx: Mailbox,
+    pane: PaneId,
+    generation: u64,
+    total: Option<u64>,
+    read: Arc<std::sync::atomic::AtomicU64>,
+    told: Arc<std::sync::atomic::AtomicU64>,
+}
+
+impl Meter {
+    fn new(tx: Mailbox, pane: PaneId, generation: u64, total: Option<u64>) -> Self {
+        Self {
+            tx,
+            pane,
+            generation,
+            total,
+            read: Arc::default(),
+            told: Arc::default(),
+        }
+    }
+
+    /// `bytes` more were read; `end` says the reader is done, or waits.
+    fn add(&self, bytes: u64, end: bool) {
+        use std::sync::atomic::Ordering;
+        let read = self.read.fetch_add(bytes, Ordering::Relaxed) + bytes;
+        let told = self.told.load(Ordering::Relaxed);
+        if read >= told + PROGRESS_STEP || (end && read != told) {
+            self.told.store(read, Ordering::Relaxed);
+            self.tx.send(Msg::PreviewProgress {
+                pane: self.pane,
+                generation: self.generation,
+                read,
+                total: self.total,
+            });
+        }
+    }
+
+    /// `reader` with its bytes counted.
+    fn wrap(&self, reader: ext::ReadHandle) -> ext::ReadHandle {
+        // Before the first byte: the pane shows the download has begun.
+        self.tx.send(Msg::PreviewProgress {
+            pane: self.pane,
+            generation: self.generation,
+            read: self.read.load(std::sync::atomic::Ordering::Relaxed),
+            total: self.total,
+        });
+        Box::new(Metered {
+            inner: reader,
+            meter: self.clone(),
+        })
+    }
+}
+
+/// A reader whose bytes a [`Meter`] counts.
+struct Metered {
+    inner: ext::ReadHandle,
+    meter: Meter,
+}
+
+impl tokio::io::AsyncRead for Metered {
+    fn poll_read(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buf: &mut tokio::io::ReadBuf<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        let before = buf.filled().len();
+        let polled = std::pin::Pin::new(&mut self.inner).poll_read(cx, buf);
+        match &polled {
+            std::task::Poll::Ready(Ok(())) => {
+                let bytes = (buf.filled().len() - before) as u64;
+                self.meter.add(bytes, bytes == 0);
+            }
+            // The link stalls: what has arrived is told now.
+            std::task::Poll::Pending => self.meter.add(0, true),
+            std::task::Poll::Ready(Err(_)) => {}
+        }
+        polled
+    }
 }
 
 impl std::fmt::Debug for Prefixed {
@@ -5120,12 +5333,20 @@ impl ext::Provider for Prefixed {
     async fn open_read(&self, loc: &Location) -> Result<ext::ReadHandle, Error> {
         use tokio::io::AsyncReadExt as _;
         let reader = self.inner.open_read(loc).await?;
-        Ok(Box::new(reader.take(self.limit)))
+        let reader: ext::ReadHandle = Box::new(reader.take(self.limit));
+        Ok(match &self.meter {
+            Some(meter) => meter.wrap(reader),
+            None => reader,
+        })
     }
     async fn open_read_at(&self, loc: &Location, offset: u64) -> Result<ext::ReadHandle, Error> {
         use tokio::io::AsyncReadExt as _;
         let reader = self.inner.open_read_at(loc, offset).await?;
-        Ok(Box::new(reader.take(self.limit.saturating_sub(offset))))
+        let reader: ext::ReadHandle = Box::new(reader.take(self.limit.saturating_sub(offset)));
+        Ok(match &self.meter {
+            Some(meter) => meter.wrap(reader),
+            None => reader,
+        })
     }
     async fn open_write(
         &self,

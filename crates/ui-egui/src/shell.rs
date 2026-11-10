@@ -1673,9 +1673,14 @@ impl RickUi {
                     size,
                     cap,
                     source,
+                    provider,
                 } => {
                     let entry = self.preview_entry(pane);
-                    self.previews.capped(pane, size, cap, source, entry);
+                    self.previews
+                        .capped(pane, size, cap, (source, provider), entry);
+                }
+                Event::PreviewProgress { pane, read, total } => {
+                    self.previews.progress(pane, read, total);
                 }
                 Event::ViewOpened { tab, view, .. } => {
                     if let ext::View::Console(console) = &view {
@@ -1845,6 +1850,19 @@ impl RickUi {
         // An open menu owns the keyboard: Escape closes it, nothing else —
         // not even the side panel, whose row the menu may belong to.
         if egui::Popup::is_any_open(ctx) {
+            return;
+        }
+        // A download for the preview is cancelled by Escape before the key
+        // clears a filter or the selection (SPEC.md *Remote sources*).
+        if let Some(preview) = self.app.preview_pane()
+            && self
+                .previews
+                .get(preview)
+                .is_some_and(crate::preview::Slot::downloading)
+            && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape))
+        {
+            self.requests
+                .push(Request::Command(Command::PreviewCancel(preview)));
             return;
         }
         if self.side.focused() && self.side.handle_keys(ctx, &self.app, &mut self.requests) {

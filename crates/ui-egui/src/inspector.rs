@@ -368,6 +368,14 @@ pub fn show(
                 view.text_settings,
                 &around,
             );
+            // Either button of the size-limit card clears the card at
+            // once: the download is what the pane shows from here.
+            if matches!(
+                act,
+                Some(PreviewAct::PreviewAnyway | PreviewAct::PreviewAlways)
+            ) {
+                previews.fetching(pane);
+            }
             match act {
                 Some(PreviewAct::Columns(widths)) => {
                     if let Some(previewer) = view.previewer {

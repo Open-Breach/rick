@@ -35,8 +35,11 @@ with the previewer that opened it, and a file no previewer claims with the
 disabled plugin whose manifest claims its type and the file's permission
 line, for the pane's File info card, whose *Open as hex* shows that one
 file through the hex previewer (`Command::PreviewWith`); *Always preview on <source>* writes
-`preview_always` into the source's connection and takes the size cap off
-there. The extension settings store is shared with the plugins through the
+`preview_always` into the source's connection and takes the size limit off
+there, whichever remote provider keeps the source; a whole file fetched
+from a remote source for a preview is counted as it arrives
+(`Event::PreviewProgress`), and `Command::PreviewCancel` stops the fetch
+and brings the size-limit card back. The extension settings store is shared with the plugins through the
 registry, so a plugin that found its third-party library writes the path
 into its own setting. The pinned list lives in its settings, and the pin actions
 in `ops` see it through the `PinStore` bridge it hands them. It feeds the

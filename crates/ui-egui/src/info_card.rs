@@ -91,6 +91,9 @@ pub struct Card<'a> {
     pub name: &'a str,
     /// The line under the name: the type and the size.
     pub line: &'a str,
+    /// In place of rows: a title and, under it, a sentence that wraps —
+    /// what the card has to say when it is no list of facts.
+    pub note: Option<(&'a str, &'a str)>,
     /// The rows, every section's in order.
     pub rows: &'a [Row],
     /// How many rows show before *Show all n fields*; `None` shows all.
@@ -141,6 +144,10 @@ pub fn show(ui: &mut egui::Ui, card: &Card<'_>, state: &mut State, max_rows: f32
             ui.spacing_mut().item_spacing = vec2(0.0, 0.0);
             if head(ui, card) {
                 outcome.pin = true;
+            }
+            if let Some((title, sentence)) = card.note {
+                hairline(ui);
+                note(ui, title, sentence);
             }
             if !card.rows.is_empty() {
                 hairline(ui);
@@ -251,6 +258,40 @@ pub(crate) fn toggle_button(
         egui::WidgetInfo::selected(egui::WidgetType::Button, true, on, name.to_owned())
     });
     response.on_hover_text(name)
+}
+
+/// A note in place of rows: the title in 13 px `text/primary` and the
+/// sentence in 12 px `text/secondary`, wrapped to the card.
+fn note(ui: &mut egui::Ui, title: &str, sentence: &str) {
+    let scheme = theme::scheme(ui);
+    egui::Frame::new()
+        .inner_margin(egui::Margin {
+            left: 14,
+            right: 14,
+            top: 12,
+            bottom: 0,
+        })
+        .show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            ui.spacing_mut().item_spacing = vec2(0.0, 6.0);
+            ui.add(
+                egui::Label::new(
+                    egui::RichText::new(title)
+                        .size(TEXT_BODY)
+                        .color(scheme.text_primary),
+                )
+                .selectable(false),
+            );
+            ui.add(
+                egui::Label::new(
+                    egui::RichText::new(sentence)
+                        .size(TEXT_SECONDARY)
+                        .color(scheme.text_secondary),
+                )
+                .selectable(false)
+                .wrap(),
+            );
+        });
 }
 
 /// The rows: the first ones, or all of them once unfolded, and the line
@@ -500,12 +541,18 @@ fn actions(ui: &mut egui::Ui, card: &Card<'_>, state: &mut State, outcome: &mut 
     }
 }
 
-/// Draws the card centred in what the `ui` has left: 400 px wide, or the
+/// The width of a card centred in the pane.
+pub const CENTRED: f32 = 400.0;
+/// The width of the size-limit card, whose action row holds a source's
+/// name (QUESTIONS.md 362).
+pub const CENTRED_WIDE: f32 = 440.0;
+
+/// Draws the card centred in what the `ui` has left: `width` wide, or the
 /// width less its margins. The card's height is known once it is laid
 /// out, so the last frame's centres it.
-pub fn show_centred(ui: &mut egui::Ui, card: &Card<'_>, state: &mut State) -> Outcome {
+pub fn show_centred(ui: &mut egui::Ui, card: &Card<'_>, state: &mut State, width: f32) -> Outcome {
     let whole = ui.available_rect_before_wrap();
-    let width = (whole.width() - 24.0).clamp(0.0, 400.0);
+    let width = (whole.width() - 24.0).clamp(0.0, width);
     let id = ui.id().with("file-info-centred");
     let last: f32 = ui.data(|d| d.get_temp(id)).unwrap_or(220.0);
     let top = (whole.center().y - last / 2.0).max(whole.top() + 12.0);
