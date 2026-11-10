@@ -33,11 +33,11 @@ use crate::dnd::{Dnd, DragView, Source, Spring, Target, Zone};
 use crate::dock::DockSync;
 use crate::host::{Ask, EguiHost};
 use crate::inline::{EditKind, RowEdit};
-use crate::keys::{Direction, Intent, KeyMap};
+use crate::keys::{self, Direction, Intent, KeyMap};
 use crate::operations::Operations;
 use crate::preview::Previews;
 use crate::search::{Pick, SearchBox};
-use crate::settings_ui::ShortcutsScreen;
+use crate::shortcuts::ShortcutsScreen;
 use crate::side_panel::SidePanelState;
 use crate::thumbs::Thumbnails;
 use crate::{compare, console};
@@ -1100,7 +1100,7 @@ impl RickUi {
                 wake.request_repaint_of(id);
             }
         }));
-        let keys = KeyMap::new(app.registry(), &app.model().settings);
+        let keys = KeyMap::of(&keys::rows_of(&app), &app.model().settings);
         let keys_from = app.model().settings.shortcuts.clone();
         let root = app.model().focused_window;
         let inspector_width = 260.0;
@@ -1767,7 +1767,7 @@ impl RickUi {
             self.applied = Some(key);
         }
         if settings.shortcuts != self.keys_from {
-            self.keys = KeyMap::new(self.app.registry(), settings);
+            self.keys = KeyMap::of(&keys::rows_of(&self.app), settings);
             self.keys_from = settings.shortcuts.clone();
         }
     }
@@ -1839,7 +1839,7 @@ impl RickUi {
         let pane = self.explorer_pane(self.focused_in(window));
         if self.dialog.is_some()
             || self.name_prompt.is_some()
-            || self.shortcuts.rebinding.is_some()
+            || self.shortcuts.open
             || self.about.is_open()
             || self.properties.is_open()
             || !self.app.model().conflicts.is_empty()
@@ -2656,7 +2656,7 @@ impl RickUi {
                 self.handle(Command::TogglePreview { window, fraction });
             }
             Intent::Settings => self.settings.open(window),
-            Intent::Shortcuts => self.shortcuts.open = true,
+            Intent::Shortcuts => self.shortcuts.open(),
             Intent::Extensions => self.extensions_open = true,
             Intent::ViewList => self.handle(Command::SetView {
                 pane,
@@ -4867,7 +4867,7 @@ impl RickUi {
             question::show(ctx, &self.app, &mut self.question, &mut self.requests);
             self.show_name_prompt(ctx);
             self.shortcuts
-                .show(ctx, &self.keys, self.app.registry(), &mut self.requests);
+                .show(ctx, &self.keys, &self.app, &mut self.requests);
             settings_ui::extensions_window(
                 ctx,
                 &mut self.extensions_open,

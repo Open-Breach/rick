@@ -2744,6 +2744,136 @@ fn screenshots_of_the_preview_tables() {
     eprintln!("the preview pane: {:?}", harness.state().inspector_rect());
 }
 
+/// SPEC.md *Keyboard shortcuts dialogue* (issue 139, item 8): the
+/// dialogue on *File operations* with a changed row and a cell that
+/// records, on *Git* with a chord that Copy has too — the amber chip —
+/// and with a chord pressed in the search field, in Light and Dark at
+/// both densities.
+#[test]
+#[ignore = "needs a wgpu adapter; CI runs it and uploads the images"]
+#[allow(clippy::too_many_lines)]
+fn screenshots_of_the_keyboard_shortcuts_dialogue() {
+    use egui::accesskit::Role;
+    use egui_kittest::kittest::Queryable as _;
+    let (_keep, root) = sample_tree();
+    let fake = Arc::new(Fake::new().unwrap_or_else(|e| panic!("{e}")));
+    let host = Arc::new(EguiHost::new());
+    let app = app::App::new(app::Config {
+        platform: fake.clone(),
+        ui: host.clone(),
+        extensions: vec![
+            Arc::new(ext_git::GitExtension::new()),
+            Arc::new(ext_svn::SvnExtension::new()),
+            Arc::new(ext_ssh::SshExtension::new()),
+            Arc::new(ext_action_compress::CompressExtension::new()),
+            Arc::new(ext_action_compare::CompareExtension::new()),
+            Arc::new(ext_action_rename::RenameExtension::new()),
+            Arc::new(ext_action_terminal::TerminalExtension::new()),
+        ],
+        config_dir: Some(fake.config_dir()),
+        start: Some(local(&root)),
+    });
+    let mut harness = Harness::builder()
+        .with_size(egui::vec2(1280.0, 800.0))
+        .with_pixels_per_point(2.0)
+        .build_eframe(move |cc| RickUi::new(app, host, &cc.egui_ctx));
+    settle(&mut harness);
+    let modes = [
+        (Theme::Light, Density::Comfortable, "light-comfortable"),
+        (Theme::Light, Density::Compact, "light-compact"),
+        (Theme::Dark, Density::Comfortable, "dark-comfortable"),
+        (Theme::Dark, Density::Compact, "dark-compact"),
+    ];
+    let steps = |harness: &mut Harness<'_, RickUi>| {
+        for _ in 0..4 {
+            harness.step();
+        }
+    };
+    let set = |harness: &mut Harness<'_, RickUi>, theme: Theme, density: Density| {
+        for change in [
+            SettingsChange::Theme(theme),
+            SettingsChange::Density(density),
+        ] {
+            harness
+                .state_mut()
+                .app_mut()
+                .handle(app::Command::Settings(change), &mut Vec::new());
+        }
+        // The pointer rests outside the dialogue, on no button.
+        harness.event(egui::Event::PointerMoved(egui::pos2(40.0, 780.0)));
+        for _ in 0..4 {
+            harness.step();
+        }
+    };
+    let bind = |harness: &mut Harness<'_, RickUi>, action: &str, binding: &str| {
+        harness.state_mut().app_mut().handle(
+            app::Command::Settings(SettingsChange::Shortcut {
+                action: action.to_owned(),
+                binding: Some(binding.to_owned()),
+            }),
+            &mut Vec::new(),
+        );
+    };
+    let choose = |harness: &mut Harness<'_, RickUi>, category: &str| {
+        harness
+            .get_by_role_and_label(Role::RadioButton, category)
+            .click();
+        for _ in 0..4 {
+            harness.step();
+        }
+    };
+    let cell = |harness: &mut Harness<'_, RickUi>, name: &str| {
+        harness.get_by_label(name).click();
+        for _ in 0..4 {
+            harness.step();
+        }
+    };
+    let ctrl = platform::MOD_KEY;
+
+    // A changed row, a chord taken twice.
+    bind(&mut harness, "core.duplicate", "Mod+Alt+D");
+    bind(&mut harness, "git.commit", "Mod+K");
+    bind(&mut harness, "svn.commit", "Mod+K");
+    let pane = harness.state().app().model().focused;
+    harness.state_mut().queue(Intent::Shortcuts, pane);
+    steps(&mut harness);
+
+    // File operations, one cell recording.
+    choose(&mut harness, "File operations");
+    cell(
+        &mut harness,
+        &format!("Shortcut for New folder: {ctrl}+Shift+N"),
+    );
+    for (theme, density, mode) in modes {
+        set(&mut harness, theme, density);
+        shoot(&mut harness, &format!("shortcuts-{mode}"));
+    }
+    harness.key_press(egui::Key::Escape);
+    steps(&mut harness);
+
+    // Git, whose commit shares its chord with SVN's.
+    choose(&mut harness, "Git");
+    for (theme, density, mode) in modes {
+        set(&mut harness, theme, density);
+        shoot(&mut harness, &format!("shortcuts-git-{mode}"));
+    }
+
+    // All, narrowed by a chord pressed in the search field.
+    choose(&mut harness, "All");
+    harness
+        .get_all_by_role(Role::TextInput)
+        .find(|field| (100.0..300.0).contains(&field.rect().top()))
+        .unwrap_or_else(|| panic!("the search field"))
+        .click();
+    steps(&mut harness);
+    harness.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::K);
+    steps(&mut harness);
+    for (theme, density, mode) in [modes[0], modes[2]] {
+        set(&mut harness, theme, density);
+        shoot(&mut harness, &format!("shortcuts-chord-{mode}"));
+    }
+}
+
 /// Issue 139, item 7: the size limit of remote previews as the Figma
 /// frame has it (`151:4550`) — the File info card for a picture above the
 /// limit on a cloud account, and the download half way, with its progress

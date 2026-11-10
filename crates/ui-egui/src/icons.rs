@@ -23,7 +23,7 @@ pub const PLUS: &str = ph::PLUS;
 pub const MENU: &str = ph::LIST;
 /// The search box.
 pub const SEARCH: &str = ph::MAGNIFYING_GLASS;
-/// Undo.
+/// Undo; the reset button of a changed shortcut.
 pub const UNDO: &str = ph::ARROW_U_UP_LEFT;
 /// Redo.
 pub const REDO: &str = ph::ARROW_U_UP_RIGHT;
@@ -357,6 +357,46 @@ pub fn by_extension(name: &str) -> &'static str {
     }
 }
 
+/// The Selection category of the Keyboard shortcuts dialogue.
+pub const LIST_CHECKS: &str = ph::LIST_CHECKS;
+/// The Panes & tabs category of the Keyboard shortcuts dialogue.
+pub const COLUMNS: &str = ph::COLUMNS;
+
+/// A plugin's icon, by what its id says it is for: the glyph beside the
+/// plugin's name in the settings' category list and in the Keyboard
+/// shortcuts dialogue. A plugin the table does not know gets the puzzle
+/// piece.
+#[must_use]
+pub fn for_plugin(id: &str) -> &'static str {
+    let id = id.to_lowercase();
+    let has = |part: &str| id.contains(part);
+    if has("pdf") {
+        FILE_PDF
+    } else if has("office") {
+        FILE_DOC
+    } else if has("3d") {
+        CUBE
+    } else if has("console") || has("terminal") {
+        TERMINAL
+    } else if has("ssh") || has("network") {
+        NETWORK
+    } else if has("archive") || has("compress") {
+        ARCHIVE
+    } else if has("git") || has("svn") {
+        BRANCH
+    } else if has("rename") {
+        RENAME
+    } else if has("compare") {
+        COMPARE
+    } else if has("installer") {
+        INSTALL
+    } else if has("trash") {
+        TRASH
+    } else {
+        PLUGIN
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -463,6 +503,8 @@ mod tests {
         FILE_PDF,
         FILE_DOC,
         CUBE,
+        LIST_CHECKS,
+        COLUMNS,
     ];
 
     #[test]
