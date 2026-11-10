@@ -110,7 +110,7 @@ You need the stable Rust toolchain (`rust-toolchain.toml` pins it) and, on Linux
 Rick is open source under [Apache-2.0](LICENSE) and we want company.
 
 - **Try it and tell us.** Open an issue for anything that feels slow, wrong or missing. Performance complaints are especially welcome; they come with numbers.
-- **Ask questions.** Ambiguities in the spec are tracked in [QUESTIONS.md](QUESTIONS.md). Add yours.
+- **Ask questions.** Ambiguities in the spec are raised as [issues](https://github.com/Open-Breach/rick/issues). Add yours.
 - **Review the code.** Because so much of it is agent-written, a second pair of human eyes on any pull request is worth more here than in most projects. Read a crate, question a design, poke at an edge case.
 - **Build something.** Pick a crate, read its one-paragraph README, and send a pull request. The engineering rules are short and in SPEC.md; CI checks them on Linux, macOS and Windows.
 - **Write a module.** The five traits are small enough to fit on one screen each. A previewer for your favourite format is a great first contribution, and it ships as a module people can switch on.

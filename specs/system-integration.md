@@ -1,6 +1,6 @@
 # Rick — System integration & distribution
 
-Status: decided 2026-11-07 and 2026-11-09; part of Version 0.3 (see SPEC.md, *Version 0.3*). Binding in the same way as SPEC.md; where the two disagree, the question goes to `QUESTIONS.md`. Design reference for the dialogs: the Figma file *Rick - FileExplorer*, section *System integration* (frames *Integration dialog — first run (Linux)* and *Settings — Integration*, plus the yellow *Spec notes — integration* frame).
+Status: decided 2026-11-07 and 2026-11-09; part of Version 0.3 (see SPEC.md, *Version 0.3*). Binding in the same way as SPEC.md; where the two disagree, the question goes into the pull request. Design reference for the dialogs: the Figma file *Rick - FileExplorer*, section *System integration* (frames *Integration dialog — first run (Linux)* and *Settings — Integration*, plus the yellow *Spec notes — integration* frame).
 
 ## 1. Purpose and scope
 
