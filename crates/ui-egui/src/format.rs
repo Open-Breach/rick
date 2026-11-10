@@ -68,6 +68,18 @@ pub fn stamp(time: SystemTime) -> String {
 /// extension and *file*, or plainly *File* (QUESTIONS.md 352).
 #[must_use]
 pub fn type_name(kind: &EntryKind, name: &str, executable: bool) -> String {
+    named_type(kind, name, executable, false)
+}
+
+/// [`type_name`] for a file that is known to be no text — no previewer
+/// took it for one: where the extension names no family and the file is
+/// not executable it is a *Binary file*.
+#[must_use]
+pub fn binary_type_name(kind: &EntryKind, name: &str, executable: bool) -> String {
+    named_type(kind, name, executable, true)
+}
+
+fn named_type(kind: &EntryKind, name: &str, executable: bool, binary: bool) -> String {
     match kind {
         EntryKind::Dir => return t!("type-folder"),
         EntryKind::Symlink { .. } => return t!("type-symbolic-link"),
@@ -81,6 +93,8 @@ pub fn type_name(kind: &EntryKind, name: &str, executable: bool) -> String {
     let Some(ext) = ext else {
         return if executable {
             t!("type-executable")
+        } else if binary {
+            t!("type-binary")
         } else {
             t!("type-file")
         };
@@ -104,6 +118,7 @@ pub fn type_name(kind: &EntryKind, name: &str, executable: bool) -> String {
         "pdf" | "doc" | "docx" | "odt" | "rtf" | "xls" | "xlsx" | "ods" | "ppt" | "pptx"
         | "odp" => t!("type-document", format = format),
         _ if executable => t!("type-executable"),
+        _ if binary => t!("type-binary"),
         _ => t!("type-file-of", format = format),
     }
 }
@@ -138,6 +153,13 @@ mod tests {
         assert_eq!(type_name(&file, "random-4k.bin", false), "BIN file");
         assert_eq!(type_name(&file, "Makefile", false), "File");
         assert_eq!(type_name(&file, ".profile", false), "File");
+        // No previewer took it for text: it is binary, whatever it is called.
+        assert_eq!(
+            binary_type_name(&file, "random-4k.bin", false),
+            "Binary file"
+        );
+        assert_eq!(binary_type_name(&file, "clip.mkv", false), "MKV video");
+        assert_eq!(binary_type_name(&file, "rider", true), "Executable file");
     }
 
     #[test]

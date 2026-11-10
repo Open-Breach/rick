@@ -386,11 +386,11 @@ fn screenshots_of_the_preview_pane() {
     settle(&mut harness);
     shoot(&mut harness, "preview-json-pretty");
 
-    // A photo with its EXIF section pinned.
+    // A photo with its File info card pinned.
     preview(&mut harness, "IMG_1200.jpg");
-    harness.get_by_label(icons::CAMERA).click();
+    harness.get_by_label("File info").click();
     settle(&mut harness);
-    shoot(&mut harness, "preview-image-exif-pinned");
+    shoot(&mut harness, "preview-image-info-pinned");
 
     // An A3 page in a narrow pane.
     let mut harness = shell(&root, egui::vec2(1100.0, 760.0));
@@ -2509,6 +2509,140 @@ fn screenshots_of_the_paste_conflict_dialogue() {
         shoot(&mut harness, &format!("paste-conflict-folders-{mode}"));
     }
     cancel(&mut harness);
+}
+
+/// Issue 139, item 5: the preview pane as the Figma frames have it
+/// (`149:4630`) — nothing selected; a photo with the File info card
+/// hanging under the info button, and with it pinned; a file no previewer
+/// claims; and a PDF on a machine without pdfium — in Light and Dark at
+/// both densities, in a pane 600 px wide as the frames are.
+#[test]
+#[ignore = "needs a wgpu adapter; CI runs it and uploads the images"]
+#[allow(clippy::too_many_lines)]
+fn screenshots_of_the_file_info_card() {
+    use egui_kittest::kittest::Queryable as _;
+    let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+    let root = dir.path().join("16-binary-hex");
+    fs::create_dir_all(&root).unwrap_or_else(|e| panic!("{e}"));
+    let photo = "Camera white appartment 5-14-2026 1.32.41pm GMT2.jpg";
+    fs::write(root.join(photo), media::photo_jpeg(1024, 768)).unwrap_or_else(|e| panic!("{e}"));
+    let noise: Vec<u8> = (0..4096u32)
+        .map(|i| (i.wrapping_mul(2_654_435_761) >> 13).to_le_bytes()[0])
+        .collect();
+    fs::write(root.join("random-4k.bin"), noise).unwrap_or_else(|e| panic!("{e}"));
+    fs::write(
+        root.join("hallway_chandeliers_sign_v2.pdf"),
+        media::pdf(1, 595, 842),
+    )
+    .unwrap_or_else(|e| panic!("{e}"));
+    // A window whose PDF previewer looks in its setting alone, as on a
+    // machine without pdfium, with the hex previewer loaded.
+    let fake = Arc::new(Fake::new().unwrap_or_else(|e| panic!("{e}")));
+    let host = Arc::new(EguiHost::new());
+    let app = app::App::new(app::Config {
+        platform: fake.clone(),
+        ui: host.clone(),
+        extensions: vec![
+            Arc::new(ext_preview_text::TextPreview::new()),
+            Arc::new(ext_preview_image::ImagePreview::new()),
+            Arc::new(ext_preview_hex::HexPreview::new()),
+            Arc::new(ext_preview_pdf::PdfPreview::with_search(
+                ext_preview_pdf::Search::SettingOnly,
+            )),
+        ],
+        config_dir: Some(fake.config_dir()),
+        start: Some(local(&root)),
+    });
+    let mut harness = Harness::builder()
+        .with_size(egui::vec2(1280.0, 800.0))
+        .with_pixels_per_point(2.0)
+        .build_eframe(move |cc| RickUi::new(app, host, &cc.egui_ctx));
+    settle(&mut harness);
+    harness.state_mut().set_inspector_width(600.0);
+    let pane = harness.state().app().model().focused;
+    harness.state_mut().queue(Intent::ToggleInspector, pane);
+    settle(&mut harness);
+    let modes = [
+        (Theme::Light, Density::Comfortable, "light-comfortable"),
+        (Theme::Light, Density::Compact, "light-compact"),
+        (Theme::Dark, Density::Comfortable, "dark-comfortable"),
+        (Theme::Dark, Density::Compact, "dark-compact"),
+    ];
+    let set = |harness: &mut Harness<'_, RickUi>, theme: Theme, density: Density| {
+        for change in [
+            SettingsChange::Theme(theme),
+            SettingsChange::Density(density),
+        ] {
+            harness
+                .state_mut()
+                .app_mut()
+                .handle(app::Command::Settings(change), &mut Vec::new());
+        }
+        // The pointer rests on nothing.
+        harness.event(egui::Event::PointerMoved(egui::pos2(300.0, 780.0)));
+        for _ in 0..4 {
+            harness.step();
+        }
+    };
+
+    // Nothing selected.
+    for (theme, density, mode) in modes {
+        set(&mut harness, theme, density);
+        shoot(&mut harness, &format!("preview-empty-{mode}"));
+    }
+    eprintln!("the preview pane: {:?}", harness.state().inspector_rect());
+
+    // A photo: the card hanging under the info button.
+    preview(&mut harness, photo);
+    for (theme, density, mode) in modes {
+        set(&mut harness, theme, density);
+        harness.get_by_label("File info").hover();
+        for _ in 0..6 {
+            harness.step();
+        }
+        shoot(&mut harness, &format!("preview-info-hover-{mode}"));
+    }
+
+    // The card pinned above the picture.
+    harness.get_by_label("File info").click();
+    settle(&mut harness);
+    for (theme, density, mode) in modes {
+        set(&mut harness, theme, density);
+        shoot(&mut harness, &format!("preview-info-pinned-{mode}"));
+    }
+    harness.get_by_label("File info").click();
+    settle(&mut harness);
+
+    // A file no previewer claims, and a PDF without pdfium: the card
+    // centred, with what can be done.
+    for (name, scene) in [
+        ("random-4k.bin", "preview-no-previewer"),
+        ("hallway_chandeliers_sign_v2.pdf", "preview-missing-library"),
+    ] {
+        let pane = harness.state().app().model().focused;
+        let id = harness
+            .state()
+            .app()
+            .model()
+            .active_tab(pane)
+            .and_then(|(_, t)| t.listing.rows().find(|e| e.name == name).map(|e| e.id))
+            .unwrap_or_else(|| panic!("no entry {name}"));
+        harness.state_mut().app_mut().handle(
+            app::Command::Select {
+                pane,
+                change: SelectionChange::Set(vec![id]),
+            },
+            &mut Vec::new(),
+        );
+        settle(&mut harness);
+        for _ in 0..6 {
+            harness.step();
+        }
+        for (theme, density, mode) in modes {
+            set(&mut harness, theme, density);
+            shoot(&mut harness, &format!("{scene}-{mode}"));
+        }
+    }
 }
 
 /// Issue 139, item 4: the Properties dialogue as the Figma frames have it

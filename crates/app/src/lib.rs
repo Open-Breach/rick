@@ -227,6 +227,8 @@ enum Msg {
         pane: PaneId,
         generation: u64,
         result: Result<Box<dyn PreviewDoc>, Error>,
+        /// The previewer that was asked.
+        previewer: ExtId,
         /// The bytes served and the file's size, when the previewer got a
         /// prefix of a remote file.
         prefix: Option<(u64, Option<u64>)>,
@@ -285,6 +287,9 @@ enum Msg {
     PreviewNone {
         pane: PaneId,
         generation: u64,
+        /// The file's mode string and `owner:group`, where they could be
+        /// read.
+        permissions: Option<String>,
     },
     /// The pane's *Copy* read the file: its text, for the clipboard.
     PreviewText {
@@ -602,6 +607,9 @@ pub struct App {
     preview_more: BTreeMap<PaneId, (EntryId, u32)>,
     /// The entry a pane previews whatever its size, after *Preview anyway*.
     preview_force: BTreeMap<PaneId, EntryId>,
+    /// The entry a pane previews through one previewer whatever the
+    /// scores say, after *Open as hex*.
+    preview_with: BTreeMap<PaneId, (EntryId, ExtId)>,
     /// Thumbnails being rendered, so a cell asked for twice renders once.
     thumbnails: BTreeSet<(EntryId, u32)>,
     /// Events from start-up, delivered on the first poll.
@@ -921,6 +929,7 @@ impl App {
             preview_generation: 0,
             preview_more: BTreeMap::new(),
             preview_force: BTreeMap::new(),
+            preview_with: BTreeMap::new(),
             thumbnails: BTreeSet::new(),
             pending,
             later: Vec::new(),
@@ -1662,6 +1671,12 @@ impl App {
             Command::PreviewAnyway(pane) => {
                 if let Some(job) = self.preview.get(&pane) {
                     self.preview_force.insert(pane, job.entry);
+                    self.restart_preview(pane);
+                }
+            }
+            Command::PreviewWith { pane, previewer } => {
+                if let Some(job) = self.preview.get(&pane) {
+                    self.preview_with.insert(pane, (job.entry, previewer));
                     self.restart_preview(pane);
                 }
             }
@@ -3707,6 +3722,7 @@ impl App {
                 pane,
                 generation,
                 result,
+                previewer,
                 prefix,
             } => {
                 if self
@@ -3718,7 +3734,11 @@ impl App {
                 }
                 let opened = result.is_ok();
                 events.push(match result {
-                    Ok(doc) => Event::PreviewReady { pane, doc },
+                    Ok(doc) => Event::PreviewReady {
+                        pane,
+                        doc,
+                        previewer,
+                    },
                     Err(error) => Event::PreviewFailed { pane, error },
                 });
                 if let Some((served, total)) = prefix.filter(|_| opened) {
@@ -3749,14 +3769,22 @@ impl App {
                     }),
                 }
             }
-            Msg::PreviewNone { pane, generation } => {
+            Msg::PreviewNone {
+                pane,
+                generation,
+                permissions,
+            } => {
                 if let Some(job) = self
                     .preview
                     .get(&pane)
                     .filter(|job| job.generation == generation)
                 {
                     let plugin = self.disabled_plugin_for(&job.full.name);
-                    events.push(Event::PreviewNone { pane, plugin });
+                    events.push(Event::PreviewNone {
+                        pane,
+                        plugin,
+                        permissions,
+                    });
                 }
             }
             Msg::PreviewCapped {
@@ -4100,6 +4128,8 @@ impl App {
             if let Some(job) = self.preview.remove(&pane) {
                 job.cancel.cancel();
             }
+            // *Open as hex* was for that one look at the file.
+            self.preview_with.remove(&pane);
         }
         for (pane, entry) in wanted {
             if !self.preview.contains_key(&pane) {
@@ -4152,6 +4182,21 @@ impl App {
         }
     }
 
+    /// The entry's provider cannot be reached: the preview failed before
+    /// it began, and the pane keeps the entry so *Retry* can try again.
+    fn preview_unreachable(&mut self, pane: PaneId, entry: Entry, generation: u64, error: Error) {
+        self.pending.push(Event::PreviewFailed { pane, error });
+        self.preview.insert(
+            pane,
+            PreviewJob {
+                entry: entry.id,
+                full: entry,
+                generation,
+                cancel: CancelToken::new(),
+            },
+        );
+    }
+
     /// Opens `entry` for `pane` through the best-scoring previewer as a
     /// job, answered by [`Event::PreviewReady`] or [`Event::PreviewFailed`].
     /// On a remote provider a prefix previewer is served the first chunk
@@ -4166,16 +4211,7 @@ impl App {
         let provider = match self.mounts.resolve(&loc) {
             Ok(provider) => provider,
             Err(error) => {
-                self.pending.push(Event::PreviewFailed { pane, error });
-                self.preview.insert(
-                    pane,
-                    PreviewJob {
-                        entry: entry.id,
-                        full: job_entry,
-                        generation,
-                        cancel: CancelToken::new(),
-                    },
-                );
+                self.preview_unreachable(pane, job_entry, generation, error);
                 return;
             }
         };
@@ -4191,19 +4227,31 @@ impl App {
             .filter(|(id, _)| *id == entry.id)
             .map_or(0, |(_, n)| *n);
         let force = self.preview_force.get(&pane) == Some(&entry.id);
+        // *Open as hex*: one previewer for this file, whatever the scores.
+        let with = self
+            .preview_with
+            .get(&pane)
+            .filter(|(id, _)| *id == entry.id)
+            .map(|(_, previewer)| *previewer);
         let previewers: Vec<Arc<dyn Previewer>> = self.registry.previewers().to_vec();
+        let platform = Arc::clone(&self.platform);
+        let local = local_path(&entry);
         let tx = self.mailbox.clone();
         let id = entry.id;
         let handle =
             self.jobs
                 .spawn_named(format!("Preview {}", entry.name), move |job| async move {
                     let sniff = ext::read_bytes(&*provider, &loc, Some(4096), &job.cancel).await?;
-                    let best = previewers
-                        .iter()
-                        .map(|p| (p.score(&entry, &sniff), p))
-                        .filter(|(score, _)| *score > 0)
-                        .max_by_key(|(score, _)| *score)
-                        .map(|(_, p)| Arc::clone(p));
+                    let best = choose_previewer(&previewers, with, &entry, &sniff);
+                    let Some(previewer) = best.as_ref().map(|p| p.id()) else {
+                        let permissions = permissions_of(platform, local, entry.kind.clone()).await;
+                        tx.send(Msg::PreviewNone {
+                            pane,
+                            generation,
+                            permissions,
+                        });
+                        return Ok(());
+                    };
                     let mut prefix = None;
                     let result = match best {
                         Some(previewer) if remote && previewer.reads() == Reads::Prefix => {
@@ -4233,10 +4281,8 @@ impl App {
                             return Ok(());
                         }
                         Some(previewer) => previewer.open(&loc, provider, job.cancel.clone()).await,
-                        None => {
-                            tx.send(Msg::PreviewNone { pane, generation });
-                            return Ok(());
-                        }
+                        // Answered above.
+                        None => return Ok(()),
                     };
                     if job.cancel.is_cancelled() {
                         return Err(Error::Cancelled);
@@ -4245,6 +4291,7 @@ impl App {
                         pane,
                         generation,
                         result,
+                        previewer,
                         prefix,
                     });
                     Ok(())
@@ -4947,6 +4994,84 @@ fn count_tree(path: &Path, cancel: &CancelToken) -> Option<FolderContents> {
         }
     }
     Some(contents)
+}
+
+/// The entry as a path on this machine, for an entry of the local
+/// provider.
+fn local_path(entry: &Entry) -> Option<PathBuf> {
+    (entry.id.provider == vfs_local::PROVIDER_ID)
+        .then(|| platform::paths::to_path(&entry.path).ok())
+        .flatten()
+}
+
+/// The previewer that shows `entry`: the one `asked` for, whatever the
+/// scores say, else the highest-scoring one that claims the entry at all.
+fn choose_previewer(
+    previewers: &[Arc<dyn Previewer>],
+    asked: Option<ExtId>,
+    entry: &Entry,
+    sniff: &[u8],
+) -> Option<Arc<dyn Previewer>> {
+    match asked {
+        Some(asked) => previewers.iter().find(|p| p.id() == asked).cloned(),
+        None => previewers
+            .iter()
+            .map(|p| (p.score(entry, sniff), p))
+            .filter(|(score, _)| *score > 0)
+            .max_by_key(|(score, _)| *score)
+            .map(|(_, p)| Arc::clone(p)),
+    }
+}
+
+/// The [`permission_line`] of the local file at `path`, read off the UI
+/// thread; `None` for an entry that is not on this machine.
+async fn permissions_of(
+    platform: Arc<dyn Platform>,
+    path: Option<PathBuf>,
+    kind: EntryKind,
+) -> Option<String> {
+    let path = path?;
+    runtime::handle()
+        .spawn_blocking(move || {
+            let read = platform.permissions(&path).ok()?;
+            permission_line(&read, &kind)
+        })
+        .await
+        .ok()
+        .flatten()
+}
+
+/// An entry's mode as `ls -l` writes it and its `owner:group`,
+/// `-rw-r--r-- serge:serge`, for the File info card; `None` where the
+/// platform has no mode bits.
+fn permission_line(permissions: &platform::FilePermissions, kind: &EntryKind) -> Option<String> {
+    let mode = permissions.mode?;
+    let mut text = String::with_capacity(10);
+    text.push(match kind {
+        EntryKind::Dir => 'd',
+        EntryKind::Symlink { .. } => 'l',
+        EntryKind::File | EntryKind::Other => '-',
+    });
+    // The execute place of each triplet carries its special bit: setuid,
+    // setgid, sticky.
+    let special = [(0o4000, 's', 'S'), (0o2000, 's', 'S'), (0o1000, 't', 'T')];
+    for (index, (bit, set, alone)) in special.into_iter().enumerate() {
+        let shift = 6 - 3 * index;
+        let triplet = (mode >> shift) & 7;
+        text.push(if triplet & 4 == 0 { '-' } else { 'r' });
+        text.push(if triplet & 2 == 0 { '-' } else { 'w' });
+        text.push(match (triplet & 1 != 0, mode & bit != 0) {
+            (true, true) => set,
+            (false, true) => alone,
+            (true, false) => 'x',
+            (false, false) => '-',
+        });
+    }
+    Some(format!(
+        "{text} {}:{}",
+        permissions.owner.display(),
+        permissions.group.display()
+    ))
 }
 
 /// The count the Properties dialogue waits for or holds.

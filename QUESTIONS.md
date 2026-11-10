@@ -4177,3 +4177,44 @@ Once answered, an entry keeps its number and gains a dated decision line.
     of the shared shell now: Escape and a click beside it close it,
     unapplied changes included, and the keymap is quiet while it is
     open.
+
+357. (GUI fixes, preview pane, issue 139 item 5, 2026-11-10) The frame
+    of *No previewer* names `random-4k.bin` a *Binary file*; question 352
+    names a file by the family of its extension and `.bin` is in none.
+    Assumed: in that card the file is known to be no text — no previewer
+    took it for one — so a file in no family and not executable is a
+    *Binary file* there; everywhere else it stays *BIN file*.
+
+358. (GUI fixes, preview pane, issue 139 item 5, 2026-11-10) *Open as
+    hex* shows "this file only, until the selection moves on", and the
+    hex previewer claims no file by itself.
+    Assumed: a command of its own, `PreviewWith`, opens the pane's file
+    through one previewer whatever the scores say; the choice is dropped
+    when the pane's selection changes, so coming back to the file shows
+    the card again. The button is left out for a folder, and while the
+    hex plugin is not loaded.
+
+359. (GUI fixes, preview pane, issue 139 item 5, 2026-11-10) Four
+    things about the card's places are not written out. With the card
+    centred in the content the frames draw no file icon and no controls
+    in the toolbar. The pin "is remembered per previewer". A missing
+    library's *Where Rick looked* "unfolds the places that were searched
+    and the loader's error". *Destination*'s button "shows the folder …
+    creating it first".
+    Assumed: the file icon stays at the toolbar's left, as *Toolbar*
+    says for every entry, and the previewer's controls go, since there
+    is no document for them to act on; the info button is then inert,
+    the card being on show. The pin is `<previewer id> = true` in
+    `[preview.pinned]`, the id being the extension's (`preview-image`).
+    The line unfolds the text the plugin reports, as it reports it. The
+    button makes the per-user plugins folder and opens it with the
+    system's handler for a folder.
+
+360. (GUI fixes, preview pane, issue 139 item 5, 2026-11-10) "Only the
+    tags Rick knows by name and that have a value": a GPS block without
+    a position still holds named tags with values (the version, a
+    reference letter), and a maker note is a named tag whose value is
+    bytes.
+    Assumed: no GPS row at all unless latitude and longitude are both
+    numbers; every other named tag with a value is listed, bytes
+    included, cut at 200 characters as before.

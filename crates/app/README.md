@@ -30,9 +30,11 @@ its prompt (`Console::foreground_job`). A drag and drop's `Transfer`, `Receive`,
 and enters as a location when it browses it (unless the setting
 `archives.on_open` says `system`), anything else opens with the system
 default; nothing opens a viewer. The preview pane's *Copy* reads the whole
-file as a job and puts its text on the clipboard; a file no previewer
-claims is reported with the disabled plugin whose manifest claims its type,
-for the pane's placeholder; *Always preview on <source>* writes
+file as a job and puts its text on the clipboard; a preview is reported
+with the previewer that opened it, and a file no previewer claims with the
+disabled plugin whose manifest claims its type and the file's permission
+line, for the pane's File info card, whose *Open as hex* shows that one
+file through the hex previewer (`Command::PreviewWith`); *Always preview on <source>* writes
 `preview_always` into the source's connection and takes the size cap off
 there. The extension settings store is shared with the plugins through the
 registry, so a plugin that found its third-party library writes the path

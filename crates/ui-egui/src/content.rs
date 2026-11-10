@@ -15,13 +15,9 @@ use std::time::SystemTime;
 
 use egui::{Align, Rect, RichText, TextureHandle, TextureOptions, pos2, vec2};
 use egui_extras::{Column as TableColumn, TableBuilder};
-use ext::{
-    Block, Content, Document, Grid, Image, InfoSection, Inline, Listing, ListingEntry,
-    MissingLibrary, Style,
-};
+use ext::{Block, Content, Document, Grid, Image, Inline, Listing, ListingEntry, Style};
 use types::EntryKind;
 
-use crate::preview::PreviewAct;
 use crate::{format, icons};
 
 /// How far a nested row or block is indented, in points.
@@ -127,101 +123,16 @@ impl State {
     }
 }
 
-/// Draws `content` into the Ui's available space; `sections` are the
-/// document's, whose first is the file's information a missing-library
-/// message shows above itself. Returns what a button asked for.
-pub fn draw(
-    ui: &mut egui::Ui,
-    content: &Content,
-    sections: &[InfoSection],
-    state: &mut State,
-    now: SystemTime,
-) -> Option<PreviewAct> {
+/// Draws `content` into the Ui's available space. A missing library is
+/// not laid out here: the pane shows the File info card for it.
+pub fn draw(ui: &mut egui::Ui, content: &Content, state: &mut State, now: SystemTime) {
     ui.style_mut().interaction.selectable_labels = false;
     match content {
         Content::Listing(listing) => draw_listing(ui, listing, state, now),
         Content::Grid(grid) => draw_grid(ui, &**grid, state),
         Content::Document(document) => draw_document(ui, document, state),
-        Content::MissingLibrary(missing) => return draw_missing(ui, missing, sections.first()),
+        Content::MissingLibrary(_) => {}
     }
-    None
-}
-
-/// The message for a third-party library the previewer could not find
-/// (SPEC.md, *Third-party libraries*): the file's information at the top,
-/// then the library's name, how to install it on this platform, where it
-/// was looked for, and *Browse…* and *Retry*.
-fn draw_missing(
-    ui: &mut egui::Ui,
-    missing: &MissingLibrary,
-    info: Option<&InfoSection>,
-) -> Option<PreviewAct> {
-    let whole = ui.available_rect_before_wrap();
-    if let Some(info) = info {
-        let section = crate::inspector::Section {
-            id: info.id,
-            title: info.title.get(),
-            glyph: icons::for_icon(info.icon),
-            rows: info.rows.clone(),
-        };
-        crate::inspector::section_rows(ui, &section, None, whole.height() * 0.4);
-        ui.add_space(8.0);
-    }
-    let mut act = None;
-    ui.style_mut().interaction.selectable_labels = true;
-    egui::ScrollArea::vertical()
-        .id_salt("preview-missing-library")
-        .auto_shrink([false, false])
-        .show(ui, |ui| {
-            ui.add_space(6.0);
-            ui.horizontal_wrapped(|ui| {
-                ui.add_space(6.0);
-                ui.label(
-                    RichText::new(ext::t!(
-                        "preview-library-needed",
-                        name = missing.name.as_str()
-                    ))
-                    .strong(),
-                );
-            });
-            ui.add_space(4.0);
-            ui.horizontal_wrapped(|ui| {
-                ui.add_space(6.0);
-                ui.label(ext::t!(
-                    "preview-library-install",
-                    name = missing.name.as_str()
-                ));
-            });
-            ui.horizontal_wrapped(|ui| {
-                ui.add_space(6.0);
-                if is_url(&missing.install) {
-                    ui.hyperlink(&missing.install);
-                } else {
-                    ui.add(egui::Label::new(RichText::new(&missing.install).code()).wrap());
-                }
-            });
-            ui.add_space(8.0);
-            ui.horizontal(|ui| {
-                ui.add_space(6.0);
-                if ui.button(ext::t!("preview-browse")).clicked() {
-                    act = Some(PreviewAct::Browse {
-                        setting: missing.setting,
-                        filters: missing.filters.clone(),
-                    });
-                }
-                if ui.button(ext::t!("preview-retry")).clicked() {
-                    act = Some(PreviewAct::Retry);
-                }
-            });
-            if !missing.detail.is_empty() {
-                ui.add_space(8.0);
-                ui.horizontal_wrapped(|ui| {
-                    ui.add_space(6.0);
-                    ui.add(egui::Label::new(RichText::new(&missing.detail).small().weak()).wrap());
-                });
-            }
-        });
-    act
 }
 
 /// The glyph of a listing row: the folder, the link, or the type by name.

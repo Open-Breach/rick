@@ -41,6 +41,7 @@ pub mod frame;
 pub mod hash;
 pub mod host;
 pub mod icons;
+pub mod info_card;
 pub mod inline;
 pub mod inspector;
 pub mod integration;

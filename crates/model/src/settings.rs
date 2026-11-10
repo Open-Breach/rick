@@ -256,9 +256,32 @@ pub fn parse_location(text: &str) -> Location {
 pub struct Preview {
     /// Text and code defaults.
     pub text: TextPreview,
-    /// The pinned info section's id by content kind (`"text"`, `"image"`,
-    /// `"pages"`); a kind without an entry has nothing pinned.
-    pub pinned: BTreeMap<String, String>,
+    /// Whether the File info card is pinned, by the id of the previewer
+    /// that shows the file (`preview-image = true`); a previewer without
+    /// an entry has it unpinned. An entry of 0.3, which named a section
+    /// per content kind, is dropped when the file is read.
+    #[serde(deserialize_with = "lenient_pins")]
+    pub pinned: BTreeMap<String, bool>,
+}
+
+/// The pins of `[preview.pinned]`: the entries that are `true`. Anything
+/// else under a key — 0.3's section name — is no pin and is dropped
+/// instead of failing the whole file.
+fn lenient_pins<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<BTreeMap<String, bool>, D::Error> {
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Pin {
+        Flag(bool),
+        Other(serde::de::IgnoredAny),
+    }
+    let entries: BTreeMap<String, Pin> = BTreeMap::deserialize(deserializer)?;
+    Ok(entries
+        .into_iter()
+        .filter(|(_, pin)| matches!(pin, Pin::Flag(true)))
+        .map(|(previewer, _)| (previewer, true))
+        .collect())
 }
 
 /// How text and code open in the preview pane.
@@ -510,12 +533,12 @@ pub enum SettingsChange {
     PreviewLineNumbers(bool),
     /// Word wrap in text previews, the new default.
     PreviewWrap(bool),
-    /// Pin an info section for a content kind, or unpin with `None`.
+    /// Pin or unpin the File info card for the files a previewer shows.
     PreviewPin {
-        /// The content kind: `"text"`, `"image"`, `"pages"`.
-        kind: String,
-        /// The section id to pin, or nothing.
-        section: Option<String>,
+        /// The previewer's id.
+        previewer: String,
+        /// Pinned above the content, or not.
+        pinned: bool,
     },
     /// The names the subtree search skips.
     SearchIgnore(Vec<String>),
@@ -582,14 +605,13 @@ impl Settings {
             SettingsChange::AfterDrag(after) => self.drag.after = after,
             SettingsChange::PreviewLineNumbers(v) => self.preview.text.line_numbers = v,
             SettingsChange::PreviewWrap(v) => self.preview.text.wrap = v,
-            SettingsChange::PreviewPin { kind, section } => match section {
-                Some(section) => {
-                    self.preview.pinned.insert(kind, section);
+            SettingsChange::PreviewPin { previewer, pinned } => {
+                if pinned {
+                    self.preview.pinned.insert(previewer, true);
+                } else {
+                    self.preview.pinned.remove(&previewer);
                 }
-                None => {
-                    self.preview.pinned.remove(&kind);
-                }
-            },
+            }
             SettingsChange::SearchIgnore(names) => self.search.ignore = names,
             SettingsChange::ArchivesOnOpen(on_open) => self.archives.on_open = on_open,
             SettingsChange::Plugin { id, enabled } => {
@@ -772,40 +794,40 @@ mod tests {
     }
 
     #[test]
-    fn preview_changes_apply_and_pins_are_per_kind() {
+    fn preview_changes_apply_and_pins_are_per_previewer() {
         let mut s = Settings::default();
         s.apply(SettingsChange::PreviewWrap(true));
         s.apply(SettingsChange::PreviewLineNumbers(false));
         assert!(s.preview.text.wrap);
         assert!(!s.preview.text.line_numbers);
-        s.apply(SettingsChange::PreviewPin {
-            kind: "image".into(),
-            section: Some("exif".into()),
-        });
-        s.apply(SettingsChange::PreviewPin {
-            kind: "text".into(),
-            section: Some("file".into()),
-        });
-        assert_eq!(
-            s.preview.pinned.get("image").map(String::as_str),
-            Some("exif")
+        let pin = |previewer: &str, pinned: bool| SettingsChange::PreviewPin {
+            previewer: previewer.into(),
+            pinned,
+        };
+        s.apply(pin("preview-image", true));
+        s.apply(pin("preview-text", true));
+        assert_eq!(s.preview.pinned.get("preview-image"), Some(&true));
+        s.apply(pin("preview-image", false));
+        assert_eq!(s.preview.pinned.get("preview-image"), None);
+        assert_eq!(s.preview.pinned.get("preview-text"), Some(&true));
+        // Written as a table of switches and read back.
+        let text = toml::to_string(&s).unwrap_or_else(|e| panic!("{e}"));
+        assert!(
+            text.contains("[preview.pinned]\npreview-text = true"),
+            "{text}"
         );
-        s.apply(SettingsChange::PreviewPin {
-            kind: "image".into(),
-            section: Some("file".into()),
-        });
+        let back: Settings = toml::from_str(&text).unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(back.preview.pinned, s.preview.pinned);
+        // A pin of 0.3, a section per content kind, is not carried over
+        // and does not stop the file from being read.
+        let old: Settings = toml::from_str(
+            "theme = \"dark\"\n[preview.pinned]\nimage = \"exif\"\npreview-pdf = true\noff = false\n",
+        )
+        .unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(old.theme, Theme::Dark);
         assert_eq!(
-            s.preview.pinned.get("image").map(String::as_str),
-            Some("file")
-        );
-        s.apply(SettingsChange::PreviewPin {
-            kind: "image".into(),
-            section: None,
-        });
-        assert_eq!(s.preview.pinned.get("image"), None);
-        assert_eq!(
-            s.preview.pinned.get("text").map(String::as_str),
-            Some("file")
+            old.preview.pinned.keys().collect::<Vec<_>>(),
+            ["preview-pdf"]
         );
     }
 

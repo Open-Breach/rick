@@ -383,6 +383,31 @@ pub fn button_of(
     kind: ButtonKind,
     enabled: bool,
 ) -> egui::Response {
+    button_sized(ui, glyph, label, kind, enabled, 36.0)
+}
+
+/// The button of a card's action row: [`button_of`] at 32 px, with 12 px
+/// of padding (SPEC.md *File info card*).
+pub fn card_button(
+    ui: &mut egui::Ui,
+    glyph: Option<&str>,
+    label: &str,
+    kind: ButtonKind,
+) -> egui::Response {
+    button_sized(ui, glyph, label, kind, true, 32.0)
+}
+
+/// A button `height` tall; a 36 px one has 16 px of padding at its sides,
+/// a lower one 12 px.
+fn button_sized(
+    ui: &mut egui::Ui,
+    glyph: Option<&str>,
+    label: &str,
+    kind: ButtonKind,
+    enabled: bool,
+    height: f32,
+) -> egui::Response {
+    let pad = if height < 36.0 { 12.0 } else { 16.0 };
     let scheme = theme::scheme(ui);
     let radius = theme::metrics(ui.ctx()).corner_radius();
     let (fill, fg) = match (kind, enabled) {
@@ -406,7 +431,7 @@ pub fn button_of(
     } else {
         0.0
     };
-    let size = vec2(galley.size().x + glyph_room + 32.0, 36.0);
+    let size = vec2(galley.size().x + glyph_room + pad * 2.0, height);
     let (rect, response) = ui.allocate_exact_size(size, Sense::click());
     let fill = if response.hovered() && enabled {
         fill.gamma_multiply(0.9)
@@ -414,10 +439,10 @@ pub fn button_of(
         fill
     };
     ui.painter().rect_filled(rect, radius, fill);
-    let text_left = rect.left() + 16.0 + glyph_room;
+    let text_left = rect.left() + pad + glyph_room;
     if let Some(glyph) = glyph {
         ui.painter().text(
-            pos2(rect.left() + 16.0 + theme::ICON / 2.0, rect.center().y),
+            pos2(rect.left() + pad + theme::ICON / 2.0, rect.center().y),
             Align2::CENTER_CENTER,
             glyph,
             FontId::proportional(theme::ICON),

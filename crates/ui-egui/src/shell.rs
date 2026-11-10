@@ -1270,10 +1270,17 @@ impl RickUi {
         &self.inspector_state.toolbar
     }
 
-    /// The preview pane's badges of the last frame, for tests.
+    /// The info button of the Preview tab as last drawn: inert, with a
+    /// card to open, or pinned.
     #[must_use]
-    pub fn preview_badges(&self) -> &[inspector::BadgeItem] {
-        &self.inspector_state.badges
+    pub fn preview_info(&self) -> inspector::Info {
+        self.inspector_state.info
+    }
+
+    /// The File info card's rows of the last frame, as label and value.
+    #[must_use]
+    pub fn preview_fields(&self) -> &[(String, String)] {
+        &self.inspector_state.fields
     }
 
     /// The preview pane's status bar text of the last frame, for tests.
@@ -1636,17 +1643,25 @@ impl RickUi {
                     contents,
                 } => self.properties.counted(pane, &path, contents),
                 Event::HashesOpened { hashes, format, .. } => self.hash.open(hashes, format),
-                Event::PreviewReady { pane, doc } => {
+                Event::PreviewReady {
+                    pane,
+                    doc,
+                    previewer,
+                } => {
                     let entry = self.preview_entry(pane);
-                    self.previews.ready(pane, doc, entry);
+                    self.previews.ready(pane, doc, entry, previewer);
                 }
                 Event::PreviewFailed { pane, error } => {
                     let entry = self.preview_entry(pane);
                     self.previews.failed(pane, &error, entry);
                 }
-                Event::PreviewNone { pane, plugin } => {
+                Event::PreviewNone {
+                    pane,
+                    plugin,
+                    permissions,
+                } => {
                     let entry = self.preview_entry(pane);
-                    self.previews.none(pane, plugin, entry);
+                    self.previews.none(pane, plugin, permissions, entry);
                 }
                 Event::PreviewPrefix {
                     pane,
