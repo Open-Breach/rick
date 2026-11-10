@@ -102,6 +102,14 @@ pub fn hand_over(endpoint: &Endpoint, argv: Vec<String>, cwd: PathBuf) -> io::Re
     })
 }
 
+/// The path a `rick://` URL names, in the form `cli::resolve` gives a
+/// typed path: canonical where it names something, so a symlink reaches
+/// the thing itself (QUESTIONS.md 316).
+fn url_path(url: &str) -> Option<PathBuf> {
+    let path = platform::paths::from_uri(url, "rick")?;
+    Some(std::fs::canonicalize(&path).unwrap_or(path))
+}
+
 /// A folder as a location of the local provider.
 #[must_use]
 pub fn location(path: &Path) -> Location {
@@ -164,15 +172,15 @@ fn open(
 ) -> Reply {
     tracing::info!(new_window, ?targets, "open from the command line");
     // A `rick://` URL names an existing folder, to open, or an existing
-    // file, to reveal; anything else is an error toast in the window and
-    // nothing opens for it.
+    // file, to reveal, resolved like a typed path; anything else is an
+    // error toast in the window and nothing opens for it.
     let mut first = true;
     let mut reveal: Vec<Location> = Vec::new();
     let mut problems: Vec<String> = Vec::new();
     for target in targets {
         let folder = match target {
             Target::Path(path) => Some(path),
-            Target::Url(url) => match platform::paths::from_uri(&url, "rick") {
+            Target::Url(url) => match url_path(&url) {
                 Some(path) if path.is_dir() => Some(path),
                 Some(path) if path.is_file() => {
                     reveal.push(location(&path));

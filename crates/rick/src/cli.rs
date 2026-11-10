@@ -343,8 +343,17 @@ mod tests {
     #[test]
     fn reveal_takes_files_and_a_plugin_command_takes_its_arguments_as_typed() {
         let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+        // An absolute path that names nothing stays as typed; a relative one
+        // joins the working directory. (`/b/c.txt` is not absolute on
+        // Windows, where it would take the working directory's drive.)
+        let elsewhere = dir.path().join("elsewhere").join("c.txt");
         let parsed = parse(
-            &args(&["reveal", "--new-window", "a.txt", "/b/c.txt"]),
+            &args(&[
+                "reveal",
+                "--new-window",
+                "a.txt",
+                elsewhere.to_str().unwrap_or_default(),
+            ]),
             dir.path(),
             &[],
         )
@@ -352,7 +361,7 @@ mod tests {
         assert_eq!(
             parsed,
             Parsed::Reveal {
-                files: vec![dir.path().join("a.txt"), PathBuf::from("/b/c.txt")],
+                files: vec![dir.path().join("a.txt"), elsewhere],
                 new_window: true
             }
         );
