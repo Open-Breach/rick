@@ -500,6 +500,14 @@ pub trait NativeDialogs: Send + Sync {
     /// Asks for a directory; `None` when dismissed.
     async fn pick_folder(&self, title: &str) -> Option<PathBuf>;
 
+    /// Asks for a directory with the dialogue starting in `start`: the
+    /// Downloads folder for *Download…*. The default starts wherever the
+    /// platform's dialogue does.
+    async fn pick_folder_in(&self, title: &str, start: &Path) -> Option<PathBuf> {
+        let _ = start;
+        self.pick_folder(title).await
+    }
+
     /// Asks for one or more files; empty when dismissed.
     async fn pick_files(&self, title: &str, filters: &[DialogFilter]) -> Vec<PathBuf>;
 

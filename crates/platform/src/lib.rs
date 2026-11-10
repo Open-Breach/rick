@@ -286,6 +286,14 @@ impl NativeDialogs for Native {
         dialogs::pick_folder(title).await
     }
 
+    async fn pick_folder_in(
+        &self,
+        title: &str,
+        start: &std::path::Path,
+    ) -> Option<std::path::PathBuf> {
+        dialogs::pick_folder_in(title, start).await
+    }
+
     async fn pick_files(&self, title: &str, filters: &[DialogFilter]) -> Vec<std::path::PathBuf> {
         dialogs::pick_files(title, filters).await
     }
