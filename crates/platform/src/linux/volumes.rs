@@ -13,9 +13,12 @@ use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
+use rustix::event::{PollFd, PollFlags, poll};
+use rustix::pipe::{PipeFlags, pipe_with};
+use tracing::debug;
 use types::Error;
 
-use crate::traits::{Volume, VolumeKind};
+use crate::traits::{MountWatch, MountsChanged, Volume, VolumeKind};
 
 /// File system types that are not volumes a user browses.
 const PSEUDO: &[&str] = &[
@@ -241,6 +244,59 @@ pub(super) fn list() -> Result<Vec<Volume>, Error> {
 }
 
 /// Runs a command and turns a failure into an error carrying what it said.
+/// Listens for mounts and unmounts and calls `changed` on each, until the
+/// returned watch is dropped.
+///
+/// The kernel's mount table is pollable: on every mount and unmount in this
+/// process's namespace a `poll` on `/proc/self/mounts` reports a priority
+/// event, once. A thread waits for that and for the end of the watch, which
+/// it sees as the hang-up of a pipe whose other end the watch holds.
+pub(super) fn watch_mounts(changed: MountsChanged) -> Option<MountWatch> {
+    listen(changed).map(|(watch, _)| watch)
+}
+
+/// [`watch_mounts`], with the listening thread's handle.
+fn listen(changed: MountsChanged) -> Option<(MountWatch, std::thread::JoinHandle<()>)> {
+    let table = fs::File::open("/proc/self/mounts")
+        .inspect_err(|error| debug!(%error, "the mount table cannot be watched"))
+        .ok()?;
+    let (ended, keep) = pipe_with(PipeFlags::CLOEXEC)
+        .inspect_err(|error| debug!(%error, "the mount table cannot be watched"))
+        .ok()?;
+    let thread = std::thread::Builder::new()
+        .name("rick-mounts".into())
+        .spawn(move || {
+            loop {
+                let mut fds = [
+                    PollFd::new(&table, PollFlags::PRI),
+                    PollFd::new(&ended, PollFlags::IN),
+                ];
+                match poll(&mut fds, None) {
+                    Ok(_) => {}
+                    Err(rustix::io::Errno::INTR) => continue,
+                    Err(error) => {
+                        debug!(%error, "the watch of the mount table ended");
+                        break;
+                    }
+                }
+                let [table_events, ended_events] = [fds[0].revents(), fds[1].revents()];
+                if !ended_events.is_empty() {
+                    break;
+                }
+                if table_events.contains(PollFlags::PRI) {
+                    changed();
+                } else if !table_events.is_empty() {
+                    // An error without the event: nothing to wait for.
+                    debug!(?table_events, "the watch of the mount table ended");
+                    break;
+                }
+            }
+        })
+        .inspect_err(|error| debug!(%error, "the mount table cannot be watched"))
+        .ok()?;
+    Some((MountWatch::new(keep), thread))
+}
+
 fn run(program: &str, args: &[&std::ffi::OsStr]) -> Result<(), Error> {
     let output = Command::new(program)
         .args(args)
@@ -263,6 +319,40 @@ fn run(program: &str, args: &[&std::ffi::OsStr]) -> Result<(), Error> {
 fn available(program: &str) -> bool {
     std::env::var_os("PATH")
         .is_some_and(|path| std::env::split_paths(&path).any(|dir| dir.join(program).is_file()))
+}
+
+/// The disk utilities *Format…* opens, in the order they are looked for:
+/// GNOME Disks, then the desktop's equivalents, KDE Partition Manager and
+/// `GParted`.
+const FORMAT_TOOLS: &[&str] = &["gnome-disks", "partitionmanager", "gparted"];
+
+/// The disk utility that is installed, if one is.
+pub(super) fn format_tool() -> Option<&'static str> {
+    FORMAT_TOOLS.iter().copied().find(|tool| available(tool))
+}
+
+/// The arguments that take `tool` to `device`: GNOME Disks opens its
+/// format dialogue on it, the others open with the device selected.
+fn format_args(tool: &str, device: Option<&str>) -> Vec<String> {
+    match (tool, device) {
+        (_, None) => Vec::new(),
+        ("gnome-disks", Some(device)) => vec![
+            "--block-device".to_owned(),
+            device.to_owned(),
+            "--format-device".to_owned(),
+        ],
+        ("partitionmanager", Some(device)) => vec!["--device".to_owned(), device.to_owned()],
+        (_, Some(device)) => vec![device.to_owned()],
+    }
+}
+
+/// Opens the installed disk utility on the volume's device. Rick formats
+/// nothing itself: what happens next is the tool's and the user's.
+pub(super) fn open_format_tool(volume: &Volume) -> Result<(), Error> {
+    let tool = format_tool().ok_or(Error::Unsupported("no disk utility is installed"))?;
+    let args = format_args(tool, volume.device.as_deref());
+    let args: Vec<&std::ffi::OsStr> = args.iter().map(std::ffi::OsStr::new).collect();
+    super::spawn_detached(tool, &args)
 }
 
 /// The loop device behind a partition or loop device name: `/dev/loop3`
@@ -334,6 +424,87 @@ pub(super) fn eject(volume: &Volume) -> Result<(), Error> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Issue 149, *Format…*: Rick opens the system's own tool on the
+    /// drive and formats nothing itself. GNOME Disks is taken to its
+    /// format dialogue for the device, the others to the device.
+    /// Waits up to five seconds for `done`.
+    fn within_five_seconds(done: impl Fn() -> bool) -> bool {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while std::time::Instant::now() < deadline {
+            if done() {
+                return true;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        done()
+    }
+
+    #[test]
+    fn the_watch_of_the_mount_table_ends_with_its_watch() {
+        let rung = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let count = std::sync::Arc::clone(&rung);
+        let Some((watch, thread)) = listen(Box::new(move || {
+            count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        })) else {
+            panic!("the mount table is not watched");
+        };
+        assert!(!thread.is_finished());
+        drop(watch);
+        assert!(within_five_seconds(|| thread.is_finished()));
+    }
+
+    /// A mount needs the right to mount: the test runs where it has it (as
+    /// root, in a container that allows it) and says so where it has not.
+    #[test]
+    fn a_mount_and_an_unmount_ring_the_watch() {
+        let rung = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let count = std::sync::Arc::clone(&rung);
+        let Some((watch, _thread)) = listen(Box::new(move || {
+            count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        })) else {
+            panic!("the mount table is not watched");
+        };
+        let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+        let mounted = Command::new("mount")
+            .args(["-t", "tmpfs", "none"])
+            .arg(dir.path())
+            .stderr(Stdio::null())
+            .status()
+            .is_ok_and(|status| status.success());
+        if !mounted {
+            eprintln!("skipped: this user may not mount a file system");
+            return;
+        }
+        let after_mount =
+            within_five_seconds(|| rung.load(std::sync::atomic::Ordering::SeqCst) >= 1);
+        let before = rung.load(std::sync::atomic::Ordering::SeqCst);
+        let unmounted = Command::new("umount")
+            .arg(dir.path())
+            .status()
+            .is_ok_and(|status| status.success());
+        assert!(unmounted, "the test's file system stays mounted");
+        assert!(after_mount, "the mount did not ring the watch");
+        assert!(
+            within_five_seconds(|| rung.load(std::sync::atomic::Ordering::SeqCst) > before),
+            "the unmount did not ring the watch"
+        );
+        drop(watch);
+    }
+
+    #[test]
+    fn the_format_tools_are_taken_to_the_device() {
+        assert_eq!(
+            format_args("gnome-disks", Some("/dev/sdb1")),
+            ["--block-device", "/dev/sdb1", "--format-device"]
+        );
+        assert_eq!(
+            format_args("partitionmanager", Some("/dev/sdb1")),
+            ["--device", "/dev/sdb1"]
+        );
+        assert_eq!(format_args("gparted", Some("/dev/sdb1")), ["/dev/sdb1"]);
+        assert_eq!(format_args("gnome-disks", None), Vec::<String>::new());
+    }
 
     const SAMPLE: &str = "\
 proc /proc proc rw,relatime 0 0

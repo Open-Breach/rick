@@ -236,7 +236,30 @@ impl Volumes for Native {
             said.to_owned()
         })))
     }
+
+    /// Disk Utility is part of the system.
+    fn has_format_tool(&self) -> bool {
+        Path::new(DISK_UTILITY).exists()
+    }
+
+    /// Opens Disk Utility, where the volume is erased; it takes no volume
+    /// to start on.
+    fn open_format_tool(&self, _volume: &Volume) -> Result<(), Error> {
+        if !self.has_format_tool() {
+            return Err(Error::Unsupported("no disk utility is installed"));
+        }
+        run_detached(
+            "open",
+            &[
+                std::ffi::OsStr::new("-a"),
+                std::ffi::OsStr::new(DISK_UTILITY),
+            ],
+        )
+    }
 }
+
+/// Where Disk Utility is on every macOS Rick supports.
+const DISK_UTILITY: &str = "/System/Applications/Utilities/Disk Utility.app";
 
 /// Network file systems by the name `statfs` reports.
 const NETWORK_FS: &[&str] = &[
