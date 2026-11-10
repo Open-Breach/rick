@@ -79,6 +79,7 @@
 //! let manifest = |api_version| Manifest {
 //!     id: ExtId("demo"),
 //!     name: "Demo",
+//!     description: "",
 //!     version: Version::new(0, 1, 0),
 //!     api_version,
 //!     requires: Capabilities::empty(),
@@ -177,8 +178,10 @@ use crate::search::SearchIndex;
 /// shows (issue 139): `Conflicts::ask` takes a `ConflictDetails` — both
 /// sides of the conflict, the name *Keep both* would give and the
 /// conflict's place among the job's — where it took `target_is_dir` and
-/// `remaining` (QUESTIONS.md 350).
-pub const API_VERSION: u32 = 17;
+/// `remaining` (QUESTIONS.md 350); 18 an extension describes itself
+/// (issue 139): [`Manifest`] gained `description`, which `plugin.toml`
+/// carries and the Extensions dialogue shows (QUESTIONS.md 344).
+pub const API_VERSION: u32 = 18;
 
 bitflags::bitflags! {
     /// The extension points an extension fills, as its manifest declares
@@ -309,6 +312,10 @@ pub struct Manifest {
     pub id: ExtId,
     /// Human-readable name.
     pub name: &'static str,
+    /// What the extension does, in a sentence or two of plain English:
+    /// the text under its name in the Extensions dialogue, and
+    /// `description` in `plugin.toml`. Empty for one that says nothing.
+    pub description: &'static str,
     /// The extension's own version.
     pub version: Version,
     /// The [`API_VERSION`] the extension was built against.
@@ -880,6 +887,7 @@ mod tests {
         let result = registry.load(&Broken(Manifest {
             id: ExtId("broken"),
             name: "Broken",
+            description: "",
             version: Version::new(0, 1, 0),
             api_version: API_VERSION,
             requires: Capabilities::empty(),
@@ -937,6 +945,7 @@ mod tests {
         let manifest = Manifest {
             id: ExtId("undeclared"),
             name: "Undeclared",
+            description: "",
             version: Version::new(0, 1, 0),
             api_version: API_VERSION,
             requires: Capabilities::empty(),
@@ -995,6 +1004,7 @@ mod tests {
         let manifest = Manifest {
             id: ExtId("chatty"),
             name: "Chatty",
+            description: "",
             version: Version::new(0, 1, 0),
             api_version: API_VERSION,
             requires: Capabilities::empty(),

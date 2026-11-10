@@ -171,6 +171,7 @@ impl Core {
             manifest: Manifest {
                 id: ExtId("core"),
                 name: "Core operations",
+                description: "Rick's own file operations.",
                 version: Version::new(0, 1, 0),
                 api_version: API_VERSION,
                 requires: Capabilities::WRITE,

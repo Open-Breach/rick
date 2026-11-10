@@ -73,6 +73,7 @@ impl WindowsSearchExtension {
             manifest: Manifest {
                 id: ID,
                 name: "Windows Search",
+                description: "Searches the Windows Search index from the search box.",
                 version: Version::parse(env!("CARGO_PKG_VERSION"))
                     .unwrap_or_else(|_| Version::new(0, 0, 0)),
                 api_version: API_VERSION,

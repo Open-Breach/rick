@@ -85,6 +85,9 @@ fn plugins() -> Vec<app::Plugin> {
             previews: Vec::new(),
             status: app::PluginStatus::Loaded,
             path: PathBuf::from("/opt/rick/plugins/git"),
+            description: String::new(),
+            built_in: false,
+            removed: false,
         },
         app::Plugin {
             id: "probe".to_owned(),
@@ -94,6 +97,9 @@ fn plugins() -> Vec<app::Plugin> {
             previews: Vec::new(),
             status: app::PluginStatus::Disabled,
             path: PathBuf::from("/home/me/.config/rick/plugins/probe"),
+            description: String::new(),
+            built_in: false,
+            removed: false,
         },
     ]
 }

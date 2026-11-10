@@ -159,6 +159,7 @@ impl S3Extension {
             manifest: Manifest {
                 id: ID,
                 name: "S3",
+                description: "Browse Amazon S3 and S3-compatible stores as folders. Buckets appear at the root; copy and move inside one account run server-side.",
                 version: Version::parse(env!("CARGO_PKG_VERSION"))
                     .unwrap_or_else(|_| Version::new(0, 0, 0)),
                 api_version: API_VERSION,

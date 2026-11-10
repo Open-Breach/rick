@@ -49,6 +49,7 @@ impl ProbeExtension {
             manifest: Manifest {
                 id: ID,
                 name: "Probe",
+                description: "The test plugin of the plugin host.",
                 version: Version::parse(env!("CARGO_PKG_VERSION"))
                     .unwrap_or_else(|_| Version::new(0, 0, 0)),
                 api_version: API_VERSION,

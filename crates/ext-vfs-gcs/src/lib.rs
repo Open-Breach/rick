@@ -161,6 +161,7 @@ impl GcsExtension {
             manifest: Manifest {
                 id: ID,
                 name: "Google Cloud Storage",
+                description: "Browse Google Cloud Storage projects as folders. Buckets appear at the root; copy and move inside one project run server-side.",
                 version: Version::parse(env!("CARGO_PKG_VERSION"))
                     .unwrap_or_else(|_| Version::new(0, 0, 0)),
                 api_version: API_VERSION,

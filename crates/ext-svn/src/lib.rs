@@ -78,6 +78,7 @@ impl SvnExtension {
             manifest: Manifest {
                 id: ID,
                 name: "SVN",
+                description: "Shows Subversion status badges and the revision, and adds the SVN actions: update, commit, revert, log and add.",
                 version: Version::parse(env!("CARGO_PKG_VERSION"))
                     .unwrap_or_else(|_| Version::new(0, 0, 0)),
                 api_version: API_VERSION,

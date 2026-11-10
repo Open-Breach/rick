@@ -78,6 +78,7 @@ impl GitExtension {
             manifest: Manifest {
                 id: ID,
                 name: "Git",
+                description: "Shows Git status badges, the branch and how far it is ahead or behind, and adds the Git actions: commit, stash, pull, push, checkout, discard, log and blame.",
                 version: Version::parse(env!("CARGO_PKG_VERSION"))
                     .unwrap_or_else(|_| Version::new(0, 0, 0)),
                 api_version: API_VERSION,

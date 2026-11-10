@@ -576,6 +576,7 @@ mod tests {
         Arc::new(Echoer(Manifest {
             id: ExtId("echoer"),
             name: "Echoer",
+            description: "",
             version: Version::new(0, 1, 0),
             api_version: API_VERSION,
             requires: Capabilities::empty(),

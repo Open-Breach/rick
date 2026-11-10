@@ -319,6 +319,7 @@ fn status_word(status: &PluginStatus) -> String {
         PluginStatus::Loaded => "loaded".to_owned(),
         PluginStatus::Disabled => "disabled".to_owned(),
         PluginStatus::Refused(reason) => format!("refused: {reason}"),
+        PluginStatus::Installed => "installed".to_owned(),
     }
 }
 
@@ -1360,6 +1361,9 @@ mod tests {
                 previews: Vec::new(),
                 status: PluginStatus::Loaded,
                 path: PathBuf::from("/opt/rick/plugins/git"),
+                description: String::new(),
+                built_in: false,
+                removed: false,
             },
             Plugin {
                 id: "probe".to_owned(),
@@ -1369,6 +1373,9 @@ mod tests {
                 previews: Vec::new(),
                 status: PluginStatus::Refused("toolchain".to_owned()),
                 path: PathBuf::from("/home/me/.config/rick/plugins/probe"),
+                description: String::new(),
+                built_in: false,
+                removed: false,
             },
         ];
         let text = details(&build(), &plugins);
@@ -1532,6 +1539,9 @@ mod tests {
             previews: Vec::new(),
             status: PluginStatus::Loaded,
             path: path.to_path_buf(),
+            description: String::new(),
+            built_in: false,
+            removed: false,
         };
         let plugins = vec![
             plugin("git", "Git", &inside),

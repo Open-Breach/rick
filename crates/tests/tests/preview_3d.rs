@@ -264,6 +264,7 @@ impl GestureExtension {
             manifest: Manifest {
                 id: ExtId("gestures"),
                 name: "Gestures",
+                description: "",
                 version: Version::new(0, 1, 0),
                 api_version: API_VERSION,
                 requires: Capabilities::empty(),

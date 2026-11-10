@@ -57,6 +57,7 @@ impl CompareExtension {
             manifest: Manifest {
                 id: ID,
                 name: "Compare",
+                description: "Compares two files as a side-by-side text diff, and two folders entry by entry.",
                 version: Version::parse(env!("CARGO_PKG_VERSION"))
                     .unwrap_or_else(|_| Version::new(0, 0, 0)),
                 api_version: API_VERSION,

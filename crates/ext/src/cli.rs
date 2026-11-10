@@ -62,6 +62,7 @@
 //! let greeter = Greeter(Manifest {
 //!     id: ExtId("greeter"),
 //!     name: "Greeter",
+//!     description: "",
 //!     version: Version::new(0, 1, 0),
 //!     api_version: API_VERSION,
 //!     requires: Capabilities::empty(),

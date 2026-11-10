@@ -788,6 +788,7 @@ impl IndexExtension {
             manifest: Manifest {
                 id: ExtId(id),
                 name: "Fake index",
+                description: "",
                 version: Version::new(0, 1, 0),
                 api_version: API_VERSION,
                 requires: Capabilities::empty(),
@@ -1696,6 +1697,7 @@ mod net {
                 manifest: Manifest {
                     id: ExtId("stub-net"),
                     name: "Stub network provider",
+                    description: "",
                     version: Version::new(0, 1, 0),
                     api_version: API_VERSION,
                     requires: Capabilities::empty(),
@@ -2378,6 +2380,7 @@ fn with_fake_console() -> (Harness, Arc<FakeConsole>, model::PaneId) {
         manifest: Manifest {
             id: ExtId("fake-console"),
             name: "Fake console",
+            description: "",
             version: Version::new(0, 1, 0),
             api_version: API_VERSION,
             requires: Capabilities::empty(),
@@ -2985,6 +2988,7 @@ mod integration {
             manifest: Manifest {
                 id: ExtId("installer"),
                 name: "Installer",
+                description: "",
                 version: Version::new(0, 1, 0),
                 api_version: API_VERSION,
                 requires: Capabilities::empty(),

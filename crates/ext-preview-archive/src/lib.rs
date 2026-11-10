@@ -91,6 +91,7 @@ impl ArchivePreview {
             manifest: Manifest {
                 id: ID,
                 name: "Archive preview",
+                description: "Lists what is inside archives and disk images, zip, the tar family, 7z, RAR, ISO and more, without extracting or mounting them.",
                 version: Version::parse(env!("CARGO_PKG_VERSION"))
                     .unwrap_or_else(|_| Version::new(0, 0, 0)),
                 api_version: API_VERSION,

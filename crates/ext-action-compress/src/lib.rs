@@ -51,6 +51,7 @@ impl CompressExtension {
             manifest: Manifest {
                 id: ID,
                 name: "Compress and extract",
+                description: "Compresses the selection into zip, tar.gz, tar.zst, 7z and other archives, and extracts an archive here, into a folder of its own or to a folder you choose.",
                 version: Version::parse(env!("CARGO_PKG_VERSION"))
                     .unwrap_or_else(|_| Version::new(0, 0, 0)),
                 api_version: API_VERSION,

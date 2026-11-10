@@ -557,6 +557,7 @@ fn counted_ssh() -> (Arc<AtomicU64>, Arc<dyn Extension>) {
         manifest: Manifest {
             id: ext_ssh::ID,
             name: "SSH",
+            description: "",
             version: ext::Version::new(0, 0, 0),
             api_version: API_VERSION,
             requires: Capabilities::empty(),

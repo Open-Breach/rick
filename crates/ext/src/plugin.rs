@@ -35,6 +35,7 @@
 //!         Hello(Manifest {
 //!             id: ExtId("hello"),
 //!             name: "Hello",
+//!             description: "",
 //!             version: Version::new(0, 1, 0),
 //!             api_version: API_VERSION,
 //!             requires: Capabilities::empty(),
@@ -198,6 +199,7 @@ mod tests {
         Manifest {
             id: ExtId("fine"),
             name: "Fine",
+            description: "",
             version: Version::new(0, 1, 0),
             api_version,
             requires: Capabilities::empty(),

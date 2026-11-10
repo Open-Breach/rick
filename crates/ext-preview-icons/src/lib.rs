@@ -90,6 +90,7 @@ impl IconsPreview {
             manifest: Manifest {
                 id: ID,
                 name: "Icon preview",
+                description: "Previews icon files, ICO, CUR, ICNS and XPM, with every size in the file as a page.",
                 version: Version::parse(env!("CARGO_PKG_VERSION"))
                     .unwrap_or_else(|_| Version::new(0, 0, 0)),
                 api_version: API_VERSION,

@@ -71,6 +71,7 @@ impl MediaPreview {
             manifest: Manifest {
                 id: ID,
                 name: "Media preview",
+                description: "Plays audio and video with GStreamer: transport, waveform, cover art, tags and stream details.",
                 version: Version::parse(env!("CARGO_PKG_VERSION"))
                     .unwrap_or_else(|_| Version::new(0, 0, 0)),
                 api_version: API_VERSION,

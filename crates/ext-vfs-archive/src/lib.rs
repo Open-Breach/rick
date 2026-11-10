@@ -798,6 +798,7 @@ impl ArchiveExtension {
             manifest: Manifest {
                 id: ID,
                 name: "Archives",
+                description: "Opens archives and disk images as folders: zip, the tar family, 7z, RAR, ISO and more, with zip, tar and 7z writable.",
                 version: Version::parse(env!("CARGO_PKG_VERSION"))
                     .unwrap_or_else(|_| Version::new(0, 0, 0)),
                 api_version: API_VERSION,

@@ -65,6 +65,7 @@ impl TerminalExtension {
             manifest: Manifest {
                 id: ID,
                 name: "Console",
+                description: "Opens a console at the folder: an embedded terminal tab, or the system terminal when the setting says so.",
                 version: Version::parse(env!("CARGO_PKG_VERSION"))
                     .unwrap_or_else(|_| Version::new(0, 0, 0)),
                 api_version: API_VERSION,

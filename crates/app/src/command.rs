@@ -365,6 +365,17 @@ pub enum Command {
     /// Escape during the download — and show the size-limit card again
     /// (`Event::PreviewCapped`), from which it can be fetched after all.
     PreviewCancel(PaneId),
+    /// Unpack a plugin package — an `.rkp` file, a zip archive of a
+    /// plugin's folder — into the per-user plugins folder, as *Install
+    /// from file…* of the Extensions dialogue asks. Nothing is checked and
+    /// nothing is asked; a plugin of the same folder name is replaced, and
+    /// the next start loads what is there. Answered by
+    /// `Event::PluginInstalled`.
+    InstallPlugin(PathBuf),
+    /// Delete the folder of a user's plugin, by the path its row gives:
+    /// *Remove* of the Extensions dialogue, at once and without a
+    /// question. A plugin beside the binary is left alone.
+    RemovePlugin(PathBuf),
     /// Show the pane's file through one previewer whatever the scores say
     /// — *Open as hex* on a file no previewer claims. It holds for this
     /// file only, until the selection moves on.
@@ -735,6 +746,12 @@ pub enum Event {
         /// The launcher's activation token, for the platform.
         token: Option<String>,
     },
+    /// A plugin package was unpacked into the per-user plugins folder:
+    /// `App::plugins` has its row, under this path.
+    PluginInstalled {
+        /// The plugin's folder.
+        path: PathBuf,
+    },
     /// What `Command::ShowProperties` found: the dialogue's contents.
     Properties(Box<PropertiesInfo>),
     /// The count of the folder the Properties dialogue shows is in.
@@ -933,6 +950,10 @@ impl fmt::Debug for Event {
                 .finish(),
             Self::Conflict(conflict) => f.debug_tuple("Conflict").field(&conflict.id).finish(),
             Self::Question(question) => f.debug_tuple("Question").field(&question.id).finish(),
+            Self::PluginInstalled { path } => f
+                .debug_struct("PluginInstalled")
+                .field("path", path)
+                .finish(),
             Self::Properties(info) => f
                 .debug_struct("Properties")
                 .field("entry", &info.entry.name)

@@ -542,6 +542,7 @@ impl MemExtension {
             manifest: Manifest {
                 id: ExtId(id),
                 name: "In-memory provider",
+                description: "",
                 version: Version::new(0, 1, 0),
                 api_version: API_VERSION,
                 requires: Capabilities::empty(),

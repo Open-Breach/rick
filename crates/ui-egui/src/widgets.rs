@@ -368,6 +368,9 @@ pub enum ButtonKind {
     /// A choice that overwrites something: `trash/mid-bg` with
     /// `trash/mid-text`, amber and not the red of a destructive entry.
     Caution,
+    /// A secondary action that destroys something: `bg/control` with its
+    /// label in `status/danger`, like *Remove* of the Extensions dialogue.
+    Danger,
 }
 
 /// A caution button: [`button`] in the amber of [`ButtonKind::Caution`].
@@ -422,6 +425,10 @@ fn button_sized(
             scheme.trash_mid_bg.gamma_multiply(0.5),
             scheme.trash_mid_text,
         ),
+        (ButtonKind::Danger, true) => (scheme.bg_control, scheme.status_danger),
+        (ButtonKind::Danger, false) => {
+            (scheme.bg_control, scheme.status_danger.gamma_multiply(0.5))
+        }
     };
     let galley = ui
         .painter()

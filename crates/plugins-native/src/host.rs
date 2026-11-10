@@ -57,6 +57,8 @@ pub struct Plugin {
     pub id: String,
     /// The name the manifest gives.
     pub name: String,
+    /// What the manifest says the plugin does; empty when it says nothing.
+    pub description: String,
     /// The version the manifest gives.
     pub version: String,
     /// The points the manifest lists.
@@ -244,6 +246,7 @@ fn process(
                 Plugin {
                     id: dir_name,
                     name: String::new(),
+                    description: String::new(),
                     version: String::new(),
                     points: Points::empty(),
                     previews: Vec::new(),
@@ -276,6 +279,7 @@ fn process(
         Plugin {
             id: toml.id.clone(),
             name: toml.name.clone(),
+            description: toml.description.clone(),
             version: toml.version.clone(),
             points: toml.points().unwrap_or_default(),
             previews: toml.previews.clone(),

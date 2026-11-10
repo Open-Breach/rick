@@ -78,6 +78,7 @@ impl Hello {
             manifest: Manifest {
                 id: ExtId("hello"),
                 name: "Hello",
+                description: "Says hello.",
                 version: Version::parse(env!("CARGO_PKG_VERSION"))
                     .unwrap_or_else(|_| Version::new(0, 0, 0)),
                 api_version: API_VERSION,
@@ -187,8 +188,13 @@ caller's working directory, never the instance's.
 `plugins/` directory beside the binary. A user drops a plugin into the
 `plugins/` folder beside the binary or into the per-user one in the config
 directory (`~/.config/rick/plugins/` on Linux); the per-user copy wins when
-both hold the same id. Disabling a plugin in the Extensions screen writes
-its id to `[plugins] disabled` in `rick.toml`.
+both hold the same id. Switching a plugin off in the Extensions dialogue
+writes its id to `[plugins] disabled` in `rick.toml`. The dialogue's
+*Install from file…* unpacks a plugin package into the per-user folder: an
+`.rkp` file, which is a zip archive of the plugin's folder — the folder
+itself, or its contents, in which case the folder takes the package's
+name. Nothing is checked at that point; the host judges what it finds at
+the next start, as for a folder put there by hand.
 
 **Testing it.** `cargo xtask bundle` then
 `target/debug/bundle/rick --list-plugins` prints the table the Extensions

@@ -1157,6 +1157,9 @@ fn a_file_no_previewer_claims_shows_the_centred_card_with_open_as_hex() {
         previews: vec!["abc".to_owned()],
         status: app::PluginStatus::Disabled,
         path: dir.path().join("plugins").join("preview-abc"),
+        description: String::new(),
+        built_in: false,
+        removed: false,
     }]);
     let pane = harness.state().app().model().focused;
 
