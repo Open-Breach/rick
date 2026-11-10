@@ -8,6 +8,13 @@ repository.workspace = true
 
 build = "build.rs"
 
+# The command line and the single instance as a library (`cli`,
+# `instance`), so the binary's integration tests drive them against the
+# built binary.
+[lib]
+name = "rick"
+path = "src/lib.rs"
+
 [[bin]]
 name = "rick"
 path = "src/main.rs"
@@ -18,8 +25,8 @@ path = "src/main.rs"
 # plugin in instead of loading it from `plugins/`; default off, since the
 # plugins directory is where they live in 0.2. The previewer plugins of
 # issue 18, the 3D previewer of issue 19, the markup previewer of issue
-# 51, the four action plugins of issue 23 and the installer of issue 44
-# have the same opt-in features;
+# 51, the four action plugins of issue 23, the installer of issue 44 and
+# the icon previewer of issue 84 have the same opt-in features;
 # `gstreamer` turns playback on in the media previewer, wherever it is
 # built (the plugin's own feature of that name; off by default so a build
 # without the GStreamer development files still builds every crate).
@@ -35,6 +42,7 @@ preview-media = ["dep:ext-preview-media"]
 preview-archive = ["dep:ext-preview-archive"]
 preview-markup = ["dep:ext-preview-markup"]
 preview-3d = ["dep:ext-preview-3d"]
+preview-icons = ["dep:ext-preview-icons"]
 gstreamer = ["preview-media", "ext-preview-media/gstreamer"]
 git = ["dep:ext-git"]
 svn = ["dep:ext-svn"]
@@ -60,6 +68,7 @@ types = { workspace = true }
 platform = { workspace = true }
 ext = { workspace = true }
 vfs-local = { workspace = true }
+model = { workspace = true }
 app = { workspace = true }
 ui-egui = { workspace = true }
 plugins-native = { workspace = true }
@@ -91,15 +100,27 @@ ext-search-spotlight = { workspace = true, optional = true }
 ext-search-tracker = { workspace = true, optional = true }
 ext-search-baloo = { workspace = true, optional = true }
 ext-preview-3d = { workspace = true, optional = true }
+ext-preview-icons = { workspace = true, optional = true }
+runtime = { workspace = true }
 anyhow = { workspace = true }
+clap = { workspace = true }
+# The single-instance endpoint's serving loop (`instance`): the timers and
+# the task handle, on the one runtime.
+tokio = { workspace = true, features = ["time", "rt", "sync"] }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
+
+[build-dependencies]
+# The icon and version resource of `rick.exe` (specs/app-icons.md), compiled
+# by build.rs for Windows targets only; the crate builds everywhere, so the
+# script needs no `cfg` of its own. Without its `toml` feature: the fields
+# are set in the script, not read from this manifest.
+winresource = { version = "0.1", default-features = false }
 
 [dev-dependencies]
 # The tests of `rick-perms`, the privileged helper: run through the fake
 # platform, and as root through the polkit stand-in of Linux CI.
 ops = { workspace = true }
-runtime = { workspace = true }
 tempfile = { workspace = true }
 
 [lints]

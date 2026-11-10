@@ -83,6 +83,7 @@ impl PdfPreview {
                 points: Points::PREVIEWER,
                 platforms: Platforms::ALL,
                 previews: &["pdf"],
+                commands: &[],
             },
         }
     }

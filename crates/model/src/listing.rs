@@ -2,7 +2,7 @@
 //! (filtered, sorted, grouped) that the list shows.
 
 use std::cmp::Ordering;
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::time::{Duration, SystemTime};
 
 use rayon::prelude::*;
@@ -101,6 +101,9 @@ pub struct ViewSpec<'a> {
     pub folders_first: bool,
     /// Name must contain this, case-insensitively; empty shows all.
     pub filter: &'a str,
+    /// Only entries of these types (as [`type_of`] names them), when a
+    /// type filter is on; `None` shows every type.
+    pub types: Option<&'a BTreeSet<String>>,
     /// Show entries flagged hidden.
     pub show_hidden: bool,
     /// Show entries flagged system.
@@ -313,6 +316,12 @@ fn passes(entry: &Entry, spec: &ViewSpec<'_>) -> bool {
     if !spec.show_system && entry.attrs.contains(Attrs::SYSTEM) {
         return false;
     }
+    if spec
+        .types
+        .is_some_and(|types| !types.contains(&type_of(entry)))
+    {
+        return false;
+    }
     spec.filter.is_empty() || contains_ignore_case(&entry.name, spec.filter)
 }
 
@@ -332,11 +341,14 @@ fn is_dir(entry: &Entry) -> bool {
     entry.kind == EntryKind::Dir
 }
 
+/// The type text of a folder, as [`type_of`] names it.
+pub const FOLDER_TYPE: &str = "Folder";
+
 /// The type text of an entry, as the Type column shows it.
 #[must_use]
 pub fn type_of(entry: &Entry) -> String {
     match &entry.kind {
-        EntryKind::Dir => "Folder".to_owned(),
+        EntryKind::Dir => FOLDER_TYPE.to_owned(),
         EntryKind::Symlink { .. } => "Link".to_owned(),
         EntryKind::Other => "Special".to_owned(),
         EntryKind::File => entry
@@ -470,9 +482,33 @@ mod tests {
             sort,
             folders_first: true,
             filter,
+            types: None,
             show_hidden: false,
             show_system: false,
         }
+    }
+
+    #[test]
+    fn a_type_filter_keeps_only_the_named_types() {
+        let mut listing = Listing::new();
+        let sort = by(Column::Name, SortDir::Ascending);
+        let types: BTreeSet<String> = ["SVG".to_owned(), "Folder".to_owned()].into();
+        let narrowed = ViewSpec {
+            types: Some(&types),
+            ..spec(sort, "")
+        };
+        listing.extend(
+            vec![
+                entry(1, "a.svg", EntryKind::File, Some(1), 0),
+                entry(2, "b.png", EntryKind::File, Some(2), 0),
+                entry(3, "c.SVG", EntryKind::File, Some(3), 0),
+                entry(4, "d", EntryKind::Dir, None, 0),
+            ],
+            &narrowed,
+        );
+        assert_eq!(names(&listing), ["d", "a.svg", "c.SVG"]);
+        listing.refresh_view(&spec(sort, ""));
+        assert_eq!(listing.row_count(), 4, "no filter shows every type");
     }
 
     fn by(by: Column, dir: SortDir) -> Sort {

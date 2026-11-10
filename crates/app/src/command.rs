@@ -7,8 +7,8 @@ use std::sync::Arc;
 
 use ext::{ActionCtx, ActionId, Continuation, Decoration, FsChange, Level, PreviewDoc, Values};
 use model::{
-    Column, Dock, DockTarget, Geometry, PaneId, Place, SelectionChange, SettingsChange,
-    SidePanelChange, SortDir, SplitDir, TabId, ViewMode, WindowId,
+    Column, Dock, DockTarget, Geometry, PaneId, Place, SelectionChange, SettingsChange, Side,
+    SidePanelChange, SortDir, SplitDir, TabId, ViewMode, WindowId, WorkspaceId,
 };
 use ops::PermissionRequest;
 use platform::{FilePermissions, Principals};
@@ -102,6 +102,15 @@ pub enum Command {
         pane: PaneId,
         /// The column, or `None` for a flat list.
         by: Option<Column>,
+    },
+    /// Narrow a pane to the entries of these file types, as the Type
+    /// column names them, from the view options menu; `None` shows every
+    /// type again. The filter is per pane and clears on navigation.
+    TypeFilter {
+        /// The pane.
+        pane: PaneId,
+        /// The types to show, or every type.
+        types: Option<std::collections::BTreeSet<String>>,
     },
     /// Set the pane's type-to-filter text.
     Filter {
@@ -238,14 +247,47 @@ pub enum Command {
         /// The form's values, or `None` when the dialogue was dismissed.
         values: Option<Values>,
     },
-    /// Open a tab at the location in the focused pane.
+    /// Open a new workspace tab with one pane at the location, in the
+    /// focused pane's window, right after the shown workspace, and show it
+    /// (SPEC.md *Workspace tabs*).
     NewTab(Location),
-    /// Close a tab.
+    /// Close a tab with its pane; a workspace left empty closes with it.
     CloseTab(TabId),
-    /// Make a tab its pane's active one.
+    /// Give a tab's pane the keyboard focus, showing its workspace.
     ActivateTab(TabId),
-    /// Give a pane the keyboard focus.
+    /// Give a pane the keyboard focus, showing its workspace.
     FocusPane(PaneId),
+    /// Show a workspace tab of the title row.
+    ActivateWorkspace(WorkspaceId),
+    /// Close a workspace with every pane in it; the neighbour shows.
+    CloseWorkspace(WorkspaceId),
+    /// Move a workspace tab to a position in its window's title row.
+    MoveWorkspace {
+        /// The workspace.
+        id: WorkspaceId,
+        /// The index it takes, clamped to the row.
+        to: usize,
+    },
+    /// Dock the one pane of a workspace beside a pane of any layout, the
+    /// workspace's tab leaving its row: a tab holding exactly one pane
+    /// dropped on a dock target. The model refuses a workspace of several
+    /// panes.
+    DockWorkspace {
+        /// The workspace whose pane moves.
+        id: WorkspaceId,
+        /// The pane it docks beside.
+        pane: PaneId,
+        /// On which side of that pane.
+        side: Side,
+    },
+    /// Move a workspace to the end of another window's title row, or into a
+    /// window of its own for `None`.
+    WorkspaceToWindow {
+        /// The workspace.
+        id: WorkspaceId,
+        /// The window, or `None` for a new one.
+        window: Option<WindowId>,
+    },
     /// Split a pane, opening a new pane with a tab at the same location.
     Split {
         /// The pane.
@@ -253,16 +295,19 @@ pub enum Command {
         /// To the right or below.
         dir: SplitDir,
     },
-    /// Dock a tab somewhere else.
+    /// Dock a tab with its pane somewhere else: beside a pane of any
+    /// window, in a new workspace or in a new window.
     MoveTab {
         /// The tab.
         tab: TabId,
         /// Where it goes.
         to: DockTarget,
     },
-    /// Open the window's Preview tab, in a new pane right of every other,
-    /// or close it when it is open. The preview is one tab per window that
-    /// follows the focus; it docks and tears out like any other tab.
+    /// Open the window's Preview tab, in a new pane right of every other
+    /// pane of the shown workspace, or close it when it is open there. The
+    /// preview is one tab per window that follows the focus; toggled on in
+    /// another workspace it moves there; it docks and tears out like any
+    /// other tab.
     TogglePreview {
         /// The window.
         window: WindowId,
@@ -420,16 +465,8 @@ pub enum Command {
     },
     /// Unpin from the side panel, undoable.
     Unpin(Location),
-    /// The strip order of a pane's tabs, as the dock shows them; display
-    /// state the session keeps.
-    TabOrder {
-        /// The pane.
-        pane: PaneId,
-        /// Its tabs, left to right.
-        order: Vec<TabId>,
-    },
-    /// A window's split fractions, as the dock shows them: `dock` has the
-    /// window's panes in the window's splits.
+    /// The shown workspace's split fractions, as the dock shows them:
+    /// `dock` has the workspace's panes in its splits.
     Layout {
         /// The window.
         window: WindowId,
@@ -442,6 +479,14 @@ pub enum Command {
         tab: TabId,
         /// The vertical offset in logical points.
         offset: f32,
+    },
+    /// The widths the user gave a tab's details columns, by column id
+    /// (SPEC.md *File list*); an empty map restores the defaults.
+    ColumnWidths {
+        /// The tab.
+        tab: TabId,
+        /// The widths in logical points.
+        columns: std::collections::BTreeMap<String, f32>,
     },
     /// Where a window is on the screen.
     WindowGeometry {
@@ -461,6 +506,30 @@ pub enum Command {
     FocusWindow(WindowId),
     /// Open a window with the start layout.
     NewWindow,
+    /// Open a window of its own with one tab at the location, focused:
+    /// `rick --new-window <path>` (specs/system-integration.md §3).
+    NewWindowAt(Location),
+    /// `rick reveal <file>…`: open each file's folder in a new tab of the
+    /// focused window — a window of its own for the first with
+    /// `new_window` — and select the files there once they are listed;
+    /// with `properties`, the Properties dialogue follows the selection.
+    Reveal {
+        /// The files.
+        items: Vec<Location>,
+        /// The first folder's tab opens in a new window.
+        new_window: bool,
+        /// Open Properties on the first folder's files once they are
+        /// selected: `ShowItemProperties` of the freedesktop file-manager
+        /// interface (specs/system-integration.md §4).
+        properties: bool,
+    },
+    /// Raise and focus the focused window, as a second launch's command
+    /// line asks: the UI gets [`Event::Activate`] with the window and the
+    /// launcher's activation token, when the launch had one.
+    Activate {
+        /// `XDG_ACTIVATION_TOKEN` or `DESKTOP_STARTUP_ID` of the launch.
+        token: Option<String>,
+    },
     /// Close a window; closing the last one asks the application to exit
     /// ([`App::exit_requested`](crate::App::exit_requested)).
     CloseWindow(WindowId),
@@ -478,6 +547,10 @@ pub enum Command {
         /// The new name.
         to: String,
     },
+    /// System integration (specs/system-integration.md §6): run the
+    /// check, apply the dialog's rows, add or restore one item from
+    /// Settings → Integration, reset the choices.
+    Integration(crate::IntegrationCommand),
 }
 
 /// What the application tells the UI happened. The model already reflects
@@ -619,6 +692,14 @@ pub enum Event {
         /// The text.
         text: String,
     },
+    /// Raise and focus a window through the windowing backend and the
+    /// platform's activation (`Command::Activate`).
+    Activate {
+        /// The window.
+        window: WindowId,
+        /// The launcher's activation token, for the platform.
+        token: Option<String>,
+    },
     /// What `Command::ShowProperties` found: the dialogue's contents.
     Properties(Box<PropertiesInfo>),
     /// Compute hash started on the pane's selection: open the Hash
@@ -630,6 +711,27 @@ pub enum Event {
         hashes: Arc<ext::Hashes>,
         /// The format remembered in `core.toml`, for the toggle.
         format: ops::hash::Format,
+    },
+    /// An integration check finished
+    /// ([`IntegrationCommand::Check`](crate::IntegrationCommand::Check));
+    /// the model's `integration` holds what it found.
+    IntegrationChecked {
+        /// The check at startup found an item missing or drifted and the
+        /// user has not said *Don't ask again*: open the dialog.
+        ask: bool,
+    },
+    /// The rows of an apply, an add or a restore were performed; the
+    /// records hold what each wrote, and a check of what is there now
+    /// follows.
+    IntegrationApplied {
+        /// The rows that could not be set up; each was reported through
+        /// [`Event::Notify`].
+        failed: Vec<platform::integration::Item>,
+        /// The binary of the copy Rick was installed to in this apply,
+        /// through its `current` link: the UI saves the session and
+        /// continues from there, the running process exiting once the new
+        /// one answers.
+        relaunch: Option<PathBuf>,
     },
 }
 
@@ -671,6 +773,8 @@ fn pane_struct(
 }
 
 impl fmt::Debug for Event {
+    // One arm per event, each naming what the UI would want in a log.
+    #[allow(clippy::too_many_lines)]
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Listed { pane, batch, done } => f
@@ -757,6 +861,11 @@ impl fmt::Debug for Event {
                 .field("level", level)
                 .field("text", text)
                 .finish(),
+            Self::Activate { window, token } => f
+                .debug_struct("Activate")
+                .field("window", window)
+                .field("token", token)
+                .finish(),
             Self::HashesOpened {
                 pane,
                 hashes,
@@ -766,6 +875,15 @@ impl fmt::Debug for Event {
                 .field("pane", pane)
                 .field("hashes", hashes)
                 .field("format", format)
+                .finish(),
+            Self::IntegrationChecked { ask } => f
+                .debug_struct("IntegrationChecked")
+                .field("ask", ask)
+                .finish(),
+            Self::IntegrationApplied { failed, relaunch } => f
+                .debug_struct("IntegrationApplied")
+                .field("failed", failed)
+                .field("relaunch", relaunch)
                 .finish(),
         }
     }

@@ -93,6 +93,64 @@ pub struct Plan {
     pub overwrite: bool,
     /// The commands under `bin/`, which get the execute bit.
     pub bins: Vec<String>,
+    /// Whether a GUI app gets its launcher entry and icon from this
+    /// install. `false` for an app that sets its own up: Rick, whose
+    /// launcher entry is an integration item with a switch of its own.
+    pub launcher: bool,
+}
+
+/// The app id Rick installs itself under: `~/.local/opt/rick`.
+pub const RICK_ID: &str = "rick";
+/// Rick's binary inside its folder.
+pub const RICK_MAIN: &str = "rick";
+
+/// The plan that installs the Rick unpacked in `folder` — the binary, its
+/// libraries, `plugins/` and `share/` — as `version`: the app `rick`, its
+/// files copied from the folder as they are, with the same layout,
+/// record, staging and `current` link as an archive's, and nothing
+/// written outside the app folder. The launcher entry, the icons and the
+/// `rick` command are integration items the user switches on one by one
+/// (specs/system-integration.md §6.1), so this install makes none of
+/// them. `index` is the folder's, read as [`Format::Folder`]; `update_of`
+/// is the record of a Rick installed before, whose version is kept as
+/// the previous one.
+#[must_use]
+pub fn rick_plan(
+    layout: Layout,
+    folder: &Path,
+    version: &str,
+    index: Arc<Index>,
+    update_of: Option<Record>,
+) -> Plan {
+    let name = folder
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    Plan {
+        layout,
+        archive: folder.to_path_buf(),
+        format: Format::Folder,
+        index,
+        id: RICK_ID.to_owned(),
+        name: "Rick".to_owned(),
+        version: version.to_owned(),
+        kind: Kind::Gui,
+        main: RICK_MAIN.to_owned(),
+        icon: IconSource::None,
+        categories: String::new(),
+        wm_class: Some(RICK_ID.to_owned()),
+        vendor_desktop: None,
+        commands: Vec::new(),
+        path_mode: PathMode::Symlinks,
+        bin_dir: None,
+        env_var: None,
+        expected_sha256: None,
+        source_pattern: detect::strip_version(&name),
+        update_of,
+        overwrite: false,
+        bins: Vec::new(),
+        launcher: false,
+    }
 }
 
 impl Plan {
@@ -114,13 +172,13 @@ impl Plan {
     /// The desktop entry's path, for a GUI app.
     #[must_use]
     pub fn desktop_path(&self) -> Option<PathBuf> {
-        (self.kind == Kind::Gui).then(|| self.layout.desktop_path(&self.id))
+        (self.kind == Kind::Gui && self.launcher).then(|| self.layout.desktop_path(&self.id))
     }
 
     /// The icon's path in the hicolor theme, for a GUI app with an icon.
     #[must_use]
     pub fn icon_path(&self) -> Option<PathBuf> {
-        if self.kind != Kind::Gui {
+        if self.kind != Kind::Gui || !self.launcher {
             return None;
         }
         let (size, ext) = match &self.icon {
@@ -562,7 +620,7 @@ pub fn install(
         .as_ref()
         .is_some_and(|old| old.main_executable != plan.main);
     let mut wrote_desktop = false;
-    if plan.kind == Kind::Gui {
+    if plan.kind == Kind::Gui && plan.launcher {
         let icon_path = plan.icon_path();
         let desktop_path = plan.layout.desktop_path(&plan.id);
         if !plan.is_update() || !desktop_path.exists() {
@@ -717,9 +775,29 @@ fn write_desktop(
 /// The marker on the line Rick adds to a shell profile.
 const PROFILE_MARK: &str = "# added by rick";
 
+/// The installed Rick among `records`, by its main executable's name, and
+/// the binary the shell function runs.
+fn rick_binary(layout: &Layout, records: &[Record]) -> Option<PathBuf> {
+    records
+        .iter()
+        .find(|r| {
+            Path::new(&r.main_executable)
+                .file_name()
+                .is_some_and(|n| n == "rick")
+        })
+        .map(|r| layout.current(&r.id).join(&r.main_executable))
+}
+
 /// Regenerates `~/.config/rick/path.sh` (and the fish drop-in when fish is
-/// configured) from the PATH-mode records of `records`, and makes sure the
-/// profiles source it; removes the files when no record needs them.
+/// configured) from the PATH-mode records of `records`, with the `rick`
+/// shell function when Rick itself is installed (so `rick` with no
+/// argument opens the shell's current directory from a login shell that
+/// lacks `~/.local/bin` on its PATH; specs/system-integration.md §4), and
+/// makes sure the profiles source it; removes the files when no record
+/// needs them. The block the `rick` command of the integration items
+/// keeps in either file (specs/system-integration.md §7.1) is carried
+/// over as it is, in place of the records' function, and keeps a file
+/// alive that the records no longer need.
 ///
 /// # Errors
 ///
@@ -729,15 +807,33 @@ pub fn write_path_file(layout: &Layout, records: &[Record]) -> Result<(), Error>
         .iter()
         .filter(|r| r.path_mode == Some(PathMode::Path))
         .collect();
+    let rick = rick_binary(layout, records);
     let file = layout.path_file();
     let fish_dir = layout.home.join(".config/fish");
     let fish_file = fish_dir.join("conf.d/rick.fish");
-    if path_mode.is_empty() {
-        let _ = fs::remove_file(&file);
-        let _ = fs::remove_file(&fish_file);
+    // The `rick` command of the integration items keeps the function in a
+    // marked block of its own in both files (it works without an install
+    // record, for a Rick that runs from where it was unpacked): carried
+    // over as found, in place of the function the records would give.
+    let kept = |path: &Path| {
+        fs::read_to_string(path)
+            .ok()
+            .and_then(|text| ext::platform::integration::command_block(&text))
+    };
+    let (kept_sh, kept_fish) = (kept(&file), kept(&fish_file));
+    let header = "# Generated by Rick from its install records; edit nothing here.\n";
+    if path_mode.is_empty() && rick.is_none() {
+        for (path, block) in [(&file, &kept_sh), (&fish_file, &kept_fish)] {
+            match block {
+                Some(block) => fs::write(path, format!("{header}{block}")).map_err(io_write)?,
+                None => {
+                    let _ = fs::remove_file(path);
+                }
+            }
+        }
         return Ok(());
     }
-    let mut sh = String::from("# Generated by Rick from its install records; edit nothing here.\n");
+    let mut sh = String::from(header);
     let mut fish = sh.clone();
     for record in path_mode {
         let current = layout.current(&record.id);
@@ -750,6 +846,27 @@ pub fn write_path_file(layout: &Layout, records: &[Record]) -> Result<(), Error>
             let _ = writeln!(sh, "export {var}=\"{dir}\"");
             let _ = writeln!(fish, "set -gx {var} \"{dir}\"");
         }
+    }
+    let binary = rick.map(|binary| binary.to_string_lossy().into_owned());
+    match (&kept_sh, &binary) {
+        (Some(block), _) => sh.push_str(block),
+        (None, Some(binary)) => {
+            let _ = writeln!(
+                sh,
+                "# `rick` for a login shell without ~/.local/bin on its PATH: no argument opens the shell's directory.\nrick() {{ \"{binary}\" \"$@\"; }}"
+            );
+        }
+        (None, None) => {}
+    }
+    match (&kept_fish, &binary) {
+        (Some(block), _) => fish.push_str(block),
+        (None, Some(binary)) => {
+            let _ = writeln!(
+                fish,
+                "# `rick` for a login shell without ~/.local/bin on its PATH: no argument opens the shell's directory.\nfunction rick\n    \"{binary}\" $argv\nend"
+            );
+        }
+        (None, None) => {}
     }
     if let Some(parent) = file.parent() {
         fs::create_dir_all(parent).map_err(io_write)?;

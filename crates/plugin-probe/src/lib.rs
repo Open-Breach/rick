@@ -56,6 +56,7 @@ impl ProbeExtension {
                 points: Points::PREVIEWER | Points::ACTION,
                 platforms: Platforms::ALL,
                 previews: &[],
+                commands: &[],
             },
         }
     }

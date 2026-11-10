@@ -24,7 +24,7 @@ use app::{App, Command, Config, Event};
 use egui_kittest::kittest::Queryable as _;
 use ext::{ActionId, Algorithm, Availability, Digests, Extension, Hashes, Invocation};
 use model::{JobState, SelectionChange};
-use platform::{ConfigDir as _, Fake};
+use platform::{Clipboard as _, ConfigDir as _, Fake};
 use sha2::Digest as _;
 use tests::fixture::{self, SizeDistribution};
 use tests::local;
@@ -553,6 +553,10 @@ fn the_shell_opens_the_dialogue_and_fills_in_its_rows() {
     harness.step();
     assert!(!harness.state().hash_dialog().is_open());
 
+    // The clipboard holds the file's SHA-256: the Verify field is
+    // prefilled with it when the dialogue opens.
+    let sha256 = hash::render(&reference(&bytes).sha256, Format::Hex);
+    fake.set_text(&sha256).unwrap_or_else(|e| panic!("{e}"));
     // The action from the shell, as the context menu runs it.
     harness
         .state_mut()
@@ -564,8 +568,12 @@ fn the_shell_opens_the_dialogue_and_fills_in_its_rows() {
         "the dialogue opens at once"
     );
     assert!(
-        harness.query_by_label("Hash — notes.txt").is_some(),
-        "titled after the file"
+        harness.query_by_label("File hashes").is_some(),
+        "titled File hashes"
+    );
+    assert!(
+        harness.query_by_label("notes.txt · 68.4 KiB").is_some(),
+        "the file's name and size on the secondary line"
     );
     let hashes = harness
         .state()
@@ -582,47 +590,64 @@ fn the_shell_opens_the_dialogue_and_fills_in_its_rows() {
     harness.step();
     harness.step();
     assert_eq!(result_of(&hashes, 0), reference(&bytes));
-    for label in ["MD5", "SHA-1", "SHA-256", "BLAKE3", "Copy all", "Verify"] {
+    for label in [
+        "MD5", "SHA-1", "SHA-256", "BLAKE3", "Copy all", "Done", "VERIFY", "Format", "Close",
+    ] {
         assert!(harness.query_by_label(label).is_some(), "{label} is drawn");
     }
+    // The prefilled value matches the SHA-256 row: the pill says so and the
+    // field carries the clipboard hint until edited.
+    assert!(
+        harness.query_by_label("Matches SHA-256").is_some(),
+        "the Matches pill"
+    );
+    assert!(
+        harness.query_by_label("from clipboard").is_some(),
+        "the clipboard hint"
+    );
     assert_eq!(harness.state().hash_dialog().format(), Some(Format::Hex));
+    // The format control is segmented: hex, HEX, Base64.
+    for option in ["hex", "HEX", "Base64"] {
+        harness.get_by_role_and_label(egui::accesskit::Role::RadioButton, option);
+    }
+    assert!(
+        harness
+            .query_by_role_and_label(egui::accesskit::Role::Button, "Cancel")
+            .is_none(),
+        "no Cancel once the job is done"
+    );
 
     rows_fit_their_values(&harness, &reference(&bytes));
 }
 
-/// Every value field of the dialogue is wide enough for the whole hex
-/// SHA-256, 64 monospace characters, and its Copy button sits to the right
-/// of it: a field in a grid column must not collapse to the grid's minimum
-/// cell width.
+/// Every value of the dialogue is drawn whole — as wide as its characters
+/// in the 11 px monospace font, 64 for the hex SHA-256 — with its copy
+/// icon, named after the algorithm, to the right of it.
 fn rows_fit_their_values(harness: &egui_kittest::Harness<'_, RickUi>, digests: &Digests) {
-    let values: Vec<String> = Algorithm::ALL
-        .into_iter()
-        .map(|a| hash::render(digests.get(a), Format::Hex))
-        .collect();
-    let font = egui::TextStyle::Monospace.resolve(&harness.ctx.global_style());
-    let glyph = harness.ctx.fonts_mut(|f| f.glyph_width(&font, '0'));
-    let copies: Vec<egui::Rect> = harness
-        .get_all_by_role_and_label(egui::accesskit::Role::Button, "Copy")
-        .map(|node| node.rect())
-        .collect();
-    assert_eq!(copies.len(), 4, "a Copy button per row");
-    let fields: Vec<(String, egui::Rect)> = harness
-        .get_all_by_role(egui::accesskit::Role::TextInput)
-        .filter_map(|node| node.value().map(|value| (value, node.rect())))
-        .filter(|(value, _)| values.contains(value))
-        .collect();
-    assert_eq!(fields.len(), 4, "a value field per row: {fields:?}");
-    for (value, rect) in &fields {
+    let glyph = harness
+        .ctx
+        .fonts_mut(|f| f.glyph_width(&egui::FontId::monospace(11.0), '0'));
+    for algorithm in Algorithm::ALL {
+        let value = hash::render(digests.get(algorithm), Format::Hex);
+        let rect = harness.get_by_label(&value).rect();
+        #[allow(clippy::cast_precision_loss)]
+        let needed = glyph * value.len() as f32 - 1.0;
         assert!(
-            rect.width() >= glyph * 64.0,
-            "the field of {value} is {} wide, {} characters; 64 are needed",
+            rect.width() >= needed,
+            "the value of {algorithm} is {} wide, {} characters; {} are needed",
             rect.width(),
-            rect.width() / glyph
+            rect.width() / glyph,
+            value.len()
         );
+        let copy = harness
+            .get_by_role_and_label(
+                egui::accesskit::Role::Button,
+                &format!("Copy {}", algorithm.label()),
+            )
+            .rect();
         assert!(
-            copies.iter().any(|copy| copy.min.x >= rect.max.x - 1.0
-                && (copy.center().y - rect.center().y).abs() < rect.height()),
-            "no Copy button right of the field of {value} at {rect:?}: {copies:?}"
+            copy.min.x >= rect.max.x - 1.0 && (copy.center().y - rect.center().y).abs() < 22.0,
+            "the copy icon of {algorithm} at {copy:?} is not right of its value at {rect:?}"
         );
     }
 }

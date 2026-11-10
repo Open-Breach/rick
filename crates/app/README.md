@@ -13,8 +13,18 @@ a language change live), and the session: `session.toml`, written
 after every change at most once per second through a temporary file and once
 more on exit, restored at start (or the start layout the settings name, with
 a vanished folder's tab opened at its nearest ancestor), and the saved
-layouts in `layouts/`. Windows open, close and exchange tabs through it;
-closing the last one asks the UI to exit. A drag and drop's `Transfer`, `Receive`,
+layouts in `layouts/`. Windows open, close and exchange workspace tabs and
+panes through it;
+closing the last one asks the UI to exit. A second launch's command line
+reaches it through the external-work channel: `NewWindowAt` opens a
+window of its own, `Reveal` opens the files' folders as tabs and selects
+the files once listed (and, asked to, opens Properties on them), and
+`Activate` asks the UI to raise the focused
+window with the launcher's token (`Event::Activate`). A console a
+tab opened follows that tab and the tab follows it: the shell's working
+directory (OSC 7, through `Console::cwd`) moves the explorer tab, and the
+explorer's navigation types `cd` into the console while the shell is at
+its prompt (`Console::foreground_job`). A drag and drop's `Transfer`, `Receive`,
 `SpringLoad`, `Pin` and `Unpin` are commands it handles itself, and so is
 `Open`: a folder navigates, a local file is offered to the archive provider
 and enters as a location when it browses it (unless the setting
@@ -44,7 +54,22 @@ polls a location its provider cannot watch (`stat` every three seconds and
 after every operation), runs the subtree search as a visible job, lists the
 children of folders expanded in Tree view, routes the name conflicts copy
 and move jobs ask about to the UI and their answers back, and shows a job
-queued behind another on its volume as *Waiting*. It depends on `types`,
+queued behind another on its volume as *Waiting*. It runs the integration
+check of specs/system-integration.md §6 (`IntegrationCommand::Check`, a job
+off the loop's thread that reads what the platform finds of every item the
+user has not declined and folds it into `rick.toml`'s `[integration]`
+records and the model; the check at startup obeys *Check integration at
+startup* and says whether the dialog should open), performs the dialog's
+*Apply* and Settings' *Add* and *Restore* row by row through the platform,
+recording what each wrote and reporting a row that failed without stopping
+the others, and clears the declined marks on *Reset choices*. The install
+location alone is not the platform's: the installer plugin performs it
+through its registered command `install-rick`, as a job of its own, the
+rows after it waiting for that job and then acting on the installed copy,
+and the apply's end names the copy for the UI to relaunch from; without the
+plugin the row is *Unsupported* and the others work against the folder
+Rick runs from. The
+*Shell integration* switch unties the console and the tab. It depends on `types`,
 `runtime`, `platform`, `ext`, `vfs`, `vfs-local`, `vfs-rick`, `model` and
 `ops` (the built-in operations it loads); only `ui-egui`, `rick` and
 `tests` may depend on it.

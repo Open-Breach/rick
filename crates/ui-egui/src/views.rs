@@ -3,17 +3,38 @@
 //! the rows in view, so a 200k-entry listing costs the same as a small one.
 //! Rename, New file and New folder edit a name in the row itself.
 
+use std::collections::BTreeMap;
+
 use egui::{Align, Sense};
 use egui_extras::{Column as TableColumn, TableBuilder};
-use ext::{Badge, CellValue, ColumnDef, Decoration};
+use ext::{ActionId, Badge, CellValue, ColumnDef, Decoration, t};
 use model::{Column, IconSize, SelectionChange, SortDir, Tab, ViewMode};
 use types::{Entry, EntryId, EntryKind};
 
 use crate::dnd::{self, Spring, Target, Zone};
-use crate::format;
 use crate::inline::{EditKind, EditOutcome, RowEdit, editor};
-use crate::menus;
+use crate::keys::Intent;
 use crate::shell::{PaneCx, Request};
+use crate::theme::{self, COLUMN_HEADER, Scheme, TEXT_BODY, TEXT_SECONDARY};
+use crate::{format, menus, portal};
+
+/// The inset of a row's background from the pane's edges (SPEC.md *Row
+/// states*).
+const ROW_INSET: f32 = 6.0;
+/// Where the Name column's content starts: the icon sits 6 px inside the
+/// row background, which is itself `ROW_INSET` from the pane's edge.
+const NAME_INSET: f32 = ROW_INSET + 6.0;
+
+/// The columns' default widths in points; Name's default is what the
+/// others leave, and the last column takes what is left.
+const SIZE_WIDTH: f32 = 80.0;
+const TYPE_WIDTH: f32 = 110.0;
+const MODIFIED_WIDTH: f32 = 130.0;
+const EXTRA_WIDTH: f32 = 90.0;
+/// No column gets narrower than this (SPEC.md *File list*).
+pub const COLUMN_MIN: f32 = 48.0;
+/// The hit zone of the boundary between two headers.
+const BOUNDARY_HIT: f32 = 6.0;
 
 /// Indent per tree level, in points.
 const TREE_INDENT: f32 = 16.0;
@@ -78,15 +99,11 @@ fn name_taken(tab: &Tab, name: &str) -> bool {
     tab.listing.entries().iter().any(|e| e.name == name)
 }
 
-/// Row height for the density setting.
+/// A row's height: the density's `row/height` token, less the spacing the
+/// table puts between rows, so the pitch of the rows is the token.
 #[must_use]
-pub fn row_height(ui: &egui::Ui, density: model::Density) -> f32 {
-    let text = ui.text_style_height(&egui::TextStyle::Body);
-    text + match density {
-        model::Density::Compact => 2.0,
-        model::Density::Normal => 6.0,
-        model::Density::Comfortable => 12.0,
-    }
+pub fn row_height(ui: &egui::Ui) -> f32 {
+    (crate::theme::metrics(ui.ctx()).row_height - ui.spacing().item_spacing.y).max(1.0)
 }
 
 /// Draws the active view of `cx`. A right click on empty space, below the
@@ -121,16 +138,26 @@ pub fn show(ui: &mut egui::Ui, cx: &mut PaneCx<'_>) {
         dnd::highlight(ui.painter(), ui.visuals(), area);
     }
     let overview = vfs_rick::Virtual::of(&cx.tab.location).filter(|v| v.is_overview());
-    match (overview, cx.tab.view) {
-        (Some(which), _) => crate::overview::show(ui, cx, which),
-        (None, ViewMode::List) => {
-            new_row_strip(ui, cx);
-            list(ui, cx);
-        }
-        (None, ViewMode::Details | ViewMode::Tree) => details(ui, cx),
-        (None, ViewMode::Icons(size)) => {
-            new_row_strip(ui, cx);
-            icons(ui, cx, size);
+    // Nothing to list yet, or nothing at all: the loading portal or the
+    // empty-folder message take the view's place, unless a New file or New
+    // folder is being named.
+    let bare = overview.is_none() && cx.tab.row_count() == 0 && cx.tab_ui.edit.is_none();
+    if bare && !cx.tab.listing.complete {
+        loading_state(ui, cx);
+    } else if bare && cx.tab.failure.is_none() {
+        empty_state(ui, cx);
+    } else {
+        match (overview, cx.tab.view) {
+            (Some(which), _) => crate::overview::show(ui, cx, which),
+            (None, ViewMode::List) => {
+                new_row_strip(ui, cx);
+                list(ui, cx);
+            }
+            (None, ViewMode::Details | ViewMode::Tree) => details(ui, cx),
+            (None, ViewMode::Icons(size)) => {
+                new_row_strip(ui, cx);
+                icons(ui, cx, size);
+            }
         }
     }
     if background.secondary_clicked() && !cx.tab.selection.is_empty() {
@@ -153,8 +180,102 @@ pub fn show(ui: &mut egui::Ui, cx: &mut PaneCx<'_>) {
                 .action_ctx(cx.pane, ext::Invocation::ContextMenu)
                 .and_then(|c| c.other),
         };
-        background.context_menu(|ui| menus::context_menu(ui, cx, &action_ctx, None));
+        egui::Popup::context_menu(&background)
+            .style(menus::menu_style)
+            .show(|ui| menus::context_menu(ui, cx, &action_ctx, None));
     }
+}
+
+/// The empty folder (SPEC.md *Empty folder*): `FOLDER_OPEN` at 64 px,
+/// *This folder is empty* and the hint under it; or *No entries match the
+/// filter* when the filter or the type filter emptied the list.
+fn empty_state(ui: &mut egui::Ui, cx: &mut PaneCx<'_>) {
+    let rect = ui.available_rect_before_wrap();
+    let scheme = theme::scheme(ui);
+    let centre = rect.center();
+    let filtered = !cx.tab.filter.is_empty() || cx.tab.types.is_some();
+    ui.painter().text(
+        centre - egui::vec2(0.0, 44.0),
+        egui::Align2::CENTER_CENTER,
+        crate::icons::FOLDER_OPEN,
+        egui::FontId::proportional(64.0),
+        scheme.icon_default.gamma_multiply(0.45),
+    );
+    let title = if filtered {
+        t!("list-no-match")
+    } else {
+        t!("list-empty-title")
+    };
+    // Labels, not painted text, so a screen reader hears the message.
+    centred_label(
+        ui,
+        centre + egui::vec2(0.0, 14.0),
+        egui::RichText::new(title)
+            .size(TEXT_BODY)
+            .color(scheme.text_primary),
+    );
+    if !filtered {
+        let shortcut = cx
+            .keys
+            .text_for(Intent::Action(ActionId("core.new_folder")))
+            .unwrap_or_default();
+        centred_label(
+            ui,
+            centre + egui::vec2(0.0, 38.0),
+            egui::RichText::new(t!("list-empty-hint", shortcut = shortcut))
+                .size(TEXT_SECONDARY)
+                .color(scheme.text_secondary),
+        );
+    }
+    ui.allocate_rect(rect, Sense::hover());
+}
+
+/// A one-line label centred on `at`, a widget so that it is read aloud.
+fn centred_label(ui: &mut egui::Ui, at: egui::Pos2, text: egui::RichText) {
+    let galley = egui::WidgetText::from(text.clone()).into_galley(
+        ui,
+        Some(egui::TextWrapMode::Extend),
+        f32::INFINITY,
+        egui::TextStyle::Body,
+    );
+    let rect = egui::Rect::from_center_size(at, galley.size());
+    ui.put(rect, egui::Label::new(text).selectable(false));
+}
+
+/// The loading state (SPEC.md *Loading*): the portal burst centred in the
+/// content with *Reading folder…* and the count so far under it, until
+/// the first rows arrive.
+fn loading_state(ui: &mut egui::Ui, cx: &mut PaneCx<'_>) {
+    let rect = ui.available_rect_before_wrap();
+    let scheme = theme::scheme(ui);
+    let still = cx.app.platform().reduce_motion();
+    let time = ui.input(|i| i.time);
+    let centre = rect.center();
+    portal::burst(
+        ui.painter(),
+        centre - egui::vec2(0.0, 24.0),
+        time,
+        scheme.accent_focus,
+        scheme.icon_default,
+        still,
+    );
+    let count = cx.tab.listing.len();
+    let text = if count == 0 {
+        t!("list-reading")
+    } else {
+        t!("list-reading-count", count = count.to_string())
+    };
+    centred_label(
+        ui,
+        centre + egui::vec2(0.0, 48.0),
+        egui::RichText::new(text)
+            .size(TEXT_SECONDARY)
+            .color(scheme.text_secondary),
+    );
+    if !still {
+        ui.ctx().request_repaint();
+    }
+    ui.allocate_rect(rect, Sense::hover());
 }
 
 /// The scroll offset to put back: the session's, once the restored tab's
@@ -202,7 +323,7 @@ fn new_row_strip(ui: &mut egui::Ui, cx: &mut PaneCx<'_>) {
         EditKind::NewFile => crate::icons::by_extension(&edit.text),
         EditKind::Rename(_) => return,
     };
-    let height = row_height(ui, cx.app.model().settings.density);
+    let height = row_height(ui);
     let (rect, _) =
         ui.allocate_exact_size(egui::vec2(ui.available_width(), height), Sense::hover());
     let mut strip = ui.new_child(
@@ -405,13 +526,23 @@ fn icon_cell_ui(
         return response;
     }
     let selected = cx.tab.selection.contains(&entry.id);
-    let visuals = ui.visuals();
+    let scheme = theme::scheme(ui);
+    let radius = theme::metrics(ui.ctx()).corner_radius();
     if selected {
-        ui.painter()
-            .rect_filled(rect, 6.0, visuals.selection.bg_fill);
+        // The focused pane's selection is blue, the other pane's grey
+        // (SPEC.md *Row states*).
+        let fill = if cx.focused {
+            scheme.bg_selected_soft
+        } else {
+            scheme.bg_selected_inactive
+        };
+        ui.painter().rect_filled(rect, radius, fill);
     } else if response.hovered() {
+        ui.painter().rect_filled(rect, radius, scheme.bg_subtle);
+    }
+    if cx.focused && cx.tab_ui.cursor == Some(entry.id) {
         ui.painter()
-            .rect_filled(rect, 6.0, visuals.widgets.hovered.weak_bg_fill);
+            .rect_stroke(rect, radius, scheme.focus_ring(), egui::StrokeKind::Inside);
     }
     let image_rect = egui::Rect::from_center_size(
         egui::pos2(rect.center().x, rect.top() + 6.0 + thumb / 2.0),
@@ -443,10 +574,10 @@ fn icon_cell_ui(
         _ => false,
     };
     if !drawn {
-        let color = if selected {
-            visuals.selection.stroke.color
+        let color = if selected && cx.focused {
+            scheme.text_on_selected
         } else {
-            visuals.text_color()
+            scheme.text_primary
         };
         ui.painter().text(
             image_rect.center(),
@@ -516,7 +647,7 @@ fn icon_cell_ui(
 #[allow(clippy::too_many_lines)]
 pub fn details(ui: &mut egui::Ui, cx: &mut PaneCx<'_>) {
     let settings = &cx.app.model().settings;
-    let height = row_height(ui, settings.density);
+    let height = row_height(ui);
     let count = cx.tab.row_count();
     // A New file or New folder in progress is the first row.
     let new_row = usize::from(
@@ -536,24 +667,45 @@ pub fn details(ui: &mut egui::Ui, cx: &mut PaneCx<'_>) {
     // No grid lines in the body: the table paints its column boundaries
     // with the non-interactive stroke, which goes; the resize handles still
     // show when hovered or dragged, and the header draws its own separators.
+    // The rows paint their own backgrounds (inset, rounded), so the table's
+    // hover and selection fills are off.
     ui.visuals_mut().widgets.noninteractive.bg_stroke = egui::Stroke::NONE;
+    ui.visuals_mut().widgets.hovered.bg_fill = egui::Color32::TRANSPARENT;
+    ui.visuals_mut().widgets.hovered.weak_bg_fill = egui::Color32::TRANSPARENT;
+    let scheme = theme::scheme(ui);
+    let radius = theme::metrics(ui.ctx()).corner_radius();
+    // The header band: `bg/subtle` between two hairlines, the width of the
+    // list (SPEC.md *File list*).
+    let outer = ui.available_rect_before_wrap();
+    let band = egui::Rect::from_min_size(outer.min, egui::vec2(outer.width(), COLUMN_HEADER));
+    cx.tab_ui.header_band = Some(band);
+    ui.painter().rect_filled(band, 0.0, scheme.bg_subtle);
+    for y in [band.top() + 0.5, band.bottom() - 0.5] {
+        ui.painter().hline(band.x_range(), y, scheme.hairline());
+    }
+    let row_x = egui::Rangef::new(outer.left() + ROW_INSET, outer.right() - ROW_INSET);
+    let clip = ui.clip_rect();
+    // The columns' widths are the tab's (SPEC.md *File list*): the ones the
+    // user gave, or the defaults, Name's being what the others leave; the
+    // last column takes what is left. The table lays them out as given and
+    // the header's boundaries below do the resizing.
+    let spacing_x = ui.spacing().item_spacing.x;
+    let ids = column_ids(&extra);
+    let widths = column_widths(cx.tab, &ids, outer.width(), spacing_x);
     let mut builder = TableBuilder::new(ui)
         .id_salt(("details", cx.tab_id))
-        .striped(settings.zebra_stripes)
-        .resizable(true)
+        .striped(false)
+        .resizable(false)
         .sense(Sense::click_and_drag())
         .auto_shrink([false, false])
-        .cell_layout(egui::Layout::left_to_right(Align::Center))
-        .column(TableColumn::remainder().at_least(140.0).clip(true))
-        .column(TableColumn::initial(120.0).at_least(60.0).clip(true))
-        .column(TableColumn::initial(130.0).at_least(60.0).clip(true))
-        .column(TableColumn::initial(80.0).at_least(50.0));
-    for _ in &extra {
-        builder = builder.column(TableColumn::initial(90.0).at_least(40.0).clip(true));
-    }
-    if cx.tab_ui.reset_columns {
-        builder.reset();
-        cx.tab_ui.reset_columns = false;
+        .cell_layout(egui::Layout::left_to_right(Align::Center));
+    let last = widths.len() - 1;
+    for (i, width) in widths.iter().enumerate() {
+        builder = builder.column(if i == last {
+            TableColumn::remainder().at_least(COLUMN_MIN).clip(true)
+        } else {
+            TableColumn::exact(*width).clip(true)
+        });
     }
     if let Some(row) = cx.tab_ui.scroll_to.take() {
         builder = builder.scroll_to_row(row + new_row, Some(Align::Center));
@@ -564,31 +716,50 @@ pub fn details(ui: &mut egui::Ui, cx: &mut PaneCx<'_>) {
 
     let sort = cx.tab.sort;
     let mut sort_request = None;
-    let table = builder.header(height, |mut row| {
+    // The right edge of every header cell, the cell's own rectangle: the
+    // boundaries between the columns, handled after the table.
+    let mut edges: Vec<f32> = Vec::with_capacity(widths.len());
+    let table = builder.header(COLUMN_HEADER, |mut row| {
         for (label, column) in [
-            ("Name", Column::Name),
-            ("Type", Column::Type),
-            ("Date modified", Column::Modified),
-            ("Size", Column::Size),
+            (t!("list-column-name"), Column::Name),
+            (t!("list-column-size"), Column::Size),
+            (t!("list-column-type"), Column::Type),
+            (t!("list-column-modified"), Column::Modified),
         ] {
             row.col(|ui| {
-                if sort_header(ui, label, column, sort) {
+                edges.push(ui.max_rect().right());
+                if column == Column::Name {
+                    ui.add_space(NAME_INSET);
+                }
+                if column == Column::Size {
+                    ui.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
+                        if sort_header(ui, &label, column, sort) {
+                            sort_request = Some(column);
+                        }
+                    });
+                } else if sort_header(ui, &label, column, sort) {
                     sort_request = Some(column);
                 }
-                header_separator(ui);
             });
         }
         for def in &extra {
             row.col(|ui| {
-                ui.strong(def.label.get());
-                header_separator(ui);
+                edges.push(ui.max_rect().right());
+                ui.label(
+                    egui::RichText::new(def.label.get())
+                        .size(TEXT_SECONDARY)
+                        .color(theme::scheme(ui).text_secondary),
+                );
             });
         }
     });
     let show_extensions = settings.show_extensions;
+    let zebra = settings.zebra_stripes;
     let now = cx.now;
     let tab = cx.tab;
     let is_tree = tab.view == ViewMode::Tree;
+    let focused = cx.focused;
+    let cursor = cx.tab_ui.cursor;
     let edit = &mut cx.tab_ui.edit;
     let mut clicked: Vec<(usize, egui::Response)> = Vec::new();
     let mut drawn: Vec<(usize, egui::Rect)> = Vec::new();
@@ -621,6 +792,13 @@ pub fn details(ui: &mut egui::Ui, cx: &mut PaneCx<'_>) {
                     is_tree,
                     show_extensions,
                     now,
+                    focused,
+                    cursor,
+                    zebra: zebra && index % 2 == 1,
+                    row_x,
+                    clip,
+                    scheme,
+                    radius,
                 },
             );
             if output.toggle {
@@ -637,6 +815,7 @@ pub fn details(ui: &mut egui::Ui, cx: &mut PaneCx<'_>) {
         });
     });
     cx.tab_ui.scroll_offset = out.state.offset.y;
+    column_boundaries(ui, cx, band, &edges, &ids, &widths, &extra);
     if let Some(outcome) = outcome {
         finish_edit(cx, outcome);
     }
@@ -672,6 +851,7 @@ pub fn details(ui: &mut egui::Ui, cx: &mut PaneCx<'_>) {
 
 /// How a details row is drawn.
 #[derive(Debug, Clone, Copy)]
+#[allow(clippy::struct_excessive_bools)]
 struct RowLook {
     /// Indent level in Tree view.
     depth: u16,
@@ -679,6 +859,74 @@ struct RowLook {
     is_tree: bool,
     show_extensions: bool,
     now: std::time::SystemTime,
+    /// Whether the pane has the focus: its selection is blue, another
+    /// pane's grey.
+    focused: bool,
+    /// The entry with the keyboard cursor, ringed when the pane is focused.
+    cursor: Option<EntryId>,
+    /// Whether this row is a tinted zebra stripe.
+    zebra: bool,
+    /// The x range of a row's background: the list inset from the pane's
+    /// edges.
+    row_x: egui::Rangef,
+    /// The list's clip rectangle, so a row's background stops where the
+    /// list does.
+    clip: egui::Rect,
+    scheme: &'static Scheme,
+    radius: egui::CornerRadius,
+}
+
+impl RowLook {
+    /// Paints the row's background behind `cell`, the first cell of the
+    /// row, across the whole list width (SPEC.md *Row states*): zebra
+    /// tint, hover `bg/subtle`, the selection in `bg/selected-soft` or
+    /// `bg/selected-inactive`, and the 2 px `accent/focus` ring of the
+    /// keyboard cursor. Returns the text colour the row's cells take, when
+    /// the selection changes it.
+    fn paint_background(
+        &self,
+        ui: &egui::Ui,
+        selected: bool,
+        id: EntryId,
+    ) -> Option<egui::Color32> {
+        let rect = egui::Rect::from_x_y_ranges(self.row_x, ui.max_rect().y_range());
+        // The cell's painter is clipped to the cell; the background spans
+        // the row, so the clip is set outright.
+        let mut painter = ui.painter().clone();
+        painter.set_clip_rect(rect.expand(1.0).intersect(self.clip));
+        let hovered = ui
+            .ctx()
+            .pointer_hover_pos()
+            .is_some_and(|p| rect.contains(p) && self.clip.contains(p));
+        let mut text = None;
+        if selected {
+            if self.focused {
+                painter.rect_filled(rect, self.radius, self.scheme.bg_selected_soft);
+                text = Some(self.scheme.text_on_selected);
+            } else {
+                painter.rect_filled(rect, self.radius, self.scheme.bg_selected_inactive);
+            }
+        } else if hovered {
+            painter.rect_filled(rect, self.radius, self.scheme.bg_subtle);
+        } else if self.zebra {
+            painter.rect_filled(rect, self.radius, self.scheme.bg_subtle.gamma_multiply(0.5));
+        }
+        if self.focused && self.cursor == Some(id) {
+            painter.rect_stroke(
+                rect,
+                self.radius,
+                self.scheme.focus_ring(),
+                egui::StrokeKind::Inside,
+            );
+        }
+        text
+    }
+
+    /// The colour of a secondary column's text: `text/secondary`, or the
+    /// selection's text colour on a selected row of the focused pane.
+    fn secondary(&self, selection_text: Option<egui::Color32>) -> egui::Color32 {
+        selection_text.unwrap_or(self.scheme.text_secondary)
+    }
 }
 
 /// What a details row produced.
@@ -699,6 +947,7 @@ fn new_row_ui(
 ) -> EditOutcome {
     let mut outcome = EditOutcome::Editing;
     row.col(|ui| {
+        ui.add_space(NAME_INSET);
         let glyph = match edit.kind {
             EditKind::NewFolder => crate::icons::FOLDER,
             _ => crate::icons::by_extension(&edit.text),
@@ -738,9 +987,15 @@ fn details_row(
     look: RowLook,
 ) -> RowOutput {
     let mut output = RowOutput::default();
-    row.set_selected(tab.selection.contains(&entry.id));
+    let selected = tab.selection.contains(&entry.id);
     let decoration = tab.decorations.get(&entry.id);
+    let mut selection_text: Option<egui::Color32> = None;
     row.col(|ui| {
+        selection_text = look.paint_background(ui, selected, entry.id);
+        if let Some(colour) = selection_text {
+            ui.visuals_mut().override_text_color = Some(colour);
+        }
+        ui.add_space(NAME_INSET);
         if look.is_tree {
             ui.add_space(f32::from(look.depth) * TREE_INDENT);
             if entry.kind == EntryKind::Dir {
@@ -785,22 +1040,34 @@ fn details_row(
             cell(ui, egui::RichText::new("…").weak());
         }
     });
+    // Size, Type and Modified in `text/secondary` (SPEC.md *File list*); a
+    // folder's size is an em dash until one is asked for.
+    let secondary = look.secondary(selection_text);
     row.col(|ui| {
-        cell(ui, model::type_of(entry));
+        ui.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
+            let text = if entry.kind == EntryKind::Dir {
+                "\u{2014}".to_owned()
+            } else {
+                format::size(entry.size)
+            };
+            cell(ui, egui::RichText::new(text).color(secondary));
+        });
+    });
+    row.col(|ui| {
+        cell(
+            ui,
+            egui::RichText::new(model::type_of(entry)).color(secondary),
+        );
     });
     row.col(|ui| {
         let (brief, full) = format::date(entry.modified, look.now);
-        cell(ui, brief).on_hover_text(full);
-    });
-    row.col(|ui| {
-        ui.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
-            if entry.kind != EntryKind::Dir {
-                cell(ui, format::size(entry.size));
-            }
-        });
+        cell(ui, egui::RichText::new(brief).color(secondary)).on_hover_text(full);
     });
     for def in extra {
         row.col(|ui| {
+            if let Some(colour) = selection_text {
+                ui.visuals_mut().override_text_color = Some(colour);
+            }
             let value = decoration
                 .and_then(|d| d.cells.iter().find(|(id, _)| *id == def.id).map(|(_, v)| v));
             match value {
@@ -853,17 +1120,198 @@ pub fn badge_text(badge: Badge) -> egui::RichText {
         .strong()
 }
 
-/// The vertical line between column titles, at the right edge of a header
-/// cell, where the resize handle is.
-fn header_separator(ui: &mut egui::Ui) {
-    let rect = ui.max_rect();
-    let x = rect.right() + ui.spacing().item_spacing.x / 2.0;
-    let stroke = ui.visuals().widgets.noninteractive.fg_stroke;
-    let stroke = egui::Stroke::new(1.0, stroke.color.gamma_multiply(0.4));
-    ui.painter().vline(x, rect.y_range().shrink(3.0), stroke);
+/// The id of a column in the tab's width map: the four of the list, then
+/// the decorators' columns by their own ids.
+fn column_key(column: Column) -> &'static str {
+    match column {
+        Column::Name => "name",
+        Column::Size => "size",
+        Column::Type => "type",
+        Column::Modified => "modified",
+        Column::Created => "created",
+        Column::Accessed => "accessed",
+        Column::Items => "items",
+    }
 }
 
-/// A column header that shows the sort marker; `true` when clicked.
+/// The ids of the details list's columns in display order.
+fn column_ids(extra: &[ColumnDef]) -> Vec<&'static str> {
+    let mut ids = vec![
+        column_key(Column::Name),
+        column_key(Column::Size),
+        column_key(Column::Type),
+        column_key(Column::Modified),
+    ];
+    ids.extend(extra.iter().map(|def| def.id.0));
+    ids
+}
+
+/// The default width of a column: Name's is what the others leave of
+/// `available`, never under [`COLUMN_MIN`].
+fn default_width(id: &str, ids: &[&str], available: f32, spacing: f32) -> f32 {
+    match id {
+        "name" => {
+            let others: f32 = ids
+                .iter()
+                .filter(|other| **other != "name")
+                .map(|other| default_width(other, ids, available, spacing))
+                .sum();
+            (available - others - ids.len() as f32 * spacing).max(COLUMN_MIN)
+        }
+        "size" => SIZE_WIDTH,
+        "type" => TYPE_WIDTH,
+        "modified" => MODIFIED_WIDTH,
+        _ => EXTRA_WIDTH,
+    }
+}
+
+/// The widths the table lays the columns out with: the tab's where the
+/// user set one, the default otherwise, none under [`COLUMN_MIN`].
+fn column_widths(tab: &Tab, ids: &[&str], available: f32, spacing: f32) -> Vec<f32> {
+    ids.iter()
+        .map(|id| {
+            tab.columns
+                .get(*id)
+                .copied()
+                .unwrap_or_else(|| default_width(id, ids, available, spacing))
+                .max(COLUMN_MIN)
+        })
+        .collect()
+}
+
+/// The boundaries between the columns (SPEC.md *File list*): no permanent
+/// line; a hit zone about 6 px wide over the header band that, hovered,
+/// shows a 1 px `border/strong` divider across the band and the
+/// column-resize cursor. Dragging it resizes the column before it, a
+/// double-click fits that column to its content, and no column gets
+/// narrower than [`COLUMN_MIN`]. A change goes to the model as the tab's
+/// widths, every column's, so the last one takes what is left from then
+/// on. `edges` are the header cells' right edges; the last, the table's
+/// edge, has no boundary.
+#[allow(clippy::too_many_arguments)]
+fn column_boundaries(
+    ui: &mut egui::Ui,
+    cx: &mut PaneCx<'_>,
+    band: egui::Rect,
+    edges: &[f32],
+    ids: &[&str],
+    widths: &[f32],
+    extra: &[ColumnDef],
+) {
+    let half_gap = ui.spacing().item_spacing.x / 2.0;
+    let scheme = theme::scheme(ui);
+    cx.tab_ui.column_boundaries.clear();
+    let mut changed: Option<BTreeMap<String, f32>> = None;
+    for (i, right) in edges.iter().enumerate().take(edges.len().saturating_sub(1)) {
+        let x = right + half_gap;
+        cx.tab_ui.column_boundaries.push(x);
+        let hit = egui::Rect::from_center_size(
+            egui::pos2(x, band.center().y),
+            egui::vec2(BOUNDARY_HIT, band.height()),
+        );
+        let response = ui.interact(
+            hit,
+            egui::Id::new(("column-boundary", cx.tab_id, i)),
+            Sense::click_and_drag(),
+        );
+        if response.hovered() || response.dragged() {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeColumn);
+            ui.painter().vline(
+                x.round() + 0.5,
+                band.y_range(),
+                egui::Stroke::new(1.0, scheme.border_strong),
+            );
+        }
+        let new_width = if response.double_clicked() {
+            Some(fit_width(ui, cx, i, ids[i], extra))
+        } else if response.dragged() {
+            Some(widths[i] + response.drag_delta().x)
+        } else {
+            None
+        };
+        if let Some(width) = new_width {
+            let columns = changed.get_or_insert_with(|| {
+                ids.iter()
+                    .zip(widths)
+                    .take(edges.len().saturating_sub(1))
+                    .map(|(id, w)| ((*id).to_owned(), *w))
+                    .collect()
+            });
+            columns.insert(ids[i].to_owned(), width.max(COLUMN_MIN));
+        }
+    }
+    if let Some(columns) = changed {
+        cx.requests
+            .push(Request::Command(app::Command::ColumnWidths {
+                tab: cx.tab_id,
+                columns,
+            }));
+    }
+}
+
+/// The width that fits column `index` to its content: the widest of its
+/// title and the cells of the rows in view, with the cells' padding, the
+/// Name column's icon and inset included.
+fn fit_width(ui: &egui::Ui, cx: &PaneCx<'_>, index: usize, id: &str, extra: &[ColumnDef]) -> f32 {
+    let body = egui::TextStyle::Body.resolve(ui.style());
+    let small = egui::FontId::proportional(TEXT_SECONDARY);
+    let spacing = ui.spacing().item_spacing.x;
+    let pad = 2.0 * ui.spacing().button_padding.x;
+    let measure = |text: &str, font: &egui::FontId| {
+        ui.fonts_mut(|f| {
+            f.layout_no_wrap(text.to_owned(), font.clone(), egui::Color32::WHITE)
+                .size()
+                .x
+        })
+    };
+    let title = match index {
+        0 => t!("list-column-name"),
+        1 => t!("list-column-size"),
+        2 => t!("list-column-type"),
+        3 => t!("list-column-modified"),
+        _ => extra
+            .get(index - 4)
+            .map(|d| d.label.get())
+            .unwrap_or_default(),
+    };
+    let mut widest =
+        measure(&title, &small) + pad + spacing + measure(crate::icons::SORT_ASC, &small);
+    let show_extensions = cx.app.model().settings.show_extensions;
+    let first = (cx.tab_ui.scroll_offset / row_height(ui).max(1.0)) as usize;
+    for entry in cx
+        .tab
+        .rows()
+        .skip(first)
+        .take(cx.tab_ui.visible_rows.max(1))
+    {
+        let width = match id {
+            "name" => {
+                NAME_INSET
+                    + measure(icon(entry), &body)
+                    + spacing
+                    + measure(&shown_name(cx.tab, entry, show_extensions), &body)
+            }
+            "size" => measure(&format::size(entry.size), &body),
+            "type" => measure(&model::type_of(entry), &body),
+            "modified" => measure(&format::date(entry.modified, cx.now).0, &body),
+            _ => cx
+                .tab
+                .decorations
+                .get(&entry.id)
+                .and_then(|d| d.cells.iter().find(|(c, _)| c.0 == id))
+                .map_or(0.0, |(_, value)| match value {
+                    CellValue::Text(text) => measure(text, &body),
+                    CellValue::Number(n) => measure(&n.to_string(), &body),
+                    CellValue::Pending => 0.0,
+                }),
+        };
+        widest = widest.max(width + pad);
+    }
+    widest.max(COLUMN_MIN)
+}
+
+/// A column title in 12 px `text/secondary` with the sort glyph after the
+/// sorted column's; `true` when clicked.
 fn sort_header(ui: &mut egui::Ui, label: &str, column: Column, sort: model::Sort) -> bool {
     let marker = if sort.by == column {
         match sort.dir {
@@ -873,14 +1321,16 @@ fn sort_header(ui: &mut egui::Ui, label: &str, column: Column, sort: model::Sort
     } else {
         ""
     };
-    ui.add(egui::Button::new(format!("{label} {marker}").trim_end().to_owned()).frame(false))
-        .clicked()
+    let text = egui::RichText::new(format!("{label} {marker}").trim_end().to_owned())
+        .size(TEXT_SECONDARY)
+        .color(theme::scheme(ui).text_secondary);
+    ui.add(egui::Button::new(text).frame(false)).clicked()
 }
 
 /// The list grid: icon and name only, in as many columns as fit.
 pub fn list(ui: &mut egui::Ui, cx: &mut PaneCx<'_>) {
     let settings = &cx.app.model().settings;
-    let height = row_height(ui, settings.density);
+    let height = row_height(ui);
     let cell_width = 220.0;
     let columns = ((ui.available_width() / cell_width).floor() as usize).max(1);
     let count = cx.tab.row_count();
@@ -902,6 +1352,13 @@ pub fn list(ui: &mut egui::Ui, cx: &mut PaneCx<'_>) {
     let mut clicked: Vec<(usize, egui::Response)> = Vec::new();
     let mut drawn: Vec<(usize, egui::Rect)> = Vec::new();
     let mut edit_outcome: Option<EditOutcome> = None;
+    // A pane without the focus shows its selection grey (SPEC.md *Row
+    // states*).
+    if !cx.focused {
+        let scheme = theme::scheme(ui);
+        ui.visuals_mut().selection.bg_fill = scheme.bg_selected_inactive;
+        ui.visuals_mut().selection.stroke.color = scheme.text_primary;
+    }
     let out = area.show_rows(ui, height, rows, |ui, range| {
         for row in range {
             ui.horizontal(|ui| {
@@ -1051,5 +1508,7 @@ fn interact(ui: &mut egui::Ui, cx: &mut PaneCx<'_>, index: usize, response: &egu
         cx.requests.push(Request::FocusPane(cx.pane));
     }
     let action_ctx = menus::context_for(cx, if selected { None } else { Some(entry.clone()) });
-    response.context_menu(|ui| menus::context_menu(ui, cx, &action_ctx, Some(entry)));
+    egui::Popup::context_menu(response)
+        .style(menus::menu_style)
+        .show(|ui| menus::context_menu(ui, cx, &action_ctx, Some(entry)));
 }

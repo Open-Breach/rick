@@ -45,11 +45,9 @@ fn listing_reports_kinds_sizes_and_hidden_filtering() {
     runtime::block_on(async {
         let visible = collect(&provider, dir.path(), ListOptions::default()).await;
         let names: Vec<&str> = visible.iter().map(|e| e.name.as_str()).collect();
-        // Dot-files are hidden on Unix; on Windows the attribute decides.
-        assert!(
-            names.contains(&"a.txt") && names.contains(&"sub"),
-            "{names:?}"
-        );
+        // A dot-file is hidden on every platform (SPEC.md *Hidden files*);
+        // on Windows the hidden attribute hides a file too.
+        assert_eq!(names, ["a.txt", "sub"]);
         let file = visible
             .iter()
             .find(|e| e.name == "a.txt")

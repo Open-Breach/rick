@@ -284,6 +284,8 @@ pub struct FormLater(oneshot::Receiver<(Form, Continuation)>);
 
 /// What a look at a [`FormLater`] finds.
 #[derive(Debug)]
+// The form is handed over once; boxing it would buy nothing.
+#[allow(clippy::large_enum_variant)]
 pub enum FormLaterState {
     /// The job is still at work.
     Pending,

@@ -6,13 +6,21 @@ exchange (`Capabilities`, `ListOptions`, `FsChange`, `Decoration`, `ActionCtx`,
 `PreviewDoc`, `Frame`, `Content` with its `Listing`, `Grid`, `Document`
 and `MissingLibrary`, `Transport`, `Query` and friends, the slots an
 action fills from a job, `Compare` for a tab and `Hashes` for the Hash
-dialogue, and `FormLater` with its `Continuation`, the form an action
+dialogue, `Form` with its fields (text, checkbox, choice, folder and file
+paths, a segmented control, sections and cards, disclosure cards, a
+preview marker; a field can be monospace or required), its `Header`
+(an icon, a title, a pill and a subtitle), its footer note and its titled
+preview, and `FormLater` with its `Continuation`, the form an action
 opens when a job of its finishes and the rest of the action the
 application runs with the values through `UiHost::form_later`; an
 action's `app_menu` puts it in the burger menu under its extension), the
 `Manifest` every extension declares (with `previews`, the
 file extensions its previewers claim, so the host can say a disabled
-plugin is available for a file without loading it), the `Extension` trait
+plugin is available for a file without loading it, and `commands`, the
+subcommands of the `rick` command line it provides, each a `CliCommand`
+registered under a declared name and run by the host on the application
+thread like an action, with text for the caller's terminal or an action's
+outcome for the focused pane), the `Extension` trait
 that registers contributions, and the `Registry` that collects them and
 refuses manifests of another API version. The registry is also the
 extension context: the host builds it with `Registry::with_platform`, so

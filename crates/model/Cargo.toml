@@ -13,8 +13,7 @@ platform = { workspace = true }
 ext = { workspace = true }
 rayon = { workspace = true }
 serde = { workspace = true }
-
-[dev-dependencies]
+# The date of an integration item's last check, a TOML date in `rick.toml`.
 toml = { workspace = true }
 
 [lints]

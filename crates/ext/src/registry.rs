@@ -85,6 +85,7 @@
 //!     points: Points::DECORATOR | Points::ACTION,
 //!     platforms: Platforms::ALL,
 //!     previews: &[],
+//!     commands: &[],
 //! };
 //!
 //! let mut registry = Registry::new();
@@ -111,6 +112,7 @@ use semver::Version;
 use types::{Error, ExtId};
 
 use crate::action::Action;
+use crate::cli::{CliCommand, CommandSpec};
 use crate::connection::Connector;
 use crate::decorator::Decorator;
 use crate::preview::Previewer;
@@ -163,8 +165,16 @@ use crate::search::SearchIndex;
 /// a job fills, `UiHost` gained `form_later` and the
 /// [`Continuation`](crate::Continuation) it runs with the values; and
 /// `Action` gained `app_menu`, whether the action is listed in the
-/// application menu under its extension (QUESTIONS.md 210–211).
-pub const API_VERSION: u32 = 14;
+/// application menu under its extension (QUESTIONS.md 210–211); 15 the
+/// command line gained plugin subcommands (specs/system-integration.md
+/// §4): [`Manifest`] gained `commands`, the [`CommandSpec`]s
+/// a plugin declares and `plugin.toml` carries as `[[commands]]`, and the
+/// registry takes a [`CliCommand`] per declared name
+/// through [`Registry::command`]; 16 the shell integration of the same
+/// spec: `Console` gained `cwd`, the working directory the shell reports
+/// through OSC 7, and `foreground_job`, whether a program other than the
+/// shell has the terminal.
+pub const API_VERSION: u32 = 16;
 
 bitflags::bitflags! {
     /// The extension points an extension fills, as its manifest declares
@@ -314,6 +324,12 @@ pub struct Manifest {
     /// without previewers, and for a previewer that claims no file by its
     /// name (the hex view, chosen per type in settings).
     pub previews: &'static [&'static str],
+    /// The subcommands of the `rick` command line the extension provides
+    /// (`rick <name> <args…>`), each with its help line: what `rick
+    /// --help` lists and `plugin.toml` carries as `[[commands]]`. The
+    /// registry refuses a [`CliCommand`] whose name is
+    /// not declared here. Empty for an extension without commands.
+    pub commands: &'static [CommandSpec],
 }
 
 /// How a setting is edited and stored.
@@ -470,6 +486,8 @@ pub struct Registry {
     previewers: Vec<Arc<dyn Previewer>>,
     search_indexes: Vec<Arc<dyn SearchIndex>>,
     settings: Vec<SettingsSchema>,
+    /// The plugin subcommands of the command line.
+    commands: Vec<Arc<dyn CliCommand>>,
 }
 
 impl Default for Registry {
@@ -490,6 +508,7 @@ impl Default for Registry {
             previewers: Vec::new(),
             search_indexes: Vec::new(),
             settings: Vec::new(),
+            commands: Vec::new(),
         }
     }
 }
@@ -603,6 +622,15 @@ impl Registry {
                 "extension registered a point its manifest does not declare",
             ));
         }
+        if staging
+            .commands
+            .iter()
+            .any(|c| !manifest.commands.iter().any(|spec| spec.name == c.name()))
+        {
+            return Err(Error::Unsupported(
+                "extension registered a command its manifest does not declare",
+            ));
+        }
         self.extensions.push(manifest.id);
         self.manifests.push(manifest.clone());
         self.providers.append(&mut staging.providers);
@@ -613,6 +641,7 @@ impl Registry {
         self.previewers.append(&mut staging.previewers);
         self.search_indexes.append(&mut staging.search_indexes);
         self.settings.append(&mut staging.settings);
+        self.commands.append(&mut staging.commands);
         Ok(())
     }
 
@@ -665,6 +694,13 @@ impl Registry {
         self.settings.push(schema);
     }
 
+    /// Registers a subcommand of the `rick` command line
+    /// ([`crate::cli`]); its name must be one the manifest's `commands`
+    /// declare, or [`load`](Self::load) refuses the extension.
+    pub fn command(&mut self, c: Arc<dyn CliCommand>) {
+        self.commands.push(c);
+    }
+
     /// Hands the extension's translation files to the lookup
     /// ([`crate::i18n`]): one `(language tag, Fluent source)` pair per
     /// language, `include_str!`'d from the crate's `locales/` directory.
@@ -703,6 +739,7 @@ impl Registry {
         self.search_indexes
             .extend(other.search_indexes.iter().cloned());
         self.settings.extend(other.settings.iter().cloned());
+        self.commands.extend(other.commands.iter().cloned());
     }
 
     /// Ids of the extensions loaded so far, in load order.
@@ -778,6 +815,12 @@ impl Registry {
         &self.search_indexes
     }
 
+    /// The plugin subcommands registered so far ([`crate::cli`]).
+    #[must_use]
+    pub fn commands(&self) -> &[Arc<dyn CliCommand>] {
+        &self.commands
+    }
+
     /// Declared settings schemas, in registration order.
     #[must_use]
     pub fn settings_schemas(&self) -> &[SettingsSchema] {
@@ -839,6 +882,7 @@ mod tests {
             points: Points::empty(),
             platforms: Platforms::ALL,
             previews: &[],
+            commands: &[],
         }));
         assert!(matches!(result, Err(Error::Unsupported(_))));
         assert_eq!(registry.extensions(), [] as [ExtId; 0]);
@@ -895,6 +939,7 @@ mod tests {
             points: Points::ACTION,
             platforms: Platforms::ALL,
             previews: &[],
+            commands: &[],
         };
         assert!(matches!(
             registry.load(&Undeclared(manifest.clone())),
@@ -909,6 +954,73 @@ mod tests {
             .load(&Undeclared(declared))
             .unwrap_or_else(|e| panic!("{e}"));
         assert_eq!(registry.points(), Points::PREVIEWER);
+    }
+
+    /// A plugin whose command the manifest does not name.
+    struct Chatty(Manifest);
+
+    struct Say;
+
+    impl crate::cli::CliCommand for Say {
+        fn name(&self) -> &'static str {
+            "say"
+        }
+        fn run(
+            &self,
+            ctx: crate::cli::CliCtx,
+            _: &runtime::JobRunner,
+            _: &dyn crate::action::UiHost,
+        ) -> Result<crate::cli::CliOutcome, Error> {
+            Ok(crate::cli::CliOutcome::Text(ctx.args.join(" ")))
+        }
+    }
+
+    impl Extension for Chatty {
+        fn manifest(&self) -> &Manifest {
+            &self.0
+        }
+        fn register(&self, reg: &mut Registry) -> Result<(), Error> {
+            reg.command(Arc::new(Say));
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn a_command_the_manifest_does_not_declare_is_refused() {
+        let mut registry = Registry::new();
+        let manifest = Manifest {
+            id: ExtId("chatty"),
+            name: "Chatty",
+            version: Version::new(0, 1, 0),
+            api_version: API_VERSION,
+            requires: Capabilities::empty(),
+            points: Points::empty(),
+            platforms: Platforms::ALL,
+            previews: &[],
+            commands: &[],
+        };
+        assert!(matches!(
+            registry.load(&Chatty(manifest.clone())),
+            Err(Error::Unsupported(_))
+        ));
+        assert!(registry.commands().is_empty());
+        let declared = Manifest {
+            commands: &[CommandSpec {
+                name: "say",
+                help: "Say the arguments back",
+            }],
+            ..manifest
+        };
+        registry
+            .load(&Chatty(declared))
+            .unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(registry.commands().len(), 1);
+        assert_eq!(registry.commands()[0].name(), "say");
+        // The application's registry takes a plugin's commands with the
+        // rest of its contributions.
+        let mut other = Registry::new();
+        other.absorb(&registry);
+        assert_eq!(other.commands().len(), 1);
     }
 
     #[test]

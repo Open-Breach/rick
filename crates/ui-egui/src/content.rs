@@ -238,7 +238,7 @@ fn listing_icon(entry: &ListingEntry) -> &'static str {
 /// directories folding in place, and the stats line under it.
 fn draw_listing(ui: &mut egui::Ui, listing: &Listing, state: &mut State, now: SystemTime) {
     let compressed = listing.entries.iter().any(|e| e.compressed.is_some());
-    let height = crate::views::row_height(ui, model::Density::Normal);
+    let height = crate::views::row_height(ui);
     let stats_h = ui.text_style_height(&egui::TextStyle::Small) + 8.0;
     let whole = ui.available_rect_before_wrap();
     let table_rect = Rect::from_min_max(
@@ -409,7 +409,7 @@ fn draw_grid(ui: &mut egui::Ui, grid: &dyn Grid, state: &mut State) {
     let header = grid.header();
     let rows = grid.rows();
     let columns = header.len().clamp(1, MAX_COLUMNS);
-    let height = crate::views::row_height(ui, model::Density::Normal);
+    let height = crate::views::row_height(ui);
     ui.visuals_mut().widgets.noninteractive.bg_stroke = egui::Stroke::NONE;
     let mut builder = TableBuilder::new(ui)
         .id_salt("preview-grid")

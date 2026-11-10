@@ -417,8 +417,12 @@ fn the_context_menu_shows_the_svn_group_only_inside_the_working_copy() {
         1,
         "the SVN column"
     );
-    harness.get_by_label("Modified");
+    // The status cell; the Modified column header carries the same name.
+    harness.get_by_role_and_label(egui::accesskit::Role::Label, "Modified");
     harness.get_by_label("tracked.txt").click_secondary();
+    // Two frames: the menu lays itself out in the first and, taller than
+    // the room below the row, moves up to fit the window in the second.
+    harness.step();
     harness.step();
     harness.get_by_label_contains("Properties");
     assert_eq!(

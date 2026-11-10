@@ -370,6 +370,11 @@ impl JobRunner {
                         }
                     }
                 };
+                // The future goes first: what it holds (a scheduler's queue
+                // entry, a lease) is released before anyone can observe the
+                // result, so a cancelled waiter is out of the queue by the
+                // time `result.await` returns.
+                drop(future);
                 // A report the job made just before returning, or one held
                 // back by the window, is still unpublished; the sender being
                 // gone does not matter.

@@ -10,8 +10,16 @@
 //! it in a blocking task), picks the smallest JPEG DCT scale that still
 //! covers the request, applies the orientation and downscales to fit, never
 //! upscaling. GIF frames are pages.
+//!
+//! SVG and SVGZ belong here too (SPEC.md, *Vector images*): sniffed by
+//! their root element, rasterised with `resvg` at the exact size the pane
+//! asks for and again at every change of it, the highlighted source one
+//! *Rendered* toggle away and the text layer, so *Copy* copies the raw SVG;
+//! see [`svg`].
 
 #![forbid(unsafe_code)]
+
+pub mod svg;
 
 use std::io::Cursor;
 use std::sync::Arc;
@@ -31,8 +39,14 @@ pub const ID: ExtId = ExtId("preview-image");
 /// Files above this are not decoded; the preview says so instead.
 pub const MAX_BYTES: usize = 512 * 1024 * 1024;
 
-/// Extensions that name an image even when the sniff is cut short.
+/// Raster extensions that name an image even when the sniff is cut short.
 const EXTENSIONS: &[&str] = &["jpg", "jpeg", "png", "gif", "bmp", "webp", "tif", "tiff"];
+
+/// Every extension the previewer claims, for the manifest: the raster
+/// formats and the vector ones, which score by content alone.
+const PREVIEWS: &[&str] = &[
+    "jpg", "jpeg", "png", "gif", "bmp", "webp", "tif", "tiff", "svg", "svgz",
+];
 
 /// The extension: registers [`ImagePreviewer`].
 #[derive(Debug)]
@@ -59,7 +73,8 @@ impl ImagePreview {
                 requires: Capabilities::empty(),
                 points: Points::PREVIEWER,
                 platforms: Platforms::ALL,
-                previews: EXTENSIONS,
+                previews: PREVIEWS,
+                commands: &[],
             },
         }
     }
@@ -77,7 +92,8 @@ impl Extension for ImagePreview {
     }
 }
 
-/// Previews images.
+/// Previews images: the raster formats as [`ImageDoc`], SVG and SVGZ as
+/// [`svg::SvgDoc`].
 #[derive(Debug, Default)]
 pub struct ImagePreviewer;
 
@@ -613,6 +629,11 @@ impl Previewer for ImagePreviewer {
         if entry.kind != types::EntryKind::File {
             return 0;
         }
+        // Vector images by content: the root element, or the gzip magic
+        // with the `.svgz` name; never by the extension alone.
+        if svg::is_svg(sniff) || svg::is_svgz(&entry.name, sniff) {
+            return 200;
+        }
         if image::guess_format(sniff).is_ok_and(supported) {
             return 200;
         }
@@ -637,6 +658,16 @@ impl Previewer for ImagePreviewer {
         let bytes = ext::read_bytes(&*provider, loc, Some(MAX_BYTES + 1), &cancel).await?;
         if bytes.len() > MAX_BYTES {
             return Err(Error::Unsupported("image larger than 512 MiB"));
+        }
+        let name = loc
+            .path
+            .to_string_lossy()
+            .rsplit(['/', '\\'])
+            .next()
+            .unwrap_or_default()
+            .to_owned();
+        if svg::is_svgz(&name, &bytes) || svg::is_svg(&bytes) {
+            return Ok(Box::new(svg::SvgDoc::new(&name, &bytes)?));
         }
         Ok(Box::new(ImageDoc::new(bytes)?))
     }

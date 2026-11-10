@@ -26,12 +26,16 @@
     clippy::cast_possible_wrap
 )]
 
+pub mod about;
 pub mod compare;
 pub mod conflict;
 pub mod console;
 pub mod content;
+pub mod dialog;
 pub mod dnd;
 pub mod dock;
+pub mod drag;
+pub mod fonts;
 pub mod format;
 pub mod frame;
 pub mod hash;
@@ -39,13 +43,16 @@ pub mod host;
 pub mod icons;
 pub mod inline;
 pub mod inspector;
+pub mod integration;
 pub mod keys;
+pub mod licences;
 pub mod menus;
 pub mod operations;
 pub mod overview;
 pub mod palette;
 pub mod pane;
 pub mod paths;
+pub mod portal;
 pub mod preview;
 pub mod properties;
 pub mod question;
@@ -53,8 +60,10 @@ pub mod search;
 pub mod settings_ui;
 pub mod shell;
 pub mod side_panel;
+pub mod theme;
 pub mod thumbs;
 pub mod views;
+pub mod widgets;
 
 use std::sync::Arc;
 
@@ -63,17 +72,33 @@ use app::App;
 pub use host::{Ask, EguiHost};
 pub use inline::{EditKind, RowEdit};
 pub use keys::{Intent, KeyMap};
-pub use pane::toolbar_height;
-pub use shell::{Dispatched, Request, RickUi, TabUi, WindowUi, viewport_builder};
+pub use pane::{HANDLE_WIDTH, footer_height, toolbar_height};
+pub use shell::{
+    APP_ID, DOCK_TILE, DOCK_TILE_PITCH, Dispatched, Relaunch, Request, RickUi, TabUi, WindowUi,
+    viewport_builder,
+};
 
-/// Opens the first window and runs until the last one closes. `version` is
-/// what the About window shows: the binary's version and git hash.
+/// Opens the first window and runs until the last one closes. `build` is
+/// what the About dialog shows and `rick --version` prints: the binary's
+/// version, commit, target, build date, toolchain, contributors and the
+/// generated component list ([`about::Build`]); `externals` is where the
+/// single-instance endpoint delivers a second launch's command line,
+/// drained before every frame of the first window; `relaunch` continues
+/// Rick from the copy the integration dialog installed it to
+/// ([`Relaunch`]).
 ///
 /// # Errors
 ///
 /// The error eframe reports when the window or its renderer cannot be set
 /// up.
-pub fn run(title: &str, version: &str, app: App, host: Arc<EguiHost>) -> eframe::Result {
+pub fn run(
+    title: &str,
+    build: about::Build,
+    app: App,
+    host: Arc<EguiHost>,
+    externals: Option<app::ExternalReceiver>,
+    relaunch: Option<Relaunch>,
+) -> eframe::Result {
     // Rick draws its own title row. Where the system keeps its controls
     // (macOS), the title bar goes but the window keeps its buttons; elsewhere
     // the decorations go altogether. The restored session's focused window
@@ -85,15 +110,23 @@ pub fn run(title: &str, version: &str, app: App, host: Arc<EguiHost>) -> eframe:
         ..Default::default()
     };
     let mut app = Some(app);
-    let version = version.to_owned();
+    let mut externals = externals;
+    let mut relaunch = relaunch;
+    let mut build = Some(build);
     eframe::run_native(
         title,
         options,
         Box::new(move |cc| {
             let app = app.take().ok_or("the app was already taken")?;
-            Ok(Box::new(
-                RickUi::new(app, host, &cc.egui_ctx).with_version(version),
-            ))
+            let build = build.take().unwrap_or_default();
+            let mut ui = RickUi::new(app, host, &cc.egui_ctx).with_build(build);
+            if let Some(externals) = externals.take() {
+                ui = ui.with_externals(externals);
+            }
+            if let Some(relaunch) = relaunch.take() {
+                ui = ui.with_relaunch(relaunch);
+            }
+            Ok(Box::new(ui))
         }),
     )
 }

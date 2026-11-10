@@ -49,7 +49,7 @@ impl Frame {
             offset: [0, 2],
             blur: 14,
             spread: 0,
-            color: egui::Color32::from_black_alpha(if visuals.dark_mode { 120 } else { 56 }),
+            color: crate::theme::scheme(ui).shadow(),
         };
         let painter = ui.painter();
         painter.add(shadow.as_shape(inner, 0));

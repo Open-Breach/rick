@@ -29,6 +29,14 @@
 //! watch it (an archive) is polled instead: its `stat` every few seconds, a
 //! change of size or time listing it again.
 //!
+//! The integration items (specs/system-integration.md §6) are checked by
+//! [`IntegrationCommand::Check`]: a job off the loop's thread that reads
+//! what the platform finds of every item the user has not declined, folds
+//! it into the records of `rick.toml`'s `[integration]` table and into
+//! [`model::Integration`], and answers [`Event::IntegrationChecked`]. The
+//! dialog's *Apply* and Settings' *Add* and *Restore* perform their rows
+//! through the platform and record what each wrote.
+//!
 //! The session (every window, pane and tab, see [`model::Session`]) is
 //! written to `session.toml` after every change, at most once per second,
 //! and once more by [`App::save_session`] on exit. A start restores it, or
@@ -69,12 +77,16 @@
 
 mod command;
 mod ext_settings;
+mod external;
+mod integration;
 mod places;
 mod session;
 pub mod settings;
 
 pub use command::{Command, ConnectionOp, Event, PropertiesInfo, TransferMode};
 pub use ext_settings::ExtSettings;
+pub use external::{External, ExternalReceiver, ExternalSender, external_channel};
+pub use integration::{INSTALL_RICK_COMMAND, IntegrationCommand};
 /// What the Hash dialogue draws with (the format, the rendering, the
 /// Verify logic), re-exported for the UI.
 pub use ops::hash;
@@ -90,10 +102,10 @@ use std::sync::{Arc, Mutex, PoisonError, RwLock};
 use std::time::Duration;
 
 use ext::{
-    ActionCtx, ActionOutcome, Availability, Capabilities, DecorateCtx, Decoration, Decorator,
-    Depth, Extension, Filter, FormLater, FormLaterState, FsChange, Invocation, Level, ListOptions,
-    Points, PreviewDoc, Previewer, Prompts, Query, QueryKind, Reads, Registry, SearchIndex,
-    SearchScope, UiHost, UndoCommand,
+    ActionCtx, ActionOutcome, Availability, Capabilities, CliCtx, CliOutcome, DecorateCtx,
+    Decoration, Decorator, Depth, Extension, Filter, FormLater, FormLaterState, FsChange,
+    Invocation, Level, ListOptions, Points, PreviewDoc, Previewer, Prompts, Query, QueryKind,
+    Reads, Registry, SearchIndex, SearchScope, UiHost, UndoCommand,
 };
 use futures::StreamExt;
 use model::{
@@ -306,7 +318,7 @@ enum Msg {
         result: Result<(), Error>,
     },
     /// The trash was listed.
-    Trash(Result<Vec<TrashedItem>, Error>),
+    Trash(Result<(Vec<TrashedItem>, u64), Error>),
     /// The cloud providers' roots were listed.
     Cloud(Vec<Entry>),
     /// The network providers' roots were listed.
@@ -316,6 +328,29 @@ enum Msg {
     /// A connection of this provider was connected or disconnected: its
     /// rows may read differently.
     ConnectionChanged(ProviderId),
+    /// The integration check answered: the platform's items and what it
+    /// found of each one that is not declined.
+    IntegrationChecked {
+        generation: u64,
+        startup: bool,
+        listed: platform::integration::Items,
+        found: Vec<(platform::integration::Item, platform::integration::Check)>,
+    },
+    /// The integration apply starts on a row.
+    IntegrationProgress {
+        done: usize,
+        total: usize,
+        current: platform::integration::Item,
+    },
+    /// The integration apply ended: each row's receipt, or why it failed,
+    /// and the copy Rick was installed to on the way.
+    IntegrationApplied {
+        results: Vec<(
+            platform::integration::Item,
+            Result<platform::integration::Receipt, Error>,
+        )>,
+        relaunch: Option<PathBuf>,
+    },
 }
 
 /// How long changes are collected before the decorators run again.
@@ -328,6 +363,21 @@ const POLL_EVERY: Duration = Duration::from_secs(3);
 /// How long one [`App::poll`] may spend applying messages before it leaves
 /// the rest to the next one.
 const POLL_BUDGET: Duration = Duration::from_millis(8);
+/// How long a reveal waits for its files to be listed before it selects
+/// what is there.
+const REVEAL_FOR: Duration = Duration::from_secs(5);
+
+/// The line typed into a console to take its shell to `path`: quoted for
+/// the shell, with a leading space so a shell that ignores such lines
+/// keeps it out of its history, and Enter.
+fn cd_command(path: &Path) -> Vec<u8> {
+    if ext::Platforms::current() == ext::Platforms::WINDOWS {
+        format!(" cd /d \"{}\"\r", path.display()).into_bytes()
+    } else {
+        let quoted = path.to_string_lossy().replace('\'', "'\\''");
+        format!(" cd '{quoted}'\r").into_bytes()
+    }
+}
 /// How long the title-row search box's text must stand before the search
 /// indexes are asked, so a typist does not start a query per keystroke.
 const INDEX_SEARCH_AFTER: Duration = Duration::from_millis(150);
@@ -477,6 +527,25 @@ struct Live {
     children: BTreeMap<EntryId, Child>,
 }
 
+/// A console tab and the explorer tab it was opened from
+/// (specs/system-integration.md §4): the tab follows the shell's working
+/// directory, and the shell is told `cd` when the tab navigates while it
+/// is at its prompt.
+struct ConsoleLink {
+    /// The explorer's pane.
+    pane: PaneId,
+    /// The explorer tab, which must be its pane's active tab to be moved.
+    explorer: TabId,
+    /// The console.
+    console: Arc<dyn ext::Console>,
+    /// The working directory the console last reported, so a report is
+    /// acted on once.
+    cwd_seen: Option<PathBuf>,
+    /// The explorer's location last seen, so a navigation is typed once,
+    /// and one the console itself caused not at all.
+    location_seen: Location,
+}
+
 /// The application: model, registry, jobs, undo log and settings.
 pub struct App {
     model: Model,
@@ -533,6 +602,16 @@ pub struct App {
     /// ([`ActionOutcome::Later`]), with the pane each ran in; looked at on
     /// every poll.
     later: Vec<(PaneId, FormLater)>,
+    /// The file names `Command::Reveal` selects in a pane once its folder
+    /// is listed, with when it asked; a name that never shows is dropped
+    /// after [`REVEAL_FOR`].
+    reveal_pending: BTreeMap<PaneId, (Vec<Vec<u8>>, std::time::Instant)>,
+    /// The pane whose reveal ends with the Properties dialogue on what it
+    /// selected.
+    reveal_properties: Option<PaneId>,
+    /// The console tabs open and the explorer tabs they follow, by the
+    /// console's tab.
+    console_links: BTreeMap<TabId, ConsoleLink>,
     /// Writes `places.toml`, latest snapshot wins.
     places_saver: mpsc::UnboundedSender<Vec<Place>>,
     /// Stops the volume poll.
@@ -569,6 +648,8 @@ pub struct App {
     properties_shown: Option<(PaneId, PathBuf)>,
     /// Numbers the index searches, so a superseded one's hits are dropped.
     index_generation: u64,
+    /// The integration check or apply in flight.
+    integration: integration::IntegrationRun,
 }
 
 impl App {
@@ -832,6 +913,9 @@ impl App {
             thumbnails: BTreeSet::new(),
             pending,
             later: Vec::new(),
+            reveal_pending: BTreeMap::new(),
+            reveal_properties: None,
+            console_links: BTreeMap::new(),
             places_saver,
             volumes_watch: CancelToken::new(),
             poke: runtime::watch::channel(0).0,
@@ -847,6 +931,7 @@ impl App {
             index_search: None,
             properties_shown: None,
             index_generation: 0,
+            integration: integration::IntegrationRun::default(),
         };
         app.watch_settings();
         if seeded {
@@ -968,6 +1053,13 @@ impl App {
         self.exit
     }
 
+    /// Asks the UI to exit, as closing the last window does: what the
+    /// relaunch from the installed copy ends with, once the new instance
+    /// has answered (specs/system-integration.md §6.1).
+    pub fn request_exit(&mut self) {
+        self.exit = true;
+    }
+
     /// The user's home directory as a location.
     #[must_use]
     pub fn home(&self) -> &Location {
@@ -1037,6 +1129,15 @@ impl App {
         let mut model = Model::from_session(settings, &session, &self.home);
         model.jobs = jobs;
         self.model = model;
+        // The new model numbers its panes and tabs from one again: a
+        // listing of the old model under the same numbers would pass for
+        // the new pane's and leave it empty, so every pane lists afresh.
+        for (_, live) in std::mem::take(&mut self.live) {
+            live.cancel.cancel();
+            for child in live.children.values() {
+                child.cancel.cancel();
+            }
+        }
     }
 
     fn save_layout(&mut self, name: &str, events: &mut Vec<Event>) {
@@ -1189,10 +1290,13 @@ impl App {
         self.redo.last().map(|c| c.label())
     }
 
-    /// Whether a listing is still streaming or a job still running.
+    /// Whether a listing is still streaming or a job still running, the
+    /// decorators' jobs included (a Git status being read, for instance).
     #[must_use]
     pub fn is_busy(&self) -> bool {
-        self.live.values().any(|l| !l.complete) || !self.jobs.running().is_empty()
+        self.live.values().any(|l| !l.complete)
+            || !self.jobs.running().is_empty()
+            || !self.decor_jobs.running().is_empty()
     }
 
     /// The context an action gets for `pane`: its location and selection,
@@ -1217,8 +1321,11 @@ impl App {
     /// The location of the first other pane of the pane's window whose
     /// active tab is an explorer: the other side of a two-pane layout.
     fn other_location(&self, pane: PaneId) -> Option<Location> {
-        let window = self.model.window(self.model.window_of(pane)?)?;
-        window
+        let (window, workspace) = self.model.workspace_of(pane)?;
+        self.model
+            .workspaces(window)
+            .iter()
+            .find(|ws| ws.id == workspace)?
             .dock
             .panes()
             .into_iter()
@@ -1236,6 +1343,7 @@ impl App {
         debug!(?command, "command");
         self.dispatch(command, events);
         self.sync_panes(events);
+        self.sync_consoles(events);
         self.sync_preview();
         self.sync_session();
     }
@@ -1326,6 +1434,9 @@ impl App {
             }
             Command::Filter { pane, text } => {
                 self.model.set_filter(pane, &text);
+            }
+            Command::TypeFilter { pane, types } => {
+                self.model.set_types(pane, types);
             }
             Command::ToggleHidden(pane) => {
                 self.model.toggle_hidden(pane);
@@ -1427,20 +1538,45 @@ impl App {
             Command::FocusPane(pane) => {
                 self.model.focus(pane);
             }
+            Command::ActivateWorkspace(id) => {
+                self.model.activate_workspace(id);
+            }
+            Command::CloseWorkspace(id) => {
+                self.model.close_workspace(id);
+            }
+            Command::MoveWorkspace { id, to } => {
+                self.model.move_workspace(id, to);
+            }
+            Command::WorkspaceToWindow { id, window } => {
+                self.model.workspace_to_window(id, window);
+            }
             Command::Split { pane, dir } => {
                 self.model.split(pane, dir);
             }
             Command::MoveTab { tab, to } => {
                 self.model.move_tab(tab, to);
             }
-            Command::TogglePreview { window, fraction } => match self.model.preview_tab(window) {
-                Some(tab) => {
-                    self.model.close_tab(tab);
+            Command::DockWorkspace { id, pane, side } => {
+                self.model.dock_workspace(id, pane, side);
+            }
+            Command::TogglePreview { window, fraction } => {
+                let shown = self.model.window(window).map(|w| w.active);
+                let here = self.model.preview_tab(window).filter(|tab| {
+                    self.model
+                        .pane_of(*tab)
+                        .and_then(|pane| self.model.workspace_of(pane))
+                        .map(|(_, ws)| ws)
+                        == shown
+                });
+                match here {
+                    Some(tab) => {
+                        self.model.close_tab(tab);
+                    }
+                    None => {
+                        self.model.open_preview(window, fraction);
+                    }
                 }
-                None => {
-                    self.model.open_preview(window, fraction);
-                }
-            },
+            }
             Command::CancelJob(id) => {
                 self.jobs.cancel(id);
             }
@@ -1518,14 +1654,14 @@ impl App {
             }
             Command::PreviewRetry(pane) => self.restart_preview(pane),
             Command::PreviewCopy(pane) => self.copy_preview_text(pane),
-            Command::TabOrder { pane, order } => {
-                self.model.set_tab_order(pane, order);
-            }
             Command::Layout { window, dock } => {
                 self.model.set_layout(window, dock);
             }
             Command::Scroll { tab, offset } => {
                 self.model.set_scroll(tab, offset);
+            }
+            Command::ColumnWidths { tab, columns } => {
+                self.model.set_column_widths(tab, columns);
             }
             Command::WindowGeometry { window, geometry } => {
                 self.model.set_geometry(window, geometry);
@@ -1537,6 +1673,18 @@ impl App {
                 self.model.focus_window(window);
             }
             Command::NewWindow => self.new_window(events),
+            Command::NewWindowAt(location) => {
+                self.model.new_window(location);
+            }
+            Command::Reveal {
+                items,
+                new_window,
+                properties,
+            } => self.reveal(&items, new_window, properties),
+            Command::Activate { token } => events.push(Event::Activate {
+                window: self.model.focused_window,
+                token,
+            }),
             Command::CloseWindow(window) => {
                 if !self.model.close_window(window) && self.model.window(window).is_some() {
                     self.exit = true;
@@ -1566,6 +1714,7 @@ impl App {
             }
             Command::DeleteLayout(name) => self.delete_layout(&name, events),
             Command::RenameLayout { from, to } => self.rename_layout(&from, &to, events),
+            Command::Integration(command) => self.integration(command, events),
         }
         self.sync_panes(events);
         self.sync_preview();
@@ -1602,6 +1751,7 @@ impl App {
                 break;
             }
         }
+        self.sync_consoles(events);
         if handled > 0 {
             self.sync_preview();
             self.sync_session();
@@ -1702,18 +1852,40 @@ impl App {
         self.poke.send_modify(|n| *n += 1);
     }
 
-    /// Lists the trash again, off the loop's thread, for the Places row's
-    /// count; a change makes the Trash view list again too.
+    /// Lists the trash again, off the loop's thread, with the bytes its
+    /// items take, for the Places row's pill; a change makes the Trash view
+    /// list again too.
     fn refresh_trash(&mut self) {
         let platform = Arc::clone(&self.platform);
         let tx = self.mailbox.clone();
         runtime::handle().spawn(async move {
             let result = runtime::handle()
-                .spawn_blocking(move || platform.list())
+                .spawn_blocking(move || {
+                    platform.list().map(|items| {
+                        let size = items.iter().map(|item| tree_size(&item.trashed)).sum();
+                        (items, size)
+                    })
+                })
                 .await
                 .unwrap_or_else(|join| Err(Error::Io(std::io::Error::other(join))));
             tx.send(Msg::Trash(result));
         });
+    }
+
+    /// The share of its disk the trash takes: its size against the total of
+    /// the volume whose mount point is the longest prefix of a trashed
+    /// item's path.
+    #[allow(clippy::cast_precision_loss, clippy::cast_possible_truncation)]
+    fn trash_share(&self, items: &[TrashedItem], size: u64) -> Option<f32> {
+        let inside = items.first()?.trashed.as_path();
+        let volume = self
+            .model
+            .volumes
+            .iter()
+            .filter(|v| inside.starts_with(&v.mount_point))
+            .max_by_key(|v| v.mount_point.as_os_str().len())?;
+        let total = volume.total.filter(|t| *t > 0)?;
+        Some((size as f64 / total as f64) as f32)
     }
 
     /// Enumerates the mounted volumes once, off the loop's thread.
@@ -2397,10 +2569,9 @@ impl App {
             return;
         };
         let Some(entry) = ctx.selection.first().cloned() else {
-            events.push(Event::Notify {
-                level: Level::Info,
-                text: "Select an entry to inspect".to_owned(),
-            });
+            // Nothing selected: the folder's own properties (SPEC.md
+            // *Context menu*, *Folder properties*).
+            self.show_folder_properties(pane, ctx.location, events);
             return;
         };
         let path = (entry.id.provider == vfs_local::PROVIDER_ID)
@@ -2412,6 +2583,43 @@ impl App {
         let location = ctx.location.clone();
         runtime::handle().spawn_blocking(move || {
             let info = read_properties(&*platform, pane, entry, path, &location);
+            tx.send(Msg::Properties(Box::new(info)));
+        });
+    }
+
+    /// The Properties dialogue for the pane's folder itself: the location
+    /// is read as an entry through its provider, then as any entry.
+    fn show_folder_properties(
+        &mut self,
+        pane: PaneId,
+        location: Location,
+        events: &mut Vec<Event>,
+    ) {
+        let Some(provider) = self.mounts.provider(location.provider) else {
+            events.push(Event::Notify {
+                level: Level::Info,
+                text: "Select an entry to inspect".to_owned(),
+            });
+            return;
+        };
+        let path = (location.provider == vfs_local::PROVIDER_ID)
+            .then(|| platform::paths::to_path(&location.path).ok())
+            .flatten();
+        self.properties_shown = path.clone().map(|path| (pane, path));
+        let platform = Arc::clone(&self.platform);
+        let tx = self.mailbox.clone();
+        runtime::handle().spawn(async move {
+            let entry = match provider.stat(&location).await {
+                Ok(entry) => entry,
+                Err(error) => {
+                    tx.send(Msg::Properties(Box::new(Err(error))));
+                    return;
+                }
+            };
+            let info = runtime::handle()
+                .spawn_blocking(move || read_properties(&*platform, pane, entry, path, &location))
+                .await
+                .unwrap_or_else(|join| Err(Error::Io(std::io::Error::other(join))));
             tx.send(Msg::Properties(Box::new(info)));
         });
     }
@@ -2542,6 +2750,47 @@ impl App {
         }
     }
 
+    /// Runs the plugin subcommand `name` of the command line
+    /// (specs/system-integration.md §4, [`ext::cli`]) with `args`, typed
+    /// from the working directory `cwd`, on the focused pane: what an
+    /// action would return is applied there like an action's outcome,
+    /// text is handed back for the caller's terminal. `None` when no
+    /// loaded extension provides the command; the command's own error
+    /// otherwise, for the caller rather than a notification.
+    pub fn run_cli(
+        &mut self,
+        name: &str,
+        args: Vec<String>,
+        cwd: PathBuf,
+        events: &mut Vec<Event>,
+    ) -> Option<Result<Option<String>, Error>> {
+        let command = self
+            .registry
+            .commands()
+            .iter()
+            .find(|c| c.name() == name)
+            .cloned()?;
+        let pane = self.model.focused;
+        let location = self.pane_location(pane);
+        let ctx = CliCtx {
+            args,
+            cwd,
+            pane,
+            location: location.clone(),
+        };
+        let label = format!("rick {name}");
+        Some(match command.run(ctx, &self.jobs, &*self.ui) {
+            Ok(CliOutcome::Text(text)) => Ok(Some(text)),
+            Ok(CliOutcome::Outcome(outcome)) => {
+                self.outcome(pane, location, &label, Ok(outcome), events);
+                // A form filled from an earlier look opens at once.
+                self.check_later(events);
+                Ok(None)
+            }
+            Err(error) => Err(error),
+        })
+    }
+
     fn run(&mut self, action: ext::ActionId, ctx: ActionCtx, events: &mut Vec<Event>) {
         let Some(action) = self
             .registry
@@ -2654,7 +2903,28 @@ impl App {
                     ext::View::Compare(_) => model::TabKind::Compare,
                     ext::View::Console(_) => model::TabKind::Console,
                 };
+                // The explorer tab a console follows: the pane's active
+                // tab the action ran in.
+                let explorer = self
+                    .model
+                    .active_tab(pane)
+                    .filter(|(_, tab)| tab.kind == model::TabKind::Explorer)
+                    .map(|(id, tab)| (id, tab.location.clone()));
                 if let Some(tab) = self.model.open_view(pane, kind, location, view.title()) {
+                    if let (ext::View::Console(console), Some((explorer, location_seen))) =
+                        (&view, explorer)
+                    {
+                        self.console_links.insert(
+                            tab,
+                            ConsoleLink {
+                                pane,
+                                explorer,
+                                console: Arc::clone(console),
+                                cwd_seen: console.cwd(),
+                                location_seen,
+                            },
+                        );
+                    }
                     events.push(Event::ViewOpened { pane, tab, view });
                 }
             }
@@ -3271,6 +3541,7 @@ impl App {
                     batch,
                     done: false,
                 });
+                self.resolve_reveal(pane, false, events);
             }
             Msg::ListDone {
                 pane,
@@ -3555,6 +3826,10 @@ impl App {
                 if volumes != self.model.volumes {
                     debug!(count = volumes.len(), "volumes");
                     self.model.volumes = volumes;
+                    // The trash's disk may be among them now.
+                    let size = self.model.trash.size;
+                    let share = self.trash_share(&self.model.trash.items, size);
+                    self.model.trash.set_stats(size, share);
                     self.rick.changed(Virtual::Machine);
                     self.rick.changed(Virtual::Network);
                 }
@@ -3577,9 +3852,11 @@ impl App {
                     None => self.open_default(pane, entry, events),
                 }
             }
-            Msg::Trash(Ok(items)) => {
+            Msg::Trash(Ok((items, size))) => {
                 let changed = self.model.trash.items != items || !self.model.trash.listed;
+                let share = self.trash_share(&items, size);
                 self.model.trash.set(items, true);
+                self.model.trash.set_stats(size, share);
                 if changed {
                     self.rick.changed(Virtual::Trash);
                 }
@@ -3596,6 +3873,20 @@ impl App {
             }
             Msg::ConnectionSaved(entry) => self.connection_saved(entry),
             Msg::ConnectionChanged(provider) => self.refresh_rows_of(provider),
+            Msg::IntegrationChecked {
+                generation,
+                startup,
+                listed,
+                found,
+            } => self.integration_checked(generation, startup, listed, &found, events),
+            Msg::IntegrationProgress {
+                done,
+                total,
+                current,
+            } => self.integration_progress(done, total, current),
+            Msg::IntegrationApplied { results, relaunch } => {
+                self.integration_applied(results, relaunch, events);
+            }
             Msg::Invalidate { pane, generation } => {
                 if self
                     .live
@@ -3720,9 +4011,10 @@ impl App {
 
     /// Reads the whole file the pane previews and puts its text on the
     /// clipboard: a job, answered by [`Msg::PreviewText`]. The bytes are
-    /// decoded by their byte-order mark (UTF-8, UTF-16) and as UTF-8
-    /// otherwise, lossily; a file above [`COPY_LIMIT`] is refused with a
-    /// notification.
+    /// inflated when the file is gzip-compressed (an SVGZ: the text shown is
+    /// the inflated one), then decoded by their byte-order mark (UTF-8,
+    /// UTF-16) and as UTF-8 otherwise, lossily; a file above [`COPY_LIMIT`]
+    /// is refused with a notification.
     fn copy_preview_text(&mut self, pane: PaneId) {
         let Some(job) = self.preview.get(&pane) else {
             return;
@@ -3743,7 +4035,7 @@ impl App {
                     if bytes.len() > COPY_LIMIT {
                         return Err(Error::Unsupported("the file is larger than the copy limit"));
                     }
-                    Ok(decode_text(&bytes))
+                    copied_text(&bytes)
                 }
                 .await;
                 tx.send(Msg::PreviewText { result });
@@ -3912,6 +4204,7 @@ impl App {
                 Vec::new()
             }
         };
+        self.resolve_reveal(pane, true, events);
         // The Cloud overview's rows are the side panel's Cloud rows too, and
         // the Network overview's provider rows its Network rows (the
         // mounted shares are the volumes' own rows).
@@ -3978,6 +4271,146 @@ impl App {
         }
     }
 
+    /// `Command::Reveal`: one tab per folder of `items`, in the focused
+    /// window (the first in a window of its own with `new_window`), each
+    /// selecting its files once listed.
+    fn reveal(&mut self, items: &[Location], new_window: bool, properties: bool) {
+        let mut folders: Vec<(Location, Vec<Vec<u8>>)> = Vec::new();
+        for item in items {
+            let Some(parent) = item.path.parent() else {
+                continue;
+            };
+            let Some(name) = item.path.file_name() else {
+                continue;
+            };
+            let folder = Location::new(item.provider, parent);
+            match folders.iter_mut().find(|(f, _)| *f == folder) {
+                Some((_, names)) => names.push(name.to_vec()),
+                None => folders.push((folder, vec![name.to_vec()])),
+            }
+        }
+        for (index, (folder, names)) in folders.into_iter().enumerate() {
+            let pane = if index == 0 && new_window {
+                self.model.new_window(folder).1
+            } else {
+                self.model.new_tab(None, folder).0
+            };
+            self.reveal_pending
+                .insert(pane, (names, std::time::Instant::now()));
+            if index == 0 && properties {
+                self.reveal_properties = Some(pane);
+            }
+        }
+    }
+
+    /// Selects what a reveal asked for in `pane` once its names are
+    /// listed: all of them as soon as every name has a row, what is there
+    /// when the listing is `complete` or the wait is over.
+    fn resolve_reveal(&mut self, pane: PaneId, complete: bool, events: &mut Vec<Event>) {
+        let Some((names, since)) = self.reveal_pending.get(&pane) else {
+            return;
+        };
+        let ids: Vec<EntryId> = self
+            .model
+            .active_tab(pane)
+            .map(|(_, tab)| {
+                tab.listing
+                    .rows()
+                    .filter(|e| {
+                        e.path
+                            .file_name()
+                            .is_some_and(|n| names.iter().any(|w| w == n))
+                    })
+                    .map(|e| e.id)
+                    .collect()
+            })
+            .unwrap_or_default();
+        let all = ids.len() >= names.len();
+        if !all && !complete && since.elapsed() < REVEAL_FOR {
+            return;
+        }
+        self.reveal_pending.remove(&pane);
+        let properties = self.reveal_properties.take_if(|p| *p == pane).is_some();
+        if ids.is_empty() {
+            return;
+        }
+        if let Some(ids) = self.model.select(pane, SelectionChange::Set(ids)) {
+            events.push(Event::SelectionChanged { pane, ids });
+        }
+        if properties {
+            self.show_properties(pane, events);
+        }
+    }
+
+    /// Keeps each console and the explorer tab it was opened from in step
+    /// (specs/system-integration.md §4): a working directory the shell
+    /// reported (OSC 7) since the last look moves the explorer tab there,
+    /// when it is its pane's active tab; the explorer's own navigation
+    /// types `cd` into the console while the shell is at its prompt, never
+    /// while a job has the terminal or the session cannot tell. A console
+    /// or explorer tab that closed ends the link.
+    fn sync_consoles(&mut self, events: &mut Vec<Event>) {
+        let model = &self.model;
+        self.console_links
+            .retain(|tab, link| model.tab(*tab).is_some() && model.tab(link.explorer).is_some());
+        let tabs: Vec<TabId> = self.console_links.keys().copied().collect();
+        for tab in tabs {
+            let Some(link) = self.console_links.get(&tab) else {
+                continue;
+            };
+            let Some(location) = self
+                .model
+                .active_tab(link.pane)
+                .filter(|(id, _)| *id == link.explorer)
+                .map(|(_, t)| t.location.clone())
+            else {
+                continue;
+            };
+            let pane = link.pane;
+            let cwd = link.console.cwd();
+            if !self.model.settings.integration.shell_integration {
+                // Switched off in Settings → Integration: neither follows
+                // the other, and what happened meanwhile is not caught up
+                // on when it is switched on again.
+                if let Some(link) = self.console_links.get_mut(&tab) {
+                    link.cwd_seen = cwd;
+                    link.location_seen = location;
+                }
+                continue;
+            }
+            if cwd != link.cwd_seen {
+                let to = cwd
+                    .as_deref()
+                    .map(|path| Location::new(ProviderId::LOCAL, platform::paths::from_path(path)));
+                if let Some(link) = self.console_links.get_mut(&tab) {
+                    link.cwd_seen = cwd;
+                    if let Some(to) = &to {
+                        link.location_seen = to.clone();
+                    }
+                }
+                if let Some(to) = to
+                    && to != location
+                {
+                    self.dispatch(Command::Navigate { pane, to }, events);
+                }
+                continue;
+            }
+            if location != link.location_seen {
+                let path = (location.provider == ProviderId::LOCAL)
+                    .then(|| platform::paths::to_path(&location.path).ok())
+                    .flatten();
+                if let Some(path) = path
+                    && link.console.foreground_job() == Some(false)
+                {
+                    link.console.write(&cd_command(&path));
+                }
+                if let Some(link) = self.console_links.get_mut(&tab) {
+                    link.location_seen = location;
+                }
+            }
+        }
+    }
+
     fn selected_ids(&self, pane: PaneId) -> Vec<EntryId> {
         self.model
             .active_tab(pane)
@@ -4023,6 +4456,7 @@ impl App {
                 }
                 self.waiting.remove(&id);
                 self.model.job_finished(id, state);
+                self.integration_job_finished(id, &result, events);
                 events.push(Event::JobDone { id, result });
                 if let Some(pane) = self.pane_jobs.remove(&id) {
                     self.refresh(pane);
@@ -4185,6 +4619,34 @@ pub fn decode_text(bytes: &[u8]) -> String {
     String::from_utf8_lossy(bytes).into_owned()
 }
 
+/// The text the preview pane's *Copy* puts on the clipboard for a file's
+/// bytes: a gzip-compressed file (an SVGZ, whose previewer shows the
+/// inflated XML) is inflated first, within [`COPY_LIMIT`]; then
+/// [`decode_text`].
+///
+/// # Errors
+///
+/// `Error::Unsupported` when the file inflates beyond the limit, `Error::Io`
+/// for gzip that does not inflate.
+pub fn copied_text(bytes: &[u8]) -> Result<String, Error> {
+    use std::io::Read as _;
+
+    if !bytes.starts_with(&[0x1f, 0x8b]) {
+        return Ok(decode_text(bytes));
+    }
+    let mut inflated = Vec::new();
+    flate2::read::GzDecoder::new(bytes)
+        .take(COPY_LIMIT as u64 + 1)
+        .read_to_end(&mut inflated)
+        .map_err(Error::from_io)?;
+    if inflated.len() > COPY_LIMIT {
+        return Err(Error::Unsupported(
+            "the file inflates beyond the copy limit",
+        ));
+    }
+    Ok(decode_text(&inflated))
+}
+
 /// The tab's one selected entry, when exactly one is selected and it is not
 /// a folder: what the preview shows.
 fn single_file(tab: &model::Tab) -> Option<Entry> {
@@ -4217,7 +4679,11 @@ fn repair(mounts: &Mounts, home: &Location, session: &mut Session) {
     for tab in session
         .windows
         .iter_mut()
-        .flat_map(|w| w.panes.iter_mut())
+        .flat_map(|w| {
+            w.panes
+                .iter_mut()
+                .chain(w.workspaces.iter_mut().flat_map(|ws| ws.panes.iter_mut()))
+        })
         .flat_map(|p| p.tabs.iter_mut())
     {
         if mounts.provider(tab.location.provider).is_none() {
@@ -4480,6 +4946,25 @@ impl std::fmt::Debug for App {
             .field("redo", &self.redo.len())
             .finish_non_exhaustive()
     }
+}
+
+/// The bytes under `path`: the file's size, or the sizes of everything in
+/// the folder, links counted by their own size and never followed. An entry
+/// that cannot be read counts nothing.
+fn tree_size(path: &Path) -> u64 {
+    let Ok(meta) = std::fs::symlink_metadata(path) else {
+        return 0;
+    };
+    if !meta.is_dir() {
+        return meta.len();
+    }
+    let Ok(entries) = std::fs::read_dir(path) else {
+        return 0;
+    };
+    entries
+        .flatten()
+        .map(|entry| tree_size(&entry.path()))
+        .sum()
 }
 
 #[cfg(test)]

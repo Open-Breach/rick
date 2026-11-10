@@ -21,8 +21,22 @@ egui = { workspace = true }
 egui_dock = { workspace = true }
 egui_extras = { workspace = true }
 image = { workspace = true }
+# Rasterises the About window's symbol (assets/icons/svg/rick-symbol.svg,
+# specs/app-icons.md) at the drawn size: the workspace's resvg, the one the
+# image previewer draws SVG with.
+resvg = { workspace = true }
 tracing = { workspace = true }
 egui-phosphor = { version = "0.14", features = ["fill"] }
+# Parses a system font file once before egui takes it (`fonts`), the
+# same parser egui renders with.
+ab_glyph = { workspace = true }
+# The About dialog's data (specs/about-dialog.md): third-party.json beside
+# the binary through serde_json, about/bundled.toml through toml, and the
+# Report-an-issue URL's body through percent-encoding.
+serde = { workspace = true }
+serde_json = { workspace = true }
+toml = { workspace = true }
+percent-encoding = { workspace = true }
 
 [dev-dependencies]
 egui_kittest = { workspace = true }

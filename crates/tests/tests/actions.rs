@@ -352,7 +352,7 @@ fn two_files_diff_and_two_panes_folders_diff() {
         .app
         .model()
         .window(window)
-        .map(|w| w.dock.panes())
+        .map(|w| w.dock().panes())
         .unwrap_or_default();
     let second = panes
         .into_iter()
@@ -572,12 +572,19 @@ fn the_console_opens_at_the_location_and_runs_pwd() {
         d.app.model().tab(tab).map(|t| t.kind),
         Some(TabKind::Console)
     );
+    // A view opens in a workspace tab of its own, shown and focused.
+    let console_pane = d.app.model().focused;
+    assert_ne!(console_pane, d.pane);
     assert_eq!(
-        d.app.model().active_tab(d.pane).map(|(id, _)| id),
+        d.app.model().active_tab(console_pane).map(|(id, _)| id),
         Some(tab),
         "the console tab is active"
     );
-    assert!(d.app.action_ctx(d.pane, Invocation::Shortcut).is_none());
+    assert!(
+        d.app
+            .action_ctx(console_pane, Invocation::Shortcut)
+            .is_none()
+    );
     console.resize(120, 30);
     let command: &[u8] = if std::env::consts::OS == "windows" {
         b"cd\r\n"

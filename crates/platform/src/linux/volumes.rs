@@ -68,6 +68,15 @@ struct MountLine {
     device: String,
     mount_point: PathBuf,
     fs_type: String,
+    /// The mount options, `rw,relatime` and the like.
+    options: String,
+}
+
+impl MountLine {
+    /// Whether the mount carries the option `ro`.
+    fn read_only(&self) -> bool {
+        self.options.split(',').any(|option| option == "ro")
+    }
 }
 
 /// `/proc/mounts` escapes space, tab, newline and backslash as octal.
@@ -97,10 +106,12 @@ fn parse(text: &str) -> Vec<MountLine> {
             let device = unescape(fields.next()?);
             let mount_point = PathBuf::from(unescape(fields.next()?));
             let fs_type = fields.next()?.to_owned();
+            let options = fields.next().unwrap_or_default().to_owned();
             Some(MountLine {
                 device,
                 mount_point,
                 fs_type,
+                options,
             })
         })
         .collect()
@@ -210,6 +221,7 @@ fn volumes_from(
             } else {
                 kind_of(&line)
             },
+            read_only: line.read_only(),
             fs_type: line.fs_type,
             device,
             mount_point: line.mount_point,
@@ -377,6 +389,13 @@ server:/export /mnt/nfs nfs4 rw 0 0
             .find(|v| v.name == "data")
             .map(|v| (v.total, v.free, v.device.clone()));
         assert_eq!(data, Some((Some(100), Some(40), Some("/dev/sda1".into()))));
+        // The disc is mounted `ro`, the rest `rw`.
+        let read_only: Vec<&str> = volumes
+            .iter()
+            .filter(|v| v.read_only)
+            .map(|v| v.name.as_str())
+            .collect();
+        assert_eq!(read_only, ["DISC"]);
         let nfs = volumes.iter().find(|v| v.name == "nfs");
         assert_eq!(nfs.and_then(|v| v.device.clone()), None);
         assert!(matches!(

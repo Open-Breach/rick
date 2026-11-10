@@ -32,7 +32,8 @@
 //!
 //! Each module's documentation carries a worked example of its extension
 //! point; [`registry`] shows how one extension contributes to two of them,
-//! and [`plugin`](mod@plugin) how a plugin library exports its extension to the host.
+//! [`cli`] how a plugin adds a subcommand to the `rick` command line, and
+//! [`plugin`](mod@plugin) how a plugin library exports its extension to the host.
 //!
 //! Async trait methods use [`macro@async_trait`] so the traits stay usable as
 //! `dyn` objects (`Arc<dyn Provider>`), which native `async fn` in traits
@@ -44,6 +45,7 @@
 #![allow(clippy::module_name_repetitions)]
 
 pub mod action;
+pub mod cli;
 pub mod connection;
 pub mod decorator;
 pub mod form;
@@ -63,13 +65,14 @@ pub use action::{
     ShortcutParseError, UiHost, UndoCommand,
 };
 pub use async_trait::async_trait;
+pub use cli::{CliCommand, CliCtx, CliOutcome, CommandSpec};
 pub use connection::{
     Connection, ConnectionField, ConnectionFieldKind, ConnectionSchema, Connector, secret_key,
 };
 pub use decorator::{
     Badge, CellValue, Color, ColumnDef, ColumnId, DecorateCtx, Decoration, Decorator, PanelSection,
 };
-pub use form::{Field, FieldKind, Form, Preview, PreviewRow, Value, Values};
+pub use form::{Field, FieldKind, Form, Header, HeaderIcon, Preview, PreviewRow, Value, Values};
 pub use futures::stream::BoxStream;
 pub use hash::{Algorithm, Digests, Hashes};
 pub use i18n::Text;

@@ -9,6 +9,8 @@ use async_trait::async_trait;
 use raw_window_handle::{RawDisplayHandle, RawWindowHandle};
 use types::Error;
 
+use crate::instance::Endpoint;
+use crate::integration::Integration;
 use crate::perms::Permissions;
 
 /// An entry in the trash, with enough to put it back.
@@ -100,6 +102,9 @@ pub struct Volume {
     pub total: Option<u64>,
     /// Free bytes available to the user, when the OS reports it.
     pub free: Option<u64>,
+    /// Whether the operating system mounted the volume read-only: an
+    /// optical disc, a live USB, a mounted ISO (SPEC.md *This Machine*).
+    pub read_only: bool,
 }
 
 impl Volume {
@@ -511,6 +516,14 @@ pub trait Clipboard: Send + Sync {
     /// `Error::Unsupported` when no clipboard is reachable (no display
     /// server); otherwise the platform error.
     fn set_text(&self, text: &str) -> Result<(), Error>;
+
+    /// The clipboard's text, `None` when it holds none.
+    ///
+    /// # Errors
+    ///
+    /// `Error::Unsupported` when no clipboard is reachable; otherwise the
+    /// platform error.
+    fn text(&self) -> Result<Option<String>, Error>;
 }
 
 /// Which side of the title row the window controls sit on.
@@ -678,6 +691,77 @@ pub trait Secrets: Send + Sync {
     fn remove_secret(&self, key: &str) -> Result<(), Error>;
 }
 
+/// A font file the system names: its bytes, the face index inside a
+/// collection (`.ttc`), and the family the desktop shows it as.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FontFile {
+    /// The family name, `Inter`, `Segoe UI`, `Menlo`.
+    pub family: String,
+    /// The file's bytes, unparsed.
+    pub bytes: Vec<u8>,
+    /// The face in a collection; 0 for a single-face file.
+    pub index: u32,
+}
+
+/// The fonts the desktop sets its own windows in.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Fonts {
+    /// The UI font, for everything that is not code.
+    pub ui: Option<FontFile>,
+    /// The monospace font, for hashes, paths and code.
+    pub mono: Option<FontFile>,
+}
+
+/// The system's fonts (SPEC.md *Look and feel*, Typography).
+pub trait SystemFonts: Send + Sync {
+    /// The system's UI font and its monospace font, each when the platform
+    /// can name one; the caller keeps its bundled fonts for the rest and
+    /// validates the bytes before it uses them.
+    fn system_fonts(&self) -> Fonts;
+}
+
+/// The system's reduce-motion setting.
+pub trait Motion: Send + Sync {
+    /// Whether the user asked the system for less motion: Rick's loading
+    /// animations then stand still (SPEC.md *Loading animations*).
+    fn reduce_motion(&self) -> bool;
+}
+
+/// The single-instance endpoint (specs/system-integration.md §3): where
+/// the one Rick of this user and config directory listens for the command
+/// line of a second launch.
+pub trait SingleInstance: Send + Sync {
+    /// The endpoint for `config_dir`: a Unix socket in `$XDG_RUNTIME_DIR`
+    /// (Linux) or the user's temporary directory (macOS), a named pipe
+    /// under `\\.\pipe\` (Windows), named after the user and the
+    /// directory, so two installs with different config directories
+    /// coexist. The fake answers one inside its own directory.
+    fn instance_endpoint(&self, config_dir: &Path) -> Endpoint;
+}
+
+/// Raising a window the system did not focus itself
+/// (specs/system-integration.md §3): what the running instance does when
+/// a second launch hands it a path, so the tab it opened is seen.
+pub trait Activation: Send + Sync {
+    /// Raises and focuses `window`: `xdg_activation_v1` with the launcher's
+    /// `token` on Wayland, `_NET_ACTIVE_WINDOW` on X11, `NSApp.activate`
+    /// with the window made key on macOS, `SetForegroundWindow` on
+    /// Windows.
+    ///
+    /// # Errors
+    ///
+    /// `Error::Unsupported` when the platform cannot raise the window
+    /// (no token on Wayland, a handle of another windowing system), the
+    /// I/O error of the display connection otherwise; the caller still
+    /// asks its windowing backend to focus the window.
+    fn activate_window(&self, window: &WindowRef, token: Option<&str>) -> Result<(), Error>;
+
+    /// What a launch does before it hands its command line to the running
+    /// instance, so the instance may take the foreground:
+    /// `AllowSetForegroundWindow` on Windows, nothing elsewhere.
+    fn allow_activation(&self);
+}
+
 /// All platform services behind one object.
 pub trait Platform:
     Trash
@@ -697,6 +781,11 @@ pub trait Platform:
     + StandardFolders
     + RecentlyUsed
     + Secrets
+    + SystemFonts
+    + Motion
+    + SingleInstance
+    + Activation
+    + Integration
 {
 }
 
@@ -717,7 +806,12 @@ impl<
         + Mount
         + StandardFolders
         + RecentlyUsed
-        + Secrets,
+        + Secrets
+        + SystemFonts
+        + Motion
+        + SingleInstance
+        + Activation
+        + Integration,
 > Platform for T
 {
 }

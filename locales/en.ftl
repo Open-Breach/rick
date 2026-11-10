@@ -37,6 +37,13 @@ jobs-resume = Resume
 jobs-pause = Pause
 jobs-dismiss = Dismiss
 jobs-paused = paused
+jobs-cancel = Cancel job
+jobs-paused-line = Paused
+jobs-running-count = { $count } running
+jobs-waiting-count = { $count } waiting
+jobs-queued-behind = Queued behind { $job }
+jobs-collapse = Collapse the operations
+jobs-expand = Expand the operations
 overview-connections = Connections
 overview-yes = Yes
 retry = Retry
@@ -48,7 +55,50 @@ pane-not-implemented-yet = Not implemented yet
 pane-view-mode = View mode
 pane-hidden-ancestors = Hidden ancestors
 pane-copy-path = Copy path
-pane-clear-filter = Clear filter
+pane-view-options = View options
+pane-drag-pane = Drag pane
+pane-group-view = View
+pane-group-refresh = Refresh
+pane-group-filter = Filter
+pane-view-details = Details
+pane-view-list = List
+pane-view-icons = Icons
+pane-icons-small = Small icons
+pane-icons-medium = Medium icons
+pane-icons-large = Large icons
+pane-show-hidden = Show hidden files
+pane-folders-first = Folders first
+pane-refresh-now = Refresh now
+pane-show-all = Show all
+pane-type-folders = Folders
+footer-hide-hidden = Hide hidden files
+footer-folders = { $count ->
+    [one] { $count } folder
+   *[other] { $count } folders
+}
+footer-files = { $count ->
+    [one] { $count } file
+   *[other] { $count } files
+}
+footer-of = { $shown } of { $total }
+footer-folders-of = { $shown } of { $total } folders
+footer-files-of = { $shown } of { $total } files
+footer-total-size = { $size } in files
+footer-listing = listing…
+footer-selected = { $count } selected · { $size }
+footer-filter = Filter
+footer-subtree = Include subfolders
+footer-subtree-on = Searching the subfolders too; click to filter this folder only
+footer-subtree-off = Search the subfolders too
+list-column-name = Name
+list-column-size = Size
+list-column-type = Type
+list-column-modified = Modified
+list-empty-title = This folder is empty
+list-empty-hint = Drop files here, or press { $shortcut } for a new folder.
+list-no-match = No entries match the filter
+list-reading = Reading folder…
+list-reading-count = Reading folder… { $count } items so far
 preview-load-more = Load more
 preview-file-info = File info
 preview-name = Name
@@ -124,8 +174,6 @@ settings-after-a-drag = After a drag
 settings-theme = Theme
 settings-font-size = Font size
 settings-density = Density
-settings-accent-colour = Accent colour
-settings-theme-default = Theme default
 keyboard-shortcuts = Keyboard shortcuts
 settings-filter = Filter
 settings-change = Change
@@ -147,6 +195,14 @@ shell-browse = Browse…
 shell-layout-name = layout-name
 shell-layout-name-2 = Layout name
 shell-this-tab-s-content-is = This tab's content is gone; close it.
+shell-new-tab = New tab
+shell-close-tab = Close tab
+shell-drop-for-new-tab = Drop for new tab
+shell-dragging-pane = Dragging pane { $title }
+shell-dragging-tab = Dragging tab { $title }
+shell-preview-tab = Preview
+shell-console-tab = Console
+shell-compare-tab = Compare
 panel-drop-a-folder-here-to = Drop a folder here to add a place.
 panel-edit-place = Edit place
 panel-title = Title
@@ -174,7 +230,6 @@ settings-theme-dark = Dark
 settings-after-drag-stay = Stay in the folder
 settings-after-drag-return = Return to where the drag started
 settings-density-compact = Compact
-settings-density-normal = Normal
 settings-density-comfortable = Comfortable
 
 compare-failed = Could not compare: { $error }
@@ -182,6 +237,12 @@ preview-failed = No preview: { $error }
 properties-title = Properties of { $name }
 about-version = Version { $version }
 panel-open-overview = Open the { $section } overview
+panel-fold-section = Fold { $section }
+panel-unfold-section = Unfold { $section }
+panel-add = Add…
+panel-add-connection = Add connection…
+panel-eject = Eject { $name }
+panel-read-only = Read-only
 overview-no = No
 deny = Deny
 properties-user = (user)
@@ -236,18 +297,197 @@ link-shortcut = Shortcut (.lnk)
 
 # The Hash dialogue (Compute hash…): one row per algorithm, Copy all, the
 # format toggle and the Verify field.
-hash-title = Hash — { $name }
+hash-title = File hashes
+hash-files = { $count } files
 hash-hashing = Hashing…
 hash-cancelled = Cancelled
 hash-failed = Could not hash: { $error }
-hash-copy = Copy
+hash-copy = Copy { $algorithm }
 hash-copy-all = Copy all
+hash-done = Done
 hash-format = Format
-hash-format-hex = Lowercase hex
-hash-format-hex-upper = Uppercase hex
+hash-format-hex = hex
+hash-format-hex-upper = HEX
 hash-format-base64 = Base64
 hash-verify = Verify
 hash-verify-hint = Paste the expected hash
-hash-match = Match
-hash-mismatch = Mismatch
-hash-unrecognised-length = Unrecognised length
+hash-matches = Matches { $algorithm }
+hash-no-match = No match
+hash-from-clipboard = from clipboard
+menu-copy-as = Copy as
+menu-select-all = Select all
+menu-refresh = Refresh
+menu-folder-properties = Folder properties
+menu-copy-as-name = Name
+menu-copy-as-path = Path
+menu-copy-as-path-and-name = Path and name
+shell-ok = OK
+dialog-choose = Choose…
+dialog-nothing-to-preview = Nothing to preview
+dialog-entries = { $count } entries
+dialog-entries-with-problems = { $count } entries, { $problems } with a problem
+
+# The Settings window (issue 60).
+settings-general = General
+settings-view = View
+settings-appearance = Appearance
+settings-plugins = Plugins
+settings-search-placeholder = Search settings
+settings-language-desc = The interface's language; the system's by default
+settings-group-session = Session
+settings-start-with-desc = What Rick opens with: the last session or a saved layout
+settings-group-archives = Archives
+settings-group-drag = Drag and drop
+settings-spring-loading-delay-desc = How long a folder is hovered during a drag before it opens
+settings-group-search = Search
+settings-search-ignore = Skipped by the subtree search
+settings-search-ignore-desc = Names never entered or listed, comma-separated
+settings-group-files = Files
+settings-folders-first-desc = Folders always stay on top, whatever the sort order
+settings-zebra-stripes-desc = Alternate row shading in the details view
+settings-group-sorting = Sorting
+settings-sort-by = Sort by
+settings-order = Order
+settings-show-side-panel = Show side panel
+settings-position = Position
+settings-theme-desc = System follows the desktop's light or dark setting
+settings-group-type = Type and spacing
+settings-density-desc = Comfortable rows and controls, or Compact ones
+settings-milliseconds = { $value } ms
+settings-points = { $value } pt
+settings-group-interface = Interface
+settings-group-colours = Colours
+
+# The About dialog (specs/about-dialog.md, issue 101). The build line, the
+# licence texts, the crate names and the copyright lines are data.
+about-tagline = a god-like file manager
+about-copy-details = Copy details
+about-whats-new = What's new
+about-whats-new-title = What's new in { $version }
+about-website = Website
+about-source-code = Source code
+about-report-an-issue = Report an issue
+about-licence = Licence
+about-third-party-licences = Third-party licences
+about-components = { $count ->
+    [one] { $count } component
+   *[other] { $count } components
+}
+about-not-available = not available in this build
+about-loaded-plugins = Loaded plugins
+about-plugins-summary = { $count ->
+    [one] { $count } plugin
+   *[other] { $count } plugins
+} · { $third } third-party
+about-credits = Credits
+about-role-serge = Specification, design and direction
+about-role-claude = Implementation through Claude Code, design and spec assistance
+about-built-with = Built with egui and eframe, wgpu, pdfium, GStreamer and Phosphor icons. Written largely by an AI coding agent from a human-written specification — use with care.
+about-copyright = © 2026 Open-Breach contributors
+about-back = Back
+about-details-copied = Details copied
+
+about-search-components = Search { $count } components
+about-all-licences = All licences
+about-bundled-runtimes = Bundled runtimes
+about-rust-crates = Rust crates
+about-no-matches = No component matches
+about-licences-footer = Generated at build time from Cargo.lock by cargo-about · { $count } components, { $types } licence types
+about-licences-footer-partial = The crates' list is not available in this build · { $count } components, { $types } licence types
+about-export = Export…
+about-export-title = Export the third-party licences
+about-exported = Exported to { $path }
+about-export-failed = Could not export: { $error }
+about-export-header = Third-party licences of Rick { $version }
+about-export-generated = Generated at build time from Cargo.lock by cargo-about.
+
+cli-url-not-local = { $url } names no folder or file on this computer
+
+# System integration (specs/system-integration.md §6, issue 120): the
+# items by the titles of their rows in Settings → Integration.
+integration-item-install-location = Install location
+integration-item-launcher-entry = App launcher entry
+integration-item-default-file-manager = Default file manager
+integration-item-show-in-folder = “Show in folder” from other apps
+integration-item-rick-command = rick command
+integration-item-dock-favourite = Dock favourite
+integration-failed = { $item } could not be set up: { $error }
+integration-relaunch-failed = Rick could not be started from { $path }: { $error }
+
+# The integration dialog (specs/system-integration.md §6.2).
+integration-dialog-title = Set up Rick on this system
+integration-dialog-subtitle = { $system } — a few things are not set up yet
+integration-dialog-intro = Choose what Rick may set up. Anything you switch off is not asked again — you can change all of it later in Settings → Integration.
+integration-install-for = Install for
+integration-scope-user = Just me
+integration-scope-system = All users
+integration-not-available-yet = Not available yet
+integration-row-install-location = Install to the standard location
+integration-row-install-location-detail = Copy Rick from { $from } to { $to } and run it from there
+integration-row-launcher-entry-detail = Desktop entry and icon, so Rick appears in the application launcher
+integration-row-launcher-entry-detail-gnome = Desktop entry and icon, so Rick appears in the Activities overview
+integration-row-default-file-manager-detail = Open folders with Rick instead of { $name } (inode/directory)
+integration-row-default-file-manager-detail-none = Open folders with Rick (inode/directory)
+integration-row-show-in-folder-detail = D-Bus FileManager1 service, used by browsers, chat and download tools
+integration-row-rick-command = rick command in the terminal
+integration-row-rick-command-detail = Link in { $dir }, plus a shell helper so rick opens the current folder
+integration-row-dock-favourite-detail = Pin Rick to the dock
+integration-row-dock-favourite-detail-gnome = Pin Rick to the GNOME dash
+integration-row-dock-favourite-detail-plasma = Pin Rick to the Plasma task manager
+integration-row-dock-favourite-detail-cosmic = Pin Rick to the COSMIC dock
+integration-row-dock-favourite-detail-cinnamon = Add Rick to the favourites of the Cinnamon menu
+integration-best-effort = Best effort
+integration-foreign = { $path } is already there and was not written by Rick
+integration-replace = Replace
+integration-password-note = Nothing here needs a password. “All users” installs under /opt and asks for it once.
+integration-dont-ask = Don’t ask again
+integration-not-now = Not now
+integration-apply = { $count ->
+    [one] Apply 1 item
+   *[other] Apply { $count } items
+}
+integration-applying = Setting up { $item } — { $done } of { $total }
+integration-finishing = Finishing…
+
+# Settings → Integration (specs/system-integration.md §6.1).
+settings-integration = Integration
+integration-checking = checking…
+integration-checked-at-start = checked at start, { $time }
+integration-checked = checked { $time }
+integration-not-checked = not checked yet
+integration-check-again = Check again
+integration-group-system = This system
+integration-group-terminal = Terminal and links
+integration-group-startup = Startup
+integration-line-install-location = { $path } · current
+integration-line-launcher-entry = Desktop entry and icon in { $dir }
+integration-line-default-file-manager = Rick opens folders (inode/directory) and rick:// links
+integration-line-show-in-folder = D-Bus FileManager1 service
+integration-line-rick-command = { $link } → { $target }
+integration-line-dock-favourite = Pinned to the dock
+integration-line-dock-favourite-gnome = Pinned to the GNOME dash
+integration-line-dock-favourite-plasma = Pinned to the Plasma task manager
+integration-line-dock-favourite-cosmic = Pinned to the COSMIC dock
+integration-line-dock-favourite-cinnamon = Among the favourites of the Cinnamon menu
+integration-line-drifted = Was set up by Rick and has been changed or removed since
+integration-line-skipped = Skipped in the setup dialog
+integration-line-skipped-on = Skipped in the setup dialog on { $date }
+integration-unsupported-desktop = This desktop has no dock Rick knows how to pin to
+integration-unsupported-program = Needs { $name }, which is not installed
+integration-unsupported-config = { $path } is not there
+integration-unsupported-plugin = Needs the { $name } plugin, which is not loaded
+integration-pill-set-up = Set up
+integration-pill-reset = Reset by system
+integration-pill-skipped = Skipped
+integration-pill-not-set-up = Not set up
+integration-pill-unsupported = Unsupported
+integration-restore = Restore
+integration-add = Add
+integration-action-of = { $action }: { $item }
+integration-shell-integration = Shell integration
+integration-shell-integration-desc = The console follows the tab’s folder, and cd in the console moves the tab
+integration-check-at-startup = Check integration at startup
+integration-check-at-startup-desc = Shows the setup dialog when something is missing or was reset
+integration-skipped-items = Skipped items
+integration-skipped-items-desc = Ask again about items switched off in the setup dialog
+integration-reset-choices = Reset choices

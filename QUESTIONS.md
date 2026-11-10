@@ -2698,3 +2698,1033 @@ Once answered, an entry keeps its number and gains a dated decision line.
     and made anew on the new merge commit, and the kickoff is reapplied
     once the release is out. The revert and the reapplication are plain
     commits; nothing is rewritten.
+
+224. (design refresh, issue 60, 2026-11-09) The Figma note *Spacing &
+    density* gives the title bar 46 px (Comfortable) and 36 px (Compact),
+    while the *Density* variable collection, and the frames themselves,
+    say 40 and 34.
+    Assumed: the variables, since the token set matches the collection one
+    to one; the note is out of date.
+
+225. (design refresh, 2026-11-09) The row-density setting had three levels
+    (compact, normal, comfortable); the design has two (Comfortable, the
+    default, and Compact).
+    Assumed: `density = "normal"` in an existing `rick.toml` reads as
+    Comfortable, `compact` and `comfortable` stay as they are, and the
+    file is written with the new value the next time settings change.
+
+226. (design refresh, 2026-11-09) SPEC.md's Theming said "accent colour can
+    be chosen"; the handoff says every colour comes from the token set,
+    whose pairs were checked for WCAG contrast, and that more colour comes
+    as further schemes.
+    Assumed: the accent-colour setting is withdrawn; an `accent` key in an
+    existing `rick.toml` is ignored and dropped on the next write.
+
+227. (design refresh, 2026-11-09) SPEC.md's Icons marked an active toggle
+    with Phosphor's fill weight; the Figma note says toolbar buttons are
+    ghost buttons and only active toggles keep a tint.
+    Assumed: the tint (`bg/selected-soft` behind an `accent/focus` icon)
+    and the regular weight everywhere; the fill-weight font stays loaded
+    for a later use.
+
+228. (design refresh, 2026-11-09) The Figma context menus, labelled draft,
+    show fewer entries than SPEC.md's groups: on a file no *Open in new
+    tab*, *Open in terminal here*, *Duplicate*, *Paste as link*, *Compress
+    to archive* or *Extract here*; on empty space no *Paste as link*, *Open
+    in system file manager*, *Refresh* or the view, sort and group entries.
+    The note on the file menu says the *Copy as* entries are placeholders
+    to align with the three copy actions.
+    Assumed: the frames fix the groups, their order and their look, and
+    the Action registry keeps deciding what is listed, so every registered
+    action that applies stays in its group (dropping actions would remove
+    functions, which is outside a design refresh). *Copy as* holds *Name*,
+    *Path* and *Path and name*, not Figma's *Full path*, *File name* and
+    *Path as URI*. The view entries leave the empty-space menu, since the
+    view options menu holds them; sort stays on the column header and
+    group in the command palette.
+
+229. (design refresh, 2026-11-09) With tabs in the title row and no
+    per-pane strips, SPEC.md's tab operations (new tab, close tab, open in
+    new tab, duplicate tab, next and previous tab) need a meaning.
+    Assumed: a tab is a workspace. *New tab* and *Open in new tab* open a
+    new workspace with one pane at the location; Mod+W closes the
+    workspace tab; next and previous cycle the row; *Duplicate tab* copies
+    the active pane into a new workspace. A pane leaves a workspace by
+    being dragged out (edge, centre, tab row or outside) or by F6, so
+    there is no *Close pane* command and a workspace never ends up empty.
+    *Split right* and *Split down* keep their meaning.
+
+230. (design refresh, 2026-11-09) The operations drawer shows a round
+    cancel button per job and nothing for pause and resume, which SPEC.md
+    and the job table have; it also shows no finished or failed job, which
+    SPEC.md keeps listed briefly or until dismissed. The summary's
+    percentage is a literal `#2e85e0` in Figma, not a token.
+    Assumed: a pausable running job shows a pause or resume ghost button
+    before the cancel button; finished and failed jobs are compact rows
+    like the waiting ones, the failed one with its error in `status/danger`
+    and a dismiss button; the percentage is `accent/focus`.
+
+231. (design refresh, 2026-11-09) SPEC.md left open which layout toggles
+    sit in the title row. The Figma title bar has two icons, sidebar-left
+    and sidebar-right, before the window controls.
+    Assumed: the side panel toggle and the preview pane toggle, in that
+    order; the open question is closed.
+
+232. (design refresh, 2026-11-09) The footer frames show the folder and
+    file counts of an unfiltered list; SPEC.md's status line read "12 of
+    340 files" while a filter narrows the list.
+    Assumed: the counts read "12 of 340" while a filter is active, in the
+    footer's form; nothing else changes.
+
+233. (design refresh, 2026-11-09) The hash dialogue is drawn for one file;
+    SPEC.md hashes several selected files in one job and showed a block
+    per file.
+    Assumed: with several files the body repeats the hash card per file,
+    each under a row naming the file, Verify on top compares against every
+    row, and the header names the count and the total size.
+
+234. (design refresh, 2026-11-09) Only the View page of the settings window
+    is drawn; the category list names General, View, Appearance and the
+    plugins.
+    Assumed: View holds the list settings (Files, Sorting, Side panel);
+    Appearance holds Theme, Density and Font size; General holds Language,
+    Start with, Opening an archive, After a drag, the spring-loading delay
+    and the subtree-search ignore list; a plugin page renders the plugin's
+    settings schema as cards; Keyboard shortcuts and Extensions stay their
+    own screens, opened from the burger menu, in the dialogue frame.
+
+235. (design refresh, 2026-11-09) The Figma workspace tabs carry a folder
+    icon, a code icon and a download icon for three folders.
+    Assumed: a tab's icon is the side panel's icon when the folder is a
+    place (Downloads, Home, Trash and so on), the provider's icon for an
+    archive, a remote host or a cloud account, and `FOLDER` otherwise; the
+    code icon on *flowcpt* has no rule behind it that the file states.
+
+236. (design refresh, 2026-11-09) The Compact frame's toolbar is 42 px and
+    its preview toolbar 37 px, where the Density tokens give 28 + 2 × 4 =
+    36 for both.
+    Assumed: the formula from the tokens (button size plus twice the
+    toolbar padding) in both densities; the Compact frame was not re-laid
+    to its own tokens.
+
+237. (design refresh, 2026-11-09) The install dialogue labels the scope
+    *Install for: Just me / All users*; specs/ext-installer.md says *Scope:
+    user space (recommended) / system-wide* and lists the fields in another
+    order, with Category and the commands among them.
+    Assumed: the GUI chapter uses the Figma labels and order, with Category
+    and the commands under Advanced options; specs/ext-installer.md is not
+    among the files this task edits and keeps its wording, the GUI chapter
+    governing the look.
+
+238. (design refresh, 2026-11-09) The view options menu lists Details, List
+    and three icon sizes; SPEC.md also has the Tree view and an extra-large
+    icon size.
+    Assumed: both stay reachable through the command palette and their
+    shortcuts, and the menu lists what the design shows.
+
+239. (design refresh, 2026-11-09) The *Components* frame's FileRow uses
+    `bg/selected` (`#90d1ff`) for its selected state, while every row in
+    the main frames and the *States* frame uses `bg/selected-soft`.
+    Assumed: `bg/selected-soft` for selected rows in the focused pane, as
+    the frames show; `bg/selected` stays in the token set, reserved, and
+    `bg/active` marks a pressed tool button.
+
+240. (design refresh, 2026-11-09) Saved layouts were "an arrangement of
+    panels and tabs"; with workspaces the unit needs stating.
+    Assumed: a saved layout is one window's arrangement — its workspace
+    tabs and their panes — and the start layout restores all of them.
+
+241. (design refresh, 2026-11-09) The Portal spinner's component note says
+    reduce motion shows "a static ring or a plain bar"; the yellow note
+    says "static portal, no flying files".
+    Assumed: a still portal — the rings drawn at rest, no glyphs — in both
+    the spinner and the burst.
+
+242. (design refresh, 2026-11-09) The handoff says every text and control
+    pair of the "Rick" collection meets WCAG contrast. Computed from the
+    variables' values, three pairs do not: `text/secondary` on
+    `bg/control` and on `bg/selected-inactive` (4.19:1 in Light, 4.35:1
+    in Dark, under the 4.5:1 for text — the Size, Type and Modified
+    columns of a selected row in a pane without focus), `border/strong` on
+    `bg/pane` in Light (2.94:1, under the 3:1 for controls — a checkbox on
+    a pane) and `status/warning-border` on `bg/pane` and `dialog/bg` in
+    Light (2.61:1 — the border of the installer's version field).
+    Assumed: the tokens stay as the Figma file has them, the unit test
+    that holds the pairs to the rule leaves these three out and names
+    them, and the values are for the design to revisit; nothing is
+    invented in their place.
+
+243. (design refresh, 2026-11-09) The shortcut table says Mod+W closes the
+    workspace tab; the spec says nothing about the last tab of the last
+    window, and *Windows* says closing the last window asks to exit.
+    Assumed: Mod+W on the last workspace tab of the last window does
+    nothing, as the model keeps the last pane; closing the window is
+    Mod+Shift+W's job (the window's close button).
+
+244. (design refresh, 2026-11-09) The shortcut table keeps *Duplicate tab*
+    (Mod+Shift+D); a workspace tab is a whole layout, and whether a
+    duplicate copies the layout or only the folder is not said.
+    Assumed: a new workspace with one pane at the focused pane's folder,
+    the same as Mod+T, until the layout copy is designed.
+
+245. (design refresh, 2026-11-09) *Workspace tabs* makes the tab row a
+    target for a dragged pane; files and folders dragged from a list over
+    a workspace tab are not mentioned.
+    Assumed: a workspace tab takes a drop into the folder of its focused
+    pane, and resting on it while dragging shows the workspace, as the
+    pane tabs of 0.2 did.
+
+246. (design refresh, 2026-11-09) Until the pane handle of the panes PR
+    exists, a pane's one tab in its bar stays its drag handle, and such a
+    tab can be released on another window's title row, which the spec
+    covers for workspace tabs only.
+    Assumed: the pane becomes a new workspace tab of that window, as it
+    does on its own window's row.
+
+247. (design refresh, 2026-11-09) *Controls* gives menu entries 30 px; the
+    *View options menu* frame draws its rows 32 px tall, with 18 px
+    switches and a 28 px segmented control in them.
+    Assumed: the view options menu takes the frame's 32 px rows; plain
+    menus keep 30 px.
+
+248. (design refresh, 2026-11-09) *Panes* says "F6 (Dual pane) splits the
+    focused pane to the right … and back again"; the shortcut table, the
+    single source of defaults, has no F6 and no Dual pane row.
+    Assumed: no Dual pane command until the table names it; Mod+Shift+R
+    (Split right) stays the way to a second pane.
+
+249. (design refresh, 2026-11-09) The *Empty folder* frame's hint reads
+    "Drop files here, or press Ctrl+Shift+N for a new folder."; Rick spells
+    every shown shortcut in the table's text form, `Mod+Shift+N`, in menus
+    and tooltips alike. Assumed: the hint takes the key map's spelling like
+    the rest of the UI; a platform spelling (Ctrl, ⌘) for shown shortcuts
+    would be one change for all of them, not this hint's.
+
+250. (design refresh, 2026-11-09) *Operations drawer* gives a running job
+    "its icon (the Portal spinner for a copy or move; `ARCHIVE` for an
+    archive job, and so on)", but a job in the job table has a name and a
+    state, no kind. Assumed: the spinner for every running job except one
+    whose name starts with *Extract*, *Compress*, *Archive*, *Zip* or
+    *Unzip*, which shows `ARCHIVE`; a job kind on the job table would let
+    every plugin name its glyph.
+
+251. (design refresh, 2026-11-09) *Trash pill*: "the size and the share
+    come from the trash provider's statistics", but no trash API reports a
+    size — the platform lists the items, the trash plugin shows them.
+    Assumed: the app sums the trashed items' sizes when it lists the trash
+    (a folder is walked once, links are not followed) and takes the share
+    against the volume whose mount point contains them; no pill while the
+    trash is empty, the low tint while the disk's size is unknown.
+
+252. (design refresh, 2026-11-09) *Hash dialogue*: a match gives the Verify field a
+    `status/success-bg` pill; no match "a `status/danger` border and a *No
+    match* pill", whose colours neither the tokens nor the Figma file (only
+    the matching state is drawn) give.
+    Assumed: the *No match* pill is `status/danger` text on `status/danger`
+    at 15 % over the field; a `status/danger-bg` token would replace it. The
+    clipboard is read on the dialogue's first frame, hex of either case
+    before Base64, and anything that is not a digest's length leaves the
+    field empty.
+
+253. (design refresh, 2026-11-09) *Settings window*: "a window of their
+    own, 880 × 640", and the controls "a switch, a dropdown, a segmented
+    control, a text field or a button" — the 0.2 screen had sliders for the
+    spring-loading delay and the font size, and the test harness has no
+    viewports.
+    Assumed: the window is an egui viewport where the backend has them and
+    an area over the main window, in the dialogue frame, where viewports are
+    embedded (the tests and the screenshots); the spring-loading delay is a
+    dropdown of 200, 500, 750, 1000, 1500, 2000 and 3000 ms (plus the saved
+    value when it is none of these) and the font size a dropdown of 9 to
+    24 pt; the General page's groups are Language, Session, Archives, Drag
+    and drop and Search, the Appearance page's Theme and Type and spacing;
+    a plugin's page is one card named after the plugin, its Integer fields
+    as text fields that take a number within the schema's bounds; the
+    category glyphs are chosen from the plugin's id (pdf, office, 3d,
+    console, ssh, archive) with a puzzle piece otherwise, manifests having
+    no icon.
+
+254. (design refresh fix round 1, 2026-11-09) *Footer*: "one row at the
+    foot of every pane, as tall as the toolbar (`button/size` plus twice
+    `space/toolbar-y`)"; the three *Rick — refined* frames draw the status
+    bar 39 px tall in Comfortable and 35 in Compact — the 26 px filter
+    field with `space/toolbar-y` above and below it under the hairline —
+    and the hidden-files toggle 26 px like the field, not `button/size`;
+    issue 79 item 4 asks for the Figma height.
+    Assumed: the footer takes the frames' height, the hairline, the field
+    and the toolbar padding (`Metrics::footer_height`), the toggle is the
+    field's 26 px, and the preview pane's footer follows; the spec's "as
+    tall as the toolbar" is for the author to reword.
+
+255. (preview formats, 2026-11-09) *Vector images* gives an SVG "the
+    raster images' Fit and 1:1 plus the *Rendered* toggle", makes its
+    source the text layer, and shows transparent regions "over the
+    checkerboard raster images with alpha use". The pane offers Fit and
+    1:1 — and so sends the actual-size request — only to a document with
+    neither pages nor a text layer, and draws no checkerboard behind any
+    frame; the GUI chapter is the design refresh's.
+    Assumed: the document answers both kinds of request as the spec says
+    (a fitted request rasterises to fit the pane, a `MAX_ACTUAL` request
+    gives the intrinsic size at the display scale, both proven by its
+    tests) and keeps the text layer so *Copy* and find work, while the
+    pane shows an SVG as text for the toolbar's purposes: Fit, with
+    *Rendered* and *Copy*, no 1:1 button until the pane's rule becomes
+    "a raster is any document whose frames are pixels", one change in the
+    pane for the design refresh, with the checkerboard.
+
+256. (preview formats, 2026-11-09) *Vector images*: "*Copy* copies the raw
+    SVG as text — decompressed for SVGZ". *Copy* is the app's: it reads the
+    whole file itself (the whole file, not the window the pane loaded) and
+    decodes the bytes as text, so it never asks the previewer what the text
+    of a file is, and the gzip of an SVGZ would land on the clipboard.
+    Assumed: the app inflates a gzip-compressed file before decoding it,
+    which serves SVGZ and any gzip-compressed text alike and keeps the
+    previewers out of *Copy*; a hook on the Previewer trait for the text of
+    a whole file would be a change to the versioned contract.
+
+257. (preview formats, 2026-11-09) *Icon containers*: the variants of an
+    ICO, CUR or ICNS are pages, "the pane's standard pager steps through
+    them", and "1:1 shows actual pixels … both are the previewer's own
+    work on the frame it returns at the size the pane asked for, so the
+    pane needs nothing new"; XPM is text with *Copy*. As in 255, the pane
+    sends the actual-size request only for a document with neither pages
+    nor a text layer, so a container with two or more variants, and an
+    XPM, get the pager or *Copy* but no 1:1 button; a single-variant
+    container gets Fit and 1:1. The toolbar's `Icon` set has no crosshair
+    for the hotspot toggle either.
+    Assumed: the document answers both kinds of request (a fitted request
+    magnifies by the largest whole factor up to 8, a `MAX_ACTUAL` request
+    gives the variant's own pixels), proven by its tests; the hotspot
+    toggle shows the `Tag` glyph until the set has a crosshair; both are
+    the pane's to change under the design refresh.
+
+258. (issue 101, 2026-11-09) *About dialog*, Generation: "`RICK_CONTRIBUTORS`
+    (newline-separated names) from `crates/rick/build.rs`". A build script
+    hands cargo one `cargo:rustc-env` directive per line, so a value with a
+    newline in it cannot travel through the environment.
+    Assumed: `build.rs` writes the names, one per line, into
+    `OUT_DIR/contributors.txt` and `RICK_CONTRIBUTORS` names that file,
+    which the binary embeds with `include_str!`; `RICK_CONTRIBUTOR_ROLES`
+    names a copy of the repository's `CONTRIBUTORS.md` the same way (empty
+    when there is none), for the roles of the credits card. The release
+    build checks the repository out with its whole history, since a shallow
+    clone's shortlog names one person.
+
+259. (issue 101, 2026-11-09) *About dialog*, Third-party licences page:
+    the bundled runtimes are "listed by hand in `about/bundled.toml` with
+    name, version, …". `release.yml` pins the GStreamer and 7-Zip releases
+    but downloads the latest pdfium build of bblanchon/pdfium-binaries, so
+    pdfium's version in the file can drift from the archive's.
+    Assumed: `bundled.toml` records the pdfium build current when the file
+    was written (chromium/8138, 2026-11-04) and says so in a comment; the
+    fonts are egui's bundled four (Ubuntu Light, Hack, Noto Emoji, the
+    emoji icon font) and Phosphor Icons, with the versions from the font
+    files' name tables. Pinning pdfium in `release.yml`, or reading the
+    version from the downloaded release, would close the gap.
+
+260. (issue 101, 2026-11-09) *About dialog*, Generation: "The bundle puts
+    `third-party.json` beside the binary (macOS: `Contents/Resources/`).
+    The dialog reads it once at startup."
+    Assumed: the release's package step copies the file beside `rick` on
+    Linux and Windows and into `Rick.app/Contents/Resources/` on macOS; the
+    binary looks beside itself first and in `../Resources/` second, so a
+    bundle and a flat directory both work, and `cargo xtask bundle` (a
+    developer's layout) carries no file: a build without it shows "not
+    available in this build", as the spec says for `cargo run`.
+
+261. (issue 101, 2026-11-09) *About dialog*, Generation: "The release
+    workflow fails when the file is missing or when the set of crates in it
+    differs from `Cargo.lock`." `Cargo.lock` holds crates of every platform
+    (wasm, Android), the build and dev dependencies and the workspace's own
+    crates, none of which the release links, so the two sets never match
+    as they are; and cargo-about lists the workspace crates themselves
+    (they do not say `publish = false`, which is what its `private.ignore`
+    reads) plus a few crates of target expressions it cannot evaluate
+    (`windows_x86_64_gnu`, `schannel`).
+    Assumed: `.github/scripts/check-third-party.py` fails the `licenses`
+    job when the file is missing or malformed, when a crate `cargo tree`
+    resolves for any release target with the release build's features is
+    not in it, or when an entry names a crate `Cargo.lock` lacks; the extra
+    entries are reported and allowed (over-attribution harms no one), and
+    the dialog leaves out the entries whose repository is Rick's own. The
+    `copyright` of an entry is the crate's authors from Cargo's metadata,
+    an array of strings, Cargo having no copyright field; the dialog shows
+    the first "Copyright" line of the licence text when there is one.
+    Marking the workspace crates `publish = false` would take them out of
+    the generated file at the source.
+
+262. (issue 101, 2026-11-09) *About dialog*, Credits card: "fixed rows first
+    — Serge …; Claude (Anthropic) … — then the GitHub contributors appended
+    at build time (`git shortlog -sn --no-merges` …), each with the role
+    from `CONTRIBUTORS.md` when a line matches the name". The shortlog of
+    this repository names "Claude", "Serge" and "Serge Berwert", the two
+    people of the fixed rows, and the spec does not say how a line of
+    `CONTRIBUTORS.md` (which does not exist yet) matches a name.
+    Assumed: a contributor whose first word is a fixed row's first word
+    (case aside) is that person and is not repeated; a line matches when,
+    after a list marker, it starts with the name, and what follows a dash,
+    a colon or a comma is the role. Two more small calls of this item: the
+    OS and desktop line needs the operating system's version, so a
+    `platform::os_description()` was added to the platform crate rather
+    than a `cfg(target_os)` elsewhere; and the "medium" weight of the
+    frames is drawn in the system font's one weight, egui having no
+    medium face.
+
+
+263. (issue 101, 2026-11-09) *About dialog*, Third-party licences page: the
+    footer reads "Generated at build time from Cargo.lock by cargo-about ·
+    N components, M licence types", and a build without the generated file
+    "shows the Third-party licences row as 'not available in this build'
+    and no count; the Bundled runtimes section still shows" — but not what
+    the page's footer says then, nor whether the plugins' entries count
+    among the N components.
+    Assumed: without the file the footer says the crates' list is not
+    available in this build and gives the counts of what is shown; the
+    plugins' entries count as components and their licence ids as types,
+    on the About page's row too; *Export…* writes every section shown,
+    the plugins' included, whatever the search and the filter show.
+
+264. (system integration, 2026-11-09) §4: "`rick [<path>…]` (no argument:
+    the current directory …)". The desktop entry runs `rick %F`, so a
+    launcher click without a selection is also a launch with no argument,
+    with the launcher's working directory (usually the home) — before the
+    single instance it restored the session as it was, now the spec's
+    reading adds a tab at that directory to the restored session, and a
+    second click while Rick runs opens a home tab in the running window.
+    Assumed: the spec's reading, literally, for every entry point, since
+    the binary cannot tell a terminal from a launcher and the spec names
+    no flag that would; if the launcher should only raise the window, the
+    desktop entry needs an argument form of its own, Serge's call.
+
+265. (system integration, 2026-11-09) §4: "`rick://<path>` URL scheme …
+    `rick:///home/serge/Apps` opens the folder … anything that is not an
+    existing local path shows an error toast and opens nothing." Rick's
+    own virtual locations are spelled `rick://apps`, `rick://trash` (the
+    `rick` provider of `vfs-rick`), so a link `rick://apps` reads as the
+    Installed Apps view to anyone who knows them, while the spec's grammar
+    has an empty host and a local path only.
+    Assumed: the spec's grammar, literally — a `rick://` URL with a host
+    names no path on this computer, so it shows the error toast and opens
+    nothing; mapping `rick://<view>` to the virtual provider's view would
+    be one more arm in the binary's `apply` if wanted.
+
+266. (system integration, 2026-11-09) §4: "the console reports its working
+    directory through OSC 7". No shell reports it to a terminal it does
+    not know: bash and zsh do so through the distributions' `vte.sh` and
+    fish by itself, and each checks the terminal by `VTE_VERSION`.
+    Assumed: the console's session sets `VTE_VERSION` (to a recent VTE's,
+    7800) in the shell's environment, so the three shells report the
+    directory where that script or that check is in place, and a shell
+    without either reports nothing and the tab stays where it was; the
+    emulator ignores the other sequences the variable may invite (OSC 777
+    notifications).
+
+267. (system integration, 2026-11-09) §4: "Rick emits `cd` on tab
+    navigation only while the console has no foreground job". Linux and
+    macOS say whether a job has the terminal (`/proc/<pid>/stat`,
+    `proc_pidinfo`); a Windows pseudo console has no foreground process
+    group to ask about.
+    Assumed: where the system cannot say, Rick does not type into the
+    console, so on Windows the tab follows the console (OSC 7, where the
+    shell sends it) but the console does not follow the tab, rather than
+    risk typing into a running program; a Windows answer (the console
+    host's process list) would lift that.
+
+268. (issue 80, 2026-11-09) Rule 4 has a workspace tab spring-load after
+    "~500 ms"; *Spring-loading* says "about a second (settable)", and the
+    one setting behind it (`drag.spring_delay_ms`, Settings → General)
+    defaults to 1000 ms.
+    Assumed: one delay for every kind of drag — entries, a pane, a tab —
+    and it is the existing setting; its default stays 1000 ms until this
+    is answered. If 500 ms is meant, is it the new default for folders
+    too?
+
+269. (issue 80, 2026-11-09) Rule 1: "neighbouring tabs slide apart
+    (animated)" names no duration, and nothing says what the slide does
+    under the system's reduce-motion setting.
+    Assumed: 150 ms, eased out, one constant; with reduce motion the tabs
+    take their places at once, as the portal animations stand still.
+
+270. (issue 80, 2026-11-09) Rules 2 and 3 turn on whether a tab holds
+    "exactly one pane"; the GUI chapter calls the preview "a pane like any
+    other", and the default layout is one explorer pane with the preview
+    beside it.
+    Assumed: every pane counts — the preview, a console and a comparison
+    included — so it is the model's count of the workspace's panes, and
+    the default tab with its preview is a multi-pane tab: it reorders and
+    tears off, and its explorer pane moves by its handle.
+
+271. (issue 80, 2026-11-09) Rule 2: a single-pane tab "can be dragged down
+    into the current workspace". Today a tab is activated by a click, not
+    by the press that starts a drag.
+    Assumed: it stays so. Dragging a tab never activates it, the window
+    goes on showing the workspace it showed, and an inactive single-pane
+    tab docks into that workspace directly. The dragged tab's own pane
+    shows no targets, so the shown tab, when it holds one pane, docks
+    elsewhere only through spring-loading (rule 4) or in another window
+    (rule 6).
+
+272. (issue 80, 2026-11-09) Rule 4 lets "a single-pane tab" spring-load by
+    "hovering another workspace tab"; rule 1 keeps a dragged tab in the row
+    under the cursor, so the cursor is never seen on another tab, and with
+    Chrome-style sliding a neighbour swaps away once the tab is halfway
+    over it.
+    Assumed: a dragged tab rests on a neighbour while it overlaps it by a
+    quarter of a tab's width or more, short of the half where the two
+    swap; held there for the delay it spring-loads that neighbour's
+    workspace, and held squarely in its gap it spring-loads nothing, so a
+    pause while reordering does not switch the window. A dragged pane
+    rests on a tab while the cursor is on the tab. Written into *Workspace
+    tabs*, Spring-loaded tabs.
+
+273. (issue 80, 2026-11-09) Rule 7 gives the pane's ghost its scale and
+    opacity and says of a tab only "the tab itself, lifted with a shadow";
+    rule 1 has the tab "follow the cursor along the row", rule 7 anchors
+    every ghost 8 px down and right of the cursor.
+    Assumed: the tab's ghost is full size and opaque, with the pane
+    ghost's shadow. While the cursor is in a title row — its own window's
+    or another's — the tab rides that row, on its line, the grab point
+    under the cursor with no offset; once the cursor leaves the title row
+    the tab follows it freely, the grab point 8 px down and right.
+
+274. (issue 80, 2026-11-09) Rule 3: a multi-pane tab "can only be
+    reordered in the row or torn off into its own window". Today a tab
+    released anywhere inside its window — over the panes, over the side
+    panel — is reordered to the gap it last showed.
+    Assumed: only a release on a tab row reorders and only one outside
+    every window tears off; a tab of either kind released anywhere else
+    inside a window — a single-pane one beside the dock targets too —
+    moves nothing and returns to its place. Rule 6 adds another window's
+    tab row to what a multi-pane tab can do.
+
+275. (issue 80, 2026-11-09) Rule 6: a tab or pane "dragged onto the tab bar
+    of another Rick window joins that window (as a tab, or via
+    spring-loading onto a dock target)". Whether the panes the other
+    window already shows take the drop directly is not said.
+    Assumed: they do. The dock targets appear on the pane under the cursor
+    in whichever window of this Rick the cursor is over, for a pane and
+    for a single-pane tab; the tab row is one way in, not the only one.
+    Written into *Windows*.
+
+276. (issue 80, 2026-11-09) Rule 9: Escape "restores the original layout";
+    *Spring-loading* leaves a pane where it drilled to when a drag "ends or
+    is cancelled", by the *After a drag* setting, and question 65 decided
+    that its "return" also switches a spring-loaded tab back.
+    Assumed: Escape returns every window to the workspace it showed when
+    the drag began, for a drag of entries too and whatever *After a drag*
+    says; the setting still decides the folders the panes drilled into,
+    and the workspace only when a drag of entries ends in a drop. A pane
+    or tab drag knows no *After a drag*: dropped, it leaves each window on
+    the workspace it shows, the one docked into; released where nothing
+    moves, it ends as Escape does.
+
+277. (issue 80, 2026-11-09) Rule 8: "open hand on hovering a grip or a
+    tab", "no arrow during a drag". A tab carries a close button, the row
+    a new-tab button, and a drag of entries has its own ghost, indicator
+    and the not-allowed cursor over the side panel.
+    Assumed: the open hand shows over a tab's body; its close button and
+    the new-tab button keep the cursor they have. The closed hand stays
+    for the whole of a pane or tab drag, also where a release would move
+    nothing. Rule 8 does not touch a drag of entries.
+
+278. (system integration, issue 120, 2026-11-09) §6.1: "Rick compares the
+    wanted state with the actual one, item by item" and "*Install to the
+    standard location*, which moves Rick to `~/.local/opt/rick` … through
+    `ext-installer`". The check and the dialog are the core's, the
+    installer is a plugin that may be switched off or removed, and a core
+    crate may not depend on a plugin.
+    Assumed (as the handoff of issue 120 sets out): the core owns the item
+    list, the check and the dialog. `platform::Integration` lists and
+    checks every item, the install location among them (set up when the
+    running binary is inside a version folder of `~/.local/opt/rick`);
+    performing the install location is the plugin's registered command,
+    the platform answers *unsupported* for it, and without the plugin the
+    row reads *Unsupported* with the reason while every other row works
+    against the folder Rick runs from.
+
+279. (system integration, issue 120, 2026-11-09) §6.1: "The *Install for*
+    segmented control (Just me / All users) at the top of the dialog sets
+    the scope for every row", with `/opt/rick` and `pkexec` "and the
+    installer's helper" for All users. That helper does not exist
+    (specs/ext-installer.md: "its own milestone"; `install()` refuses the
+    system scope).
+    Assumed (handoff of issue 120): this issue delivers *Just me*
+    completely. For *All users* the Linux items answer *unsupported* (not
+    available yet) and the dialog shows the segment disabled with the
+    tooltip *Not available yet*; the helper is not built here.
+
+280. (system integration, issue 120, 2026-11-09) §6.1: "The check reads
+    files and registry keys only" — but not what *set up* is for each
+    item of §7.1.
+    Assumed, for *Just me*: the **install location** when the running
+    binary is inside a version folder of `~/.local/opt/rick`; the
+    **launcher entry** when `$XDG_DATA_HOME/applications/rick.desktop` is
+    there with an `Exec` that starts this Rick and every hicolor icon
+    file is there; the **default file manager** when `rick.desktop` is
+    the first id of `inode/directory` and of `x-scheme-handler/rick`
+    under `[Default Applications]` of `$XDG_CONFIG_HOME/mimeapps.list`,
+    the file `xdg-mime default` writes; **"Show in folder"** when
+    `$XDG_DATA_HOME/dbus-1/services/org.freedesktop.FileManager1.service`
+    names that bus name and starts this Rick; the **`rick` command** when
+    `~/.local/bin/rick` is a link to this Rick and `path.sh` defines the
+    `rick` function for it; the **dock favourite** when the desktop's
+    favourites name `rick.desktop` (`rick` on COSMIC). "This Rick" is the
+    running binary, named through the `current` link when it runs from
+    the install location, so an update that flips the link takes every
+    item with it.
+
+281. (system integration, issue 120, 2026-11-09) §7.1: "`packaging/linux/
+    rick.desktop` and the icons installed under `share/applications` and
+    `share/icons/hicolor` of the chosen scope" — from where: the release
+    archive has `share/` beside the binary, a development build has not,
+    and an AppImage or a package will not have it beside the binary
+    either.
+    Assumed: the binary carries both, the desktop entry and the ten
+    hicolor files compiled into `platform`, so the item does the same
+    from every build; the archive's `share/` stays what a manual install
+    copies (specs/app-icons.md).
+
+282. (system integration, issue 120, 2026-11-09) §7.1, dock favourite:
+    "Other desktops: *Unsupported*" — but not what the item is on one of
+    the four desktops whose means are not there: no `gsettings` program,
+    a `gsettings` without the desktop's schema, no Plasma panel
+    configuration or no task manager in it, no favourites file of
+    COSMIC's dock.
+    Assumed: *Unsupported* with the reason, not *missing*, which would
+    list a row in the dialog whose Apply could only fail. COSMIC's
+    favourites are read from `~/.config/cosmic/
+    com.system76.CosmicAppList/v1/favorites`, the list its dock keeps.
+
+283. (system integration, issue 120, 2026-11-09) §6.1: "one record per
+    integration item (§7): `state = "set-up" | "declined" | "unsupported"
+    | "missing"` and the date of the last check". Three things the record
+    does not settle: where what Rick wrote for an item is kept, so it can
+    be undone (§7.2 keeps the previous values of *Make Rick the default*
+    "in `rick.toml`"); how *drifted* is remembered between starts, there
+    being no fifth state; and how fine the date is — a time would rewrite
+    `rick.toml` at every start.
+    Assumed: the record is `[integration.items.<item>]` with `state`,
+    `checked`, and, when Rick wrote something, `files` (the files and
+    links created, `~` for the home) and `previous` (the values replaced,
+    as they were). A drifted item's record keeps `state = "set-up"`:
+    drift is a set-up record meeting an item the check finds missing, at
+    this start and every later one until it is restored or switched off.
+    `checked` is the calendar day in UTC, so checks change the file at
+    most once a day; the time on Settings' status line is the running
+    session's.
+
+284. (system integration, issue 120, 2026-11-09) §6.1: "the preference
+    switches (shell integration, *Check integration at startup*)" and
+    "`[integration] ask = false`" — the two switches have no key, and the
+    spec does not say what each leaves running.
+    Assumed: `[integration] check_at_startup` and `shell_integration`,
+    both `true` by default, beside `ask`. With `ask = false` the startup
+    check still runs, so Settings shows drift, and only the dialog stays
+    closed; with `check_at_startup = false` nothing is checked until
+    *Check again* (or Settings → Integration is opened). With
+    `shell_integration = false` the embedded console and its tab stop
+    following each other, both ways, and switching it on again catches up
+    on nothing.
+
+285. (system integration, issue 120, 2026-11-09) §6.1: "**Reset choices**,
+    which clears every declined mark so the dialog asks once more", while
+    the Figma notes say of the per-row switch and of the footer checkbox
+    "Both are reversible in Settings → Integration (“Reset choices”)".
+    Assumed: *Reset choices* turns every declined record into *missing*
+    and sets `ask = true` as well, so the dialog does ask at the next
+    start whichever way it was silenced.
+
+286. (system integration, issue 120, 2026-11-09) §6.1: "**Apply N items**
+    performs the switched-on rows"; only the dock is said to be one whose
+    failure "never blocks the rest". What a failing row of any other item
+    does to the rows after it, and what its record becomes, is not said.
+    Assumed: every row is performed for itself, in the dialog's order; a
+    row that fails is reported (a warning for a *Best effort* item, an
+    error otherwise), the rows after it are still performed, and its
+    record stays as it was — *missing*, so the next start asks again, or
+    *set-up* for a drifted one. Nothing is retried by itself.
+
+287. (system integration, issue 120, 2026-11-09) §6.1 has "every item with
+    its own switch" and the installer's spec has "Rick never overwrites
+    silently" for its own collisions, but the integration spec does not
+    say what a row does when a `rick.desktop`, a `rick` link or a
+    `org.freedesktop.FileManager1.service` is already there from
+    somewhere else.
+    Assumed (handoff of issue 120: "never overwritten silently: the row
+    says so and asks"): Rick tells its own files by the item's record —
+    a file the record lists is Rick's and is rewritten freely; a file
+    that is there, is not listed and does not already do what Rick's
+    would (the entry or the service file starts another program, the
+    link points elsewhere, an icon has other contents) is *in the way*.
+    The check reports it, the row says so, and performing the item
+    refuses with *exists and was not written by Rick* unless the user
+    agreed to replace it; once replaced it is on record as Rick's. A
+    file that already is what Rick would write is left as it is and
+    stays off the record, so an undo never removes what Rick did not
+    make.
+
+288. (system integration, issue 120, 2026-11-09) §7.1: "**Default file
+    manager** — `xdg-mime default rick.desktop inode/directory` and
+    `x-scheme-handler/rick` for the scope's `mimeapps.list`". The spec
+    names the command; a test may not run it against the real system,
+    and an undo needs what the two types named before.
+    Assumed: Rick edits `$XDG_CONFIG_HOME/mimeapps.list` itself, to what
+    `xdg-mime default` leaves — each of the two keys under `[Default
+    Applications]` set to `rick.desktop`, every other line untouched,
+    the group or the file created when missing — and records each key's
+    previous value. The undo puts a previous value back (or removes the
+    key) only where the type still names Rick, and removes a file Rick
+    created once it names nothing. The item refuses while no
+    `rick.desktop` is where the desktop looks for it: a default that
+    names no application would open folders with nothing.
+
+289. (system integration, issue 120, 2026-11-09) §7.1: "**`rick` command**
+    — a symlink in `~/.local/bin` …, plus the shell function of §4 in
+    Rick's `path.sh` (the one the installer plugin sources from the
+    profile)". The installer regenerates `path.sh` from its install
+    records and writes the function only when Rick is among them; a Rick
+    that runs from where it was unpacked has no record, the plugin may
+    not be loaded, and a regeneration would drop a line it does not
+    know.
+    Assumed: the item writes the function itself, as a block between two
+    marker lines (`# >>> rick command >>>` … `# <<< rick command <<<`) in
+    `path.sh` and, where `fish` is configured, in its drop-in, and adds
+    the installer's own profile line (same text, same marker) where it is
+    missing. The installer carries the block over when it regenerates
+    either file, in place of its own function, and keeps a file alive
+    that only the block still needs. A `path.sh` that already defines the
+    function for this Rick gets no second one. The undo removes the
+    block, the files once they say nothing else, and the profile line
+    Rick added once `path.sh` is gone.
+
+290. (system integration, issue 120, 2026-11-09) §7.1: "`update-desktop-
+    database` and `gtk-update-icon-cache` run when present" — what a
+    failure of either means for the launcher entry is not said.
+    Assumed: nothing. Each is looked up on the `PATH` and run after the
+    entry and the icons are written or removed; a tool that is missing
+    or fails (a user's hicolor folder has no theme index) is logged at
+    debug level and the item is still set up, since the desktops read
+    the entry and the icons without the caches.
+
+291. (issue 80, rule 7, 2026-11-09) *Drag ghost*: "a real snapshot of the
+    grabbed pane … drawn at 70 % opacity". A picture of the frame would
+    give one even 70 %, but the backend delivers a screenshot for its
+    root viewport only (eframe 0.36 paints an immediate viewport with no
+    screenshot request), and every Rick window beyond the first is such a
+    viewport.
+    Assumed: the snapshot is the pane's own shapes, kept from the frame it
+    was grabbed in and painted again at a quarter, each shape at 70 %. It
+    is the same in every window and needs no frame of delay; where shapes
+    lie over one another — a name on a selected row — a little less than
+    30 % of what is under the ghost shows through, and the snapshot's
+    corners are cut square under the rounded border. A paint callback in
+    the pane is left out of its ghost.
+
+292. (issue 80, rule 7, 2026-11-09) *Drag ghost*: the ghost "moves rigidly
+    with the cursor". A window paints inside itself only: once the cursor
+    leaves the window a pane or a tab was dragged from, nothing of Rick
+    is under it to paint the ghost on, unless it is over another Rick
+    window.
+    Assumed for now: the ghost shows while the cursor is inside the
+    window the drag began in, and the closed hand alone follows the
+    cursor outside it; another window painting the ghost, and what shows
+    over the desktop, are part of rule 6 and are asked there.
+
+293. (system integration, issue 120, 2026-11-09) §6.1 and §7.1: the
+    install location goes "through `ext-installer`", whose `install()`
+    takes an archive; a started Rick is an unpacked folder and the
+    archive may be gone.
+    Assumed (handoff of issue 120): the installer gains a source, an
+    unpacked folder, read as one more archive format (`Format::Folder`)
+    so the index, the safety rules, the staging folder renamed into
+    place, the record and the `current` link are the archive path's own;
+    the folder is never packed first. The tree is the folder that holds
+    the running binary, with its libraries, `plugins/` and `share/`. The
+    install is `~/.local/opt/rick/<version>` with the version the binary
+    reports (`0.3.0-dev` in a development build), the app id `rick`, and
+    nothing written outside the app folder: the launcher entry, the
+    icons and the `rick` command are items with switches of their own.
+
+294. (system integration, issue 120, 2026-11-09) §4 has plugins register
+    subcommands and §6.1 has the core perform the install location
+    through the plugin, but no command for it is named.
+    Assumed: the installer declares `install-rick <folder> <version>`
+    beside `install <archive>`: no form, one job in the operations area,
+    an update when a Rick is installed already, one previous version
+    kept. The core runs it with the folder the check reported and its
+    own version, waits for the job, and only then performs the other
+    rows, on the installed copy; a failed install stops them, since they
+    would otherwise point at the folder Rick was meant to leave. The
+    command is listed by `rick --help` like any other.
+
+295. (system integration, issue 120, 2026-11-09) §6.1: "which moves Rick
+    to `~/.local/opt/rick` … and relaunches from there"; the Figma row
+    reads "Move Rick from ~/Downloads/rick-0.3.0 to ~/.local/opt/rick".
+    The process that performs the row runs from the folder it would
+    move, and the installer never deletes what it installs from.
+    Assumed: Rick is copied, and the folder it was started from is left
+    for the user to remove; the row's line says *Copy*. Starting the old
+    folder again offers the row again, as an update of the installed
+    copy.
+
+296. (system integration, issue 120, 2026-11-09) §6.1: "relaunches from
+    there", and §3: one Rick per user session, a launch that finds an
+    instance hands over and exits. How the running Rick gives way to the
+    installed one is not said.
+    Assumed (handoff of issue 120: "the old process exits after the new
+    one answers"): the session is saved; the old process stops serving
+    and unbinds the endpoint, starts `current/rick` with its own
+    `--config-dir` if it had one, and asks the endpoint for `--help`
+    every 100 ms until the new instance answers, then exits. If nothing
+    answers within 20 seconds it binds the endpoint again, stays, and
+    shows *Rick could not be started from …*. Until the relaunch the
+    installed copy stands for the running Rick in the checks, so the
+    rows read *Set up*.
+
+297. (system integration, issue 120, 2026-11-09) §7.1: "The running
+    instance owns the name; activation starts Rick when it is not
+    running." Whether a Rick whose user switched the row off also takes
+    `org.freedesktop.FileManager1`, and with it "Show in folder" from the
+    desktop's own file manager while it runs, is not said.
+    Assumed: no. Rick asks for the name when the item is on record as
+    *set up* at its start, when the session bus itself started it, and
+    from the moment a later launch hands over the activation argument.
+    A row set up in a running Rick therefore takes effect at the first
+    call — the bus starts `rick --dbus-service`, that launch hands over
+    to the running instance, which takes the name and answers — or at
+    the next start. The check looks at the activation file only, never
+    at who owns the name.
+
+298. (system integration, issue 120, 2026-11-09) §7.1: "a service file
+    for D-Bus activation"; §4 lists the core command line and has
+    nothing the activation could run without opening the folder the bus
+    happens to start it in.
+    Assumed: one more flag, `rick --dbus-service`, which is what the
+    file's `Exec` runs. Started with it, Rick restores its session,
+    opens no tab for the working directory and takes the name; handed to
+    a running instance it opens nothing and makes that instance take the
+    name. `--help` lists it. After the file is written or removed Rick
+    asks the session bus to read its services again (`dbus-send …
+    ReloadConfig`, when there is a bus and the tool); a failure is
+    logged and the item is set up by the file all the same.
+
+299. (system integration, issue 120, 2026-11-09) §7.1: "The running
+    instance owns the name" — another file manager may own it already
+    when Rick starts.
+    Assumed: Rick does not take the name away and does not give up: it
+    waits in the bus's queue and has the name when the other lets go;
+    once it has the name it keeps it while it runs.
+
+300. (system integration, issue 120, 2026-11-09) §4: "`ShowItemProperties`
+    to open plus the Properties dialog". The call takes a list of
+    items; the Properties dialog shows one entry.
+    Assumed: every item is revealed and selected as for `ShowItems`, and
+    Properties opens on the first folder's selection once it is listed,
+    as the Properties command does for a selection of several. For all
+    three calls a URI that is not a `file://` path of this computer is
+    left out, and the caller's startup id is the activation token the
+    window is raised with.
+
+301. (system integration, issue 120, 2026-11-09) §7.1, dock favourite:
+    the spec names where each desktop keeps its favourites, not what
+    Rick writes there or what the undo puts back.
+    Assumed: Rick is appended at the end of the list and nothing else in
+    it changes; a list that has Rick already is left alone. The record
+    names the list and keeps it as it was, and the undo takes Rick out
+    of the list as it is by then rather than writing the old list back,
+    so favourites pinned or removed since stay. A favourite names the
+    launcher entry, so the row fails with a warning while that entry is
+    not installed, as the default file manager does.
+
+302. (system integration, issue 120, 2026-11-09) §7.1: "Plasma: the
+    task-manager launcher list in
+    `plasma-org.kde.plasma.desktop-appletsrc`". A panel may hold several
+    task managers; one whose configuration names no launchers shows
+    Plasma's defaults, which a list in the file replaces; and the
+    running shell reads the file at its start only.
+    Assumed: the first task manager of the file gets Rick. Where it
+    names no launchers, Plasma's own default list (System Settings,
+    Discover, the preferred file manager and browser) is written out
+    with Rick after it, and the undo removes the key again when only
+    that default is left. After the write Rick asks the running shell to
+    start over from its configuration (`org.kde.PlasmaShell.
+    refreshCurrentShell` through `dbus-send`, when there is a session
+    bus and the tool): the panel restarts once. Without that call the
+    favourite appears at the next login. Say so if Rick should not
+    restart the shell.
+
+303. (system integration, issue 120, 2026-11-09) §7.1: "COSMIC: the
+    dock's configuration under `~/.config/cosmic`" (question 282 has the
+    file). The file is a RON list that COSMIC's own configuration
+    library writes and watches.
+    Assumed: `rick` is appended and the list written back the way that
+    library writes it, an id a line; the dock picks the change up by
+    itself. A COSMIC that has not written the file yet stays
+    *Unsupported*, as in question 282: Rick does not create it, since a
+    list of its own would replace the dock's defaults.
+
+304. (system integration, issue 120, 2026-11-09) §6.1: "each row with its
+    own switch (on by default for missing, on for drifted)"; the Figma
+    frame *Integration dialog — first run* draws the *Dock favourite*
+    switch off.
+    Assumed: the spec wins. Every listed row starts switched on, the
+    dock favourite included; the frame's "Apply 5 items" is that one
+    switched off by hand.
+
+305. (system integration, issue 120, 2026-11-09) Neither the spec nor
+    the frame shows a row whose place holds a file Rick did not write
+    (question 287).
+    Assumed (handoff of issue 120: "the row says so and asks"): under
+    its line the row names the file in `status/warning` — *~/.local/bin/
+    rick is already there and was not written by Rick* — with a
+    *Replace* checkbox. Ticked, the row is set up and the file replaced.
+    Not ticked, a row that is on is neither set up nor declined: it is
+    left out of *Apply N items* and asked about again at the next start.
+    Switched off it is declined like any other.
+
+306. (system integration, issue 120, 2026-11-09) §6.1: "**Not now**
+    closes without changes and asks again at the next start; the footer
+    checkbox **Don't ask again** silences the whole dialog". Which
+    button the checkbox goes with, and what *Apply* does with every row
+    off, is not said.
+    Assumed: the checkbox is stored with whichever button closes the
+    dialog, so *Don't ask again* with *Not now* stores `ask = false` and
+    nothing else. Escape and a click beside the dialog are *Not now*.
+    With every row off *Apply* reads *Apply 0 items*, stores the rows as
+    declined and closes. While the rows are set up the footer shows
+    *Setting up <row> — n of N* in place of the checkbox and the
+    controls rest; the dialog closes with the last row, and a row that
+    failed is a toast.
+
+307. (system integration, issue 120, 2026-11-09) The frame's lines are
+    worded for one machine: "so Rick appears in the Activities
+    overview", "instead of Files", "Pin Rick to the GNOME dash", "Move
+    Rick from …".
+    Assumed: the lines are worded from what the check found. The
+    launcher entry says *Activities overview* on GNOME and *application
+    launcher* elsewhere; the default file manager names the application
+    that opens folders now, or leaves "instead of …" out when there is
+    none; the `rick` command names the folder its link goes to; the dock
+    row names the desktop's own place (GNOME dash, Plasma task manager,
+    COSMIC dock, the favourites of the Cinnamon menu); the install row
+    says *Copy* (question 295). *All users* is drawn and cannot be
+    chosen, with the tooltip *Not available yet*; the frame's line about
+    passwords is kept as it is.
+
+308. (issue 80, rule 4, 2026-11-09) *Spring-loaded tabs*: a dragged tab
+    "rests on a neighbour while it overlaps it by a quarter of a tab or
+    more, short of the half where the two would swap". A tab taken past a
+    neighbour overlaps it by a quarter or more for half the way — before
+    the swap from one side, after it from the other — so at an unhurried
+    pace an ordinary reorder would outlast the delay and switch the
+    window.
+    Assumed: "rests" is taken at its word. A dragged tab spring-loads the
+    neighbour it leans on only while it is held still, the cursor within
+    6 px (`ui_egui::drag::REST_SLOP`) of where the rest began; moving on
+    starts the clock again. The overlap counts on either side of the
+    swap. A dragged pane needs no such rule: its cursor is on the tab or
+    it is not.
+
+309. (issue 80, rule 9, 2026-11-09) *No-ops and cancel*: Escape leaves
+    "every window showing the workspace it showed". A drag of entries that
+    spring-loaded through two tabs records each switch, and *After a
+    drag: return* undoes them in the order they happened, which ends on
+    the second-to-last workspace, not the first.
+    Assumed: a cancelled drag undoes the switches last first, so the
+    window ends on the workspace the drag began in. The order for a
+    dropped drag with *return* is left as it is: it is not part of issue
+    80, and is noted for the maintainer.
+
+310. (issue 80, rule 6, 2026-11-09) *Windows*: "the dock targets appear on
+    the pane under the cursor in whichever window that is". While a
+    button is down the pointer belongs to the window the drag began in;
+    another window hears nothing of the drag, so the first has to say
+    where the cursor is, which takes each window's place on the screen. A
+    Wayland compositor does not tell a window its place.
+    Assumed: the window the drag began in publishes the drag with the
+    cursor's place on the screen, and the window under the cursor shows
+    the gap, the slot, the targets and the ghost and says where a drop
+    lands. Where windows overlap, the one the drag began in counts as in
+    front, having been clicked last. Where the system gives no positions
+    (Wayland), a drag knows its own window alone: nothing shows over
+    another window, and a release outside the window does nothing, as
+    before this issue. Reaching another window there takes the
+    compositor's own drag and drop with a payload of Rick's; not built,
+    noted for the maintainer.
+
+311. (issue 80, rules 6 and 7, 2026-11-09) *Drag ghost*: the ghost "moves
+    rigidly with" the cursor; question 292 left open what paints it
+    outside the window the drag began in.
+    Assumed: the window the cursor is over paints the ghost, a tab from
+    the tab's own label, a pane from the snapshot its window took.
+    Between windows, over the desktop, no window can paint: the closed
+    hand alone shows there. A borderless, transparent window of its own
+    that follows the cursor would carry the ghost everywhere; not built.
+
+312. (issue 80, rule 6, 2026-11-09) *Panes*: "the centre, or the tab row,
+    makes the dragged pane a new workspace tab", and "another window
+    takes the pane on its tab row or on its dock targets". Where in the
+    other window's row a pane dropped on a centre target becomes a tab is
+    not said.
+    Assumed: at the end of that window's row, shown; dropped on the row
+    itself, at the slot the row shows.
+
+313. (system integration, issue 120, 2026-11-09) The Figma frame
+    *Settings — Integration* has the line "Fedora Linux 43 · GNOME 49 ·
+    checked at start, 14:02" and, under *Terminal and links*, a row
+    "rick:// links" with a *Set up* pill.
+    Assumed: the line is the system and the desktop as the platform
+    names them, without the desktop's version, then *checked at start,
+    HH:MM* in local time, or *checked HH:MM* after **Check again**. The
+    `rick://` row is left out: §7.1 has no such item, the scheme is
+    registered by the desktop entry and made Rick's by the default file
+    manager item (`x-scheme-handler/rick`), whose line says so.
+
+314. (system integration, issue 120, 2026-11-09) The frame's lines
+    "Reset by a system update on 8 Nov" and "Skipped at first run" say
+    more than Rick knows: the check finds an item it set up missing, not
+    who changed it or when, and a row can be switched off at any start.
+    Assumed: a reset item reads *Was set up by Rick and has been changed
+    or removed since*; a skipped one *Skipped in the setup dialog on
+    <day>*, the day being the one its record was last touched, which
+    for a declined item is the day it was switched off. A set-up item
+    says where it is; an unsupported one says why.
+
+315. (system integration, issue 120, 2026-11-09) §6.1 names four pills.
+    An item can also be neither set up nor declined: after *Not now*,
+    with the dialog silenced, or after *Reset choices*.
+    Assumed: such a row has a grey *Not set up* pill, the line the
+    dialog shows for it, and **Add**. A row with a file of another
+    origin in its way names the file and its button reads *Replace*,
+    which is the user's word to replace it (question 305). The buttons
+    rest while a check or an apply runs. *Reset choices* is there to
+    press when a row is declined or the dialog is silenced, and undoes
+    both. Opening the page before any check ran asks for one.
+
+316. (system integration, tier 2 on Windows and macOS, 2026-11-10) §4 says
+    paths "are resolved against the caller's working directory before they
+    are sent" and nothing about their form. `cli::resolve` makes a path
+    that exists canonical, so a launcher's relative path and a symlink
+    reach the thing itself; a `rick://` URL's path went through as spelled.
+    On macOS the temporary directory is a symlink (`/var` → `/private/var`)
+    and on Windows `canonicalize` returns the verbatim `\\?\C:\…` form, so
+    the two forms differ there and the tests that compared them failed.
+    Assumed: a `rick://` path is resolved exactly like a command-line path
+    (canonical where it names something), and the tests expect the
+    canonical form. Open: whether a tab's location should carry the
+    `\\?\` prefix on Windows at all, or be simplified to `C:\…` where
+    that is the same path; the path bar shows the location as stored.
+
+317. (preview pane, tier 2 on macOS, 2026-11-10) A start with a path
+    (`rick <path>`, or a test's `start` location) restores the last session
+    and opens the path as a workspace of its own, which is the one shown
+    (SPEC.md *Workspace tabs*). A Preview tab the session had stays in the
+    restored workspace, out of sight, until the toggle, which "closes
+    there and opens here" (`Model::open_preview`). The acceptance tests
+    took "the window has a Preview tab" for "the Preview tab is shown"
+    and, when the first window's session had been saved in time (only on
+    a loaded runner), never opened it: the exif badges test's "a.jpg: no
+    frame" on every platform. Assumed: that is the intended behaviour, and
+    the test accessor `inspector_open` means shown; whether a start with a
+    path should instead carry the Preview tab over into the new workspace
+    is open.

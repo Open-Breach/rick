@@ -1,0 +1,13 @@
+[Desktop Entry]
+Type=Application
+Name=Rick
+GenericName=File Manager
+Comment=A god-like file manager
+Exec=rick %U
+Icon=rick
+Terminal=false
+Categories=System;FileTools;FileManager;Utility;
+MimeType=inode/directory;x-scheme-handler/rick;
+Keywords=files;folders;explorer;browse;
+StartupNotify=true
+StartupWMClass=rick

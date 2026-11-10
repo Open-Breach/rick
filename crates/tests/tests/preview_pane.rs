@@ -108,9 +108,17 @@ fn select(harness: &mut Harness<'_, RickUi>, name: &str) {
         if slot.is_some_and(|s| s.has_frame() || s.error().is_some()) {
             break;
         }
+        // The rects say whether the Preview tab was drawn at all: they are
+        // set by the pane's draw and stay `None` while it never ran.
         assert!(
             started.elapsed() < Duration::from_secs(20),
-            "{name}: no frame: {slot:?}"
+            "{name}: no frame: {slot:?}; follows {:?}, preview pane {:?}, target {:?}, \
+             inspector open {}, rects {:?}",
+            harness.state().app().model().preview_follows(),
+            harness.state().app().preview_pane(),
+            harness.state().app().preview_target(),
+            harness.state().inspector_open(),
+            harness.state().preview_rects(),
         );
         std::thread::sleep(Duration::from_millis(2));
     }
@@ -726,14 +734,12 @@ fn fitted_frames_are_centred_and_actual_size_pans_by_dragging() {
         "fitted into the pane: {frame:?} in {content:?}"
     );
 
-    // The status bar is a body-text row, like the file list's status line.
+    // The status bar is the explorer footer's height (issue 79 item 4).
     let status = rects.status.unwrap_or_else(|| panic!("status"));
-    let body = egui::TextStyle::Body
-        .resolve(&harness.ctx.style_of(egui::Theme::Light))
-        .size;
+    let footer = ui_egui::footer_height(model::Density::Comfortable);
     assert!(
-        status.height() >= body + 5.0,
-        "status {status:?} for body {body}"
+        (status.height() - footer).abs() < 0.5,
+        "status {status:?} against {footer}"
     );
 
     // 1:1: the picture is wider than the pane and dragging it pans.
@@ -1452,4 +1458,144 @@ fn a_missing_pdfium_shows_the_message_and_browsing_to_it_stores_the_setting() {
         .and_then(toml::Value::as_str)
         .map_or_else(|| panic!("{text}"), Path::new);
     assert!(written.is_file(), "{}", written.display());
+}
+
+/// Issue 83, *Vector images*: an SVG fills the pane in Fit, rasterised at
+/// the pane's size rather than its own 64 px, is rasterised again when the
+/// pane gets wider, carries the *Rendered* toggle to its highlighted
+/// source, and *Copy* puts the raw SVG on the clipboard; an SVGZ copies
+/// the decompressed XML.
+#[test]
+// One scenario start to finish; splitting it would repeat the window.
+#[allow(clippy::too_many_lines)]
+fn an_svg_is_rasterised_at_the_pane_size_and_again_after_a_resize_and_copy_gives_the_source() {
+    use std::io::Write as _;
+
+    let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+    let svg = "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"64\" height=\"64\">\n  <circle cx=\"32\" cy=\"32\" r=\"24\" fill=\"#ff0000\"/>\n</svg>\n";
+    fs::write(dir.path().join("disc.svg"), svg).unwrap_or_else(|e| panic!("{e}"));
+    let mut gz = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+    gz.write_all(svg.as_bytes())
+        .unwrap_or_else(|e| panic!("{e}"));
+    fs::write(
+        dir.path().join("disc.svgz"),
+        gz.finish().unwrap_or_else(|e| panic!("{e}")),
+    )
+    .unwrap_or_else(|e| panic!("{e}"));
+    let fake = Arc::new(Fake::new().unwrap_or_else(|e| panic!("{e}")));
+    let mut harness = window(
+        &fake,
+        dir.path(),
+        egui::vec2(1100.0, 700.0),
+        340.0,
+        previewers(),
+    );
+    let pane = harness.state().app().model().focused;
+    let frame = |harness: &Harness<'_, RickUi>| {
+        harness
+            .state()
+            .previews()
+            .get(pane)
+            .and_then(|s| s.frame_size(0))
+    };
+
+    select(&mut harness, "disc.svg");
+    let first = frame(&harness).unwrap_or_else(|| panic!("no frame"));
+    assert_eq!(first.0, first.1, "the picture's own aspect: {first:?}");
+    assert!(
+        first.0 > 64 && first.0 <= 384,
+        "rasterised at the pane's quantised size, not its 64 px: {first:?}"
+    );
+    assert!(
+        harness
+            .state()
+            .preview_status()
+            .starts_with("SVG · 64 × 64 px · "),
+        "{}",
+        harness.state().preview_status()
+    );
+    assert_eq!(toolbar_item(&harness, "Rendered"), Some(true));
+    assert_eq!(toolbar_item(&harness, "Copy"), None, "Copy is there");
+
+    // A bigger window, and so a bigger pane: a new rasterisation at the
+    // new size.
+    harness.set_size(egui::vec2(1600.0, 1000.0));
+    let started = Instant::now();
+    loop {
+        settle(&mut harness);
+        if frame(&harness).is_some_and(|size| size != first) {
+            break;
+        }
+        assert!(
+            started.elapsed() < Duration::from_secs(10),
+            "not rendered again after the resize: {:?}",
+            frame(&harness)
+        );
+    }
+    let second = frame(&harness).unwrap_or_else(|| panic!("no frame"));
+    assert!(
+        second.0 > first.0 && second.0 == second.1,
+        "{first:?} then {second:?}"
+    );
+
+    // Copy: the raw source.
+    click_in_pane(&mut harness, icons::COPY);
+    let started = Instant::now();
+    loop {
+        settle(&mut harness);
+        if fake.clipboard_text().as_deref() == Some(svg) {
+            break;
+        }
+        assert!(
+            started.elapsed() < Duration::from_secs(10),
+            "the raw SVG: {:?}",
+            fake.clipboard_text()
+        );
+    }
+
+    // Rendered off: the highlighted source laid out as text.
+    click_in_pane(&mut harness, icons::for_icon(ext::Icon::Rendered));
+    let started = Instant::now();
+    loop {
+        settle(&mut harness);
+        if harness
+            .state()
+            .previews()
+            .get(pane)
+            .is_some_and(|s| s.text_view().is_some())
+        {
+            break;
+        }
+        assert!(
+            started.elapsed() < Duration::from_secs(10),
+            "no source view: {:?}",
+            harness.state().previews().get(pane)
+        );
+    }
+    assert_eq!(toolbar_item(&harness, "Rendered"), Some(false));
+
+    // An SVGZ: Copy gives the decompressed XML.
+    fake.set_text("").unwrap_or_else(|e| panic!("{e}"));
+    select(&mut harness, "disc.svgz");
+    assert!(
+        harness
+            .state()
+            .preview_status()
+            .starts_with("SVGZ · 64 × 64 px · "),
+        "{}",
+        harness.state().preview_status()
+    );
+    click_in_pane(&mut harness, icons::COPY);
+    let started = Instant::now();
+    loop {
+        settle(&mut harness);
+        if fake.clipboard_text().as_deref() == Some(svg) {
+            break;
+        }
+        assert!(
+            started.elapsed() < Duration::from_secs(10),
+            "the decompressed XML: {:?}",
+            fake.clipboard_text()
+        );
+    }
 }

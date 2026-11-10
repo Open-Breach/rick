@@ -11,15 +11,17 @@ use async_trait::async_trait;
 use tempfile::TempDir;
 use types::Error;
 
+use crate::instance::Endpoint;
+use crate::integration::{self, FakeIntegration, Integration};
 use crate::perms::{
     FilePermissions, PermissionChange, Permissions, Principal, PrincipalKind, Principals,
 };
 use crate::traits::{
-    Application, Chrome, Clipboard, ConfigDir, ControlsSide, DialogFilter, DragSource, DropTarget,
-    Elevate, ElevatedOutput, ImageFormat, IncomingFiles, Mount, NativeDialogs, OpenWith, Point,
-    Properties, PropertiesOutcome, RecentItem, RecentlyUsed, Secrets, StandardFolder,
-    StandardFolders, Terminal, Trash, TrashedItem, Volume, VolumeKind, Volumes, WindowChrome,
-    WindowRef,
+    Activation, Application, Chrome, Clipboard, ConfigDir, ControlsSide, DialogFilter, DragSource,
+    DropTarget, Elevate, ElevatedOutput, ImageFormat, IncomingFiles, Mount, NativeDialogs,
+    OpenWith, Point, Properties, PropertiesOutcome, RecentItem, RecentlyUsed, Secrets,
+    SingleInstance, StandardFolder, StandardFolders, Terminal, Trash, TrashedItem, Volume,
+    VolumeKind, Volumes, WindowChrome, WindowRef,
 };
 
 /// The applications the fake offers for every file, the default first.
@@ -56,6 +58,9 @@ pub struct Fake {
     trashed_count: Mutex<u64>,
     opened: Mutex<Vec<PathBuf>>,
     opened_with: Mutex<Vec<(PathBuf, Application)>>,
+    /// The tokens handed to [`Activation::activate_window`], oldest first;
+    /// nothing is raised.
+    activations: Mutex<Vec<Option<String>>>,
     terminals: Mutex<Vec<(PathBuf, Option<Vec<String>>)>>,
     /// The programs handed to [`Elevate::run_elevated`]; nothing runs
     /// unless `elevate_runs` says so.
@@ -83,8 +88,23 @@ pub struct Fake {
     recent: Mutex<Vec<RecentItem>>,
     /// `list` answers `Unsupported`, as the macOS trash does.
     unlistable: Mutex<bool>,
+    /// What [`Motion::reduce_motion`](crate::traits::Motion) answers; off
+    /// unless a test turns it on.
+    reduce_motion: Mutex<bool>,
     /// The keychain: secrets by key.
     secrets: Mutex<std::collections::BTreeMap<String, String>>,
+    /// Who answers [`Integration`]: a [`FakeIntegration`] without items
+    /// unless a test puts another in its place.
+    integration: Mutex<IntegrationSlot>,
+}
+
+/// The fake's [`Integration`], whatever implements it.
+struct IntegrationSlot(Arc<dyn Integration>);
+
+impl std::fmt::Debug for IntegrationSlot {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Integration")
+    }
 }
 
 #[derive(Debug, Default)]
@@ -122,6 +142,7 @@ impl Fake {
             trashed_count: Mutex::new(0),
             opened: Mutex::new(Vec::new()),
             opened_with: Mutex::new(Vec::new()),
+            activations: Mutex::new(Vec::new()),
             terminals: Mutex::new(Vec::new()),
             elevated: Mutex::new(Vec::new()),
             elevate_runs: Mutex::new(false),
@@ -138,8 +159,24 @@ impl Fake {
             mounted: Mutex::new(Vec::new()),
             recent: Mutex::new(Vec::new()),
             unlistable: Mutex::new(false),
+            reduce_motion: Mutex::new(false),
             secrets: Mutex::new(std::collections::BTreeMap::new()),
+            integration: Mutex::new(IntegrationSlot(Arc::new(FakeIntegration::new(
+                &crate::os_description(),
+                None,
+            )))),
         })
+    }
+
+    /// Puts `integration` in place of the fake's own, which lists no
+    /// items: a [`FakeIntegration`] the test scripted, or the real items
+    /// of a platform on a temporary home.
+    pub fn set_integration(&self, integration: Arc<dyn Integration>) {
+        lock(&self.integration).0 = integration;
+    }
+
+    fn integration(&self) -> Arc<dyn Integration> {
+        Arc::clone(&lock(&self.integration).0)
     }
 
     /// Paths and applications handed to [`OpenWith::open_with`], oldest
@@ -175,6 +212,13 @@ impl Fake {
     #[must_use]
     pub fn opened(&self) -> Vec<PathBuf> {
         lock(&self.opened).clone()
+    }
+
+    /// The tokens handed to [`Activation::activate_window`], oldest
+    /// first.
+    #[must_use]
+    pub fn activations(&self) -> Vec<Option<String>> {
+        lock(&self.activations).clone()
     }
 
     /// Paths handed to [`OpenWith::reveal`], oldest first.
@@ -359,6 +403,7 @@ impl Mount for Fake {
             device: None,
             total: None,
             free: None,
+            read_only: format == ImageFormat::Iso,
         };
         lock(&self.mounted).push(path.to_path_buf());
         lock(&self.volumes).push(volume.clone());
@@ -562,6 +607,10 @@ impl Clipboard for Fake {
         *lock(&self.clipboard) = Some(text.to_owned());
         Ok(())
     }
+
+    fn text(&self) -> Result<Option<String>, Error> {
+        Ok(lock(&self.clipboard).clone())
+    }
 }
 
 impl DragSource for Fake {
@@ -600,6 +649,80 @@ impl ConfigDir for Fake {
 
     fn home_dir(&self) -> PathBuf {
         self.dir.path().join("home")
+    }
+}
+
+impl Activation for Fake {
+    fn activate_window(&self, _window: &WindowRef, token: Option<&str>) -> Result<(), Error> {
+        lock(&self.activations).push(token.map(str::to_owned));
+        Ok(())
+    }
+
+    fn allow_activation(&self) {}
+}
+
+impl Integration for Fake {
+    fn integration_items(&self) -> integration::Items {
+        self.integration().integration_items()
+    }
+
+    fn check_integration(
+        &self,
+        item: integration::Item,
+        request: &integration::Request,
+    ) -> integration::Check {
+        self.integration().check_integration(item, request)
+    }
+
+    fn perform_integration(
+        &self,
+        item: integration::Item,
+        request: &integration::Request,
+    ) -> Result<integration::Receipt, Error> {
+        self.integration().perform_integration(item, request)
+    }
+
+    fn undo_integration(
+        &self,
+        item: integration::Item,
+        request: &integration::Request,
+    ) -> Result<(), Error> {
+        self.integration().undo_integration(item, request)
+    }
+}
+
+impl SingleInstance for Fake {
+    /// An endpoint inside the fake's own directory, whatever the config
+    /// directory: a test's instance is nobody else's.
+    fn instance_endpoint(&self, _config_dir: &Path) -> Endpoint {
+        Endpoint::in_dir(self.dir.path())
+    }
+}
+
+impl crate::traits::SystemFonts for Fake {
+    /// The fonts of the machine the tests run on, so a screenshot shows
+    /// what a user there sees; nothing where the machine names none.
+    fn system_fonts(&self) -> crate::traits::Fonts {
+        crate::fonts::system()
+    }
+}
+
+impl Fake {
+    /// Makes the fake report the system's reduce-motion setting as `on`.
+    pub fn set_reduce_motion(&self, on: bool) {
+        *self
+            .reduce_motion
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = on;
+    }
+}
+
+impl crate::traits::Motion for Fake {
+    fn reduce_motion(&self) -> bool {
+        *self
+            .reduce_motion
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
     }
 }
 
@@ -783,6 +906,7 @@ mod tests {
             device: None,
             total: Some(10),
             free: Some(5),
+            read_only: false,
         };
         assert_eq!(usb.used(), Some(5));
         assert!(usb.utilisation().is_some_and(|u| (u - 0.5).abs() < 1e-6));

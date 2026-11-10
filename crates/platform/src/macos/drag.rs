@@ -89,7 +89,10 @@ thread_local! {
 }
 
 /// The view of a window handle, for the main thread.
-fn view_of(window: &WindowRef, mtm: MainThreadMarker) -> Result<Retained<NSView>, Error> {
+pub(super) fn view_of(
+    window: &WindowRef,
+    mtm: MainThreadMarker,
+) -> Result<Retained<NSView>, Error> {
     let RawWindowHandle::AppKit(handle) = window.window else {
         return Err(Error::Unsupported("the window is not an AppKit view"));
     };

@@ -78,6 +78,7 @@ impl SpotlightExtension {
                 points: Points::SEARCH_INDEX,
                 platforms: Platforms::MACOS,
                 previews: &[],
+                commands: &[],
             },
         }
     }

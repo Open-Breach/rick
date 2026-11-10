@@ -16,8 +16,9 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::SystemTime;
 
 use ext::{
-    Action, ActionCtx, ActionGroup, ActionId, ActionOutcome, Availability, Continuation, Field,
-    Form, FormLater, JobRunner, PreviewRow, Shortcut, UiHost, Values,
+    Action, ActionCtx, ActionGroup, ActionId, ActionOutcome, Availability, CliCommand, CliCtx,
+    CliOutcome, CommandSpec, Continuation, Field, Form, FormLater, Header, HeaderIcon, JobRunner,
+    PreviewRow, Shortcut, UiHost, Values,
 };
 use types::{CancelToken, Entry, EntryKind, Error, Location, Progress, ProviderId};
 
@@ -71,6 +72,9 @@ const K_UPDATE_OF: &str = "update_of";
 const K_OVERWRITE: &str = "overwrite";
 const K_DOWNGRADE: &str = "downgrade";
 const K_WM_CLASS: &str = "wm_class";
+/// The two disclosure cards' open state.
+const K_COMMANDS_OPEN: &str = "commands_open";
+const K_ADVANCED_OPEN: &str = "advanced_open";
 /// One checkbox per command the archive offers, up to this many.
 const CMD_KEYS: [&str; 16] = [
     "cmd0", "cmd1", "cmd2", "cmd3", "cmd4", "cmd5", "cmd6", "cmd7", "cmd8", "cmd9", "cmd10",
@@ -144,6 +148,36 @@ impl Installer {
         lock(&self.detections).insert(path.to_path_buf(), (stamp, Arc::clone(&detected)));
         Ok(detected)
     }
+}
+
+/// The subcommand `rick install <archive>`.
+pub const INSTALL_COMMAND: &str = "install";
+
+/// The subcommand `rick install-rick <folder> <version>`: what the
+/// integration dialog's *Install to the standard location* runs
+/// (specs/system-integration.md §6.1).
+pub const INSTALL_RICK_COMMAND: &str = "install-rick";
+
+/// What the manifest declares for the command line: `install` and
+/// `install-rick`.
+pub const COMMANDS: &[CommandSpec] = &[
+    CommandSpec {
+        name: INSTALL_COMMAND,
+        help: "Install a tar or zip archive as an application (Linux)",
+    },
+    CommandSpec {
+        name: INSTALL_RICK_COMMAND,
+        help: "Install the Rick unpacked in a folder to the standard location, as a version (Linux)",
+    },
+];
+
+/// Every command-line subcommand over `installer`.
+#[must_use]
+pub fn commands(installer: &Arc<Installer>) -> Vec<Arc<dyn CliCommand>> {
+    vec![
+        Arc::new(InstallCommand(Arc::clone(installer))),
+        Arc::new(InstallRickCommand(Arc::clone(installer))),
+    ]
 }
 
 /// Every action over `installer`.
@@ -251,8 +285,8 @@ fn offered_commands(detected: &Detected, kind: Kind, id: &str, main: &str) -> Ve
 /// The text of an icon in the form's list: its path and pixel size.
 fn icon_option(icon: &detect::IconFile) -> String {
     match (icon.ext.as_str(), icon.size) {
-        ("svg", _) => format!("{} (scalable)", icon.rel),
-        (_, Some((w, h))) => format!("{} ({w}×{h})", icon.rel),
+        ("svg", _) => format!("{} · scalable", icon.rel),
+        (_, Some((w, h))) => format!("{} · {w}×{h}", icon.rel),
         (_, None) => icon.rel.clone(),
     }
 }
@@ -612,14 +646,18 @@ pub fn assemble(
         update_of: update_of.map(|u| u.record),
         overwrite: values.check(K_OVERWRITE) || collisions.is_empty(),
         bins: detected.bins.clone(),
+        launcher: true,
     });
     Assembled { plan, rows }
 }
 
-/// The install form for `detected`, prefilled with detection's defaults
-/// and, for an update, the installed app's.
+/// The install dialogue (SPEC.md *Install dialogue*): the header with the
+/// app's icon, the mode pill and the version change; Name, App ID,
+/// Version and *Install for*; the card with Kind, Main executable and
+/// Icon; the *WHAT RICK WILL DO* card from the live summary; for a
+/// toolchain the *Commands to link* disclosure; the *Advanced options*
+/// disclosure with the rest. The archive is named in the footer.
 #[allow(clippy::too_many_lines)]
-#[must_use]
 pub fn install_form(
     detected: &Arc<Detected>,
     scan: &Scan,
@@ -642,38 +680,69 @@ pub fn install_form(
         ),
         None => format!("Install {} as application", detected.archive_name()),
     };
-    let mut form = Form::new(
-        title,
-        if matched.is_some() {
-            t!("installer-update")
-        } else {
-            t!("installer-install")
-        },
-    )
-    .field(Field::text(
-        K_NAME,
-        t!("installer-name"),
-        &detected.name,
-        "The name in the launcher",
-    ))
-    .field(Field::text(
-        K_ID,
-        t!("installer-app-id"),
-        &id,
-        "lowercase-with-hyphens",
-    ))
-    .field(Field::text(
-        K_VERSION,
-        t!("installer-version"),
-        &detected.version,
-        "as the archive names it",
-    ))
-    .field(Field::choice(
-        K_KIND,
-        t!("installer-kind"),
-        vec!["GUI application".to_owned(), "Command-line tool".to_owned()],
-        usize::from(detected.kind == Kind::Cli),
-    ));
+    let version_text = if detected.version.is_empty() {
+        "?"
+    } else {
+        detected.version.as_str()
+    };
+    let (pill, subtitle) = match matched {
+        Some(m) if !detected.version.is_empty() && m.record.version == detected.version => (
+            Some(t!("installer-reinstall")),
+            format!("{} → {version_text}", m.record.version),
+        ),
+        Some(m) => (
+            Some(t!("installer-update")),
+            format!("{} → {version_text}", m.record.version),
+        ),
+        None => (None, version_text.to_owned()),
+    };
+    let mut header = Header::new(header_icon(detected, &id))
+        .title(&detected.name)
+        .subtitle(subtitle);
+    if let Some(pill) = pill {
+        header = header.pill(pill);
+    }
+    let ok = match (matched, pill_is_reinstall(matched, detected)) {
+        (Some(_), true) => t!("installer-reinstall"),
+        (Some(_), false) => t!("installer-update"),
+        (None, _) => t!("installer-install"),
+    };
+    let mut form = Form::new(title, ok)
+        .header(header)
+        .note(t!(
+            "installer-archive-note",
+            name = detected.archive_name().as_str()
+        ))
+        .preview_title(t!("installer-what-rick-will-do"))
+        .field(Field::text(
+            K_NAME,
+            t!("installer-name"),
+            &detected.name,
+            "The name in the launcher",
+        ))
+        .field(Field::text(K_ID, t!("installer-app-id"), &id, "lowercase-with-hyphens").mono())
+        .field(
+            Field::text(
+                K_VERSION,
+                t!("installer-version"),
+                &detected.version,
+                t!("installer-version-hint"),
+            )
+            .required(t!("installer-version-missing")),
+        )
+        .field(Field::segmented(
+            K_SCOPE,
+            t!("installer-install-for"),
+            vec![t!("installer-just-me"), t!("installer-all-users")],
+            0,
+        ))
+        .field(Field::section(None, true))
+        .field(Field::choice(
+            K_KIND,
+            t!("installer-kind"),
+            vec!["GUI application".to_owned(), "Command-line tool".to_owned()],
+            usize::from(detected.kind == Kind::Cli),
+        ));
     let mut exe_options: Vec<String> = detected.candidates.iter().map(|c| c.rel.clone()).collect();
     let exe_selected = match detected.main {
         Some(i) => i,
@@ -688,22 +757,83 @@ pub fn install_form(
             0
         }
     };
-    form = form.field(Field::choice(
-        K_EXE,
-        t!("installer-main-executable"),
-        exe_options,
-        exe_selected,
-    ));
-    // One list: (none), then every PNG and SVG of the archive, best first,
-    // the best preselected only when detection trusts it.
-    let mut icon_options = vec!["(none)".to_owned()];
+    form = form.field(
+        Field::choice(
+            K_EXE,
+            t!("installer-main-executable"),
+            exe_options,
+            exe_selected,
+        )
+        .mono(),
+    );
+    // One list: (none) — or what a missing icon becomes — then every PNG
+    // and SVG of the archive, best first, the best preselected only when
+    // detection trusts it.
+    let none = if detected.icons.is_empty() {
+        t!("installer-no-icon-generated")
+    } else {
+        "(none)".to_owned()
+    };
+    let mut icon_options = vec![none];
     icon_options.extend(detected.icons.iter().map(icon_option));
-    form = form.field(Field::choice(
-        K_ICON,
-        t!("installer-icon"),
-        icon_options,
-        usize::from(detected.icon_trusted && !detected.icons.is_empty()),
-    ));
+    form = form.field(
+        Field::choice(
+            K_ICON,
+            t!("installer-icon"),
+            icon_options,
+            usize::from(detected.icon_trusted && !detected.icons.is_empty()),
+        )
+        .mono(),
+    );
+    if detected.icons.is_empty() {
+        form = form.field(Field::file(
+            K_ICON_FILE,
+            t!("installer-icon-file"),
+            "",
+            vec![("Images", &["svg", "png"][..])],
+        ));
+    }
+    form = form.field(Field::preview_here());
+    // The commands: a toolchain's `bin/` under *Commands to link*, a GUI
+    // application's one command under Advanced options.
+    let main = detected.main_rel().unwrap_or("");
+    let offered = offered_commands(detected, detected.kind, &id, main);
+    let mut command_fields: Vec<Field> = Vec::new();
+    for (i, command) in offered.iter().enumerate() {
+        let Some(key) = CMD_KEYS.get(i) else {
+            break;
+        };
+        let target = if command.target.is_empty() {
+            "<main executable>"
+        } else {
+            &command.target
+        };
+        command_fields.push(Field::check(
+            key,
+            format!("Link command {} → current/{target}", command.name),
+            true,
+        ));
+    }
+    if offered.len() > CMD_KEYS.len() {
+        command_fields.push(Field::check(
+            "cmd_more",
+            format!(
+                "{} more commands in bin/ are not linked; PATH mode puts them all on the PATH",
+                offered.len() - CMD_KEYS.len()
+            ),
+            false,
+        ));
+    }
+    let toolchain = detected.kind == Kind::Cli;
+    if toolchain && !command_fields.is_empty() {
+        form = form.field(
+            Field::disclosure(K_COMMANDS_OPEN, t!("installer-commands-to-link"), "", false)
+                .counted(),
+        );
+        for field in command_fields.drain(..) {
+            form = form.field(field);
+        }
+    }
     let category_index = detected
         .desktop
         .as_ref()
@@ -714,6 +844,12 @@ pub fn install_form(
         })
         .unwrap_or(0);
     form = form
+        .field(Field::disclosure(
+            K_ADVANCED_OPEN,
+            t!("installer-advanced-options"),
+            t!("installer-advanced-summary"),
+            false,
+        ))
         .field(Field::choice(
             K_CATEGORY,
             t!("installer-category-gui"),
@@ -726,32 +862,8 @@ pub fn install_form(
             detected.wm_class().unwrap_or_default(),
             "editable later in Installed Apps",
         ));
-    let main = detected.main_rel().unwrap_or("");
-    let offered = offered_commands(detected, detected.kind, &id, main);
-    for (i, command) in offered.iter().enumerate() {
-        let Some(key) = CMD_KEYS.get(i) else {
-            break;
-        };
-        let target = if command.target.is_empty() {
-            "<main executable>"
-        } else {
-            &command.target
-        };
-        form = form.field(Field::check(
-            key,
-            format!("Link command {} → current/{target}", command.name),
-            true,
-        ));
-    }
-    if offered.len() > CMD_KEYS.len() {
-        form = form.field(Field::check(
-            "cmd_more",
-            format!(
-                "{} more commands in bin/ are not linked; PATH mode puts them all on the PATH",
-                offered.len() - CMD_KEYS.len()
-            ),
-            false,
-        ));
+    for field in command_fields {
+        form = form.field(field);
     }
     form = form
         .field(Field::choice(
@@ -769,22 +881,15 @@ pub fn install_form(
             "",
             "JAVA_HOME, pointing at the version folder",
         ))
-        .field(Field::choice(
-            K_SCOPE,
-            t!("installer-scope"),
-            vec![
-                "User space (recommended)".to_owned(),
-                "System-wide (unavailable: the privileged helper is not part of this version)"
-                    .to_owned(),
-            ],
-            0,
-        ))
-        .field(Field::text(
-            K_SHA,
-            t!("installer-expected-sha-256"),
-            "",
-            "optional; the hash the vendor publishes",
-        ));
+        .field(
+            Field::text(
+                K_SHA,
+                t!("installer-expected-sha-256"),
+                "",
+                "optional; the hash the vendor publishes",
+            )
+            .mono(),
+        );
     if !forced {
         let mut update_options = vec!["New install".to_owned()];
         update_options.extend(
@@ -827,6 +932,34 @@ pub fn install_form(
         )
         .rows
     }))
+}
+
+/// Whether the dialogue is a reinstall: the installed version is the
+/// archive's.
+fn pill_is_reinstall(matched: Option<&Installed>, detected: &Detected) -> bool {
+    matched.is_some_and(|m| !detected.version.is_empty() && m.record.version == detected.version)
+}
+
+/// The header's icon: the trusted PNG icon of the archive when its bytes
+/// were kept, else a monogram of the name on a colour from the app id.
+fn header_icon(detected: &Detected, id: &str) -> HeaderIcon {
+    let png = detected
+        .icons
+        .iter()
+        .filter(|_| detected.icon_trusted)
+        .find(|icon| icon.ext == "png" && icon.data.is_some())
+        .and_then(|icon| icon.data.clone());
+    match png {
+        Some(bytes) => HeaderIcon::Image { bytes, svg: false },
+        None => HeaderIcon::Monogram {
+            letter: detected
+                .name
+                .chars()
+                .find(|c| c.is_alphanumeric())
+                .unwrap_or('?'),
+            seed: id.to_owned(),
+        },
+    }
 }
 
 /// Spawns the install job for `plan`.
@@ -929,6 +1062,132 @@ fn install_through_form(
         Ok(())
     });
     ActionOutcome::Later(later)
+}
+
+/// `rick install <archive>`: *Install as application…* from the command
+/// line. The archive, resolved against the caller's working directory, is
+/// read by the job *Reading archive…* and the install form opens in the
+/// running Rick with every guess editable; the caller's terminal gets
+/// exit status zero at once, and an error (no such file, not an archive,
+/// another platform) with status 1.
+pub struct InstallCommand(Arc<Installer>);
+
+impl CliCommand for InstallCommand {
+    fn name(&self) -> &'static str {
+        INSTALL_COMMAND
+    }
+
+    fn run(&self, ctx: CliCtx, jobs: &JobRunner, _ui: &dyn UiHost) -> Result<CliOutcome, Error> {
+        if !crate::supported() {
+            return Err(err(InstallError::Unsupported));
+        }
+        let [archive] = ctx.args.as_slice() else {
+            return Err(Error::Unsupported("usage: rick install <archive>"));
+        };
+        let path = Path::new(archive);
+        let path = if path.is_absolute() {
+            path.to_path_buf()
+        } else {
+            ctx.cwd.join(path)
+        };
+        let path = std::fs::canonicalize(&path).unwrap_or(path);
+        let name = path
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        if Format::by_name(&name).is_none() {
+            return Err(Error::Unsupported(
+                "the archive must be a tar (gz, xz, bz2, zst) or zip file",
+            ));
+        }
+        if !std::fs::metadata(&path).map_err(Error::from_io)?.is_file() {
+            return Err(Error::Unsupported("the archive must be a file"));
+        }
+        Ok(CliOutcome::Outcome(install_through_form(
+            &self.0, &path, None, jobs,
+        )))
+    }
+}
+
+/// `rick install-rick <folder> <version>`: installs the Rick unpacked in
+/// `folder` — the folder that holds the binary, its libraries, `plugins/`
+/// and `share/` — to the standard location, `~/.local/opt/rick/<version>`
+/// with the `current` link, as one job with progress and a cancel. No
+/// form: there is nothing to guess about Rick. The folder is copied as it
+/// is, never packed first; nothing is written outside the app folder (the
+/// launcher entry and the `rick` command are integration items of their
+/// own); a Rick installed before is updated, its version kept as the
+/// previous one. This is what the integration dialog's *Install to the
+/// standard location* runs (specs/system-integration.md §6.1), and the
+/// caller's terminal gets exit status zero once the job has started.
+pub struct InstallRickCommand(Arc<Installer>);
+
+impl CliCommand for InstallRickCommand {
+    fn name(&self) -> &'static str {
+        INSTALL_RICK_COMMAND
+    }
+
+    fn run(&self, ctx: CliCtx, jobs: &JobRunner, _ui: &dyn UiHost) -> Result<CliOutcome, Error> {
+        if !crate::supported() {
+            return Err(err(InstallError::Unsupported));
+        }
+        let [folder, version] = ctx.args.as_slice() else {
+            return Err(Error::Unsupported(
+                "usage: rick install-rick <folder> <version>",
+            ));
+        };
+        let folder = Path::new(folder);
+        let folder = if folder.is_absolute() {
+            folder.to_path_buf()
+        } else {
+            ctx.cwd.join(folder)
+        };
+        let folder = std::fs::canonicalize(&folder).unwrap_or(folder);
+        if !folder.join(install::RICK_MAIN).is_file() {
+            return Err(Error::Unsupported("the folder must hold the rick binary"));
+        }
+        if !detect::valid_version(version) {
+            return Err(err(InstallError::Invalid(format!(
+                "the version {version:?} cannot name a folder"
+            ))));
+        }
+        let version = version.clone();
+        let installer = Arc::clone(&self.0);
+        let layout = installer.provider.user_layout();
+        let staging = layout.staging(install::RICK_ID, &version);
+        installer.provider.set_busy(&staging, true);
+        let platform = Arc::clone(installer.provider.platform());
+        let name = format!("Install Rick {version}");
+        let handle = jobs.spawn_named(name, move |job| async move {
+            let progress = job.progress.clone();
+            let cancel = job.cancel.clone();
+            let provider = Arc::clone(&installer.provider);
+            let result = ext::blocking(move || {
+                let index = crate::archive::scan(
+                    &folder,
+                    Format::Folder,
+                    &cancel,
+                    &mut |_| {},
+                    &mut |_, _| Ok(()),
+                )?;
+                let scan = provider.rescan();
+                let update_of = scan
+                    .apps
+                    .iter()
+                    .find(|app| {
+                        app.layout.scope == layout.scope && app.record.id == install::RICK_ID
+                    })
+                    .map(|app| app.record.clone());
+                let plan =
+                    install::rick_plan(layout, &folder, &version, Arc::new(index), update_of);
+                install::install(&plan, &scan, &*platform, &progress, &cancel).map(drop)
+            })
+            .await;
+            installer.provider.set_busy(&staging, false);
+            result
+        });
+        Ok(CliOutcome::Outcome(ActionOutcome::Started(handle.id)))
+    }
 }
 
 /// *Install as application…* on a selected archive.

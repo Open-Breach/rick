@@ -72,6 +72,7 @@ impl TerminalExtension {
                 points: Points::ACTION,
                 platforms: Platforms::ALL,
                 previews: &[],
+                commands: &[],
             },
         }
     }

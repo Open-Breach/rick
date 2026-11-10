@@ -85,6 +85,7 @@ impl SvnExtension {
                 points: Points::DECORATOR | Points::ACTION,
                 platforms: Platforms::ALL,
                 previews: &[],
+                commands: &[],
             },
             copies: Arc::new(WorkingCopies::default()),
         }

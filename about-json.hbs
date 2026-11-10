@@ -1,0 +1,20 @@
+{{!-- cargo-about: third-party.json, the component list the About dialog's
+     Third-party licences page shows (specs/about-dialog.md). One entry per
+     crate and licence text: name, version, the SPDX id cargo-about resolved
+     the crate's licence expression to, the crate's authors as the copyright
+     holders (Cargo's metadata has no copyright line; the dialog prefers the
+     "Copyright" line of the text when there is one), the repository, and
+     the full licence text. Every value goes through the `json` helper, so
+     the file is valid JSON whatever the text holds. --}}
+[
+{{#each licenses}}{{#each used_by}}
+  {
+    "name": {{json crate.name}},
+    "version": {{json crate.version}},
+    "license": {{json ../id}},
+    "copyright": {{json crate.authors}},
+    "repository": {{json crate.repository}},
+    "text": {{json ../text}}
+  }{{#unless (and @../last @last)}},{{/unless}}
+{{/each}}{{/each}}
+]

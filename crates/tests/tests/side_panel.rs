@@ -14,7 +14,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use egui_kittest::Harness;
-use egui_kittest::kittest::Queryable as _;
+use egui_kittest::kittest::{By, Queryable as _};
 use ext::{ActionId, Extension};
 use model::{JobState, Section, SelectionChange};
 use platform::{ConfigDir, Fake, Trash as _};
@@ -125,11 +125,11 @@ fn local_location(harness: &Harness<'_, RickUi>) -> PathBuf {
     platform::paths::to_path(&location(harness).path).unwrap_or_else(|e| panic!("{e}"))
 }
 
+/// The workspace tabs of the focused window: *Open in new tab* opens a
+/// workspace (SPEC.md *Workspace tabs*).
 fn tab_count(harness: &Harness<'_, RickUi>) -> usize {
-    let app = harness.state().app();
-    app.model()
-        .pane(app.model().focused)
-        .map_or(0, |p| p.tabs().len())
+    let model = harness.state().app().model();
+    model.workspaces(model.focused_window).len()
 }
 
 fn row_names(harness: &Harness<'_, RickUi>) -> Vec<String> {
@@ -148,13 +148,37 @@ fn pane_rect(harness: &Harness<'_, RickUi>) -> egui::Rect {
 
 /// The side panel rows whose label contains `text`, top to bottom: the
 /// panel sits left of the focused pane.
+/// The side panel widgets named `text`: those with exactly that name, or,
+/// when there are none, those whose name starts with it (a drive card's
+/// name carries its percentage, its eject button the drive's name after
+/// *Eject*), or, failing that, those whose name contains it (a section's
+/// title is also part of its caret's name).
 fn panel_rects(harness: &Harness<'_, RickUi>, text: &str) -> Vec<egui::Rect> {
     let rect = pane_rect(harness);
+    let in_panel = |r: &egui::Rect| r.center().x < rect.left();
     let mut rects: Vec<egui::Rect> = harness
-        .query_all_by_label_contains(text)
+        .query_all_by_label(text)
         .map(|n| n.rect())
-        .filter(|r| r.center().x < rect.left())
+        .filter(in_panel)
         .collect();
+    if rects.is_empty() {
+        rects = harness
+            .query_all(
+                By::new()
+                    .label_contains(text)
+                    .predicate(|n| n.label().is_some_and(|l| l.starts_with(text))),
+            )
+            .map(|n| n.rect())
+            .filter(in_panel)
+            .collect();
+    }
+    if rects.is_empty() {
+        rects = harness
+            .query_all_by_label_contains(text)
+            .map(|n| n.rect())
+            .filter(in_panel)
+            .collect();
+    }
     rects.sort_by(|a, b| a.top().total_cmp(&b.top()));
     rects
 }
@@ -296,6 +320,7 @@ fn volume(name: &str, mount: &Path, kind: platform::VolumeKind) -> platform::Vol
         device: None,
         total: Some(100 << 20),
         free: Some(40 << 20),
+        read_only: false,
     }
 }
 
@@ -648,8 +673,14 @@ fn this_machine_shows_utilisation_the_header_opens_the_overview_and_eject_works(
     assert_eq!(row_names(&harness), ["data", "STICK"]);
 
     // Eject from the overview: the platform ejects and the list follows.
-    harness.get_by_label_contains("Eject").click();
-    harness.step();
+    // (The card's own eject button is item 7's; this is the table's.)
+    let table = pane_rect(&harness);
+    let eject = harness
+        .query_all_by_label_contains("Eject")
+        .map(|n| n.rect())
+        .find(|r| table.contains(r.center()))
+        .map_or_else(|| panic!("no Eject in the table"), |r| r.center());
+    click_at(&mut harness, eject, egui::PointerButton::Primary);
     assert!(step_until(&mut harness, Duration::from_secs(5), |h| {
         h.state().app().model().volumes.len() == 1
     }));
@@ -686,10 +717,14 @@ fn this_machine_shows_utilisation_the_header_opens_the_overview_and_eject_works(
         h.state().app().model().volumes.len() == 2
     }));
     click_row(&mut harness, "STICK", egui::PointerButton::Secondary);
-    // The menu's Eject, not the table's button.
+    // The menu's Eject: not the table's button, not the card's.
     let table = pane_rect(&harness);
     let item = harness
-        .query_all_by_label_contains("Eject")
+        .query_all(
+            By::new()
+                .label_contains("Eject")
+                .predicate(|n| n.label().is_some_and(|l| !l.contains("STICK"))),
+        )
         .map(|n| n.rect())
         .find(|r| !table.contains(r.center()))
         .map_or_else(|| panic!("no Eject in the menu"), |r| r.center());
@@ -757,7 +792,7 @@ fn sections_fold_with_the_chevron_and_the_fold_survives_a_restart() {
         let network = panel_row(&harness, "Network");
         // The chevron sits left of the title.
         let chevron = egui::pos2(network.x - 60.0, network.y);
-        let chevrons: Vec<egui::Rect> = panel_rects(&harness, icons::TREE_OPEN);
+        let chevrons: Vec<egui::Rect> = panel_rects(&harness, "Fold ");
         let on_row = chevrons
             .iter()
             .find(|r| (r.center().y - network.y).abs() < 4.0)
@@ -870,9 +905,7 @@ fn the_trash_view_lists_restores_undoes_and_empties() {
     let rect = pane_rect(&harness);
     let empty_space = egui::pos2(rect.center().x, rect.bottom() - 80.0);
     click_at(&mut harness, empty_space, egui::PointerButton::Secondary);
-    harness.get_by_label_contains("Trash ⏵").hover();
-    harness.step();
-    harness.step();
+    // The Trash group has one entry in the view, so it is that entry.
     harness.get_by_label("Empty trash").click();
     harness.step();
     harness.step();
@@ -896,7 +929,7 @@ fn the_trash_view_lists_restores_undoes_and_empties() {
     click_at(&mut harness, empty_space, egui::PointerButton::Secondary);
     harness.step();
     harness.get_by_label_contains("New folder");
-    assert!(harness.query_by_label_contains("Trash ⏵").is_none());
+    assert!(harness.query_by_label("Empty trash").is_none());
     harness.key_press(egui::Key::Escape);
     harness.step();
 }
@@ -1031,7 +1064,7 @@ fn copies_on_one_volume_run_in_turn_and_on_disjoint_volumes_together() {
         "{:?}",
         states(&harness)
     );
-    harness.get_by_label_contains("Waiting for Copy two.bin to dst");
+    harness.get_by_label_contains("Queued behind Copy two.bin to dst");
     assert!(
         !s3.paths().contains(&"/other/one.bin".to_owned()),
         "not yet"
@@ -1159,17 +1192,34 @@ fn the_operations_area_shows_a_bar_per_row_and_stays_responsive_with_many_jobs()
         h.state().app().model().jobs.len() == 8
     }));
     // Frames while eight jobs report: each well under a tenth of a second,
-    // even in a debug build.
-    let mut worst = Duration::ZERO;
-    for _ in 0..20 {
-        let started = Instant::now();
-        harness.step();
-        worst = worst.max(started.elapsed());
-    }
-    assert!(worst < Duration::from_millis(100), "worst frame {worst:?}");
+    // even in a debug build. The shared macOS and Windows runners swing too
+    // much for the worst of twenty (344 ms on macOS in CI run 42698799305,
+    // the median far under), so there the median of the twenty is held to
+    // the budget, as BENCHMARKS.md does for the timed tests.
+    let mut frames: Vec<Duration> = (0..20)
+        .map(|_| {
+            let started = Instant::now();
+            harness.step();
+            started.elapsed()
+        })
+        .collect();
+    frames.sort_unstable();
+    let (worst, median) = (frames[19], frames[10]);
+    let held = if std::env::consts::OS == "linux" {
+        worst
+    } else {
+        median
+    };
+    assert!(
+        held < Duration::from_millis(100),
+        "worst frame {worst:?}, median {median:?}"
+    );
     // The header counts them and every job has a row with a bar of
     // `done of total`.
-    harness.get_by_label_contains("8 jobs running");
+    assert!(
+        !panel_rects(&harness, "8 running").is_empty(),
+        "the drawer's summary"
+    );
     assert!(
         harness.query_all_by_label_contains("of 2000").count() >= 5,
         "the rows show done of total (at least the capped five are visible)"
@@ -1293,9 +1343,10 @@ fn mount_offered(harness: &mut Harness<'_, RickUi>, name: &str) -> bool {
     offered
 }
 
-/// The side panel rows whose label contains `text` but not the image
-/// file's name: the volume's row, not the "Mount disc.iso" job row of
-/// the operations area nor the file in the list.
+/// The side panel rows whose label starts with `text` but is not the
+/// image file's name: the volume's card, not the "Mount disc.iso" job row
+/// of the operations area, the file in the list nor the card's own
+/// *Eject disc* button.
 fn volume_rows(harness: &Harness<'_, RickUi>, text: &str) -> Vec<egui::Rect> {
     let rect = pane_rect(harness);
     let file: Vec<egui::Rect> = harness
@@ -1303,7 +1354,11 @@ fn volume_rows(harness: &Harness<'_, RickUi>, text: &str) -> Vec<egui::Rect> {
         .map(|n| n.rect())
         .collect();
     harness
-        .query_all_by_label_contains(text)
+        .query_all(
+            By::new()
+                .label_contains(text)
+                .predicate(|n| n.label().is_some_and(|l| l.starts_with(text))),
+        )
         .map(|n| n.rect())
         .filter(|r| r.center().x < rect.left() && !file.contains(r))
         .collect()
@@ -1383,7 +1438,14 @@ fn mount_shows_on_the_images_this_os_mounts_and_a_mounted_iso_is_a_volume_until_
     );
     harness.step();
     assert!(harness.query_by_label_contains("Unmount").is_none());
-    harness.get_by_label_contains("Eject").click();
+    // The menu's Eject, not the card's own button (issue 79 item 7).
+    harness
+        .get(
+            By::new()
+                .label_contains("Eject")
+                .predicate(|n| n.label().is_some_and(|l| !l.contains("disc"))),
+        )
+        .click();
     harness.step();
     assert!(
         step_until(&mut harness, Duration::from_secs(6), |h| {
@@ -1392,4 +1454,93 @@ fn mount_shows_on_the_images_this_os_mounts_and_a_mounted_iso_is_a_volume_until_
         "the volume goes with Eject"
     );
     assert_eq!(fake.ejected(), [volumes[0].mount_point.clone()]);
+}
+
+/// Issue 79 item 7: a removable drive's card carries an eject button at
+/// its right edge, vertically centred and always visible, named after the
+/// drive; a fixed drive's card has none; a click ejects the drive.
+#[test]
+fn a_removable_drives_card_has_an_eject_button_at_its_right_edge() {
+    let dir = tree();
+    let fake = Arc::new(Fake::new().unwrap_or_else(|e| panic!("{e}")));
+    let stick = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+    fake.add_volume(volume("data", dir.path(), platform::VolumeKind::Fixed));
+    fake.add_volume(volume(
+        "STICK",
+        stick.path(),
+        platform::VolumeKind::Removable,
+    ));
+    let mut harness = harness_with(dir.path(), &fake.config_dir(), fake.clone(), Vec::new());
+    assert!(step_until(&mut harness, Duration::from_secs(5), |h| {
+        h.state().app().model().volumes.len() == 2
+    }));
+    assert!(
+        harness.query_by_label("Eject data").is_none(),
+        "a fixed drive has no eject button"
+    );
+    let button = harness.get_by_label("Eject STICK").rect();
+    let card = panel_row(&harness, "STICK");
+    let card_rect = panel_rects(&harness, "STICK")[0];
+    assert!(
+        (button.center().y - card.y).abs() < 1.0,
+        "vertically centred: {button:?} in {card_rect:?}"
+    );
+    // At the right edge: inside the card, with only the card's 6 px inset
+    // and its 12 px padding after it.
+    assert!(
+        card_rect.contains_rect(button) && card_rect.right() - button.right() < 20.0,
+        "at the right edge: {button:?} in {card_rect:?}"
+    );
+    harness.get_by_label("Eject STICK").click();
+    harness.step();
+    assert!(step_until(&mut harness, Duration::from_secs(5), |_| {
+        fake.ejected() == [stick.path().to_path_buf()]
+    }));
+}
+
+/// Issue 79 item 8: a read-only drive's card shows no percentage, its bar
+/// is named *Read-only* for the tooltip and the screen reader, and the
+/// card itself says so; a writable drive keeps its percentage.
+#[test]
+fn a_read_only_drives_card_has_no_percentage_and_its_bar_says_read_only() {
+    let dir = tree();
+    let fake = Arc::new(Fake::new().unwrap_or_else(|e| panic!("{e}")));
+    let live = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+    fake.add_volume(volume("data", dir.path(), platform::VolumeKind::Fixed));
+    let mut iso = volume("LIVE", live.path(), platform::VolumeKind::Removable);
+    iso.read_only = true;
+    iso.total = Some(4 << 30);
+    iso.free = Some(1 << 30);
+    fake.add_volume(iso);
+    let mut harness = harness_with(dir.path(), &fake.config_dir(), fake.clone(), Vec::new());
+    assert!(step_until(&mut harness, Duration::from_secs(5), |h| {
+        h.state().app().model().volumes.len() == 2
+    }));
+    // The writable drive's card carries its percentage, the read-only
+    // drive's the word instead, and nothing says 75 %.
+    harness.get_by_label("data · 60%");
+    harness.get_by_label("LIVE · Read-only");
+    assert!(harness.query_by_label_contains("75%").is_none());
+    // The bar is a widget named Read-only inside the card, and hovering it
+    // shows the tooltip.
+    let card = panel_rects(&harness, "LIVE")[0];
+    let bar = harness.get_by_label("Read-only").rect();
+    assert!(card.contains_rect(bar), "bar {bar:?} in card {card:?}");
+    // One move, then the pointer rests: egui shows the tooltip after its
+    // delay.
+    harness.hover_at(bar.center());
+    let started = Instant::now();
+    loop {
+        harness.step();
+        if harness.query_all_by_label("Read-only").count() >= 2 {
+            break;
+        }
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "hovering the bar never showed the tooltip"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    // The eject button is there too: the drive is removable.
+    harness.get_by_label("Eject LIVE");
 }

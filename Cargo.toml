@@ -3,7 +3,7 @@ resolver = "3"
 members = ["crates/*"]
 
 [workspace.package]
-version = "0.2.0"
+version = "0.3.0-dev"
 edition = "2024"
 license = "Apache-2.0"
 repository = "https://github.com/Open-Breach/rick"
@@ -26,6 +26,7 @@ ext-preview-code = { path = "crates/ext-preview-code" }
 ext-preview-image = { path = "crates/ext-preview-image" }
 ext-preview-pdf = { path = "crates/ext-preview-pdf" }
 ext-preview-hex = { path = "crates/ext-preview-hex" }
+ext-preview-icons = { path = "crates/ext-preview-icons" }
 ext-git = { path = "crates/ext-git" }
 ext-vfs-trash = { path = "crates/ext-vfs-trash" }
 ext-vfs-archive = { path = "crates/ext-vfs-archive" }
@@ -57,6 +58,18 @@ plugin-panic = { path = "crates/plugin-panic" }
 gix = { version = "0.90", default-features = false, features = ["status", "revision", "parallel", "sha1"] }
 encoding_rs = "0.8"
 image = { version = "0.25", default-features = false, features = ["bmp", "gif", "jpeg", "png", "tiff", "webp"] }
+# Vector images (issue 83): `resvg` rasterises SVG and SVGZ in pure Rust,
+# text through usvg's font database over the system fonts, embedded raster
+# images through the pure-Rust codecs. No gzip of its own: the image
+# previewer decompresses SVGZ itself, so the source is there for the text
+# layer.
+resvg = { version = "0.49", default-features = false, features = ["text", "system-fonts", "memmap-fonts", "raster-images"] }
+# Icon containers (issue 84, `ext-preview-icons`): ICO and CUR with their
+# BMP and PNG entries, ICNS with its PNG and run-length encoded types and
+# JPEG 2000 left out on purpose (SPEC.md, *Icon containers*: such an entry
+# is listed as not decodable); XPM is parsed in the plugin.
+ico = "0.6"
+icns = { version = "0.5", default-features = false, features = ["pngio"] }
 jpeg-decoder = { version = "0.3", default-features = false }
 kamadak-exif = "0.6"
 pdfium-render = { version = "0.9", default-features = false, features = ["pdfium_latest", "thread_safe"] }
@@ -120,6 +133,9 @@ similar = "2"
 portable-pty = "0.9"
 vte = "0.15"
 anyhow = "1"
+# The command line of the binary (specs/system-integration.md §4): the core
+# subcommands by derive, the plugins' added from their manifests.
+clap = { version = "4", features = ["derive"] }
 # The platform keychain (SPEC.md "Package layout": `Secrets`, 0.2).
 keyring = "4"
 # The provider plugins of issue 21 and the SSH plugin of issue 34. SSH
@@ -156,6 +172,8 @@ url = "2"
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 eframe = "0.36"
 egui = "0.36"
+# The font parser egui renders with, for checking a system font file.
+ab_glyph = "0.2"
 egui_dock = "0.21"
 egui_extras = { version = "0.36", default-features = false }
 egui_kittest = { version = "0.36", features = ["eframe"] }
@@ -173,6 +191,11 @@ objc2-app-kit = { version = "0.3", default-features = false }
 raw-window-handle = "0.6"
 rayon = "1"
 rfd = { version = "0.16", default-features = false }
+# The session bus, for the `org.freedesktop.FileManager1` service the
+# running instance owns on Linux (specs/system-integration.md §7.1): pure
+# Rust, on the one tokio runtime, and the version `rfd`'s portal backend
+# and the keychain already bring, so the lock file gains nothing.
+zbus = { version = "5", default-features = false, features = ["tokio"] }
 rustix = { version = "1", default-features = false }
 semver = "1"
 serde = { version = "1", features = ["derive"] }
@@ -189,6 +212,9 @@ tracing = "0.1"
 # system backend without dlopen, x11rb's Rust connection.
 wayland-client = { version = "0.31", features = ["system"] }
 wayland-backend = { version = "0.3", features = ["client_system"] }
+# `xdg_activation_v1`, which raises the running instance's window with the
+# token a second launch received from its launcher (issue 103).
+wayland-protocols = { version = "0.32", default-features = false, features = ["client", "staging"] }
 x11rb = "0.13"
 windows = "0.62"
 # Named directly for the `implement` macro, which spells out its paths.

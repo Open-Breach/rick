@@ -59,6 +59,16 @@ pub const VIEW_DETAILS: &str = ph::LIST_DASHES;
 pub const VIEW_TREE: &str = ph::TREE_STRUCTURE;
 /// The Icons view.
 pub const VIEW_ICONS: &str = ph::SQUARES_FOUR;
+/// The view options button.
+pub const VIEW_OPTIONS: &str = ph::SLIDERS_HORIZONTAL;
+/// A pane's grab handle.
+pub const HANDLE: &str = ph::DOTS_SIX_VERTICAL;
+/// The three icon sizes of the view options menu.
+pub const ICONS_SMALL: &str = ph::DOTS_NINE;
+/// See [`ICONS_SMALL`].
+pub const ICONS_MEDIUM: &str = ph::SQUARES_FOUR;
+/// See [`ICONS_SMALL`].
+pub const ICONS_LARGE: &str = ph::SQUARE;
 /// Home.
 pub const HOME: &str = ph::HOUSE;
 /// Pinned.
@@ -73,6 +83,8 @@ pub const NETWORK: &str = ph::NETWORK;
 pub const TRASH: &str = ph::TRASH;
 /// A folder.
 pub const FOLDER: &str = ph::FOLDER;
+/// A plain file: the footer's file count, the portal burst's flyers.
+pub const FILE: &str = ph::FILE;
 /// A location on a provider that is not the local disk.
 pub const PROVIDER: &str = ph::HARD_DRIVES;
 /// An archive browsed as a location.
@@ -87,14 +99,29 @@ pub const FAILED: &str = ph::WARNING;
 pub const TREE_CLOSED: &str = ph::CARET_RIGHT;
 /// An expanded tree node.
 pub const TREE_OPEN: &str = ph::CARET_DOWN;
+/// The operations drawer's caret while it is collapsed.
+pub const CARET_UP: &str = ph::CARET_UP;
+/// The context menu's entries (SPEC.md *Context menu*).
+pub const CUT: &str = ph::SCISSORS;
+pub const PASTE: &str = ph::CLIPBOARD;
+pub const RENAME: &str = ph::PENCIL_SIMPLE;
+pub const HASH: &str = ph::HASH;
+pub const INSTALL: &str = ph::DOWNLOAD_SIMPLE;
+pub const DUPLICATE: &str = ph::COPY_SIMPLE;
+pub const SELECT_ALL: &str = ph::SELECTION_ALL;
+pub const NEW_FILE: &str = ph::FILE_PLUS;
+pub const NEW_FOLDER: &str = ph::FOLDER_PLUS;
+pub const REVEAL: &str = ph::ARROW_SQUARE_OUT;
+pub const MOUNT: &str = ph::HARD_DRIVES;
+pub const OPEN_WITH: &str = ph::APP_WINDOW;
 /// An open folder, for the expanded folder tree node.
 pub const FOLDER_OPEN: &str = ph::FOLDER_OPEN;
 /// Pause a job.
 pub const PAUSE: &str = ph::PAUSE;
 /// Resume a job.
 pub const PLAY: &str = ph::PLAY;
-/// Search in subdirectories.
-pub const SUBTREE: &str = ph::FOLDERS;
+/// The footer's include-subfolders toggle (SPEC.md *Footer*).
+pub const SUBTREE: &str = ph::TREE_STRUCTURE;
 /// Removable media.
 pub const USB: &str = ph::USB;
 /// An internal disk.
@@ -131,6 +158,16 @@ pub const CLOUD: &str = ph::CLOUD;
 pub const EJECT: &str = ph::EJECT;
 /// A drop the panel refuses.
 pub const REFUSED: &str = ph::PROHIBIT;
+/// The General page of the settings.
+pub const GEAR: &str = ph::GEAR;
+/// A plugin without an icon of its own, in the settings' category list.
+pub const PLUGIN: &str = ph::PUZZLE_PIECE;
+/// A PDF plugin.
+pub const FILE_PDF: &str = ph::FILE_PDF;
+/// An office-documents plugin.
+pub const FILE_DOC: &str = ph::FILE_DOC;
+/// A 3D-models plugin.
+pub const CUBE: &str = ph::CUBE;
 /// Edit a place.
 pub const EDIT: &str = ph::PENCIL_SIMPLE;
 /// Add a connection or an account.
@@ -150,6 +187,12 @@ pub const FIT: &str = ph::ARROWS_IN;
 pub const ACTUAL_SIZE: &str = ph::FRAME_CORNERS;
 /// The File info badge.
 pub const INFO: &str = ph::INFO;
+/// The licence row of the About dialog.
+pub const DOCUMENT: &str = ph::FILE_TEXT;
+/// The source-code row of the About dialog.
+pub const CODE: &str = ph::CODE;
+/// The app launcher entry among the integration items.
+pub const DESKTOP: &str = ph::DESKTOP;
 /// The EXIF badge.
 pub const CAMERA: &str = ph::CAMERA;
 /// The Git badge.
@@ -259,21 +302,8 @@ pub fn for_decorator(id: &str) -> &'static str {
     }
 }
 
-/// Registers the Phosphor font with egui's defaults; call once per context.
-pub fn install(ctx: &egui::Context) {
-    let mut fonts = egui::FontDefinitions::default();
-    egui_phosphor::add_to_fonts(&mut fonts, egui_phosphor::Variant::Regular);
-    // The fill weight marks an active toggle; it is its own family so a
-    // glyph can ask for it.
-    egui_phosphor::add_font_bytes_as_family(
-        &mut fonts,
-        FILL_FAMILY,
-        egui_phosphor::Variant::Fill.font_bytes(),
-    );
-    ctx.set_fonts(fonts);
-}
-
-/// The font family of the fill weight, for active toggles.
+/// The font family of the Phosphor fill weight; `fonts::install` registers
+/// it beside the regular weight.
 pub const FILL_FAMILY: &str = "phosphor-fill";
 
 /// The file-type icon of an entry: by kind, then by extension.
@@ -370,6 +400,7 @@ mod tests {
         FIT,
         ACTUAL_SIZE,
         INFO,
+        DESKTOP,
         CAMERA,
         BRANCH,
         FILM,
@@ -383,6 +414,19 @@ mod tests {
         FAILED,
         TREE_CLOSED,
         TREE_OPEN,
+        CARET_UP,
+        CUT,
+        PASTE,
+        RENAME,
+        HASH,
+        INSTALL,
+        DUPLICATE,
+        SELECT_ALL,
+        NEW_FILE,
+        NEW_FOLDER,
+        REVEAL,
+        MOUNT,
+        OPEN_WITH,
         FOLDER_OPEN,
         PAUSE,
         PLAY,
@@ -405,6 +449,11 @@ mod tests {
         EDIT,
         ADD,
         WAITING,
+        GEAR,
+        PLUGIN,
+        FILE_PDF,
+        FILE_DOC,
+        CUBE,
     ];
 
     #[test]
@@ -425,7 +474,7 @@ mod tests {
         let mut harness = egui_kittest::Harness::new_ui(|ui| {
             ui.label(&text);
         });
-        install(&harness.ctx);
+        crate::fonts::install(&harness.ctx, &platform::Fonts::default());
         harness.run();
     }
 

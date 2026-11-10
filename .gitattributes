@@ -1,0 +1,4 @@
+# Line endings: LF everywhere, on every platform. The Windows runner
+# otherwise checks the text fixtures out as CRLF (git's autocrlf) and the
+# tests that compare their byte sizes and contents fail (tier 2).
+* text=auto eol=lf

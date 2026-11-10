@@ -7,8 +7,8 @@ use std::time::{Duration, Instant};
 use ext::platform::{ConfigDir, Fake};
 use ext::runtime::JobEvent;
 use ext::{
-    ActionCtx, ActionOutcome, Availability, CellValue, DecorateCtx, Depth, Form, Invocation, Level,
-    ListOptions, PaneId, Provider, Registry, UiHost, Value, Values,
+    ActionCtx, ActionOutcome, Availability, CellValue, CliCtx, CliOutcome, DecorateCtx, Depth,
+    Form, Invocation, Level, ListOptions, PaneId, Provider, Registry, UiHost, Value, Values,
 };
 use futures::StreamExt;
 use runtime::JobRunner;
@@ -16,8 +16,8 @@ use types::{Attrs, CancelToken, Entry, EntryId, EntryKind, Error, Location, Prov
 
 use super::*;
 use crate::actions::{
-    APPS, EDIT_LAUNCHER, FORGET, INSTALL, LAUNCH, OPEN_FOLDER, REMOVE_STAGING, REPAIR, REVERT,
-    UNINSTALL, UPDATE,
+    APPS, EDIT_LAUNCHER, FORGET, INSTALL, INSTALL_COMMAND, INSTALL_RICK_COMMAND, LAUNCH,
+    OPEN_FOLDER, REMOVE_STAGING, REPAIR, REVERT, UNINSTALL, UPDATE,
 };
 use crate::archive::{Format, ItemKind};
 use crate::detect::{compare_versions, slug, split_version, strip_version};
@@ -450,6 +450,68 @@ fn the_extension_registers_the_view_the_columns_and_the_actions() {
     assert!(matches!(outcome, ActionOutcome::Navigate(to) if to == location()));
 }
 
+/// `rick install <archive>` (specs/system-integration.md §4): the
+/// manifest declares the command, the registry holds it, and it opens the
+/// install form on the archive named relative to the caller's directory;
+/// wrong arguments and a file that is no archive are the caller's errors.
+#[test]
+fn the_install_command_opens_the_form_on_an_archive_from_the_command_line() {
+    let h = harness();
+    let manifest = InstallerExtension::new().manifest().clone();
+    assert_eq!(manifest.commands.len(), 2);
+    assert_eq!(manifest.commands[0].name, INSTALL_COMMAND);
+    assert_eq!(manifest.commands[1].name, INSTALL_RICK_COMMAND);
+    let command = h
+        .registry
+        .commands()
+        .iter()
+        .find(|c| c.name() == INSTALL_COMMAND)
+        .cloned()
+        .unwrap_or_else(|| panic!("the install command is registered"));
+    let cwd = h.dir.path().to_path_buf();
+    let ctx = |args: &[&str]| CliCtx {
+        args: args.iter().map(|a| (*a).to_owned()).collect(),
+        cwd: cwd.clone(),
+        pane: PaneId(1),
+        location: Location::new(ProviderId::LOCAL, ext::platform::paths::from_path(&cwd)),
+    };
+    let name = Fixture::GuiWithDesktop.file_name();
+    if !supported() {
+        let refused = command.run(ctx(&[name]), &h.jobs, &h.ui);
+        assert!(refused.is_err(), "Linux only: {refused:?}");
+        return;
+    }
+    assert!(matches!(
+        command.run(ctx(&[]), &h.jobs, &h.ui),
+        Err(Error::Unsupported(_))
+    ));
+    assert!(matches!(
+        command.run(ctx(&["nowhere.tar.gz"]), &h.jobs, &h.ui),
+        Err(Error::NotFound)
+    ));
+    fs::write(h.dir.path().join("notes.txt"), b"x").unwrap_or_else(|e| panic!("{e}"));
+    assert!(matches!(
+        command.run(ctx(&["notes.txt"]), &h.jobs, &h.ui),
+        Err(Error::Unsupported(_))
+    ));
+    // The archive by its name relative to the caller's directory: the
+    // detection job reads it and the form arrives for the application to
+    // show, as *Install as application…* would.
+    let outcome = command
+        .run(ctx(&[name]), &h.jobs, &h.ui)
+        .unwrap_or_else(|e| panic!("{e}"));
+    let CliOutcome::Outcome(ActionOutcome::Later(later)) = outcome else {
+        panic!("the form comes later: {outcome:?}");
+    };
+    let (form, _then) =
+        runtime::block_on(later.wait()).unwrap_or_else(|| panic!("the detection fills the form"));
+    assert!(
+        !form.title.is_empty() && !form.fields.is_empty(),
+        "{form:?}"
+    );
+    h.settle();
+}
+
 #[test]
 fn the_elf_reader_reads_the_tiny_programs() {
     let program = tiny_elf(this_machine(), &["libgtk-3.so.0", "libc.so.6"]);
@@ -790,7 +852,7 @@ fn the_icon_field_is_one_list_of_the_archives_icons() {
         matches!(
             field(&form, "icon"),
             ext::FieldKind::Choice { options, selected: 1 }
-                if *options == ["(none)", "bin/app.svg (scalable)", "bin/app.png (128×128)"]
+                if *options == ["(none)", "bin/app.svg · scalable", "bin/app.png · 128×128"]
         ),
         "{:?}",
         field(&form, "icon")
@@ -834,7 +896,7 @@ fn the_icon_field_is_one_list_of_the_archives_icons() {
         matches!(
             field(&form, "icon"),
             ext::FieldKind::Choice { options, selected: 0 }
-                if *options == ["(none)", "docs/shot.png (32×32)"]
+                if *options == ["(none)", "docs/shot.png · 32×32"]
         ),
         "{:?}",
         field(&form, "icon")
@@ -1688,6 +1750,319 @@ fn the_system_scope_is_unavailable_in_this_version() {
         .find(|f| f.key == "scope")
         .unwrap_or_else(|| panic!("no scope field"));
     assert!(
-        matches!(&scope.kind, ext::FieldKind::Choice { options, selected: 0 } if options[1].contains("unavailable"))
+        matches!(&scope.kind, ext::FieldKind::Segmented { options, selected: 0 } if options[1] == "All users")
     );
+}
+
+/// With Rick itself among the installed apps, `path.sh` and the fish
+/// drop-in define the `rick` function over its `current` binary
+/// (specs/system-integration.md §4); without it and without a PATH-mode
+/// app the files go.
+#[test]
+fn the_path_file_defines_the_rick_function_when_rick_is_installed() {
+    let h = harness();
+    if !supported() {
+        return;
+    }
+    let layout = h.layout();
+    fs::create_dir_all(h.home().join(".config/fish")).unwrap_or_else(|e| panic!("{e}"));
+    h.install(Fixture::GuiWithDesktop, Vec::new());
+    let mut record = h.record("fixture-gui");
+    record.id = "rick".to_owned();
+    record.main_executable = "rick".to_owned();
+    install::write_path_file(&layout, &[record.clone()]).unwrap_or_else(|e| panic!("{e}"));
+    let sh = fs::read_to_string(layout.path_file()).unwrap_or_else(|e| panic!("{e}"));
+    let binary = layout.current("rick").join("rick");
+    assert!(
+        sh.contains(&format!("rick() {{ \"{}\" \"$@\"; }}", binary.display())),
+        "{sh}"
+    );
+    assert!(!sh.contains("export PATH"), "no PATH-mode app: {sh}");
+    let fish = fs::read_to_string(h.home().join(".config/fish/conf.d/rick.fish"))
+        .unwrap_or_else(|e| panic!("{e}"));
+    assert!(
+        fish.contains("function rick") && fish.contains(&format!("\"{}\" $argv", binary.display())),
+        "{fish}"
+    );
+    let profile = fs::read_to_string(h.home().join(".profile")).unwrap_or_else(|e| panic!("{e}"));
+    assert!(profile.contains(&layout.path_file().display().to_string()));
+    // Rick uninstalled (the record gone), nothing else on the PATH: the
+    // files go.
+    install::write_path_file(&layout, &[]).unwrap_or_else(|e| panic!("{e}"));
+    assert!(!layout.path_file().exists());
+    assert!(!h.home().join(".config/fish/conf.d/rick.fish").exists());
+}
+
+/// The `rick` command of the integration items keeps its shell function
+/// in a marked block of `path.sh` and the fish drop-in
+/// (specs/system-integration.md §7.1): regenerating the files from the
+/// install records carries the block over, in place of the records' own
+/// function, and a file the records no longer need stays for the block.
+#[test]
+fn the_path_file_keeps_the_rick_commands_block() {
+    let h = harness();
+    if !supported() {
+        return;
+    }
+    let layout = h.layout();
+    let (begin, end) = ext::platform::integration::COMMAND_BLOCK;
+    let block = format!("{begin}\nrick() {{ \"/elsewhere/rick\" \"$@\"; }}\n{end}\n");
+    fs::create_dir_all(h.home().join(".config/fish/conf.d")).unwrap_or_else(|e| panic!("{e}"));
+    let fish_file = h.home().join(".config/fish/conf.d/rick.fish");
+    let fish_block = format!("{begin}\nfunction rick\n    \"/elsewhere/rick\" $argv\nend\n{end}\n");
+    let path_file = layout.path_file();
+    if let Some(parent) = path_file.parent() {
+        fs::create_dir_all(parent).unwrap_or_else(|e| panic!("{e}"));
+    }
+    fs::write(layout.path_file(), format!("# old\n{block}")).unwrap_or_else(|e| panic!("{e}"));
+    fs::write(&fish_file, &fish_block).unwrap_or_else(|e| panic!("{e}"));
+
+    // Rick among the records: the block stands in for the records' function.
+    h.install(Fixture::GuiWithDesktop, Vec::new());
+    let mut record = h.record("fixture-gui");
+    record.id = "rick".to_owned();
+    record.main_executable = "rick".to_owned();
+    install::write_path_file(&layout, &[record]).unwrap_or_else(|e| panic!("{e}"));
+    let sh = fs::read_to_string(layout.path_file()).unwrap_or_else(|e| panic!("{e}"));
+    assert!(sh.ends_with(&block), "{sh}");
+    assert_eq!(sh.matches("rick() {").count(), 1, "one definition: {sh}");
+    let fish = fs::read_to_string(&fish_file).unwrap_or_else(|e| panic!("{e}"));
+    assert!(fish.ends_with(&fish_block), "{fish}");
+    assert_eq!(fish.matches("function rick").count(), 1, "{fish}");
+
+    // No record needs the files any more: they stay, for the block.
+    install::write_path_file(&layout, &[]).unwrap_or_else(|e| panic!("{e}"));
+    let sh = fs::read_to_string(layout.path_file()).unwrap_or_else(|e| panic!("{e}"));
+    assert!(
+        sh.starts_with("# Generated by Rick") && sh.ends_with(&block),
+        "{sh}"
+    );
+    assert!(fs::read_to_string(&fish_file).is_ok_and(|fish| fish.ends_with(&fish_block)));
+}
+
+/// A Rick unpacked into `folder`, as the release archive unpacks: the
+/// binary, a library, a plugin and `share/`, with one link that stays
+/// inside the folder and one that leaves it.
+fn unpacked_rick(folder: &Path) {
+    fs::create_dir_all(folder.join("plugins/git")).unwrap_or_else(|e| panic!("{e}"));
+    fs::create_dir_all(folder.join("share/applications")).unwrap_or_else(|e| panic!("{e}"));
+    let write = |rel: &str, bytes: &[u8]| {
+        fs::write(folder.join(rel), bytes).unwrap_or_else(|e| panic!("{rel}: {e}"));
+    };
+    write("rick", &tiny_elf(this_machine(), &[]));
+    write("librick_kernel.so", b"kernel");
+    write("plugins/git/plugin.toml", b"id = \"git\"\n");
+    write("plugins/git/libext_git.so", b"plugin");
+    write(
+        "share/applications/rick.desktop",
+        b"[Desktop Entry]\nName=Rick\nExec=rick %U\n",
+    );
+    ext::platform::fs::symlink(Path::new("rick"), &folder.join("rick-again"))
+        .unwrap_or_else(|e| panic!("{e}"));
+    ext::platform::fs::symlink(Path::new("/etc/hostname"), &folder.join("outside"))
+        .unwrap_or_else(|e| panic!("{e}"));
+}
+
+/// An unpacked folder reads as one more archive format: every file below
+/// it an entry relative to it, each folder before what it holds, nothing
+/// hoisted, the links as links.
+#[test]
+fn a_folder_reads_as_an_archive_of_its_files() {
+    let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+    let folder = dir.path().join("rick-0.3.0-linux-x64");
+    unpacked_rick(&folder);
+    let index = archive::index(&folder, Format::Folder).unwrap_or_else(|e| panic!("{e}"));
+    assert_eq!(index.top_level, None, "the folder is taken as it is");
+    let paths: Vec<&str> = index.items.iter().map(|i| i.path.as_str()).collect();
+    assert_eq!(
+        paths,
+        [
+            "librick_kernel.so",
+            "outside",
+            "plugins",
+            "rick",
+            "rick-again",
+            "share",
+            "plugins/git",
+            "plugins/git/libext_git.so",
+            "plugins/git/plugin.toml",
+            "share/applications",
+            "share/applications/rick.desktop",
+        ]
+    );
+    assert!(index.has_file("rick") && index.has_file("plugins/git/plugin.toml"));
+    assert_eq!(index.at("plugins").map(|i| i.kind), Some(ItemKind::Dir));
+    let link = index.at("rick-again").unwrap_or_else(|| panic!("the link"));
+    assert_eq!(link.kind, ItemKind::Symlink);
+    assert_eq!(link.link.as_deref(), Some("rick"));
+    // The files' bytes; links and folders weigh nothing.
+    let files: u64 = index
+        .items
+        .iter()
+        .filter(|item| item.kind == ItemKind::File)
+        .map(|item| {
+            fs::metadata(folder.join(&item.path))
+                .map(|meta| meta.len())
+                .unwrap_or_default()
+        })
+        .sum();
+    assert_eq!(index.total_size, files);
+    assert!(files > tiny_elf(this_machine(), &[]).len() as u64);
+    assert_eq!(Format::Folder.name(), "folder");
+    assert_eq!(Format::by_name("rick-0.3.0-linux-x64"), None);
+}
+
+/// The registered `install-rick` command and what a caller in `cwd`
+/// hands it.
+fn install_rick_command(h: &Harness) -> (Arc<dyn ext::CliCommand>, impl Fn(&[&str]) -> CliCtx) {
+    let command = h
+        .registry
+        .commands()
+        .iter()
+        .find(|c| c.name() == INSTALL_RICK_COMMAND)
+        .cloned()
+        .unwrap_or_else(|| panic!("the install-rick command is registered"));
+    let cwd = h.dir.path().to_path_buf();
+    let ctx = move |args: &[&str]| CliCtx {
+        args: args.iter().map(|a| (*a).to_owned()).collect(),
+        cwd: cwd.clone(),
+        pane: PaneId(1),
+        location: Location::new(ProviderId::LOCAL, ext::platform::paths::from_path(&cwd)),
+    };
+    (command, ctx)
+}
+
+/// Runs `rick install-rick <args>` and waits for its one job to succeed.
+fn install_rick(h: &Harness, args: &[&str]) {
+    let (command, ctx) = install_rick_command(h);
+    let outcome = command
+        .run(ctx(args), &h.jobs, &h.ui)
+        .unwrap_or_else(|e| panic!("{e}"));
+    assert!(
+        matches!(outcome, CliOutcome::Outcome(ActionOutcome::Started(_))),
+        "one job, no form: {outcome:?}"
+    );
+    h.settle();
+    let mut events = h.events.lock().unwrap_or_else(PoisonError::into_inner);
+    while let Ok(event) = events.try_recv() {
+        if let JobEvent::Finished { result, .. } = event {
+            result.unwrap_or_else(|e| panic!("the install job: {e}"));
+        }
+    }
+}
+
+/// `rick install-rick` takes a folder that holds the binary and a version
+/// that can name a folder; anything else is the caller's error, and
+/// nothing is installed. Linux only, like the rest of the installer.
+#[test]
+fn the_install_rick_command_refuses_what_is_no_rick() {
+    let h = harness();
+    let (command, ctx) = install_rick_command(&h);
+    unpacked_rick(&h.dir.path().join("rick-0.3.0-linux-x64"));
+    if !supported() {
+        let refused = command.run(ctx(&["rick-0.3.0-linux-x64", "0.3.0"]), &h.jobs, &h.ui);
+        assert!(refused.is_err(), "Linux only: {refused:?}");
+        return;
+    }
+    assert!(matches!(
+        command.run(ctx(&["rick-0.3.0-linux-x64"]), &h.jobs, &h.ui),
+        Err(Error::Unsupported(_))
+    ));
+    assert!(
+        command.run(ctx(&[".", "0.3.0"]), &h.jobs, &h.ui).is_err(),
+        "a folder without the binary"
+    );
+    assert!(
+        command
+            .run(ctx(&["rick-0.3.0-linux-x64", "../up"]), &h.jobs, &h.ui)
+            .is_err(),
+        "a version that cannot name a folder"
+    );
+    assert!(!h.layout().app_dir("rick").exists());
+}
+
+/// `rick install-rick <folder> <version>`, what the integration dialog's
+/// *Install to the standard location* runs: the folder is copied as it is
+/// into `~/.local/opt/rick/<version>` with the `current` link and the
+/// record, and nothing is written outside the app folder — no launcher
+/// entry, no icon, no command link. A later version updates and keeps the
+/// one before.
+#[test]
+fn the_install_rick_command_copies_the_folder_to_the_standard_location() {
+    let h = harness();
+    if !supported() {
+        return;
+    }
+    let folder = h.dir.path().join("rick-0.3.0-linux-x64");
+    unpacked_rick(&folder);
+    // A launcher entry and a command of another origin are not this
+    // install's business: it writes neither, so neither is in its way.
+    let layout = h.layout();
+    let foreign_entry = layout.desktop_path("rick");
+    fs::create_dir_all(layout.applications_dir()).unwrap_or_else(|e| panic!("{e}"));
+    fs::write(&foreign_entry, b"[Desktop Entry]\nName=Other\n").unwrap_or_else(|e| panic!("{e}"));
+
+    install_rick(&h, &["rick-0.3.0-linux-x64", "0.3.0"]);
+    let app = layout.app_dir("rick");
+    let version = app.join("0.3.0");
+    assert_eq!(
+        fs::read(version.join("rick")).ok(),
+        Some(tiny_elf(this_machine(), &[]))
+    );
+    let mode = ext::platform::fs::unix_mode(&version.join("rick"))
+        .ok()
+        .flatten()
+        .unwrap_or(0);
+    assert_eq!(mode & 0o111, 0o111, "the binary is executable: {mode:o}");
+    assert!(version.join("librick_kernel.so").is_file());
+    assert!(version.join("plugins/git/libext_git.so").is_file());
+    assert!(version.join("share/applications/rick.desktop").is_file());
+    assert_eq!(
+        fs::read_link(version.join("rick-again")).ok().as_deref(),
+        Some(Path::new("rick"))
+    );
+    assert!(
+        fs::symlink_metadata(version.join("outside")).is_err(),
+        "a link out of the folder is left out"
+    );
+    assert_eq!(
+        fs::read_link(layout.current("rick")).ok().as_deref(),
+        Some(Path::new("0.3.0"))
+    );
+    assert!(
+        folder.join("rick").is_file(),
+        "the folder is copied, not moved"
+    );
+    let record = h.record("rick");
+    assert_eq!(record.name, "Rick");
+    assert_eq!(record.kind, Kind::Gui);
+    assert_eq!(record.version, "0.3.0");
+    assert_eq!(record.main_executable, "rick");
+    assert_eq!(record.source_archive, "rick-0.3.0-linux-x64");
+    assert_eq!(record.external_files, []);
+    assert_eq!(
+        fs::read(&foreign_entry).ok().as_deref(),
+        Some(&b"[Desktop Entry]\nName=Other\n"[..]),
+        "nothing outside the app folder is touched"
+    );
+    assert!(fs::symlink_metadata(layout.bin_dir().join("rick")).is_err());
+    assert!(!layout.staging("rick", "0.3.0").exists());
+
+    // The next version, unpacked elsewhere: an update with one kept.
+    let newer = h.dir.path().join("rick-0.3.1-linux-x64");
+    unpacked_rick(&newer);
+    fs::write(newer.join("NEW"), b"new").unwrap_or_else(|e| panic!("{e}"));
+    install_rick(&h, &["rick-0.3.1-linux-x64", "0.3.1"]);
+    assert_eq!(
+        fs::read_link(layout.current("rick")).ok().as_deref(),
+        Some(Path::new("0.3.1"))
+    );
+    assert!(app.join("0.3.1/NEW").is_file());
+    assert!(
+        app.join("0.3.0/rick").is_file(),
+        "the previous version is kept"
+    );
+    let record = h.record("rick");
+    assert_eq!(record.version, "0.3.1");
+    assert_eq!(record.previous_version.as_deref(), Some("0.3.0"));
 }

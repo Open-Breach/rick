@@ -735,6 +735,7 @@ fn a_new_text_cancels_the_running_walk_on_the_200k_fixture() {
     let (mut harness, _) = harness(fixture.root());
     let pane = pane(&harness);
     command(&mut harness, app::Command::Subtree { pane, on: true });
+    let mut running_after_each = Vec::new();
     for text in ["f0", "f00"] {
         harness.state_mut().app_mut().handle(
             app::Command::Filter {
@@ -743,13 +744,21 @@ fn a_new_text_cancels_the_running_walk_on_the_200k_fixture() {
             },
             &mut Vec::new(),
         );
+        running_after_each.push(harness.state().app().jobs().running());
     }
+    let settled = Instant::now();
     settle(&mut harness);
     let states = search_states(&harness);
+    // The first walk is cancelled by the second text while it runs; a
+    // run that saw it end Done (CI run 42692336940, Linux x64) is told
+    // which jobs ran at each text and how long the settle took.
     assert_eq!(
         states,
         [JobState::Cancelled, JobState::Done],
-        "the first walk is cancelled, the second runs through"
+        "the first walk is cancelled, the second runs through; jobs running after each text \
+         {running_after_each:?}, settled in {:?}, jobs {:?}",
+        settled.elapsed(),
+        harness.state().app().model().jobs
     );
 }
 
@@ -819,7 +828,7 @@ fn search_in_subdirectories_streams_matches_and_a_new_text_supersedes_the_walk()
     assert_eq!(row_names(&harness).len(), 11, "foo1 and foo10 to foo19");
 
     // The toggle off ends the search; the folder's own entries are back.
-    harness.get_by_label(icons::SUBTREE).click();
+    harness.get_by_label("Include subfolders").click();
     harness.step();
     settle(&mut harness);
     assert!(!tab(&harness).1.subtree);
@@ -860,13 +869,11 @@ fn open_containing_folder_from_a_flattened_view_selects_the_item() {
     assert!(step_until(&mut harness, Duration::from_secs(3), |h| {
         selected_names(h) == ["inner.txt"]
     }));
+    let model = harness.state().app().model();
     assert_eq!(
-        harness
-            .state()
-            .app()
-            .model()
-            .pane(pane)
-            .map(|p| p.tabs().len()),
-        Some(2)
+        model.workspaces(model.focused_window).len(),
+        2,
+        "the folder opened in a new workspace tab"
     );
+    assert_ne!(model.focused, pane);
 }

@@ -38,6 +38,7 @@ everywhere=(
   "preview-office|[^|]*|previewer"
   "preview-hex|[^|]*|previewer"
   "preview-3d|[^|]*|previewer"
+  "preview-icons|[^|]*|previewer"
   "search-walk|Subdirectory search|search-index"
   "action-compress|Compress and extract|action"
   "action-compare|Compare|action"

@@ -165,6 +165,7 @@ impl AzureExtension {
                 points: Points::PROVIDER,
                 platforms: Platforms::ALL,
                 previews: &[],
+                commands: &[],
             },
         }
     }

@@ -24,7 +24,7 @@ use std::collections::{BTreeSet, HashMap};
 use std::path::PathBuf;
 
 use app::{App, Command, TransferMode};
-use egui::{Color32, Id, LayerId, Order, Pos2, Rect, Stroke, Vec2, pos2, vec2};
+use egui::{Id, LayerId, Order, Pos2, Rect, Stroke, Vec2, pos2, vec2};
 use model::{AfterDrag, PaneId, Place, Tab, TabId};
 use platform::WindowRef;
 use types::{Entry, EntryId, EntryKind, Location};
@@ -67,7 +67,8 @@ pub enum Spring {
     /// Navigate this pane into the target folder (a folder row or a
     /// breadcrumb segment).
     Pane(PaneId),
-    /// Make this tab its pane's active one (a tab header).
+    /// Show this tab's workspace and focus its pane (a workspace tab of
+    /// the title row, or a pane bar's tab).
     Tab(TabId),
 }
 
@@ -256,7 +257,7 @@ enum Origin {
         location: Location,
         scroll: f32,
     },
-    /// The pane switched tabs away from `previous`.
+    /// The window showed `pane`'s workspace instead of `previous`'s.
     Tab { pane: PaneId, previous: TabId },
 }
 
@@ -498,7 +499,11 @@ impl Dnd {
     }
 
     /// Cancels the drag in progress: the ghost goes, the model is untouched,
-    /// the panes that spring-loaded follow the `after` setting.
+    /// the panes that spring-loaded follow the `after` setting, and a
+    /// window that spring-loading switched to another workspace shows the
+    /// one it showed when the drag began whatever the setting says: a
+    /// cancelled drag leaves the layout as it was (SPEC.md *No-ops and
+    /// cancel*, QUESTIONS.md 276).
     pub fn cancel(
         &mut self,
         after: AfterDrag,
@@ -508,7 +513,23 @@ impl Dnd {
         if self.drag.is_some() {
             self.suppressed = true;
         }
-        self.end(after);
+        if let Some(drag) = self.drag.take() {
+            // The folders first, by the setting; then the workspaces, the
+            // last switch undone first, so that the window ends on the one
+            // it showed before the first.
+            let (shown, drilled): (Vec<Origin>, Vec<Origin>) = drag
+                .origins
+                .into_iter()
+                .partition(|origin| matches!(origin, Origin::Tab { .. }));
+            self.finished
+                .extend(drilled.into_iter().map(|origin| (after, origin)));
+            self.finished.extend(
+                shown
+                    .into_iter()
+                    .rev()
+                    .map(|origin| (AfterDrag::Return, origin)),
+            );
+        }
         self.finish(tabs, requests);
     }
 
@@ -1010,15 +1031,21 @@ fn spring_load(
             }));
         }
         Spring::Tab(tab) => {
+            // A workspace tab of the title row: resting on it shows the
+            // workspace, with its pane focused; the tab that had the
+            // window's focus is the one to come back to.
             let model = app.model();
             let Some(pane) = model.pane_of(*tab) else {
                 return;
             };
-            let active = model.pane(pane).and_then(model::Pane::active);
-            if active == Some(*tab) {
+            let Some(window) = model.window_of(pane) else {
+                return;
+            };
+            let focused = model.window(window).map(model::Window::focused);
+            if focused == Some(pane) {
                 return;
             }
-            if let Some(previous) = active
+            if let Some(previous) = focused.and_then(|p| model.active_tab(p)).map(|(id, _)| id)
                 && !drag
                     .origins
                     .iter()
@@ -1056,10 +1083,15 @@ fn paint_ghost(ctx: &egui::Context, drag: &Drag, pos: Pos2) {
     if count > 1 {
         let centre = pos2(rect.right(), rect.top());
         let label = count.to_string();
-        let badge = painter.layout_no_wrap(label, font, Color32::WHITE);
+        let scheme = crate::theme::scheme_of(ctx);
+        let badge = painter.layout_no_wrap(label, font, crate::theme::Scheme::ON_BUTTON);
         let radius = (badge.size().x / 2.0 + 4.0).max(9.0);
-        painter.circle_filled(centre, radius, visuals.selection.bg_fill);
-        painter.galley(centre - badge.size() / 2.0, badge, Color32::WHITE);
+        painter.circle_filled(centre, radius, scheme.accent_button);
+        painter.galley(
+            centre - badge.size() / 2.0,
+            badge,
+            crate::theme::Scheme::ON_BUTTON,
+        );
     }
     if let Some(indicator) = drag.indicator {
         let glyph = painter.layout_no_wrap(

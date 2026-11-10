@@ -169,6 +169,26 @@ impl DirReader {
     }
 }
 
+/// Attribute flags from the Windows file attributes and the name: the
+/// hidden attribute, and a leading dot too, which hides a file on every
+/// platform (SPEC.md *Hidden files, symlinks and mounts*).
+fn attrs(name: &OsStr, attributes: u32, kind: RawKind) -> Attrs {
+    let mut attrs = Attrs::empty();
+    if attributes & FILE_ATTRIBUTE_HIDDEN.0 != 0 || name.as_encoded_bytes().first() == Some(&b'.') {
+        attrs |= Attrs::HIDDEN;
+    }
+    if attributes & FILE_ATTRIBUTE_SYSTEM.0 != 0 {
+        attrs |= Attrs::SYSTEM;
+    }
+    if attributes & FILE_ATTRIBUTE_READONLY.0 != 0 {
+        attrs |= Attrs::READONLY;
+    }
+    if kind == RawKind::File && is_executable(name) {
+        attrs |= Attrs::EXECUTABLE;
+    }
+    attrs
+}
+
 fn entry_from(info: &FILE_ID_BOTH_DIR_INFO, name: OsString, serial: u32) -> RawEntry {
     let attributes = info.FileAttributes;
     let kind = if attributes & FILE_ATTRIBUTE_REPARSE_POINT.0 != 0 {
@@ -181,19 +201,7 @@ fn entry_from(info: &FILE_ID_BOTH_DIR_INFO, name: OsString, serial: u32) -> RawE
     } else {
         RawKind::File
     };
-    let mut attrs = Attrs::empty();
-    if attributes & FILE_ATTRIBUTE_HIDDEN.0 != 0 {
-        attrs |= Attrs::HIDDEN;
-    }
-    if attributes & FILE_ATTRIBUTE_SYSTEM.0 != 0 {
-        attrs |= Attrs::SYSTEM;
-    }
-    if attributes & FILE_ATTRIBUTE_READONLY.0 != 0 {
-        attrs |= Attrs::READONLY;
-    }
-    if kind == RawKind::File && is_executable(&name) {
-        attrs |= Attrs::EXECUTABLE;
-    }
+    let attrs = attrs(&name, attributes, kind);
     RawEntry {
         id: (u128::from(serial) << 64) | u128::from(info.FileId.cast_unsigned()),
         kind,
@@ -353,19 +361,7 @@ pub(super) fn stat(path: &Path) -> io::Result<RawEntry> {
         RawKind::File
     };
     let (serial, file_id) = identity(path)?;
-    let mut attrs = Attrs::empty();
-    if attributes & FILE_ATTRIBUTE_HIDDEN.0 != 0 {
-        attrs |= Attrs::HIDDEN;
-    }
-    if attributes & FILE_ATTRIBUTE_SYSTEM.0 != 0 {
-        attrs |= Attrs::SYSTEM;
-    }
-    if attributes & FILE_ATTRIBUTE_READONLY.0 != 0 {
-        attrs |= Attrs::READONLY;
-    }
-    if kind == RawKind::File && is_executable(&name) {
-        attrs |= Attrs::EXECUTABLE;
-    }
+    let attrs = attrs(&name, attributes, kind);
     let time = |value: u64| filetime(i64::try_from(value).unwrap_or(0));
     Ok(RawEntry {
         id: (u128::from(serial) << 64) | u128::from(file_id),

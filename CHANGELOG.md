@@ -7,6 +7,499 @@ the pull request that brought the change.
 
 ## [Unreleased]
 
+### Added
+
+- System integration: the check, the setup dialog and Settings →
+  Integration, with the Linux items (issue 120,
+  [`specs/system-integration.md`](specs/system-integration.md) §6 and
+  §7.1, milestone 3 of the integration track). Rick keeps one record per
+  integration item under `[integration]` in `rick.toml` — `set-up`,
+  `declined`, `unsupported` or `missing`, the day of the last check and
+  what Rick wrote for the item — beside `ask` and the switch for the
+  check at startup. After the first frame, off the UI thread, it compares
+  the wanted state with the actual one, reading only; a declined item is
+  never listed and never watched (#123, #126). On Linux the items are the
+  install location, the app launcher entry with its icons, the default
+  file manager (`inode/directory` and `x-scheme-handler/rick` in
+  `mimeapps.list`), *“Show in folder” from other apps*, the `rick`
+  command (the link in `~/.local/bin` and the shell function, a marked
+  block of `path.sh`) and the dock favourite. Each perform answers a
+  receipt of the files it wrote and the values it replaced, the undo
+  removes exactly that, and a file Rick did not write is replaced only
+  with the user's word (#127). A Rick started from its unpacked archive
+  installs itself to `~/.local/opt/rick/<version>` with a `current` link
+  through the installer plugin's new `install-rick` command, which takes
+  a folder as its source, and continues from the installed copy: the
+  running process frees the single-instance endpoint, starts the copy and
+  exits once it answers (#128). The running instance owns
+  `org.freedesktop.FileManager1` on the session bus, through `zbus`, when
+  the item is set up — `ShowItems` is `reveal`, `ShowFolders` opens the
+  folders, `ShowItemProperties` reveals and opens Properties — and the
+  activation file starts `rick --dbus-service` when no Rick is up (#131).
+  The dock favourite appends Rick to the favourites of GNOME and Cinnamon
+  through `gsettings`, to the launchers of Plasma's task manager and to
+  the list of COSMIC's dock, as best it can: a failure is a warning and
+  blocks nothing, and every other desktop is *Unsupported* (#133). *Set
+  up Rick on this system* opens once when something is missing or was
+  reset: a row per item with a switch, *Install for* (*All users* is not
+  available yet), *Don't ask again*, *Not now* and *Apply N items* with a
+  progress line (#134). Settings → Integration, after *Appearance*, shows
+  the system and the last check beside *Check again*, every item with its
+  pill — *Set up*, *Reset by system* with *Restore*, *Skipped* with
+  *Add*, *Unsupported* — the switches for shell integration and the check
+  at startup, and *Reset choices* (#135). Windows and macOS list no item
+  yet: the dialog never opens there and the page shows its line and the
+  preferences. Questions 278–290, 293–307 and 313–315; the README's
+  install paragraph, the screenshots of the dialog and the page, and the
+  first acceptance line clicked through the dialog (#140).
+- Single instance, the command line and `rick://` (issue 103,
+  [`specs/system-integration.md`](specs/system-integration.md) §3 and
+  §4, milestone 1 of the integration track). One Rick per user session
+  and config directory: the first launch binds an endpoint named after
+  both — a Unix socket in `$XDG_RUNTIME_DIR` (Linux) or the user's
+  temporary directory (macOS), a named pipe on Windows — and a second
+  launch hands its command line over as one length-prefixed JSON message
+  with a protocol version, prints the reply and exits with the instance's
+  status within a second; an instance that does not answer is reported,
+  a socket a crash left behind is reclaimed, and a second window opens
+  only for `--new-window` when no instance answers (#106). The command
+  line is parsed with `clap`: `rick [<path>…]` opens each folder as a tab
+  of the most recently focused window (the working directory without
+  any), `rick reveal <file>…` opens the files' folders and selects the
+  files once listed, `--new-window` puts them in a window of their own,
+  `--config-dir <dir>` runs another install, and paths resolve against
+  the caller's working directory; plugins declare subcommands in their
+  manifest (`[[commands]]` in `plugin.toml`) and register an
+  `ext::CliCommand` the running instance dispatches to, `rick install
+  <archive>` of the tarball installer being the first, and `--help` lists
+  core and plugin commands; a bare word that names nothing is an unknown
+  command answered with the help and exit 2 (#108). The window a path
+  opened in is raised through the platform — `xdg_activation_v1` with the
+  launcher's token on Wayland, `_NET_ACTIVE_WINDOW` on X11,
+  `NSApp.activate` on macOS, `SetForegroundWindow` after the launch's
+  `AllowSetForegroundWindow` on Windows (#114). `rick:///<path>` opens an
+  existing folder, reveals an existing file and is an error toast
+  otherwise; the desktop entry (`%U`, `x-scheme-handler/rick`) and
+  `Info.plist` (`CFBundleURLTypes`) register the scheme (#115). The
+  embedded console reports its working directory through OSC 7 (the
+  session tells the shells a VTE version so they do) and the tab it was
+  opened from follows it; the tab's navigation types `cd` into the
+  console while the shell is at its prompt (Linux and macOS can tell; a
+  Windows pseudo console cannot, so nothing is typed there); the tarball
+  installer's `path.sh` defines a `rick` function for login shells that
+  lack `~/.local/bin` on their PATH (#116). Questions 264–267 (#117).
+- SVG and SVGZ previews in `ext-preview-image` (issue 83, SPEC.md *Vector
+  images*): claimed by the `svg` root element, or the gzip magic with the
+  `.svgz` name, never by the extension alone; rasterised with `resvg` at
+  the exact size the pane asks for and again at every change of it — the
+  pane's size for Fit, the intrinsic size at the display scale for the
+  actual-size request — so the picture is sharp at any size and nothing
+  comes from a scaled-up bitmap; the long edge capped at 8192 px with the
+  footer saying so. The intrinsic size is `width` and `height`, else the
+  `viewBox`, else 300 × 150. Only data URIs are honoured: no `href` to a
+  file or URL is followed, no script runs, text is set through usvg's
+  font database over the system fonts. The *Rendered* toggle, on for
+  every newly shown file, switches to the highlighted XML, and the source
+  (inflated for SVGZ) is the text layer, so *Copy* copies the raw SVG and
+  find searches it; the pane's *Copy* inflates a gzip-compressed file
+  before decoding it. A document usvg rejects opens on the source with
+  the parser's message, line and column, in the footer. Footer
+  `SVG · 512 × 512 px · 14.2 KiB`, `viewBox 0 0 24 24` in place of the
+  size when only a viewBox exists; File info plus an Image section
+  (QUESTIONS.md 255, 256) (#91).
+- `ext-preview-icons`, a plugin for the icon containers ICO, CUR, ICNS
+  and XPM (issue 84, SPEC.md *Icon containers*): claimed by magic,
+  decoded in pure Rust (the `ico` and `icns` crates, an XPM parser of the
+  crate's own with the X11 colour names and `None` transparent), never
+  compiled into the default binary. The variants of a container are the
+  document's pages, largest first, stepped through with the pane's pager;
+  a variant the plugin cannot decode (an ICNS JPEG 2000 entry, an unknown
+  type, a corrupt entry) is listed in File info as not decodable and
+  counted in the footer, and a file with none fails to open with a clear
+  error. In Fit a variant is magnified by the largest whole factor up to
+  8, nearest-neighbour, so every pixel stays a crisp square, and the
+  pane's actual-size request gets the variant's own pixels; transparent
+  pixels stay transparent. A CUR draws its hotspot as a crosshair, with
+  the `icons.hotspot` toggle to hide it. XPM's source is the text layer,
+  so *Copy* copies it; the binary containers have no *Copy*. Footer
+  `ICO · 7 variants · 48 × 48 · 32-bit · PNG · 23.4 KiB`, `2 not shown`
+  when variants were skipped, `XPM · 32 × 32 · 16 colours · 2.1 KiB`
+  (QUESTIONS.md 257) (#99).
+- The app icon on all three platforms and a Linux desktop entry (issue
+  88, [`specs/app-icons.md`](specs/app-icons.md), #92). One identifier,
+  `rick`, ties the desktop file, the hicolor icon name, the Wayland app id
+  and `StartupWMClass` together, so GNOME and KDE match the running window
+  to its launcher entry. Every window carries the Portal burst icon from
+  `assets/icons/png/rick-256.png` and the app id through eframe (the title
+  bar, taskbar and Alt-Tab on Windows and X11), and the About window shows
+  the rings-only symbol at 64 px, rasterised from the SVG with resvg, the
+  image previewer's rasteriser, at the drawn size times the window's
+  scale (#93).
+- `rick.exe` carries its icon and version resource: ProductName "Rick",
+  FileDescription "Rick file manager", FileVersion and ProductVersion from
+  `Cargo.toml` and the Apache-2.0 notice, embedded by `build.rs` through
+  `winresource` for Windows targets only, so Explorer and the Properties
+  dialog show them (#95).
+- The macOS archive is `Rick.app` zipped: the release workflow lays the
+  whole bundle out in `Contents/MacOS` (plugins beside the binary as
+  everywhere), `Info.plist` from `packaging/macos/Info.plist` with the
+  release's version and `Contents/Resources/Rick.icns`, so Finder and the
+  Dock show the icon; unsigned, as before (#97).
+- The Linux archive carries `share/applications/rick.desktop`
+  (`packaging/linux/rick.desktop`: `Exec=rick %F`, `Icon=rick`,
+  `StartupWMClass=rick`, `MimeType=inode/directory;`) and the icons under
+  `share/icons/hicolor/` in the XDG layout, so one copy of `share/` into
+  `~/.local/share/` plus `rick` on the PATH installs it, and the tarball
+  installer finds the entry and the icons where it looks (#96).
+- `rick <folder>…` opens every folder on the command line in a tab of its
+  own, as the desktop entry's `%F` passes the selected folders; an argument
+  that names nothing is passed on as a location rather than failing the
+  start (#94).
+- The README's install paragraph: `share/` and the PATH or the installer
+  plugin on Linux, `Rick.app` to Applications on macOS, nothing new on
+  Windows; no install script (#98).
+
+### Changed
+
+- The workspace version is `0.3.0-dev` until 0.3.0 is tagged.
+- The scheme and density tokens of the design refresh (issue 60;
+  `ui_egui::theme`): every colour comes from a scheme, the Figma collection
+  *Rick* one to one with *Light* and *Dark* as the two schemes Rick ships,
+  and every size from the *Density* collection, *Comfortable* (the default)
+  and *Compact*; egui's visuals, spacing and text styles are derived from
+  them for both of egui's themes, so following the system keeps working,
+  and a widget that needs a token egui has no field for reads it from the
+  context. A unit test holds the shipped pairs to WCAG contrast (4.5:1
+  text, 3:1 controls and icons; QUESTIONS.md 242 names the three Figma
+  pairs that fall short) (#68).
+- The density setting has two levels, Comfortable and Compact; `normal` in
+  an existing `rick.toml` reads as Comfortable (QUESTIONS.md 225) (#68).
+- The interface is set in the system's UI font and its monospace font
+  (issue 60): the platform reports them (`SystemFonts`: fontconfig's
+  `sans-serif` and `monospace` on Linux, San Francisco or Helvetica Neue
+  and Menlo on macOS, Segoe UI and Cascadia Mono or Consolas on Windows),
+  egui's bundled Ubuntu and Hack stay behind them as fallbacks, and the
+  Phosphor icons come first in both families with their text code points
+  moved out of a letter's way, so no letter shows for an icon and no icon
+  for a letter (#69).
+- Workspace tabs in the title row (issue 60, SPEC.md *Title row* and
+  *Workspace tabs*): each tab is a whole workspace — a layout of panes
+  with their locations, histories, selections and dividers — titled after
+  the folder in its focused pane with the place's, the view's or the
+  provider's icon, 220 px wide on the bottom edge of a `titlebar/height`
+  row, the active one filled `bg/pane` and joined to the panes below; the
+  new-tab button follows the last tab, a middle click or the close button
+  closes a tab, a drag along the row reorders them, a tab dropped outside
+  every window opens a new one and one dropped on another window's row
+  moves there, and a pane dropped on the row, or on the centre target of
+  another pane, becomes a workspace of its own. Panes hold one tab each
+  and have no tab strips; *Open in new tab* everywhere, Mod+T, Mod+W,
+  Mod+Tab, Mod+1 to 9 and the Move tab shortcuts act on workspaces. The
+  menu slot of the title row is as wide as the side panel, so the first
+  tab starts where the panes begin; the search box is 320 px before the
+  window group and gives way only when the row is short of room. The
+  session and the saved layouts hold the workspaces in order with the
+  active one; a `session.toml` of 0.2 reads as one workspace per window,
+  its panes' further tabs opening as workspaces of their own (#70).
+- The panes of the design refresh (issue 60, SPEC.md *Panes*, *Toolbar*,
+  *Path bar*, *View options menu*): no tab bar over a pane any more; a
+  grab handle at the top right of every toolbar drags the pane, with a
+  ghost card under the pointer and the five dock tiles on the pane below —
+  left, right, top and bottom split it and dock the pane there, the
+  centre or the tab row makes it a workspace tab, outside the window a
+  new window; the toolbar holds Back and Forward, the breadcrumb starting
+  with the parent chip after a hairline, and a view options button
+  before the handle. The view options menu replaces the view-mode
+  dropdown, the hidden-files toggle and the refresh button: Details, List
+  and Icons with the three icon sizes, the Show hidden files and Folders
+  first switches, Refresh now, and a per-type filter — one checkbox per
+  file type in the folder with its count, folders too — that narrows the
+  list, clears on navigation and lights a dot on the button while it is
+  on (`Command::TypeFilter`). Panes are separated by a hairline that
+  drags to resize; the focused pane shows no border (#71).
+- The file list of the design refresh (issue 60, SPEC.md *File list*,
+  *Row states*, *Empty folder*, *Loading*, *Loading animations*): the
+  columns Name, Size, Type and Modified in that order, Size right-aligned
+  with an em dash for a folder, the three secondary columns in
+  `text/secondary`; the column header a 34 px `bg/subtle` band between two
+  hairlines with 12 px titles and the sort glyph after the sorted one, its
+  separators the only vertical lines of the list; rows with
+  `radius/control` corners inset 6 px from the pane's edges, `bg/subtle`
+  on hover, `bg/selected-soft` with `text/on-selected` when selected in
+  the focused pane and `bg/selected-inactive` in another, a 2 px
+  `accent/focus` ring on the keyboard cursor, the same in the list and
+  icon views. An empty folder shows `FOLDER_OPEN`, *This folder is empty*
+  and the new-folder hint, a filter that matches nothing *No entries match
+  the filter*; while a folder is read and no row has arrived the list
+  shows the **portal burst** — Rick's loading animation, three arc rings
+  around a glow with folder and file glyphs spiralling out, in
+  `accent/focus` — with *Reading folder…* and the count so far. The
+  platform reports the system's reduce-motion setting (`Motion`: GNOME's
+  `enable-animations`, macOS's *Reduce motion*, Windows's client area
+  animation), which stills the portal (#72).
+- The footer of the design refresh (issue 60, SPEC.md *Footer*): one row
+  at the foot of every pane, the toolbar's height under a hairline with
+  `space/toolbar-x` padding. Left to right the hidden-files toggle, icon
+  only — `EYE` on `bg/selected-soft` while hidden files are shown,
+  `EYE_SLASH` as a ghost button while they are hidden — the statistics in
+  12 px `text/secondary` (`FOLDER` and the folder count, `FILE` and the
+  file count, the files' total size; *12 of 340* while a filter narrows
+  the list, *listing…* while entries still arrive), a hairline and the
+  selection pill (`bg/selected-soft`, `text/on-selected`, *1 selected ·
+  568 B*) while something is selected, the pane's note; at the right the
+  200 × 26 filter field with a `MAGNIFYING_GLASS` at 60 %, the *Filter*
+  placeholder and, inside its right end, the include-subfolders toggle
+  (`TREE_STRUCTURE`, tinted while on). Escape in the field clears the
+  text and returns the focus to the list; the separate clear button is
+  gone. The counts and the pill are read aloud with their nouns. The
+  preview pane's footer takes the same height and the 12 px secondary
+  text (#73).
+- The side panel of the design refresh (issue 60, SPEC.md *Rows*,
+  *Section headers*, *Trash pill*, *This Machine*, *Operations drawer*):
+  rows `sidebar/item-height` tall with `radius/control` corners and
+  `space/row-x` padding, inset 6 px from the panel's edges, a 16 px icon,
+  12 px of gap and the label in 13 px, `bg/subtle` on hover and the
+  2 px `accent/focus` ring on the keyboard row; section headers in 11 px
+  letter-spaced capitals with a `CARET_DOWN` at 60 % that folds the
+  section (`CARET_RIGHT` when folded), 18 px of air above and 6 below, the
+  title itself the overview's row, nothing indented; the Trash row's pill
+  with the trash's size — not its count — tinted `trash/low-*`, `mid-*`
+  or `high-*` by the share of its disk the trash takes (under 1 %, to
+  5 %, over), no pill while the trash is empty; This Machine as drive
+  cards (`bg/subtle`, 8 px corners, 6 px apart; 44 px in Comfortable with
+  the icon, the name, the percentage and a 4 px usage bar, 26 px in
+  Compact on one line), a network mount as a row with its percentage, the
+  *Add…* row with `PLUS_CIRCLE`. The operations area is the **operations
+  drawer**: a `bg/card` card floating over the foot of the panel — along
+  the window's foot while the panel is hidden — with 12 px top corners, a
+  hairline and a shadow upwards; its summary *2 running · 2 waiting* with
+  the overall percentage in `accent/focus` and a caret over a 4 px bar,
+  which a click collapses the drawer to; a block per running job with its
+  icon (the portal spinner, `ARCHIVE` for an archive job), its title,
+  pause and a round `bg/control` cancel button, a thin bar and the detail
+  line *473 MiB of 2.2 GiB · 33.7 MiB/s · 53 s left*; the waiting jobs
+  under *WAITING* with why each waits; finished jobs as compact rows. The
+  app sums the trashed items' sizes when it lists the trash (#74).
+- The context menu of the design refresh (issue 60, SPEC.md *Context
+  menu*): a 260 px card of 30 px entries, each with a 16 px icon slot, its
+  label in 13 px and its shortcut in 12 px `text/secondary` at the right,
+  the hovered entry `bg/selected-soft`, groups separated by hairlines in
+  the spec's order — Open (Open, Open with, Open in new tab, Open in
+  terminal here, Pin to side panel), Edit (Cut, Copy, Paste, Paste as
+  link, *Copy as* with Name, Path and Path and name, Duplicate), Change
+  (Rename, Move to trash and Delete permanently in `status/danger`), the
+  extension groups (*Compress* and the plugins' groups as submenus opening
+  to the right, a group with one entry as that entry, Install as
+  application, Compute hash…) and Info (Properties). The empty area's
+  menu: New folder and New file; Paste, Paste as link, Select all; Open
+  terminal here, Open in system file manager, Refresh; Folder properties,
+  which opens the Properties dialogue of the folder itself (#75).
+- The dialogue frame of the design refresh (issue 60, SPEC.md
+  *Dialogues*, *Install dialogue*): a `dialog/bg` window with 12 px
+  corners and a soft shadow in three bands — a header with an icon, the
+  title and a secondary line, a body that scrolls when the window is too
+  short, a footer under a hairline with a note at the left and *Cancel*
+  before the primary button filled `accent/button` — which the form,
+  prompt and confirmation dialogues now take. Forms gained a header with
+  an icon (a glyph, a generated monogram or a PNG), a pill and a subtitle,
+  a footer note, a titled preview drawn as a card of effects, sections and
+  cards, disclosure cards (counted ones with a *n of m* pill and *Select
+  all*), segmented controls, file fields with *Choose…*, monospace values
+  and required fields whose warning disables the primary. The install
+  dialogue uses them: the archive's icon or a monogram at 48 px with the
+  *Update* or *Reinstall* pill and the version change; Name, App ID and
+  Version; *Install for* as *Just me* / *All users*; the Kind, Main
+  executable and Icon card, the icon rows reading *path · size*; the
+  *WHAT RICK WILL DO* card from the live summary; *Commands to link* for
+  a toolchain; *Advanced options* collapsed with its summary. A missing
+  version warns under its field and holds the primary; an archive without
+  an icon offers *Choose…*. Detection keeps the bytes of icon files up to
+  256 KiB for the header (#76).
+- The hash dialogue of the design refresh (issue 60, SPEC.md *Hash
+  dialogue*): 620 px in the dialogue frame, the header with the `HASH`
+  glyph, *File hashes*, the file's name and size and a round close
+  button. The *VERIFY* field comes first: when the clipboard holds
+  something that looks like a hash — hex of MD5, SHA-1, SHA-256 or BLAKE3
+  length, or Base64 of one — the field is prefilled with it, compared at
+  once and carries a *from clipboard* hint until edited; a match gives it
+  a `status/success` border and a *Matches SHA-256* pill and tints the
+  row `status/success-row` with its label in `status/success`, anything
+  else a `status/danger` border and a *No match* pill. Under it a card
+  per file with one row per algorithm — the label, the value in 11 px
+  monospace, a copy icon named after the algorithm — each file under a
+  row with its name and size when several are selected, then the
+  *Format* segmented control (*hex*, *HEX*, *Base64*). The footer has
+  *Copy all* with the `COPY` glyph and *Done*. While the job runs the
+  card gives way to the portal burst with *Hashing…*, the bytes done of
+  the total, the throughput and the time left over a 4 px bar; *Copy all*
+  is disabled and *Cancel* stops the job and closes the dialogue at once.
+  The platform's clipboard can be read (`Clipboard::text`) and the hash
+  slots carry the files' sizes (#77).
+- The settings window of the design refresh (issue 60, SPEC.md *Settings
+  window*): 880 × 640, GNOME-style, a viewport of its own where the
+  backend has them and an area over the main window in the dialogue
+  frame otherwise. The left column in `bg/panel` holds the *Settings*
+  title, a search field that narrows the categories and rows to those
+  whose label or description match, and the category list — General,
+  View, Appearance, then *PLUGINS* with a row per loaded plugin that
+  declares settings, each with an icon chosen from its id. The right
+  column shows the chosen page: its title, a round close button and
+  grouped cards, one row per setting with its label, description and
+  control — a switch, a dropdown, a segmented control or a text field.
+  General holds Language, Start with, Opening an archive, After a drag,
+  the spring-loading delay (a dropdown of presets) and the names the
+  subtree search skips; View the Files, Sorting and Side panel groups;
+  Appearance Theme, Density and Font size; a plugin's page its schema as
+  a card. The 0.2 settings screen with its grid and sliders is gone
+  (#78).
+- The drag of a pane and of a workspace tab (issue 80, rules 7 and 8;
+  SPEC.md *Drag ghost*). The ghost of a pane dragged by its handle is the
+  pane itself — what it painted when it was grabbed, at a quarter of its
+  size and 70 % opacity inside a 1 px `border/strong` border with a soft
+  shadow — in place of the card with a title and skeleton rows, and it is
+  anchored to the grab point: its scaled grip sits 8 px down and right of
+  the cursor and moves rigidly with it. A dragged tab is its own ghost,
+  lifted with the same shadow: along the title row it rides the row held
+  where it was grabbed, off the row it follows the cursor the same 8 px
+  away while the row closes up behind it, and released off the row inside
+  the window it returns to its place, where it used to be reordered to
+  the room the row last kept for it. A tab shows the open hand over its
+  body, as a pane's grip does, and the closed hand stays for the whole of
+  either drag, whatever the cursor passes over. A screen reader is told
+  what is being dragged. The numbers — scale, opacity, offset — are
+  constants of `ui_egui::drag` (#125).
+- Reordering workspace tabs by drag, Chrome-style (issue 80, rule 1;
+  SPEC.md *Workspace tabs*, Dragging a tab). The tabs a dragged tab passes
+  slide, over 150 ms and eased out, to open the gap where it will land,
+  and close it again when the tab leaves the row; let go, the tab settles
+  into the gap. Nothing marks the place but the gap: there is no
+  insertion line. Under the system's reduce-motion setting the tabs take
+  their places at once. The slide's duration is `ui_egui::drag::TAB_SLIDE`
+  (#129).
+- A workspace tab that holds exactly one pane can be dragged down into the
+  workspace the window shows (issue 80, rules 2 and 3; SPEC.md *Workspace
+  tabs*, Dragging a tab): off the row, the pane under the cursor shows the
+  four side dock targets — no centre, the tab being a tab already — with
+  the preview of the half, and dropped on one the tab's pane docks there
+  and the tab leaves the row; it is the reverse of dropping a pane on the
+  tab row. A tab that holds several panes is offered no target: it
+  reorders, changes window or tears off, and its panes move by their
+  handles. Whether a tab holds one pane is the model's answer
+  (`Model::sole_pane`), every pane counting, the preview too
+  (QUESTIONS.md 270), and the move is the model's `dock_workspace`
+  behind `Command::DockWorkspace` (#130).
+- Spring-loaded workspace tabs for every kind of drag (issue 80, rules 4
+  and 5; SPEC.md *Workspace tabs*, Spring-loaded tabs). A pane dragged by
+  its handle and rested on another workspace's tab for the spring-loading
+  delay — the one setting of Settings → General, a second by default —
+  switches the window to that workspace, where the pane can be docked; a
+  dragged tab that holds one pane does the same when it is held still
+  leaning on a neighbour, a quarter of a tab or more over it
+  (QUESTIONS.md 308). Let go where it cannot land, nothing moves and the
+  window shows the workspace the drag began in. Entries dragged from a
+  list already switched the window this way; a test now holds it (#132).
+- Escape cancels the drag of a pane or of a workspace tab (issue 80, rule
+  9; SPEC.md *No-ops and cancel*): the ghost goes, nothing moves, the
+  tabs are back in their order and the window shows the workspace it
+  showed when the drag began, whatever spring-loading has switched since;
+  the button that is still down then drops nothing. A cancelled drag of
+  entries returns the window to that workspace too, whatever *After a
+  drag* says and through however many tabs it sprang (QUESTIONS.md 309);
+  the folders its panes drilled into still follow the setting
+  (QUESTIONS.md 276) (#137).
+- A workspace tab or a pane can be dragged onto another window (issue 80,
+  rule 6; SPEC.md *Windows*). Over the other window the drag shows what
+  it shows over its own: a tab rides that window's tab row, the tabs
+  there sliding apart for it, and lands in the gap; a tab that holds one
+  pane, and a pane dragged by its handle, are offered the dock targets of
+  the pane under the cursor there; a pane over the row shows the slot
+  where it becomes a new tab. The tabs of the other window spring-load
+  alike, the window the cursor is over paints the ghost
+  (QUESTIONS.md 311), and Escape or a release that lands nowhere leaves
+  every window on the workspace it showed. Where the system does not
+  tell a window its place on the screen (Wayland), a drag still knows
+  its own window alone (QUESTIONS.md 310) (#138).
+
+### Removed
+
+- The accent-colour setting: colours are the scheme's contrast-checked
+  pairs, and more colour comes as further schemes; an `accent` key in
+  `rick.toml` is ignored and dropped on the next write (QUESTIONS.md 226)
+  (#68).
+
+### Fixed
+
+- A workspace tab can be dragged to the last place of its row: the row
+  never opened its gap after the last of the other tabs, so the first of
+  two tabs could not be dragged past the second at all, and a tab pulled
+  to the end of a longer row landed one place short (issue 80, rule 1)
+  (#129).
+- The pane toolbar sits on the pane's `bg/pane`, the active workspace
+  tab's colour, so the tab reads as attached to its pane and only the
+  column header band is tinted; egui's panel frame had painted it
+  `bg/window` like the title row. The row keeps `space/toolbar-x` of
+  padding at both ends, as the design has it, in place of the frame's
+  (issue 79 item 1).
+- The footer is the Figma status bar's height — the hairline, then the
+  26 px filter field with `space/toolbar-y` above and below it: 39 px
+  Comfortable, 35 px Compact — with the hidden-files toggle 26 px like
+  the field, and one hairline over it: egui's panel separator had drawn a
+  second line between the list and the footer, and the panel's margins
+  had made the row taller than the toolbar. The preview pane's footer
+  takes the same height and hairline (issue 79 item 4, QUESTIONS.md 254).
+- The preview pane's toolbar is the explorer toolbar's height, with
+  `space/toolbar-x` padding, and ends like every other pane's in the
+  hairline and the six-dot grab handle (`DOTS_SIX_VERTICAL`, named *Drag
+  pane*, the grab and grabbing cursors), which drags the pane onto the
+  dock tiles, the tab row or out of the window; it had been a 30 px row
+  with the close button alone. The handle and the hairline are one widget
+  shared with the explorer toolbar (`widgets::pane_handle`, `divider`)
+  (issue 79 items 2 and 3).
+- The path field, while the breadcrumb is being edited, is `button/size`
+  tall — the height of Back and Forward, on their line — and as wide as
+  the breadcrumb; it had hugged its text. Its look and the rest of the
+  editing rule are issue 79 item 10 (issue 79 item 5).
+- Every column of the details list resizes by the boundary after it, Name
+  included, and the last column takes the remaining width; the header
+  draws its separator at every boundary, where the previous code's
+  clipped cells had cut all but the one between Size and Type away. The
+  hover and drag visuals of the boundaries, the fit on double-click and
+  the widths' persistence are issue 79 item 9 (issue 79 item 6).
+- A removable drive's card in This Machine carries an eject button
+  (`EJECT`) at its right edge, vertically centred and always visible,
+  named *Eject <drive>* for the tooltip and the screen reader; a click
+  ejects the drive, as the context menu's *Eject* does. The usage bar's
+  colours and the read-only drives are issue 79 item 8 (issue 79 item 7).
+- Drive cards as decided for the design refresh (SPEC.md *This Machine*):
+  the usage bar's fill follows how full the drive is, like the Trash pill
+  — `accent/usage` below 80 %, `status/warning` from 80 %, `status/danger`
+  from 90 % — in the card and in the This Machine overview; a drive the
+  operating system mounted read-only (a live USB, an optical disc, a
+  mounted ISO) shows a full bar in `text/placeholder`, no percentage and
+  nothing else in the row, the bar's tooltip and accessible description
+  *Read-only*; the name stays on one line with an ellipsis. `Volume` of the
+  `platform` crate reports `read_only` on every platform: the `ro` mount
+  option on Linux, `MNT_RDONLY` on macOS, `FILE_READ_ONLY_VOLUME` on
+  Windows, an ISO's mount everywhere (issue 79 item 8).
+- The column header as decided for the design refresh (SPEC.md *File
+  list*): no permanent divider between the titles; the boundary between
+  two headers has a 6 px hit zone that, hovered, shows a 1 px
+  `border/strong` divider across the band and the column-resize cursor;
+  dragging it resizes the column before it, Name included, a double-click
+  fits that column to the title and the rows in view, no column goes under
+  48 px, and the last column takes what is left. The widths are the tab's
+  (`Command::ColumnWidths`, `Tab::columns` by column id) and come back
+  with the session; *Size columns* puts the defaults back (issue 79
+  item 9).
+- Path editing as decided for the design refresh (SPEC.md *Path bar*):
+  Mod+L, or a click on the empty part of the breadcrumb bar, swaps the
+  breadcrumbs for a text field in place — `button/size` tall on the Back /
+  Forward line and as wide as the breadcrumb, `bg/control` with a 1 px
+  `accent/focus` ring and `radius/control` corners, the path in 13 px
+  `text/primary` — with the whole path selected on entry, so typing
+  replaces it; Enter navigates, Escape and losing the focus restore the
+  breadcrumbs unchanged (issue 79 item 10).
+
 ## [0.2.0] - 2026-11-08
 
 The plugin release, on Linux, macOS and Windows: the native plugin host and

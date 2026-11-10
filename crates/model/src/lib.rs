@@ -6,8 +6,9 @@
 //! [`Listing`] with its sort, group, filter and selection, the [`ViewMode`]
 //! with the [`Tree`] state of expanded folders and the scroll offset, plus
 //! the job table, the side panel's data (the [`Places`], the volumes, the
-//! cloud and network rows, the [`TrashView`]), the name conflicts jobs wait on and the
-//! [`Settings`] snapshot. All windows share the one model, so a job
+//! cloud and network rows, the [`TrashView`]), the name conflicts jobs wait on, the
+//! [`Settings`] snapshot and the [`Integration`] items as the last check
+//! left them. All windows share the one model, so a job
 //! started in one shows in every other. It applies listing batches and
 //! filesystem changes and derives the visible rows; it performs no I/O.
 //! `app` mutates it in response to `Command`s; the UI only reads it.
@@ -16,6 +17,7 @@
 
 #![forbid(unsafe_code)]
 
+mod integration;
 mod listing;
 mod panel;
 mod session;
@@ -27,12 +29,19 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 pub use ext::PaneId;
 use ext::{CellValue, Decoration, FsChange};
-pub use listing::{Column, Group, IconSize, Listing, Sort, SortDir, ViewMode, ViewSpec, type_of};
+pub use integration::{
+    Applying, Integration, IntegrationItem, IntegrationSettings, ItemRecord, ItemState, ItemStatus,
+    day_of, decline, fold_check, reset_choices, set_up,
+};
+pub use listing::{
+    Column, FOLDER_TYPE, Group, IconSize, Listing, Sort, SortDir, ViewMode, ViewSpec, type_of,
+};
 pub use panel::{DEFAULT_PLACE_ICON, Place, Places, TrashView};
 pub use platform::{TrashedItem, Volume, VolumeKind};
 use serde::{Deserialize, Serialize};
 pub use session::{
-    DockSession, Geometry, PaneSession, Session, TabSession, WindowSession, parse_entry_id,
+    DockSession, Geometry, PaneSession, Session, TabSession, WindowSession, WorkspaceSession,
+    parse_entry_id,
 };
 pub use settings::{
     AfterDrag, Archives, ConnectionEntry, Density, Drag, LAST_SESSION, OnOpen, PanelSide, Plugins,
@@ -52,6 +61,11 @@ pub struct TabId(pub u64);
 /// Identity of a window, unique within one model.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct WindowId(pub u64);
+
+/// Identity of a workspace: one tab of the title row, holding a whole layout
+/// of panes (SPEC.md *Workspace tabs*). Unique within one model.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct WorkspaceId(pub u64);
 
 /// What a tab shows. Every kind is a tab of the dock: split, docked and
 /// torn out alike.
@@ -116,8 +130,6 @@ pub enum Side {
 /// Where a moved tab goes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DockTarget {
-    /// Into an existing pane's tab strip.
-    Into(PaneId),
     /// Into a new pane split off `pane` on `side`.
     Beside {
         /// The pane to split.
@@ -125,7 +137,10 @@ pub enum DockTarget {
         /// Which side the new pane takes.
         side: Side,
     },
-    /// Into a new window of its own (a tab dragged outside every window).
+    /// Into a new workspace tab of the same window, right after the shown
+    /// one (a pane dropped on the centre target or on the tab row).
+    NewWorkspace,
+    /// Into a new window of its own (a pane dragged outside every window).
     NewWindow,
 }
 
@@ -267,7 +282,9 @@ impl Dock {
     }
 }
 
-/// A pane: a tab strip inside the dock.
+/// A pane of a workspace's dock. It holds one tab: panes have no tab strips
+/// (SPEC.md *Workspace tabs*); the accessors keep the shape of a list so the
+/// callers written for strips still read.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Pane {
     tabs: Vec<TabId>,
@@ -345,6 +362,10 @@ pub struct Tab {
     pub group: Option<Column>,
     /// The type-to-filter text.
     pub filter: String,
+    /// The file types the list is narrowed to from the view options menu
+    /// (as the Type column names them); `None` shows every type. Cleared
+    /// on navigation, never saved.
+    pub types: Option<BTreeSet<String>>,
     /// Hidden entries shown in this tab.
     pub show_hidden: bool,
     /// Subfolders flattened into the list.
@@ -363,6 +384,11 @@ pub struct Tab {
     /// The list's vertical scroll offset in logical points, as the UI last
     /// reported it; restored with the session.
     pub scroll: f32,
+    /// The widths the user gave the details list's columns, in logical
+    /// points by column id (`name`, `size`, `type`, `modified`, a decorator
+    /// column's id); a column not in the map takes its default width.
+    /// Restored with the session (SPEC.md *File list*).
+    pub columns: BTreeMap<String, f32>,
     /// A note for the status line: why the tab is not where the session
     /// left it. Cleared by the next navigation.
     pub note: Option<String>,
@@ -388,6 +414,7 @@ impl Tab {
             },
             group: None,
             filter: String::new(),
+            types: None,
             show_hidden: settings.show_hidden,
             flatten: false,
             subtree: false,
@@ -396,6 +423,7 @@ impl Tab {
             decorations: HashMap::new(),
             tree: Tree::default(),
             scroll: 0.0,
+            columns: BTreeMap::new(),
             note: None,
             failure: None,
             title: None,
@@ -498,6 +526,7 @@ impl Tab {
     /// offset and note before the tab shows another location.
     fn leave(&mut self) {
         self.filter.clear();
+        self.types = None;
         self.listing.clear();
         self.selection.clear();
         self.decorations.clear();
@@ -513,6 +542,7 @@ impl Tab {
             sort: self.sort,
             folders_first: settings.folders_first,
             filter: &self.filter,
+            types: self.types.as_ref(),
             show_hidden: self.show_hidden,
             show_system: settings.show_system,
         }
@@ -533,12 +563,19 @@ impl Tab {
         }
     }
 
-    /// The view specification over `filter`, borrowing nothing of the tab.
-    fn spec_with<'a>(&self, settings: &Settings, filter: &'a str) -> ViewSpec<'a> {
+    /// The view specification over `filter` and `types`, borrowing nothing
+    /// of the tab, so the listing can change under it.
+    fn spec_with<'a>(
+        &self,
+        settings: &Settings,
+        filter: &'a str,
+        types: Option<&'a BTreeSet<String>>,
+    ) -> ViewSpec<'a> {
         ViewSpec {
             sort: self.sort,
             folders_first: settings.folders_first,
             filter,
+            types,
             show_hidden: self.show_hidden,
             show_system: settings.show_system,
         }
@@ -546,7 +583,8 @@ impl Tab {
 
     fn refresh_view(&mut self, settings: &Settings) {
         let filter = self.filter_text();
-        let spec = self.spec_with(settings, &filter);
+        let types = self.types.clone();
+        let spec = self.spec_with(settings, &filter, types.as_ref());
         self.listing.refresh_view(&spec);
         self.tree.refresh_views(&spec);
         self.rebuild_tree();
@@ -586,15 +624,104 @@ pub enum JobState {
 /// screen and its side panel.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Window {
-    /// The pane tree.
-    pub dock: Dock,
-    /// The pane keyboard input goes to when the window has it.
-    pub focused: PaneId,
+    /// The workspaces, in the order of the title row's tabs; never empty.
+    pub workspaces: Vec<Workspace>,
+    /// The workspace shown.
+    pub active: WorkspaceId,
     /// Position, size and maximised state, once the UI reported them.
     pub geometry: Option<Geometry>,
     /// The side panel: side, width, collapsed state, folded sections.
     pub side_panel: SidePanel,
 }
+
+impl Window {
+    /// A window with one workspace.
+    fn one(workspace: Workspace, geometry: Option<Geometry>, side_panel: SidePanel) -> Self {
+        Self {
+            active: workspace.id,
+            workspaces: vec![workspace],
+            geometry,
+            side_panel,
+        }
+    }
+
+    /// The workspace shown.
+    #[must_use]
+    pub fn workspace(&self) -> &Workspace {
+        self.workspaces
+            .iter()
+            .find(|w| w.id == self.active)
+            .or_else(|| self.workspaces.first())
+            .unwrap_or(&EMPTY_WORKSPACE)
+    }
+
+    fn workspace_mut(&mut self, id: WorkspaceId) -> Option<&mut Workspace> {
+        self.workspaces.iter_mut().find(|w| w.id == id)
+    }
+
+    /// The shown workspace's pane tree.
+    #[must_use]
+    pub fn dock(&self) -> &Dock {
+        &self.workspace().dock
+    }
+
+    /// The pane keyboard input goes to when the window has it: the shown
+    /// workspace's focused pane.
+    #[must_use]
+    pub fn focused(&self) -> PaneId {
+        self.workspace().focused
+    }
+
+    /// The workspace holding this pane.
+    #[must_use]
+    pub fn workspace_of(&self, pane: PaneId) -> Option<&Workspace> {
+        self.workspaces
+            .iter()
+            .find(|w| w.dock.panes().contains(&pane))
+    }
+
+    /// Every pane of every workspace, workspace by workspace.
+    #[must_use]
+    pub fn panes(&self) -> Vec<PaneId> {
+        self.workspaces
+            .iter()
+            .flat_map(|w| w.dock.panes())
+            .collect()
+    }
+
+    /// The index of a workspace in the tab row.
+    #[must_use]
+    pub fn position(&self, id: WorkspaceId) -> Option<usize> {
+        self.workspaces.iter().position(|w| w.id == id)
+    }
+
+    /// The workspace after `at`, else the one before it: what shows when
+    /// the one at `at` goes.
+    fn neighbour(&self, at: usize) -> Option<WorkspaceId> {
+        self.workspaces
+            .get(at)
+            .or_else(|| self.workspaces.get(at.saturating_sub(1)))
+            .map(|ws| ws.id)
+    }
+}
+
+/// One workspace of a window: a layout of panes and the pane with the focus.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Workspace {
+    /// The id, stable while the workspace exists.
+    pub id: WorkspaceId,
+    /// The pane tree.
+    pub dock: Dock,
+    /// The pane keyboard input goes to when the workspace is shown.
+    pub focused: PaneId,
+}
+
+/// The workspace a window without one reads as; never shown.
+static EMPTY_WORKSPACE: Workspace = Workspace {
+    id: WorkspaceId(0),
+    dock: Dock::Pane(PaneId(0)),
+    focused: PaneId(0),
+};
 
 /// The title-row search box's query over the platform's search indexes and
 /// what came back so far (QUESTIONS.md 118). The box lists the current
@@ -686,6 +813,10 @@ pub struct Model {
     pub trash: TrashView,
     /// The settings snapshot.
     pub settings: Settings,
+    /// The integration items as the last check left them
+    /// (specs/system-integration.md §6): what the dialog and Settings →
+    /// Integration show.
+    pub integration: Integration,
     /// The title-row search box's query over the search indexes.
     pub index_search: IndexSearch,
     /// The search indexes available right now, by extension id: the ones
@@ -700,6 +831,7 @@ pub struct Model {
     next_pane: u64,
     next_tab: u64,
     next_window: u64,
+    next_workspace: u64,
 }
 
 impl Model {
@@ -730,6 +862,7 @@ impl Model {
             network: Vec::new(),
             trash: TrashView::default(),
             settings,
+            integration: Integration::default(),
             index_search: IndexSearch::default(),
             search_indexes: Vec::new(),
             subtree_search: false,
@@ -737,6 +870,7 @@ impl Model {
             next_pane: 1,
             next_tab: 1,
             next_window: 1,
+            next_workspace: 1,
         }
     }
 
@@ -769,8 +903,7 @@ impl Model {
     #[must_use]
     pub fn preview_tab(&self, window: WindowId) -> Option<TabId> {
         let w = self.windows.get(&window)?;
-        w.dock
-            .panes()
+        w.panes()
             .into_iter()
             .filter_map(|pane| self.panes.get(&pane))
             .flat_map(|pane| pane.tabs.iter().copied())
@@ -781,20 +914,28 @@ impl Model {
             })
     }
 
-    /// Opens the window's Preview tab in a new pane right of every other,
-    /// the others keeping `fraction` of the width, or returns the one it
-    /// has. The focus stays where it is: the preview follows it.
+    /// Opens the window's Preview tab in a new pane right of every other
+    /// pane of the shown workspace, the others keeping `fraction` of the
+    /// width, or returns the one it has; one the window has in another
+    /// workspace closes there and opens here. The focus stays where it is:
+    /// the preview follows it.
     pub fn open_preview(&mut self, window: WindowId, fraction: f32) -> Option<TabId> {
         if let Some(tab) = self.preview_tab(window) {
-            return Some(tab);
+            let shown = self.windows.get(&window)?.active;
+            match self.pane_of(tab).and_then(|pane| self.workspace_of(pane)) {
+                Some((_, ws)) if ws == shown => return Some(tab),
+                _ => {
+                    self.close_tab(tab);
+                }
+            }
         }
         let w = self.windows.get(&window)?;
         // A location for form's sake: the preview lists nothing.
         let location = self
-            .active_tab(w.focused)
+            .active_tab(w.focused())
             .map(|(_, tab)| tab.location.clone())
             .or_else(|| {
-                w.dock
+                w.dock()
                     .panes()
                     .into_iter()
                     .filter_map(|pane| self.active_tab(pane))
@@ -816,8 +957,10 @@ impl Model {
             },
         );
         let w = self.windows.get_mut(&window)?;
-        let rest = std::mem::replace(&mut w.dock, Dock::Pane(pane));
-        w.dock = Dock::Split {
+        let active = w.active;
+        let ws = w.workspace_mut(active)?;
+        let rest = std::mem::replace(&mut ws.dock, Dock::Pane(pane));
+        ws.dock = Dock::Split {
             dir: SplitDir::Right,
             fraction: if fraction.is_finite() {
                 fraction.clamp(0.05, 0.95)
@@ -847,64 +990,383 @@ impl Model {
             },
         );
         self.tabs.insert(tab, Tab::new(location, &self.settings));
-        self.windows.insert(
-            window,
-            Window {
-                dock: Dock::Pane(pane),
-                focused: pane,
-                geometry: None,
-                side_panel: SidePanel::default(),
-            },
-        );
+        let workspace = self.workspace_for(pane);
+        self.windows
+            .insert(window, Window::one(workspace, None, SidePanel::default()));
         self.focused_window = window;
         self.focused = pane;
         self.refollow();
         (window, pane, tab)
     }
 
-    /// Opens a window from a saved one: its panes, tabs, dock, side panel
-    /// and geometry. A pane without tabs is dropped; a window without panes
-    /// gets one tab at `fallback`. Returns the window, now focused.
+    /// A workspace holding one pane, with the next id.
+    fn workspace_for(&mut self, pane: PaneId) -> Workspace {
+        let id = WorkspaceId(self.next_workspace);
+        self.next_workspace += 1;
+        Workspace {
+            id,
+            dock: Dock::Pane(pane),
+            focused: pane,
+        }
+    }
+
+    /// A pane holding one new tab at `location`, with the next ids.
+    fn pane_with_tab(&mut self, location: Location) -> (PaneId, TabId) {
+        let pane = PaneId(self.next_pane);
+        self.next_pane += 1;
+        let tab = TabId(self.next_tab);
+        self.next_tab += 1;
+        self.tabs.insert(tab, Tab::new(location, &self.settings));
+        self.panes.insert(
+            pane,
+            Pane {
+                tabs: vec![tab],
+                active: Some(tab),
+            },
+        );
+        (pane, tab)
+    }
+
+    /// The workspaces of a window, in the order of the title row.
+    #[must_use]
+    pub fn workspaces(&self, window: WindowId) -> &[Workspace] {
+        self.windows.get(&window).map_or(&[], |w| &w.workspaces)
+    }
+
+    /// The window and the workspace holding this pane.
+    #[must_use]
+    pub fn workspace_of(&self, pane: PaneId) -> Option<(WindowId, WorkspaceId)> {
+        self.windows
+            .iter()
+            .find_map(|(id, w)| w.workspace_of(pane).map(|ws| (*id, ws.id)))
+    }
+
+    /// The window holding this workspace.
+    #[must_use]
+    pub fn window_of_workspace(&self, id: WorkspaceId) -> Option<WindowId> {
+        self.windows
+            .iter()
+            .find(|(_, w)| w.position(id).is_some())
+            .map(|(window, _)| *window)
+    }
+
+    /// The pane of a workspace that holds exactly one, whatever the pane
+    /// shows — the preview, a console and a comparison count like an
+    /// explorer (QUESTIONS.md 270); `None` for a workspace of several panes
+    /// and for one the model does not have. Only the tab of such a
+    /// workspace can be docked into another layout (SPEC.md *Workspace
+    /// tabs*, Dragging a tab).
+    #[must_use]
+    pub fn sole_pane(&self, id: WorkspaceId) -> Option<PaneId> {
+        let window = self.window_of_workspace(id)?;
+        let workspace = self.workspaces(window).iter().find(|ws| ws.id == id)?;
+        match workspace.dock {
+            Dock::Pane(pane) => Some(pane),
+            Dock::Split { .. } => None,
+        }
+    }
+
+    /// Docks the one pane of workspace `id` beside `pane` on `side`, in
+    /// whichever workspace and window `pane` is: the reverse of a pane
+    /// dropped on the tab row. The workspace, emptied, leaves its row, and
+    /// the layout that took the pane is shown with the pane focused.
+    /// Refused for a workspace of several panes — its panes move one at a
+    /// time by their handles — and for a `pane` that is the workspace's
+    /// own. Returns whether the pane was docked.
+    pub fn dock_workspace(&mut self, id: WorkspaceId, pane: PaneId, side: Side) -> bool {
+        let Some(sole) = self.sole_pane(id) else {
+            return false;
+        };
+        if sole == pane {
+            return false;
+        }
+        let Some(tab) = self.pane(sole).and_then(Pane::active) else {
+            return false;
+        };
+        self.move_tab(tab, DockTarget::Beside { pane, side })
+    }
+
+    /// Opens a new workspace in `window`, right after the shown one, with one
+    /// pane at `location`, and shows it. Returns the workspace, the pane and
+    /// the tab.
+    pub fn new_workspace(
+        &mut self,
+        window: WindowId,
+        location: Location,
+    ) -> Option<(WorkspaceId, PaneId, TabId)> {
+        if !self.windows.contains_key(&window) {
+            return None;
+        }
+        let (pane, tab) = self.pane_with_tab(location);
+        let workspace = self.workspace_for(pane);
+        let id = workspace.id;
+        let w = self.windows.get_mut(&window)?;
+        let at = w.position(w.active).map_or(w.workspaces.len(), |i| i + 1);
+        w.workspaces.insert(at, workspace);
+        self.activate_workspace(id);
+        Some((id, pane, tab))
+    }
+
+    /// Shows a workspace: its window gets the focus, its focused pane the
+    /// keyboard. Returns whether it exists.
+    pub fn activate_workspace(&mut self, id: WorkspaceId) -> bool {
+        let Some(window) = self.window_of_workspace(id) else {
+            return false;
+        };
+        let Some(w) = self.windows.get_mut(&window) else {
+            return false;
+        };
+        w.active = id;
+        let focused = w.focused();
+        self.focused_window = window;
+        self.focused = focused;
+        self.refollow();
+        true
+    }
+
+    /// Closes a workspace with every pane and tab in it; the neighbour
+    /// after it, else before it, is shown. A window left without a
+    /// workspace closes unless it is the last one, whose last workspace
+    /// stays. Returns whether it closed.
+    pub fn close_workspace(&mut self, id: WorkspaceId) -> bool {
+        let Some(window) = self.window_of_workspace(id) else {
+            return false;
+        };
+        let Some(w) = self.windows.get(&window) else {
+            return false;
+        };
+        if w.workspaces.len() < 2 {
+            return self.windows.len() > 1 && self.close_window(window);
+        }
+        let panes: Vec<PaneId> = w
+            .workspaces
+            .iter()
+            .find(|ws| ws.id == id)
+            .map(|ws| ws.dock.panes())
+            .unwrap_or_default();
+        for pane in panes {
+            self.remove_pane(pane);
+        }
+        let Some(w) = self.windows.get_mut(&window) else {
+            return false;
+        };
+        let Some(at) = w.position(id) else {
+            return false;
+        };
+        w.workspaces.remove(at);
+        if w.active == id
+            && let Some(next) = w.neighbour(at)
+        {
+            w.active = next;
+        }
+        if self.focused_window == window {
+            self.focused = w.focused();
+        }
+        self.refollow();
+        true
+    }
+
+    /// Moves a workspace to position `to` in its window's tab row. Returns
+    /// whether it moved.
+    pub fn move_workspace(&mut self, id: WorkspaceId, to: usize) -> bool {
+        let Some(window) = self.window_of_workspace(id) else {
+            return false;
+        };
+        let Some(w) = self.windows.get_mut(&window) else {
+            return false;
+        };
+        let Some(from) = w.position(id) else {
+            return false;
+        };
+        let to = to.min(w.workspaces.len() - 1);
+        if from == to {
+            return false;
+        }
+        let workspace = w.workspaces.remove(from);
+        w.workspaces.insert(to, workspace);
+        true
+    }
+
+    /// Moves a workspace to the end of another window's tab row, or into a
+    /// new window of its own, and shows it there. A window emptied by the
+    /// move closes. Returns whether it moved.
+    pub fn workspace_to_window(&mut self, id: WorkspaceId, target: Option<WindowId>) -> bool {
+        let Some(from) = self.window_of_workspace(id) else {
+            return false;
+        };
+        if target == Some(from) {
+            return false;
+        }
+        let alone = self
+            .windows
+            .get(&from)
+            .is_some_and(|w| w.workspaces.len() == 1);
+        if target.is_none() && alone {
+            // A window with this one workspace is one already.
+            return true;
+        }
+        if target.is_some_and(|t| !self.windows.contains_key(&t)) {
+            return false;
+        }
+        let geometry = self.offset_geometry(from);
+        let Some(w) = self.windows.get_mut(&from) else {
+            return false;
+        };
+        let Some(at) = w.position(id) else {
+            return false;
+        };
+        let workspace = w.workspaces.remove(at);
+        if w.active == id
+            && let Some(next) = w.neighbour(at)
+        {
+            w.active = next;
+        }
+        if let Some(window) = target {
+            if let Some(w) = self.windows.get_mut(&window) {
+                w.workspaces.push(workspace);
+            }
+        } else {
+            let window = WindowId(self.next_window);
+            self.next_window += 1;
+            self.windows.insert(
+                window,
+                Window::one(workspace, geometry, SidePanel::default()),
+            );
+        }
+        self.drop_empty_window(from);
+        self.activate_workspace(id);
+        true
+    }
+
+    /// The geometry for a window torn off `window`: the same size, a little
+    /// down and right, not maximised.
+    fn offset_geometry(&self, window: WindowId) -> Option<Geometry> {
+        self.windows
+            .get(&window)
+            .and_then(|w| w.geometry)
+            .map(|g| Geometry {
+                x: g.x + 40.0,
+                y: g.y + 40.0,
+                maximised: false,
+                ..g
+            })
+    }
+
+    /// Forgets a window left without a workspace; the focus moves to another
+    /// window.
+    fn drop_empty_window(&mut self, window: WindowId) {
+        if self
+            .windows
+            .get(&window)
+            .is_some_and(|w| w.workspaces.is_empty())
+        {
+            self.windows.remove(&window);
+            if self.focused_window == window
+                && let Some(next) = self.windows.keys().next().copied()
+            {
+                self.focused_window = next;
+                self.focused = self.windows[&next].focused();
+            }
+        }
+    }
+
+    /// Opens a window from a saved one: its workspaces with their panes,
+    /// tabs and docks, its side panel and geometry. A pane without tabs is
+    /// dropped, so is a workspace without panes; a window without
+    /// workspaces gets one at `fallback`. A pane saved with several tabs (a
+    /// session of 0.2, whose panes had tab strips) keeps its active tab and
+    /// opens the others as workspaces of their own, after every saved
+    /// workspace. Returns the window, now focused.
     pub fn add_window(&mut self, saved: &WindowSession, fallback: &Location) -> WindowId {
+        let mut workspaces: Vec<Workspace> = Vec::new();
+        let mut extra: Vec<Workspace> = Vec::new();
+        let mut active: Option<WorkspaceId> = None;
+        for (index, saved_ws) in saved.workspaces().iter().enumerate() {
+            let Some((workspace, more)) = self.add_workspace(saved_ws) else {
+                continue;
+            };
+            if index == saved.active_workspace {
+                active = Some(workspace.id);
+            }
+            workspaces.push(workspace);
+            extra.extend(more);
+        }
+        workspaces.extend(extra);
+        if workspaces.is_empty() {
+            let (pane, _) = self.pane_with_tab(fallback.clone());
+            workspaces.push(self.workspace_for(pane));
+        }
+        let active = active
+            .filter(|id| workspaces.iter().any(|w| w.id == *id))
+            .unwrap_or(workspaces[0].id);
+        let window = WindowId(self.next_window);
+        self.next_window += 1;
+        self.windows.insert(
+            window,
+            Window {
+                workspaces,
+                active,
+                geometry: saved.geometry,
+                side_panel: saved.side_panel.clone(),
+            },
+        );
+        self.activate_workspace(active);
+        window
+    }
+
+    /// Builds a workspace from a saved one: its panes with their active tab
+    /// each and its dock. Every further tab of a pane comes back in a
+    /// workspace of its own, returned after it. `None` for a workspace with
+    /// no tab at all.
+    fn add_workspace(&mut self, saved: &WorkspaceSession) -> Option<(Workspace, Vec<Workspace>)> {
         let mut ids: Vec<PaneId> = Vec::new();
         let mut focused: Option<PaneId> = None;
+        let mut extra: Vec<Workspace> = Vec::new();
         for (index, saved_pane) in saved.panes.iter().enumerate() {
             if saved_pane.tabs.is_empty() {
                 // Keep the indices the dock refers to aligned.
                 ids.push(PaneId(0));
                 continue;
             }
-            let pane = PaneId(self.next_pane);
-            self.next_pane += 1;
-            let mut tabs = Vec::new();
-            for saved_tab in &saved_pane.tabs {
-                let tab = TabId(self.next_tab);
-                self.next_tab += 1;
-                let mut state = Tab::new(saved_tab.location.clone(), &self.settings);
-                // A hand-edited file naming a console or a comparison: the
-                // view is gone, the location stays.
-                state.kind = if saved_tab.kind.is_view() {
-                    TabKind::Explorer
-                } else {
-                    saved_tab.kind
-                };
-                state.view = saved_tab.view;
-                state.sort = saved_tab.sort;
-                state.group = saved_tab.group;
-                state.filter.clone_from(&saved_tab.filter);
-                state.show_hidden = saved_tab.show_hidden;
-                state.flatten = saved_tab.flatten;
-                state.selection = saved_tab.selection.iter().copied().collect();
-                state.scroll = saved_tab.scroll.max(0.0);
-                state.note.clone_from(&saved_tab.note);
-                self.tabs.insert(tab, state);
-                tabs.push(tab);
-            }
-            let active = saved_pane
+            let kept = saved_pane
                 .active
-                .and_then(|i| tabs.get(i).copied())
-                .or_else(|| tabs.first().copied());
-            self.panes.insert(pane, Pane { tabs, active });
+                .filter(|i| *i < saved_pane.tabs.len())
+                .unwrap_or(0);
+            let mut pane_id = None;
+            for (i, saved_tab) in saved_pane.tabs.iter().enumerate() {
+                let (pane, tab) = self.pane_with_tab(saved_tab.location.clone());
+                if let Some(state) = self.tabs.get_mut(&tab) {
+                    // A hand-edited file naming a console or a comparison:
+                    // the view is gone, the location stays.
+                    state.kind = if saved_tab.kind.is_view() {
+                        TabKind::Explorer
+                    } else {
+                        saved_tab.kind
+                    };
+                    state.view = saved_tab.view;
+                    state.sort = saved_tab.sort;
+                    state.group = saved_tab.group;
+                    state.filter.clone_from(&saved_tab.filter);
+                    state.show_hidden = saved_tab.show_hidden;
+                    state.flatten = saved_tab.flatten;
+                    state.selection = saved_tab.selection.iter().copied().collect();
+                    state.scroll = saved_tab.scroll.max(0.0);
+                    state.columns = saved_tab
+                        .columns
+                        .iter()
+                        .filter(|(_, w)| w.is_finite() && **w > 0.0)
+                        .map(|(id, w)| (id.clone(), *w))
+                        .collect();
+                    state.note.clone_from(&saved_tab.note);
+                }
+                if i == kept {
+                    pane_id = Some(pane);
+                } else {
+                    let workspace = self.workspace_for(pane);
+                    extra.push(workspace);
+                }
+            }
+            let pane = pane_id?;
             if index == saved.focused_pane {
                 focused = Some(pane);
             }
@@ -928,45 +1390,19 @@ impl Model {
             });
         let dock = if let Some(dock) = dock {
             dock
-        } else if let Some((first, rest)) = real.split_first() {
+        } else {
+            let (first, rest) = real.split_first()?;
             // The dock did not match the panes: lay them out side by side.
             rest.iter().fold(Dock::Pane(*first), |dock, pane| {
                 Dock::split_of(SplitDir::Right, dock, Dock::Pane(*pane))
             })
-        } else {
-            let pane = PaneId(self.next_pane);
-            self.next_pane += 1;
-            let tab = TabId(self.next_tab);
-            self.next_tab += 1;
-            self.tabs
-                .insert(tab, Tab::new(fallback.clone(), &self.settings));
-            self.panes.insert(
-                pane,
-                Pane {
-                    tabs: vec![tab],
-                    active: Some(tab),
-                },
-            );
-            Dock::Pane(pane)
         };
         let focused = focused
             .filter(|p| p.0 != 0)
             .unwrap_or_else(|| dock.panes().first().copied().unwrap_or(PaneId(0)));
-        let window = WindowId(self.next_window);
-        self.next_window += 1;
-        self.windows.insert(
-            window,
-            Window {
-                dock,
-                focused,
-                geometry: saved.geometry,
-                side_panel: saved.side_panel.clone(),
-            },
-        );
-        self.focused_window = window;
-        self.focused = focused;
-        self.refollow();
-        window
+        let id = WorkspaceId(self.next_workspace);
+        self.next_workspace += 1;
+        Some((Workspace { id, dock, focused }, extra))
     }
 
     /// A model rebuilt from a session: every window, pane and tab. A session
@@ -1001,55 +1437,69 @@ impl Model {
             if *id == self.focused_window {
                 focused_window = index;
             }
-            let panes = window.dock.panes();
-            let index_of = |pane: PaneId| panes.iter().position(|p| *p == pane).unwrap_or(0);
             windows.push(WindowSession {
                 geometry: window.geometry,
-                focused_pane: index_of(window.focused),
                 side_panel: window.side_panel.clone(),
-                dock: DockSession::from_dock(&window.dock, &index_of),
-                panes: panes
+                active_workspace: window.position(window.active).unwrap_or(0),
+                workspaces: window
+                    .workspaces
                     .iter()
-                    .map(|pane| {
-                        let pane = self.panes.get(pane);
-                        // A console or a comparison cannot come back with
-                        // the session: its tab is left out.
-                        let tabs: Vec<TabId> = pane
-                            .map(|p| p.tabs.clone())
-                            .unwrap_or_default()
-                            .into_iter()
-                            .filter(|id| self.tabs.get(id).is_some_and(|t| !t.kind.is_view()))
-                            .collect();
-                        PaneSession {
-                            active: pane
-                                .and_then(Pane::active)
-                                .and_then(|a| tabs.iter().position(|t| *t == a))
-                                .or_else(|| (!tabs.is_empty()).then_some(0)),
-                            tabs: tabs
-                                .iter()
-                                .filter_map(|id| self.tabs.get(id))
-                                .map(|tab| TabSession {
-                                    kind: tab.kind,
-                                    location: tab.location.clone(),
-                                    view: tab.view,
-                                    sort: tab.sort,
-                                    group: tab.group,
-                                    filter: tab.filter.clone(),
-                                    show_hidden: tab.show_hidden,
-                                    flatten: tab.flatten,
-                                    selection: tab.selection.iter().copied().collect(),
-                                    scroll: tab.scroll,
-                                    note: None,
-                                })
-                                .collect(),
-                        }
-                    })
+                    .map(|ws| self.workspace_session(ws))
                     .collect(),
+                ..WindowSession::default()
             });
         }
         Session {
             focused_window,
             windows,
+        }
+    }
+
+    /// One workspace as the session holds it.
+    fn workspace_session(&self, ws: &Workspace) -> WorkspaceSession {
+        let panes = ws.dock.panes();
+        let index_of = |pane: PaneId| panes.iter().position(|p| *p == pane).unwrap_or(0);
+        WorkspaceSession {
+            focused_pane: index_of(ws.focused),
+            dock: DockSession::from_dock(&ws.dock, &index_of),
+            panes: panes
+                .iter()
+                .map(|pane| {
+                    let pane = self.panes.get(pane);
+                    // A console or a comparison cannot come back with the
+                    // session: its tab is left out.
+                    let tabs: Vec<TabId> = pane
+                        .map(|p| p.tabs.clone())
+                        .unwrap_or_default()
+                        .into_iter()
+                        .filter(|id| self.tabs.get(id).is_some_and(|t| !t.kind.is_view()))
+                        .collect();
+                    PaneSession {
+                        active: pane
+                            .and_then(Pane::active)
+                            .and_then(|a| tabs.iter().position(|t| *t == a))
+                            .or_else(|| (!tabs.is_empty()).then_some(0)),
+                        tabs: tabs
+                            .iter()
+                            .filter_map(|id| self.tabs.get(id))
+                            .map(|tab| TabSession {
+                                kind: tab.kind,
+                                location: tab.location.clone(),
+                                view: tab.view,
+                                sort: tab.sort,
+                                group: tab.group,
+                                filter: tab.filter.clone(),
+                                show_hidden: tab.show_hidden,
+                                flatten: tab.flatten,
+                                selection: tab.selection.iter().copied().collect(),
+                                scroll: tab.scroll,
+                                columns: tab.columns.clone(),
+                                note: None,
+                            })
+                            .collect(),
+                    }
+                })
+                .collect(),
         }
     }
 
@@ -1069,24 +1519,24 @@ impl Model {
     pub fn window_of(&self, pane: PaneId) -> Option<WindowId> {
         self.windows
             .iter()
-            .find(|(_, w)| w.dock.panes().contains(&pane))
+            .find(|(_, w)| w.workspace_of(pane).is_some())
             .map(|(id, _)| *id)
     }
 
-    /// The focused window's pane tree.
+    /// The focused window's shown workspace's pane tree.
     #[must_use]
     pub fn dock(&self) -> &Dock {
         self.windows
             .get(&self.focused_window)
             .or_else(|| self.windows.values().next())
-            .map_or(&EMPTY_DOCK, |w| &w.dock)
+            .map_or(&EMPTY_DOCK, Window::dock)
     }
 
-    /// Every pane of every window, window by window, left-to-right and
-    /// top-to-bottom within each.
+    /// Every pane of every window, window by window and workspace by
+    /// workspace, left-to-right and top-to-bottom within each.
     #[must_use]
     pub fn all_panes(&self) -> Vec<PaneId> {
-        self.windows.values().flat_map(|w| w.dock.panes()).collect()
+        self.windows.values().flat_map(Window::panes).collect()
     }
 
     /// Gives `window` the focus; its focused pane becomes the focused one.
@@ -1095,7 +1545,7 @@ impl Model {
         match self.windows.get(&window) {
             Some(w) => {
                 self.focused_window = window;
-                self.focused = w.focused;
+                self.focused = w.focused();
                 self.refollow();
                 true
             }
@@ -1112,7 +1562,7 @@ impl Model {
         let Some(gone) = self.windows.remove(&window) else {
             return false;
         };
-        for pane in gone.dock.panes() {
+        for pane in gone.panes() {
             if let Some(pane) = self.panes.remove(&pane) {
                 for tab in pane.tabs {
                     self.tabs.remove(&tab);
@@ -1152,31 +1602,21 @@ impl Model {
 
     /// Takes a window's split fractions from `dock`, which must have the
     /// same panes in the same splits. Returns whether it did.
+    /// Records the split fractions of the window's shown workspace, as the
+    /// UI shows them; `dock` must have the workspace's shape. Returns
+    /// whether it did.
     pub fn set_layout(&mut self, window: WindowId, dock: Dock) -> bool {
-        match self.windows.get_mut(&window) {
-            Some(w) if w.dock.same_shape(&dock) => {
-                w.dock = dock;
+        let Some(w) = self.windows.get_mut(&window) else {
+            return false;
+        };
+        let active = w.active;
+        match w.workspace_mut(active) {
+            Some(ws) if ws.dock.same_shape(&dock) => {
+                ws.dock = dock;
                 true
             }
             _ => false,
         }
-    }
-
-    /// Records the strip order of a pane's tabs, as the UI shows them. The
-    /// order must hold exactly the pane's tabs. Returns whether it did.
-    pub fn set_tab_order(&mut self, pane: PaneId, order: Vec<TabId>) -> bool {
-        let Some(p) = self.panes.get_mut(&pane) else {
-            return false;
-        };
-        let mut have = p.tabs.clone();
-        let mut want = order.clone();
-        have.sort_unstable();
-        want.sort_unstable();
-        if have != want || have.windows(2).any(|w| w[0] == w[1]) {
-            return false;
-        }
-        p.tabs = order;
-        true
     }
 
     /// Records a tab's scroll offset.
@@ -1184,6 +1624,22 @@ impl Model {
         match self.tabs.get_mut(&tab) {
             Some(t) => {
                 t.scroll = offset.max(0.0);
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// Records the widths the user gave a tab's columns, by column id; an
+    /// empty map puts every column back to its default. A width that is
+    /// not a positive number is dropped. `false` when the tab is unknown.
+    pub fn set_column_widths(&mut self, tab: TabId, columns: BTreeMap<String, f32>) -> bool {
+        match self.tabs.get_mut(&tab) {
+            Some(t) => {
+                t.columns = columns
+                    .into_iter()
+                    .filter(|(_, w)| w.is_finite() && *w > 0.0)
+                    .collect();
                 true
             }
             None => false,
@@ -1239,14 +1695,17 @@ impl Model {
         self.tabs.get_mut(&id).map(|tab| (id, tab))
     }
 
-    /// Makes `pane` the focused one, and its window the focused window.
-    /// Returns whether it exists.
+    /// Makes `pane` the focused one, its workspace the shown one and its
+    /// window the focused window. Returns whether it exists.
     pub fn focus(&mut self, pane: PaneId) -> bool {
-        let Some(window) = self.window_of(pane) else {
+        let Some((window, workspace)) = self.workspace_of(pane) else {
             return false;
         };
         if let Some(w) = self.windows.get_mut(&window) {
-            w.focused = pane;
+            w.active = workspace;
+            if let Some(ws) = w.workspace_mut(workspace) {
+                ws.focused = pane;
+            }
         }
         self.focused_window = window;
         self.focused = pane;
@@ -1359,6 +1818,19 @@ impl Model {
         true
     }
 
+    /// Narrows the pane's active tab to the entries of `types`, as the Type
+    /// column names them, or shows every type again for `None` or an empty
+    /// set (SPEC.md *View options menu*). Returns whether the tab exists.
+    pub fn set_types(&mut self, pane: PaneId, types: Option<BTreeSet<String>>) -> bool {
+        let settings = self.settings.clone();
+        let Some((_, tab)) = self.active_tab_mut(pane) else {
+            return false;
+        };
+        tab.types = types.filter(|t| !t.is_empty());
+        tab.refresh_view(&settings);
+        true
+    }
+
     /// Flips hidden entries in the pane's active tab. Returns the new state.
     pub fn toggle_hidden(&mut self, pane: PaneId) -> Option<bool> {
         let settings = self.settings.clone();
@@ -1457,7 +1929,8 @@ impl Model {
             return false;
         };
         let filter = tab.filter_text();
-        let spec = tab.spec_with(&settings, &filter);
+        let types = tab.types.clone();
+        let spec = tab.spec_with(&settings, &filter, types.as_ref());
         let took = tab.tree.extend(folder, batch, &spec);
         tab.rebuild_tree();
         took
@@ -1471,7 +1944,8 @@ impl Model {
             return false;
         };
         let filter = tab.filter_text();
-        let spec = tab.spec_with(&settings, &filter);
+        let types = tab.types.clone();
+        let spec = tab.spec_with(&settings, &filter, types.as_ref());
         let took = tab.tree.replace(folder, entries, &spec);
         if took {
             let listing = &tab.listing;
@@ -1557,83 +2031,102 @@ impl Model {
         location: Location,
         title: String,
     ) -> Option<TabId> {
-        let p = self.panes.get(&pane)?;
-        let at = p
-            .active
-            .and_then(|a| p.tabs.iter().position(|t| *t == a))
-            .map_or(p.tabs.len(), |i| i + 1);
-        let id = TabId(self.next_tab);
-        self.next_tab += 1;
-        let mut state = Tab::new(location, &self.settings);
-        state.kind = kind;
-        state.title = Some(title);
-        self.tabs.insert(id, state);
-        self.panes.get_mut(&pane)?.tabs.insert(at, id);
-        self.activate(id);
+        let window = self.window_of(pane)?;
+        let (_, new_pane, id) = self.new_workspace(window, location)?;
+        if let Some(state) = self.tabs.get_mut(&id) {
+            state.kind = kind;
+            state.title = Some(title);
+        }
+        self.focus(new_pane);
         Some(id)
     }
 
-    /// Opens a tab at `location` in `pane`, or in the focused pane, and makes
-    /// it active.
+    /// Opens a new workspace with one pane at `location` in the window of
+    /// `pane`, or of the focused pane, and shows it. Returns the new pane
+    /// and its tab.
     pub fn new_tab(&mut self, pane: Option<PaneId>, location: Location) -> (PaneId, TabId) {
         let pane = pane
             .filter(|p| self.panes.contains_key(p))
             .unwrap_or(self.focused);
-        let id = TabId(self.next_tab);
-        self.next_tab += 1;
-        self.tabs.insert(id, Tab::new(location, &self.settings));
-        let p = self.panes.entry(pane).or_default();
-        p.tabs.push(id);
-        p.active = Some(id);
-        self.focus(pane);
-        (pane, id)
+        let window = self
+            .window_of(pane)
+            .or_else(|| {
+                self.windows
+                    .contains_key(&self.focused_window)
+                    .then_some(self.focused_window)
+            })
+            .or_else(|| self.windows.keys().next().copied());
+        if let Some((_, pane, tab)) = window.and_then(|w| self.new_workspace(w, location.clone())) {
+            (pane, tab)
+        } else {
+            // No window at all: one opens for the tab.
+            let (_, pane, tab) = self.new_window(location);
+            (pane, tab)
+        }
     }
 
-    /// Closes a tab. The neighbour becomes active; a pane left empty is
-    /// removed from its window's dock, and a window left without a pane
-    /// closes unless it is the last one. Returns the pane the tab was in.
+    /// Closes a tab with its pane: the pane leaves its workspace's dock, a
+    /// workspace left empty closes with the neighbour shown, and a window
+    /// left without a workspace closes unless it is the last one, whose
+    /// last pane stays. Returns the pane the tab was in, `None` when
+    /// nothing closed.
     pub fn close_tab(&mut self, tab: TabId) -> Option<PaneId> {
         let pane = self.pane_of(tab)?;
-        self.tabs.remove(&tab);
-        let p = self.panes.get_mut(&pane)?;
-        let at = p.tabs.iter().position(|t| *t == tab)?;
-        p.tabs.remove(at);
-        if p.active == Some(tab) {
-            p.active = p.tabs.get(at.min(p.tabs.len().saturating_sub(1))).copied();
-        }
-        if p.tabs.is_empty() {
-            self.drop_pane(pane);
+        if !self.drop_pane(pane) {
+            return None;
         }
         self.refollow();
         Some(pane)
     }
 
-    /// Removes an emptied pane from its window; the window closes when it
-    /// was its last pane and other windows exist. The one pane of the only
-    /// window stays, empty.
-    fn drop_pane(&mut self, pane: PaneId) {
-        let Some(window) = self.window_of(pane) else {
-            return;
+    /// Removes a pane with its tab from its workspace; an emptied workspace
+    /// closes, and a window emptied with it closes when other windows
+    /// exist. The last pane of the last workspace of the last window stays.
+    /// Returns whether the pane went.
+    fn drop_pane(&mut self, pane: PaneId) -> bool {
+        let Some((window, workspace)) = self.workspace_of(pane) else {
+            return false;
         };
-        let Some(w) = self.windows.get_mut(&window) else {
-            return;
+        let Some(w) = self.windows.get(&window) else {
+            return false;
         };
-        match w.dock.clone().without(pane) {
+        let Some(ws) = w.workspaces.iter().find(|ws| ws.id == workspace) else {
+            return false;
+        };
+        match ws.dock.clone().without(pane) {
             Some(dock) => {
-                w.dock = dock;
-                if w.focused == pane {
-                    w.focused = w.dock.panes().first().copied().unwrap_or(pane);
+                let Some(w) = self.windows.get_mut(&window) else {
+                    return false;
+                };
+                let Some(ws) = w.workspace_mut(workspace) else {
+                    return false;
+                };
+                ws.dock = dock;
+                if ws.focused == pane {
+                    ws.focused = ws.dock.panes().first().copied().unwrap_or(pane);
                 }
-                let focused = w.focused;
-                self.panes.remove(&pane);
+                let focused = w.focused();
+                self.remove_pane(pane);
                 if self.focused == pane {
                     self.focused = focused;
                 }
+                true
             }
             None => {
-                if self.windows.len() > 1 {
-                    self.close_window(window);
+                if w.workspaces.len() > 1 || self.windows.len() > 1 {
+                    self.close_workspace(workspace)
+                } else {
+                    false
                 }
+            }
+        }
+    }
+
+    /// Forgets a pane and its tabs.
+    fn remove_pane(&mut self, pane: PaneId) {
+        if let Some(pane) = self.panes.remove(&pane) {
+            for tab in pane.tabs {
+                self.tabs.remove(&tab);
             }
         }
     }
@@ -1646,95 +2139,141 @@ impl Model {
             SplitDir::Right => Side::Right,
             SplitDir::Down => Side::Bottom,
         };
-        let new = self.add_pane(pane, side)?;
-        let (_, tab) = self.new_tab(Some(new), location);
+        let (new, tab) = self.pane_with_tab(location);
+        if !self.place_beside(new, pane, side) {
+            self.remove_pane(new);
+            return None;
+        }
+        self.focus(new);
         Some((new, tab))
     }
 
-    fn add_pane(&mut self, beside: PaneId, side: Side) -> Option<PaneId> {
-        let window = self.window_of(beside)?;
-        let new = PaneId(self.next_pane);
-        if !self.windows.get_mut(&window)?.dock.split(beside, side, new) {
-            return None;
-        }
-        self.next_pane += 1;
-        self.panes.insert(new, Pane::default());
-        Some(new)
+    /// Puts `new` into the dock of `beside`'s workspace, on `side` of it.
+    fn place_beside(&mut self, new: PaneId, beside: PaneId, side: Side) -> bool {
+        let Some((window, workspace)) = self.workspace_of(beside) else {
+            return false;
+        };
+        let Some(w) = self.windows.get_mut(&window) else {
+            return false;
+        };
+        let Some(ws) = w.workspace_mut(workspace) else {
+            return false;
+        };
+        ws.dock.split(beside, side, new)
     }
 
-    /// Moves a tab into another pane, into a new pane beside one, or into a
-    /// window of its own. The other pane may be in another window. An
-    /// emptied pane is removed, and a window emptied by the move closes.
-    /// Returns whether the move happened.
+    /// Takes a pane out of its workspace's dock without forgetting it: the
+    /// first step of a move. An emptied workspace closes, a window emptied
+    /// with it too. Returns whether the pane was in a dock.
+    fn detach_pane(&mut self, pane: PaneId) -> bool {
+        let Some((window, workspace)) = self.workspace_of(pane) else {
+            return false;
+        };
+        let Some(w) = self.windows.get_mut(&window) else {
+            return false;
+        };
+        let Some(ws) = w.workspace_mut(workspace) else {
+            return false;
+        };
+        if let Some(dock) = ws.dock.clone().without(pane) {
+            ws.dock = dock;
+            if ws.focused == pane {
+                ws.focused = ws.dock.panes().first().copied().unwrap_or(pane);
+            }
+        } else {
+            let Some(at) = w.position(workspace) else {
+                return false;
+            };
+            w.workspaces.remove(at);
+            if w.active == workspace
+                && let Some(next) = w.neighbour(at)
+            {
+                w.active = next;
+            }
+            self.drop_empty_window(window);
+        }
+        true
+    }
+
+    /// Moves a tab with its pane: beside another pane (of any window), into
+    /// a new workspace of its window, or into a window of its own. A
+    /// workspace or window emptied by the move closes. Returns whether the
+    /// move happened.
     pub fn move_tab(&mut self, tab: TabId, to: DockTarget) -> bool {
         let Some(from) = self.pane_of(tab) else {
             return false;
         };
-        let destination = match to {
-            DockTarget::Into(pane) => {
-                if !self.panes.contains_key(&pane) {
-                    return false;
-                }
-                pane
-            }
-            DockTarget::Beside { pane, side } => match self.add_pane(pane, side) {
-                Some(new) => new,
-                None => return false,
-            },
-            DockTarget::NewWindow => {
-                // A window alone with this tab is one already.
-                if self.panes.get(&from).is_some_and(|p| p.tabs.len() == 1)
-                    && self
-                        .window_of(from)
-                        .and_then(|w| self.windows.get(&w))
-                        .is_some_and(|w| w.dock == Dock::Pane(from))
-                {
+        let Some((window, workspace)) = self.workspace_of(from) else {
+            return false;
+        };
+        let alone_in_workspace = self
+            .windows
+            .get(&window)
+            .and_then(|w| w.workspace_of(from))
+            .is_some_and(|ws| ws.dock == Dock::Pane(from));
+        let alone_in_window = alone_in_workspace
+            && self
+                .windows
+                .get(&window)
+                .is_some_and(|w| w.workspaces.len() == 1);
+        match to {
+            DockTarget::Beside { pane, side } => {
+                if pane == from {
                     return true;
                 }
-                let pane = PaneId(self.next_pane);
-                self.next_pane += 1;
-                self.panes.insert(pane, Pane::default());
-                let window = WindowId(self.next_window);
+                if !self.panes.contains_key(&pane) || !self.detach_pane(from) {
+                    return false;
+                }
+                if !self.place_beside(from, pane, side) {
+                    // The target is in no dock: a workspace of its own
+                    // instead, so the pane is not lost.
+                    let ws = self.workspace_for(from);
+                    let id = ws.id;
+                    if let Some(w) = self.windows.get_mut(&window) {
+                        w.workspaces.push(ws);
+                    }
+                    self.activate_workspace(id);
+                    return true;
+                }
+                self.focus(from);
+                true
+            }
+            DockTarget::NewWorkspace => {
+                if alone_in_workspace {
+                    return true;
+                }
+                if !self.detach_pane(from) {
+                    return false;
+                }
+                let ws = self.workspace_for(from);
+                let id = ws.id;
+                let Some(w) = self.windows.get_mut(&window) else {
+                    return false;
+                };
+                let at = w.position(workspace).map_or(w.workspaces.len(), |i| i + 1);
+                w.workspaces.insert(at.min(w.workspaces.len()), ws);
+                self.activate_workspace(id);
+                true
+            }
+            DockTarget::NewWindow => {
+                if alone_in_window {
+                    // A window alone with this pane is one already.
+                    return true;
+                }
+                let geometry = self.offset_geometry(window);
+                if !self.detach_pane(from) {
+                    return false;
+                }
+                let ws = self.workspace_for(from);
+                let id = ws.id;
+                let new_window = WindowId(self.next_window);
                 self.next_window += 1;
-                let geometry = self
-                    .window_of(from)
-                    .and_then(|w| self.windows.get(&w))
-                    .and_then(|w| w.geometry)
-                    .map(|g| Geometry {
-                        x: g.x + 40.0,
-                        y: g.y + 40.0,
-                        maximised: false,
-                        ..g
-                    });
-                self.windows.insert(
-                    window,
-                    Window {
-                        dock: Dock::Pane(pane),
-                        focused: pane,
-                        geometry,
-                        side_panel: SidePanel::default(),
-                    },
-                );
-                pane
-            }
-        };
-        if destination == from {
-            return true;
-        }
-        if let Some(p) = self.panes.get_mut(&from) {
-            p.tabs.retain(|t| *t != tab);
-            if p.active == Some(tab) {
-                p.active = p.tabs.first().copied();
+                self.windows
+                    .insert(new_window, Window::one(ws, geometry, SidePanel::default()));
+                self.activate_workspace(id);
+                true
             }
         }
-        let p = self.panes.entry(destination).or_default();
-        p.tabs.push(tab);
-        p.active = Some(tab);
-        self.focus(destination);
-        if self.panes.get(&from).is_some_and(|p| p.tabs.is_empty()) {
-            self.drop_pane(from);
-        }
-        true
     }
 
     /// Replaces the settings and re-derives every tab's view.
@@ -1754,7 +2293,8 @@ impl Model {
             return false;
         };
         let filter = tab.filter_text();
-        let spec = tab.spec_with(&settings, &filter);
+        let types = tab.types.clone();
+        let spec = tab.spec_with(&settings, &filter, types.as_ref());
         tab.listing.extend(batch, &spec);
         tab.rebuild_tree();
         true
@@ -1784,7 +2324,8 @@ impl Model {
             return false;
         };
         let filter = tab.filter_text();
-        let spec = tab.spec_with(&settings, &filter);
+        let types = tab.types.clone();
+        let spec = tab.spec_with(&settings, &filter, types.as_ref());
         tab.listing.clear();
         tab.listing.extend(entries, &spec);
         tab.listing.complete = true;
@@ -1863,7 +2404,8 @@ impl Model {
             return true;
         };
         let filter = tab.filter_text();
-        let spec = tab.spec_with(&settings, &filter);
+        let types = tab.types.clone();
+        let spec = tab.spec_with(&settings, &filter, types.as_ref());
         match change {
             FsChange::Created(entry) | FsChange::Modified(entry) => {
                 tab.listing.upsert(entry, &spec);
@@ -2163,9 +2705,11 @@ mod tests {
     }
 
     #[test]
-    fn tabs_split_move_and_close_through_the_dock() {
+    fn panes_split_move_and_close_through_the_dock() {
         let mut model = Model::new(Settings::default(), loc("/a"));
+        let window = model.focused_window;
         let pane = model.focused;
+        let home = model.workspaces(window)[0].id;
         let (right, right_tab) = model
             .split(pane, SplitDir::Right)
             .unwrap_or_else(|| panic!("split"));
@@ -2176,10 +2720,17 @@ mod tests {
             Some(loc("/a"))
         );
 
-        let (_, extra) = model.new_tab(Some(pane), loc("/b"));
-        assert_eq!(model.pane(pane).map(|p| p.tabs().len()), Some(2));
-        assert!(model.move_tab(extra, DockTarget::Into(right)));
-        assert_eq!(model.pane(right).map(Pane::active), Some(Some(extra)));
+        // A new tab is a new workspace, shown, right after the one shown.
+        let (extra_pane, extra) = model.new_tab(Some(pane), loc("/b"));
+        assert_eq!(model.pane(pane).map(|p| p.tabs().len()), Some(1));
+        assert_eq!(model.workspaces(window).len(), 2);
+        let second = model.workspaces(window)[1].id;
+        assert_eq!(model.window(window).map(|w| w.active), Some(second));
+        assert_eq!(model.dock(), &Dock::Pane(extra_pane));
+        assert_eq!(model.focused, extra_pane);
+
+        // Its pane docks beside a pane of the other workspace; the emptied
+        // workspace closes and the target's is shown.
         assert!(model.move_tab(
             extra,
             DockTarget::Beside {
@@ -2187,20 +2738,160 @@ mod tests {
                 side: Side::Top
             }
         ));
+        assert_eq!(model.workspaces(window).len(), 1);
         assert_eq!(model.dock().panes().len(), 3);
+        assert_eq!(model.focused, extra_pane);
+        // And out again into a workspace of its own, after the shown one.
+        assert!(model.move_tab(extra, DockTarget::NewWorkspace));
+        assert_eq!(model.dock(), &Dock::Pane(extra_pane));
+        assert_eq!(model.workspaces(window)[0].id, home);
+        assert_eq!(model.workspaces(window)[0].dock.panes(), [pane, right]);
+        // A pane alone in its workspace stays where it is.
+        assert!(model.move_tab(extra, DockTarget::NewWorkspace));
+        assert_eq!(model.workspaces(window).len(), 2);
 
         assert_eq!(model.close_tab(right_tab), Some(right));
-        assert_eq!(model.dock().panes().len(), 2, "the emptied pane is gone");
-        assert!(model.pane(right).is_none());
-        assert!(model.close_tab(extra).is_some());
-        assert_eq!(*model.dock(), Dock::Pane(pane));
-        assert_eq!(model.close_tab(TabId(1)), Some(pane));
         assert_eq!(
-            model.pane(pane).map(|p| p.tabs().len()),
-            Some(0),
-            "the last pane stays"
+            model.workspaces(window)[0].dock,
+            Dock::Pane(pane),
+            "the emptied pane is gone"
         );
-        assert!(!model.move_tab(TabId(99), DockTarget::Into(pane)));
+        assert!(model.pane(right).is_none());
+        // Closing the one pane of a workspace closes the workspace; the
+        // neighbour shows.
+        assert_eq!(model.close_tab(extra), Some(extra_pane));
+        assert_eq!(model.workspaces(window).len(), 1);
+        assert_eq!(model.focused, pane);
+        assert_eq!(*model.dock(), Dock::Pane(pane));
+        // The last pane of the last workspace of the last window stays.
+        assert_eq!(model.close_tab(TabId(1)), None);
+        assert_eq!(model.pane(pane).map(|p| p.tabs().len()), Some(1));
+        assert!(!model.move_tab(
+            TabId(99),
+            DockTarget::Beside {
+                pane,
+                side: Side::Left
+            }
+        ));
+    }
+
+    #[test]
+    fn a_workspace_of_one_pane_docks_into_another_layout_and_one_of_several_does_not() {
+        let mut model = Model::new(Settings::default(), loc("/a"));
+        let window = model.focused_window;
+        let pane_a = model.focused;
+        let first = model.workspaces(window)[0].id;
+        let (second, pane_b, _) = model
+            .new_workspace(window, loc("/b"))
+            .unwrap_or_else(|| panic!("workspace"));
+        let (third, pane_c, _) = model
+            .new_workspace(window, loc("/c"))
+            .unwrap_or_else(|| panic!("workspace"));
+        let (pane_d, _) = model
+            .split(pane_c, SplitDir::Right)
+            .unwrap_or_else(|| panic!("split"));
+        assert!(model.activate_workspace(first));
+
+        // Exactly one pane, or none to speak of.
+        assert_eq!(model.sole_pane(first), Some(pane_a));
+        assert_eq!(model.sole_pane(second), Some(pane_b));
+        assert_eq!(model.sole_pane(third), None, "two panes");
+        assert_eq!(model.sole_pane(WorkspaceId(99)), None);
+
+        // A workspace of several panes is not docked, nor one onto itself,
+        // nor onto a pane that is not there.
+        let before = model.clone();
+        assert!(!model.dock_workspace(third, pane_a, Side::Left));
+        assert!(!model.dock_workspace(second, pane_b, Side::Left));
+        assert!(!model.dock_workspace(second, PaneId(99), Side::Left));
+        assert!(!model.dock_workspace(WorkspaceId(99), pane_a, Side::Left));
+        assert_eq!(model.workspaces(window), before.workspaces(window));
+
+        // The one pane of the second workspace, docked left of the first's:
+        // the second leaves the row, the first holds both and is shown, and
+        // the docked pane has the keyboard.
+        assert!(model.dock_workspace(second, pane_a, Side::Left));
+        let order: Vec<WorkspaceId> = model.workspaces(window).iter().map(|w| w.id).collect();
+        assert_eq!(order, [first, third]);
+        assert_eq!(
+            model.workspaces(window)[0].dock,
+            Dock::split_of(SplitDir::Right, Dock::Pane(pane_b), Dock::Pane(pane_a))
+        );
+        assert_eq!(model.window(window).map(|w| w.active), Some(first));
+        assert_eq!(model.focused, pane_b);
+        assert_eq!(model.sole_pane(first), None, "it holds two now");
+
+        // Into a layout that is not shown: it is shown afterwards. The
+        // first workspace is down to one pane again after its other pane
+        // goes below a pane of the third.
+        assert_eq!(
+            model.close_tab(
+                model
+                    .pane(pane_b)
+                    .and_then(Pane::active)
+                    .unwrap_or(TabId(0))
+            ),
+            Some(pane_b)
+        );
+        assert_eq!(model.sole_pane(first), Some(pane_a));
+        assert!(model.dock_workspace(first, pane_d, Side::Bottom));
+        let order: Vec<WorkspaceId> = model.workspaces(window).iter().map(|w| w.id).collect();
+        assert_eq!(order, [third]);
+        assert_eq!(model.dock().panes(), [pane_c, pane_d, pane_a]);
+        assert_eq!(model.focused, pane_a);
+    }
+
+    #[test]
+    fn workspaces_open_switch_reorder_and_close() {
+        let mut model = Model::new(Settings::default(), loc("/a"));
+        let window = model.focused_window;
+        let pane_a = model.focused;
+        let first = model.workspaces(window)[0].id;
+        let (second, pane_b, tab_b) = model
+            .new_workspace(window, loc("/b"))
+            .unwrap_or_else(|| panic!("workspace"));
+        let (third, pane_c, _) = model
+            .new_workspace(window, loc("/c"))
+            .unwrap_or_else(|| panic!("workspace"));
+        assert_eq!(model.workspaces(window).len(), 3);
+        assert_eq!(model.focused, pane_c);
+        assert_eq!(model.workspace_of(pane_b), Some((window, second)));
+        assert_eq!(model.all_panes(), [pane_a, pane_b, pane_c]);
+        assert_eq!(
+            model.tab(tab_b).map(|t| t.location.clone()),
+            Some(loc("/b"))
+        );
+
+        // Showing a workspace gives its pane the keyboard; focusing a pane
+        // shows its workspace.
+        assert!(model.activate_workspace(second));
+        assert_eq!(model.focused, pane_b);
+        assert_eq!(model.dock(), &Dock::Pane(pane_b));
+        assert!(model.focus(pane_c));
+        assert_eq!(model.window(window).map(|w| w.active), Some(third));
+        assert!(!model.activate_workspace(WorkspaceId(99)));
+
+        // Reordering.
+        assert!(model.move_workspace(third, 0));
+        let order: Vec<WorkspaceId> = model.workspaces(window).iter().map(|w| w.id).collect();
+        assert_eq!(order, [third, first, second]);
+        assert!(!model.move_workspace(third, 0), "already there");
+        assert!(model.move_workspace(third, 9), "clamped to the end");
+        let order: Vec<WorkspaceId> = model.workspaces(window).iter().map(|w| w.id).collect();
+        assert_eq!(order, [first, second, third]);
+
+        // Closing the shown one shows the one after it, else before it.
+        assert!(model.activate_workspace(second));
+        assert!(model.close_workspace(second));
+        assert!(model.pane(pane_b).is_none());
+        assert!(model.tab(tab_b).is_none());
+        assert_eq!(model.window(window).map(|w| w.active), Some(third));
+        assert_eq!(model.focused, pane_c);
+        assert!(model.close_workspace(third));
+        assert_eq!(model.window(window).map(|w| w.active), Some(first));
+        assert_eq!(model.focused, pane_a);
+        assert!(!model.close_workspace(first), "the last one stays");
+        assert!(!model.close_workspace(second), "gone already");
     }
 
     #[test]
@@ -2208,38 +2899,103 @@ mod tests {
         let mut model = Model::new(Settings::default(), loc("/a"));
         let first = model.focused_window;
         let pane_a = model.focused;
-        let (_, extra) = model.new_tab(Some(pane_a), loc("/b"));
+        let (extra_pane, extra) = model.new_tab(Some(pane_a), loc("/b"));
         let (second, pane_b, tab_b) = model.new_window(loc("/c"));
         assert_eq!(model.focused_window, second);
         assert_eq!(model.focused, pane_b);
         assert_eq!(model.window_of(pane_a), Some(first));
         assert_eq!(model.window_of(pane_b), Some(second));
-        assert_eq!(model.all_panes(), [pane_a, pane_b]);
+        assert_eq!(model.all_panes(), [pane_a, extra_pane, pane_b]);
 
-        // A tab moves between windows by pane id; the emptied window closes.
-        assert!(model.move_tab(tab_b, DockTarget::Into(pane_a)));
+        // A pane docks beside a pane of another window; the emptied window
+        // closes.
+        assert!(model.move_tab(
+            tab_b,
+            DockTarget::Beside {
+                pane: pane_a,
+                side: Side::Right
+            }
+        ));
         assert!(model.window(second).is_none(), "emptied window closed");
-        assert_eq!(model.pane(pane_a).map(|p| p.tabs().len()), Some(3));
         assert_eq!(model.focused_window, first);
+        assert_eq!(model.focused, pane_b);
+        assert_eq!(model.dock().panes(), [pane_a, pane_b]);
 
-        // Tear-out: a tab into a window of its own.
+        // Tear-out: a pane into a window of its own, as its one workspace.
         assert!(model.move_tab(extra, DockTarget::NewWindow));
         assert_eq!(model.windows().count(), 2);
         let torn = model.focused_window;
         assert_ne!(torn, first);
-        assert_eq!(model.pane_of(extra), Some(model.focused));
-        assert_eq!(model.pane(pane_a).map(|p| p.tabs().len()), Some(2));
-        // A tab alone in its window is torn out already.
+        assert_eq!(model.focused, extra_pane);
+        assert_eq!(
+            model.workspaces(first).len(),
+            1,
+            "its workspace went with it"
+        );
+        assert_eq!(model.workspaces(torn).len(), 1);
+        // A pane alone in its window is torn out already.
         assert!(model.move_tab(extra, DockTarget::NewWindow));
         assert_eq!(model.windows().count(), 2);
+
+        // A whole workspace moves between windows and into a window of its
+        // own; an emptied window closes.
+        let home = model.workspaces(first)[0].id;
+        let torn_ws = model.workspaces(torn)[0].id;
+        assert!(model.workspace_to_window(torn_ws, Some(first)));
+        assert_eq!(model.windows().count(), 1);
+        assert_eq!(model.workspaces(first).len(), 2);
+        assert_eq!(model.window(first).map(|w| w.active), Some(torn_ws));
+        assert!(
+            !model.workspace_to_window(torn_ws, Some(first)),
+            "there already"
+        );
+        assert!(model.workspace_to_window(home, None));
+        assert_eq!(model.windows().count(), 2);
+        assert_eq!(
+            model.focused, pane_b,
+            "the workspace keeps its focused pane"
+        );
+        assert!(model.workspace_to_window(home, None), "alone already");
+        assert!(!model.workspace_to_window(WorkspaceId(99), None));
 
         // Closing the last tab of a window closes the window; the last
         // window never closes.
         assert!(model.close_tab(extra).is_some());
         assert_eq!(model.windows().count(), 1);
-        assert!(!model.close_window(first), "the last window stays");
+        assert!(
+            !model.close_window(model.focused_window),
+            "the last window stays"
+        );
         assert!(model.focus(pane_a));
         assert!(!model.focus(PaneId(99)));
+    }
+
+    #[test]
+    fn a_window_from_a_saved_layout_closes_and_gives_the_focus_back() {
+        let mut model = Model::new(Settings::default(), loc("/home"));
+        // The way the application opens: a tab at the start location, the
+        // one at home closed.
+        let (pane_1, _) = model.new_tab(None, loc("/a"));
+        assert!(model.close_tab(TabId(1)).is_some());
+        let first = model.focused_window;
+        assert_eq!(model.focused, pane_1);
+
+        let (second, pane_2, _) = model.new_window(loc("/a"));
+        let (pane_3, _) = model.new_tab(None, loc("/a/x"));
+        assert_eq!(model.window_of(pane_3), Some(second));
+        let saved = model.session();
+        let layout = saved.windows[saved.focused_window].clone();
+        let third = model.add_window(&layout, &loc("/home"));
+        assert_eq!(model.focused_window, third);
+        assert_eq!(model.workspaces(third).len(), 2);
+        assert!(model.close_window(third));
+        assert_eq!(model.windows().count(), 2);
+        assert!(model.focus_window(first));
+        assert_eq!(model.focused, pane_1);
+        assert!(model.focus_window(second));
+        assert_eq!(model.focused, pane_3);
+        assert!(model.focus(pane_2));
+        assert_eq!(model.focused, pane_2);
     }
 
     #[test]
@@ -2281,8 +3037,27 @@ mod tests {
         assert_eq!(model.preview_follows(), Some(TabId(1)));
         let (_, second) = model.new_tab(Some(pane), loc("/b"));
         assert_eq!(model.preview_follows(), Some(second));
+        // Toggled on from the other workspace, the one preview of the
+        // window moves there.
+        assert_eq!(model.workspaces(window).len(), 2);
+        let moved = model
+            .open_preview(window, 0.7)
+            .unwrap_or_else(|| panic!("preview"));
+        assert_ne!(moved, preview);
+        assert_eq!(model.preview_tab(window), Some(moved));
+        assert_eq!(model.dock().panes().len(), 2);
+        assert_eq!(
+            model.workspaces(window)[0].dock,
+            Dock::Pane(pane),
+            "gone from the first workspace"
+        );
+        assert!(model.close_tab(moved).is_some());
         assert!(model.activate(TabId(1)));
         assert_eq!(model.preview_follows(), Some(TabId(1)));
+        let preview = model
+            .open_preview(window, 0.7)
+            .unwrap_or_else(|| panic!("preview"));
+        let preview_pane = model.pane_of(preview).unwrap_or_else(|| panic!("pane"));
 
         // The session keeps the kind and the follow comes back with the
         // focus.
@@ -2333,14 +3108,10 @@ mod tests {
         let (right, right_tab) = model
             .split(pane, SplitDir::Right)
             .unwrap_or_else(|| panic!("split"));
-        let (_, third) = model.new_tab(Some(right), loc("/b"));
-        assert!(model.set_tab_order(right, vec![third, right_tab]));
-        assert!(
-            !model.set_tab_order(right, vec![third]),
-            "must name every tab"
-        );
-        assert!(!model.set_tab_order(right, vec![third, third]));
+        let (third_pane, _) = model.new_tab(Some(right), loc("/b"));
         let window = model.focused_window;
+        assert_eq!(model.focused, third_pane, "the new workspace is shown");
+        assert!(model.focus(pane));
         let mut layout = model.dock().clone();
         if let Dock::Split { fraction, .. } = &mut layout {
             *fraction = 0.3;
@@ -2377,8 +3148,13 @@ mod tests {
         assert!(!w.side_panel.visible);
         assert!(w.side_panel.folded.contains(&Section::Network));
         assert_eq!(w.geometry.map(|g| g.width), Some(800.0));
-        assert!(matches!(w.dock, Dock::Split { fraction, .. } if (fraction - 0.3).abs() < 1e-6));
-        let panes = w.dock.panes();
+        assert_eq!(w.workspaces.len(), 2);
+        assert_eq!(
+            w.active, w.workspaces[0].id,
+            "the shown workspace is shown again"
+        );
+        assert!(matches!(w.dock(), Dock::Split { fraction, .. } if (fraction - 0.3).abs() < 1e-6));
+        let panes = w.dock().panes();
         assert_eq!(panes.len(), 2);
         assert_eq!(restored.focused, panes[0]);
         let (_, tab) = restored
@@ -2394,14 +3170,15 @@ mod tests {
         assert!((tab.scroll - 120.5).abs() < f32::EPSILON);
         assert!(tab.selection.contains(&EntryId::new(ProviderId("t"), 2)));
         let right_pane = restored.pane(panes[1]).unwrap_or_else(|| panic!("pane"));
-        assert_eq!(right_pane.tabs().len(), 2);
-        let names: Vec<Location> = right_pane
-            .tabs()
-            .iter()
-            .filter_map(|t| restored.tab(*t).map(|t| t.location.clone()))
-            .collect();
-        assert_eq!(names, [loc("/b"), loc("/a")], "strip order kept");
-        assert_eq!(right_pane.active(), Some(right_pane.tabs()[1]));
+        assert_eq!(right_pane.tabs().len(), 1);
+        let other = &w.workspaces[1];
+        assert_eq!(
+            restored
+                .active_tab(other.focused)
+                .map(|(_, t)| t.location.clone()),
+            Some(loc("/b")),
+            "the second workspace came back"
+        );
 
         // An empty session gets one window at the fallback.
         let empty = Model::from_session(Settings::default(), &Session::default(), &loc("/home"));
@@ -2414,9 +3191,69 @@ mod tests {
         );
         // A dock naming a pane the session does not have is laid out anew.
         let mut odd = session.clone();
-        odd.windows[0].dock = DockSession::Pane(7);
+        odd.windows[0].workspaces[0].dock = DockSession::Pane(7);
         let odd = Model::from_session(Settings::default(), &odd, &loc("/home"));
         assert_eq!(odd.dock().panes().len(), 2);
+    }
+
+    #[test]
+    fn a_session_of_0_2_opens_its_further_tabs_as_workspaces() {
+        // 0.2 held the one layout in the window, and a pane had a tab strip.
+        let tab = |path: &str| TabSession {
+            location: loc(path),
+            ..TabSession::default()
+        };
+        let old = Session {
+            focused_window: 0,
+            windows: vec![WindowSession {
+                focused_pane: 1,
+                dock: DockSession::Split {
+                    dir: SplitDir::Right,
+                    fraction: 0.4,
+                    first: Box::new(DockSession::Pane(0)),
+                    second: Box::new(DockSession::Pane(1)),
+                },
+                panes: vec![
+                    PaneSession {
+                        active: Some(1),
+                        tabs: vec![tab("/a"), tab("/b"), tab("/c")],
+                    },
+                    PaneSession {
+                        active: None,
+                        tabs: vec![tab("/d")],
+                    },
+                ],
+                ..WindowSession::default()
+            }],
+        };
+        let model = Model::from_session(Settings::default(), &old, &loc("/home"));
+        let window = model.focused_window;
+        let workspaces = model.workspaces(window);
+        assert_eq!(workspaces.len(), 3, "the layout and one per further tab");
+        let at = |pane: PaneId| {
+            model
+                .active_tab(pane)
+                .map_or_else(|| panic!("tab of {pane:?}"), |(_, t)| t.location.clone())
+        };
+        let first = workspaces[0].dock.panes();
+        assert_eq!(first.len(), 2);
+        assert_eq!(
+            at(first[0]),
+            loc("/b"),
+            "the active tab stays in the layout"
+        );
+        assert_eq!(at(first[1]), loc("/d"));
+        assert_eq!(model.focused, first[1]);
+        assert_eq!(at(workspaces[1].dock.panes()[0]), loc("/a"));
+        assert_eq!(at(workspaces[2].dock.panes()[0]), loc("/c"));
+        assert!(
+            matches!(workspaces[0].dock, Dock::Split { fraction, .. } if (fraction - 0.4).abs() < 1e-6)
+        );
+        // Written again, the file holds workspaces and none of the old keys.
+        let again = model.session();
+        assert_eq!(again.windows[0].panes, Vec::new());
+        assert_eq!(again.windows[0].workspaces.len(), 3);
+        assert_eq!(again.windows[0].active_workspace, 0);
     }
 
     #[test]
