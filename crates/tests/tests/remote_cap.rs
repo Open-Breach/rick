@@ -280,6 +280,33 @@ fn a_file_above_the_limit_shows_the_card_and_always_preview_holds_for_the_accoun
         |h| state(h).2 && !state(h).0,
     );
     assert_eq!(mem.read_bytes() / MIB as u64, 6, "the whole file was read");
+
+    // The switch is taken back where a source's row has it, its context
+    // menu — for a cloud account as for an SSH host — and the limit
+    // holds again.
+    let row = harness
+        .get_all_by_label("flowcptstorage")
+        .map(|node| node.rect())
+        .min_by(|a, b| a.left().total_cmp(&b.left()))
+        .unwrap_or_else(|| panic!("the account's row in the side panel"));
+    harness.event(egui::Event::PointerMoved(row.center()));
+    for pressed in [true, false] {
+        harness.event(egui::Event::PointerButton {
+            pos: row.center(),
+            button: egui::PointerButton::Secondary,
+            pressed,
+            modifiers: egui::Modifiers::default(),
+        });
+        harness.step();
+    }
+    for _ in 0..3 {
+        harness.step();
+    }
+    click(&mut harness, "Always preview");
+    settle(&mut harness);
+    select(&mut harness, "a.jpg");
+    step_until(&mut harness, "the limit did not come back", |h| state(h).0);
+    harness.get_by_label("Not previewed automatically");
 }
 
 #[test]
