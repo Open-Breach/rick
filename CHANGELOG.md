@@ -7,6 +7,18 @@ the pull request that brought the change.
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-11-10
+
+The design refresh and the first part of system integration, on Linux, macOS
+and Windows: the whole GUI redrawn from tokens in Light and Dark and in two
+densities — workspace tabs in the title row, the panes, the file list, the
+footer, the side panel, the context menu, the dialogues and the settings
+window — with tabs and panes dragged, docked, reordered and spring-loaded;
+one Rick per session with the command line and `rick://`; the integration
+check, the setup dialog and Settings → Integration with the Linux items; SVG
+and icon-container previews; the app icon, the Linux desktop entry and
+`Rick.app` on macOS; and the About dialog with the third-party licences.
+
 ### Added
 
 - System integration: the check, the setup dialog and Settings →
@@ -125,6 +137,23 @@ the pull request that brought the change.
   `ICO · 7 variants · 48 × 48 · 32-bit · PNG · 23.4 KiB`, `2 not shown`
   when variants were skipped, `XPM · 32 × 32 · 16 colours · 2.1 KiB`
   (QUESTIONS.md 257) (#99).
+- The About dialog (issue 101,
+  [`specs/about-dialog.md`](specs/about-dialog.md)): a modal in the
+  settings window's chrome in place of the floating About window, with
+  the symbol, the name, the tagline, the version and the build line,
+  *Copy details* and *What's new* — this changelog's section for the
+  running version — and the link, licence and credits cards. The details
+  are the text `rick --version` prints: commit, target, plugin ABI, build
+  date, toolchain, the OS and desktop in one line and the loaded plugins
+  (#107). *Third-party licences* is its second page: the bundled runtimes
+  (pdfium, GStreamer, 7-Zip, egui's fonts, Phosphor Icons), every crate
+  of the release build and one section per plugin loaded from outside the
+  release's `plugins/` folder, with a search field, a filter by licence,
+  each licence text opening in place and *Export…* (#109). The release
+  workflow generates the crates' list as `third-party.json` beside the
+  binary, in `Rick.app`'s Resources on macOS, and fails when a crate the
+  release links is missing from it; the build records its date, its
+  target and the contributors (#105).
 - The app icon on all three platforms and a Linux desktop entry (issue
   88, [`specs/app-icons.md`](specs/app-icons.md), #92). One identifier,
   `rick`, ties the desktop file, the hicolor icon name, the Wayland app id
@@ -429,6 +458,19 @@ the pull request that brought the change.
 
 ### Fixed
 
+- A dot-file is hidden on Windows too: the listing there took the hidden
+  attribute alone, so `.name` was shown with hidden files off, against
+  SPEC.md's *Hidden files* (#145).
+- A `rick://` link's path is resolved like a path on the command line, to
+  its canonical form, so a link and a path that name the same folder
+  agree where the two spellings differ — a symlinked temporary directory
+  on macOS, the `\\?\` form on Windows (QUESTIONS.md 316) (#144).
+- A job that reads a decorator's state, the Git status of a repository,
+  counts as work in progress, so the window keeps repainting until the
+  badges are there (#146).
+- A job gives up what it held — its place in the queue of an operation's
+  scheduler — before its result is published, not after: the next job no
+  longer finds a cancelled one still queued (#148).
 - A workspace tab can be dragged to the last place of its row: the row
   never opened its gap after the last of the other tabs, so the first of
   two tabs could not be dragged past the second at all, and a tab pulled
@@ -1057,6 +1099,7 @@ text, code, images and PDF, and Git, on Linux, macOS and Windows.
   in the middle of a write can no longer read a truncated file and lose
   the pinned folders (#14).
 
-[Unreleased]: https://github.com/Open-Breach/rick/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/Open-Breach/rick/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/Open-Breach/rick/releases/tag/v0.3.0
 [0.2.0]: https://github.com/Open-Breach/rick/releases/tag/v0.2.0
 [0.1.0]: https://github.com/Open-Breach/rick/releases/tag/v0.1.0
