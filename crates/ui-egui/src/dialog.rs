@@ -252,22 +252,22 @@ pub(crate) fn header(ui: &mut egui::Ui, title: &str, header: Option<&Header>, cl
             x = rect.right() + 10.0;
         }
         if let Some(subtitle) = &header.subtitle {
-            let galley = ui.painter().layout_no_wrap(
-                subtitle.clone(),
+            // One line, cut with an ellipsis before the close button:
+            // nothing runs under the button, and the whole text is the
+            // line's tooltip.
+            let right = if close {
+                band.right() - PAD - CLOSE_BUTTON - 12.0
+            } else {
+                band.right() - PAD
+            };
+            widgets::line(
+                ui,
+                pos2(x, line_y),
+                subtitle,
                 FontId::proportional(TEXT_SECONDARY),
                 scheme.text_secondary,
+                right - x,
             );
-            let size = galley.size();
-            ui.painter().galley(
-                pos2(x, line_y - size.y / 2.0),
-                galley,
-                scheme.text_secondary,
-            );
-            let rect = Rect::from_min_size(pos2(x, line_y - size.y / 2.0), size);
-            ui.interact(rect, ui.id().with("dialog-subtitle"), Sense::hover())
-                .widget_info(|| {
-                    egui::WidgetInfo::labeled(egui::WidgetType::Label, true, subtitle.clone())
-                });
         }
     }
     ui.painter()
