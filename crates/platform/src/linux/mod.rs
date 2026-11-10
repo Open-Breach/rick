@@ -314,6 +314,21 @@ impl Chrome for Native {
             native_controls_width: 0.0,
         }
     }
+
+    fn on_x11(&self) -> bool {
+        x11_backend(|name| std::env::var(name).ok())
+    }
+}
+
+/// Whether the windowing backend opens X11 windows, told before it has
+/// opened one by the rule it chooses with (winit 0.30, `EventLoop::new`):
+/// Wayland when `WAYLAND_DISPLAY`, or failing that `WAYLAND_SOCKET`, names a
+/// display, X11 when only `DISPLAY` does. An empty variable counts as unset,
+/// and so does one that is not Unicode. `var` reads the environment.
+fn x11_backend(var: impl Fn(&str) -> Option<String>) -> bool {
+    let set = |name: &str| var(name).is_some_and(|value| !value.is_empty());
+    let wayland = set("WAYLAND_DISPLAY") || set("WAYLAND_SOCKET");
+    !wayland && set("DISPLAY")
 }
 
 impl Activation for Native {
@@ -400,6 +415,34 @@ mod tests {
             Native.show(&dir.path().join("missing")),
             Err(Error::NotFound)
         ));
+    }
+
+    /// The windows are X11 windows when the environment names an X11
+    /// display and no Wayland one, as the windowing backend chooses.
+    #[test]
+    fn the_windows_are_x11_windows_without_a_wayland_display() {
+        let with = |vars: &'static [(&'static str, &'static str)]| {
+            x11_backend(|name| {
+                vars.iter()
+                    .find(|(key, _)| *key == name)
+                    .map(|(_, value)| (*value).to_owned())
+            })
+        };
+        assert!(with(&[("DISPLAY", ":0")]), "an X11 session");
+        assert!(
+            with(&[("DISPLAY", ":0"), ("WAYLAND_DISPLAY", "")]),
+            "an empty variable is not set"
+        );
+        // A Wayland session, with or without Xwayland beside it.
+        assert!(!with(&[("WAYLAND_DISPLAY", "wayland-0")]));
+        assert!(!with(&[
+            ("DISPLAY", ":0"),
+            ("WAYLAND_DISPLAY", "wayland-0")
+        ]));
+        assert!(!with(&[("DISPLAY", ":0"), ("WAYLAND_SOCKET", "5")]));
+        // No display at all: no window, and no X11 one.
+        assert!(!with(&[]));
+        assert!(!with(&[("DISPLAY", "")]));
     }
 
     #[test]

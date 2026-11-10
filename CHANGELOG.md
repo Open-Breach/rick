@@ -145,6 +145,13 @@ open is in `QUESTIONS.md` 323 to 366. The rules went into SPEC.md first
   in the log at startup names the graphics backend, the adapter and the
   frame chosen. `frame` in the `[window]` table of `rick.toml` overrides
   the check: `auto` (the default), `shadow` or `plain` (#182).
+- **The plain frame is the default on X11.** An X11 window is blended with
+  the desktop only while a compositing manager runs, and its surface offers
+  an alpha mode either way, so without one the shadow frame's margin was
+  still a black band. On X11 `auto` now draws the plain frame and asks for
+  no transparent window; `frame = "shadow"` in the `[window]` table of
+  `rick.toml` brings the shadow frame back where a compositing manager
+  runs. Wayland, macOS and Windows are unchanged (#189).
 - **Copy, cut and paste by keyboard** work in the file list (issue 176). A
   window delivers Mod+C, Mod+X and Mod+V as copy, cut and paste events, not
   as key presses, and the paste event only when the clipboard holds text;

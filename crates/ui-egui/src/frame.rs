@@ -9,8 +9,10 @@
 //! edges and corners resize the window through the backend. Around a window
 //! that cannot be transparent, where that margin would be composited as a
 //! black band, the plain frame: no margin and no shadow, the border at the
-//! window's edge and the grips on it. A maximised or fullscreen window has
-//! no frame, and neither has one whose system keeps its own controls.
+//! window's edge and the grips on it. On X11, where nothing tells whether a
+//! transparent window is composited, the plain frame is the default. A
+//! maximised or fullscreen window has no frame, and neither has one whose
+//! system keeps its own controls.
 
 use egui::viewport::{ResizeDirection, ViewportCommand};
 use egui::{CursorIcon, Pos2, Rect, Sense, StrokeKind, Vec2, pos2};
@@ -45,11 +47,20 @@ impl Mode {
     /// surface can do. `blends` is whether that surface blends the window
     /// with the desktop; `None`, not known, counts as opaque, so the margin
     /// of a shadow frame never shows as a black band, not even for a frame.
+    ///
+    /// `x11` is whether the windows are X11 windows
+    /// ([`Chrome::on_x11`](platform::Chrome::on_x11)). There `auto` is the
+    /// plain frame whatever the surface says: an X11 surface offers its
+    /// alpha mode with or without a compositing manager to blend it, and
+    /// without one the margin is the black band. `shadow` still decides by
+    /// itself.
     #[must_use]
-    pub const fn of(setting: WindowFrame, blends: Option<bool>) -> Self {
-        match (setting, blends) {
-            (WindowFrame::Shadow, _) | (WindowFrame::Auto, Some(true)) => Self::Shadow,
-            (WindowFrame::Plain, _) | (WindowFrame::Auto, Some(false) | None) => Self::Plain,
+    pub const fn of(setting: WindowFrame, x11: bool, blends: Option<bool>) -> Self {
+        match (setting, x11, blends) {
+            (WindowFrame::Shadow, _, _) | (WindowFrame::Auto, false, Some(true)) => Self::Shadow,
+            (WindowFrame::Plain, _, _)
+            | (WindowFrame::Auto, true, _)
+            | (WindowFrame::Auto, false, Some(false) | None) => Self::Plain,
         }
     }
 
@@ -79,11 +90,17 @@ impl Mode {
 }
 
 /// Whether the first window asks the system for transparency, before the
-/// frame is chosen: it does unless `rick.toml` says `plain`, because asking
-/// is how Rick finds out whether transparency can be had.
+/// frame is chosen. Under `auto` it does, because asking is how Rick finds
+/// out whether transparency can be had, except on X11 (`x11`), where the
+/// answer says nothing and the frame is the plain one; with `shadow` it
+/// does and with `plain` it does not, wherever.
 #[must_use]
-pub const fn asks_transparency(setting: WindowFrame) -> bool {
-    !matches!(setting, WindowFrame::Plain)
+pub const fn asks_transparency(setting: WindowFrame, x11: bool) -> bool {
+    match setting {
+        WindowFrame::Shadow => true,
+        WindowFrame::Plain => false,
+        WindowFrame::Auto => !x11,
+    }
 }
 
 /// Whether the frame is drawn now: the system draws no chrome and the
@@ -427,21 +444,35 @@ mod tests {
     }
 
     /// `rick.toml` decides, and under `auto` the surface does; a surface
-    /// nothing is known about counts as opaque.
+    /// nothing is known about counts as opaque. On X11 `auto` is the plain
+    /// frame whatever the surface says.
     #[test]
     fn the_frame_follows_the_setting_and_then_the_surface() {
-        for blends in [None, Some(false), Some(true)] {
-            assert_eq!(Mode::of(WindowFrame::Shadow, blends), Mode::Shadow);
-            assert_eq!(Mode::of(WindowFrame::Plain, blends), Mode::Plain);
+        for x11 in [false, true] {
+            for blends in [None, Some(false), Some(true)] {
+                assert_eq!(Mode::of(WindowFrame::Shadow, x11, blends), Mode::Shadow);
+                assert_eq!(Mode::of(WindowFrame::Plain, x11, blends), Mode::Plain);
+            }
         }
-        assert_eq!(Mode::of(WindowFrame::Auto, Some(true)), Mode::Shadow);
-        assert_eq!(Mode::of(WindowFrame::Auto, Some(false)), Mode::Plain);
-        assert_eq!(Mode::of(WindowFrame::Auto, None), Mode::Plain, "not known");
-        // The first window asks for transparency unless told not to; a
-        // later one asks when the frame is the shadow frame.
-        assert!(asks_transparency(WindowFrame::Auto));
-        assert!(asks_transparency(WindowFrame::Shadow));
-        assert!(!asks_transparency(WindowFrame::Plain));
+        let elsewhere = |blends| Mode::of(WindowFrame::Auto, false, blends);
+        assert_eq!(elsewhere(Some(true)), Mode::Shadow);
+        assert_eq!(elsewhere(Some(false)), Mode::Plain);
+        assert_eq!(elsewhere(None), Mode::Plain, "not known");
+        // X11: its surface offers an alpha mode with or without a
+        // compositing manager, so its word is not taken.
+        for blends in [None, Some(false), Some(true)] {
+            let on_x11 = Mode::of(WindowFrame::Auto, true, blends);
+            assert_eq!(on_x11, Mode::Plain, "{blends:?}");
+        }
+        // The first window asks for transparency unless told not to, and
+        // on X11 only when told to; a later one asks when the frame is the
+        // shadow frame.
+        assert!(asks_transparency(WindowFrame::Auto, false));
+        assert!(!asks_transparency(WindowFrame::Auto, true), "X11");
+        for x11 in [false, true] {
+            assert!(asks_transparency(WindowFrame::Shadow, x11));
+            assert!(!asks_transparency(WindowFrame::Plain, x11));
+        }
         assert!(Mode::Shadow.transparent());
         assert!(!Mode::Plain.transparent());
         assert_eq!(Mode::Shadow.name(), "shadow");
