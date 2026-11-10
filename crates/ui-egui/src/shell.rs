@@ -958,6 +958,9 @@ pub struct RickUi {
     window_ref: Option<WindowRef>,
     /// The platform has been told about `window_ref`.
     attached: bool,
+    /// The frame drawn around every window Rick decorates itself: the
+    /// shadow frame unless [`with_frame`](Self::with_frame) said otherwise.
+    frame_mode: frame::Mode,
     /// Work from outside the windows (a second launch's command line,
     /// handed over through the single-instance endpoint), run against the
     /// application before the root window's frame.
@@ -1214,10 +1217,22 @@ impl RickUi {
             quitting: false,
             window_ref: None,
             attached: false,
+            frame_mode: frame::Mode::Shadow,
             viewports,
             externals: None,
             relaunch: None,
         }
+    }
+
+    /// Sets the frame Rick draws around its windows (specs/gui-title-row.md,
+    /// *Window frame*). Without this call it is the shadow frame, which is
+    /// right where the window is rendered off screen, as the test harness
+    /// does; [`run`](crate::run) always calls it, with the plain frame
+    /// unless the window is known to be transparent.
+    #[must_use]
+    pub fn with_frame(mut self, mode: frame::Mode) -> Self {
+        self.frame_mode = mode;
+        self
     }
 
     /// Takes the hook that continues Rick from the copy it was installed
@@ -4995,8 +5010,8 @@ impl RickUi {
         // Rick's own window frame where the system draws none; the panels
         // go inside it.
         let chrome = self.app.platform().window_chrome();
-        let window_frame =
-            frame::wanted(ctx, chrome).then(|| frame::Frame::paint(ui, ui.max_rect()));
+        let window_frame = frame::wanted(ctx, chrome)
+            .then(|| frame::Frame::paint(ui, ui.max_rect(), self.frame_mode));
         let content = window_frame.map_or(ui.max_rect(), |f| f.content());
         if let Some(w) = self.windows.get_mut(&window) {
             w.window_frame = window_frame;

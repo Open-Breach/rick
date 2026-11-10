@@ -12,15 +12,40 @@ use egui::viewport::{ResizeDirection, ViewportCommand};
 use egui::{CursorIcon, Pos2, Rect, Sense, StrokeKind, Vec2, pos2};
 use platform::WindowChrome;
 
-/// The margin around the content, holding the shadow.
+/// The margin around the content of the shadow frame, holding the shadow.
 pub const MARGIN: f32 = 10.0;
 /// How far inside the border a grip still reaches.
 const GRIP_INSIDE: f32 = 4.0;
 /// How far from a corner a grip resizes diagonally.
 const CORNER: f32 = 24.0;
 
+/// Which of the two frames Rick draws around a window it decorates itself
+/// (specs/gui-title-row.md, *Window frame*), the same for every window of
+/// the process.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Mode {
+    /// The frame of a transparent window: a transparent margin around the
+    /// content holds the shadow, the border runs around the content, and
+    /// the grips cover the margin.
+    Shadow,
+    /// The frame of an opaque window, where a transparent margin would be
+    /// composited as a black band: no margin and no shadow, the border at
+    /// the window's edge and the grips on it.
+    Plain,
+}
+
+impl Mode {
+    /// The margin between the window's edge and the border.
+    #[must_use]
+    pub const fn margin(self) -> f32 {
+        match self {
+            Self::Shadow | Self::Plain => MARGIN,
+        }
+    }
+}
+
 /// Whether the frame is drawn now: the system draws no chrome and the
-/// window is neither maximised nor fullscreen.
+/// window is neither maximised nor fullscreen. The same in both modes.
 #[must_use]
 pub fn wanted(ctx: &egui::Context, chrome: WindowChrome) -> bool {
     if chrome.native_controls {
@@ -32,7 +57,8 @@ pub fn wanted(ctx: &egui::Context, chrome: WindowChrome) -> bool {
     })
 }
 
-/// A painted frame: the window rect and the bordered rect inside the margin.
+/// A painted frame: the window rect and the bordered rect inside the
+/// mode's margin.
 #[derive(Debug, Clone, Copy)]
 pub struct Frame {
     outer: Rect,
@@ -40,10 +66,22 @@ pub struct Frame {
 }
 
 impl Frame {
-    /// Paints the shadow, the fill and the border into `outer`.
+    /// The frame of `mode` in the window rect `outer`, not painted: the
+    /// border runs inside the mode's margin.
     #[must_use]
-    pub fn paint(ui: &egui::Ui, outer: Rect) -> Self {
-        let inner = outer.shrink(MARGIN);
+    pub fn of(outer: Rect, mode: Mode) -> Self {
+        Self {
+            outer,
+            inner: outer.shrink(mode.margin()),
+        }
+    }
+
+    /// Paints the frame of `mode` into `outer`: the shadow, the fill and
+    /// the border.
+    #[must_use]
+    pub fn paint(ui: &egui::Ui, outer: Rect, mode: Mode) -> Self {
+        let frame = Self::of(outer, mode);
+        let inner = frame.inner;
         let visuals = ui.visuals();
         let shadow = egui::epaint::Shadow {
             offset: [0, 2],
@@ -60,7 +98,7 @@ impl Frame {
             visuals.window_stroke(),
             StrokeKind::Inside,
         );
-        Self { outer, inner }
+        frame
     }
 
     /// The rect the content gets: inside the border.
@@ -165,10 +203,11 @@ fn cursor(direction: ResizeDirection) -> CursorIcon {
     }
 }
 
-/// The size the content loses to the frame on each axis.
+/// The size the content loses to the frame of `mode` on each axis: its
+/// margin and the border, on both sides.
 #[must_use]
-pub fn inset() -> Vec2 {
-    Vec2::splat(2.0 * (MARGIN + 1.0))
+pub fn inset(mode: Mode) -> Vec2 {
+    Vec2::splat(2.0 * (mode.margin() + 1.0))
 }
 
 #[cfg(test)]
