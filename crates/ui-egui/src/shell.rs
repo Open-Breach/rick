@@ -87,6 +87,8 @@ pub struct TabUi {
     pub restore_scroll: Option<f32>,
     /// The location drawn last frame, to notice a change.
     pub last_location: Option<Location>,
+    /// What stays of the *Connection lost* card between frames.
+    pub lost_card: crate::info_card::State,
     /// Select the entry with this name once it is listed, giving up after
     /// `SELECT_FOR` (5 s): the entry may still be on its way (a new folder's
     /// job, a renamed entry's change event).
