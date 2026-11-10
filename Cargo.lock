@@ -309,7 +309,7 @@ checksum = "330a5ed07fa54e4702c9d6c4174f74427fc0ef6e214bbd677ae50a5099946470"
 
 [[package]]
 name = "app"
-version = "0.3.0-dev"
+version = "0.3.0"
 dependencies = [
  "encoding_rs",
  "ext",
@@ -2049,7 +2049,7 @@ dependencies = [
 
 [[package]]
 name = "ext"
-version = "0.3.0-dev"
+version = "0.3.0"
 dependencies = [
  "async-trait",
  "bitflags 2.13.2",
@@ -2071,7 +2071,7 @@ dependencies = [
 
 [[package]]
 name = "ext-action-compare"
-version = "0.3.0-dev"
+version = "0.3.0"
 dependencies = [
  "ext",
  "platform",
@@ -2085,7 +2085,7 @@ dependencies = [
 
 [[package]]
 name = "ext-action-compress"
-version = "0.3.0-dev"
+version = "0.3.0"
 dependencies = [
  "ext",
  "ext-vfs-archive",
@@ -2100,7 +2100,7 @@ dependencies = [
 
 [[package]]
 name = "ext-action-rename"
-version = "0.3.0-dev"
+version = "0.3.0"
 dependencies = [
  "chrono",
  "ext",
@@ -2115,7 +2115,7 @@ dependencies = [
 
 [[package]]
 name = "ext-action-terminal"
-version = "0.3.0-dev"
+version = "0.3.0"
 dependencies = [
  "ext",
  "platform",
@@ -2129,7 +2129,7 @@ dependencies = [
 
 [[package]]
 name = "ext-git"
-version = "0.3.0-dev"
+version = "0.3.0"
 dependencies = [
  "ext",
  "gix",
@@ -2145,7 +2145,7 @@ dependencies = [
 
 [[package]]
 name = "ext-installer"
-version = "0.3.0-dev"
+version = "0.3.0"
 dependencies = [
  "bzip2",
  "chrono",
@@ -2171,7 +2171,7 @@ dependencies = [
 
 [[package]]
 name = "ext-preview-3d"
-version = "0.3.0-dev"
+version = "0.3.0"
 dependencies = [
  "bytemuck",
  "ext",
@@ -2194,7 +2194,7 @@ dependencies = [
 
 [[package]]
 name = "ext-preview-archive"
-version = "0.3.0-dev"
+version = "0.3.0"
 dependencies = [
  "bzip2",
  "ext",
@@ -2218,7 +2218,7 @@ dependencies = [
 
 [[package]]
 name = "ext-preview-code"
-version = "0.3.0-dev"
+version = "0.3.0"
 dependencies = [
  "encoding_rs",
  "ext",
@@ -2234,7 +2234,7 @@ dependencies = [
 
 [[package]]
 name = "ext-preview-hex"
-version = "0.3.0-dev"
+version = "0.3.0"
 dependencies = [
  "ext",
  "platform",
@@ -2247,7 +2247,7 @@ dependencies = [
 
 [[package]]
 name = "ext-preview-icons"
-version = "0.3.0-dev"
+version = "0.3.0"
 dependencies = [
  "ext",
  "icns",
@@ -2262,7 +2262,7 @@ dependencies = [
 
 [[package]]
 name = "ext-preview-image"
-version = "0.3.0-dev"
+version = "0.3.0"
 dependencies = [
  "ext",
  "ext-preview-code",
@@ -2282,7 +2282,7 @@ dependencies = [
 
 [[package]]
 name = "ext-preview-markup"
-version = "0.3.0-dev"
+version = "0.3.0"
 dependencies = [
  "csv",
  "encoding_rs",
@@ -2301,7 +2301,7 @@ dependencies = [
 
 [[package]]
 name = "ext-preview-media"
-version = "0.3.0-dev"
+version = "0.3.0"
 dependencies = [
  "ext",
  "gstreamer",
@@ -2321,7 +2321,7 @@ dependencies = [
 
 [[package]]
 name = "ext-preview-office"
-version = "0.3.0-dev"
+version = "0.3.0"
 dependencies = [
  "ext",
  "pdfium-render",
@@ -2337,7 +2337,7 @@ dependencies = [
 
 [[package]]
 name = "ext-preview-pdf"
-version = "0.3.0-dev"
+version = "0.3.0"
 dependencies = [
  "ext",
  "pdfium-render",
@@ -2351,7 +2351,7 @@ dependencies = [
 
 [[package]]
 name = "ext-preview-text"
-version = "0.3.0-dev"
+version = "0.3.0"
 dependencies = [
  "encoding_rs",
  "ext",
@@ -2365,7 +2365,7 @@ dependencies = [
 
 [[package]]
 name = "ext-search-baloo"
-version = "0.3.0-dev"
+version = "0.3.0"
 dependencies = [
  "ext",
  "futures",
@@ -2377,7 +2377,7 @@ dependencies = [
 
 [[package]]
 name = "ext-search-spotlight"
-version = "0.3.0-dev"
+version = "0.3.0"
 dependencies = [
  "ext",
  "futures",
@@ -2389,7 +2389,7 @@ dependencies = [
 
 [[package]]
 name = "ext-search-tracker"
-version = "0.3.0-dev"
+version = "0.3.0"
 dependencies = [
  "ext",
  "futures",
@@ -2401,7 +2401,7 @@ dependencies = [
 
 [[package]]
 name = "ext-search-walk"
-version = "0.3.0-dev"
+version = "0.3.0"
 dependencies = [
  "ext",
  "futures",
@@ -2413,7 +2413,7 @@ dependencies = [
 
 [[package]]
 name = "ext-search-windows"
-version = "0.3.0-dev"
+version = "0.3.0"
 dependencies = [
  "ext",
  "futures",
@@ -2425,7 +2425,7 @@ dependencies = [
 
 [[package]]
 name = "ext-ssh"
-version = "0.3.0-dev"
+version = "0.3.0"
 dependencies = [
  "base64 0.22.1",
  "bytes",
@@ -2445,7 +2445,7 @@ dependencies = [
 
 [[package]]
 name = "ext-svn"
-version = "0.3.0-dev"
+version = "0.3.0"
 dependencies = [
  "ext",
  "platform",
@@ -2461,7 +2461,7 @@ dependencies = [
 
 [[package]]
 name = "ext-vfs-archive"
-version = "0.3.0-dev"
+version = "0.3.0"
 dependencies = [
  "brotli",
  "bzip2",
@@ -2491,7 +2491,7 @@ dependencies = [
 
 [[package]]
 name = "ext-vfs-azure"
-version = "0.3.0-dev"
+version = "0.3.0"
 dependencies = [
  "base64 0.22.1",
  "bytes",
@@ -2515,7 +2515,7 @@ dependencies = [
 
 [[package]]
 name = "ext-vfs-gcs"
-version = "0.3.0-dev"
+version = "0.3.0"
 dependencies = [
  "base64 0.22.1",
  "bytes",
@@ -2539,7 +2539,7 @@ dependencies = [
 
 [[package]]
 name = "ext-vfs-s3"
-version = "0.3.0-dev"
+version = "0.3.0"
 dependencies = [
  "bytes",
  "chrono",
@@ -2563,7 +2563,7 @@ dependencies = [
 
 [[package]]
 name = "ext-vfs-trash"
-version = "0.3.0-dev"
+version = "0.3.0"
 dependencies = [
  "ext",
  "futures",
@@ -5381,7 +5381,7 @@ dependencies = [
 
 [[package]]
 name = "model"
-version = "0.3.0-dev"
+version = "0.3.0"
 dependencies = [
  "ext",
  "platform",
@@ -6020,7 +6020,7 @@ checksum = "7e036b411754132fd6b74e94b74e9a13c5cf606fa93d1885c35860d3060820b1"
 
 [[package]]
 name = "ops"
-version = "0.3.0-dev"
+version = "0.3.0"
 dependencies = [
  "base64 0.22.1",
  "blake3",
@@ -6420,7 +6420,7 @@ checksum = "b4596b6d070b27117e987119b4dac604f3c58cfb0b191112e24771b2faeac1a6"
 
 [[package]]
 name = "platform"
-version = "0.3.0-dev"
+version = "0.3.0"
 dependencies = [
  "arboard",
  "async-trait",
@@ -6455,14 +6455,14 @@ dependencies = [
 
 [[package]]
 name = "plugin-panic"
-version = "0.3.0-dev"
+version = "0.3.0"
 dependencies = [
  "ext",
 ]
 
 [[package]]
 name = "plugin-probe"
-version = "0.3.0-dev"
+version = "0.3.0"
 dependencies = [
  "ext",
  "tracing",
@@ -6471,7 +6471,7 @@ dependencies = [
 
 [[package]]
 name = "plugins-native"
-version = "0.3.0-dev"
+version = "0.3.0"
 dependencies = [
  "ext",
  "libloading",
@@ -7015,7 +7015,7 @@ dependencies = [
 
 [[package]]
 name = "rick"
-version = "0.3.0-dev"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "app",
@@ -7115,7 +7115,7 @@ dependencies = [
 
 [[package]]
 name = "runtime"
-version = "0.3.0-dev"
+version = "0.3.0"
 dependencies = [
  "rayon",
  "tokio",
@@ -8137,7 +8137,7 @@ dependencies = [
 
 [[package]]
 name = "tests"
-version = "0.3.0-dev"
+version = "0.3.0"
 dependencies = [
  "app",
  "blake3",
@@ -8618,7 +8618,7 @@ checksum = "b6f5e870be6c3b371b77fe0ee0bafb859fa4964b4404c27de1d380043c4dda20"
 
 [[package]]
 name = "types"
-version = "0.3.0-dev"
+version = "0.3.0"
 dependencies = [
  "bitflags 2.13.2",
  "thiserror 2.0.21",
@@ -8637,7 +8637,7 @@ dependencies = [
 
 [[package]]
 name = "ui-egui"
-version = "0.3.0-dev"
+version = "0.3.0"
 dependencies = [
  "ab_glyph",
  "app",
@@ -8928,7 +8928,7 @@ checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
 
 [[package]]
 name = "vfs"
-version = "0.3.0-dev"
+version = "0.3.0"
 dependencies = [
  "ext",
  "futures",
@@ -8940,7 +8940,7 @@ dependencies = [
 
 [[package]]
 name = "vfs-local"
-version = "0.3.0-dev"
+version = "0.3.0"
 dependencies = [
  "async-trait",
  "ext",
@@ -8956,7 +8956,7 @@ dependencies = [
 
 [[package]]
 name = "vfs-rick"
-version = "0.3.0-dev"
+version = "0.3.0"
 dependencies = [
  "async-trait",
  "ext",
@@ -9967,7 +9967,7 @@ checksum = "ec7a2a501ed189703dba8b08142f057e887dfc4b2cc4db2d343ac6376ba3e0b9"
 
 [[package]]
 name = "xtask"
-version = "0.3.0-dev"
+version = "0.3.0"
 dependencies = [
  "serde_json",
 ]
