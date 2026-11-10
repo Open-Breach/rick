@@ -53,6 +53,8 @@ pub struct MemProvider {
     store: AtomicBool,
     /// Every `create_dir` call, by path, whatever came of it.
     made: Mutex<Vec<String>>,
+    /// What a listing fails with while the store cannot be reached.
+    unreachable: Mutex<Option<&'static str>>,
     /// Bytes handed out through `open_read`.
     read_bytes: Arc<AtomicU64>,
     /// Every `transfer` call: the mode, the items and the target folder.
@@ -122,6 +124,7 @@ impl MemProvider {
             native: AtomicBool::new(false),
             store: AtomicBool::new(false),
             made: Mutex::new(Vec::new()),
+            unreachable: Mutex::new(None),
             read_bytes: Arc::new(AtomicU64::new(0)),
             transfers: Mutex::new(Vec::new()),
             gate: Arc::new(Gate {
@@ -167,6 +170,16 @@ impl MemProvider {
     /// pass (`SEARCH_SUBTREE`) and downloaded from (`DOWNLOAD`).
     pub fn set_store(&self, on: bool) {
         self.store.store(on, Ordering::SeqCst);
+    }
+
+    /// From now on the store cannot be reached: every listing below its
+    /// root fails with a connection error that says `why`. `None` makes it
+    /// answer again.
+    pub fn set_unreachable(&self, why: Option<&'static str>) {
+        *self
+            .unreachable
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = why;
     }
 
     /// Every `create_dir` call so far, by path.
@@ -323,6 +336,15 @@ impl Provider for MemProvider {
 
     fn list(&self, loc: &Location, opts: ListOptions, _cancel: CancelToken) -> EntryStream {
         let dir = key(loc);
+        let unreachable = *self
+            .unreachable
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        if let Some(why) = unreachable
+            && dir != "/"
+        {
+            return stream::once(async move { Err(Error::unreachable(why)) }).boxed();
+        }
         let tree = lock(&self.tree);
         if !matches!(tree.get(&dir), Some(Node::Dir)) {
             return stream::once(async { Err(Error::NotFound) }).boxed();
