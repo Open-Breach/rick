@@ -102,11 +102,12 @@ pub fn hand_over(endpoint: &Endpoint, argv: Vec<String>, cwd: PathBuf) -> io::Re
     })
 }
 
-/// The path a `rick://` URL names, resolved like a path typed on the
-/// command line (`cli::resolve`): canonical where it names something, so a
-/// symlink reaches the thing itself (QUESTIONS.md 316).
+/// The path a `rick://` URL names, in the form `cli::resolve` gives a
+/// typed path: canonical where it names something, so a symlink reaches
+/// the thing itself (QUESTIONS.md 316).
 fn url_path(url: &str) -> Option<PathBuf> {
-    platform::paths::from_uri(url, "rick").map(|path| cli::resolve(&path, &path))
+    let path = platform::paths::from_uri(url, "rick")?;
+    Some(std::fs::canonicalize(&path).unwrap_or(path))
 }
 
 /// A folder as a location of the local provider.
