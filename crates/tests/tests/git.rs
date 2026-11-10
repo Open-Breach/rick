@@ -6,10 +6,11 @@
 //!
 //! Acceptance (issue 173): *Git clone…* is in the menu of the empty area
 //! and of a folder, not of a file or of several entries; its dialogue
-//! opens with a Git URL from the clipboard, names the folder the clone
-//! creates and folds the options away; the clone runs as a job through the
-//! app, which shows a failure in the job, takes a cancel, and shows the new
-//! folder in the pane when the job is done.
+//! opens with a Git URL or a local repository's path from the clipboard,
+//! names the folder the clone creates and folds the options away; the
+//! clone runs as a job through the app, which shows a failure in the job,
+//! takes a cancel, and shows the new folder in the pane when the job is
+//! done.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -563,64 +564,13 @@ fn the_context_menu_shows_the_git_group_only_inside_the_repository() {
     );
 }
 
-/// `git daemon` serving the repositories under a folder on a port of its
-/// own, for a clone from a `git://` URL; stopped when dropped.
-struct Daemon {
-    child: std::process::Child,
-    port: u16,
-}
-
-impl Daemon {
-    /// `None`, with a note, where git has no daemon that serves.
-    fn serve(base: &Path) -> Option<Self> {
-        // The daemon itself, not `git daemon`, which would start it as a
-        // child of its own that outlives a kill.
-        let program = PathBuf::from(git(base, &["--exec-path"]).trim())
-            .join(format!("git-daemon{}", std::env::consts::EXE_SUFFIX));
-        // A free port: bound, read and released for the daemon.
-        let port = std::net::TcpListener::bind("127.0.0.1:0")
-            .and_then(|listener| listener.local_addr())
-            .map_or_else(|e| panic!("{e}"), |addr| addr.port());
-        let spawned = std::process::Command::new(&program)
-            .args(["--reuseaddr", "--listen=127.0.0.1", "--export-all"])
-            .arg(format!("--port={port}"))
-            .arg(format!("--base-path={}", base.display()))
-            .arg(base)
-            .stdin(std::process::Stdio::null())
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .spawn();
-        let mut child = match spawned {
-            Ok(child) => child,
-            Err(error) => {
-                eprintln!("note: {} did not start ({error})", program.display());
-                return None;
-            }
-        };
-        let deadline = Instant::now() + Duration::from_secs(10);
-        loop {
-            if std::net::TcpStream::connect(("127.0.0.1", port)).is_ok() {
-                return Some(Self { child, port });
-            }
-            if child.try_wait().ok().flatten().is_some() || Instant::now() > deadline {
-                eprintln!("note: {} does not serve here", program.display());
-                let _ = child.kill();
-                let _ = child.wait();
-                return None;
-            }
-            std::thread::sleep(Duration::from_millis(20));
-        }
-    }
-
-    fn url(&self, repository: &str) -> String {
-        format!("git://127.0.0.1:{}/{repository}", self.port)
-    }
-}
-
-impl Drop for Daemon {
-    fn drop(&mut self) {
-        let _ = self.child.kill();
-        let _ = self.child.wait();
+/// `path` as a `file://` URL, which git clones like a remote one.
+fn file_url(path: &Path) -> String {
+    let text = path.to_string_lossy().replace('\\', "/");
+    if text.starts_with('/') {
+        format!("file://{text}")
+    } else {
+        format!("file:///{text}")
     }
 }
 
@@ -693,25 +643,23 @@ impl Driver {
     }
 }
 
-/// The URL on the clipboard is what the dialogue opens with; the clone
-/// runs as a job, creates the repository's folder in the pane's folder, or
-/// in the folder it was invoked on, and the pane shows it when the job is
-/// done.
+/// What the clipboard holds is what the dialogue opens with — a local
+/// repository's path, and a `file://` URL; the clone runs as a job,
+/// creates the repository's folder in the pane's folder, or in the folder
+/// it was invoked on, and the pane shows it when the job is done.
 #[test]
 fn a_clone_lands_in_the_target_folder_and_the_pane_shows_it() {
     let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
     repo_with_origin(dir.path());
+    let origin = dir.path().join("origin.git");
     let into = dir.path().join("into");
     fs::create_dir_all(into.join("nested")).unwrap_or_else(|e| panic!("{e}"));
-    let Some(daemon) = Daemon::serve(dir.path()) else {
-        eprintln!("note: the clone from a served repository is skipped");
-        return;
-    };
     let mut d = Driver::new(&into);
     assert_eq!(d.names(), ["nested"]);
 
-    // On the empty area: into the folder the pane shows.
-    d.start_clone(&daemon.url("origin.git"), &[]);
+    // On the empty area, from the repository's path: into the folder the
+    // pane shows.
+    d.start_clone(&origin.to_string_lossy(), &[]);
     d.pump_until("the clone is a job", |d| {
         d.job("Git clone origin").is_some()
     });
@@ -728,8 +676,8 @@ fn a_clone_lands_in_the_target_folder_and_the_pane_shows_it() {
     );
     assert_eq!(d.names(), ["nested", "origin"], "the pane shows the clone");
 
-    // On a folder: inside that folder.
-    d.start_clone(&daemon.url("origin.git"), &["nested"]);
+    // On a folder, from a `file://` URL: inside that folder.
+    d.start_clone(&file_url(&origin), &["nested"]);
     d.settle();
     assert!(into.join("nested/origin/.git").is_dir());
     assert_eq!(d.names(), ["nested", "origin"]);
