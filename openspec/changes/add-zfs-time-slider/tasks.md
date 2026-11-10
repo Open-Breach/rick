@@ -3,15 +3,15 @@
 ## 1. Preconditions
 
 - [ ] 1.1 Confirm `add-zfs-snapshots` is merged and archived, so `openspec/specs/zfs-snapshots` exists; verify `openspec list --specs` lists it
-- [x] 1.2 Record the decided question in QUESTIONS.md (368): the bar adds a row to SPEC.md's pane layout, `Decorator` gains `offers_timelines` and `timeline`, `Command` gains `ToggleTimeline` and `TimeTravel`; accepted with five changes (review of #156); verify the numbering
-- [ ] 1.3 SPEC.md names the bar in the pane layout and the two Decorator methods in "Core types and extension traits" (Serge's edit, or his approval of the agent's pull request as in QUESTIONS.md 324); verify the text matches design Decisions 1, 5 and 8
+- [x] 1.2 Record the decision in the pull request (#156, review of the proposal): the bar adds a row to SPEC.md's pane layout, `Decorator` gains `offers_timelines` and `timeline`, `Command` gains `ToggleTimeline` and `TimeTravel`; accepted with five changes (review of #156); verify the numbering
+- [ ] 1.3 SPEC.md names the bar in the pane layout and the two Decorator methods in "Core types and extension traits" (Serge's edit, or his approval of the agent's pull request); verify the text matches design Decisions 1, 5 and 8
 - [x] 1.4 Propose the bar's frame as a mock-up (`mockup.html`): at *Now*, at a past point read-only, reading, focused, in Light and Dark, from SPEC.md's tokens; verify it opens in a browser and every state is shown in both schemes
 - [ ] 1.5 The frame is drawn in the Figma file *Rick — FileExplorer*, page *Main view*, and approved by Serge; verify design Decisions 7 and 8 match it, updating them where the frame differs
 
 ## 2. Extension contract
 
-- [ ] 2.1 Add `Timeline` and `TimePoint` (with `source`) to `ext`, and `Decorator::offers_timelines` (default `false`) and `Decorator::timeline` (default `None`), with doc comments that say `timeline` runs in a job and may block, and a worked example in the decorator docs; bump `API_VERSION` to 18 with its history note; verify `cargo doc -p ext` and the doctest
-- [ ] 2.2 Verify every existing decorator still compiles unchanged and the plugin host refuses a plugin built for API 17 (existing version-mismatch test)
+- [ ] 2.1 Add `Timeline` and `TimePoint` (with `source`) to `ext`, and `Decorator::offers_timelines` (default `false`) and `Decorator::timeline` (default `None`), with doc comments that say `timeline` runs in a job and may block, and a worked example in the decorator docs; bump `API_VERSION` to 19 with its history note; verify `cargo doc -p ext` and the doctest
+- [ ] 2.2 Verify every existing decorator still compiles unchanged and the plugin host refuses a plugin built for API 18 (existing version-mismatch test)
 
 ## 3. Model and application
 
@@ -38,5 +38,5 @@
 
 ## Workflow follow-up
 
-- Open the pull request against `dev` with QUESTIONS.md 368, the API bump, and what was left out (absent-point dimming, selection carry-over, per-file timeline).
+- Open the pull request against `dev` with the review decision of #156, the API bump, and what was left out (absent-point dimming, selection carry-over, per-file timeline).
 - After merge, archive with `/opsx:archive` so `location-timeline` becomes a living spec and `zfs-snapshots` gains the timeline requirement.

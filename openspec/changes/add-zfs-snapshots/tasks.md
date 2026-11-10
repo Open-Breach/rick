@@ -57,9 +57,9 @@
 - [x] 9.2 Add the plugin to CHANGELOG.md under the unreleased version; verify the entry names the plugin and its Linux-only scope
 - [x] 9.3 Run `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, `cargo test --workspace`, `cargo deny check`, `cargo doc --no-deps`; verify all pass, and launch Rick on the ZFS machine to browse a snapshot, open a file's versions and restore a file by hand
 
-## 10. Review of #156 (QUESTIONS.md 364)
+## 10. Review of #156
 
-- [x] 10.1 Answer the decided question in QUESTIONS.md 364 and record the polkit assumption as 366; verify the numbering after the rebase onto `dev`
+- [x] 10.1 Record the review decision and the polkit assumption in the pull request (the questions file is retired on `dev`)
 - [x] 10.2 Add the privileged helper: `ext_zfs::helper` (argument check, system `zfs`, exit codes, `path()`), binary `rick-zfs` in crate `rick`, bundled beside `rick` where the plugin is; elevation runs the helper, and without it none is offered; verify unit tests for the accepted forms and every refusal, a manage test for the helper path and one without a helper, and the bundled helper against the real dataset
 - [x] 10.3 Ship the polkit action `org.openbreach.rick.zfs` as `packaging/linux/org.openbreach.rick.zfs.policy` in the Linux archive; verify the XML parses
 - [x] 10.4 Make *Restore* always ask once, naming the snapshot, the live targets and apart the items it replaces; verify restore tests for a question with nothing in the way, a declined restore and a replacement

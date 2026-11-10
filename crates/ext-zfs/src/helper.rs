@@ -22,7 +22,7 @@
 //! Under `pkexec`, the polkit action [`POLKIT_ACTION`] applies when the
 //! policy file `org.openbreach.rick.zfs.policy` is installed system-wide
 //! and names the helper's path; otherwise `pkexec` asks under its generic
-//! action, as for `rick-perms` (QUESTIONS.md 366).
+//! action, as for `rick-perms` (#156).
 
 use std::path::{Path, PathBuf};
 use std::process::Command;

@@ -292,7 +292,7 @@ jobs:
             cp packaging/linux/rick.desktop "dist/$NAME/share/applications/"
             cp -R assets/icons/linux/hicolor "dist/$NAME/share/icons/"
             # The polkit action of the ZFS plugin's helper rick-zfs, for a
-            # system-wide install (QUESTIONS.md 366).
+            # system-wide install (#156).
             mkdir -p "dist/$NAME/share/polkit-1/actions"
             cp packaging/linux/org.openbreach.rick.zfs.policy "dist/$NAME/share/polkit-1/actions/"
           fi

@@ -40,7 +40,7 @@ the specification first (#174).
 ### Added
 
 - `ext-zfs`, a plugin for OpenZFS snapshots, Linux only (OpenSpec change
-  `add-zfs-snapshots`, QUESTIONS.md 364): through the `zfs` command line
+  `add-zfs-snapshots`, placed by the review of #156): through the `zfs` command line
   it finds the dataset a folder lies in and, without `zfs` or outside a
   dataset, shows nothing. A read-only `zfs` location lists the datasets
   with snapshots, each dataset's snapshots newest first and each
@@ -54,12 +54,12 @@ the specification first (#174).
   for lack of permission: through the platform prompt as a call of
   `rick-zfs`, a helper beside `rick` that runs only a snapshot's
   `snapshot`, `rename` or `destroy`, under the polkit action
-  `org.openbreach.rick.zfs` where it is installed (QUESTIONS.md 366). The
+  `org.openbreach.rick.zfs` where it is installed. The
   info panel gets a ZFS section with the dataset, its snapshots and its
   main properties with their source. *Edit ZFS properties…* changes
   `compression`, `atime`, `relatime`, `copies`, `recordsize`, `quota`
-  and `refquota` of a dataset (OpenSpec change `add-zfs-property-editor`,
-  QUESTIONS.md 367): a form opened with the current values, *Inherit*
+  and `refquota` of a dataset (OpenSpec change
+  `add-zfs-property-editor`): a form opened with the current values, *Inherit*
   labelled with the value it gives, a preview of each change with the old
   value's source that refuses a size it cannot read, a quota below the
   space used or no change; applied as one job of `zfs set` then

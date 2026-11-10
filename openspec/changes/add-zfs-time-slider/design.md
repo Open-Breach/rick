@@ -2,13 +2,13 @@
 
 ## Context
 
-See proposal.md for motivation and the SPEC.md conflict, decided in QUESTIONS.md 368. Relevant current state:
+See proposal.md for motivation and the SPEC.md conflict, decided in the review of #156. Relevant current state:
 
 - Extensions return data and jobs and never draw (SPEC.md, Extension points). The Decorator already answers per location (`applies_to`, `invalidates_on`), returns quickly from caches and pushes late results through `DecorateCtx::publish`, which the application turns into `Event::Decorated`.
 - `ui-egui/src/pane.rs` draws each pane as a top panel (the toolbar), then the file view and the foot. Since the design refresh SPEC.md fixes the toolbar to the navigation pair, the breadcrumb and a right group of view options menu plus pane handle, and says other controls are not added to it; hidden files and refresh live in the view options menu.
 - A workspace tab is a whole layout of panes; each `model::Pane` holds its own explorer tabs. The timeline belongs to what a pane shows, so its toggle is per pane (review point 2).
 - `app` already has a navigation that records history only on the first step: `Command::SpringLoad { pane, to, first }` for drags.
-- `API_VERSION` is 17 on `dev`; every change to an extension trait bumps it, and plugins built for another version are refused.
+- `API_VERSION` is 18 on `dev`; every change to an extension trait bumps it, and plugins built for another version are refused.
 - `add-zfs-snapshots` gives `ext-zfs` a snapshot list cached per dataset (30 s) and the `zfs` provider locations `/<dataset>/@<snapshot>/<rel>`.
 
 ## Goals / Non-Goals
@@ -80,4 +80,4 @@ A top panel under the toolbar panel, as tall as the toolbar (`button/size` plus 
 
 ## Migration Plan
 
-Session files gain the pane's `timeline_shown` with a serde default of `false`, so older sessions load unchanged. Plugins built against API 17 are refused until rebuilt, which the workspace build does. Rollback is reverting the change and the version bump together.
+Session files gain the pane's `timeline_shown` with a serde default of `false`, so older sessions load unchanged. Plugins built against API 18 are refused until rebuilt, which the workspace build does. Rollback is reverting the change and the version bump together.

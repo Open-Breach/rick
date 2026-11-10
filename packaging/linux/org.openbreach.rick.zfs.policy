@@ -8,7 +8,7 @@
   program at exec.path; it takes effect once this file is installed in
   /usr/share/polkit-1/actions and the helper is at that path, which is
   where a system-wide install through ext-installer puts it
-  (QUESTIONS.md 366). Anywhere else pkexec asks under its generic action.
+  (#156). Anywhere else pkexec asks under its generic action.
 -->
 <policyconfig>
   <vendor>Rick</vendor>

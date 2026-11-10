@@ -4,7 +4,7 @@
 
 People who keep their home or their data on OpenZFS take snapshots, by hand or through a timer, and then rarely look at them, because getting a file back means a shell, the hidden `.zfs/snapshot` folder and the exact name of the snapshot. `ext-zfs` lets Rick show those snapshots as folders, list the versions of one file across them, put a file back where it was, create, rename and destroy snapshots, and change the few dataset properties that are safe to change on a running system, all without leaving the file manager.
 
-This file is the binding specification for the plugin; where it disagrees with `SPEC.md`, the question goes to `QUESTIONS.md`. It was built as the OpenSpec changes `add-zfs-snapshots` and `add-zfs-property-editor` and placed by QUESTIONS.md 364: its own plugin, not part of `ext-deco-fs`.
+This file is the binding specification for the plugin; where it disagrees with `SPEC.md`, the question goes into the pull request. It was built as the OpenSpec changes `add-zfs-snapshots` and `add-zfs-property-editor` and placed in the review of #156: its own plugin, not part of `ext-deco-fs`.
 
 ## Decisions
 
@@ -87,7 +87,7 @@ Applying is one job: one `zfs set p=v … <dataset>` for every explicit value, t
 
 The snapshot commands need a snapshot's full name: a dataset name without `@` is refused, so the helper can never destroy or rename a dataset; the property commands need a dataset's name without `@`. No argument may start with `-` beyond the one `-r`, so no other option reaches `zfs`. It runs the system's `zfs` from `/usr/sbin`, `/sbin`, `/usr/bin` or `/bin`, never from the caller's `PATH`, with a cleared environment and the C locale, passes ZFS's output through and returns its exit code; refused arguments exit with 64, a missing `zfs` with 69.
 
-**The polkit action** is `org.openbreach.rick.zfs` (`packaging/linux/org.openbreach.rick.zfs.policy`, in the Linux archive under `share/polkit-1/actions/`), administrator authentication every time. `pkexec` applies it when the policy is installed in `/usr/share/polkit-1/actions` and names the helper's path, which is where a system-wide install puts it (`/opt/rick/current/rick-zfs`); in a per-user install `pkexec` asks under its generic action instead (QUESTIONS.md 366).
+**The polkit action** is `org.openbreach.rick.zfs` (`packaging/linux/org.openbreach.rick.zfs.policy`, in the Linux archive under `share/polkit-1/actions/`), administrator authentication every time. `pkexec` applies it when the policy is installed in `/usr/share/polkit-1/actions` and names the helper's path, which is where a system-wide install puts it (`/opt/rick/current/rick-zfs`); in a per-user install `pkexec` asks under its generic action instead.
 
 ## Info panel section
 
