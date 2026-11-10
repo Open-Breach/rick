@@ -2645,6 +2645,105 @@ fn screenshots_of_the_file_info_card() {
     }
 }
 
+/// Issue 139, item 6: the tables of the preview as the Figma frame has
+/// them (`150:4368`) — the archive tree and the CSV grid under the one
+/// header band, striped from the second row — in Light and Dark at both
+/// densities.
+#[test]
+#[ignore = "needs a wgpu adapter; CI runs it and uploads the images"]
+fn screenshots_of_the_preview_tables() {
+    use std::io::Write as _;
+    let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+    let root = dir.path().join("tables");
+    fs::create_dir_all(&root).unwrap_or_else(|e| panic!("{e}"));
+    // The frame's archive: a folder, a folder inside it, three documents.
+    let mut zip = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+    let options = zip::write::SimpleFileOptions::default()
+        .compression_method(zip::CompressionMethod::Deflated);
+    for folder in [
+        "Kreditkarte - Farbcodiert/",
+        "Kreditkarte - Farbcodiert/2024/",
+    ] {
+        zip.add_directory(folder, options)
+            .unwrap_or_else(|e| panic!("{e}"));
+    }
+    for (index, kib) in [150usize, 249, 135].into_iter().enumerate() {
+        let name = format!(
+            "Kreditkarte - Farbcodiert/2024/default_0{}_2024_annotated.pdf",
+            index + 1
+        );
+        zip.start_file(name, options)
+            .unwrap_or_else(|e| panic!("{e}"));
+        // Text that deflates a little, as a document would.
+        let body: Vec<u8> = (0..kib * 1024)
+            .map(|i| (i.wrapping_mul(2_654_435_761) >> 11).to_le_bytes()[0] | 0x20)
+            .collect();
+        zip.write_all(&body).unwrap_or_else(|e| panic!("{e}"));
+    }
+    let bytes = zip.finish().unwrap_or_else(|e| panic!("{e}")).into_inner();
+    fs::write(root.join("Kreditkarte.zip"), bytes).unwrap_or_else(|e| panic!("{e}"));
+    fs::write(
+        root.join("products.csv"),
+        "id,title,description,price\n\
+         1,\"Rick, the file manager\",\"Fast listing, \"\"god-like\"\"\",0.00\n\
+         2,Multi-line field,First line of two,12.50\n\
+         3,Trailing spaces  ,  leading spaces,7\n\
+         4,Unquoted,plain,3\n",
+    )
+    .unwrap_or_else(|e| panic!("{e}"));
+
+    let fake = Arc::new(Fake::new().unwrap_or_else(|e| panic!("{e}")));
+    let host = Arc::new(EguiHost::new());
+    let app = app::App::new(app::Config {
+        platform: fake.clone(),
+        ui: host.clone(),
+        extensions: vec![
+            Arc::new(ext_preview_text::TextPreview::new()),
+            Arc::new(ext_preview_markup::MarkupPreview::new()),
+            Arc::new(ext_preview_archive::ArchivePreview::new()),
+        ],
+        config_dir: Some(fake.config_dir()),
+        start: Some(local(&root)),
+    });
+    let mut harness = Harness::builder()
+        .with_size(egui::vec2(1280.0, 800.0))
+        .with_pixels_per_point(2.0)
+        .build_eframe(move |cc| RickUi::new(app, host, &cc.egui_ctx));
+    settle(&mut harness);
+    harness.state_mut().set_inspector_width(600.0);
+    let modes = [
+        (Theme::Light, Density::Comfortable, "light-comfortable"),
+        (Theme::Light, Density::Compact, "light-compact"),
+        (Theme::Dark, Density::Comfortable, "dark-comfortable"),
+        (Theme::Dark, Density::Compact, "dark-compact"),
+    ];
+    for (name, scene) in [
+        ("Kreditkarte.zip", "preview-table-archive"),
+        ("products.csv", "preview-table-csv"),
+    ] {
+        preview(&mut harness, name);
+        settle(&mut harness);
+        for (theme, density, mode) in modes {
+            for change in [
+                SettingsChange::Theme(theme),
+                SettingsChange::Density(density),
+            ] {
+                harness
+                    .state_mut()
+                    .app_mut()
+                    .handle(app::Command::Settings(change), &mut Vec::new());
+            }
+            // The pointer rests on nothing.
+            harness.event(egui::Event::PointerMoved(egui::pos2(300.0, 780.0)));
+            for _ in 0..4 {
+                harness.step();
+            }
+            shoot(&mut harness, &format!("{scene}-{mode}"));
+        }
+    }
+    eprintln!("the preview pane: {:?}", harness.state().inspector_rect());
+}
+
 /// Issue 139, item 4: the Properties dialogue as the Figma frames have it
 /// (`144:4115`) — a folder and a symbolic link on the General tab, the
 /// Permissions tab, and the tab with the access control list open — in

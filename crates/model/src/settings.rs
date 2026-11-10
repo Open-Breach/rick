@@ -262,6 +262,12 @@ pub struct Preview {
     /// per content kind, is dropped when the file is read.
     #[serde(deserialize_with = "lenient_pins")]
     pub pinned: BTreeMap<String, bool>,
+    /// The widths of the columns of the table a previewer shows, by the
+    /// previewer's id and then by position — every column but the last,
+    /// which takes what is left (`preview-archive = [240, 72, 112, 88]`).
+    /// A previewer without an entry has the default widths, and so has a
+    /// column beyond those remembered.
+    pub columns: BTreeMap<String, Vec<u16>>,
 }
 
 /// The pins of `[preview.pinned]`: the entries that are `true`. Anything
@@ -533,6 +539,13 @@ pub enum SettingsChange {
     PreviewLineNumbers(bool),
     /// Word wrap in text previews, the new default.
     PreviewWrap(bool),
+    /// Remember the widths of the columns of a previewer's table.
+    PreviewColumns {
+        /// The previewer's id.
+        previewer: String,
+        /// The widths by position, every column's but the last.
+        widths: Vec<u16>,
+    },
     /// Pin or unpin the File info card for the files a previewer shows.
     PreviewPin {
         /// The previewer's id.
@@ -605,6 +618,9 @@ impl Settings {
             SettingsChange::AfterDrag(after) => self.drag.after = after,
             SettingsChange::PreviewLineNumbers(v) => self.preview.text.line_numbers = v,
             SettingsChange::PreviewWrap(v) => self.preview.text.wrap = v,
+            SettingsChange::PreviewColumns { previewer, widths } => {
+                self.preview.columns.insert(previewer, widths);
+            }
             SettingsChange::PreviewPin { previewer, pinned } => {
                 if pinned {
                     self.preview.pinned.insert(previewer, true);
@@ -818,6 +834,21 @@ mod tests {
         );
         let back: Settings = toml::from_str(&text).unwrap_or_else(|e| panic!("{e}"));
         assert_eq!(back.preview.pinned, s.preview.pinned);
+        // The widths of a previewer's table are kept by position.
+        s.apply(SettingsChange::PreviewColumns {
+            previewer: "preview-archive".into(),
+            widths: vec![240, 72, 112, 88],
+        });
+        let text = toml::to_string(&s).unwrap_or_else(|e| panic!("{e}"));
+        assert!(
+            text.contains("preview-archive = [240, 72, 112, 88]"),
+            "{text}"
+        );
+        let back: Settings = toml::from_str(&text).unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(
+            back.preview.columns.get("preview-archive"),
+            Some(&vec![240, 72, 112, 88])
+        );
         // A pin of 0.3, a section per content kind, is not carried over
         // and does not stop the file from being read.
         let old: Settings = toml::from_str(

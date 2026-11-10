@@ -968,8 +968,18 @@ impl Previews {
             let body = ui.available_rect_before_wrap();
             slot.frame_rect = Some(body);
             ui.set_clip_rect(body.intersect(ui.clip_rect()));
-            content::draw(ui, &content, &mut slot.content_state, SystemTime::now());
-            return act;
+            let remembered = slot
+                .previewer
+                .and_then(|id| around.columns.get(id.0))
+                .map_or(&[][..], Vec::as_slice);
+            let resized = content::draw(
+                ui,
+                &content,
+                &mut slot.content_state,
+                SystemTime::now(),
+                remembered,
+            );
+            return resized.map(PreviewAct::Columns).or(act);
         }
         let ctx = ui.ctx().clone();
         let body = ui.available_rect_before_wrap();
@@ -1086,6 +1096,9 @@ pub struct Around<'a> {
     pub hex: bool,
     /// Whether motion is reduced: the Portal burst stands still.
     pub still: bool,
+    /// The widths remembered for the columns of a previewer's table, by
+    /// the previewer's id.
+    pub columns: &'a std::collections::BTreeMap<String, Vec<u16>>,
 }
 
 /// The loading state (SPEC.md *Preview*): the Portal burst centred in the
@@ -1343,6 +1356,9 @@ pub enum PreviewAct {
     /// Show this folder in the system file manager, making it first when
     /// it is not there.
     OpenFolder(std::path::PathBuf),
+    /// A table's columns were resized: remember these widths, every
+    /// column's but the last, for the previewer that shows the file.
+    Columns(Vec<u16>),
     /// Ask for the file of a missing library with a file dialogue and
     /// store the choice into the previewer's setting, then open again.
     Browse {

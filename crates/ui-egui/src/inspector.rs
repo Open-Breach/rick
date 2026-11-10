@@ -358,6 +358,7 @@ pub fn show(
                     .iter()
                     .any(|p| p.id() == HEX_PREVIEWER),
                 still: app.platform().reduce_motion(),
+                columns: &app.model().settings.preview.columns,
             };
             let act = previews.content(
                 &mut body_ui,
@@ -367,8 +368,17 @@ pub fn show(
                 view.text_settings,
                 &around,
             );
-            if let Some(act) = act {
-                apply_preview_act(act, pane, app, ui.ctx(), requests);
+            match act {
+                Some(PreviewAct::Columns(widths)) => {
+                    if let Some(previewer) = view.previewer {
+                        acts.push(Act::Setting(SettingsChange::PreviewColumns {
+                            previewer: previewer.0.to_owned(),
+                            widths,
+                        }));
+                    }
+                }
+                Some(act) => apply_preview_act(act, pane, app, ui.ctx(), requests),
+                None => {}
             }
         }
         None => nothing_selected(&mut body_ui),
@@ -414,6 +424,8 @@ fn apply_preview_act(
             }
         }
         PreviewAct::Download(address) => ctx.open_url(egui::OpenUrl::new_tab(address)),
+        // The pane itself stores a table's widths.
+        PreviewAct::Columns(_) => {}
         PreviewAct::OpenFolder(folder) => {
             // The folder a library goes into is made when it is first shown.
             let shown = std::fs::create_dir_all(&folder)

@@ -931,6 +931,163 @@ fn the_git_section_appears_only_inside_a_work_tree() {
     );
 }
 
+/// The table of the pane's content as last drawn.
+fn table_of(harness: &Harness<'_, RickUi>) -> ui_egui::table::Drawn {
+    let pane = harness.state().app().model().focused;
+    harness
+        .state()
+        .previews()
+        .get(pane)
+        .and_then(|slot| slot.content_state().table.clone())
+        .unwrap_or_else(|| panic!("the content is no table"))
+}
+
+/// Issue 139, item 6 (SPEC.md *Tables in previews*): the archive tree and
+/// the CSV grid are one table — a 30 px header band with a divider
+/// between every pair of header cells, the rows starting right under it;
+/// a divider dragged resizes the column before it, never under 48 px, and
+/// the last column takes the rest; a double-click fits the column; the
+/// widths are remembered per previewer, by position, across files and
+/// restarts.
+#[test]
+#[allow(clippy::too_many_lines)]
+fn preview_tables_share_a_header_whose_dividers_resize_and_are_remembered() {
+    let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+    fs::write(
+        dir.path().join("data.csv"),
+        "id,title,description,price\n1,Rick,Fast listing,0.00\n2,Multi-line field,First line,12.50\n",
+    )
+    .unwrap_or_else(|e| panic!("{e}"));
+    for name in ["bundle.zip", "other.zip"] {
+        fs::write(
+            dir.path().join(name),
+            ext_preview_archive::fixtures::sample_zip(),
+        )
+        .unwrap_or_else(|e| panic!("{e}"));
+    }
+    let fake = Arc::new(Fake::new().unwrap_or_else(|e| panic!("{e}")));
+    let size = egui::vec2(1400.0, 700.0);
+    let mut harness = window(&fake, dir.path(), size, 600.0, content_previewers());
+
+    // The archive tree: Name, Type, Modified, Size and Packed.
+    select(&mut harness, "bundle.zip");
+    let table = table_of(&harness);
+    let content = harness
+        .state()
+        .preview_rects()
+        .content
+        .unwrap_or_else(|| panic!("content"));
+    assert!((table.header.height() - 30.0).abs() < 0.1, "{table:?}");
+    assert!((table.header.top() - content.top()).abs() < 0.1);
+    assert_eq!(table.widths.len(), 5, "{table:?}");
+    assert_eq!(
+        table.dividers.len(),
+        4,
+        "one between every pair of header cells"
+    );
+    for title in ["Name", "Type", "Modified", "Size", "Packed"] {
+        assert!(in_pane(&harness, title) >= 1, "the {title} title");
+    }
+    let first = table.first_row.unwrap_or_else(|| panic!("rows"));
+    assert!(
+        (first.top() - table.header.bottom()).abs() < 0.1,
+        "the first row sits right under the header: {table:?}"
+    );
+    assert!(table.widths.iter().all(|w| *w >= 48.0), "{table:?}");
+    let total: f32 = table.widths.iter().sum();
+    assert!(
+        (total - content.width()).abs() < 1.0,
+        "the last column takes the rest: {table:?} in {content:?}"
+    );
+
+    // Dragging the second divider widens Type by the drag, and the last
+    // column gives the room.
+    let y = table.header.center().y;
+    let divider = egui::pos2(table.dividers[1], y);
+    drag(&mut harness, divider, divider + egui::vec2(40.0, 0.0));
+    settle(&mut harness);
+    let wider = table_of(&harness);
+    // The first few points of a drag are egui's threshold.
+    let grown = wider.widths[1] - table.widths[1];
+    assert!(
+        (33.0..=40.5).contains(&grown),
+        "{:?} -> {:?}",
+        table.widths,
+        wider.widths
+    );
+    assert!((wider.widths[0] - table.widths[0]).abs() < 0.1);
+    assert!((wider.widths[4] - (table.widths[4] - grown)).abs() < 0.1);
+    let text = wait_settings(&mut harness, "preview-archive = [");
+    assert!(text.contains("[preview.columns]"), "{text}");
+
+    // No column gets narrower than 48 px.
+    let divider = egui::pos2(wider.dividers[1], y);
+    drag(&mut harness, divider, divider - egui::vec2(400.0, 0.0));
+    settle(&mut harness);
+    let narrow = table_of(&harness);
+    assert!((narrow.widths[1] - 48.0).abs() < 0.1, "{narrow:?}");
+
+    // A double-click fits the column to the cells in view: Type holds
+    // "Folder" and extensions, which need more than 48 px with the padding.
+    // Both clicks go into one frame's input: the harness's clock moves a
+    // quarter second per frame, more than the double-click window.
+    let divider = egui::pos2(narrow.dividers[1], y);
+    harness.event(egui::Event::PointerMoved(divider));
+    harness.step();
+    for _ in 0..2 {
+        for pressed in [true, false] {
+            harness.input_mut().events.push(egui::Event::PointerButton {
+                pos: divider,
+                button: egui::PointerButton::Primary,
+                pressed,
+                modifiers: egui::Modifiers::default(),
+            });
+        }
+    }
+    harness.step();
+    settle(&mut harness);
+    let fitted = table_of(&harness);
+    assert!(
+        fitted.widths[1] > 48.5 && fitted.widths[1] < table.widths[1] + 40.0,
+        "{fitted:?}"
+    );
+
+    // Another archive opens with the widths the first was left with, and
+    // so does a new window.
+    select(&mut harness, "other.zip");
+    let other = table_of(&harness);
+    assert!(
+        (other.widths[1] - fitted.widths[1]).abs() < 1.0,
+        "{other:?} after {fitted:?}"
+    );
+    let remembered = fitted.widths[1];
+    settle(&mut harness);
+    let fitted_text = format!("{}", remembered.round());
+    wait_settings(&mut harness, &fitted_text);
+    drop(harness);
+    let mut harness = window(&fake, dir.path(), size, 600.0, content_previewers());
+    select(&mut harness, "bundle.zip");
+    assert!(
+        (table_of(&harness).widths[1] - remembered).abs() < 1.0,
+        "the widths survive a restart"
+    );
+
+    // The CSV grid is the same table, its widths kept by position under
+    // its own previewer.
+    select(&mut harness, "data.csv");
+    let grid = table_of(&harness);
+    assert!((grid.header.height() - 30.0).abs() < 0.1);
+    assert_eq!(grid.widths.len(), 4);
+    assert_eq!(grid.dividers.len(), 3);
+    let y = grid.header.center().y;
+    let divider = egui::pos2(grid.dividers[0], y);
+    drag(&mut harness, divider, divider + egui::vec2(30.0, 0.0));
+    settle(&mut harness);
+    let grown = table_of(&harness).widths[0] - grid.widths[0];
+    assert!((23.0..=30.5).contains(&grown), "{grown}");
+    wait_settings(&mut harness, "preview-markup = [");
+}
+
 /// Selects `name` and steps until the pane shows its placeholder for it.
 fn select_unclaimed(harness: &mut Harness<'_, RickUi>, name: &str) {
     let pane = harness.state().app().model().focused;
@@ -1302,9 +1459,12 @@ fn markdown_csv_and_a_zip_are_laid_out_by_the_pane_itself() {
     assert_eq!(rows, 4, "docs, docs/readme.txt, a.txt, secret.bin");
     assert_ne!(stats, "");
     assert!(in_pane(&harness, "readme.txt") >= 1);
+    // The archive tree's columns; in a pane this narrow the last ones are
+    // reached by scrolling sideways.
+    assert!(in_pane(&harness, "Type") >= 1, "the Type title");
     assert!(
-        in_pane(&harness, "Date modified") >= 1,
-        "the explorer's columns"
+        harness.query_all_by_label("Packed").next().is_some(),
+        "the Packed title"
     );
     assert!(in_pane(&harness, &stats) >= 1, "the stats line");
     // Folding docs hides its contents.

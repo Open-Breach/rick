@@ -4218,3 +4218,16 @@ Once answered, an entry keeps its number and gains a dated decision line.
     Assumed: no GPS row at all unless latitude and longitude are both
     numbers; every other named tag with a value is listed, bytes
     included, cut at 200 characters as before.
+
+361. (GUI fixes, preview tables, issue 139 item 6, 2026-11-10) Widths
+    are remembered "per previewer … the archive tree's by column, the CSV
+    grid's by position", and nothing says under which key or what a
+    table wider than the pane does.
+    Assumed: `[preview.columns]` in `rick.toml`, one array per
+    previewer id holding every column's width but the last, by position
+    — the archive tree's columns have fixed places, so by position is by
+    column there. They are written when a drag ends or a double-click
+    has fitted a column. A table whose columns are wider than the pane
+    scrolls sideways, its header with it. The tree's titles follow the
+    rule: *Modified* and *Packed*, where 0.3 had *Date modified* and
+    *Compressed*.
