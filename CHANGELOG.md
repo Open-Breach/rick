@@ -117,6 +117,19 @@ open is in `QUESTIONS.md` 323 to 366. The rules went into SPEC.md first
 
 ### Fixed
 
+- **No black band around the window where it cannot be transparent**
+  (issue 158). Rick asks for a transparent window to paint its shadow into
+  a 10 px margin; where the surface is opaque — as on Windows under
+  DirectX 12, which is what a virtual machine without a graphics driver
+  gets — that margin showed as a solid black band. Rick now checks once,
+  before the first frame,
+  whether the first window's surface offers an alpha mode that blends, and
+  draws the plain frame where it does not: no margin and no shadow, a
+  one-pixel border at the window's edge, and the resize grips on the edge.
+  The shadow frame is unchanged where the window is transparent. One line
+  in the log at startup names the graphics backend, the adapter and the
+  frame chosen. `frame` in the `[window]` table of `rick.toml` overrides
+  the check: `auto` (the default), `shadow` or `plain` (#182).
 - EXIF in the image preview shows only the tags Rick names and that have a
   real value, with the exposure as `1/120 s` and dates without seconds: a
   photo without GPS data has no GPS rows and no “NaN” (#162).
