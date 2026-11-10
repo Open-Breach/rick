@@ -1,6 +1,6 @@
 # ext-git — English, the fallback language.
 
-git-commit = Commit
+git-commit = Git commit
 git-stash = Stash
 git-stash-pop = Stash pop
 git-pull = Pull
