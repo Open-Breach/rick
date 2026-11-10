@@ -13,8 +13,8 @@ use model::{
 use ops::PermissionRequest;
 use platform::{FilePermissions, Principals};
 use types::{
-    Answer, Conflict, ConflictAnswer, ConflictId, Entry, EntryId, Error, JobId, Location, Progress,
-    ProviderId, Question, QuestionId,
+    Answer, Conflict, ConflictAnswer, ConflictId, Entry, EntryId, Error, ExtId, JobId, Location,
+    Progress, ProviderId, Question, QuestionId,
 };
 
 /// Whether a transfer moves or copies, or asks on drop.
@@ -361,6 +361,15 @@ pub enum Command {
     /// A remote file held behind the size cap (`Event::PreviewCapped`):
     /// open the preview whatever its size.
     PreviewAnyway(PaneId),
+    /// Show the pane's file through one previewer whatever the scores say
+    /// — *Open as hex* on a file no previewer claims. It holds for this
+    /// file only, until the selection moves on.
+    PreviewWith {
+        /// The pane.
+        pane: PaneId,
+        /// The previewer, by its extension's id.
+        previewer: ExtId,
+    },
     /// The cap message's *Always preview on <source>*: switch the cap off
     /// for the source (one SSH host, one cloud account) that holds the
     /// pane's file, `preview_always = true` in its connection, then open
@@ -617,6 +626,9 @@ pub enum Event {
         pane: PaneId,
         /// The document.
         doc: Box<dyn PreviewDoc>,
+        /// The previewer that opened it, by its extension's id: what the
+        /// pin of the File info card is remembered under.
+        previewer: ExtId,
     },
     /// No preview could be opened for the pane's selection: a previewer
     /// claimed the file and failed to open it.
@@ -626,16 +638,19 @@ pub enum Event {
         /// Why.
         error: Error,
     },
-    /// No previewer claims the pane's selection; the pane shows the
-    /// placeholder of SPEC.md's *No previewer*: the file's facts, its type
-    /// icon and one line saying whether a plugin for the type is there.
+    /// No previewer claims the pane's selection; the pane shows the File
+    /// info card of SPEC.md's *No previewer*, centred: the file's facts
+    /// and what can be done about it.
     PreviewNone {
         /// The pane.
         pane: PaneId,
         /// A previewer plugin in the plugins directory whose manifest
-        /// claims the file's type but which is disabled, by id: *Plugin
-        /// available*. `None`: *No plugin available*.
+        /// claims the file's type but which is disabled, by id: the card's
+        /// head reads *plugin available*. `None`: *no previewer for …*.
         plugin: Option<String>,
+        /// The file's mode string and `owner:group`, `-rw-r--r--
+        /// serge:serge`, for a local file where the platform has them.
+        permissions: Option<String>,
     },
     /// The preview just opened for the pane shows a prefix of a file on a
     /// remote provider; the pane offers *Load more*
@@ -866,7 +881,7 @@ impl fmt::Debug for Event {
             Self::PreviewFailed { pane, error } => {
                 pane_struct(f, "PreviewFailed", *pane, "error", error)
             }
-            Self::PreviewNone { pane, plugin } => {
+            Self::PreviewNone { pane, plugin, .. } => {
                 pane_struct(f, "PreviewNone", *pane, "plugin", plugin)
             }
             Self::PreviewPrefix {

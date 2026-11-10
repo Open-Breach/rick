@@ -391,7 +391,7 @@ fn the_app_opens_a_preview_for_the_selection() {
     assert!(
         events
             .iter()
-            .any(|e| matches!(e, Event::PreviewNone { pane: p, plugin: None } if *p == pane)),
+            .any(|e| matches!(e, Event::PreviewNone { pane: p, plugin: None, .. } if *p == pane)),
         "no previewer claims it, and no disabled plugin would: {events:?}"
     );
     assert!(

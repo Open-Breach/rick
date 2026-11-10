@@ -96,10 +96,7 @@ mod tests {
         settings.session.start = "Review".to_owned();
         settings.preview.text.wrap = true;
         settings.preview.text.line_numbers = false;
-        settings
-            .preview
-            .pinned
-            .insert("image".into(), "exif".into());
+        settings.preview.pinned.insert("preview-image".into(), true);
         save(&path, &settings).unwrap_or_else(|e| panic!("{e}"));
         let text = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{e}"));
         assert!(text.contains("[preview.text]"), "{text}");

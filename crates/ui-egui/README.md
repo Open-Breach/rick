@@ -28,13 +28,19 @@ Rename, New file and New folder) and footer (the toolbar's height under a
 hairline: the hidden-files toggle, the folder and file counts and the
 files' size — *12 of 340* while a filter narrows the list — the selection
 pill, and the 200 px filter field with the include-subfolders toggle
-inside its right end), the Preview tab (toolbar with the media transport and *Copy*, info
-badges, content, status bar; one per window, following the focused
+inside its right end), the Preview tab (toolbar with the media transport, *Copy* and
+the info button, content, status bar; one per window, following the focused
 explorer, docked and torn out like any tab; Rick's only viewer, laying out
 every kind of content a previewer returns itself in `content.rs`: a file
-list in the explorer's columns, a grid, a rendered document, and the
-message for a missing third-party library with *Browse…* and *Retry*; the
-placeholder for a file no previewer claims), the side panel (rows
+list in the explorer's columns, a grid, a rendered document; one File info
+card for every file (`info_card.rs`: the icon, name, type and size, rows
+with a copy button each and *Show all n fields*) — hanging under the info
+button while the pointer is on it, pinned above the content per previewer,
+and centred with its buttons where there is nothing to show: no previewer
+(*Open as hex*, *Open with…*), a missing third-party library (*Download*,
+*Browse…*, *Retry*, *Where Rick looked*) or a failed preview; the Portal
+burst while a preview loads and a glyph with *No file selected* when
+there is none), the side panel (rows
 `sidebar/item-height` tall inset from the panel's edges; the editable
 Places list with its drag reorder, Edit… dialogue and keyboard, Favorites,
 Recent and the Trash view among the places, the Trash row's pill with the

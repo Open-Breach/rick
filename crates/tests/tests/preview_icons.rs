@@ -235,11 +235,11 @@ fn select_unclaimed(harness: &mut Harness<'_, RickUi>, name: &str) {
     harness.step();
 }
 
-/// With the plugin disabled in Extensions, an `.ico` shows the *Plugin
-/// available* placeholder: the host answers from the plugin's manifest,
-/// without loading it.
+/// With the plugin disabled in Extensions, an `.ico` shows the centred
+/// card whose head reads *plugin available*: the host answers from the
+/// plugin's manifest, without loading it.
 #[test]
-fn with_the_plugin_disabled_an_ico_shows_the_plugin_available_placeholder() {
+fn with_the_plugin_disabled_an_ico_shows_the_card_that_says_plugin_available() {
     let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
     fs::copy(fixture("multi.ico"), dir.path().join("app.ico")).unwrap_or_else(|e| panic!("{e}"));
     fs::write(dir.path().join("blob.xyz"), [0u8, 1, 2, 3]).unwrap_or_else(|e| panic!("{e}"));
@@ -271,9 +271,14 @@ fn with_the_plugin_disabled_an_ico_shows_the_plugin_available_placeholder() {
         "the disabled plugin claims .ico"
     );
     assert!(!slot.has_frame(), "no frame at all");
-    harness.get_by_label("Plugin available");
-    assert!(harness.query_by_label("No plugin available").is_none());
+    // The card's head says so, after the type and the size.
+    let line = |harness: &Harness<'_, RickUi>, text: &str| {
+        harness.query_all_by_label_contains(text).next().is_some()
+    };
+    assert!(line(&harness, "plugin available"));
+    assert!(!line(&harness, "no previewer for"));
 
     select_unclaimed(&mut harness, "blob.xyz");
-    harness.get_by_label("No plugin available");
+    assert!(line(&harness, "no previewer for .xyz"));
+    assert!(!line(&harness, "plugin available"));
 }
