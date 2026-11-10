@@ -44,9 +44,9 @@ pub use session::{
     parse_entry_id,
 };
 pub use settings::{
-    AfterDrag, Archives, ConnectionEntry, Density, Drag, LAST_SESSION, OnOpen, PanelSide, Plugins,
-    Preview, Rgb, Search, Section, SessionSettings, Settings, SettingsChange, SidePanel,
-    SidePanelChange, TextPreview, Theme, TitlebarColour, WindowFrame, WindowSettings,
+    AfterDrag, Archives, ConnectionEntry, DateFormat, Density, Drag, LAST_SESSION, OnOpen,
+    PanelSide, Plugins, Preview, Rgb, Search, Section, SessionSettings, Settings, SettingsChange,
+    SidePanel, SidePanelChange, TextPreview, Theme, TitlebarColour, WindowFrame, WindowSettings,
     parse_location,
 };
 pub use tree::{Tree, TreeRow};
@@ -568,6 +568,28 @@ impl Tab {
             show_hidden: self.show_hidden,
             show_system: settings.show_system,
         }
+    }
+
+    /// The folder's entries as the tab shows them without its filter and
+    /// its type filter: all that are known but the hidden and the system
+    /// ones it leaves out.
+    pub fn unfiltered(&self, settings: &Settings) -> impl Iterator<Item = &Entry> + use<'_> {
+        self.listing
+            .unfiltered(self.show_hidden, settings.show_system)
+    }
+
+    /// How many entries of the folder the tab does not show because they
+    /// are hidden, and *Select all* therefore leaves out (SPEC.md *Select
+    /// all*): zero while hidden entries are shown, and in Tree view, whose
+    /// rows are not the listing's alone.
+    #[must_use]
+    pub fn hidden_left_out(&self, settings: &Settings) -> usize {
+        if self.is_tree() {
+            return 0;
+        }
+        let filter = self.filter_text();
+        self.listing
+            .hidden_left_out(&self.spec_with(settings, &filter, self.types.as_ref()))
     }
 
     /// The selected entries, in view order.
