@@ -2,6 +2,7 @@
 //! in a temporary directory and a scripted `zfs`.
 
 mod actions;
+mod decorator;
 mod manage;
 mod restore;
 mod provider;

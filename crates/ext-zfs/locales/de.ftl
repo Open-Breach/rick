@@ -49,3 +49,12 @@ zfs-as-administrator = { $name } (als Administrator)
 zfs-permission-denied = Zugriff verweigert; nichts wurde geändert.
 zfs-needs-permission = Dir fehlen dafür die Rechte auf { $dataset }, und keine Administrator-Abfrage ist verfügbar. Ein Administrator kann sie so vergeben:
     { $command }
+zfs-reading = ZFS-Infos von { $dataset } lesen
+zfs-dataset = Dataset
+zfs-snapshots = Snapshots
+zfs-newest-snapshot = Neuester Snapshot
+zfs-loading = Wird geladen…
+zfs-source-local = lokal
+zfs-source-inherited = geerbt von { $dataset }
+zfs-source-default = Standard
+zfs-source-received = empfangen

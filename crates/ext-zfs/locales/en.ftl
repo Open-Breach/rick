@@ -49,3 +49,12 @@ zfs-as-administrator = { $name } (as administrator)
 zfs-permission-denied = Permission denied; nothing was changed.
 zfs-needs-permission = You lack the rights for this on { $dataset }, and no administrator prompt is available. An administrator can grant them with:
     { $command }
+zfs-reading = Read ZFS info of { $dataset }
+zfs-dataset = Dataset
+zfs-snapshots = Snapshots
+zfs-newest-snapshot = Newest snapshot
+zfs-loading = Loading…
+zfs-source-local = local
+zfs-source-inherited = inherited from { $dataset }
+zfs-source-default = default
+zfs-source-received = received

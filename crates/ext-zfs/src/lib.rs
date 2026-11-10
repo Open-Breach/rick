@@ -18,6 +18,7 @@
 
 pub mod actions;
 pub mod datasets;
+pub mod decorator;
 pub mod manage;
 pub mod parse;
 pub mod props;
@@ -109,6 +110,7 @@ impl Extension for ZfsExtension {
             ("de", include_str!("../locales/de.ftl")),
         ]);
         reg.provider(Arc::new(ZfsProvider::new(Arc::clone(&self.datasets))) as Arc<dyn ext::Provider>);
+        reg.decorator(Arc::new(decorator::ZfsDecorator::new(Arc::clone(&self.datasets))) as Arc<dyn ext::Decorator>);
         let shared = Arc::new(actions::Shared {
             datasets: Arc::clone(&self.datasets),
             platform: reg.platform().cloned(),
