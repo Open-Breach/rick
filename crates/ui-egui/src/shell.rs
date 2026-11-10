@@ -1111,11 +1111,16 @@ fn viewport_of(window: WindowId) -> ViewportId {
 
 /// The viewport builder for a window: Rick's own chrome, the app id and the
 /// window icon, at the window's restored geometry when it has one.
+/// `transparent` is whether a window Rick frames itself asks the system for
+/// transparency: the first window by [`frame::asks_transparency`], every
+/// later one by the frame that was chosen ([`frame::Mode::transparent`]). A
+/// window whose system keeps its controls never asks.
 #[must_use]
 pub fn viewport_builder(
     title: &str,
     chrome: platform::WindowChrome,
     geometry: Option<Geometry>,
+    transparent: bool,
 ) -> ViewportBuilder {
     let mut viewport = ViewportBuilder::default()
         .with_title(title)
@@ -1131,15 +1136,18 @@ pub fn viewport_builder(
             .with_maximized(g.maximised),
         None => viewport.with_inner_size(DEFAULT_SIZE),
     };
-    // Without decorations Rick draws the frame itself (`frame`): the window
-    // is transparent so the margin around the content shows the shadow.
+    // Without decorations Rick draws the frame itself (`frame`): for the
+    // shadow frame the window is transparent, so the margin around the
+    // content shows the shadow; for the plain frame it is not.
     if chrome.native_controls {
         viewport
             .with_titlebar_shown(false)
             .with_title_shown(false)
             .with_fullsize_content_view(true)
     } else {
-        viewport.with_decorations(false).with_transparent(true)
+        viewport
+            .with_decorations(false)
+            .with_transparent(transparent)
     }
 }
 
@@ -5122,7 +5130,7 @@ impl RickUi {
             ids.push(viewport);
             ctx.show_viewport_immediate(
                 viewport,
-                viewport_builder("Rick", chrome, geometry),
+                viewport_builder("Rick", chrome, geometry, self.frame_mode.transparent()),
                 |ui, _class| self.draw_window(ui, id),
             );
         }
@@ -5317,6 +5325,26 @@ mod tests {
         );
     }
 
+    /// Issue 158, every window: one Rick frames itself is undecorated and
+    /// asks for transparency only when told to, which is for the shadow
+    /// frame; one whose system keeps its controls never asks.
+    #[test]
+    fn a_window_asks_for_transparency_only_for_the_shadow_frame() {
+        let chrome = |native_controls| platform::WindowChrome {
+            controls: ControlsSide::Right,
+            native_controls,
+            native_controls_width: 0.0,
+        };
+        for (asked, mode) in [(true, frame::Mode::Shadow), (false, frame::Mode::Plain)] {
+            let own = viewport_builder("Rick", chrome(false), None, mode.transparent());
+            assert_eq!(own.decorations, Some(false));
+            assert_eq!(own.transparent, Some(asked), "{mode:?}");
+            let native = viewport_builder("Rick", chrome(true), None, mode.transparent());
+            assert_eq!(native.transparent, None, "the system's frame");
+            assert_eq!(native.decorations, None);
+        }
+    }
+
     /// The bundled icon is the 256 px tile, decoded once.
     #[test]
     fn the_window_icon_is_the_256_px_tile() {
@@ -5338,7 +5366,7 @@ mod tests {
                 native_controls,
                 native_controls_width: 0.0,
             };
-            let viewport = viewport_builder("Rick", chrome, None);
+            let viewport = viewport_builder("Rick", chrome, None, true);
             assert_eq!(viewport.app_id.as_deref(), Some(APP_ID));
             assert_eq!(APP_ID, "rick");
             let icon = viewport

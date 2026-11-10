@@ -14,6 +14,7 @@
 
 use egui::viewport::{ResizeDirection, ViewportCommand};
 use egui::{CursorIcon, Pos2, Rect, Sense, StrokeKind, Vec2, pos2};
+use model::WindowFrame;
 use platform::WindowChrome;
 
 /// The margin around the content of the shadow frame, holding the shadow.
@@ -39,6 +40,25 @@ pub enum Mode {
 }
 
 impl Mode {
+    /// The frame of this process's windows: what `frame` in the `[window]`
+    /// table of `rick.toml` says, and under `auto` what the first window's
+    /// surface can do. `blends` is whether that surface blends the window
+    /// with the desktop; `None`, not known, counts as opaque, so the margin
+    /// of a shadow frame never shows as a black band, not even for a frame.
+    #[must_use]
+    pub const fn of(setting: WindowFrame, blends: Option<bool>) -> Self {
+        match (setting, blends) {
+            (WindowFrame::Shadow, _) | (WindowFrame::Auto, Some(true)) => Self::Shadow,
+            (WindowFrame::Plain, _) | (WindowFrame::Auto, Some(false) | None) => Self::Plain,
+        }
+    }
+
+    /// Whether a window with this frame asks the system for transparency.
+    #[must_use]
+    pub const fn transparent(self) -> bool {
+        matches!(self, Self::Shadow)
+    }
+
     /// The margin between the window's edge and the border.
     #[must_use]
     pub const fn margin(self) -> f32 {
@@ -47,6 +67,14 @@ impl Mode {
             Self::Plain => 0.0,
         }
     }
+}
+
+/// Whether the first window asks the system for transparency, before the
+/// frame is chosen: it does unless `rick.toml` says `plain`, because asking
+/// is how Rick finds out whether transparency can be had.
+#[must_use]
+pub const fn asks_transparency(setting: WindowFrame) -> bool {
+    !matches!(setting, WindowFrame::Plain)
 }
 
 /// Whether the frame is drawn now: the system draws no chrome and the
@@ -387,6 +415,26 @@ mod tests {
         assert_eq!(border.corner_radius, egui::CornerRadius::ZERO, "square");
         assert!(border.blur_width.abs() < f32::EPSILON);
         assert_eq!(border.fill.a(), 255, "nothing shows through");
+    }
+
+    /// `rick.toml` decides, and under `auto` the surface does; a surface
+    /// nothing is known about counts as opaque.
+    #[test]
+    fn the_frame_follows_the_setting_and_then_the_surface() {
+        for blends in [None, Some(false), Some(true)] {
+            assert_eq!(Mode::of(WindowFrame::Shadow, blends), Mode::Shadow);
+            assert_eq!(Mode::of(WindowFrame::Plain, blends), Mode::Plain);
+        }
+        assert_eq!(Mode::of(WindowFrame::Auto, Some(true)), Mode::Shadow);
+        assert_eq!(Mode::of(WindowFrame::Auto, Some(false)), Mode::Plain);
+        assert_eq!(Mode::of(WindowFrame::Auto, None), Mode::Plain, "not known");
+        // The first window asks for transparency unless told not to; a
+        // later one asks when the frame is the shadow frame.
+        assert!(asks_transparency(WindowFrame::Auto));
+        assert!(asks_transparency(WindowFrame::Shadow));
+        assert!(!asks_transparency(WindowFrame::Plain));
+        assert!(Mode::Shadow.transparent());
+        assert!(!Mode::Plain.transparent());
     }
 
     /// As before, and in both modes: a maximised or fullscreen window has

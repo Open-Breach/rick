@@ -108,7 +108,7 @@ pub fn run(
     // the decorations go altogether. The restored session's focused window
     // is the first one; its geometry is applied by the first frame.
     let chrome = app.platform().window_chrome();
-    let viewport = viewport_builder(title, chrome, None);
+    let viewport = viewport_builder(title, chrome, None, true);
     let options = eframe::NativeOptions {
         viewport,
         ..Default::default()
