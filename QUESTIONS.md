@@ -4032,6 +4032,8 @@ Once answered, an entry keeps its number and gains a dated decision line.
     6.0:1), the mirror of the white at 78 % the dark band draws. The
     frames show `text/secondary`; the difference is a slightly darker
     grey in Light.
+    Decided (2026-11-10): as assumed, for now — Serge: "go with it for
+    now". SPEC.md already says so; nothing changes there.
 
 347. (GUI fixes, title bar colour, 2026-11-10) Three cases the frames do
     not cover. On the Dark band in Light, a hovered inactive tab at
