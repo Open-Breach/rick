@@ -166,6 +166,15 @@ pub fn os_description() -> String {
 /// offers it as *System properties…* there.
 pub const NATIVE_PROPERTIES: bool = cfg!(any(windows, target_os = "macos"));
 
+/// How this platform names the key the spec calls Mod: *Cmd* on macOS,
+/// *Ctrl* on Linux and Windows. A shortcut hint is spelled with it; a
+/// binding is stored as `Mod`.
+pub const MOD_KEY: &str = if cfg!(target_os = "macos") {
+    "Cmd"
+} else {
+    "Ctrl"
+};
+
 /// The platform the binary runs on.
 ///
 /// Zero-sized; every method dispatches to the OS implementation chosen at

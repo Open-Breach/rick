@@ -212,6 +212,18 @@ const LIST: &str = "List";
 /// focus, where its rows win over the list's.
 pub const PREVIEW: &str = "Preview pane";
 
+/// A shortcut as the user reads it in a menu or a hint: the canonical
+/// text with `Mod` written as the platform's key, *Ctrl* or *Cmd*
+/// (SPEC.md *Keyboard shortcuts*). The keymap file keeps `Mod`.
+#[must_use]
+pub fn spelled(shortcut: Shortcut) -> String {
+    let text = shortcut.text();
+    match text.strip_prefix("Mod+") {
+        Some(rest) => format!("{}+{rest}", platform::MOD_KEY),
+        None => text,
+    }
+}
+
 /// Every intent the UI handles itself, with the spec's default bindings.
 /// File operations are not here: they come from the action registry.
 pub const UI_INTENTS: &[IntentSpec] = &[
@@ -799,10 +811,11 @@ impl KeyMap {
             .map(|b| b.shortcut)
     }
 
-    /// The first binding of an intent as text, for menus.
+    /// The first binding of an intent as a hint for menus, spelled as the
+    /// platform spells it ([`spelled`]); `None` when it is unbound.
     #[must_use]
     pub fn text_for(&self, intent: Intent) -> Option<String> {
-        self.shortcuts_for(intent).next().map(|s| s.text())
+        self.shortcuts_for(intent).next().map(spelled)
     }
 
     /// What this shortcut does in an explorer, if anything.
@@ -1054,7 +1067,26 @@ mod tests {
         let back: Vec<String> = map.shortcuts_for(Intent::Back).map(|s| s.text()).collect();
         assert_eq!(back, ["Mod+Left", "Mod+["]);
         assert_eq!(map.shortcuts_for(Intent::Palette).count(), 0);
-        assert_eq!(map.text_for(Intent::Back).as_deref(), Some("Mod+Left"));
+        // A menu's hint is the first chord, spelled as the platform does.
+        assert_eq!(
+            map.text_for(Intent::Back),
+            Some(format!("{}+Left", platform::MOD_KEY))
+        );
+        assert_eq!(map.text_for(Intent::Palette), None);
+    }
+
+    #[test]
+    fn a_hint_spells_mod_as_the_platform_s_key() {
+        let key = |text: &str| -> Shortcut { text.parse().unwrap_or_else(|e| panic!("{e}")) };
+        let name = platform::MOD_KEY;
+        assert!(name == "Ctrl" || name == "Cmd", "{name}");
+        assert_eq!(spelled(key("Mod+N")), format!("{name}+N"));
+        assert_eq!(spelled(key("Mod+Shift+P")), format!("{name}+Shift+P"));
+        assert_eq!(spelled(key("Mod+,")), format!("{name}+,"));
+        // Without Mod nothing changes, and the keymap's own text keeps it.
+        assert_eq!(spelled(key("Alt+Left")), "Alt+Left");
+        assert_eq!(spelled(key("F2")), "F2");
+        assert_eq!(key("Mod+N").text(), "Mod+N");
     }
 
     #[test]
