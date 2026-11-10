@@ -46,6 +46,7 @@ preview-icons = ["dep:ext-preview-icons"]
 gstreamer = ["preview-media", "ext-preview-media/gstreamer"]
 git = ["dep:ext-git"]
 svn = ["dep:ext-svn"]
+zfs = ["dep:ext-zfs"]
 vfs-trash = ["dep:ext-vfs-trash"]
 vfs-archive = ["dep:ext-vfs-archive"]
 search-walk = ["dep:ext-search-walk"]
@@ -94,6 +95,7 @@ ext-preview-media = { workspace = true, optional = true }
 ext-preview-archive = { workspace = true, optional = true }
 ext-preview-markup = { workspace = true, optional = true }
 ext-svn = { workspace = true, optional = true }
+ext-zfs = { workspace = true, optional = true }
 ext-search-walk = { workspace = true, optional = true }
 ext-search-windows = { workspace = true, optional = true }
 ext-search-spotlight = { workspace = true, optional = true }

@@ -2580,7 +2580,7 @@ dependencies = [
 
 [[package]]
 name = "ext-zfs"
-version = "0.3.0-dev"
+version = "0.3.0"
 dependencies = [
  "ext",
  "futures",
@@ -7074,6 +7074,7 @@ dependencies = [
  "ext-vfs-gcs",
  "ext-vfs-s3",
  "ext-vfs-trash",
+ "ext-zfs",
  "model",
  "ops",
  "platform",
@@ -8197,6 +8198,7 @@ dependencies = [
  "ext-vfs-gcs",
  "ext-vfs-s3",
  "ext-vfs-trash",
+ "ext-zfs",
  "flate2",
  "futures",
  "hadris-fs",

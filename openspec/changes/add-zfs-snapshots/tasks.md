@@ -4,7 +4,7 @@
 
 - [x] 1.1 Append a numbered question to QUESTIONS.md: SPEC.md puts ZFS snapshots in `ext-deco-fs` ("Not in 0.2"); this change builds a feature plugin `ext-zfs` now (design Decision 1), stating the assumption; verify the entry follows the file's numbering
 - [x] 1.2 Create `crates/ext-zfs` as `cdylib` + `rlib` with `lib.rs` (manifest: id `zfs`, points Provider | Decorator | Action, `Platforms::LINUX`), the `ext::plugin!` entry point, empty `en.ftl`/`de.ftl`, and a one-paragraph README naming its responsibility and that it depends on `ext` and `types` only; verify `cargo build -p ext-zfs`
-- [ ] 1.3 Wire the crate into the workspace: members and workspace dependency, `zfs` feature on `rick`, dev-dependency of `tests`, `deny.toml` wrapper entries like `ext-svn`, plugin bundling into `plugins/zfs/`; verify `cargo deny check` and that `rick --list-plugins` lists `zfs`
+- [x] 1.3 Wire the crate into the workspace: members and workspace dependency, `zfs` feature on `rick`, dev-dependency of `tests`, `deny.toml` wrapper entries like `ext-svn`, plugin bundling into `plugins/zfs/`; verify `cargo deny check` and that `rick --list-plugins` lists `zfs`
 
 ## 2. Command-line layer
 
