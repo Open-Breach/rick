@@ -280,8 +280,9 @@ enum Msg {
     Conflicts,
     /// An extension asked the user a question.
     Prompts,
-    /// `Command::ShowProperties` read the entry.
-    Properties(Box<Result<PropertiesInfo, Error>>),
+    /// `Command::ShowProperties` read the entry: the request's number and
+    /// what was read.
+    Properties(u64, Box<Result<PropertiesInfo, Error>>),
     /// The count of the folder the Properties dialogue shows ended.
     PropertiesCounted {
         pane: PaneId,
@@ -706,6 +707,11 @@ pub struct App {
     /// the Properties dialogue: each ends in one `Msg::Properties`, and
     /// until then the application is busy.
     properties_reading: usize,
+    /// Numbers the requests for Properties.
+    properties_asked: u64,
+    /// The request whose answer the dialogue waits for: the latest one,
+    /// until it is answered or called off. Any other answer is dropped.
+    properties_waiting: Option<u64>,
     /// Numbers the index searches, so a superseded one's hits are dropped.
     index_generation: u64,
     /// The integration check or apply in flight.
@@ -1030,6 +1036,8 @@ impl App {
             properties_shown: None,
             properties_count: None,
             properties_reading: 0,
+            properties_asked: 0,
+            properties_waiting: None,
             index_generation: 0,
             integration: integration::IntegrationRun::default(),
         };
@@ -1808,6 +1816,8 @@ impl App {
             Command::ShowProperties(pane) => self.show_properties(pane, events),
             Command::PropertiesClosed => {
                 self.properties_shown = None;
+                // A request still on its way is called off with it.
+                self.properties_waiting = None;
                 if let Some(count) = self.properties_count.take() {
                     count.cancel.cancel();
                 }
@@ -2850,7 +2860,7 @@ impl App {
         let platform = Arc::clone(&self.platform);
         let tx = self.mailbox.clone();
         let location = ctx.location.clone();
-        self.properties_reading += 1;
+        let asked = self.properties_asking();
         runtime::handle().spawn(async move {
             // Every read is answered, one that failed on its thread too:
             // the application is busy until the answer is in.
@@ -2860,8 +2870,26 @@ impl App {
                 })
                 .await
                 .unwrap_or_else(|join| Err(Error::Io(std::io::Error::other(join))));
-            tx.send(Msg::Properties(Box::new(info)));
+            tx.send(Msg::Properties(asked, Box::new(info)));
         });
+    }
+
+    /// Numbers a request for Properties whose read is about to start: the
+    /// dialogue waits for this one now, and the application is busy until
+    /// it is answered.
+    fn properties_asking(&mut self) -> u64 {
+        self.properties_asked += 1;
+        self.properties_waiting = Some(self.properties_asked);
+        self.properties_reading += 1;
+        self.properties_asked
+    }
+
+    /// Whether Properties was asked for and its dialogue has not opened
+    /// yet, the entry still being read: Escape calls it off with
+    /// [`Command::PropertiesClosed`].
+    #[must_use]
+    pub fn properties_pending(&self) -> bool {
+        self.properties_waiting.is_some()
     }
 
     /// Starts the count of what is inside `folder` for the Properties
@@ -2934,12 +2962,12 @@ impl App {
         let contents = self.count_contents(pane, &name, path.as_deref());
         let platform = Arc::clone(&self.platform);
         let tx = self.mailbox.clone();
-        self.properties_reading += 1;
+        let asked = self.properties_asking();
         runtime::handle().spawn(async move {
             let entry = match provider.stat(&location).await {
                 Ok(entry) => entry,
                 Err(error) => {
-                    tx.send(Msg::Properties(Box::new(Err(error))));
+                    tx.send(Msg::Properties(asked, Box::new(Err(error))));
                     return;
                 }
             };
@@ -2949,7 +2977,7 @@ impl App {
                 })
                 .await
                 .unwrap_or_else(|join| Err(Error::Io(std::io::Error::other(join))));
-            tx.send(Msg::Properties(Box::new(info)));
+            tx.send(Msg::Properties(asked, Box::new(info)));
         });
     }
 
@@ -4207,9 +4235,16 @@ impl App {
                     });
                 }
             }
-            Msg::Properties(result) => {
+            Msg::Properties(asked, result) => {
                 // The read is answered: nothing more comes of it.
                 self.properties_reading = self.properties_reading.saturating_sub(1);
+                // Only the request the dialogue waits for opens it: one
+                // called off in the meantime, or overtaken by a later one,
+                // is dropped with whatever it read.
+                if self.properties_waiting != Some(asked) {
+                    return;
+                }
+                self.properties_waiting = None;
                 match *result {
                     Ok(mut info) => {
                         // The count may have ended while the entry was read.
