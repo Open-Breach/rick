@@ -180,8 +180,14 @@ use crate::search::SearchIndex;
 /// conflict's place among the job's — where it took `target_is_dir` and
 /// `remaining` (QUESTIONS.md 350); 18 an extension describes itself
 /// (issue 139): [`Manifest`] gained `description`, which `plugin.toml`
-/// carries and the Extensions dialogue shows (QUESTIONS.md 344).
-pub const API_VERSION: u32 = 18;
+/// carries and the Extensions dialogue shows (QUESTIONS.md 344); 19 a
+/// provider says what a location offers (issue 149):
+/// [`Capabilities`] gained `CREATE_DIR`,
+/// `CREATE_FILE`, `SEARCH_SUBTREE` and `DOWNLOAD`, and
+/// [`Provider`] gained `unavailable_reason`, the tooltip
+/// of a control a location rules out, and `name_problem`, a new folder's
+/// name checked against the provider's own rules before any request.
+pub const API_VERSION: u32 = 19;
 
 bitflags::bitflags! {
     /// The extension points an extension fills, as its manifest declares
