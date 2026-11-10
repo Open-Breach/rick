@@ -265,6 +265,15 @@ settings-spring-loading-delay = Spring-loading delay
 settings-after-a-drag = After a drag
 settings-theme = Theme
 settings-font-size = Font size
+settings-date-format = Date format
+settings-date-format-desc = How dates are written in the list, the file info and tooltips
+settings-date-smart-time = Smart with time
+settings-date-smart = Smart without time
+settings-date-iso = ISO
+settings-date-system = System
+settings-behaviour = Behaviour
+settings-rename-on-click = Rename on a second click
+settings-rename-on-click-desc = A second click on the selected item edits its name. F2 and the context menu always do
 settings-density = Density
 keyboard-shortcuts = Keyboard shortcuts
 shortcuts-subtitle = Click a shortcut to change it. Changes apply at once.
@@ -451,6 +460,10 @@ action-mount = Mount
 reason-select-something-first = select something first
 reason-not-available-here = Not available in this location
 notice-was-removed = { $name } was removed
+notice-hidden-not-selected = { $count ->
+    [one] 1 hidden item not selected
+   *[other] { $count } hidden items not selected
+}
 pane-connection-lost = Connection lost to { $source }
 pane-connection-error = Error
 reason-select-an-entry-first = select an entry first
