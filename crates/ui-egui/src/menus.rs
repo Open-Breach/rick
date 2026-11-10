@@ -43,6 +43,8 @@ pub fn burger(
     version: &str,
 ) {
     let scheme = theme::scheme(ui);
+    // The button sits on the title row's band and is drawn in its colours.
+    let band = theme::band(ui);
     let metrics = theme::metrics(ui.ctx());
     let size = metrics.button_size;
     let (rect, response) = ui.allocate_exact_size(egui::vec2(size, size), egui::Sense::click());
@@ -52,11 +54,17 @@ pub fn burger(
         .widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, spoken.clone()));
     let open = egui::Popup::is_id_open(ui.ctx(), egui::Popup::default_response_id(&response));
     // A tool button: no frame at rest, `bg/subtle` under the pointer,
-    // `bg/active` while pressed and while its menu is open.
+    // `bg/active` while pressed and while its menu is open. On a band
+    // that does not agree with the scheme both are the band's own hover,
+    // on which its icon reads.
     let fill = if open || response.is_pointer_button_down_on() {
-        Some(scheme.bg_active)
+        Some(if band.contrary {
+            band.hover
+        } else {
+            scheme.bg_active
+        })
     } else if response.hovered() {
-        Some(scheme.bg_subtle)
+        Some(band.hover)
     } else {
         None
     };
@@ -77,7 +85,7 @@ pub fn burger(
         egui::Align2::CENTER_CENTER,
         icons::MENU,
         egui::FontId::proportional(ICON),
-        scheme.icon_default,
+        band.icon,
     );
     let response = if open {
         response

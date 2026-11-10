@@ -2744,6 +2744,112 @@ fn screenshots_of_the_preview_tables() {
     eprintln!("the preview pane: {:?}", harness.state().inspector_rect());
 }
 
+/// SPEC.md *Title bar colour* (issue 139, item 10): the title row on
+/// every preset's band with three workspace tabs, the middle one hovered,
+/// in Light and Dark at both densities; and the setting's card on the
+/// Appearance page, with a preset and with *Custom* chosen.
+#[test]
+#[ignore = "needs a wgpu adapter; CI runs it and uploads the images"]
+#[allow(clippy::too_many_lines)]
+fn screenshots_of_the_title_bar_colour() {
+    use egui::accesskit::Role;
+    use egui_kittest::kittest::Queryable as _;
+    use model::TitlebarColour;
+    let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+    let folders = ["icons — android-studio", "flowcpt", "Downloads"];
+    for folder in folders {
+        fs::create_dir_all(dir.path().join(folder)).unwrap_or_else(|e| panic!("{e}"));
+    }
+    let mut harness = shell(&dir.path().join(folders[0]), egui::vec2(1600.0, 300.0));
+    for folder in &folders[1..] {
+        harness.state_mut().app_mut().handle(
+            app::Command::NewTab(local(&dir.path().join(folder))),
+            &mut Vec::new(),
+        );
+        settle(&mut harness);
+    }
+    let model = harness.state().app().model();
+    let first = model.workspaces(model.focused_window)[0].id;
+    harness
+        .state_mut()
+        .app_mut()
+        .handle(app::Command::ActivateWorkspace(first), &mut Vec::new());
+    settle(&mut harness);
+    let modes = [
+        (Theme::Light, Density::Comfortable, "light-comfortable"),
+        (Theme::Light, Density::Compact, "light-compact"),
+        (Theme::Dark, Density::Comfortable, "dark-comfortable"),
+        (Theme::Dark, Density::Compact, "dark-compact"),
+    ];
+    let change = |harness: &mut Harness<'_, RickUi>, change: SettingsChange| {
+        harness
+            .state_mut()
+            .app_mut()
+            .handle(app::Command::Settings(change), &mut Vec::new());
+    };
+    let presets = [
+        (TitlebarColour::DustyRose, "dusty-rose"),
+        (TitlebarColour::WarmGrey, "warm-grey"),
+        (TitlebarColour::SlateTeal, "slate-teal"),
+        (TitlebarColour::Sage, "sage"),
+        (TitlebarColour::Plum, "plum"),
+        (TitlebarColour::DarkBand, "dark-band"),
+    ];
+    for (preset, name) in presets {
+        change(&mut harness, SettingsChange::TitlebarColour(preset));
+        for (theme, density, mode) in modes {
+            change(&mut harness, SettingsChange::Theme(theme));
+            change(&mut harness, SettingsChange::Density(density));
+            for _ in 0..4 {
+                harness.step();
+            }
+            // At rest: the pointer is nowhere near the row.
+            harness.event(egui::Event::PointerMoved(egui::pos2(800.0, 280.0)));
+            for _ in 0..4 {
+                harness.step();
+            }
+            shoot(&mut harness, &format!("titlebar-{name}-{mode}"));
+            // An inactive tab under the pointer, on the default band and
+            // on the one that turns the row to light text.
+            let hovered = matches!(preset, TitlebarColour::DustyRose | TitlebarColour::DarkBand)
+                && density == Density::Comfortable;
+            if hovered {
+                let tab = harness.get_by_label("flowcpt").rect().center();
+                harness.event(egui::Event::PointerMoved(tab));
+                harness.step();
+                harness.step();
+                shoot(&mut harness, &format!("titlebar-hover-{name}-{mode}"));
+            }
+        }
+    }
+
+    // The setting's card, in a window tall enough for the page.
+    std::mem::drop(harness);
+    let mut harness = shell(&dir.path().join(folders[0]), egui::vec2(1280.0, 800.0));
+    harness.state_mut().open_settings();
+    for _ in 0..4 {
+        harness.step();
+    }
+    harness
+        .get_by_role_and_label(Role::RadioButton, "Appearance")
+        .click();
+    for (choice, name) in [
+        (TitlebarColour::DustyRose, "setting"),
+        (TitlebarColour::Custom, "setting-custom"),
+    ] {
+        change(&mut harness, SettingsChange::TitlebarColour(choice));
+        for (theme, density, mode) in modes {
+            change(&mut harness, SettingsChange::Theme(theme));
+            change(&mut harness, SettingsChange::Density(density));
+            harness.event(egui::Event::PointerMoved(egui::pos2(300.0, 780.0)));
+            for _ in 0..4 {
+                harness.step();
+            }
+            shoot(&mut harness, &format!("titlebar-{name}-{mode}"));
+        }
+    }
+}
+
 /// SPEC.md *Extensions dialogue* (issue 139, item 9): the list grouped by
 /// what the plugins contribute, with a plugin switched off and one that
 /// needs attention, and the details of a built-in provider, of the plugin

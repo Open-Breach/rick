@@ -4314,3 +4314,28 @@ Once answered, an entry keeps its number and gains a dated decision line.
     is chosen, then the one chosen last, and the one just installed.
     *Settings* closes the dialogue and opens the settings window on the
     plugin's page. The footer is the shell's.
+
+365. (GUI fixes, title bar colour, issue 139 item 10, 2026-11-10) Six
+    things the frames and the rule leave open, after questions 346 and
+    347. "The setting writes its two values into the token", and the
+    schemes are constants. Nothing says what a tool button under the
+    pointer looks like on a band that agrees with the scheme, or how an
+    active layout toggle is told on one that does not. The card is drawn
+    with its title inside, where every other card of the settings has
+    its group's title above it. Nothing says what *Custom* starts from,
+    or what becomes of the custom pair when a preset is chosen again.
+    And the custom fields have no size and no rule for half-typed text.
+    Assumed: the scheme keeps `bg/titlebar` at the default pair, and the
+    setting's pair is held beside the schemes in the active theme; the
+    title row reads the band there, never the constant. A hovered tool
+    button on an agreeing band is `bg/subtle`, as everywhere; on a band
+    that does not agree, an active toggle is told by its filled glyph
+    alone, in the band's icon colour, since `accent/focus` has 3:1 on no
+    dark band. The card is as its frame draws it, title inside and no
+    group title above. *Custom* starts from the Dusty rose pair, and the
+    custom pair is kept when a preset is chosen, for the next time. A
+    field is 104 px beside a swatch of the colour in use; what is typed
+    is taken the moment it reads as `#rrggbb`, and until then the field
+    has its warning border and the band keeps its colour. A value in
+    `rick.toml` that is no colour, or a preset's name that is none,
+    reads as the default and leaves the rest of the file standing.

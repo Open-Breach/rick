@@ -1,12 +1,13 @@
-//! The Settings window, the Keyboard shortcuts and Extensions screens; the
-//! About dialog is [`crate::about`].
+//! The Settings window; the Keyboard shortcuts dialogue is
+//! [`crate::shortcuts`], the Extensions dialogue [`crate::extensions`] and
+//! the About dialog [`crate::about`].
 
 use app::{App, Command, IntegrationCommand};
 use egui::{Align, Align2, FontId, Rect, Sense, pos2, vec2};
 use ext::t;
 use model::{
-    AfterDrag, Column, Density, OnOpen, PanelSide, SettingsChange, SidePanelChange, SortDir, Theme,
-    WindowId,
+    AfterDrag, Column, Density, OnOpen, PanelSide, Rgb, SettingsChange, SidePanelChange, SortDir,
+    Theme, TitlebarColour, WindowId,
 };
 use platform::integration::Item;
 
@@ -656,6 +657,14 @@ fn groups_of(page: &Page, app: &App) -> Vec<Group> {
                     Spec::new(t!("settings-font-size")),
                 ],
             },
+            // A card with its title inside, as its frame draws it.
+            Group {
+                title: String::new(),
+                rows: vec![Spec::described(
+                    t!("settings-titlebar-colour"),
+                    t!("settings-titlebar-colour-desc"),
+                )],
+            },
         ],
         Page::Integration => integration_groups(app),
         Page::Plugin(id) => app
@@ -681,21 +690,26 @@ fn groups_of(page: &Page, app: &App) -> Vec<Group> {
 /// are separated by hairlines; `draw` adds the rows through the card.
 fn group_ui(ui: &mut egui::Ui, group: &Group, visible: &[bool], draw: impl FnOnce(&mut Card<'_>)) {
     let scheme = theme::scheme(ui);
-    let (title, _) = ui.allocate_exact_size(vec2(ui.available_width(), 18.0), Sense::hover());
-    ui.painter().text(
-        pos2(title.left(), title.center().y),
-        Align2::LEFT_CENTER,
-        &group.title,
-        FontId::proportional(theme::TEXT_BODY),
-        scheme.text_secondary,
-    );
-    ui.interact(
-        title,
-        ui.id().with(("settings-group", &group.title)),
-        Sense::hover(),
-    )
-    .widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Label, true, group.title.clone()));
-    ui.add_space(8.0);
+    // A group without a title is a card that carries its own inside.
+    if !group.title.is_empty() {
+        let (title, _) = ui.allocate_exact_size(vec2(ui.available_width(), 18.0), Sense::hover());
+        ui.painter().text(
+            pos2(title.left(), title.center().y),
+            Align2::LEFT_CENTER,
+            &group.title,
+            FontId::proportional(theme::TEXT_BODY),
+            scheme.text_secondary,
+        );
+        ui.interact(
+            title,
+            ui.id().with(("settings-group", &group.title)),
+            Sense::hover(),
+        )
+        .widget_info(|| {
+            egui::WidgetInfo::labeled(egui::WidgetType::Label, true, group.title.clone())
+        });
+        ui.add_space(8.0);
+    }
     egui::Frame::new()
         .fill(scheme.bg_card)
         .stroke(egui::Stroke::new(1.0, scheme.border_default))
@@ -724,6 +738,48 @@ struct Card<'a> {
 }
 
 impl Card<'_> {
+    /// Row `index` of the group as a block of its own: the label, under
+    /// it the description over the card's width, then whatever `content`
+    /// lays out — the *Title bar colour* card.
+    fn block(&mut self, index: usize, content: impl FnOnce(&mut egui::Ui)) {
+        if !self.visible.get(index).copied().unwrap_or(false) {
+            return;
+        }
+        let Some(spec) = self.rows.get(index) else {
+            return;
+        };
+        let scheme = theme::scheme(self.ui);
+        self.drawn += 1;
+        egui::Frame::new()
+            .inner_margin(egui::Margin::symmetric(19, 17))
+            .show(self.ui, |ui| {
+                ui.set_width(ui.available_width());
+                ui.spacing_mut().item_spacing = vec2(0.0, 0.0);
+                ui.add(
+                    egui::Label::new(
+                        egui::RichText::new(&spec.label)
+                            .size(theme::TEXT_BODY)
+                            .color(scheme.text_primary),
+                    )
+                    .selectable(false),
+                );
+                if let Some(description) = &spec.description {
+                    ui.add_space(9.0);
+                    ui.add(
+                        egui::Label::new(
+                            egui::RichText::new(description)
+                                .size(theme::TEXT_SECONDARY)
+                                .color(scheme.text_secondary),
+                        )
+                        .wrap()
+                        .selectable(false),
+                    );
+                }
+                ui.add_space(12.0);
+                content(ui);
+            });
+    }
+
     /// Row `index` of the group, its control drawn by `control` in a
     /// right-to-left child: the first widget sits at the right edge.
     fn row(&mut self, index: usize, control: impl FnOnce(&mut egui::Ui)) {
@@ -1149,6 +1205,7 @@ fn rows_of(page: &Page, index: usize, card: &mut Card<'_>, cx: &mut PageCx<'_>) 
                 },
             );
         }
+        (Page::Appearance, 2) => card.block(0, |ui| titlebar_colour(ui, cx)),
         (Page::Integration, group) => integration_rows(group, card, cx),
         (Page::Plugin(id), 0) => plugin_rows(id, card, cx),
         _ => {}
@@ -1404,6 +1461,240 @@ fn after_drag_name(after: AfterDrag) -> String {
         AfterDrag::Stay => t!("settings-after-drag-stay"),
         AfterDrag::Return => t!("settings-after-drag-return"),
     }
+}
+
+/// A choice of *Title bar colour* as its tile names it.
+fn titlebar_name(colour: TitlebarColour) -> String {
+    match colour {
+        TitlebarColour::DustyRose => t!("settings-titlebar-dusty-rose"),
+        TitlebarColour::WarmGrey => t!("settings-titlebar-warm-grey"),
+        TitlebarColour::SlateTeal => t!("settings-titlebar-slate-teal"),
+        TitlebarColour::Sage => t!("settings-titlebar-sage"),
+        TitlebarColour::Plum => t!("settings-titlebar-plum"),
+        TitlebarColour::DarkBand => t!("settings-titlebar-dark-band"),
+        TitlebarColour::Custom => t!("settings-titlebar-custom"),
+    }
+}
+
+/// The swatch of a tile.
+const SWATCH: egui::Vec2 = vec2(64.0, 40.0);
+/// A tile: the swatch with 4 px around it, over the name.
+const TILE: egui::Vec2 = vec2(72.0, 67.0);
+
+/// The choices of *Title bar colour* (SPEC.md *Settings window*): a tile
+/// per preset, in the order of the table, then *Custom…* — a swatch split
+/// into the choice's light half and its dark half over its name, the
+/// chosen one in a 2 px `accent/focus` ring — and, with *Custom* chosen,
+/// the two colour fields under the tiles. A click is the choice, which
+/// shows in the title row at once.
+fn titlebar_colour(ui: &mut egui::Ui, cx: &mut PageCx<'_>) {
+    let scheme = theme::scheme(ui);
+    let settings = &cx.app.model().settings;
+    let chosen = settings.titlebar_colour;
+    let custom = (
+        settings.titlebar_custom_light,
+        settings.titlebar_custom_dark,
+    );
+    let mut picked = None;
+    ui.horizontal_wrapped(|ui| {
+        ui.spacing_mut().item_spacing = vec2(10.0, 10.0);
+        for colour in TitlebarColour::ALL {
+            let name = titlebar_name(colour);
+            let (tile, response) = ui.allocate_exact_size(TILE, Sense::click());
+            let is_chosen = colour == chosen;
+            response.widget_info(|| {
+                egui::WidgetInfo::selected(
+                    egui::WidgetType::RadioButton,
+                    true,
+                    is_chosen,
+                    name.clone(),
+                )
+            });
+            let swatch = Rect::from_min_size(tile.min + vec2(4.0, 4.0), SWATCH);
+            // A preset's pair; the custom pair once Custom is the choice.
+            swatch_ui(ui, swatch, colour.preset().or(is_chosen.then_some(custom)));
+            ui.painter().text(
+                pos2(tile.center().x, tile.top() + 56.5),
+                Align2::CENTER_CENTER,
+                &name,
+                FontId::proportional(theme::TEXT_CAPS),
+                if is_chosen {
+                    scheme.text_primary
+                } else {
+                    scheme.text_secondary
+                },
+            );
+            if is_chosen {
+                ui.painter().rect_stroke(
+                    tile.expand(2.0),
+                    f32::from(theme::CARD_RADIUS) + 2.0,
+                    scheme.focus_ring(),
+                    egui::StrokeKind::Inside,
+                );
+            } else if response.hovered() {
+                ui.painter().rect_stroke(
+                    tile.expand(2.0),
+                    f32::from(theme::CARD_RADIUS) + 2.0,
+                    scheme.hairline(),
+                    egui::StrokeKind::Inside,
+                );
+            }
+            if response.clicked() {
+                picked = Some(colour);
+            }
+        }
+    });
+    if let Some(colour) = picked {
+        cx.change(SettingsChange::TitlebarColour(colour));
+    }
+    if chosen == TitlebarColour::Custom {
+        ui.add_space(14.0);
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing = vec2(8.0, 0.0);
+            for (dark, label, value) in [
+                (false, t!("settings-theme-light"), custom.0),
+                (true, t!("settings-theme-dark"), custom.1),
+            ] {
+                custom_field(ui, cx, dark, &label, value);
+                ui.add_space(16.0);
+            }
+        });
+    }
+}
+
+/// A tile's swatch: split into the pair's light half and its dark half,
+/// or, for *Custom* before it is chosen, a dashed outline reading *L / D*.
+fn swatch_ui(ui: &egui::Ui, swatch: Rect, pair: Option<(Rgb, Rgb)>) {
+    let scheme = theme::scheme(ui);
+    let Some((light, dark)) = pair else {
+        let outline = dashed_outline(swatch.shrink(0.5), f32::from(theme::CARD_RADIUS));
+        ui.painter().extend(egui::Shape::dashed_line(
+            &outline,
+            egui::Stroke::new(1.0, scheme.border_strong),
+            4.0,
+            3.0,
+        ));
+        ui.painter().text(
+            swatch.center(),
+            Align2::CENTER_CENTER,
+            t!("settings-titlebar-light-dark"),
+            FontId::proportional(theme::TEXT_CAPS),
+            scheme.text_secondary,
+        );
+        return;
+    };
+    let half = swatch.center().x;
+    let corners = |left: bool| egui::CornerRadius {
+        nw: if left { theme::CARD_RADIUS } else { 0 },
+        sw: if left { theme::CARD_RADIUS } else { 0 },
+        ne: if left { 0 } else { theme::CARD_RADIUS },
+        se: if left { 0 } else { theme::CARD_RADIUS },
+    };
+    ui.painter().rect_filled(
+        Rect::from_min_max(swatch.min, pos2(half, swatch.bottom())),
+        corners(true),
+        theme::rgb(light),
+    );
+    ui.painter().rect_filled(
+        Rect::from_min_max(pos2(half, swatch.top()), swatch.max),
+        corners(false),
+        theme::rgb(dark),
+    );
+    ui.painter().rect_stroke(
+        swatch,
+        theme::CARD_RADIUS,
+        scheme.hairline(),
+        egui::StrokeKind::Inside,
+    );
+}
+
+/// One field of the custom pair: its name, a swatch of the colour it
+/// holds and a `#rrggbb` text field. What is typed is taken as soon as it
+/// is a colour; until then the field has its warning border and the band
+/// keeps the colour it had.
+fn custom_field(ui: &mut egui::Ui, cx: &mut PageCx<'_>, dark: bool, label: &str, value: Rgb) {
+    let scheme = theme::scheme(ui);
+    let id = ui.id().with(("titlebar-custom", dark));
+    let mut text = ui
+        .data_mut(|d| d.get_temp::<String>(id))
+        .unwrap_or_default();
+    // The field shows the setting unless something else is being typed.
+    let typed = Rgb::parse(&text);
+    let focused = ui
+        .data(|d| d.get_temp::<bool>(id.with("focus")))
+        .unwrap_or(false);
+    if !focused && typed != Some(value) {
+        text = value.text();
+    }
+    ui.add(
+        egui::Label::new(
+            egui::RichText::new(label)
+                .size(theme::TEXT_SECONDARY)
+                .color(scheme.text_secondary),
+        )
+        .selectable(false),
+    );
+    let (swatch, _) = ui.allocate_exact_size(vec2(22.0, 22.0), Sense::hover());
+    ui.painter().rect(
+        swatch,
+        theme::metrics(ui.ctx()).corner_radius(),
+        theme::rgb(value),
+        scheme.hairline(),
+        egui::StrokeKind::Inside,
+    );
+    let invalid = Rgb::parse(&text).is_none();
+    let border = invalid.then_some(scheme.status_warning_border);
+    let name = t!("settings-titlebar-custom-field", scheme = label);
+    let response = ui
+        .scope(|ui| {
+            ui.set_width(104.0);
+            dialog::text_field(ui, &mut text, "#rrggbb", true, border, false)
+        })
+        .inner;
+    response.widget_info(|| {
+        let mut info = egui::WidgetInfo::text_edit(true, String::new(), text.clone(), "#rrggbb");
+        info.label = Some(name.clone());
+        info
+    });
+    if response.changed()
+        && let Some(colour) = Rgb::parse(&text)
+        && colour != value
+    {
+        cx.change(SettingsChange::TitlebarCustom { dark, colour });
+    }
+    // Asked before the data is locked: the focus is behind the same lock.
+    let has_focus = response.has_focus();
+    ui.data_mut(|d| {
+        d.insert_temp(id, text);
+        d.insert_temp(id.with("focus"), has_focus);
+    });
+}
+
+/// The outline of a rectangle with rounded corners as a closed run of
+/// points, for a dashed stroke.
+fn dashed_outline(rect: Rect, radius: f32) -> Vec<egui::Pos2> {
+    use std::f32::consts::FRAC_PI_2;
+    let centres = [
+        (pos2(rect.right() - radius, rect.top() + radius), -FRAC_PI_2),
+        (pos2(rect.right() - radius, rect.bottom() - radius), 0.0),
+        (
+            pos2(rect.left() + radius, rect.bottom() - radius),
+            FRAC_PI_2,
+        ),
+        (
+            pos2(rect.left() + radius, rect.top() + radius),
+            2.0 * FRAC_PI_2,
+        ),
+    ];
+    let mut points = Vec::new();
+    for (centre, start) in centres {
+        for step in 0_u8..=6 {
+            let angle = start + FRAC_PI_2 * f32::from(step) / 6.0;
+            points.push(centre + radius * vec2(angle.cos(), angle.sin()));
+        }
+    }
+    points.extend(points.first().copied());
+    points
 }
 
 fn density_name(density: Density) -> String {

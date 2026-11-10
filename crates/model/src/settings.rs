@@ -37,6 +37,145 @@ pub enum Density {
     Comfortable,
 }
 
+/// A colour as `rick.toml` writes it, `#rrggbb`: red, green, blue.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct Rgb(pub [u8; 3]);
+
+impl Rgb {
+    /// The colour a `#rrggbb` text names, the `#` optional and the case
+    /// free; `None` for anything else.
+    #[must_use]
+    pub fn parse(text: &str) -> Option<Self> {
+        let hex = text.trim();
+        let hex = hex.strip_prefix('#').unwrap_or(hex);
+        if hex.len() != 6 || !hex.bytes().all(|b| b.is_ascii_hexdigit()) {
+            return None;
+        }
+        let channel = |at: usize| u8::from_str_radix(&hex[at..at + 2], 16).ok();
+        Some(Self([channel(0)?, channel(2)?, channel(4)?]))
+    }
+
+    /// The colour as `#rrggbb`.
+    #[must_use]
+    pub fn text(self) -> String {
+        let [r, g, b] = self.0;
+        format!("#{r:02x}{g:02x}{b:02x}")
+    }
+}
+
+impl Serialize for Rgb {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(&self.text())
+    }
+}
+
+/// The colour of the title row's band (SPEC.md *Title bar colour*): one
+/// of six presets, each a light and a dark value so that one choice works
+/// in both schemes, or the user's own pair.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
+#[serde(rename_all = "kebab-case")]
+pub enum TitlebarColour {
+    /// `#ece0db` and `#332c2c`: the values of the `bg/titlebar` token.
+    #[default]
+    DustyRose,
+    /// `#e6e2dc` and `#2c2a28`.
+    WarmGrey,
+    /// `#d9e4e4` and `#263233`.
+    SlateTeal,
+    /// `#dfe6d8` and `#283027`.
+    Sage,
+    /// `#e4dcea` and `#3a2e4a`.
+    Plum,
+    /// `#2f3237` in both schemes: a dark band in Light too.
+    DarkBand,
+    /// `titlebar_custom_light` and `titlebar_custom_dark`.
+    Custom,
+}
+
+impl TitlebarColour {
+    /// The choices in the order the settings show them: the presets as
+    /// SPEC.md's table lists them, then *Custom*.
+    pub const ALL: [Self; 7] = [
+        Self::DustyRose,
+        Self::WarmGrey,
+        Self::SlateTeal,
+        Self::Sage,
+        Self::Plum,
+        Self::DarkBand,
+        Self::Custom,
+    ];
+
+    /// A preset's light and dark value; `None` for *Custom*, whose pair
+    /// the settings hold.
+    #[must_use]
+    pub const fn preset(self) -> Option<(Rgb, Rgb)> {
+        let pair = match self {
+            Self::DustyRose => ([0xec, 0xe0, 0xdb], [0x33, 0x2c, 0x2c]),
+            Self::WarmGrey => ([0xe6, 0xe2, 0xdc], [0x2c, 0x2a, 0x28]),
+            Self::SlateTeal => ([0xd9, 0xe4, 0xe4], [0x26, 0x32, 0x33]),
+            Self::Sage => ([0xdf, 0xe6, 0xd8], [0x28, 0x30, 0x27]),
+            Self::Plum => ([0xe4, 0xdc, 0xea], [0x3a, 0x2e, 0x4a]),
+            Self::DarkBand => ([0x2f, 0x32, 0x37], [0x2f, 0x32, 0x37]),
+            Self::Custom => return None,
+        };
+        Some((Rgb(pair.0), Rgb(pair.1)))
+    }
+}
+
+/// The default of `titlebar_custom_light`: the default preset's light
+/// value, so that *Custom* starts from the band the user knows.
+const fn custom_light() -> Rgb {
+    Rgb([0xec, 0xe0, 0xdb])
+}
+
+/// The default of `titlebar_custom_dark`.
+const fn custom_dark() -> Rgb {
+    Rgb([0x33, 0x2c, 0x2c])
+}
+
+/// A `#rrggbb` key of `rick.toml`: anything that is no colour reads as
+/// `fallback` instead of failing the whole file.
+fn lenient_rgb<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+    fallback: Rgb,
+) -> Result<Rgb, D::Error> {
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Value {
+        Text(String),
+        Other(serde::de::IgnoredAny),
+    }
+    Ok(match Value::deserialize(deserializer)? {
+        Value::Text(text) => Rgb::parse(&text).unwrap_or(fallback),
+        Value::Other(_) => fallback,
+    })
+}
+
+fn lenient_light<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<Rgb, D::Error> {
+    lenient_rgb(deserializer, custom_light())
+}
+
+fn lenient_dark<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<Rgb, D::Error> {
+    lenient_rgb(deserializer, custom_dark())
+}
+
+/// The `titlebar_colour` key: a name that is no preset reads as the
+/// default instead of failing the whole file.
+fn lenient_titlebar<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<TitlebarColour, D::Error> {
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Value {
+        Known(TitlebarColour),
+        Other(serde::de::IgnoredAny),
+    }
+    Ok(match Value::deserialize(deserializer)? {
+        Value::Known(colour) => colour,
+        Value::Other(_) => TitlebarColour::default(),
+    })
+}
+
 /// Everything in `rick.toml`. Missing keys take their defaults, so a file
 /// with one line is valid.
 // Settings are flags by nature; each maps to one TOML key.
@@ -64,6 +203,15 @@ pub struct Settings {
     pub font_size: u8,
     /// The density of the interface.
     pub density: Density,
+    /// The colour of the title row's band: a preset, or `custom`.
+    #[serde(deserialize_with = "lenient_titlebar")]
+    pub titlebar_colour: TitlebarColour,
+    /// The band in the light scheme while `titlebar_colour` is `custom`.
+    #[serde(deserialize_with = "lenient_light")]
+    pub titlebar_custom_light: Rgb,
+    /// The band in the dark scheme while `titlebar_colour` is `custom`.
+    #[serde(deserialize_with = "lenient_dark")]
+    pub titlebar_custom_dark: Rgb,
     /// The language of the user interface as a tag (`de`), or `None` for
     /// the system's; applied live, English the fallback for a missing key.
     pub language: Option<String>,
@@ -461,6 +609,17 @@ impl SessionSettings {
     }
 }
 
+impl Settings {
+    /// The band of the title row in the light and in the dark scheme: the
+    /// chosen preset's pair, or the custom one.
+    #[must_use]
+    pub fn titlebar(&self) -> (Rgb, Rgb) {
+        self.titlebar_colour
+            .preset()
+            .unwrap_or((self.titlebar_custom_light, self.titlebar_custom_dark))
+    }
+}
+
 impl Default for Settings {
     fn default() -> Self {
         Self {
@@ -474,6 +633,9 @@ impl Default for Settings {
             theme: Theme::System,
             font_size: 13,
             density: Density::Comfortable,
+            titlebar_colour: TitlebarColour::default(),
+            titlebar_custom_light: custom_light(),
+            titlebar_custom_dark: custom_dark(),
             shortcuts: BTreeMap::new(),
             session: SessionSettings::default(),
             pinned: Vec::new(),
@@ -510,6 +672,16 @@ pub enum SettingsChange {
     FontSize(u8),
     /// The density of the interface.
     Density(Density),
+    /// The title row's band: a preset, or the custom pair.
+    TitlebarColour(TitlebarColour),
+    /// One colour of the custom pair: the light scheme's, or the dark
+    /// scheme's.
+    TitlebarCustom {
+        /// The dark scheme's value; the light scheme's otherwise.
+        dark: bool,
+        /// The colour.
+        colour: Rgb,
+    },
     /// The language, `None` for the system's.
     Language(Option<String>),
     /// Rebind an action; `None` restores its default.
@@ -592,6 +764,14 @@ impl Settings {
             SettingsChange::Theme(v) => self.theme = v,
             SettingsChange::FontSize(v) => self.font_size = v,
             SettingsChange::Density(v) => self.density = v,
+            SettingsChange::TitlebarColour(v) => self.titlebar_colour = v,
+            SettingsChange::TitlebarCustom { dark: true, colour } => {
+                self.titlebar_custom_dark = colour;
+            }
+            SettingsChange::TitlebarCustom {
+                dark: false,
+                colour,
+            } => self.titlebar_custom_light = colour,
             SettingsChange::Language(v) => self.language = v,
             SettingsChange::Shortcut { action, binding } => match binding {
                 Some(binding) => {
@@ -669,6 +849,100 @@ mod tests {
         assert_eq!(s.archives.on_open, OnOpen::System);
         let text = toml::to_string(&s).unwrap_or_default();
         assert!(text.contains("[archives]\non_open = \"system\""), "{text}");
+    }
+
+    #[test]
+    fn the_title_bar_colour_is_a_preset_or_a_custom_pair() {
+        // The presets, as SPEC.md's table lists them.
+        let table = [
+            (
+                TitlebarColour::DustyRose,
+                "dusty-rose",
+                "#ece0db",
+                "#332c2c",
+            ),
+            (TitlebarColour::WarmGrey, "warm-grey", "#e6e2dc", "#2c2a28"),
+            (
+                TitlebarColour::SlateTeal,
+                "slate-teal",
+                "#d9e4e4",
+                "#263233",
+            ),
+            (TitlebarColour::Sage, "sage", "#dfe6d8", "#283027"),
+            (TitlebarColour::Plum, "plum", "#e4dcea", "#3a2e4a"),
+            (TitlebarColour::DarkBand, "dark-band", "#2f3237", "#2f3237"),
+        ];
+        for (index, (preset, key, light, dark)) in table.into_iter().enumerate() {
+            assert_eq!(TitlebarColour::ALL[index], preset);
+            let pair = preset.preset().map(|(l, d)| (l.text(), d.text()));
+            assert_eq!(pair, Some((light.to_owned(), dark.to_owned())), "{key}");
+            // The choice is written under its name and read back.
+            let mut s = Settings::default();
+            s.apply(SettingsChange::TitlebarColour(preset));
+            let text = toml::to_string(&s).unwrap_or_default();
+            assert!(
+                text.contains(&format!("titlebar_colour = \"{key}\"")),
+                "{text}"
+            );
+            let back: Settings = toml::from_str(&text).unwrap_or_default();
+            assert_eq!(back.titlebar_colour, preset);
+            assert_eq!(back.titlebar().0.text(), light);
+        }
+        assert_eq!(TitlebarColour::ALL[6], TitlebarColour::Custom);
+        assert_eq!(TitlebarColour::Custom.preset(), None);
+
+        // The default is Dusty rose, and Custom starts from its pair.
+        let mut s = Settings::default();
+        assert_eq!(s.titlebar_colour, TitlebarColour::DustyRose);
+        s.apply(SettingsChange::TitlebarColour(TitlebarColour::Custom));
+        assert_eq!(
+            s.titlebar(),
+            (Rgb([0xec, 0xe0, 0xdb]), Rgb([0x33, 0x2c, 0x2c]))
+        );
+        s.apply(SettingsChange::TitlebarCustom {
+            dark: false,
+            colour: Rgb([0x10, 0x20, 0x30]),
+        });
+        s.apply(SettingsChange::TitlebarCustom {
+            dark: true,
+            colour: Rgb([0xa0, 0xb0, 0xc0]),
+        });
+        assert_eq!(
+            s.titlebar(),
+            (Rgb([0x10, 0x20, 0x30]), Rgb([0xa0, 0xb0, 0xc0]))
+        );
+        let text = toml::to_string(&s).unwrap_or_default();
+        assert!(text.contains("titlebar_colour = \"custom\""), "{text}");
+        assert!(
+            text.contains("titlebar_custom_light = \"#102030\""),
+            "{text}"
+        );
+        assert!(
+            text.contains("titlebar_custom_dark = \"#a0b0c0\""),
+            "{text}"
+        );
+        let back: Settings = toml::from_str(&text).unwrap_or_default();
+        assert_eq!(back, s);
+        // A preset keeps the custom pair for the next time.
+        s.apply(SettingsChange::TitlebarColour(TitlebarColour::Sage));
+        assert_eq!(s.titlebar().0.text(), "#dfe6d8");
+        assert_eq!(s.titlebar_custom_light, Rgb([0x10, 0x20, 0x30]));
+
+        // What is no colour and no preset reads as the default, and the
+        // rest of the file stands.
+        let odd = "show_hidden = true\ntitlebar_colour = \"neon\"\n\
+                   titlebar_custom_light = \"blue\"\ntitlebar_custom_dark = 7\n";
+        let read: Settings = toml::from_str(odd).unwrap_or_else(|e| panic!("{e}"));
+        assert!(read.show_hidden);
+        assert_eq!(read.titlebar_colour, TitlebarColour::DustyRose);
+        assert_eq!(read.titlebar_custom_light, Rgb([0xec, 0xe0, 0xdb]));
+        assert_eq!(read.titlebar_custom_dark, Rgb([0x33, 0x2c, 0x2c]));
+        // A colour is six hex digits, the hash and the case free.
+        assert_eq!(Rgb::parse("#ECE0DB"), Some(Rgb([0xec, 0xe0, 0xdb])));
+        assert_eq!(Rgb::parse(" 2f3237 "), Some(Rgb([0x2f, 0x32, 0x37])));
+        for bad in ["", "#fff", "#12345g", "#1234567", "rose"] {
+            assert_eq!(Rgb::parse(bad), None, "{bad}");
+        }
     }
 
     #[test]
