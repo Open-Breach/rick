@@ -21,6 +21,9 @@ use std::time::{Duration, Instant};
 
 /// A pause between two chords: a frame or two of a software renderer.
 const BEAT: Duration = Duration::from_millis(400);
+/// How long the list is given to show a file that has just appeared on
+/// disk: nothing outside the window says when it has.
+const LIST_FOLLOWS: Duration = Duration::from_secs(2);
 
 /// The running Rick, killed when the test ends either way.
 struct Rick(Child);
@@ -196,6 +199,9 @@ fn the_real_chords_copy_cut_and_paste_in_a_real_window() {
     );
     assert!(deep.join("one.txt").exists(), "a copy leaves the original");
     assert_eq!(names(&top), ["deep", "one.txt"]);
+    // The list hears of the new file from the folder's watcher, a moment
+    // after it is on disk; the next keys select it in the list.
+    std::thread::sleep(LIST_FOLLOWS);
 
     // Cut: in top, narrow the list to the file by typing, select it, Mod+X,
     // clear the filter, up to root. This time the clipboard holds text, so

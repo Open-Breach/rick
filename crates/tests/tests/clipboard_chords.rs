@@ -85,15 +85,25 @@ fn go(harness: &mut Harness<'_, RickUi>, to: &Path) {
     );
 }
 
+/// Selects the row named `name` in the focused pane, once it is listed: a
+/// file that was just pasted is on disk before the list has heard of it.
 fn select(harness: &mut Harness<'_, RickUi>, name: &str) {
     let pane = harness.state().app().model().focused;
-    let id = harness
-        .state()
-        .app()
-        .model()
-        .active_tab(pane)
-        .and_then(|(_, tab)| tab.listing.rows().find(|e| e.name == name).map(|e| e.id))
-        .unwrap_or_else(|| panic!("{name} is listed"));
+    let deadline = Instant::now() + Duration::from_secs(20);
+    let id = loop {
+        let listed = harness
+            .state()
+            .app()
+            .model()
+            .active_tab(pane)
+            .and_then(|(_, tab)| tab.listing.rows().find(|e| e.name == name).map(|e| e.id));
+        if let Some(id) = listed {
+            break id;
+        }
+        assert!(Instant::now() < deadline, "{name} is not listed");
+        std::thread::sleep(Duration::from_millis(10));
+        harness.step();
+    };
     command(
         harness,
         app::Command::Select {
