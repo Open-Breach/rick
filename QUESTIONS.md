@@ -4278,3 +4278,39 @@ Once answered, an entry keeps its number and gains a dated decision line.
     clipboard events as the chords they are, in the search field and
     while a cell records. The search field has the focus when the
     dialogue opens, and *Reset all to defaults* asks nothing.
+
+364. (GUI fixes, extensions, issue 139 item 9, 2026-11-10) Eight things
+    the frame and the rule leave open, after questions 344 and 345. An
+    `.rkp` is "a zip archive of the plugin's folder", unpacked "under its
+    own name": the folder may be zipped itself or its contents may be.
+    Nothing says what replacing or removing does to a plugin that is
+    loaded. A plugin installed in this session has no row from the host,
+    and one removed still has one. *Contributes* names "a provider's
+    scheme", which a manifest does not carry. The manifest's description
+    is English text in the code, like its name. A plugin whose manifest
+    cannot be read fills no point, so it has no heading. Nothing says
+    which plugin is chosen when the dialogue opens. And the frame's
+    footer is 56 px with 32 px buttons, where the dialogue shell has 68
+    and 36.
+    Assumed: when everything in the archive sits in one top-level
+    folder, that folder is the plugin's; otherwise the archive's entries
+    are the folder's contents and the folder takes the package file's
+    name. A folder goes in and out whole: it is unpacked beside the
+    plugins folder and moved in with one rename, the plugin it replaces
+    stepping aside the same way, and *Remove* moves the folder out
+    before deleting it — so a package that cannot be read, or a folder
+    the system will not let go, leaves what was there. Entries that
+    would land outside the folder and symbolic links are skipped, not
+    written. The application reads the unpacked folder's `plugin.toml`
+    for the new row, whose status is *Installed; loads at the next
+    start*; a removed plugin that the host had loaded keeps its row,
+    dimmed, with *Removed; gone at the next start* and no switch or
+    buttons, and one that was never loaded leaves no row. A loaded
+    plugin's schemes are what its providers registered (`azure://`,
+    `rick://trash`); a plugin that is not loaded shows the point's name
+    alone. The description is not translated, as the name is not. A
+    plugin without a point is listed under *NOT RECOGNISED*, so the
+    refused folder can be seen and removed. The first plugin of the list
+    is chosen, then the one chosen last, and the one just installed.
+    *Settings* closes the dialogue and opens the settings window on the
+    plugin's page. The footer is the shell's.
