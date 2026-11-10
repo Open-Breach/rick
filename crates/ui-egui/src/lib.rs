@@ -112,9 +112,12 @@ pub fn run(
     let chrome = app.platform().window_chrome();
     // Where Rick draws the frame the first window asks for transparency,
     // unless `rick.toml` says not to, and the probe finds out, before the
-    // first frame, whether the window got it (`surface`).
+    // first frame, whether the window got it (`surface`). Not on X11,
+    // where the answer says nothing: there the frame is the plain one
+    // unless `rick.toml` asks for the shadow.
     let setting = app.model().settings.window.frame;
-    let asks = !chrome.native_controls && frame::asks_transparency(setting);
+    let x11 = app.platform().on_x11();
+    let asks = !chrome.native_controls && frame::asks_transparency(setting, x11);
     let probe = asks.then(surface::Probe::default);
     let mut options = eframe::NativeOptions {
         viewport: viewport_builder(title, chrome, None, asks),
@@ -136,7 +139,7 @@ pub fn run(
             // The frame of every window, chosen once: a window not known
             // to be transparent gets the plain one.
             let blends = probe.as_ref().and_then(surface::Probe::blends);
-            let mode = frame::Mode::of(setting, blends);
+            let mode = frame::Mode::of(setting, x11, blends);
             // One line for whoever reads the log: what draws, and which
             // frame came of it. The fallback is silent for the user.
             let adapter = cc

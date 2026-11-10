@@ -20,6 +20,12 @@
 //!
 //! This is a check of what the surface can do and never of the machine:
 //! nothing here reads an adapter's name, its vendor or its driver.
+//!
+//! On X11 the check is not made unless `rick.toml` asks for the shadow
+//! frame. A transparent X11 window is blended by a compositing manager,
+//! which may not be running, and its surface offers the pre-multiplied mode
+//! either way, so the answer would say nothing: the plain frame is the
+//! default there ([`Mode::of`](crate::frame::Mode::of)).
 
 use std::sync::{Arc, OnceLock};
 
