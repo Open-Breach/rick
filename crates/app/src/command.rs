@@ -191,6 +191,10 @@ pub enum Command {
     },
     /// Eject the removable volume mounted at this path, as a job.
     Eject(PathBuf),
+    /// Open the system's own format tool on the volume mounted at this
+    /// path (SPEC.md *This Machine*, *Format…*). Rick formats nothing
+    /// itself.
+    Format(PathBuf),
     /// Add a connection of a network or cloud provider, as its *Add
     /// connection…* dialogue filled it in: the fields of
     /// [`ConnectionFieldKind::Secret`](ext::ConnectionFieldKind::Secret) go into the platform
