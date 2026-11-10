@@ -14,6 +14,7 @@ use crate::provider::{snapshot_location, target, versions_location, Target};
 fn shared(fx: &Fixture) -> Arc<Shared> {
     Arc::new(Shared {
         datasets: Arc::clone(&fx.datasets),
+        platform: None,
     })
 }
 

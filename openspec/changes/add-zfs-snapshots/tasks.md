@@ -35,8 +35,8 @@
 
 ## 6. Restore
 
-- [ ] 6.1 Implement the restore job: live path from snapshot location, one confirmation listing live items to be replaced, trash them through `platform::Trash`, create missing parents, copy files, folders and symlinks with permissions and mtime, cancel token between files; a failed trash skips that item (design Decision 6); verify unit tests with `platform::Fake` for each scenario of the spec requirement "Restore from a snapshot"
-- [ ] 6.2 Add the *Restore* action for entries in a snapshot or versions view and its locale strings; verify unit tests for availability and that a declined confirmation changes nothing
+- [x] 6.1 Implement the restore job: live path from snapshot location, one confirmation listing live items to be replaced, trash them through `platform::Trash`, create missing parents, copy files, folders and symlinks with permissions and mtime, cancel token between files; a failed trash skips that item (design Decision 6); verify unit tests with `platform::Fake` for each scenario of the spec requirement "Restore from a snapshot"
+- [x] 6.2 Add the *Restore* action for entries in a snapshot or versions view and its locale strings; verify unit tests for availability and that a declined confirmation changes nothing
 
 ## 7. Snapshot management and elevation
 

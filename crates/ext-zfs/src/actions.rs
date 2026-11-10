@@ -4,7 +4,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use ext::platform::paths;
+use ext::platform::{Platform, paths};
 use ext::{
     Action, ActionCtx, ActionGroup, ActionId, ActionOutcome, Availability, JobRunner, Shortcut,
     UiHost, t,
@@ -29,10 +29,21 @@ pub const VERSIONS: ActionId = ActionId("zfs.versions");
 const LOCAL: ProviderId = ProviderId("local");
 
 /// What every ZFS action shares.
-#[derive(Debug)]
 pub struct Shared {
     /// The datasets and their snapshots.
     pub datasets: Arc<Datasets>,
+    /// The platform the host lent: its trash for Restore, its elevation
+    /// prompt for management; without one those actions are hidden.
+    pub platform: Option<Arc<dyn Platform>>,
+}
+
+impl std::fmt::Debug for Shared {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Shared")
+            .field("datasets", &self.datasets)
+            .field("platform", &self.platform.is_some())
+            .finish()
+    }
 }
 
 /// The OS path of a live (local) location; `None` for other providers.
@@ -289,5 +300,6 @@ pub fn all(shared: &Arc<Shared>) -> Vec<Arc<dyn Action>> {
         Arc::new(Browse(Arc::clone(shared))),
         Arc::new(Live(Arc::clone(shared))),
         Arc::new(Versions(Arc::clone(shared))),
+        Arc::new(crate::restore::Restore(Arc::clone(shared))),
     ]
 }

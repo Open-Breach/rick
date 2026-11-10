@@ -20,6 +20,7 @@ pub mod actions;
 pub mod datasets;
 pub mod parse;
 pub mod provider;
+pub mod restore;
 mod versions;
 pub mod zfs;
 
@@ -108,6 +109,7 @@ impl Extension for ZfsExtension {
         reg.provider(Arc::new(ZfsProvider::new(Arc::clone(&self.datasets))) as Arc<dyn ext::Provider>);
         let shared = Arc::new(actions::Shared {
             datasets: Arc::clone(&self.datasets),
+            platform: reg.platform().cloned(),
         });
         for action in actions::all(&shared) {
             reg.action(action);

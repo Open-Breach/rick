@@ -12,3 +12,13 @@ zfs-back-to-live-folder = Zurück zum aktuellen Ordner
 zfs-versions = Versionen
 zfs-no-snapshot-holds-folder = kein Snapshot enthält diesen Ordner
 zfs-select-one-file = zuerst eine Datei auswählen
+zfs-restore = Wiederherstellen
+zfs-select-items-to-restore = zuerst auswählen, was wiederhergestellt werden soll
+zfs-restore-replaces = Diese aktuellen Einträge werden in den Papierkorb verschoben und durch ihre Snapshot-Version ersetzt:
+    { $items }
+zfs-restoring = { $count ->
+    [one] Einen Eintrag
+   *[other] { $count } Einträge
+} aus einem Snapshot wiederherstellen
+zfs-not-restored = Nicht wiederhergestellt, der aktuelle Eintrag ließ sich nicht in den Papierkorb verschieben oder kopieren:
+    { $items }
