@@ -934,11 +934,23 @@ impl Previews {
         (slot.cap_source, slot.cap_provider) = source;
     }
 
-    /// A whole remote file is being fetched for `pane`'s preview: `read`
-    /// of `total` bytes so far. The size-limit card, if it was shown,
-    /// gives way to the download.
-    pub fn progress(&mut self, pane: PaneId, read: u64, total: Option<u64>) {
+    /// A whole remote file is being fetched for `pane`'s preview, which
+    /// is about `entry`: `read` of `total` bytes so far. The size-limit
+    /// card, if it was shown, gives way to the download. The report may
+    /// come before the pane has laid out anything for the file, and a
+    /// stream that stalls sends no second one: the slot is the file's
+    /// from here on, so the next layout keeps what was reported.
+    pub fn progress(
+        &mut self,
+        pane: PaneId,
+        entry: Option<EntryId>,
+        read: u64,
+        total: Option<u64>,
+    ) {
         let slot = self.slot(pane);
+        if slot.entry != entry {
+            slot.reset(entry);
+        }
         slot.capped = None;
         slot.download = Some((read, total));
     }
@@ -1834,6 +1846,34 @@ fn append_line(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_download_reported_before_the_pane_saw_its_file_is_still_shown() {
+        let ctx = egui::Context::default();
+        let pane = PaneId(7);
+        let file = |key| {
+            Some(EntryId {
+                provider: types::ProviderId("mem"),
+                key,
+            })
+        };
+        let mut previews = Previews::default();
+        // The pane shows one file; the selection moves on, and the first
+        // bytes of the next file are reported before the pane is laid out
+        // again. The stream then stalls, so no second report follows.
+        previews.sync(&ctx, pane, file(1));
+        previews.progress(pane, file(2), 100, Some(200));
+        let slot = previews.sync(&ctx, pane, file(2));
+        assert!(slot.downloading(), "the layout keeps the report");
+        assert_eq!(slot.download(), Some((100, Some(200))));
+        // A report for the file the pane already shows only moves on.
+        previews.progress(pane, file(2), 150, Some(200));
+        let slot = previews.sync(&ctx, pane, file(2));
+        assert_eq!(slot.download(), Some((150, Some(200))));
+        // Another file starts from nothing.
+        let slot = previews.sync(&ctx, pane, file(3));
+        assert!(!slot.downloading());
+    }
 
     #[test]
     fn lines_split_on_newlines_and_keep_a_trailing_line() {

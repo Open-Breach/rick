@@ -1680,7 +1680,8 @@ impl RickUi {
                         .capped(pane, size, cap, (source, provider), entry);
                 }
                 Event::PreviewProgress { pane, read, total } => {
-                    self.previews.progress(pane, read, total);
+                    let entry = self.preview_entry(pane);
+                    self.previews.progress(pane, entry, read, total);
                 }
                 Event::ViewOpened { tab, view, .. } => {
                     if let ext::View::Console(console) = &view {
