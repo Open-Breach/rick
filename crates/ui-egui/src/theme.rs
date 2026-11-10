@@ -106,7 +106,7 @@ scheme! {
     text_primary => "text/primary", "#2b2b2b", "#ededed";
     /// Column headers, section headers, footer statistics, the secondary
     /// columns, inactive tabs, detail lines, shortcuts in menus.
-    text_secondary => "text/secondary", "#6b6b6b", "#a0a0a0";
+    text_secondary => "text/secondary", "#646464", "#a6a6a6";
     /// Icons at rest.
     icon_default => "icon/default", "#4a4a4a", "#cfcfcf";
     /// Hairlines, dividers, field and card borders, the window border.
@@ -147,7 +147,7 @@ scheme! {
     /// A switch that is off.
     bg_switch_off => "bg/switch-off", "#8e8e8e", "#7a7a7a";
     /// Checkbox borders and other small controls that need more contrast.
-    border_strong => "border/strong", "#939393", "#777777";
+    border_strong => "border/strong", "#8c8c8c", "#777777";
     /// A hash that matches: field border, pill text, row label.
     status_success => "status/success", "#1d7943", "#6fd49a";
     /// The *Matches* pill.
@@ -157,7 +157,7 @@ scheme! {
     /// Warning text, such as the missing version in the installer.
     status_warning => "status/warning", "#8c5c00", "#f2c46b";
     /// The border of a field with a warning.
-    status_warning_border => "status/warning-border", "#d98c0d", "#d98c0d";
+    status_warning_border => "status/warning-border", "#c27d0b", "#d98c0d";
     /// Destructive menu entries, a hash that does not match, errors.
     status_danger => "status/danger", "#b3261a", "#ff8a80";
     /// The background of dialogues and of the settings window.
@@ -751,7 +751,7 @@ mod tests {
         ("bg/selected", "#90d1ff", "#2e5e8f"),
         ("bg/active", "#90d1ff", "#2e5e8f"),
         ("text/primary", "#2b2b2b", "#ededed"),
-        ("text/secondary", "#6b6b6b", "#a0a0a0"),
+        ("text/secondary", "#646464", "#a6a6a6"),
         ("icon/default", "#4a4a4a", "#cfcfcf"),
         ("border/default", "#d6d6d6", "#3d3d3d"),
         ("accent/usage", "#3c84c2", "#5ab0ff"),
@@ -770,12 +770,12 @@ mod tests {
         ("text/on-selected", "#1f528c", "#a9d2ff"),
         ("text/placeholder", "#737373", "#979797"),
         ("bg/switch-off", "#8e8e8e", "#7a7a7a"),
-        ("border/strong", "#939393", "#777777"),
+        ("border/strong", "#8c8c8c", "#777777"),
         ("status/success", "#1d7943", "#6fd49a"),
         ("status/success-bg", "#d9f2e0", "#1e3b2a"),
         ("status/success-row", "#edfaf0", "#1b2e22"),
         ("status/warning", "#8c5c00", "#f2c46b"),
-        ("status/warning-border", "#d98c0d", "#d98c0d"),
+        ("status/warning-border", "#c27d0b", "#d98c0d"),
         ("status/danger", "#b3261a", "#ff8a80"),
         ("dialog/bg", "#fafafa", "#2a2a2a"),
         ("accent/button", "#2a77c6", "#2975c7"),
@@ -843,16 +843,16 @@ mod tests {
     }
 
     /// The text pairs the design puts together, at 4.5:1, and the control
-    /// and icon pairs, at 3:1, in both schemes. The pairs the Figma file
-    /// holds that fall short are listed in QUESTIONS.md 242 and are not
-    /// here: `text/secondary` on `bg/control` and `bg/selected-inactive`,
-    /// `border/strong` on `bg/pane` in Light, and the warning border on
-    /// light backgrounds.
+    /// and icon pairs, at 3:1, in both schemes. Every pair is here: the
+    /// three that fell short until the Figma variables changed
+    /// (specs/decisions.md Q242) are held like the rest — `text/secondary`
+    /// on `bg/control` and `bg/selected-inactive`, `border/strong` on
+    /// `bg/pane`, and the warning border on `bg/pane` and `dialog/bg`.
     #[test]
     fn the_pairs_meet_wcag_contrast() {
         for scheme in [&Scheme::LIGHT, &Scheme::DARK] {
             let s = scheme;
-            let text_pairs: [(&str, Color32, Color32); 27] = [
+            let text_pairs: [(&str, Color32, Color32); 29] = [
                 ("primary on window", s.text_primary, s.bg_window),
                 ("primary on panel", s.text_primary, s.bg_panel),
                 ("primary on pane", s.text_primary, s.bg_pane),
@@ -875,6 +875,12 @@ mod tests {
                 ("secondary on pane", s.text_secondary, s.bg_pane),
                 ("secondary on card", s.text_secondary, s.bg_card),
                 ("secondary on subtle", s.text_secondary, s.bg_subtle),
+                ("secondary on control", s.text_secondary, s.bg_control),
+                (
+                    "secondary on inactive",
+                    s.text_secondary,
+                    s.bg_selected_inactive,
+                ),
                 ("secondary on dialog", s.text_secondary, s.dialog_bg),
                 ("placeholder on pane", s.text_placeholder, s.bg_pane),
                 ("placeholder on card", s.text_placeholder, s.bg_card),
@@ -899,7 +905,7 @@ mod tests {
             }
             assert!(contrast(s.trash_mid_text, s.trash_mid_bg) >= 4.5);
             assert!(contrast(s.trash_high_text, s.trash_high_bg) >= 4.5);
-            let control_pairs: [(&str, Color32, Color32); 14] = [
+            let control_pairs: [(&str, Color32, Color32); 17] = [
                 ("icon on window", s.icon_default, s.bg_window),
                 ("icon on panel", s.icon_default, s.bg_panel),
                 ("icon on pane", s.icon_default, s.bg_pane),
@@ -911,6 +917,13 @@ mod tests {
                 ("focus on subtle", s.accent_focus, s.bg_subtle),
                 ("focus on soft", s.accent_focus, s.bg_selected_soft),
                 ("strong border on card", s.border_strong, s.bg_card),
+                ("strong border on pane", s.border_strong, s.bg_pane),
+                ("warning border on pane", s.status_warning_border, s.bg_pane),
+                (
+                    "warning border on dialog",
+                    s.status_warning_border,
+                    s.dialog_bg,
+                ),
                 ("switch off on pane", s.bg_switch_off, s.bg_pane),
                 ("usage on track", s.accent_usage, s.bg_track),
                 ("button on dialog", s.accent_button, s.dialog_bg),
@@ -982,14 +995,16 @@ mod tests {
                 .map(|(l, d)| (rgb(l), rgb(d))),
             Some((Scheme::LIGHT.bg_titlebar, Scheme::DARK.bg_titlebar))
         );
-        // On the five light presets in Light `text/secondary` falls short,
-        // and the titles are the band's text colour at 78 %; in Dark it
-        // holds and stays.
+        // On four of the five light presets in Light `text/secondary`
+        // holds and stays; on Plum it falls short, and the titles are the
+        // band's text colour at 78 %. In Dark it holds on every preset.
         let rose = Band::on(&Scheme::LIGHT, Scheme::LIGHT.bg_titlebar);
-        assert!(contrast(Scheme::LIGHT.text_secondary, rose.fill) < 4.5);
-        assert_eq!(rose.title, over(Band::INK, 0.78, rose.fill));
+        assert_eq!(rose.title, Scheme::LIGHT.text_secondary);
         assert_eq!(rose.icon, Scheme::LIGHT.icon_default);
         assert_eq!(rose.search_fill, Scheme::LIGHT.bg_pane);
+        let plum = Band::on(&Scheme::LIGHT, hex("#e4dcea"));
+        assert!(contrast(Scheme::LIGHT.text_secondary, plum.fill) < 4.5);
+        assert_eq!(plum.title, over(Band::INK, 0.78, plum.fill));
         let charcoal = Band::on(&Scheme::DARK, Scheme::DARK.bg_titlebar);
         assert_eq!(charcoal.title, Scheme::DARK.text_secondary);
         // The Dark band in Light: the row in white, as frame 167:5261

@@ -126,6 +126,14 @@ open is in `QUESTIONS.md` 323 to 366. The rules went into SPEC.md first
   entry written by an earlier version reads as changed in the integration
   dialog and is rewritten when its row is applied (specs/decisions.md
   Q264).
+- **Three colour tokens follow the revised Figma variables.**
+  `text/secondary` is `#646464` in Light and `#a6a6a6` in Dark,
+  `border/strong` is `#8c8c8c` in Light and `status/warning-border` is
+  `#c27d0b` in Light. Every text and control pair now meets WCAG contrast,
+  and the test that holds them has no exception left. In Light the
+  inactive tab titles on the *Dusty rose*, *Warm grey*, *Slate teal* and
+  *Sage* bands are `text/secondary` again; *Plum*, where it still falls
+  short, keeps `#2b2b2b` at 78 % (specs/decisions.md Q242).
 - The workspace version is `0.4.0-dev` until 0.4.0 is tagged (#154).
 
 ### Fixed

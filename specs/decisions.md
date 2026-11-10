@@ -2,7 +2,7 @@
 
 Related: specs/history.md, specs/open.md
 
-The entries kept from the retired `QUESTIONS.md`, under their original numbers: the decision, or the assumption as it was implemented. A citation `QUESTIONS.md N` anywhere in the repository means entry `QN` here. Reference, not reading: `grep '^Q81\.' specs/decisions.md`. The full text of every entry is in the history: `git show 2102534:QUESTIONS.md`. *(provisional)* marks an entry that awaits a decision. Nothing is appended here.
+The entries kept from the retired `QUESTIONS.md`, under their original numbers: the decision, or the assumption as it was implemented. A citation `QUESTIONS.md N` anywhere in the repository means entry `QN` here. Reference, not reading: `grep '^Q81\.' specs/decisions.md`. The full text of every entry is in the history: `git show 2102534:QUESTIONS.md`. Nothing is appended here.
 
 Q5. The 30 s fixture budget is enforced on Linux only; Windows and macOS report their time.
 
@@ -252,7 +252,7 @@ Q226. The accent-colour setting is withdrawn; an old `accent` key is ignored and
 
 Q234. Settings pages: View (Files, Sorting, Side panel), Appearance, General, and one page per plugin.
 
-Q242. Three token pairs miss WCAG contrast; the tokens stay and the contrast test names them. (provisional)
+Q242. The three token pairs that missed WCAG contrast were changed in the Figma variables; the contrast test holds every pair (decided 2026-11-10).
 
 Q243. Mod+W on the last workspace tab of the last window does nothing.
 
@@ -424,7 +424,7 @@ Q344. The plugin manifest gains a description; *Remove* is hidden for a built-in
 
 Q345. An `.rkp` is a zip of the plugin's folder; install and remove ask nothing (decided 2026-11-10).
 
-Q346. Inactive tab titles are `#2b2b2b` at 78 % on the light bands (decided 2026-11-10, for now).
+Q346. Inactive tab titles are `#2b2b2b` at 78 % where `text/secondary` misses 4.5:1 on the band: Plum in Light since Q242 (decided 2026-11-10, for now).
 
 Q347. Keys `titlebar_colour`, `titlebar_custom_light`, `titlebar_custom_dark`; hover on a dark band is 12 % white.
 
