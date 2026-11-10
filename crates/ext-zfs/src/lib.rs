@@ -16,12 +16,17 @@
 // allowance (QUESTIONS.md 82).
 #![deny(unsafe_code)]
 
+pub mod parse;
+pub mod zfs;
+
 use std::sync::Arc;
 
 use ext::{
     API_VERSION, Capabilities, Extension, Manifest, Platforms, Points, Registry, Version,
 };
 use types::{Error, ExtId};
+
+pub use zfs::{Output, ScriptedZfs, SystemZfs, Zfs, ZfsError};
 
 /// The extension id.
 pub const ID: ExtId = ExtId("zfs");

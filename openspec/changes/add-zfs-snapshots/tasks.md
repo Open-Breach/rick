@@ -8,10 +8,10 @@
 
 ## 2. Command-line layer
 
-- [ ] 2.1 Add the `Zfs` runner trait with the real implementation (`std::process`, `LC_ALL=C`, absolute path of `zfs` from PATH, `Unsupported` when missing) and a scripted fake; verify a unit test that the fake replays recorded output
-- [ ] 2.2 Parse `zfs list -H -p` output for file systems (name, mountpoint, mounted; skip `none`, `legacy`, unmounted) and snapshots (name, creation, used), from outputs recorded on OpenZFS 2.4; verify unit tests including names with spaces and malformed lines (skipped, never a panic)
-- [ ] 2.3 Classify failures from exit code and `LC_ALL=C` stderr into permission denied, already exists, held/has clones (destroy), and other (verbatim); verify unit tests per class
-- [ ] 2.4 Implement snapshot-name validation and the `rick-YYYY-MM-DD-HHMMSS` default (design Decision 9); verify unit tests for allowed characters, empty, too long, and the default format
+- [x] 2.1 Add the `Zfs` runner trait with the real implementation (`std::process`, `LC_ALL=C`, absolute path of `zfs` from PATH, `Unsupported` when missing) and a scripted fake; verify a unit test that the fake replays recorded output
+- [x] 2.2 Parse `zfs list -H -p` output for file systems (name, mountpoint, mounted; skip `none`, `legacy`, unmounted) and snapshots (name, creation, used), from outputs recorded on OpenZFS 2.4; verify unit tests including names with spaces and malformed lines (skipped, never a panic)
+- [x] 2.3 Classify failures from exit code and `LC_ALL=C` stderr into permission denied, already exists, held/has clones (destroy), and other (verbatim); verify unit tests per class
+- [x] 2.4 Implement snapshot-name validation and the `rick-YYYY-MM-DD-HHMMSS` default (design Decision 9); verify unit tests for allowed characters, empty, too long, and the default format
 
 ## 3. Dataset cache and detection
 

@@ -2582,6 +2582,7 @@ dependencies = [
 name = "ext-zfs"
 version = "0.3.0"
 dependencies = [
+ "chrono",
  "ext",
  "futures",
  "platform",
