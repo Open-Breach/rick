@@ -194,8 +194,8 @@ fn side_text(side: Option<&ext::Side>) -> String {
     } else {
         parts.push(format::size(side.size));
     }
-    if side.modified.is_some() {
-        parts.push(format::date(side.modified, std::time::SystemTime::now()).1);
+    if let Some(modified) = side.modified {
+        parts.push(format::exact(modified));
     }
     parts.join(" · ")
 }

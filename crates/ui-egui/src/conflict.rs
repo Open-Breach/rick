@@ -98,7 +98,7 @@ fn subtitle(conflict: &Conflict, home: &Path) -> String {
 /// A side's facts under its name: the size and the modified time, a
 /// folder's time alone.
 fn facts(side: &ConflictSide, now: SystemTime) -> String {
-    let (when, _) = format::date(side.modified, now);
+    let when = format::brief(side.modified, now);
     match (side.size, when.is_empty()) {
         (Some(bytes), false) => format!("{}  ·  {when}", format::size(Some(bytes))),
         (Some(bytes), true) => format::size(Some(bytes)),

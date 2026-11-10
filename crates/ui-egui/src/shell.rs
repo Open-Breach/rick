@@ -76,6 +76,13 @@ pub struct TabUi {
     pub column_boundaries: Vec<f32>,
     /// How many rows the last frame could show, for Page Up and Down.
     pub visible_rows: usize,
+    /// The List view of the last frame: how many rows a column holds and
+    /// the one width of its columns, for Left and Right and for tests.
+    /// `None` before the List view was drawn.
+    pub list: Option<crate::views::ListGrid>,
+    /// The average width of the names the List view's columns are sized
+    /// by, with what it was measured for.
+    pub list_names: Option<crate::views::NameWidths>,
     /// The list's vertical scroll offset in the last frame.
     pub scroll_offset: f32,
     /// Scroll to this offset on the next frame.
@@ -1568,6 +1575,13 @@ impl RickUi {
         self.tabs.get(&tab).and_then(|t| t.toolbar_row)
     }
 
+    /// The List view's grid of a tab in the last frame it was drawn, for
+    /// tests: the rows a column holds and the columns' one width.
+    #[must_use]
+    pub fn list_grid(&self, tab: TabId) -> Option<crate::views::ListGrid> {
+        self.tabs.get(&tab).and_then(|t| t.list)
+    }
+
     /// The footer row of a tab in the last frame, for tests.
     #[must_use]
     pub fn footer_row(&self, tab: TabId) -> Option<egui::Rect> {
@@ -2939,6 +2953,8 @@ impl RickUi {
                     self.handle(Command::SwitchLayout(Some(name)));
                 }
             }
+            Intent::CursorLeft => self.move_cursor_column(pane, -1),
+            Intent::CursorRight => self.move_cursor_column(pane, 1),
             Intent::CursorUp => self.move_cursor(pane, -1, false),
             Intent::CursorDown => self.move_cursor(pane, 1, false),
             Intent::CursorPageUp => self.move_cursor(pane, -self.page(pane), false),
@@ -3201,6 +3217,36 @@ impl RickUi {
             .active_tab(pane)
             .and_then(|(id, _)| self.tabs.get(&id))
             .map_or(20, |t| t.visible_rows.max(1) as isize)
+    }
+
+    /// Left and Right in the List view: one column over with the row kept,
+    /// the last entry where that column is shorter (SPEC.md *List view*).
+    /// The other views have no columns of entries, and nothing moves.
+    fn move_cursor_column(&mut self, pane: PaneId, by: isize) {
+        let Some((tab_id, tab)) = self.app.model().active_tab(pane) else {
+            return;
+        };
+        if tab.view != ViewMode::List {
+            return;
+        }
+        let Some(grid) = self.tabs.get(&tab_id).and_then(|t| t.list) else {
+            return;
+        };
+        let current = self
+            .tabs
+            .get(&tab_id)
+            .and_then(|t| t.cursor)
+            .and_then(|c| tab.rows().position(|e| e.id == c));
+        let Some(index) = current else {
+            // No cursor yet: the first key puts it on an end of the list.
+            self.move_cursor(pane, by, false);
+            return;
+        };
+        let target = grid.step_columns(index, by, tab.row_count());
+        let step = isize::try_from(target).unwrap_or(0) - isize::try_from(index).unwrap_or(0);
+        if step != 0 {
+            self.move_cursor(pane, step, false);
+        }
     }
 
     fn move_cursor(&mut self, pane: PaneId, by: isize, extend: bool) {

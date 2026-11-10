@@ -147,6 +147,10 @@ pub enum Intent {
     LastSession,
     /// Switch to the saved layout at this index of `App::layouts`.
     Layout(u16),
+    /// Move the list cursor one column to the left, in the List view.
+    CursorLeft,
+    /// Move the list cursor one column to the right, in the List view.
+    CursorRight,
     /// Move the list cursor one row up.
     CursorUp,
     /// Move the list cursor one row down.
@@ -621,6 +625,20 @@ pub const UI_INTENTS: &[IntentSpec] = &[
         &["Mod+B"],
     ),
     spec(Intent::CursorUp, "list.up", "Cursor up", LIST, &["Up"]),
+    spec(
+        Intent::CursorLeft,
+        "list.left",
+        "Cursor one column left",
+        LIST,
+        &["Left"],
+    ),
+    spec(
+        Intent::CursorRight,
+        "list.right",
+        "Cursor one column right",
+        LIST,
+        &["Right"],
+    ),
     spec(
         Intent::CursorDown,
         "list.down",
