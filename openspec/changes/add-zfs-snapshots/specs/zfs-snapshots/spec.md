@@ -40,7 +40,7 @@ The system SHALL offer a ZFS location whose root lists the mounted datasets that
 - **THEN** it is not listed at the root of the ZFS location
 
 ### Requirement: Browse a snapshot read-only
-The system SHALL show a snapshot's files and folders as they were when it was taken, with preview, copy and the usual navigation, and SHALL refuse every change inside a snapshot: no write, rename, trash, delete, new file or new folder is offered.
+The system SHALL show a snapshot's files and folders as they were when it was taken, with preview, copy and the usual navigation, and SHALL refuse every change inside a snapshot: no write, rename, trash, new file or new folder is offered, and a permanent delete, which the core offers wherever there is a selection, fails with a message that snapshots are read-only.
 
 #### Scenario: Preview a file in a snapshot
 - **WHEN** the user selects a text file inside snapshot `b`
@@ -52,7 +52,11 @@ The system SHALL show a snapshot's files and folders as they were when it was ta
 
 #### Scenario: Change refused
 - **WHEN** the user opens the context menu on an entry inside a snapshot
-- **THEN** rename, move to trash, delete and the new-item commands are not available
+- **THEN** rename, move to trash and the new-item commands are not available
+
+#### Scenario: Delete refused
+- **WHEN** the user deletes an entry inside a snapshot permanently and confirms
+- **THEN** the job fails with a message that snapshots are read-only and the entry is still there
 
 ### Requirement: Open the snapshots of the current folder
 The system SHALL offer an action that takes the pane from a live folder in a dataset to the same folder inside the newest snapshot that contains it, and from there back to the live folder.
