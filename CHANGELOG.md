@@ -69,14 +69,16 @@ open is in `QUESTIONS.md` 323 to 366. The rules went into SPEC.md first
   card. This holds for every remote provider; the limit stays 4 MiB (#164).
 - **Git clone.** *Git clone…* in the right-click menu of a folder and of a
   pane's empty area clones a repository into that folder, outside a
-  repository too. Its dialogue asks for the URL — prefilled, and selected,
-  when the clipboard holds a Git URL — names the folder the clone creates,
-  and has *Branch*, *Depth* and *Submodules* as options, folded away. The
-  clone is `git clone` as a job in the operations: git's own progress line,
-  a cancel that stops git and removes what the clone had created, and git's
-  message in the job when it fails. The dialogue is built from the form
-  fields a plugin has, so it does not match its Figma frames in every
-  detail yet (#188).
+  repository too. Its dialogue asks for the URL: an `https://`, `ssh://`,
+  `git://` or `file://` URL, `user@host:path`, or the path of a local
+  repository. The field is prefilled, and selected, when the clipboard
+  holds one of these. The dialogue names the folder the clone creates and
+  has *Branch*, *Depth* and *Submodules* as options, folded away. The clone
+  is `git clone` as a job in the operations: git's own progress line, a
+  cancel that stops git and removes the folder the clone had created, never
+  one that was there before, and git's message in the job when it fails.
+  The dialogue is built from the form fields a plugin has, so it does not
+  match its Figma frames in every detail yet (#188).
 
 ### Changed
 
