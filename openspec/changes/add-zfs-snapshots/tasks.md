@@ -54,7 +54,7 @@
 ## 9. Integration and release notes
 
 - [ ] 9.1 Add the opt-in real-pool test (`RICK_REQUIRE_ZFS=1`, dataset from `RICK_ZFS_TEST_DATASET`, skipped with a note otherwise) that creates, lists, browses, restores from, renames and destroys its own snapshot; verify it passes by hand on a ZFS machine and is skipped in CI
-- [ ] 9.2 Add the plugin to CHANGELOG.md under the unreleased version; verify the entry names the plugin and its Linux-only scope
+- [x] 9.2 Add the plugin to CHANGELOG.md under the unreleased version; verify the entry names the plugin and its Linux-only scope
 - [ ] 9.3 Run `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, `cargo test --workspace`, `cargo deny check`, `cargo doc --no-deps`; verify all pass, and launch Rick on the ZFS machine to browse a snapshot, open a file's versions and restore a file by hand
 
 ## Workflow follow-up

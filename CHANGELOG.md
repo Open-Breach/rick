@@ -39,6 +39,20 @@ the specification first (#174).
 
 ### Added
 
+- `ext-zfs`, a plugin for OpenZFS snapshots, Linux only (OpenSpec change
+  `add-zfs-snapshots`, QUESTIONS.md 323): through the `zfs` command line
+  it finds the dataset a folder lies in and, without `zfs` or outside a
+  dataset, shows nothing. A read-only `zfs` location lists the datasets
+  with snapshots, each dataset's snapshots newest first and each
+  snapshot's files as they were (`zfs:/tank/home/@b/docs`), so a snapshot
+  opens, previews and copies out like any folder; `/~versions/<path>`
+  lists the snapshots holding a different version of one file. The "ZFS"
+  group has *Browse snapshots*, *Back to live folder*, *Versions*,
+  *Restore* (a live item it replaces goes to the trash first), and
+  *Create*, *Rename* and *Destroy snapshot* as jobs, which offer to run
+  once more as administrator through the platform prompt when ZFS refuses
+  for lack of permission. The info panel gets a ZFS section with the
+  dataset, its snapshots and its main properties with their source.
 - **Title bar colour.** The title row sits on a band of its own colour, the
   new token `bg/titlebar`, and the active workspace tab lifts out of it in
   `bg/pane`, with no accent line. *Settings → Appearance → Title bar colour*
