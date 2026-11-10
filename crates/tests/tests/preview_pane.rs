@@ -108,14 +108,17 @@ fn select(harness: &mut Harness<'_, RickUi>, name: &str) {
         if slot.is_some_and(|s| s.has_frame() || s.error().is_some()) {
             break;
         }
+        // The rects say whether the Preview tab was drawn at all: they are
+        // set by the pane's draw and stay `None` while it never ran.
         assert!(
             started.elapsed() < Duration::from_secs(20),
             "{name}: no frame: {slot:?}; follows {:?}, preview pane {:?}, target {:?}, \
-             inspector open {}",
+             inspector open {}, rects {:?}",
             harness.state().app().model().preview_follows(),
             harness.state().app().preview_pane(),
             harness.state().app().preview_target(),
             harness.state().inspector_open(),
+            harness.state().preview_rects(),
         );
         std::thread::sleep(Duration::from_millis(2));
     }
