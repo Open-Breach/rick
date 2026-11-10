@@ -7,6 +7,10 @@ the pull request that brought the change.
 
 ## [Unreleased]
 
+### Changed
+
+- The workspace version is `0.4.0-dev` until 0.4.0 is tagged.
+
 ## [0.3.0] - 2026-11-10
 
 The design refresh and the first part of system integration, on Linux, macOS
