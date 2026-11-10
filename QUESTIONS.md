@@ -3714,3 +3714,17 @@ Once answered, an entry keeps its number and gains a dated decision line.
     canonical form. Open: whether a tab's location should carry the
     `\\?\` prefix on Windows at all, or be simplified to `C:\…` where
     that is the same path; the path bar shows the location as stored.
+
+317. (preview pane, tier 2 on macOS, 2026-11-10) A start with a path
+    (`rick <path>`, or a test's `start` location) restores the last session
+    and opens the path as a workspace of its own, which is the one shown
+    (SPEC.md *Workspace tabs*). A Preview tab the session had stays in the
+    restored workspace, out of sight, until the toggle, which "closes
+    there and opens here" (`Model::open_preview`). The acceptance tests
+    took "the window has a Preview tab" for "the Preview tab is shown"
+    and, when the first window's session had been saved in time (only on
+    a loaded runner), never opened it: the exif badges test's "a.jpg: no
+    frame" on every platform. Assumed: that is the intended behaviour, and
+    the test accessor `inspector_open` means shown; whether a start with a
+    path should instead carry the Preview tab over into the new workspace
+    is open.
