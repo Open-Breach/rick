@@ -153,9 +153,73 @@ properties-system-properties = System properties…
 owner = Owner
 group = Group
 properties-apply-to-enclosed-items = Apply to enclosed items
-files = Files
-folders = Folders
+properties-apply-to-enclosed-detail = Set the same permissions on everything inside
 properties-other = Other…
+properties-general = General
+properties-no-permissions = No permissions can be read for this entry
+properties-calculating = Calculating…
+properties-folder-summary = { $count ->
+    [one] 1 item
+   *[other] { $count } items
+}, { $size }
+properties-location = Location
+properties-copy-location = Copy location
+properties-target = Target
+properties-copy-target = Copy target
+properties-resolves-to = Resolves to
+properties-missing = Missing
+properties-media-type = Media type
+properties-link = Link
+size = Size
+properties-link-size = { $size } (on disk { $on_disk })
+properties-contents = Contents
+properties-contents-counted = { $count ->
+    [one] 1 item
+   *[other] { $count } items
+}  ·  { $size }
+properties-on-disk = On disk
+properties-dates = Dates
+properties-modified = Modified
+properties-accessed = Accessed
+properties-created = Created
+properties-options = Options
+properties-hidden = Hidden
+properties-open-target-folder = Open target folder
+properties-ownership = Ownership
+properties-access = Access
+properties-advanced = Advanced
+others = Others
+properties-may = { $who }: { $what }
+properties-special-bits-off = setuid · setgid · sticky: off
+properties-acl = Access control list (ACL)
+properties-acl-no-extra = No extra entries
+properties-acl-extra = { $count ->
+    [one] 1 extra entry
+   *[other] { $count } extra entries
+}: { $entries }
+properties-acl-entries = { $count ->
+    [one] 1 entry
+   *[other] { $count } entries
+}
+properties-acl-user = user
+properties-acl-group = group
+properties-acl-owner = Owner ({ $name })
+properties-acl-owning-group = Owning group ({ $name })
+properties-acl-mask = Mask
+properties-acl-remove = Remove { $name }
+properties-acl-user-option = User
+add = Add
+type-folder = Folder
+type-symbolic-link = Symbolic link
+type-special-file = Special file
+type-executable = Executable file
+type-file = File
+type-file-of = { $format } file
+type-image = { $format } image
+type-video = { $format } video
+type-audio = { $format } audio
+type-archive = { $format } archive
+type-document = { $format } document
 read = Read
 write = Write
 execute = Execute
@@ -247,7 +311,6 @@ settings-density-comfortable = Comfortable
 
 compare-failed = Could not compare: { $error }
 preview-failed = No preview: { $error }
-properties-title = Properties of { $name }
 about-version = Version { $version }
 panel-open-overview = Open the { $section } overview
 panel-fold-section = Fold { $section }

@@ -1630,6 +1630,11 @@ impl RickUi {
                 Event::Notify { level, text } => self.toast(level, text),
                 Event::Activate { window, token } => self.activate(window, token.as_deref()),
                 Event::Properties(info) => self.properties.open(*info),
+                Event::PropertiesCounted {
+                    pane,
+                    path,
+                    contents,
+                } => self.properties.counted(pane, &path, contents),
                 Event::HashesOpened { hashes, format, .. } => self.hash.open(hashes, format),
                 Event::PreviewReady { pane, doc } => {
                     let entry = self.preview_entry(pane);
@@ -1816,6 +1821,7 @@ impl RickUi {
             || self.name_prompt.is_some()
             || self.shortcuts.rebinding.is_some()
             || self.about.is_open()
+            || self.properties.is_open()
             || !self.app.model().conflicts.is_empty()
             || !self.app.model().questions.is_empty()
         {
@@ -2267,12 +2273,15 @@ impl RickUi {
             return;
         };
         let to = Location::new(entry.id.provider, parent);
-        if new_tab {
+        // A new tab opens in the focused pane; otherwise the pane asked
+        // for is the one that goes there, focused or not.
+        let pane = if new_tab {
             self.handle(Command::NewTab(to));
+            self.app.model().focused
         } else {
             self.handle(Command::Navigate { pane, to });
-        }
-        let pane = self.app.model().focused;
+            pane
+        };
         self.requests.push(Request::SelectNamed {
             pane,
             name: name.to_vec(),
@@ -4833,7 +4842,7 @@ impl RickUi {
                 &mut self.requests,
             );
             self.about.show(ctx, &self.app, &mut self.requests);
-            self.properties.show(ctx, &mut self.requests);
+            self.properties.show(ctx, &self.app, &mut self.requests);
             self.hash.show(ctx, &self.app, &mut self.requests);
             self.integration.show(ctx, &self.app, &mut self.requests);
             self.show_texts(ctx);

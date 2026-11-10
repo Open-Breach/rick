@@ -15,7 +15,7 @@ use model::{Column, SelectionChange, SettingsChange, SortDir};
 use platform::{ConfigDir, Fake};
 use types::{Attrs, CancelToken, Entry, EntryId, EntryKind, Error, ExtId, Location, VPath};
 
-use super::{App, Command, Config, Event, SETTINGS_FILE};
+use super::{App, Command, Config, Contents, Event, SETTINGS_FILE};
 
 /// The text of the file at `path` once `done` holds for it, or as it is
 /// after ten seconds: the settings saver writes on a task of the runtime
@@ -2063,6 +2063,158 @@ fn reveal_opens_the_folder_in_a_tab_and_selects_the_files_once_listed() {
         "{:?}",
         h.events
     );
+}
+
+/// The Properties dialogue on a folder (SPEC.md *Dialogues*): the entry
+/// arrives with its contents still being counted, the count follows as an
+/// event of its own and is no job of the operations drawer; asked again
+/// for the same folder the application answers with the count it has; a
+/// file is not counted.
+#[test]
+fn properties_count_a_folder_s_contents_in_the_background() {
+    let mut h = harness();
+    h.settle();
+    let sub = h.root.path().join("sub");
+    fs::create_dir(sub.join("deeper")).unwrap_or_else(|e| panic!("{e}"));
+    fs::write(sub.join("one.bin"), vec![0u8; 1000]).unwrap_or_else(|e| panic!("{e}"));
+    fs::write(sub.join("deeper/two.bin"), vec![0u8; 500]).unwrap_or_else(|e| panic!("{e}"));
+    let pane = h.app.model().focused;
+    let select = |h: &mut Harness, name: &str| {
+        let id = h
+            .tab(pane)
+            .listing
+            .rows()
+            .find(|e| e.name == name)
+            .map_or_else(|| panic!("{name} is listed"), |e| e.id);
+        h.send(Command::Select {
+            pane,
+            change: SelectionChange::Set(vec![id]),
+        });
+    };
+    let shown = |events: &[Event]| {
+        events.iter().rev().find_map(|e| match e {
+            Event::Properties(info) => Some((info.entry.name.clone(), info.contents)),
+            _ => None,
+        })
+    };
+    let counted = |events: &[Event]| {
+        events.iter().find_map(|e| match e {
+            Event::PropertiesCounted { path, contents, .. } => Some((path.clone(), *contents)),
+            _ => None,
+        })
+    };
+
+    select(&mut h, "sub");
+    h.events.clear();
+    h.send(Command::ShowProperties(pane));
+    h.settle();
+    let (path, contents) = counted(&h.events).unwrap_or_else(|| panic!("{:?}", h.events));
+    assert_eq!(path, sub);
+    assert_eq!(contents.items, 3, "two files and the folder between them");
+    assert_eq!(contents.bytes, 1500);
+    // The entry came with the count running, or already with its result.
+    let (name, first) = shown(&h.events).unwrap_or_else(|| panic!("{:?}", h.events));
+    assert_eq!(name, "sub");
+    assert!(
+        first == Contents::Counting || first == Contents::Counted(contents),
+        "{first:?}"
+    );
+    assert!(
+        h.app.model().jobs.is_empty(),
+        "the count is not in the drawer: {:?}",
+        h.app.model().jobs
+    );
+
+    // Asked again while the dialogue shows the folder: the count it has.
+    h.events.clear();
+    h.send(Command::ShowProperties(pane));
+    h.settle();
+    assert_eq!(
+        shown(&h.events),
+        Some(("sub".to_owned(), Contents::Counted(contents)))
+    );
+    assert!(counted(&h.events).is_none(), "not counted twice");
+
+    // Closed, the count is dropped: the next dialogue counts again.
+    h.send(Command::PropertiesClosed);
+    h.events.clear();
+    h.send(Command::ShowProperties(pane));
+    h.settle();
+    assert!(counted(&h.events).is_some());
+
+    // A file has nothing to count.
+    h.send(Command::PropertiesClosed);
+    select(&mut h, "c.txt");
+    h.events.clear();
+    h.send(Command::ShowProperties(pane));
+    h.settle();
+    assert_eq!(shown(&h.events), Some(("c.txt".to_owned(), Contents::None)));
+    assert!(counted(&h.events).is_none());
+}
+
+/// What the Properties dialogue reads through links: these need a
+/// symbolic link to be made, which only Unix lets a test do freely.
+#[cfg(unix)]
+mod links {
+    use std::fs;
+    use std::path::{Path, PathBuf};
+
+    use types::{CancelToken, EntryKind, VPath};
+
+    use crate::{count_tree, lexical, link_target};
+
+    /// What a link resolves to (SPEC.md *Dialogues*, Properties): the entry at
+    /// the end of the link, under the path the link's text names, a relative
+    /// text taken from the link's folder; nothing for a broken link.
+    #[test]
+    fn a_link_s_target_is_the_entry_it_names_from_its_own_folder() {
+        let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+        let bin = dir.path().join("bin");
+        let links = dir.path().join("links");
+        fs::create_dir(&bin).unwrap_or_else(|e| panic!("{e}"));
+        fs::create_dir(&links).unwrap_or_else(|e| panic!("{e}"));
+        fs::write(bin.join("tool"), b"abc").unwrap_or_else(|e| panic!("{e}"));
+        let link = links.join("tool-link");
+        std::os::unix::fs::symlink("../bin/./tool", &link).unwrap_or_else(|e| panic!("{e}"));
+        let target = link_target(&link, &VPath::from("../bin/./tool"))
+            .unwrap_or_else(|| panic!("the link resolves"));
+        assert_eq!(target.name, "tool");
+        assert_eq!(target.kind, EntryKind::File);
+        assert_eq!(target.size, Some(3));
+        assert_eq!(target.path, platform::paths::from_path(&bin.join("tool")));
+
+        let broken = links.join("gone");
+        std::os::unix::fs::symlink("nowhere", &broken).unwrap_or_else(|e| panic!("{e}"));
+        assert!(link_target(&broken, &VPath::from("nowhere")).is_none());
+
+        assert_eq!(lexical(Path::new("/a/b/../c/./d")), PathBuf::from("/a/c/d"));
+    }
+
+    /// The count walks everything below the folder, never through a link, and
+    /// stops when it is cancelled.
+    #[test]
+    fn the_count_follows_no_link_and_stops_when_cancelled() {
+        let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+        let inside = dir.path().join("inside");
+        let outside = dir.path().join("outside");
+        fs::create_dir_all(inside.join("sub")).unwrap_or_else(|e| panic!("{e}"));
+        fs::create_dir(&outside).unwrap_or_else(|e| panic!("{e}"));
+        fs::write(inside.join("a"), vec![0u8; 10]).unwrap_or_else(|e| panic!("{e}"));
+        fs::write(inside.join("sub/b"), vec![0u8; 20]).unwrap_or_else(|e| panic!("{e}"));
+        fs::write(outside.join("big"), vec![0u8; 5000]).unwrap_or_else(|e| panic!("{e}"));
+        std::os::unix::fs::symlink(&outside, inside.join("out")).unwrap_or_else(|e| panic!("{e}"));
+        let contents =
+            count_tree(&inside, &CancelToken::new()).unwrap_or_else(|| panic!("not cancelled"));
+        assert_eq!(contents.items, 4, "a, sub, sub/b and the link itself");
+        let link = fs::symlink_metadata(inside.join("out"))
+            .unwrap_or_else(|e| panic!("{e}"))
+            .len();
+        assert_eq!(contents.bytes, 30 + link, "nothing from behind the link");
+
+        let cancelled = CancelToken::new();
+        cancelled.cancel();
+        assert!(count_tree(&inside, &cancelled).is_none());
+    }
 }
 
 /// `Command::Reveal` with `properties` (specs/system-integration.md §4,

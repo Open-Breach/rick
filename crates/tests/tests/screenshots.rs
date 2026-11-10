@@ -2511,6 +2511,212 @@ fn screenshots_of_the_paste_conflict_dialogue() {
     cancel(&mut harness);
 }
 
+/// Issue 139, item 4: the Properties dialogue as the Figma frames have it
+/// (`144:4115`) — a folder and a symbolic link on the General tab, the
+/// Permissions tab, and the tab with the access control list open — in
+/// Light and Dark at both densities. The folder's files are sparse, so
+/// what they occupy on disk is next to nothing; the list's extra entry is
+/// a user this machine has, where the file system takes one.
+#[cfg(unix)]
+#[test]
+#[ignore = "needs a wgpu adapter; CI runs it and uploads the images"]
+#[allow(clippy::too_many_lines)]
+fn screenshots_of_the_properties_dialogue() {
+    use egui_kittest::kittest::Queryable as _;
+    use platform::{Acl, PermissionChange, Permissions as _, PosixAce, PosixTag};
+    use std::os::unix::fs::PermissionsExt as _;
+    const MIB: u64 = 1024 * 1024;
+    let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+    let home = dir.path().join("home");
+    let serge = home.join("serge");
+    let rider = serge.join(".local/opt/jetbrains-rider/current/bin");
+    let bin = serge.join(".local/bin");
+    fs::create_dir_all(&rider).unwrap_or_else(|e| panic!("{e}"));
+    fs::create_dir_all(&bin).unwrap_or_else(|e| panic!("{e}"));
+    let sparse = |path: &Path, bytes: u64| {
+        let file = fs::File::create(path).unwrap_or_else(|e| panic!("{e}"));
+        file.set_len(bytes).unwrap_or_else(|e| panic!("{e}"));
+    };
+    // Twelve items inside, 3.4 GiB.
+    sparse(&rider.join("rider"), 2 * MIB + 100 * 1024);
+    fs::set_permissions(rider.join("rider"), fs::Permissions::from_mode(0o755))
+        .unwrap_or_else(|e| panic!("{e}"));
+    sparse(&serge.join("backup.tar"), 3 * 1024 * MIB);
+    sparse(&serge.join("movie.mkv"), 407 * MIB);
+    for name in ["notes.md", "todo.txt"] {
+        sparse(&serge.join(name), 12 * 1024);
+    }
+    std::os::unix::fs::symlink(rider.join("rider"), bin.join("jetbrains-rider"))
+        .unwrap_or_else(|e| panic!("{e}"));
+    fs::set_permissions(&serge, fs::Permissions::from_mode(0o710))
+        .unwrap_or_else(|e| panic!("{e}"));
+
+    let mut harness = shell(&home, egui::vec2(1280.0, 1000.0));
+    let modes = [
+        (Theme::Light, Density::Comfortable, "light-comfortable"),
+        (Theme::Light, Density::Compact, "light-compact"),
+        (Theme::Dark, Density::Comfortable, "dark-comfortable"),
+        (Theme::Dark, Density::Compact, "dark-compact"),
+    ];
+    let set = |harness: &mut Harness<'_, RickUi>, theme: Theme, density: Density| {
+        for change in [
+            SettingsChange::Theme(theme),
+            SettingsChange::Density(density),
+        ] {
+            harness
+                .state_mut()
+                .app_mut()
+                .handle(app::Command::Settings(change), &mut Vec::new());
+        }
+        // The pointer rests outside the dialogue, on no button.
+        harness.event(egui::Event::PointerMoved(egui::pos2(40.0, 980.0)));
+        for _ in 0..4 {
+            harness.step();
+        }
+    };
+    // Goes to `folder`, selects `name` there and opens Properties on it.
+    let open =
+        |harness: &mut Harness<'_, RickUi>, folder: &Path, name: &str| {
+            let pane = harness.state().app().model().focused;
+            harness.state_mut().app_mut().handle(
+                app::Command::Navigate {
+                    pane,
+                    to: local(folder),
+                },
+                &mut Vec::new(),
+            );
+            settle(harness);
+            let id = harness
+                .state()
+                .app()
+                .model()
+                .active_tab(pane)
+                .and_then(|(_, tab)| tab.rows().find(|e| e.name == name).map(|e| e.id))
+                .unwrap_or_else(|| panic!("{name} is listed"));
+            for command in [
+                app::Command::Select {
+                    pane,
+                    change: SelectionChange::Set(vec![id]),
+                },
+                app::Command::ShowProperties(pane),
+            ] {
+                harness
+                    .state_mut()
+                    .app_mut()
+                    .handle(command, &mut Vec::new());
+            }
+            let deadline = Instant::now() + Duration::from_secs(10);
+            // Open, and a folder counted.
+            while !harness.state().properties().info().is_some_and(|info| {
+                info.entry.name == name && info.contents != app::Contents::Counting
+            }) {
+                assert!(Instant::now() < deadline, "no Properties dialogue");
+                harness.step();
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            for _ in 0..4 {
+                harness.step();
+            }
+        };
+    let close = |harness: &mut Harness<'_, RickUi>| {
+        harness.key_press(egui::Key::Escape);
+        for _ in 0..4 {
+            harness.step();
+        }
+        settle(harness);
+    };
+
+    // The folder, on the General tab.
+    open(&mut harness, &home, "serge");
+    for (theme, density, mode) in modes {
+        set(&mut harness, theme, density);
+        shoot(&mut harness, &format!("properties-folder-{mode}"));
+    }
+    close(&mut harness);
+
+    // The symbolic link.
+    open(&mut harness, &bin, "jetbrains-rider");
+    for (theme, density, mode) in modes {
+        set(&mut harness, theme, density);
+        shoot(&mut harness, &format!("properties-link-{mode}"));
+    }
+    close(&mut harness);
+
+    // An extra entry on the folder's list: a user of this machine, with
+    // execute, under a mask of execute — where the file system takes it.
+    let pane = harness.state().app().model().focused;
+    let posix = matches!(
+        platform::Native.permissions(&serge).map(|p| p.acl),
+        Ok(Some(Acl::Posix { .. }))
+    );
+    let users = platform::Native.principals().ok().filter(|_| posix);
+    let extra = users.and_then(|p| {
+        p.users.into_iter().find(|u| {
+            u.id != "0"
+                && u.name
+                    .as_deref()
+                    .is_some_and(|name| name.chars().all(char::is_alphanumeric))
+        })
+    });
+    if let Some(user) = extra {
+        let ace = |tag, qualifier, perms| PosixAce {
+            tag,
+            qualifier,
+            perms,
+        };
+        let change = PermissionChange {
+            acl: Some(Acl::Posix {
+                access: vec![
+                    ace(PosixTag::UserObj, None, 7),
+                    ace(PosixTag::User, Some(user), 1),
+                    ace(PosixTag::GroupObj, None, 0),
+                    ace(PosixTag::Mask, None, 1),
+                    ace(PosixTag::Other, None, 0),
+                ],
+                default: Vec::new(),
+            }),
+            ..PermissionChange::default()
+        };
+        harness.state_mut().app_mut().handle(
+            app::Command::SetPermissions {
+                pane,
+                request: app::PermissionRequest {
+                    targets: vec![serge.clone()],
+                    change,
+                    recursive: None,
+                },
+            },
+            &mut Vec::new(),
+        );
+        settle(&mut harness);
+    }
+
+    // The Permissions tab, then the list open.
+    open(&mut harness, &home, "serge");
+    harness.get_by_label("Permissions").click();
+    for _ in 0..4 {
+        harness.step();
+    }
+    for (theme, density, mode) in modes {
+        set(&mut harness, theme, density);
+        shoot(&mut harness, &format!("properties-permissions-{mode}"));
+    }
+    if harness
+        .query_by_label("Access control list (ACL)")
+        .is_some()
+    {
+        harness.get_by_label("Access control list (ACL)").click();
+        for _ in 0..4 {
+            harness.step();
+        }
+        for (theme, density, mode) in modes {
+            set(&mut harness, theme, density);
+            shoot(&mut harness, &format!("properties-acl-{mode}"));
+        }
+    }
+    close(&mut harness);
+}
+
 /// Issue 60: the install dialogue — the JetBrains-shaped archive with its
 /// icon, the effects card and the collapsed Advanced options — in Light
 /// and Dark at both densities, then with Advanced options expanded, and

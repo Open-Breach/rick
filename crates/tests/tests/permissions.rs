@@ -2,9 +2,10 @@
 //! its owner, group and mode bits, a change through the dialogue's command
 //! is read back, and a recursive change on a thousand files is one job
 //! with progress that one Undo reverts; through the egui harness, the
-//! dialogue opens on the selection with its rows and the Permissions
-//! section. The elevated change and the helper are the binary crate's
-//! tests (`crates/rick/tests/perms.rs`).
+//! dialogue opens on the selection with its General rows and its
+//! Permissions tab (the dialogue itself is `tests/properties.rs`). The
+//! elevated change and the helper are the binary crate's tests
+//! (`crates/rick/tests/perms.rs`).
 
 #![cfg(unix)]
 
@@ -201,11 +202,9 @@ fn properties_show_the_mode_bits_and_a_change_is_read_back_and_undone() {
     let info = d.properties();
     assert_eq!(info.entry.name, "notes.txt");
     assert_eq!(info.path.as_deref(), Some(file.as_path()));
-    assert!(
-        info.rows.iter().any(|(k, v)| k == "Size" && v == "5 bytes"),
-        "{:?}",
-        info.rows
-    );
+    assert_eq!(info.entry.size, Some(5));
+    assert_eq!(info.location, dir.path().display().to_string());
+    assert!(info.on_disk.is_some(), "what the file occupies on disk");
     let perms = info
         .permissions
         .clone()
@@ -340,7 +339,7 @@ fn a_recursive_change_on_a_thousand_files_is_one_job_with_progress_and_one_undo(
 }
 
 #[test]
-fn the_dialogue_opens_on_the_selection_with_its_rows_and_the_permissions_section() {
+fn the_dialogue_opens_on_the_selection_with_its_rows_and_the_permissions_tab() {
     use egui_kittest::kittest::Queryable as _;
 
     let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
@@ -393,17 +392,28 @@ fn the_dialogue_opens_on_the_selection_with_its_rows_and_the_permissions_section
         .app_mut()
         .handle(Command::ShowProperties(pane), &mut Vec::new());
     let deadline = Instant::now() + Duration::from_secs(10);
-    while harness
-        .query_by_label_contains("Properties of photo.jpg")
-        .is_none()
-    {
+    while !harness.state().properties().is_open() {
         harness.step();
         assert!(Instant::now() < deadline, "the dialogue did not open");
         std::thread::sleep(Duration::from_millis(10));
     }
-    harness.step();
+    // A modal takes a frame to find its size and another its place.
+    for _ in 0..4 {
+        harness.step();
+    }
+    // The General tab: the header's line and the rows.
+    assert!(
+        harness.query_by_label("JPEG image  ·  2.0 KiB").is_some(),
+        "the type and the size under the name"
+    );
+    assert!(harness.query_by_label("On disk").is_some(), "the size rows");
+    // The Permissions tab.
+    harness.get_by_label("Permissions").click();
+    for _ in 0..4 {
+        harness.step();
+    }
     for label in [
-        "Permissions",
+        "OWNERSHIP",
         "Owner",
         "Group",
         "Read",
@@ -417,10 +427,6 @@ fn the_dialogue_opens_on_the_selection_with_its_rows_and_the_permissions_section
             "{label} in the dialogue"
         );
     }
-    assert!(
-        harness.query_by_label("2048 bytes").is_some(),
-        "the size row"
-    );
     assert!(
         harness.state().properties().pending_change().is_none(),
         "nothing changed yet"

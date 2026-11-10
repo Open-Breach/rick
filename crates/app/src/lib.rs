@@ -83,7 +83,9 @@ mod places;
 mod session;
 pub mod settings;
 
-pub use command::{Command, ConnectionOp, Event, PropertiesInfo, TransferMode};
+pub use command::{
+    Command, ConnectionOp, Contents, Event, FolderContents, PropertiesInfo, TransferMode,
+};
 pub use ext_settings::ExtSettings;
 pub use external::{External, ExternalReceiver, ExternalSender, external_channel};
 pub use integration::{INSTALL_RICK_COMMAND, IntegrationCommand};
@@ -266,6 +268,12 @@ enum Msg {
     Prompts,
     /// `Command::ShowProperties` read the entry.
     Properties(Box<Result<PropertiesInfo, Error>>),
+    /// The count of the folder the Properties dialogue shows ended.
+    PropertiesCounted {
+        pane: PaneId,
+        path: PathBuf,
+        contents: FolderContents,
+    },
     /// A permission job ended.
     PermissionsApplied {
         pane: PaneId,
@@ -646,6 +654,9 @@ pub struct App {
     /// The entry the Properties dialogue shows, while it is open: a change
     /// to it reports the new state through `Event::Properties`.
     properties_shown: Option<(PaneId, PathBuf)>,
+    /// The count of that entry's contents, when it is a folder: running,
+    /// or done and kept for as long as the dialogue shows the folder.
+    properties_count: Option<PropertiesCount>,
     /// Numbers the index searches, so a superseded one's hits are dropped.
     index_generation: u64,
     /// The integration check or apply in flight.
@@ -930,6 +941,7 @@ impl App {
             ext_settings,
             index_search: None,
             properties_shown: None,
+            properties_count: None,
             index_generation: 0,
             integration: integration::IntegrationRun::default(),
         };
@@ -1606,7 +1618,12 @@ impl App {
                 self.model.question_closed(id);
             }
             Command::ShowProperties(pane) => self.show_properties(pane, events),
-            Command::PropertiesClosed => self.properties_shown = None,
+            Command::PropertiesClosed => {
+                self.properties_shown = None;
+                if let Some(count) = self.properties_count.take() {
+                    count.cancel.cancel();
+                }
+            }
             Command::HashFormat(format) => {
                 if let Err(error) = ops::hash::remember(&*self.platform, format) {
                     events.push(Event::Notify {
@@ -2578,13 +2595,64 @@ impl App {
             .then(|| platform::paths::to_path(&entry.path).ok())
             .flatten();
         self.properties_shown = path.clone().map(|path| (pane, path));
+        let folder = path
+            .as_deref()
+            .filter(|_| entry.kind == types::EntryKind::Dir);
+        let contents = self.count_contents(pane, &entry.name, folder);
         let platform = Arc::clone(&self.platform);
         let tx = self.mailbox.clone();
         let location = ctx.location.clone();
         runtime::handle().spawn_blocking(move || {
-            let info = read_properties(&*platform, pane, entry, path, &location);
+            let info = read_properties(&*platform, pane, entry, path, &location, contents);
             tx.send(Msg::Properties(Box::new(info)));
         });
+    }
+
+    /// Starts the count of what is inside `folder` for the Properties
+    /// dialogue, as a job the operations drawer does not list, and says
+    /// where the count stands: a count of the same folder already running
+    /// or done is kept, any other is cancelled. `None` counts nothing.
+    fn count_contents(&mut self, pane: PaneId, name: &str, folder: Option<&Path>) -> Contents {
+        if let (Some(count), Some(folder)) = (&self.properties_count, folder)
+            && count.pane == pane
+            && count.path == folder
+        {
+            return count.result.map_or(Contents::Counting, Contents::Counted);
+        }
+        if let Some(count) = self.properties_count.take() {
+            count.cancel.cancel();
+        }
+        let Some(folder) = folder else {
+            return Contents::None;
+        };
+        let path = folder.to_path_buf();
+        let walked = path.clone();
+        let tx = self.mailbox.clone();
+        let handle = self
+            .jobs
+            .spawn_named(format!("Count {name}"), move |job| async move {
+                let cancel = job.cancel.clone();
+                let root = walked.clone();
+                let contents = runtime::handle()
+                    .spawn_blocking(move || count_tree(&root, &cancel))
+                    .await
+                    .map_err(|join| Error::Io(std::io::Error::other(join)))?
+                    .ok_or(Error::Cancelled)?;
+                tx.send(Msg::PropertiesCounted {
+                    pane,
+                    path: walked,
+                    contents,
+                });
+                Ok(())
+            });
+        self.internal.insert(handle.id);
+        self.properties_count = Some(PropertiesCount {
+            pane,
+            path,
+            cancel: handle.cancel,
+            result: None,
+        });
+        Contents::Counting
     }
 
     /// The Properties dialogue for the pane's folder itself: the location
@@ -2606,6 +2674,8 @@ impl App {
             .then(|| platform::paths::to_path(&location.path).ok())
             .flatten();
         self.properties_shown = path.clone().map(|path| (pane, path));
+        let name = runtime::name_of(&location);
+        let contents = self.count_contents(pane, &name, path.as_deref());
         let platform = Arc::clone(&self.platform);
         let tx = self.mailbox.clone();
         runtime::handle().spawn(async move {
@@ -2617,7 +2687,9 @@ impl App {
                 }
             };
             let info = runtime::handle()
-                .spawn_blocking(move || read_properties(&*platform, pane, entry, path, &location))
+                .spawn_blocking(move || {
+                    read_properties(&*platform, pane, entry, path, &location, contents)
+                })
                 .await
                 .unwrap_or_else(|join| Err(Error::Io(std::io::Error::other(join))));
             tx.send(Msg::Properties(Box::new(info)));
@@ -3800,8 +3872,35 @@ impl App {
                     events.push(Event::Question(question));
                 }
             }
+            Msg::PropertiesCounted {
+                pane,
+                path,
+                contents,
+            } => {
+                // A count the dialogue no longer waits for is dropped.
+                if let Some(count) = &mut self.properties_count
+                    && count.pane == pane
+                    && count.path == path
+                {
+                    count.result = Some(contents);
+                    events.push(Event::PropertiesCounted {
+                        pane,
+                        path,
+                        contents,
+                    });
+                }
+            }
             Msg::Properties(result) => match *result {
-                Ok(info) => {
+                Ok(mut info) => {
+                    // The count may have ended while the entry was read.
+                    if info.contents == Contents::Counting
+                        && let Some(count) = &self.properties_count
+                        && count.pane == info.pane
+                        && Some(&count.path) == info.path.as_ref()
+                        && let Some(contents) = count.result
+                    {
+                        info.contents = Contents::Counted(contents);
+                    }
                     // A dialogue closed in the meantime takes no answer.
                     if self.properties_shown.as_ref().is_some_and(|(pane, path)| {
                         *pane == info.pane && Some(path) == info.path.as_ref()
@@ -4733,62 +4832,29 @@ fn repair(mounts: &Mounts, home: &Location, session: &mut Session) {
     }
 }
 
-/// A provider whose reads stop after `limit` bytes: what a prefix
-/// previewer is handed for a file on a remote provider, so a 1 GiB log
-/// previews from its first chunk. Everything else goes to the provider
-/// itself.
-/// The contents of the Properties dialogue for `entry`: the general rows,
-/// and the permissions of a local entry the platform can read them of.
+/// The contents of the Properties dialogue for `entry`: where it is, what
+/// it occupies, what a link resolves to, and the permissions of a local
+/// entry the platform can read them of. `contents` is where the count of
+/// a folder stands.
 fn read_properties(
     platform: &dyn Platform,
     pane: PaneId,
     entry: Entry,
     path: Option<PathBuf>,
     location: &Location,
+    contents: Contents,
 ) -> Result<PropertiesInfo, Error> {
-    let kind = match &entry.kind {
-        types::EntryKind::File => "File",
-        types::EntryKind::Dir => "Folder",
-        types::EntryKind::Symlink { .. } => "Symbolic link",
-        types::EntryKind::Other => "Special file",
+    let shown = path
+        .as_ref()
+        .and_then(|p| p.parent())
+        .map_or_else(|| location.to_string(), |p| p.display().to_string());
+    let on_disk = path
+        .as_ref()
+        .and_then(|p| platform::fs::allocated_size(p).ok());
+    let target = match (&entry.kind, &path) {
+        (types::EntryKind::Symlink { target, .. }, Some(path)) => link_target(path, target),
+        _ => None,
     };
-    let mut rows = vec![
-        ("Name".to_owned(), entry.name.clone()),
-        ("Type".to_owned(), kind.to_owned()),
-        (
-            "Location".to_owned(),
-            path.as_ref()
-                .and_then(|p| p.parent())
-                .map_or_else(|| location.to_string(), |p| p.display().to_string()),
-        ),
-    ];
-    if let Some(mime) = &entry.mime {
-        rows.push(("Media type".to_owned(), mime.as_str().to_owned()));
-    }
-    if let Some(size) = entry.size {
-        rows.push(("Size".to_owned(), format!("{size} bytes")));
-    }
-    if let Some(path) = &path
-        && let Ok(allocated) = platform::fs::allocated_size(path)
-    {
-        rows.push(("On disk".to_owned(), format!("{allocated} bytes")));
-    }
-    for (label, time) in [
-        ("Modified", entry.modified),
-        ("Accessed", entry.accessed),
-        ("Created", entry.created),
-    ] {
-        if let Some(time) = time {
-            rows.push((label.to_owned(), platform::iso8601(time)));
-        }
-    }
-    if let types::EntryKind::Symlink { target, broken } = &entry.kind {
-        let mut text = target.to_string();
-        if *broken {
-            text.push_str(" (missing)");
-        }
-        rows.push(("Target".to_owned(), text));
-    }
     let permissions = match &path {
         Some(path) => match platform.permissions(path) {
             Ok(permissions) => Some(permissions),
@@ -4806,13 +4872,99 @@ fn read_properties(
         pane,
         entry,
         path,
-        rows,
+        location: shown,
+        on_disk,
+        target,
+        contents,
         permissions,
         principals,
         native: platform::NATIVE_PROPERTIES,
     })
 }
 
+/// What the link at `path` resolves to: the entry at the end of the chain
+/// of links, with the path the link holds — `held`, taken from the link's
+/// folder when it is relative — as its path, so its folder is the one the
+/// link names. `None` for a broken link.
+fn link_target(path: &Path, held: &VPath) -> Option<Entry> {
+    let real = std::fs::canonicalize(path).ok()?;
+    let held = platform::paths::to_path(held).ok()?;
+    let named = lexical(&path.parent()?.join(held));
+    // `..` after a link in the path names another folder than the text
+    // says: then the real path is the one to go to.
+    let at = if std::fs::symlink_metadata(&named).is_ok() {
+        named
+    } else {
+        real.clone()
+    };
+    vfs_local::entry_at(&real, &platform::paths::from_path(&at)).ok()
+}
+
+/// `path` without its `.` and `..` components, as the text reads; nothing
+/// is looked up.
+fn lexical(path: &Path) -> PathBuf {
+    let mut out = PathBuf::new();
+    for component in path.components() {
+        match component {
+            std::path::Component::CurDir => {}
+            std::path::Component::ParentDir => {
+                if !out.pop() {
+                    out.push(component);
+                }
+            }
+            other => out.push(other),
+        }
+    }
+    out
+}
+
+/// Counts what is inside the folder at `path`: every file and folder below
+/// it, the files' sizes and what all of it occupies on disk. Links count as
+/// themselves and are never followed; an entry that cannot be read counts
+/// nothing. `None` when `cancel` was set before the end.
+fn count_tree(path: &Path, cancel: &CancelToken) -> Option<FolderContents> {
+    let mut contents = FolderContents::default();
+    let mut folders = vec![path.to_path_buf()];
+    while let Some(folder) = folders.pop() {
+        let Ok(entries) = std::fs::read_dir(&folder) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            if cancel.is_cancelled() {
+                return None;
+            }
+            let path = entry.path();
+            let Ok(meta) = std::fs::symlink_metadata(&path) else {
+                continue;
+            };
+            contents.items += 1;
+            contents.on_disk += platform::fs::allocated_size(&path).unwrap_or(0);
+            if meta.is_dir() {
+                folders.push(path);
+            } else {
+                contents.bytes += meta.len();
+            }
+        }
+    }
+    Some(contents)
+}
+
+/// The count the Properties dialogue waits for or holds.
+struct PropertiesCount {
+    /// The pane the dialogue was opened from.
+    pane: PaneId,
+    /// The folder counted.
+    path: PathBuf,
+    /// Stops the count.
+    cancel: CancelToken,
+    /// What it found, once it ended.
+    result: Option<FolderContents>,
+}
+
+/// A provider whose reads stop after `limit` bytes: what a prefix
+/// previewer is handed for a file on a remote provider, so a 1 GiB log
+/// previews from its first chunk. Everything else goes to the provider
+/// itself.
 struct Prefixed {
     inner: Arc<dyn ext::Provider>,
     limit: u64,
