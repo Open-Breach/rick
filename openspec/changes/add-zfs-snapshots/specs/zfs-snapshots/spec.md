@@ -85,10 +85,10 @@ The system SHALL offer, for one selected file in a dataset, a view listing each 
 - **THEN** its versions view still lists the snapshots that hold it
 
 ### Requirement: Restore from a snapshot
-The system SHALL offer *Restore* for entries inside a snapshot or a versions view, copying each selected item back to its corresponding live location as a job. When a live item exists at that location, it SHALL first be moved to the trash, after the user confirmed the replacement; if trashing fails, that item SHALL NOT be restored.
+The system SHALL offer *Restore* for entries inside a snapshot or a versions view, copying each selected item back to its corresponding live location as a job, after one confirmation that names the snapshot the items come from, the live paths they go to and the live items they replace. When a live item exists at that location, it SHALL first be moved to the trash; if trashing fails, that item SHALL NOT be restored.
 
 #### Scenario: Restore a deleted file
-- **WHEN** the user restores `report.odt` from snapshot `b` and no `report.odt` exists live
+- **WHEN** the user restores `report.odt` from snapshot `b`, no `report.odt` exists live, and the user confirms the question naming `tank/home@b`
 - **THEN** `report.odt` is copied to its live folder with its snapshot content
 
 #### Scenario: Replace a live file
@@ -96,7 +96,7 @@ The system SHALL offer *Restore* for entries inside a snapshot or a versions vie
 - **THEN** the live file is in the trash and the snapshot version is at its place
 
 #### Scenario: Replacement declined
-- **WHEN** the user declines the replacement
+- **WHEN** the user declines the confirmation
 - **THEN** nothing is changed
 
 #### Scenario: Missing live parent
@@ -137,7 +137,7 @@ The system SHALL offer *Destroy snapshot* on snapshot folders in the snapshot li
 - **THEN** the job fails with a message that the snapshot is held, and the snapshot remains
 
 ### Requirement: Permission and elevation
-Every create, rename and destroy SHALL run first with the user's own rights. When ZFS refuses it for lack of permission, the system SHALL ask whether to run it as administrator; on confirmation it SHALL run the same command once through the platform's elevation prompt, and on refusal or a dismissed prompt it SHALL report that permission was denied and change nothing.
+Every create, rename and destroy SHALL run first with the user's own rights. When ZFS refuses it for lack of permission, the system SHALL ask whether to run it as administrator; on confirmation it SHALL run the same command once through the platform's elevation prompt as a call of the privileged helper `rick-zfs`, which runs only a snapshot's `snapshot`, `rename` or `destroy` and refuses everything else, and on refusal or a dismissed prompt it SHALL report that permission was denied and change nothing.
 
 #### Scenario: Delegated rights
 - **WHEN** the user holds `zfs allow` rights for `snapshot` on `tank/home` and creates a snapshot
@@ -151,8 +151,12 @@ Every create, rename and destroy SHALL run first with the user's own rights. Whe
 - **WHEN** the user dismisses the polkit prompt
 - **THEN** a notification says permission was denied and no snapshot exists
 
+#### Scenario: Helper refuses other commands
+- **WHEN** `rick-zfs` is called with `destroy tank/home`, a name without `@`, or with any option but `snapshot -r`
+- **THEN** it exits with an error and does not start `zfs`
+
 #### Scenario: No elevation available
-- **WHEN** `pkexec` is not installed and ZFS refuses the command
+- **WHEN** `pkexec` or the helper `rick-zfs` is not installed and ZFS refuses the command
 - **THEN** the message names the missing rights and the `zfs allow` permission needed, and no elevation is offered
 
 ### Requirement: Snapshot lists stay current

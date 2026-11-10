@@ -48,11 +48,15 @@ the specification first (#174).
   opens, previews and copies out like any folder; `/~versions/<path>`
   lists the snapshots holding a different version of one file. The "ZFS"
   group has *Browse snapshots*, *Back to live folder*, *Versions*,
-  *Restore* (a live item it replaces goes to the trash first), and
-  *Create*, *Rename* and *Destroy snapshot* as jobs, which offer to run
-  once more as administrator through the platform prompt when ZFS refuses
-  for lack of permission. The info panel gets a ZFS section with the
-  dataset, its snapshots and its main properties with their source.
+  *Restore* (one question naming the snapshot; a live item it replaces
+  goes to the trash first), and *Create*, *Rename* and *Destroy snapshot*
+  as jobs, which offer to run once more as administrator when ZFS refuses
+  for lack of permission: through the platform prompt as a call of
+  `rick-zfs`, a helper beside `rick` that runs only a snapshot's
+  `snapshot`, `rename` or `destroy`, under the polkit action
+  `org.openbreach.rick.zfs` where it is installed (QUESTIONS.md 366). The
+  info panel gets a ZFS section with the dataset, its snapshots and its
+  main properties with their source. Specified in `specs/ext-zfs.md`.
 - **Title bar colour.** The title row sits on a band of its own colour, the
   new token `bg/titlebar`, and the active workspace tab lifts out of it in
   `bg/pane`, with no accent line. *Settings → Appearance → Title bar colour*
