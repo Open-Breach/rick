@@ -4,7 +4,9 @@ name: release
 # dylibs and libstd it shares with the plugins, the pdfium library beside it
 # (SPEC.md: pdfium ships beside the binary), the GStreamer runtime on macOS
 # and Windows (SPEC.md: bundled there, the system's on Linux; QUESTIONS.md
-# 89), `plugins/` with every plugin (QUESTIONS.md 81) and the 7-Zip library
+# 89), the Visual C++ runtime on Windows (every module imports it, and a
+# machine without the Visual C++ Redistributable has none), `plugins/` with
+# every plugin (QUESTIONS.md 81) and the 7-Zip library
 # with its licence beside the archive plugin (issue 51; built from the
 # pinned sources on Linux and macOS, the pinned installer's 7z.dll on
 # Windows, see .github/scripts/sevenzip.sh) — plus LICENSE, README,
@@ -194,9 +196,37 @@ jobs:
           else
             echo "RICK_SEVENZIP_DIR=$dest" >> "$GITHUB_ENV"
           fi
+      # The Visual C++ runtime: rick.exe, the kernel libraries, every plugin
+      # and the GStreamer runtime import vcruntime140.dll, some of them
+      # vcruntime140_1.dll and msvcp140.dll too, and the 0.3.0 archive, which
+      # carried none, did not start on a machine without the Visual C++
+      # Redistributable. The redistributable folder of the newest toolset of
+      # the runner's Visual Studio, the one the build links with, is named
+      # to the bundler, which copies its libraries beside the binary.
+      - name: visual c++ runtime (windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          $install = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+          if (-not $install) { throw "no Visual Studio with the C++ tools on this runner" }
+          $redist = Join-Path $install "VC\Redist\MSVC"
+          $crt = Get-ChildItem -Path $redist -Directory |
+            Where-Object { $_.Name -match '^\d+(\.\d+)+$' } |
+            Sort-Object { [version]$_.Name } -Descending |
+            ForEach-Object { Get-ChildItem -Path (Join-Path $_.FullName "x64") -Directory -Filter "Microsoft.VC*.CRT" -ErrorAction SilentlyContinue } |
+            Where-Object { Test-Path (Join-Path $_.FullName "vcruntime140.dll") } |
+            Select-Object -First 1
+          if (-not $crt) {
+            Get-ChildItem -Path $redist -Recurse -Depth 2 | Select-Object -First 60 FullName
+            throw "no Microsoft.VC*.CRT folder with vcruntime140.dll under $redist"
+          }
+          Get-ChildItem -Path $crt.FullName | Select-Object Name, Length
+          "RICK_VCRUNTIME_DIR=$($crt.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Append
       # The bundle: binary, kernel dylibs, libstd, pdfium (from the PDF
       # previewer's setting), the GStreamer runtime (from RICK_GSTREAMER_DIR on
-      # macOS and Windows), plugins/ with the 7-Zip library beside the
+      # macOS and Windows), the Visual C++ runtime (from RICK_VCRUNTIME_DIR on
+      # Windows), plugins/ with the 7-Zip library beside the
       # archive plugin (from RICK_SEVENZIP_DIR), from one build of every library,
       # binary and example in the workspace with the media previewer's
       # playback on, the previewer's pdfium_check example for the smoke
@@ -440,6 +470,11 @@ jobs:
           # (specs/app-icons.md), as Explorer's Properties dialog reads it.
           if [ "${{ runner.os }}" = "Windows" ]; then
             pwsh -NoProfile -File "$GITHUB_WORKSPACE/.github/scripts/check-exe-resource.ps1" rick.exe "$version"
+            # The Visual C++ runtime beside rick.exe: every library of it
+            # that a module of the archive imports is in the archive. The
+            # import tables are read from the files, since this runner has
+            # Visual Studio and rick.exe starting here proves nothing.
+            python3 "$GITHUB_WORKSPACE/.github/scripts/check-vcruntime.py" .
           fi
 
   release:
