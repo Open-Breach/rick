@@ -220,6 +220,8 @@ pub struct Settings {
     pub shortcuts: BTreeMap<String, String>,
     /// What Rick opens with: the last session or a named layout.
     pub session: SessionSettings,
+    /// The windows: which frame Rick draws around one it decorates itself.
+    pub window: WindowSettings,
     /// Folders and files pinned to the side panel, in display order.
     /// Written as `provider:path` strings; a bare path is a local one.
     #[serde(with = "pinned_toml")]
@@ -609,6 +611,51 @@ impl SessionSettings {
     }
 }
 
+/// The `[window]` table. Its keys are in the config file only, with no
+/// entry in Settings.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(default)]
+pub struct WindowSettings {
+    /// Which frame Rick draws around a window it decorates itself. Read
+    /// when Rick starts.
+    #[serde(deserialize_with = "lenient_frame")]
+    pub frame: WindowFrame,
+}
+
+/// `frame` in the `[window]` table (specs/gui-title-row.md, *Window
+/// frame*): the override of the check whether the window is transparent,
+/// for a system that reports a transparent surface and composites it
+/// wrongly, or the other way round.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum WindowFrame {
+    /// The shadow frame where the window is transparent, the plain frame
+    /// where it is not.
+    #[default]
+    Auto,
+    /// Always the shadow frame: a transparent margin with a shadow.
+    Shadow,
+    /// Always the plain frame, and no transparent window is asked for.
+    Plain,
+}
+
+/// The `frame` key: a value that is none of the three reads as `auto`
+/// instead of failing the whole file.
+fn lenient_frame<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<WindowFrame, D::Error> {
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Value {
+        Known(WindowFrame),
+        Other(serde::de::IgnoredAny),
+    }
+    Ok(match Value::deserialize(deserializer)? {
+        Value::Known(frame) => frame,
+        Value::Other(_) => WindowFrame::default(),
+    })
+}
+
 impl Settings {
     /// The band of the title row in the light and in the dark scheme: the
     /// chosen preset's pair, or the custom one.
@@ -638,6 +685,7 @@ impl Default for Settings {
             titlebar_custom_dark: custom_dark(),
             shortcuts: BTreeMap::new(),
             session: SessionSettings::default(),
+            window: WindowSettings::default(),
             pinned: Vec::new(),
             drag: Drag::default(),
             preview: Preview::default(),
@@ -942,6 +990,37 @@ mod tests {
         assert_eq!(Rgb::parse(" 2f3237 "), Some(Rgb([0x2f, 0x32, 0x37])));
         for bad in ["", "#fff", "#12345g", "#1234567", "rose"] {
             assert_eq!(Rgb::parse(bad), None, "{bad}");
+        }
+    }
+
+    /// Issue 158: `frame` of the `[window]` table is `auto`, `shadow` or
+    /// `plain`; absent it is `auto`, and so is a value Rick does not know.
+    #[test]
+    fn the_window_frame_is_auto_shadow_or_plain() {
+        assert_eq!(Settings::default().window.frame, WindowFrame::Auto);
+        let old: Settings = toml::from_str("show_hidden = true\n").unwrap_or_default();
+        assert_eq!(old.window, WindowSettings::default(), "an older file");
+        for (text, frame) in [
+            ("auto", WindowFrame::Auto),
+            ("shadow", WindowFrame::Shadow),
+            ("plain", WindowFrame::Plain),
+        ] {
+            let file = format!("[window]\nframe = \"{text}\"\n");
+            let read: Settings = toml::from_str(&file).unwrap_or_else(|e| panic!("{e}"));
+            assert_eq!(read.window.frame, frame, "{text}");
+            // Written under the same name and read back.
+            let written = toml::to_string(&read).unwrap_or_default();
+            assert!(written.contains(&file), "{written}");
+            let back: Settings = toml::from_str(&written).unwrap_or_else(|e| panic!("{e}"));
+            assert_eq!(back, read);
+        }
+        // What is none of the three reads as `auto`, and the rest of the
+        // file stands.
+        for odd in ["frame = \"glass\"", "frame = 3", "frame = true"] {
+            let file = format!("show_hidden = true\n[window]\n{odd}\n");
+            let read: Settings = toml::from_str(&file).unwrap_or_else(|e| panic!("{e}"));
+            assert!(read.show_hidden, "{odd}");
+            assert_eq!(read.window.frame, WindowFrame::Auto, "{odd}");
         }
     }
 
