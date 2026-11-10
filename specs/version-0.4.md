@@ -26,10 +26,12 @@ The bundle reuses the dialogue frame, the scheme and density tokens and the Port
 3. **File list** — *List view*, *Sorting*, *Dates* and *Inline rename* under Main area; *Select all* under Operations; the Appearance and Behaviour pages of the *Settings window*.
 4. **Window** — *Window geometry* under General behaviour; and a bug without a rule of its own: the corner resize grip goes dead after one resize until a click elsewhere.
 5. **Launching and opening files** — *Executables and scripts* and *Open in editor* under *Opening files*; *Path bar* under Main area; F4 in Keyboard shortcuts.
-6. **Search and previewers** — *Indexed search* under Main area and *Attention* in the Extensions dialogue for the Tracker connector; *No previewer* under Preview and *Previews are modules* for the hex view as the fallback.
+6. **Search and previewers** — *Indexed search* under Main area and *Attention* in the Extensions dialogue for the Tracker connector; *No previewer* under Preview and *Previews are modules* for the hex view as the fallback, which takes the *Open as hex* button off the *No previewer* card of the first bundle.
 
 It ends with the changelog entry, the new settings in the README where settings are listed, and a screenshot of the List view in Light and Dark.
 
-**Not in the second bundle.** The five identical `tmp` rows at `/` of the same session were not reproduced and are left out on purpose; subfolder search over SSH; a plugin permission model. Nothing visual of the first bundle is changed along the way.
+Item 1 raises the extension API version to 19, for the four capability flags and `unavailable_reason`. Every plugin is rebuilt against it; one that was built against 18 and is not in the workspace yet — `ext-zfs`, pull request 156 — is refused by the registry until it is rebuilt.
+
+**Not in the second bundle.** The five identical `tmp` rows at `/` of the same session were not reproduced and are left out on purpose; subfolder search over SSH; a plugin permission model. Nothing visual of the first bundle is changed along the way, but for that one button.
 
 What else 0.4 holds is added here as it is decided. During 0.4 the workspace version is `0.4.0-dev`.
