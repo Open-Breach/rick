@@ -267,10 +267,15 @@ pub struct Dispatched {
     pub pane: PaneId,
 }
 
+/// A notice at the top right of a window.
 struct Toast {
     level: Level,
     text: String,
-    until: Instant,
+    /// When it leaves by itself; an error stays until it is dismissed.
+    until: Option<Instant>,
+    /// The window it is shown in — the one the user acted in — or the
+    /// window in front when it is tied to none.
+    window: Option<WindowId>,
 }
 
 /// A text an action asked the host to show.
@@ -880,6 +885,9 @@ pub struct RickUi {
     requests: Vec<Request>,
     dispatched: VecDeque<Dispatched>,
     toasts: Vec<Toast>,
+    /// The window of the pane a job that just failed was started from:
+    /// where the notice that follows is shown.
+    failed_in: Option<WindowId>,
     dialog: Option<Dialog>,
     name_prompt: Option<NamePrompt>,
     settings: settings_ui::SettingsWindow,
@@ -1083,8 +1091,13 @@ fn window_control(ui: &mut egui::Ui, glyph: &str, name: &str, on: Option<bool>) 
     });
     response.on_hover_text(name)
 }
-/// How long a notification stays.
+/// How long a notice that is not an error stays.
 const TOAST_FOR: Duration = Duration::from_secs(5);
+/// The width a notice's text wraps at.
+const TOAST_WIDTH: f32 = 340.0;
+/// The gap between the notices and the title row above them, and the
+/// window's edge at their right.
+const TOAST_GAP: f32 = 8.0;
 /// How long a `SelectNamed` waits for its entry to be listed.
 const SELECT_FOR: Duration = Duration::from_secs(5);
 
@@ -1166,6 +1179,7 @@ impl RickUi {
             requests: Vec::new(),
             dispatched: VecDeque::new(),
             toasts: Vec::new(),
+            failed_in: None,
             dialog: None,
             name_prompt: None,
             settings: settings_ui::SettingsWindow::default(),
@@ -1670,20 +1684,40 @@ impl RickUi {
     }
 
     fn toast(&mut self, level: Level, text: impl Into<String>) {
+        self.toast_in(level, text, None);
+    }
+
+    /// A notice in `window`, or in the window in front. An error stays
+    /// until it is dismissed, so it is never missed; any other notice
+    /// leaves by itself after [`TOAST_FOR`] (SPEC.md *Operations*).
+    fn toast_in(&mut self, level: Level, text: impl Into<String>, window: Option<WindowId>) {
+        let until = (level != Level::Error).then(|| Instant::now() + TOAST_FOR);
         self.toasts.push(Toast {
             level,
             text: text.into(),
-            until: Instant::now() + TOAST_FOR,
+            until,
+            window,
         });
     }
 
     fn absorb(&mut self, events: Vec<Event>) {
+        // A failed job and its notice come in one batch.
+        self.failed_in = None;
         for event in events {
             match event {
                 Event::Thumbnail { id, size, frame } => {
                     self.thumbnails.arrived(&self.ctx, id, size, frame);
                 }
-                Event::Notify { level, text } => self.toast(level, text),
+                Event::JobFailed { pane, .. } => {
+                    // The notice that follows is shown where the user
+                    // acted: in the window of the pane the job was
+                    // started from.
+                    self.failed_in = pane.and_then(|pane| self.app.model().window_of(pane));
+                }
+                Event::Notify { level, text } => {
+                    let window = self.failed_in.take().filter(|_| level == Level::Error);
+                    self.toast_in(level, text, window);
+                }
                 Event::Activate { window, token } => self.activate(window, token.as_deref()),
                 Event::Properties(info) => self.properties.open(*info),
                 Event::PluginInstalled { path } => self.extensions.installed(path),
@@ -3880,7 +3914,7 @@ impl RickUi {
         if !side.visible {
             if jobs {
                 let mut collapsed = w.drawer_collapsed;
-                let height = Operations::height(self.app.model(), collapsed);
+                let height = self.operations.height(self.app.model(), collapsed);
                 egui::Panel::bottom(egui::Id::new(("operations", window.0)))
                     .exact_size(height)
                     .frame(egui::Frame::NONE)
@@ -3910,7 +3944,7 @@ impl RickUi {
             .show(ui, |ui| {
                 let panel_rect = ui.max_rect();
                 let height = if jobs {
-                    Operations::height(self.app.model(), w.drawer_collapsed)
+                    self.operations.height(self.app.model(), w.drawer_collapsed)
                 } else {
                     0.0
                 };
@@ -4290,29 +4324,90 @@ impl RickUi {
         }
     }
 
-    fn show_toasts(&mut self, ctx: &egui::Context) {
+    /// The notices of `window` at its top right, under the title row: the
+    /// ones tied to it and, when it is the window in `front`, the ones
+    /// tied to none or to a window that is gone. A notice carries its
+    /// whole text, wrapped and never cut; an error has a close button and
+    /// stays until that is pressed.
+    fn show_toasts(&mut self, ctx: &egui::Context, window: WindowId, front: bool) {
         let now = Instant::now();
-        self.toasts.retain(|t| t.until > now);
-        if self.toasts.is_empty() {
+        self.toasts
+            .retain(|t| t.until.is_none_or(|until| until > now));
+        let shown: Vec<usize> = self
+            .toasts
+            .iter()
+            .enumerate()
+            .filter(|(_, toast)| match toast.window {
+                Some(of) if self.windows.contains_key(&of) => of == window,
+                _ => front,
+            })
+            .map(|(index, _)| index)
+            .collect();
+        if shown.is_empty() {
             return;
         }
-        egui::Area::new(egui::Id::new("toasts"))
-            .anchor(egui::Align2::RIGHT_TOP, egui::vec2(-12.0, 40.0))
+        let scheme = crate::theme::scheme_of(ctx);
+        // Under the title row, at the right of what the window draws.
+        let content = self
+            .windows
+            .get(&window)
+            .and_then(|w| w.content)
+            .unwrap_or_else(|| ctx.content_rect());
+        let corner = egui::pos2(
+            content.right() - TOAST_GAP,
+            content.top() + crate::theme::metrics(ctx).titlebar_height + TOAST_GAP,
+        );
+        let mut dismissed = None;
+        egui::Area::new(egui::Id::new(("toasts", window.0)))
+            .pivot(egui::Align2::RIGHT_TOP)
+            .fixed_pos(corner)
             .order(egui::Order::Foreground)
-            .interactable(false)
             .show(ctx, |ui| {
-                for toast in &self.toasts {
+                for index in shown {
+                    let toast = &self.toasts[index];
+                    let sticky = toast.until.is_none();
                     egui::Frame::popup(ui.style()).show(ui, |ui| {
-                        let color = match toast.level {
-                            Level::Info => ui.visuals().text_color(),
-                            Level::Warning => ui.visuals().warn_fg_color,
-                            Level::Error => ui.visuals().error_fg_color,
+                        let colour = match toast.level {
+                            Level::Info => scheme.text_primary,
+                            Level::Warning => scheme.status_warning,
+                            Level::Error => scheme.status_danger,
                         };
-                        ui.colored_label(color, &toast.text);
+                        ui.horizontal_top(|ui| {
+                            ui.spacing_mut().item_spacing.x = 8.0;
+                            ui.allocate_ui(egui::vec2(TOAST_WIDTH, 0.0), |ui| {
+                                ui.set_max_width(TOAST_WIDTH);
+                                ui.add(
+                                    egui::Label::new(
+                                        egui::RichText::new(&toast.text).color(colour),
+                                    )
+                                    .wrap(),
+                                );
+                            });
+                            if sticky {
+                                let (rect, _) = ui.allocate_exact_size(
+                                    egui::vec2(20.0, 20.0),
+                                    egui::Sense::hover(),
+                                );
+                                let close = crate::properties::icon_button(
+                                    ui,
+                                    rect,
+                                    icons::CLOSE,
+                                    &t!("jobs-dismiss"),
+                                );
+                                if close.clicked() {
+                                    dismissed = Some(index);
+                                }
+                            }
+                        });
                     });
                 }
             });
-        ctx.request_repaint_after(Duration::from_millis(250));
+        if let Some(index) = dismissed {
+            self.toasts.remove(index);
+        }
+        if self.toasts.iter().any(|toast| toast.until.is_some()) {
+            ctx.request_repaint_after(Duration::from_millis(250));
+        }
     }
 }
 
@@ -4937,9 +5032,11 @@ impl RickUi {
             self.hash.show(ctx, &self.app, &mut self.requests);
             self.integration.show(ctx, &self.app, &mut self.requests);
             self.show_texts(ctx);
-            self.show_toasts(ctx);
             self.apply_requests(ctx);
         }
+        // A notice is shown in the window it belongs to, in front or not.
+        let front = self.is_front(ctx, window);
+        self.show_toasts(ctx, window, front);
 
         // The closed hand for as long as a pane or a tab is dragged,
         // whatever the cursor is over and in whichever window: set last,

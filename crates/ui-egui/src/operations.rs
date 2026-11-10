@@ -94,6 +94,9 @@ impl Rate {
 pub struct Operations {
     rates: HashMap<JobId, Rate>,
     done_at: HashMap<JobId, Instant>,
+    /// The failed jobs whose error is unfolded to its whole text, with
+    /// the height their row took in the last frame.
+    expanded: HashMap<JobId, f32>,
     /// How many times the rows were drawn, for the repaint tests.
     paints: u64,
 }
@@ -260,18 +263,20 @@ impl Operations {
     }
 
     /// The height the rows take: a block per running job, the header and
-    /// a row per waiting job, a compact row per finished one.
-    fn rows_height(model: &Model) -> f32 {
+    /// a row per waiting job, a compact row per finished one — taller for
+    /// a failed job whose error is unfolded.
+    fn rows_height(&self, model: &Model) -> f32 {
         let mut height = 0.0;
         let mut waiting = false;
-        for job in model.jobs.values() {
+        for (id, job) in &model.jobs {
             height += match job.state {
                 JobState::Running(_) => RUNNING,
                 JobState::Waiting(_) => {
                     waiting = true;
                     WAITING
                 }
-                JobState::Done | JobState::Cancelled | JobState::Failed(_) => COMPACT,
+                JobState::Failed(_) => self.expanded.get(id).copied().unwrap_or(COMPACT),
+                JobState::Done | JobState::Cancelled => COMPACT,
             };
         }
         if waiting {
@@ -284,10 +289,10 @@ impl Operations {
     /// while collapsed, else the summary and the rows up to the cap of
     /// [`ROWS_CAP`] running blocks, beyond which the rows scroll.
     #[must_use]
-    pub fn height(model: &Model, collapsed: bool) -> f32 {
+    pub fn height(&self, model: &Model, collapsed: bool) -> f32 {
         let mut height = PAD + SUMMARY + PAD;
         if !collapsed {
-            let rows = Self::rows_height(model);
+            let rows = self.rows_height(model);
             if rows > 0.0 {
                 height += rows.min(ROWS_CAP as f32 * RUNNING) + PAD;
             }
@@ -469,6 +474,7 @@ impl Operations {
         }
         self.rates.retain(|id, _| model.jobs.contains_key(id));
         self.done_at.retain(|id, _| model.jobs.contains_key(id));
+        self.expanded.retain(|id, _| model.jobs.contains_key(id));
     }
 
     /// A running job under a hairline: its icon, its title with pause and
@@ -658,7 +664,11 @@ impl Operations {
 
     /// A finished job as a compact row with its result, gone after
     /// [`DONE_FOR`] or a click on its button; a failed job with its error in
-    /// `status/danger` until dismissed.
+    /// `status/danger` until dismissed. An error is never lost to the
+    /// ellipsis: at rest the row shows it on one line, cut when it is
+    /// long, with the whole text as its tooltip, and a click on the row
+    /// unfolds it to the whole text, wrapped over as many lines as it
+    /// needs, and folds it again.
     fn compact_row(
         &mut self,
         ui: &mut egui::Ui,
@@ -668,15 +678,37 @@ impl Operations {
         requests: &mut Vec<Request>,
     ) {
         let scheme = theme::scheme(ui);
-        let (outer, _) =
-            ui.allocate_exact_size(vec2(ui.available_width(), COMPACT), Sense::hover());
-        let rect = outer.shrink2(vec2(PAD, 0.0));
-        let line_y = rect.center().y;
         let (glyph, result, colour) = match &info.state {
             JobState::Failed(error) => (icons::FAILED, error.clone(), scheme.status_danger),
             JobState::Cancelled => (icons::CLOSE, t!("jobs-cancelled"), scheme.text_secondary),
             _ => (icons::DONE, t!("jobs-done"), scheme.text_secondary),
         };
+        let failed = matches!(info.state, JobState::Failed(_));
+        let whole = format!("{} · {result}", info.name);
+        // The text has the row from the icon to the dismiss button.
+        let left = PAD + ICON + 10.0;
+        let right = PAD + ROUND + 8.0;
+        let text_width = (ui.available_width() - left - right).max(0.0);
+        let unfolded = (failed && self.expanded.contains_key(&id)).then(|| {
+            let mut job = egui::text::LayoutJob::simple(
+                whole.clone(),
+                FontId::proportional(TEXT_SECONDARY),
+                colour,
+                text_width,
+            );
+            job.wrap.break_anywhere = false;
+            ui.painter().layout_job(job)
+        });
+        let height = unfolded
+            .as_ref()
+            .map_or(COMPACT, |galley| (galley.size().y + 10.0).max(COMPACT));
+        if unfolded.is_some() {
+            self.expanded.insert(id, height);
+        }
+        let (outer, _) = ui.allocate_exact_size(vec2(ui.available_width(), height), Sense::hover());
+        let rect = outer.shrink2(vec2(PAD, 0.0));
+        // The icon and the button stay on the first line.
+        let line_y = rect.top() + COMPACT / 2.0;
         ui.painter().text(
             pos2(rect.left() + ICON / 2.0, line_y),
             Align2::CENTER_CENTER,
@@ -694,32 +726,47 @@ impl Operations {
             true,
         )
         .clicked();
-        let title_x = rect.left() + ICON + 10.0;
-        let mut text = egui::text::LayoutJob::default();
-        text.append(
-            &info.name,
-            0.0,
-            egui::TextFormat::simple(FontId::proportional(TEXT_SECONDARY), scheme.text_secondary),
+        let text_rect = Rect::from_min_max(
+            pos2(outer.left() + left, rect.top()),
+            pos2(outer.left() + left + text_width, rect.bottom()),
         );
-        text.append(
-            &format!(" · {result}"),
-            0.0,
-            egui::TextFormat::simple(FontId::proportional(TEXT_DETAIL), colour),
-        );
-        placed_label(
-            ui,
-            Rect::from_min_max(
-                pos2(title_x, line_y - 9.0),
-                pos2(
-                    (dismiss_at.x - ROUND / 2.0 - 8.0).max(title_x),
-                    line_y + 9.0,
+        match unfolded {
+            Some(galley) => {
+                ui.painter()
+                    .galley(pos2(text_rect.left(), rect.top() + 5.0), galley, colour);
+            }
+            None => placed_label(
+                ui,
+                Rect::from_min_max(
+                    pos2(text_rect.left(), line_y - 9.0),
+                    pos2(text_rect.right(), line_y + 9.0),
                 ),
+                egui::RichText::new(&whole)
+                    .size(TEXT_SECONDARY)
+                    .color(colour),
             ),
-            egui::RichText::new(format!("{} · {result}", info.name))
-                .size(TEXT_SECONDARY)
-                .color(colour),
-        );
-        let gone = if matches!(info.state, JobState::Failed(_)) {
+        }
+        if failed {
+            // The whole row's text takes the click that unfolds it.
+            let open = self.expanded.contains_key(&id);
+            let response = ui
+                .interact(text_rect, ui.id().with(("error", id)), Sense::click())
+                .on_hover_cursor(egui::CursorIcon::PointingHand);
+            response.widget_info(|| {
+                egui::WidgetInfo::selected(egui::WidgetType::Button, true, open, whole.clone())
+            });
+            if response.clicked() {
+                if open {
+                    self.expanded.remove(&id);
+                } else {
+                    self.expanded.insert(id, COMPACT);
+                }
+            }
+            if !open {
+                response.on_hover_text(&whole);
+            }
+        }
+        let gone = if failed {
             dismiss
         } else {
             let at = *self.done_at.entry(id).or_insert(now);
@@ -772,7 +819,7 @@ mod tests {
             model::Settings::default(),
             types::Location::new(types::ProviderId("t"), "/"),
         );
-        let summary = Operations::height(&model, false);
+        let summary = Operations::default().height(&model, false);
         let close = |a: f32, b: f32| (a - b).abs() < 1e-3;
         assert!(close(summary, PAD + SUMMARY + PAD), "the summary alone");
         for i in 0..3 {
@@ -780,13 +827,13 @@ mod tests {
         }
         assert!(
             close(
-                Operations::height(&model, false),
+                Operations::default().height(&model, false),
                 summary + 3.0 * RUNNING + PAD
             ),
             "three blocks"
         );
         assert!(
-            close(Operations::height(&model, true), summary),
+            close(Operations::default().height(&model, true), summary),
             "collapsed to the summary"
         );
         for i in 3..20 {
@@ -794,7 +841,7 @@ mod tests {
         }
         assert!(
             close(
-                Operations::height(&model, false),
+                Operations::default().height(&model, false),
                 summary + ROWS_CAP as f32 * RUNNING + PAD
             ),
             "capped"
