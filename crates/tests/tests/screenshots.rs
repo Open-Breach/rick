@@ -2266,6 +2266,87 @@ fn screenshots_of_the_context_menus() {
     }
 }
 
+/// Issue 139, item 2: the application menu under its button — the three
+/// groups, an icon on every entry, the shortcut hints, the submenu carets
+/// and the version beside About Rick — with the pointer on New window as
+/// the Figma frame has it (`138:4031`, dark `138:4115`), in Light and Dark
+/// at both densities. The installer is loaded where it runs, for its
+/// submenu.
+#[test]
+#[ignore = "needs a wgpu adapter; CI runs it and uploads the images"]
+fn screenshots_of_the_app_menu() {
+    use egui_kittest::kittest::Queryable as _;
+    let (_dir, deep) = sample_tree();
+    let fake = Arc::new(Fake::new().unwrap_or_else(|e| panic!("{e}")));
+    let host = Arc::new(EguiHost::new());
+    let app = app::App::new(app::Config {
+        platform: fake.clone(),
+        ui: host.clone(),
+        extensions: vec![
+            Arc::new(ext_preview_text::TextPreview::new()),
+            Arc::new(ext_preview_image::ImagePreview::new()),
+            Arc::new(ext_installer::InstallerExtension::new()),
+        ],
+        config_dir: Some(fake.config_dir()),
+        start: Some(local(&deep)),
+    });
+    let mut harness = Harness::builder()
+        .with_size(egui::vec2(1280.0, 720.0))
+        .with_pixels_per_point(2.0)
+        .build_eframe(move |cc| RickUi::new(app, host, &cc.egui_ctx));
+    settle(&mut harness);
+    for (theme, density) in [
+        (Theme::Light, Density::Comfortable),
+        (Theme::Light, Density::Compact),
+        (Theme::Dark, Density::Comfortable),
+        (Theme::Dark, Density::Compact),
+    ] {
+        for change in [
+            SettingsChange::Theme(theme),
+            SettingsChange::Density(density),
+        ] {
+            harness
+                .state_mut()
+                .app_mut()
+                .handle(app::Command::Settings(change), &mut Vec::new());
+        }
+        settle(&mut harness);
+        let theme_name = match theme {
+            Theme::Light => "light",
+            Theme::Dark => "dark",
+            Theme::System => "system",
+        };
+        let density_name = match density {
+            Density::Comfortable => "comfortable",
+            Density::Compact => "compact",
+        };
+        harness.get_by_label("Menu").click();
+        harness.step();
+        harness.step();
+        let first = harness.get_by_label("New window").rect().center();
+        harness.event(egui::Event::PointerMoved(first));
+        harness.step();
+        harness.step();
+        shoot(
+            &mut harness,
+            &format!("app-menu-{theme_name}-{density_name}"),
+        );
+        // A submenu is a card of the same form: Layouts, opened by hover.
+        let layouts = harness.get_by_label_contains("Layouts").rect().center();
+        harness.event(egui::Event::PointerMoved(layouts));
+        for _ in 0..4 {
+            harness.step();
+        }
+        shoot(
+            &mut harness,
+            &format!("app-menu-layouts-{theme_name}-{density_name}"),
+        );
+        harness.key_press(egui::Key::Escape);
+        harness.step();
+        harness.step();
+    }
+}
+
 /// Issue 60: the install dialogue — the JetBrains-shaped archive with its
 /// icon, the effects card and the collapsed Advanced options — in Light
 /// and Dark at both densities, then with Advanced options expanded, and

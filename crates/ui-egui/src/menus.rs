@@ -11,86 +11,244 @@ use types::Entry;
 use egui::Align;
 
 use crate::icons;
-use crate::keys::Intent;
+use crate::keys::{Intent, KeyMap};
 use crate::shell::{PaneCx, Request};
-use crate::theme::{self, ICON, TEXT_BODY, TEXT_SECONDARY};
+use crate::theme::{self, ICON, Scheme, TEXT_BODY, TEXT_SECONDARY};
 
-/// The burger menu at the top of the window: New window, the Layouts
-/// submenu, the actions extensions put in the application menu
-/// ([`Action::app_menu`]) under one submenu per extension, Settings,
-/// Keyboard shortcuts, Extensions, About.
-pub fn burger(ui: &mut egui::Ui, requests: &mut Vec<Request>, pane: model::PaneId, app: &App) {
-    ui.menu_button(crate::icons::MENU, |ui| {
-        if ui.button(t!("menu-new-window")).clicked() {
-            requests.push(Request::Intent {
-                intent: Intent::NewWindow,
-                pane,
-            });
-            ui.close();
-        }
-        ui.menu_button(t!("menu-layouts"), |ui| {
-            layouts_menu(ui, requests, pane, app);
-        });
-        if let Some((ctx, groups)) = app_menu_actions(app, pane) {
-            ui.separator();
-            for (group, members) in groups {
-                match group {
-                    None => {
-                        for action in members {
-                            action_item(ui, requests, action.as_ref(), &ctx);
-                        }
-                    }
-                    Some(name) => {
-                        ui.menu_button(name, |ui| {
-                            for action in &members {
-                                action_item(ui, requests, action.as_ref(), &ctx);
-                            }
-                        });
-                    }
-                }
-            }
-        }
-        ui.separator();
-        if ui.button(t!("settings-ellipsis")).clicked() {
-            requests.push(Request::Intent {
-                intent: Intent::Settings,
-                pane,
-            });
-            ui.close();
-        }
-        if ui.button(t!("keyboard-shortcuts-ellipsis")).clicked() {
-            requests.push(Request::Intent {
-                intent: Intent::Shortcuts,
-                pane,
-            });
-            ui.close();
-        }
-        if ui.button(t!("extensions-ellipsis")).clicked() {
-            requests.push(Request::Intent {
-                intent: Intent::Extensions,
-                pane,
-            });
-            ui.close();
-        }
-        ui.separator();
-        if ui.button(t!("about-rick")).clicked() {
-            requests.push(Request::About);
-            ui.close();
-        }
+/// The application menu's least width (SPEC.md *Menu*); the card grows
+/// when an entry needs more.
+pub const APP_MENU_WIDTH: f32 = 280.0;
+/// The gap between the menu button and the card that opens under it.
+const APP_MENU_GAP: f32 = 6.0;
+/// The padding of the application menu's card inside its 1 px border, so
+/// that an entry starts 7 px from the card's edge.
+const APP_MENU_PAD: f32 = 6.0;
+/// The least content width of a submenu of the application menu.
+const SUBMENU_WIDTH: f32 = 200.0;
+
+/// The burger menu at the top of the window, the application menu
+/// (SPEC.md *Menu*): the menu button, a tool button, and under it — left
+/// edges aligned, 6 px below — a card in the form of the other menus. Three
+/// groups: New window, the Layouts submenu and one submenu per extension
+/// that put actions in the application menu ([`Action::app_menu`]);
+/// Settings, Keyboard shortcuts and Extensions; About Rick with `version`
+/// at its right. Every entry has an icon, and its hint is the chord the
+/// keymap binds to it, nothing when it is unbound.
+pub fn burger(
+    ui: &mut egui::Ui,
+    requests: &mut Vec<Request>,
+    pane: model::PaneId,
+    app: &App,
+    keys: &KeyMap,
+    version: &str,
+) {
+    let scheme = theme::scheme(ui);
+    let metrics = theme::metrics(ui.ctx());
+    let size = metrics.button_size;
+    let (rect, response) = ui.allocate_exact_size(egui::vec2(size, size), egui::Sense::click());
+    let name = t!("menu-application-menu");
+    let spoken = name.clone();
+    response
+        .widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, spoken.clone()));
+    let open = egui::Popup::is_id_open(ui.ctx(), egui::Popup::default_response_id(&response));
+    // A tool button: no frame at rest, `bg/subtle` under the pointer,
+    // `bg/active` while pressed and while its menu is open.
+    let fill = if open || response.is_pointer_button_down_on() {
+        Some(scheme.bg_active)
+    } else if response.hovered() {
+        Some(scheme.bg_subtle)
+    } else {
+        None
+    };
+    if let Some(fill) = fill {
+        ui.painter()
+            .rect_filled(rect, metrics.corner_radius(), fill);
+    }
+    if response.has_focus() {
+        ui.painter().rect_stroke(
+            rect,
+            metrics.corner_radius(),
+            scheme.focus_ring(),
+            egui::StrokeKind::Inside,
+        );
+    }
+    ui.painter().text(
+        rect.center(),
+        egui::Align2::CENTER_CENTER,
+        icons::MENU,
+        egui::FontId::proportional(ICON),
+        scheme.icon_default,
+    );
+    let response = if open {
+        response
+    } else {
+        response.on_hover_text(name)
+    };
+    egui::Popup::menu(&response)
+        .gap(APP_MENU_GAP)
+        .style(app_menu_style)
+        .show(|ui| app_menu(ui, requests, pane, app, keys, version));
+}
+
+/// One group of the application menu's extension actions: the core ones
+/// (`None`) or an extension's, by its name.
+type AppMenuGroup = (Option<&'static str>, Vec<Arc<dyn Action>>);
+/// The extension actions of the application menu with the context they
+/// run on, as [`app_menu_actions`] gives them.
+type AppMenuActions = (ActionCtx, Vec<AppMenuGroup>);
+
+/// The card of the application menu: its three groups.
+fn app_menu(
+    ui: &mut egui::Ui,
+    requests: &mut Vec<Request>,
+    pane: model::PaneId,
+    app: &App,
+    keys: &KeyMap,
+    version: &str,
+) {
+    let extensions = app_menu_actions(app, pane);
+    fit_app_menu(ui, keys, version, extensions.as_ref());
+
+    // Window and tools.
+    intent_item(
+        ui,
+        requests,
+        pane,
+        keys,
+        Some(icons::NEW_WINDOW),
+        &t!("menu-new-window"),
+        Intent::NewWindow,
+    );
+    submenu_in(ui, Some(icons::LAYOUTS), &t!("menu-layouts"), APP, |ui| {
+        layouts_menu(ui, requests, pane, app, keys);
     });
+    if let Some(extensions) = extensions {
+        extension_items(ui, requests, extensions);
+    }
+
+    // Configuration.
+    separator(ui);
+    for (icon, label, intent) in [
+        (icons::SETTINGS, t!("settings"), Intent::Settings),
+        (
+            icons::SHORTCUTS,
+            t!("keyboard-shortcuts"),
+            Intent::Shortcuts,
+        ),
+        (icons::PLUGIN, t!("extensions"), Intent::Extensions),
+    ] {
+        intent_item(ui, requests, pane, keys, Some(icon), &label, intent);
+    }
+
+    // About, with the version where a shortcut would be.
+    separator(ui);
+    let label = t!("about-rick");
+    let about = entry_button(
+        ui,
+        Some(icons::INFO),
+        &label,
+        Some(version.to_owned()),
+        false,
+        None,
+        APP,
+    );
+    if labelled(ui.add(about), &label).clicked() {
+        requests.push(Request::About);
+        ui.close();
+    }
+}
+
+/// Sets the application menu's width from what it will list: its own six
+/// entries with their hints, the version, and the extensions' entries.
+fn fit_app_menu(
+    ui: &mut egui::Ui,
+    keys: &KeyMap,
+    version: &str,
+    extensions: Option<&AppMenuActions>,
+) {
+    let own = [
+        (t!("menu-new-window"), keys.text_for(Intent::NewWindow)),
+        (t!("settings"), keys.text_for(Intent::Settings)),
+        (t!("keyboard-shortcuts"), keys.text_for(Intent::Shortcuts)),
+        (t!("extensions"), keys.text_for(Intent::Extensions)),
+    ];
+    let layouts = t!("menu-layouts");
+    let about = t!("about-rick");
+    let groups = extensions.map(|(_, groups)| groups.as_slice());
+    let actions: Vec<String> = groups
+        .into_iter()
+        .flatten()
+        .filter(|(group, _)| group.is_none())
+        .flat_map(|(_, members)| members.iter().map(|action| action.label()))
+        .collect();
+    let entries = own
+        .iter()
+        .map(|(label, hint)| (label.as_str(), Trailing::of(hint.as_deref())))
+        .chain([
+            (layouts.as_str(), Trailing::Caret),
+            (about.as_str(), Trailing::Hint(version)),
+        ])
+        .chain(actions.iter().map(|l| (l.as_str(), Trailing::None)))
+        .chain(
+            groups
+                .into_iter()
+                .flatten()
+                .filter_map(|(group, _)| group.map(|name| (name, Trailing::Caret))),
+        );
+    fit_width(ui, APP_MENU_WIDTH - 2.0 * (APP_MENU_PAD + 1.0), entries);
+}
+
+/// The extensions' part of the application menu: the core-grouped actions
+/// as entries, then one submenu per extension with its group's icon.
+fn extension_items(ui: &mut egui::Ui, requests: &mut Vec<Request>, extensions: AppMenuActions) {
+    let (ctx, groups) = extensions;
+    for (group, members) in groups {
+        let Some(name) = group else {
+            for action in members {
+                action_item(ui, requests, action.as_ref(), &ctx);
+            }
+            continue;
+        };
+        let icon = group_icon(name).unwrap_or(icons::PLUGIN);
+        submenu_in(ui, Some(icon), name, APP, |ui| {
+            let labels: Vec<String> = members.iter().map(|a| a.label()).collect();
+            fit_width(
+                ui,
+                SUBMENU_WIDTH,
+                labels.iter().map(|l| (l.as_str(), Trailing::None)),
+            );
+            for action in &members {
+                action_item(ui, requests, action.as_ref(), &ctx);
+            }
+        });
+    }
+}
+
+/// One entry of the application menu that queues an intent: its icon, its
+/// label and the chord the keymap binds to it.
+fn intent_item(
+    ui: &mut egui::Ui,
+    requests: &mut Vec<Request>,
+    pane: model::PaneId,
+    keys: &KeyMap,
+    icon: Option<&str>,
+    label: &str,
+    intent: Intent,
+) {
+    let row = entry_button(ui, icon, label, keys.text_for(intent), false, None, APP);
+    if labelled(ui.add(row), label).clicked() {
+        requests.push(Request::Intent { intent, pane });
+        ui.close();
+    }
 }
 
 /// The actions that asked for the application menu and apply to the
 /// focused pane, with the context they run on: the core ones first, then
 /// one group per extension, by name. `None` when the pane shows no
 /// entries (a console, a comparison) or nothing applies.
-#[allow(clippy::type_complexity)]
-fn app_menu_actions(
-    app: &App,
-    pane: model::PaneId,
-) -> Option<(ActionCtx, Vec<(Option<&'static str>, Vec<Arc<dyn Action>>)>)> {
+fn app_menu_actions(app: &App, pane: model::PaneId) -> Option<AppMenuActions> {
     let ctx = app.action_ctx(pane, Invocation::Menu)?;
-    let mut groups: Vec<(Option<&'static str>, Vec<Arc<dyn Action>>)> = Vec::new();
+    let mut groups: Vec<AppMenuGroup> = Vec::new();
     for action in app.registry().actions() {
         if !action.app_menu() || action.availability(&ctx) != Availability::Enabled {
             continue;
@@ -115,7 +273,17 @@ fn action_item(
     action: &dyn Action,
     ctx: &ActionCtx,
 ) {
-    if ui.button(action.label()).clicked() {
+    let label = action.label();
+    let row = entry_button(
+        ui,
+        action_icon(action.id().0),
+        &label,
+        None,
+        false,
+        None,
+        APP,
+    );
+    if labelled(ui.add(row), &label).clicked() {
         requests.push(Request::RunAction {
             action: action.id(),
             ctx: ctx.clone(),
@@ -126,62 +294,101 @@ fn action_item(
 
 /// The Layouts submenu: "Continue where I left off" first, then one
 /// submenu per saved layout with Switch, Set as start layout, Rename and
-/// Delete, then Save layout as….
-fn layouts_menu(ui: &mut egui::Ui, requests: &mut Vec<Request>, pane: model::PaneId, app: &App) {
-    ui.set_min_width(200.0);
-    if ui.button(t!("continue-where-i-left-off")).clicked() {
-        requests.push(Request::Intent {
-            intent: Intent::LastSession,
-            pane,
-        });
-        ui.close();
-    }
+/// Delete, then Save layout as…. Its rows have the form of the menu's.
+fn layouts_menu(
+    ui: &mut egui::Ui,
+    requests: &mut Vec<Request>,
+    pane: model::PaneId,
+    app: &App,
+    keys: &KeyMap,
+) {
     let start = app.model().settings.session.start_layout();
-    for (index, name) in app.layouts().iter().enumerate() {
+    let titles: Vec<String> = app
+        .layouts()
+        .iter()
+        .map(|name| {
+            if start == Some(name.as_str()) {
+                format!("{name} (start layout)")
+            } else {
+                name.clone()
+            }
+        })
+        .collect();
+    let last_session = t!("continue-where-i-left-off");
+    let save_as = t!("menu-save-layout-as");
+    let hints = [
+        keys.text_for(Intent::LastSession),
+        keys.text_for(Intent::SaveLayout),
+    ];
+    fit_width(
+        ui,
+        SUBMENU_WIDTH,
+        [
+            (last_session.as_str(), Trailing::of(hints[0].as_deref())),
+            (save_as.as_str(), Trailing::of(hints[1].as_deref())),
+        ]
+        .into_iter()
+        .chain(titles.iter().map(|t| (t.as_str(), Trailing::Caret))),
+    );
+    intent_item(
+        ui,
+        requests,
+        pane,
+        keys,
+        None,
+        &last_session,
+        Intent::LastSession,
+    );
+    for (index, (name, title)) in app.layouts().iter().zip(&titles).enumerate() {
         let Ok(index) = u16::try_from(index) else {
             break;
         };
-        let title = if start == Some(name.as_str()) {
-            format!("{name} (start layout)")
-        } else {
-            name.clone()
-        };
-        ui.menu_button(title, |ui| {
-            if ui.button(t!("menu-switch")).clicked() {
-                requests.push(Request::Intent {
-                    intent: Intent::Layout(index),
-                    pane,
-                });
-                ui.close();
-            }
+        submenu_in(ui, None, title, APP, |ui| {
+            let labels = [
+                t!("menu-switch"),
+                t!("menu-set-as-start-layout"),
+                t!("rename-ellipsis"),
+                t!("delete"),
+            ];
+            fit_width(
+                ui,
+                SUBMENU_WIDTH,
+                labels.iter().map(|l| (l.as_str(), Trailing::None)),
+            );
+            intent_item(
+                ui,
+                requests,
+                pane,
+                keys,
+                None,
+                &t!("menu-switch"),
+                Intent::Layout(index),
+            );
             let is_start = start == Some(name.as_str());
-            if ui
-                .add_enabled(!is_start, egui::Button::new(t!("menu-set-as-start-layout")))
-                .clicked()
-            {
+            let label = t!("menu-set-as-start-layout");
+            let row = entry_button(ui, None, &label, None, false, None, APP);
+            if labelled(ui.add_enabled(!is_start, row), &label).clicked() {
                 requests.push(Request::Command(Command::Settings(
                     model::SettingsChange::StartLayout(Some(name.clone())),
                 )));
                 ui.close();
             }
-            if ui.button(t!("rename-ellipsis")).clicked() {
+            let label = t!("rename-ellipsis");
+            let row = entry_button(ui, None, &label, None, false, None, APP);
+            if labelled(ui.add(row), &label).clicked() {
                 requests.push(Request::RenameLayout(name.clone()));
                 ui.close();
             }
-            if ui.button(t!("delete")).clicked() {
+            let label = t!("delete");
+            let row = entry_button(ui, None, &label, None, false, None, APP);
+            if labelled(ui.add(row), &label).clicked() {
                 requests.push(Request::Command(Command::DeleteLayout(name.clone())));
                 ui.close();
             }
         });
     }
-    ui.separator();
-    if ui.button(t!("menu-save-layout-as")).clicked() {
-        requests.push(Request::Intent {
-            intent: Intent::SaveLayout,
-            pane,
-        });
-        ui.close();
-    }
+    separator(ui);
+    intent_item(ui, requests, pane, keys, None, &save_as, Intent::SaveLayout);
 }
 
 /// The action context for the pane: the selection, or `only` when the menu
@@ -213,6 +420,82 @@ const MENU_PAD: f32 = 7.0;
 const ENTRY_PAD_X: f32 = 10.0;
 /// The gap between an entry's icon slot and its label.
 const ICON_GAP: f32 = 10.0;
+/// The least room between a label and the hint or caret at its right.
+const HINT_GAP: f32 = 24.0;
+
+/// The form of a menu's rows: the context menus' or the application
+/// menu's.
+#[derive(Clone, Copy)]
+struct Rows {
+    /// An entry's height.
+    height: f32,
+    /// Whether the card is the context menus' 260 px one; the application
+    /// menu's cards are fitted to their entries ([`fit_width`]).
+    fixed: bool,
+}
+
+/// The context menus: 30 px entries in a 260 px card.
+const CONTEXT: Rows = Rows {
+    height: ENTRY_HEIGHT,
+    fixed: true,
+};
+/// The application menu: 32 px entries, as the View options menu has, in
+/// a card that is at least [`APP_MENU_WIDTH`] wide.
+const APP: Rows = Rows {
+    height: 32.0,
+    fixed: false,
+};
+
+/// What an entry shows at its right edge, for [`fit_width`].
+#[derive(Clone, Copy)]
+enum Trailing<'a> {
+    /// Nothing.
+    None,
+    /// A shortcut hint, or the version beside About Rick.
+    Hint(&'a str),
+    /// A submenu's caret.
+    Caret,
+}
+
+impl<'a> Trailing<'a> {
+    /// A hint when there is one, nothing otherwise.
+    fn of(hint: Option<&'a str>) -> Self {
+        hint.map_or(Trailing::None, Trailing::Hint)
+    }
+}
+
+/// Sets a card's content width to its widest entry, and to `least` at
+/// least: the padding, the icon slot, the label and what stands at the
+/// right with its gap. The rows fill that width, so a card is as wide as
+/// its entries need and no wider.
+fn fit_width<'a>(
+    ui: &mut egui::Ui,
+    least: f32,
+    entries: impl IntoIterator<Item = (&'a str, Trailing<'a>)>,
+) {
+    let measure = |ui: &egui::Ui, text: &str, size: f32| {
+        ui.painter()
+            .layout_no_wrap(
+                text.to_owned(),
+                egui::FontId::proportional(size),
+                egui::Color32::PLACEHOLDER,
+            )
+            .size()
+            .x
+    };
+    let mut width = least;
+    for (label, trailing) in entries {
+        let right = match trailing {
+            Trailing::None => 0.0,
+            Trailing::Hint(hint) => HINT_GAP + measure(ui, hint, TEXT_SECONDARY),
+            Trailing::Caret => HINT_GAP + ICON,
+        };
+        let row = 2.0 * ENTRY_PAD_X + ICON + ICON_GAP + measure(ui, label, TEXT_BODY) + right;
+        width = width.max(row.ceil());
+    }
+    ui.set_min_width(width);
+    ui.set_max_width(width);
+}
 
 /// The style of a menu card: `bg/card` with the rows padding themselves,
 /// the hovered entry `bg/selected-soft`.
@@ -221,6 +504,37 @@ pub fn menu_style(style: &mut egui::Style) {
     style.spacing.menu_width = CONTEXT_MENU_WIDTH - 2.0 * MENU_PAD;
     style.spacing.item_spacing = egui::Vec2::ZERO;
     style.spacing.button_padding = egui::vec2(ENTRY_PAD_X, 0.0);
+}
+
+/// The style of the application menu's card and of its submenus: a
+/// `bg/card` card whose rows pad themselves, the entry under the pointer
+/// and the row of an open submenu `bg/selected-soft` with no outline.
+pub fn app_menu_style(style: &mut egui::Style) {
+    let scheme = if style.visuals.dark_mode {
+        &Scheme::DARK
+    } else {
+        &Scheme::LIGHT
+    };
+    style.spacing.menu_margin = egui::Margin::same(APP_MENU_PAD as i8);
+    style.spacing.item_spacing = egui::Vec2::ZERO;
+    style.spacing.button_padding = egui::vec2(ENTRY_PAD_X, 0.0);
+    style.visuals.window_fill = scheme.bg_card;
+    let widgets = &mut style.visuals.widgets;
+    for state in [&mut widgets.hovered, &mut widgets.active, &mut widgets.open] {
+        state.weak_bg_fill = scheme.bg_selected_soft;
+        state.bg_fill = scheme.bg_selected_soft;
+        state.bg_stroke = egui::Stroke::NONE;
+        state.expansion = 0.0;
+    }
+}
+
+/// Gives a row its accessible name: the label alone, without the hint at
+/// its right.
+fn labelled(response: egui::Response, label: &str) -> egui::Response {
+    let spoken = label.to_owned();
+    response
+        .widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, spoken.clone()));
+    response
 }
 
 /// Fixes a menu's content width to the card's.
@@ -340,11 +654,8 @@ fn entry(
     shortcut: Option<String>,
     destructive: bool,
 ) -> egui::Response {
-    let response = ui.add(entry_button(ui, icon, label, shortcut, destructive, None));
-    let spoken = label.to_owned();
-    response
-        .widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, spoken.clone()));
-    response
+    let row = entry_button(ui, icon, label, shortcut, destructive, None, CONTEXT);
+    labelled(ui.add(row), label)
 }
 
 /// The button of an entry, for [`entry`] and for a submenu's row.
@@ -355,6 +666,7 @@ fn entry_button<'a>(
     shortcut: Option<String>,
     destructive: bool,
     right: Option<&str>,
+    rows: Rows,
 ) -> egui::Button<'a> {
     let scheme = theme::scheme(ui);
     let colour = if destructive {
@@ -395,7 +707,7 @@ fn entry_button<'a>(
     let mut button = egui::Button::new(job)
         .wrap_mode(egui::TextWrapMode::Truncate)
         .frame_when_inactive(false)
-        .min_size(egui::vec2(0.0, ENTRY_HEIGHT));
+        .min_size(egui::vec2(0.0, rows.height));
     if let Some(text) = shortcut {
         button = button.shortcut_text(
             egui::RichText::new(text)
@@ -422,11 +734,32 @@ fn submenu(
     label: &str,
     content: impl FnOnce(&mut egui::Ui),
 ) {
-    let button = entry_button(ui, icon, label, None, false, Some(icons::TREE_CLOSED));
+    submenu_in(ui, icon, label, CONTEXT, content);
+}
+
+/// [`submenu`] in the given row form: the context menus' card of fixed
+/// width, or the application menu's, whose content sets its own width
+/// with [`fit_width`].
+fn submenu_in(
+    ui: &mut egui::Ui,
+    icon: Option<&str>,
+    label: &str,
+    rows: Rows,
+    content: impl FnOnce(&mut egui::Ui),
+) {
+    let caret = Some(icons::TREE_CLOSED);
+    let button = entry_button(ui, icon, label, None, false, caret, rows);
+    let style: fn(&mut egui::Style) = if rows.fixed {
+        menu_style
+    } else {
+        app_menu_style
+    };
     let (response, _) = egui::containers::menu::SubMenuButton::from_button(button)
-        .config(egui::containers::menu::MenuConfig::new().style(menu_style))
+        .config(egui::containers::menu::MenuConfig::new().style(style))
         .ui(ui, |ui| {
-            card_width(ui);
+            if rows.fixed {
+                card_width(ui);
+            }
             content(ui);
         });
     let spoken = format!(

@@ -19,14 +19,12 @@ open-in-new-tab = In neuem Tab öffnen
 continue-where-i-left-off = Weitermachen, wo ich aufgehört habe
 properties = Eigenschaften
 settings = Einstellungen
-settings-ellipsis = Einstellungen…
 extensions = Erweiterungen
-extensions-ellipsis = Erweiterungen…
 keyboard-shortcuts = Tastenkürzel
-keyboard-shortcuts-ellipsis = Tastenkürzel…
 about-rick = Über Rick
 
 # Das Burger-Menü und die Layouts
+menu-application-menu = Menü
 menu-new-window = Neues Fenster
 menu-layouts = Layouts
 menu-switch = Wechseln
