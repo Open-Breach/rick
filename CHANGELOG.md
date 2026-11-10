@@ -113,6 +113,10 @@ open is in `QUESTIONS.md` 323 to 366. The rules went into SPEC.md first
   job's name and the whole text; an error notice stays until its close
   button is pressed. `Event::JobFailed` names the pane a failed job was
   started from (#169).
+- **Paste in the context menu** is always there where the folder can be
+  written to, greyed with *nothing to paste* until something is copied or
+  cut. On a folder it pastes into that folder, and *Paste as link* with it;
+  on the empty area into the folder the pane shows (issue 176, #179).
 - The workspace version is `0.4.0-dev` until 0.4.0 is tagged (#154).
 
 ### Fixed
@@ -130,6 +134,26 @@ open is in `QUESTIONS.md` 323 to 366. The rules went into SPEC.md first
   in the log at startup names the graphics backend, the adapter and the
   frame chosen. `frame` in the `[window]` table of `rick.toml` overrides
   the check: `auto` (the default), `shadow` or `plain` (#182).
+- **Copy, cut and paste by keyboard** work in the file list (issue 176). A
+  window delivers Mod+C, Mod+X and Mod+V as copy, cut and paste events, not
+  as key presses, and the paste event only when the clipboard holds text;
+  the list matched key presses alone, so the three chords did nothing in a
+  running Rick. They now go through the keymap like any key — Mod+Shift+C,
+  Mod+Alt+C and Mod+Shift+V with them — and a paste is taken at the release
+  of its key, whatever the clipboard holds. A text field keeps the chords
+  for its text. CI tier 2 drives the chords through a real window on Linux
+  (#179).
+- **A dialogue keeps the keyboard** (issue 177). Behind *File hashes* and
+  *Set up Rick on this system* the file list took every key: Escape cleared
+  its selection instead of closing the dialogue, and Delete would have
+  trashed the selected file. Escape now closes *File hashes*, with its
+  *Verify* field focused too, and cancels the job while the hashes are
+  still being computed (#183).
+- **Escape calls off Properties** that has not opened yet (issue 178). The
+  dialogue opens once its entry is read, which takes a moment on a slow or
+  remote volume; Escape pressed in between used to go to the list, and the
+  dialogue opened afterwards. An answer to a request that was called off,
+  or overtaken by a later one, is dropped — on a remote entry too (#185).
 - EXIF in the image preview shows only the tags Rick names and that have a
   real value, with the exposure as `1/120 s` and dates without seconds: a
   photo without GPS data has no GPS rows and no “NaN” (#162).
