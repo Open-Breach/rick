@@ -1290,10 +1290,13 @@ impl App {
         self.redo.last().map(|c| c.label())
     }
 
-    /// Whether a listing is still streaming or a job still running.
+    /// Whether a listing is still streaming or a job still running, the
+    /// decorators' jobs included (a Git status being read, for instance).
     #[must_use]
     pub fn is_busy(&self) -> bool {
-        self.live.values().any(|l| !l.complete) || !self.jobs.running().is_empty()
+        self.live.values().any(|l| !l.complete)
+            || !self.jobs.running().is_empty()
+            || !self.decor_jobs.running().is_empty()
     }
 
     /// The context an action gets for `pane`: its location and selection,
