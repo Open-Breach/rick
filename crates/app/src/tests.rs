@@ -1143,12 +1143,19 @@ fn paste_conflicts_reach_the_model_and_the_answer_reaches_the_job() {
             .iter()
             .any(|e| matches!(e, Event::Conflict(c) if c.id == conflict.id))
     );
+    // The job's message travels on the progress channel, the conflict on
+    // the mailbox: the message may be a tick behind the conflict.
     assert!(
-        h.app
+        wait_until(&mut h, Duration::from_secs(5), |h| {
+            h
+            .app
             .model()
             .jobs
             .get(&conflict.job)
             .is_some_and(|j| matches!(&j.state, model::JobState::Running(types::Progress::Message(m)) if m.contains("exists")))
+        }),
+        "the job waits on the conflict: {:?}",
+        h.app.model().jobs.get(&conflict.job)
     );
     h.send(Command::ResolveConflict {
         id: conflict.id,
