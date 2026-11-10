@@ -214,9 +214,11 @@ impl SettingsWindow {
         }
     }
 
-    /// The two columns in `rect`; `rounded` rounds the column's corners,
-    /// as the embedded frame does.
-    fn content(
+    /// The two columns in `rect`; `rounded` says the settings are embedded
+    /// in the main window: the column's corners are rounded, as the
+    /// frame's are, and the page has the close button. A window of its own
+    /// passes `false`: it has its own close control.
+    pub fn content(
         &mut self,
         ui: &mut egui::Ui,
         rect: Rect,
@@ -261,7 +263,7 @@ impl SettingsWindow {
                 .max_rect(page)
                 .layout(egui::Layout::top_down(Align::Min)),
         );
-        if self.page_ui(&mut page_ui, app, requests) {
+        if self.page_ui(&mut page_ui, rounded, app, requests) {
             self.open = false;
         }
         ui.allocate_rect(rect, Sense::hover());
@@ -441,10 +443,18 @@ impl SettingsWindow {
         ui.allocate_rect(rect, Sense::hover());
     }
 
-    /// The right column: the page's title with the close button, then its
-    /// groups as cards in a scroll area. Returns whether the close button
-    /// was clicked.
-    fn page_ui(&mut self, ui: &mut egui::Ui, app: &App, requests: &mut Vec<Request>) -> bool {
+    /// The right column: the page's title, then its groups as cards in a
+    /// scroll area. A window of its own is closed with its own close
+    /// control, so the page draws no second one; only `embedded`, drawn
+    /// inside the main window, does the page keep its round close button,
+    /// being the only one there. Returns whether that button was clicked.
+    fn page_ui(
+        &mut self,
+        ui: &mut egui::Ui,
+        embedded: bool,
+        app: &App,
+        requests: &mut Vec<Request>,
+    ) -> bool {
         let scheme = theme::scheme(ui);
         let (head, _) = ui.allocate_exact_size(
             vec2(ui.available_width(), PAGE_PAD + CLOSE_BUTTON + 12.0),
@@ -468,10 +478,11 @@ impl SettingsWindow {
         );
         ui.interact(heading, ui.id().with("settings-page-title"), Sense::hover())
             .widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Label, true, name.clone()));
-        let close = close_button(
-            ui,
-            pos2(head.right() - PAGE_PAD - CLOSE_BUTTON / 2.0, title_y),
-        );
+        let close = embedded
+            && close_button(
+                ui,
+                pos2(head.right() - PAGE_PAD - CLOSE_BUTTON / 2.0, title_y),
+            );
         let groups = groups_of(&self.page, app);
         let search = self.search.clone();
         let page = self.page.clone();
