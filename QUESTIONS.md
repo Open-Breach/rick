@@ -3925,6 +3925,14 @@ Once answered, an entry keeps its number and gains a dated decision line.
     it as an *Install* row with a copy button and no *Download* button.
     GStreamer, which reports through the media previewer's *Playback*
     row and not as a missing library, is unchanged.
+    Decided (2026-11-10): yes, browser only, and the card also shows the
+    destination folder with an open-folder button (Serge). SPEC.md's
+    *Third-party libraries* has the *Destination* row now. Assumed with
+    it: the destination is the per-user plugins folder, which the
+    library search already includes and which never needs elevation, as
+    the folder beside the binary can; the button creates it when it is
+    missing. A library installed with a command keeps its *Install* row
+    and has no *Destination*.
 
 339. (GUI fixes, preview tables, 2026-11-10) The notes call the header —
     a 30 px `bg/panel` band with one hairline below and medium titles —
