@@ -1187,3 +1187,65 @@ fn cancelling_the_job_stops_git_and_removes_the_folder_it_had_created() {
     wait_for("the folder is removed", || !created.exists());
     assert_eq!(fs::read_dir(dir.path()).map(Iterator::count).ok(), Some(0));
 }
+
+#[test]
+fn a_cancelled_clone_never_removes_a_folder_that_was_there_before() {
+    let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+    // The folder the clone would create is there already, and empty, so
+    // git clones into it.
+    let there = dir.path().join("slow");
+    fs::create_dir(&there).unwrap_or_else(|e| panic!("{e}"));
+    let silent = std::net::TcpListener::bind("127.0.0.1:0").unwrap_or_else(|e| panic!("{e}"));
+    let port = silent.local_addr().unwrap_or_else(|e| panic!("{e}")).port();
+    let h = harness();
+    h.ui.type_text("url", &format!("git://127.0.0.1:{port}/team/slow.git"));
+    let action = h.action("git.clone");
+    let outcome = action
+        .run(ctx(dir.path(), &[]), &h.jobs, &h.ui)
+        .unwrap_or_else(|e| panic!("{e}"));
+    let ActionOutcome::Started(id) = outcome else {
+        panic!("no job: {outcome:?}");
+    };
+    wait_for("git works in the folder", || there.join(".git").exists());
+    assert!(h.jobs.cancel(id));
+    let events = h.finish();
+    assert!(
+        matches!(result_of(&events), Err(types::Error::Cancelled)),
+        "{events:?}"
+    );
+    // Long enough for a removal to have happened, had there been one: the
+    // clone's own folder is gone well within this in the test above.
+    std::thread::sleep(Duration::from_secs(2));
+    drop(silent);
+    assert!(there.is_dir(), "the folder that was there is still there");
+}
+
+#[test]
+fn only_a_folder_git_has_started_on_is_removed() {
+    let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+    // A folder under the clone's name that git never worked in: somebody
+    // else's, whatever is in it.
+    let foreign = dir.path().join("foreign");
+    fs::create_dir(&foreign).unwrap_or_else(|e| panic!("{e}"));
+    fs::write(foreign.join("mine.txt"), "mine").unwrap_or_else(|e| panic!("{e}"));
+    clone::remove_partial(&foreign);
+    assert_eq!(
+        fs::read_to_string(foreign.join("mine.txt")).ok().as_deref(),
+        Some("mine")
+    );
+    // An empty one, and a file of that name.
+    let empty = dir.path().join("empty");
+    fs::create_dir(&empty).unwrap_or_else(|e| panic!("{e}"));
+    clone::remove_partial(&empty);
+    assert!(empty.is_dir());
+    let file = dir.path().join("file");
+    fs::write(&file, "x").unwrap_or_else(|e| panic!("{e}"));
+    clone::remove_partial(&file);
+    assert!(file.is_file());
+    // What a stopped clone leaves: git's `.git` and what it had checked out.
+    let partial = dir.path().join("partial");
+    fs::create_dir_all(partial.join(".git/objects")).unwrap_or_else(|e| panic!("{e}"));
+    fs::write(partial.join("half.txt"), "half").unwrap_or_else(|e| panic!("{e}"));
+    clone::remove_partial(&partial);
+    assert!(!partial.exists());
+}

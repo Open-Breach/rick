@@ -270,8 +270,13 @@ fn note(line: &str, update: bool, said: &mut VecDeque<String>, progress: &Progre
     progress.report(Progress::Message(text));
 }
 
-/// Removes what a stopped clone left of the folder it had created.
-fn remove_partial(created: &Path) {
+/// Removes what a stopped clone left of the folder it had created: a
+/// folder that was not there before git started and that holds git's
+/// `.git` now. Anything else under that name is not the clone's and stays.
+pub(crate) fn remove_partial(created: &Path) {
+    if created.join(".git").symlink_metadata().is_err() {
+        return;
+    }
     for attempt in 1..=REMOVE_TRIES {
         // Gone, or not a folder: nothing of the clone's is left.
         if !created.symlink_metadata().is_ok_and(|meta| meta.is_dir()) {
