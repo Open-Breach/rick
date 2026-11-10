@@ -18,6 +18,8 @@
 
 pub mod datasets;
 pub mod parse;
+pub mod provider;
+mod versions;
 pub mod zfs;
 
 use std::sync::Arc;
@@ -27,6 +29,11 @@ use ext::{
 };
 use types::{Error, ExtId};
 
+pub use datasets::Datasets;
+pub use provider::{
+    PROVIDER_ID, Target, ZfsProvider, dataset_location, snapshot_location, target,
+    versions_location,
+};
 pub use zfs::{Output, ScriptedZfs, SystemZfs, Zfs, ZfsError};
 
 /// The extension id.
@@ -36,6 +43,7 @@ pub const ID: ExtId = ExtId("zfs");
 #[derive(Debug)]
 pub struct ZfsExtension {
     manifest: Manifest,
+    datasets: Arc<Datasets>,
 }
 
 impl Default for ZfsExtension {
@@ -48,6 +56,19 @@ impl ZfsExtension {
     /// The extension over the system's `zfs` command line.
     #[must_use]
     pub fn new() -> Self {
+        Self::with_zfs(Arc::new(SystemZfs::new()))
+    }
+
+    /// The extension over another `zfs`: a [`ScriptedZfs`] in tests.
+    #[must_use]
+    pub fn with_zfs(zfs: Arc<dyn Zfs>) -> Self {
+        Self::with_datasets(Arc::new(Datasets::new(zfs)))
+    }
+
+    /// The extension over a dataset cache of the caller's, which tests
+    /// build with a short TTL.
+    #[must_use]
+    pub fn with_datasets(datasets: Arc<Datasets>) -> Self {
         Self {
             manifest: Manifest {
                 id: ID,
@@ -62,7 +83,14 @@ impl ZfsExtension {
                 previews: &[],
                 commands: &[],
             },
+            datasets,
         }
+    }
+
+    /// The dataset cache every contribution shares.
+    #[must_use]
+    pub fn datasets(&self) -> &Arc<Datasets> {
+        &self.datasets
     }
 }
 
@@ -76,8 +104,12 @@ impl Extension for ZfsExtension {
             ("en", include_str!("../locales/en.ftl")),
             ("de", include_str!("../locales/de.ftl")),
         ]);
+        reg.provider(Arc::new(ZfsProvider::new(Arc::clone(&self.datasets))) as Arc<dyn ext::Provider>);
         Ok(())
     }
 }
 
 ext::plugin!(|| Arc::new(ZfsExtension::new()) as Arc<dyn Extension>);
+
+#[cfg(test)]
+mod tests;

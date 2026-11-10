@@ -16,7 +16,7 @@ types = { workspace = true }
 ext = { workspace = true }
 chrono = { workspace = true }
 futures = { workspace = true }
-tokio = { workspace = true, features = ["fs"] }
+tokio = { workspace = true, features = ["fs", "sync"] }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 
