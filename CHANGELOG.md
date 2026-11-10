@@ -56,7 +56,15 @@ the specification first (#174).
   `snapshot`, `rename` or `destroy`, under the polkit action
   `org.openbreach.rick.zfs` where it is installed (QUESTIONS.md 366). The
   info panel gets a ZFS section with the dataset, its snapshots and its
-  main properties with their source. Specified in `specs/ext-zfs.md`.
+  main properties with their source. *Edit ZFS properties…* changes
+  `compression`, `atime`, `relatime`, `copies`, `recordsize`, `quota`
+  and `refquota` of a dataset (OpenSpec change `add-zfs-property-editor`,
+  QUESTIONS.md 367): a form opened with the current values, *Inherit*
+  labelled with the value it gives, a preview of each change with the old
+  value's source that refuses a size it cannot read, a quota below the
+  space used or no change; applied as one job of `zfs set` then
+  `zfs inherit`, with the same permission rule. Specified in
+  `specs/ext-zfs.md`.
 - **Title bar colour.** The title row sits on a band of its own colour, the
   new token `bg/titlebar`, and the active workspace tab lifts out of it in
   `bg/pane`, with no accent line. *Settings → Appearance → Title bar colour*

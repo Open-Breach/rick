@@ -15,7 +15,9 @@ offering to run a command once more as administrator when ZFS refuses it
 for lack of permission: through the platform's elevation prompt, as one
 call of the privileged helper `rick-zfs` (module `helper`, binary in
 `rick`), which accepts only a snapshot's `snapshot`, `rename` or
-`destroy` and runs the system's `zfs`. *Restore* and *Destroy* ask first,
+`destroy` (and the property editor's `set` and `inherit`) and runs the
+system's `zfs`. *Edit ZFS properties…* (module `edit`) changes seven
+safe properties of a dataset through a form with a live preview. *Restore* and *Destroy* ask first,
 naming the snapshot. A Decorator adds a ZFS
 section with the dataset, its snapshots and its main properties to the
 info panel. Every call to ZFS goes through the `Zfs` runner trait, which

@@ -2,24 +2,24 @@
 
 ## Purpose
 
-People who keep their home or their data on OpenZFS take snapshots, by hand or through a timer, and then rarely look at them, because getting a file back means a shell, the hidden `.zfs/snapshot` folder and the exact name of the snapshot. `ext-zfs` lets Rick show those snapshots as folders, list the versions of one file across them, put a file back where it was, and create, rename and destroy snapshots, all without leaving the file manager.
+People who keep their home or their data on OpenZFS take snapshots, by hand or through a timer, and then rarely look at them, because getting a file back means a shell, the hidden `.zfs/snapshot` folder and the exact name of the snapshot. `ext-zfs` lets Rick show those snapshots as folders, list the versions of one file across them, put a file back where it was, create, rename and destroy snapshots, and change the few dataset properties that are safe to change on a running system, all without leaving the file manager.
 
-This file is the binding specification for the plugin; where it disagrees with `SPEC.md`, the question goes to `QUESTIONS.md`. It was built as the OpenSpec change `add-zfs-snapshots` and placed by QUESTIONS.md 364: its own plugin, not part of `ext-deco-fs`.
+This file is the binding specification for the plugin; where it disagrees with `SPEC.md`, the question goes to `QUESTIONS.md`. It was built as the OpenSpec changes `add-zfs-snapshots` and `add-zfs-property-editor` and placed by QUESTIONS.md 364: its own plugin, not part of `ext-deco-fs`.
 
 ## Decisions
 
 - One plugin crate, `ext-zfs`, a feature plugin like `ext-git` and `ext-ssh`: one read-only `Provider` (id `zfs`), one `Decorator` for the Info panel section, and the "ZFS" Action group. Loadable plugin file; the binary ships without it and nothing breaks when it is removed.
 - Linux only (OpenZFS). The manifest declares Linux as its only platform; elsewhere the Extensions screen lists the plugin as not supported and it is not loaded.
-- Everything goes through the `zfs` command line (`zfs list -H -p`, `zfs get -H -p`, `zfs snapshot`, `zfs rename`, `zfs destroy`) in the C locale. No libzfs, no C dependency in the plugin file.
+- Everything goes through the `zfs` command line (`zfs list -H -p`, `zfs get -H -p`, `zfs snapshot`, `zfs rename`, `zfs destroy`, `zfs set`, `zfs inherit`) in the C locale. No libzfs, no C dependency in the plugin file.
 - A snapshot's files are read from the dataset's `.zfs/snapshot/<name>/` directory with the platform's file system calls, so a snapshot opens, previews and copies out like any folder.
 - Without `zfs`, or in a folder on another file system, the plugin shows nothing: no action, no column, no Info section, no error.
 - Changes run with the user's own rights first (`zfs allow` delegation); only a change ZFS refuses for lack of permission is offered once more as administrator, through the privileged helper `rick-zfs`. Rick itself never runs as root.
 
 ## Scope
 
-**In:** finding the dataset a folder lies in; the `zfs` location (datasets, snapshots, a snapshot's files, a file's versions); *Browse snapshots*, *Back to live folder*, *Versions*, *Restore*; *Create*, *Rename* and *Destroy snapshot*; the privileged helper and its polkit action; the Info panel section with the dataset's properties.
+**In:** finding the dataset a folder lies in; the `zfs` location (datasets, snapshots, a snapshot's files, a file's versions); *Browse snapshots*, *Back to live folder*, *Versions*, *Restore*; *Create*, *Rename* and *Destroy snapshot*; *Edit ZFS properties…* for seven properties; the privileged helper and its polkit action; the Info panel section with the dataset's properties.
 
-**Out (this version):** macOS and FreeBSD ZFS; rollback; clones, holds and bookmarks as actions (a held snapshot is reported, not released); `zfs send` and `receive`; changing dataset properties (a later change, `add-zfs-property-editor`); a timeline across snapshots (a later change, `add-zfs-time-slider`); pool status and scrubs.
+**Out (this version):** macOS and FreeBSD ZFS; rollback; clones, holds and bookmarks as actions (a held snapshot is reported, not released); `zfs send` and `receive`; properties beyond the editor's seven, user properties, recursive property changes and undo of a property change; a timeline across snapshots (a later change, `add-zfs-time-slider`); pool status and scrubs.
 
 ## Datasets
 
@@ -50,7 +50,27 @@ All in the "ZFS" group of the context menu and the palette, shown only where the
 - **Rename snapshot** — on one snapshot in the snapshot list, with the same name check.
 - **Destroy snapshot** — on snapshots in the snapshot list: one confirmation that names each snapshot (`dataset@name`) and says it cannot be undone, then one `zfs destroy` per snapshot. A snapshot ZFS refuses to destroy (held, dependent clones) is reported with ZFS's reason and stays.
 
-Create, Rename and Destroy run as named jobs and refresh the dataset's snapshot list when they end.
+- **Edit ZFS properties…** — on a live folder in a dataset, or on one dataset folder selected at the root of the `zfs` location; see *Property editor*.
+
+Create, Rename, Destroy and the property editor run as named jobs and refresh the dataset's cached snapshot list and properties when they end.
+
+## Property editor
+
+The editor reads the dataset's values fresh in a job (not from the 30-second cache), then opens a form with one field per property, in this order:
+
+| Property | Field | Values offered |
+|---|---|---|
+| `compression` | choice | *Inherit*, off, on, lz4, zstd, gzip, zle, and the current value when it is another (`zstd-3`) |
+| `atime`, `relatime` | choice | *Inherit*, on, off |
+| `copies` | choice | *Inherit*, 1, 2, 3 |
+| `recordsize` | choice | *Inherit*, 4K to 1M in powers of two, and the current value when it is another |
+| `quota`, `refquota` | text | `none`, a size, or empty for *Inherit* |
+
+*Inherit* is labelled with the value it would give: the parent dataset's, or *default* for a pool's root dataset; the quota fields say it in their placeholder. A choice opens on the current value when it is set locally, else on *Inherit*; a quota opens with its local value, else empty. A size is a whole or decimal number with an optional unit K, M, G, T or P, powers of 1024, any case, optionally followed by `B` or `iB`.
+
+The live preview has one row per changed property, `name: old (source)` → new, and the form cannot be confirmed while a row has a problem: a size that does not parse, a `quota` below `used` or a `refquota` below `referenced`, or no change at all. When `compression`, `copies` or `recordsize` changes, a row says that new values apply to data written from now on.
+
+Applying is one job: one `zfs set p=v … <dataset>` for every explicit value, then one `zfs inherit <p> <dataset>` per property reset, stopping at the first failure; what ran before stays applied, and the message names the property and ZFS's reason. The permission rule is that of the snapshot commands, with the refused command and every one after it handed to the helper; without elevation, the message names the changed properties as the `zfs allow` permission set. No undo.
 
 ## Permissions and the privileged helper
 
@@ -63,8 +83,9 @@ Create, Rename and Destroy run as named jobs and refresh the dataset's snapshot 
 - `snapshot [-r] <dataset>@<name>`
 - `rename <dataset>@<old> <dataset>@<new>`, both of one dataset
 - `destroy <dataset>@<name>`
+- `set <property>=<value>… <dataset>` and `inherit <property> <dataset>`, for the editor's seven properties only, each value checked as the editor checks it
 
-Every name must be a snapshot's full name: a dataset name without `@` is refused, so the helper can never destroy or rename a dataset, and no argument may start with `-` beyond the one `-r`, so no other option reaches `zfs`. It runs the system's `zfs` from `/usr/sbin`, `/sbin`, `/usr/bin` or `/bin`, never from the caller's `PATH`, with a cleared environment and the C locale, passes ZFS's output through and returns its exit code; refused arguments exit with 64, a missing `zfs` with 69.
+The snapshot commands need a snapshot's full name: a dataset name without `@` is refused, so the helper can never destroy or rename a dataset; the property commands need a dataset's name without `@`. No argument may start with `-` beyond the one `-r`, so no other option reaches `zfs`. It runs the system's `zfs` from `/usr/sbin`, `/sbin`, `/usr/bin` or `/bin`, never from the caller's `PATH`, with a cleared environment and the C locale, passes ZFS's output through and returns its exit code; refused arguments exit with 64, a missing `zfs` with 69.
 
 **The polkit action** is `org.openbreach.rick.zfs` (`packaging/linux/org.openbreach.rick.zfs.policy`, in the Linux archive under `share/polkit-1/actions/`), administrator authentication every time. `pkexec` applies it when the policy is installed in `/usr/share/polkit-1/actions` and names the helper's path, which is where a system-wide install puts it (`/opt/rick/current/rick-zfs`); in a per-user install `pkexec` asks under its generic action instead (QUESTIONS.md 366).
 
@@ -93,6 +114,7 @@ Unit tests run against a scripted `zfs` runner and a temporary directory laid ou
 7. *Restore* always asks once, naming the snapshot; a deleted file comes back with its content and modification time; a live file in the way is in the trash afterwards; a declined question changes nothing; missing parents are created.
 8. *Create* with the default name makes `rick-YYYY-MM-DD-HHMMSS`; an invalid name cannot be confirmed; a taken name fails and names it. *Rename* and *Destroy* work; a held snapshot stays and is reported.
 9. A refused change offers elevation once; accepted, it runs `rick-zfs` with the same arguments; declined or dismissed, it reports "Permission denied". Without `pkexec` or the helper, the message names the `zfs allow` command.
-10. `rick-zfs` refuses a dataset without `@`, any option but `snapshot -r`, a rename across datasets and every other subcommand, and never starts `zfs` for them.
-11. The real-pool test creates, lists, browses, restores from, renames and destroys its own snapshot and leaves nothing behind.
-12. Removing `ext-zfs` from the plugins folder leaves Rick fully functional.
+10. `rick-zfs` refuses a dataset without `@` for the snapshot commands, any option but `snapshot -r`, a rename across datasets, a property outside the editor's seven or a value the editor would not send, and every other subcommand, and never starts `zfs` for them.
+11. The property editor opens with the current values (`zstd-3` set locally is selected; *Inherit (lz4)* names the parent's value) and has no field for `mountpoint`, `readonly`, `dedup` or `encryption`; `50G` shows as 50 GiB, `fifty` is invalid; a quota below the space used, or no change, keeps it from applying; applying sets, then inherits, and a failed reset leaves the set values and names the property.
+12. The real-pool test creates, lists, browses, restores from, renames and destroys its own snapshot, sets `compression` and `quota` and inherits them back, and leaves nothing behind.
+13. Removing `ext-zfs` from the plugins folder leaves Rick fully functional.
