@@ -20,7 +20,7 @@
 
 ## 4. Read-only `zfs` provider
 
-- [ ] 4.1 Implement path parsing for `/`, `/<dataset>`, `/<dataset>@<snapshot>/<rel>` and `/~versions/<path>` (design Decision 3); verify unit tests including datasets with `/` and a path with a second `@`
+- [ ] 4.1 Implement path parsing for `/`, `/<dataset>`, `/<dataset>/@<snapshot>/<rel>` and `/~versions/<path>` (design Decision 3); verify unit tests including datasets with `/`, a path with a second `@` and that the parent of a snapshot is its dataset
 - [ ] 4.2 List the root (datasets with snapshots) and the dataset level (snapshots newest first, creation time as modified, used as size); verify unit tests against the fake (spec: Snapshot overview)
 - [ ] 4.3 List, `stat` and `open_read` inside a snapshot from a fixture tree `<mount>/.zfs/snapshot/<s>/…`, streamed in batches with the cancel token, entry ids from `(st_dev, st_ino)`; verify unit tests including hidden files and symlinks
 - [ ] 4.4 Return empty capabilities and `Unsupported` for every write and for `watch`; verify a unit test per write method and an integration test in `tests` that the context menu offers no rename, trash, delete or new item inside a snapshot (spec: Browse a snapshot read-only)
@@ -30,7 +30,7 @@
 
 - [ ] 5.1 Add the "ZFS" action group with *Browse snapshots* (newest snapshot containing the folder, `Disabled` with reason otherwise) and *Back to live folder* (nearest existing parent), both returning `ActionOutcome::Navigate`; verify unit tests for each scenario of the spec requirement "Open the snapshots of the current folder"
 - [ ] 5.2 List `/~versions/<path>`: walk snapshots newest first, keep a version when size or mtime changes, entry path is the snapshot location, display name `<snapshot> — <file name>`, streamed and cancellable (design Decision 5); verify unit tests for collapsed unchanged versions and a file deleted live
-- [ ] 5.3 Add the *Versions* action for one live or snapshot file, returning `ActionOutcome::View`; verify unit tests for availability and the location it opens
+- [ ] 5.3 Add the *Versions* action for one live or snapshot file, returning `ActionOutcome::Navigate` to its versions location (design Decision 10); verify unit tests for availability and the location it opens
 - [ ] 5.4 Add the action labels and messages of this group to `en.ftl` and `de.ftl`; verify the i18n test that every key exists in both files
 
 ## 6. Restore

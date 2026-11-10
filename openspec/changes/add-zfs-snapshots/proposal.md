@@ -32,6 +32,6 @@ None (no existing OpenSpec capability; SPEC.md is not edited by this change).
 
 - **New crate** `crates/ext-zfs` depending on `ext` and `types` only (plus `thiserror`, `tracing`, `futures`, `async-trait` as the other plugins do); dependencies point downward only.
 - **Workspace wiring**: `Cargo.toml` members, a `zfs` feature on `rick`, `tests` dev-dependency, `deny.toml` wrapper entries, plugin bundling as for `ext-svn`.
-- **Uses existing kernel surfaces** without changing them: `Registry::provider`, `decorator`, `action`, `platform()` for `Trash` and `Elevate`, `ActionOutcome::View`/navigate, `UiHost` forms and confirmations.
+- **Uses existing kernel surfaces** without changing them: `Registry::provider`, `decorator`, `action`, `platform()` for `Trash` and `Elevate`, `ActionOutcome::Navigate`, `UiHost` forms and confirmations.
 - **External tool**: `zfs` (OpenZFS ≥ 2.0) at run time; `pkexec` for the elevated path. CI has neither ZFS nor a pool, so tests run against a fake `zfs` and a fixture tree; real-pool tests are opt-in.
 - **Locales**: new `en.ftl` and `de.ftl` for the plugin.
