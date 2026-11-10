@@ -1,32 +1,60 @@
 # Rick — agent instructions
 
 You are implementing Rick (tagline: a god-like file manager), a cross-platform file manager in Rust. The
-specification is SPEC.md in this repository. Read it before any task. It is
+specification is SPEC.md in this repository. It is
 the source of truth: when code and spec disagree, the spec is right until it
 is changed. Do not change SPEC.md yourself.
+
+## Reading the specification
+
+- SPEC.md is a one-page index. Read it at the start of every session.
+- The specification lives in specs/, one file per area. Read ONLY the files
+  the issue lists under "Spec files". If the issue lists none, pick from the
+  index the one or two files the task touches and say in the pull request
+  which you read.
+- Do not read specs/history.md or specs/decisions.md unless you need to know
+  why something was decided. Look up a single entry with grep, do not load
+  the file. Do not re-read a file you already read in this session.
+- The specification is the source of truth: when code and spec disagree, the
+  spec is right until it is changed. Do not change SPEC.md or specs/ unless
+  the issue says so.
+- Keep this file short. Never append session notes or summaries to it.
 
 ## How to work
 
 - One task = one milestone or one issue. Do what the issue asks, nothing
   more. No speculative abstractions, no extra features, no settings the
   spec does not name.
-- If the spec is ambiguous or contradictory for the task at hand, append a
-  numbered question to QUESTIONS.md, make the smallest reasonable
-  assumption, state it in the pull request description, and continue.
-  Never resolve an ambiguity silently.
 - Before opening a pull request, all of these pass locally:
   `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`,
   `cargo test --workspace`, `cargo deny check`, `cargo doc --no-deps`.
 - Small commits, one concern each, conventional-commit messages
   (`feat(vfs): …`, `fix(ui): …`, `test(ops): …`). Each commit builds.
-- The pull request description lists: what was done, what was assumed,
-  which acceptance test proves it, what was deliberately left out.
+- The pull request description lists: what was done, **Decisions made**,
+  **Needs a decision**, which acceptance test proves it, what was
+  deliberately left out.
 - Branches: agent work lands on `dev`, and `main` only receives batches
   from `dev`. Every task branch opens its pull request against `dev`,
   never `main`. Serge merges finished pull requests into `dev` and tests
   them there by hand; when a batch is ready he opens one pull request from
   `dev` to `main`, which must pass the full matrix (CI tier 2) before it
   merges; after the merge `dev` is brought back level with `main`.
+
+## Decisions
+
+- There is no questions file. Never create one. Decisions live in the pull
+  request that raised them.
+- Small decisions: decide. Follow the spec and the patterns already in the
+  code, and list each one in the pull request under "Decisions made", one
+  line each, with a reason only where the choice is not obvious.
+- Major decisions: list them in the pull request under "Needs a decision",
+  at most five, each with the options and your recommended one. Implement
+  the recommendation, mark it as provisional, and continue.
+- Major means one of: behaviour the user sees that the spec does not cover;
+  adding, removing or swapping a dependency; a change to a public trait, an
+  extension point, the plugin manifest or the plugin ABI; a file or config
+  format on disk; anything touching security, permissions or network
+  access. Everything else is small.
 
 ## Code rules (summary — SPEC.md "Engineering guidelines" and "Architecture rules" are authoritative)
 
