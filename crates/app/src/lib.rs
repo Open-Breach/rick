@@ -702,6 +702,10 @@ pub struct App {
     /// The count of that entry's contents, when it is a folder: running,
     /// or done and kept for as long as the dialogue shows the folder.
     properties_count: Option<PropertiesCount>,
+    /// The entries whose facts a background thread is still reading for
+    /// the Properties dialogue: each ends in one `Msg::Properties`, and
+    /// until then the application is busy.
+    properties_reading: usize,
     /// Numbers the index searches, so a superseded one's hits are dropped.
     index_generation: u64,
     /// The integration check or apply in flight.
@@ -1025,6 +1029,7 @@ impl App {
             index_search: None,
             properties_shown: None,
             properties_count: None,
+            properties_reading: 0,
             index_generation: 0,
             integration: integration::IntegrationRun::default(),
         };
@@ -1483,12 +1488,15 @@ impl App {
     }
 
     /// Whether a listing is still streaming or a job still running, the
-    /// decorators' jobs included (a Git status being read, for instance).
+    /// decorators' jobs included (a Git status being read, for instance),
+    /// or an entry's properties are still being read for the Properties
+    /// dialogue: whether an event is still to come without a new command.
     #[must_use]
     pub fn is_busy(&self) -> bool {
         self.live.values().any(|l| !l.complete)
             || !self.jobs.running().is_empty()
             || !self.decor_jobs.running().is_empty()
+            || self.properties_reading > 0
     }
 
     /// The context an action gets for `pane`: its location and selection,
@@ -2842,8 +2850,16 @@ impl App {
         let platform = Arc::clone(&self.platform);
         let tx = self.mailbox.clone();
         let location = ctx.location.clone();
-        runtime::handle().spawn_blocking(move || {
-            let info = read_properties(&*platform, pane, entry, path, &location, contents);
+        self.properties_reading += 1;
+        runtime::handle().spawn(async move {
+            // Every read is answered, one that failed on its thread too:
+            // the application is busy until the answer is in.
+            let info = runtime::handle()
+                .spawn_blocking(move || {
+                    read_properties(&*platform, pane, entry, path, &location, contents)
+                })
+                .await
+                .unwrap_or_else(|join| Err(Error::Io(std::io::Error::other(join))));
             tx.send(Msg::Properties(Box::new(info)));
         });
     }
@@ -2918,6 +2934,7 @@ impl App {
         let contents = self.count_contents(pane, &name, path.as_deref());
         let platform = Arc::clone(&self.platform);
         let tx = self.mailbox.clone();
+        self.properties_reading += 1;
         runtime::handle().spawn(async move {
             let entry = match provider.stat(&location).await {
                 Ok(entry) => entry,
@@ -4190,30 +4207,34 @@ impl App {
                     });
                 }
             }
-            Msg::Properties(result) => match *result {
-                Ok(mut info) => {
-                    // The count may have ended while the entry was read.
-                    if info.contents == Contents::Counting
-                        && let Some(count) = &self.properties_count
-                        && count.pane == info.pane
-                        && Some(&count.path) == info.path.as_ref()
-                        && let Some(contents) = count.result
-                    {
-                        info.contents = Contents::Counted(contents);
+            Msg::Properties(result) => {
+                // The read is answered: nothing more comes of it.
+                self.properties_reading = self.properties_reading.saturating_sub(1);
+                match *result {
+                    Ok(mut info) => {
+                        // The count may have ended while the entry was read.
+                        if info.contents == Contents::Counting
+                            && let Some(count) = &self.properties_count
+                            && count.pane == info.pane
+                            && Some(&count.path) == info.path.as_ref()
+                            && let Some(contents) = count.result
+                        {
+                            info.contents = Contents::Counted(contents);
+                        }
+                        // A dialogue closed in the meantime takes no answer.
+                        if self.properties_shown.as_ref().is_some_and(|(pane, path)| {
+                            *pane == info.pane && Some(path) == info.path.as_ref()
+                        }) || info.path.is_none()
+                        {
+                            events.push(Event::Properties(Box::new(info)));
+                        }
                     }
-                    // A dialogue closed in the meantime takes no answer.
-                    if self.properties_shown.as_ref().is_some_and(|(pane, path)| {
-                        *pane == info.pane && Some(path) == info.path.as_ref()
-                    }) || info.path.is_none()
-                    {
-                        events.push(Event::Properties(Box::new(info)));
-                    }
+                    Err(error) => events.push(Event::Notify {
+                        level: Level::Error,
+                        text: format!("Properties: {error}"),
+                    }),
                 }
-                Err(error) => events.push(Event::Notify {
-                    level: Level::Error,
-                    text: format!("Properties: {error}"),
-                }),
-            },
+            }
             Msg::PermissionsApplied {
                 pane,
                 label,

@@ -2154,6 +2154,59 @@ fn properties_count_a_folder_s_contents_in_the_background() {
     assert!(counted(&h.events).is_none());
 }
 
+/// The Properties dialogue's entry is read off the loop, and the
+/// application is busy until that read is answered: whoever waits for the
+/// application to be idle has the entry by then. On a slow machine the
+/// answer used to come after the wait (issue 139, the macOS runner).
+#[test]
+fn a_properties_read_under_way_counts_as_busy() {
+    let mut h = harness();
+    h.settle();
+    let pane = h.app.model().focused;
+    let shown = |events: &[Event]| {
+        events.iter().find_map(|e| match e {
+            Event::Properties(info) => Some(info.entry.name.clone()),
+            _ => None,
+        })
+    };
+
+    // A file: nothing is counted, so no job stands in for the read.
+    let id = h
+        .tab(pane)
+        .listing
+        .rows()
+        .find(|e| e.name == "c.txt")
+        .map_or_else(|| panic!("c.txt is listed"), |e| e.id);
+    h.send(Command::Select {
+        pane,
+        change: SelectionChange::Set(vec![id]),
+    });
+    h.settle();
+    assert!(!h.app.is_busy());
+    h.events.clear();
+    h.send(Command::ShowProperties(pane));
+    assert!(h.app.model().jobs.is_empty(), "no job runs for a file");
+    assert!(h.app.is_busy(), "the entry is being read");
+    h.settle();
+    assert_eq!(shown(&h.events).as_deref(), Some("c.txt"), "{:?}", h.events);
+    assert!(!h.app.is_busy(), "the read was answered");
+
+    // The folder's own properties, with nothing selected, are read through
+    // its provider first; the wait covers that too.
+    h.send(Command::PropertiesClosed);
+    h.send(Command::Select {
+        pane,
+        change: SelectionChange::Clear,
+    });
+    h.settle();
+    h.events.clear();
+    h.send(Command::ShowProperties(pane));
+    assert!(h.app.is_busy());
+    h.settle();
+    assert!(shown(&h.events).is_some(), "{:?}", h.events);
+    assert!(!h.app.is_busy());
+}
+
 /// What the Properties dialogue reads through links: these need a
 /// symbolic link to be made, which only Unix lets a test do freely.
 #[cfg(unix)]
