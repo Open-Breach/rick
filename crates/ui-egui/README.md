@@ -14,8 +14,10 @@ where the system draws none (`frame`: the shadow frame, a transparent margin
 with a shadow and the resize grips, around a transparent window, and the
 plain frame, a one-pixel border at the window's edge with the grips on it,
 around one that cannot be transparent; `surface` finds out which, once, from
-the alpha modes the first window's surface offers, and `frame` in the
-`[window]` table of `rick.toml` overrides it), the title row
+the alpha modes the first window's surface offers, except on X11, where that
+answer says nothing without a compositing manager and the plain frame is the
+default; `frame` in the `[window]` table of `rick.toml` overrides either),
+the title row
 on its band (`theme::band`: `bg/titlebar` with the pair the *Title bar
 colour* setting wrote into it, the active tab lifting out of it in
 `bg/pane`, and everything else in the row — inactive titles, icons, the
