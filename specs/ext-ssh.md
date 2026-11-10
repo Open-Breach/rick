@@ -19,7 +19,7 @@ This file is the binding specification for the plugin; where it disagrees with `
 - One connection pool per host, channels multiplexed, a second connection only at the server's session limit.
 - Jump hosts (`ProxyJump`) are first-class, including chains.
 - Same-host copy and move run on the host (`cp -a`, `mv`) through the `NATIVE_TRANSFER` hook; everything else streams through Rick.
-- Previews: text-like previewers read a prefix and offer *Load more*; whole-file previewers are size-capped with *Preview anyway*.
+- Previews: text-like previewers read a prefix and offer *Load more*; whole-file previewers are subject to the size limit of remote sources, with *Preview this file*.
 - Unix-like hosts only in this version: Linux (glibc, musl, BusyBox), BSD, macOS. Windows SSH hosts are out of scope and are more likely to be served by an SMB provider later.
 
 ## Scope
@@ -109,7 +109,7 @@ Both actions appear in the context menu of a remote folder and of a host row in 
 Previewers declare whether they need the **whole file** or can work on a **prefix**.
 
 - Prefix previewers (text, code, Markdown, CSV): the provider serves the first chunk (default 256 KiB) and the preview pane shows a *Load more* control at the end.
-- Whole-file previewers (image, PDF, media): subject to a **size cap**, default 4 MiB, applied by the preview frame when the provider is `REMOTE`. Above the cap the pane shows the file-info badges and two buttons: *Preview anyway*, for this file once, and *Always preview on <host>*, which sets the host's `preview_always` and switches the cap off for that host from then on. The cap is a global setting with a per-host size override for slow links; `preview_always` is the per-host switch that ignores both, reversible in the host editor and in the host row's context menu (see `SPEC.md`, Preview, *Remote sources*). Prefix previewers are unaffected by either.
+- Whole-file previewers (image, PDF, media): subject to a **size cap**, the limit of every remote source — 10 MiB by default, set on *Settings → Previews* — applied by the preview frame when the provider is `REMOTE`. Above the cap the pane shows the File info card with two buttons: *Preview this file*, for this file once, and *Always preview on <host>*, which sets the host's `preview_always` and switches the cap off for that host from then on. The cap is that one setting, with a per-host size override for slow links; `preview_always` is the per-host switch that ignores both, reversible in the host editor and in the host row's context menu (see `SPEC.md`, Preview, *Remote sources*). Prefix previewers are unaffected by either.
 - A file pulled for a preview goes to a temporary file that is removed when the tab closes.
 
 ## Configuration
@@ -154,5 +154,5 @@ Against Docker containers in CI: an OpenSSH server on Debian (`gnu`), on Alpine 
 6. A host behind a bastion, and one behind a two-hop chain, browse and transfer exactly like a direct host; each hop gets its own host-key check; two targets behind one bastion share its connection.
 7. A same-host move of a large tree produces no traffic through Rick (asserted by counting bytes through `open_read`); a copy from the host to the local disk streams with progress and cancels cleanly.
 8. Both console actions open in the browsed folder, including on a jump-host target; *Open console here* is present only once the console pane exists.
-9. A 1 GiB remote text file previews at once with *Load more*; a 50 MiB image shows the cap message and loads on *Preview anyway*; *Always preview on <host>* loads it, writes `preview_always = true` for the host, and the next large image on that host previews without the message, while the same image on another host still shows it.
+9. A 1 GiB remote text file previews at once with *Load more*; a 50 MiB image shows the cap card and loads on *Preview this file*; *Always preview on <host>* loads it, writes `preview_always = true` for the host, and the next large image on that host previews without the message, while the same image on another host still shows it.
 10. Removing `ext-ssh` from the plugins folder leaves Rick fully functional with an empty Network section.
