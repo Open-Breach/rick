@@ -165,6 +165,8 @@ pub const EJECT: &str = ph::EJECT;
 pub const REFUSED: &str = ph::PROHIBIT;
 /// The General page of the settings.
 pub const GEAR: &str = ph::GEAR;
+/// The Behaviour page of the settings.
+pub const BEHAVIOUR: &str = ph::CURSOR_CLICK;
 /// A plugin without an icon of its own, in the settings' category list.
 pub const PLUGIN: &str = ph::PUZZLE_PIECE;
 /// A PDF plugin.

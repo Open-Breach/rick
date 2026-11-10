@@ -11,7 +11,6 @@
 //! up.
 
 use std::collections::{HashMap, HashSet};
-use std::time::SystemTime;
 
 use egui::{Align, Rect, RichText, TextureHandle, TextureOptions, pos2, vec2};
 use ext::{Block, Content, Document, Grid, Image, Inline, Listing, ListingEntry, Style};
@@ -149,13 +148,13 @@ pub fn draw(
     ui: &mut egui::Ui,
     content: &Content,
     state: &mut State,
-    now: SystemTime,
+    dates: format::Dates,
     remembered: &[u16],
 ) -> Option<Vec<u16>> {
     ui.style_mut().interaction.selectable_labels = false;
     state.table = None;
     match content {
-        Content::Listing(listing) => draw_listing(ui, listing, state, now, remembered),
+        Content::Listing(listing) => draw_listing(ui, listing, state, dates, remembered),
         Content::Grid(grid) => draw_grid(ui, &**grid, state, remembered),
         Content::Document(document) => draw_document(ui, document, state),
         Content::MissingLibrary(_) => {}
@@ -204,7 +203,7 @@ fn draw_listing(
     ui: &mut egui::Ui,
     listing: &Listing,
     state: &mut State,
-    now: SystemTime,
+    dates: format::Dates,
     remembered: &[u16],
 ) {
     let compressed = listing.entries.iter().any(|e| e.compressed.is_some());
@@ -253,12 +252,12 @@ fn draw_listing(
         visible.len(),
         &mut |ui, row, col| {
             if let Some(entry) = entry_at(row)
-                && listing_cell(ui, entry, col, folds.contains(&entry.path), now)
+                && listing_cell(ui, entry, col, folds.contains(&entry.path), dates)
             {
                 toggled = Some(entry.path.clone());
             }
         },
-        &|ui, row, col| entry_at(row).map_or(0.0, |entry| listing_width(ui, entry, col, now)),
+        &|ui, row, col| entry_at(row).map_or(0.0, |entry| listing_width(ui, entry, col, dates)),
     );
     state.table = Some(drawn);
     if let Some(path) = toggled {
@@ -274,10 +273,10 @@ fn draw_listing(
 }
 
 /// The texts of a listing row's Type, Modified, Size and Packed cells.
-fn listing_text(entry: &ListingEntry, col: usize, now: SystemTime) -> String {
+fn listing_text(entry: &ListingEntry, col: usize, dates: format::Dates) -> String {
     match col {
         1 => listing_type(entry),
-        2 => format::date(entry.modified, now).0,
+        2 => dates.write(entry.modified).0,
         3 if entry.kind != EntryKind::Dir => format::size(entry.size),
         4 => entry
             .compressed
@@ -287,7 +286,7 @@ fn listing_text(entry: &ListingEntry, col: usize, now: SystemTime) -> String {
 }
 
 /// How wide the content of a listing cell is, for a column's fit.
-fn listing_width(ui: &egui::Ui, entry: &ListingEntry, col: usize, now: SystemTime) -> f32 {
+fn listing_width(ui: &egui::Ui, entry: &ListingEntry, col: usize, dates: format::Dates) -> f32 {
     let body = egui::TextStyle::Body.resolve(ui.style());
     let measure = |text: &str| {
         ui.painter()
@@ -301,7 +300,7 @@ fn listing_width(ui: &egui::Ui, entry: &ListingEntry, col: usize, now: SystemTim
         let indent = entry.depth as f32 * INDENT;
         indent + CHEVRON + spacing + measure(listing_icon(entry)) + spacing + measure(&entry.name)
     } else {
-        measure(&listing_text(entry, col, now))
+        measure(&listing_text(entry, col, dates))
     }
 }
 
@@ -313,13 +312,13 @@ fn listing_cell(
     entry: &ListingEntry,
     col: usize,
     folded: bool,
-    now: SystemTime,
+    dates: format::Dates,
 ) -> bool {
     if col > 0 {
-        let text = listing_text(entry, col, now);
+        let text = listing_text(entry, col, dates);
         let label = ui.add(egui::Label::new(text).truncate());
         if col == 2 {
-            label.on_hover_text(format::date(entry.modified, now).1);
+            label.on_hover_text(dates.write(entry.modified).1);
         }
         return false;
     }
