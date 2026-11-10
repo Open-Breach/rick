@@ -744,10 +744,9 @@ fn workspace_label(model: &model::Model, ws: &model::Workspace) -> TabLabel {
 fn tab_label(model: &model::Model, tab: &Tab) -> (&'static str, String) {
     match tab.kind {
         TabKind::Preview => (icons::PREVIEW, t!("shell-preview-tab")),
-        TabKind::Console => (
-            icons::TERMINAL,
-            tab.title.clone().unwrap_or_else(|| t!("shell-console-tab")),
-        ),
+        // A console is titled Console: not the folder it was opened in,
+        // and not what its shell sets as its title.
+        TabKind::Console => (icons::TERMINAL, t!("shell-console-tab")),
         TabKind::Compare => (
             icons::COMPARE,
             tab.title.clone().unwrap_or_else(|| t!("shell-compare-tab")),
