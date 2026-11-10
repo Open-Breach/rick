@@ -380,12 +380,28 @@ impl Policy {
         let resolution = if let Some(standing) = &self.all {
             standing.clone()
         } else {
+            // An extraction does not count its conflicts beforehand: the
+            // dialogue gets the two sides and the items still to come.
+            let details = types::ConflictDetails {
+                existing: types::ConflictSide {
+                    is_dir: existing.is_dir(),
+                    size: existing.is_file().then_some(existing.len()),
+                    modified: existing.modified().ok(),
+                },
+                incoming: types::ConflictSide {
+                    is_dir: entry.kind == EntryKind::Dir,
+                    size: entry.size,
+                    modified: entry.modified,
+                },
+                proposed: None,
+                position: None,
+                remaining,
+            };
             let answer = ext::runtime::handle().block_on(job.conflicts.ask(
                 job,
                 &source,
                 &target_loc,
-                existing.is_dir(),
-                remaining,
+                details,
             ));
             if answer.apply_to_all {
                 self.all = Some(answer.resolution.clone());

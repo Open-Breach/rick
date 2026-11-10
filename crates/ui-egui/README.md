@@ -55,7 +55,10 @@ buttons; a form's fields in a label-left grid with cards, disclosure
 cards, segmented controls, switches, file pickers and the preview as a
 card of effects — the install dialogue's shape — taken by every form,
 prompt and confirmation an action asks), the shared controls in
-`widgets.rs`, the conflict dialogue, the question dialogue an extension asks through, the
+`widgets.rs`, the paste-conflict dialogue (`conflict.rs`: *Replace file?* with its
+place among the job's conflicts, the existing and the arriving entry as two
+cards, Skip, Replace or Merge, and Keep both as the default, 520 px wide
+whatever the name), the question dialogue an extension asks through, the
 Properties dialogue (the general rows and, for a local entry, its owner,
 group, mode bits and ACL edited in place, applied to the enclosed entries
 too when asked), the Hash dialogue (620 px in the dialogue frame: *File

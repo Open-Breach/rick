@@ -28,7 +28,9 @@ folder, every entry's previous state recorded so the job is one undo step,
 the entries the user may not change handed to the privileged helper in one
 prompt); `Conflicts`,
 where a copy or move that would land on an existing name asks — skip,
-overwrite, rename, apply to all, cancel — and waits; and the `Scheduler`,
+replace (merge between two folders), keep both under the first free
+numbered name, the same for the remaining, cancel — and waits, the job
+having counted its conflicts before it brought anything; and the `Scheduler`,
 which runs two jobs that share a source or destination volume one after the
 other and jobs on disjoint volumes in parallel, the queued one shown as
 *Waiting*. Every operation that touches the filesystem runs as a `Job`;

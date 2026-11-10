@@ -27,7 +27,9 @@ mod progress;
 mod question;
 
 pub use cancel::{CancelToken, Cancelled};
-pub use conflict::{Conflict, ConflictAnswer, ConflictId, Resolution, numbered_name};
+pub use conflict::{
+    Conflict, ConflictAnswer, ConflictDetails, ConflictId, ConflictSide, Resolution, numbered_name,
+};
 pub use entry::{Attrs, Entry, EntryKind, Mime};
 pub use error::Error;
 pub use id::{EntryId, ExtId, JobId, ProviderId};

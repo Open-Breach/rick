@@ -15,7 +15,9 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use tokio::sync::oneshot;
 use tracing::debug;
-use types::{Conflict, ConflictAnswer, ConflictId, Location, Progress, Resolution};
+use types::{
+    Conflict, ConflictAnswer, ConflictDetails, ConflictId, Location, Progress, Resolution,
+};
 
 use crate::JobCtx;
 
@@ -86,17 +88,18 @@ impl Conflicts {
     }
 
     /// Asks about `target` on behalf of `job` and waits for the answer:
-    /// `source` is what would land there, `target_is_dir` what is there
-    /// now, `remaining` how many items follow this one (for "apply to
-    /// all"). The job's progress says it is waiting meanwhile. A question
-    /// dropped unanswered (the application went away) is a `Cancel`.
+    /// `source` is what would land there, and `details` what the dialogue
+    /// shows — the two sides, the name *Keep both* would give, the
+    /// conflict's place among the job's and how many follow it (for "do
+    /// the same for the remaining"). The job's progress says it is waiting
+    /// meanwhile. A question dropped unanswered (the application went
+    /// away) is a `Cancel`.
     pub async fn ask(
         &self,
         job: &JobCtx,
         source: &Location,
         target: &Location,
-        target_is_dir: bool,
-        remaining: u64,
+        details: ConflictDetails,
     ) -> ConflictAnswer {
         let name = name_of(target);
         let (tx, rx) = oneshot::channel();
@@ -110,9 +113,13 @@ impl Conflicts {
                 job: job.id,
                 source: source.clone(),
                 target: target.clone(),
-                target_is_dir,
-                proposed: types::numbered_name(&name, 2),
-                remaining,
+                existing: details.existing,
+                incoming: details.incoming,
+                proposed: details
+                    .proposed
+                    .unwrap_or_else(|| types::numbered_name(&name, 2)),
+                position: details.position,
+                remaining: details.remaining,
             };
             inner.fresh.push(conflict.clone());
             conflict

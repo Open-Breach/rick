@@ -2347,6 +2347,170 @@ fn screenshots_of_the_app_menu() {
     }
 }
 
+/// Issue 139, item 3: the paste-conflict dialogue as the Figma frames
+/// have it (`141:4082`) — one conflict; the third of twelve with the
+/// checkbox; and two folders, which the frames do not draw — in Light and
+/// Dark at both densities. The files are sparse, with the frames' sizes
+/// and dates.
+#[test]
+#[ignore = "needs a wgpu adapter; CI runs it and uploads the images"]
+#[allow(clippy::too_many_lines)]
+fn screenshots_of_the_paste_conflict_dialogue() {
+    use egui_kittest::kittest::Queryable as _;
+    use std::time::SystemTime;
+    const MIB: f64 = 1024.0 * 1024.0;
+    let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+    let (from, into) = (dir.path().join("from"), dir.path().join("test"));
+    fs::create_dir_all(from.join("Holiday")).unwrap_or_else(|e| panic!("{e}"));
+    fs::create_dir_all(into.join("Holiday")).unwrap_or_else(|e| panic!("{e}"));
+    let long = "Camera white appartment 5-14-2026 1.32.41pm GMT2 - 5-14-2026 1.33.08pm GMT2.mp4";
+    // A sparse file of `mib` MiB, modified `ago` before now.
+    let sparse = |path: &Path, mib: f64, ago: Duration| {
+        let file = fs::File::create(path).unwrap_or_else(|e| panic!("{e}"));
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        file.set_len((mib * MIB) as u64)
+            .unwrap_or_else(|e| panic!("{e}"));
+        file.set_modified(SystemTime::now() - ago)
+            .unwrap_or_else(|e| panic!("{e}"));
+    };
+    let mut names = vec![
+        "Alpha.txt".to_owned(),
+        "Beta.txt".to_owned(),
+        long.to_owned(),
+    ];
+    names.extend((1..=9).map(|n| format!("Notes {n:02}.txt")));
+    for name in &names {
+        let (old, new) = if name == long {
+            (48.2, 51.7)
+        } else {
+            (0.1, 0.2)
+        };
+        sparse(&into.join(name), old, Duration::from_secs(26 * 3600));
+        sparse(&from.join(name), new, Duration::from_secs(2 * 3600));
+    }
+    let mut harness = shell(&from, egui::vec2(1280.0, 800.0));
+    let run = |harness: &mut Harness<'_, RickUi>, action: &'static str| {
+        let pane = harness.state().app().model().focused;
+        harness
+            .state_mut()
+            .queue(Intent::Action(ext::ActionId(action)), pane);
+        harness.step();
+        harness.step();
+    };
+    // Copies the rows named by `pick` in `from` and pastes them into
+    // `into`, then waits for the dialogue.
+    let paste = |harness: &mut Harness<'_, RickUi>, pick: &dyn Fn(&str) -> bool| {
+        let pane = harness.state().app().model().focused;
+        harness.state_mut().app_mut().handle(
+            app::Command::Navigate {
+                pane,
+                to: local(&from),
+            },
+            &mut Vec::new(),
+        );
+        settle(harness);
+        let ids: Vec<types::EntryId> = harness
+            .state()
+            .app()
+            .model()
+            .active_tab(pane)
+            .map_or_else(|| panic!("no tab"), |(_, tab)| tab.clone())
+            .rows()
+            .filter(|e| pick(&e.name))
+            .map(|e| e.id)
+            .collect();
+        harness.state_mut().app_mut().handle(
+            app::Command::Select {
+                pane,
+                change: SelectionChange::Set(ids),
+            },
+            &mut Vec::new(),
+        );
+        settle(harness);
+        run(harness, "core.copy");
+        harness.state_mut().app_mut().handle(
+            app::Command::Navigate {
+                pane,
+                to: local(&into),
+            },
+            &mut Vec::new(),
+        );
+        settle(harness);
+        run(harness, "core.paste");
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while harness.state().app().model().conflicts.is_empty() {
+            assert!(Instant::now() < deadline, "no conflict dialogue");
+            harness.step();
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        harness.step();
+        harness.step();
+    };
+    let cancel = |harness: &mut Harness<'_, RickUi>| {
+        harness.get_by_label("Cancel").click();
+        harness.step();
+        settle(harness);
+    };
+    let modes = [
+        (Theme::Light, Density::Comfortable, "light-comfortable"),
+        (Theme::Light, Density::Compact, "light-compact"),
+        (Theme::Dark, Density::Comfortable, "dark-comfortable"),
+        (Theme::Dark, Density::Compact, "dark-compact"),
+    ];
+    let set = |harness: &mut Harness<'_, RickUi>, theme: Theme, density: Density| {
+        for change in [
+            SettingsChange::Theme(theme),
+            SettingsChange::Density(density),
+        ] {
+            harness
+                .state_mut()
+                .app_mut()
+                .handle(app::Command::Settings(change), &mut Vec::new());
+        }
+        // The pointer rests outside the dialogue, on no button.
+        harness.event(egui::Event::PointerMoved(egui::pos2(40.0, 780.0)));
+        for _ in 0..4 {
+            harness.step();
+        }
+    };
+
+    // One conflict: no count, no checkbox.
+    paste(&mut harness, &|name| name == long);
+    for (theme, density, mode) in modes {
+        set(&mut harness, theme, density);
+        shoot(&mut harness, &format!("paste-conflict-one-{mode}"));
+    }
+    cancel(&mut harness);
+
+    // The third of twelve, with the checkbox.
+    paste(&mut harness, &|name| name != "Holiday");
+    for _ in 0..2 {
+        harness.get_by_label("Skip").click();
+        harness.step();
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while harness.state().app().model().conflicts.is_empty() {
+            assert!(Instant::now() < deadline, "no further conflict");
+            harness.step();
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        harness.step();
+        harness.step();
+    }
+    for (theme, density, mode) in modes {
+        set(&mut harness, theme, density);
+        shoot(&mut harness, &format!("paste-conflict-several-{mode}"));
+    }
+    cancel(&mut harness);
+
+    // Two folders: Merge, and no Keep both.
+    paste(&mut harness, &|name| name == "Holiday");
+    for (theme, density, mode) in modes {
+        set(&mut harness, theme, density);
+        shoot(&mut harness, &format!("paste-conflict-folders-{mode}"));
+    }
+    cancel(&mut harness);
+}
+
 /// Issue 60: the install dialogue — the JetBrains-shaped archive with its
 /// icon, the effects card and the collapsed Advanced options — in Light
 /// and Dark at both densities, then with Advanced options expanded, and

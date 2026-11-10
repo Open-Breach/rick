@@ -390,3 +390,23 @@ integration-check-at-startup-desc = Zeigt den Einrichtungsdialog, wenn etwas feh
 integration-skipped-items = Übersprungene Einträge
 integration-skipped-items-desc = Erneut nach Einträgen fragen, die im Einrichtungsdialog ausgeschaltet wurden
 integration-reset-choices = Auswahl zurücksetzen
+
+# Der Konfliktdialog beim Einfügen
+conflict-replace-file = Datei ersetzen?
+conflict-replace-folder = Ordner ersetzen?
+conflict-merge-folder = Ordner zusammenführen?
+conflict-title-counted = { $question } ({ $index } von { $total })
+conflict-file-already-in = Eine Datei mit diesem Namen ist bereits in { $folder }
+conflict-folder-already-in = Ein Ordner mit diesem Namen ist bereits in { $folder }
+conflict-existing-file = Vorhandene Datei
+conflict-new-file = Neue Datei
+conflict-existing-folder = Vorhandener Ordner
+conflict-new-folder = Neuer Ordner
+conflict-same-for-remaining = { $count ->
+    [one] Für den verbleibenden Konflikt ebenso verfahren
+   *[other] Für die verbleibenden { $count } Konflikte ebenso verfahren
+}
+conflict-same-for-all-remaining = Für alle verbleibenden Konflikte ebenso verfahren
+conflict-replace = Ersetzen
+conflict-merge = Zusammenführen
+conflict-keep-both = Beide behalten

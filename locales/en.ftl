@@ -6,9 +6,24 @@ compare-left = Left
 compare-right = Right
 compare-copy-to-the-right-folder = Copy to the right folder
 compare-copy-to-the-left-folder = Copy to the left folder
-conflict-conflict = conflict
-conflict-rename-to = Rename to
-conflict-rename = Rename
+conflict-replace-file = Replace file?
+conflict-replace-folder = Replace folder?
+conflict-merge-folder = Merge folder?
+conflict-title-counted = { $question } ({ $index } of { $total })
+conflict-file-already-in = A file with this name is already in { $folder }
+conflict-folder-already-in = A folder with this name is already in { $folder }
+conflict-existing-file = Existing file
+conflict-new-file = New file
+conflict-existing-folder = Existing folder
+conflict-new-folder = New folder
+conflict-same-for-remaining = { $count ->
+    [one] Do the same for the remaining conflict
+   *[other] Do the same for the remaining { $count } conflicts
+}
+conflict-same-for-all-remaining = Do the same for all remaining conflicts
+conflict-replace = Replace
+conflict-merge = Merge
+conflict-keep-both = Keep both
 skip = Skip
 cancel = Cancel
 inspector-select-a-file-to-preview = Select a file to preview it
