@@ -20,6 +20,7 @@ pub mod actions;
 pub mod datasets;
 pub mod manage;
 pub mod parse;
+pub mod props;
 pub mod provider;
 pub mod restore;
 mod versions;

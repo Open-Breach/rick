@@ -47,7 +47,7 @@
 
 ## 8. Info section
 
-- [ ] 8.1 Read the fixed property list through `zfs get -H -p -o property,value,source` into the dataset cache, mapping sources and dropping `-` values and unknown properties with one retry (design Decision 11); verify unit tests on recorded output for an inherited value, an unencrypted dataset and an unknown-property error
+- [x] 8.1 Read the fixed property list through `zfs get -H -p -o property,value,source` into the dataset cache, mapping sources and dropping `-` values and unknown properties with one retry (design Decision 11); verify unit tests on recorded output for an inherited value, an unencrypted dataset and an unknown-property error
 - [ ] 8.2 Implement the decorator: `applies_to` from the dataset cache, no columns, `decorate` starting the background read when the cache is missing or stale, and a *ZFS* panel section with dataset, snapshot count, newest snapshot and date, then the properties with their source, or a *Loading…* row before the read arrives; verify unit tests for an entry inside and outside a dataset and before and after the read (spec: Dataset info section, Dataset properties shown)
 - [ ] 8.3 Add the section's labels and source words to `en.ftl` and `de.ftl`; verify the i18n test
 

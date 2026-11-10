@@ -16,7 +16,8 @@ use std::time::{Duration, Instant};
 use types::Error;
 
 use crate::parse::{self, FileSystem, Snapshot};
-use crate::zfs::{Zfs, ZfsError, classify, to_error};
+use crate::props::{self, Property};
+use crate::zfs::{Zfs, classify, to_error};
 
 /// How long a snapshot list is trusted before it is read again.
 pub const TTL: Duration = Duration::from_secs(30);
@@ -37,6 +38,7 @@ pub struct Datasets {
     ttl: Duration,
     filesystems: OnceLock<Vec<FileSystem>>,
     snapshots: Mutex<HashMap<String, Read>>,
+    properties: Mutex<HashMap<String, (Instant, Arc<Vec<Property>>)>>,
     told: AtomicBool,
 }
 
@@ -59,6 +61,7 @@ impl Datasets {
             ttl,
             filesystems: OnceLock::new(),
             snapshots: Mutex::default(),
+            properties: Mutex::default(),
             told: AtomicBool::new(false),
         }
     }
@@ -170,9 +173,35 @@ impl Datasets {
             .map(|read| Arc::clone(&read.snapshots))
     }
 
-    /// Forgets the snapshot list of `dataset`: the next request reads it.
+    /// Forgets the snapshot list and the properties of `dataset`: the next
+    /// request reads them.
     pub fn invalidate(&self, dataset: &str) {
         lock(&self.snapshots).remove(dataset);
+        lock(&self.properties).remove(dataset);
+    }
+
+    /// The properties of `dataset` the info section shows, from the cache
+    /// when it is younger than the TTL, read again otherwise.
+    ///
+    /// # Errors
+    ///
+    /// `Error::Unsupported` without `zfs`; ZFS's error when the read fails.
+    pub fn properties(&self, dataset: &str) -> Result<Arc<Vec<Property>>, Error> {
+        if let Some(fresh) = self.cached_properties(dataset) {
+            return Ok(fresh);
+        }
+        let read = Arc::new(props::read(&*self.zfs, dataset)?);
+        lock(&self.properties).insert(dataset.to_owned(), (Instant::now(), Arc::clone(&read)));
+        Ok(read)
+    }
+
+    /// The cached properties of `dataset`, when younger than the TTL.
+    #[must_use]
+    pub fn cached_properties(&self, dataset: &str) -> Option<Arc<Vec<Property>>> {
+        lock(&self.properties)
+            .get(dataset)
+            .filter(|(at, _)| at.elapsed() < self.ttl)
+            .map(|(_, read)| Arc::clone(read))
     }
 
     /// The mounted datasets that have snapshots, with them, newest first,
@@ -204,12 +233,6 @@ impl Datasets {
 
 fn newest_first(list: &[Snapshot]) -> Vec<Snapshot> {
     list.iter().rev().cloned().collect()
-}
-
-/// Whether a ZFS error is the one a missing dataset gives.
-#[must_use]
-pub fn is_missing(error: &ZfsError) -> bool {
-    error.message().contains("does not exist")
 }
 
 #[cfg(test)]
