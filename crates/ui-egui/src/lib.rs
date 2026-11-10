@@ -130,3 +130,11 @@ pub fn run(
         }),
     )
 }
+
+/// Loads the English strings, once: for a unit test that reads a text the
+/// UI shows. The application does this at its start.
+#[cfg(test)]
+pub(crate) fn english() {
+    static ONCE: std::sync::Once = std::sync::Once::new();
+    ONCE.call_once(|| ext::i18n::add_bundled("en", app::LOCALE_EN));
+}

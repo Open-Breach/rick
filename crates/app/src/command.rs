@@ -386,12 +386,15 @@ pub enum Command {
     /// file (read again as a job, not the window the pane has loaded), the
     /// raw source for a rendered format, never the file itself.
     PreviewCopy(PaneId),
-    /// Open Properties on the pane's selected entry: the general rows and,
-    /// for a local entry, its owner, group, mode bits and ACL; answered by
-    /// `Event::Properties`, and again after a change while the dialogue is
-    /// open.
+    /// Open Properties on the pane's selected entry: its location, sizes
+    /// and dates, what a link resolves to and, for a local entry, its
+    /// owner, group, mode bits and ACL; answered by `Event::Properties`,
+    /// and again after a change while the dialogue is open. A local
+    /// folder's contents are counted in the background and follow with
+    /// `Event::PropertiesCounted`.
     ShowProperties(PaneId),
-    /// The Properties dialogue closed; a later change does not report back.
+    /// The Properties dialogue closed: a later change does not report
+    /// back, and a count still running is cancelled.
     PropertiesClosed,
     /// The Hash dialogue's format toggle changed: remember the format as
     /// `[hash] format` in `core.toml`, so the next dialogue opens with it.
@@ -702,6 +705,15 @@ pub enum Event {
     },
     /// What `Command::ShowProperties` found: the dialogue's contents.
     Properties(Box<PropertiesInfo>),
+    /// The count of the folder the Properties dialogue shows is in.
+    PropertiesCounted {
+        /// The pane the dialogue was opened from.
+        pane: PaneId,
+        /// The folder.
+        path: PathBuf,
+        /// What is inside.
+        contents: FolderContents,
+    },
     /// Compute hash started on the pane's selection: open the Hash
     /// dialogue on the slot, which the job fills file by file.
     HashesOpened {
@@ -745,8 +757,18 @@ pub struct PropertiesInfo {
     /// The entry as a path on this machine, for a local entry: what the
     /// permissions and the platform's dialogue work on.
     pub path: Option<PathBuf>,
-    /// The general rows: name, type, location, size, dates, link target.
-    pub rows: Vec<(String, String)>,
+    /// The folder that holds the entry, as the *Location* row shows and
+    /// copies it.
+    pub location: String,
+    /// The bytes the entry itself occupies on disk, where that can be told.
+    pub on_disk: Option<u64>,
+    /// What a symbolic link resolves to: the entry at the end of the link,
+    /// its path the one the link holds, made absolute. `None` for anything
+    /// but a link, for a broken link and where the link cannot be followed
+    /// from this machine.
+    pub target: Option<Entry>,
+    /// Where the count of a folder's contents stands.
+    pub contents: Contents,
     /// The owner, group, mode bits and ACL, for a local entry the platform
     /// could read them of.
     pub permissions: Option<FilePermissions>,
@@ -755,6 +777,32 @@ pub struct PropertiesInfo {
     /// Whether the platform has a dialogue of its own to offer
     /// (`Command::SystemProperties`).
     pub native: bool,
+}
+
+/// Where the count of a folder's contents stands, for the Properties
+/// dialogue's *Contents* row.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Contents {
+    /// Nothing is counted: the entry is no folder, or no folder on this
+    /// machine.
+    #[default]
+    None,
+    /// The count is running; [`Event::PropertiesCounted`] brings the result.
+    Counting,
+    /// What the count found.
+    Counted(FolderContents),
+}
+
+/// What is inside a folder: everything below it, at any depth, links
+/// counted as themselves and never followed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct FolderContents {
+    /// The files and folders inside.
+    pub items: u64,
+    /// The sum of the files' sizes.
+    pub bytes: u64,
+    /// The bytes they occupy on disk, the folders' own included.
+    pub on_disk: u64,
 }
 
 /// A `debug_struct` of `name` with the pane and one more field: the shape
@@ -850,6 +898,9 @@ impl fmt::Debug for Event {
                 .field("entry", &info.entry.name)
                 .field("permissions", &info.permissions.is_some())
                 .finish(),
+            Self::PropertiesCounted { pane, contents, .. } => {
+                pane_struct(f, "PropertiesCounted", *pane, "contents", contents)
+            }
             Self::ViewOpened { pane, tab, view } => f
                 .debug_struct("ViewOpened")
                 .field("pane", pane)

@@ -127,23 +127,7 @@ pub fn checkbox(ui: &mut egui::Ui, on: bool, label: &str) -> egui::Response {
         pos2(rect.left() + ICON / 2.0, rect.center().y),
         vec2(ICON, ICON),
     );
-    if on {
-        ui.painter().rect_filled(box_rect, 3.0, scheme.accent_focus);
-        ui.painter().text(
-            box_rect.center(),
-            Align2::CENTER_CENTER,
-            icons::DONE,
-            FontId::proportional(12.0),
-            Scheme::ON_BUTTON,
-        );
-    } else {
-        ui.painter().rect_stroke(
-            box_rect,
-            3.0,
-            egui::Stroke::new(1.0, scheme.border_strong),
-            egui::StrokeKind::Inside,
-        );
-    }
+    paint_check(ui, box_rect, on);
     ui.painter().galley(
         pos2(
             box_rect.right() + 8.0,
@@ -154,6 +138,47 @@ pub fn checkbox(ui: &mut egui::Ui, on: bool, label: &str) -> egui::Response {
     );
     response.widget_info(|| {
         egui::WidgetInfo::selected(egui::WidgetType::Checkbox, true, on, label.to_owned())
+    });
+    response
+}
+
+/// The box of a checkbox in `rect`: filled `accent/focus` with a white
+/// check when ticked, a `border/strong` outline when not.
+fn paint_check(ui: &egui::Ui, rect: Rect, on: bool) {
+    let scheme = theme::scheme(ui);
+    if on {
+        ui.painter().rect_filled(rect, 3.0, scheme.accent_focus);
+        ui.painter().text(
+            rect.center(),
+            Align2::CENTER_CENTER,
+            icons::DONE,
+            FontId::proportional(12.0),
+            Scheme::ON_BUTTON,
+        );
+    } else {
+        ui.painter().rect_stroke(
+            rect,
+            3.0,
+            egui::Stroke::new(1.0, scheme.border_strong),
+            egui::StrokeKind::Inside,
+        );
+    }
+}
+
+/// A checkbox without a label of its own, its 16 px box centred on
+/// `center`: one cell of a grid whose row and column say what it is, and
+/// `name` says it to a screen reader. A little room around the box takes
+/// the click too; returns the response, the caller owns the value.
+pub fn check_at(ui: &mut egui::Ui, center: egui::Pos2, on: bool, name: &str) -> egui::Response {
+    let rect = Rect::from_center_size(center, vec2(ICON, ICON));
+    let response = ui.interact(
+        rect.expand(5.0),
+        ui.id().with(("check", name)),
+        Sense::click(),
+    );
+    paint_check(ui, rect, on);
+    response.widget_info(|| {
+        egui::WidgetInfo::selected(egui::WidgetType::Checkbox, true, on, name.to_owned())
     });
     response
 }

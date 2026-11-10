@@ -116,7 +116,6 @@ link-junction = Verzeichnisverbindung
 link-shortcut = Verknüpfung (.lnk)
 
 # Die Eigenschaften
-properties-title = Eigenschaften von { $name }
 permissions = Berechtigungen
 owner = Besitzer
 group = Gruppe
@@ -124,11 +123,73 @@ read = Lesen
 write = Schreiben
 execute = Ausführen
 octal = Oktal
-files = Dateien
-folders = Ordner
+others = Andere
+size = Größe
 allow = Erlauben
 deny = Verweigern
 properties-apply-to-enclosed-items = Auf enthaltene Einträge anwenden
+properties-apply-to-enclosed-detail = Dieselben Berechtigungen für alles darin setzen
+properties-general = Allgemein
+properties-no-permissions = Für diesen Eintrag lassen sich keine Berechtigungen lesen
+properties-calculating = Wird berechnet…
+properties-folder-summary = { $count ->
+    [one] 1 Element
+   *[other] { $count } Elemente
+}, { $size }
+properties-location = Ort
+properties-copy-location = Ort kopieren
+properties-target = Ziel
+properties-copy-target = Ziel kopieren
+properties-resolves-to = Verweist auf
+properties-missing = Fehlt
+properties-media-type = Medientyp
+properties-link = Verknüpfung
+properties-link-size = { $size } (auf dem Datenträger { $on_disk })
+properties-contents = Inhalt
+properties-contents-counted = { $count ->
+    [one] 1 Element
+   *[other] { $count } Elemente
+}  ·  { $size }
+properties-on-disk = Auf dem Datenträger
+properties-dates = Daten
+properties-modified = Geändert
+properties-accessed = Zugegriffen
+properties-created = Erstellt
+properties-options = Optionen
+properties-hidden = Versteckt
+properties-open-target-folder = Zielordner öffnen
+properties-ownership = Besitz
+properties-access = Zugriff
+properties-advanced = Erweitert
+properties-acl = Zugriffssteuerungsliste (ACL)
+properties-acl-no-extra = Keine zusätzlichen Einträge
+properties-acl-extra = { $count ->
+    [one] 1 zusätzlicher Eintrag
+   *[other] { $count } zusätzliche Einträge
+}: { $entries }
+properties-acl-entries = { $count ->
+    [one] 1 Eintrag
+   *[other] { $count } Einträge
+}
+properties-acl-user = Benutzer
+properties-acl-group = Gruppe
+properties-acl-owner = Besitzer ({ $name })
+properties-acl-owning-group = Besitzergruppe ({ $name })
+properties-acl-mask = Maske
+properties-acl-remove = { $name } entfernen
+properties-acl-user-option = Benutzer
+add = Hinzufügen
+type-folder = Ordner
+type-symbolic-link = Symbolische Verknüpfung
+type-special-file = Spezialdatei
+type-executable = Ausführbare Datei
+type-file = Datei
+type-file-of = { $format }-Datei
+type-image = { $format }-Bild
+type-video = { $format }-Video
+type-audio = { $format }-Audio
+type-archive = { $format }-Archiv
+type-document = { $format }-Dokument
 properties-system-properties = Systemeigenschaften…
 properties-applying = Wird angewendet…
 

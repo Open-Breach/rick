@@ -4119,3 +4119,61 @@ Once answered, an entry keeps its number and gains a dated decision line.
     button is the filled one there.
     Assumed: *Skip* is filled, as the button Enter chooses is everywhere
     else, and *Merge* keeps the amber of *Replace*.
+
+352. (GUI fixes, Properties, issue 139 item 4, 2026-11-10) The header
+    names "the type" — *Folder*, *Symbolic link*, *Executable file*, and
+    for the File info card *JPEG image*, *PDF document* — and nothing
+    says how a type's name is found; the file list's Type column has
+    `JPG`.
+    Assumed: one helper for both places. A file is named after the
+    family of its extension — image, video, audio, archive, document —
+    with the format in capitals before it (*JPEG image*, *MKV video*,
+    *TAR archive*, *PDF document*); a file in no family is an
+    *Executable file* when it is executable, else its extension and
+    *file* (*BIN file*), or *File* without one.
+
+353. (GUI fixes, Properties, issue 139 item 4, 2026-11-10) *Contents*
+    reads "12 items · 3.4 GiB" and does not say whether the items are
+    the folder's own entries or everything below it; the size can only
+    be everything below it.
+    Assumed: one walk gives both — every file and folder inside, at any
+    depth, links counted as themselves and never followed, entries that
+    cannot be read left out. *On disk* is what all of it occupies, the
+    folder's own blocks included. Only a folder on this machine is
+    counted; a remote folder has no Size group.
+
+354. (GUI fixes, Properties, issue 139 item 4, 2026-11-10) *Open target
+    folder* "shows the folder that holds the target", and a link's text
+    can be relative or go through other links.
+    Assumed: the folder the link's text names, a relative text taken
+    from the link's folder, `.` and `..` read as text; where no entry
+    has that name (a `..` after another link), the real folder of the
+    target. *Resolves to* describes the entry at the end of the chain.
+    A link on a remote provider shows its *Target* only: nothing follows
+    it from here, so it has no *Resolves to* unless it is broken, and
+    its button is off.
+
+355. (GUI fixes, Properties, issue 139 item 4, 2026-11-10) "For a
+    regular file also *Media type*": the row shows what the provider
+    reports for the entry, and the local provider reports none, as in
+    0.3.
+    Assumed: the row is there when the entry has a media type and left
+    out when it has none; finding the type of a local file (the shared
+    MIME database is only read on Linux, for *Open with*) is not part of
+    this item.
+
+356. (GUI fixes, Properties, issue 139 item 4, 2026-11-10) Three
+    behaviours of the Permissions tab follow from the frames and are not
+    written out. 0.3 chose files and folders separately under *Apply to
+    enclosed items*; the frame has one switch. 0.3 gave a new list entry
+    a mask of `rwx`; the two grids now move together, so the mask shows
+    as the Group row. An entry on a provider without permissions has
+    nothing to show on the tab.
+    Assumed: the switch covers files and folders alike. A new entry gets
+    read access and the mask becomes the union of the owning group's and
+    the named entries' rights, as `setfacl` computes it, and goes with
+    the last named entry. Without permissions the *Permissions* segment
+    is washed out and says why in its tooltip. The dialogue is a modal
+    of the shared shell now: Escape and a click beside it close it,
+    unapplied changes included, and the keymap is quiet while it is
+    open.
