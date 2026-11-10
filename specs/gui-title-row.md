@@ -61,7 +61,7 @@ There is no menu bar; the burger menu at the left of the title row — the appli
 | Configuration | Settings | `SLIDERS` | Its shortcut |
 | | Keyboard shortcuts | `KEYBOARD` | Its shortcut |
 | | Extensions | `PUZZLE_PIECE` | Its shortcut |
-| About | About Rick (the About dialog, [`specs/about-dialog.md`](specs/about-dialog.md)) | `INFO` | The version of the running build, `0.4.0` |
+| About | About Rick (the About dialog, [`specs/about-dialog.md`](about-dialog.md)) | `INFO` | The version of the running build, `0.4.0` |
 
 - Every entry has an icon. No label ends in "…": *Settings*, *Keyboard shortcuts* and *Extensions* are written as GNOME writes them. A shortcut hint comes from the keymap, never from a table of its own: the entry shows the chord bound to it — the first when it has several — and nothing when it is unbound. There is no theme switch in the menu: the scheme follows the system by default and is changed in Settings → Appearance.
 - The submenus are cards of the same form and keep their entries.
