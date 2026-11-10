@@ -2,8 +2,9 @@
 //!
 //! The plugin cannot use `ops` (it sits above the plugins), so Restore is
 //! its own job: for each selected entry it computes the live path (mount
-//! point plus the path below the snapshot), asks once to replace the live
-//! items that exist, moves those to the trash through the platform's
+//! point plus the path below the snapshot), asks once, naming the snapshot
+//! and the live items it replaces, moves those to the trash through the
+//! platform's
 //! [`Trash`], creates missing parents and copies the entry back: regular
 //! files, folders and symbolic links, with their permissions and
 //! modification times. The cancel token is checked between files. An item
@@ -36,6 +37,8 @@ pub struct Item {
     pub from: PathBuf,
     /// The live path it is restored to.
     pub to: PathBuf,
+    /// The snapshot it comes from, `dataset@name`.
+    pub snapshot: String,
 }
 
 /// Why some items were not restored.
@@ -70,7 +73,11 @@ pub fn items(shared: &Shared, locations: &[Location]) -> Result<Vec<Item>, Error
             let fs = shared.datasets.named(&dataset).ok_or(Error::NotFound)?;
             let from = crate::datasets::Datasets::snapshot_dir(fs, &snapshot).join(&rel);
             let to = live_path(&shared.datasets, loc).ok_or(Error::NotFound)?;
-            Ok(Item { from, to })
+            Ok(Item {
+                from,
+                to,
+                snapshot: format!("{dataset}@{snapshot}"),
+            })
         })
         .collect()
 }
@@ -175,6 +182,33 @@ fn keep_mode(from: &Path, to: &Path) {
     }
 }
 
+/// The confirmation's text: the snapshots the items come from, the live
+/// paths they go to and, apart, the live items that go to the trash.
+fn question(items: &[Item]) -> String {
+    let mut snapshots: Vec<&str> = Vec::new();
+    for item in items {
+        if !snapshots.contains(&item.snapshot.as_str()) {
+            snapshots.push(&item.snapshot);
+        }
+    }
+    let targets: Vec<String> = items.iter().map(|i| i.to.display().to_string()).collect();
+    let mut text = t!(
+        "zfs-restore-confirm",
+        snapshots = snapshots.join(", "),
+        items = targets.join("\n")
+    );
+    let replaced: Vec<String> = items
+        .iter()
+        .filter(|i| i.to.symlink_metadata().is_ok())
+        .map(|i| i.to.display().to_string())
+        .collect();
+    if !replaced.is_empty() {
+        text.push_str("\n\n");
+        text.push_str(&t!("zfs-restore-replaces", items = replaced.join("\n")));
+    }
+    text
+}
+
 /// Puts the selected entries of a snapshot or a versions view back.
 #[derive(Debug)]
 pub struct Restore(pub Arc<Shared>);
@@ -233,17 +267,7 @@ impl Action for Restore {
             .map(|e| Location::new(ctx.location.provider, e.path.clone()))
             .collect();
         let items = items(&self.0, &locations)?;
-        let replaced: Vec<String> = items
-            .iter()
-            .filter(|i| i.to.symlink_metadata().is_ok())
-            .map(|i| i.to.display().to_string())
-            .collect();
-        if !replaced.is_empty()
-            && !ui.confirm(
-                &t!("zfs-restore"),
-                &t!("zfs-restore-replaces", items = replaced.join("\n")),
-            )
-        {
+        if !ui.confirm(&t!("zfs-restore"), &question(&items)) {
             return Ok(ActionOutcome::Done);
         }
         let name = t!("zfs-restoring", count = items.len());

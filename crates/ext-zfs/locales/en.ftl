@@ -14,6 +14,8 @@ zfs-no-snapshot-holds-folder = no snapshot contains this folder
 zfs-select-one-file = select one file first
 zfs-restore = Restore
 zfs-select-items-to-restore = select what to restore first
+zfs-restore-confirm = Restore from snapshot { $snapshots } to:
+    { $items }
 zfs-restore-replaces = These live items will be moved to the trash and replaced by their snapshot version:
     { $items }
 zfs-restoring = Restore { $count ->

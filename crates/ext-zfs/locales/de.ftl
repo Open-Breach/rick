@@ -14,6 +14,8 @@ zfs-no-snapshot-holds-folder = kein Snapshot enthält diesen Ordner
 zfs-select-one-file = zuerst eine Datei auswählen
 zfs-restore = Wiederherstellen
 zfs-select-items-to-restore = zuerst auswählen, was wiederhergestellt werden soll
+zfs-restore-confirm = Aus Snapshot { $snapshots } wiederherstellen nach:
+    { $items }
 zfs-restore-replaces = Diese aktuellen Einträge werden in den Papierkorb verschoben und durch ihre Snapshot-Version ersetzt:
     { $items }
 zfs-restoring = { $count ->

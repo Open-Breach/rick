@@ -92,11 +92,38 @@ fn a_deleted_file_is_restored_with_its_snapshot_content() {
     let result = b.run(
         ann(&b, "b"),
         vec![b.entry("b", "ann/old.txt")],
-        &Scripted::default(),
+        &Scripted::confirming(true),
     );
     assert!(matches!(result, Some(Ok(()))), "{result:?}");
     assert_eq!(fs::read_to_string(&live).ok().as_deref(), Some("gone live"));
     assert!(b.trashed().is_empty(), "nothing was in the way");
+}
+
+#[test]
+fn the_question_names_the_snapshot_even_with_nothing_in_the_way() {
+    let b = bench();
+    let live = b.fx.home().join("ann/old.txt");
+    let ui = Scripted::confirming(true);
+    let result = b.run(ann(&b, "b"), vec![b.entry("b", "ann/old.txt")], &ui);
+    assert!(matches!(result, Some(Ok(()))), "{result:?}");
+    let asked = ui.asked();
+    assert_eq!(asked.len(), 1, "one confirmation: {asked:?}");
+    assert!(asked[0].contains("tank/home@b"), "{asked:?}");
+    assert!(asked[0].contains(&live.display().to_string()), "{asked:?}");
+    assert!(
+        !asked[0].contains("trash"),
+        "nothing is replaced: {asked:?}"
+    );
+}
+
+#[test]
+fn a_declined_restore_changes_nothing() {
+    let b = bench();
+    let live = b.fx.home().join("ann/old.txt");
+    let ui = Scripted::confirming(false);
+    let result = b.run(ann(&b, "b"), vec![b.entry("b", "ann/old.txt")], &ui);
+    assert!(result.is_none(), "no job: {result:?}");
+    assert!(!live.exists(), "nothing restored");
 }
 
 #[test]
@@ -112,6 +139,8 @@ fn a_live_file_is_trashed_and_replaced_after_confirmation() {
     let asked = ui.asked();
     assert_eq!(asked.len(), 1, "one confirmation: {asked:?}");
     assert!(asked[0].contains(&live.display().to_string()), "{asked:?}");
+    assert!(asked[0].contains("tank/home@b"), "{asked:?}");
+    assert!(asked[0].contains("trash"), "{asked:?}");
     // The snapshot's modification time came along.
     let modified = fs::metadata(&live).and_then(|m| m.modified()).ok();
     assert_eq!(
@@ -144,7 +173,7 @@ fn missing_live_parents_are_created() {
     let result = b.run(
         at,
         vec![b.entry("b", "ann/gone/deeper/f.txt")],
-        &Scripted::default(),
+        &Scripted::confirming(true),
     );
     assert!(matches!(result, Some(Ok(()))), "{result:?}");
     assert_eq!(
@@ -170,7 +199,7 @@ fn a_folder_comes_back_with_its_files_and_links() {
     let result = b.run(
         ann(&b, "b"),
         vec![b.entry("b", "ann/proj")],
-        &Scripted::default(),
+        &Scripted::confirming(true),
     );
     assert!(matches!(result, Some(Ok(()))), "{result:?}");
     let live = b.fx.home().join("ann/proj");
@@ -199,7 +228,7 @@ fn a_version_from_the_versions_view_is_restored() {
     let result = b.run(
         versions_location(&live),
         vec![version],
-        &Scripted::default(),
+        &Scripted::confirming(true),
     );
     assert!(matches!(result, Some(Ok(()))), "{result:?}");
     assert!(live.exists());
