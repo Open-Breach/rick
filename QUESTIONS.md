@@ -4103,3 +4103,19 @@ Once answered, an entry keeps its number and gains a dated decision line.
     reads *Console* whatever the shell sets; the error is a toast in the
     window the user acted in, with the whole text wrapped, that stays
     until it is dismissed, and the drawer's row expands on a click.
+
+350. (GUI fixes, paste conflict, issue 139 item 3, 2026-11-10) The
+    dialogue needs both entries' size and date and the conflict's place
+    among the job's, and `Conflicts::ask` is what plugins call too: the
+    extraction of `ext-action-compress` asks through it.
+    Assumed: `ask` takes a `ConflictDetails` in place of `target_is_dir`
+    and `remaining`, and the extension API version goes to 17. A copy or
+    move counts its conflicts before it begins; an extraction does not, so
+    its dialogue has no "(n of m)" and its checkbox reads *Do the same
+    for all remaining conflicts*, without a number.
+
+351. (GUI fixes, paste conflict, issue 139 item 3, 2026-11-10) Between
+    two folders Enter is *Skip* (question 329), and nothing says which
+    button is the filled one there.
+    Assumed: *Skip* is filled, as the button Enter chooses is everywhere
+    else, and *Merge* keeps the amber of *Replace*.
