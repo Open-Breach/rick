@@ -320,7 +320,12 @@ fn a_1gib_sparse_copy_shows_progress_pauses_and_cancels() {
         let info = harness.state().app().model().jobs[&id].clone();
         if matches!(info.state, JobState::Running(_)) {
             assert!(info.paused, "{info:?}");
-            harness.get_by_label(icons::PLAY);
+            // The operations drawer names its round button; the glyph is
+            // only painted.
+            assert!(
+                harness.query_all_by_label("Resume").count() >= 1,
+                "a paused job's row offers Resume"
+            );
         }
         harness
             .state_mut()
