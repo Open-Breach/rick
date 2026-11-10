@@ -114,6 +114,11 @@ pub const NEW_FOLDER: &str = ph::FOLDER_PLUS;
 pub const REVEAL: &str = ph::ARROW_SQUARE_OUT;
 pub const MOUNT: &str = ph::HARD_DRIVES;
 pub const OPEN_WITH: &str = ph::APP_WINDOW;
+/// The application menu's entries (SPEC.md *Menu*).
+pub const NEW_WINDOW: &str = ph::APP_WINDOW;
+pub const LAYOUTS: &str = ph::LAYOUT;
+pub const SETTINGS: &str = ph::SLIDERS;
+pub const SHORTCUTS: &str = ph::KEYBOARD;
 /// An open folder, for the expanded folder tree node.
 pub const FOLDER_OPEN: &str = ph::FOLDER_OPEN;
 /// Pause a job.
@@ -427,6 +432,10 @@ mod tests {
         REVEAL,
         MOUNT,
         OPEN_WITH,
+        NEW_WINDOW,
+        LAYOUTS,
+        SETTINGS,
+        SHORTCUTS,
         FOLDER_OPEN,
         PAUSE,
         PLAY,

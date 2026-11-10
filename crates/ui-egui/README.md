@@ -11,7 +11,11 @@ is the system's UI and monospace fonts (`fonts`, through the platform's
 the `model` the `app` owns, the first as eframe's root viewport and the
 others as viewports of their own drawn in the same frame: the window frame
 with its shadow and resize grips where the system draws none, the title row
-with the burger menu (New window, the Layouts submenu), the workspace tabs
+with the burger menu (the application menu, `menus.rs`: a card in the form of
+the other menus, 280 px at least, 6 px under its button — New window, the
+Layouts submenu and the extensions' submenus; Settings, Keyboard shortcuts
+and Extensions; About Rick with the version — every entry with its icon and
+the chord the keymap binds to it, spelled *Ctrl* or *Cmd*), the workspace tabs
 (one per workspace, titled after the folder in its focused pane, reordered
 by drag with the neighbours sliding apart for the gap where it will land, the dragged tab its own ghost lifted with a shadow, a tab of one pane docking into the shown layout on the side targets of the pane under it, the tabs spring-loading under a dragged pane, tab or entries, Escape cancelling the drag of a tab or a pane, a tab dragged outside every window opening a new one, a tab or a pane dragged onto another window landing in its tab row or on its dock targets) and the
 search box, the `egui_dock` tree of the shown workspace's split panes, whose

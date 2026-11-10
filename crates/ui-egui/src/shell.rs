@@ -2974,7 +2974,14 @@ impl RickUi {
                 if chrome.native_controls && chrome.controls == ControlsSide::Left {
                     left.add_space(chrome.native_controls_width);
                 }
-                menus::burger(&mut left, &mut self.requests, focused, &self.app);
+                menus::burger(
+                    &mut left,
+                    &mut self.requests,
+                    focused,
+                    &self.app,
+                    &self.keys,
+                    &self.about.build().version,
+                );
                 let side = self
                     .app
                     .model()
