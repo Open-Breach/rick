@@ -110,7 +110,12 @@ fn select(harness: &mut Harness<'_, RickUi>, name: &str) {
         }
         assert!(
             started.elapsed() < Duration::from_secs(20),
-            "{name}: no frame: {slot:?}"
+            "{name}: no frame: {slot:?}; follows {:?}, preview pane {:?}, target {:?}, \
+             inspector open {}",
+            harness.state().app().model().preview_follows(),
+            harness.state().app().preview_pane(),
+            harness.state().app().preview_target(),
+            harness.state().inspector_open(),
         );
         std::thread::sleep(Duration::from_millis(2));
     }

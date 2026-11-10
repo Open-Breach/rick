@@ -137,6 +137,11 @@ fn click_at(harness: &mut Harness<'_, RickUi>, at: egui::Pos2) {
 
 #[test]
 fn the_dialogue_has_the_header_the_cards_the_disclosure_and_the_footer() {
+    // Install as application is Linux only (specs/ext-installer.md): the
+    // action is hidden elsewhere and the dialogue cannot open.
+    if !ext_installer::supported() {
+        return;
+    }
     let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
     Fixture::GuiWithDesktop
         .write(dir.path())
@@ -182,6 +187,11 @@ fn the_dialogue_has_the_header_the_cards_the_disclosure_and_the_footer() {
 
 #[test]
 fn a_missing_version_warns_under_the_field() {
+    // Install as application is Linux only (specs/ext-installer.md): the
+    // action is hidden elsewhere and the dialogue cannot open.
+    if !ext_installer::supported() {
+        return;
+    }
     let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
     Fixture::Tarbomb
         .write(dir.path())
