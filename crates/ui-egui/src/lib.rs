@@ -63,6 +63,7 @@ pub mod settings_ui;
 pub mod shell;
 pub mod shortcuts;
 pub mod side_panel;
+pub mod surface;
 pub mod table;
 pub mod theme;
 pub mod thumbs;
@@ -108,11 +109,19 @@ pub fn run(
     // the decorations go altogether. The restored session's focused window
     // is the first one; its geometry is applied by the first frame.
     let chrome = app.platform().window_chrome();
-    let viewport = viewport_builder(title, chrome, None, true);
-    let options = eframe::NativeOptions {
-        viewport,
+    // Where Rick draws the frame the first window asks for transparency,
+    // unless `rick.toml` says not to, and the probe finds out, before the
+    // first frame, whether the window got it (`surface`).
+    let setting = app.model().settings.window.frame;
+    let asks = !chrome.native_controls && frame::asks_transparency(setting);
+    let probe = asks.then(surface::Probe::default);
+    let mut options = eframe::NativeOptions {
+        viewport: viewport_builder(title, chrome, None, asks),
         ..Default::default()
     };
+    if let Some(probe) = &probe {
+        options.wgpu_options = probe.wgpu_options();
+    }
     let mut app = Some(app);
     let mut externals = externals;
     let mut relaunch = relaunch;
@@ -123,7 +132,13 @@ pub fn run(
         Box::new(move |cc| {
             let app = app.take().ok_or("the app was already taken")?;
             let build = build.take().unwrap_or_default();
-            let mut ui = RickUi::new(app, host, &cc.egui_ctx).with_build(build);
+            // The frame of every window, chosen once: a window not known
+            // to be transparent gets the plain one.
+            let blends = probe.as_ref().and_then(surface::Probe::blends);
+            let mode = frame::Mode::of(setting, blends);
+            let mut ui = RickUi::new(app, host, &cc.egui_ctx)
+                .with_build(build)
+                .with_frame(mode);
             if let Some(externals) = externals.take() {
                 ui = ui.with_externals(externals);
             }
