@@ -24,13 +24,17 @@ use crate::profile::{self, Parser, RawEntry, RawKind};
 use crate::shell::{self, Command};
 use crate::{PROVIDER_ID, location, message, split};
 
-/// What the provider can do below a host.
+/// What the provider can do below a host. Not `SEARCH_SUBTREE`: a search
+/// in subfolders over SSH is not built yet (SPEC.md, *Footer*).
 const BELOW: Capabilities = Capabilities::REMOTE
     .union(Capabilities::WRITE)
     .union(Capabilities::RENAME)
     .union(Capabilities::SYMLINK)
     .union(Capabilities::SEEK)
-    .union(Capabilities::NATIVE_TRANSFER);
+    .union(Capabilities::NATIVE_TRANSFER)
+    .union(Capabilities::CREATE_DIR)
+    .union(Capabilities::CREATE_FILE)
+    .union(Capabilities::DOWNLOAD);
 
 /// Bytes per buffer when a copy streams through the machine.
 const BUFFER: usize = 1 << 20;
@@ -734,6 +738,18 @@ impl Provider for SshProvider {
             BELOW
         } else {
             Capabilities::REMOTE
+        }
+    }
+
+    fn unavailable_reason(&self, loc: &Location, capability: Capabilities) -> Option<String> {
+        if capability.contains(Capabilities::SEARCH_SUBTREE) {
+            Some(ext::t!("ssh-no-subfolder-search-yet"))
+        } else if split(loc).is_none()
+            && capability.intersects(Capabilities::CREATE_DIR | Capabilities::CREATE_FILE)
+        {
+            Some(ext::t!("ssh-hosts-come-from-the-side-panel"))
+        } else {
+            None
         }
     }
 

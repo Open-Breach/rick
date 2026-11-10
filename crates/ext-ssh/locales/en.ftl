@@ -17,3 +17,5 @@ ssh-password = Password
 ssh-remember-password-in-the-os-keychain = Remember password in the OS keychain
 ssh-preview-size-cap-mib-0-for = Preview size cap (MiB, 0 for the default)
 ssh-always-preview = Always preview (no size cap on this host)
+ssh-no-subfolder-search-yet = Subfolder search is not available over SSH yet
+ssh-hosts-come-from-the-side-panel = Hosts are added in the side panel
