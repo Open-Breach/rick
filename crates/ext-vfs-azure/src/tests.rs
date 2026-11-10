@@ -445,6 +445,36 @@ fn a_put_without_a_body_carries_a_content_length() {
     assert_eq!(put.header("content-length"), Some("0"), "{put:?}");
 }
 
+/// A store that does not answer is a lost connection, which keeps the pane
+/// where it is, and no error of the plugin's own (SPEC.md *Removed and
+/// unreachable locations*).
+#[test]
+fn a_store_that_refuses_the_connection_is_a_lost_connection() {
+    use futures::StreamExt as _;
+    // A port that was free a moment ago and has no listener.
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap_or_else(|e| panic!("{e}"));
+    let endpoint = format!(
+        "http://{}",
+        listener.local_addr().unwrap_or_else(|e| panic!("{e}"))
+    );
+    drop(listener);
+    let provider = provider_at(&endpoint);
+    let first = runtime::block_on(async {
+        provider
+            .list(
+                &Location::new(PROVIDER_ID, "/test/photos"),
+                ext::ListOptions::default(),
+                types::CancelToken::new(),
+            )
+            .next()
+            .await
+    });
+    match first {
+        Some(Err(error)) => assert!(error.is_unreachable(), "{error}"),
+        other => panic!("the listing went through: {other:?}"),
+    }
+}
+
 /// Issue 149: a new folder and a new file inside a container, two levels
 /// deep, under the names the inline edit suggests, which have a space. A
 /// folder is a zero-byte blob with a trailing slash and a file an empty

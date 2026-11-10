@@ -120,6 +120,48 @@ fn a_host_offers_folders_files_and_downloads_and_no_search_beneath() {
     );
 }
 
+/// A host that refuses the connection is a lost connection, which keeps
+/// the pane where it is, and no missing folder (SPEC.md *Removed and
+/// unreachable locations*).
+#[test]
+fn a_host_that_refuses_the_connection_is_a_lost_connection() {
+    use futures::StreamExt as _;
+
+    // A port that was free a moment ago and has no listener.
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap_or_else(|e| panic!("{e}"));
+    let port = listener
+        .local_addr()
+        .unwrap_or_else(|e| panic!("{e}"))
+        .port();
+    drop(listener);
+    let fake = Arc::new(Fake::new().unwrap_or_else(|e| panic!("{e}")));
+    let hosts = Arc::new(Hosts::new(fake));
+    let pool = Pool::new(Arc::clone(&hosts), None);
+    let provider = SshProvider::new(Arc::clone(&pool));
+    let connector = SshConnector::new(Arc::clone(&pool));
+    let mut host = ext::Connection {
+        name: "box".into(),
+        ..ext::Connection::default()
+    };
+    host.settings.insert("host".into(), "127.0.0.1".into());
+    host.settings.insert("port".into(), port.to_string());
+    connector.update(vec![host]);
+    let first = runtime::block_on(async {
+        provider
+            .list(
+                &Location::new(PROVIDER_ID, "/box/srv"),
+                ext::ListOptions::default(),
+                types::CancelToken::new(),
+            )
+            .next()
+            .await
+    });
+    match first {
+        Some(Err(error)) => assert!(error.is_unreachable(), "{error}"),
+        other => panic!("the listing went through: {other:?}"),
+    }
+}
+
 #[test]
 fn the_root_lists_the_hosts_without_connecting() {
     use futures::StreamExt as _;

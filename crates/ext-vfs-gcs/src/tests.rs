@@ -484,3 +484,28 @@ fn a_flat_listing_gives_the_files_and_each_folder_once() {
         ]
     );
 }
+
+/// An address on this machine that refuses a connection: a port that was
+/// free a moment ago and has no listener.
+fn refusing_address() -> std::net::SocketAddr {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap_or_else(|e| panic!("{e}"));
+    listener.local_addr().unwrap_or_else(|e| panic!("{e}"))
+}
+
+/// A request that never reaches the service is a lost connection, which
+/// keeps the pane where it is, and no error of the plugin's own (SPEC.md
+/// *Removed and unreachable locations*).
+#[test]
+fn a_refused_connection_is_a_lost_connection() {
+    let url = format!("http://{}/", refusing_address());
+    super::client::install_crypto();
+    let client = reqwest::Client::builder()
+        .no_proxy()
+        .build()
+        .unwrap_or_else(|e| panic!("{e}"));
+    let failure = runtime::block_on(async { client.get(&url).send().await })
+        .err()
+        .unwrap_or_else(|| panic!("the request was answered"));
+    let error = super::client::transport(failure);
+    assert!(error.is_unreachable(), "{error}");
+}
