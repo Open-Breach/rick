@@ -6,7 +6,7 @@ Most of what people browse remotely is a Linux server, a NAS, a Raspberry Pi, a 
 
 The plugin deliberately does **not** use the SFTP subsystem. Every operation is a command run on an SSH `exec` channel, so any host with a POSIX shell works, including the ones with no SFTP server at all. The price, parsing command output across GNU, BSD and BusyBox userlands, is paid once in a small set of command profiles.
 
-This file is the binding specification for the plugin; where it disagrees with `SPEC.md`, the question goes to `QUESTIONS.md`. It takes the place of `ext-vfs-sftp` in the Version 0.2 plan.
+This file is the binding specification for the plugin; where it disagrees with `SPEC.md`, the question goes into the pull request. It takes the place of `ext-vfs-sftp` in the Version 0.2 plan.
 
 ## Decisions
 
