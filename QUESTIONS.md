@@ -3959,6 +3959,17 @@ Once answered, an entry keeps its number and gains a dated decision line.
     no longer read. The progress line shows for every whole-file download
     from a remote source, not only after a button, and Escape cancels the
     download before it clears the filter or the selection.
+    Decided (2026-11-10): *Always preview on <host>* must actually
+    stick; the limit stays 4 MiB; no settings page and no host editor
+    this round (Serge). SPEC.md and `specs/ext-ssh.md` are back at
+    4 MiB, the Previews page is taken out again, and the plugin-wide key
+    of `ext-ssh` is read as before. What item 7 does: the card, the
+    download with its progress line and Escape, and the switch honoured
+    by every remote provider and kept across restarts. Assumed with it:
+    the switch is undone where SPEC.md already had it, the source row's
+    context menu, which therefore has to show it for a cloud account
+    too — without a settings page or an editor it is the only way back
+    short of editing `rick.toml`.
 
 341. (GUI fixes, keyboard shortcuts, 2026-11-10) The drawn categories
     are All, Navigation, File operations, View, Selection, Panes & tabs,
