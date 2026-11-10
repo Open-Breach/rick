@@ -43,6 +43,44 @@ impl Error {
         }
     }
 
+    /// The other end could not be reached, or stopped answering: a
+    /// connection that was refused or reset, a host that did not answer in
+    /// time, a name that does not resolve. A provider behind a network
+    /// reports such a failure with this, saying in `what` what happened,
+    /// so the kernel can tell a lost connection from a missing path or a
+    /// refused permission and keep the pane where it is (SPEC.md *Removed
+    /// and unreachable locations*).
+    #[must_use]
+    pub fn unreachable(what: impl Into<String>) -> Self {
+        Self::Io(std::io::Error::new(
+            std::io::ErrorKind::NotConnected,
+            what.into(),
+        ))
+    }
+
+    /// Whether the error says the other end could not be reached: what
+    /// [`unreachable`](Self::unreachable) makes, and an I/O error of a
+    /// kind the network gives.
+    #[must_use]
+    pub fn is_unreachable(&self) -> bool {
+        use std::io::ErrorKind;
+        matches!(
+            self,
+            Self::Io(error) if matches!(
+                error.kind(),
+                ErrorKind::NotConnected
+                    | ErrorKind::ConnectionRefused
+                    | ErrorKind::ConnectionReset
+                    | ErrorKind::ConnectionAborted
+                    | ErrorKind::TimedOut
+                    | ErrorKind::HostUnreachable
+                    | ErrorKind::NetworkUnreachable
+                    | ErrorKind::NetworkDown
+                    | ErrorKind::BrokenPipe
+            )
+        )
+    }
+
     /// A second copy of this error for another receiver. `Error` cannot be
     /// `Clone` because `std::io::Error` is not; the copy keeps the variant,
     /// the I/O error kind and the message, and drops any wrapped payload.
@@ -75,6 +113,25 @@ mod tests {
         assert!(matches!(Error::from_io(denied), Error::PermissionDenied));
         let other = std::io::Error::from(std::io::ErrorKind::AlreadyExists);
         assert!(matches!(Error::from_io(other), Error::Io(_)));
+    }
+
+    #[test]
+    fn an_unreachable_error_is_told_from_a_missing_path_and_survives_a_copy() {
+        let lost = Error::unreachable("nas:22 did not answer in time");
+        assert!(lost.is_unreachable());
+        assert_eq!(lost.to_string(), "I/O error: nas:22 did not answer in time");
+        assert!(lost.replicate().is_unreachable());
+        let refused = std::io::Error::from(std::io::ErrorKind::ConnectionRefused);
+        assert!(Error::from_io(refused).is_unreachable());
+        for other in [
+            Error::NotFound,
+            Error::PermissionDenied,
+            Error::Cancelled,
+            Error::Unsupported("no"),
+            Error::Io(std::io::Error::from(std::io::ErrorKind::AlreadyExists)),
+        ] {
+            assert!(!other.is_unreachable(), "{other}");
+        }
     }
 
     #[test]
