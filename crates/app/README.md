@@ -39,7 +39,14 @@ file through the hex previewer (`Command::PreviewWith`); *Always preview on <sou
 there, whichever remote provider keeps the source; a whole file fetched
 from a remote source for a preview is counted as it arrives
 (`Event::PreviewProgress`), and `Command::PreviewCancel` stops the fetch
-and brings the size-limit card back. The extension settings store is shared with the plugins through the
+and brings the size-limit card back. For the Extensions dialogue it keeps the
+plugins' rows with what their manifests say, which schemes a plugin's
+providers serve, where its settings file is and whether its previewer
+reported a third-party library missing; `Command::InstallPlugin` unpacks a
+plugin package — an `.rkp` file, a zip archive of a plugin's folder — into
+the per-user plugins folder and `Command::RemovePlugin` deletes a user's
+plugin there (`plugins`), each as a job, checking and asking nothing and
+never writing outside that folder. The extension settings store is shared with the plugins through the
 registry, so a plugin that found its third-party library writes the path
 into its own setting. The pinned list lives in its settings, and the pin actions
 in `ops` see it through the `PinStore` bridge it hands them. It feeds the

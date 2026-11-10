@@ -112,7 +112,12 @@ integration and the check at startup and *Reset choices*) and the Keyboard
 shortcuts dialogue (`shortcuts`: the categories with one per plugin that
 contributes actions, the search field that takes a name or a pressed
 chord, key caps, recording in the shortcut cell, the reset button of a
-changed row and the *also:* chip of a chord bound twice), and drag and drop of entries: rows are drag
+changed row and the *also:* chip of a chord bound twice) and the Extensions
+dialogue (`extensions`: the plugins grouped by what they contribute, each
+with its enable switch and an amber dot when it needs attention; the
+chosen plugin's details with the manifest's description, the attention
+card and an info card whose rows copy; *Settings*, *Open folder*, *Remove*
+for a user's plugin and *Install from file…*), and drag and drop of entries: rows are drag
 sources, folders, pane space, breadcrumb segments and tab headers are drop
 zones with the ghost, the live indicator and spring-loading in between (a
 pane at the Trash view trashes what lands in it); the side panel is never a

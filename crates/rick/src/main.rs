@@ -543,6 +543,7 @@ fn row(plugin: &plugins_native::Plugin) -> app::Plugin {
     app::Plugin {
         id: plugin.id.clone(),
         name: plugin.name.clone(),
+        description: plugin.description.clone(),
         version: plugin.version.clone(),
         points: plugin.points,
         previews: plugin.previews.clone(),
@@ -552,6 +553,8 @@ fn row(plugin: &plugins_native::Plugin) -> app::Plugin {
             PluginStatus::Refused(reason) => app::PluginStatus::Refused(reason.clone()),
         },
         path: plugin.dir.clone(),
+        built_in: plugin.source == plugins_native::Source::BesideBinary,
+        removed: false,
     }
 }
 

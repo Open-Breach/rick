@@ -696,7 +696,12 @@ impl Card<'_> {
 
 /// A 24 px button of one glyph in `rect`, `bg/subtle` under the pointer,
 /// named `name` for a screen reader and as its tooltip.
-fn icon_button(ui: &mut egui::Ui, rect: Rect, glyph: &str, name: &str) -> egui::Response {
+pub(crate) fn icon_button(
+    ui: &mut egui::Ui,
+    rect: Rect,
+    glyph: &str,
+    name: &str,
+) -> egui::Response {
     let scheme = theme::scheme(ui);
     let response = ui.interact(rect, ui.id().with(("icon-button", name)), Sense::click());
     if response.hovered() {

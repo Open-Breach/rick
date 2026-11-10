@@ -80,6 +80,7 @@ mod ext_settings;
 mod external;
 mod integration;
 mod places;
+pub mod plugins;
 mod session;
 pub mod settings;
 
@@ -126,7 +127,7 @@ use vfs::Mounts;
 use vfs_local::LocalProvider;
 use vfs_rick::{RickProvider, Virtual};
 
-/// What became of a plugin the host found, for the Extensions screen.
+/// What became of a plugin the host found, for the Extensions dialogue.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PluginStatus {
     /// Loaded; its contributions are registered.
@@ -135,6 +136,9 @@ pub enum PluginStatus {
     Disabled,
     /// Not loaded, for the reason given.
     Refused(String),
+    /// Unpacked in this session by *Install from file…*: on disk, and
+    /// loaded or refused by the next start.
+    Installed,
 }
 
 /// One plugin the host found, as the Extensions screen and
@@ -146,6 +150,8 @@ pub struct Plugin {
     pub id: String,
     /// The name its manifest gives.
     pub name: String,
+    /// What its manifest says it does; empty when it says nothing.
+    pub description: String,
     /// The version its manifest gives.
     pub version: String,
     /// The extension points its manifest lists.
@@ -157,6 +163,12 @@ pub struct Plugin {
     pub status: PluginStatus,
     /// The plugin's directory.
     pub path: PathBuf,
+    /// It ships beside the binary; a user's plugin sits in the per-user
+    /// plugins folder and can be removed.
+    pub built_in: bool,
+    /// Its folder was deleted in this session by *Remove*: the next start
+    /// no longer finds it.
+    pub removed: bool,
 }
 
 /// What an [`App`] is built from.
@@ -308,6 +320,13 @@ enum Msg {
         generation: u64,
         read: u64,
         total: Option<u64>,
+    },
+    /// A plugin package was unpacked, or was not.
+    PluginInstalled(Result<Box<Plugin>, String>),
+    /// A plugin's folder was deleted, or was not.
+    PluginRemoved {
+        path: PathBuf,
+        result: Result<(), String>,
     },
     /// A job started waiting for its volume, or stopped.
     Schedule,
@@ -664,6 +683,14 @@ pub struct App {
     /// The extension that registered each action, by the action's id; the
     /// kernel's own actions are not in it.
     action_owners: BTreeMap<&'static str, ExtId>,
+    /// What each extension's providers serve, as the schemes of their
+    /// locations: `azure://`, `rick://trash`.
+    provider_schemes: BTreeMap<ExtId, Vec<String>>,
+    /// The third-party library a plugin's previewer reported missing in
+    /// this session, by the plugin's id.
+    missing_libraries: BTreeMap<String, String>,
+    /// The config directory, where the extensions' settings files live.
+    config_dir: PathBuf,
     /// The values of the settings extensions declared, one TOML file each;
     /// shared with the extensions through the registry.
     ext_settings: Arc<ExtSettings>,
@@ -749,14 +776,33 @@ impl App {
         // Keyboard shortcuts dialogue files a plugin's actions under the
         // plugin.
         let mut action_owners = BTreeMap::new();
+        // And what its providers serve, for the Extensions dialogue.
+        let mut provider_schemes: BTreeMap<ExtId, Vec<String>> = BTreeMap::new();
         let plugins = extensions.iter().map(|e| (&**e, true));
         for (ext, plugin) in std::iter::once((&core as &dyn Extension, false)).chain(plugins) {
             let id = ext.manifest().id;
-            let before = registry.actions().len();
+            let before = (
+                registry.actions().len(),
+                registry.providers().len(),
+                registry.views().len(),
+            );
             match registry.load(ext) {
                 Ok(()) if plugin => {
-                    for action in &registry.actions()[before..] {
+                    for action in &registry.actions()[before.0..] {
                         action_owners.insert(action.id().0, id);
+                    }
+                    let mut schemes: Vec<String> = registry.providers()[before.1..]
+                        .iter()
+                        .map(|provider| format!("{}://", provider.id().0))
+                        .chain(
+                            registry.views()[before.2..]
+                                .iter()
+                                .map(|(name, _)| format!("rick://{name}")),
+                        )
+                        .collect();
+                    schemes.dedup();
+                    if !schemes.is_empty() {
+                        provider_schemes.insert(id, schemes);
                     }
                 }
                 Ok(()) => {}
@@ -972,6 +1018,9 @@ impl App {
             exit: false,
             plugins: Vec::new(),
             action_owners,
+            provider_schemes,
+            missing_libraries: BTreeMap::new(),
+            config_dir: config_dir.clone(),
             ext_settings,
             index_search: None,
             properties_shown: None,
@@ -1040,9 +1089,58 @@ impl App {
         self.session_saver.writes()
     }
 
-    /// Records the plugins the host found, for the Extensions screen.
+    /// Records the plugins the host found, for the Extensions dialogue.
     pub fn set_plugins(&mut self, plugins: Vec<Plugin>) {
         self.plugins = plugins;
+    }
+
+    /// Unpacks a plugin package into the per-user plugins folder as a job
+    /// (SPEC.md *Extensions dialogue*): nothing is checked and nothing is
+    /// asked, and the plugin loads at the next start. Answered by
+    /// [`Event::PluginInstalled`], or by an error notice.
+    fn install_plugin(&mut self, package: PathBuf) {
+        let dir = self.plugins_dir();
+        let tx = self.mailbox.clone();
+        let name = format!("Install {}", package.display());
+        let handle = self.jobs.spawn_named(name, move |_job| async move {
+            let result = tokio::task::spawn_blocking(move || {
+                plugins::install(&package, &dir)
+                    .map(|folder| Box::new(plugins::describe(&folder)))
+                    .map_err(|error| error.to_string())
+            })
+            .await
+            .unwrap_or_else(|join| Err(join.to_string()));
+            tx.send(Msg::PluginInstalled(result));
+            Ok(())
+        });
+        self.internal.insert(handle.id);
+    }
+
+    /// Deletes the folder of a user's plugin as a job, at once and
+    /// without a question; a plugin that ships beside the binary is not
+    /// removed. The plugin stays loaded until the next start.
+    fn remove_plugin(&mut self, path: PathBuf) {
+        let listed = self
+            .plugins
+            .iter()
+            .any(|row| row.path == path && !row.built_in && !row.removed);
+        if !listed {
+            return;
+        }
+        let dir = self.plugins_dir();
+        let tx = self.mailbox.clone();
+        let name = format!("Remove {}", path.display());
+        let handle = self.jobs.spawn_named(name, move |_job| async move {
+            let folder = path.clone();
+            let result = tokio::task::spawn_blocking(move || {
+                plugins::remove(&folder, &dir).map_err(|error| error.to_string())
+            })
+            .await
+            .unwrap_or_else(|join| Err(join.to_string()));
+            tx.send(Msg::PluginRemoved { path, result });
+            Ok(())
+        });
+        self.internal.insert(handle.id);
     }
 
     /// The plugins the host found, as the binary recorded them; empty when
@@ -1060,6 +1158,44 @@ impl App {
     pub fn action_extension(&self, action: ext::ActionId) -> Option<&ext::Manifest> {
         let id = self.action_owners.get(action.0)?;
         self.registry.manifests().iter().find(|m| m.id == *id)
+    }
+
+    /// The per-user plugins folder: where *Install from file…* unpacks a
+    /// package, and the only place *Remove* deletes from.
+    #[must_use]
+    pub fn plugins_dir(&self) -> PathBuf {
+        self.config_dir.join(plugins::PLUGINS_DIR)
+    }
+
+    /// What the providers of the loaded plugin `id` serve, as the schemes
+    /// of their locations (`azure://`, `rick://trash`); empty for a
+    /// plugin without providers, and for one that is not loaded.
+    #[must_use]
+    pub fn plugin_schemes(&self, id: &str) -> &[String] {
+        self.provider_schemes
+            .iter()
+            .find(|(ext, _)| ext.0 == id)
+            .map_or(&[], |(_, schemes)| schemes.as_slice())
+    }
+
+    /// The settings file of the plugin `id`, when it declares settings:
+    /// `<config dir>/<id>.toml`.
+    #[must_use]
+    pub fn plugin_config(&self, id: &str) -> Option<PathBuf> {
+        self.registry
+            .settings_schemas()
+            .iter()
+            .any(|schema| schema.ext.0 == id)
+            .then(|| ext_settings::file_of(&self.config_dir, id))
+    }
+
+    /// The third-party library the plugin `id` reported missing in this
+    /// session, by its name (`pdfium`, `LibreOffice`): its previewer
+    /// answered a file with the missing-library card and has shown no
+    /// file since.
+    #[must_use]
+    pub fn missing_library(&self, id: &str) -> Option<&str> {
+        self.missing_libraries.get(id).map(String::as_str)
     }
 
     /// The id of a disabled plugin in the plugins directory whose manifest
@@ -1710,6 +1846,8 @@ impl App {
                 }
             }
             Command::PreviewCancel(pane) => self.cancel_preview(pane, events),
+            Command::InstallPlugin(package) => self.install_plugin(package),
+            Command::RemovePlugin(path) => self.remove_plugin(path),
             Command::PreviewWith { pane, previewer } => {
                 if let Some(job) = self.preview.get(&pane) {
                     self.preview_with.insert(pane, (job.entry, previewer));
@@ -3820,6 +3958,18 @@ impl App {
                     return;
                 }
                 let opened = result.is_ok();
+                if let Ok(doc) = &result {
+                    // What the Extensions dialogue calls needing attention.
+                    match doc.content() {
+                        Some(ext::Content::MissingLibrary(missing)) => {
+                            self.missing_libraries
+                                .insert(missing.setting.0.0.to_owned(), missing.name.clone());
+                        }
+                        _ => {
+                            self.missing_libraries.remove(previewer.0);
+                        }
+                    }
+                }
                 events.push(match result {
                     Ok(doc) => Event::PreviewReady {
                         pane,
@@ -3902,6 +4052,36 @@ impl App {
                     events.push(Event::PreviewProgress { pane, read, total });
                 }
             }
+            Msg::PluginInstalled(Ok(plugin)) => {
+                // The row of what is on disk now: in place of the plugin
+                // it replaced, or a new one.
+                let path = plugin.path.clone();
+                match self.plugins.iter_mut().find(|row| row.path == path) {
+                    Some(row) => *row = *plugin,
+                    None => self.plugins.push(*plugin),
+                }
+                events.push(Event::PluginInstalled { path });
+            }
+            Msg::PluginRemoved {
+                path,
+                result: Ok(()),
+            } => {
+                // A plugin unpacked in this session was never loaded: its
+                // row goes with its folder. One the host loaded stays,
+                // marked, until the next start.
+                self.plugins
+                    .retain(|row| row.path != path || row.status != PluginStatus::Installed);
+                if let Some(row) = self.plugins.iter_mut().find(|row| row.path == path) {
+                    row.removed = true;
+                }
+            }
+            Msg::PluginInstalled(Err(text))
+            | Msg::PluginRemoved {
+                result: Err(text), ..
+            } => events.push(Event::Notify {
+                level: Level::Error,
+                text,
+            }),
             Msg::Decorated {
                 pane,
                 generation,

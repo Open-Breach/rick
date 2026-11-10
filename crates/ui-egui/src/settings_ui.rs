@@ -1,7 +1,7 @@
 //! The Settings window, the Keyboard shortcuts and Extensions screens; the
 //! About dialog is [`crate::about`].
 
-use app::{App, Command, IntegrationCommand, PluginStatus};
+use app::{App, Command, IntegrationCommand};
 use egui::{Align, Align2, FontId, Rect, Sense, pos2, vec2};
 use ext::t;
 use model::{
@@ -143,6 +143,14 @@ impl SettingsWindow {
     pub fn open(&mut self, window: WindowId) {
         self.open = true;
         self.window = Some(window);
+    }
+
+    /// Opens the window on the settings page of the plugin `id`, as
+    /// *Settings* of the Extensions dialogue asks.
+    pub fn open_plugin(&mut self, window: WindowId, id: &str) {
+        self.open(window);
+        self.page = Page::Plugin(id.to_owned());
+        self.search.clear();
     }
 
     /// Whether the window is open.
@@ -1403,83 +1411,4 @@ fn density_name(density: Density) -> String {
         Density::Compact => t!("settings-density-compact"),
         Density::Comfortable => t!("settings-density-comfortable"),
     }
-}
-
-/// The Extensions screen: the plugins the host found, each with its name,
-/// version, the points it fills and its status (loaded, disabled, or
-/// refused with the reason), and an Enabled toggle per row. The toggle is a
-/// `SettingsChange::Plugin`, which writes `rick.toml`; the row says that it
-/// takes effect on the next start.
-pub fn extensions_window(
-    ctx: &egui::Context,
-    open: &mut bool,
-    app: &App,
-    requests: &mut Vec<Request>,
-) {
-    let plugins = app.plugins();
-    let disabled = &app.model().settings.plugins.disabled;
-    egui::Window::new(t!("extensions"))
-        .open(open)
-        .default_width(640.0)
-        .show(ctx, |ui| {
-            if plugins.is_empty() {
-                ui.label(t!("settings-no-plugins-found"));
-            }
-            egui::Grid::new("extensions-grid")
-                .num_columns(5)
-                .striped(true)
-                .spacing([16.0, 6.0])
-                .show(ui, |ui| {
-                    for heading in ["Name", "Version", "Points", "Status", ""] {
-                        ui.strong(heading);
-                    }
-                    ui.end_row();
-                    for plugin in plugins {
-                        let name = if plugin.name.is_empty() {
-                            plugin.id.as_str()
-                        } else {
-                            plugin.name.as_str()
-                        };
-                        ui.label(name).on_hover_text(format!(
-                            "{}\n{}",
-                            plugin.id,
-                            plugin.path.display()
-                        ));
-                        ui.label(&plugin.version);
-                        ui.label(plugin.points.to_string());
-                        let status = match &plugin.status {
-                            PluginStatus::Loaded => "loaded".to_owned(),
-                            PluginStatus::Disabled => "disabled".to_owned(),
-                            PluginStatus::Refused(reason) => format!("refused: {reason}"),
-                        };
-                        ui.label(status);
-                        let mut enabled = !disabled.contains(&plugin.id);
-                        ui.horizontal(|ui| {
-                            if ui.checkbox(&mut enabled, t!("settings-enabled")).changed() {
-                                requests.push(Request::Command(Command::Settings(
-                                    SettingsChange::Plugin {
-                                        id: plugin.id.clone(),
-                                        enabled,
-                                    },
-                                )));
-                            }
-                            let disabled_at_start = plugin.status == PluginStatus::Disabled;
-                            if enabled == disabled_at_start {
-                                ui.weak(if enabled {
-                                    "loads on the next start"
-                                } else {
-                                    "disabled on the next start"
-                                });
-                            }
-                        });
-                        ui.end_row();
-                    }
-                });
-            ui.separator();
-            ui.weak(
-                "Plugins live in the plugins folder beside the binary and in the config \
-                 directory; a per-user plugin wins on an id clash. Changes take effect \
-                 on the next start.",
-            );
-        });
 }

@@ -454,12 +454,15 @@ fn rows(host: &Host) -> Vec<app::Plugin> {
                 PluginStatus::Refused(reason) => app::PluginStatus::Refused(reason.clone()),
             },
             path: p.dir.clone(),
+            description: p.description.clone(),
+            built_in: p.source == Source::BesideBinary,
+            removed: false,
         })
         .collect()
 }
 
 #[test]
-fn the_extensions_screen_lists_the_plugins_and_its_toggle_writes_the_setting() {
+fn the_extensions_dialogue_lists_the_plugins_and_its_switch_writes_the_setting() {
     let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
     let plugins = dir.path().join("plugins");
     install(&plugins, "plugin_probe", |_| {});
@@ -491,27 +494,46 @@ fn the_extensions_screen_lists_the_plugins_and_its_toggle_writes_the_setting() {
     harness.step();
     harness.step();
     assert!(harness.state().extensions_open());
-    harness.get_by_label("Probe");
-    // Both probe rows fill the same points.
-    assert_eq!(harness.get_all_by_label("action, previewer").count(), 2);
-    harness.get_by_label("loaded");
-    harness.get_by_label("Old probe");
+    let row = |harness: &mut Harness<'_, RickUi>, name: &str| {
+        harness
+            .get_by_role_and_label(egui::accesskit::Role::RadioButton, name)
+            .click();
+        for _ in 0..4 {
+            harness.step();
+        }
+    };
+    // Both are listed, under what they mainly contribute, with what the
+    // manifest says: the probe's description is the test plugin's.
+    harness.get_by_label("PREVIEWERS");
+    harness.get_by_label("2 installed  ·  2 enabled  ·  1 needs attention");
+    row(&mut harness, "Probe");
+    harness.get_by_label("The test plugin of the plugin host.");
+    harness.get_by_label("Built-in plugin");
+    harness.get_by_label("Loaded");
+    // The one the host refused needs attention: the card gives the reason.
+    row(&mut harness, "Old probe");
     let refused = harness
-        .get_all_by_label_contains("refused: extension API version")
+        .get_all_by_label_contains("extension API version")
         .count();
-    assert_eq!(refused, 1);
+    assert!(refused >= 1, "the host's reason is shown");
+    assert_eq!(harness.get_all_by_label("Needs attention").count(), 2);
 
-    // The toggle of the loaded row writes the setting and says so.
-    let toggles: Vec<_> = harness.get_all_by_label("Enabled").collect();
-    assert_eq!(toggles.len(), 2);
-    toggles[0].click();
-    harness.step();
-    harness.step();
+    // The switch of the loaded row writes the setting and says that it
+    // waits for the next start.
+    row(&mut harness, "Probe");
+    harness
+        .get_all_by_label("Enable Probe")
+        .next()
+        .unwrap_or_else(|| panic!("the switch"))
+        .click();
+    for _ in 0..4 {
+        harness.step();
+    }
     assert_eq!(
         harness.state().app().model().settings.plugins.disabled,
         ["probe"]
     );
-    harness.get_by_label("disabled on the next start");
+    assert_eq!(harness.get_all_by_label("restart").count(), 2);
     drop(harness);
     drop(host);
 }

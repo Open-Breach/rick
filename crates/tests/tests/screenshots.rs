@@ -2744,6 +2744,173 @@ fn screenshots_of_the_preview_tables() {
     eprintln!("the preview pane: {:?}", harness.state().inspector_rect());
 }
 
+/// SPEC.md *Extensions dialogue* (issue 139, item 9): the list grouped by
+/// what the plugins contribute, with a plugin switched off and one that
+/// needs attention, and the details of a built-in provider, of the plugin
+/// the host refused and of a user's plugin that waits for a restart — in
+/// Light and Dark at both densities.
+#[test]
+#[ignore = "needs a wgpu adapter; CI runs it and uploads the images"]
+#[allow(clippy::too_many_lines)]
+fn screenshots_of_the_extensions_dialogue() {
+    use app::{Plugin, PluginStatus};
+    use egui::accesskit::Role;
+    use egui_kittest::kittest::Queryable as _;
+    use ext::Extension;
+    let (_keep, root) = sample_tree();
+    let fake = Arc::new(Fake::new().unwrap_or_else(|e| panic!("{e}")));
+    let host = Arc::new(EguiHost::new());
+    // The plugins that ship, loaded for real so that the dialogue shows
+    // what they register, as rows beside the binary.
+    let loaded: Vec<Arc<dyn Extension>> = vec![
+        Arc::new(ext_vfs_azure::AzureExtension::new()),
+        Arc::new(ext_vfs_s3::S3Extension::new()),
+        Arc::new(ext_vfs_gcs::GcsExtension::new()),
+        Arc::new(ext_ssh::SshExtension::new()),
+        Arc::new(ext_vfs_archive::ArchiveExtension::new()),
+        Arc::new(ext_vfs_trash::TrashExtension::new()),
+        Arc::new(ext_preview_3d::Preview3d::new()),
+        Arc::new(ext_preview_archive::ArchivePreview::new()),
+        Arc::new(ext_preview_hex::HexPreview::new()),
+        Arc::new(ext_preview_media::MediaPreview::new()),
+        Arc::new(ext_preview_pdf::PdfPreview::new()),
+        Arc::new(ext_git::GitExtension::new()),
+        Arc::new(ext_action_rename::RenameExtension::new()),
+    ];
+    let beside = Path::new("/opt/rick/plugins");
+    let row = |ext: &dyn Extension| {
+        let manifest = ext.manifest();
+        Plugin {
+            id: manifest.id.0.to_owned(),
+            name: manifest.name.to_owned(),
+            description: manifest.description.to_owned(),
+            version: manifest.version.to_string(),
+            points: manifest.points,
+            previews: manifest.previews.iter().map(|p| (*p).to_owned()).collect(),
+            status: PluginStatus::Loaded,
+            path: beside.join(manifest.id.0),
+            built_in: true,
+            removed: false,
+        }
+    };
+    let mut rows: Vec<Plugin> = loaded.iter().map(|ext| row(&**ext)).collect();
+    // One switched off, one the host refused, one of the user's.
+    rows.push(Plugin {
+        status: PluginStatus::Disabled,
+        ..row(&ext_preview_office::OfficePreview::new())
+    });
+    rows.push(Plugin {
+        status: PluginStatus::Refused(
+            "built with rustc 1.97.0, and this Rick with rustc 1.99.1".to_owned(),
+        ),
+        ..row(&ext_search_tracker::TrackerExtension::new())
+    });
+    let per_user = fake.config_dir().join("plugins");
+    rows.push(Plugin {
+        id: "word-count".to_owned(),
+        name: "Word count".to_owned(),
+        description: "Counts the words, lines and characters of the selected text files."
+            .to_owned(),
+        version: "1.2.0".to_owned(),
+        points: ext::Points::ACTION,
+        previews: Vec::new(),
+        status: PluginStatus::Loaded,
+        path: per_user.join("word-count"),
+        built_in: false,
+        removed: false,
+    });
+    let mut app = app::App::new(app::Config {
+        platform: fake.clone(),
+        ui: host.clone(),
+        extensions: loaded,
+        config_dir: Some(fake.config_dir()),
+        start: Some(local(&root)),
+    });
+    app.set_plugins(rows);
+    app.handle(
+        app::Command::Settings(SettingsChange::Plugin {
+            id: "preview-office".to_owned(),
+            enabled: false,
+        }),
+        &mut Vec::new(),
+    );
+    let mut harness = Harness::builder()
+        .with_size(egui::vec2(1280.0, 840.0))
+        .with_pixels_per_point(2.0)
+        .build_eframe(move |cc| RickUi::new(app, host, &cc.egui_ctx));
+    settle(&mut harness);
+    let modes = [
+        (Theme::Light, Density::Comfortable, "light-comfortable"),
+        (Theme::Light, Density::Compact, "light-compact"),
+        (Theme::Dark, Density::Comfortable, "dark-comfortable"),
+        (Theme::Dark, Density::Compact, "dark-compact"),
+    ];
+    let set = |harness: &mut Harness<'_, RickUi>, theme: Theme, density: Density| {
+        for change in [
+            SettingsChange::Theme(theme),
+            SettingsChange::Density(density),
+        ] {
+            harness
+                .state_mut()
+                .app_mut()
+                .handle(app::Command::Settings(change), &mut Vec::new());
+        }
+        // The pointer rests outside the dialogue, on no button.
+        harness.event(egui::Event::PointerMoved(egui::pos2(40.0, 820.0)));
+        for _ in 0..4 {
+            harness.step();
+        }
+    };
+    let choose = |harness: &mut Harness<'_, RickUi>, name: &str| {
+        harness
+            .get_by_role_and_label(Role::RadioButton, name)
+            .click();
+        for _ in 0..4 {
+            harness.step();
+        }
+    };
+    let pane = harness.state().app().model().focused;
+    harness.state_mut().queue(Intent::Extensions, pane);
+    for _ in 0..4 {
+        harness.step();
+    }
+
+    // A built-in provider, the first of the list.
+    choose(&mut harness, "Azure Blob");
+    for (theme, density, mode) in modes {
+        set(&mut harness, theme, density);
+        shoot(&mut harness, &format!("extensions-{mode}"));
+    }
+    // The plugin the host refused, at the list's end: the attention card.
+    harness.event(egui::Event::PointerMoved(egui::pos2(400.0, 500.0)));
+    harness.event(egui::Event::MouseWheel {
+        unit: egui::MouseWheelUnit::Point,
+        delta: egui::vec2(0.0, -600.0),
+        phase: egui::TouchPhase::Move,
+        modifiers: egui::Modifiers::NONE,
+    });
+    for _ in 0..12 {
+        harness.step();
+    }
+    choose(&mut harness, "Tracker");
+    for (theme, density, mode) in modes {
+        set(&mut harness, theme, density);
+        shoot(&mut harness, &format!("extensions-attention-{mode}"));
+    }
+    // A user's plugin, switched off a moment ago: the restart chips and
+    // Remove.
+    choose(&mut harness, "Word count");
+    harness
+        .get_all_by_label("Enable Word count")
+        .next()
+        .unwrap_or_else(|| panic!("the switch"))
+        .click();
+    for (theme, density, mode) in [modes[0], modes[2]] {
+        set(&mut harness, theme, density);
+        shoot(&mut harness, &format!("extensions-user-{mode}"));
+    }
+}
+
 /// SPEC.md *Keyboard shortcuts dialogue* (issue 139, item 8): the
 /// dialogue on *File operations* with a changed row and a cell that
 /// records, on *Git* with a chord that Copy has too — the amber chip —

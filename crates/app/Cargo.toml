@@ -24,6 +24,10 @@ encoding_rs = { workspace = true }
 # The preview pane's Copy inflates a gzip-compressed file (an SVGZ) before
 # decoding its text (issue 83).
 flate2 = { workspace = true }
+# A plugin package is a zip archive of the plugin's folder, unpacked into
+# the per-user plugins folder (issue 139).
+zip = { workspace = true }
+thiserror = { workspace = true }
 tracing = { workspace = true }
 
 [dev-dependencies]

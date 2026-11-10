@@ -256,6 +256,9 @@ fn with_the_plugin_disabled_an_ico_shows_the_card_that_says_plugin_available() {
         previews: toml.previews.clone(),
         status: app::PluginStatus::Disabled,
         path: dir.path().join("plugins").join(&toml.id),
+        description: String::new(),
+        built_in: false,
+        removed: false,
     }]);
     let pane = harness.state().app().model().focused;
 

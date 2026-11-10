@@ -31,6 +31,7 @@ use crate::about::{self, AboutDialog};
 use crate::console::ConsoleUi;
 use crate::dnd::{Dnd, DragView, Source, Spring, Target, Zone};
 use crate::dock::DockSync;
+use crate::extensions::ExtensionsDialog;
 use crate::host::{Ask, EguiHost};
 use crate::inline::{EditKind, RowEdit};
 use crate::keys::{self, Direction, Intent, KeyMap};
@@ -153,6 +154,8 @@ pub enum Request {
     Toast(Level, String),
     /// Show the About window.
     About,
+    /// Open the Settings window on a plugin's page, by the plugin's id.
+    PluginSettings(String),
     /// Rows were dragged past the threshold: start a drag of them.
     StartDrag {
         /// The pane.
@@ -878,7 +881,7 @@ pub struct RickUi {
     name_prompt: Option<NamePrompt>,
     settings: settings_ui::SettingsWindow,
     shortcuts: ShortcutsScreen,
-    extensions_open: bool,
+    extensions: ExtensionsDialog,
     /// The About dialog (specs/about-dialog.md), with the binary's build
     /// details once it says them.
     about: AboutDialog,
@@ -1121,7 +1124,7 @@ impl RickUi {
             name_prompt: None,
             settings: settings_ui::SettingsWindow::default(),
             shortcuts: ShortcutsScreen::default(),
-            extensions_open: false,
+            extensions: ExtensionsDialog::default(),
             about: AboutDialog::default(),
             inspector_state: inspector::PaneState::default(),
             inspector_width,
@@ -1326,7 +1329,7 @@ impl RickUi {
     /// Whether the Extensions screen is open.
     #[must_use]
     pub fn extensions_open(&self) -> bool {
-        self.extensions_open
+        self.extensions.is_open()
     }
 
     /// The About dialog, for the tests.
@@ -1637,6 +1640,7 @@ impl RickUi {
                 Event::Notify { level, text } => self.toast(level, text),
                 Event::Activate { window, token } => self.activate(window, token.as_deref()),
                 Event::Properties(info) => self.properties.open(*info),
+                Event::PluginInstalled { path } => self.extensions.installed(path),
                 Event::PropertiesCounted {
                     pane,
                     path,
@@ -1841,6 +1845,7 @@ impl RickUi {
         if self.dialog.is_some()
             || self.name_prompt.is_some()
             || self.shortcuts.open
+            || self.extensions.is_open()
             || self.about.is_open()
             || self.properties.is_open()
             || !self.app.model().conflicts.is_empty()
@@ -1959,6 +1964,7 @@ impl RickUi {
                     Request::FocusPane(pane) => self.handle(Command::FocusPane(pane)),
                     Request::Toast(level, text) => self.toast(level, text),
                     Request::About => self.about.open(),
+                    Request::PluginSettings(id) => self.settings.open_plugin(self.root, &id),
                     Request::StartDrag {
                         pane,
                         tab,
@@ -2658,7 +2664,7 @@ impl RickUi {
             }
             Intent::Settings => self.settings.open(window),
             Intent::Shortcuts => self.shortcuts.open(),
-            Intent::Extensions => self.extensions_open = true,
+            Intent::Extensions => self.extensions.open(),
             Intent::ViewList => self.handle(Command::SetView {
                 pane,
                 mode: ViewMode::List,
@@ -4869,12 +4875,7 @@ impl RickUi {
             self.show_name_prompt(ctx);
             self.shortcuts
                 .show(ctx, &self.keys, &self.app, &mut self.requests);
-            settings_ui::extensions_window(
-                ctx,
-                &mut self.extensions_open,
-                &self.app,
-                &mut self.requests,
-            );
+            self.extensions.show(ctx, &self.app, &mut self.requests);
             self.about.show(ctx, &self.app, &mut self.requests);
             self.properties.show(ctx, &self.app, &mut self.requests);
             self.hash.show(ctx, &self.app, &mut self.requests);

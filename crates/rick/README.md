@@ -9,7 +9,7 @@ crate, default-on: the text, code, image and PDF previewers; `git` and
 `preview-hex` compile the Git and hex-preview plugins in instead of loading
 them, default off. `rick --version`
 prints the version and the git hash, `rick --list-plugins` the plugins table
-the Extensions screen shows; `rick [<path>…]` opens each folder in a tab
+the Extensions dialogue is built from; `rick [<path>…]` opens each folder in a tab
 of the most recently focused window (the working directory without any),
 `rick reveal <file>…` opens the files' folders and selects the files,
 `--new-window` puts them in a window of their own, `rick <command>

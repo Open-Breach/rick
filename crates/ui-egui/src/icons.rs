@@ -363,9 +363,9 @@ pub const LIST_CHECKS: &str = ph::LIST_CHECKS;
 pub const COLUMNS: &str = ph::COLUMNS;
 
 /// A plugin's icon, by what its id says it is for: the glyph beside the
-/// plugin's name in the settings' category list and in the Keyboard
-/// shortcuts dialogue. A plugin the table does not know gets the puzzle
-/// piece.
+/// plugin's name in the settings' category list, in the Keyboard
+/// shortcuts dialogue and in the Extensions dialogue. A plugin the table
+/// does not know gets the puzzle piece.
 #[must_use]
 pub fn for_plugin(id: &str) -> &'static str {
     let id = id.to_lowercase();
@@ -392,6 +392,18 @@ pub fn for_plugin(id: &str) -> &'static str {
         INSTALL
     } else if has("trash") {
         TRASH
+    } else if has("azure") || has("s3") || has("gcs") || has("cloud") {
+        CLOUD
+    } else if has("search") {
+        SEARCH
+    } else if has("image") || has("icons") {
+        PREVIEW
+    } else if has("media") {
+        FILM
+    } else if has("hex") || has("code") {
+        CODE
+    } else if has("text") || has("markup") {
+        DOCUMENT
     } else {
         PLUGIN
     }
