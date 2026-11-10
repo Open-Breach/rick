@@ -879,20 +879,21 @@ fn the_core_and_the_installer_agree_on_the_command() {
     assert_eq!(scratch.env.home, scratch.fake.home_dir());
 }
 
-/// With a window: once the apply has installed Rick, the shell saves the
-/// session and hands the installed binary to the relaunch hook, which in
-/// the binary starts the copy and exits when it answers.
-#[test]
-fn the_window_hands_the_installed_copy_to_the_relaunch_after_saving_the_session() {
-    use egui_kittest::Harness;
-    use ui_egui::{EguiHost, RickUi};
+/// What the relaunch hook was called with, and whether the session was
+/// on disk by then.
+type Relaunched = Arc<Mutex<Vec<(PathBuf, bool)>>>;
 
-    let scratch = Scratch::new("XFCE");
+/// Rick's window on the scratch home, with the installer plugin and a
+/// relaunch hook that records its calls.
+fn window(
+    scratch: &Scratch,
+    relaunched: &Relaunched,
+) -> egui_kittest::Harness<'static, ui_egui::RickUi> {
     scratch
         .fake
         .set_integration(Arc::new(scratch.integration()));
     let config = scratch.env.config_home.join("rick");
-    let host = Arc::new(EguiHost::new());
+    let host = Arc::new(ui_egui::EguiHost::new());
     let app = App::new(Config {
         platform: scratch.fake.clone(),
         ui: host.clone(),
@@ -900,59 +901,155 @@ fn the_window_hands_the_installed_copy_to_the_relaunch_after_saving_the_session(
         config_dir: Some(config.clone()),
         start: Some(tests::local(scratch.dir.path())),
     });
-    // What the hook was called with, and whether the session was on disk
-    // by then.
-    let relaunched: Arc<Mutex<Vec<(PathBuf, bool)>>> = Arc::new(Mutex::new(Vec::new()));
-    let seen = Arc::clone(&relaunched);
+    let seen = Arc::clone(relaunched);
     let session = config.join(app::SESSION_FILE);
     let hook: ui_egui::Relaunch = Arc::new(move |binary: &Path| {
         seen.lock()
             .unwrap_or_else(PoisonError::into_inner)
             .push((binary.to_path_buf(), session.is_file()));
     });
-    let mut harness = Harness::builder()
-        .with_size(egui::vec2(1200.0, 800.0))
-        .build_eframe(move |cc| RickUi::new(app, host, &cc.egui_ctx).with_relaunch(hook));
-    let run = |harness: &mut Harness<'_, RickUi>, command: IntegrationCommand| {
-        harness
-            .state_mut()
-            .app_mut()
-            .handle(Command::Integration(command), &mut Vec::new());
-        let deadline = Instant::now() + Duration::from_secs(30);
-        loop {
-            for _ in 0..3 {
-                harness.step();
-            }
-            let integration = &harness.state().app().model().integration;
-            let idle = !integration.checking && integration.applying.is_none();
-            if idle && !harness.state().app().is_busy() {
-                std::thread::sleep(Duration::from_millis(50));
-                harness.step();
-                if !harness.state().app().is_busy() {
-                    break;
-                }
-            }
-            assert!(Instant::now() < deadline, "did not settle");
-            std::thread::sleep(Duration::from_millis(10));
+    let mut harness = egui_kittest::Harness::builder()
+        .with_size(egui::vec2(1200.0, 900.0))
+        .build_eframe(move |cc| ui_egui::RickUi::new(app, host, &cc.egui_ctx).with_relaunch(hook));
+    settle_window(&mut harness);
+    harness
+}
+
+/// Runs frames until no check and no apply is in flight and a quiet
+/// moment passed.
+fn settle_window(harness: &mut egui_kittest::Harness<'_, ui_egui::RickUi>) {
+    let deadline = Instant::now() + Duration::from_secs(30);
+    loop {
+        for _ in 0..3 {
+            harness.step();
         }
-    };
-    run(&mut harness, IntegrationCommand::Check { startup: true });
-    run(
-        &mut harness,
-        IntegrationCommand::Apply {
-            scope: Scope::User,
-            perform: vec![Item::InstallLocation, Item::LauncherEntry],
-            decline: Vec::new(),
-            replace: Vec::new(),
-        },
+        let integration = &harness.state().app().model().integration;
+        let idle = !integration.checking && integration.applying.is_none();
+        if idle && !harness.state().app().is_busy() {
+            std::thread::sleep(Duration::from_millis(50));
+            harness.step();
+            if !harness.state().app().is_busy() {
+                break;
+            }
+        }
+        assert!(Instant::now() < deadline, "did not settle");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
+/// The first two acceptance lines, through the window: a Rick unpacked
+/// into a scratch folder and started shows the dialog once; *Apply* with
+/// every row on leaves Rick in the standard location with `current`
+/// pointing at it and the launcher entry, the icons, the D-Bus service
+/// file, the defaults, the `rick` link and the dock favourite in place,
+/// each on the installed copy; the shell saves the session and hands the
+/// installed binary to the relaunch hook, which in the binary starts the
+/// copy and exits when it answers. The installed copy, started, shows no
+/// dialog.
+#[test]
+fn through_the_dialog_every_row_on_installs_rick_and_continues_from_the_copy() {
+    use egui::accesskit::Role;
+    use egui_kittest::kittest::Queryable as _;
+
+    let version = env!("CARGO_PKG_VERSION");
+    let mut scratch = Scratch::new("GNOME");
+    scratch
+        .settings
+        .put("org.gnome.shell", "favorite-apps", "['firefox.desktop']");
+    let home = scratch.env.home.clone();
+    let relaunched = Relaunched::default();
+
+    let mut harness = window(&scratch, &relaunched);
+    assert!(
+        harness.state().integration_dialog().is_open(),
+        "the dialog opens at the first start"
     );
-    let relaunched = relaunched
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner)
-        .clone();
+    // Six rows, the install location first, every switch on.
+    harness.get_by_label("Set up Rick on this system");
+    let mut last = f32::NEG_INFINITY;
+    for row in [
+        "Install to the standard location",
+        "App launcher entry",
+        "Default file manager",
+        "“Show in folder” from other apps",
+        "rick command in the terminal",
+        "Dock favourite",
+    ] {
+        let top = harness
+            .get_by_role_and_label(Role::CheckBox, row)
+            .rect()
+            .top();
+        assert!(top > last, "{row} follows the row before it");
+        last = top;
+    }
+    harness.get_by_label_contains("to ~/.local/opt/rick and run it from there");
+    let at = harness
+        .get_by_role_and_label(Role::Button, "Apply 6 items")
+        .rect()
+        .center();
+    harness.event(egui::Event::PointerMoved(at));
+    harness.step();
+    for pressed in [true, false] {
+        harness.event(egui::Event::PointerButton {
+            pos: at,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::default(),
+        });
+        harness.step();
+    }
+    settle_window(&mut harness);
+    assert!(!harness.state().integration_dialog().is_open());
+
+    // Rick in the standard location, `current` pointing at the version,
+    // and every other row on the installed copy.
+    let app_dir = home.join(".local/opt/rick");
+    assert!(app_dir.join(version).join("rick").is_file());
     assert_eq!(
-        relaunched,
-        [(scratch.env.home.join(".local/opt/rick/current/rick"), true)],
-        "once, with the installed binary, the session saved before"
+        fs::read_link(app_dir.join("current")).ok().as_deref(),
+        Some(Path::new(version))
     );
+    let installed = app_dir.join("current/rick");
+    assert_in_place(&home, &installed);
+    assert_eq!(
+        scratch
+            .settings
+            .value("org.gnome.shell", "favorite-apps")
+            .as_deref(),
+        Some("['firefox.desktop', 'rick.desktop']")
+    );
+    // Rick continues from the installed copy: once, the session saved
+    // before.
+    let calls = |relaunched: &Relaunched| {
+        relaunched
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+    };
+    assert_eq!(calls(&relaunched), [(installed, true)]);
+    let settings = harness.state().app().settings_path().to_path_buf();
+    let text = read_until(&settings, |text| text.contains("dock-favourite"));
+    assert!(
+        text.contains("[integration.items.install-location]\nstate = \"set-up\""),
+        "{text}"
+    );
+    drop(harness);
+
+    // The installed copy, started: no dialog, and nothing more to hand
+    // over.
+    scratch.run_installed(version);
+    let harness = window(&scratch, &relaunched);
+    assert!(
+        !harness.state().integration_dialog().is_open(),
+        "starting the installed copy shows no dialog"
+    );
+    for item in Item::ALL {
+        let status = harness.state().app().model().integration.get(item);
+        assert_eq!(
+            status.map(|row| row.status.clone()),
+            Some(ItemStatus::SetUp),
+            "{item:?}"
+        );
+    }
+    assert_eq!(calls(&relaunched).len(), 1);
 }

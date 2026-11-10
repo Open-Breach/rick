@@ -9,6 +9,49 @@ the pull request that brought the change.
 
 ### Added
 
+- System integration: the check, the setup dialog and Settings →
+  Integration, with the Linux items (issue 120,
+  [`specs/system-integration.md`](specs/system-integration.md) §6 and
+  §7.1, milestone 3 of the integration track). Rick keeps one record per
+  integration item under `[integration]` in `rick.toml` — `set-up`,
+  `declined`, `unsupported` or `missing`, the day of the last check and
+  what Rick wrote for the item — beside `ask` and the switch for the
+  check at startup. After the first frame, off the UI thread, it compares
+  the wanted state with the actual one, reading only; a declined item is
+  never listed and never watched (#123, #126). On Linux the items are the
+  install location, the app launcher entry with its icons, the default
+  file manager (`inode/directory` and `x-scheme-handler/rick` in
+  `mimeapps.list`), *“Show in folder” from other apps*, the `rick`
+  command (the link in `~/.local/bin` and the shell function, a marked
+  block of `path.sh`) and the dock favourite. Each perform answers a
+  receipt of the files it wrote and the values it replaced, the undo
+  removes exactly that, and a file Rick did not write is replaced only
+  with the user's word (#127). A Rick started from its unpacked archive
+  installs itself to `~/.local/opt/rick/<version>` with a `current` link
+  through the installer plugin's new `install-rick` command, which takes
+  a folder as its source, and continues from the installed copy: the
+  running process frees the single-instance endpoint, starts the copy and
+  exits once it answers (#128). The running instance owns
+  `org.freedesktop.FileManager1` on the session bus, through `zbus`, when
+  the item is set up — `ShowItems` is `reveal`, `ShowFolders` opens the
+  folders, `ShowItemProperties` reveals and opens Properties — and the
+  activation file starts `rick --dbus-service` when no Rick is up (#131).
+  The dock favourite appends Rick to the favourites of GNOME and Cinnamon
+  through `gsettings`, to the launchers of Plasma's task manager and to
+  the list of COSMIC's dock, as best it can: a failure is a warning and
+  blocks nothing, and every other desktop is *Unsupported* (#133). *Set
+  up Rick on this system* opens once when something is missing or was
+  reset: a row per item with a switch, *Install for* (*All users* is not
+  available yet), *Don't ask again*, *Not now* and *Apply N items* with a
+  progress line (#134). Settings → Integration, after *Appearance*, shows
+  the system and the last check beside *Check again*, every item with its
+  pill — *Set up*, *Reset by system* with *Restore*, *Skipped* with
+  *Add*, *Unsupported* — the switches for shell integration and the check
+  at startup, and *Reset choices* (#135). Windows and macOS list no item
+  yet: the dialog never opens there and the page shows its line and the
+  preferences. Questions 278–290, 293–307 and 313–315; the README's
+  install paragraph, the screenshots of the dialog and the page, and the
+  first acceptance line clicked through the dialog (#140).
 - Single instance, the command line and `rick://` (issue 103,
   [`specs/system-integration.md`](specs/system-integration.md) §3 and
   §4, milestone 1 of the integration track). One Rick per user session
