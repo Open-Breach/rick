@@ -32,7 +32,9 @@ inside its right end), the Preview tab (toolbar with the media transport, *Copy*
 the info button, content, status bar; one per window, following the focused
 explorer, docked and torn out like any tab; Rick's only viewer, laying out
 every kind of content a previewer returns itself in `content.rs`: a file
-list in the explorer's columns, a grid, a rendered document; one File info
+list and a grid as the one table of `table.rs` (a header band whose
+dividers resize the columns, rows striped from the second, widths
+remembered per previewer), a rendered document; one File info
 card for every file (`info_card.rs`: the icon, name, type and size, rows
 with a copy button each and *Show all n fields*) — hanging under the info
 button while the pointer is on it, pinned above the content per previewer,

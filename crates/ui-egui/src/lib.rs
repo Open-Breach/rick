@@ -61,6 +61,7 @@ pub mod search;
 pub mod settings_ui;
 pub mod shell;
 pub mod side_panel;
+pub mod table;
 pub mod theme;
 pub mod thumbs;
 pub mod views;
