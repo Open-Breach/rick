@@ -16,6 +16,7 @@ fn shared(fx: &Fixture) -> Arc<Shared> {
         datasets: Arc::clone(&fx.datasets),
         platform: None,
         elevate: None,
+        helper: None,
     })
 }
 

@@ -38,6 +38,9 @@ pub struct Shared {
     /// The elevation prompt, when the platform has one here (`pkexec` is
     /// installed); without it a refused command is not offered elevated.
     pub elevate: Option<Arc<dyn Elevate>>,
+    /// The privileged helper `rick-zfs` that runs a refused change under
+    /// the prompt; without it a refused command is not offered elevated.
+    pub helper: Option<PathBuf>,
 }
 
 impl std::fmt::Debug for Shared {
@@ -46,6 +49,7 @@ impl std::fmt::Debug for Shared {
             .field("datasets", &self.datasets)
             .field("platform", &self.platform.is_some())
             .field("elevate", &self.elevate.is_some())
+            .field("helper", &self.helper)
             .finish()
     }
 }

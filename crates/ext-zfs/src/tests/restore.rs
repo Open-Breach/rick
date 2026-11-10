@@ -28,6 +28,7 @@ fn bench() -> Bench {
         datasets: Arc::clone(&fx.datasets),
         platform: Some(fake.clone()),
         elevate: None,
+        helper: None,
     });
     Bench { fx, fake, shared }
 }
@@ -294,6 +295,7 @@ fn restore_is_offered_inside_snapshots_and_versions_only() {
         datasets: Arc::clone(&b.fx.datasets),
         platform: None,
         elevate: None,
+        helper: None,
     }));
     assert_eq!(
         without_platform.availability(&ctx(ann(&b, "b"), selected)),

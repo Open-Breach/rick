@@ -151,7 +151,8 @@ pub fn run_first(datasets: &Datasets, batch: &Batch) -> FirstRun {
 }
 
 /// Runs the refused commands of `batch` once more through the elevation
-/// prompt.
+/// prompt, each as one call of the privileged helper at `program`
+/// ([`crate::helper`]), which takes the same arguments as `zfs`.
 ///
 /// # Errors
 ///
@@ -235,7 +236,7 @@ pub fn spawn(shared: &Arc<Shared>, jobs: &JobRunner, name: String, batch: Batch)
                     commands,
                 };
                 let (Some(elevate), Some(program)) =
-                    (shared.elevate.clone(), shared.datasets.zfs().program())
+                    (shared.elevate.clone(), shared.helper.clone())
                 else {
                     let mut message = denied.needs();
                     if !failed.is_empty() {

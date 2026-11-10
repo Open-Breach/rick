@@ -19,6 +19,7 @@
 pub mod actions;
 pub mod datasets;
 pub mod decorator;
+pub mod helper;
 pub mod manage;
 pub mod parse;
 pub mod props;
@@ -121,6 +122,7 @@ impl Extension for ZfsExtension {
                 .platform()
                 .filter(|_| zfs::find_program("pkexec").is_some())
                 .map(|p| Arc::clone(p) as Arc<dyn ext::platform::Elevate>),
+            helper: helper::path(),
         });
         for action in actions::all(&shared) {
             reg.action(action);

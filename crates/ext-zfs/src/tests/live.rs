@@ -68,6 +68,7 @@ fn a_real_pool_creates_browses_restores_renames_and_destroys() {
         datasets: Arc::clone(&datasets),
         platform: None,
         elevate: None,
+        helper: None,
     };
     let wanted = items(
         &shared,

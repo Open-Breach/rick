@@ -16,6 +16,9 @@ use crate::actions::{Shared, local};
 use crate::manage::{Create, Destroy, Rename};
 use crate::provider::{dataset_location, snapshot_location};
 
+/// Where the tests say the privileged helper is.
+const HELPER: &str = "/opt/rick/rick-zfs";
+
 const DENIED: &str = "cannot create snapshot 'tank/home@x': permission denied\n";
 
 /// An elevation prompt that is dismissed, or missing.
@@ -39,6 +42,7 @@ fn shared(fx: &Fixture, elevate: Option<Arc<dyn Elevate>>) -> Arc<Shared> {
         datasets: Arc::clone(&fx.datasets),
         platform: None,
         elevate,
+        helper: Some(PathBuf::from(HELPER)),
     })
 }
 
@@ -373,7 +377,7 @@ fn a_refused_command_runs_elevated_once_accepted() {
     assert_eq!(
         platform.elevated(),
         [(
-            PathBuf::from("/usr/sbin/zfs"),
+            PathBuf::from(HELPER),
             vec![OsString::from("snapshot"), OsString::from("tank/home@x")]
         )]
     );
@@ -439,4 +443,27 @@ fn without_elevation_the_needed_permission_is_named() {
     .unwrap_or_else(|| panic!("nothing ran"));
     let result = ran.answer(true);
     assert!(message(&result).contains("zfs allow"), "{result:?}");
+}
+
+#[test]
+fn without_the_helper_no_elevation_is_offered() {
+    let fx = Fixture::new();
+    denied(&fx);
+    let platform = fake();
+    let shared = Arc::new(Shared {
+        datasets: Arc::clone(&fx.datasets),
+        platform: None,
+        elevate: Some(platform.clone()),
+        helper: None,
+    });
+    let mut ran = run(
+        &Create(shared),
+        local(&fx.home()),
+        Vec::new(),
+        &with_name("x"),
+    )
+    .unwrap_or_else(|| panic!("nothing ran"));
+    assert!(message(&ran.first).contains("zfs allow"), "{:?}", ran.first);
+    assert!(ran.question().is_none(), "no elevation offered");
+    assert_eq!(platform.elevated(), []);
 }
