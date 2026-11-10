@@ -104,11 +104,27 @@ bitflags! { pub struct Capabilities: u32 {
     /// on the provider's side (server-side copy, remote rename); nothing
     /// streams through the machine and the job only tracks progress.
     const NATIVE_TRANSFER = 256;
+    const JUNCTION = 512; const SHORTCUT = 1024;
+    /// The entries live behind a network: a remote-latency mount, with no
+    /// eager stat and no thumbnails by default (`specs/ext-ssh.md`).
+    const REMOTE = 2048;
+    /// What this location offers (0.4; see below). A folder can be created
+    /// in it with `create_dir`; a file can be created in it with `open_write`.
+    const CREATE_DIR = 4096; const CREATE_FILE = 8192;
+    /// `list` with unlimited depth answers for everything beneath the
+    /// location in one pass, so the subfolder search can run on it.
+    const SEARCH_SUBTREE = 16384;
+    /// Its files and folders can be brought down to the machine.
+    const DOWNLOAD = 32768;
 } }
 
 pub trait Provider: Send + Sync + 'static {
     fn id(&self) -> ProviderId;
     fn capabilities(&self, loc: &Location) -> Capabilities;
+    /// Why `loc` lacks `capability`, in the language in use: the tooltip of
+    /// the control that is disabled for it ("Files live inside a container").
+    /// `None`, the default, leaves the kernel's own sentence.
+    fn unavailable_reason(&self, loc: &Location, capability: Capabilities) -> Option<String> { None }
 
     /// Streams entries in batches. The first batch must arrive within the
     /// first-screen budget; `opts` carries hidden/system flags and depth (1 or
@@ -147,6 +163,8 @@ pub trait Provider: Send + Sync + 'static {
 
 pub enum FsChange { Created(Entry), Removed(EntryId), Modified(Entry), Renamed { from: EntryId, to: Entry }, Rescan }
 ```
+
+*Capabilities decide what is offered.* `capabilities` answers per location, not per provider, and four of the flags say what the user is offered there: `CREATE_DIR` for *New folder*, `CREATE_FILE` for *New file*, `SEARCH_SUBTREE` for the search in subfolders and `DOWNLOAD` for *Download…* and for what Enter does on a remote file (*Remote files* under *Opening files*). The kernel asks before it offers: a control whose capability the location lacks is drawn disabled, with the reason as its tooltip, and nothing is offered that then fails with an error. The reason is the provider's `unavailable_reason` and, where that is `None`, *Not available in this location*. `WRITE` keeps its meaning — entries can be written, renamed and removed — and no longer says by itself that something can be created: a provider that takes new entries sets `CREATE_DIR` and `CREATE_FILE` where it does, as the local file system and `ext-ssh` do on every folder that can be written to. `SEARCH_SUBTREE` is for a provider that answers for a whole subtree in one listing, as an object store does with a prefix (*Object storage* under Supported scope): the kernel lists the location with unlimited depth and matches the names itself, as a cancellable job. A location is also searchable beneath when a `SearchIndex` whose scope is under it is available, which is how the local file system is searched (`ext-search-walk`) without the flag. The four flags and the method come with 0.4 and are a change of the versioned contract, so the API version goes up with them.
 
 **Decorator** — adds badges, columns and panel sections to entries:
 
@@ -317,7 +335,7 @@ pub enum Command {
     Thumbnail { pane: PaneId, id: EntryId, size: u32 },
     /// Session, layouts and windows (General behaviour).
     TabOrder { pane: PaneId, tabs: Vec<TabId>, active: TabId }, Layout(DockLayout), Scroll { pane: PaneId, offset: f32 },
-    WindowGeometry { window: WindowId, rect: Rect, maximised: bool }, SidePanel { window: WindowId, state: SidePanelState },
+    WindowGeometry { window: WindowId, rect: Rect, maximised: bool, monitor: Option<MonitorId> }, SidePanel { window: WindowId, state: SidePanelState },
     FocusWindow(WindowId), NewWindow, CloseWindow(WindowId),
     SaveLayout(String), SwitchLayout(String), DeleteLayout(String), RenameLayout { from: String, to: String },
 }
