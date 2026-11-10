@@ -4,7 +4,7 @@
 use std::ffi::OsString;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
 use std::time::SystemTime;
 
 use async_trait::async_trait;
@@ -70,6 +70,9 @@ pub struct Fake {
     elevate_runs: Mutex<bool>,
     revealed: Mutex<Vec<PathBuf>>,
     clipboard: Mutex<Option<String>>,
+    /// Whether [`Permissions::permissions`] waits: a test holds the
+    /// Properties dialogue's read back with it, as a slow volume would.
+    permissions_held: (Mutex<bool>, Condvar),
     dragged: Mutex<Vec<Vec<String>>>,
     /// A drag handed to `start_drag` runs until the test ends it.
     drag_running: Mutex<bool>,
@@ -148,6 +151,7 @@ impl Fake {
             elevate_runs: Mutex::new(false),
             revealed: Mutex::new(Vec::new()),
             clipboard: Mutex::new(None),
+            permissions_held: (Mutex::new(false), Condvar::new()),
             dragged: Mutex::new(Vec::new()),
             drag_running: Mutex::new(false),
             drop_position: Mutex::new(None),
@@ -265,6 +269,20 @@ impl Fake {
     /// What `pick_folder` answers from now on.
     pub fn answer_folder(&self, folder: Option<PathBuf>) {
         lock(&self.answers).folder = folder;
+    }
+
+    /// Makes [`Permissions::permissions`] wait from now on, until
+    /// [`release_permissions`](Self::release_permissions): the read of an
+    /// entry's properties takes as long as the test wants.
+    pub fn hold_permissions(&self) {
+        *lock(&self.permissions_held.0) = true;
+    }
+
+    /// Lets the reads held by [`hold_permissions`](Self::hold_permissions)
+    /// go on.
+    pub fn release_permissions(&self) {
+        *lock(&self.permissions_held.0) = false;
+        self.permissions_held.1.notify_all();
     }
 
     /// What `pick_files` answers from now on.
@@ -576,6 +594,15 @@ impl Permissions for Fake {
     /// The real entry's permissions: the fake's temporary directory is a
     /// real one, and the acceptance tests change modes on it.
     fn permissions(&self, path: &Path) -> Result<FilePermissions, Error> {
+        let mut held = lock(&self.permissions_held.0);
+        while *held {
+            held = self
+                .permissions_held
+                .1
+                .wait(held)
+                .unwrap_or_else(PoisonError::into_inner);
+        }
+        drop(held);
         crate::Native.permissions(path)
     }
 
