@@ -940,12 +940,9 @@ impl App {
         model.set_places(places);
         model.cloud_providers = cloud_providers;
         model.network_providers = network_providers;
-        // The search indexes: a walk gives the filter bar its subtree
-        // toggle, the platform's indexes feed the title-row search box.
-        model.subtree_search = registry
-            .search_indexes()
-            .iter()
-            .any(|index| matches!(index.scope(), SearchScope::Under(_)));
+        // The search indexes: the platform's feed the title-row search
+        // box; a walk searches beneath a location, which the filter bar's
+        // toggle asks about per location (`subtree_search`).
         model.search_indexes = available_indexes(&registry)
             .iter()
             .map(|index| index.id())
@@ -1656,6 +1653,10 @@ impl App {
                 }
             }
             Command::Subtree { pane, on } => {
+                // Only where the location can be searched beneath: the
+                // toggle is disabled elsewhere, and so is its shortcut.
+                let on =
+                    on && self.subtree_search(&self.pane_location(pane)) == Availability::Enabled;
                 let before = self.selection_len(pane);
                 if self.model.set_subtree(pane, on) {
                     Self::selection_cleared(pane, before, events);
@@ -3352,6 +3353,14 @@ impl App {
             }
         }
         for pane in panes {
+            // A pane that moved to where nothing can be searched beneath
+            // lists the folder again; the toggle goes off with it.
+            let unsearchable = self.model.active_tab(pane).is_some_and(|(_, tab)| {
+                tab.subtree && self.subtree_search(&tab.location) != Availability::Enabled
+            });
+            if unsearchable {
+                self.model.set_subtree(pane, false);
+            }
             let key = self.list_key(pane);
             let current = self.live.get(&pane).map(|l| &l.key);
             match key {
@@ -3530,46 +3539,59 @@ impl App {
         );
     }
 
-    /// Starts the subtree search of `key` as a job the operations area
-    /// shows, through the search index whose scope is `Under` the
-    /// location (the `ext-search-walk` plugin; QUESTIONS.md 118): the
-    /// matches stream into the pane's listing like a listing's batches, and
-    /// a change of text or location cancels it. The pane's hidden toggle
-    /// and the `[search] ignore` list travel as the query's filters.
-    fn search(&mut self, pane: PaneId, key: ListKey, generation: u64, text: &str) {
-        let location = key.location.clone();
-        let index = self
-            .registry
+    /// Whether `location` can be searched beneath (SPEC.md, *Footer*):
+    /// through a search index whose scope is under it, as the local file
+    /// system is through the walk, or by its provider's own listing of a
+    /// whole subtree (`SEARCH_SUBTREE`). Where it cannot, the reason is
+    /// the tooltip of the filter bar's disabled toggle.
+    #[must_use]
+    pub fn subtree_search(&self, location: &Location) -> Availability {
+        if self.subtree_index(location).is_some() {
+            return Availability::Enabled;
+        }
+        match self.mounts.resolve(location) {
+            Ok(provider)
+                if provider
+                    .capabilities(location)
+                    .contains(Capabilities::SEARCH_SUBTREE) =>
+            {
+                Availability::Enabled
+            }
+            Ok(provider) => Availability::Disabled(
+                provider
+                    .unavailable_reason(location, Capabilities::SEARCH_SUBTREE)
+                    .unwrap_or_else(|| ext::t!("reason-not-available-here")),
+            ),
+            Err(_) => Availability::Disabled(ext::t!("reason-not-available-here")),
+        }
+    }
+
+    /// The available search index whose scope is under `location`.
+    fn subtree_index(&self, location: &Location) -> Option<Arc<dyn SearchIndex>> {
+        self.registry
             .search_indexes()
             .iter()
             .find(|index| {
                 let scope = index.scope();
                 matches!(scope, SearchScope::Under(_))
-                    && scope.covers(&location)
+                    && scope.covers(location)
                     && index.availability() == Availability::Enabled
             })
-            .cloned();
-        let Some(index) = index else {
-            self.pending.push(Event::Notify {
-                level: Level::Error,
-                text: format!(
-                    "No subdirectory search for {location}: the search-walk plugin is not loaded"
-                ),
-            });
-            self.model.listing_done(pane);
-            self.live.insert(
-                pane,
-                Live {
-                    key,
-                    generation,
-                    cancel: CancelToken::new(),
-                    complete: true,
-                    buffer: None,
-                    decorators: Vec::new(),
-                    redecorate_scheduled: false,
-                    children: BTreeMap::new(),
-                },
-            );
+            .cloned()
+    }
+
+    /// Starts the subtree search of `key` as a job the operations area
+    /// shows: through the search index whose scope is `Under` the location
+    /// (the `ext-search-walk` plugin; QUESTIONS.md 118), or, on a provider
+    /// with `SEARCH_SUBTREE`, by listing everything beneath the location
+    /// and matching the names here. The matches stream into the pane's
+    /// listing like a listing's batches, and a change of text or location
+    /// cancels it. The pane's hidden toggle and the `[search] ignore` list
+    /// narrow both.
+    fn search(&mut self, pane: PaneId, key: ListKey, generation: u64, text: &str) {
+        let location = key.location.clone();
+        let Some(index) = self.subtree_index(&location) else {
+            self.search_listing(pane, key, generation, text);
             return;
         };
         let tx = self.mailbox.clone();
@@ -3591,6 +3613,102 @@ impl App {
                 let result = async {
                     while let Some(batch) = stream.next().await {
                         let batch: Vec<Entry> = batch?.into_iter().map(|hit| hit.entry).collect();
+                        count += batch.len() as u64;
+                        job.progress.report(Progress::Items {
+                            done: count,
+                            total: None,
+                        });
+                        if !tx.send(Msg::Batch {
+                            pane,
+                            generation,
+                            batch,
+                        }) {
+                            break;
+                        }
+                    }
+                    Ok(())
+                }
+                .await;
+                tx.send(Msg::ListDone {
+                    pane,
+                    generation,
+                    result: result.as_ref().copied().map_err(Error::replicate),
+                });
+                result
+            },
+        );
+        self.live.insert(
+            pane,
+            Live {
+                key,
+                generation,
+                cancel: handle.cancel,
+                complete: false,
+                buffer: None,
+                decorators: Vec::new(),
+                redecorate_scheduled: false,
+                children: BTreeMap::new(),
+            },
+        );
+    }
+
+    /// The subtree search on a provider that lists a whole subtree itself
+    /// (`SEARCH_SUBTREE`): one listing of everything beneath the location,
+    /// the names matched here as the walk matches them — the text anywhere
+    /// in the name, whatever the case — and what the ignore list names
+    /// left out with everything under it. Where the location has neither
+    /// an index nor the capability the search finds nothing and says
+    /// nothing: the toggle that starts it is disabled there.
+    fn search_listing(&mut self, pane: PaneId, key: ListKey, generation: u64, text: &str) {
+        let location = key.location.clone();
+        let provider = self.mounts.resolve(&location).ok().filter(|provider| {
+            provider
+                .capabilities(&location)
+                .contains(Capabilities::SEARCH_SUBTREE)
+        });
+        let Some(provider) = provider else {
+            debug!(%location, "nothing searches beneath this location");
+            self.model.listing_done(pane);
+            self.live.insert(
+                pane,
+                Live {
+                    key,
+                    generation,
+                    cancel: CancelToken::new(),
+                    complete: true,
+                    buffer: None,
+                    decorators: Vec::new(),
+                    redecorate_scheduled: false,
+                    children: BTreeMap::new(),
+                },
+            );
+            return;
+        };
+        let tx = self.mailbox.clone();
+        let needle = text.to_lowercase();
+        let ignore = self.model.settings.search.ignore.clone();
+        let opts = ListOptions {
+            depth: Depth::Unlimited,
+            ..key.opts
+        };
+        let root = location.path.clone();
+        let handle = self.jobs.spawn_named(
+            format!("Search {text} in {location}"),
+            move |job| async move {
+                let mut stream = provider.list(&location, opts, job.cancel.clone());
+                let mut count = 0u64;
+                let result = async {
+                    while let Some(batch) = stream.next().await {
+                        let batch: Vec<Entry> = batch?
+                            .into_iter()
+                            .filter(|entry| {
+                                entry.name.to_lowercase().contains(&needle)
+                                    && !below_ignored(&root, &entry.path, &ignore)
+                            })
+                            .collect();
+                        if batch.is_empty() {
+                            continue;
+                        }
                         count += batch.len() as u64;
                         job.progress.report(Progress::Items {
                             done: count,
@@ -4967,6 +5085,15 @@ impl App {
 /// The search indexes the title-row search box queries: every registered
 /// one whose service is there and whose scope is the whole machine. A walk
 /// scoped `Under` a root answers the filter bar instead (QUESTIONS.md 118).
+/// Whether `path`, below `root`, is or lies under an entry the ignore
+/// list names: a component of its path from `root` on is one of `names`.
+fn below_ignored(root: &VPath, path: &VPath, names: &[String]) -> bool {
+    let (root, path) = (root.as_bytes(), path.as_bytes());
+    let rest = path.strip_prefix(root).unwrap_or(path);
+    rest.split(|b| matches!(b, b'/' | b'\\'))
+        .any(|part| names.iter().any(|name| name.as_bytes() == part))
+}
+
 fn available_indexes(registry: &Registry) -> Vec<Arc<dyn SearchIndex>> {
     registry
         .search_indexes()

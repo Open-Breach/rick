@@ -46,6 +46,16 @@ impl RowEdit {
         }
     }
 
+    /// An edit put back as it was committed, refused: the row shakes red
+    /// and keeps the name for another try. For a name the list would take
+    /// and the provider does not (a container's, by its naming rules).
+    #[must_use]
+    pub fn refused(kind: EditKind, text: impl Into<String>, now: f64) -> Self {
+        let mut edit = Self::new(kind, text);
+        edit.refuse(now);
+        edit
+    }
+
     /// Whether the edit is being refused right now.
     #[must_use]
     pub fn is_shaking(&self, now: f64) -> bool {

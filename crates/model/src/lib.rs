@@ -824,9 +824,6 @@ pub struct Model {
     /// the title-row search box queries. Empty when the platform has none;
     /// the box then searches the current location alone, as in 0.1.
     pub search_indexes: Vec<ExtId>,
-    /// A subdirectory search index is registered, so the filter bar offers
-    /// *Search in subdirectories*.
-    pub subtree_search: bool,
     /// The explorer tab the preview follows: the last one focused.
     preview_follows: Option<TabId>,
     next_pane: u64,
@@ -866,7 +863,6 @@ impl Model {
             integration: Integration::default(),
             index_search: IndexSearch::default(),
             search_indexes: Vec::new(),
-            subtree_search: false,
             preview_follows: None,
             next_pane: 1,
             next_tab: 1,
