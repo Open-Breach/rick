@@ -117,6 +117,17 @@ open is in `QUESTIONS.md` 323 to 366. The rules went into SPEC.md first
 
 ### Fixed
 
+- **The Windows archive starts on a machine without the Visual C++
+  Redistributable.** `rick.exe`, Rick's kernel libraries, every plugin and
+  the GStreamer runtime import `vcruntime140.dll`, some of them
+  `vcruntime140_1.dll` and `msvcp140.dll` too, and the archives up to 0.3.0
+  carried none: on a Windows without the redistributable Rick stopped
+  before its first window with “VCRUNTIME140.dll was not found”. The
+  release workflow now puts the runtime's libraries beside `rick.exe`
+  (`cargo xtask bundle` copies them from `RICK_VCRUNTIME_DIR`, the
+  toolset's redistributable folder), and its smoke test reads the imports
+  of every module in the archive and fails when a library of the Visual
+  C++ runtime is not in it (#186).
 - **No black band around the window where it cannot be transparent**
   (issue 158). Rick asks for a transparent window to paint its shadow into
   a 10 px margin; where the surface is opaque — as on Windows under
