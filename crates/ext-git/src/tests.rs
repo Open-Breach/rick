@@ -68,10 +68,42 @@ struct Scripted {
     prompt: Mutex<Option<String>>,
     confirm: Mutex<bool>,
     shown: Mutex<Vec<(String, String)>>,
+    /// What a form is answered with, over its defaults.
+    typed: Mutex<Vec<(&'static str, ext::Value)>>,
+    /// A form is dismissed instead of answered.
+    dismiss: Mutex<bool>,
+    /// The forms the actions showed.
+    forms: Mutex<Vec<ext::Form>>,
+    notices: Mutex<Vec<(Level, String)>>,
+}
+
+impl Scripted {
+    /// Types `text` into the form's field `key`.
+    fn type_text(&self, key: &'static str, text: &str) {
+        self.typed
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push((key, ext::Value::Text(text.to_owned())));
+    }
+
+    /// The form shown last.
+    fn last_form(&self) -> ext::Form {
+        self.forms
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .last()
+            .cloned()
+            .unwrap_or_else(|| panic!("no form was shown"))
+    }
 }
 
 impl UiHost for Scripted {
-    fn notify(&self, _: Level, _: &str) {}
+    fn notify(&self, level: Level, text: &str) {
+        self.notices
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push((level, text.to_owned()));
+    }
     fn confirm(&self, _: &str, _: &str) -> bool {
         *self.confirm.lock().unwrap_or_else(PoisonError::into_inner)
     }
@@ -88,7 +120,23 @@ impl UiHost for Scripted {
             .push((title.to_owned(), text.to_owned()));
     }
     fn form(&self, form: ext::Form) -> Option<ext::Values> {
-        Some(form.defaults())
+        let mut values = form.defaults();
+        self.forms
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push(form);
+        if *self.dismiss.lock().unwrap_or_else(PoisonError::into_inner) {
+            return None;
+        }
+        for (key, value) in self
+            .typed
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .iter()
+        {
+            values.set(key, value.clone());
+        }
+        Some(values)
     }
 }
 
@@ -132,8 +180,16 @@ struct Harness {
 }
 
 fn harness() -> Harness {
+    harness_on(Registry::new())
+}
+
+/// A harness whose extension is lent `platform`, for its clipboard.
+fn harness_with(platform: Arc<platform::Fake>) -> Harness {
+    harness_on(Registry::with_platform(platform))
+}
+
+fn harness_on(mut registry: Registry) -> Harness {
     let ext = GitExtension::new();
-    let mut registry = Registry::new();
     registry.load(&ext).unwrap_or_else(|e| panic!("{e}"));
     let (jobs, events) = JobRunner::with_events();
     Harness {
@@ -189,6 +245,58 @@ impl Harness {
             .repos()
             .refresh(work)
             .unwrap_or_else(|e| panic!("{e}"))
+    }
+
+    /// Waits for every job and returns what the jobs published, failures
+    /// included.
+    fn finish(&self) -> Vec<runtime::JobEvent> {
+        let deadline = Instant::now() + Duration::from_secs(30);
+        while !self.jobs.running().is_empty() {
+            assert!(Instant::now() < deadline, "jobs still running");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        // `Finished` is published a moment after the job leaves the list.
+        std::thread::sleep(Duration::from_millis(50));
+        let mut events = self.events.lock().unwrap_or_else(PoisonError::into_inner);
+        std::iter::from_fn(|| events.try_recv().ok()).collect()
+    }
+
+    /// What the actions share, for a clone started without the dialogue.
+    fn shared(&self) -> actions::Shared {
+        actions::Shared {
+            repos: Arc::clone(self.ext.repos()),
+            platform: None,
+        }
+    }
+}
+
+/// `path` as a `file://` URL, which git clones like a remote one.
+fn file_url(path: &Path) -> String {
+    let text = path.to_string_lossy().replace('\\', "/");
+    if text.starts_with('/') {
+        format!("file://{text}")
+    } else {
+        format!("file:///{text}")
+    }
+}
+
+/// How the one job of `events` ended.
+fn result_of(events: &[runtime::JobEvent]) -> &Result<(), types::Error> {
+    events
+        .iter()
+        .find_map(|event| match event {
+            runtime::JobEvent::Finished { result, .. } => Some(result),
+            _ => None,
+        })
+        .unwrap_or_else(|| panic!("no job finished: {events:?}"))
+}
+
+/// Waits until `done` holds.
+fn wait_for(what: &str, mut done: impl FnMut() -> bool) {
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while !done() {
+        assert!(Instant::now() < deadline, "{what}");
+        std::thread::sleep(Duration::from_millis(10));
     }
 }
 
@@ -351,6 +459,10 @@ fn actions_are_hidden_outside_a_work_tree() {
     let h = harness();
     for action in h.registry.actions() {
         assert_eq!(action.group(), actions::GROUP);
+        // Git clone… is the one action that needs no work tree.
+        if action.id() == ActionId("git.clone") {
+            continue;
+        }
         assert_eq!(
             action.availability(&ctx(dir.path(), &[])),
             Availability::Hidden,
@@ -364,7 +476,7 @@ fn actions_are_hidden_outside_a_work_tree() {
             action.id().0
         );
     }
-    assert_eq!(h.registry.actions().len(), 9);
+    assert_eq!(h.registry.actions().len(), 10);
 }
 
 #[test]
@@ -477,4 +589,503 @@ fn log_and_blame_show_text() {
     assert!(shown[0].1.contains("first commit"), "{}", shown[0].1);
     assert!(shown[1].0.starts_with("Blame"));
     assert!(shown[1].1.contains("Rick Test"), "{}", shown[1].1);
+}
+
+#[test]
+fn a_git_url_is_one_of_the_four_forms_and_nothing_else() {
+    for url in [
+        "https://github.com/Open-Breach/rick.git",
+        "https://github.com/Open-Breach/rick",
+        "HTTPS://example.com/team/repo.git/",
+        "ssh://git@example.com:2222/team/repo.git",
+        "git://example.com/repo.git",
+        "git@github.com:Open-Breach/rick.git",
+        "deploy@build.example.com:repo",
+    ] {
+        assert!(clone::is_git_url(url), "{url}");
+    }
+    for text in [
+        "",
+        "rick",
+        "https://github.com",
+        "https://github.com/",
+        "https:///rick.git",
+        "http://example.com/repo.git",
+        "file:///srv/repo.git",
+        "ext::sh -c id",
+        "ext::sh://x/y",
+        "/srv/git/repo.git",
+        "C:/work/repo",
+        "serge@example.com",
+        "git@github.com:",
+        "-oProxyCommand=id@host:repo",
+        "ssh://-oProxyCommand=id/repo",
+        "see https://github.com/Open-Breach/rick.git",
+        "https://github.com/Open-Breach/rick.git\nand more",
+        "git clone https://github.com/Open-Breach/rick.git",
+    ] {
+        assert!(!clone::is_git_url(text), "{text:?}");
+    }
+}
+
+#[test]
+fn the_new_folder_is_named_as_git_names_it() {
+    for (url, name) in [
+        ("https://github.com/Open-Breach/rick.git", "rick"),
+        ("https://github.com/Open-Breach/rick", "rick"),
+        ("https://example.com/team/repo.git/", "repo"),
+        ("https://example.com/team/repo/.git", "repo"),
+        ("ssh://git@example.com:2222/team/repo.git", "repo"),
+        ("git@github.com:Open-Breach/rick.git", "rick"),
+        ("git@example.com:repo.git", "repo"),
+        ("git://example.com/a.b.git", "a.b"),
+    ] {
+        assert_eq!(clone::repo_name(url).as_deref(), Some(name), "{url}");
+    }
+    for url in [
+        "https://github.com",
+        "https://example.com/.git",
+        "git@host:..",
+    ] {
+        assert_eq!(clone::repo_name(url), None, "{url}");
+    }
+}
+
+#[test]
+fn the_options_become_gits_flags_and_an_unset_one_adds_nothing() {
+    let url = "https://example.com/team/repo.git";
+    assert_eq!(
+        clone::clone_args(url, &clone::Options::default()),
+        ["clone", "--progress", "--", url]
+    );
+    let all = clone::Options {
+        branch: Some("release/1.2".to_owned()),
+        depth: Some(5),
+        submodules: true,
+    };
+    assert_eq!(
+        clone::clone_args(url, &all),
+        [
+            "clone",
+            "--progress",
+            "--branch=release/1.2",
+            "--depth=5",
+            "--recurse-submodules",
+            "--",
+            url
+        ]
+    );
+    let depth_only = clone::Options {
+        depth: Some(1),
+        ..clone::Options::default()
+    };
+    assert_eq!(
+        clone::clone_args(url, &depth_only),
+        ["clone", "--progress", "--depth=1", "--", url]
+    );
+}
+
+#[test]
+fn clone_is_offered_on_the_empty_area_and_on_one_folder_only() {
+    let (dir, work) = repo();
+    let h = harness();
+    let clone = h.action("git.clone");
+    let file = work.join("tracked.txt");
+    let sub = work.join("sub");
+    // The empty area and a folder, outside a work tree and inside one.
+    for context in [
+        ctx(dir.path(), &[]),
+        ctx(dir.path(), &[&work]),
+        ctx(&work, &[]),
+        ctx(&work, &[&sub]),
+    ] {
+        assert_eq!(clone.availability(&context), Availability::Enabled);
+    }
+    // A file, and a selection of several: not in the context menu, greyed
+    // with the reason in the command palette.
+    for context in [ctx(&work, &[&file]), ctx(dir.path(), &[&work, &work])] {
+        assert!(
+            matches!(clone.availability(&context), Availability::Disabled(_)),
+            "{:?}",
+            context.selection
+        );
+    }
+    // A location that is not a local folder.
+    let mut remote = ctx(dir.path(), &[]);
+    remote.location = Location::new(types::ProviderId("ssh"), "/srv");
+    assert_eq!(clone.availability(&remote), Availability::Hidden);
+}
+
+/// Runs *Git clone…* with the dialogue dismissed and returns the form it
+/// showed.
+fn clone_form(h: &Harness, context: ActionCtx) -> ext::Form {
+    *h.ui.dismiss.lock().unwrap_or_else(PoisonError::into_inner) = true;
+    assert!(matches!(h.run("git.clone", context), ActionOutcome::Done));
+    h.ui.last_form()
+}
+
+#[test]
+fn the_dialogue_opens_with_a_git_url_from_the_clipboard_and_blank_otherwise() {
+    use platform::Clipboard as _;
+    let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+    let fake = Arc::new(platform::Fake::new().unwrap_or_else(|e| panic!("{e}")));
+    let h = harness_with(Arc::clone(&fake));
+    // Nothing on the clipboard.
+    assert_eq!(
+        clone_form(&h, ctx(dir.path(), &[])).defaults().text("url"),
+        ""
+    );
+    for (clipboard, field) in [
+        (
+            "https://github.com/Open-Breach/rick.git",
+            "https://github.com/Open-Breach/rick.git",
+        ),
+        // Copied with the line's end.
+        (
+            "  git@github.com:Open-Breach/rick.git\n",
+            "git@github.com:Open-Breach/rick.git",
+        ),
+        ("just some text", ""),
+        ("/home/serge/notes.txt", ""),
+        ("git clone https://github.com/Open-Breach/rick.git", ""),
+    ] {
+        fake.set_text(clipboard).unwrap_or_else(|e| panic!("{e}"));
+        let form = clone_form(&h, ctx(dir.path(), &[]));
+        assert_eq!(form.defaults().text("url"), field, "{clipboard:?}");
+    }
+    // Without platform services there is no clipboard to read.
+    let bare = harness();
+    assert_eq!(
+        clone_form(&bare, ctx(dir.path(), &[]))
+            .defaults()
+            .text("url"),
+        ""
+    );
+}
+
+#[test]
+fn the_dialogue_names_the_target_and_the_folder_the_clone_creates() {
+    let (dir, work) = repo();
+    let h = harness();
+    // On a folder the clone lands inside it; on the empty area in the
+    // pane's folder.
+    for (context, target) in [
+        (ctx(dir.path(), &[&work]), work.clone()),
+        (ctx(dir.path(), &[]), dir.path().to_path_buf()),
+    ] {
+        let form = clone_form(&h, context);
+        assert_eq!(form.title, "Clone repository");
+        assert_eq!(form.ok, "Clone");
+        assert_eq!(
+            form.header.as_ref().and_then(|h| h.subtitle.clone()),
+            Some(format!("Into {}", target.display()))
+        );
+        assert_eq!(
+            form.note.as_deref(),
+            Some("Runs as a job — progress in Operations")
+        );
+        // The options are folded away and all unset.
+        let options = form
+            .fields
+            .iter()
+            .find(|f| f.key == "options")
+            .unwrap_or_else(|| panic!("no options"));
+        assert_eq!(options.label, "Options");
+        assert_eq!(
+            options.kind,
+            ext::FieldKind::Disclosure {
+                summary: "Branch, depth, submodules".to_owned(),
+                open: false,
+                counted: false,
+            }
+        );
+        let mut values = form.defaults();
+        assert_eq!(values.text("branch"), "");
+        assert_eq!(values.text("depth"), "");
+        assert!(!values.check("submodules"));
+
+        // The *Creates* line follows the URL as it is typed.
+        let creates = |values: &ext::Values| form.preview_rows(values);
+        values.set(
+            "url",
+            ext::Value::Text("https://example.com/team/tool.git".into()),
+        );
+        let rows = creates(&values);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].from, "Creates");
+        assert_eq!(rows[0].problem, None);
+        let made = target.join("tool").display().to_string();
+        // A long path keeps its end: the new folder's name.
+        assert!(rows[0].to.ends_with("tool"), "{}", rows[0].to);
+        assert!(
+            rows[0].to == made || rows[0].to.contains('…'),
+            "{}",
+            rows[0].to
+        );
+        values.set("url", ext::Value::Text("git@example.com:other".into()));
+        assert!(creates(&values)[0].to.ends_with("other"));
+
+        // What is not a Git URL, and a depth that is not a number, hold
+        // the Clone button back: a row with a problem does.
+        values.set("url", ext::Value::Text("not a url".into()));
+        assert!(creates(&values)[0].problem.is_some());
+        values.set("url", ext::Value::Text("git@example.com:other".into()));
+        for depth in ["0", "-1", "abc", "1.5"] {
+            values.set("depth", ext::Value::Text(depth.into()));
+            let rows = creates(&values);
+            assert_eq!(rows.len(), 2, "{depth}");
+            assert!(rows[1].problem.is_some(), "{depth}");
+        }
+        values.set("depth", ext::Value::Text(" 3 ".into()));
+        assert!(creates(&values).iter().all(|row| row.problem.is_none()));
+        // An empty URL is the field's own warning, not a problem row.
+        values.set("url", ext::Value::Text(String::new()));
+        assert!(creates(&values).iter().all(|row| row.problem.is_none()));
+        let url = &form.fields[0];
+        assert_eq!((url.key, url.mono), ("url", true));
+        assert!(url.required.is_some());
+    }
+}
+
+#[test]
+fn what_the_dialogue_would_not_confirm_starts_no_clone() {
+    let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+    for (url, depth, warned) in [
+        ("", "", false),
+        ("not a url", "", true),
+        ("ext::sh -c id", "", true),
+        ("https://example.com/team/tool.git", "many", true),
+    ] {
+        let h = harness();
+        h.ui.type_text("url", url);
+        h.ui.type_text("depth", depth);
+        assert!(matches!(
+            h.run("git.clone", ctx(dir.path(), &[])),
+            ActionOutcome::Done
+        ));
+        assert_eq!(h.finish().len(), 0, "{url:?}: no job");
+        let notices = h.ui.notices.lock().unwrap_or_else(PoisonError::into_inner);
+        assert_eq!(notices.len(), usize::from(warned), "{url:?}");
+        assert!(notices.iter().all(|(level, _)| *level == Level::Warning));
+    }
+    assert_eq!(
+        fs::read_dir(dir.path()).map(Iterator::count).ok(),
+        Some(0),
+        "nothing was created"
+    );
+}
+
+#[test]
+fn a_clone_creates_the_repositorys_folder_in_the_target_as_git_clone_does() {
+    let (dir, _work) = repo();
+    let url = file_url(&dir.path().join("origin.git"));
+    let h = harness();
+    let into = dir.path().join("into");
+    fs::create_dir(&into).unwrap_or_else(|e| panic!("{e}"));
+    let outcome = clone::spawn(
+        &h.shared(),
+        &h.jobs,
+        into.clone(),
+        url.clone(),
+        clone::Options::default(),
+    );
+    assert!(matches!(outcome, ActionOutcome::Started(_)));
+    let events = h.finish();
+    assert!(result_of(&events).is_ok(), "{events:?}");
+    // The job is named after the repository and passes on what git says.
+    assert!(events.iter().any(|event| matches!(
+        event,
+        runtime::JobEvent::Started { name, .. } if name == "Git clone origin"
+    )));
+    assert!(
+        events.iter().any(|event| matches!(
+            event,
+            runtime::JobEvent::Progress { progress: types::Progress::Message(line), .. }
+                if line.contains("% (")
+        )),
+        "git's progress: {events:?}"
+    );
+    // The repository's folder, inside the target, with its content.
+    let cloned = into.join("origin");
+    assert_eq!(
+        fs::read_to_string(cloned.join("tracked.txt"))
+            .ok()
+            .as_deref(),
+        Some("one\n")
+    );
+    assert!(cloned.join(".git").is_dir());
+    assert_eq!(fs::read_dir(&into).map(Iterator::count).ok(), Some(1));
+
+    // Plain `git clone <url>` in a folder gives the same.
+    let plain = dir.path().join("plain");
+    fs::create_dir(&plain).unwrap_or_else(|e| panic!("{e}"));
+    git(&plain, &["clone", "-q", &url]);
+    let names = |folder: &Path| -> Vec<std::ffi::OsString> {
+        fs::read_dir(folder)
+            .unwrap_or_else(|e| panic!("{e}"))
+            .filter_map(|entry| entry.ok().map(|e| e.file_name()))
+            .collect()
+    };
+    assert_eq!(names(&into), names(&plain));
+    assert_eq!(
+        git(&cloned, &["rev-parse", "HEAD"]),
+        git(&plain.join("origin"), &["rev-parse", "HEAD"])
+    );
+    assert_eq!(
+        git(&cloned, &["remote", "get-url", "origin"]),
+        git(&plain.join("origin"), &["remote", "get-url", "origin"])
+    );
+}
+
+#[test]
+fn branch_and_depth_reach_git_and_unset_they_change_nothing() {
+    let (dir, work) = repo();
+    // Two commits on main and two more on a branch of its own.
+    for (branch, text) in [
+        ("main", "two\n"),
+        ("feature", "three\n"),
+        ("feature", "four\n"),
+    ] {
+        if branch == "feature" && text == "three\n" {
+            git(&work, &["checkout", "-q", "-b", "feature"]);
+        }
+        fs::write(work.join("tracked.txt"), text).unwrap_or_else(|e| panic!("{e}"));
+        git(&work, &["commit", "-q", "-am", text.trim()]);
+        git(&work, &["push", "-q", "-u", "origin", branch]);
+    }
+    let url = file_url(&dir.path().join("origin.git"));
+    let h = harness();
+    let clone_into = |name: &str, options: clone::Options| {
+        let into = dir.path().join(name);
+        fs::create_dir(&into).unwrap_or_else(|e| panic!("{e}"));
+        clone::spawn(&h.shared(), &h.jobs, into.clone(), url.clone(), options);
+        let events = h.finish();
+        assert!(result_of(&events).is_ok(), "{name}: {events:?}");
+        into.join("origin")
+    };
+
+    // Nothing set: the remote's default branch with its whole history.
+    let plain = clone_into("plain", clone::Options::default());
+    assert_eq!(
+        git(&plain, &["rev-parse", "--abbrev-ref", "HEAD"]).trim(),
+        "main"
+    );
+    assert_eq!(git(&plain, &["rev-list", "--count", "HEAD"]).trim(), "2");
+    assert_eq!(
+        git(&plain, &["rev-parse", "--is-shallow-repository"]).trim(),
+        "false"
+    );
+
+    // Branch and depth: that branch, its last commit only.
+    let shallow = clone_into(
+        "shallow",
+        clone::Options {
+            branch: Some("feature".to_owned()),
+            depth: Some(1),
+            // No submodules in this repository: git takes the flag.
+            submodules: true,
+        },
+    );
+    assert_eq!(
+        git(&shallow, &["rev-parse", "--abbrev-ref", "HEAD"]).trim(),
+        "feature"
+    );
+    assert_eq!(git(&shallow, &["rev-list", "--count", "HEAD"]).trim(), "1");
+    assert_eq!(
+        fs::read_to_string(shallow.join("tracked.txt"))
+            .ok()
+            .as_deref(),
+        Some("four\n")
+    );
+
+    // A branch the remote does not have fails in the job, as git fails.
+    let into = dir.path().join("missing");
+    fs::create_dir(&into).unwrap_or_else(|e| panic!("{e}"));
+    clone::spawn(
+        &h.shared(),
+        &h.jobs,
+        into.clone(),
+        url.clone(),
+        clone::Options {
+            branch: Some("no-such-branch".to_owned()),
+            ..clone::Options::default()
+        },
+    );
+    let events = h.finish();
+    let error = result_of(&events).as_ref().err().map_or_else(
+        || panic!("cloned a branch that is not there"),
+        ToString::to_string,
+    );
+    assert!(error.contains("no-such-branch"), "{error}");
+    assert_eq!(fs::read_dir(&into).map(Iterator::count).ok(), Some(0));
+}
+
+#[test]
+fn an_existing_folder_fails_the_job_as_git_fails_and_is_not_touched() {
+    let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+    let taken = dir.path().join("tool");
+    fs::create_dir(&taken).unwrap_or_else(|e| panic!("{e}"));
+    fs::write(taken.join("mine.txt"), "mine").unwrap_or_else(|e| panic!("{e}"));
+    let h = harness();
+    // Git refuses the folder before it looks for the host.
+    h.ui.type_text("url", "https://example.invalid/team/tool.git");
+    let action = h.action("git.clone");
+    let outcome = action
+        .run(ctx(dir.path(), &[]), &h.jobs, &h.ui)
+        .unwrap_or_else(|e| panic!("{e}"));
+    // The failure is the job's, not the action's.
+    assert!(matches!(outcome, ActionOutcome::Started(_)));
+    let events = h.finish();
+    let error = result_of(&events)
+        .as_ref()
+        .err()
+        .unwrap_or_else(|| panic!("cloned into a folder that was there"));
+    assert!(matches!(error, types::Error::Extension { .. }), "{error:?}");
+    assert!(error.to_string().contains("tool"), "{error}");
+    assert_eq!(
+        fs::read_to_string(taken.join("mine.txt")).ok().as_deref(),
+        Some("mine")
+    );
+    assert_eq!(fs::read_dir(&taken).map(Iterator::count).ok(), Some(1));
+}
+
+#[test]
+fn cancelling_the_job_stops_git_and_removes_the_folder_it_had_created() {
+    let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+    // A server that takes the connection and never answers: the clone
+    // waits for it until it is cancelled.
+    let silent = std::net::TcpListener::bind("127.0.0.1:0").unwrap_or_else(|e| panic!("{e}"));
+    let port = silent.local_addr().unwrap_or_else(|e| panic!("{e}")).port();
+    let h = harness();
+    h.ui.type_text("url", &format!("git://127.0.0.1:{port}/team/slow.git"));
+    let action = h.action("git.clone");
+    let outcome = action
+        .run(ctx(dir.path(), &[]), &h.jobs, &h.ui)
+        .unwrap_or_else(|e| panic!("{e}"));
+    let ActionOutcome::Started(id) = outcome else {
+        panic!("no job: {outcome:?}");
+    };
+    let created = dir.path().join("slow");
+    wait_for("git creates the folder", || created.is_dir());
+    assert_eq!(h.jobs.running(), vec![id], "the clone waits for the server");
+
+    assert!(h.jobs.cancel(id));
+    let events = h.finish();
+    assert!(
+        matches!(result_of(&events), Err(types::Error::Cancelled)),
+        "{events:?}"
+    );
+    // Where `git` is a launcher (Git for Windows), the git it started is
+    // not the process that was stopped: it ends when its server goes away
+    // and removes its folder itself.
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while created.exists() && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    if created.exists() {
+        eprintln!("note: git outlived the process that was stopped");
+    }
+    drop(silent);
+    wait_for("the folder is removed", || !created.exists());
+    assert_eq!(fs::read_dir(dir.path()).map(Iterator::count).ok(), Some(0));
 }
