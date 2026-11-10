@@ -4,8 +4,9 @@ name: full
 # main, which `tier 2` must pass before it merges; nightly on dev; and by
 # hand from the Actions tab. Every runner takes tier 1's checks (fmt,
 # clippy, the tests, the bundle with every plugin loading, the docs); Linux
-# x64 adds the integration tests on the 200k fixture, Linux x64 and macOS
-# the screenshots; cargo deny runs beside them. The timings are bench.yml.
+# x64 adds the integration tests on the 200k fixture and the clipboard
+# chords through a real window, Linux x64 and macOS the screenshots; cargo
+# deny runs beside them. The timings are bench.yml.
 #
 # A new push cancels the pull request's running check; a docs-only change
 # builds nothing and `tier 2` still reports success. A schedule runs from
@@ -96,6 +97,17 @@ jobs:
       - name: list plugins
         shell: bash
         run: .github/scripts/check-plugins.sh target/debug/bundle
+      # Issue 176: the copy, cut and paste chords through a real window.
+      # The bundle's binary runs on an X display under Xvfb, xdotool sends
+      # the keys, and the files say what happened. A window does not deliver
+      # these chords as key presses, so no test that injects keys can stand
+      # in for this one. Linux x64 only; the same build as the tests.
+      - name: the copy, cut and paste chords in a real window
+        if: matrix.os == 'ubuntu-24.04'
+        run: |
+          sudo apt-get install -y --no-install-recommends xvfb xauth xdotool xclip mesa-vulkan-drivers libxkbcommon-x11-0
+          xvfb-run -a -s "-screen 0 1400x900x24" cargo test --workspace ${{ env.RICK_WS_FEATURES }} --test real_chords -- --nocapture
+        env: { RICK_REQUIRE_REAL_CHORDS: "1", WGPU_BACKEND: vulkan }
       - run: cargo doc --no-deps ${{ env.RICK_WS_FEATURES }}
         env: { RUSTDOCFLAGS: "-D warnings" }
       # The two integration tests on the 200k fixture that are not timings:

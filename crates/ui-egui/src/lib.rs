@@ -27,6 +27,7 @@
 )]
 
 pub mod about;
+mod chords;
 pub mod compare;
 pub mod conflict;
 pub mod console;
