@@ -2,27 +2,39 @@
 
 ## Purpose
 
-Lets the user move a pane back and forth through earlier states of the folder it shows, along a time slider under the toolbar, wherever an extension can say which earlier states exist.
+Lets the user move a pane back and forth through earlier states of the folder it shows, along a time slider under the toolbar, wherever one or more extensions can say which earlier states exist.
 
 ## ADDED Requirements
 
-### Requirement: Timeline offered by an extension
-The system SHALL let a Decorator offer a timeline for a location: the live location and an ordered list of points, each with a time, a label and the location that shows the folder at that time. When several decorators offer one, the system SHALL use the first in registration order. A location with no offered timeline SHALL show no timeline controls.
+### Requirement: Timeline offered by extensions
+The system SHALL let a Decorator declare that it offers timelines and answer for a location with the live location and a list of points, each with a time, a label, the name of its source and the location that shows the folder at that time. The system SHALL ask for a timeline only off the UI thread and only while the pane's bar is shown, and SHALL keep the merged answer for a location until that location is decorated again or 30 seconds have passed. When several decorators answer for the same location, the system SHALL merge their points into one list sorted by time, each point keeping its source.
 
 #### Scenario: No source
-- **WHEN** the pane shows a folder for which no decorator offers a timeline
+- **WHEN** the pane shows a folder no decorator that offers timelines applies to
 - **THEN** neither the timeline bar nor the *Timeline* entry of the view options menu is shown
 
 #### Scenario: Two sources
-- **WHEN** two decorators offer a timeline for the same folder
-- **THEN** the bar shows the timeline of the one registered first
+- **WHEN** two decorators answer for the same folder, one with points on Monday and Thursday, the other with a point on Tuesday
+- **THEN** the bar shows three points in the order Monday, Tuesday, Thursday, and each point's tooltip names its source
+
+#### Scenario: Not asked while hidden
+- **WHEN** the bar of a pane is hidden and the pane navigates
+- **THEN** no decorator is asked for a timeline
+
+#### Scenario: Not asked on the UI thread
+- **WHEN** a decorator's answer takes two seconds
+- **THEN** the pane lists and responds as usual meanwhile, and the bar shows its reading state until the answer arrives
 
 ### Requirement: Timeline bar position and content
-The timeline bar SHALL be one row directly below the pane's toolbar and above the file list, the full width of the pane. It SHALL show a time axis from the oldest point to *Now*, one tick per point at its time, a handle at the current point, and the current point's date and label; at *Now* it SHALL show "Now".
+The timeline bar SHALL be one row directly below the pane's toolbar and above the file list, the full width of the pane, laid out as the approved design frame draws it. It SHALL show a time axis from the oldest point to *Now*, one tick per point at its time, a handle at the current point, and the current point's date, label and source; at *Now* it SHALL show "Now". At a past point it SHALL show that the pane shows the past and is read-only.
 
 #### Scenario: Bar layout
 - **WHEN** the bar is shown for a folder with snapshots on Monday, Tuesday and Thursday and the pane is at the live folder
 - **THEN** three ticks are placed by time on the axis, the handle is at *Now* at the right end, and the label reads "Now"
+
+#### Scenario: At a past point
+- **WHEN** the pane is at the Tuesday snapshot
+- **THEN** the bar shows Tuesday's date, the snapshot's name and "ZFS", marked read-only
 
 #### Scenario: Dense ticks
 - **WHEN** a timeline has more points than the axis has room for separate ticks
@@ -30,7 +42,7 @@ The timeline bar SHALL be one row directly below the pane's toolbar and above th
 
 #### Scenario: Hover
 - **WHEN** the pointer rests on a tick
-- **THEN** a tooltip shows that point's date, time and label
+- **THEN** a tooltip shows that point's date, time, label and source
 
 ### Requirement: Navigating along the timeline
 Dragging the handle SHALL snap to the nearest point and take the pane to that point's location once the drag pauses or ends; clicking a tick SHALL go to its point; with the bar focused, Left and Right SHALL step to the previous and next point, Home to the oldest and End to *Now*. Going to *Now* SHALL take the pane to the live location.
@@ -59,16 +71,20 @@ A run of timeline moves SHALL record one history entry, the location before the 
 - **THEN** the pane shows the live folder
 
 ### Requirement: Timeline visibility
-The bar SHALL be shown when the tab's timeline toggle is on and the location has a timeline, and always while the pane is at a past point of a timeline. A *Timeline* checkbox entry in the toolbar's view options menu and the palette command *Toggle timeline* SHALL switch the toggle for the tab; the menu entry SHALL only appear where a timeline exists, and the toolbar SHALL get no new control. The toggle SHALL be saved and restored with the tab.
+The bar SHALL be shown when the pane's timeline toggle is on and the location's timeline has points, and always while the pane is at a past point of a timeline; it SHALL never be shown without points, apart from its reading state while the first answer for the location is awaited. A *Timeline* checkbox entry in the toolbar's view options menu and the palette command *Toggle timeline* SHALL switch the toggle for the pane. The entry SHALL be absent where no decorator that offers timelines applies to the location, and disabled with a reason where the timeline was read and has no points. The toolbar SHALL get no new control. The toggle SHALL be saved and restored with the pane.
 
 #### Scenario: Toggle on
-- **WHEN** the user ticks *Timeline* in the view options menu in a folder with a timeline
-- **THEN** the bar appears and the entry is shown ticked
+- **WHEN** the user ticks *Timeline* in the view options menu in a folder with snapshots
+- **THEN** the bar appears, reading at first and then with the points, and the entry is shown ticked
+
+#### Scenario: Toggle in a folder without earlier states
+- **WHEN** the user ticks *Timeline* in a dataset without snapshots
+- **THEN** no bar remains once the answer arrived, and the entry is disabled with the reason that the folder has no earlier states
 
 #### Scenario: Opened inside a snapshot
 - **WHEN** the toggle is off and the pane goes to a folder inside a snapshot
 - **THEN** the bar is shown
 
 #### Scenario: Restart
-- **WHEN** the toggle is on for a tab and Rick is restarted
-- **THEN** that tab shows the bar again
+- **WHEN** the toggle is on for a pane and Rick is restarted
+- **THEN** that pane shows the bar again

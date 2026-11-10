@@ -3,7 +3,7 @@
 ## ADDED Requirements
 
 ### Requirement: ZFS timeline
-The ZFS plugin SHALL offer a timeline for a live folder inside a dataset that has snapshots and for a folder inside one of its snapshots: one point per snapshot of that dataset, oldest first, labelled with the snapshot name and timed at its creation, each pointing at the same relative folder inside that snapshot, with the live folder as *Now*. It SHALL answer from its cached snapshot list without running `zfs`.
+The ZFS plugin SHALL declare that it offers timelines and SHALL answer for a live folder inside a dataset that has snapshots and for a folder inside one of its snapshots: one point per snapshot of that dataset, labelled with the snapshot name, with the source "ZFS" and timed at its creation, each pointing at the same relative folder inside that snapshot (`/<dataset>/@<snapshot>/<path>`), with the live folder as *Now*. It SHALL answer from its snapshot list cached per dataset and read `zfs` only when that cache is cold or older than 30 seconds.
 
 #### Scenario: Live folder
 - **WHEN** the pane shows `/tank/home/ann/docs` and `tank/home` has snapshots `a` and `b`
@@ -11,12 +11,12 @@ The ZFS plugin SHALL offer a timeline for a live folder inside a dataset that ha
 
 #### Scenario: Inside a snapshot
 - **WHEN** the pane shows `ann/docs` inside snapshot `a`
-- **THEN** the timeline is the same as for the live folder and the current point is `a`
+- **THEN** the timeline is the same as for the live folder and the pane is at point `a`
 
 #### Scenario: Dataset without snapshots
 - **WHEN** the dataset has no snapshots
 - **THEN** no timeline is offered
 
-#### Scenario: Snapshot list not cached yet
-- **WHEN** the timeline is asked for before the dataset's snapshot list has been read
-- **THEN** no timeline is offered at first and the bar's controls appear once the list has been read
+#### Scenario: One read per dataset
+- **WHEN** the bar is shown and the user opens three folders of `tank/home` within 30 seconds
+- **THEN** `zfs list` for the snapshots of `tank/home` runs at most once
