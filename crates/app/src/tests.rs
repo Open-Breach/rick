@@ -969,29 +969,40 @@ fn hit(id: u128, path: &str) -> Entry {
     }
 }
 
+/// Issue 149: where nothing searches beneath a location — no search
+/// index under it and no `SEARCH_SUBTREE` on its provider — the toggle
+/// cannot be switched on, the filter narrows the folder as always, and no
+/// error is shown anywhere. The "search-walk plugin is not loaded" notice
+/// is gone.
 #[test]
-fn without_a_subtree_index_the_toggle_is_absent_and_a_search_ends_with_a_notice() {
+fn where_nothing_searches_beneath_the_toggle_stays_off_and_no_error_is_shown() {
     let mut h = harness();
     h.settle();
-    assert!(!h.app.model().subtree_search);
-    assert_eq!(h.app.model().search_indexes, Vec::<ExtId>::new());
     let pane = h.app.model().focused;
+    let location = h.tab(pane).location.clone();
+    assert_eq!(
+        h.app.subtree_search(&location),
+        Availability::Disabled("Not available in this location".to_owned())
+    );
+    assert_eq!(h.app.model().search_indexes, Vec::<ExtId>::new());
+    h.take_events();
     h.send(Command::Subtree { pane, on: true });
     h.send(Command::Filter {
         pane,
-        text: "foo".into(),
+        text: "a.t".into(),
     });
     h.settle();
     let events = h.take_events();
     assert!(
-        events.iter().any(|e| matches!(
-            e,
-            Event::Notify { level: Level::Error, text } if text.contains("No subdirectory search")
-        )),
+        !events
+            .iter()
+            .any(|e| matches!(e, Event::Notify { level, .. } if *level != Level::Info)),
         "{events:?}"
     );
+    assert!(!h.tab(pane).subtree, "the toggle stays off");
+    assert!(!h.tab(pane).is_searching());
     assert!(!h.app.is_busy());
-    assert_eq!(h.names(), Vec::<String>::new());
+    assert_eq!(h.names(), ["a.txt"], "the filter narrows the folder itself");
 }
 
 #[test]
@@ -1001,12 +1012,16 @@ fn subtree_search_streams_matches_as_a_job_and_a_new_text_supersedes_it() {
         Arc::new(FakeWalk),
     )]);
     h.settle();
-    assert!(h.app.model().subtree_search);
+    let pane = h.app.model().focused;
+    assert_eq!(
+        h.app.subtree_search(&h.tab(pane).location),
+        Availability::Enabled,
+        "the walk searches beneath a local folder"
+    );
     assert!(
         h.app.model().search_indexes.is_empty(),
         "a walk is not a platform index"
     );
-    let pane = h.app.model().focused;
     let mut dir = h.root.path().join("sub");
     for level in 0..20 {
         dir.push(format!("l{level}"));

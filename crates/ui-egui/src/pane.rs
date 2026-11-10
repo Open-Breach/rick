@@ -1156,15 +1156,14 @@ fn filter_field(ui: &mut egui::Ui, cx: &mut PaneCx<'_>) {
         egui::FontId::proportional(ICON),
         scheme.icon_default.gamma_multiply(0.6),
     );
-    let mut right = rect.right() - FIELD_PAD;
-    if cx.app.model().subtree_search {
-        let toggle = egui::Rect::from_center_size(
-            egui::pos2(rect.right() - 2.0 - FIELD_TOGGLE / 2.0, rect.center().y),
-            egui::vec2(FIELD_TOGGLE, FIELD_TOGGLE),
-        );
-        subtree_toggle(ui, cx, toggle);
-        right = toggle.left() - 4.0;
-    }
+    // The toggle is always there: where the location cannot be searched
+    // beneath it is disabled and says why (SPEC.md *Footer*).
+    let toggle = egui::Rect::from_center_size(
+        egui::pos2(rect.right() - 2.0 - FIELD_TOGGLE / 2.0, rect.center().y),
+        egui::vec2(FIELD_TOGGLE, FIELD_TOGGLE),
+    );
+    subtree_toggle(ui, cx, toggle);
+    let right = toggle.left() - 4.0;
     let text_rect = egui::Rect::from_min_max(
         egui::pos2(glass.right() + 6.0, rect.top()),
         egui::pos2(right.max(glass.right() + 6.0), rect.bottom()),
@@ -1212,10 +1211,33 @@ fn filter_field(ui: &mut egui::Ui, cx: &mut PaneCx<'_>) {
 }
 
 /// The include-subfolders toggle inside the filter field: `TREE_STRUCTURE`,
-/// on `bg/selected-soft` while on.
+/// on `bg/selected-soft` while on. Where the location cannot be searched
+/// beneath — its provider has no `SEARCH_SUBTREE` and no search index is
+/// under it — the toggle is disabled, in `text/placeholder`, with the
+/// reason as its tooltip.
 fn subtree_toggle(ui: &mut egui::Ui, cx: &mut PaneCx<'_>, rect: egui::Rect) {
     let on = cx.tab.subtree;
     let scheme = theme::scheme(ui);
+    if let ext::Availability::Disabled(reason) = cx.app.subtree_search(&cx.tab.location) {
+        let response = ui.interact(
+            rect,
+            ui.id().with(("subtree", cx.tab_id)),
+            egui::Sense::hover(),
+        );
+        ui.painter().text(
+            rect.center(),
+            egui::Align2::CENTER_CENTER,
+            icons::SUBTREE,
+            egui::FontId::proportional(ICON),
+            scheme.text_placeholder,
+        );
+        let label = t!("footer-subtree");
+        response.widget_info(|| {
+            egui::WidgetInfo::labeled(egui::WidgetType::Button, false, label.clone())
+        });
+        response.on_hover_text(reason);
+        return;
+    }
     let response = ui.interact(
         rect,
         ui.id().with(("subtree", cx.tab_id)),

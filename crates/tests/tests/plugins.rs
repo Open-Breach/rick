@@ -544,6 +544,8 @@ fn the_extensions_dialogue_lists_the_plugins_and_its_switch_writes_the_setting()
 /// app, the walk gives the filter bar its toggle and the SVN group is
 /// registered.
 #[test]
+// One scenario over every search and SVN plugin, start to finish.
+#[allow(clippy::too_many_lines)]
 fn the_search_and_svn_plugins_load_on_their_platforms() {
     let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
     let plugins = dir.path().join("plugins");
@@ -618,7 +620,11 @@ fn the_search_and_svn_plugins_load_on_their_platforms() {
         start: Some(local(dir.path())),
     });
     settle(&mut app, &mut events);
-    assert!(app.model().subtree_search, "the walk is registered");
+    assert_eq!(
+        app.subtree_search(&local(dir.path())),
+        ext::Availability::Enabled,
+        "the walk is registered"
+    );
     let svn_actions: Vec<&str> = app
         .registry()
         .actions()

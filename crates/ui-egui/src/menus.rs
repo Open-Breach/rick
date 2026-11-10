@@ -156,7 +156,7 @@ fn app_menu(
         Some(icons::INFO),
         &label,
         Some(version.to_owned()),
-        false,
+        Tone::Plain,
         None,
         APP,
     );
@@ -243,7 +243,15 @@ fn intent_item(
     label: &str,
     intent: Intent,
 ) {
-    let row = entry_button(ui, icon, label, keys.text_for(intent), false, None, APP);
+    let row = entry_button(
+        ui,
+        icon,
+        label,
+        keys.text_for(intent),
+        Tone::Plain,
+        None,
+        APP,
+    );
     if labelled(ui.add(row), label).clicked() {
         requests.push(Request::Intent { intent, pane });
         ui.close();
@@ -287,7 +295,7 @@ fn action_item(
         action_icon(action.id().0),
         &label,
         None,
-        false,
+        Tone::Plain,
         None,
         APP,
     );
@@ -374,7 +382,7 @@ fn layouts_menu(
             );
             let is_start = start == Some(name.as_str());
             let label = t!("menu-set-as-start-layout");
-            let row = entry_button(ui, None, &label, None, false, None, APP);
+            let row = entry_button(ui, None, &label, None, Tone::Plain, None, APP);
             if labelled(ui.add_enabled(!is_start, row), &label).clicked() {
                 requests.push(Request::Command(Command::Settings(
                     model::SettingsChange::StartLayout(Some(name.clone())),
@@ -382,13 +390,13 @@ fn layouts_menu(
                 ui.close();
             }
             let label = t!("rename-ellipsis");
-            let row = entry_button(ui, None, &label, None, false, None, APP);
+            let row = entry_button(ui, None, &label, None, Tone::Plain, None, APP);
             if labelled(ui.add(row), &label).clicked() {
                 requests.push(Request::RenameLayout(name.clone()));
                 ui.close();
             }
             let label = t!("delete");
-            let row = entry_button(ui, None, &label, None, false, None, APP);
+            let row = entry_button(ui, None, &label, None, Tone::Plain, None, APP);
             if labelled(ui.add(row), &label).clicked() {
                 requests.push(Request::Command(Command::DeleteLayout(name.clone())));
                 ui.close();
@@ -574,7 +582,8 @@ fn action_icon(id: &str) -> Option<&'static str> {
         "core.new_folder" => icons::NEW_FOLDER,
         "core.new_file" => icons::NEW_FILE,
         "core.hash" => icons::HASH,
-        "installer.install" => icons::INSTALL,
+        // `DOWNLOAD_SIMPLE`: what comes down to the machine.
+        "core.download" | "installer.install" => icons::INSTALL,
         _ => return None,
     })
 }
@@ -602,6 +611,7 @@ const FILE_GROUPS: &[&[&str]] = &[
     &[
         "core.open_default",
         "core.open_with",
+        "core.download",
         "core.open_containing",
         "core.open_containing_tab",
         "terminal.console",
@@ -652,6 +662,22 @@ const EMPTY_GROUPS: &[&[&str]] = &[
     &["terminal.console", "core.reveal", "menu.refresh"],
 ];
 
+/// The entries a location's capabilities can rule out (SPEC.md *Context
+/// menu*): the one kind of entry that is greyed in the menu, with the
+/// reason as its tooltip, and not hidden.
+const CAPABILITY_ENTRIES: &[&str] = &["core.new_folder", "core.new_file", "core.download"];
+
+/// How an entry is drawn.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Tone {
+    /// `text/primary` with the icon in `icon/default`.
+    Plain,
+    /// `status/danger`: a destructive entry.
+    Destructive,
+    /// `text/placeholder`: an entry the location rules out.
+    Greyed,
+}
+
 /// One entry of the menu: a 16 px icon slot, the label and the shortcut at
 /// the right; `destructive` draws it in `status/danger`. Its accessible
 /// name is the label alone.
@@ -662,8 +688,39 @@ fn entry(
     shortcut: Option<String>,
     destructive: bool,
 ) -> egui::Response {
-    let row = entry_button(ui, icon, label, shortcut, destructive, None, CONTEXT);
+    let tone = if destructive {
+        Tone::Destructive
+    } else {
+        Tone::Plain
+    };
+    let row = entry_button(ui, icon, label, shortcut, tone, None, CONTEXT);
     labelled(ui.add(row), label)
+}
+
+/// An entry that is there and cannot be used now — one the location's
+/// capabilities rule out, or *Paste* with nothing to paste: drawn in
+/// `text/placeholder`, doing nothing, with `reason` as its tooltip, so that
+/// the user learns why it is not there to use.
+fn greyed_entry(
+    ui: &mut egui::Ui,
+    icon: Option<&str>,
+    label: &str,
+    shortcut: Option<String>,
+    reason: &str,
+) {
+    let row = entry_button(ui, icon, label, shortcut, Tone::Greyed, None, CONTEXT);
+    let response = ui
+        .scope(|ui| {
+            // The colours say it; egui's own fade on top would take the
+            // text below the placeholder tone.
+            ui.visuals_mut().disabled_alpha = 1.0;
+            ui.add_enabled(false, row)
+        })
+        .inner;
+    let spoken = label.to_owned();
+    response
+        .widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, false, spoken.clone()));
+    response.on_disabled_hover_text(reason);
 }
 
 /// The button of an entry, for [`entry`] and for a submenu's row.
@@ -672,24 +729,20 @@ fn entry_button<'a>(
     icon: Option<&str>,
     label: &str,
     shortcut: Option<String>,
-    destructive: bool,
+    tone: Tone,
     right: Option<&str>,
     rows: Rows,
 ) -> egui::Button<'a> {
     let scheme = theme::scheme(ui);
-    let colour = if destructive {
-        scheme.status_danger
-    } else {
-        scheme.text_primary
+    let (colour, icon_colour) = match tone {
+        Tone::Plain => (scheme.text_primary, scheme.icon_default),
+        Tone::Destructive => (scheme.status_danger, scheme.status_danger),
+        Tone::Greyed => (scheme.text_placeholder, scheme.text_placeholder),
     };
     let mut job = egui::text::LayoutJob::default();
     let mut icon_format = egui::TextFormat {
         font_id: egui::FontId::proportional(ICON),
-        color: if destructive {
-            scheme.status_danger
-        } else {
-            scheme.icon_default
-        },
+        color: icon_colour,
         valign: Align::Center,
         ..Default::default()
     };
@@ -756,7 +809,7 @@ fn submenu_in(
     content: impl FnOnce(&mut egui::Ui),
 ) {
     let caret = Some(icons::TREE_CLOSED);
-    let button = entry_button(ui, icon, label, None, false, caret, rows);
+    let button = entry_button(ui, icon, label, None, Tone::Plain, caret, rows);
     let style: fn(&mut egui::Style) = if rows.fixed {
         menu_style
     } else {
@@ -802,6 +855,33 @@ fn menu_label(action: &dyn ext::Action) -> String {
         "core.copy_path" => t!("menu-copy-as-path"),
         "core.copy_path_and_name" => t!("menu-copy-as-path-and-name"),
         _ => action.label(),
+    }
+}
+
+/// The entry of an action the menu lists by name, when it has one: the
+/// row of an action that is available, or, for one of the
+/// [`CAPABILITY_ENTRIES`] the location rules out, the greyed row with the
+/// reason. `false` when the action has no entry here.
+fn listed_entry(
+    ui: &mut egui::Ui,
+    cx: &mut PaneCx<'_>,
+    action_ctx: &ActionCtx,
+    action: &dyn ext::Action,
+    before: impl FnOnce(&mut egui::Ui),
+) -> bool {
+    match action.availability(action_ctx) {
+        Availability::Enabled => {
+            before(ui);
+            action_entry(ui, cx, action_ctx, action);
+            true
+        }
+        Availability::Disabled(reason) if CAPABILITY_ENTRIES.contains(&action.id().0) => {
+            before(ui);
+            let icon = action_icon(action.id().0);
+            greyed_entry(ui, icon, &menu_label(action), None, &reason);
+            true
+        }
+        _ => false,
     }
 }
 
@@ -904,23 +984,14 @@ fn paste_entry(
         }
         Availability::Disabled(why) if action.id().0 == "core.paste" => {
             start(ui);
-            let label = menu_label(action);
             let shortcut = cx.keys.text_for(Intent::Action(action.id()));
-            let row = entry_button(
+            greyed_entry(
                 ui,
                 action_icon(action.id().0),
-                &label,
+                &menu_label(action),
                 shortcut,
-                false,
-                None,
-                CONTEXT,
+                &why,
             );
-            let response = ui.add_enabled(false, row);
-            let spoken = label.clone();
-            response.widget_info(|| {
-                egui::WidgetInfo::labeled(egui::WidgetType::Button, false, spoken.clone())
-            });
-            response.on_disabled_hover_text(why);
         }
         Availability::Disabled(_) | Availability::Hidden => {}
     }
@@ -931,8 +1002,10 @@ fn paste_entry(
 /// shortcut, destructive entries in `status/danger`, submenus opening to
 /// the right. On `entry` the file's menu — Open, Edit, Change, the
 /// extension groups and Info — on `None` the empty area's. Entries that
-/// do not apply are hidden; *Paste* alone is greyed while the clipboard is
-/// empty, and on a folder it pastes into that folder.
+/// do not apply are hidden. Two kinds are greyed with the reason as the
+/// tooltip instead: *Paste* while the clipboard is empty — on a folder it
+/// pastes into that folder — and an entry the location's capabilities rule
+/// out (New folder, New file and Download…).
 #[allow(clippy::too_many_lines)]
 pub fn context_menu(
     ui: &mut egui::Ui,
@@ -1005,11 +1078,9 @@ pub fn context_menu(
                     });
                     continue;
                 }
-                if action.availability(action_ctx) != Availability::Enabled {
-                    continue;
-                }
-                group_start(ui, &mut any, &mut shown);
-                action_entry(ui, cx, action_ctx, &**action);
+                listed_entry(ui, cx, action_ctx, &**action, |ui| {
+                    group_start(ui, &mut any, &mut shown);
+                });
             }
         }
     } else {
@@ -1047,11 +1118,9 @@ pub fn context_menu(
                             });
                             continue;
                         }
-                        if action.availability(action_ctx) != Availability::Enabled {
-                            continue;
-                        }
-                        group_start(ui, &mut any, &mut shown);
-                        action_entry(ui, cx, action_ctx, &**action);
+                        listed_entry(ui, cx, action_ctx, &**action, |ui| {
+                            group_start(ui, &mut any, &mut shown);
+                        });
                     }
                 }
             }
