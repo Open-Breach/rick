@@ -7,9 +7,128 @@ the pull request that brought the change.
 
 ## [Unreleased]
 
+The GUI fixes of the test session of 2026-11-09 (issue 139, SPEC.md *Version
+0.4 — scope*): the menus, the dialogues and the preview pane redrawn from
+their Figma frames on the dialogue shell, the tokens and the Portal burst of
+the design refresh, in Light and Dark and in both densities. Each item has
+its acceptance test and its screenshots in the four modes
+(`crates/tests/tests/screenshots.rs`, taken by CI tier 2); what a rule left
+open is in `QUESTIONS.md` 323 to 366. The rules went into SPEC.md first
+(#155).
+
+### Added
+
+- **Title bar colour.** The title row sits on a band of its own colour, the
+  new token `bg/titlebar`, and the active workspace tab lifts out of it in
+  `bg/pane`, with no accent line. *Settings → Appearance → Title bar colour*
+  chooses the band: six presets, each a light and a dark value so that one
+  choice works in both modes — *Dusty rose* (the default), *Warm grey*,
+  *Slate teal*, *Sage*, *Plum* and *Dark band* — and *Custom* with a
+  `#rrggbb` field per scheme. The choice is `titlebar_colour` in
+  `rick.toml`, with `titlebar_custom_light` and `titlebar_custom_dark`. On a
+  band that is dark in Light — the *Dark band*, or a dark custom colour —
+  the tab titles, the icons, the window controls and the search box turn to
+  light text, and a light custom colour in Dark is the mirror image; the
+  titles hold 4.5:1 and the icons 3:1 on every preset (#168).
+- **Extensions dialogue.** Master and detail: a searchable list grouped by
+  what a plugin contributes, each row with its icon, name and enable switch
+  and an amber dot when it needs attention; beside it the plugin's name, id,
+  version and kind, a *Built-in plugin* or *User plugin* chip, the
+  description from its manifest, an attention card when there is one, and a
+  card with *Contributes*, *Status*, *Location* and *Config*. *Settings*
+  opens the plugin's settings page, *Open folder* its folder, and *Remove*
+  deletes a user plugin's folder. *Install from file…* unpacks an `.rkp`
+  package — a zip archive of the plugin's folder — into the plugins folder.
+  An installed plugin loads at the next start and a removed one is gone at
+  the next start; neither asks nor checks anything yet. A manifest carries a
+  `description`, and the extension API version is 18 (#167).
+- **Keyboard shortcuts dialogue.** The categories with their counts at the
+  left, one per plugin that contributes actions, so a plugin's actions are
+  no longer filed under *File operations*; at the right a search field that
+  also takes a pressed chord, and the rows grouped by category with their
+  shortcuts as key caps, *Not set* when unbound. A click on the shortcut
+  cell records, Backspace unbinds, Esc cancels; a changed row has an accent
+  dot and a reset button, and a chord that is taken shows an amber *also: …*
+  chip on both rows (#165).
+- **The File info card** in the preview pane: one card for every previewer —
+  icon tile, name, type and size, label and value rows with a copy button
+  each, *Show all n fields* for the rest. It opens under the info button on
+  hover, can be pinned above the content, and sits centred in the pane when
+  there is nothing to show; the info rows above each previewer's content are
+  gone. A file no previewer claims shows the card with *Open as hex* and
+  *Open with…*; a missing library shows it with *Download*, *Browse…*,
+  *Retry* and *Where Rick looked*, which unfolds the paths and the loader's
+  error. With nothing selected the pane reads *No file selected*, and
+  loading is always the centred Portal burst (#162).
+- **Always preview on an account.** A remote file over the size limit shows
+  the File info card with *Preview this file* and *Always preview on* the
+  account's name; *Always* is kept per provider account, across restarts,
+  and is also in the context menu of the account's row in the side panel.
+  Either button shows the Portal burst with a progress line and
+  *Downloading… x of y MiB*, and Esc cancels the download and returns to the
+  card. This holds for every remote provider; the limit stays 4 MiB (#164).
+
 ### Changed
 
-- The workspace version is `0.4.0-dev` until 0.4.0 is tagged.
+- **Application menu.** The pattern of the View options and context menus:
+  an icon on every item, the shortcut hint or the submenu caret at the
+  right, three groups — *New window* and *Layouts*; *Installer*, *Settings*,
+  *Keyboard shortcuts* and *Extensions*; *About Rick* with the version. No
+  trailing “…” and no theme switch. The hints come from the keymap, are
+  empty when an action is unbound, and spell *Mod* as the platform's key.
+  The menu is at least 280 px wide and opens under the menu button with a
+  6 px gap (#159).
+- **Paste-conflict dialogue.** *Replace file?*, with “(n of m)” when there
+  are several, replaces the “already exists” question: two cards, *Existing
+  file* and *New file*, each with icon, name, size and modified time, and
+  the dialogue keeps its 520 px for a long name. *Cancel* at the left;
+  *Skip*, *Replace* as a caution button and *Keep both* at the right. *Keep
+  both* is the primary button and the Enter default and pastes as
+  `name (2).ext` with the next free number. With several conflicts, *Do the
+  same for the remaining n conflicts*. Between two folders *Merge* takes the
+  place of *Replace*, without *Keep both*. `Conflicts::ask` takes a
+  `ConflictDetails`, and the extension API version went to 17 (#160).
+- **Properties dialogue** on the dialogue shell: a header with the icon
+  tile, the name and type · size, and two tabs. *General* in cards —
+  *Location*, *Size* or *Link*, *Dates*, *Options* — with a copy button on
+  every path row; a symbolic link has *Target* with its copy button,
+  *Resolves to* and *Open target folder*. *Permissions* has the ownership
+  dropdowns, the access grid with its octal row, the ACL as a row that
+  unfolds into its table with an *Add entry* line, and *Apply to enclosed
+  items* as a switch. *Apply* and *Revert* stay disabled until something
+  changes (#161).
+- **Tables in previews.** The archive tree and the CSV grid take the file
+  list's header — a `bg/panel` band with a hairline below — and their
+  stripes start white. The column dividers are always visible in the header,
+  one between every pair of columns, and are the resize handles:
+  `border/strong` on hover, a drag resizes, a double-click fits, and the
+  widths are remembered per previewer (#163).
+- **Window group.** The layout toggles and the window controls are 16 px
+  icons 12 px apart, each answering over its whole 28 px step, with the
+  divider in the middle of a 25 px gap; every control has its name, and the
+  window's is *Close window* (#169).
+- **Errors of operations.** A failed job's row in the operations drawer
+  unfolds on a click to the whole error, wrapped, and the failure is also a
+  notice at the top right of the window the job was started from, with the
+  job's name and the whole text; an error notice stays until its close
+  button is pressed. `Event::JobFailed` names the pane a failed job was
+  started from (#169).
+- The workspace version is `0.4.0-dev` until 0.4.0 is tagged (#154).
+
+### Fixed
+
+- EXIF in the image preview shows only the tags Rick names and that have a
+  real value, with the exposure as `1/120 s` and dates without seconds: a
+  photo without GPS data has no GPS rows and no “NaN” (#162).
+- The two commit actions are *Git commit* and *SVN commit*; *Commit* no
+  longer appears twice in the keyboard shortcuts (#165).
+- A download's progress that arrives before the preview pane has seen its
+  file is kept, not cleared (#165).
+- A console's tab is titled *Console*, not the folder it was opened in; the
+  settings in a window of their own no longer draw a second close button;
+  the *File hashes* dialogue's secondary line ends in an ellipsis before the
+  close button; and an operation's error is no longer cut to “Invali…”
+  (#169).
 
 ## [0.3.0] - 2026-11-10
 
