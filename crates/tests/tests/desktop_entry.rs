@@ -39,10 +39,13 @@ fn the_desktop_entry_names_the_app_id_as_icon_and_window_class() {
     assert_eq!(ui_egui::APP_ID, "rick");
     assert_eq!(value(&text, "Icon"), Some(ui_egui::APP_ID));
     assert_eq!(value(&text, "StartupWMClass"), Some(ui_egui::APP_ID));
-    // `%U`: the selected folders, and a `rick://` link the entry handles.
+    // `--activate`, the launcher's own argument form: a click that hands
+    // nothing over only raises the window (specs/system-integration.md
+    // §4). `%U`: the selected folders, and a `rick://` link the entry
+    // handles.
     assert_eq!(
         value(&text, "Exec"),
-        Some(format!("{} %U", ui_egui::APP_ID).as_str())
+        Some(format!("{} --activate %U", ui_egui::APP_ID).as_str())
     );
     assert_eq!(text.lines().next(), Some("[Desktop Entry]"));
     assert_eq!(value(&text, "Type"), Some("Application"));
