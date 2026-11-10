@@ -2744,6 +2744,197 @@ fn screenshots_of_the_preview_tables() {
     eprintln!("the preview pane: {:?}", harness.state().inspector_rect());
 }
 
+/// The small items of issue 139 (item 11), in Light and Dark at both
+/// densities: the window group with its wider steps beside a console's
+/// tab titled *Console*; the Hash dialogue's secondary line cut before
+/// the close button; and a failed job — the notice that stays, and the
+/// drawer's row at rest and unfolded to the whole error.
+#[test]
+#[ignore = "needs a wgpu adapter; CI runs it and uploads the images"]
+#[allow(clippy::too_many_lines)]
+fn screenshots_of_the_small_items() {
+    use egui::accesskit::Role;
+    use egui_kittest::kittest::{NodeT as _, Queryable as _};
+    use ext::{
+        API_VERSION, Action, ActionCtx, ActionGroup, ActionId, ActionOutcome, Availability,
+        Capabilities, Extension, Manifest, Platforms, Points, Registry, Shortcut, UiHost, Version,
+    };
+    use types::Error;
+
+    /// An action whose job fails with a long error.
+    struct Sync;
+    impl Action for Sync {
+        fn id(&self) -> ActionId {
+            ActionId("test.sync")
+        }
+        fn label(&self) -> String {
+            "Sync photos".to_owned()
+        }
+        fn group(&self) -> ActionGroup {
+            ActionGroup::Core
+        }
+        fn default_shortcut(&self) -> Option<Shortcut> {
+            None
+        }
+        fn availability(&self, _: &ActionCtx) -> Availability {
+            Availability::Enabled
+        }
+        fn run(
+            &self,
+            _ctx: ActionCtx,
+            jobs: &runtime::JobRunner,
+            _ui: &dyn UiHost,
+        ) -> Result<ActionOutcome, Error> {
+            let handle = jobs.spawn_named("Copy 14 items to archive", |_job| async move {
+                Err::<(), Error>(Error::Io(std::io::Error::other(
+                    "Invalid argument: the destination \
+                     /mnt/archive/2026/photos/holiday/day-one/edited/IMG_1204-final-retouched.png \
+                     could not be written, because the volume it is on was taken away while the \
+                     copy was running",
+                )))
+            });
+            Ok(ActionOutcome::Started(handle.id))
+        }
+    }
+    struct SyncExtension(Manifest);
+    impl Extension for SyncExtension {
+        fn manifest(&self) -> &Manifest {
+            &self.0
+        }
+        fn register(&self, reg: &mut Registry) -> Result<(), Error> {
+            reg.action(Arc::new(Sync));
+            Ok(())
+        }
+    }
+
+    let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+    let folder = dir.path().join("holiday-2026");
+    fs::create_dir_all(&folder).unwrap_or_else(|e| panic!("{e}"));
+    let long = format!("{}.tar.zst", "backup-of-the-whole-photo-archive-".repeat(4));
+    fs::write(folder.join(&long), vec![7_u8; 70_000]).unwrap_or_else(|e| panic!("{e}"));
+    fs::write(folder.join("notes.txt"), "notes").unwrap_or_else(|e| panic!("{e}"));
+    let fake = Arc::new(Fake::new().unwrap_or_else(|e| panic!("{e}")));
+    let host = Arc::new(EguiHost::new());
+    let app = app::App::new(app::Config {
+        platform: fake.clone(),
+        ui: host.clone(),
+        extensions: vec![
+            Arc::new(ext_action_terminal::TerminalExtension::new()),
+            Arc::new(SyncExtension(Manifest {
+                id: types::ExtId("test-sync"),
+                name: "Sync",
+                description: "",
+                version: Version::new(1, 0, 0),
+                api_version: API_VERSION,
+                requires: Capabilities::empty(),
+                points: Points::ACTION,
+                platforms: Platforms::ALL,
+                previews: &[],
+                commands: &[],
+            })),
+        ],
+        config_dir: Some(fake.config_dir()),
+        start: Some(local(&folder)),
+    });
+    let mut harness = Harness::builder()
+        .with_size(egui::vec2(1280.0, 720.0))
+        .with_pixels_per_point(2.0)
+        .build_eframe(move |cc| RickUi::new(app, host, &cc.egui_ctx));
+    settle(&mut harness);
+    let modes = [
+        (Theme::Light, Density::Comfortable, "light-comfortable"),
+        (Theme::Light, Density::Compact, "light-compact"),
+        (Theme::Dark, Density::Comfortable, "dark-comfortable"),
+        (Theme::Dark, Density::Compact, "dark-compact"),
+    ];
+    let set = |harness: &mut Harness<'_, RickUi>, theme: Theme, density: Density| {
+        for change in [
+            SettingsChange::Theme(theme),
+            SettingsChange::Density(density),
+        ] {
+            harness
+                .state_mut()
+                .app_mut()
+                .handle(app::Command::Settings(change), &mut Vec::new());
+        }
+        harness.event(egui::Event::PointerMoved(egui::pos2(640.0, 500.0)));
+        for _ in 0..4 {
+            harness.step();
+        }
+    };
+    let explorer = harness.state().app().model().focused;
+
+    // The hash dialogue on the file with the long name.
+    let id = harness
+        .state()
+        .app()
+        .model()
+        .active_tab(explorer)
+        .and_then(|(_, tab)| tab.listing.rows().find(|e| e.name == long).map(|e| e.id))
+        .unwrap_or_else(|| panic!("the file is listed"));
+    harness.state_mut().app_mut().handle(
+        app::Command::Select {
+            pane: explorer,
+            change: SelectionChange::Set(vec![id]),
+        },
+        &mut Vec::new(),
+    );
+    harness.step();
+    harness
+        .state_mut()
+        .queue(Intent::Action(ActionId("core.hash")), explorer);
+    settle(&mut harness);
+    for (theme, density, mode) in modes {
+        set(&mut harness, theme, density);
+        shoot(&mut harness, &format!("small-hash-{mode}"));
+    }
+    harness.get_by_role_and_label(Role::Button, "Done").click();
+    settle(&mut harness);
+
+    // A failed job: the notice, and the drawer's row at rest.
+    harness
+        .state_mut()
+        .queue(Intent::Action(ActionId("test.sync")), explorer);
+    let deadline = Instant::now() + Duration::from_secs(20);
+    while harness.state().toasts().is_empty() {
+        harness.step();
+        assert!(Instant::now() < deadline, "the job did not fail");
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    for (theme, density, mode) in modes {
+        set(&mut harness, theme, density);
+        shoot(&mut harness, &format!("small-error-{mode}"));
+    }
+    // The row unfolded to the whole text.
+    harness
+        .query_all_by_label_contains("Copy 14 items to archive · ")
+        .find(|node| node.accesskit_node().role() == Role::Button)
+        .unwrap_or_else(|| panic!("the failed row"))
+        .click();
+    for _ in 0..4 {
+        harness.step();
+    }
+    for (theme, density, mode) in modes {
+        set(&mut harness, theme, density);
+        shoot(&mut harness, &format!("small-error-unfolded-{mode}"));
+    }
+
+    // A console's tab, beside the window group.
+    harness
+        .state_mut()
+        .queue(Intent::Action(ActionId("terminal.console")), explorer);
+    let deadline = Instant::now() + Duration::from_secs(20);
+    while harness.state().app().model().focused == explorer {
+        harness.step();
+        assert!(Instant::now() < deadline, "no console");
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    for (theme, density, mode) in modes {
+        set(&mut harness, theme, density);
+        shoot(&mut harness, &format!("small-title-row-{mode}"));
+    }
+}
+
 /// SPEC.md *Title bar colour* (issue 139, item 10): the title row on
 /// every preset's band with three workspace tabs, the middle one hovered,
 /// in Light and Dark at both densities; and the setting's card on the

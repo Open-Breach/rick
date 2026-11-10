@@ -4827,6 +4827,12 @@ impl App {
                         .get(&id)
                         .map(|job| job.name.clone())
                         .unwrap_or_default();
+                    // Where the user acted, then what went wrong: the
+                    // notice is shown in that pane's window.
+                    events.push(Event::JobFailed {
+                        id,
+                        pane: self.pane_jobs.get(&id).copied(),
+                    });
                     events.push(Event::Notify {
                         level: Level::Error,
                         text: format!("{name}: {error}"),

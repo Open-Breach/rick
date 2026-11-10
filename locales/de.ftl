@@ -8,6 +8,7 @@ cancel = Abbrechen
 ok = OK
 apply = Anwenden
 close = Schließen
+shell-close-window = Fenster schließen
 remove = Entfernen
 rename-ellipsis = Umbenennen…
 delete = Löschen

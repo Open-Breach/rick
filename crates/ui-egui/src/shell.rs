@@ -267,10 +267,15 @@ pub struct Dispatched {
     pub pane: PaneId,
 }
 
+/// A notice at the top right of a window.
 struct Toast {
     level: Level,
     text: String,
-    until: Instant,
+    /// When it leaves by itself; an error stays until it is dismissed.
+    until: Option<Instant>,
+    /// The window it is shown in — the one the user acted in — or the
+    /// window in front when it is tied to none.
+    window: Option<WindowId>,
 }
 
 /// A text an action asked the host to show.
@@ -744,10 +749,9 @@ fn workspace_label(model: &model::Model, ws: &model::Workspace) -> TabLabel {
 fn tab_label(model: &model::Model, tab: &Tab) -> (&'static str, String) {
     match tab.kind {
         TabKind::Preview => (icons::PREVIEW, t!("shell-preview-tab")),
-        TabKind::Console => (
-            icons::TERMINAL,
-            tab.title.clone().unwrap_or_else(|| t!("shell-console-tab")),
-        ),
+        // A console is titled Console: not the folder it was opened in,
+        // and not what its shell sets as its title.
+        TabKind::Console => (icons::TERMINAL, t!("shell-console-tab")),
         TabKind::Compare => (
             icons::COMPARE,
             tab.title.clone().unwrap_or_else(|| t!("shell-compare-tab")),
@@ -881,6 +885,9 @@ pub struct RickUi {
     requests: Vec<Request>,
     dispatched: VecDeque<Dispatched>,
     toasts: Vec<Toast>,
+    /// The window of the pane a job that just failed was started from:
+    /// where the notice that follows is shown.
+    failed_in: Option<WindowId>,
     dialog: Option<Dialog>,
     name_prompt: Option<NamePrompt>,
     settings: settings_ui::SettingsWindow,
@@ -1032,17 +1039,65 @@ fn dock_style(egui_style: &egui::Style, scheme: &crate::theme::Scheme) -> egui_d
     style
 }
 
-/// An icon-only toggle; the fill weight marks it active.
-fn toggle_icon(glyph: &str, on: bool) -> egui::Button<'static> {
-    let text = if on {
-        egui::RichText::new(glyph).family(egui::FontFamily::Name(t!("shell-phosphor-fill").into()))
+/// The gap between two icons of the title row's window group.
+const WINDOW_ICON_GAP: f32 = 12.0;
+/// The gap between the layout toggles' icons and the window controls',
+/// with the divider in its middle.
+const WINDOW_GROUP_GAP: f32 = 25.0;
+
+/// One control of the title row's window group (SPEC.md *Title row*): a
+/// 16 px icon in a step of the icon and its 12 px gap, as tall as a tool
+/// button, which answers over the whole of it — so the controls are
+/// neither crowded nor small to hit. It is drawn on the band, in the
+/// band's colours; `on` makes it a toggle, whose filled glyph and — on a
+/// band that agrees with the scheme — `accent/focus` tint mark it active.
+/// `name` is its accessible name and its tooltip.
+fn window_control(ui: &mut egui::Ui, glyph: &str, name: &str, on: Option<bool>) -> egui::Response {
+    use crate::theme::ICON;
+    let metrics = crate::theme::metrics(ui.ctx());
+    let scheme = crate::theme::scheme(ui);
+    let band = crate::theme::band(ui);
+    let (rect, response) = ui.allocate_exact_size(
+        egui::vec2(ICON + WINDOW_ICON_GAP, metrics.button_size),
+        egui::Sense::click(),
+    );
+    if response.hovered() {
+        ui.painter()
+            .rect_filled(rect, metrics.corner_radius(), band.hover);
+    }
+    let active = on == Some(true);
+    let colour = if active && !band.contrary {
+        scheme.accent_focus
     } else {
-        egui::RichText::new(glyph)
+        band.icon
     };
-    egui::Button::new(text).frame(false).selected(on)
+    let family = if active {
+        egui::FontFamily::Name(icons::FILL_FAMILY.into())
+    } else {
+        egui::FontFamily::Proportional
+    };
+    ui.painter().text(
+        rect.center(),
+        egui::Align2::CENTER_CENTER,
+        glyph,
+        egui::FontId::new(ICON, family),
+        colour,
+    );
+    response.widget_info(|| match on {
+        Some(on) => {
+            egui::WidgetInfo::selected(egui::WidgetType::Checkbox, true, on, name.to_owned())
+        }
+        None => egui::WidgetInfo::labeled(egui::WidgetType::Button, true, name.to_owned()),
+    });
+    response.on_hover_text(name)
 }
-/// How long a notification stays.
+/// How long a notice that is not an error stays.
 const TOAST_FOR: Duration = Duration::from_secs(5);
+/// The width a notice's text wraps at.
+const TOAST_WIDTH: f32 = 340.0;
+/// The gap between the notices and the title row above them, and the
+/// window's edge at their right.
+const TOAST_GAP: f32 = 8.0;
 /// How long a `SelectNamed` waits for its entry to be listed.
 const SELECT_FOR: Duration = Duration::from_secs(5);
 
@@ -1124,6 +1179,7 @@ impl RickUi {
             requests: Vec::new(),
             dispatched: VecDeque::new(),
             toasts: Vec::new(),
+            failed_in: None,
             dialog: None,
             name_prompt: None,
             settings: settings_ui::SettingsWindow::default(),
@@ -1628,20 +1684,40 @@ impl RickUi {
     }
 
     fn toast(&mut self, level: Level, text: impl Into<String>) {
+        self.toast_in(level, text, None);
+    }
+
+    /// A notice in `window`, or in the window in front. An error stays
+    /// until it is dismissed, so it is never missed; any other notice
+    /// leaves by itself after [`TOAST_FOR`] (SPEC.md *Operations*).
+    fn toast_in(&mut self, level: Level, text: impl Into<String>, window: Option<WindowId>) {
+        let until = (level != Level::Error).then(|| Instant::now() + TOAST_FOR);
         self.toasts.push(Toast {
             level,
             text: text.into(),
-            until: Instant::now() + TOAST_FOR,
+            until,
+            window,
         });
     }
 
     fn absorb(&mut self, events: Vec<Event>) {
+        // A failed job and its notice come in one batch.
+        self.failed_in = None;
         for event in events {
             match event {
                 Event::Thumbnail { id, size, frame } => {
                     self.thumbnails.arrived(&self.ctx, id, size, frame);
                 }
-                Event::Notify { level, text } => self.toast(level, text),
+                Event::JobFailed { pane, .. } => {
+                    // The notice that follows is shown where the user
+                    // acted: in the window of the pane the job was
+                    // started from.
+                    self.failed_in = pane.and_then(|pane| self.app.model().window_of(pane));
+                }
+                Event::Notify { level, text } => {
+                    let window = self.failed_in.take().filter(|_| level == Level::Error);
+                    self.toast_in(level, text, window);
+                }
                 Event::Activate { window, token } => self.activate(window, token.as_deref()),
                 Event::Properties(info) => self.properties.open(*info),
                 Event::PluginInstalled { path } => self.extensions.installed(path),
@@ -3061,25 +3137,14 @@ impl RickUi {
                         .max_rect(rect)
                         .layout(egui::Layout::right_to_left(egui::Align::Center)),
                 );
-                right.add_space(metrics.space_toolbar_x);
-                // The window group is drawn on the band, in its colours:
-                // the icons, the divider and the running count.
+                // The last icon ends `space/toolbar-x` from the edge: its
+                // step reaches half an icon gap further.
+                right.add_space((metrics.space_toolbar_x - WINDOW_ICON_GAP / 2.0).max(0.0));
+                // The running count is text on the band, in its colours.
                 let band = crate::theme::band(&right);
                 let visuals = right.visuals_mut();
-                for widget in [
-                    &mut visuals.widgets.inactive,
-                    &mut visuals.widgets.hovered,
-                    &mut visuals.widgets.active,
-                ] {
-                    widget.fg_stroke.color = band.icon;
-                }
-                visuals.widgets.noninteractive.bg_stroke.color = band.divider;
                 visuals.weak_text_color = Some(band.title);
-                if band.contrary {
-                    // An active toggle is told by its filled glyph alone:
-                    // the scheme's tint is not made for this band.
-                    visuals.selection.stroke.color = band.icon;
-                }
+                visuals.widgets.noninteractive.fg_stroke.color = band.icon;
                 self.title_right(&mut right, ctx, chrome, window, focused);
                 let right_edge = right.min_rect().left();
 
@@ -3849,7 +3914,7 @@ impl RickUi {
         if !side.visible {
             if jobs {
                 let mut collapsed = w.drawer_collapsed;
-                let height = Operations::height(self.app.model(), collapsed);
+                let height = self.operations.height(self.app.model(), collapsed);
                 egui::Panel::bottom(egui::Id::new(("operations", window.0)))
                     .exact_size(height)
                     .frame(egui::Frame::NONE)
@@ -3879,7 +3944,7 @@ impl RickUi {
             .show(ui, |ui| {
                 let panel_rect = ui.max_rect();
                 let height = if jobs {
-                    Operations::height(self.app.model(), w.drawer_collapsed)
+                    self.operations.height(self.app.model(), w.drawer_collapsed)
                 } else {
                     0.0
                 };
@@ -3943,46 +4008,43 @@ impl RickUi {
         window: WindowId,
         focused: PaneId,
     ) {
+        // The group's icons are 16 px and 12 px apart: each control is a
+        // 28 px step that answers over its whole width (SPEC.md *Title
+        // row*).
+        right.spacing_mut().item_spacing.x = 0.0;
         if !chrome.native_controls {
-            if right
-                .add(egui::Button::new(icons::CLOSE).frame(false))
-                .on_hover_text(t!("close"))
-                .clicked()
-            {
+            // Named apart from a dialogue's Close, which may be open.
+            if window_control(right, icons::CLOSE, &t!("shell-close-window"), None).clicked() {
                 self.requests.push(Request::CloseWindow(window));
             }
             let maximized = ctx.input(|i| i.viewport().maximized.unwrap_or(false));
-            let glyph = if maximized {
-                icons::RESTORE
+            let (glyph, name) = if maximized {
+                (icons::RESTORE, t!("shell-restore"))
             } else {
-                icons::MAXIMISE
+                (icons::MAXIMISE, t!("shell-maximise"))
             };
-            if right
-                .add(egui::Button::new(glyph).frame(false))
-                .on_hover_text(if maximized {
-                    t!("shell-restore")
-                } else {
-                    t!("shell-maximise")
-                })
-                .clicked()
-            {
+            if window_control(right, glyph, &name, None).clicked() {
                 ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(!maximized));
             }
-            if right
-                .add(egui::Button::new(icons::MINIMISE).frame(false))
-                .on_hover_text(t!("shell-minimise"))
-                .clicked()
-            {
+            if window_control(right, icons::MINIMISE, &t!("shell-minimise"), None).clicked() {
                 ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true));
             }
-            right.separator();
+            // The divider in the middle of the 25 px between the toggles'
+            // icons and the window controls'.
+            let band = crate::theme::band(right);
+            let (gap, _) = right.allocate_exact_size(
+                egui::vec2(WINDOW_GROUP_GAP - WINDOW_ICON_GAP, crate::theme::ICON),
+                egui::Sense::hover(),
+            );
+            right.painter().vline(
+                gap.center().x,
+                gap.y_range(),
+                egui::Stroke::new(1.0, band.divider),
+            );
         }
         let preview_open = self.app.model().preview_tab(window).is_some();
-        if right
-            .add(toggle_icon(icons::PREVIEW, preview_open))
-            .on_hover_text(t!("shell-toggle-preview-pane"))
-            .clicked()
-        {
+        let name = t!("shell-toggle-preview-pane");
+        if window_control(right, icons::PREVIEW, &name, Some(preview_open)).clicked() {
             self.requests.push(Request::Intent {
                 intent: Intent::ToggleInspector,
                 pane: focused,
@@ -3993,16 +4055,14 @@ impl RickUi {
             .model()
             .window(window)
             .is_none_or(|w| w.side_panel.visible);
-        if right
-            .add(toggle_icon(icons::SIDE_PANEL, side_visible))
-            .on_hover_text(t!("shell-toggle-side-panel"))
-            .clicked()
-        {
+        let name = t!("shell-toggle-side-panel");
+        if window_control(right, icons::SIDE_PANEL, &name, Some(side_visible)).clicked() {
             self.requests.push(Request::Intent {
                 intent: Intent::ToggleSidePanel,
                 pane: focused,
             });
         }
+        right.add_space(crate::theme::metrics(ctx).space_toolbar_x);
         let running = self
             .app
             .model()
@@ -4264,29 +4324,90 @@ impl RickUi {
         }
     }
 
-    fn show_toasts(&mut self, ctx: &egui::Context) {
+    /// The notices of `window` at its top right, under the title row: the
+    /// ones tied to it and, when it is the window in `front`, the ones
+    /// tied to none or to a window that is gone. A notice carries its
+    /// whole text, wrapped and never cut; an error has a close button and
+    /// stays until that is pressed.
+    fn show_toasts(&mut self, ctx: &egui::Context, window: WindowId, front: bool) {
         let now = Instant::now();
-        self.toasts.retain(|t| t.until > now);
-        if self.toasts.is_empty() {
+        self.toasts
+            .retain(|t| t.until.is_none_or(|until| until > now));
+        let shown: Vec<usize> = self
+            .toasts
+            .iter()
+            .enumerate()
+            .filter(|(_, toast)| match toast.window {
+                Some(of) if self.windows.contains_key(&of) => of == window,
+                _ => front,
+            })
+            .map(|(index, _)| index)
+            .collect();
+        if shown.is_empty() {
             return;
         }
-        egui::Area::new(egui::Id::new("toasts"))
-            .anchor(egui::Align2::RIGHT_TOP, egui::vec2(-12.0, 40.0))
+        let scheme = crate::theme::scheme_of(ctx);
+        // Under the title row, at the right of what the window draws.
+        let content = self
+            .windows
+            .get(&window)
+            .and_then(|w| w.content)
+            .unwrap_or_else(|| ctx.content_rect());
+        let corner = egui::pos2(
+            content.right() - TOAST_GAP,
+            content.top() + crate::theme::metrics(ctx).titlebar_height + TOAST_GAP,
+        );
+        let mut dismissed = None;
+        egui::Area::new(egui::Id::new(("toasts", window.0)))
+            .pivot(egui::Align2::RIGHT_TOP)
+            .fixed_pos(corner)
             .order(egui::Order::Foreground)
-            .interactable(false)
             .show(ctx, |ui| {
-                for toast in &self.toasts {
+                for index in shown {
+                    let toast = &self.toasts[index];
+                    let sticky = toast.until.is_none();
                     egui::Frame::popup(ui.style()).show(ui, |ui| {
-                        let color = match toast.level {
-                            Level::Info => ui.visuals().text_color(),
-                            Level::Warning => ui.visuals().warn_fg_color,
-                            Level::Error => ui.visuals().error_fg_color,
+                        let colour = match toast.level {
+                            Level::Info => scheme.text_primary,
+                            Level::Warning => scheme.status_warning,
+                            Level::Error => scheme.status_danger,
                         };
-                        ui.colored_label(color, &toast.text);
+                        ui.horizontal_top(|ui| {
+                            ui.spacing_mut().item_spacing.x = 8.0;
+                            ui.allocate_ui(egui::vec2(TOAST_WIDTH, 0.0), |ui| {
+                                ui.set_max_width(TOAST_WIDTH);
+                                ui.add(
+                                    egui::Label::new(
+                                        egui::RichText::new(&toast.text).color(colour),
+                                    )
+                                    .wrap(),
+                                );
+                            });
+                            if sticky {
+                                let (rect, _) = ui.allocate_exact_size(
+                                    egui::vec2(20.0, 20.0),
+                                    egui::Sense::hover(),
+                                );
+                                let close = crate::properties::icon_button(
+                                    ui,
+                                    rect,
+                                    icons::CLOSE,
+                                    &t!("jobs-dismiss"),
+                                );
+                                if close.clicked() {
+                                    dismissed = Some(index);
+                                }
+                            }
+                        });
                     });
                 }
             });
-        ctx.request_repaint_after(Duration::from_millis(250));
+        if let Some(index) = dismissed {
+            self.toasts.remove(index);
+        }
+        if self.toasts.iter().any(|toast| toast.until.is_some()) {
+            ctx.request_repaint_after(Duration::from_millis(250));
+        }
     }
 }
 
@@ -4911,9 +5032,11 @@ impl RickUi {
             self.hash.show(ctx, &self.app, &mut self.requests);
             self.integration.show(ctx, &self.app, &mut self.requests);
             self.show_texts(ctx);
-            self.show_toasts(ctx);
             self.apply_requests(ctx);
         }
+        // A notice is shown in the window it belongs to, in front or not.
+        let front = self.is_front(ctx, window);
+        self.show_toasts(ctx, window, front);
 
         // The closed hand for as long as a pane or a tab is dragged,
         // whatever the cursor is over and in whichever window: set last,

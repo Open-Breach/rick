@@ -4339,3 +4339,30 @@ Once answered, an entry keeps its number and gains a dated decision line.
     has its warning border and the band keeps its colour. A value in
     `rick.toml` that is no colour, or a preset's name that is none,
     reads as the default and leaves the rest of the file standing.
+
+366. (GUI fixes, small items, issue 139 item 11, 2026-11-10) Six things
+    the rules leave open, after questions 348 and 349. The window's
+    close control and a dialogue's close button would carry the same
+    name. "The tint of an active one" for a layout toggle names no
+    token. The failure is reported "where the user acted", and a job
+    does not say which window started it. Nothing says how wide the
+    notice is, or what a job's failure does to the notice 0.3 already
+    showed. "A click on the row expands it", and the row holds the
+    dismiss button too. And the settings' own window cannot be opened in
+    the test harness, which draws one window.
+    Assumed: the window's control is named *Close window*, with
+    *Minimise* and *Maximise* or *Restore*; a dialogue's stays *Close*.
+    An active toggle is its filled glyph in `accent/focus` on a band
+    that agrees with the scheme, and in the band's icon colour on one
+    that does not (question 365). The application says which pane a
+    failed job was started from (`Event::JobFailed`, ahead of the
+    notice), and the notice goes to the window that pane is in, or the
+    front window when the job has no pane or its pane is gone. A notice
+    is 340 px wide under the title row, its text wrapped; every error
+    notice stays until its close button is pressed, a job's or not, and
+    the others still leave after five seconds. The click that unfolds
+    the row is one on its text, which is a button named after the job
+    and its error; the dismiss button keeps its own. The acceptance test
+    draws the settings' content both ways — as the window's, with no
+    round button, and embedded, with exactly one; the window with the
+    system's own control is not drawn in a test.
