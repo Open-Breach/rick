@@ -1966,6 +1966,33 @@ impl RickUi {
             .collect()
     }
 
+    /// What Escape calls off before the key clears a filter or the
+    /// selection: Properties that is on its way, its entry still being
+    /// read (issue 178), and a download for the preview (SPEC.md *Remote
+    /// sources*). Returns whether the key was taken for one of them.
+    fn escape_calls_off(&mut self, ctx: &egui::Context) -> bool {
+        let escape = |ctx: &egui::Context| {
+            ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape))
+        };
+        if self.app.properties_pending() && escape(ctx) {
+            self.requests
+                .push(Request::Command(Command::PropertiesClosed));
+            return true;
+        }
+        if let Some(preview) = self.app.preview_pane()
+            && self
+                .previews
+                .get(preview)
+                .is_some_and(crate::preview::Slot::downloading)
+            && escape(ctx)
+        {
+            self.requests
+                .push(Request::Command(Command::PreviewCancel(preview)));
+            return true;
+        }
+        false
+    }
+
     fn handle_keys(&mut self, ctx: &egui::Context, window: WindowId) {
         // The copy, cut and paste chords are followed in every frame,
         // whoever has the keyboard: a paste is told by its key's release.
@@ -1981,17 +2008,7 @@ impl RickUi {
         if egui::Popup::is_any_open(ctx) {
             return;
         }
-        // A download for the preview is cancelled by Escape before the key
-        // clears a filter or the selection (SPEC.md *Remote sources*).
-        if let Some(preview) = self.app.preview_pane()
-            && self
-                .previews
-                .get(preview)
-                .is_some_and(crate::preview::Slot::downloading)
-            && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape))
-        {
-            self.requests
-                .push(Request::Command(Command::PreviewCancel(preview)));
+        if self.escape_calls_off(ctx) {
             return;
         }
         if self.side.focused() && self.side.handle_keys(ctx, &self.app, &mut self.requests) {

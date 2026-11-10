@@ -446,3 +446,74 @@ fn the_access_control_list_opens_in_place_and_moves_with_the_grid() {
     assert!(harness.state().properties().pending_change().is_none());
     assert_eq!(mode_of(&file), 0o640, "nothing was applied");
 }
+
+/// Issue 178: Escape pressed while Properties is on its way — asked for,
+/// its entry still being read — calls it off. The dialogue does not open
+/// when the read is answered, the key is not the list's, and asking again
+/// opens it.
+#[test]
+fn escape_before_the_dialogue_has_opened_calls_it_off() {
+    let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+    fs::write(dir.path().join("notes.txt"), "notes").unwrap_or_else(|e| panic!("{e}"));
+    let (mut harness, fake) = harness(dir.path());
+    let pane = harness.state().app().model().focused;
+    let id = harness
+        .state()
+        .app()
+        .model()
+        .active_tab(pane)
+        .and_then(|(_, tab)| tab.rows().find(|e| e.name == "notes.txt").map(|e| e.id))
+        .unwrap_or_else(|| panic!("notes.txt is listed"));
+    command(
+        &mut harness,
+        app::Command::Select {
+            pane,
+            change: SelectionChange::Set(vec![id]),
+        },
+    );
+    let selected = |harness: &Harness<'_, RickUi>| {
+        harness
+            .state()
+            .app()
+            .model()
+            .active_tab(pane)
+            .map_or(0, |(_, tab)| tab.selection.len())
+    };
+
+    // The read is held back, as a slow volume would hold it.
+    fake.hold_permissions();
+    harness.key_press_modifiers(egui::Modifiers::ALT, egui::Key::Enter);
+    for _ in 0..4 {
+        harness.step();
+    }
+    assert!(harness.state().app().properties_pending());
+    assert!(!harness.state().properties().is_open());
+
+    escape(&mut harness);
+    assert!(
+        !harness.state().app().properties_pending(),
+        "Escape calls it off"
+    );
+    assert_eq!(
+        selected(&harness),
+        1,
+        "and is not the list's: the selection stays"
+    );
+
+    // The volume answers at last: nothing opens.
+    fake.release_permissions();
+    settle(&mut harness);
+    assert!(
+        !harness.state().properties().is_open(),
+        "a dialogue that was called off does not open"
+    );
+
+    // Asked for again, it opens.
+    harness.key_press_modifiers(egui::Modifiers::ALT, egui::Key::Enter);
+    step_until(&mut harness, "the dialogue did not open", |h| {
+        h.state()
+            .properties()
+            .info()
+            .is_some_and(|info| info.entry.name == "notes.txt")
+    });
+}
