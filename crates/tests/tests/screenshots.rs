@@ -2275,6 +2275,12 @@ fn screenshots_of_the_context_menus() {
 fn screenshots_of_the_install_dialogue() {
     use egui_kittest::kittest::Queryable as _;
     use ext_installer::fixtures::Fixture;
+    // Install as application is Linux only (specs/ext-installer.md): the
+    // action is hidden elsewhere and the dialogue cannot open, so the
+    // Linux runner takes these pictures.
+    if !ext_installer::supported() {
+        return;
+    }
     let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
     for fixture in [Fixture::JetBrains, Fixture::Tarbomb] {
         fixture.write(dir.path()).unwrap_or_else(|e| panic!("{e}"));
