@@ -20,9 +20,15 @@
 //! provider plugin, `ext-vfs-trash`, which serves the Trash view.
 //!
 //! An action's availability follows the provider's capabilities at the
-//! pane's location: Paste, Duplicate, Rename, New file and New folder need
-//! `WRITE`, Move to trash needs `TRASH`, so a read-only archive or the
-//! Trash view hides them instead of failing.
+//! pane's location: Paste, Duplicate and Rename need `WRITE`, Move to trash
+//! needs `TRASH`, so a read-only archive or the Trash view hides them
+//! instead of failing. New folder, New file and Download… follow
+//! `CREATE_DIR`, `CREATE_FILE` and `DOWNLOAD` (SPEC.md, *Capabilities
+//! decide what is offered*): where a location that takes writes, or a
+//! remote one, lacks the capability, the action is `Disabled` with the
+//! provider's reason, which the context menu shows greyed with the reason
+//! as its tooltip — *Files live inside a container* at the root of an
+//! Azure account — so nothing is offered that then fails.
 //!
 //! Every operation that touches the filesystem runs as a job on the
 //! [`JobRunner`](runtime::JobRunner) the action receives, so `run` returns at
@@ -52,6 +58,7 @@ mod conflict;
 mod containing;
 mod core_toml;
 mod create;
+mod download;
 mod edit;
 pub mod hash;
 mod link;
@@ -152,6 +159,30 @@ impl State {
             Availability::Hidden
         }
     }
+
+    /// Whether `loc` offers what `needed` names, one of the capabilities
+    /// that decide what is offered: `Enabled` with it; without it
+    /// `Disabled` with the provider's reason, or the kernel's own sentence,
+    /// where the location takes writes or is remote, and `Hidden` in a
+    /// read-only view (an archive, the Trash), whose menu never had the
+    /// entry.
+    fn offers(&self, loc: &Location, needed: Capabilities) -> Availability {
+        let Ok(provider) = self.mounts.resolve(loc) else {
+            return Availability::Hidden;
+        };
+        let caps = provider.capabilities(loc);
+        if caps.contains(needed) {
+            Availability::Enabled
+        } else if caps.intersects(Capabilities::WRITE | Capabilities::REMOTE) {
+            Availability::Disabled(
+                provider
+                    .unavailable_reason(loc, needed)
+                    .unwrap_or_else(|| t!("reason-not-available-here")),
+            )
+        } else {
+            Availability::Hidden
+        }
+    }
 }
 
 impl Core {
@@ -226,6 +257,7 @@ impl Extension for Core {
         reg.action(Arc::new(open::CopyPath(Arc::clone(s))));
         reg.action(Arc::new(open::CopyPathAndName(Arc::clone(s))));
         reg.action(Arc::new(open::OpenDefault(Arc::clone(s))));
+        reg.action(Arc::new(download::Download(Arc::clone(s))));
         reg.action(Arc::new(open::Reveal(Arc::clone(s))));
         reg.action(Arc::new(containing::OpenContaining));
         reg.action(Arc::new(containing::OpenContainingInTab));

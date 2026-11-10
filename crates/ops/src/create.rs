@@ -182,9 +182,18 @@ fn create(
     if name.is_empty() {
         return Ok(ActionOutcome::Done);
     }
+    let at = inside(&ctx.location, name.as_bytes());
+    // A folder's name is checked against the provider's own rules before
+    // any request goes out: a container's, at the root of an account.
+    if kind == Created::Folder
+        && let Some(problem) = state.mounts.resolve(&at)?.name_problem(&at)
+    {
+        ui.notify(ext::Level::Warning, &problem);
+        return Ok(ActionOutcome::Done);
+    }
     let command = CreateCommand {
         mounts: Arc::clone(&state.mounts),
-        at: inside(&ctx.location, name.as_bytes()),
+        at,
         kind,
         label: format!("{title} {name}"),
     };
@@ -211,7 +220,7 @@ impl Action for NewFile {
         None
     }
     fn availability(&self, ctx: &ActionCtx) -> Availability {
-        self.0.needs(&ctx.location, Capabilities::WRITE)
+        self.0.offers(&ctx.location, Capabilities::CREATE_FILE)
     }
     fn run(
         &self,
@@ -251,7 +260,7 @@ impl Action for NewFolder {
         })
     }
     fn availability(&self, ctx: &ActionCtx) -> Availability {
-        self.0.needs(&ctx.location, Capabilities::WRITE)
+        self.0.offers(&ctx.location, Capabilities::CREATE_DIR)
     }
     fn run(
         &self,
