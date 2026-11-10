@@ -4250,3 +4250,31 @@ Once answered, an entry keeps its number and gains a dated decision line.
     that is where the fetch can be asked for again. The switch is
     reversible in the source row's context menu, as in 0.3; the editors
     do not show it in this round, as decided on the spec pull request.
+
+363. (GUI fixes, keyboard shortcuts, issue 139 item 8, 2026-11-10) Seven
+    things the frame and the rule leave open. The frame has *File
+    operations* chosen and still draws *GIT · PLUGIN* under it. Nothing
+    orders the rows inside a category or the plugins' categories. The
+    column title *Shortcut* is drawn 36 px to the right of the cells it
+    stands over. A plugin's actions are "filed under the plugin", and an
+    action does not say which plugin registered it. A cell is 200 px,
+    and three keys, a chip and the dot do not fit in it. The list's
+    cursor keys were not listed in 0.3 and are in no category. And the
+    windowing glue reports Mod+C, Mod+X and Mod+V as copy, cut and paste
+    events, not as key presses.
+    Assumed: a category narrows the list to its own rows, under its
+    heading; *All* shows every category. Rows stand in the order of the
+    spec's tables, the kernel's actions at the head of *File
+    operations*; the plugins' categories follow Rick's own in the order
+    of their names. That order is "the list" a chord in conflict is
+    resolved by. *Shortcut* stands over its cells. The application
+    records, as it loads the extensions, which one registered each
+    action, so nothing changes in the extension API. Where the caps do
+    not fit, the ones that fit whole are drawn and an ellipsis stands
+    for the rest, the chip is cut before the caps are, and the cell's
+    tooltip has every chord. The cursor keys stay out of the list, as in
+    0.3, and behind Rick's other rows in the keymap; a chord recorded on
+    top of one names it in the chip. The dialogue reads the three
+    clipboard events as the chords they are, in the search field and
+    while a cell records. The search field has the focus when the
+    dialogue opens, and *Reset all to defaults* asks nothing.
