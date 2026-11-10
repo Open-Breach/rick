@@ -16,6 +16,7 @@
 // allowance (QUESTIONS.md 82).
 #![deny(unsafe_code)]
 
+pub mod actions;
 pub mod datasets;
 pub mod parse;
 pub mod provider;
@@ -105,6 +106,12 @@ impl Extension for ZfsExtension {
             ("de", include_str!("../locales/de.ftl")),
         ]);
         reg.provider(Arc::new(ZfsProvider::new(Arc::clone(&self.datasets))) as Arc<dyn ext::Provider>);
+        let shared = Arc::new(actions::Shared {
+            datasets: Arc::clone(&self.datasets),
+        });
+        for action in actions::all(&shared) {
+            reg.action(action);
+        }
         Ok(())
     }
 }

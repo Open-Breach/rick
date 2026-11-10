@@ -28,10 +28,10 @@
 
 ## 5. Navigation and versions
 
-- [ ] 5.1 Add the "ZFS" action group with *Browse snapshots* (newest snapshot containing the folder, `Disabled` with reason otherwise) and *Back to live folder* (nearest existing parent), both returning `ActionOutcome::Navigate`; verify unit tests for each scenario of the spec requirement "Open the snapshots of the current folder"
+- [x] 5.1 Add the "ZFS" action group with *Browse snapshots* (newest snapshot containing the folder, `Disabled` with reason otherwise) and *Back to live folder* (nearest existing parent), both returning `ActionOutcome::Navigate`; verify unit tests for each scenario of the spec requirement "Open the snapshots of the current folder"
 - [x] 5.2 List `/~versions/<path>`: walk snapshots newest first, keep a version when size or mtime changes, entry path is the snapshot location, display name `<snapshot> — <file name>`, streamed and cancellable (design Decision 5); verify unit tests for collapsed unchanged versions and a file deleted live
-- [ ] 5.3 Add the *Versions* action for one live or snapshot file, returning `ActionOutcome::Navigate` to its versions location (design Decision 10); verify unit tests for availability and the location it opens
-- [ ] 5.4 Add the action labels and messages of this group to `en.ftl` and `de.ftl`; verify the i18n test that every key exists in both files
+- [x] 5.3 Add the *Versions* action for one live or snapshot file, returning `ActionOutcome::Navigate` to its versions location (design Decision 10); verify unit tests for availability and the location it opens
+- [x] 5.4 Add the action labels and messages of this group to `en.ftl` and `de.ftl`; verify the i18n test that every key exists in both files
 
 ## 6. Restore
 
