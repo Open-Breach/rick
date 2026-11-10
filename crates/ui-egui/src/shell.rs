@@ -5261,6 +5261,59 @@ mod tests {
         assert_eq!(home.cursor_in(second, Some(origins[1]), None), None);
     }
 
+    /// A 900 by 600 window on the fake platform, where Rick draws the
+    /// frame, after its first frame.
+    fn framed(mode: frame::Mode) -> egui_kittest::Harness<'static, RickUi> {
+        let fake = Arc::new(platform::Fake::new().unwrap_or_else(|e| panic!("{e}")));
+        let host = Arc::new(EguiHost::new());
+        let app = App::new(app::Config {
+            platform: fake.clone(),
+            ui: host.clone(),
+            extensions: Vec::new(),
+            config_dir: Some(platform::ConfigDir::config_dir(fake.as_ref())),
+            start: None,
+        });
+        let mut harness = egui_kittest::Harness::builder()
+            .with_size(egui::vec2(900.0, 600.0))
+            .build_eframe(move |cc| RickUi::new(app, host, &cc.egui_ctx).with_frame(mode));
+        harness.step();
+        harness
+    }
+
+    /// Issue 158: behind a plain frame the window is cleared to the panel
+    /// colour, opaque, so nothing of an opaque surface shows as black; the
+    /// shadow frame's margin is cleared to transparent as before.
+    #[test]
+    fn the_window_is_cleared_to_the_panel_colour_behind_a_plain_frame() {
+        let visuals = egui::Visuals::dark();
+        let plain = framed(frame::Mode::Plain);
+        assert!(plain.state().framed_content().is_some(), "a frame is drawn");
+        let cleared = eframe::App::clear_color(plain.state(), &visuals);
+        let panel = visuals.panel_fill.to_normalized_gamma_f32();
+        assert!(
+            cleared
+                .iter()
+                .zip(panel)
+                .all(|(c, p)| (c - p).abs() < f32::EPSILON),
+            "{cleared:?} is the panel colour {panel:?}"
+        );
+        assert!(
+            (cleared[3] - 1.0).abs() < f32::EPSILON,
+            "opaque: {cleared:?}"
+        );
+
+        let shadow = framed(frame::Mode::Shadow);
+        assert!(
+            shadow.state().framed_content().is_some(),
+            "a frame is drawn"
+        );
+        let cleared = eframe::App::clear_color(shadow.state(), &visuals);
+        assert!(
+            cleared.iter().all(|c| c.abs() < f32::EPSILON),
+            "transparent: {cleared:?}"
+        );
+    }
+
     /// The bundled icon is the 256 px tile, decoded once.
     #[test]
     fn the_window_icon_is_the_256_px_tile() {

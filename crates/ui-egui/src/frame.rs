@@ -277,4 +277,126 @@ mod tests {
         };
         assert!(wanted(&ctx, own));
     }
+
+    /// A 900 by 600 window, as a frame is given it.
+    const WINDOW: Rect = Rect::from_min_max(pos2(0.0, 0.0), pos2(900.0, 600.0));
+
+    /// The chrome of a platform where Rick draws the controls.
+    const OWN: WindowChrome = WindowChrome {
+        controls: platform::ControlsSide::Right,
+        native_controls: false,
+        native_controls_width: 0.0,
+    };
+
+    #[test]
+    fn the_shadow_frame_keeps_its_margin() {
+        assert!((Mode::Shadow.margin() - MARGIN).abs() < f32::EPSILON);
+        assert_eq!(inset(Mode::Shadow), Vec2::splat(22.0));
+        assert_eq!(
+            Frame::of(WINDOW, Mode::Shadow).content(),
+            Rect::from_min_max(pos2(11.0, 11.0), pos2(889.0, 589.0))
+        );
+    }
+
+    /// Issue 158: an opaque window has no margin to show as a black band.
+    #[test]
+    fn the_plain_frame_has_no_margin() {
+        assert!(Mode::Plain.margin().abs() < f32::EPSILON);
+        assert_eq!(inset(Mode::Plain), Vec2::splat(2.0), "the border only");
+    }
+
+    #[test]
+    fn the_plain_frames_content_is_the_window_inside_its_border() {
+        assert_eq!(
+            Frame::of(WINDOW, Mode::Plain).content(),
+            Rect::from_min_max(pos2(1.0, 1.0), pos2(899.0, 599.0))
+        );
+    }
+
+    #[test]
+    fn the_plain_frames_grips_are_on_the_windows_edge() {
+        let frame = Frame::of(WINDOW, Mode::Plain);
+        let at = |x, y| direction(pos2(x, y), frame.inner);
+        // Along the edges, reaching 4 points inwards and no further.
+        assert_eq!(at(2.0, 300.0), Some(ResizeDirection::West));
+        assert_eq!(at(898.0, 300.0), Some(ResizeDirection::East));
+        assert_eq!(at(450.0, 2.0), Some(ResizeDirection::North));
+        assert_eq!(at(450.0, 598.0), Some(ResizeDirection::South));
+        assert_eq!(at(3.5, 300.0), Some(ResizeDirection::West));
+        assert_eq!(at(5.0, 300.0), None);
+        assert_eq!(at(450.0, 594.0), None);
+        // The same corner rule: within 24 points of a corner, diagonally.
+        assert_eq!(at(2.0, 2.0), Some(ResizeDirection::NorthWest));
+        assert_eq!(at(2.0, 20.0), Some(ResizeDirection::NorthWest));
+        assert_eq!(at(880.0, 2.0), Some(ResizeDirection::NorthEast));
+        assert_eq!(at(2.0, 590.0), Some(ResizeDirection::SouthWest));
+        assert_eq!(at(898.0, 598.0), Some(ResizeDirection::SouthEast));
+        assert_eq!(at(2.0, 30.0), Some(ResizeDirection::West));
+    }
+
+    /// What `paint` hands the renderer for a 900 by 600 window: the rects
+    /// of its shapes, the frame's own after the pass's background.
+    fn painted(mode: Mode) -> Vec<egui::epaint::RectShape> {
+        let ctx = egui::Context::default();
+        let mut rects = Vec::new();
+        let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+            let layer = egui::LayerId::new(egui::Order::Middle, egui::Id::new("frame-test"));
+            let ui = ui.new_child(egui::UiBuilder::new().layer_id(layer).max_rect(WINDOW));
+            let _ = Frame::paint(&ui, WINDOW, mode);
+            ui.ctx().graphics(|graphics| {
+                if let Some(list) = graphics.get(layer) {
+                    for clipped in list.all_entries() {
+                        if let egui::Shape::Rect(rect) = &clipped.shape {
+                            rects.push(rect.clone());
+                        }
+                    }
+                }
+            });
+        });
+        // No renderer takes the font atlas in a unit test.
+        output.textures_delta.clear();
+        rects
+    }
+
+    #[test]
+    fn the_shadow_frame_paints_its_shadow_and_its_border_inside_the_margin() {
+        let rects = painted(Mode::Shadow);
+        assert_eq!(rects.len(), 2, "the shadow, then the bordered fill");
+        assert!(rects[0].blur_width > 0.0, "the shadow is blurred");
+        assert_eq!(rects[1].rect, WINDOW.shrink(MARGIN));
+        assert!((rects[1].stroke.width - 1.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn the_plain_frame_paints_its_border_at_the_windows_edge_and_no_shadow() {
+        let rects = painted(Mode::Plain);
+        assert_eq!(rects.len(), 1, "the bordered fill only: {rects:?}");
+        let border = &rects[0];
+        assert_eq!(border.rect, WINDOW, "at the window's edge");
+        assert!((border.stroke.width - 1.0).abs() < f32::EPSILON);
+        assert_eq!(border.stroke_kind, StrokeKind::Inside);
+        assert_eq!(border.corner_radius, egui::CornerRadius::ZERO, "square");
+        assert!(border.blur_width.abs() < f32::EPSILON);
+        assert_eq!(border.fill.a(), 255, "nothing shows through");
+    }
+
+    /// As before, and in both modes: a maximised or fullscreen window has
+    /// no frame.
+    #[test]
+    fn no_frame_when_maximised_or_fullscreen() {
+        let seen_with = |maximized: bool, fullscreen: bool| {
+            let ctx = egui::Context::default();
+            let mut raw = egui::RawInput::default();
+            let viewport = raw.viewports.entry(egui::ViewportId::ROOT).or_default();
+            viewport.maximized = Some(maximized);
+            viewport.fullscreen = Some(fullscreen);
+            let mut seen = None;
+            let mut output = ctx.run_ui(raw, |ui| seen = Some(wanted(ui.ctx(), OWN)));
+            output.textures_delta.clear();
+            seen
+        };
+        assert_eq!(seen_with(false, false), Some(true));
+        assert_eq!(seen_with(true, false), Some(false));
+        assert_eq!(seen_with(false, true), Some(false));
+    }
 }
