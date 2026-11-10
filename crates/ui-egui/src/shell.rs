@@ -351,8 +351,8 @@ pub struct WindowUi {
     /// Each workspace tab of the title row in the last frame, by the tab
     /// its title comes from, for tests that drop on one.
     tab_headers: HashMap<TabId, egui::Rect>,
-    /// Rick's own window frame as the last frame drew it, if it did; the
-    /// window is then cleared to transparent around it.
+    /// Rick's own window frame as the last frame drew it, if it did; around
+    /// a shadow frame the window is then cleared to transparent.
     window_frame: Option<frame::Frame>,
     /// Drag and drop of entries.
     dnd: Dnd,
@@ -5134,10 +5134,13 @@ impl RickUi {
 }
 
 impl eframe::App for RickUi {
-    /// Transparent around Rick's own frame, so its shadow shows the desktop
-    /// through the margin; the panel colour otherwise.
+    /// Transparent around Rick's shadow frame, so its shadow shows the
+    /// desktop through the margin; the panel colour otherwise, and always
+    /// behind the plain frame of a window that cannot be transparent.
     fn clear_color(&self, visuals: &egui::Visuals) -> [f32; 4] {
-        if self.windows.values().any(|w| w.window_frame.is_some()) {
+        if self.frame_mode == frame::Mode::Shadow
+            && self.windows.values().any(|w| w.window_frame.is_some())
+        {
             [0.0; 4]
         } else {
             visuals.panel_fill.to_normalized_gamma_f32()
