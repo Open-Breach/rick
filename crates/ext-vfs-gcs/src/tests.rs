@@ -415,3 +415,72 @@ fn against_a_store_list_upload_download_move_across_buckets_and_delete_round_tri
         assert!(!buckets.contains(&bucket_a) && !buckets.contains(&bucket_b));
     });
 }
+
+/// Issue 149: what a place offers. Nothing is created at a project — a
+/// bucket needs more than the connection holds, and a file needs a bucket
+/// — and each says why; a bucket and every folder below it take folders
+/// and files, are searched beneath and are downloaded from.
+#[test]
+fn capabilities_say_what_each_place_offers() {
+    ext::i18n::add_bundled("en", include_str!("../locales/en.ftl"));
+    let fake = Arc::new(Fake::new().unwrap_or_else(|e| panic!("{e}")));
+    let provider = GcsProvider::new(Arc::new(GcsConnections::new(fake)));
+    let at = |p: &str| Location::new(PROVIDER_ID, p);
+    let creating = Capabilities::CREATE_DIR | Capabilities::CREATE_FILE;
+
+    let project = provider.capabilities(&at("/proj"));
+    assert!(!project.intersects(creating), "{project:?}");
+    assert!(project.contains(Capabilities::SEARCH_SUBTREE | Capabilities::DOWNLOAD));
+    assert_eq!(
+        provider.unavailable_reason(&at("/proj"), Capabilities::CREATE_FILE),
+        Some("Files live inside a bucket".to_owned())
+    );
+    assert_eq!(
+        provider.unavailable_reason(&at("/proj"), Capabilities::CREATE_DIR),
+        Some("Buckets are created in the provider's console".to_owned())
+    );
+    for inside in ["/proj/photos", "/proj/photos/2026/may"] {
+        let caps = provider.capabilities(&at(inside));
+        assert!(
+            caps.contains(creating | Capabilities::SEARCH_SUBTREE | Capabilities::DOWNLOAD),
+            "{inside}: {caps:?}"
+        );
+    }
+}
+
+/// Issue 149, subfolder search: a listing without a delimiter answers for
+/// everything beneath a prefix, each folder on the way once and a folder's
+/// marker never as an entry of its own.
+#[test]
+fn a_flat_listing_gives_the_files_and_each_folder_once() {
+    let page = parse_page(
+        r#"{"kind":"storage#objects","items":[
+            {"name":"2026/","size":"0"},
+            {"name":"2026/a.jpg","size":"10"},
+            {"name":"2026/may/trip/day 1/b.jpg","size":"20"},
+            {"name":"2026/may/trip/day 1/c.jpg","size":"30"},
+            {"name":"2026/.cache/thumb.db","size":"5"},
+            {"name":"2026/empty/","size":"0"}]}"#,
+    )
+    .unwrap_or_else(|e| panic!("{e}"));
+    let mut seen = std::collections::HashSet::new();
+    let entries = GcsProvider::flat_entries("proj", "photos", "2026/", page, false, &mut seen);
+    let listed: Vec<(String, EntryKind)> = entries
+        .iter()
+        .map(|e| (e.path.to_string(), e.kind.clone()))
+        .collect();
+    let dir = |p: &str| (format!("/proj/photos/2026/{p}"), EntryKind::Dir);
+    let file = |p: &str| (format!("/proj/photos/2026/{p}"), EntryKind::File);
+    assert_eq!(
+        listed,
+        [
+            file("a.jpg"),
+            dir("may"),
+            dir("may/trip"),
+            dir("may/trip/day 1"),
+            file("may/trip/day 1/b.jpg"),
+            file("may/trip/day 1/c.jpg"),
+            dir("empty"),
+        ]
+    );
+}

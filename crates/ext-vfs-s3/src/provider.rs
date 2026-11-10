@@ -1,14 +1,16 @@
 //! The provider: accounts at the root, buckets below each, key prefixes as
 //! folders below those.
 
+use std::collections::{HashSet, VecDeque};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::SystemTime;
 
 use bytes::Bytes;
 use ext::{
-    Capabilities, ChangeStream, CopyOptions, EntryStream, LinkKind, ListOptions, ProgressSink,
-    Provider, ReadHandle, RemoveMode, TransferMode, WriteHandle, WriteOptions, async_trait,
+    Capabilities, ChangeStream, CopyOptions, Depth, EntryStream, LinkKind, ListOptions,
+    ProgressSink, Provider, ReadHandle, RemoveMode, TransferMode, WriteHandle, WriteOptions,
+    async_trait, t,
 };
 use futures::{StreamExt, stream};
 use tokio::io::{AsyncReadExt, AsyncWrite};
@@ -26,10 +28,23 @@ const PART: usize = 8 * 1024 * 1024;
 /// How much the upload pipe holds before the writer waits.
 const PIPE: usize = 4 * 1024 * 1024;
 
-/// What the provider can do inside a bucket.
+/// What the provider can do inside a bucket: folders and files at every
+/// depth, everything beneath a prefix in one listing, and downloads.
 const IN_BUCKET: Capabilities = Capabilities::REMOTE
     .union(Capabilities::WRITE)
-    .union(Capabilities::NATIVE_TRANSFER);
+    .union(Capabilities::NATIVE_TRANSFER)
+    .union(Capabilities::CREATE_DIR)
+    .union(Capabilities::CREATE_FILE)
+    .union(Capabilities::SEARCH_SUBTREE)
+    .union(Capabilities::DOWNLOAD);
+
+/// What the provider can do at an account: nothing is created there, a
+/// bucket needing more than the connection holds (SPEC.md, *Object
+/// storage*).
+const AT_ACCOUNT: Capabilities = Capabilities::REMOTE
+    .union(Capabilities::WRITE)
+    .union(Capabilities::SEARCH_SUBTREE)
+    .union(Capabilities::DOWNLOAD);
 
 /// FNV-1a over `bytes`: the key of an entry, stable across listings and
 /// processes.
@@ -148,6 +163,29 @@ impl std::fmt::Debug for S3Provider {
     }
 }
 
+/// The states of a listing of everything beneath a location
+/// ([`Depth::Unlimited`]): the buckets still to go through, each from its
+/// prefix, page by page.
+struct Flat {
+    conns: Arc<S3Connections>,
+    client: Option<Arc<S3Client>>,
+    account: String,
+    /// At an account every bucket is listed; `false` once they are known.
+    whole_account: bool,
+    /// The buckets still to list, each with the prefix to list under.
+    todo: VecDeque<(String, String)>,
+    token: Option<String>,
+    /// The folders already reported in the bucket being listed.
+    seen: HashSet<String>,
+    hidden: bool,
+    cancel: CancelToken,
+}
+
+/// Whether a path below a listing's root has a hidden component.
+fn hidden_below(rest: &str) -> bool {
+    rest.split('/').any(|part| part.starts_with('.'))
+}
+
 /// What a key stands for on the service.
 enum Kind {
     Object(Object),
@@ -219,6 +257,150 @@ impl S3Provider {
         out
     }
 
+    /// The entries of one page of a listing without a delimiter: every
+    /// object below `prefix` as a file, and every folder on the way to
+    /// one, once — a folder being a prefix objects share, or its marker.
+    pub(crate) fn flat_entries(
+        account: &str,
+        bucket: &str,
+        prefix: &str,
+        page: crate::client::Page,
+        hidden: bool,
+        seen: &mut HashSet<String>,
+    ) -> Vec<Entry> {
+        let mut out = Vec::with_capacity(page.objects.len());
+        let place_of = |name: &str| Place::Key {
+            account: account.to_owned(),
+            bucket: bucket.to_owned(),
+            key: name.to_owned(),
+        };
+        for object in page.objects {
+            let Some(rest) = object.key.strip_prefix(prefix) else {
+                continue;
+            };
+            let is_folder = rest.ends_with('/');
+            let rest = rest.trim_end_matches('/');
+            if rest.is_empty() || (!hidden && hidden_below(rest)) {
+                continue;
+            }
+            // The folders above the object, and the object itself when it
+            // is a folder's marker.
+            let mut end = 0;
+            for part in rest.split('/') {
+                end += part.len();
+                let last = end == rest.len();
+                if !last || is_folder {
+                    let name = format!("{prefix}{}", &rest[..end]);
+                    if seen.insert(name.clone()) {
+                        out.push(folder(&place_of(&name), part, None));
+                    }
+                }
+                end += 1;
+            }
+            if !is_folder {
+                out.push(file(&place_of(&object.key), &object));
+            }
+        }
+        out
+    }
+
+    /// Everything beneath an account, a bucket or a folder, streamed page
+    /// by page: what the search in subfolders and the flattened view list
+    /// (`SEARCH_SUBTREE`).
+    fn list_below(&self, place: &Place, hidden: bool, cancel: CancelToken) -> EntryStream {
+        let (account, whole_account, todo) = match place {
+            Place::Root => return stream::once(async { Err(Error::NotFound) }).boxed(),
+            Place::Account(account) => (account.clone(), true, VecDeque::new()),
+            Place::Bucket { account, bucket } => (
+                account.clone(),
+                false,
+                VecDeque::from([(bucket.clone(), String::new())]),
+            ),
+            Place::Key {
+                account,
+                bucket,
+                key,
+            } => (
+                account.clone(),
+                false,
+                VecDeque::from([(bucket.clone(), format!("{key}/"))]),
+            ),
+        };
+        let start = Flat {
+            conns: Arc::clone(&self.conns),
+            client: None,
+            account,
+            whole_account,
+            todo,
+            token: None,
+            seen: HashSet::new(),
+            hidden,
+            cancel,
+        };
+        stream::unfold(Some(start), |state| async move {
+            let mut state = state?;
+            if state.cancel.is_cancelled() {
+                return Some((Err(Error::Cancelled), None));
+            }
+            let client = match &state.client {
+                Some(client) => Arc::clone(client),
+                None => match state.conns.client(&state.account).await {
+                    Ok(client) => {
+                        state.client = Some(Arc::clone(&client));
+                        client
+                    }
+                    Err(error) => return Some((Err(error), None)),
+                },
+            };
+            if state.whole_account {
+                state.whole_account = false;
+                return match client.list_buckets().await {
+                    Ok(buckets) => {
+                        let mut entries = Vec::with_capacity(buckets.len());
+                        for b in buckets {
+                            let place = Place::Bucket {
+                                account: state.account.clone(),
+                                bucket: b.name.clone(),
+                            };
+                            let entry = folder(&place, &b.name, b.created);
+                            if state.hidden || !entry.attrs.contains(Attrs::HIDDEN) {
+                                entries.push(entry);
+                                state.todo.push_back((b.name, String::new()));
+                            }
+                        }
+                        Some((Ok(entries), Some(state)))
+                    }
+                    Err(error) => Some((Err(error), None)),
+                };
+            }
+            let (bucket, prefix) = state.todo.front()?.clone();
+            match client
+                .list_flat(&bucket, &prefix, state.token.as_deref())
+                .await
+            {
+                Ok(page) => {
+                    let next = page.next.clone();
+                    let entries = Self::flat_entries(
+                        &state.account,
+                        &bucket,
+                        &prefix,
+                        page,
+                        state.hidden,
+                        &mut state.seen,
+                    );
+                    state.token = next;
+                    if state.token.is_none() {
+                        state.todo.pop_front();
+                        state.seen.clear();
+                    }
+                    Some((Ok(entries), Some(state)))
+                }
+                Err(error) => Some((Err(error), None)),
+            }
+        })
+        .boxed()
+    }
+
     /// Every object under an item: the object itself, or everything below
     /// a folder, with the key each lands at under `to_prefix`.
     async fn plan(
@@ -254,8 +436,25 @@ impl Provider for S3Provider {
     fn capabilities(&self, loc: &Location) -> Capabilities {
         match Place::of(loc) {
             Place::Root => Capabilities::REMOTE,
-            Place::Account(_) => Capabilities::REMOTE | Capabilities::WRITE,
+            Place::Account(_) => AT_ACCOUNT,
             Place::Bucket { .. } | Place::Key { .. } => IN_BUCKET,
+        }
+    }
+
+    fn unavailable_reason(&self, loc: &Location, capability: Capabilities) -> Option<String> {
+        match Place::of(loc) {
+            Place::Root
+                if capability.intersects(Capabilities::CREATE_DIR | Capabilities::CREATE_FILE) =>
+            {
+                Some(t!("s3-accounts-come-from-the-side-panel"))
+            }
+            Place::Account(_) if capability.contains(Capabilities::CREATE_FILE) => {
+                Some(t!("s3-files-live-in-a-bucket"))
+            }
+            Place::Account(_) if capability.contains(Capabilities::CREATE_DIR) => {
+                Some(t!("s3-buckets-come-from-the-console"))
+            }
+            _ => None,
         }
     }
 
@@ -263,6 +462,9 @@ impl Provider for S3Provider {
         let place = Place::of(loc);
         let conns = Arc::clone(&self.conns);
         let hidden = opts.hidden;
+        if opts.depth == Depth::Unlimited && place != Place::Root {
+            return self.list_below(&place, hidden, cancel);
+        }
         match place {
             Place::Root => {
                 let entries: Vec<Entry> = conns
