@@ -1,6 +1,7 @@
 //! The provider: accounts at the root, containers below each, blob name
 //! prefixes as folders below those.
 
+use std::collections::{HashSet, VecDeque};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, SystemTime};
@@ -8,8 +9,9 @@ use std::time::{Duration, SystemTime};
 use base64::Engine as _;
 use bytes::Bytes;
 use ext::{
-    Capabilities, ChangeStream, CopyOptions, EntryStream, LinkKind, ListOptions, ProgressSink,
-    Provider, ReadHandle, RemoveMode, TransferMode, WriteHandle, WriteOptions, async_trait,
+    Capabilities, ChangeStream, CopyOptions, Depth, EntryStream, LinkKind, ListOptions,
+    ProgressSink, Provider, ReadHandle, RemoveMode, TransferMode, WriteHandle, WriteOptions,
+    async_trait, t,
 };
 use futures::{StreamExt, stream};
 use tokio::io::{AsyncReadExt, AsyncWrite};
@@ -30,10 +32,46 @@ const PIPE: usize = 4 * 1024 * 1024;
 /// How often a pending copy is polled.
 const POLL: Duration = Duration::from_millis(500);
 
-/// What the provider can do inside a container.
+/// What the provider can do inside a container: folders and files at every
+/// depth, everything beneath a prefix in one listing, and downloads.
 const IN_CONTAINER: Capabilities = Capabilities::REMOTE
     .union(Capabilities::WRITE)
-    .union(Capabilities::NATIVE_TRANSFER);
+    .union(Capabilities::NATIVE_TRANSFER)
+    .union(Capabilities::CREATE_DIR)
+    .union(Capabilities::CREATE_FILE)
+    .union(Capabilities::SEARCH_SUBTREE)
+    .union(Capabilities::DOWNLOAD);
+
+/// What the provider can do at an account: a new folder is a container,
+/// and a file needs one to live in.
+const AT_ACCOUNT: Capabilities = Capabilities::REMOTE
+    .union(Capabilities::WRITE)
+    .union(Capabilities::CREATE_DIR)
+    .union(Capabilities::SEARCH_SUBTREE)
+    .union(Capabilities::DOWNLOAD);
+
+/// What is wrong with `name` as a container's, by the service's naming
+/// rules: 3 to 63 characters, lowercase letters, digits and hyphens, a
+/// letter or a digit first and last, no two hyphens in a row. `None` for a
+/// name the service takes.
+#[must_use]
+pub fn container_name_problem(name: &str) -> Option<String> {
+    let edge = |c: Option<char>| c.is_some_and(|c| c.is_ascii_lowercase() || c.is_ascii_digit());
+    if !(3..=63).contains(&name.chars().count()) {
+        Some(t!("azure-container-name-length"))
+    } else if !name
+        .chars()
+        .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
+    {
+        Some(t!("azure-container-name-characters"))
+    } else if !edge(name.chars().next()) || !edge(name.chars().next_back()) {
+        Some(t!("azure-container-name-edges"))
+    } else if name.contains("--") {
+        Some(t!("azure-container-name-hyphens"))
+    } else {
+        None
+    }
+}
 
 /// FNV-1a over `bytes`: the key of an entry, stable across listings and
 /// processes.
@@ -142,6 +180,29 @@ enum Listing {
     Done,
 }
 
+/// The states of a listing of everything beneath a location
+/// ([`Depth::Unlimited`]): the containers still to go through, each from
+/// its prefix, page by page.
+struct Flat {
+    conns: Arc<AzureConnections>,
+    client: Option<Arc<AzureClient>>,
+    account: String,
+    /// At an account every container is listed; `None` once they are known.
+    whole_account: bool,
+    /// The containers still to list, each with the prefix to list under.
+    todo: VecDeque<(String, String)>,
+    marker: Option<String>,
+    /// The folders already reported in the container being listed.
+    seen: HashSet<String>,
+    hidden: bool,
+    cancel: CancelToken,
+}
+
+/// Whether a path below a listing's root has a hidden component.
+fn hidden_below(rest: &str) -> bool {
+    rest.split('/').any(|part| part.starts_with('.'))
+}
+
 /// What a name stands for on the service.
 enum Kind {
     Blob(Blob),
@@ -221,6 +282,173 @@ impl AzureProvider {
             }
         }
         out
+    }
+
+    /// The entries of one page of a listing without a delimiter: every
+    /// blob below `prefix` as a file, and every folder on the way to one,
+    /// once — a folder being a prefix blobs share, or its placeholder.
+    pub(crate) fn flat_entries(
+        account: &str,
+        container: &str,
+        prefix: &str,
+        page: crate::client::Page,
+        hidden: bool,
+        seen: &mut HashSet<String>,
+    ) -> Vec<Entry> {
+        let mut out = Vec::with_capacity(page.blobs.len());
+        let place_of = |name: &str| Place::Blob {
+            account: account.to_owned(),
+            container: container.to_owned(),
+            name: name.to_owned(),
+        };
+        for blob in page.blobs {
+            let Some(rest) = blob.name.strip_prefix(prefix) else {
+                continue;
+            };
+            let is_folder = rest.ends_with('/');
+            let rest = rest.trim_end_matches('/');
+            if rest.is_empty() || (!hidden && hidden_below(rest)) {
+                continue;
+            }
+            // The folders above the blob, and the blob itself when it is a
+            // folder's placeholder.
+            let mut end = 0;
+            for part in rest.split('/') {
+                end += part.len();
+                let last = end == rest.len();
+                if !last || is_folder {
+                    let name = format!("{prefix}{}", &rest[..end]);
+                    if seen.insert(name.clone()) {
+                        out.push(folder(&place_of(&name), part, None));
+                    }
+                }
+                end += 1;
+            }
+            if !is_folder {
+                out.push(file(&place_of(&blob.name), &blob));
+            }
+        }
+        out
+    }
+
+    /// The containers of an account, as its folders.
+    fn list_account(&self, account: String) -> EntryStream {
+        let conns = Arc::clone(&self.conns);
+        stream::once(async move {
+            let client = conns.client(&account).await?;
+            let containers = client.list_containers().await?;
+            Ok(containers
+                .into_iter()
+                .map(|c| {
+                    folder(
+                        &Place::Container {
+                            account: account.clone(),
+                            container: c.name.clone(),
+                        },
+                        &c.name,
+                        c.modified,
+                    )
+                })
+                .collect())
+        })
+        .boxed()
+    }
+
+    /// Everything beneath an account, a container or a folder, streamed
+    /// page by page: what the search in subfolders and the flattened view
+    /// list (`SEARCH_SUBTREE`).
+    fn list_below(&self, place: &Place, hidden: bool, cancel: CancelToken) -> EntryStream {
+        let (account, whole_account, todo) = match place {
+            Place::Root => return stream::once(async { Err(Error::NotFound) }).boxed(),
+            Place::Account(account) => (account.clone(), true, VecDeque::new()),
+            Place::Container { account, container } => (
+                account.clone(),
+                false,
+                VecDeque::from([(container.clone(), String::new())]),
+            ),
+            Place::Blob {
+                account,
+                container,
+                name,
+            } => (
+                account.clone(),
+                false,
+                VecDeque::from([(container.clone(), format!("{name}/"))]),
+            ),
+        };
+        let start = Flat {
+            conns: Arc::clone(&self.conns),
+            client: None,
+            account,
+            whole_account,
+            todo,
+            marker: None,
+            seen: HashSet::new(),
+            hidden,
+            cancel,
+        };
+        stream::unfold(Some(start), |state| async move {
+            let mut state = state?;
+            if state.cancel.is_cancelled() {
+                return Some((Err(Error::Cancelled), None));
+            }
+            let client = match &state.client {
+                Some(client) => Arc::clone(client),
+                None => match state.conns.client(&state.account).await {
+                    Ok(client) => {
+                        state.client = Some(Arc::clone(&client));
+                        client
+                    }
+                    Err(error) => return Some((Err(error), None)),
+                },
+            };
+            if state.whole_account {
+                state.whole_account = false;
+                return match client.list_containers().await {
+                    Ok(containers) => {
+                        let mut entries = Vec::with_capacity(containers.len());
+                        for c in containers {
+                            let place = Place::Container {
+                                account: state.account.clone(),
+                                container: c.name.clone(),
+                            };
+                            let entry = folder(&place, &c.name, c.modified);
+                            if state.hidden || !entry.attrs.contains(Attrs::HIDDEN) {
+                                entries.push(entry);
+                                state.todo.push_back((c.name, String::new()));
+                            }
+                        }
+                        Some((Ok(entries), Some(state)))
+                    }
+                    Err(error) => Some((Err(error), None)),
+                };
+            }
+            let (container, prefix) = state.todo.front()?.clone();
+            match client
+                .list_flat(&container, &prefix, state.marker.as_deref())
+                .await
+            {
+                Ok(page) => {
+                    let next = page.next.clone();
+                    let entries = Self::flat_entries(
+                        &state.account,
+                        &container,
+                        &prefix,
+                        page,
+                        state.hidden,
+                        &mut state.seen,
+                    );
+                    state.marker = next;
+                    if state.marker.is_none() {
+                        state.todo.pop_front();
+                        state.seen.clear();
+                    }
+                    Some((Ok(entries), Some(state)))
+                }
+                Err(error) => Some((Err(error), None)),
+            }
+        })
+        .boxed()
     }
 
     /// Every blob under an item, with the name each lands at under
@@ -303,8 +531,29 @@ impl Provider for AzureProvider {
     fn capabilities(&self, loc: &Location) -> Capabilities {
         match Place::of(loc) {
             Place::Root => Capabilities::REMOTE,
-            Place::Account(_) => Capabilities::REMOTE | Capabilities::WRITE,
+            Place::Account(_) => AT_ACCOUNT,
             Place::Container { .. } | Place::Blob { .. } => IN_CONTAINER,
+        }
+    }
+
+    fn unavailable_reason(&self, loc: &Location, capability: Capabilities) -> Option<String> {
+        match Place::of(loc) {
+            Place::Root
+                if capability.intersects(Capabilities::CREATE_DIR | Capabilities::CREATE_FILE) =>
+            {
+                Some(t!("azure-accounts-come-from-the-side-panel"))
+            }
+            Place::Account(_) if capability.contains(Capabilities::CREATE_FILE) => {
+                Some(t!("azure-files-live-in-a-container"))
+            }
+            _ => None,
+        }
+    }
+
+    fn name_problem(&self, loc: &Location) -> Option<String> {
+        match Place::of(loc) {
+            Place::Container { container, .. } => container_name_problem(&container),
+            _ => None,
         }
     }
 
@@ -312,6 +561,9 @@ impl Provider for AzureProvider {
         let place = Place::of(loc);
         let conns = Arc::clone(&self.conns);
         let hidden = opts.hidden;
+        if opts.depth == Depth::Unlimited && place != Place::Root {
+            return self.list_below(&place, hidden, cancel);
+        }
         match place {
             Place::Root => {
                 let entries: Vec<Entry> = conns
@@ -321,24 +573,7 @@ impl Provider for AzureProvider {
                     .collect();
                 stream::once(async move { Ok(entries) }).boxed()
             }
-            Place::Account(account) => stream::once(async move {
-                let client = conns.client(&account).await?;
-                let containers = client.list_containers().await?;
-                Ok(containers
-                    .into_iter()
-                    .map(|c| {
-                        folder(
-                            &Place::Container {
-                                account: account.clone(),
-                                container: c.name.clone(),
-                            },
-                            &c.name,
-                            c.modified,
-                        )
-                    })
-                    .collect())
-            })
-            .boxed(),
+            Place::Account(account) => self.list_account(account),
             Place::Container { .. } | Place::Blob { .. } => {
                 let Some((account, container, prefix)) = prefix_of(&place) else {
                     return stream::once(async { Err(Error::NotFound) }).boxed();
@@ -476,6 +711,12 @@ impl Provider for AzureProvider {
                 "an account is added from the side panel",
             )),
             Place::Container { account, container } => {
+                // The name is checked here, before any request goes out:
+                // the service answers a name it does not take with
+                // `InvalidResourceName` and nothing the user can act on.
+                if let Some(problem) = container_name_problem(container) {
+                    return Err(crate::client::message(problem));
+                }
                 let client = self.conns.client(account).await?;
                 if client.head_container(container).await.is_ok() {
                     return Err(already_exists());
