@@ -3774,3 +3774,296 @@ Once answered, an entry keeps its number and gains a dated decision line.
     the zip with `ditto` and open `Rick.app`, as the release workflow's
     smoke test does; BENCHMARKS.md stays, the `bench` workflow measuring
     again on the tag.
+
+323. (GUI fixes, issue 139, 2026-11-10) The issue starts "once 0.3.0 is
+    tagged and `dev` is level with `main` again", and the handoff asks for
+    one chore pull request that sets the workspace version to `0.4.0-dev`
+    first. `v0.3.0` is `main`'s head (`025bae1`); `dev` is `main` plus
+    #154, which is that version bump, merged on 2026-11-10.
+    Assumed: the preconditions hold and the bump is not made a second
+    time.
+
+324. (GUI fixes, issue 139, 2026-11-10) CLAUDE.md says "Do not change
+    SPEC.md yourself"; item 1 of the issue asks for the rules of items 2
+    to 11 to be written into SPEC.md, as a pull request that waits for
+    Serge's review.
+    Assumed: the review is what makes the change Serge's. The agent
+    opens the pull request and does not merge it, and builds nothing on
+    it before it is merged. `specs/ext-ssh.md` is edited in the same
+    pull request where it named the old cap (4 MiB, *Preview anyway*).
+
+325. (GUI fixes, issue 139, 2026-11-10) The Figma section also holds
+    *List view mode* (`163:5119`) with its notes; the issue lists the
+    layout of the List view as out of scope.
+    Assumed: read, and neither specified nor built here; it belongs to
+    issue 149.
+
+326. (GUI fixes, app menu, 2026-11-10) The notes say "same pattern as the
+    View options and right-click menus: card, 10 px corners, soft shadow,
+    32 px rows". SPEC.md's *Look and feel* fixed 30 px menu entries and
+    8 px corners on cards and menus. In the Figma file the context menus
+    have 30 px entries and the View options menu 32 px, all with 10 px
+    corners; the code of 0.3 follows Figma for the heights and SPEC.md for
+    the corners. The new frames draw their cards (the two file cards, the
+    File info card, the attention card) with 10 px corners too.
+    Assumed: the app menu has 32 px entries, as the View options menu
+    has, and *Look and feel* now says which menu has which height. The
+    8 px corners stay, for the app menu and for the cards of the new
+    dialogues, which reuse the menu and card components of the design
+    refresh; 10 px, if it is wanted, is one constant for every menu and
+    card and a step of its own.
+
+327. (GUI fixes, app menu, 2026-11-10) The frame draws seven entries.
+    Nothing says where a second extension's submenu goes, which icon it
+    has, whether the entries of the submenus get icons, or whether
+    *Rename…* and *Save layout as…* in the Layouts submenu lose their
+    "…".
+    Assumed: every extension with application-menu actions has its
+    submenu in the first group after Layouts, with the icon its group
+    has in the context menu and `PUZZLE_PIECE` without one. The submenus
+    take the same card and keep their entries and labels: the rule on
+    "…" names Settings, Keyboard shortcuts and Extensions. The version
+    beside About Rick is the build's, as the About dialog shows it.
+
+328. (GUI fixes, paste conflict, 2026-11-10) "(3 of 12)" and "the
+    remaining 9 conflicts" count conflicts, but a job learns of a
+    conflict only when it reaches the item; today it reports the items
+    left, not the conflicts.
+    Assumed: the job compares the top-level names with the destination
+    before it brings anything, so the number is known at the first
+    question. Names inside a merged folder are neither counted nor asked
+    about, as before.
+
+329. (GUI fixes, paste conflict, 2026-11-10) Folder conflicts are "not
+    drawn": the notes give *Merge* in place of *Replace* and no *Keep
+    both*, and nothing else. A file meeting a folder of the same name is
+    not mentioned.
+    Assumed: *Merge folder?* with the captions *Existing folder* and *New
+    folder*; *Merge* keeps the caution style, since it replaces the
+    same-named files inside; Enter is *Skip*, the choice that loses
+    nothing, as *Keep both* is for files; a folder's card shows its
+    modified time and no size. A file and a folder of one name are asked
+    about as two files are, the title and captions naming what each is,
+    and *Replace* removes the existing item first as SPEC.md already
+    said. A standing *Keep both* does not answer for two folders. The
+    close button is *Cancel*.
+
+330. (GUI fixes, properties, 2026-11-10) The frames draw a folder and a
+    symbolic link. No frame draws a regular file; none shows the media
+    type, which SPEC.md's *Inspect* names; none shows *System
+    properties…*, which Windows and macOS have today.
+    Assumed: a file's Size group has *Size* and *On disk*; the media type
+    is a row of the Location group for a regular file; *System
+    properties…* sits at the left of the General tab's footer, where
+    *Open target folder* sits for a link.
+
+331. (GUI fixes, properties, 2026-11-10) The folder frame has an Options
+    group with a *Hidden* switch. Nothing in Rick sets the hidden state
+    today, and on Linux it is the leading dot of the name.
+    Assumed: the switch shows the state and is not changed here. Setting
+    it is a function of its own — an attribute on Windows and macOS, a
+    rename on Linux — and the issue holds visual and interaction changes
+    only. The group is not shown for a symbolic link, as drawn.
+
+332. (GUI fixes, properties, 2026-11-10) The Access group draws the
+    octal mode as text and "setuid · setgid · sticky: off" beside it;
+    0.3 has an octal field that can be edited and three checkboxes.
+    Assumed: the octal value stays a field, the special bits are set
+    through its first digit, and the text at the right names the bits
+    that are on, or reads as drawn when none is. The checkboxes go.
+
+333. (GUI fixes, properties, 2026-11-10) The notes say "Owner/group/
+    others ACL rows mirror the Access grid above"; the frame draws
+    *Owning group* without Execute while the grid's *Group* row has it.
+    Assumed: the frame, which is what POSIX does: with named entries the
+    mode's group bits are the mask, so the grid's *Group* row moves with
+    the *Mask* row and the owning group has its own. The other kinds of
+    ACL (NFSv4, macOS, NTFS) open in the same place with the rows they
+    had in 0.3.
+
+334. (GUI fixes, properties, 2026-11-10) *Apply to enclosed items* is
+    one switch, "Set the same permissions on everything inside". SPEC.md
+    and 0.3 had a separate choice for files and for folders.
+    Assumed: the switch applies to both and the separate choice is
+    withdrawn; SPEC.md's *Permission management* says so now.
+
+335. (GUI fixes, preview pane, 2026-11-10) One info button and one card
+    replace the badges, one per section (File info, EXIF, tags, stream
+    details, a decorator's panel). The notes do not say what becomes of
+    the sections, of the search field of a long section, or of the pin
+    remembered per content kind.
+    Assumed: the card lists every section's rows in order, the further
+    sections under their titles once it is unfolded; the search field
+    goes; the pin is one switch per previewer id, and a pin stored per
+    content kind is not carried over. A click on the info button pins
+    and unpins as the pin button does, because a popover on hover alone
+    cannot be reached from the keyboard.
+
+336. (GUI fixes, preview pane, 2026-11-10) "Rows are the first 4–5
+    fields of the previewer": the popover draws five, the pinned card
+    four. Both draw *Modified*, which no previewer reports.
+    Assumed: five as a popover, four when pinned, as drawn; the pane
+    adds the entry's *Modified* after the previewer's *Size* row.
+
+337. (GUI fixes, preview pane, 2026-11-10) *Open as hex*: the hex
+    previewer claims no file, and its claiming `.bin` is on the issue's
+    out-of-scope list. SPEC.md had *Plugin available* for a type a
+    disabled plugin claims. The card for a previewer that failed is not
+    drawn.
+    Assumed: the button shows this one file with `ext-preview-hex` until
+    the selection moves on, and is absent while that plugin is not
+    loaded; *plugin available* takes the place of "no previewer for
+    .bin" in the head; an error is the card with one row, *Preview*, and
+    *Retry*.
+
+338. (GUI fixes, preview pane, 2026-11-10) *Download pdfium*: the
+    plugins name either a download address (pdfium) or an install command
+    (LibreOffice, the 7-Zip library on Linux), and nothing in Rick
+    downloads or unpacks a library.
+    Assumed: *Download* opens the address in the browser and Rick fetches
+    and installs nothing; where the plugin names a command, the card has
+    it as an *Install* row with a copy button and no *Download* button.
+    GStreamer, which reports through the media previewer's *Playback*
+    row and not as a missing library, is unchanged.
+
+339. (GUI fixes, preview tables, 2026-11-10) The notes call the header —
+    a 30 px `bg/panel` band with one hairline below and medium titles —
+    "the same header as the main file list". The file list's header is
+    34 px in `bg/subtle` between two hairlines with regular titles, in
+    SPEC.md and in Figma (`116:3485`). The frame draws 30 px rows while
+    the notes take the row height from the Density tokens, and in the
+    *After* frame the cells do not sit under their resized header cells.
+    Assumed: the tables in previews get the header as drawn and the file
+    list is not changed; rows are `row/height`; every cell sits under its
+    header; both tables are striped whatever the list's zebra setting,
+    as both are drawn; widths are kept in `rick.toml` per previewer, the
+    CSV grid's by position because its columns differ from file to file.
+
+340. (GUI fixes, remote size cap, 2026-11-10) The notes set the limit at
+    10 MiB and put it, and the undoing of *Always*, on *Settings →
+    Previews*. SPEC.md and `specs/ext-ssh.md` had 4 MiB, a per-host
+    override and the host editor; `ext-ssh` also has a plugin-wide
+    `preview_size_cap_mib`; no Previews page is drawn.
+    Assumed: 10 MiB, one core setting for every remote provider, on a
+    Previews page that also lists the sources that are always previewed;
+    the per-host override and the switches in the host or account editor
+    and the row's context menu stay; the plugin-wide key of `ext-ssh` is
+    no longer read. The progress line shows for every whole-file download
+    from a remote source, not only after a button, and Escape cancels the
+    download before it clears the filter or the selection.
+
+341. (GUI fixes, keyboard shortcuts, 2026-11-10) The drawn categories
+    are All, Navigation, File operations, View, Selection, Panes & tabs,
+    Search, then the plugins. 0.3 has *Window* and *Preview pane* and no
+    *Search*. The frame files *Compress…* and *Bulk rename…* under File
+    operations, though both come from plugins and the issue says plugin
+    actions are never filed there. The category icons are stand-ins, two
+    of them the same.
+    Assumed: the window commands join *Panes & tabs*; *Search* holds the
+    search box in both modes, the filter and the search in
+    subdirectories; *Preview pane* stays a category, because its chords
+    apply only while the preview has the focus and may repeat the list's.
+    The rule wins over the frame: *Compress and extract*, *Bulk rename*,
+    *Compare* and *Console* are categories of their own. Icons:
+    `LIST_CHECKS` for Selection, `COLUMNS` for Panes & tabs, `IMAGE` for
+    Preview pane.
+
+342. (GUI fixes, keyboard shortcuts, 2026-11-10) The issue calls the
+    duplicate *Commit* row "a registration bug in `ext-git`". `ext-git`
+    registers `git.commit` once; the second row is `svn.commit` of
+    `ext-svn`, and both sit under "File operations" because 0.3 files
+    every registered action there.
+    Assumed: the fix is the filing — each under its plugin — and nothing
+    changes in what `ext-git` registers. Under *All* the two rows remain,
+    one under *GIT · PLUGIN* and one under *SVN · PLUGIN*.
+
+343. (GUI fixes, keyboard shortcuts, 2026-11-10) Four details the frame
+    leaves open. The conflict chip is drawn with `text/primary` on
+    `status/warning`, 2.5:1. Nothing says which action a chord in
+    conflict runs. Several actions have more than one default chord
+    (Back: Backspace, Alt+Left). The notes write changes to "the keymap
+    TOML".
+    Assumed: the chip is `trash/mid-bg` with `trash/mid-text`, the amber
+    pair the scheme already holds to 4.5:1. A chord in conflict runs the
+    built-in action before a plugin's, otherwise the first in the list.
+    All of an action's chords are shown, one after the other; recording
+    replaces them with the one pressed. Backspace unbinds while
+    recording, so it cannot be recorded in the dialogue, only written in
+    the file. The keymap is the `[shortcuts]` table of `rick.toml`. Mod
+    is written *Ctrl*, and *Cmd* on macOS.
+
+344. (GUI fixes, extensions, 2026-11-10) The details show things the
+    host does not have: a description (the manifest has none), "2
+    accounts connected" in Status, an attention text about what Azure
+    cannot do yet, and "deprecated" as a reason. The frame shows *Remove*
+    and a per-user path on a plugin with the *Built-in plugin* chip.
+    Assumed: the manifest gains a description and the API version goes
+    up. Status is the load state alone. A plugin needs attention when the
+    host refused or failed to load it, or when it reported a missing
+    library in this session; "deprecated" and notes on known limits wait
+    for a field that carries them. Built-in means beside the binary;
+    the notes win over the frame, so *Remove* is hidden for a built-in.
+    The extensions compiled into the binary are not listed, as before. A
+    plugin that fills only the decorator point would need a fifth
+    heading; none ships.
+
+345. (GUI fixes, extensions, 2026-11-10) *Install from file…* "picks a
+    .rkp", and *Remove* deletes a plugin. No `.rkp` format is defined
+    anywhere, Rick has no code that installs or removes a plugin, the
+    issue holds "visual and interaction changes only", and the trust on
+    first use of `specs/system-integration.md` §9 is not built.
+    Assumed: an `.rkp` is a zip archive of the plugin's folder as it sits
+    in the plugins directory. Install unpacks it into the per-user
+    plugins folder, refuses a file without a plugin manifest and asks
+    before it replaces a plugin of the same id; *Remove* asks and deletes
+    the folder; both take effect at the next start. No trust check is
+    added beyond what the loader does today: §9 arrives with its
+    milestone. If the two buttons should wait for that milestone
+    instead, they are left out of item 9.
+
+346. (GUI fixes, title bar colour, 2026-11-10) The notes say "contrast
+    of text/secondary on every light preset is ≥ 4.5:1; verify after
+    implementation", and the issue's acceptance asks for 4.5:1. Computed:
+    `text/secondary` (`#6b6b6b`) on Dusty rose 4.12, Warm grey 4.13,
+    Slate teal 4.10, Sage 4.17, Plum 3.99. In Dark it holds, 4.81 to
+    5.47, and `icon/default` holds everywhere.
+    Assumed: the presets stay as given and the inactive titles change
+    where they fall short: `#2b2b2b` at 78 % on a light band (5.8 to
+    6.0:1), the mirror of the white at 78 % the dark band draws. The
+    frames show `text/secondary`; the difference is a slightly darker
+    grey in Light.
+
+347. (GUI fixes, title bar colour, 2026-11-10) Three cases the frames do
+    not cover. On the Dark band in Light, a hovered inactive tab at
+    "`bg/pane` at 50 %" is a mid grey on which white at 78 % has 2.4:1
+    and `icon/default` 3.0:1. A light *Custom* colour in Dark is not
+    mentioned. The search box without its border has 1.2:1 against a
+    light band.
+    Assumed: on a dark band in Light the hovered tab is white at 12 %,
+    as the frame draws the hovered menu button; a light band in Dark is
+    the mirror image, with `#2b2b2b`; the search box is told by its icon
+    and placeholder, which are held to 3:1 and 4.5:1, and its fill
+    against the band is not a checked pair, as a tab's is not. *Custom*
+    is two `#rrggbb` fields with a swatch each; no colour picker is
+    drawn. The setting is `titlebar_colour`, with
+    `titlebar_custom_light` and `titlebar_custom_dark`.
+
+348. (GUI fixes, small items, 2026-11-10) "Window controls spaced wider
+    apart" has no number and no frame of its own. In 0.3 the glyphs are
+    about 10 px wide and 9.5 px apart, a 19 px step; the title row
+    frames of this issue draw 16 px icons 12 px apart, a 28 px step.
+    Assumed: the frames' spacing, for the whole window group, toggles
+    included, each control answering over its whole step. If wider than
+    the frames is meant, the number is needed.
+
+349. (GUI fixes, small items, 2026-11-10) Three small items leave a
+    choice. The settings' second close button: where the settings cannot
+    open as a window of their own they are drawn inside the main window
+    and the round button is the only one. A console's title: the shell
+    can set one. An operation's error "also appears where the user
+    acted": the brief says "a toast or an inline card"; 0.3 already
+    shows a toast for every failed job, for five seconds.
+    Assumed: the round button stays in the embedded case only; the tab
+    reads *Console* whatever the shell sets; the error is a toast in the
+    window the user acted in, with the whole text wrapped, that stays
+    until it is dismissed, and the drawer's row expands on a click.
