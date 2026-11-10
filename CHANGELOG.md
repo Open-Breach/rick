@@ -40,7 +40,7 @@ the specification first (#174).
 ### Added
 
 - `ext-zfs`, a plugin for OpenZFS snapshots, Linux only (OpenSpec change
-  `add-zfs-snapshots`, QUESTIONS.md 323): through the `zfs` command line
+  `add-zfs-snapshots`, QUESTIONS.md 364): through the `zfs` command line
   it finds the dataset a folder lies in and, without `zfs` or outside a
   dataset, shows nothing. A read-only `zfs` location lists the datasets
   with snapshots, each dataset's snapshots newest first and each
