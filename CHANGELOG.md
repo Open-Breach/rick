@@ -119,9 +119,10 @@ open is in `QUESTIONS.md` 323 to 366. The rules went into SPEC.md first
 
 - **No black band around the window where it cannot be transparent**
   (issue 158). Rick asks for a transparent window to paint its shadow into
-  a 10 px margin; where the surface is opaque — Windows on DirectX 12, a
-  virtual machine, software rendering, remote desktop — that margin showed
-  as a solid black band. Rick now checks once, before the first frame,
+  a 10 px margin; where the surface is opaque — as on Windows under
+  DirectX 12, which is what a virtual machine without a graphics driver
+  gets — that margin showed as a solid black band. Rick now checks once,
+  before the first frame,
   whether the first window's surface offers an alpha mode that blends, and
   draws the plain frame where it does not: no margin and no shadow, a
   one-pixel border at the window's edge, and the resize grips on the edge.
