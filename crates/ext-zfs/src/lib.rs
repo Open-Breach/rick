@@ -18,6 +18,7 @@
 
 pub mod actions;
 pub mod datasets;
+pub mod manage;
 pub mod parse;
 pub mod provider;
 pub mod restore;
@@ -110,6 +111,10 @@ impl Extension for ZfsExtension {
         let shared = Arc::new(actions::Shared {
             datasets: Arc::clone(&self.datasets),
             platform: reg.platform().cloned(),
+            elevate: reg
+                .platform()
+                .filter(|_| zfs::find_program("pkexec").is_some())
+                .map(|p| Arc::clone(p) as Arc<dyn ext::platform::Elevate>),
         });
         for action in actions::all(&shared) {
             reg.action(action);

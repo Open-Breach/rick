@@ -2,6 +2,7 @@
 //! in a temporary directory and a scripted `zfs`.
 
 mod actions;
+mod manage;
 mod restore;
 mod provider;
 
@@ -72,6 +73,8 @@ pub(crate) fn on_snapshots(zfs: &ScriptedZfs, dataset: &str, out: &str) {
 
 impl Fixture {
     pub fn new() -> Self {
+        // The messages the tests read, whatever ran before.
+        ext::i18n::add_bundled("en", include_str!("../../locales/en.ftl"));
         let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
         let root = dir.path();
         let zfs = Arc::new(ScriptedZfs::new());
@@ -155,7 +158,6 @@ pub(crate) struct Scripted {
     pub form: std::sync::Mutex<Option<Vec<(&'static str, ext::Value)>>>,
     pub dismiss_form: std::sync::Mutex<bool>,
     pub asked: std::sync::Mutex<Vec<String>>,
-    pub notes: std::sync::Mutex<Vec<(ext::Level, String)>>,
     pub forms: std::sync::Mutex<Vec<ext::Form>>,
 }
 
@@ -174,15 +176,10 @@ impl Scripted {
         guard(&self.asked).clone()
     }
 
-    pub fn notes(&self) -> Vec<(ext::Level, String)> {
-        guard(&self.notes).clone()
-    }
 }
 
 impl ext::UiHost for Scripted {
-    fn notify(&self, level: ext::Level, text: &str) {
-        guard(&self.notes).push((level, text.to_owned()));
-    }
+    fn notify(&self, _level: ext::Level, _text: &str) {}
     fn confirm(&self, title: &str, text: &str) -> bool {
         guard(&self.asked).push(format!("{title}: {text}"));
         *guard(&self.confirm)

@@ -4,7 +4,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use ext::platform::{Platform, paths};
+use ext::platform::{Elevate, Platform, paths};
 use ext::{
     Action, ActionCtx, ActionGroup, ActionId, ActionOutcome, Availability, JobRunner, Shortcut,
     UiHost, t,
@@ -35,6 +35,9 @@ pub struct Shared {
     /// The platform the host lent: its trash for Restore, its elevation
     /// prompt for management; without one those actions are hidden.
     pub platform: Option<Arc<dyn Platform>>,
+    /// The elevation prompt, when the platform has one here (`pkexec` is
+    /// installed); without it a refused command is not offered elevated.
+    pub elevate: Option<Arc<dyn Elevate>>,
 }
 
 impl std::fmt::Debug for Shared {
@@ -42,6 +45,7 @@ impl std::fmt::Debug for Shared {
         f.debug_struct("Shared")
             .field("datasets", &self.datasets)
             .field("platform", &self.platform.is_some())
+            .field("elevate", &self.elevate.is_some())
             .finish()
     }
 }
@@ -301,5 +305,8 @@ pub fn all(shared: &Arc<Shared>) -> Vec<Arc<dyn Action>> {
         Arc::new(Live(Arc::clone(shared))),
         Arc::new(Versions(Arc::clone(shared))),
         Arc::new(crate::restore::Restore(Arc::clone(shared))),
+        Arc::new(crate::manage::Create(Arc::clone(shared))),
+        Arc::new(crate::manage::Rename(Arc::clone(shared))),
+        Arc::new(crate::manage::Destroy(Arc::clone(shared))),
     ]
 }

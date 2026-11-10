@@ -27,6 +27,7 @@ fn bench() -> Bench {
     let shared = Arc::new(Shared {
         datasets: Arc::clone(&fx.datasets),
         platform: Some(fake.clone()),
+        elevate: None,
     });
     Bench { fx, fake, shared }
 }
@@ -260,6 +261,7 @@ fn restore_is_offered_inside_snapshots_and_versions_only() {
     let without_platform = Restore(Arc::new(Shared {
         datasets: Arc::clone(&b.fx.datasets),
         platform: None,
+        elevate: None,
     }));
     assert_eq!(
         without_platform.availability(&ctx(ann(&b, "b"), selected)),

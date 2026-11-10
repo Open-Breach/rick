@@ -88,12 +88,19 @@ impl SystemZfs {
     }
 
     fn find() -> Option<PathBuf> {
-        let path = std::env::var_os("PATH").unwrap_or_default();
-        std::env::split_paths(&path)
-            .chain(SBIN.iter().map(PathBuf::from))
-            .map(|dir| dir.join("zfs"))
-            .find(|candidate| candidate.is_absolute() && candidate.is_file())
+        find_program("zfs")
     }
+}
+
+/// The absolute path of the program `name`, found on `PATH`, then in
+/// `/usr/sbin` and `/sbin`.
+#[must_use]
+pub fn find_program(name: &str) -> Option<PathBuf> {
+    let path = std::env::var_os("PATH").unwrap_or_default();
+    std::env::split_paths(&path)
+        .chain(SBIN.iter().map(PathBuf::from))
+        .map(|dir| dir.join(name))
+        .find(|candidate| candidate.is_absolute() && candidate.is_file())
 }
 
 impl Zfs for SystemZfs {

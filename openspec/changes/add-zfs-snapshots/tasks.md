@@ -40,10 +40,10 @@
 
 ## 7. Snapshot management and elevation
 
-- [ ] 7.1 Implement *Create snapshot* (form with name, preview row validation, "include child datasets" checkbox), run as a named job that invalidates the dataset's cache; verify unit tests for default name, invalid name and name taken (spec: Create a snapshot)
-- [ ] 7.2 Implement *Rename snapshot* and *Destroy snapshot* (confirmation naming each snapshot and that it cannot be undone; held snapshot reported and kept); verify unit tests per spec scenario
-- [ ] 7.3 Implement the permission rule: on a permission failure ask "Run as administrator?", then `Elevate::run_elevated` with the same arguments; `PermissionDenied` and refusal end in one notification, `Unsupported` in the message naming the needed `zfs allow` permissions (design Decision 7); verify unit tests with `Fake::set_elevate_runs` for delegated, accepted, dismissed and no-`pkexec` cases
-- [ ] 7.4 Add the management strings to `en.ftl` and `de.ftl`; verify the i18n test
+- [x] 7.1 Implement *Create snapshot* (form with name, preview row validation, "include child datasets" checkbox), run as a named job that invalidates the dataset's cache; verify unit tests for default name, invalid name and name taken (spec: Create a snapshot)
+- [x] 7.2 Implement *Rename snapshot* and *Destroy snapshot* (confirmation naming each snapshot and that it cannot be undone; held snapshot reported and kept); verify unit tests per spec scenario
+- [x] 7.3 Implement the permission rule: on a permission failure ask "Run as administrator?", then `Elevate::run_elevated` with the same arguments; `PermissionDenied` and refusal end in one notification, `Unsupported` in the message naming the needed `zfs allow` permissions (design Decision 7); verify unit tests with `Fake::set_elevate_runs` for delegated, accepted, dismissed and no-`pkexec` cases
+- [x] 7.4 Add the management strings to `en.ftl` and `de.ftl`; verify the i18n test
 
 ## 8. Info section
 
