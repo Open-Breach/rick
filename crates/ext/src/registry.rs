@@ -339,7 +339,7 @@ pub struct Manifest {
     /// *Plugin available* for a file of such a type from the manifest
     /// alone, without loading a disabled plugin. Empty for an extension
     /// without previewers, and for a previewer that claims no file by its
-    /// name (the hex view, chosen per type in settings).
+    /// name (the hex view, which takes what nothing else recognises).
     pub previews: &'static [&'static str],
     /// The subcommands of the `rick` command line the extension provides
     /// (`rick <name> <args…>`), each with its help line: what `rick

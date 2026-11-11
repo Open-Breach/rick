@@ -51,7 +51,7 @@ card for every file (`info_card.rs`: the icon, name, type and size, rows
 with a copy button each and *Show all n fields*) — hanging under the info
 button while the pointer is on it, pinned above the content per previewer,
 and centred with its buttons where there is nothing to show: no previewer
-(*Open as hex*, *Open with…*), a missing third-party library (*Download*,
+(*Open with…*), a missing third-party library (*Download*,
 *Browse…*, *Retry*, *Where Rick looked*) or a failed preview; the Portal
 burst while a preview loads and a glyph with *No file selected* when
 there is none), the side panel (rows

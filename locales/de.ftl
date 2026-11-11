@@ -281,7 +281,6 @@ preview-destination = Ziel
 preview-install = Installation
 preview-open-destination = Ordner öffnen
 preview-download = { $name } herunterladen
-preview-open-as-hex = Als Hex öffnen
 preview-open-with = Öffnen mit…
 preview-pin-info = Dateiinfo anheften
 preview-unpin-info = Dateiinfo lösen
