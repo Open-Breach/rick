@@ -213,6 +213,11 @@ the specification first (#174).
 
 ### Fixed
 
+- **The search box's results list** has a width of its own, 560 px, where
+  the tabs squeeze the box; it grows with the hits the index sends after
+  the folder's own names, where it kept the height it had opened with and
+  showed two rows; and a long name and its folder each end in an ellipsis,
+  the folder at its start, where they were drawn over each other (#201).
 - **The Windows archive starts on a machine without the Visual C++
   Redistributable.** `rick.exe`, Rick's kernel libraries, every plugin and
   the GStreamer runtime import `vcruntime140.dll`, some of them
