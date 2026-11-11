@@ -10,13 +10,57 @@ use types::{Error, VPath};
 use crate::MAX_HITS;
 use crate::service::{Command, Service};
 
-/// The miner's D-Bus name: the SPARQL endpoint the queries go to.
+/// The miner's D-Bus name under `tracker3`: the SPARQL endpoint the
+/// queries go to.
 pub const SERVICE: &str = "org.freedesktop.Tracker3.Miner.Files";
 
-/// What the probe learnt about the tools: nothing to learn here, the
-/// command line is `tracker3`.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct Tools;
+/// The miner's D-Bus name under its name since 2024, `LocalSearch`.
+pub const LOCALSEARCH_SERVICE: &str = "org.freedesktop.LocalSearch3";
+
+/// The indexer as this machine has it: under which of its two names its
+/// command line is installed (SPEC.md *Indexed search*).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum Tools {
+    /// `tracker3`, on older distributions and on Ubuntu: `tracker3 sparql`
+    /// sends the queries.
+    #[default]
+    Tracker3,
+    /// `localsearch`, as GNOME calls the indexer since 2024 (Fedora 41 and
+    /// later); its SPARQL goes through `tinysparql query`, the command
+    /// line of the library that was Tracker's.
+    LocalSearch,
+}
+
+impl Tools {
+    /// The miner's D-Bus name under this name of the indexer.
+    #[must_use]
+    pub const fn service(self) -> &'static str {
+        match self {
+            Self::Tracker3 => SERVICE,
+            Self::LocalSearch => LOCALSEARCH_SERVICE,
+        }
+    }
+}
+
+/// The indexer's command line on this machine, looked for under both of
+/// its names: `localsearch` with the `tinysparql` it is queried through,
+/// then `tracker3`. `None` with neither, and then the connector disables
+/// itself. A tool is there when it answers `--version`.
+#[must_use]
+pub fn installed(service: &dyn Service) -> Option<Tools> {
+    let runs = |program: &str| {
+        service
+            .output(&Command::new(program, &["--version"]))
+            .is_ok()
+    };
+    if runs("localsearch") && runs("tinysparql") {
+        Some(Tools::LocalSearch)
+    } else if runs("tracker3") {
+        Some(Tools::Tracker3)
+    } else {
+        None
+    }
+}
 
 /// Whether the miner owns its name on the session bus: asked through
 /// `gdbus`, or `busctl` where there is no `gdbus`. A name without an
@@ -24,16 +68,19 @@ pub struct Tools;
 /// first query would start it by activation, so the box waits for the
 /// desktop to start it.
 #[must_use]
-pub fn probe(service: &dyn Service) -> Option<Tools> {
-    for command in [gdbus_has_owner(), busctl_has_owner()] {
+pub fn probe(service: &dyn Service, tools: Tools) -> Option<Tools> {
+    for command in [
+        gdbus_has_owner(tools.service()),
+        busctl_has_owner(tools.service()),
+    ] {
         if let Ok(output) = service.output(&command) {
-            return output.contains("true").then_some(Tools);
+            return output.contains("true").then_some(tools);
         }
     }
     None
 }
 
-fn gdbus_has_owner() -> Command {
+fn gdbus_has_owner(name: &str) -> Command {
     Command::new(
         "gdbus",
         &[
@@ -45,12 +92,12 @@ fn gdbus_has_owner() -> Command {
             "/org/freedesktop/DBus",
             "--method",
             "org.freedesktop.DBus.NameHasOwner",
-            SERVICE,
+            name,
         ],
     )
 }
 
-fn busctl_has_owner() -> Command {
+fn busctl_has_owner(name: &str) -> Command {
     Command::new(
         "busctl",
         &[
@@ -61,26 +108,25 @@ fn busctl_has_owner() -> Command {
             "org.freedesktop.DBus",
             "NameHasOwner",
             "s",
-            SERVICE,
+            name,
         ],
     )
 }
 
-/// `tracker3 sparql` against the miner, with the SPARQL for `q`.
+/// The SPARQL for `q` sent to the miner, through the command line this
+/// machine has: `tracker3 sparql`, or `tinysparql query` for `LocalSearch`.
+/// Both print the same.
 ///
 /// # Errors
 ///
 /// `Error::Unsupported` when the query's root is not a local location.
-pub fn query_command(q: &Query, _tools: &Tools) -> Result<Command, Error> {
-    Ok(Command::new(
-        "tracker3",
-        &[
-            "sparql",
-            &format!("--dbus-service={SERVICE}"),
-            "-q",
-            &sparql(q)?,
-        ],
-    ))
+pub fn query_command(q: &Query, tools: &Tools) -> Result<Command, Error> {
+    let service = format!("--dbus-service={}", tools.service());
+    let sparql = sparql(q)?;
+    Ok(match tools {
+        Tools::Tracker3 => Command::new("tracker3", &["sparql", &service, "-q", &sparql]),
+        Tools::LocalSearch => Command::new("tinysparql", &["query", &service, &sparql]),
+    })
 }
 
 /// The SPARQL for a query: the URLs of the files whose name contains the
@@ -189,15 +235,17 @@ pub(crate) mod tests {
     use crate::service::Fake;
 
     pub(crate) fn make_present(fake: &Fake) {
+        fake.answers("tracker3", Ok("Tracker 3.4.2\n"));
         fake.answers("gdbus", Ok("(true,)\n"));
     }
 
     pub(crate) fn make_absent(fake: &Fake) {
+        fake.answers("tracker3", Ok("Tracker 3.4.2\n"));
         fake.answers("gdbus", Ok("(false,)\n"));
     }
 
     pub(crate) fn is_probe(command: &Command) -> bool {
-        command.program == "gdbus" || command.program == "busctl"
+        command.program == "gdbus" || command.program == "busctl" || command.args == ["--version"]
     }
 
     /// What `tracker3 sparql` prints for these files.
@@ -264,19 +312,77 @@ pub(crate) mod tests {
     #[test]
     fn the_probe_falls_back_to_busctl_and_reads_either_answer() {
         let fake = Fake::new();
-        assert_eq!(probe(&*fake), None, "no bus tool at all");
+        let probe = |fake: &Fake| probe(fake, Tools::Tracker3);
+        assert_eq!(probe(&fake), None, "no bus tool at all");
         fake.answers("busctl", Ok("b true\n"));
-        assert_eq!(probe(&*fake), Some(Tools));
+        assert_eq!(probe(&fake), Some(Tools::Tracker3));
         fake.answers("busctl", Ok("b false\n"));
-        assert_eq!(probe(&*fake), None);
+        assert_eq!(probe(&fake), None);
         fake.answers("gdbus", Ok("(true,)\n"));
-        assert_eq!(probe(&*fake), Some(Tools), "gdbus wins when both are there");
+        assert_eq!(
+            probe(&fake),
+            Some(Tools::Tracker3),
+            "gdbus wins when both are there"
+        );
         let programs: Vec<String> = fake.commands().iter().map(|c| c.program.clone()).collect();
         assert_eq!(
             programs,
             [
                 "gdbus", "busctl", "gdbus", "busctl", "gdbus", "busctl", "gdbus"
             ]
+        );
+    }
+
+    /// Issue 149: the indexer is looked for under both of its names, and
+    /// queried through the one that is there.
+    #[test]
+    fn the_indexer_is_found_under_either_of_its_names() {
+        let fake = Fake::new();
+        assert_eq!(installed(&*fake), None, "neither is installed");
+        // Ubuntu, older distributions.
+        fake.answers("tracker3", Ok("Tracker 3.4.2\n"));
+        assert_eq!(installed(&*fake), Some(Tools::Tracker3));
+        // Fedora 41 and later: localsearch, queried through tinysparql.
+        fake.forgets("tracker3");
+        fake.answers("localsearch", Ok("LocalSearch 3.8.2\n"));
+        assert_eq!(installed(&*fake), None, "nothing to query it with");
+        fake.answers("tinysparql", Ok("TinySPARQL 3.8.2\n"));
+        assert_eq!(installed(&*fake), Some(Tools::LocalSearch));
+        // Both: the new name.
+        fake.answers("tracker3", Ok("Tracker 3.4.2\n"));
+        assert_eq!(installed(&*fake), Some(Tools::LocalSearch));
+
+        let q = Query {
+            text: "notes".into(),
+            root: None,
+            kind: QueryKind::Name,
+            filters: Vec::new(),
+        };
+        let old = query_command(&q, &Tools::Tracker3).unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(old.program, "tracker3");
+        assert_eq!(
+            old.args[..3],
+            [
+                "sparql",
+                "--dbus-service=org.freedesktop.Tracker3.Miner.Files",
+                "-q"
+            ]
+        );
+        let new = query_command(&q, &Tools::LocalSearch).unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(new.program, "tinysparql");
+        assert_eq!(
+            new.args[..2],
+            ["query", "--dbus-service=org.freedesktop.LocalSearch3"]
+        );
+        assert_eq!(new.args[2], old.args[3], "the same SPARQL");
+        assert_eq!(new.args.len(), 3);
+        // The bus is asked for the name that goes with the tool.
+        fake.answers("gdbus", Ok("(true,)\n"));
+        assert_eq!(probe(&*fake, Tools::LocalSearch), Some(Tools::LocalSearch));
+        let asked = fake.commands().pop().unwrap_or_else(|| panic!("a command"));
+        assert_eq!(
+            asked.args.last().map(String::as_str),
+            Some(LOCALSEARCH_SERVICE)
         );
     }
 

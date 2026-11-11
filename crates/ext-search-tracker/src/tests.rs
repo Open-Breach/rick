@@ -53,11 +53,13 @@ fn present() -> (Arc<Fake>, TrackerIndex) {
 #[test]
 fn the_probe_decides_availability_and_follows_the_service() {
     let fake = Fake::new();
+    // The indexer is installed and not running.
+    backend::tests::make_absent(&fake);
     let index = TrackerIndex::new(Arc::clone(&fake) as Arc<dyn Service>);
-    // Nothing answers: not available, and said so once the probe ran.
     assert!(!ext::runtime::block_on(index.probe()));
     assert!(matches!(index.availability(), Availability::Disabled(_)));
     assert!(index.state().probed());
+    assert!(!index.state().missing());
     backend::tests::make_present(&fake);
     assert!(ext::runtime::block_on(index.probe()));
     assert_eq!(index.availability(), Availability::Enabled);
@@ -66,6 +68,60 @@ fn the_probe_decides_availability_and_follows_the_service() {
     assert!(matches!(index.availability(), Availability::Disabled(_)));
     assert_eq!(index.scope(), SearchScope::Everywhere);
     assert_eq!(index.id(), ID);
+}
+
+/// Issue 149: on a machine with neither `localsearch` nor `tracker3` the
+/// connector disables itself at start, with its reason; it is looked for
+/// once, the bus is never asked, and nothing is ever queried.
+#[test]
+fn with_neither_tool_the_connector_disables_itself_quietly() {
+    ext::i18n::add_bundled("en", include_str!("../locales/en.ftl"));
+    let fake = Fake::new();
+    let index = TrackerIndex::new(Arc::clone(&fake) as Arc<dyn Service>);
+    assert!(!ext::runtime::block_on(index.probe()));
+    assert!(index.state().missing());
+    assert_eq!(
+        index.availability(),
+        Availability::Disabled("Neither localsearch nor tracker3 was found".to_owned())
+    );
+    // A later probe looks for nothing again, and asks the bus nothing.
+    let looked = fake.commands().len();
+    assert!(!ext::runtime::block_on(index.probe()));
+    assert_eq!(fake.commands().len(), looked);
+    assert!(
+        fake.commands()
+            .iter()
+            .all(|command| command.args == ["--version"]),
+        "{:?}",
+        fake.commands()
+    );
+}
+
+/// With `localsearch` installed the bus is asked for its new name
+/// and the query goes through `tinysparql`.
+#[test]
+fn with_localsearch_the_query_goes_through_tinysparql() {
+    let fake = Fake::new();
+    fake.answers("localsearch", Ok("LocalSearch 3.8.2\n"));
+    fake.answers("tinysparql", Ok("TinySPARQL 3.8.2\n"));
+    fake.answers("gdbus", Ok("(true,)\n"));
+    let index = TrackerIndex::new(Arc::clone(&fake) as Arc<dyn Service>);
+    assert!(ext::runtime::block_on(index.probe()));
+    assert_eq!(index.availability(), Availability::Enabled);
+    assert_eq!(index.state().tools(), backend::Tools::LocalSearch);
+    fake.prints(&backend::tests::noise());
+    assert_eq!(
+        collect(&index, &query("notes", None))
+            .map(|hits| hits.len())
+            .ok(),
+        Some(0)
+    );
+    let command = last_query(&fake);
+    assert_eq!(command.program, "tinysparql");
+    assert_eq!(
+        command.args[..2],
+        ["query", "--dbus-service=org.freedesktop.LocalSearch3"]
+    );
 }
 
 /// The tool prints `/`-rooted paths, which a Windows path cannot stand in
