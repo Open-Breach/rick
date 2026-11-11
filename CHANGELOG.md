@@ -7,6 +7,21 @@ the pull request that brought the change.
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-11-11
+
+The fixes of the test session of 2026-11-09 and what followed from them, on
+Linux, macOS and Windows: the application menu, the paste-conflict,
+Properties, Keyboard shortcuts and Extensions dialogues and the preview pane
+redrawn, with the File info card for every previewer and a title bar colour
+to choose; remote providers that say what a location offers, with Download,
+containers on Azure and search in subfolders; a tab that goes Home when its
+drive is removed and stays, with Retry, when a connection is lost; the List
+view in columns, the date formats, the window's place and size across
+launches, programs and scripts that start, Open in editor and Git clone; and
+the fixes for copy, cut and paste by keyboard, the black band around the
+window, the search results and the Windows archive that would not start
+without the Visual C++ runtime.
+
 The GUI fixes of the test session of 2026-11-09 (issue 139, SPEC.md *Version
 0.4 — scope*): the menus, the dialogues and the preview pane redrawn from
 their Figma frames on the dialogue shell, the tokens and the Portal burst of
@@ -85,7 +100,6 @@ the specification first (#174).
   one that was there before, and git's message in the job when it fails.
   The dialogue is built from the form fields a plugin has, so it does not
   match its Figma frames in every detail yet (#188).
-
 - **Download.** Enter and a double-click on a remote file copy it into
   Downloads as a job and open nothing; *Download…* in the menu of remote
   files and folders does it for the whole selection, folders included, into
@@ -196,7 +210,6 @@ the specification first (#174).
   *Sage* bands are `text/secondary` again; *Plum*, where it still falls
   short, keeps `#2b2b2b` at 78 % (specs/decisions.md Q242, #191).
 - The workspace version is `0.4.0-dev` until 0.4.0 is tagged (#154).
-
 - **The extension API is version 19.** `Capabilities` gains `CREATE_DIR`,
   `CREATE_FILE`, `SEARCH_SUBTREE` and `DOWNLOAD`, and `Provider` gains
   `unavailable_reason` and `name_problem`; plugins built against 18 are
@@ -287,7 +300,6 @@ the specification first (#174).
   the *File hashes* dialogue's secondary line ends in an ellipsis before the
   close button; and an operation's error is no longer cut to “Invali…”
   (#169).
-
 - **Azure requests**: a `PUT` without a body carries its `Content-Length`,
   a space in a query is `%20` in the request as in its signature, and a
   container's name is signed encoded (#193).
@@ -1394,7 +1406,8 @@ text, code, images and PDF, and Git, on Linux, macOS and Windows.
   in the middle of a write can no longer read a truncated file and lose
   the pinned folders (#14).
 
-[Unreleased]: https://github.com/Open-Breach/rick/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/Open-Breach/rick/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/Open-Breach/rick/releases/tag/v0.4.0
 [0.3.0]: https://github.com/Open-Breach/rick/releases/tag/v0.3.0
 [0.2.0]: https://github.com/Open-Breach/rick/releases/tag/v0.2.0
 [0.1.0]: https://github.com/Open-Breach/rick/releases/tag/v0.1.0
