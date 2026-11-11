@@ -229,6 +229,11 @@ enum Msg {
         generation: u64,
         result: Result<(), Error>,
     },
+    /// The wait before a lost connection is tried again is over.
+    RetryLost {
+        pane: PaneId,
+        generation: u64,
+    },
     Change {
         pane: PaneId,
         generation: u64,
@@ -333,6 +338,9 @@ enum Msg {
     Schedule,
     /// The mounted volumes were enumerated.
     Volumes(Result<Vec<Volume>, Error>),
+    /// Whether the system has a tool for formatting a drive, as looked up
+    /// with the volumes: one that is installed while Rick runs is found.
+    FormatTool(bool),
     /// Open's job answered: the archive provider browses the file as a
     /// location (navigate there), or does not (the system default).
     Opened {
@@ -395,11 +403,23 @@ enum Msg {
 
 /// How long changes are collected before the decorators run again.
 const REDECORATE_AFTER: Duration = Duration::from_millis(150);
-/// How often the mounted volumes are enumerated again, so a drive that is
-/// plugged in or a share that is mounted shows up without a user action.
+/// How often the mounted volumes are enumerated again, whatever the
+/// platform reported: the net under its mount events, and all there is
+/// where it has none.
 const VOLUMES_EVERY: Duration = Duration::from_secs(2);
+/// How long after a mount or unmount event the volumes are enumerated: the
+/// events of one stick, one per partition, come in a burst.
+const VOLUMES_AFTER_EVENT: Duration = Duration::from_millis(100);
 /// How often a location its provider cannot watch is checked for a change.
 const POLL_EVERY: Duration = Duration::from_secs(3);
+/// When Rick tries a lost connection again by itself: after the loss, then
+/// after each try that failed; after the last one it waits for *Retry*
+/// (SPEC.md *Removed and unreachable locations*).
+pub const RETRY_LOST_AFTER: [Duration; 3] = [
+    Duration::from_secs(2),
+    Duration::from_secs(5),
+    Duration::from_secs(15),
+];
 /// How long one [`App::poll`] may spend applying messages before it leaves
 /// the rest to the next one.
 const POLL_BUDGET: Duration = Duration::from_millis(8);
@@ -659,6 +679,10 @@ pub struct App {
     places_saver: mpsc::UnboundedSender<Vec<Place>>,
     /// Stops the volume poll.
     volumes_watch: CancelToken,
+    /// The platform's watch of mounts and unmounts, which makes the volume
+    /// poll read the list at once; kept for as long as the application
+    /// runs. `None` where the platform has no such events.
+    mounts_watch: Option<platform::MountWatch>,
     /// Rung to make every polled location check for a change now; see
     /// [`poll_location`].
     poke: runtime::watch::Sender<u64>,
@@ -938,6 +962,7 @@ impl App {
             None => Model::new(settings, start.unwrap_or_else(|| home.clone())),
         };
         model.set_places(places);
+        model.format_tool = platform.has_format_tool();
         model.cloud_providers = cloud_providers;
         model.network_providers = network_providers;
         // The search indexes: the platform's feed the title-row search
@@ -1015,6 +1040,7 @@ impl App {
             console_links: BTreeMap::new(),
             places_saver,
             volumes_watch: CancelToken::new(),
+            mounts_watch: None,
             poke: runtime::watch::channel(0).0,
             home,
             session_saver: session::Saver::new(session_path),
@@ -1709,6 +1735,7 @@ impl App {
                 }
             }
             Command::Eject(mount_point) => self.eject(&mount_point, events),
+            Command::Format(mount_point) => self.format(&mount_point, events),
             Command::AddConnection {
                 provider,
                 name,
@@ -2126,25 +2153,39 @@ impl App {
         });
     }
 
-    /// Enumerates the volumes now and every [`VOLUMES_EVERY`], so media
-    /// that come and go show up without a user action.
-    fn poll_volumes(&self) {
+    /// Enumerates the volumes now, on every mount and unmount event of the
+    /// platform and every [`VOLUMES_EVERY`], so media that come and go show
+    /// up without a user action (SPEC.md *This Machine*): the list is never
+    /// one read at start, and a partition that mounts a moment after its
+    /// stick was plugged in is read like the first.
+    fn poll_volumes(&mut self) {
         let platform = Arc::clone(&self.platform);
         let tx = self.mailbox.clone();
         let cancel = self.volumes_watch.clone();
+        let mounted = Arc::new(tokio::sync::Notify::new());
+        let ring = Arc::clone(&mounted);
+        self.mounts_watch = self
+            .platform
+            .watch_mounts(Box::new(move || ring.notify_one()));
         runtime::handle().spawn(async move {
             loop {
                 let platform = Arc::clone(&platform);
-                let result = runtime::handle()
-                    .spawn_blocking(move || platform.volumes())
+                let (result, format_tool) = runtime::handle()
+                    .spawn_blocking(move || (platform.volumes(), platform.has_format_tool()))
                     .await
-                    .unwrap_or_else(|join| Err(Error::Io(std::io::Error::other(join))));
-                if !tx.send(Msg::Volumes(result)) {
+                    .unwrap_or_else(|join| (Err(Error::Io(std::io::Error::other(join))), false));
+                if !tx.send(Msg::Volumes(result)) || !tx.send(Msg::FormatTool(format_tool)) {
                     break;
                 }
                 tokio::select! {
                     () = cancel.cancelled() => break,
                     () = tokio::time::sleep(VOLUMES_EVERY) => {}
+                    () = mounted.notified() => {
+                        tokio::select! {
+                            () = cancel.cancelled() => break,
+                            () = tokio::time::sleep(VOLUMES_AFTER_EVENT) => {}
+                        }
+                    }
                 }
             }
         });
@@ -2173,6 +2214,40 @@ impl App {
         let _ = self.places_saver.send(self.model.places.rows().to_vec());
     }
 
+    /// Opens the system's own format tool on the volume at `mount_point`:
+    /// GNOME Disks or the desktop's equivalent, Disk Utility, the format
+    /// dialogue of Windows. Rick formats nothing itself.
+    fn format(&mut self, mount_point: &Path, events: &mut Vec<Event>) {
+        let Some(volume) = self
+            .model
+            .volumes
+            .iter()
+            .find(|v| v.mount_point == mount_point)
+            .cloned()
+        else {
+            events.push(Event::Notify {
+                level: Level::Warning,
+                text: format!("{} is not mounted", mount_point.display()),
+            });
+            return;
+        };
+        // The entry is disabled where the system has no such tool; a
+        // command that comes all the same is told what the tooltip says.
+        if !self.platform.has_format_tool() {
+            events.push(Event::Notify {
+                level: Level::Warning,
+                text: ext::t!("panel-no-disk-utility"),
+            });
+            return;
+        }
+        if let Err(error) = self.platform.open_format_tool(&volume) {
+            events.push(Event::Notify {
+                level: Level::Error,
+                text: format!("Format {}: {error}", volume.name),
+            });
+        }
+    }
+
     /// Ejects the removable volume at `mount_point` as a job, then lists
     /// the volumes again.
     fn eject(&mut self, mount_point: &Path, events: &mut Vec<Event>) {
@@ -2189,6 +2264,15 @@ impl App {
             });
             return;
         };
+        // The panes on the drive leave it first, so that none points at a
+        // drive that is gone and no listing keeps it busy while it is
+        // unmounted.
+        self.evacuate(
+            &volume.name,
+            &|location| on_volume(&volume.mount_point, location),
+            events,
+        );
+        self.sync_panes(events);
         let platform = Arc::clone(&self.platform);
         let name = volume.name.clone();
         let handle = self
@@ -2458,8 +2542,94 @@ impl App {
                 );
                 self.pane_jobs.insert(handle.id, self.model.focused);
                 self.refresh_rows_of(provider);
+                // The panes on the account or the host leave with it.
+                self.evacuate(
+                    name,
+                    &|location| {
+                        location.provider == provider
+                            && source_at(location).as_deref() == Some(name)
+                    },
+                    events,
+                );
             }
         }
+    }
+
+    /// Sends every pane on a location `gone` names Home, at once, and says
+    /// `<name> was removed` when one went: a medium that was pulled out or
+    /// ejected, an account or a host that was removed (SPEC.md *Removed and
+    /// unreachable locations*). It is no error, and none is shown.
+    fn evacuate(&mut self, name: &str, gone: &dyn Fn(&Location) -> bool, events: &mut Vec<Event>) {
+        let home = self.home.clone();
+        let moved = self.model.evacuate(gone, &home);
+        if moved > 0 {
+            debug!(name, moved, "panes went home");
+            events.push(Event::Notify {
+                level: Level::Info,
+                text: ext::t!("notice-was-removed", name = name.to_owned()),
+            });
+        }
+    }
+
+    /// The pane's listing failed because its location could not be
+    /// reached: the tab stays where it is and shows the card with *Retry*,
+    /// and Rick tries again by itself after each of [`RETRY_LOST_AFTER`].
+    fn lost(&mut self, pane: PaneId, generation: u64, location: &Location, error: &Error) {
+        let retries = self
+            .model
+            .active_tab(pane)
+            .and_then(|(_, tab)| tab.lost.as_ref())
+            .map_or(0, |lost| lost.retries);
+        let connector = self.registry.connector_of(location.provider);
+        let lost = model::ConnectionLost {
+            source: connector
+                .as_ref()
+                .and_then(|_| source_at(location))
+                .unwrap_or_else(|| location.provider.0.to_owned()),
+            provider: connector.map_or_else(
+                || location.provider.0.to_owned(),
+                |connector| connector.schema().title.get(),
+            ),
+            // The provider's own words, without the kernel's prefix.
+            message: match error {
+                Error::Io(io) => io.to_string(),
+                other => other.to_string(),
+            },
+            retries,
+        };
+        self.model.connection_lost(pane, Some(lost));
+        self.model.listing_failed(pane, None);
+        if let Some(after) = RETRY_LOST_AFTER.get(usize::from(retries)).copied() {
+            let tx = self.mailbox.clone();
+            runtime::handle().spawn(async move {
+                tokio::time::sleep(after).await;
+                tx.send(Msg::RetryLost { pane, generation });
+            });
+        }
+    }
+
+    /// Tries a lost connection again, when the pane is still where it was
+    /// and still without its listing.
+    fn retry_lost(&mut self, pane: PaneId, generation: u64) {
+        let current = self.live.get(&pane).map(|live| live.generation);
+        let Some(mut lost) = self
+            .model
+            .active_tab(pane)
+            .and_then(|(_, tab)| tab.lost.clone())
+        else {
+            return;
+        };
+        if current != Some(generation) {
+            return;
+        }
+        lost.retries += 1;
+        debug!(
+            ?pane,
+            retries = lost.retries,
+            "trying a lost connection again"
+        );
+        self.model.connection_lost(pane, Some(lost));
+        self.refresh(pane);
     }
 
     /// The connection (one SSH host, one cloud account) an entry is on:
@@ -4023,6 +4193,7 @@ impl App {
                 generation,
                 result,
             } => self.list_done(pane, generation, &result, events),
+            Msg::RetryLost { pane, generation } => self.retry_lost(pane, generation),
             Msg::Change {
                 pane,
                 generation,
@@ -4398,6 +4569,22 @@ impl App {
             Msg::Volumes(Ok(volumes)) => {
                 if volumes != self.model.volumes {
                     debug!(count = volumes.len(), "volumes");
+                    // A volume that is gone — pulled out, or unmounted by
+                    // another program — sends the panes on it Home.
+                    let removed: Vec<Volume> = self
+                        .model
+                        .volumes
+                        .iter()
+                        .filter(|old| !volumes.iter().any(|v| v.mount_point == old.mount_point))
+                        .cloned()
+                        .collect();
+                    for volume in &removed {
+                        self.evacuate(
+                            &volume.name,
+                            &|location| on_volume(&volume.mount_point, location),
+                            events,
+                        );
+                    }
                     self.model.volumes = volumes;
                     // The trash's disk may be among them now.
                     let size = self.model.trash.size;
@@ -4408,6 +4595,7 @@ impl App {
                 }
             }
             Msg::Volumes(Err(error)) => debug!(%error, "volumes not enumerated"),
+            Msg::FormatTool(installed) => self.model.format_tool = installed,
             Msg::Opened {
                 pane,
                 tab,
@@ -4730,16 +4918,31 @@ impl App {
         live.complete = true;
         let buffered = live.buffer.take();
         let location = live.key.location.clone();
-        // A failure is the tab's banner with *Retry*, never a dialogue
-        // (`specs/ext-ssh.md`, "Connections"); a listing that works clears
-        // it.
-        self.model.listing_failed(
-            pane,
-            result
-                .as_ref()
-                .err()
-                .map(|error| format!("{location} could not be listed: {error}")),
-        );
+        // A remote location that cannot be reached keeps the pane where it
+        // is, with the card and *Retry* (SPEC.md *Removed and unreachable
+        // locations*). Any other failure is the tab's banner with *Retry*,
+        // never a dialogue (`specs/ext-ssh.md`, "Connections"); a listing
+        // that works clears both.
+        let remote = self.mounts.resolve(&location).is_ok_and(|provider| {
+            provider
+                .capabilities(&location)
+                .contains(Capabilities::REMOTE)
+        });
+        match result {
+            Err(error) if remote && error.is_unreachable() => {
+                self.lost(pane, generation, &location, error);
+            }
+            _ => {
+                self.model.connection_lost(pane, None);
+                self.model.listing_failed(
+                    pane,
+                    result
+                        .as_ref()
+                        .err()
+                        .map(|error| format!("{location} could not be listed: {error}")),
+                );
+            }
+        }
         let batch = match buffered {
             Some(entries) if result.is_ok() => {
                 let before = self.selected_ids(pane);
@@ -5082,9 +5285,26 @@ impl App {
     }
 }
 
-/// The search indexes the title-row search box queries: every registered
-/// one whose service is there and whose scope is the whole machine. A walk
-/// scoped `Under` a root answers the filter bar instead (QUESTIONS.md 118).
+/// Whether `location` is on the volume mounted at `mount_point`: a local
+/// folder below it, or a location inside an archive or a disk image whose
+/// file is.
+fn on_volume(mount_point: &Path, location: &Location) -> bool {
+    (location.provider == ProviderId::LOCAL || location.provider == ProviderId::ARCHIVE)
+        && platform::paths::to_path(&location.path).is_ok_and(|path| path.starts_with(mount_point))
+}
+
+/// The connection a location is on, for a provider that keeps its
+/// connections as the folders at its root: the first component of the
+/// path.
+fn source_at(location: &Location) -> Option<String> {
+    location
+        .path
+        .as_bytes()
+        .split(|b| matches!(b, b'/' | b'\\'))
+        .find(|part| !part.is_empty())
+        .map(|first| String::from_utf8_lossy(first).into_owned())
+}
+
 /// Whether `path`, below `root`, is or lies under an entry the ignore
 /// list names: a component of its path from `root` on is one of `names`.
 fn below_ignored(root: &VPath, path: &VPath, names: &[String]) -> bool {
@@ -5094,6 +5314,9 @@ fn below_ignored(root: &VPath, path: &VPath, names: &[String]) -> bool {
         .any(|part| names.iter().any(|name| name.as_bytes() == part))
 }
 
+/// The search indexes the title-row search box queries: every registered
+/// one whose service is there and whose scope is the whole machine. A walk
+/// scoped `Under` a root answers the filter bar instead (QUESTIONS.md 118).
 fn available_indexes(registry: &Registry) -> Vec<Arc<dyn SearchIndex>> {
     registry
         .search_indexes()

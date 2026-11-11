@@ -36,7 +36,7 @@ keyring = { workspace = true }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 libc = { workspace = true }
-rustix = { workspace = true, features = ["fs", "pipe", "process", "std"] }
+rustix = { workspace = true, features = ["event", "fs", "pipe", "process", "std"] }
 wayland-client = { workspace = true }
 wayland-backend = { workspace = true }
 wayland-protocols = { workspace = true }

@@ -18,10 +18,10 @@ use crate::perms::{
 };
 use crate::traits::{
     Activation, Application, Chrome, Clipboard, ConfigDir, ControlsSide, DialogFilter, DragSource,
-    DropTarget, Elevate, ElevatedOutput, ImageFormat, IncomingFiles, Mount, NativeDialogs,
-    OpenWith, Point, Properties, PropertiesOutcome, RecentItem, RecentlyUsed, Secrets,
-    SingleInstance, StandardFolder, StandardFolders, Terminal, Trash, TrashedItem, Volume,
-    VolumeKind, Volumes, WindowChrome, WindowRef,
+    DropTarget, Elevate, ElevatedOutput, ImageFormat, IncomingFiles, Mount, MountWatch,
+    MountsChanged, NativeDialogs, OpenWith, Point, Properties, PropertiesOutcome, RecentItem,
+    RecentlyUsed, Secrets, SingleInstance, StandardFolder, StandardFolders, Terminal, Trash,
+    TrashedItem, Volume, VolumeKind, Volumes, WindowChrome, WindowRef,
 };
 
 /// The applications the fake offers for every file, the default first.
@@ -49,6 +49,16 @@ pub const FAKE_STANDARD_FOLDERS: [StandardFolder; 3] = [
 /// availability can be tried for every platform; the standard folders are
 /// the directories under the fake's home; the secrets live in a map the
 /// test can read back.
+/// The listeners [`Volumes::watch_mounts`] was handed.
+#[derive(Default)]
+struct MountListeners(Mutex<Vec<Arc<MountsChanged>>>);
+
+impl std::fmt::Debug for MountListeners {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "MountListeners({})", lock(&self.0).len())
+    }
+}
+
 #[derive(Debug)]
 pub struct Fake {
     dir: TempDir,
@@ -83,6 +93,12 @@ pub struct Fake {
     answers: Mutex<Answers>,
     volumes: Mutex<Vec<Volume>>,
     ejected: Mutex<Vec<PathBuf>>,
+    /// Whether a disk utility is installed, for *Format…*.
+    format_tool: Mutex<bool>,
+    /// What `watch_mounts` was handed, called by `mounts_changed`.
+    mount_listeners: Arc<MountListeners>,
+    /// The mount points handed to `open_format_tool`.
+    formatting: Mutex<Vec<PathBuf>>,
     /// The disk-image formats [`Mount::mountable`] answers; the current
     /// platform's unless a test says otherwise.
     mountable: Mutex<&'static [ImageFormat]>,
@@ -159,6 +175,9 @@ impl Fake {
             answers: Mutex::new(Answers::default()),
             volumes: Mutex::new(Vec::new()),
             ejected: Mutex::new(Vec::new()),
+            format_tool: Mutex::new(true),
+            mount_listeners: Arc::default(),
+            formatting: Mutex::new(Vec::new()),
             mountable: Mutex::new(crate::NATIVE_MOUNTABLE),
             mounted: Mutex::new(Vec::new()),
             recent: Mutex::new(Vec::new()),
@@ -319,6 +338,27 @@ impl Fake {
         lock(&self.ejected).clone()
     }
 
+    /// The stand-in for the system's mount or unmount event: every running
+    /// [`Volumes::watch_mounts`] is told.
+    pub fn mounts_changed(&self) {
+        let listeners = lock(&self.mount_listeners.0).clone();
+        for changed in listeners {
+            changed();
+        }
+    }
+
+    /// Whether a disk utility is installed from now on; one is at first.
+    pub fn set_format_tool(&self, installed: bool) {
+        *lock(&self.format_tool) = installed;
+    }
+
+    /// The mount points the system's format tool was opened on, oldest
+    /// first.
+    #[must_use]
+    pub fn format_opened(&self) -> Vec<PathBuf> {
+        lock(&self.formatting).clone()
+    }
+
     /// What [`Mount::mountable`] answers from now on: another platform's
     /// list, so a test can try the *Mount* action as Windows or macOS
     /// would show it.
@@ -379,6 +419,40 @@ impl Volumes for Fake {
         volumes.retain(|v| v.mount_point != volume.mount_point);
         lock(&self.ejected).push(volume.mount_point.clone());
         Ok(())
+    }
+
+    fn has_format_tool(&self) -> bool {
+        *lock(&self.format_tool)
+    }
+
+    /// Records the volume; nothing is formatted.
+    fn open_format_tool(&self, volume: &Volume) -> Result<(), Error> {
+        if !self.has_format_tool() {
+            return Err(Error::Unsupported("no disk utility is installed"));
+        }
+        lock(&self.formatting).push(volume.mount_point.clone());
+        Ok(())
+    }
+
+    /// Keeps `changed` for [`Fake::mounts_changed`] until the watch is
+    /// dropped.
+    fn watch_mounts(&self, changed: MountsChanged) -> Option<MountWatch> {
+        /// Takes its listener off the list when the watch ends.
+        struct Listening {
+            listeners: Arc<MountListeners>,
+            changed: Arc<MountsChanged>,
+        }
+        impl Drop for Listening {
+            fn drop(&mut self) {
+                lock(&self.listeners.0).retain(|other| !Arc::ptr_eq(other, &self.changed));
+            }
+        }
+        let changed = Arc::new(changed);
+        lock(&self.mount_listeners.0).push(Arc::clone(&changed));
+        Some(MountWatch::new(Listening {
+            listeners: Arc::clone(&self.mount_listeners),
+            changed,
+        }))
     }
 }
 

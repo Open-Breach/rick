@@ -79,8 +79,21 @@ fn error_message(body: &str) -> String {
     )
 }
 
-/// A transport error as the kernel error.
+/// A transport error as the kernel error. A request that never reached the
+/// service, or went unanswered, is a lost connection
+/// ([`Error::unreachable`]): the pane keeps its place and tries again.
 pub(crate) fn transport(error: reqwest::Error) -> Error {
+    if error.is_connect() || error.is_timeout() {
+        // The cause is in the chain, not in the error's own text.
+        let mut text = error.to_string();
+        let mut cause = std::error::Error::source(&error);
+        while let Some(inner) = cause {
+            text.push_str(": ");
+            text.push_str(&inner.to_string());
+            cause = inner.source();
+        }
+        return Error::unreachable(text);
+    }
     Error::Extension {
         ext: ID,
         source: Box::new(error),

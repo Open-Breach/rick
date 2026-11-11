@@ -133,6 +133,33 @@ impl Volume {
     }
 }
 
+/// What [`Volumes::watch_mounts`] calls on each mount and unmount.
+pub type MountsChanged = Box<dyn Fn() + Send + Sync>;
+
+/// A running watch of the system's mount and unmount events
+/// ([`Volumes::watch_mounts`]). Dropping it ends the watch.
+pub struct MountWatch {
+    /// What the platform holds its listener by.
+    _keep: Box<dyn Send + Sync>,
+}
+
+impl MountWatch {
+    /// A watch that runs for as long as `keep` lives: whatever the platform
+    /// holds its listener by, which ends it when dropped.
+    #[must_use]
+    pub fn new(keep: impl Send + Sync + 'static) -> Self {
+        Self {
+            _keep: Box::new(keep),
+        }
+    }
+}
+
+impl std::fmt::Debug for MountWatch {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("MountWatch")
+    }
+}
+
 /// The volumes the OS has mounted, for the side panel's This Machine and
 /// Network sections. Mounting is not part of 0.2's milestone 2; ejecting
 /// removable media is.
@@ -154,6 +181,39 @@ pub trait Volumes: Send + Sync {
     /// `Error::Unsupported` for a volume that is not removable; otherwise
     /// the I/O or platform error, with what the OS said.
     fn eject(&self, volume: &Volume) -> Result<(), Error>;
+
+    /// Whether the system has a tool of its own for formatting a drive,
+    /// which [`open_format_tool`](Self::open_format_tool) opens: GNOME
+    /// Disks or the desktop's equivalent on Linux, Disk Utility on macOS,
+    /// the format dialogue on Windows. Without one *Format…* is disabled
+    /// (SPEC.md *This Machine*).
+    fn has_format_tool(&self) -> bool {
+        false
+    }
+
+    /// Opens the system's own tool for formatting `volume` and returns at
+    /// once. Rick formats nothing itself.
+    ///
+    /// # Errors
+    ///
+    /// `Error::Unsupported` where no such tool is installed; otherwise the
+    /// I/O error from starting it.
+    fn open_format_tool(&self, volume: &Volume) -> Result<(), Error> {
+        let _ = volume;
+        Err(Error::Unsupported("no disk utility is installed"))
+    }
+
+    /// Listens for the system's mount and unmount events and calls
+    /// `changed` on each, until the returned watch is dropped, so that the
+    /// caller reads [`volumes`](Self::volumes) again at once: a partition
+    /// that mounts a moment after its stick was plugged in is then seen
+    /// like the first (SPEC.md *This Machine*). `None` where the platform
+    /// has no such listener; the caller is then left with reading the list
+    /// at intervals.
+    fn watch_mounts(&self, changed: MountsChanged) -> Option<MountWatch> {
+        let _ = changed;
+        None
+    }
 }
 
 /// A disk-image format, by the file's extension: what the *Mount* action
