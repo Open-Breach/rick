@@ -525,6 +525,9 @@ pub enum Command {
         window: WindowId,
         /// Its position, size and maximised state.
         geometry: Geometry,
+        /// The monitor it is on, by the name the system gives it; `None`
+        /// where the platform reports no monitors.
+        monitor: Option<String>,
     },
     /// Change a window's side panel.
     SidePanel {

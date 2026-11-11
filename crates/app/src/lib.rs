@@ -1324,8 +1324,12 @@ impl App {
             layout.windows.into_iter().nth(index)
         });
         if let Some(saved) = window {
+            // A new window opens beside the one it was opened from,
+            // whatever place the layout held for its own.
+            let opener = self.model.focused_window;
             let home = self.home.clone();
-            self.model.add_window(&saved, &home);
+            let new = self.model.add_window(&saved, &home);
+            self.model.open_beside(new, opener);
         } else {
             let location = self
                 .model
@@ -1931,8 +1935,12 @@ impl App {
             Command::ColumnWidths { tab, columns } => {
                 self.model.set_column_widths(tab, columns);
             }
-            Command::WindowGeometry { window, geometry } => {
-                self.model.set_geometry(window, geometry);
+            Command::WindowGeometry {
+                window,
+                geometry,
+                monitor,
+            } => {
+                self.model.set_geometry(window, geometry, monitor);
             }
             Command::SidePanel { window, change } => {
                 self.model.side_panel(window, change);
