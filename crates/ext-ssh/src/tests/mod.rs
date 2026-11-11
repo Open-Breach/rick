@@ -85,6 +85,41 @@ fn the_extension_registers_a_provider_a_connector_two_actions_and_settings() {
     assert_eq!(ids, ["ssh.console", "ssh.terminal"]);
 }
 
+/// Issue 149: what a host offers. A folder below a host takes folders and
+/// files and is downloaded from; it is not searched beneath, for now, and
+/// says so for the tooltip of the filter bar's disabled toggle.
+#[test]
+fn a_host_offers_folders_files_and_downloads_and_no_search_beneath() {
+    ext::i18n::add_bundled("en", include_str!("../../locales/en.ftl"));
+    let fake = Arc::new(Fake::new().unwrap_or_else(|e| panic!("{e}")));
+    let pool = Pool::new(Arc::new(Hosts::new(fake)), None);
+    let provider = SshProvider::new(pool);
+    let below = Location::new(PROVIDER_ID, "/nas/srv/photos");
+    let caps = provider.capabilities(&below);
+    assert!(
+        caps.contains(
+            Capabilities::CREATE_DIR | Capabilities::CREATE_FILE | Capabilities::DOWNLOAD
+        )
+    );
+    assert!(!caps.contains(Capabilities::SEARCH_SUBTREE));
+    assert_eq!(
+        provider.unavailable_reason(&below, Capabilities::SEARCH_SUBTREE),
+        Some("Subfolder search is not available over SSH yet".to_owned())
+    );
+    // The list of hosts takes nothing new: a host is added in the side
+    // panel.
+    let root = Location::new(PROVIDER_ID, "/");
+    assert!(
+        !provider
+            .capabilities(&root)
+            .intersects(Capabilities::CREATE_DIR | Capabilities::CREATE_FILE)
+    );
+    assert_eq!(
+        provider.unavailable_reason(&root, Capabilities::CREATE_DIR),
+        Some("Hosts are added in the side panel".to_owned())
+    );
+}
+
 #[test]
 fn the_root_lists_the_hosts_without_connecting() {
     use futures::StreamExt as _;

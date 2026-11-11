@@ -181,9 +181,10 @@ fn the_extension_registers_a_provider_and_a_connector_with_the_platform() {
         provider.capabilities(&Location::new(PROVIDER_ID, "/")),
         Capabilities::REMOTE
     );
-    assert_eq!(
-        provider.capabilities(&Location::new(PROVIDER_ID, "/work")),
-        Capabilities::REMOTE | Capabilities::WRITE
+    assert!(
+        provider
+            .capabilities(&Location::new(PROVIDER_ID, "/work"))
+            .contains(Capabilities::REMOTE | Capabilities::WRITE)
     );
     assert!(
         provider
@@ -501,4 +502,76 @@ fn against_a_store_list_upload_download_move_across_buckets_and_delete_round_tri
         conns.disconnect("test");
         assert!(!conns.is_connected("test"));
     });
+}
+
+/// Issue 149: what a place offers. Nothing is created at an account — a
+/// bucket needs more than the connection holds, and a file needs a bucket
+/// — and each says why; a bucket and every folder below it take folders
+/// and files, are searched beneath and are downloaded from.
+#[test]
+fn capabilities_say_what_each_place_offers() {
+    ext::i18n::add_bundled("en", include_str!("../locales/en.ftl"));
+    let fake = Arc::new(Fake::new().unwrap_or_else(|e| panic!("{e}")));
+    let provider = S3Provider::new(Arc::new(S3Connections::new(fake)));
+    let at = |p: &str| Location::new(PROVIDER_ID, p);
+    let creating = Capabilities::CREATE_DIR | Capabilities::CREATE_FILE;
+
+    let account = provider.capabilities(&at("/work"));
+    assert!(!account.intersects(creating), "{account:?}");
+    assert!(account.contains(Capabilities::SEARCH_SUBTREE | Capabilities::DOWNLOAD));
+    assert_eq!(
+        provider.unavailable_reason(&at("/work"), Capabilities::CREATE_FILE),
+        Some("Files live inside a bucket".to_owned())
+    );
+    assert_eq!(
+        provider.unavailable_reason(&at("/work"), Capabilities::CREATE_DIR),
+        Some("Buckets are created in the provider's console".to_owned())
+    );
+    for inside in ["/work/photos", "/work/photos/2026/may"] {
+        let caps = provider.capabilities(&at(inside));
+        assert!(
+            caps.contains(creating | Capabilities::SEARCH_SUBTREE | Capabilities::DOWNLOAD),
+            "{inside}: {caps:?}"
+        );
+    }
+}
+
+/// Issue 149, subfolder search: a listing without a delimiter answers for
+/// everything beneath a prefix, each folder on the way once and a folder's
+/// marker never as an entry of its own.
+#[test]
+fn a_flat_listing_gives_the_files_and_each_folder_once() {
+    let page = parse_page(
+        r#"<?xml version="1.0" encoding="UTF-8"?>
+<ListBucketResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/">
+  <Name>photos</Name><Prefix>2026/</Prefix><IsTruncated>false</IsTruncated>
+  <Contents><Key>2026/</Key><Size>0</Size></Contents>
+  <Contents><Key>2026/a.jpg</Key><Size>10</Size></Contents>
+  <Contents><Key>2026/may/trip/day 1/b.jpg</Key><Size>20</Size></Contents>
+  <Contents><Key>2026/may/trip/day 1/c.jpg</Key><Size>30</Size></Contents>
+  <Contents><Key>2026/.cache/thumb.db</Key><Size>5</Size></Contents>
+  <Contents><Key>2026/empty/</Key><Size>0</Size></Contents>
+</ListBucketResult>"#,
+    )
+    .unwrap_or_else(|e| panic!("{e}"));
+    let mut seen = std::collections::HashSet::new();
+    let entries = S3Provider::flat_entries("work", "photos", "2026/", page, false, &mut seen);
+    let listed: Vec<(String, EntryKind)> = entries
+        .iter()
+        .map(|e| (e.path.to_string(), e.kind.clone()))
+        .collect();
+    let dir = |p: &str| (format!("/work/photos/2026/{p}"), EntryKind::Dir);
+    let file = |p: &str| (format!("/work/photos/2026/{p}"), EntryKind::File);
+    assert_eq!(
+        listed,
+        [
+            file("a.jpg"),
+            dir("may"),
+            dir("may/trip"),
+            dir("may/trip/day 1"),
+            file("may/trip/day 1/b.jpg"),
+            file("may/trip/day 1/c.jpg"),
+            dir("empty"),
+        ]
+    );
 }

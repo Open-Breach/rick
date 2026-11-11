@@ -10,7 +10,15 @@ mounts (the mounted image is a removable volume whose Eject unmounts it);
 each follows the provider's capabilities at the pane's location, so Paste,
 Rename and the rest hide where nothing can be written and Move to trash
 where there is no trash, and in the virtual locations of `vfs-rick` the
-actions that do not apply hide themselves. Compute hash… (`hash`) reads
+actions that do not apply hide themselves. New folder, New file and
+Download… follow `CREATE_DIR`, `CREATE_FILE` and `DOWNLOAD`: where a
+location that takes writes, or a remote one, lacks the capability the
+action is disabled with the provider's reason, which the context menu shows
+greyed with the reason as its tooltip, and a new folder's name is put to
+the provider's `name_problem` before any request goes out. Open on a remote
+file hands nothing to the system: it copies the file into the Downloads
+folder as a job, and Download… (`download`) does the same for the whole
+selection, folders included, into a folder asked for first. Compute hash… (`hash`) reads
 every selected file once through its provider in 1 MiB chunks and feeds
 each chunk to MD5, SHA-1, SHA-256 and BLAKE3 in one job with byte progress
 and cancel, filling an `ext::Hashes` slot the Hash dialogue polls; the

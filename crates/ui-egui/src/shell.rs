@@ -322,6 +322,13 @@ struct LibraryBrowse {
     answer: runtime::oneshot::Receiver<Vec<std::path::PathBuf>>,
 }
 
+/// The folder dialogue *Download…* opened: what to download once a folder
+/// is picked, and the answer.
+struct DownloadPick {
+    ctx: ActionCtx,
+    answer: runtime::oneshot::Receiver<Option<std::path::PathBuf>>,
+}
+
 /// What a name typed into the name prompt is for.
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum NameFor {
@@ -909,6 +916,8 @@ pub struct RickUi {
     /// The file dialogue a preview's *Browse…* opened for a missing
     /// library, while it is open.
     library_browse: Option<LibraryBrowse>,
+    /// The folder dialogue of a *Download…* that waits for its answer.
+    download_pick: Option<DownloadPick>,
     /// The Hash dialogue, open or not.
     hash: hash::HashDialog,
     /// The integration dialog, open or not, and the check after the
@@ -1205,6 +1214,7 @@ impl RickUi {
             inspector_width,
             properties: properties::PropertiesDialog::default(),
             library_browse: None,
+            download_pick: None,
             hash: hash::HashDialog::default(),
             integration: integration::IntegrationDialog::default(),
             texts: Vec::new(),
@@ -2142,7 +2152,8 @@ impl RickUi {
                     }
                     Request::StartEdit { pane, kind } => self.start_edit(pane, kind),
                     Request::CommitEdit { pane, kind, name } => {
-                        self.commit_edit(pane, kind, &name);
+                        let now = ctx.input(|i| i.time);
+                        self.commit_edit(pane, kind, &name, now);
                     }
                     Request::OpenContaining {
                         pane,
@@ -2436,11 +2447,31 @@ impl RickUi {
     }
 
     /// Runs the action behind an inline edit with the name pre-answered,
-    /// then selects the result once it is listed.
-    fn commit_edit(&mut self, pane: PaneId, kind: EditKind, name: &str) {
-        let Some((_, tab)) = self.app.model().active_tab(pane) else {
+    /// then selects the result once it is listed. A new folder's name the
+    /// provider's own rules refuse — a container's — is refused in place,
+    /// before anything is asked of the provider: the row stays in edit,
+    /// shaking as for a name that is taken, and a notice names the rule.
+    fn commit_edit(&mut self, pane: PaneId, kind: EditKind, name: &str, now: f64) {
+        let Some((tab_id, tab)) = self.app.model().active_tab(pane) else {
             return;
         };
+        if kind == EditKind::NewFolder {
+            let at = Location::new(
+                tab.location.provider,
+                tab.location.path.join(name.as_bytes()),
+            );
+            let problem = self
+                .app
+                .mounts()
+                .resolve(&at)
+                .ok()
+                .and_then(|provider| provider.name_problem(&at));
+            if let Some(problem) = problem {
+                self.tabs.entry(tab_id).or_default().edit = Some(RowEdit::refused(kind, name, now));
+                self.toast(Level::Warning, problem);
+                return;
+            }
+        }
         let (action, selection) = match kind {
             EditKind::Rename(id) => match tab.entry(id) {
                 Some(entry) => (ActionId("core.rename"), vec![entry.clone()]),
@@ -2492,13 +2523,14 @@ impl RickUi {
         });
     }
 
-    /// Whether the provider at `location` takes new entries: the inline
-    /// edits start only where New file and New folder can finish.
-    fn writable(&self, location: &Location) -> bool {
+    /// Whether the provider at `location` offers `needed`: the inline
+    /// edits start only where New file (`CREATE_FILE`) and New folder
+    /// (`CREATE_DIR`) can finish.
+    fn offers(&self, location: &Location, needed: ext::Capabilities) -> bool {
         self.app
             .mounts()
             .resolve(location)
-            .is_ok_and(|p| p.capabilities(location).contains(ext::Capabilities::WRITE))
+            .is_ok_and(|p| p.capabilities(location).contains(needed))
     }
 
     /// Whether the shell handles an action itself rather than running it:
@@ -2519,18 +2551,40 @@ impl RickUi {
                 });
                 true
             }
-            "core.new_file" if !self.inline_commit && self.writable(&ctx.location) => {
+            "core.new_file"
+                if !self.inline_commit
+                    && self.offers(&ctx.location, ext::Capabilities::CREATE_FILE) =>
+            {
                 self.requests.push(Request::StartEdit {
                     pane: ctx.pane,
                     kind: EditKind::NewFile,
                 });
                 true
             }
-            "core.new_folder" if !self.inline_commit && self.writable(&ctx.location) => {
+            "core.new_folder"
+                if !self.inline_commit
+                    && self.offers(&ctx.location, ext::Capabilities::CREATE_DIR) =>
+            {
                 self.requests.push(Request::StartEdit {
                     pane: ctx.pane,
                     kind: EditKind::NewFolder,
                 });
+                true
+            }
+            // Download… asks for the folder with the system's dialogue
+            // before the action runs with it as the answer; where the
+            // action is not available it runs, and says why.
+            "core.download"
+                if !self.inline_commit
+                    && self
+                        .app
+                        .registry()
+                        .actions()
+                        .iter()
+                        .find(|a| a.id() == action)
+                        .is_some_and(|a| a.availability(ctx) == ext::Availability::Enabled) =>
+            {
+                self.pick_download_folder(ctx.clone());
                 true
             }
             "core.open_containing" | "core.open_containing_tab" => {
@@ -2806,10 +2860,11 @@ impl RickUi {
                 }
             }
             Intent::ToggleSubtree => {
-                // Without a subdirectory search index there is nothing to
-                // walk, and the filter bar shows no toggle either.
-                if self.app.model().subtree_search
-                    && let Some((tab_id, tab)) = self.app.model().active_tab(pane)
+                // Only where the location can be searched beneath: the
+                // filter bar's toggle is disabled elsewhere, and the
+                // shortcut does nothing.
+                if let Some((tab_id, tab)) = self.app.model().active_tab(pane)
+                    && self.app.subtree_search(&tab.location) == ext::Availability::Enabled
                 {
                     let on = !tab.subtree;
                     self.handle(Command::Subtree { pane, on });
@@ -3038,6 +3093,52 @@ impl RickUi {
                 }
             }
             Err(runtime::oneshot::error::TryRecvError::Closed) => self.library_browse = None,
+            Err(runtime::oneshot::error::TryRecvError::Empty) => {
+                ctx.request_repaint_after(Duration::from_millis(100));
+            }
+        }
+    }
+
+    /// *Download…* asks for the target folder first (SPEC.md *Remote
+    /// files*): the system's folder dialogue, starting in Downloads. The
+    /// answer is polled each frame ([`poll_download_pick`](Self::poll_download_pick)).
+    fn pick_download_folder(&mut self, ctx: ActionCtx) {
+        if self.download_pick.is_some() {
+            return;
+        }
+        let platform = Arc::clone(self.app.platform());
+        let title = t!("download-to");
+        let (tx, rx) = runtime::oneshot::channel();
+        runtime::handle().spawn(async move {
+            let start = platform
+                .standard_folder(platform::StandardFolder::Downloads)
+                .unwrap_or_else(|| platform.home_dir());
+            let _ = tx.send(platform.pick_folder_in(&title, &start).await);
+        });
+        self.download_pick = Some(DownloadPick { ctx, answer: rx });
+    }
+
+    /// The folder the dialogue of *Download…* picked answers the action's
+    /// question, and the download starts; a dismissed dialogue downloads
+    /// nothing.
+    fn poll_download_pick(&mut self, ctx: &egui::Context) {
+        let Some(pick) = self.download_pick.as_mut() else {
+            return;
+        };
+        match pick.answer.try_recv() {
+            Ok(folder) => {
+                let Some(pick) = self.download_pick.take() else {
+                    return;
+                };
+                if let Some(folder) = folder {
+                    self.host.answer_prompt(folder.display().to_string());
+                    self.inline_commit = true;
+                    self.run_action_with(ActionId("core.download"), pick.ctx);
+                    self.inline_commit = false;
+                    self.host.clear_answers();
+                }
+            }
+            Err(runtime::oneshot::error::TryRecvError::Closed) => self.download_pick = None,
             Err(runtime::oneshot::error::TryRecvError::Empty) => {
                 ctx.request_repaint_after(Duration::from_millis(100));
             }
@@ -5061,6 +5162,7 @@ impl RickUi {
         self.cancel_layout_drag(ctx, window);
         self.resolve_pending_selects();
         self.poll_library_browse(ctx);
+        self.poll_download_pick(ctx);
         self.handle_keys(ctx, window);
         self.apply_requests(ctx);
         // A closed console or comparison takes its view with it; dropping a

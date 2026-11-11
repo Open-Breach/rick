@@ -336,9 +336,13 @@ fn every_format_lists_stats_and_reads() {
         out
     });
     assert_eq!(names(&shown), [".hidden", "docs", "empty", "top.txt"]);
+    // A zip can be rewritten: it takes new folders and files (issue 149).
     assert_eq!(
         provider.capabilities(&loc(&zip_path, "")),
-        Capabilities::WRITE | Capabilities::RENAME
+        Capabilities::WRITE
+            | Capabilities::RENAME
+            | Capabilities::CREATE_DIR
+            | Capabilities::CREATE_FILE
     );
 
     for (name, codec) in [

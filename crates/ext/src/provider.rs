@@ -153,6 +153,22 @@ bitflags::bitflags! {
         /// location as a remote-latency mount (SPEC.md "Network file
         /// systems"), with no eager stat and no thumbnails by default.
         const REMOTE = 2048;
+        /// A folder can be created in the location with
+        /// [`Provider::create_dir`]: what *New folder* asks for. `WRITE`
+        /// alone does not say so: an object store's account takes a
+        /// container and no file.
+        const CREATE_DIR = 4096;
+        /// A file can be created in the location with
+        /// [`Provider::open_write`]: what *New file* asks for.
+        const CREATE_FILE = 8192;
+        /// [`Provider::list`] with [`Depth::Unlimited`] answers for
+        /// everything beneath the location in one pass, as an object store
+        /// does with a prefix, so the search in subfolders can run on it:
+        /// the kernel lists and matches the names itself.
+        const SEARCH_SUBTREE = 16384;
+        /// The location's files and folders can be brought down to the
+        /// machine: *Download…*, and what Enter does on a remote file.
+        const DOWNLOAD = 32768;
     }
 }
 
@@ -287,6 +303,28 @@ pub trait Provider: Send + Sync + 'static {
 
     /// What the provider can do at `loc`.
     fn capabilities(&self, loc: &Location) -> Capabilities;
+
+    /// Why `loc` lacks `capability`, in the language in use: the tooltip
+    /// of the control that is disabled for it (*Files live inside a
+    /// container*). `None`, the default, leaves the kernel's own sentence
+    /// (SPEC.md, *Capabilities decide what is offered*).
+    fn unavailable_reason(&self, loc: &Location, capability: Capabilities) -> Option<String> {
+        let _ = (loc, capability);
+        None
+    }
+
+    /// What is wrong with the name of the folder [`create_dir`] would make
+    /// at `loc`, in the language in use, when the provider's own naming
+    /// rules rule it out: an object store's rules for a container. The
+    /// kernel asks before any request goes out and refuses the name in
+    /// place with this text. `None`, the default, is a name the provider
+    /// has nothing against.
+    ///
+    /// [`create_dir`]: Provider::create_dir
+    fn name_problem(&self, loc: &Location) -> Option<String> {
+        let _ = loc;
+        None
+    }
 
     /// Streams entries in batches. The first batch must arrive within the
     /// first-screen budget. Cancelling the token ends the stream within one

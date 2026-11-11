@@ -116,7 +116,11 @@ fn the_walk_plugin_streams_the_subtree_search_through_the_host() {
         start: Some(local(&tree)),
     });
     settle(&mut app, &mut events);
-    assert!(app.model().subtree_search, "the toggle is there");
+    assert_eq!(
+        app.subtree_search(&local(&tree)),
+        ext::Availability::Enabled,
+        "the toggle is there"
+    );
     assert!(
         app.model().search_indexes.is_empty(),
         "a walk is no platform index"

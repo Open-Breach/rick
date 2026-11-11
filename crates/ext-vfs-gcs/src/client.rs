@@ -462,24 +462,35 @@ impl GcsClient {
         parse_page(&json)
     }
 
+    /// One page of every object under `prefix`, however deep: the listing
+    /// without a delimiter, which answers for a whole subtree.
+    pub(crate) async fn list_flat(
+        &self,
+        bucket: &str,
+        prefix: &str,
+        page_token: Option<&str>,
+    ) -> Result<Page, Error> {
+        let mut query: Vec<(&str, &str)> = vec![("prefix", prefix), ("maxResults", PAGE)];
+        if let Some(t) = page_token {
+            query.push(("pageToken", t));
+        }
+        let json = self
+            .text(
+                Method::GET,
+                self.url(&format!("/storage/v1/b/{}/o", encode(bucket)), &query),
+                &[],
+                None,
+            )
+            .await?;
+        parse_page(&json)
+    }
+
     /// Every object under `prefix`, however deep.
     pub(crate) async fn list_all(&self, bucket: &str, prefix: &str) -> Result<Vec<Object>, Error> {
         let mut out = Vec::new();
         let mut token: Option<String> = None;
         loop {
-            let mut query: Vec<(&str, &str)> = vec![("prefix", prefix), ("maxResults", PAGE)];
-            if let Some(t) = token.as_deref() {
-                query.push(("pageToken", t));
-            }
-            let json = self
-                .text(
-                    Method::GET,
-                    self.url(&format!("/storage/v1/b/{}/o", encode(bucket)), &query),
-                    &[],
-                    None,
-                )
-                .await?;
-            let page = parse_page(&json)?;
+            let page = self.list_flat(bucket, prefix, token.as_deref()).await?;
             out.extend(page.objects);
             match page.next {
                 Some(next) => token = Some(next),
