@@ -213,6 +213,12 @@ the specification first (#174).
 
 ### Fixed
 
+- **Every search result can be reached and picked.** A click on a row
+  picks it, a hit of the index taking the pane to its folder, where the
+  click was lost; the arrow keys move past a pointer that rests on the list
+  and bring every row into view, where the row under the pointer held the
+  highlight; and the scroll bar's handle shows whenever there are more rows
+  than the twelve in view (#202).
 - **The search box's results list** has a width of its own, 560 px, where
   the tabs squeeze the box; it grows with the hits the index sends after
   the folder's own names, where it kept the height it had opened with and

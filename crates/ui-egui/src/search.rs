@@ -52,6 +52,22 @@ pub struct SearchBox {
     searching_indexes: bool,
     /// The dropdown of the last frame, `None` while it is closed.
     drawn: Option<Drawn>,
+    /// Who moved the highlight last.
+    lead: Lead,
+    /// Where the pointer was in the last frame, to tell when it moves.
+    pointer_at: Option<egui::Pos2>,
+}
+
+/// Who moved the dropdown's highlight last.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+enum Lead {
+    /// The pointer: the row under it is the highlighted one.
+    #[default]
+    Pointer,
+    /// The keyboard, by an arrow key or by typing: a pointer that rests on
+    /// a row does not take the highlight back, only one that moves, scrolls
+    /// or presses.
+    Keys,
 }
 
 /// How many name matches the dropdown lists.
@@ -82,6 +98,8 @@ const HINT_SHARE: f32 = 0.5;
 pub struct Drawn {
     /// The dropdown's card.
     pub card: egui::Rect,
+    /// The highlighted row, the one Enter picks.
+    pub selected: usize,
     /// Every row's texts, in order.
     pub rows: Vec<DrawnRow>,
 }
@@ -145,6 +163,29 @@ impl SearchBox {
         self.query = Some(text);
     }
 
+    /// Whether the pointer moved since the last frame.
+    fn pointer_moved(&mut self, ui: &egui::Ui) -> bool {
+        let at = ui.input(|i| i.pointer.latest_pos());
+        let moved = at != self.pointer_at;
+        self.pointer_at = at;
+        moved
+    }
+
+    /// Whether the pointer is on the dropdown the last frame drew, with a
+    /// button down or just released. Takes that frame's record: this
+    /// frame's dropdown writes its own.
+    fn pressed_on_dropdown(&mut self, ui: &egui::Ui) -> bool {
+        self.drawn.take().is_some_and(|drawn| {
+            ui.input(|i| {
+                let pointer = &i.pointer;
+                (pointer.any_down() || pointer.any_released())
+                    && pointer
+                        .interact_pos()
+                        .is_some_and(|at| drawn.card.contains(at))
+            })
+        })
+    }
+
     /// Draws the box in `rect` and its dropdown below; returns what the user
     /// picked, if anything. `salt` tells one window's box from another's.
     ///
@@ -195,7 +236,9 @@ impl SearchBox {
             }
             self.focus = false;
         }
-        if output.changed() {
+        let pointer_moved = self.pointer_moved(ui);
+        let typed = output.changed();
+        if typed {
             self.selected = 0;
             self.note_query();
         }
@@ -203,7 +246,6 @@ impl SearchBox {
         // frame, so they count while the box had it a moment ago.
         let was_active = self.active;
         let has_focus = output.has_focus();
-        self.drawn = None;
         let (enter, escape) = ui.input(|i| {
             (
                 i.key_pressed(egui::Key::Enter),
@@ -211,8 +253,15 @@ impl SearchBox {
             )
         });
         let finishing = was_active && output.lost_focus() && (enter || escape);
-        self.active = has_focus;
-        if !has_focus && !finishing {
+        // So does a press on the dropdown: the click that picks a row takes
+        // the keyboard from the box, and the box is the active one all the
+        // same, with the keyboard back.
+        let on_dropdown = self.pressed_on_dropdown(ui);
+        if on_dropdown && !has_focus && !escape {
+            output.request_focus();
+        }
+        self.active = has_focus || on_dropdown;
+        if !self.active && !finishing {
             return None;
         }
         let (up, down) = ui.input_mut(|i| {
@@ -221,6 +270,16 @@ impl SearchBox {
                 i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowDown),
             )
         });
+        // Who has the highlight: the keyboard from a key on, the pointer
+        // again once it moves, scrolls or presses.
+        let by_keys = up || down || typed;
+        if by_keys {
+            self.lead = Lead::Keys;
+        } else if pointer_moved
+            || ui.input(|i| i.smooth_scroll_delta != egui::Vec2::ZERO || i.pointer.any_pressed())
+        {
+            self.lead = Lead::Pointer;
+        }
         if escape {
             self.text.clear();
             self.active = false;
@@ -245,7 +304,7 @@ impl SearchBox {
 
         let show_dropdown = self.command_mode() || !self.text.trim().is_empty();
         if show_dropdown {
-            self.dropdown(ui, id, rect, &rows, &mut picked);
+            self.dropdown(ui, id, rect, &rows, by_keys, &mut picked);
         }
 
         if picked.is_some() {
@@ -263,12 +322,20 @@ impl SearchBox {
     /// and never past the window's edges. The card is as tall as its rows,
     /// growing and shrinking with them, and scrolls beyond
     /// [`DROPDOWN_HEIGHT`]. Each row is a line of its own ([`row`]).
+    ///
+    /// The highlighted row is brought into view in the frame the keyboard
+    /// moved it, `by_keys`, and in no other: brought back every frame, it
+    /// would hold the list where the wheel or the scroll bar had just moved
+    /// it from. The row under the pointer takes the highlight unless the
+    /// keyboard had it last: a pointer that rests on the list would keep
+    /// the arrow keys from moving past it. A click picks its row.
     fn dropdown(
         &mut self,
         ui: &mut egui::Ui,
         id: egui::Id,
         rect: egui::Rect,
         rows: &[Row],
+        by_keys: bool,
         picked: &mut Option<Pick>,
     ) {
         let screen = ui.ctx().content_rect();
@@ -291,6 +358,7 @@ impl SearchBox {
         let wanted = (rows.len() as f32 * ROW_HEIGHT).min(DROPDOWN_HEIGHT);
         let mut drawn = Drawn {
             card: egui::Rect::NOTHING,
+            selected: 0,
             rows: Vec::new(),
         };
         let area = egui::Area::new(id.with("dropdown"))
@@ -301,6 +369,11 @@ impl SearchBox {
             frame.show(ui, |ui| {
                 ui.set_width(inner);
                 ui.spacing_mut().item_spacing.y = 0.0;
+                // The scroll bar's handle shows at rest as it does under
+                // the pointer: it is what says that there are more rows
+                // than the twelve in view.
+                let scroll = &mut ui.spacing_mut().scroll;
+                scroll.dormant_handle_opacity = scroll.active_handle_opacity;
                 egui::ScrollArea::vertical()
                     .max_height(DROPDOWN_HEIGHT)
                     .min_scrolled_height(wanted)
@@ -318,7 +391,7 @@ impl SearchBox {
                         for (i, entry) in rows.iter().enumerate() {
                             let selected = i == self.selected;
                             let response = row(ui, entry, selected, &mut drawn.rows);
-                            if selected {
+                            if selected && by_keys {
                                 response.scroll_to_me(None);
                             }
                             if let Some(why) = &entry.disabled {
@@ -327,7 +400,7 @@ impl SearchBox {
                             if response.clicked() {
                                 picked.clone_from(&entry.pick);
                             }
-                            if response.hovered() {
+                            if response.hovered() && self.lead == Lead::Pointer {
                                 self.selected = i;
                             }
                         }
@@ -335,6 +408,7 @@ impl SearchBox {
             });
         });
         drawn.card = shown.response.rect;
+        drawn.selected = self.selected;
         self.drawn = Some(drawn);
     }
 
