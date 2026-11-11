@@ -531,7 +531,7 @@ fn mount_shows_on_the_images_this_platform_mounts_and_goes_through_it() {
 #[test]
 fn every_action_has_an_id_label_and_core_group() {
     let h = harness();
-    assert_eq!(h.registry.actions().len(), 25);
+    assert_eq!(h.registry.actions().len(), 26);
     for action in h.registry.actions() {
         assert!(action.id().0.starts_with("core."), "{}", action.id().0);
         assert_ne!(action.label(), "");
@@ -1873,4 +1873,25 @@ fn download_asks_for_the_folder_and_brings_files_and_folders_down() {
         store.paths(),
         ["/photos/a.jpg", "/photos/b.jpg", "/photos/raw/c.dng"]
     );
+}
+
+/// Issue 149: the editor's command is split at spaces outside double
+/// quotes, and the quotes are dropped.
+#[test]
+fn an_editor_command_is_split_at_spaces_outside_double_quotes() {
+    let split = crate::split_command;
+    assert_eq!(split("code"), ["code"]);
+    assert_eq!(split("  code   --wait  "), ["code", "--wait"]);
+    assert_eq!(
+        split(r#""C:\Program Files\Editor\edit.exe" --wait"#),
+        [r"C:\Program Files\Editor\edit.exe", "--wait"]
+    );
+    assert_eq!(
+        split(r#"code --user-data-dir="/tmp/my code" -n"#),
+        ["code", "--user-data-dir=/tmp/my code", "-n"]
+    );
+    // An empty argument stays one; nothing at all is no command.
+    assert_eq!(split(r#"edit "" x"#), ["edit", "", "x"]);
+    assert_eq!(split(""), [] as [&str; 0]);
+    assert_eq!(split("   "), [] as [&str; 0]);
 }

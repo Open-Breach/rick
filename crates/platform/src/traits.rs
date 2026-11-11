@@ -451,6 +451,53 @@ pub trait OpenWith: Send + Sync {
     ///
     /// Fails when the application cannot be started.
     fn open_with(&self, path: &Path, app: &Application) -> Result<(), Error>;
+
+    /// Whether a file's execute bit says it is a program here, so that
+    /// opening it runs it (SPEC.md *Executables and scripts*). Windows has
+    /// no such bit: there every file is handed to the system, which runs a
+    /// program and decides about a script by its association.
+    fn has_execute_bit(&self) -> bool {
+        false
+    }
+
+    /// Starts `program` with `args`, detached from Rick and with `dir` as
+    /// its working directory, and returns at once: a binary the user
+    /// opened, or the editor they named.
+    ///
+    /// # Errors
+    ///
+    /// The I/O error from starting it.
+    fn run_detached(&self, program: &Path, args: &[OsString], dir: &Path) -> Result<(), Error> {
+        let mut child = std::process::Command::new(program)
+            .args(args)
+            .current_dir(dir)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .map_err(Error::from_io)?;
+        // Nobody waits for it but this thread, so that it leaves no
+        // zombie behind when it ends before Rick does.
+        std::thread::Builder::new()
+            .name("rick-child".to_owned())
+            .spawn(move || {
+                let _ = child.wait();
+            })
+            .map(drop)
+            .map_err(Error::from_io)
+    }
+
+    /// Opens `paths` in the system's default text editor, the application
+    /// registered for plain text (SPEC.md *Open in editor*).
+    ///
+    /// # Errors
+    ///
+    /// `Error::Unsupported` where the system names none; otherwise the
+    /// error from starting it.
+    fn open_in_text_editor(&self, paths: &[PathBuf]) -> Result<(), Error> {
+        let _ = paths;
+        Err(Error::Unsupported("no text editor is registered"))
+    }
 }
 
 /// The user's terminal emulator.

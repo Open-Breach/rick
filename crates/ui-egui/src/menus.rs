@@ -564,6 +564,7 @@ fn action_icon(id: &str) -> Option<&'static str> {
     Some(match id {
         "core.open_default" => icons::FOLDER_OPEN,
         "core.open_with" => icons::OPEN_WITH,
+        "core.open_in_editor" => icons::EDIT,
         "core.mount" => icons::MOUNT,
         "core.open_containing" | "core.open_containing_tab" => icons::FOLDER,
         "core.reveal" => icons::REVEAL,
@@ -611,6 +612,7 @@ const FILE_GROUPS: &[&[&str]] = &[
     &[
         "core.open_default",
         "core.open_with",
+        "core.open_in_editor",
         "core.download",
         "core.open_containing",
         "core.open_containing_tab",

@@ -279,7 +279,26 @@ pub(crate) fn on_path(program: &str) -> Option<PathBuf> {
 pub(crate) fn applications(path: &Path) -> Result<Vec<Application>, Error> {
     std::fs::symlink_metadata(path).map_err(Error::from_io)?;
     let mime = mime_of(path);
-    let mimes = candidates(&mime);
+    let mut out = registered(&candidates(&mime));
+    if out.is_empty() && on_path("xdg-open").is_some() {
+        out.push(Application {
+            name: "System default".to_owned(),
+            id: "xdg-open".to_owned(),
+        });
+    }
+    Ok(out)
+}
+
+/// The system's default text editor: the first application registered
+/// for plain text, as `mimeapps.list` and the MIME cache order them.
+pub(crate) fn text_editor() -> Option<Application> {
+    registered(&["text/plain".to_owned()]).into_iter().next()
+}
+
+/// The applications registered for `mimes`, the default first: the
+/// defaults of `mimeapps.list`, then the added associations, then
+/// everything the MIME cache lists, less what the user removed.
+fn registered(mimes: &[String]) -> Vec<Application> {
     let mut ordered: Vec<String> = Vec::new();
     let mut removed: Vec<String> = Vec::new();
     let push = |id: String, ordered: &mut Vec<String>| {
@@ -308,14 +327,14 @@ pub(crate) fn applications(path: &Path) -> Result<Vec<Application>, Error> {
         .iter()
         .filter_map(|p| std::fs::read_to_string(p).ok())
         .collect();
-    for mime in &mimes {
+    for mime in mimes {
         for text in &texts {
             for id in ids_in(text, "Default Applications", mime) {
                 push(id, &mut ordered);
             }
         }
     }
-    for mime in &mimes {
+    for mime in mimes {
         for text in &texts {
             for id in ids_in(text, "Added Associations", mime) {
                 push(id, &mut ordered);
@@ -328,7 +347,7 @@ pub(crate) fn applications(path: &Path) -> Result<Vec<Application>, Error> {
         let Ok(text) = std::fs::read_to_string(dir.join("applications/mimeinfo.cache")) else {
             continue;
         };
-        for mime in &mimes {
+        for mime in mimes {
             for id in ids_in(&text, "MIME Cache", mime) {
                 push(id, &mut ordered);
             }
@@ -361,13 +380,7 @@ pub(crate) fn applications(path: &Path) -> Result<Vec<Application>, Error> {
             id: file.to_string_lossy().into_owned(),
         });
     }
-    if out.is_empty() && on_path("xdg-open").is_some() {
-        out.push(Application {
-            name: "System default".to_owned(),
-            id: "xdg-open".to_owned(),
-        });
-    }
-    Ok(out)
+    out
 }
 
 /// Splits a desktop `Exec` line into its words: quoted with `"`, with the

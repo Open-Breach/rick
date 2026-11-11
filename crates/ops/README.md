@@ -18,7 +18,11 @@ greyed with the reason as its tooltip, and a new folder's name is put to
 the provider's `name_problem` before any request goes out. Open on a remote
 file hands nothing to the system: it copies the file into the Downloads
 folder as a job, and Download… (`download`) does the same for the whole
-selection, folders included, into a folder asked for first. Compute hash… (`hash`) reads
+selection, folders included, into a folder asked for first. Open in
+editor (F4) starts the command of the `editor` setting with the selected
+local files appended, split at spaces outside double quotes, or the
+system's default text editor where the setting is empty; the application
+hands the setting over as `OpenSettings`. Compute hash… (`hash`) reads
 every selected file once through its provider in 1 MiB chunks and feeds
 each chunk to MD5, SHA-1, SHA-256 and BLAKE3 in one job with byte progress
 and cancel, filling an `ext::Hashes` slot the Hash dialogue polls; the
