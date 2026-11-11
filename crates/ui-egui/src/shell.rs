@@ -84,6 +84,8 @@ pub struct TabUi {
     /// The average width of the names the List view's columns are sized
     /// by, with what it was measured for.
     pub list_names: Option<crate::views::NameWidths>,
+    /// The time slider's drag, run and rectangles.
+    pub timeline: crate::timeline_bar::BarState,
     /// The list's vertical scroll offset in the last frame.
     pub scroll_offset: f32,
     /// Scroll to this offset on the next frame.
@@ -1607,6 +1609,14 @@ impl RickUi {
         self.tabs.get(&tab).and_then(|t| t.list)
     }
 
+    /// The time slider's row and axis of a tab in the last frame, for
+    /// tests: `None` while the bar is not drawn.
+    #[must_use]
+    pub fn timeline_bar(&self, tab: TabId) -> Option<(egui::Rect, Option<egui::Rect>)> {
+        let state = &self.tabs.get(&tab)?.timeline;
+        state.rect.map(|rect| (rect, state.axis))
+    }
+
     /// The footer row of a tab in the last frame, for tests.
     #[must_use]
     pub fn footer_row(&self, tab: TabId) -> Option<egui::Rect> {
@@ -2101,6 +2111,7 @@ impl RickUi {
         // The Preview tab has the focus: its own table (Space plays) comes
         // first.
         let in_preview = crate::dock::shows_preview(self.app.model(), self.focused_in(window));
+        let bar_focused = crate::timeline_bar::focused(ctx, pane);
         let mut intents = Vec::new();
         let mut typed = String::new();
         let mut backspace = false;
@@ -2114,6 +2125,11 @@ impl RickUi {
                     modifiers,
                     ..
                 } => {
+                    // The focused time slider steps with these itself.
+                    if bar_focused && modifiers.is_none() && crate::timeline_bar::KEYS.contains(key)
+                    {
+                        return true;
+                    }
                     if *key == egui::Key::Backspace
                         && modifiers.is_none()
                         && !filter_text.is_empty()
@@ -2981,6 +2997,7 @@ impl RickUi {
                 }
             }
             Intent::ToggleHidden => self.handle(Command::ToggleHidden(pane)),
+            Intent::ToggleTimeline => self.handle(Command::ToggleTimeline(pane)),
             Intent::ToggleSystem => {
                 let on = !self.app.model().settings.show_system;
                 self.handle(Command::Settings(SettingsChange::ShowSystem(on)));

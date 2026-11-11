@@ -4,8 +4,9 @@
 use std::sync::Arc;
 
 use app::App;
+use ext::t;
 use ext::{Action, Availability, Invocation};
-use model::PaneId;
+use model::{PaneId, TimelineState};
 
 use crate::keys::{Intent, KeyMap, UI_INTENTS};
 
@@ -57,7 +58,7 @@ pub fn items(app: &App, keys: &KeyMap, pane: PaneId, recents: &[Intent]) -> Vec<
                 intent: spec.intent,
                 label: spec.label.to_owned(),
                 shortcut: keys.text_for(spec.intent),
-                disabled: None,
+                disabled: disabled(app, pane, spec.intent),
                 recency: recency(spec.intent),
             }),
     );
@@ -76,6 +77,19 @@ pub fn items(app: &App, keys: &KeyMap, pane: PaneId, recents: &[Intent]) -> Vec<
             }),
     );
     items
+}
+
+/// Why a UI intent cannot run in `pane` now: *Toggle timeline* where no
+/// source offers one, or where the folder has no earlier states.
+fn disabled(app: &App, pane: PaneId, intent: Intent) -> Option<String> {
+    if intent != Intent::ToggleTimeline {
+        return None;
+    }
+    match app.model().timeline(pane) {
+        TimelineState::None => Some(t!("timeline-no-source")),
+        TimelineState::Empty => Some(t!("timeline-empty")),
+        _ => None,
+    }
 }
 
 /// The rows matching `query`, best first: by score, then recency, then
