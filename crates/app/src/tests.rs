@@ -2207,6 +2207,130 @@ fn a_properties_read_under_way_counts_as_busy() {
     assert!(!h.app.is_busy());
 }
 
+/// Issue 178: Properties that is called off while its entry is still being
+/// read does not open when the read is answered, and neither does a
+/// request a later one overtook.
+#[test]
+fn properties_called_off_or_overtaken_do_not_open() {
+    let mut h = harness();
+    h.settle();
+    let pane = h.app.model().focused;
+    let id_of = |h: &Harness, name: &str| {
+        h.tab(pane)
+            .listing
+            .rows()
+            .find(|e| e.name == name)
+            .map_or_else(|| panic!("{name} is listed"), |e| e.id)
+    };
+    let shown = |events: &[Event]| -> Vec<String> {
+        events
+            .iter()
+            .filter_map(|e| match e {
+                Event::Properties(info) => Some(info.entry.name.clone()),
+                _ => None,
+            })
+            .collect()
+    };
+    let (c, a) = (id_of(&h, "c.txt"), id_of(&h, "a.txt"));
+    h.send(Command::Select {
+        pane,
+        change: SelectionChange::Set(vec![c]),
+    });
+    h.settle();
+
+    // The read is held back, as a slow volume would hold it.
+    h.fake.hold_permissions();
+    h.events.clear();
+    h.send(Command::ShowProperties(pane));
+    assert!(h.app.properties_pending(), "asked for, not open yet");
+    // Called off, as Escape does.
+    h.send(Command::PropertiesClosed);
+    assert!(!h.app.properties_pending());
+    assert!(h.app.is_busy(), "the read itself still runs");
+    h.fake.release_permissions();
+    h.settle();
+    assert_eq!(shown(&h.events), Vec::<String>::new(), "it does not open");
+    assert!(!h.app.is_busy());
+
+    // Asked again it opens.
+    h.events.clear();
+    h.send(Command::ShowProperties(pane));
+    h.settle();
+    assert_eq!(shown(&h.events), ["c.txt"]);
+    assert!(!h.app.properties_pending());
+    h.send(Command::PropertiesClosed);
+
+    // Overtaken: asked for one entry, then for another before the first
+    // was read. Only the one last asked for opens.
+    h.fake.hold_permissions();
+    h.events.clear();
+    h.send(Command::ShowProperties(pane));
+    h.send(Command::Select {
+        pane,
+        change: SelectionChange::Set(vec![a]),
+    });
+    h.send(Command::ShowProperties(pane));
+    h.fake.release_permissions();
+    h.settle();
+    assert_eq!(shown(&h.events), ["a.txt"]);
+}
+
+/// Issue 178, on a provider that is not the local one — where the read is
+/// slowest, and where the entry has no local path to tell a stale answer
+/// by: Properties called off before its answer is in does not open.
+#[test]
+fn properties_called_off_on_a_remote_entry_do_not_open() {
+    let stub = net::Stub::new();
+    let mut h = harness_with(vec![Arc::new(net::StubExtension::new(Arc::clone(&stub)))]);
+    h.settle();
+    h.send(Command::AddConnection {
+        provider: net::ID,
+        name: "nas".into(),
+        values: vec![("host".into(), "10.0.0.2".into())],
+    });
+    h.settle();
+    let pane = h.app.model().focused;
+    h.send(Command::Navigate {
+        pane,
+        to: Location::new(net::ID, "/"),
+    });
+    h.settle();
+    let id = h
+        .tab(pane)
+        .listing
+        .rows()
+        .find(|e| e.name == "nas")
+        .map_or_else(|| panic!("nas is listed: {:?}", h.names()), |e| e.id);
+    h.send(Command::Select {
+        pane,
+        change: SelectionChange::Set(vec![id]),
+    });
+    h.settle();
+    let shown = |events: &[Event]| -> Vec<String> {
+        events
+            .iter()
+            .filter_map(|e| match e {
+                Event::Properties(info) => Some(info.entry.name.clone()),
+                _ => None,
+            })
+            .collect()
+    };
+
+    // Asked for and called off before the answer is taken in.
+    h.events.clear();
+    h.send(Command::ShowProperties(pane));
+    assert!(h.app.properties_pending());
+    h.send(Command::PropertiesClosed);
+    h.settle();
+    assert_eq!(shown(&h.events), Vec::<String>::new(), "{:?}", h.events);
+
+    // Asked for and left alone, it opens.
+    h.events.clear();
+    h.send(Command::ShowProperties(pane));
+    h.settle();
+    assert_eq!(shown(&h.events), ["nas"]);
+}
+
 /// What the Properties dialogue reads through links: these need a
 /// symbolic link to be made, which only Unix lets a test do freely.
 #[cfg(unix)]

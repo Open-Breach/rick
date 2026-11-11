@@ -496,7 +496,7 @@ fn assert_in_place(home: &Path, rick: &Path) {
     let entry = home.join(".local/share/applications/rick.desktop");
     let text = fs::read_to_string(&entry).unwrap_or_else(|e| panic!("{e}"));
     assert!(
-        text.contains(&format!("Exec=\"{}\" %U\n", rick.display())),
+        text.contains(&format!("Exec=\"{}\" --activate %U\n", rick.display())),
         "{text}"
     );
     match ext_installer::desktop::validate(&entry) {

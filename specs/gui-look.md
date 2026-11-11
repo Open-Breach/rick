@@ -26,12 +26,12 @@ Default layout: the side panel on the left; one workspace tab holding one explor
 | `bg/track` | `#e0e0e0` | `#3d3d3d` | The track of a drive's usage bar |
 | `bg/switch-off` | `#8e8e8e` | `#7a7a7a` | A switch that is off |
 | `text/primary` | `#2b2b2b` | `#ededed` | Body text |
-| `text/secondary` | `#6b6b6b` | `#a0a0a0` | Column headers, section headers, footer statistics, the Size, Type and Modified columns, inactive tabs, detail lines, shortcuts in menus |
+| `text/secondary` | `#646464` | `#a6a6a6` | Column headers, section headers, footer statistics, the Size, Type and Modified columns, inactive tabs, detail lines, shortcuts in menus |
 | `text/placeholder` | `#737373` | `#979797` | Placeholder text in fields |
 | `text/on-selected` | `#1f528c` | `#a9d2ff` | Text on `bg/selected-soft` |
 | `icon/default` | `#4a4a4a` | `#cfcfcf` | Icons at rest |
 | `border/default` | `#d6d6d6` | `#3d3d3d` | Hairlines, dividers, field and card borders, the window border |
-| `border/strong` | `#939393` | `#777777` | Checkbox borders and other small controls that need more contrast |
+| `border/strong` | `#8c8c8c` | `#777777` | Checkbox borders and other small controls that need more contrast |
 | `accent/focus` | `#2873c0` | `#4ea1ff` | Blue text, focus rings, the icon of an active toggle, a switch that is on, progress bars, the portal animations, the filter-active dot |
 | `accent/button` | `#2a77c6` | `#2975c7` | The background of a primary button, with white text on it |
 | `accent/usage` | `#3c84c2` | `#5ab0ff` | The fill of a drive's usage bar |
@@ -39,7 +39,7 @@ Default layout: the side panel on the left; one workspace tab holding one explor
 | `status/success-bg` | `#d9f2e0` | `#1e3b2a` | The *Matches* pill |
 | `status/success-row` | `#edfaf0` | `#1b2e22` | The matching hash row |
 | `status/warning` | `#8c5c00` | `#f2c46b` | Warning text, such as the missing version in the installer |
-| `status/warning-border` | `#d98c0d` | `#d98c0d` | The border of a field with a warning |
+| `status/warning-border` | `#c27d0b` | `#d98c0d` | The border of a field with a warning |
 | `status/danger` | `#b3261a` | `#ff8a80` | Destructive menu entries (*Move to trash*, *Delete permanently*), a hash that does not match, errors |
 | `trash/low-bg`, `trash/low-text` | `#e2e2e2`, `#5c5c5c` | `#3a3a3a`, `#bdbdbd` | The Trash pill under 1 % |
 | `trash/mid-bg`, `trash/mid-text` | `#fce8b2`, `#8a5a00` | `#4a3a12`, `#f2c46b` | The Trash pill from 1 % to 5 % |

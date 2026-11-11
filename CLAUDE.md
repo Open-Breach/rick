@@ -100,7 +100,8 @@ test reads it.
 - Tier 2, `full.yml`: the pull request from `dev` into `main`, nightly on
   `dev`, and by hand from the Actions tab. Tier 1's checks on Linux x64,
   Linux arm64, macOS arm64 and Windows x64, plus the integration tests on
-  the 200k fixture (Linux x64) and the screenshots (Linux x64, macOS).
+  the 200k fixture and the clipboard chords through a real window (Linux
+  x64) and the screenshots (Linux x64, macOS).
   Gate job `tier 2`, the check `main` requires.
 - Tier 3, `bench.yml`: the acceptance benchmarks, measured with
   `RICK_BENCH_RECORD` and never blocking a pull request. By hand from the

@@ -4,7 +4,20 @@ Related: specs/gui-look.md, specs/gui-main-area.md, specs/gui-dialogues.md, spec
 
 ## Title row
 
-Rick draws its own window chrome; the platform's title bar is turned off. Where Rick draws the controls (Linux, Windows) the window is transparent behind a 10 px margin that holds a light shadow and a one-pixel border in `border/default`, with invisible resize grips along the edges and corners; a maximised or fullscreen window has no frame; macOS keeps the system's border and resize handles. Dragging an empty part of the title row moves the window; double-clicking it maximises or restores.
+Rick draws its own window chrome; the platform's title bar is turned off. Where Rick draws the controls (Linux, Windows) it draws the window's frame too, one of two (*Window frame*, below): where the window is transparent, it is so behind a 10 px margin that holds a light shadow and a one-pixel border in `border/default`, with invisible resize grips along the edges and corners; where it is not, the frame is a plain one-pixel border at the window's edge. A maximised or fullscreen window has no frame; macOS keeps the system's border and resize handles. Dragging an empty part of the title row moves the window; double-clicking it maximises or restores.
+
+**Window frame.** The frame Rick draws around a window it decorates itself is one of two, the same for every window of the process:
+
+- **Shadow frame**, the frame of a transparent window: a 10 px transparent margin around the content holds a light shadow, a one-pixel border in `border/default` runs around the content, and the resize grips cover the margin and reach 4 px inside the border.
+- **Plain frame**, the frame of an opaque window, which is the fallback where a window cannot be transparent and the default on X11: no margin and no shadow. The content fills the window, a one-pixel border in `border/default` runs along the window's edge, the corners are square, and the resize grips sit on the edge and reach 4 px inwards. The window is cleared to the panel colour, never to transparent.
+
+In both, a grip within 24 px of a corner resizes diagonally, and a maximised or fullscreen window has no frame.
+
+Rick asks for a transparent window and finds out once, when the first window's surface exists, whether it got one. The window counts as transparent when the surface the renderer draws to offers an alpha mode that blends the window with the desktop, pre-multiplied or post-multiplied; a surface that offers neither is composited opaque, and the margin of a shadow frame would show as a black band. This is a check of what the surface can do and never of the machine: Rick does not look for a virtual machine, a vendor or a driver name. Until the answer is known the window counts as opaque, so no black band shows even for one frame. Rick writes one line to the log at startup with the graphics backend, the adapter's name and the frame chosen; the fallback shows no dialogue and no notice.
+
+On X11 the check is not made. A transparent X11 window is blended with the desktop only while a compositing manager runs, and its surface offers an alpha mode whether one runs or not, so there the surface's answer says nothing and the margin of a shadow frame would be a black band on a desktop without one. On X11 Rick therefore draws the plain frame and does not ask for a transparent window, unless `rick.toml` asks for the shadow frame. The windows are X11 windows when the session names an X11 display and no Wayland one, which is how the windowing backend chooses; on Wayland the check is made as everywhere else.
+
+The choice can be overridden in `rick.toml`, key `frame` of the `[window]` table: `auto` (the default) follows the check, and on X11 draws the plain frame; `shadow` always asks for a transparent window and draws the shadow frame, on X11 too; `plain` always draws the plain frame and does not ask for a transparent window at all. It is for a system that reports a transparent surface and composites it wrongly, or the other way round, and for the shadow frame on an X11 desktop with a compositing manager. The key is in the config file only, with no entry in Settings; it is read when Rick starts, and a value Rick does not know reads as `auto`.
 
 The top of every window is one **title row**, `titlebar/height` tall on a tinted band, `bg/titlebar` (*Title bar colour*, below), laid out left to right:
 
@@ -28,7 +41,7 @@ The top of every window is one **title row**, `titlebar/height` tall on a tinted
 
 **On the band.** The active tab is `bg/pane` with the scheme's own colours whatever the band; everything else in the row is drawn on the band and is chosen by contrast with it. A band is *dark* when white contrasts with it more than `#2b2b2b` does, and *light* otherwise: every preset is light in Light and dark in Dark, except *Dark band*, which is dark in both.
 
-- **A band that agrees with the scheme** — light in Light, dark in Dark — is drawn from the scheme: icons in `icon/default`, inactive tab titles in `text/secondary`. Where `text/secondary` does not reach 4.5:1 on the band the titles are the band's own text colour at 78 % instead — `#2b2b2b` on a light band, white on a dark one — and at full strength should 78 % still fall short. That is the case of the five light presets in Light, on which `text/secondary` reaches 4.0 to 4.2:1 and `#2b2b2b` at 78 % reaches 5.8 to 6.0:1; in Dark `text/secondary` reaches 4.8:1 or more on every preset and stays.
+- **A band that agrees with the scheme** — light in Light, dark in Dark — is drawn from the scheme: icons in `icon/default`, inactive tab titles in `text/secondary`. Where `text/secondary` does not reach 4.5:1 on the band the titles are the band's own text colour at 78 % instead — `#2b2b2b` on a light band, white on a dark one — and at full strength should 78 % still fall short. That is the case of *Plum* in Light, on which `text/secondary` reaches 4.4:1 and `#2b2b2b` at 78 % reaches 5.8:1; on the other four light presets `text/secondary` reaches 4.6:1 and stays, and in Dark it reaches 5.2:1 or more on every preset and stays.
 - **A dark band in Light** — the *Dark band* preset, or a dark *Custom* colour — switches the row to light text, as frame `167:5261` draws: inactive tab titles white at 78 %; the icons — the menu button, the tab icons and close buttons, the new-tab button, the layout toggles and the window controls — white at 90 %; the divider white at 25 %; a hovered tool button and a hovered inactive tab white at 12 %; the search box white at 14 % with its placeholder white at 70 % and its text white at 90 %. A light *Custom* colour in Dark is the mirror image, with `#2b2b2b` in place of white.
 - **Hover.** An inactive tab under the pointer is `bg/pane` at 50 % over the band, except in the case above, where that would give a mid grey no title reads on.
 
@@ -61,7 +74,7 @@ There is no menu bar; the burger menu at the left of the title row — the appli
 | Configuration | Settings | `SLIDERS` | Its shortcut |
 | | Keyboard shortcuts | `KEYBOARD` | Its shortcut |
 | | Extensions | `PUZZLE_PIECE` | Its shortcut |
-| About | About Rick (the About dialog, [`specs/about-dialog.md`](specs/about-dialog.md)) | `INFO` | The version of the running build, `0.4.0` |
+| About | About Rick (the About dialog, [`specs/about-dialog.md`](about-dialog.md)) | `INFO` | The version of the running build, `0.4.0` |
 
 - Every entry has an icon. No label ends in "…": *Settings*, *Keyboard shortcuts* and *Extensions* are written as GNOME writes them. A shortcut hint comes from the keymap, never from a table of its own: the entry shows the chord bound to it — the first when it has several — and nothing when it is unbound. There is no theme switch in the menu: the scheme follows the system by default and is changed in Settings → Appearance.
 - The submenus are cards of the same form and keep their entries.

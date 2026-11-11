@@ -351,8 +351,8 @@ pub struct WindowUi {
     /// Each workspace tab of the title row in the last frame, by the tab
     /// its title comes from, for tests that drop on one.
     tab_headers: HashMap<TabId, egui::Rect>,
-    /// Rick's own window frame as the last frame drew it, if it did; the
-    /// window is then cleared to transparent around it.
+    /// Rick's own window frame as the last frame drew it, if it did; around
+    /// a shadow frame the window is then cleared to transparent.
     window_frame: Option<frame::Frame>,
     /// Drag and drop of entries.
     dnd: Dnd,
@@ -888,6 +888,9 @@ pub struct RickUi {
     /// The window of the pane a job that just failed was started from:
     /// where the notice that follows is shown.
     failed_in: Option<WindowId>,
+    /// What each window has seen of the copy, cut and paste chords, which
+    /// do not arrive as key presses.
+    chords: HashMap<WindowId, crate::chords::ClipboardChords>,
     dialog: Option<Dialog>,
     name_prompt: Option<NamePrompt>,
     settings: settings_ui::SettingsWindow,
@@ -958,6 +961,9 @@ pub struct RickUi {
     window_ref: Option<WindowRef>,
     /// The platform has been told about `window_ref`.
     attached: bool,
+    /// The frame drawn around every window Rick decorates itself: the
+    /// shadow frame unless [`with_frame`](Self::with_frame) said otherwise.
+    frame_mode: frame::Mode,
     /// Work from outside the windows (a second launch's command line,
     /// handed over through the single-instance endpoint), run against the
     /// application before the root window's frame.
@@ -1108,11 +1114,16 @@ fn viewport_of(window: WindowId) -> ViewportId {
 
 /// The viewport builder for a window: Rick's own chrome, the app id and the
 /// window icon, at the window's restored geometry when it has one.
+/// `transparent` is whether a window Rick frames itself asks the system for
+/// transparency: the first window by [`frame::asks_transparency`], every
+/// later one by the frame that was chosen ([`frame::Mode::transparent`]). A
+/// window whose system keeps its controls never asks.
 #[must_use]
 pub fn viewport_builder(
     title: &str,
     chrome: platform::WindowChrome,
     geometry: Option<Geometry>,
+    transparent: bool,
 ) -> ViewportBuilder {
     let mut viewport = ViewportBuilder::default()
         .with_title(title)
@@ -1128,15 +1139,18 @@ pub fn viewport_builder(
             .with_maximized(g.maximised),
         None => viewport.with_inner_size(DEFAULT_SIZE),
     };
-    // Without decorations Rick draws the frame itself (`frame`): the window
-    // is transparent so the margin around the content shows the shadow.
+    // Without decorations Rick draws the frame itself (`frame`): for the
+    // shadow frame the window is transparent, so the margin around the
+    // content shows the shadow; for the plain frame it is not.
     if chrome.native_controls {
         viewport
             .with_titlebar_shown(false)
             .with_title_shown(false)
             .with_fullsize_content_view(true)
     } else {
-        viewport.with_decorations(false).with_transparent(true)
+        viewport
+            .with_decorations(false)
+            .with_transparent(transparent)
     }
 }
 
@@ -1180,6 +1194,7 @@ impl RickUi {
             dispatched: VecDeque::new(),
             toasts: Vec::new(),
             failed_in: None,
+            chords: HashMap::new(),
             dialog: None,
             name_prompt: None,
             settings: settings_ui::SettingsWindow::default(),
@@ -1214,10 +1229,22 @@ impl RickUi {
             quitting: false,
             window_ref: None,
             attached: false,
+            frame_mode: frame::Mode::Shadow,
             viewports,
             externals: None,
             relaunch: None,
         }
+    }
+
+    /// Sets the frame Rick draws around its windows (specs/gui-title-row.md,
+    /// *Window frame*). Without this call it is the shadow frame, which is
+    /// right where the window is rendered off screen, as the test harness
+    /// does; [`run`](crate::run) always calls it, with the plain frame
+    /// unless the window is known to be transparent.
+    #[must_use]
+    pub fn with_frame(mut self, mode: frame::Mode) -> Self {
+        self.frame_mode = mode;
+        self
     }
 
     /// Takes the hook that continues Rick from the copy it was installed
@@ -1927,17 +1954,76 @@ impl RickUi {
 
     /// Turns this frame's key presses into intents, unless a text field, a
     /// dialogue, the palette or the shortcuts screen wants them.
-    fn handle_keys(&mut self, ctx: &egui::Context, window: WindowId) {
-        let pane = self.explorer_pane(self.focused_in(window));
-        if self.dialog.is_some()
+    /// Whether a dialogue is open: it has the keyboard, not the list
+    /// behind it. Every dialogue the window shows is named here — one left
+    /// out lets the list take its keys, Escape before all (issue 177).
+    fn dialogue_open(&self) -> bool {
+        self.dialog.is_some()
             || self.name_prompt.is_some()
             || self.shortcuts.open
             || self.extensions.is_open()
             || self.about.is_open()
             || self.properties.is_open()
+            || self.hash.is_open()
+            || self.integration.is_open()
             || !self.app.model().conflicts.is_empty()
             || !self.app.model().questions.is_empty()
+    }
+
+    /// The intents of the copy, cut and paste chords of this frame, for a
+    /// list that has the keyboard: the window delivers them as events of
+    /// their own, and they go through the keymap like any key press.
+    fn clipboard_intents(
+        &mut self,
+        ctx: &egui::Context,
+        window: WindowId,
+        in_preview: bool,
+    ) -> Vec<Intent> {
+        let chords = self.chords.entry(window).or_default();
+        ctx.input_mut(|input| chords.take(input))
+            .into_iter()
+            .filter_map(|chord| {
+                self.keys
+                    .match_key(chord.modifiers, chord.key, None, in_preview)
+            })
+            .collect()
+    }
+
+    /// What Escape calls off before the key clears a filter or the
+    /// selection: Properties that is on its way, its entry still being
+    /// read (issue 178), and a download for the preview (SPEC.md *Remote
+    /// sources*). Returns whether the key was taken for one of them.
+    fn escape_calls_off(&mut self, ctx: &egui::Context) -> bool {
+        let escape = |ctx: &egui::Context| {
+            ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape))
+        };
+        if self.app.properties_pending() && escape(ctx) {
+            self.requests
+                .push(Request::Command(Command::PropertiesClosed));
+            return true;
+        }
+        if let Some(preview) = self.app.preview_pane()
+            && self
+                .previews
+                .get(preview)
+                .is_some_and(crate::preview::Slot::downloading)
+            && escape(ctx)
         {
+            self.requests
+                .push(Request::Command(Command::PreviewCancel(preview)));
+            return true;
+        }
+        false
+    }
+
+    fn handle_keys(&mut self, ctx: &egui::Context, window: WindowId) {
+        // The copy, cut and paste chords are followed in every frame,
+        // whoever has the keyboard: a paste is told by its key's release.
+        let now = Instant::now();
+        let chords = self.chords.entry(window).or_default();
+        ctx.input(|input| chords.track(input, now));
+        let pane = self.explorer_pane(self.focused_in(window));
+        if self.dialogue_open() {
             return;
         }
         // An open menu owns the keyboard: Escape closes it, nothing else —
@@ -1945,17 +2031,7 @@ impl RickUi {
         if egui::Popup::is_any_open(ctx) {
             return;
         }
-        // A download for the preview is cancelled by Escape before the key
-        // clears a filter or the selection (SPEC.md *Remote sources*).
-        if let Some(preview) = self.app.preview_pane()
-            && self
-                .previews
-                .get(preview)
-                .is_some_and(crate::preview::Slot::downloading)
-            && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape))
-        {
-            self.requests
-                .push(Request::Command(Command::PreviewCancel(preview)));
+        if self.escape_calls_off(ctx) {
             return;
         }
         if self.side.focused() && self.side.handle_keys(ctx, &self.app, &mut self.requests) {
@@ -1977,6 +2053,7 @@ impl RickUi {
         let mut intents = Vec::new();
         let mut typed = String::new();
         let mut backspace = false;
+        intents.extend(self.clipboard_intents(ctx, window, in_preview));
         ctx.input_mut(|input| {
             input.events.retain(|event| match event {
                 egui::Event::Key {
@@ -4995,8 +5072,8 @@ impl RickUi {
         // Rick's own window frame where the system draws none; the panels
         // go inside it.
         let chrome = self.app.platform().window_chrome();
-        let window_frame =
-            frame::wanted(ctx, chrome).then(|| frame::Frame::paint(ui, ui.max_rect()));
+        let window_frame = frame::wanted(ctx, chrome)
+            .then(|| frame::Frame::paint(ui, ui.max_rect(), self.frame_mode));
         let content = window_frame.map_or(ui.max_rect(), |f| f.content());
         if let Some(w) = self.windows.get_mut(&window) {
             w.window_frame = window_frame;
@@ -5107,7 +5184,7 @@ impl RickUi {
             ids.push(viewport);
             ctx.show_viewport_immediate(
                 viewport,
-                viewport_builder("Rick", chrome, geometry),
+                viewport_builder("Rick", chrome, geometry, self.frame_mode.transparent()),
                 |ui, _class| self.draw_window(ui, id),
             );
         }
@@ -5119,10 +5196,13 @@ impl RickUi {
 }
 
 impl eframe::App for RickUi {
-    /// Transparent around Rick's own frame, so its shadow shows the desktop
-    /// through the margin; the panel colour otherwise.
+    /// Transparent around Rick's shadow frame, so its shadow shows the
+    /// desktop through the margin; the panel colour otherwise, and always
+    /// behind the plain frame of a window that cannot be transparent.
     fn clear_color(&self, visuals: &egui::Visuals) -> [f32; 4] {
-        if self.windows.values().any(|w| w.window_frame.is_some()) {
+        if self.frame_mode == frame::Mode::Shadow
+            && self.windows.values().any(|w| w.window_frame.is_some())
+        {
             [0.0; 4]
         } else {
             visuals.panel_fill.to_normalized_gamma_f32()
@@ -5246,6 +5326,79 @@ mod tests {
         assert_eq!(home.cursor_in(second, Some(origins[1]), None), None);
     }
 
+    /// A 900 by 600 window on the fake platform, where Rick draws the
+    /// frame, after its first frame.
+    fn framed(mode: frame::Mode) -> egui_kittest::Harness<'static, RickUi> {
+        let fake = Arc::new(platform::Fake::new().unwrap_or_else(|e| panic!("{e}")));
+        let host = Arc::new(EguiHost::new());
+        let app = App::new(app::Config {
+            platform: fake.clone(),
+            ui: host.clone(),
+            extensions: Vec::new(),
+            config_dir: Some(platform::ConfigDir::config_dir(fake.as_ref())),
+            start: None,
+        });
+        let mut harness = egui_kittest::Harness::builder()
+            .with_size(egui::vec2(900.0, 600.0))
+            .build_eframe(move |cc| RickUi::new(app, host, &cc.egui_ctx).with_frame(mode));
+        harness.step();
+        harness
+    }
+
+    /// Issue 158: behind a plain frame the window is cleared to the panel
+    /// colour, opaque, so nothing of an opaque surface shows as black; the
+    /// shadow frame's margin is cleared to transparent as before.
+    #[test]
+    fn the_window_is_cleared_to_the_panel_colour_behind_a_plain_frame() {
+        let visuals = egui::Visuals::dark();
+        let plain = framed(frame::Mode::Plain);
+        assert!(plain.state().framed_content().is_some(), "a frame is drawn");
+        let cleared = eframe::App::clear_color(plain.state(), &visuals);
+        let panel = visuals.panel_fill.to_normalized_gamma_f32();
+        assert!(
+            cleared
+                .iter()
+                .zip(panel)
+                .all(|(c, p)| (c - p).abs() < f32::EPSILON),
+            "{cleared:?} is the panel colour {panel:?}"
+        );
+        assert!(
+            (cleared[3] - 1.0).abs() < f32::EPSILON,
+            "opaque: {cleared:?}"
+        );
+
+        let shadow = framed(frame::Mode::Shadow);
+        assert!(
+            shadow.state().framed_content().is_some(),
+            "a frame is drawn"
+        );
+        let cleared = eframe::App::clear_color(shadow.state(), &visuals);
+        assert!(
+            cleared.iter().all(|c| c.abs() < f32::EPSILON),
+            "transparent: {cleared:?}"
+        );
+    }
+
+    /// Issue 158, every window: one Rick frames itself is undecorated and
+    /// asks for transparency only when told to, which is for the shadow
+    /// frame; one whose system keeps its controls never asks.
+    #[test]
+    fn a_window_asks_for_transparency_only_for_the_shadow_frame() {
+        let chrome = |native_controls| platform::WindowChrome {
+            controls: ControlsSide::Right,
+            native_controls,
+            native_controls_width: 0.0,
+        };
+        for (asked, mode) in [(true, frame::Mode::Shadow), (false, frame::Mode::Plain)] {
+            let own = viewport_builder("Rick", chrome(false), None, mode.transparent());
+            assert_eq!(own.decorations, Some(false));
+            assert_eq!(own.transparent, Some(asked), "{mode:?}");
+            let native = viewport_builder("Rick", chrome(true), None, mode.transparent());
+            assert_eq!(native.transparent, None, "the system's frame");
+            assert_eq!(native.decorations, None);
+        }
+    }
+
     /// The bundled icon is the 256 px tile, decoded once.
     #[test]
     fn the_window_icon_is_the_256_px_tile() {
@@ -5267,7 +5420,7 @@ mod tests {
                 native_controls,
                 native_controls_width: 0.0,
             };
-            let viewport = viewport_builder("Rick", chrome, None);
+            let viewport = viewport_builder("Rick", chrome, None, true);
             assert_eq!(viewport.app_id.as_deref(), Some(APP_ID));
             assert_eq!(APP_ID, "rick");
             let icon = viewport

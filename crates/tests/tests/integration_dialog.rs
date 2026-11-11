@@ -413,3 +413,37 @@ fn without_items_the_dialog_never_opens() {
         "the check ran after the first frame"
     );
 }
+
+/// Issue 177: while the dialog is open the keyboard is its own — the list
+/// behind it gets no key, as behind every other dialogue.
+#[test]
+fn the_list_behind_the_dialog_gets_no_keys() {
+    let (fake, _integration) = scripted();
+    let config = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+    std::fs::write(config.path().join("notes.txt"), "notes").unwrap_or_else(|e| panic!("{e}"));
+    let mut harness = start(&fake, config.path());
+    assert!(open(&harness));
+    harness.state_mut().clear_dispatched();
+    harness.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+    harness.key_press(egui::Key::Delete);
+    harness.event(egui::Event::Text("no".to_owned()));
+    for _ in 0..4 {
+        harness.step();
+    }
+    assert_eq!(
+        harness
+            .state()
+            .dispatched()
+            .iter()
+            .map(|d| d.intent)
+            .collect::<Vec<_>>(),
+        Vec::new(),
+        "no key of the dialog's is the list's"
+    );
+    let model = harness.state().app().model();
+    let filter = model
+        .active_tab(model.focused)
+        .map(|(_, tab)| tab.filter.clone());
+    assert_eq!(filter.as_deref(), Some(""));
+    assert!(open(&harness));
+}

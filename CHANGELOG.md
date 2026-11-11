@@ -67,6 +67,18 @@ open is in `QUESTIONS.md` 323 to 366. The rules went into SPEC.md first
   Either button shows the Portal burst with a progress line and
   *Downloading… x of y MiB*, and Esc cancels the download and returns to the
   card. This holds for every remote provider; the limit stays 4 MiB (#164).
+- **Git clone.** *Git clone…* in the right-click menu of a folder and of a
+  pane's empty area clones a repository into that folder, outside a
+  repository too. Its dialogue asks for the URL: an `https://`, `ssh://`,
+  `git://` or `file://` URL, `user@host:path`, or the path of a local
+  repository. The field is prefilled, and selected, when the clipboard
+  holds one of these. The dialogue names the folder the clone creates and
+  has *Branch*, *Depth* and *Submodules* as options, folded away. The clone
+  is `git clone` as a job in the operations: git's own progress line, a
+  cancel that stops git and removes the folder the clone had created, never
+  one that was there before, and git's message in the job when it fails.
+  The dialogue is built from the form fields a plugin has, so it does not
+  match its Figma frames in every detail yet (#188).
 
 ### Changed
 
@@ -113,10 +125,82 @@ open is in `QUESTIONS.md` 323 to 366. The rules went into SPEC.md first
   job's name and the whole text; an error notice stays until its close
   button is pressed. `Event::JobFailed` names the pane a failed job was
   started from (#169).
+- **Paste in the context menu** is always there where the folder can be
+  written to, greyed with *nothing to paste* until something is copied or
+  cut. On a folder it pastes into that folder, and *Paste as link* with it;
+  on the empty area into the folder the pane shows (issue 176, #179).
+- **A click on the launcher only raises the window.** The desktop entry
+  runs `rick --activate %U`: a click on the launcher entry or on a dock
+  favourite brings the window of the running Rick forward and opens no
+  tab, and starts Rick with its session when none runs. A folder dropped
+  on the icon, *Open with* and a `rick://` link open as before, and `rick`
+  typed in a terminal keeps opening the current directory. A launcher
+  entry written by an earlier version reads as changed in the integration
+  dialog and is rewritten when its row is applied (specs/decisions.md
+  Q264, #191).
+- **Three colour tokens follow the revised Figma variables.**
+  `text/secondary` is `#646464` in Light and `#a6a6a6` in Dark,
+  `border/strong` is `#8c8c8c` in Light and `status/warning-border` is
+  `#c27d0b` in Light. Every text and control pair now meets WCAG contrast,
+  and the test that holds them has no exception left. In Light the
+  inactive tab titles on the *Dusty rose*, *Warm grey*, *Slate teal* and
+  *Sage* bands are `text/secondary` again; *Plum*, where it still falls
+  short, keeps `#2b2b2b` at 78 % (specs/decisions.md Q242, #191).
 - The workspace version is `0.4.0-dev` until 0.4.0 is tagged (#154).
 
 ### Fixed
 
+- **The Windows archive starts on a machine without the Visual C++
+  Redistributable.** `rick.exe`, Rick's kernel libraries, every plugin and
+  the GStreamer runtime import `vcruntime140.dll`, some of them
+  `vcruntime140_1.dll` and `msvcp140.dll` too, and the archives up to 0.3.0
+  carried none: on a Windows without the redistributable Rick stopped
+  before its first window with “VCRUNTIME140.dll was not found”. The
+  release workflow now puts the runtime's libraries beside `rick.exe`
+  (`cargo xtask bundle` copies them from `RICK_VCRUNTIME_DIR`, the
+  toolset's redistributable folder), and its smoke test reads the imports
+  of every module in the archive and fails when a library of the Visual
+  C++ runtime is not in it (#186).
+- **No black band around the window where it cannot be transparent**
+  (issue 158). Rick asks for a transparent window to paint its shadow into
+  a 10 px margin; where the surface is opaque — as on Windows under
+  DirectX 12, which is what a virtual machine without a graphics driver
+  gets — that margin showed as a solid black band. Rick now checks once,
+  before the first frame,
+  whether the first window's surface offers an alpha mode that blends, and
+  draws the plain frame where it does not: no margin and no shadow, a
+  one-pixel border at the window's edge, and the resize grips on the edge.
+  The shadow frame is unchanged where the window is transparent. One line
+  in the log at startup names the graphics backend, the adapter and the
+  frame chosen. `frame` in the `[window]` table of `rick.toml` overrides
+  the check: `auto` (the default), `shadow` or `plain` (#182).
+- **The plain frame is the default on X11.** An X11 window is blended with
+  the desktop only while a compositing manager runs, and its surface offers
+  an alpha mode either way, so without one the shadow frame's margin was
+  still a black band. On X11 `auto` now draws the plain frame and asks for
+  no transparent window; `frame = "shadow"` in the `[window]` table of
+  `rick.toml` brings the shadow frame back where a compositing manager
+  runs. Wayland, macOS and Windows are unchanged (#189).
+- **Copy, cut and paste by keyboard** work in the file list (issue 176). A
+  window delivers Mod+C, Mod+X and Mod+V as copy, cut and paste events, not
+  as key presses, and the paste event only when the clipboard holds text;
+  the list matched key presses alone, so the three chords did nothing in a
+  running Rick. They now go through the keymap like any key — Mod+Shift+C,
+  Mod+Alt+C and Mod+Shift+V with them — and a paste is taken at the release
+  of its key, whatever the clipboard holds. A text field keeps the chords
+  for its text. CI tier 2 drives the chords through a real window on Linux
+  (#179).
+- **A dialogue keeps the keyboard** (issue 177). Behind *File hashes* and
+  *Set up Rick on this system* the file list took every key: Escape cleared
+  its selection instead of closing the dialogue, and Delete would have
+  trashed the selected file. Escape now closes *File hashes*, with its
+  *Verify* field focused too, and cancels the job while the hashes are
+  still being computed (#183).
+- **Escape calls off Properties** that has not opened yet (issue 178). The
+  dialogue opens once its entry is read, which takes a moment on a slow or
+  remote volume; Escape pressed in between used to go to the list, and the
+  dialogue opened afterwards. An answer to a request that was called off,
+  or overtaken by a later one, is dropped — on a remote entry too (#185).
 - EXIF in the image preview shows only the tags Rick names and that have a
   real value, with the exposure as `1/120 s` and dates without seconds: a
   photo without GPS data has no GPS rows and no “NaN” (#162).

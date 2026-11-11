@@ -46,7 +46,8 @@ pub use session::{
 pub use settings::{
     AfterDrag, Archives, ConnectionEntry, Density, Drag, LAST_SESSION, OnOpen, PanelSide, Plugins,
     Preview, Rgb, Search, Section, SessionSettings, Settings, SettingsChange, SidePanel,
-    SidePanelChange, TextPreview, Theme, TitlebarColour, parse_location,
+    SidePanelChange, TextPreview, Theme, TitlebarColour, WindowFrame, WindowSettings,
+    parse_location,
 };
 pub use tree::{Tree, TreeRow};
 use types::{
