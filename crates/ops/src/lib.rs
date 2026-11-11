@@ -86,6 +86,7 @@ use vfs::Mounts;
 
 pub use clipboard::{ClipMode, Clipboard};
 pub use conflict::{ConflictWaker, Conflicts};
+pub use open::{OpenSettings, split_command};
 pub use open_with::FILE as OPEN_WITH_FILE;
 pub use perms::{Applied, PermissionRequest, PermissionsCommand, Recursion};
 pub use pin::{PinStore, pin_command, unpin_command};
@@ -134,6 +135,8 @@ struct State {
     // Actions run on the app thread one at a time; the lock is for the
     // `Send + Sync` bound, not for contention.
     clipboard: Mutex<Option<Clipboard>>,
+    /// The settings the open actions read; without them the defaults.
+    open_settings: Option<Arc<dyn OpenSettings>>,
 }
 
 impl State {
@@ -218,8 +221,19 @@ impl Core {
                 conflicts,
                 scheduler,
                 clipboard: Mutex::new(None),
+                open_settings: None,
             }),
         }
+    }
+
+    /// The same operations reading `settings` for what the user chose
+    /// about opening files: the editor of *Open in editor*.
+    #[must_use]
+    pub fn with_open_settings(mut self, settings: Arc<dyn OpenSettings>) -> Self {
+        if let Some(state) = Arc::get_mut(&mut self.state) {
+            state.open_settings = Some(settings);
+        }
+        self
     }
 
     /// What Copy or Cut put on the clipboard, if anything.
@@ -257,6 +271,7 @@ impl Extension for Core {
         reg.action(Arc::new(open::CopyPath(Arc::clone(s))));
         reg.action(Arc::new(open::CopyPathAndName(Arc::clone(s))));
         reg.action(Arc::new(open::OpenDefault(Arc::clone(s))));
+        reg.action(Arc::new(open::OpenInEditor(Arc::clone(s))));
         reg.action(Arc::new(download::Download(Arc::clone(s))));
         reg.action(Arc::new(open::Reveal(Arc::clone(s))));
         reg.action(Arc::new(containing::OpenContaining));
