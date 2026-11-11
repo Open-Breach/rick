@@ -13,6 +13,8 @@ use types::{Entry, EntryId};
 
 use crate::keys::{Intent, KeyMap};
 use crate::palette::{self, Item};
+use crate::theme::{self, ICON, TEXT_BODY, TEXT_SECONDARY};
+use crate::widgets;
 
 /// What the user picked from the dropdown.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -48,10 +50,56 @@ pub struct SearchBox {
     /// An index was available when the dropdown was last drawn, so an empty
     /// dropdown says so.
     searching_indexes: bool,
+    /// The dropdown of the last frame, `None` while it is closed.
+    drawn: Option<Drawn>,
 }
 
 /// How many name matches the dropdown lists.
 const MAX_ROWS: usize = 40;
+/// The dropdown's width where the window has the room: the box's own
+/// width is no measure for it, since the box gives way to the tabs down to
+/// 120 px, and a name with its folder beside it needs the room.
+pub const DROPDOWN_WIDTH: f32 = 560.0;
+/// The dropdown keeps this far from the window's edges.
+const DROPDOWN_MARGIN: f32 = 8.0;
+/// The dropdown scrolls beyond this height: twelve rows.
+const DROPDOWN_HEIGHT: f32 = 360.0;
+/// A row's height, a menu entry's.
+const ROW_HEIGHT: f32 = 30.0;
+/// A row's padding at each side.
+const ROW_PAD: f32 = 10.0;
+/// The gap between a row's icon and its label.
+const ICON_GAP: f32 = 10.0;
+/// The least room between a row's label and the text at its right.
+const HINT_GAP: f32 = 24.0;
+/// The share of a row the text at its right may take from a label that
+/// would fill the row by itself.
+const HINT_SHARE: f32 = 0.5;
+
+/// Where the dropdown and the texts of its rows were drawn in the last
+/// frame, for tests.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Drawn {
+    /// The dropdown's card.
+    pub card: egui::Rect,
+    /// Every row's texts, in order.
+    pub rows: Vec<DrawnRow>,
+}
+
+/// The texts of one row of the dropdown as they were drawn.
+#[derive(Debug, Clone, PartialEq)]
+pub struct DrawnRow {
+    /// The whole label, cut or not.
+    pub label: String,
+    /// Where the label was painted.
+    pub label_rect: egui::Rect,
+    /// Whether the label was cut with an ellipsis.
+    pub label_cut: bool,
+    /// Where the text at the right was painted, when the row has one.
+    pub hint_rect: Option<egui::Rect>,
+    /// Whether the text at the right was cut with an ellipsis.
+    pub hint_cut: bool,
+}
 
 impl SearchBox {
     /// Puts `text` in the box and focuses it.
@@ -66,6 +114,12 @@ impl SearchBox {
     #[must_use]
     pub fn active(&self) -> bool {
         self.active
+    }
+
+    /// The dropdown as the last frame drew it, `None` while it is closed.
+    #[must_use]
+    pub fn drawn(&self) -> Option<&Drawn> {
+        self.drawn.as_ref()
     }
 
     /// Whether the text asks for commands.
@@ -149,6 +203,7 @@ impl SearchBox {
         // frame, so they count while the box had it a moment ago.
         let was_active = self.active;
         let has_focus = output.has_focus();
+        self.drawn = None;
         let (enter, escape) = ui.input(|i| {
             (
                 i.key_pressed(egui::Key::Enter),
@@ -202,7 +257,12 @@ impl SearchBox {
         picked
     }
 
-    /// The rows below the box.
+    /// The rows below the box, on a card of its own width: the box's left
+    /// edge where the window has the room, moved left where it has not,
+    /// [`DROPDOWN_WIDTH`] wide or as wide as the box where that is wider,
+    /// and never past the window's edges. The card is as tall as its rows,
+    /// growing and shrinking with them, and scrolls beyond
+    /// [`DROPDOWN_HEIGHT`]. Each row is a line of its own ([`row`]).
     fn dropdown(
         &mut self,
         ui: &mut egui::Ui,
@@ -211,66 +271,71 @@ impl SearchBox {
         rows: &[Row],
         picked: &mut Option<Pick>,
     ) {
-        {
-            let area = egui::Area::new(id.with("dropdown"))
-                .order(egui::Order::Foreground)
-                .fixed_pos(rect.left_bottom() + egui::vec2(0.0, 4.0))
-                .interactable(true);
-            area.show(ui.ctx(), |ui| {
-                ui.set_width(rect.width());
-                egui::Frame::popup(ui.style()).show(ui, |ui| {
-                    ui.set_width(rect.width() - 16.0);
-                    egui::ScrollArea::vertical()
-                        .max_height(360.0)
-                        .show(ui, |ui| {
-                            if rows.is_empty() {
-                                ui.weak(if self.command_mode() {
-                                    "No matching command"
-                                } else if self.searching_indexes {
-                                    "Nothing by that name here or in the index"
-                                } else {
-                                    "Nothing by that name here"
-                                });
+        let screen = ui.ctx().content_rect();
+        let width = rect
+            .width()
+            .max(DROPDOWN_WIDTH)
+            .min(screen.width() - 2.0 * DROPDOWN_MARGIN);
+        let left = rect
+            .left()
+            .min(screen.right() - DROPDOWN_MARGIN - width)
+            .max(screen.left() + DROPDOWN_MARGIN);
+        let frame = egui::Frame::popup(ui.style());
+        let inner = width - frame.total_margin().sum().x;
+        // The height the rows want, up to the height the list scrolls at.
+        // An area remembers the size it last had and offers its content no
+        // more, and a scroll area takes what it is offered: left to them,
+        // the list would keep the height of the rows it first opened with
+        // and scroll the hits that the index sends a moment later.
+        #[allow(clippy::cast_precision_loss)]
+        let wanted = (rows.len() as f32 * ROW_HEIGHT).min(DROPDOWN_HEIGHT);
+        let mut drawn = Drawn {
+            card: egui::Rect::NOTHING,
+            rows: Vec::new(),
+        };
+        let area = egui::Area::new(id.with("dropdown"))
+            .order(egui::Order::Foreground)
+            .fixed_pos(egui::pos2(left, rect.bottom() + 4.0))
+            .interactable(true);
+        let shown = area.show(ui.ctx(), |ui| {
+            frame.show(ui, |ui| {
+                ui.set_width(inner);
+                ui.spacing_mut().item_spacing.y = 0.0;
+                egui::ScrollArea::vertical()
+                    .max_height(DROPDOWN_HEIGHT)
+                    .min_scrolled_height(wanted)
+                    .show(ui, |ui| {
+                        ui.set_width(ui.available_width());
+                        if rows.is_empty() {
+                            ui.weak(if self.command_mode() {
+                                "No matching command"
+                            } else if self.searching_indexes {
+                                "Nothing by that name here or in the index"
+                            } else {
+                                "Nothing by that name here"
+                            });
+                        }
+                        for (i, entry) in rows.iter().enumerate() {
+                            let selected = i == self.selected;
+                            let response = row(ui, entry, selected, &mut drawn.rows);
+                            if selected {
+                                response.scroll_to_me(None);
                             }
-                            for (i, row) in rows.iter().enumerate() {
-                                let selected = i == self.selected;
-                                let text = egui::RichText::new(&row.label);
-                                let text = if row.disabled.is_some() {
-                                    text.weak()
-                                } else {
-                                    text
-                                };
-                                let response = ui
-                                    .horizontal(|ui| {
-                                        let r = ui.selectable_label(selected, text);
-                                        ui.with_layout(
-                                            egui::Layout::right_to_left(egui::Align::Center),
-                                            |ui| {
-                                                if let Some(hint) = &row.hint {
-                                                    ui.weak(hint);
-                                                }
-                                            },
-                                        );
-                                        r
-                                    })
-                                    .inner;
-                                if selected {
-                                    response.scroll_to_me(None);
-                                }
-                                if let Some(why) = &row.disabled {
-                                    response.clone().on_hover_text(why);
-                                }
-                                if response.clicked() {
-                                    picked.clone_from(&row.pick);
-                                }
-                                if response.hovered() {
-                                    self.selected = i;
-                                }
+                            if let Some(why) = &entry.disabled {
+                                response.clone().on_hover_text(why);
                             }
-                        });
-                });
+                            if response.clicked() {
+                                picked.clone_from(&entry.pick);
+                            }
+                            if response.hovered() {
+                                self.selected = i;
+                            }
+                        }
+                    });
             });
-        }
+        });
+        drawn.card = shown.response.rect;
+        self.drawn = Some(drawn);
     }
 
     /// The dropdown's rows for the current text.
@@ -281,8 +346,9 @@ impl SearchBox {
             return palette::ranked(query, items)
                 .into_iter()
                 .map(|item: Item| Row {
+                    icon: None,
                     label: item.label,
-                    hint: item.shortcut,
+                    hint: item.shortcut.map(Hint::Text),
                     pick: item.disabled.is_none().then_some(Pick::Intent(item.intent)),
                     disabled: item.disabled,
                 })
@@ -302,8 +368,9 @@ impl SearchBox {
             .filter(|(_, e)| e.name.to_lowercase().contains(&needle))
             .take(MAX_ROWS + 1)
             .map(|(index, e)| Row {
-                label: format!("{} {}", crate::icons::for_entry(e), e.name),
-                hint: Some(model::type_of(e)),
+                icon: Some(crate::icons::for_entry(e)),
+                label: e.name.clone(),
+                hint: Some(Hint::Text(model::type_of(e))),
                 disabled: None,
                 pick: Some(Pick::Entry { index, id: e.id }),
             })
@@ -321,14 +388,16 @@ impl SearchBox {
                     .parent()
                     .map_or_else(String::new, |p| p.to_string_lossy().into_owned());
                 rows.push(Row {
-                    label: format!("{} {}", crate::icons::for_entry(entry), entry.name),
-                    hint: Some(folder),
+                    icon: Some(crate::icons::for_entry(entry)),
+                    label: entry.name.clone(),
+                    hint: Some(Hint::Folder(folder)),
                     disabled: None,
                     pick: Some(Pick::Hit(entry.clone())),
                 });
             }
             for error in &search.errors {
                 rows.push(Row {
+                    icon: None,
                     label: error.clone(),
                     hint: None,
                     disabled: Some(t!("search-index-did-not-answer")),
@@ -337,6 +406,7 @@ impl SearchBox {
             }
             if !search.done {
                 rows.push(Row {
+                    icon: None,
                     label: "Searching the index…".to_owned(),
                     hint: None,
                     disabled: Some(t!("search-hits-appear-as-the-index-answers")),
@@ -347,6 +417,7 @@ impl SearchBox {
         if rows.len() > MAX_ROWS {
             rows.truncate(MAX_ROWS);
             rows.push(Row {
+                icon: None,
                 label: "More matches: keep typing".to_owned(),
                 hint: None,
                 disabled: Some(t!("search-narrow-the-search")),
@@ -364,8 +435,134 @@ fn needle_text(text: &str) -> &str {
 
 /// One line of the dropdown.
 struct Row {
+    /// The glyph before the label: an entry's icon. A command has none.
+    icon: Option<&'static str>,
     label: String,
-    hint: Option<String>,
+    hint: Option<Hint>,
     disabled: Option<String>,
     pick: Option<Pick>,
+}
+
+/// The text at a row's right.
+enum Hint {
+    /// A shortcut or a type: cut at its end where it has to be.
+    Text(String),
+    /// The folder of an index hit: cut at its start, so that the folder
+    /// itself, the end of the path, stays.
+    Folder(String),
+}
+
+impl Hint {
+    /// The whole text.
+    fn text(&self) -> &str {
+        match self {
+            Self::Text(text) | Self::Folder(text) => text,
+        }
+    }
+}
+
+/// One row of the dropdown, [`ROW_HEIGHT`] tall over the card's width: the
+/// icon, the label, and at the right the hint in `text/secondary`. The two
+/// texts never share a pixel: the hint takes what it needs, up to
+/// [`HINT_SHARE`] of the row where the label wants the row for itself, the
+/// label has the rest less [`HINT_GAP`], and what does not fit ends in an
+/// ellipsis, a folder at its start. A text that was cut shows whole as the
+/// tooltip. The selected row is `bg/selected-soft`; a row that cannot be
+/// picked is `text/placeholder`. Its accessible name is the label; the
+/// hint is a label of its own.
+fn row(ui: &mut egui::Ui, row: &Row, selected: bool, drawn: &mut Vec<DrawnRow>) -> egui::Response {
+    let scheme = theme::scheme(ui);
+    let metrics = theme::metrics(ui.ctx());
+    let (rect, response) = ui.allocate_exact_size(
+        egui::vec2(ui.available_width(), ROW_HEIGHT),
+        egui::Sense::click(),
+    );
+    if selected {
+        ui.painter()
+            .rect_filled(rect, metrics.corner_radius(), scheme.bg_selected_soft);
+    }
+    let (label_colour, icon_colour, hint_colour) = if row.disabled.is_some() {
+        (
+            scheme.text_placeholder,
+            scheme.text_placeholder,
+            scheme.text_placeholder,
+        )
+    } else {
+        (
+            scheme.text_primary,
+            scheme.icon_default,
+            scheme.text_secondary,
+        )
+    };
+    let middle = rect.center().y;
+    let mut left = rect.left() + ROW_PAD;
+    let right = rect.right() - ROW_PAD;
+    if let Some(icon) = row.icon {
+        ui.painter().text(
+            egui::pos2(left + ICON / 2.0, middle),
+            egui::Align2::CENTER_CENTER,
+            icon,
+            egui::FontId::proportional(ICON),
+            icon_colour,
+        );
+        left += ICON + ICON_GAP;
+    }
+    let room = (right - left).max(0.0);
+    let label_font = egui::FontId::proportional(TEXT_BODY);
+    let mut label_room = room;
+    let mut hint_rect = None;
+    let mut hint_cut = false;
+    if let Some(hint) = &row.hint {
+        let font = egui::FontId::proportional(TEXT_SECONDARY);
+        // What the label leaves, and its share where the label would take
+        // the row.
+        let wanted = ui
+            .painter()
+            .layout_no_wrap(row.label.clone(), label_font.clone(), label_colour)
+            .size()
+            .x;
+        let most = (room - wanted - HINT_GAP).max(room * HINT_SHARE);
+        let (galley, cut) = match hint {
+            Hint::Text(text) => {
+                let galley = widgets::elided(ui, text, font, hint_colour, most);
+                let cut = galley.elided;
+                (galley, cut)
+            }
+            Hint::Folder(text) => widgets::elided_at_start(ui, text, &font, hint_colour, most),
+        };
+        let size = galley.size();
+        let at = egui::Rect::from_min_size(egui::pos2(right - size.x, middle - size.y / 2.0), size);
+        ui.painter().galley(at.min, galley, hint_colour);
+        let spoken = hint.text().to_owned();
+        let over = ui.interact(at, response.id.with("hint"), egui::Sense::hover());
+        over.widget_info(|| {
+            egui::WidgetInfo::labeled(egui::WidgetType::Label, true, spoken.clone())
+        });
+        if cut {
+            over.on_hover_text(hint.text());
+        }
+        label_room = (room - size.x - HINT_GAP).max(0.0);
+        hint_rect = Some(at);
+        hint_cut = cut;
+    }
+    let galley = widgets::elided(ui, &row.label, label_font, label_colour, label_room);
+    let size = galley.size();
+    let label_cut = galley.elided;
+    let label_rect = egui::Rect::from_min_size(egui::pos2(left, middle - size.y / 2.0), size);
+    ui.painter().galley(label_rect.min, galley, label_colour);
+    let (spoken, enabled) = (row.label.clone(), row.pick.is_some());
+    response.widget_info(|| {
+        egui::WidgetInfo::labeled(egui::WidgetType::Button, enabled, spoken.clone())
+    });
+    drawn.push(DrawnRow {
+        label: row.label.clone(),
+        label_rect,
+        label_cut,
+        hint_rect,
+        hint_cut,
+    });
+    if label_cut && row.disabled.is_none() {
+        return response.on_hover_text(&row.label);
+    }
+    response
 }
