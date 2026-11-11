@@ -22,7 +22,7 @@ Select a file and the preview pane shows it, whatever it is: the pane is Rick's 
 - **Text and code** come with syntax highlighting and pretty-print for JSON, XML and YAML, and a 500 MB log shows its first screen instantly because Rick never loads a file whole.
 - **Audio and video** play right in the pane, with the stream details in the info bar.
 
-A file no previewer claims shows its facts and whether a plugin for its type is there to switch on; a hex view is one setting away for the types you want it for.
+A file no other previewer recognises opens in the hex view; without that plugin it shows its facts and whether a plugin for its type is there to switch on.
 
 ## Then put it in order
 
@@ -33,6 +33,7 @@ Seeing is half the job. Rick is also for the sorting-out:
 - Every copy, move, rename and delete runs as a job with progress, pause and cancel, and the risky ones are undoable. Conflicts ask once and remember your answer.
 - Flatten a tree into one list, create links, bulk rename with a preview, compare two files or two folders, pin the places you keep coming back to.
 - A command palette, a full rebindable keyboard map, and plain TOML settings you can read, edit and version.
+- Settings for how you work: how dates are written (`date_format`: `smart-time`, `smart`, `iso` or `system`), whether a second click renames (`rename_on_click`, off unless you turn it on), and the editor that F4 and *Open in editor* start (`editor`, empty for the system's default text editor). All three are in the Settings window, under Appearance and Behaviour, and in `rick.toml`.
 
 ## One tool, your modules
 
