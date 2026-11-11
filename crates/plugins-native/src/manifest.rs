@@ -11,7 +11,7 @@
 //! name = "Git"
 //! description = "Shows Git status badges and adds the Git actions."
 //! version = "0.2.0-dev"
-//! api_version = 19
+//! api_version = 20
 //! points = ["decorator", "action"]
 //! platforms = ["linux", "macos", "windows"]
 //! previews = []
