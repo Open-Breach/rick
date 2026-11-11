@@ -3,7 +3,8 @@
 //! The crate exposes [`fixture`], which generates a deterministic directory
 //! tree of N entries for tests and benchmarks, [`media`], which writes a
 //! photo with EXIF and a PDF of any page size, [`mem`], an in-memory
-//! provider that stands in for a cloud provider, and [`mod@bench`], the
+//! provider that stands in for a cloud provider, [`timeline`], a time
+//! slider source over a folder's copies, and [`mod@bench`], the
 //! targets of the acceptance benchmarks per operating system. The
 //! integration tests themselves live under `tests/`.
 
@@ -13,6 +14,7 @@ pub mod bench;
 pub mod fixture;
 pub mod media;
 pub mod mem;
+pub mod timeline;
 
 /// A local location for an OS path.
 #[must_use]
