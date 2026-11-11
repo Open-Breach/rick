@@ -40,7 +40,7 @@ rustix = { workspace = true, features = ["event", "fs", "pipe", "process", "std"
 wayland-client = { workspace = true }
 wayland-backend = { workspace = true }
 wayland-protocols = { workspace = true }
-x11rb = { workspace = true }
+x11rb = { workspace = true, features = ["randr"] }
 # The session bus: `org.freedesktop.FileManager1` (`file_manager`).
 zbus = { workspace = true }
 
@@ -58,6 +58,7 @@ objc2-app-kit = { workspace = true, features = [
     "NSImage",
     "NSPasteboard",
     "NSResponder",
+    "NSScreen",
     "NSView",
     "NSWindow",
     "NSWorkspace",

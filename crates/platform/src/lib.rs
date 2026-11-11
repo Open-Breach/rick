@@ -109,8 +109,8 @@ pub use raw_window_handle;
 pub use time::iso8601;
 pub use traits::{
     Activation, Application, Chrome, Clipboard, ConfigDir, ControlsSide, DialogFilter, DragSource,
-    DropTarget, Elevate, ElevatedOutput, FontFile, Fonts, ImageFormat, IncomingFiles, Motion,
-    Mount, MountWatch, MountsChanged, NativeDialogs, OpenWith, Platform, Point, Properties,
+    DropTarget, Elevate, ElevatedOutput, FontFile, Fonts, ImageFormat, IncomingFiles, Monitor,
+    Motion, Mount, MountWatch, MountsChanged, NativeDialogs, OpenWith, Platform, Point, Properties,
     PropertiesOutcome, RecentItem, RecentlyUsed, Secrets, SingleInstance, StandardFolder,
     StandardFolders, SystemFonts, Terminal, Trash, TrashedItem, Volume, VolumeKind, Volumes,
     WindowChrome, WindowRef,

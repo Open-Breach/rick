@@ -26,7 +26,7 @@ use crate::Native;
 use crate::time::parse_iso8601;
 use crate::traits::{
     Activation, Application, Chrome, ConfigDir, ControlsSide, DragSource, DropTarget, Elevate,
-    ElevatedOutput, ImageFormat, IncomingFiles, Mount, OpenWith, Point, Properties,
+    ElevatedOutput, ImageFormat, IncomingFiles, Monitor, Mount, OpenWith, Point, Properties,
     PropertiesOutcome, RecentItem, RecentlyUsed, StandardFolder, StandardFolders, Terminal, Trash,
     TrashedItem, Volume, VolumeKind, Volumes, WindowChrome, WindowRef,
 };
@@ -718,6 +718,43 @@ impl Chrome for Native {
             native_controls: true,
             native_controls_width: 78.0,
         }
+    }
+
+    /// The screens of `AppKit`, which counts in points already, the first
+    /// being the one with the menu bar. Its origin is the bottom left
+    /// corner of that screen with y upwards; a window is placed from the
+    /// top left with y downwards, so the rectangles are turned over.
+    fn monitors(&self, _pixels_per_point: f32) -> Vec<Monitor> {
+        let Some(mtm) = objc2::MainThreadMarker::new() else {
+            return Vec::new();
+        };
+        let screens = objc2_app_kit::NSScreen::screens(mtm);
+        let Some(top) = screens
+            .iter()
+            .next()
+            .map(|main| main.frame().origin.y + main.frame().size.height)
+        else {
+            return Vec::new();
+        };
+        #[allow(clippy::cast_possible_truncation)]
+        let turned = |rect: objc2_foundation::NSRect| {
+            [
+                rect.origin.x as f32,
+                (top - (rect.origin.y + rect.size.height)) as f32,
+                rect.size.width as f32,
+                rect.size.height as f32,
+            ]
+        };
+        screens
+            .iter()
+            .enumerate()
+            .map(|(index, screen)| Monitor {
+                id: screen.localizedName().to_string(),
+                primary: index == 0,
+                bounds: turned(screen.frame()),
+                work: turned(screen.visibleFrame()),
+            })
+            .collect()
     }
 }
 

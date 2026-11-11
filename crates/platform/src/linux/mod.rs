@@ -14,6 +14,7 @@ mod drag;
 mod elevate;
 pub(crate) mod file_manager;
 pub(crate) mod integration;
+mod monitors;
 mod mount;
 mod terminal;
 mod trash;
@@ -33,9 +34,9 @@ use crate::Native;
 use crate::time::iso8601;
 use crate::traits::{
     Activation, Application, Chrome, ConfigDir, ControlsSide, DragSource, DropTarget, Elevate,
-    ElevatedOutput, ImageFormat, IncomingFiles, Mount, MountWatch, MountsChanged, OpenWith, Point,
-    Properties, PropertiesOutcome, RecentItem, RecentlyUsed, StandardFolder, StandardFolders,
-    Terminal, Trash, TrashedItem, Volume, Volumes, WindowChrome, WindowRef,
+    ElevatedOutput, ImageFormat, IncomingFiles, Monitor, Mount, MountWatch, MountsChanged,
+    OpenWith, Point, Properties, PropertiesOutcome, RecentItem, RecentlyUsed, StandardFolder,
+    StandardFolders, Terminal, Trash, TrashedItem, Volume, Volumes, WindowChrome, WindowRef,
 };
 
 /// The distribution and the desktop: `PRETTY_NAME` of `/etc/os-release`
@@ -330,6 +331,11 @@ impl Chrome for Native {
 
     fn on_x11(&self) -> bool {
         x11_backend(|name| std::env::var(name).ok())
+    }
+
+    /// From `RandR` on X11; none on Wayland.
+    fn monitors(&self, pixels_per_point: f32) -> Vec<Monitor> {
+        monitors::list(pixels_per_point)
     }
 }
 
