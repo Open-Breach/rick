@@ -168,18 +168,18 @@ fn the_loading_portal_stands_still_under_reduce_motion() {
     harness.get_by_label("This folder is empty");
 }
 
-/// The x positions of the vertical hairlines painted inside `band` in the
-/// last frame: the header's separators, in order.
-fn separators_in(harness: &Harness<'_, RickUi>, band: egui::Rect) -> Vec<f32> {
-    fn walk(shape: &egui::Shape, band: egui::Rect, xs: &mut Vec<f32>) {
+/// The vertical hairlines painted inside `band` in the last frame, each
+/// with its x and its colour: the header's dividers, in order.
+fn separators_in(harness: &Harness<'_, RickUi>, band: egui::Rect) -> Vec<(f32, egui::Color32)> {
+    fn walk(shape: &egui::Shape, band: egui::Rect, xs: &mut Vec<(f32, egui::Color32)>) {
         match shape {
-            egui::Shape::LineSegment { points, .. }
+            egui::Shape::LineSegment { points, stroke }
                 if (points[0].x - points[1].x).abs() < 0.5
                     && band.x_range().contains(points[0].x)
                     && band.y_range().contains(points[0].y)
                     && band.y_range().contains(points[1].y) =>
             {
-                xs.push(points[0].x);
+                xs.push((points[0].x, stroke.color));
             }
             egui::Shape::Vec(shapes) => {
                 for shape in shapes {
@@ -195,8 +195,8 @@ fn separators_in(harness: &Harness<'_, RickUi>, band: egui::Rect) -> Vec<f32> {
             walk(&clipped.shape, band, &mut xs);
         }
     }
-    xs.sort_by(f32::total_cmp);
-    xs.dedup_by(|a, b| (*a - *b).abs() < 1.0);
+    xs.sort_by(|a, b| a.0.total_cmp(&b.0));
+    xs.dedup_by(|a, b| (a.0 - b.0).abs() < 1.0);
     xs
 }
 
@@ -254,16 +254,17 @@ fn double_click(harness: &mut Harness<'_, RickUi>, at: egui::Pos2) {
     harness.step();
 }
 
-/// Issue 79 item 9 (SPEC.md *File list*): no permanent divider between the
-/// headers; hovering a boundary shows a 1 px `border/strong` divider
-/// across the band and the column-resize cursor; dragging resizes the
-/// column before it, Name included, and the last column takes what is
+/// Issue 79 item 9 (SPEC.md *File list*), with the dividers that always
+/// show: between every two headers a 1 px divider across the band in
+/// `border/default`, so that the place to grab is seen; under the pointer
+/// it is `border/strong` with the column-resize cursor; dragging resizes
+/// the column before it, Name included, and the last column takes what is
 /// left; a double-click fits the column to its content; no column goes
 /// under 48 px; the widths survive a restart.
 #[test]
 // One scenario, boundary by boundary.
 #[allow(clippy::too_many_lines)]
-fn column_boundaries_show_on_hover_resize_fit_and_survive_a_restart() {
+fn column_boundaries_always_show_resize_fit_and_survive_a_restart() {
     use model::{SettingsChange, Theme};
     let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
     for name in ["a.txt", "b.svg", "a-rather-long-file-name-to-fit.txt"] {
@@ -289,41 +290,31 @@ fn column_boundaries_show_on_hover_resize_fit_and_survive_a_restart() {
         3,
         "Name|Size, Size|Type, Type|Modified: {boundaries:?}"
     );
-    assert!(
-        separators_in(&harness, band).is_empty(),
-        "no permanent divider: {:?}",
-        separators_in(&harness, band)
-    );
+    // With the pointer nowhere near, every boundary has its divider, in
+    // border/default.
+    let (resting, strong) = {
+        let scheme = ui_egui::theme::Scheme::LIGHT;
+        (scheme.border_default, scheme.border_strong)
+    };
+    let lines = separators_in(&harness, band);
+    assert_eq!(lines.len(), 3, "a divider at every boundary: {lines:?}");
+    for (line, boundary) in lines.iter().zip(&boundaries) {
+        assert!((line.0 - boundary).abs() < 1.0, "{lines:?} {boundaries:?}");
+        assert_eq!(line.1, resting, "border/default at rest: {lines:?}");
+    }
     let size = title_x(&harness, band, "Size");
     let kind = title_x(&harness, band, "Type");
     let modified = title_x(&harness, band, "Modified");
 
-    // Hovering the Size|Type boundary: one divider across the band in
-    // border/strong, and the column-resize cursor.
+    // Hovering the Size|Type boundary: its divider turns border/strong,
+    // the other two stay, and the cursor is the column-resize one.
     let at = egui::pos2(boundaries[1], band.center().y);
     harness.hover_at(at);
     harness.step();
     harness.step();
     let lines = separators_in(&harness, band);
-    assert_eq!(lines.len(), 1, "one divider while hovered: {lines:?}");
-    assert!(
-        (lines[0] - boundaries[1]).abs() < 1.0,
-        "{lines:?} at {at:?}"
-    );
-    let strong = ui_egui::theme::Scheme::LIGHT.border_strong;
-    let coloured = harness
-        .output()
-        .shapes
-        .iter()
-        .any(|clipped| match &clipped.shape {
-            egui::Shape::LineSegment { points, stroke } => {
-                (points[0].x - points[1].x).abs() < 0.5
-                    && band.y_range().contains(points[0].y)
-                    && stroke.color == strong
-            }
-            _ => false,
-        });
-    assert!(coloured, "the divider is border/strong");
+    let colours: Vec<_> = lines.iter().map(|line| line.1).collect();
+    assert_eq!(colours, [resting, strong, resting], "{lines:?} at {at:?}");
     assert_eq!(
         harness.output().platform_output.cursor_icon,
         egui::CursorIcon::ResizeColumn
@@ -331,9 +322,11 @@ fn column_boundaries_show_on_hover_resize_fit_and_survive_a_restart() {
     harness.hover_at(egui::pos2(band.center().x, band.bottom() + 200.0));
     harness.step();
     harness.step();
-    assert!(
-        separators_in(&harness, band).is_empty(),
-        "gone when the pointer leaves"
+    let lines = separators_in(&harness, band);
+    let colours: Vec<_> = lines.iter().map(|line| line.1).collect();
+    assert_eq!(
+        colours, [resting; 3],
+        "all three stay when the pointer leaves, at rest again: {lines:?}"
     );
 
     // Name grows by 60 px: Size, Type and Modified move right together.

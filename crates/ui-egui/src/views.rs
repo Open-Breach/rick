@@ -1270,9 +1270,10 @@ fn column_widths(tab: &Tab, ids: &[&str], available: f32, spacing: f32) -> Vec<f
         .collect()
 }
 
-/// The boundaries between the columns (SPEC.md *File list*): no permanent
-/// line; a hit zone about 6 px wide over the header band that, hovered,
-/// shows a 1 px `border/strong` divider across the band and the
+/// The boundaries between the columns (SPEC.md *File list*): a 1 px
+/// divider across the header band that always shows, in `border/default`,
+/// so that the place to grab is seen; its hit zone is about 6 px wide, and
+/// under the pointer or dragged the divider is `border/strong` with the
 /// column-resize cursor. Dragging it resizes the column before it, a
 /// double-click fits that column to its content, and no column gets
 /// narrower than [`COLUMN_MIN`]. A change goes to the model as the tab's
@@ -1305,14 +1306,20 @@ fn column_boundaries(
             egui::Id::new(("column-boundary", cx.tab_id, i)),
             Sense::click_and_drag(),
         );
-        if response.hovered() || response.dragged() {
+        let grabbed = response.hovered() || response.dragged();
+        if grabbed {
             ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeColumn);
-            ui.painter().vline(
-                x.round() + 0.5,
-                band.y_range(),
-                egui::Stroke::new(1.0, scheme.border_strong),
-            );
         }
+        let colour = if grabbed {
+            scheme.border_strong
+        } else {
+            scheme.border_default
+        };
+        ui.painter().vline(
+            x.round() + 0.5,
+            band.y_range(),
+            egui::Stroke::new(1.0, colour),
+        );
         let new_width = if response.double_clicked() {
             Some(fit_width(ui, cx, i, ids[i], extra))
         } else if response.dragged() {

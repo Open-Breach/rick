@@ -82,6 +82,9 @@ open is in `QUESTIONS.md` 323 to 366. The rules went into SPEC.md first
 
 ### Changed
 
+- **The dividers between the column headers always show**, in
+  `border/default`, so that the place to grab a column by is seen; under
+  the pointer a divider is `border/strong`, as before (#199).
 - **Application menu.** The pattern of the View options and context menus:
   an icon on every item, the shortcut hint or the submenu caret at the
   right, three groups — *New window* and *Layouts*; *Installer*, *Settings*,
