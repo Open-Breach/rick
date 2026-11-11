@@ -8,7 +8,7 @@ This file is the binding specification for the plugin; where it disagrees with `
 
 ## Decisions
 
-- One plugin crate, `ext-zfs`, a feature plugin like `ext-git` and `ext-ssh`: one read-only `Provider` (id `zfs`), one `Decorator` for the Info panel section, and the "ZFS" Action group. Loadable plugin file; the binary ships without it and nothing breaks when it is removed.
+- One plugin crate, `ext-zfs`, a feature plugin like `ext-git` and `ext-ssh`: one read-only `Provider` (id `zfs`), one `Decorator` for the Info panel section and the time slider's timeline, and the "ZFS" Action group. Loadable plugin file; the binary ships without it and nothing breaks when it is removed.
 - Linux only (OpenZFS). The manifest declares Linux as its only platform; elsewhere the Extensions screen lists the plugin as not supported and it is not loaded.
 - Everything goes through the `zfs` command line (`zfs list -H -p`, `zfs get -H -p`, `zfs snapshot`, `zfs rename`, `zfs destroy`, `zfs set`, `zfs inherit`) in the C locale. No libzfs, no C dependency in the plugin file.
 - A snapshot's files are read from the dataset's `.zfs/snapshot/<name>/` directory with the platform's file system calls, so a snapshot opens, previews and copies out like any folder.
@@ -17,9 +17,9 @@ This file is the binding specification for the plugin; where it disagrees with `
 
 ## Scope
 
-**In:** finding the dataset a folder lies in; the `zfs` location (datasets, snapshots, a snapshot's files, a file's versions); *Browse snapshots*, *Back to live folder*, *Versions*, *Restore*; *Create*, *Rename* and *Destroy snapshot*; *Edit ZFS properties…* for seven properties; the privileged helper and its polkit action; the Info panel section with the dataset's properties.
+**In:** finding the dataset a folder lies in; the `zfs` location (datasets, snapshots, a snapshot's files, a file's versions); *Browse snapshots*, *Back to live folder*, *Versions*, *Restore*; *Create*, *Rename* and *Destroy snapshot*; *Edit ZFS properties…* for seven properties; the privileged helper and its polkit action; the Info panel section with the dataset's properties; the dataset's snapshots as the time slider's timeline.
 
-**Out (this version):** macOS and FreeBSD ZFS; rollback; clones, holds and bookmarks as actions (a held snapshot is reported, not released); `zfs send` and `receive`; properties beyond the editor's seven, user properties, recursive property changes and undo of a property change; a timeline across snapshots (a later change, `add-zfs-time-slider`); pool status and scrubs.
+**Out (this version):** macOS and FreeBSD ZFS; rollback; clones, holds and bookmarks as actions (a held snapshot is reported, not released); `zfs send` and `receive`; properties beyond the editor's seven, user properties, recursive property changes and undo of a property change; pool status and scrubs.
 
 ## Datasets
 
@@ -93,6 +93,10 @@ The snapshot commands need a snapshot's full name: a dataset name without `@` is
 
 A *ZFS* section in the info badges of a local entry inside a dataset: the dataset's name; then, once read (*Loading…* until then), the number of snapshots, the newest snapshot's name and date, and the properties `guid`, `type`, `mountpoint`, `used`, `available`, `referenced`, `usedbysnapshots`, `quota`, `refquota`, `reservation`, `compression`, `compressratio`, `recordsize`, `dedup`, `copies`, `atime`, `encryption`, `keystatus` and `readonly`, in that order. Sizes are in human units, a quota or reservation of 0 reads *none*, `compressratio` carries an `x`. Each label carries the value's source: local, inherited from a named dataset, default or received. A property the installed ZFS does not report, or reports as `-`, is left out. Values copy as plain text.
 
+## Timeline
+
+The decorator offers the kernel's time slider (`add-zfs-time-slider`) a timeline for a live folder inside a dataset and for a folder inside one of its snapshots: one point per snapshot of that dataset, oldest first in the order ZFS took them, labelled with the snapshot's name, source *ZFS*, at its creation time, each pointing at the same relative folder inside that snapshot (`zfs:/<dataset>/@<snapshot>/<path>`), with the live folder as *Now*. It answers from the snapshot list cached per dataset, so the folders of one dataset read `zfs list` at most once in 30 seconds. A dataset without snapshots offers none. The kernel asks only while the pane's bar is shown, in a job.
+
 ## Configuration
 
 None. The plugin has no settings.
@@ -118,3 +122,4 @@ Unit tests run against a scripted `zfs` runner and a temporary directory laid ou
 11. The property editor opens with the current values (`zstd-3` set locally is selected; *Inherit (lz4)* names the parent's value) and has no field for `mountpoint`, `readonly`, `dedup` or `encryption`; `50G` shows as 50 GiB, `fifty` is invalid; a quota below the space used, or no change, keeps it from applying; applying sets, then inherits, and a failed reset leaves the set values and names the property.
 12. The real-pool test creates, lists, browses, restores from, renames and destroys its own snapshot, sets `compression` and `quota` and inherits them back, and leaves nothing behind.
 13. Removing `ext-zfs` from the plugins folder leaves Rick fully functional.
+14. The timeline of `/tank/home/ann/docs` has one point per snapshot of `tank/home` pointing at `ann/docs` inside it, the same from inside a snapshot; two snapshots of one second keep ZFS's order; three folders of a dataset read the list once.

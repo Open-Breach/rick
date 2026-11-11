@@ -65,6 +65,20 @@ the specification first (#174).
   space used or no change; applied as one job of `zfs set` then
   `zfs inherit`, with the same permission rule. Specified in
   `specs/ext-zfs.md`.
+- **Time slider** (OpenSpec change `add-zfs-time-slider`, review of #156):
+  a row under a pane's toolbar that moves the pane through the earlier
+  states of the folder it shows — *Now* with the count of earlier states,
+  an axis with one tick per point, and at a past point the date, name and
+  source with *Read-only* and *Back to now*. Click a tick, drag (the pane
+  follows after a 200 ms rest or on release), or Left/Right/Home/End while
+  focused; a run of moves is one Back. Switched per pane with *Timeline* in
+  the view options menu or *Toggle timeline* in the palette, saved with
+  the session; absent where nothing offers a timeline, disabled where the
+  folder has no earlier states, never empty. Extensions offer timelines
+  through two new defaulted `Decorator` methods, `offers_timelines` and
+  `timeline` (API 20), asked in a job and only while the bar is shown;
+  several sources merge into one bar. `ext-zfs` offers a dataset's
+  snapshots.
 - **Title bar colour.** The title row sits on a band of its own colour, the
   new token `bg/titlebar`, and the active workspace tab lifts out of it in
   `bg/pane`, with no accent line. *Settings → Appearance → Title bar colour*
