@@ -1,9 +1,10 @@
 //! The hex view: a file's bytes as a hex dump with an ASCII column.
 //!
-//! The previewer claims no file on its own: it scores every file 0, so it
-//! is never an automatic fallback (a file nobody claims shows the pane's
-//! placeholder) and is chosen per type in settings like any other
-//! previewer (SPEC.md, Preview, *No previewer*). `open` reads at
+//! The previewer is the fallback: it gives every file a low score that is
+//! not zero, so it takes whatever no other previewer recognises — a file
+//! with a recognised type still goes to its own previewer — and it can be
+//! chosen per type in settings like any other previewer (SPEC.md, Preview,
+//! *No previewer*). `open` reads at
 //! most [`WINDOW`] bytes; `render` returns the dump as a [`Frame::Text`] the
 //! pane lays out line by line, so a long dump costs only its visible rows;
 //! the dump doubles as the text layer, so find works over offsets, hex and
@@ -32,9 +33,9 @@ use types::{CancelToken, Entry, Error, ExtId, Location};
 /// The extension id.
 pub const ID: ExtId = ExtId("preview-hex");
 
-/// The score for every file: none. The hex view claims nothing by itself
-/// and is chosen per type in settings.
-pub const SCORE: u8 = 0;
+/// The score for every file: the fallback's, low and not zero, so the hex
+/// view takes what no other previewer recognises and nothing else.
+pub const SCORE: u8 = ext::FALLBACK_SCORE;
 
 /// How much of a file is read: large files show their start.
 pub const WINDOW: usize = 1024 * 1024;
@@ -299,7 +300,7 @@ mod tests {
     }
 
     #[test]
-    fn no_file_is_claimed_by_itself() {
+    fn every_file_is_taken_as_a_last_resort() {
         let entry = Entry {
             id: types::EntryId::new(types::ProviderId("local"), 1),
             name: "x.bin".into(),
@@ -312,8 +313,16 @@ mod tests {
             attrs: types::Attrs::empty(),
             mime: None,
         };
+        // Issue 149: a low score that is not zero, whatever the file, so
+        // the hex view takes what no other previewer recognises and a
+        // recognised type still goes to its own.
         assert_eq!(HexPreviewer.score(&entry, b"\x00\xff"), SCORE);
         assert_eq!(HexPreviewer.score(&entry, b"text"), SCORE);
+        assert_eq!(SCORE, ext::FALLBACK_SCORE);
+        // Not zero, which would claim nothing; and under what a previewer
+        // gives a file it only guesses at.
+        let score = HexPreviewer.score(&entry, b"");
+        assert!(score > 0 && score < 20, "{score}");
     }
 
     #[test]
