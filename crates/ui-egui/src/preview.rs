@@ -1151,8 +1151,6 @@ pub struct Around<'a> {
     pub home: &'a std::path::Path,
     /// The per-user plugins folder, where a downloaded library goes.
     pub plugins: &'a std::path::Path,
-    /// Whether the hex previewer is loaded, for *Open as hex*.
-    pub hex: bool,
     /// Whether motion is reduced: the Portal burst stands still.
     pub still: bool,
     /// How dates are written (SPEC.md *Dates*).
@@ -1291,8 +1289,8 @@ fn file_rows(entry: &Entry, home: &std::path::Path, dates: format::Dates) -> Vec
 
 /// The card of SPEC.md's *No previewer*: the name and, under it, the type,
 /// the size and *no previewer for .bin*; *Location*, *Modified* and
-/// *Permissions*; **Open as hex**, while the hex previewer is loaded, and
-/// **Open with…**.
+/// *Permissions*; and **Open with…**, its one button. With the hex view
+/// loaded no file comes here: it takes what nothing else recognises.
 fn no_previewer_card(
     ui: &mut egui::Ui,
     entry: &Entry,
@@ -1315,20 +1313,13 @@ fn no_previewer_card(
     if let Some(permissions) = &placeholder.permissions {
         rows.push(Row::new(t!("permissions"), permissions).mono());
     }
-    let mut actions = Vec::new();
-    let mut acts = Vec::new();
-    if around.hex && entry.kind == EntryKind::File {
-        actions.push(Action {
-            glyph: Some(icons::CODE),
-            label: t!("preview-open-as-hex"),
-        });
-        acts.push(PreviewAct::OpenAsHex);
-    }
-    actions.push(Action {
+    // The card's one button: with the hex view loaded every file has a
+    // previewer, and without it there is nothing to open the bytes with.
+    let actions = [Action {
         glyph: Some(icons::FOLDER_OPEN),
         label: t!("preview-open-with"),
-    });
-    acts.push(PreviewAct::OpenWith);
+    }];
+    let acts = [PreviewAct::OpenWith];
     let card = Card {
         glyph: icons::for_entry(entry),
         name: &entry.name,
@@ -1454,8 +1445,6 @@ pub enum PreviewAct {
     PreviewAlways,
     /// Open the preview again: a missing library may be there now.
     Retry,
-    /// Show this file with the hex previewer.
-    OpenAsHex,
     /// Run *Open with…* on the file.
     OpenWith,
     /// Open this address, a library's download page, in the browser.

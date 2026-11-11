@@ -138,14 +138,17 @@ fn name_of(plugin: &Plugin) -> &str {
 }
 
 /// Why a plugin needs attention, as its card says it: the host refused
-/// or failed to load it, or its previewer reported a third-party library
-/// missing in this session. `None` for a plugin that is in order.
+/// or failed to load it, its previewer reported a third-party library
+/// missing in this session, or it has disabled itself because what it
+/// connects to is not on the machine and said so (`ext::attention`), which
+/// gives the plugin's own reason. `None` for a plugin that is in order.
 fn attention(app: &App, plugin: &Plugin) -> Option<String> {
     if let PluginStatus::Refused(reason) = &plugin.status {
         return Some(t!("extensions-refused", reason = reason.as_str()));
     }
     app.missing_library(&plugin.id)
         .map(|library| t!("extensions-missing-library", name = library))
+        .or_else(|| ext::attention::of(&plugin.id))
 }
 
 /// Whether the plugin is switched on: not on the settings' disabled list.
