@@ -1584,6 +1584,12 @@ impl RickUi {
         self.tabs.get(&tab).and_then(|t| t.toolbar_row)
     }
 
+    /// The text in a tab's path bar while it is being edited, for tests.
+    #[must_use]
+    pub fn path_text(&self, tab: TabId) -> Option<&str> {
+        self.tabs.get(&tab).and_then(|t| t.path_edit.as_deref())
+    }
+
     /// The List view's grid of a tab in the last frame it was drawn, for
     /// tests: the rows a column holds and the columns' one width.
     #[must_use]

@@ -655,6 +655,16 @@ fn path_edit(ui: &mut egui::Ui, cx: &mut PaneCx<'_>, rect: egui::Rect) {
     let height = button_size(ui);
     let scheme = theme::scheme(ui);
     let radius = theme::metrics(ui.ctx()).corner_radius();
+    let home = cx.app.platform().home_dir();
+    // Text pasted into the field goes in expanded (SPEC.md *Path bar*,
+    // *Expansion*).
+    ui.input_mut(|input| {
+        for event in &mut input.events {
+            if let egui::Event::Paste(pasted) = event {
+                *pasted = paths::expand_here(pasted, &home);
+            }
+        }
+    });
     let Some(text) = cx.tab_ui.path_edit.as_mut() else {
         return;
     };
@@ -687,7 +697,9 @@ fn path_edit(ui: &mut egui::Ui, cx: &mut PaneCx<'_>, rect: egui::Rect) {
     let enter = output.response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
     let escape = ui.input(|i| i.key_pressed(egui::Key::Escape));
     if enter {
-        let typed = text.trim().to_owned();
+        // A leading `~` and the environment's variables are expanded
+        // before the path is used.
+        let typed = paths::expand_here(text.trim(), &home);
         cx.tab_ui.path_edit = None;
         if !typed.is_empty() {
             let location = paths::typed(&cx.tab.location, &typed);
