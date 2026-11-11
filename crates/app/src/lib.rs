@@ -120,8 +120,8 @@ use platform::{Platform, TrashedItem};
 use runtime::{JobEvent, JobRunner, mpsc};
 use tracing::{debug, warn};
 use types::{
-    CancelToken, Entry, EntryId, EntryKind, Error, ExtId, JobId, Location, Progress, ProviderId,
-    VPath,
+    Answer, Attrs, CancelToken, Entry, EntryId, EntryKind, Error, ExtId, JobId, Location, Progress,
+    ProviderId, QuestionKind, VPath,
 };
 use vfs::Mounts;
 use vfs_local::LocalProvider;
@@ -341,6 +341,13 @@ enum Msg {
     /// Whether the system has a tool for formatting a drive, as looked up
     /// with the volumes: one that is installed while Rick runs is found.
     FormatTool(bool),
+    /// *Run script?* was answered with Run, or with Edit.
+    Script {
+        pane: PaneId,
+        entry: Entry,
+        /// Run; Edit otherwise.
+        run: bool,
+    },
     /// Open's job answered: the archive provider browses the file as a
     /// location (navigate there), or does not (the system default).
     Opened {
@@ -430,6 +437,32 @@ const REVEAL_FOR: Duration = Duration::from_secs(5);
 /// The line typed into a console to take its shell to `path`: quoted for
 /// the shell, with a leading space so a shell that ignores such lines
 /// keeps it out of its history, and Enter.
+/// The embedded console's action, `ext-action-terminal`'s *Open console*.
+const EMBEDDED_CONSOLE: ext::ActionId = ext::ActionId("terminal.console");
+/// How much of a file with the execute bit is read to tell a binary from
+/// a script.
+const PROGRAM_PROBE: u64 = 4096;
+
+/// Whether the file is a binary and no script: its first 4 KiB hold a NUL
+/// byte (SPEC.md *Executables and scripts*).
+fn is_binary(path: &Path) -> Result<bool, Error> {
+    use std::io::Read as _;
+    let mut head = Vec::new();
+    std::fs::File::open(path)
+        .map_err(Error::from_io)?
+        .take(PROGRAM_PROBE)
+        .read_to_end(&mut head)
+        .map_err(Error::from_io)?;
+    Ok(head.contains(&0))
+}
+
+/// The line that runs the script `name` of the console's folder, as it is
+/// typed at the shell's prompt.
+fn run_line(name: &str) -> Vec<u8> {
+    let quoted = name.replace('\'', "'\\''");
+    format!("'./{quoted}'\r").into_bytes()
+}
+
 fn cd_command(path: &Path) -> Vec<u8> {
     if ext::Platforms::current() == ext::Platforms::WINDOWS {
         format!(" cd /d \"{}\"\r", path.display()).into_bytes()
@@ -475,6 +508,8 @@ pub const LOCALE_DE: &str = include_str!("../../../locales/de.ftl");
 struct PinBridge {
     pinned: RwLock<Vec<Location>>,
     pending: Mutex<Vec<SettingsChange>>,
+    /// The command of *Open in editor*, as the settings have it.
+    editor: RwLock<String>,
 }
 
 impl PinBridge {
@@ -483,9 +518,25 @@ impl PinBridge {
         pinned.clone_into(&mut self.pinned.write().unwrap_or_else(PoisonError::into_inner));
     }
 
+    /// Takes what the open actions read of `settings`.
+    fn sync_open(&self, settings: &Settings) {
+        settings
+            .editor
+            .clone_into(&mut self.editor.write().unwrap_or_else(PoisonError::into_inner));
+    }
+
     /// The changes asked for since the last call.
     fn take(&self) -> Vec<SettingsChange> {
         std::mem::take(&mut self.pending.lock().unwrap_or_else(PoisonError::into_inner))
+    }
+}
+
+impl ops::OpenSettings for PinBridge {
+    fn editor(&self) -> String {
+        self.editor
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
     }
 }
 
@@ -604,6 +655,9 @@ struct ConsoleLink {
     /// The explorer's location last seen, so a navigation is typed once,
     /// and one the console itself caused not at all.
     location_seen: Location,
+    /// A line still to type into the console: the script it was opened to
+    /// run, typed once the shell is at its prompt.
+    line: Option<Vec<u8>>,
 }
 
 /// The application: model, registry, jobs, undo log and settings.
@@ -679,6 +733,9 @@ pub struct App {
     places_saver: mpsc::UnboundedSender<Vec<Place>>,
     /// Stops the volume poll.
     volumes_watch: CancelToken,
+    /// The line the console that is being opened is to type: the script
+    /// *Run* starts, between asking for the console and its link.
+    console_line: Option<Vec<u8>>,
     /// The platform's watch of mounts and unmounts, which makes the volume
     /// poll read the list at once; kept for as long as the application
     /// runs. `None` where the platform has no such events.
@@ -805,7 +862,8 @@ impl App {
             Arc::clone(&pins) as Arc<dyn PinStore>,
             Arc::clone(&conflicts),
             Arc::clone(&scheduler),
-        );
+        )
+        .with_open_settings(Arc::clone(&pins) as Arc<dyn ops::OpenSettings>);
         // Which extension an action came from, the kernel's own apart: the
         // Keyboard shortcuts dialogue files a plugin's actions under the
         // plugin.
@@ -914,6 +972,7 @@ impl App {
         ext::i18n::load_overrides(&config_dir);
         ext::i18n::set_language(settings.language.as_deref());
         pins.sync(&settings.pinned);
+        pins.sync_open(&settings);
         for connector in registry.connectors() {
             connector.update(connections_of(&settings, connector.provider()));
         }
@@ -1040,6 +1099,7 @@ impl App {
             console_links: BTreeMap::new(),
             places_saver,
             volumes_watch: CancelToken::new(),
+            console_line: None,
             mounts_watch: None,
             poke: runtime::watch::channel(0).0,
             home,
@@ -2865,6 +2925,16 @@ impl App {
             self.dispatch(Command::Navigate { pane, to }, events);
             return;
         }
+        // A local file with the execute bit is a program, where that bit
+        // means one: it is started, not handed to the system (SPEC.md
+        // *Executables and scripts*).
+        if tab.location.provider == ProviderId::LOCAL
+            && entry.attrs.contains(Attrs::EXECUTABLE)
+            && self.platform.has_execute_bit()
+        {
+            self.launch(pane, entry);
+            return;
+        }
         let archive = (tab.location.provider == ProviderId::LOCAL
             && self.model.settings.archives.on_open == model::OnOpen::Enter)
             .then(|| self.mounts.provider(ProviderId::ARCHIVE))
@@ -2898,6 +2968,107 @@ impl App {
                 Ok(())
             });
         self.internal.insert(handle.id);
+    }
+
+    /// Starts a program the user opened (SPEC.md *Executables and
+    /// scripts*). A binary — its first 4 KiB hold a NUL byte — runs
+    /// detached from Rick, with its folder as the working directory and
+    /// without a question. An executable script is a readable file as
+    /// well, so Rick asks first: *Run script?* with **Cancel**, **Edit**
+    /// and **Run**; the answer comes back as [`Msg::Script`].
+    fn launch(&mut self, pane: PaneId, entry: Entry) {
+        let Ok(path) = platform::paths::to_path(&entry.path) else {
+            return;
+        };
+        let platform = Arc::clone(&self.platform);
+        let prompts = Arc::clone(&self.prompts);
+        let tx = self.mailbox.clone();
+        let name = entry.name.clone();
+        let handle = self
+            .jobs
+            .spawn_named(format!("Open {name}"), move |_job| async move {
+                let probe = path.clone();
+                let binary = runtime::handle()
+                    .spawn_blocking(move || is_binary(&probe))
+                    .await
+                    .unwrap_or_else(|join| Err(Error::Io(std::io::Error::other(join))))?;
+                if binary {
+                    let dir = path.parent().unwrap_or(&path).to_path_buf();
+                    return platform.run_detached(&path, &[], &dir);
+                }
+                let answer = prompts
+                    .ask(
+                        ext::t!("run-script-title"),
+                        name,
+                        QuestionKind::Choice {
+                            options: vec![
+                                ext::t!("cancel"),
+                                ext::t!("run-script-edit"),
+                                ext::t!("run-script-run"),
+                            ],
+                            default: 2,
+                        },
+                        false,
+                    )
+                    .await;
+                let run = match answer {
+                    Answer::Choice(1) => false,
+                    Answer::Choice(2) => true,
+                    _ => return Ok(()),
+                };
+                tx.send(Msg::Script { pane, entry, run });
+                Ok(())
+            });
+        self.internal.insert(handle.id);
+    }
+
+    /// What the user chose for an executable script: **Run** starts it in
+    /// a console in its folder, so that its output is visible — the
+    /// embedded console where `ext-action-terminal` is loaded, the
+    /// system's terminal otherwise — and **Edit** opens it in the editor.
+    fn script(&mut self, pane: PaneId, entry: Entry, run: bool, events: &mut Vec<Event>) {
+        let Ok(path) = platform::paths::to_path(&entry.path) else {
+            return;
+        };
+        let dir = path.parent().unwrap_or(&path).to_path_buf();
+        let folder = Location::new(ProviderId::LOCAL, platform::paths::from_path(&dir));
+        if !run {
+            let ctx = ActionCtx {
+                pane,
+                location: folder,
+                selection: vec![entry],
+                invoked_from: Invocation::Shortcut,
+                other: None,
+            };
+            self.run(ext::ActionId("core.open_in_editor"), ctx, events);
+            return;
+        }
+        let embedded = self
+            .registry
+            .actions()
+            .iter()
+            .any(|action| action.id() == EMBEDDED_CONSOLE);
+        if embedded {
+            // The console the action opens is handed the line to type.
+            self.console_line = Some(run_line(&entry.name));
+            let ctx = ActionCtx {
+                pane,
+                location: folder,
+                selection: Vec::new(),
+                invoked_from: Invocation::Shortcut,
+                other: None,
+            };
+            self.run(EMBEDDED_CONSOLE, ctx, events);
+            self.console_line = None;
+        } else if let Err(error) = self
+            .platform
+            .open_terminal(&dir, Some(&[path.to_string_lossy().into_owned()]))
+        {
+            events.push(Event::Notify {
+                level: Level::Error,
+                text: format!("{}: {error}", entry.name),
+            });
+        }
     }
 
     /// Opens an entry with the system default application, through the
@@ -3019,6 +3190,7 @@ impl App {
             ext::i18n::set_language(settings.language.as_deref());
         }
         self.pins.sync(&settings.pinned);
+        self.pins.sync_open(&settings);
         self.model.apply_settings(settings.clone());
         if settings.pinned != pinned_before {
             self.rick.changed(Virtual::Favorites);
@@ -3474,6 +3646,7 @@ impl App {
                                 console: Arc::clone(console),
                                 cwd_seen: console.cwd(),
                                 location_seen,
+                                line: self.console_line.take(),
                             },
                         );
                     }
@@ -4283,6 +4456,7 @@ impl App {
                         ext::i18n::set_language(settings.language.as_deref());
                     }
                     self.pins.sync(&settings.pinned);
+                    self.pins.sync_open(&settings);
                     let connections_changed =
                         settings.connections != self.model.settings.connections;
                     self.model.apply_settings(settings);
@@ -4627,6 +4801,7 @@ impl App {
             }
             Msg::Volumes(Err(error)) => debug!(%error, "volumes not enumerated"),
             Msg::FormatTool(installed) => self.model.format_tool = installed,
+            Msg::Script { pane, entry, run } => self.script(pane, entry, run, events),
             Msg::Opened {
                 pane,
                 tab,
@@ -5141,6 +5316,16 @@ impl App {
             .retain(|tab, link| model.tab(*tab).is_some() && model.tab(link.explorer).is_some());
         let tabs: Vec<TabId> = self.console_links.keys().copied().collect();
         for tab in tabs {
+            // A script the console was opened to run is typed once the
+            // shell is at its prompt, or at once where the session cannot
+            // tell: a new console has nothing running that could take it.
+            if let Some(link) = self.console_links.get_mut(&tab)
+                && link.line.is_some()
+                && link.console.foreground_job() != Some(true)
+                && let Some(line) = link.line.take()
+            {
+                link.console.write(&line);
+            }
             let Some(link) = self.console_links.get(&tab) else {
                 continue;
             };

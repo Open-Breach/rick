@@ -2912,15 +2912,17 @@ impl ext::Console for FakeConsole {
 struct ConsoleOpener {
     manifest: Manifest,
     console: Arc<FakeConsole>,
+    /// The id its action goes by.
+    action: ActionId,
 }
 
 const OPEN_FAKE_CONSOLE: ActionId = ActionId("fake.console");
 
-struct OpenFakeConsole(Arc<FakeConsole>);
+struct OpenFakeConsole(Arc<FakeConsole>, ActionId);
 
 impl ext::Action for OpenFakeConsole {
     fn id(&self) -> ActionId {
-        OPEN_FAKE_CONSOLE
+        self.1
     }
     fn label(&self) -> String {
         "Fake console".to_owned()
@@ -2951,16 +2953,272 @@ impl Extension for ConsoleOpener {
         &self.manifest
     }
     fn register(&self, reg: &mut Registry) -> Result<(), Error> {
-        reg.action(Arc::new(OpenFakeConsole(Arc::clone(&self.console))));
+        reg.action(Arc::new(OpenFakeConsole(
+            Arc::clone(&self.console),
+            self.action,
+        )));
         Ok(())
     }
 }
 
-/// A harness with the fake console opened from its explorer tab: the
-/// harness, the console and the pane both are in.
-fn with_fake_console() -> (Harness, Arc<FakeConsole>, model::PaneId) {
+/// Writes `bytes` to `name` in the harness's root and sets its execute
+/// bit, or leaves it off.
+#[cfg(unix)]
+fn program(h: &Harness, name: &str, bytes: &[u8], executable: bool) -> std::path::PathBuf {
+    use std::os::unix::fs::PermissionsExt as _;
+    let path = h.root.path().join(name);
+    fs::write(&path, bytes).unwrap_or_else(|e| panic!("{e}"));
+    let mode = if executable { 0o755 } else { 0o644 };
+    fs::set_permissions(&path, fs::Permissions::from_mode(mode)).unwrap_or_else(|e| panic!("{e}"));
+    path
+}
+
+/// Opens the entry named `name` in the focused pane, as Enter does.
+#[cfg(unix)]
+fn open_named(h: &mut Harness, name: &str) {
+    let pane = h.app.model().focused;
+    let id = id_of(h, name);
+    h.send(Command::Open { pane, id });
+}
+
+/// The question that is open, once one is.
+#[cfg(unix)]
+fn question(h: &mut Harness) -> types::Question {
+    assert!(
+        wait_until(h, Duration::from_secs(5), |h| {
+            !h.app.model().questions.is_empty()
+        }),
+        "no question was asked"
+    );
+    h.app.model().questions[0].clone()
+}
+
+/// Acceptance (issue 149, item 6): a binary with the execute bit starts
+/// on Enter, detached, in its folder and without a question; nothing is
+/// handed to the system.
+#[cfg(unix)]
+#[test]
+fn a_binary_with_the_execute_bit_runs_detached_in_its_folder() {
+    let mut h = harness();
+    let tool = program(&h, "tool", b"\x7fELF\x02\x01\x01\0\0\0\0\0\0\0\0\0", true);
+    h.settle();
+    open_named(&mut h, "tool");
+    assert!(wait_until(&mut h, Duration::from_secs(5), |h| {
+        !h.fake.ran().is_empty()
+    }));
+    assert_eq!(
+        h.fake.ran(),
+        [(tool, Vec::new(), h.root.path().to_path_buf())]
+    );
+    h.settle();
+    assert!(h.app.model().questions.is_empty(), "no question");
+    assert!(h.fake.opened().is_empty(), "not handed to the system");
+}
+
+/// An executable script asks first, *Run script?* with Cancel, Edit and
+/// Run, Run being the one Enter picks. Run starts it in the system's
+/// terminal in its folder where no embedded console is loaded; Edit opens
+/// it in the editor; Cancel does nothing.
+#[cfg(unix)]
+#[test]
+fn an_executable_script_asks_to_run_edit_or_cancel() {
+    let mut h = harness();
+    let script = program(&h, "build.sh", b"#!/bin/sh\necho built\n", true);
+    h.settle();
+    let answer = |h: &mut Harness, choice: usize| {
+        open_named(h, "build.sh");
+        let asked = question(h);
+        assert_eq!(asked.title, "Run script?");
+        assert_eq!(asked.text, "build.sh");
+        assert_eq!(
+            asked.kind,
+            types::QuestionKind::Choice {
+                options: vec!["Cancel".into(), "Edit".into(), "Run".into()],
+                default: 2,
+            }
+        );
+        h.send(Command::AnswerQuestion {
+            id: asked.id,
+            answer: types::Answer::Choice(choice),
+        });
+        h.settle();
+        assert!(h.app.model().questions.is_empty());
+    };
+
+    // Cancel: nothing runs, nothing opens.
+    answer(&mut h, 0);
+    assert!(h.fake.ran().is_empty() && h.fake.terminals().is_empty());
+    assert!(h.fake.edited().is_empty() && h.fake.opened().is_empty());
+
+    // Run: a terminal in the script's folder, running it.
+    answer(&mut h, 2);
+    assert_eq!(
+        h.fake.terminals(),
+        [(
+            h.root.path().to_path_buf(),
+            Some(vec![script.to_string_lossy().into_owned()])
+        )]
+    );
+    assert!(h.fake.ran().is_empty(), "a script is not started blind");
+
+    // Edit: the editor.
+    answer(&mut h, 1);
+    assert_eq!(h.fake.edited(), [vec![script.clone()]]);
+    assert_eq!(h.fake.terminals().len(), 1);
+
+    // Escape, or closing the dialogue: as Cancel.
+    open_named(&mut h, "build.sh");
+    let asked = question(&mut h);
+    h.send(Command::AnswerQuestion {
+        id: asked.id,
+        answer: types::Answer::Cancelled,
+    });
+    h.settle();
+    assert_eq!(h.fake.terminals().len(), 1);
+    assert_eq!(h.fake.edited().len(), 1);
+}
+
+/// With the embedded console loaded, Run opens a console in the script's
+/// folder and types the script at its prompt.
+#[cfg(unix)]
+#[test]
+fn run_starts_a_script_in_the_embedded_console_where_it_is_loaded() {
     let console = Arc::new(FakeConsole::default());
-    let opener: Arc<dyn Extension> = Arc::new(ConsoleOpener {
+    let mut h = harness_with(vec![console_opener(&console, ActionId("terminal.console"))]);
+    program(&h, "it's a build.sh", b"#!/bin/sh\necho built\n", true);
+    h.settle();
+    // The shell is busy starting: nothing is typed yet.
+    *console.job.lock().unwrap_or_else(PoisonError::into_inner) = Some(true);
+    open_named(&mut h, "it's a build.sh");
+    let asked = question(&mut h);
+    h.send(Command::AnswerQuestion {
+        id: asked.id,
+        answer: types::Answer::Choice(2),
+    });
+    h.settle();
+    let typed = |console: &FakeConsole| {
+        String::from_utf8_lossy(&console.typed.lock().unwrap_or_else(PoisonError::into_inner))
+            .into_owned()
+    };
+    assert!(
+        h.events
+            .iter()
+            .any(|e| matches!(e, Event::ViewOpened { .. })),
+        "the console is opened: {:?}",
+        h.events
+    );
+    assert_eq!(typed(&console), "");
+    // At its prompt: the script, quoted, and Enter.
+    *console.job.lock().unwrap_or_else(PoisonError::into_inner) = Some(false);
+    assert!(wait_until(&mut h, Duration::from_secs(5), |_| {
+        !typed(&console).is_empty()
+    }));
+    assert_eq!(typed(&console), "'./it'\\''s a build.sh'\r");
+    assert!(h.fake.terminals().is_empty(), "not the system's terminal");
+}
+
+/// A script without the execute bit is a text file like any other; and
+/// where the execute bit makes no program, as on Windows, every file is
+/// handed to the system as before.
+#[cfg(unix)]
+#[test]
+fn without_the_execute_bit_a_file_opens_with_the_system_default() {
+    let mut h = harness();
+    let plain = program(&h, "notes.sh", b"#!/bin/sh\necho hi\n", false);
+    let tool = program(&h, "tool", b"\x7fELF\0\0\0\0", true);
+    h.settle();
+    open_named(&mut h, "notes.sh");
+    assert!(wait_until(&mut h, Duration::from_secs(5), |h| {
+        h.fake.opened() == [plain.clone()]
+    }));
+    assert!(h.app.model().questions.is_empty());
+
+    h.fake.set_execute_bit(false);
+    open_named(&mut h, "tool");
+    assert!(wait_until(&mut h, Duration::from_secs(5), |h| {
+        h.fake.opened() == [plain.clone(), tool.clone()]
+    }));
+    assert!(h.fake.ran().is_empty());
+}
+
+/// Acceptance (issue 149, item 6): Open in editor opens the selected
+/// files in the system's default text editor, or with the command the
+/// setting names, split at spaces outside double quotes, the files
+/// appended; it is not offered for a folder.
+#[test]
+fn open_in_editor_uses_the_systems_editor_or_the_command_the_setting_names() {
+    let mut h = harness();
+    h.settle();
+    let pane = h.app.model().focused;
+    let (a, b) = (h.root.path().join("a.txt"), h.root.path().join("b.txt"));
+    let select = |h: &mut Harness, names: &[&str]| {
+        let ids = names.iter().map(|name| id_of(h, name)).collect();
+        h.send(Command::Select {
+            pane,
+            change: SelectionChange::Set(ids),
+        });
+    };
+    select(&mut h, &["a.txt"]);
+    h.run(pane, "core.open_in_editor");
+    h.settle();
+    assert_eq!(h.fake.edited(), [vec![a.clone()]]);
+    assert!(h.fake.ran().is_empty());
+
+    h.send(Command::Settings(SettingsChange::Editor(
+        "code --wait \"--user-data-dir=/tmp/my code\"".into(),
+    )));
+    select(&mut h, &["a.txt", "b.txt"]);
+    h.run(pane, "core.open_in_editor");
+    h.settle();
+    assert_eq!(
+        h.fake.ran(),
+        [(
+            std::path::PathBuf::from("code"),
+            vec![
+                "--wait".into(),
+                "--user-data-dir=/tmp/my code".into(),
+                a.clone().into_os_string(),
+                b.into_os_string(),
+            ],
+            h.root.path().to_path_buf(),
+        )]
+    );
+    assert_eq!(
+        h.fake.edited().len(),
+        1,
+        "the setting's editor, not the system's"
+    );
+
+    // A folder is not offered the editor: nothing happens, nothing is said.
+    select(&mut h, &["sub"]);
+    h.take_events();
+    h.run(pane, "core.open_in_editor");
+    h.settle();
+    assert_eq!(h.fake.ran().len(), 1);
+    assert!(
+        !h.take_events()
+            .iter()
+            .any(|e| matches!(e, Event::Notify { .. }))
+    );
+    // F4 is its key.
+    let action = h
+        .app
+        .registry()
+        .actions()
+        .iter()
+        .find(|action| action.id() == ActionId("core.open_in_editor"))
+        .cloned()
+        .unwrap_or_else(|| panic!("the action"));
+    assert_eq!(
+        action.default_shortcut().map(|s| s.to_string()),
+        Some("F4".to_owned())
+    );
+    assert_eq!(action.label(), "Open in editor");
+}
+
+/// The extension whose action, known as `action`, opens `console`.
+fn console_opener(console: &Arc<FakeConsole>, action: ActionId) -> Arc<dyn Extension> {
+    Arc::new(ConsoleOpener {
         manifest: Manifest {
             id: ExtId("fake-console"),
             name: "Fake console",
@@ -2973,8 +3231,16 @@ fn with_fake_console() -> (Harness, Arc<FakeConsole>, model::PaneId) {
             previews: &[],
             commands: &[],
         },
-        console: Arc::clone(&console),
-    });
+        console: Arc::clone(console),
+        action,
+    })
+}
+
+/// A harness with the fake console opened from its explorer tab: the
+/// harness, the console and the pane both are in.
+fn with_fake_console() -> (Harness, Arc<FakeConsole>, model::PaneId) {
+    let console = Arc::new(FakeConsole::default());
+    let opener = console_opener(&console, OPEN_FAKE_CONSOLE);
     let mut h = harness_with(vec![opener]);
     h.settle();
     let pane = h.app.model().focused;
