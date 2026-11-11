@@ -289,6 +289,147 @@ pub fn typed(current: &Location, text: &str) -> Location {
     Location::new(provider, text)
 }
 
+/// A path typed into the path bar, expanded before it is used (SPEC.md
+/// *Path bar*, *Expansion*): a leading `~`, alone or before a separator,
+/// becomes `home`, and `$VAR` and `${VAR}` — with `percent`, which is
+/// Windows, `%VAR%` as well — become what `variable` gives for the name,
+/// anywhere in the text. A variable that is not set stays as it was
+/// written. Nothing else: no `~user`, no wildcards, no command
+/// substitution.
+#[must_use]
+pub fn expand(
+    text: &str,
+    home: &str,
+    percent: bool,
+    variable: &dyn Fn(&str) -> Option<String>,
+) -> String {
+    let (mut out, rest) = match text.strip_prefix('~') {
+        Some(rest) if rest.is_empty() || rest.starts_with(['/', '\\']) => (home.to_owned(), rest),
+        _ => (String::new(), text),
+    };
+    let is_name = |c: char| c.is_ascii_alphanumeric() || c == '_';
+    let chars: Vec<char> = rest.chars().collect();
+    let mut i = 0;
+    while i < chars.len() {
+        // The name a variable reference at `i` names, and where the
+        // reference ends.
+        let reference = match chars[i] {
+            '$' if chars.get(i + 1) == Some(&'{') => chars[i + 2..]
+                .iter()
+                .position(|c| *c == '}')
+                .map(|len| (i + 2, i + 2 + len, i + 3 + len)),
+            '$' => {
+                let len = chars[i + 1..].iter().take_while(|c| is_name(**c)).count();
+                let starts = chars.get(i + 1).is_some_and(|c| !c.is_ascii_digit());
+                (len > 0 && starts).then_some((i + 1, i + 1 + len, i + 1 + len))
+            }
+            '%' if percent => chars[i + 1..]
+                .iter()
+                .position(|c| *c == '%')
+                .map(|len| (i + 1, i + 1 + len, i + 2 + len)),
+            _ => None,
+        };
+        let value = reference.and_then(|(from, to, end)| {
+            let name: String = chars[from..to].iter().collect();
+            (!name.is_empty() && name.chars().all(is_name))
+                .then(|| variable(&name))
+                .flatten()
+                .map(|value| (value, end))
+        });
+        if let Some((value, end)) = value {
+            out.push_str(&value);
+            i = end;
+        } else {
+            out.push(chars[i]);
+            i += 1;
+        }
+    }
+    out
+}
+
+/// [`expand`] with this process's environment and `home`, and `%VAR%`
+/// where the system is Windows.
+#[must_use]
+pub fn expand_here(text: &str, home: &std::path::Path) -> String {
+    expand(
+        text,
+        &home.to_string_lossy(),
+        ext::Platforms::current() == ext::Platforms::WINDOWS,
+        &|name| std::env::var(name).ok(),
+    )
+}
+
+#[cfg(test)]
+mod expand_tests {
+    use super::expand;
+
+    fn variable(name: &str) -> Option<String> {
+        match name {
+            "HOME" => Some("/home/serge".to_owned()),
+            "XDG_DATA_HOME" => Some("/home/serge/.local/share".to_owned()),
+            "USERPROFILE" => Some(r"C:\Users\serge".to_owned()),
+            "EMPTY" => Some(String::new()),
+            _ => None,
+        }
+    }
+
+    fn unix(text: &str) -> String {
+        expand(text, "/home/serge", false, &variable)
+    }
+
+    /// Issue 149: `~/.local/bin` and `$HOME/Downloads` both name a folder.
+    #[test]
+    fn a_leading_tilde_and_variables_are_expanded() {
+        assert_eq!(unix("~/.local/bin"), "/home/serge/.local/bin");
+        assert_eq!(unix("~"), "/home/serge");
+        assert_eq!(unix("$HOME/Downloads"), "/home/serge/Downloads");
+        assert_eq!(unix("${HOME}/Downloads"), "/home/serge/Downloads");
+        // Anywhere in the path, and more than once.
+        assert_eq!(
+            unix("/mnt$HOME/x/${XDG_DATA_HOME}/rick"),
+            "/mnt/home/serge/x//home/serge/.local/share/rick"
+        );
+        assert_eq!(unix("${HOME}work"), "/home/sergework");
+        assert_eq!(unix("$EMPTY/etc"), "/etc");
+    }
+
+    #[test]
+    fn what_is_no_reference_stays_as_it_was_written() {
+        // A tilde that does not lead, and `~user`.
+        assert_eq!(unix("/tmp/~"), "/tmp/~");
+        assert_eq!(unix("~serge/x"), "~serge/x");
+        assert_eq!(unix("a~/b"), "a~/b");
+        // A variable that is not set.
+        assert_eq!(unix("$NOPE/x"), "$NOPE/x");
+        assert_eq!(unix("${NOPE}/x"), "${NOPE}/x");
+        // No name, an open brace, a digit first, a lone dollar.
+        assert_eq!(unix("/a/$/b"), "/a/$/b");
+        assert_eq!(unix("/a/${HOME"), "/a/${HOME");
+        assert_eq!(unix("/a/$1/b"), "/a/$1/b");
+        assert_eq!(unix("cost$"), "cost$");
+        assert_eq!(unix("${}"), "${}");
+        // No wildcards, no command substitution.
+        assert_eq!(unix("/a/*.txt"), "/a/*.txt");
+        assert_eq!(unix("$(pwd)/x"), "$(pwd)/x");
+        // `%VAR%` is Windows' own.
+        assert_eq!(unix("%HOME%/x"), "%HOME%/x");
+    }
+
+    #[test]
+    fn on_windows_percent_variables_are_expanded_too() {
+        let windows = |text: &str| expand(text, r"C:\Users\serge", true, &variable);
+        assert_eq!(
+            windows(r"%USERPROFILE%\Downloads"),
+            r"C:\Users\serge\Downloads"
+        );
+        assert_eq!(windows(r"~\Downloads"), r"C:\Users\serge\Downloads");
+        assert_eq!(windows(r"$USERPROFILE\x"), r"C:\Users\serge\x");
+        assert_eq!(windows(r"D:\a\%NOPE%\b"), r"D:\a\%NOPE%\b");
+        assert_eq!(windows("100%"), "100%");
+        assert_eq!(windows("%%"), "%%");
+    }
+}
+
 #[cfg(test)]
 mod crumb_tests {
     use super::*;

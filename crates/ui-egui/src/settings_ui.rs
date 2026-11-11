@@ -687,13 +687,22 @@ fn groups_of(page: &Page, app: &App) -> Vec<Group> {
                 )],
             },
         ],
-        Page::Behaviour => vec![Group {
-            title: t!("settings-group-files"),
-            rows: vec![Spec::described(
-                t!("settings-rename-on-click"),
-                t!("settings-rename-on-click-desc"),
-            )],
-        }],
+        Page::Behaviour => vec![
+            Group {
+                title: t!("settings-group-files"),
+                rows: vec![Spec::described(
+                    t!("settings-rename-on-click"),
+                    t!("settings-rename-on-click-desc"),
+                )],
+            },
+            Group {
+                title: t!("settings-group-opening"),
+                rows: vec![Spec::described(
+                    t!("settings-editor"),
+                    t!("settings-editor-desc"),
+                )],
+            },
+        ],
         Page::Integration => integration_groups(app),
         Page::Plugin(id) => app
             .registry()
@@ -950,6 +959,18 @@ fn field_row(
     text: &str,
     set: impl FnOnce(String),
 ) {
+    hinted_field_row(card, index, id, text, "", set);
+}
+
+/// [`field_row`] with `hint` shown while the field is empty.
+fn hinted_field_row(
+    card: &mut Card<'_>,
+    index: usize,
+    id: egui::Id,
+    text: &str,
+    hint: &str,
+    set: impl FnOnce(String),
+) {
     card.row(index, |ui| {
         let (slot, _) = ui.allocate_exact_size(vec2(FIELD, widgets::FIELD_HEIGHT), Sense::hover());
         let mut field_ui = ui.new_child(
@@ -959,7 +980,7 @@ fn field_row(
                 .id_salt(id),
         );
         let mut edited = text.to_owned();
-        let response = dialog::text_field(&mut field_ui, &mut edited, "", false, None, false);
+        let response = dialog::text_field(&mut field_ui, &mut edited, hint, false, None, false);
         if response.changed() {
             set(edited);
         }
@@ -1255,6 +1276,17 @@ fn rows_of(page: &Page, index: usize, card: &mut Card<'_>, cx: &mut PageCx<'_>) 
             switch_row(card, 0, settings.rename_on_click, |v| {
                 cx.change(SettingsChange::RenameOnClick(v));
             });
+        }
+        (Page::Behaviour, 1) => {
+            // The command of Open in editor; empty is the system's own.
+            hinted_field_row(
+                card,
+                0,
+                egui::Id::new("settings-editor"),
+                &settings.editor,
+                &t!("settings-editor-hint"),
+                |text| cx.change(SettingsChange::Editor(text)),
+            );
         }
         (Page::Integration, group) => integration_rows(group, card, cx),
         (Page::Plugin(id), 0) => plugin_rows(id, card, cx),
