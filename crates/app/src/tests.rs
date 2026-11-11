@@ -294,6 +294,53 @@ fn tabs_and_splits_keep_their_listings_live() {
     assert!(!h.app.is_busy());
 }
 
+/// A change that is still on its way to the settings file is not undone
+/// by the file as it was. The watcher reloads the file on any removal or
+/// rescan in the configuration directory, and another file written there
+/// through its temporary file is enough for one; until the saver has
+/// written, the file holds what it held at the start, which is no edit to
+/// pick up. The Windows runner of tier 2 lost a plugin's *disabled* this
+/// way (full.yml run 42962612644, `extensions.rs`).
+#[test]
+fn the_settings_file_as_it_was_at_the_start_does_not_undo_a_change_on_its_way_to_it() {
+    let mut h = harness();
+    let path = h.app.settings_path().to_path_buf();
+    let as_it_was = super::settings::load(&path).unwrap_or_else(|e| panic!("{e}"));
+    assert_ne!(as_it_was.sort_by, Column::Size);
+
+    h.send(Command::Settings(SettingsChange::Sort(
+        Column::Size,
+        SortDir::Descending,
+    )));
+    // What the watcher's reload reports when it read the file before the
+    // saver wrote it.
+    h.app
+        .on_msg(super::Msg::Settings(Ok(as_it_was)), &mut h.events);
+    assert_eq!(
+        h.app.model().settings.sort_by,
+        Column::Size,
+        "the file as it was undid the change"
+    );
+
+    // The change reaches the file, and an edit to the file is still
+    // picked up afterwards.
+    h.settle();
+    let text = read_until(&path, |t| t.contains("sort_by = \"size\""));
+    assert!(text.contains("sort_by = \"size\""), "{text}");
+    fs::write(&path, "font_size = 15\n").unwrap_or_else(|e| panic!("{e}"));
+    let started = Instant::now();
+    while h.app.model().settings.font_size != 15 {
+        assert!(
+            started.elapsed() < Duration::from_secs(10),
+            "settings not reloaded"
+        );
+        runtime::block_on(async {
+            let _ =
+                tokio::time::timeout(Duration::from_millis(20), h.app.tick(&mut h.events)).await;
+        });
+    }
+}
+
 #[test]
 fn settings_changes_are_saved_and_disk_edits_are_picked_up() {
     let mut h = harness();
