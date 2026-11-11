@@ -5036,3 +5036,70 @@ fn screenshots_of_the_integration_settings() {
     }
     std::mem::drop(dir);
 }
+
+/// Issue 149: the List view in Light and in Dark — the Downloads folder of
+/// the Figma frame *List view mode*: folders first, columns of one width
+/// filled top to bottom, a selected row, the cursor's ring and a long name
+/// cut to its column.
+#[test]
+#[ignore = "needs a wgpu adapter; CI runs it and uploads the images"]
+fn screenshots_of_the_list_view() {
+    let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+    let downloads = dir.path().join("Downloads");
+    for folder in [
+        "Backup",
+        "android-studio-rabbit1-linux",
+        "code-stable-x64-1793133762",
+        "rick-day-zero",
+        "support-B87E-1788041812146",
+    ] {
+        fs::create_dir_all(downloads.join(folder)).unwrap_or_else(|e| panic!("{e}"));
+    }
+    let mut files: Vec<String> = [
+        "20260828_CA ABR TITEL VERSAND.pdf",
+        "a-photograph-with-a-name-so-long-that-no-column-of-the-list-view-could-hold-it-whole.jpg",
+        "us-states-with-detail.json",
+        "notes.md",
+        "main.rs",
+        "invoice-2026-08.pdf",
+        "rick-0.3.0-linux-x64.tar.gz",
+    ]
+    .map(str::to_owned)
+    .to_vec();
+    files.extend((1..=40).map(|i| format!("20260903_1215{i:02}.jpg")));
+    files.extend((1..=12).map(|i| format!("report-{i:02}.xlsx")));
+    for name in &files {
+        fs::write(downloads.join(name), name).unwrap_or_else(|e| panic!("{e}"));
+    }
+    let mut harness = shell(&downloads, egui::vec2(1100.0, 520.0));
+    let pane = harness.state().app().model().focused;
+    let mut send = |harness: &mut Harness<'static, RickUi>, command: app::Command| {
+        harness
+            .state_mut()
+            .app_mut()
+            .handle(command, &mut Vec::new());
+        settle(harness);
+    };
+    send(
+        &mut harness,
+        app::Command::SetView {
+            pane,
+            mode: model::ViewMode::List,
+        },
+    );
+    // One row selected, with the keyboard cursor on it.
+    harness.key_press(egui::Key::Home);
+    harness.step();
+    for _ in 0..7 {
+        harness.key_press(egui::Key::ArrowDown);
+        harness.step();
+    }
+    settle(&mut harness);
+    for (theme, name) in [(Theme::Light, "light"), (Theme::Dark, "dark")] {
+        send(
+            &mut harness,
+            app::Command::Settings(SettingsChange::Theme(theme)),
+        );
+        shoot(&mut harness, &format!("list-view-{name}"));
+    }
+}
