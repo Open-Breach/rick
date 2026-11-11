@@ -330,7 +330,12 @@ fn a_hundred_files_fill_aligned_columns_of_one_width_and_scroll_sideways_only() 
     // `a-very-long…` sorts first: back to the left edge to see it.
     press(&mut harness, egui::Key::Home);
     settle(&mut harness);
-    let cell = row(&harness, &long).unwrap_or_else(|| panic!("the long name's row"));
+    let cell = row(&harness, &long).unwrap_or_else(|| {
+        panic!(
+            "the long name's row; the list starts with {:?}",
+            names(&harness).first()
+        )
+    });
     assert!(
         (cell.width() - with_long.column_width).abs() < 0.5,
         "{cell:?}"
