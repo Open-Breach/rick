@@ -934,6 +934,19 @@ impl OpenWith for Native {
             .map(drop)
             .map_err(Error::from_io)
     }
+
+    /// Notepad, which every Windows has: one window a file.
+    fn open_in_text_editor(&self, paths: &[PathBuf]) -> Result<(), Error> {
+        for path in paths {
+            let dir = path.parent().unwrap_or(path);
+            self.run_detached(
+                Path::new("notepad.exe"),
+                &[path.as_os_str().to_owned()],
+                dir,
+            )?;
+        }
+        Ok(())
+    }
 }
 
 /// Whether `program` is on the `PATH`.

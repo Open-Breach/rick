@@ -198,6 +198,21 @@ impl OpenWith for Native {
     fn open_with(&self, path: &Path, app: &Application) -> Result<(), Error> {
         apps::open_with(path, app)
     }
+
+    fn has_execute_bit(&self) -> bool {
+        true
+    }
+
+    /// With the application registered for `text/plain`.
+    fn open_in_text_editor(&self, paths: &[PathBuf]) -> Result<(), Error> {
+        let editor = apps::text_editor().ok_or(Error::Unsupported(
+            "no application is registered for plain text",
+        ))?;
+        for path in paths {
+            apps::open_with(path, &editor)?;
+        }
+        Ok(())
+    }
 }
 
 impl Terminal for Native {

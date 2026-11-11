@@ -68,6 +68,13 @@ pub struct Fake {
     trashed_count: Mutex<u64>,
     opened: Mutex<Vec<PathBuf>>,
     opened_with: Mutex<Vec<(PathBuf, Application)>>,
+    /// What `run_detached` was handed: the program, its arguments and its
+    /// working directory. Nothing is started.
+    ran: Mutex<Vec<(PathBuf, Vec<OsString>, PathBuf)>>,
+    /// The files handed to `open_in_text_editor`, one list a call.
+    edited: Mutex<Vec<Vec<PathBuf>>>,
+    /// Whether an execute bit makes a program here; it does at first.
+    execute_bit: Mutex<bool>,
     /// The tokens handed to [`Activation::activate_window`], oldest first;
     /// nothing is raised.
     activations: Mutex<Vec<Option<String>>>,
@@ -163,6 +170,9 @@ impl Fake {
             trashed_count: Mutex::new(0),
             opened: Mutex::new(Vec::new()),
             opened_with: Mutex::new(Vec::new()),
+            ran: Mutex::new(Vec::new()),
+            edited: Mutex::new(Vec::new()),
+            execute_bit: Mutex::new(true),
             activations: Mutex::new(Vec::new()),
             terminals: Mutex::new(Vec::new()),
             elevated: Mutex::new(Vec::new()),
@@ -210,6 +220,26 @@ impl Fake {
     #[must_use]
     pub fn opened_with(&self) -> Vec<(PathBuf, Application)> {
         lock(&self.opened_with).clone()
+    }
+
+    /// The programs handed to [`OpenWith::run_detached`], oldest first,
+    /// each with its arguments and its working directory.
+    #[must_use]
+    pub fn ran(&self) -> Vec<(PathBuf, Vec<OsString>, PathBuf)> {
+        lock(&self.ran).clone()
+    }
+
+    /// The files handed to [`OpenWith::open_in_text_editor`], one list a
+    /// call, oldest first.
+    #[must_use]
+    pub fn edited(&self) -> Vec<Vec<PathBuf>> {
+        lock(&self.edited).clone()
+    }
+
+    /// Whether an execute bit makes a program from now on, as it does on
+    /// Linux and macOS and does not on Windows.
+    pub fn set_execute_bit(&self, on: bool) {
+        *lock(&self.execute_bit) = on;
     }
 
     /// The folders and commands handed to [`Terminal::open_terminal`],
@@ -636,6 +666,22 @@ impl OpenWith for Fake {
 
     fn open_with(&self, path: &Path, app: &Application) -> Result<(), Error> {
         lock(&self.opened_with).push((path.to_path_buf(), app.clone()));
+        Ok(())
+    }
+
+    fn has_execute_bit(&self) -> bool {
+        *lock(&self.execute_bit)
+    }
+
+    /// Records the call; nothing is started.
+    fn run_detached(&self, program: &Path, args: &[OsString], dir: &Path) -> Result<(), Error> {
+        lock(&self.ran).push((program.to_path_buf(), args.to_vec(), dir.to_path_buf()));
+        Ok(())
+    }
+
+    /// Records the files; nothing is opened.
+    fn open_in_text_editor(&self, paths: &[PathBuf]) -> Result<(), Error> {
+        lock(&self.edited).push(paths.to_vec());
         Ok(())
     }
 }
