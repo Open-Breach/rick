@@ -45,6 +45,7 @@
 #![allow(clippy::module_name_repetitions)]
 
 pub mod action;
+pub mod attention;
 pub mod cli;
 pub mod connection;
 pub mod decorator;
@@ -77,8 +78,8 @@ pub use futures::stream::BoxStream;
 pub use hash::{Algorithm, Digests, Hashes};
 pub use i18n::Text;
 pub use preview::{
-    Block, Content, ControlId, ControlValue, Document, Frame, Gesture, Grid, Icon, Image,
-    InfoSection, Inline, Listing, ListingEntry, MissingLibrary, PreviewControl, PreviewDoc,
+    Block, Content, ControlId, ControlValue, Document, FALLBACK_SCORE, Frame, Gesture, Grid, Icon,
+    Image, InfoSection, Inline, Listing, ListingEntry, MissingLibrary, PreviewControl, PreviewDoc,
     Previewer, Reads, RenderRequest, Style, TextBlock, TextLayer, TextSpan, TextureId, Transport,
     blocking, read_bytes,
 };
