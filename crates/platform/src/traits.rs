@@ -616,6 +616,25 @@ pub struct WindowChrome {
     pub native_controls_width: f32,
 }
 
+/// A monitor as the system has it: which one it is, where it is on the
+/// desktop and what of it is free for windows (SPEC.md *Window geometry*).
+/// The rectangles are `[x, y, width, height]` in the logical pixels a
+/// window is placed in.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Monitor {
+    /// What tells the monitor from the others across restarts: the name of
+    /// its output (`DP-1`), its device (`\\.\DISPLAY1`) or the name the
+    /// system shows for it.
+    pub id: String,
+    /// Whether the system calls it the primary one.
+    pub primary: bool,
+    /// The whole monitor.
+    pub bounds: [f32; 4],
+    /// The working area: the monitor less the system's panels, dock and
+    /// task bar.
+    pub work: [f32; 4],
+}
+
 /// Window chrome placement, per platform.
 pub trait Chrome: Send + Sync {
     /// How this platform's windows are decorated when the title bar is
@@ -631,6 +650,16 @@ pub trait Chrome: Send + Sync {
     /// before the first window exists.
     fn on_x11(&self) -> bool {
         false
+    }
+
+    /// The monitors that are connected, for placing a window: in the
+    /// logical pixels of a window whose scale is `pixels_per_point`. Empty
+    /// where the platform tells an application no position and lets it set
+    /// none — a Wayland session — and there the placing is the system's.
+    /// Called on the thread that runs the windows.
+    fn monitors(&self, pixels_per_point: f32) -> Vec<Monitor> {
+        let _ = pixels_per_point;
+        Vec::new()
     }
 }
 

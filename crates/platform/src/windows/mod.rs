@@ -57,7 +57,7 @@ use crate::Native;
 use crate::fs::windows::{filetime, io_error, wide};
 use crate::traits::{
     Activation, Application, Chrome, ConfigDir, ControlsSide, DragSource, DropTarget, Elevate,
-    ElevatedOutput, ImageFormat, IncomingFiles, Mount, OpenWith, Point, Properties,
+    ElevatedOutput, ImageFormat, IncomingFiles, Monitor, Mount, OpenWith, Point, Properties,
     PropertiesOutcome, RecentItem, RecentlyUsed, StandardFolder, StandardFolders, Terminal, Trash,
     TrashedItem, Volume, VolumeKind, Volumes, WindowChrome, WindowRef,
 };
@@ -1155,6 +1155,85 @@ impl Chrome for Native {
             native_controls: false,
             native_controls_width: 0.0,
         }
+    }
+
+    /// The display monitors with their work areas, which Windows counts in
+    /// physical pixels.
+    fn monitors(&self, pixels_per_point: f32) -> Vec<Monitor> {
+        use windows::Win32::Foundation::{LPARAM, RECT};
+        use windows::Win32::Graphics::Gdi::{
+            EnumDisplayMonitors, GetMonitorInfoW, HDC, HMONITOR, MONITORINFO, MONITORINFOEXW,
+        };
+        use windows::core::BOOL;
+
+        /// `MONITORINFOF_PRIMARY`: the monitor is the primary one.
+        const PRIMARY: u32 = 1;
+
+        unsafe extern "system" fn each(
+            monitor: HMONITOR,
+            _: HDC,
+            _: *mut RECT,
+            data: LPARAM,
+        ) -> BOOL {
+            // SAFETY: `data` is the address of the `Vec` that
+            // `EnumDisplayMonitors` was handed below, which outlives the
+            // call and is touched by nothing else while it runs.
+            let found = unsafe { &mut *(data.0 as *mut Vec<HMONITOR>) };
+            found.push(monitor);
+            true.into()
+        }
+
+        let mut found: Vec<HMONITOR> = Vec::new();
+        // SAFETY: the callback matches `MONITORENUMPROC`, and the pointer
+        // it is handed is to `found`, alive for the whole call.
+        let _ = unsafe {
+            EnumDisplayMonitors(
+                None,
+                None,
+                Some(each),
+                LPARAM(std::ptr::from_mut(&mut found) as isize),
+            )
+        };
+        let scale = if pixels_per_point > 0.0 {
+            pixels_per_point
+        } else {
+            1.0
+        };
+        #[allow(clippy::cast_precision_loss)]
+        let area = |rect: RECT| {
+            [
+                rect.left as f32 / scale,
+                rect.top as f32 / scale,
+                (rect.right - rect.left) as f32 / scale,
+                (rect.bottom - rect.top) as f32 / scale,
+            ]
+        };
+        found
+            .into_iter()
+            .filter_map(|monitor| {
+                let mut info = MONITORINFOEXW::default();
+                #[allow(clippy::cast_possible_truncation)]
+                {
+                    info.monitorInfo.cbSize = size_of::<MONITORINFOEXW>() as u32;
+                }
+                // SAFETY: `info` is a `MONITORINFOEXW` with its size set,
+                // which begins with the `MONITORINFO` the call fills, and
+                // it lives across the call.
+                let known = unsafe {
+                    GetMonitorInfoW(monitor, std::ptr::from_mut(&mut info).cast::<MONITORINFO>())
+                };
+                known.as_bool().then(|| {
+                    let name = info.szDevice;
+                    let end = name.iter().position(|c| *c == 0).unwrap_or(name.len());
+                    Monitor {
+                        id: String::from_utf16_lossy(&name[..end]),
+                        primary: info.monitorInfo.dwFlags & PRIMARY != 0,
+                        bounds: area(info.monitorInfo.rcMonitor),
+                        work: area(info.monitorInfo.rcWork),
+                    }
+                })
+            })
+            .collect()
     }
 }
 
