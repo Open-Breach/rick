@@ -164,9 +164,11 @@ fn toasts(harness: &Harness<'_, RickUi>) -> Vec<(Level, String)> {
     harness.state().toasts()
 }
 
-/// A name of 120 characters.
+/// A name of 120 characters that ends in its extension. Cut at 120 after
+/// the extension was added it ended in a dot, and Windows stores a name
+/// without its trailing dot: the file was listed, under another name.
 fn long_name() -> String {
-    format!("{}.txt", "a-very-long-name-".repeat(7))[..120].to_owned()
+    format!("{}.txt", &"a-very-long-name-".repeat(7)[..116])
 }
 
 /// A folder of 100 files with short names, `file-000.txt` on.
@@ -330,7 +332,12 @@ fn a_hundred_files_fill_aligned_columns_of_one_width_and_scroll_sideways_only() 
     // `a-very-long…` sorts first: back to the left edge to see it.
     press(&mut harness, egui::Key::Home);
     settle(&mut harness);
-    let cell = row(&harness, &long).unwrap_or_else(|| panic!("the long name's row"));
+    let cell = row(&harness, &long).unwrap_or_else(|| {
+        panic!(
+            "the long name's row; the list starts with {:?}",
+            names(&harness).first()
+        )
+    });
     assert!(
         (cell.width() - with_long.column_width).abs() < 0.5,
         "{cell:?}"

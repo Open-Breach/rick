@@ -313,6 +313,10 @@ the specification first (#174).
 - **No raw error in the search box** on a machine with neither `tracker3`
   nor `localsearch`: the Tracker connector disables itself and the
   Extensions dialogue says why (#198).
+- **The first setting changed after the start is kept.** Rick reads the
+  settings file again when something in its configuration folder changes;
+  when that happened before the change had been written, the window went
+  back to the old value while the file got the new one (#206).
 
 ## [0.3.0] - 2026-11-10
 

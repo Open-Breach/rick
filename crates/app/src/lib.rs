@@ -474,8 +474,9 @@ fn cd_command(path: &Path) -> Vec<u8> {
 /// How long the title-row search box's text must stand before the search
 /// indexes are asked, so a typist does not start a query per keystroke.
 const INDEX_SEARCH_AFTER: Duration = Duration::from_millis(150);
-/// How many of this process's own settings writes are remembered, so the
-/// watcher's report of each is told from an edit.
+/// How many states of the settings file are remembered, its state at the
+/// start and this process's own writes, so the watcher's report of each is
+/// told from an edit.
 const RECENT_SAVES: usize = 16;
 /// How much of a file on a remote provider a prefix previewer is served at
 /// first, and per *Load more* (`specs/ext-ssh.md`, "Previews over SSH").
@@ -697,8 +698,10 @@ pub struct App {
     settings_watch: CancelToken,
     /// Writes the settings file in order, one at a time.
     settings_saver: mpsc::UnboundedSender<Settings>,
-    /// What this process wrote lately: a reload that matches one is the
-    /// watcher reporting our own write, not an edit to pick up.
+    /// What this process wrote lately, after what the file held when it
+    /// was read at the start: a reload that matches one is the watcher
+    /// reporting our own write, or the file as it was before a change that
+    /// is still on its way to it, not an edit to pick up.
     recent_saves: VecDeque<Settings>,
     /// The previews being opened or shown, by pane.
     preview: BTreeMap<PaneId, PreviewJob>,
@@ -954,8 +957,15 @@ impl App {
         };
         let session_path = config_dir.join(SESSION_FILE);
         let layouts_dir = config_dir.join(LAYOUTS_DIR);
+        // What the file holds now is no edit to pick up later: a reload
+        // that reads it again before our first change has been written
+        // must not undo that change.
+        let mut recent_saves = VecDeque::new();
         let settings = match settings::load(&settings_path) {
-            Ok(settings) => settings,
+            Ok(settings) => {
+                recent_saves.push_back(settings.clone());
+                settings
+            }
             Err(error) => {
                 warn!(%error, path = %settings_path.display(), "settings not read");
                 pending.push(Event::Notify {
@@ -1085,7 +1095,7 @@ impl App {
             settings_path,
             settings_watch: CancelToken::new(),
             settings_saver,
-            recent_saves: VecDeque::new(),
+            recent_saves,
             preview: BTreeMap::new(),
             preview_generation: 0,
             preview_more: BTreeMap::new(),
@@ -4447,7 +4457,8 @@ impl App {
                 if self.recent_saves.contains(&settings) {
                     // Our own write coming back through the watcher; an
                     // earlier one may have been written over by a later
-                    // change already.
+                    // change already. Or the file as it was at the start,
+                    // read again before our first change reached it.
                     return;
                 }
                 if settings != self.model.settings {

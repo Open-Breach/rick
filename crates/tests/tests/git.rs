@@ -45,6 +45,16 @@ fn git(dir: &Path, args: &[&str]) -> String {
     String::from_utf8_lossy(&output.stdout).into_owned()
 }
 
+/// The text of a file a clone checked out, with its line endings as
+/// committed. A clone is a new repository, which the fixture's own
+/// `core.autocrlf` does not reach: Git for Windows checks text out with
+/// CRLF unless told otherwise.
+fn checked_out(path: &Path) -> Option<String> {
+    fs::read_to_string(path)
+        .ok()
+        .map(|text| text.replace("\r\n", "\n"))
+}
+
 /// Turns `dir` into a repository with one commit of everything in it.
 fn init_repo(dir: &Path) {
     git(dir, &["init", "-q", "-b", "main"]);
@@ -669,9 +679,7 @@ fn a_clone_lands_in_the_target_folder_and_the_pane_shows_it() {
         Some(model::JobState::Done)
     );
     assert_eq!(
-        fs::read_to_string(into.join("origin/tracked.txt"))
-            .ok()
-            .as_deref(),
+        checked_out(&into.join("origin/tracked.txt")).as_deref(),
         Some("one\n")
     );
     assert_eq!(d.names(), ["nested", "origin"], "the pane shows the clone");
@@ -968,10 +976,15 @@ fn the_clone_dialogue_opens_with_the_clipboards_url_and_starts_a_job() {
             .value()
             .unwrap_or_default()
     };
-    assert_eq!(
-        creates(&harness),
-        format!("Creates · {}", plain.join("rick").display())
-    );
+    // The card cuts a long path in its middle and keeps its end, the
+    // folder the clone creates; the temporary directory's path is that
+    // long on macOS and Windows.
+    let ends_in = |line: &str, folder: &str| {
+        let end = Path::new("plain").join(folder).display().to_string();
+        line.starts_with("Creates · ") && line.ends_with(&end)
+    };
+    let line = creates(&harness);
+    assert!(ends_in(&line, "rick"), "{line}");
     // The prefilled text is selected: typing replaces it, and the line
     // follows.
     harness.event(egui::Event::Text("not a url".to_owned()));
@@ -987,10 +1000,8 @@ fn the_clone_dialogue_opens_with_the_clipboards_url_and_starts_a_job() {
     ));
     harness.step();
     harness.step();
-    assert_eq!(
-        creates(&harness),
-        format!("Creates · {}", plain.join("tool").display())
-    );
+    let line = creates(&harness);
+    assert!(ends_in(&line, "tool"), "{line}");
 
     // Enter starts the clone: the dialogue closes and the job, whose
     // folder is taken, fails in the operations, with no dialogue.
