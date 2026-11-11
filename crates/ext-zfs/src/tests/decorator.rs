@@ -130,3 +130,109 @@ fn without_zfs_nothing_appears() {
             .is_none()
     );
 }
+
+/// The time slider's timeline (spec requirement "ZFS timeline").
+mod timeline {
+    use std::path::Path;
+
+    use super::*;
+    use crate::parse;
+    use crate::provider::snapshot_location;
+
+    #[test]
+    fn a_live_folder_has_one_point_per_snapshot() {
+        let fx = Fixture::new();
+        let decorator = ZfsDecorator::new(Arc::clone(&fx.datasets));
+        assert!(decorator.offers_timelines());
+        let folder = local(&fx.home().join("ann/docs"));
+        let timeline = decorator
+            .timeline(&folder)
+            .unwrap_or_else(|| panic!("no timeline"));
+        assert_eq!(timeline.live, folder);
+        let points: Vec<(&str, &str, Location)> = timeline
+            .points
+            .iter()
+            .map(|p| (p.label.as_str(), p.source.as_str(), p.location.clone()))
+            .collect();
+        let rel = Path::new("ann/docs");
+        assert_eq!(
+            points,
+            [
+                ("a", "ZFS", snapshot_location("tank/home", "a", rel)),
+                ("b", "ZFS", snapshot_location("tank/home", "b", rel)),
+            ],
+            "oldest first"
+        );
+        assert!(timeline.points[0].time < timeline.points[1].time);
+        assert_eq!(timeline.point_at(&folder), None, "the live folder is Now");
+    }
+
+    #[test]
+    fn inside_a_snapshot_the_timeline_is_the_live_folders() {
+        let fx = Fixture::new();
+        let decorator = ZfsDecorator::new(Arc::clone(&fx.datasets));
+        let inside = snapshot_location("tank/home", "a", Path::new("ann/docs"));
+        assert!(decorator.applies_to(&inside));
+        let from_inside = decorator
+            .timeline(&inside)
+            .unwrap_or_else(|| panic!("no timeline"));
+        let live = decorator
+            .timeline(&local(&fx.home().join("ann/docs")))
+            .unwrap_or_else(|| panic!("no timeline"));
+        assert_eq!(from_inside, live);
+        assert_eq!(from_inside.point_at(&inside), Some(0), "the pane is at a");
+    }
+
+    #[test]
+    fn snapshots_of_the_same_second_keep_zfs_order() {
+        let fx = Fixture::new();
+        // ZFS lists by creation; two taken in one second come in the order
+        // they were taken.
+        on_snapshots(
+            &fx.zfs,
+            "tank/home",
+            "tank/home@a\t100\t10\ntank/home@b\t100\t20\n",
+        );
+        let decorator = ZfsDecorator::new(Arc::clone(&fx.datasets));
+        let timeline = decorator
+            .timeline(&local(&fx.home()))
+            .unwrap_or_else(|| panic!("no timeline"));
+        let labels: Vec<&str> = timeline.points.iter().map(|p| p.label.as_str()).collect();
+        assert_eq!(labels, ["a", "b"], "a was taken first");
+    }
+
+    #[test]
+    fn a_snapshots_root_leads_back_to_the_mount_point() {
+        let fx = Fixture::new();
+        let decorator = ZfsDecorator::new(Arc::clone(&fx.datasets));
+        let root = snapshot_location("tank/home", "b", Path::new(""));
+        let timeline = decorator
+            .timeline(&root)
+            .unwrap_or_else(|| panic!("no timeline"));
+        assert_eq!(timeline.live, local(&fx.home()), "no trailing separator");
+        assert_eq!(timeline.point_at(&root), Some(1));
+    }
+
+    #[test]
+    fn a_dataset_without_snapshots_offers_none() {
+        let fx = Fixture::new();
+        let decorator = ZfsDecorator::new(Arc::clone(&fx.datasets));
+        let in_tank = local(fx.dir.path());
+        assert!(decorator.applies_to(&in_tank));
+        assert_eq!(decorator.timeline(&in_tank), None);
+        let elsewhere = local(Path::new("/nowhere/at/all"));
+        assert_eq!(decorator.timeline(&elsewhere), None);
+    }
+
+    #[test]
+    fn three_folders_of_a_dataset_read_the_list_once() {
+        let fx = Fixture::new();
+        let decorator = ZfsDecorator::new(Arc::clone(&fx.datasets));
+        for rel in ["", "ann", "ann/docs"] {
+            assert!(decorator.timeline(&local(&fx.home().join(rel))).is_some());
+        }
+        let list = parse::list_snapshots_args("tank/home");
+        let reads = fx.zfs.calls().iter().filter(|call| **call == list).count();
+        assert_eq!(reads, 1);
+    }
+}

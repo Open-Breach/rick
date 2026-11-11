@@ -6,17 +6,26 @@
 //! a visible batch, starts the background read of the dataset's snapshot
 //! list and properties when they are missing or stale. A panel asked for
 //! before that read arrives shows the dataset and a *Loading…* row.
+//!
+//! The decorator also offers the time slider's timeline: for a live folder
+//! inside a dataset and for a folder inside one of its snapshots, one point
+//! per snapshot at the same relative folder, from the snapshot list the
+//! dataset cache keeps for 30 seconds.
 
 use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::SystemTime;
 
-use ext::{ColumnDef, DecorateCtx, Decoration, Decorator, PanelSection, t};
+use ext::{ColumnDef, DecorateCtx, Decoration, Decorator, PanelSection, TimePoint, Timeline, t};
 use types::{Entry, EntryId, ExtId, Location};
 
-use crate::actions::local_path;
+use crate::actions::{local, local_path};
 use crate::datasets::Datasets;
+use crate::provider::{Target, snapshot_location, target};
+
+/// The source's name on the time slider.
+const SOURCE: &str = "ZFS";
 
 /// The panel section and the reads behind it.
 #[derive(Debug)]
@@ -95,7 +104,7 @@ impl Decorator for ZfsDecorator {
     }
 
     fn applies_to(&self, loc: &Location) -> bool {
-        self.dataset_of(loc).is_some()
+        self.dataset_of(loc).is_some() || matches!(target(loc), Ok(Target::Snapshot { .. }))
     }
 
     fn columns(&self) -> &[ColumnDef] {
@@ -153,4 +162,49 @@ impl Decorator for ZfsDecorator {
     }
 
     fn invalidate(&self, _loc: &Location) {}
+
+    fn offers_timelines(&self) -> bool {
+        true
+    }
+
+    fn timeline(&self, loc: &Location) -> Option<Timeline> {
+        let (dataset, rel, live) = match target(loc) {
+            Ok(Target::Snapshot { dataset, rel, .. }) => {
+                let mountpoint = &self.datasets.named(&dataset)?.mountpoint;
+                // `join` of an empty path would end it with a separator.
+                let live = if rel.as_os_str().is_empty() {
+                    local(mountpoint)
+                } else {
+                    local(&mountpoint.join(&rel))
+                };
+                (dataset, rel, live)
+            }
+            Ok(_) => return None,
+            Err(_) => {
+                let (fs, rel) = self.datasets.split(&local_path(loc)?)?;
+                (fs.name.clone(), rel, loc.clone())
+            }
+        };
+        let mut snapshots = match self.datasets.snapshots(&dataset) {
+            Ok(snapshots) => snapshots,
+            Err(error) => {
+                tracing::debug!(%dataset, %error, "no ZFS timeline");
+                return None;
+            }
+        };
+        // Newest first as the cache gives them; oldest first for the
+        // slider. Reversed rather than sorted: ZFS lists by creation, and
+        // two snapshots of the same second keep the order they were taken.
+        snapshots.reverse();
+        let points: Vec<TimePoint> = snapshots
+            .iter()
+            .map(|s| TimePoint {
+                time: s.created,
+                label: s.name.clone(),
+                source: SOURCE.to_owned(),
+                location: snapshot_location(&dataset, &s.name, &rel),
+            })
+            .collect();
+        (!points.is_empty()).then_some(Timeline { live, points })
+    }
 }
