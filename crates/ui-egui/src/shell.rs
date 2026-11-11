@@ -18,6 +18,7 @@ use app::{App, Command, Event};
 use egui::{ViewportBuilder, ViewportCommand, ViewportId};
 use egui_dock::{DockArea, TabViewer};
 use ext::{ActionCtx, ActionId, Invocation, Level};
+use model::placement::{self, Area, Screen};
 use model::{
     Column, Density, DockTarget, Geometry, IconSize, JobState, PaneId, PanelSide, SelectionChange,
     SettingsChange, SidePanelChange, SortDir, Tab, TabId, TabKind, Theme, ViewMode, WindowId,
@@ -982,6 +983,12 @@ pub struct RickUi {
     /// The frame drawn around every window Rick decorates itself: the
     /// shadow frame unless [`with_frame`](Self::with_frame) said otherwise.
     frame_mode: frame::Mode,
+    /// The monitors as the platform listed them last and when, so that a
+    /// window being dragged does not ask for them every frame.
+    screens: Option<(Instant, Vec<Screen>)>,
+    /// The windows that were put where *Window geometry* says: restored,
+    /// centred at the default size, or beside the window they came from.
+    arranged: std::collections::BTreeSet<WindowId>,
     /// Work from outside the windows (a second launch's command line,
     /// handed over through the single-instance endpoint), run against the
     /// application before the root window's frame.
@@ -1249,6 +1256,8 @@ impl RickUi {
             window_ref: None,
             attached: false,
             frame_mode: frame::Mode::Shadow,
+            screens: None,
+            arranged: std::collections::BTreeSet::new(),
             viewports,
             externals: None,
             relaunch: None,
@@ -2348,6 +2357,101 @@ impl RickUi {
         }
     }
 
+    /// The monitors that are connected, as the platform lists them, in the
+    /// logical pixels of this viewport; asked for at most once a second.
+    /// Empty where the platform places the windows itself.
+    fn screens(&mut self, ctx: &egui::Context) -> Vec<Screen> {
+        let now = Instant::now();
+        if let Some((at, screens)) = &self.screens
+            && now.duration_since(*at) < Duration::from_secs(1)
+        {
+            return screens.clone();
+        }
+        let area = |[x, y, width, height]: [f32; 4]| Area::new(x, y, width, height);
+        let screens: Vec<Screen> = self
+            .app
+            .platform()
+            .monitors(ctx.pixels_per_point())
+            .into_iter()
+            .map(|monitor| Screen {
+                id: monitor.id,
+                primary: monitor.primary,
+                bounds: area(monitor.bounds),
+                work: area(monitor.work),
+            })
+            .collect();
+        self.screens = Some((now, screens.clone()));
+        screens
+    }
+
+    /// Where `window` goes when it is first shown (SPEC.md *Window
+    /// geometry*): beside the window it was opened from; or what the
+    /// session held for it, where its monitor is still there and the
+    /// window would be visible on it; or centred on the primary monitor at
+    /// the default size. `None` where there is nothing to decide: the
+    /// platform reports no monitors and the window came from no other.
+    fn arrangement(&mut self, ctx: &egui::Context, window: WindowId) -> Option<placement::Placed> {
+        self.arranged.insert(window);
+        let title = crate::theme::metrics(ctx).titlebar_height;
+        let screens = self.screens(ctx);
+        let model = self.app.model().window(window)?;
+        match (model.beside, model.geometry) {
+            (true, Some(opener)) => Some(placement::beside(&opener, &screens, title)),
+            (_, geometry) => {
+                placement::restore(geometry.as_ref(), model.monitor.as_deref(), &screens, title)
+            }
+        }
+    }
+
+    /// Puts the first window where *Window geometry* says, once it is
+    /// there: the backend opened it at a size and a place of its own.
+    /// Where the platform reports no monitors the saved size and state
+    /// are restored and the place is the system's; a first launch there
+    /// takes the default size from the monitor the window opened on.
+    fn place_root(
+        &mut self,
+        ctx: &egui::Context,
+        window: WindowId,
+        monitor_size: Option<egui::Vec2>,
+    ) {
+        let saved = self.app.model().window(window).and_then(|w| w.geometry);
+        let size = |g: &Geometry| egui::vec2(g.width.max(MIN_SIZE[0]), g.height.max(MIN_SIZE[1]));
+        match (self.arrangement(ctx, window), saved) {
+            (Some(placed), _) => {
+                let g = placed.geometry;
+                ctx.send_viewport_cmd(ViewportCommand::OuterPosition(egui::pos2(g.x, g.y)));
+                ctx.send_viewport_cmd(ViewportCommand::InnerSize(size(&g)));
+                if g.maximised {
+                    ctx.send_viewport_cmd(ViewportCommand::Maximized(true));
+                }
+                if saved != Some(g) {
+                    self.handle(Command::WindowGeometry {
+                        window,
+                        geometry: g,
+                        monitor: placed.monitor,
+                    });
+                }
+            }
+            (None, Some(g)) => {
+                ctx.send_viewport_cmd(ViewportCommand::OuterPosition(egui::pos2(g.x, g.y)));
+                ctx.send_viewport_cmd(ViewportCommand::InnerSize(size(&g)));
+                if g.maximised {
+                    ctx.send_viewport_cmd(ViewportCommand::Maximized(true));
+                }
+            }
+            (None, None) => {
+                if let Some(monitor) = monitor_size.filter(|m| m.x > 0.0 && m.y > 0.0) {
+                    let (width, height) =
+                        placement::default_size(&Area::new(0.0, 0.0, monitor.x, monitor.y));
+                    ctx.send_viewport_cmd(ViewportCommand::InnerSize(egui::vec2(
+                        width.max(MIN_SIZE[0]),
+                        height.max(MIN_SIZE[1]),
+                    )));
+                }
+            }
+        }
+    }
+
     /// Reports the window's place on the screen, focus and close requests
     /// to the app, and hands a restored geometry to the backend once.
     fn report_viewport(&mut self, ctx: &egui::Context, window: WindowId) {
@@ -2360,15 +2464,8 @@ impl RickUi {
         w.screen = info.inner_rect;
         if !w.placed {
             w.placed = true;
-            if is_root && let Some(g) = model_geometry {
-                ctx.send_viewport_cmd(ViewportCommand::OuterPosition(egui::pos2(g.x, g.y)));
-                ctx.send_viewport_cmd(ViewportCommand::InnerSize(egui::vec2(
-                    g.width.max(MIN_SIZE[0]),
-                    g.height.max(MIN_SIZE[1]),
-                )));
-                if g.maximised {
-                    ctx.send_viewport_cmd(ViewportCommand::Maximized(true));
-                }
+            if is_root {
+                self.place_root(ctx, window, info.monitor_size);
             }
             return;
         }
@@ -2408,7 +2505,14 @@ impl RickUi {
                     && g.maximised == geometry.maximised
             });
             if !same && geometry.width > 0.0 && geometry.height > 0.0 {
-                self.handle(Command::WindowGeometry { window, geometry });
+                let title = crate::theme::metrics(ctx).titlebar_height;
+                let monitor = placement::screen_of(&geometry, &self.screens(ctx), title)
+                    .map(|screen| screen.id.clone());
+                self.handle(Command::WindowGeometry {
+                    window,
+                    geometry,
+                    monitor,
+                });
             }
         }
         if info.close_requested() {
@@ -4110,6 +4214,8 @@ impl RickUi {
             return;
         }
         let height = crate::theme::metrics(&self.ctx).titlebar_height;
+        // Where it was dropped is where it goes: not beside its window.
+        self.arranged.insert(new);
         self.handle(Command::WindowGeometry {
             window: new,
             geometry: Geometry {
@@ -4119,6 +4225,8 @@ impl RickUi {
                 height: size.y,
                 maximised: false,
             },
+            // Its first report names the monitor.
+            monitor: None,
         });
     }
 
@@ -5301,6 +5409,7 @@ impl RickUi {
         }
         let model_windows: Vec<WindowId> = self.app.model().windows().map(|(id, _)| id).collect();
         self.windows.retain(|id, _| model_windows.contains(id));
+        self.arranged.retain(|id| model_windows.contains(id));
         if !model_windows.contains(&self.root) {
             let Some(next) = model_windows.first().copied() else {
                 return;
@@ -5328,6 +5437,18 @@ impl RickUi {
         for id in model_windows {
             if id == self.root {
                 continue;
+            }
+            // A window shown for the first time is put where it belongs
+            // before its viewport is built: beside the window it came
+            // from, or where the session had it.
+            if !self.arranged.contains(&id)
+                && let Some(placed) = self.arrangement(ctx, id)
+            {
+                self.handle(Command::WindowGeometry {
+                    window: id,
+                    geometry: placed.geometry,
+                    monitor: placed.monitor,
+                });
             }
             let geometry = self.app.model().window(id).and_then(|w| w.geometry);
             let viewport = viewport_of(id);
