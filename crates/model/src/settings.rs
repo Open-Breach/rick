@@ -248,6 +248,10 @@ pub struct Settings {
     /// Whether a second click on the one selected row renames it; F2 and
     /// *Rename* in the context menu always do (SPEC.md *Inline rename*).
     pub rename_on_click: bool,
+    /// The command of *Open in editor*, with its arguments, to which the
+    /// files' paths are appended; empty for the system's default text
+    /// editor (SPEC.md *Open in editor*).
+    pub editor: String,
     /// The colour of the title row's band: a preset, or `custom`.
     #[serde(deserialize_with = "lenient_titlebar")]
     pub titlebar_colour: TitlebarColour,
@@ -727,6 +731,7 @@ impl Default for Settings {
             density: Density::Comfortable,
             date_format: DateFormat::default(),
             rename_on_click: false,
+            editor: String::new(),
             titlebar_colour: TitlebarColour::default(),
             titlebar_custom_light: custom_light(),
             titlebar_custom_dark: custom_dark(),
@@ -771,6 +776,8 @@ pub enum SettingsChange {
     DateFormat(DateFormat),
     /// Whether a second click on the selected row renames it.
     RenameOnClick(bool),
+    /// The command of *Open in editor*; empty for the system's default.
+    Editor(String),
     /// The title row's band: a preset, or the custom pair.
     TitlebarColour(TitlebarColour),
     /// One colour of the custom pair: the light scheme's, or the dark
@@ -865,6 +872,7 @@ impl Settings {
             SettingsChange::Density(v) => self.density = v,
             SettingsChange::DateFormat(v) => self.date_format = v,
             SettingsChange::RenameOnClick(v) => self.rename_on_click = v,
+            SettingsChange::Editor(v) => self.editor = v,
             SettingsChange::TitlebarColour(v) => self.titlebar_colour = v,
             SettingsChange::TitlebarCustom { dark: true, colour } => {
                 self.titlebar_custom_dark = colour;
@@ -1119,6 +1127,10 @@ mod tests {
         let text = toml::to_string(&s).unwrap_or_else(|e| panic!("{e}"));
         assert!(text.contains("date_format = \"smart-time\""), "{text}");
         assert!(text.contains("rename_on_click = false"), "{text}");
+        assert!(text.contains("editor = \"\""), "{text}");
+        let named: Settings =
+            toml::from_str("editor = \"code --wait\"\n").unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(named.editor, "code --wait");
         for (key, format) in [
             ("smart-time", DateFormat::SmartTime),
             ("smart", DateFormat::Smart),
