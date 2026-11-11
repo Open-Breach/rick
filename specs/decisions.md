@@ -406,7 +406,7 @@ Q335. One File info card for every section; the pin is per previewer id; a click
 
 Q336. The card shows five fields as a popover and four when pinned; *Modified* follows *Size*.
 
-Q337. *Open as hex* shows this file only; *plugin available* replaces the no-previewer text.
+Q337. *Open as hex* shows this file only; *plugin available* replaces the no-previewer text. (Superseded for the button by issue 149: the hex view is the fallback and the card has no *Open as hex*.)
 
 Q338. *Download* only opens the browser; the card shows the destination folder (decided 2026-11-10).
 

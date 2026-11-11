@@ -1,6 +1,6 @@
 # Functions
 
-Related: specs/gui-dialogues.md, specs/gui-side-panel.md, specs/gui-title-row.md, specs/keyboard-shortcuts.md
+Related: specs/gui-dialogues.md, specs/gui-side-panel.md, specs/gui-title-row.md, specs/gui-windows.md, specs/core-types.md, specs/keyboard-shortcuts.md
 
 **Drag and drop.** Dragging a selection out of a file list starts a drag; where it lands decides what happens. Every target highlights while the cursor is over it.
 
@@ -60,8 +60,8 @@ There is no rename field: a different name is given afterwards, in the list. *Do
 - **Copy name.** Copy the file name of each selected item to the clipboard (`report.pdf`), one per line for multiple items (Mod+Alt+C).
 - **Copy path.** Copy the folder path of each selected item, without the name (`/home/serge/docs`), one per line, duplicates removed (Mod+Alt+Shift+C). With nothing selected, and from the breadcrumb's copy button, this is the current folder's path.
 - **Copy path and name.** Copy the full path of each selected item (`/home/serge/docs/report.pdf`), one per line (Mod+Shift+C). The three sit together in the Share group of the context menu.
-- **New file.** Create an empty file in the current location with its name in inline edit; extensions can add templates (text, markdown, and so on).
-- **New folder.** Create a folder in the current location with its name in inline edit; with a selection, a variant moves the selected items into the new folder.
+- **New file.** Create an empty file in the current location with its name in inline edit; extensions can add templates (text, markdown, and so on). Offered where the location has `CREATE_FILE`, disabled with the reason where it has not (*Capabilities decide what is offered* under Core types).
+- **New folder.** Create a folder in the current location with its name in inline edit; with a selection, a variant moves the selected items into the new folder. Offered where the location has `CREATE_DIR`; at the root of an Azure Blob account it creates a container (*Object storage* under Supported scope).
 - **Open containing folder.** Navigate the current pane to the folder that holds the selected item and select it there; useful from search results, the flattened view and Recent.
 - **Open containing folder in new tab.** The same, in a new tab.
 - **Show only folders.** Filter the list to folders.
@@ -89,10 +89,12 @@ There is no rename field: a different name is given afterwards, in the list. *Do
 - **Select first tab.** Jump to the first tab (Ctrl+1); Ctrl+2 to Ctrl+8 select by position and Ctrl+9 the last.
 - **Rename.** Edit the name inline (F2), with the base name pre-selected and the extension left alone; with several items selected, opens the bulk rename dialogue (pattern, numbering, find and replace, preview of the result).
 - **To lower case / to upper case.** Rename the selected items to all-lower or all-upper case names in one step, extension included; on case-insensitive filesystems this goes through a temporary name.
-- **Select all / invert selection.** Select everything in the list (Ctrl+A) or swap selected and unselected.
+- **Select all / invert selection.** Select everything in the list (Ctrl+A) or swap selected and unselected. *Select all* selects what the list shows and nothing else: an entry the pane is not showing is never selected invisibly. When the folder holds hidden items that are not shown, a toast says so with their number, *3 hidden items not selected* (*1 hidden item not selected*).
 - **Select by pattern.** Select the entries matching a glob or regular expression entered in a small prompt (Ctrl+Shift+A), adding to or replacing the current selection.
 - **Undo / redo.** Reverse the last move, rename, trash, new file or new folder (Ctrl+Z / Ctrl+Shift+Z); copies and permanent deletes are not undoable and say so.
 - **Open with.** Open the selection in a chosen application from the platform's list for that type, or any executable; the choice can be remembered for the type.
+- **Open in editor.** Open the selected local files in the configured editor (F4); see *Open in editor* under *Opening files* in General behaviour.
+- **Download.** Bring the selected remote files and folders down to the machine as one job, into a folder asked for first, Downloads by default; see *Remote files* under *Opening files*. Offered on remote locations only.
 - **Compress.** Pack the selection into an archive (zip by default, other formats in a small dialogue) next to it.
 - **Extract here / extract to.** Unpack the selected archive into the current folder, into a folder named after it, or to a chosen location.
 - **Compare.** Compare the two selected files, or the folders of the two panes, in a diff view; file contents via a text diff, folders by name, size and modified date with the differences highlighted.

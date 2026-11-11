@@ -82,7 +82,7 @@ One Cargo workspace, one crate per concern, grouped by layer. Kernel crates carr
 - `ext-preview-archive` — listing of an archive's or disk image's contents without mounting it.
 - `ext-preview-markup` — one plugin for the three structured text formats: Markdown and HTML rendered, CSV and TSV as a virtualised grid, each with the *Rendered* toggle to the source. Supersedes `ext-preview-csv` and takes the Markdown and HTML rendering out of `ext-preview-code`.
 - `ext-preview-3d` — STL, OBJ and 3MF meshes rendered through wgpu.
-- `ext-preview-hex` — the hex view; claims no file on its own, chosen per type in settings.
+- `ext-preview-hex` — the hex view: the fallback for a file no other previewer recognises (the lowest score, for every file), and chosen per type in settings.
 
 **Actions** (`ext-action-*`)
 

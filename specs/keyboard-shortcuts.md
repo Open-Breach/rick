@@ -12,7 +12,7 @@ The default `default_shortcut` of every built-in Action. **Mod** is Ctrl on Linu
 
 | Shortcut | Action |
 | --- | --- |
-| Enter | Open (folder: navigate; archive or disk image: enter it, or the system default when `archives.on_open` is `system`; other: system default) |
+| Enter | Open (folder: navigate; archive or disk image: enter it, or the system default when `archives.on_open` is `system`; a local program: run it, a script after a question; a remote file: download it; other: system default) |
 | Mod+Enter | Open with the system default application, whatever the file and the setting |
 | Backspace, Alt+Left | Back |
 | Alt+Right | Forward |
@@ -56,6 +56,7 @@ The default `default_shortcut` of every built-in Action. **Mod** is Ctrl on Linu
 | Mod+Z | Undo |
 | Mod+Shift+Z, Mod+Y | Redo |
 | Mod+O | Open with… |
+| F4 | Open in editor |
 | Mod+Shift+O | Open in system file manager |
 
 **Tabs and panes**
