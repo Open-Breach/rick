@@ -1126,29 +1126,29 @@ fn select_unclaimed(harness: &mut Harness<'_, RickUi>, name: &str) {
     harness.step();
 }
 
-/// Issue 139, item 5, *No previewer*: a file nobody claims shows the File
-/// info card, centred — not a hex dump and not a bare line: its head says
-/// *no previewer for .bin*, or *plugin available* when a disabled plugin's
-/// manifest claims the type; its rows are where the file is, when it was
-/// modified and its permissions; *Open as hex* shows this file with the
-/// hex previewer, while that is loaded, until the selection moves on.
+/// Issue 139, item 5, *No previewer*, as issue 149 changed it: without
+/// the hex view loaded, a file nobody claims shows the File info card,
+/// centred — not a bare line: its head says *no previewer for .bin*, or
+/// *plugin available* when a disabled plugin's manifest claims the type;
+/// its rows are where the file is, when it was modified and its
+/// permissions; and its one button is *Open with…*. *Open as hex* is gone:
+/// with the hex view loaded it takes such a file by itself (the test
+/// below).
 #[test]
 #[allow(clippy::too_many_lines)]
-fn a_file_no_previewer_claims_shows_the_centred_card_with_open_as_hex() {
+fn a_file_no_previewer_claims_shows_the_centred_card_with_open_with_alone() {
     use ui_egui::inspector::Info;
     let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
     fs::write(dir.path().join("random.bin"), [0u8, 1, 2, 3, 255, 254])
         .unwrap_or_else(|e| panic!("{e}"));
     fs::write(dir.path().join("notes.abc"), b"abc\0").unwrap_or_else(|e| panic!("{e}"));
     let fake = Arc::new(Fake::new().unwrap_or_else(|e| panic!("{e}")));
-    let mut extensions = previewers();
-    extensions.push(Arc::new(ext_preview_hex::HexPreview::new()));
     let mut harness = window(
         &fake,
         dir.path(),
         egui::vec2(1300.0, 700.0),
         520.0,
-        extensions,
+        previewers(),
     );
     // A disabled plugin in the plugins directory whose manifest claims
     // `.abc`, as the binary would have reported it.
@@ -1204,38 +1204,22 @@ fn a_file_no_previewer_claims_shows_the_centred_card_with_open_as_hex() {
         .preview_rects()
         .content
         .unwrap_or_else(|| panic!("content"));
-    let hex = harness.get_by_label("Open as hex").rect();
-    let with = harness.get_by_label("Open with…").rect();
-    assert!(hex.left() < with.left(), "Open as hex comes first");
     assert!(
-        (hex.left() - (content.center().x - 200.0 + 15.0)).abs() < 2.0,
-        "left-aligned in a 400 px card centred in {content:?}: {hex:?}"
+        harness.query_by_label("Open as hex").is_none(),
+        "the card has one button"
+    );
+    let with = harness.get_by_label("Open with…").rect();
+    assert!(
+        (with.left() - (content.center().x - 200.0 + 15.0)).abs() < 2.0,
+        "left-aligned in a 400 px card centred in {content:?}: {with:?}"
     );
     assert!(
-        (hex.center().y - content.center().y).abs() < content.height() / 3.0,
-        "{hex:?} in {content:?}"
+        (with.center().y - content.center().y).abs() < content.height() / 3.0,
+        "{with:?} in {content:?}"
     );
     // Nothing for the info button to open: the card is on show already.
     assert_eq!(harness.state().preview_info(), Info::Inert);
     assert_eq!(harness.state().preview_fields(), [], "no rows to list");
-
-    // Open as hex: this file, in the pane, through the hex previewer.
-    harness.get_by_label("Open as hex").click();
-    let started = Instant::now();
-    loop {
-        harness.step();
-        let slot = harness.state().previews().get(pane);
-        if slot.is_some_and(|s| s.previewer() == Some(ext_preview_hex::ID) && s.has_doc()) {
-            break;
-        }
-        assert!(
-            started.elapsed() < Duration::from_secs(20),
-            "no hex view: {slot:?}"
-        );
-        std::thread::sleep(Duration::from_millis(2));
-    }
-    settle(&mut harness);
-    assert!(harness.query_by_label("Open as hex").is_none());
 
     // The other file: a disabled plugin claims its type.
     select_unclaimed(&mut harness, "notes.abc");
@@ -1258,12 +1242,75 @@ fn a_file_no_previewer_claims_shows_the_centred_card_with_open_as_hex() {
             .next()
             .is_some()
     );
-    // And back: the hex view was for that one look at the file.
-    select_unclaimed(&mut harness, "random.bin");
-    for _ in 0..3 {
-        harness.step();
-    }
-    harness.get_by_label("Open as hex");
+}
+
+/// Issue 149, item 7: with the hex view loaded, a file nothing else
+/// recognises opens in it by itself — `random-4k.bin` of the test files —
+/// while a file with a recognised type still goes to its own previewer.
+#[test]
+fn the_hex_view_takes_a_file_nothing_else_recognises() {
+    let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+    let noise: Vec<u8> = (0..4096u32).map(|i| (i * 31 % 251) as u8).collect();
+    fs::write(dir.path().join("random-4k.bin"), noise).unwrap_or_else(|e| panic!("{e}"));
+    fs::write(dir.path().join("notes.txt"), "hello\n").unwrap_or_else(|e| panic!("{e}"));
+    let fake = Arc::new(Fake::new().unwrap_or_else(|e| panic!("{e}")));
+    let mut extensions = previewers();
+    extensions.push(Arc::new(ext_preview_hex::HexPreview::new()));
+    let mut harness = window(
+        &fake,
+        dir.path(),
+        egui::vec2(1300.0, 700.0),
+        520.0,
+        extensions,
+    );
+    let pane = harness.state().app().model().focused;
+    let shown_by = |harness: &mut Harness<'_, RickUi>, name: &str| {
+        let id = harness
+            .state()
+            .app()
+            .model()
+            .active_tab(pane)
+            .and_then(|(_, t)| t.listing.rows().find(|e| e.name == name).map(|e| e.id))
+            .unwrap_or_else(|| panic!("no entry {name}"));
+        harness.state_mut().app_mut().handle(
+            app::Command::Select {
+                pane,
+                change: SelectionChange::Set(vec![id]),
+            },
+            &mut Vec::new(),
+        );
+        let started = Instant::now();
+        loop {
+            harness.step();
+            let slot = harness.state().previews().get(pane);
+            if let Some(previewer) = slot
+                .filter(|s| s.has_doc())
+                .and_then(ui_egui::preview::Slot::previewer)
+            {
+                return previewer;
+            }
+            assert!(
+                started.elapsed() < Duration::from_secs(20),
+                "{name}: no preview: {slot:?}"
+            );
+            std::thread::sleep(Duration::from_millis(2));
+        }
+    };
+    assert_eq!(
+        shown_by(&mut harness, "random-4k.bin"),
+        ext_preview_hex::ID,
+        "the hex view, and no card"
+    );
+    settle(&mut harness);
+    assert!(harness.query_by_label("Open with…").is_none(), "no card");
+    assert!(
+        harness
+            .query_all_by_label_contains("no previewer for")
+            .next()
+            .is_none()
+    );
+    // A recognised type still goes to its own previewer.
+    assert_ne!(shown_by(&mut harness, "notes.txt"), ext_preview_hex::ID);
 }
 
 /// Nothing selected (SPEC.md *Nothing selected*): the glyph with *No file

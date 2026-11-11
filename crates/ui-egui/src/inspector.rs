@@ -38,8 +38,6 @@ use crate::preview::{Around, PreviewAct, Previews, Slot};
 use crate::shell::{PaneDrag, Request};
 use crate::theme::{self, CARD_RADIUS, TEXT_SECONDARY};
 
-/// The hex previewer, which *Open as hex* shows a file with.
-const HEX_PREVIEWER: ExtId = ExtId("preview-hex");
 /// The rows the card shows before *Show all n fields*: as a popover, and
 /// pinned.
 const ROWS_POPOVER: usize = 5;
@@ -356,11 +354,6 @@ pub fn show(
             let around = Around {
                 home: &home,
                 plugins: &plugins,
-                hex: app
-                    .registry()
-                    .previewers()
-                    .iter()
-                    .any(|p| p.id() == HEX_PREVIEWER),
                 still: app.platform().reduce_motion(),
                 dates: crate::format::Dates::of(&app.model().settings),
                 columns: &app.model().settings.preview.columns,
@@ -424,10 +417,6 @@ fn apply_preview_act(
             setting,
             filters,
         }),
-        PreviewAct::OpenAsHex => requests.push(Request::Command(Command::PreviewWith {
-            pane,
-            previewer: HEX_PREVIEWER,
-        })),
         PreviewAct::OpenWith => {
             if let Some(ctx) = app.action_ctx(pane, Invocation::ContextMenu) {
                 requests.push(Request::RunAction {

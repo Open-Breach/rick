@@ -125,7 +125,6 @@ preview-destination = Destination
 preview-install = Install
 preview-open-destination = Open folder
 preview-download = Download { $name }
-preview-open-as-hex = Open as hex
 preview-open-with = Open with…
 preview-pin-info = Pin file info
 preview-unpin-info = Unpin file info
