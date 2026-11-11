@@ -16,6 +16,12 @@ its acceptance test and its screenshots in the four modes
 open is in `QUESTIONS.md` 323 to 366. The rules went into SPEC.md first
 (#155).
 
+The functional fixes of the same test session (issue 149,
+`specs/version-0.4.md`): remote providers, removable media and lost
+connections, the file list, the window, launching, search and previewers.
+Every bug fixed has a test that fails before the fix. The rules went into
+the specification first (#174).
+
 ### Added
 
 - **Title bar colour.** The title row sits on a band of its own colour, the
@@ -79,6 +85,46 @@ open is in `QUESTIONS.md` 323 to 366. The rules went into SPEC.md first
   one that was there before, and git's message in the job when it fails.
   The dialogue is built from the form fields a plugin has, so it does not
   match its Figma frames in every detail yet (#188).
+
+- **Download.** Enter and a double-click on a remote file copy it into
+  Downloads as a job and open nothing; *Download…* in the menu of remote
+  files and folders does it for the whole selection, folders included, into
+  a folder asked for first (#193).
+- **New folder at an Azure account's root creates a container**, its name
+  checked against the naming rules before anything is asked of the service.
+  Inside a container, and inside an S3 or GCS bucket, New folder and New
+  file work at every depth (#193).
+- **Search in subfolders on Azure, S3 and GCS**, by prefix. Where a location
+  cannot be searched beneath, as over SSH, the toggle is disabled with the
+  reason (#193).
+- **Format…** in the menu of a drive's card opens the system's own tool on
+  that drive: GNOME Disks or the desktop's equivalent, Disk Utility, the
+  format dialogue of Windows. Rick formats nothing itself (#194).
+- **Connection lost.** A remote location that stops answering keeps its tab
+  and shows *Connection lost to* with the account's name and *Retry*; Rick
+  tries again by itself after 2, 5 and 15 seconds (#194).
+- **List view** as its Figma frame draws it: icon and name, columns of one
+  width filled top to bottom, sideways scrolling, Left and Right between
+  the columns (#195).
+- **Date format**, *Settings → Appearance*, `date_format` in `rick.toml`:
+  *Smart with time* (the default: *Today 15:58*, *Yesterday 09:17*, *Tue
+  21:24*, *Aug 24 14:12*), *Smart without time*, *ISO* and *System* (#195).
+- **Settings → Behaviour**, a new page: *Rename on a second click*
+  (`rename_on_click`, off by default) and *Editor* (`editor`) (#195, #197).
+- **Window geometry.** A window comes back on its monitor where that is
+  still connected and the window would be visible; otherwise it opens
+  centred on the primary monitor at the default size, 80 % of the working
+  area capped at 1920 × 1200 and at 16:9. A second window opens beside the
+  first (#196).
+- **Programs start.** A binary with the execute bit runs on Enter and a
+  double-click; an executable script asks *Run script?* with *Cancel*,
+  *Edit* and *Run* (#197).
+- **Open in editor**, F4 and the context menu of local files: the system's
+  default text editor, or the command of the `editor` setting (#197).
+- **The path bar expands** a leading `~` and `$VAR`, `${VAR}` and on Windows
+  `%VAR%`, on Enter and on paste (#197).
+- **`localsearch`.** The Tracker connector finds GNOME's indexer under its
+  new name too and queries it through `tinysparql` (#198).
 
 ### Changed
 
@@ -151,6 +197,20 @@ open is in `QUESTIONS.md` 323 to 366. The rules went into SPEC.md first
   short, keeps `#2b2b2b` at 78 % (specs/decisions.md Q242, #191).
 - The workspace version is `0.4.0-dev` until 0.4.0 is tagged (#154).
 
+- **The extension API is version 19.** `Capabilities` gains `CREATE_DIR`,
+  `CREATE_FILE`, `SEARCH_SUBTREE` and `DOWNLOAD`, and `Provider` gains
+  `unavailable_reason` and `name_problem`; plugins built against 18 are
+  rebuilt (#193).
+- **A menu entry a location's capabilities rule out is greyed** with the
+  reason as its tooltip, not hidden: New folder, New file and Download…
+  (#193).
+- **Single-click rename is off by default.** F2 and the context menu rename
+  as before (#195).
+- **Select all** says how many hidden items it left out (#195).
+- **The hex view is the fallback previewer**: it takes whatever no other
+  previewer recognises, and *Open as hex* is gone from the *No previewer*
+  card (#198).
+
 ### Fixed
 
 - **The Windows archive starts on a machine without the Visual C++
@@ -216,6 +276,20 @@ open is in `QUESTIONS.md` 323 to 366. The rules went into SPEC.md first
   the *File hashes* dialogue's secondary line ends in an ellipsis before the
   close button; and an operation's error is no longer cut to “Invali…”
   (#169).
+
+- **Azure requests**: a `PUT` without a body carries its `Content-Length`,
+  a space in a query is `%20` in the request as in its signature, and a
+  container's name is signed encoded (#193).
+- **A tab on a drive that is pulled out or ejected goes Home**, with a
+  toast that names the drive, *… was removed*; so does a tab on an account
+  or a host that is removed (#194).
+- **The drive list is read again on the system's mount events** on Linux,
+  so a partition that mounts a moment after its stick is there at once
+  (#194).
+- **The corner grip resizes every time**, not once (#196).
+- **No raw error in the search box** on a machine with neither `tracker3`
+  nor `localsearch`: the Tracker connector disables itself and the
+  Extensions dialogue says why (#198).
 
 ## [0.3.0] - 2026-11-10
 
