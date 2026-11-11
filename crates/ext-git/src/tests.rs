@@ -27,6 +27,16 @@ fn git(dir: &Path, args: &[&str]) -> String {
     String::from_utf8_lossy(&output.stdout).into_owned()
 }
 
+/// The text of a file a clone checked out, with its line endings as
+/// committed. A clone is a new repository, which the fixture's own
+/// `core.autocrlf` does not reach: Git for Windows checks text out with
+/// CRLF unless told otherwise.
+fn checked_out(path: &Path) -> Option<String> {
+    fs::read_to_string(path)
+        .ok()
+        .map(|text| text.replace("\r\n", "\n"))
+}
+
 /// A repository with one commit holding `tracked.txt`, an identity, and a
 /// bare origin it pushed to.
 fn repo() -> (tempfile::TempDir, std::path::PathBuf) {
@@ -976,9 +986,7 @@ fn a_clone_creates_the_repositorys_folder_in_the_target_as_git_clone_does() {
     // The repository's folder, inside the target, with its content.
     let cloned = into.join("origin");
     assert_eq!(
-        fs::read_to_string(cloned.join("tracked.txt"))
-            .ok()
-            .as_deref(),
+        checked_out(&cloned.join("tracked.txt")).as_deref(),
         Some("one\n")
     );
     assert!(cloned.join(".git").is_dir());
@@ -1018,9 +1026,7 @@ fn a_local_repository_is_cloned_from_its_path_through_the_action() {
     let outcome = h.run("git.clone", ctx(&into, &[]));
     assert!(matches!(outcome, ActionOutcome::Started(_)), "{outcome:?}");
     assert_eq!(
-        fs::read_to_string(into.join("origin/tracked.txt"))
-            .ok()
-            .as_deref(),
+        checked_out(&into.join("origin/tracked.txt")).as_deref(),
         Some("one\n")
     );
     let nested = into.join("nested");
@@ -1090,9 +1096,7 @@ fn branch_and_depth_reach_git_and_unset_they_change_nothing() {
     );
     assert_eq!(git(&shallow, &["rev-list", "--count", "HEAD"]).trim(), "1");
     assert_eq!(
-        fs::read_to_string(shallow.join("tracked.txt"))
-            .ok()
-            .as_deref(),
+        checked_out(&shallow.join("tracked.txt")).as_deref(),
         Some("four\n")
     );
 

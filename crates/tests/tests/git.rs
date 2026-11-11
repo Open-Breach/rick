@@ -45,6 +45,16 @@ fn git(dir: &Path, args: &[&str]) -> String {
     String::from_utf8_lossy(&output.stdout).into_owned()
 }
 
+/// The text of a file a clone checked out, with its line endings as
+/// committed. A clone is a new repository, which the fixture's own
+/// `core.autocrlf` does not reach: Git for Windows checks text out with
+/// CRLF unless told otherwise.
+fn checked_out(path: &Path) -> Option<String> {
+    fs::read_to_string(path)
+        .ok()
+        .map(|text| text.replace("\r\n", "\n"))
+}
+
 /// Turns `dir` into a repository with one commit of everything in it.
 fn init_repo(dir: &Path) {
     git(dir, &["init", "-q", "-b", "main"]);
@@ -669,9 +679,7 @@ fn a_clone_lands_in_the_target_folder_and_the_pane_shows_it() {
         Some(model::JobState::Done)
     );
     assert_eq!(
-        fs::read_to_string(into.join("origin/tracked.txt"))
-            .ok()
-            .as_deref(),
+        checked_out(&into.join("origin/tracked.txt")).as_deref(),
         Some("one\n")
     );
     assert_eq!(d.names(), ["nested", "origin"], "the pane shows the clone");
