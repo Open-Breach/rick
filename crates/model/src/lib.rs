@@ -20,6 +20,7 @@
 mod integration;
 mod listing;
 mod panel;
+pub mod placement;
 mod session;
 mod settings;
 mod tree;
@@ -674,6 +675,14 @@ pub struct Window {
     pub active: WorkspaceId,
     /// Position, size and maximised state, once the UI reported them.
     pub geometry: Option<Geometry>,
+    /// The monitor the window is on, by the name the system gives it, once
+    /// the UI reported it; `None` where the platform reports no monitors.
+    pub monitor: Option<String>,
+    /// The window was opened from another one and `geometry` is still that
+    /// window's: the UI places it beside it — the same size, a title row's
+    /// height down and to the right (SPEC.md *Window geometry*) — and
+    /// reports where it went.
+    pub beside: bool,
     /// The side panel: side, width, collapsed state, folded sections.
     pub side_panel: SidePanel,
 }
@@ -685,7 +694,18 @@ impl Window {
             active: workspace.id,
             workspaces: vec![workspace],
             geometry,
+            monitor: None,
+            beside: false,
             side_panel,
+        }
+    }
+
+    /// A window with one workspace, opened from the window whose geometry
+    /// `opener` is: to be placed beside it.
+    fn beside(workspace: Workspace, opener: Option<Geometry>) -> Self {
+        Self {
+            beside: opener.is_some(),
+            ..Self::one(workspace, opener, SidePanel::default())
         }
     }
 
@@ -1035,8 +1055,9 @@ impl Model {
         );
         self.tabs.insert(tab, Tab::new(location, &self.settings));
         let workspace = self.workspace_for(pane);
+        let opener = self.opener_geometry(self.focused_window);
         self.windows
-            .insert(window, Window::one(workspace, None, SidePanel::default()));
+            .insert(window, Window::beside(workspace, opener));
         self.focused_window = window;
         self.focused = pane;
         self.refollow();
@@ -1252,7 +1273,7 @@ impl Model {
         if target.is_some_and(|t| !self.windows.contains_key(&t)) {
             return false;
         }
-        let geometry = self.offset_geometry(from);
+        let geometry = self.opener_geometry(from);
         let Some(w) = self.windows.get_mut(&from) else {
             return false;
         };
@@ -1272,28 +1293,38 @@ impl Model {
         } else {
             let window = WindowId(self.next_window);
             self.next_window += 1;
-            self.windows.insert(
-                window,
-                Window::one(workspace, geometry, SidePanel::default()),
-            );
+            self.windows
+                .insert(window, Window::beside(workspace, geometry));
         }
         self.drop_empty_window(from);
         self.activate_workspace(id);
         true
     }
 
-    /// The geometry for a window torn off `window`: the same size, a little
-    /// down and right, not maximised.
-    fn offset_geometry(&self, window: WindowId) -> Option<Geometry> {
+    /// The geometry a window opened from `window` starts with: that
+    /// window's, not maximised, for the UI to place the new one beside it.
+    fn opener_geometry(&self, window: WindowId) -> Option<Geometry> {
         self.windows
             .get(&window)
             .and_then(|w| w.geometry)
             .map(|g| Geometry {
-                x: g.x + 40.0,
-                y: g.y + 40.0,
                 maximised: false,
                 ..g
             })
+    }
+
+    /// Marks `window` as opened from `opener`: it takes that window's
+    /// geometry, for the UI to place it beside it. What a new window that
+    /// opens with a saved layout gets, whatever the layout held.
+    pub fn open_beside(&mut self, window: WindowId, opener: WindowId) {
+        let geometry = self.opener_geometry(opener);
+        if let Some(w) = self.windows.get_mut(&window)
+            && geometry.is_some()
+        {
+            w.geometry = geometry;
+            w.monitor = None;
+            w.beside = true;
+        }
     }
 
     /// Forgets a window left without a workspace; the focus moves to another
@@ -1351,6 +1382,8 @@ impl Model {
                 workspaces,
                 active,
                 geometry: saved.geometry,
+                monitor: saved.monitor.clone(),
+                beside: false,
                 side_panel: saved.side_panel.clone(),
             },
         );
@@ -1483,6 +1516,7 @@ impl Model {
             }
             windows.push(WindowSession {
                 geometry: window.geometry,
+                monitor: window.monitor.clone(),
                 side_panel: window.side_panel.clone(),
                 active_workspace: window.position(window.active).unwrap_or(0),
                 workspaces: window
@@ -1622,11 +1656,20 @@ impl Model {
         true
     }
 
-    /// Records where a window is on the screen.
-    pub fn set_geometry(&mut self, window: WindowId, geometry: Geometry) -> bool {
+    /// Records where a window is on the screen and on which monitor, as
+    /// the UI reports it; a window that was to be placed beside another is
+    /// placed with this.
+    pub fn set_geometry(
+        &mut self,
+        window: WindowId,
+        geometry: Geometry,
+        monitor: Option<String>,
+    ) -> bool {
         match self.windows.get_mut(&window) {
             Some(w) => {
                 w.geometry = Some(geometry);
+                w.monitor = monitor;
+                w.beside = false;
                 true
             }
             None => false,
@@ -2304,7 +2347,7 @@ impl Model {
                     // A window alone with this pane is one already.
                     return true;
                 }
-                let geometry = self.offset_geometry(window);
+                let geometry = self.opener_geometry(window);
                 if !self.detach_pane(from) {
                     return false;
                 }
@@ -2313,7 +2356,7 @@ impl Model {
                 let new_window = WindowId(self.next_window);
                 self.next_window += 1;
                 self.windows
-                    .insert(new_window, Window::one(ws, geometry, SidePanel::default()));
+                    .insert(new_window, Window::beside(ws, geometry));
                 self.activate_workspace(id);
                 true
             }
@@ -3172,6 +3215,52 @@ mod tests {
         assert_eq!(model.preview_follows(), Some(TabId(1)));
     }
 
+    /// Issue 149: a window opened from another starts with that window's
+    /// geometry, marked to be placed beside it; where the UI puts it ends
+    /// the mark and names its monitor.
+    #[test]
+    fn a_new_window_starts_from_its_openers_geometry_to_be_placed_beside_it() {
+        let mut model = Model::new(Settings::default(), loc("/home"));
+        let first = model.focused_window;
+        let opener = Geometry {
+            x: 100.0,
+            y: 80.0,
+            width: 1000.0,
+            height: 700.0,
+            maximised: true,
+        };
+        assert!(model.set_geometry(first, opener, Some("DP-1".into())));
+        let (second, _, _) = model.new_window(loc("/tmp"));
+        let w = model.window(second).unwrap_or_else(|| panic!("window"));
+        assert!(w.beside);
+        assert_eq!(
+            w.geometry,
+            Some(Geometry {
+                maximised: false,
+                ..opener
+            }),
+            "the opener's place and size, restored"
+        );
+        assert_eq!(w.monitor, None);
+        let placed = Geometry {
+            x: 140.0,
+            y: 120.0,
+            maximised: false,
+            ..opener
+        };
+        assert!(model.set_geometry(second, placed, Some("DP-1".into())));
+        let w = model.window(second).unwrap_or_else(|| panic!("window"));
+        assert!(!w.beside);
+        assert_eq!(w.geometry, Some(placed));
+        assert_eq!(w.monitor.as_deref(), Some("DP-1"));
+        // A first window that never reported a place hands none on.
+        let mut bare = Model::new(Settings::default(), loc("/home"));
+        let (third, _, _) = bare.new_window(loc("/tmp"));
+        let w = bare.window(third).unwrap_or_else(|| panic!("window"));
+        assert!(!w.beside);
+        assert_eq!(w.geometry, None);
+    }
+
     #[test]
     fn sessions_round_trip_every_detail() {
         let mut model = Model::new(Settings::default(), loc("/a"));
@@ -3208,7 +3297,8 @@ mod tests {
                 width: 800.0,
                 height: 600.0,
                 maximised: false,
-            }
+            },
+            Some("DP-1".into()),
         ));
         assert!(model.side_panel(window, SidePanelChange::Visible(false)));
         assert!(model.side_panel(
@@ -3230,6 +3320,7 @@ mod tests {
         assert!(!w.side_panel.visible);
         assert!(w.side_panel.folded.contains(&Section::Network));
         assert_eq!(w.geometry.map(|g| g.width), Some(800.0));
+        assert_eq!(w.monitor.as_deref(), Some("DP-1"), "the monitor comes back");
         assert_eq!(w.workspaces.len(), 2);
         assert_eq!(
             w.active, w.workspaces[0].id,

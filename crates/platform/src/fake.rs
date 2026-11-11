@@ -18,7 +18,7 @@ use crate::perms::{
 };
 use crate::traits::{
     Activation, Application, Chrome, Clipboard, ConfigDir, ControlsSide, DialogFilter, DragSource,
-    DropTarget, Elevate, ElevatedOutput, ImageFormat, IncomingFiles, Mount, MountWatch,
+    DropTarget, Elevate, ElevatedOutput, ImageFormat, IncomingFiles, Monitor, Mount, MountWatch,
     MountsChanged, NativeDialogs, OpenWith, Point, Properties, PropertiesOutcome, RecentItem,
     RecentlyUsed, Secrets, SingleInstance, StandardFolder, StandardFolders, Terminal, Trash,
     TrashedItem, Volume, VolumeKind, Volumes, WindowChrome, WindowRef,
@@ -95,6 +95,8 @@ pub struct Fake {
     ejected: Mutex<Vec<PathBuf>>,
     /// Whether a disk utility is installed, for *Format…*.
     format_tool: Mutex<bool>,
+    /// The monitors `monitors` reports; none at first.
+    monitors: Mutex<Vec<Monitor>>,
     /// What `watch_mounts` was handed, called by `mounts_changed`.
     mount_listeners: Arc<MountListeners>,
     /// The mount points handed to `open_format_tool`.
@@ -176,6 +178,7 @@ impl Fake {
             volumes: Mutex::new(Vec::new()),
             ejected: Mutex::new(Vec::new()),
             format_tool: Mutex::new(true),
+            monitors: Mutex::new(Vec::new()),
             mount_listeners: Arc::default(),
             formatting: Mutex::new(Vec::new()),
             mountable: Mutex::new(crate::NATIVE_MOUNTABLE),
@@ -336,6 +339,11 @@ impl Fake {
     #[must_use]
     pub fn ejected(&self) -> Vec<PathBuf> {
         lock(&self.ejected).clone()
+    }
+
+    /// The monitors that are connected from now on, in logical pixels.
+    pub fn set_monitors(&self, monitors: Vec<Monitor>) {
+        *lock(&self.monitors) = monitors;
     }
 
     /// The stand-in for the system's mount or unmount event: every running
@@ -834,6 +842,11 @@ impl Chrome for Fake {
             native_controls: false,
             native_controls_width: 0.0,
         }
+    }
+
+    /// What [`Fake::set_monitors`] was given, whatever the scale.
+    fn monitors(&self, _pixels_per_point: f32) -> Vec<Monitor> {
+        lock(&self.monitors).clone()
     }
 }
 

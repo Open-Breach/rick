@@ -278,6 +278,7 @@ fn restore_brings_every_detail_back_and_writes_at_most_once_per_second() {
             height: 600.0,
             maximised: false,
         },
+        monitor: Some("DP-1".into()),
     });
     d.step(Command::FocusPane(pane));
 

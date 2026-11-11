@@ -59,6 +59,11 @@ pub struct WindowSession {
     /// Position, size and maximised state; `None` before the window
     /// reported them.
     pub geometry: Option<Geometry>,
+    /// The monitor the window was on, by the name the system gives it;
+    /// `None` where the platform reports no monitors, and in a file
+    /// written before 0.4.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub monitor: Option<String>,
     /// The side panel: docked side, width, collapsed state, folded sections.
     pub side_panel: SidePanel,
     /// Index into `workspaces` of the one shown.
