@@ -542,8 +542,11 @@ fn the_file_info_card_hovers_pins_and_the_pin_survives_files_and_restarts() {
     );
     assert_eq!(field(&harness, "Camera"), "Rick Cameras");
     assert_eq!(field(&harness, "Dimensions"), "80 × 60");
+    // As the Date format setting writes it: smart with the time, and the
+    // picture was written a moment ago.
     let modified = field(&harness, "Modified");
-    assert_eq!(modified.len(), "2026-11-10 17:29".len(), "{modified}");
+    assert!(modified.starts_with("Today "), "{modified}");
+    assert_eq!(modified.len(), "Today 17:29".len(), "{modified}");
     assert!(
         harness.state().preview_rects().panel.is_none(),
         "nothing pinned yet"

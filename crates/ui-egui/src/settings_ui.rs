@@ -6,8 +6,8 @@ use app::{App, Command, IntegrationCommand};
 use egui::{Align, Align2, FontId, Rect, Sense, pos2, vec2};
 use ext::t;
 use model::{
-    AfterDrag, Column, Density, OnOpen, PanelSide, Rgb, SettingsChange, SidePanelChange, SortDir,
-    Theme, TitlebarColour, WindowId,
+    AfterDrag, Column, DateFormat, Density, OnOpen, PanelSide, Rgb, SettingsChange,
+    SidePanelChange, SortDir, Theme, TitlebarColour, WindowId,
 };
 use platform::integration::Item;
 
@@ -69,6 +69,9 @@ enum Page {
     General,
     View,
     Appearance,
+    /// How Rick behaves on a click and on opening a file (SPEC.md
+    /// *Settings window*).
+    Behaviour,
     /// The integration items and their preferences
     /// (specs/system-integration.md §6.1).
     Integration,
@@ -269,14 +272,18 @@ impl SettingsWindow {
         ui.allocate_rect(rect, Sense::hover());
     }
 
-    /// The pages, in the list's order: the four of Rick's own, then one
-    /// per plugin that declares settings.
+    /// The pages, in the list's order: the five of Rick's own — General,
+    /// View, Appearance and Behaviour in that order (SPEC.md *Settings
+    /// window*), Integration right after Appearance
+    /// (specs/system-integration.md §6.1) — then one per plugin that
+    /// declares settings.
     fn pages(app: &App) -> Vec<Page> {
         let mut pages = vec![
             Page::General,
             Page::View,
             Page::Appearance,
             Page::Integration,
+            Page::Behaviour,
         ];
         for schema in app.registry().settings_schemas() {
             if !schema.fields.is_empty() {
@@ -558,6 +565,7 @@ fn page_icon(page: &Page) -> &'static str {
         Page::General => icons::GEAR,
         Page::View => icons::VIEW_LIST,
         Page::Appearance => icons::HIDDEN_SHOWN,
+        Page::Behaviour => icons::BEHAVIOUR,
         Page::Integration => icons::LINK,
         Page::Plugin(id) => icons::for_plugin(id),
     }
@@ -569,6 +577,7 @@ fn page_name(page: &Page, app: &App) -> String {
         Page::General => t!("settings-general"),
         Page::View => t!("settings-view"),
         Page::Appearance => t!("settings-appearance"),
+        Page::Behaviour => t!("settings-behaviour"),
         Page::Integration => t!("settings-integration"),
         Page::Plugin(id) => app
             .registry()
@@ -666,6 +675,7 @@ fn groups_of(page: &Page, app: &App) -> Vec<Group> {
                 rows: vec![
                     Spec::described(t!("settings-density"), t!("settings-density-desc")),
                     Spec::new(t!("settings-font-size")),
+                    Spec::described(t!("settings-date-format"), t!("settings-date-format-desc")),
                 ],
             },
             // A card with its title inside, as its frame draws it.
@@ -677,6 +687,13 @@ fn groups_of(page: &Page, app: &App) -> Vec<Group> {
                 )],
             },
         ],
+        Page::Behaviour => vec![Group {
+            title: t!("settings-group-files"),
+            rows: vec![Spec::described(
+                t!("settings-rename-on-click"),
+                t!("settings-rename-on-click-desc"),
+            )],
+        }],
         Page::Integration => integration_groups(app),
         Page::Plugin(id) => app
             .registry()
@@ -1215,8 +1232,30 @@ fn rows_of(page: &Page, index: usize, card: &mut Card<'_>, cx: &mut PageCx<'_>) 
                     }
                 },
             );
+            let options: Vec<String> = DateFormat::ALL.into_iter().map(date_format_name).collect();
+            let selected = DateFormat::ALL
+                .iter()
+                .position(|f| *f == settings.date_format)
+                .unwrap_or(0);
+            dropdown_row(
+                card,
+                2,
+                egui::Id::new("settings-date-format"),
+                &options,
+                selected,
+                |i| {
+                    if let Some(format) = DateFormat::ALL.get(i) {
+                        cx.change(SettingsChange::DateFormat(*format));
+                    }
+                },
+            );
         }
         (Page::Appearance, 2) => card.block(0, |ui| titlebar_colour(ui, cx)),
+        (Page::Behaviour, 0) => {
+            switch_row(card, 0, settings.rename_on_click, |v| {
+                cx.change(SettingsChange::RenameOnClick(v));
+            });
+        }
         (Page::Integration, group) => integration_rows(group, card, cx),
         (Page::Plugin(id), 0) => plugin_rows(id, card, cx),
         _ => {}
@@ -1706,6 +1745,16 @@ fn dashed_outline(rect: Rect, radius: f32) -> Vec<egui::Pos2> {
     }
     points.extend(points.first().copied());
     points
+}
+
+/// A date format's name in the *Date format* dropdown.
+fn date_format_name(format: DateFormat) -> String {
+    match format {
+        DateFormat::SmartTime => t!("settings-date-smart-time"),
+        DateFormat::Smart => t!("settings-date-smart"),
+        DateFormat::Iso => t!("settings-date-iso"),
+        DateFormat::System => t!("settings-date-system"),
+    }
 }
 
 fn density_name(density: Density) -> String {

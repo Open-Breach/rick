@@ -30,7 +30,7 @@
 use ext::t;
 use std::collections::HashMap;
 use std::ops::Range;
-use std::time::{Duration, SystemTime};
+use std::time::Duration;
 
 use egui::text::{LayoutJob, TextFormat};
 use egui::{Align2, Color32, FontId, Rect, TextStyle, TextureHandle, TextureOptions, pos2, vec2};
@@ -1035,7 +1035,7 @@ impl Previews {
                 ui,
                 &content,
                 &mut slot.content_state,
-                SystemTime::now(),
+                around.dates,
                 remembered,
             );
             return resized.map(PreviewAct::Columns).or(act);
@@ -1155,6 +1155,8 @@ pub struct Around<'a> {
     pub hex: bool,
     /// Whether motion is reduced: the Portal burst stands still.
     pub still: bool,
+    /// How dates are written (SPEC.md *Dates*).
+    pub dates: format::Dates,
     /// The widths remembered for the columns of a previewer's table, by
     /// the previewer's id.
     pub columns: &'a std::collections::BTreeMap<String, Vec<u16>>,
@@ -1276,13 +1278,13 @@ fn location_of(entry: &Entry, home: &std::path::Path) -> Option<String> {
 
 /// The rows every centred card has of the file itself: where it is and
 /// when it was modified.
-fn file_rows(entry: &Entry, home: &std::path::Path) -> Vec<Row> {
+fn file_rows(entry: &Entry, home: &std::path::Path, dates: format::Dates) -> Vec<Row> {
     let mut rows = Vec::new();
     if let Some(location) = location_of(entry, home) {
         rows.push(Row::new(t!("preview-location"), location).mono());
     }
     if let Some(modified) = entry.modified {
-        rows.push(Row::new(t!("preview-modified"), format::stamp(modified)));
+        rows.push(Row::new(t!("preview-modified"), dates.text(modified)));
     }
     rows
 }
@@ -1309,7 +1311,7 @@ fn no_previewer_card(
         (None, None) => t!("preview-no-previewer-for-type"),
     };
     let line = format!("{}  ·  {why}", type_and_size(entry, true));
-    let mut rows = file_rows(entry, around.home);
+    let mut rows = file_rows(entry, around.home, around.dates);
     if let Some(permissions) = &placeholder.permissions {
         rows.push(Row::new(t!("permissions"), permissions).mono());
     }

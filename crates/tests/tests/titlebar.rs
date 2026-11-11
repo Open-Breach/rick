@@ -222,6 +222,22 @@ fn the_setting_is_a_tile_per_preset_and_custom_takes_two_colours() {
     );
     click(&mut harness, Role::RadioButton, "Custom…");
     assert_eq!(band(&harness).fill, colour("#ece0db"));
+    // The two fields are at the foot of the page, which is longer than the
+    // window since it has the Date format row: scroll to them.
+    let over = harness
+        .get_by_role_and_label(Role::RadioButton, "Custom…")
+        .rect()
+        .center();
+    harness.event(egui::Event::PointerMoved(over));
+    harness.step();
+    harness.event(egui::Event::MouseWheel {
+        unit: egui::MouseWheelUnit::Point,
+        delta: egui::vec2(0.0, -400.0),
+        phase: egui::TouchPhase::Move,
+        modifiers: egui::Modifiers::default(),
+    });
+    steps(&mut harness);
+    steps(&mut harness);
     let field = |harness: &Harness<'_, RickUi>, scheme: &str| {
         harness
             .get_by_label(&format!("Title bar colour, {scheme}"))

@@ -354,9 +354,10 @@ fn view_options_menu(ui: &mut egui::Ui, cx: &mut PaneCx<'_>) {
 /// icon and count, folders as *Folders*; ticking types narrows the list to
 /// them.
 fn type_filter_rows(ui: &mut egui::Ui, cx: &mut PaneCx<'_>) {
-    // Every entry of the folder, the view's filter notwithstanding.
+    // Every entry of the folder the tab shows, the view's filter
+    // notwithstanding.
     let mut counts: BTreeMap<String, (usize, &'static str)> = BTreeMap::new();
-    for entry in cx.tab.listing.entries() {
+    for entry in cx.tab.unfiltered(&cx.app.model().settings) {
         let slot = counts
             .entry(model::type_of(entry))
             .or_insert((0, icons::for_entry(entry)));
@@ -1041,7 +1042,9 @@ fn statistics(ui: &mut egui::Ui, cx: &mut PaneCx<'_>) {
     let (folders, files, bytes) = count(&mut listing.rows());
     let narrowed = !cx.tab.filter.is_empty() && !cx.tab.is_searching();
     let (folders_text, folders_label, files_text, files_label) = if narrowed {
-        let (all_folders, all_files, _) = count(&mut listing.entries().iter());
+        // Of the folder as the tab shows it: the hidden entries it leaves
+        // out are no part of the total.
+        let (all_folders, all_files, _) = count(&mut cx.tab.unfiltered(&cx.app.model().settings));
         (
             t!("footer-of", shown = folders, total = all_folders),
             t!("footer-folders-of", shown = folders, total = all_folders),

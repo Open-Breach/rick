@@ -154,12 +154,16 @@ pub(crate) fn sections_for(app: &App, slot: Option<&Slot>, entry: Option<&Entry>
 /// The File info card's rows (SPEC.md *File info card*, the fields): the
 /// sections' rows in order, each section after the first beginning under
 /// its title, with the entry's *Modified* time — which the pane supplies,
-/// as `YYYY-MM-DD HH:MM` — after the first section's *Size* row, or at
+/// written as the *Date format* setting has it — after the first section's *Size* row, or at
 /// that section's end when it has none.
-pub(crate) fn card_rows(sections: &[Section], entry: Option<&Entry>) -> Vec<Row> {
+pub(crate) fn card_rows(
+    sections: &[Section],
+    entry: Option<&Entry>,
+    dates: crate::format::Dates,
+) -> Vec<Row> {
     let modified = entry
         .and_then(|entry| entry.modified)
-        .map(|time| Row::new(t!("preview-modified"), crate::format::stamp(time)));
+        .map(|time| Row::new(t!("preview-modified"), dates.text(time)));
     let mut rows = Vec::new();
     if sections.is_empty() {
         rows.extend(modified);
@@ -358,6 +362,7 @@ pub fn show(
                     .iter()
                     .any(|p| p.id() == HEX_PREVIEWER),
                 still: app.platform().reduce_motion(),
+                dates: crate::format::Dates::of(&app.model().settings),
                 columns: &app.model().settings.preview.columns,
             };
             let act = previews.content(
@@ -651,7 +656,11 @@ fn collect<'a>(ui: &egui::Ui, app: &'a App, previews: &mut Previews) -> View<'a>
         .filter(|s| s.has_doc() && !matches!(s.content(), Some(Content::MissingLibrary(_))))
         .and_then(Slot::previewer);
     let rows = if previewer.is_some() {
-        card_rows(&sections_for(app, slot, entry), entry)
+        card_rows(
+            &sections_for(app, slot, entry),
+            entry,
+            crate::format::Dates::of(settings),
+        )
     } else {
         Vec::new()
     };

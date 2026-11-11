@@ -1465,6 +1465,82 @@ fn eject_goes_through_the_platform_and_the_list_follows() {
     assert_eq!(h.fake.ejected().len(), 1);
 }
 
+/// Acceptance (issue 149, item 4): in a folder with hidden files that are
+/// not shown, Select all selects the visible entries only and a notice
+/// names how many hidden ones it left out; with them shown it selects
+/// all and says nothing.
+#[test]
+fn select_all_selects_what_is_shown_and_counts_the_hidden_it_left_out() {
+    let mut h = harness();
+    for name in [".cache", ".secret"] {
+        fs::write(h.root.path().join(name), name).unwrap_or_else(|e| panic!("{e}"));
+    }
+    h.settle();
+    let pane = h.app.model().focused;
+    assert_eq!(h.names(), ["sub", "a.txt", "b.txt", "c.txt"]);
+    h.take_events();
+    let hidden_notices = |events: &[Event]| -> Vec<String> {
+        events
+            .iter()
+            .filter_map(|event| match event {
+                Event::Notify {
+                    level: Level::Info,
+                    text,
+                } if text.contains("not selected") => Some(text.clone()),
+                _ => None,
+            })
+            .collect()
+    };
+
+    h.send(Command::Select {
+        pane,
+        change: SelectionChange::All,
+    });
+    assert_eq!(h.tab(pane).selection.len(), 4, "the four that are shown");
+    assert!(
+        h.tab(pane)
+            .selected()
+            .all(|entry| !entry.name.starts_with('.'))
+    );
+    assert_eq!(
+        hidden_notices(&h.take_events()),
+        ["2 hidden items not selected"]
+    );
+
+    // One hidden item reads in the singular; the filter narrows what
+    // counts, as it narrows what is shown.
+    h.send(Command::Filter {
+        pane,
+        text: "a".into(),
+    });
+    h.send(Command::Select {
+        pane,
+        change: SelectionChange::All,
+    });
+    assert_eq!(h.names(), ["a.txt"]);
+    assert_eq!(
+        hidden_notices(&h.take_events()),
+        ["1 hidden item not selected"],
+        "of the hidden two only .cache has an a"
+    );
+    h.send(Command::Filter {
+        pane,
+        text: String::new(),
+    });
+
+    // With the hidden files shown, everything is selected and nothing is
+    // said.
+    h.send(Command::ToggleHidden(pane));
+    h.settle();
+    h.take_events();
+    h.send(Command::Select {
+        pane,
+        change: SelectionChange::All,
+    });
+    assert_eq!(h.tab(pane).selection.len(), 6);
+    assert_eq!(hidden_notices(&h.take_events()), [] as [String; 0]);
+}
+
 /// A stick mounted at `sub` of the harness's root, as the platform lists it.
 fn stick(h: &Harness) -> platform::Volume {
     platform::Volume {
