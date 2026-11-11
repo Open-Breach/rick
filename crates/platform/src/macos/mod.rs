@@ -579,6 +579,17 @@ impl OpenWith for Native {
         args.push(path.as_os_str());
         run_detached(program, &args)
     }
+
+    fn has_execute_bit(&self) -> bool {
+        true
+    }
+
+    /// `open -t`: the default text editor, whatever the files' types.
+    fn open_in_text_editor(&self, paths: &[PathBuf]) -> Result<(), Error> {
+        let mut args: Vec<&std::ffi::OsStr> = vec![std::ffi::OsStr::new("-t")];
+        args.extend(paths.iter().map(|path| path.as_os_str()));
+        run_detached("open", &args)
+    }
 }
 
 impl Elevate for Native {
