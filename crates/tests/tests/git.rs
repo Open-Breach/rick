@@ -976,10 +976,15 @@ fn the_clone_dialogue_opens_with_the_clipboards_url_and_starts_a_job() {
             .value()
             .unwrap_or_default()
     };
-    assert_eq!(
-        creates(&harness),
-        format!("Creates · {}", plain.join("rick").display())
-    );
+    // The card cuts a long path in its middle and keeps its end, the
+    // folder the clone creates; the temporary directory's path is that
+    // long on macOS and Windows.
+    let ends_in = |line: &str, folder: &str| {
+        let end = Path::new("plain").join(folder).display().to_string();
+        line.starts_with("Creates · ") && line.ends_with(&end)
+    };
+    let line = creates(&harness);
+    assert!(ends_in(&line, "rick"), "{line}");
     // The prefilled text is selected: typing replaces it, and the line
     // follows.
     harness.event(egui::Event::Text("not a url".to_owned()));
@@ -995,10 +1000,8 @@ fn the_clone_dialogue_opens_with_the_clipboards_url_and_starts_a_job() {
     ));
     harness.step();
     harness.step();
-    assert_eq!(
-        creates(&harness),
-        format!("Creates · {}", plain.join("tool").display())
-    );
+    let line = creates(&harness);
+    assert!(ends_in(&line, "tool"), "{line}");
 
     // Enter starts the clone: the dialogue closes and the job, whose
     // folder is taken, fails in the operations, with no dialogue.
