@@ -2,7 +2,7 @@
 
 Related: specs/history.md, specs/open.md
 
-The entries kept from the retired `QUESTIONS.md`, under their original numbers: the decision, or the assumption as it was implemented. A citation `QUESTIONS.md N` anywhere in the repository means entry `QN` here. Reference, not reading: `grep '^Q81\.' specs/decisions.md`. The full text of every entry is in the history: `git show 2102534:QUESTIONS.md`. *(provisional)* marks an entry that awaits a decision. Nothing is appended here.
+The entries kept from the retired `QUESTIONS.md`, under their original numbers: the decision, or the assumption as it was implemented. A citation `QUESTIONS.md N` anywhere in the repository means entry `QN` here. Reference, not reading: `grep '^Q81\.' specs/decisions.md`. The full text of every entry is in the history: `git show 2102534:QUESTIONS.md`. Nothing is appended here.
 
 Q5. The 30 s fixture budget is enforced on Linux only; Windows and macOS report their time.
 
@@ -58,7 +58,7 @@ Q80. Timed tests on macOS and Windows assert the median of three runs; their tar
 
 Q81. Plugin ABI: Rust dylibs (`types`, `runtime`, `ext`) built with `-C prefer-dynamic`, not a C-ABI vtable.
 
-Q82. `plugins-native` is the second crate allowed `unsafe`, for the loader calls only. (provisional)
+Q82. `plugins-native` is the second crate allowed `unsafe`, for the loader calls only. (decided 2026-11-10)
 
 Q83. `Manifest` gains `points` and `platforms`; `plugin.toml` is written by `cargo xtask bundle`. API 3.
 
@@ -108,7 +108,7 @@ Q107. CSV: header unless all cells are numbers; delimiter sniffed over twenty re
 
 Q113. Find highlights text in place; in paged content it counts the matches and goes to their page.
 
-Q115. Space toggles the selection; the preview pane opens with Mod+Shift+I, not with Space. (provisional)
+Q115. Space toggles the selection; the preview pane opens with Mod+Shift+I, not with Space. (decided 2026-11-10)
 
 Q118. The search box stays on every platform; an index adds a second group of rows; a hit is selected.
 
@@ -128,7 +128,7 @@ Q125. `ActionCtx::other` is the location of the window's first other explorer pa
 
 Q126. The `Conflicts` queue lives in `runtime`; every `JobCtx` carries it, so plugins ask the same dialogue.
 
-Q127. `ext-action-compress` links `ext-vfs-archive`: the one plugin-to-plugin dependency. (provisional)
+Q127. `ext-action-compress` links `ext-vfs-archive`: the one plugin-to-plugin dependency. (decided 2026-11-10)
 
 Q128. `LinkKind` gains `Junction` and `Shortcut`; the link actions ask the kind and are undoable.
 
@@ -252,19 +252,19 @@ Q226. The accent-colour setting is withdrawn; an old `accent` key is ignored and
 
 Q234. Settings pages: View (Files, Sorting, Side panel), Appearance, General, and one page per plugin.
 
-Q242. Three token pairs miss WCAG contrast; the tokens stay and the contrast test names them. (provisional)
+Q242. The three token pairs that missed WCAG contrast were changed in the Figma variables; the contrast test holds every pair (decided 2026-11-10).
 
 Q243. Mod+W on the last workspace tab of the last window does nothing.
 
 Q244. *Duplicate tab* opens a new one-pane workspace at the focused folder, like Mod+T.
 
-Q248. No Dual pane command and no F6 until the shortcut table names one. (provisional)
+Q248. No Dual pane command and no F6; Split right is the way to a second pane (decided 2026-11-10).
 
 Q249. Shown shortcuts are spelled as the key map spells them (`Mod+Shift+N`), the empty-folder hint too.
 
 Q254. The footer takes the Figma height: the 26 px filter field plus `space/toolbar-y` above and below.
 
-Q255. An SVG gets Fit, *Rendered* and *Copy*; no 1:1 button and no checkerboard yet. (provisional)
+Q255. An SVG gets Fit, *Rendered* and *Copy*; no 1:1 button and no checkerboard yet. (decided 2026-11-10)
 
 Q256. *Copy* inflates gzip first, so SVGZ and gzip-compressed text are copied as text.
 
@@ -278,7 +278,7 @@ Q261. `check-third-party.py` fails the `licenses` job when a release crate is mi
 
 Q262. A contributor matching a fixed credits row is not repeated; `platform::os_description()` was added.
 
-Q264. `rick` without an argument opens the current directory, also from a launcher click. (provisional)
+Q264. A launcher or dock click runs `rick --activate`: it only raises a running Rick; `rick` in a terminal opens the current directory (decided 2026-11-10).
 
 Q265. A `rick://` URL takes an empty host and a local path only; `rick://apps` is an error.
 
@@ -286,7 +286,7 @@ Q266. The console sets `VTE_VERSION` so that shells report their directory throu
 
 Q267. Rick types `cd` into the console only where it can tell no job runs there (not on Windows).
 
-Q268. One spring-loading delay, `drag.spring_delay_ms`, default 1000 ms, for tabs too. (provisional)
+Q268. One spring-loading delay, `drag.spring_delay_ms`, default 1000 ms, for tabs too. (decided 2026-11-10)
 
 Q269. Tabs slide apart in 150 ms, eased out; at once under reduce motion.
 
@@ -346,7 +346,7 @@ Q300. `ShowItemProperties` reveals every item and opens Properties on the first 
 
 Q301. Dock favourite: Rick is appended; the undo removes only Rick from the list as it is by then.
 
-Q302. Plasma: Rick is added to the first task manager, then the shell is asked to restart. (provisional)
+Q302. Plasma: Rick is added to the first task manager, then the shell is asked to restart. (decided 2026-11-10)
 
 Q303. COSMIC: `rick` is appended to the favourites file; a missing file stays *Unsupported*.
 
@@ -362,7 +362,7 @@ Q308. A dragged tab spring-loads only while held still, within 6 px (`drag::REST
 
 Q309. A cancelled drag undoes its workspace switches last first.
 
-Q310. Drags between windows need screen positions; on Wayland a drag stays in its window. (provisional)
+Q310. Drags between windows need screen positions; on Wayland a drag stays in its window. (decided 2026-11-10)
 
 Q311. The window under the cursor paints the drag ghost; over the desktop only the closed hand shows.
 
@@ -424,7 +424,7 @@ Q344. The plugin manifest gains a description; *Remove* is hidden for a built-in
 
 Q345. An `.rkp` is a zip of the plugin's folder; install and remove ask nothing (decided 2026-11-10).
 
-Q346. Inactive tab titles are `#2b2b2b` at 78 % on the light bands (decided 2026-11-10, for now).
+Q346. Inactive tab titles are `#2b2b2b` at 78 % where `text/secondary` misses 4.5:1 on the band: Plum in Light since Q242 (decided 2026-11-10, for now).
 
 Q347. Keys `titlebar_colour`, `titlebar_custom_light`, `titlebar_custom_dark`; hover on a dark band is 12 % white.
 

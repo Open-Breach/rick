@@ -59,10 +59,30 @@ pub(super) fn icon_path(env: &LinuxEnv, icon: &Icon) -> PathBuf {
     env.data_home.join("icons/hicolor").join(icon.rel)
 }
 
+/// The arguments of an `Exec` line, after its program.
+fn arguments(exec: &str) -> Vec<String> {
+    super::super::apps::split_exec(exec)
+        .into_iter()
+        .skip(1)
+        .collect()
+}
+
+/// Whether `exec` is the packaged entry's for `binary`: it launches this
+/// Rick with the packaged arguments (`--activate %U`). An entry written
+/// before the launcher had an argument form of its own starts this Rick
+/// too, but opens a tab on every click (specs/system-integration.md §4):
+/// it reads as changed, and the item is offered again.
+fn is_packaged(env: &LinuxEnv, exec: &str, binary: &Path) -> bool {
+    env.launches(exec, binary)
+        && ini_value(DESKTOP_ENTRY, "Desktop Entry", "Exec")
+            .is_some_and(|packaged| arguments(exec) == arguments(&packaged))
+}
+
 /// The launcher entry is set up when the desktop entry is there and
-/// launches `binary`, and every icon is there. An entry that launches
-/// something else and an icon with other contents are in the way unless
-/// the receipt says Rick wrote them.
+/// launches `binary` with the packaged arguments, and every icon is
+/// there. An entry that launches something else, or this Rick another
+/// way, and an icon with other contents are in the way unless the receipt
+/// says Rick wrote them.
 pub(super) fn check(env: &LinuxEnv, binary: &Path, receipt: &Receipt) -> Check {
     let mut check = Check {
         actual: Actual::Missing,
@@ -71,7 +91,8 @@ pub(super) fn check(env: &LinuxEnv, binary: &Path, receipt: &Receipt) -> Check {
     };
     let entry = entry_path(env);
     let mut whole = fs::read_to_string(&entry).is_ok_and(|text| {
-        ini_value(&text, "Desktop Entry", "Exec").is_some_and(|exec| env.launches(&exec, binary))
+        ini_value(&text, "Desktop Entry", "Exec")
+            .is_some_and(|exec| is_packaged(env, &exec, binary))
     });
     // An entry that launches something else, or something that is no
     // readable file: in the way either way.
@@ -115,8 +136,8 @@ fn quote(path: &Path) -> String {
 }
 
 /// The packaged desktop entry with its `Exec` starting `binary` by its
-/// full path, the arguments (`%U`) kept: the entry launches this Rick
-/// wherever the `PATH` of the session points.
+/// full path, the arguments (`--activate %U`) kept: the entry launches
+/// this Rick wherever the `PATH` of the session points.
 pub(super) fn entry_text(binary: &Path) -> String {
     let mut out = String::with_capacity(DESKTOP_ENTRY.len() + 64);
     for line in DESKTOP_ENTRY.lines() {
@@ -224,7 +245,7 @@ mod tests {
         write(
             &entry,
             &format!(
-                "[Desktop Entry]\nType=Application\nName=Rick\nExec=\"{}\" %U\nIcon=rick\n",
+                "[Desktop Entry]\nType=Application\nName=Rick\nExec=\"{}\" --activate %U\nIcon=rick\n",
                 home.env.exe.display()
             ),
         );
@@ -233,6 +254,38 @@ mod tests {
         let found = check(Receipt::default());
         assert_eq!(found.actual, Actual::SetUp);
         assert_eq!(found.foreign, [] as [PathBuf; 0]);
+
+        // The entry of before the launcher's own argument form starts this
+        // Rick and opens a tab on every click: no longer the item. Rick's
+        // own, by its receipt, it is rewritten when the row is applied;
+        // of another origin it is in the way.
+        write(
+            &entry,
+            &format!(
+                "[Desktop Entry]\nType=Application\nName=Rick\nExec=\"{}\" %U\nIcon=rick\n",
+                home.env.exe.display()
+            ),
+        );
+        let found = check(Receipt::default());
+        assert_eq!(found.actual, Actual::Missing);
+        assert_eq!(found.foreign, std::slice::from_ref(&entry));
+        let ours = Receipt {
+            files: vec![home.env.tilde(&entry)],
+            ..Receipt::default()
+        };
+        let found = check(ours.clone());
+        assert_eq!(found.actual, Actual::Missing);
+        assert_eq!(found.foreign, [] as [PathBuf; 0]);
+        let request = Request {
+            receipt: ours,
+            ..Request::default()
+        };
+        integration
+            .perform_integration(Item::LauncherEntry, &request)
+            .unwrap_or_else(|e| panic!("{e}"));
+        let text = fs::read_to_string(&entry).unwrap_or_else(|e| panic!("{e}"));
+        assert!(text.contains("\" --activate %U\n"), "{text}");
+        assert_eq!(check(request.receipt.clone()).actual, Actual::SetUp);
 
         // Removed by hand: missing again.
         fs::remove_file(&entry).unwrap_or_else(|e| panic!("{e}"));
@@ -286,7 +339,10 @@ mod tests {
         );
         let entry = fs::read_to_string(entry_path(&home.env)).unwrap_or_else(|e| panic!("{e}"));
         assert!(
-            entry.contains(&format!("Exec=\"{}\" %U\n", home.env.exe.display())),
+            entry.contains(&format!(
+                "Exec=\"{}\" --activate %U\n",
+                home.env.exe.display()
+            )),
             "{entry}"
         );
         assert!(entry.contains("MimeType=inode/directory;x-scheme-handler/rick;"));
@@ -377,7 +433,7 @@ mod tests {
     fn a_path_with_spaces_and_signs_is_one_quoted_argument() {
         let text = entry_text(Path::new("/home/a b/50% $HOME/rick"));
         assert!(
-            text.contains("Exec=\"/home/a b/50%% \\$HOME/rick\" %U\n"),
+            text.contains("Exec=\"/home/a b/50%% \\$HOME/rick\" --activate %U\n"),
             "{text}"
         );
         let home = Home::new("GNOME");
