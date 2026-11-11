@@ -174,9 +174,9 @@ mod tests {
             return;
         }
         let monitors = read().unwrap_or_else(|e| panic!("{e}"));
-        assert!(!monitors.is_empty());
+        assert!(!monitors.is_empty(), "an X server has a monitor");
         for monitor in &monitors {
-            assert!(!monitor.id.is_empty());
+            assert!(!monitor.id.is_empty(), "{monitor:?}");
             assert!(
                 monitor.bounds[2] > 0.0 && monitor.bounds[3] > 0.0,
                 "{monitor:?}"
