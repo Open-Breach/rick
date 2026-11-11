@@ -1,6 +1,6 @@
 # ext-git — Deutsch: die Aktionen der Kontextmenüs; was fehlt, erscheint auf Englisch.
 
-git-commit = Commit
+git-commit = Git-Commit
 git-stash = Stash
 git-stash-pop = Stash anwenden
 git-pull = Pull
@@ -16,3 +16,23 @@ git-select-one-file = eine Datei auswählen
 git-commit-message = Commit-Nachricht
 git-git-log = Git-Log
 git-git = Git
+git-clone = Git-Clone…
+git-clone-select-one-folder = einen Ordner auswählen, oder nichts
+git-clone-repository = Repository klonen
+git-clone-confirm = Klonen
+git-clone-into = Nach { $folder }
+git-clone-url = Repository-URL
+git-clone-url-hint = https://…, git@host:pfad oder ein lokaler Pfad
+git-clone-url-missing = Die URL des Repositorys eingeben.
+git-clone-destination = Ziel
+git-clone-creates = Erstellt
+git-clone-not-a-git-url = keine Git-URL, kein Repository
+git-clone-options = Optionen
+git-clone-options-summary = Branch, Tiefe, Submodule
+git-clone-branch = Branch
+git-clone-branch-hint = Der Standard-Branch
+git-clone-depth = Tiefe
+git-clone-depth-hint = Alle Commits
+git-clone-depth-not-a-number = die Tiefe ist keine Anzahl Commits
+git-clone-submodules = Submodule
+git-clone-runs-as-a-job = Läuft als Vorgang — Fortschritt unter Vorgänge

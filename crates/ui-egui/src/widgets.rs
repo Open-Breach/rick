@@ -127,23 +127,7 @@ pub fn checkbox(ui: &mut egui::Ui, on: bool, label: &str) -> egui::Response {
         pos2(rect.left() + ICON / 2.0, rect.center().y),
         vec2(ICON, ICON),
     );
-    if on {
-        ui.painter().rect_filled(box_rect, 3.0, scheme.accent_focus);
-        ui.painter().text(
-            box_rect.center(),
-            Align2::CENTER_CENTER,
-            icons::DONE,
-            FontId::proportional(12.0),
-            Scheme::ON_BUTTON,
-        );
-    } else {
-        ui.painter().rect_stroke(
-            box_rect,
-            3.0,
-            egui::Stroke::new(1.0, scheme.border_strong),
-            egui::StrokeKind::Inside,
-        );
-    }
+    paint_check(ui, box_rect, on);
     ui.painter().galley(
         pos2(
             box_rect.right() + 8.0,
@@ -154,6 +138,47 @@ pub fn checkbox(ui: &mut egui::Ui, on: bool, label: &str) -> egui::Response {
     );
     response.widget_info(|| {
         egui::WidgetInfo::selected(egui::WidgetType::Checkbox, true, on, label.to_owned())
+    });
+    response
+}
+
+/// The box of a checkbox in `rect`: filled `accent/focus` with a white
+/// check when ticked, a `border/strong` outline when not.
+fn paint_check(ui: &egui::Ui, rect: Rect, on: bool) {
+    let scheme = theme::scheme(ui);
+    if on {
+        ui.painter().rect_filled(rect, 3.0, scheme.accent_focus);
+        ui.painter().text(
+            rect.center(),
+            Align2::CENTER_CENTER,
+            icons::DONE,
+            FontId::proportional(12.0),
+            Scheme::ON_BUTTON,
+        );
+    } else {
+        ui.painter().rect_stroke(
+            rect,
+            3.0,
+            egui::Stroke::new(1.0, scheme.border_strong),
+            egui::StrokeKind::Inside,
+        );
+    }
+}
+
+/// A checkbox without a label of its own, its 16 px box centred on
+/// `center`: one cell of a grid whose row and column say what it is, and
+/// `name` says it to a screen reader. A little room around the box takes
+/// the click too; returns the response, the caller owns the value.
+pub fn check_at(ui: &mut egui::Ui, center: egui::Pos2, on: bool, name: &str) -> egui::Response {
+    let rect = Rect::from_center_size(center, vec2(ICON, ICON));
+    let response = ui.interact(
+        rect.expand(5.0),
+        ui.id().with(("check", name)),
+        Sense::click(),
+    );
+    paint_check(ui, rect, on);
+    response.widget_info(|| {
+        egui::WidgetInfo::selected(egui::WidgetType::Checkbox, true, on, name.to_owned())
     });
     response
 }
@@ -324,13 +349,86 @@ pub fn icon_button(
     primary: bool,
     enabled: bool,
 ) -> egui::Response {
+    let kind = if primary {
+        ButtonKind::Primary
+    } else {
+        ButtonKind::Secondary
+    };
+    button_of(ui, glyph, label, kind, enabled)
+}
+
+/// What a dialogue button is for, which decides its colours (SPEC.md
+/// *Controls*).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ButtonKind {
+    /// The dialogue's main action: `accent/button` with white text.
+    Primary,
+    /// Any other action: `bg/control` with `text/primary`.
+    Secondary,
+    /// A choice that overwrites something: `trash/mid-bg` with
+    /// `trash/mid-text`, amber and not the red of a destructive entry.
+    Caution,
+    /// A secondary action that destroys something: `bg/control` with its
+    /// label in `status/danger`, like *Remove* of the Extensions dialogue.
+    Danger,
+}
+
+/// A caution button: [`button`] in the amber of [`ButtonKind::Caution`].
+pub fn caution_button(ui: &mut egui::Ui, label: &str, enabled: bool) -> egui::Response {
+    button_of(ui, None, label, ButtonKind::Caution, enabled)
+}
+
+/// [`icon_button`] of the given kind.
+pub fn button_of(
+    ui: &mut egui::Ui,
+    glyph: Option<&str>,
+    label: &str,
+    kind: ButtonKind,
+    enabled: bool,
+) -> egui::Response {
+    button_sized(ui, glyph, label, kind, enabled, 36.0)
+}
+
+/// The button of a card's action row: [`button_of`] at 32 px, with 12 px
+/// of padding (SPEC.md *File info card*).
+pub fn card_button(
+    ui: &mut egui::Ui,
+    glyph: Option<&str>,
+    label: &str,
+    kind: ButtonKind,
+) -> egui::Response {
+    button_sized(ui, glyph, label, kind, true, 32.0)
+}
+
+/// A button `height` tall; a 36 px one has 16 px of padding at its sides,
+/// a lower one 12 px.
+fn button_sized(
+    ui: &mut egui::Ui,
+    glyph: Option<&str>,
+    label: &str,
+    kind: ButtonKind,
+    enabled: bool,
+    height: f32,
+) -> egui::Response {
+    let pad = if height < 36.0 { 12.0 } else { 16.0 };
     let scheme = theme::scheme(ui);
     let radius = theme::metrics(ui.ctx()).corner_radius();
-    let (fill, fg) = match (primary, enabled) {
-        (true, true) => (scheme.accent_button, Scheme::ON_BUTTON),
-        (true, false) => (scheme.accent_button.gamma_multiply(0.45), Scheme::ON_BUTTON),
-        (false, true) => (scheme.bg_control, scheme.text_primary),
-        (false, false) => (scheme.bg_control, scheme.text_secondary),
+    let (fill, fg) = match (kind, enabled) {
+        (ButtonKind::Primary, true) => (scheme.accent_button, Scheme::ON_BUTTON),
+        (ButtonKind::Primary, false) => {
+            (scheme.accent_button.gamma_multiply(0.45), Scheme::ON_BUTTON)
+        }
+        (ButtonKind::Secondary, true) => (scheme.bg_control, scheme.text_primary),
+        (ButtonKind::Secondary, false) => (scheme.bg_control, scheme.text_secondary),
+        (ButtonKind::Caution, true) => (scheme.trash_mid_bg, scheme.trash_mid_text),
+        (ButtonKind::Caution, false) => (
+            scheme.trash_mid_bg.gamma_multiply(0.5),
+            scheme.trash_mid_text,
+        ),
+        (ButtonKind::Danger, true) => (scheme.bg_control, scheme.status_danger),
+        (ButtonKind::Danger, false) => {
+            (scheme.bg_control, scheme.status_danger.gamma_multiply(0.5))
+        }
     };
     let galley = ui
         .painter()
@@ -340,7 +438,7 @@ pub fn icon_button(
     } else {
         0.0
     };
-    let size = vec2(galley.size().x + glyph_room + 32.0, 36.0);
+    let size = vec2(galley.size().x + glyph_room + pad * 2.0, height);
     let (rect, response) = ui.allocate_exact_size(size, Sense::click());
     let fill = if response.hovered() && enabled {
         fill.gamma_multiply(0.9)
@@ -348,10 +446,10 @@ pub fn icon_button(
         fill
     };
     ui.painter().rect_filled(rect, radius, fill);
-    let text_left = rect.left() + 16.0 + glyph_room;
+    let text_left = rect.left() + pad + glyph_room;
     if let Some(glyph) = glyph {
         ui.painter().text(
-            pos2(rect.left() + 16.0 + theme::ICON / 2.0, rect.center().y),
+            pos2(rect.left() + pad + theme::ICON / 2.0, rect.center().y),
             Align2::CENTER_CENTER,
             glyph,
             FontId::proportional(theme::ICON),
@@ -369,6 +467,89 @@ pub fn icon_button(
     response
 }
 
+/// One line of text laid out for `width`: cut with an ellipsis at its end
+/// when it is longer, never wrapped. The galley's `elided` says whether it
+/// was cut.
+#[must_use]
+pub fn elided(
+    ui: &egui::Ui,
+    text: &str,
+    font: FontId,
+    colour: egui::Color32,
+    width: f32,
+) -> std::sync::Arc<egui::Galley> {
+    let mut job = egui::text::LayoutJob::simple_singleline(text.to_owned(), font, colour);
+    job.wrap = egui::text::TextWrapping {
+        max_width: width.max(0.0),
+        max_rows: 1,
+        break_anywhere: true,
+        overflow_character: Some('…'),
+    };
+    ui.painter().layout_job(job)
+}
+
+/// One line of text laid out for `width`, cut at its **start** when it is
+/// longer: an ellipsis and then as much of the text's end as fits. For a
+/// path, whose end says the most. Returns the galley and whether it was
+/// cut.
+#[must_use]
+pub fn elided_at_start(
+    ui: &egui::Ui,
+    text: &str,
+    font: &FontId,
+    colour: egui::Color32,
+    width: f32,
+) -> (std::sync::Arc<egui::Galley>, bool) {
+    let layout = |text: String| ui.painter().layout_no_wrap(text, font.clone(), colour);
+    let whole = layout(text.to_owned());
+    if whole.size().x <= width {
+        return (whole, false);
+    }
+    // The longest tail that fits behind the ellipsis. A tail is no wider
+    // than a longer one, so the first that fits is found by halving.
+    let starts: Vec<usize> = text.char_indices().map(|(at, _)| at).skip(1).collect();
+    let tail = |index: usize| starts.get(index).map_or("", |&at| &text[at..]);
+    let (mut low, mut high) = (0, starts.len());
+    while low < high {
+        let middle = usize::midpoint(low, high);
+        if layout(format!("…{}", tail(middle))).size().x <= width {
+            high = middle;
+        } else {
+            low = middle + 1;
+        }
+    }
+    (layout(format!("…{}", tail(low))), true)
+}
+
+/// Paints one line of text at `pos` (its left centre), cut with an
+/// ellipsis at `width`. The line is a label for a screen reader, with the
+/// whole text as its name, and shows the whole text as its tooltip when
+/// it was cut. Returns the rect it took.
+pub fn line(
+    ui: &mut egui::Ui,
+    pos: egui::Pos2,
+    text: &str,
+    font: FontId,
+    colour: egui::Color32,
+    width: f32,
+) -> Rect {
+    let galley = elided(ui, text, font, colour, width);
+    let size = galley.size();
+    let rect = Rect::from_min_size(pos2(pos.x, pos.y - size.y / 2.0), size);
+    let cut = galley.elided;
+    ui.painter().galley(rect.min, galley, colour);
+    // The same text may stand twice in one dialogue: the place tells them
+    // apart.
+    let place = (rect.left().to_bits(), rect.top().to_bits());
+    let response = ui.interact(rect, ui.id().with(("line", text, place)), Sense::hover());
+    response
+        .widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Label, true, text.to_owned()));
+    if cut {
+        response.on_hover_text(text);
+    }
+    rect
+}
+
 /// A caps heading in 11 px letter-spaced `text/secondary`, as the
 /// dialogues and the settings title their groups.
 pub fn caps_heading(ui: &mut egui::Ui, text: &str) {
@@ -383,4 +564,64 @@ pub fn caps_heading(ui: &mut egui::Ui, text: &str) {
         .selectable(false),
     );
     let _ = TEXT_SECONDARY;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_long_line_ends_in_an_ellipsis_at_its_width_and_a_short_one_is_whole() {
+        let ctx = egui::Context::default();
+        let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+            let font = FontId::proportional(TEXT_BODY);
+            let name =
+                "Camera white appartment 5-14-2026 1.32.41pm GMT2 - 5-14-2026 1.33.08pm GMT2.mp4";
+            let cut = elided(ui, name, font.clone(), egui::Color32::WHITE, 398.0);
+            assert!(cut.elided, "the name is longer than its card");
+            assert!(cut.size().x <= 398.0, "{} px", cut.size().x);
+            assert_eq!(cut.rows.len(), 1, "one line, never wrapped");
+            let last = cut.rows[0].glyphs.last().map(|g| g.chr);
+            assert_eq!(last, Some('…'), "it ends in an ellipsis");
+
+            let whole = elided(ui, "notes.md", font, egui::Color32::WHITE, 398.0);
+            assert!(!whole.elided);
+            assert_eq!(whole.text(), "notes.md");
+        });
+        // No renderer takes the font atlas in a unit test.
+        output.textures_delta.clear();
+    }
+
+    #[test]
+    fn a_long_path_is_cut_at_its_start_and_keeps_its_end() {
+        let ctx = egui::Context::default();
+        let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+            let font = FontId::proportional(TEXT_SECONDARY);
+            let path = "/home/serge/Documents/Firma/Kunden/2026/Erledigung/Backup";
+            let (cut, was_cut) = elided_at_start(ui, path, &font, egui::Color32::WHITE, 160.0);
+            assert!(was_cut, "the path is longer than its room");
+            assert!(cut.size().x <= 160.0, "{} px", cut.size().x);
+            assert_eq!(cut.rows.len(), 1, "one line, never wrapped");
+            let text = cut.text();
+            assert!(text.starts_with('…'), "{text}");
+            assert!(text.ends_with("/Backup"), "the folder itself stays: {text}");
+            // As much of the end as fits: one character more would not.
+            let kept = text.chars().count() - 1;
+            let more: String = path.chars().skip(path.chars().count() - kept - 1).collect();
+            let wider =
+                ui.painter()
+                    .layout_no_wrap(format!("…{more}"), font.clone(), egui::Color32::WHITE);
+            assert!(wider.size().x > 160.0, "{more}");
+
+            let (whole, was_cut) = elided_at_start(ui, "/tmp", &font, egui::Color32::WHITE, 160.0);
+            assert!(!was_cut);
+            assert_eq!(whole.text(), "/tmp");
+            // No room at all leaves the ellipsis alone.
+            let (none, was_cut) = elided_at_start(ui, path, &font, egui::Color32::WHITE, 1.0);
+            assert!(was_cut);
+            assert_eq!(none.text(), "…");
+        });
+        // No renderer takes the font atlas in a unit test.
+        output.textures_delta.clear();
+    }
 }

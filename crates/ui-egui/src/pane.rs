@@ -354,9 +354,10 @@ fn view_options_menu(ui: &mut egui::Ui, cx: &mut PaneCx<'_>) {
 /// icon and count, folders as *Folders*; ticking types narrows the list to
 /// them.
 fn type_filter_rows(ui: &mut egui::Ui, cx: &mut PaneCx<'_>) {
-    // Every entry of the folder, the view's filter notwithstanding.
+    // Every entry of the folder the tab shows, the view's filter
+    // notwithstanding.
     let mut counts: BTreeMap<String, (usize, &'static str)> = BTreeMap::new();
-    for entry in cx.tab.listing.entries() {
+    for entry in cx.tab.unfiltered(&cx.app.model().settings) {
         let slot = counts
             .entry(model::type_of(entry))
             .or_insert((0, icons::for_entry(entry)));
@@ -654,6 +655,16 @@ fn path_edit(ui: &mut egui::Ui, cx: &mut PaneCx<'_>, rect: egui::Rect) {
     let height = button_size(ui);
     let scheme = theme::scheme(ui);
     let radius = theme::metrics(ui.ctx()).corner_radius();
+    let home = cx.app.platform().home_dir();
+    // Text pasted into the field goes in expanded (SPEC.md *Path bar*,
+    // *Expansion*).
+    ui.input_mut(|input| {
+        for event in &mut input.events {
+            if let egui::Event::Paste(pasted) = event {
+                *pasted = paths::expand_here(pasted, &home);
+            }
+        }
+    });
     let Some(text) = cx.tab_ui.path_edit.as_mut() else {
         return;
     };
@@ -686,7 +697,9 @@ fn path_edit(ui: &mut egui::Ui, cx: &mut PaneCx<'_>, rect: egui::Rect) {
     let enter = output.response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
     let escape = ui.input(|i| i.key_pressed(egui::Key::Escape));
     if enter {
-        let typed = text.trim().to_owned();
+        // A leading `~` and the environment's variables are expanded
+        // before the path is used.
+        let typed = paths::expand_here(text.trim(), &home);
         cx.tab_ui.path_edit = None;
         if !typed.is_empty() {
             let location = paths::typed(&cx.tab.location, &typed);
@@ -1041,7 +1054,9 @@ fn statistics(ui: &mut egui::Ui, cx: &mut PaneCx<'_>) {
     let (folders, files, bytes) = count(&mut listing.rows());
     let narrowed = !cx.tab.filter.is_empty() && !cx.tab.is_searching();
     let (folders_text, folders_label, files_text, files_label) = if narrowed {
-        let (all_folders, all_files, _) = count(&mut listing.entries().iter());
+        // Of the folder as the tab shows it: the hidden entries it leaves
+        // out are no part of the total.
+        let (all_folders, all_files, _) = count(&mut cx.tab.unfiltered(&cx.app.model().settings));
         (
             t!("footer-of", shown = folders, total = all_folders),
             t!("footer-folders-of", shown = folders, total = all_folders),
@@ -1156,15 +1171,14 @@ fn filter_field(ui: &mut egui::Ui, cx: &mut PaneCx<'_>) {
         egui::FontId::proportional(ICON),
         scheme.icon_default.gamma_multiply(0.6),
     );
-    let mut right = rect.right() - FIELD_PAD;
-    if cx.app.model().subtree_search {
-        let toggle = egui::Rect::from_center_size(
-            egui::pos2(rect.right() - 2.0 - FIELD_TOGGLE / 2.0, rect.center().y),
-            egui::vec2(FIELD_TOGGLE, FIELD_TOGGLE),
-        );
-        subtree_toggle(ui, cx, toggle);
-        right = toggle.left() - 4.0;
-    }
+    // The toggle is always there: where the location cannot be searched
+    // beneath it is disabled and says why (SPEC.md *Footer*).
+    let toggle = egui::Rect::from_center_size(
+        egui::pos2(rect.right() - 2.0 - FIELD_TOGGLE / 2.0, rect.center().y),
+        egui::vec2(FIELD_TOGGLE, FIELD_TOGGLE),
+    );
+    subtree_toggle(ui, cx, toggle);
+    let right = toggle.left() - 4.0;
     let text_rect = egui::Rect::from_min_max(
         egui::pos2(glass.right() + 6.0, rect.top()),
         egui::pos2(right.max(glass.right() + 6.0), rect.bottom()),
@@ -1212,10 +1226,33 @@ fn filter_field(ui: &mut egui::Ui, cx: &mut PaneCx<'_>) {
 }
 
 /// The include-subfolders toggle inside the filter field: `TREE_STRUCTURE`,
-/// on `bg/selected-soft` while on.
+/// on `bg/selected-soft` while on. Where the location cannot be searched
+/// beneath — its provider has no `SEARCH_SUBTREE` and no search index is
+/// under it — the toggle is disabled, in `text/placeholder`, with the
+/// reason as its tooltip.
 fn subtree_toggle(ui: &mut egui::Ui, cx: &mut PaneCx<'_>, rect: egui::Rect) {
     let on = cx.tab.subtree;
     let scheme = theme::scheme(ui);
+    if let ext::Availability::Disabled(reason) = cx.app.subtree_search(&cx.tab.location) {
+        let response = ui.interact(
+            rect,
+            ui.id().with(("subtree", cx.tab_id)),
+            egui::Sense::hover(),
+        );
+        ui.painter().text(
+            rect.center(),
+            egui::Align2::CENTER_CENTER,
+            icons::SUBTREE,
+            egui::FontId::proportional(ICON),
+            scheme.text_placeholder,
+        );
+        let label = t!("footer-subtree");
+        response.widget_info(|| {
+            egui::WidgetInfo::labeled(egui::WidgetType::Button, false, label.clone())
+        });
+        response.on_hover_text(reason);
+        return;
+    }
     let response = ui.interact(
         rect,
         ui.id().with(("subtree", cx.tab_id)),

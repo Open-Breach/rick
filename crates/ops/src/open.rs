@@ -5,11 +5,11 @@ use ext::t;
 use std::sync::Arc;
 
 use ext::{
-    Action, ActionCtx, ActionGroup, ActionId, ActionOutcome, Availability, Key, Modifiers,
-    Shortcut, UiHost,
+    Action, ActionCtx, ActionGroup, ActionId, ActionOutcome, Availability, Capabilities, Key,
+    Modifiers, Shortcut, UiHost,
 };
 use runtime::JobRunner;
-use types::Error;
+use types::{Entry, EntryKind, Error};
 
 use crate::{State, is_trash, local_path, location_of, needs_entries};
 
@@ -186,13 +186,142 @@ impl Action for OpenDefault {
     fn run(
         &self,
         ctx: ActionCtx,
-        _jobs: &JobRunner,
+        jobs: &JobRunner,
         _ui: &dyn UiHost,
     ) -> Result<ActionOutcome, Error> {
+        // A remote file is not on the machine: nothing is handed to the
+        // system, and opening it brings it down to Downloads (SPEC.md,
+        // *Remote files*). Without `DOWNLOAD` it does nothing.
+        let caps = self.0.capabilities(&ctx.location);
+        if caps.contains(Capabilities::REMOTE) {
+            let files: Vec<Entry> = ctx
+                .selection
+                .iter()
+                .filter(|e| e.kind != EntryKind::Dir)
+                .cloned()
+                .collect();
+            if files.is_empty() || !caps.contains(Capabilities::DOWNLOAD) {
+                return Ok(ActionOutcome::Done);
+            }
+            let to = crate::download::downloads(&*self.0.platform);
+            return Ok(crate::download::start(&self.0, jobs, &files, &to));
+        }
         for entry in &ctx.selection {
             let path = local_path(&location_of(entry))?;
             self.0.platform.open(&path)?;
         }
+        Ok(ActionOutcome::Done)
+    }
+}
+
+/// What the open actions read of the user's settings. The application owns
+/// the settings and hands the actions this view.
+pub trait OpenSettings: Send + Sync {
+    /// The command of *Open in editor*, with its arguments; empty for the
+    /// system's default text editor.
+    fn editor(&self) -> String;
+}
+
+/// An editor command as the setting holds it, split into its words: at
+/// spaces outside double quotes, the quotes themselves dropped, so that
+/// `"C:\Program Files\Editor\edit.exe" --wait` is a program and one
+/// argument.
+#[must_use]
+pub fn split_command(command: &str) -> Vec<String> {
+    let mut words = Vec::new();
+    let mut word = String::new();
+    let (mut quoted, mut any) = (false, false);
+    for c in command.chars() {
+        match c {
+            '"' => {
+                quoted = !quoted;
+                any = true;
+            }
+            c if c.is_whitespace() && !quoted => {
+                if any {
+                    words.push(std::mem::take(&mut word));
+                    any = false;
+                }
+            }
+            c => {
+                word.push(c);
+                any = true;
+            }
+        }
+    }
+    if any {
+        words.push(word);
+    }
+    words
+}
+
+/// Opens the selected files in the editor (SPEC.md *Open in editor*): the
+/// command the user named in Settings → Behaviour → Editor, with the files'
+/// paths appended, or the system's default text editor where they named
+/// none. Offered for local files only: a file on a remote location or in
+/// an archive has no path on the machine.
+pub(crate) struct OpenInEditor(pub(crate) Arc<State>);
+
+impl Action for OpenInEditor {
+    fn id(&self) -> ActionId {
+        ActionId("core.open_in_editor")
+    }
+    fn label(&self) -> String {
+        t!("action-open-in-editor")
+    }
+    fn group(&self) -> ActionGroup {
+        ActionGroup::Core
+    }
+    fn default_shortcut(&self) -> Option<Shortcut> {
+        Some(Shortcut {
+            modifiers: Modifiers::empty(),
+            key: Key::F(4),
+        })
+    }
+    fn availability(&self, ctx: &ActionCtx) -> Availability {
+        let local = ctx.location.provider == vfs_local::PROVIDER_ID;
+        let files = !ctx.selection.is_empty()
+            && ctx.selection.iter().all(|entry| {
+                entry.kind != EntryKind::Dir && entry.id.provider == vfs_local::PROVIDER_ID
+            });
+        if local && files {
+            Availability::Enabled
+        } else {
+            Availability::Hidden
+        }
+    }
+    fn run(
+        &self,
+        ctx: ActionCtx,
+        _jobs: &JobRunner,
+        _ui: &dyn UiHost,
+    ) -> Result<ActionOutcome, Error> {
+        let paths = ctx
+            .selection
+            .iter()
+            .map(|entry| local_path(&location_of(entry)))
+            .collect::<Result<Vec<_>, _>>()?;
+        let command = self
+            .0
+            .open_settings
+            .as_ref()
+            .map(|settings| settings.editor())
+            .unwrap_or_default();
+        let mut words = split_command(&command).into_iter();
+        let Some(program) = words.next() else {
+            self.0.platform.open_in_text_editor(&paths)?;
+            return Ok(ActionOutcome::Done);
+        };
+        let mut args: Vec<std::ffi::OsString> = words.map(Into::into).collect();
+        args.extend(paths.iter().map(|path| path.as_os_str().to_owned()));
+        // The editor starts where the first file is.
+        let dir = paths.first().and_then(|path| path.parent()).map_or_else(
+            || std::path::PathBuf::from("."),
+            std::path::Path::to_path_buf,
+        );
+        self.0
+            .platform
+            .run_detached(std::path::Path::new(&program), &args, &dir)?;
         Ok(ActionOutcome::Done)
     }
 }

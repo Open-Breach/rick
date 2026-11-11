@@ -9,6 +9,17 @@
 //! not running stays out of the box rather than being started by the first
 //! query.
 //!
+//! The indexer has two names. Since 2024 GNOME calls it `LocalSearch`: its
+//! command line is `localsearch`, its endpoint
+//! `org.freedesktop.LocalSearch3`, and the SPARQL goes through `tinysparql
+//! query`, the command line of the library that was Tracker's; older
+//! distributions and Ubuntu have `tracker3`. The connector looks for both
+//! at start ([`backend::installed`]) and queries through the one it finds.
+//! With neither it disables itself quietly: `availability` gives the
+//! reason, the host is told through [`ext::attention`], which the
+//! Extensions dialogue shows, and nothing is ever run or shown in the
+//! search box (issue 149).
+//!
 //! The crate has one shape with the other three connectors (issue 22): a
 //! [`Service`] runs the platform's tool, the real one through a child
 //! process and the tests' [`Fake`](service::Fake) from canned output; a
@@ -73,6 +84,7 @@ impl TrackerExtension {
             manifest: Manifest {
                 id: ID,
                 name: "Tracker",
+                description: "Searches the GNOME file index (Tracker 3) from the search box.",
                 version: Version::parse(env!("CARGO_PKG_VERSION"))
                     .unwrap_or_else(|_| Version::new(0, 0, 0)),
                 api_version: API_VERSION,
@@ -109,6 +121,9 @@ pub struct State {
     probed: AtomicBool,
     /// What the probe learnt about the tools, for the query command.
     tools: std::sync::Mutex<backend::Tools>,
+    /// Which of the indexer's command lines is installed, looked up once:
+    /// `Some(None)` is neither.
+    installed: std::sync::OnceLock<Option<backend::Tools>>,
 }
 
 impl State {
@@ -124,13 +139,21 @@ impl State {
         self.probed.load(Ordering::SeqCst)
     }
 
+    /// Whether the indexer is not on this machine at all: neither
+    /// `localsearch` nor `tracker3` was found, and the connector has
+    /// disabled itself.
+    #[must_use]
+    pub fn missing(&self) -> bool {
+        self.installed.get() == Some(&None)
+    }
+
     /// What the probe learnt about the tools.
     #[must_use]
     pub fn tools(&self) -> backend::Tools {
-        self.tools
+        *self
+            .tools
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .clone()
     }
 
     fn record(&self, probe: Option<backend::Tools>) {
@@ -184,12 +207,38 @@ impl TrackerIndex {
     }
 }
 
-/// One probe: the backend's commands run on the blocking pool.
-async fn probe_once(state: &State, service: &Arc<dyn Service>) -> bool {
+/// One probe: the backend's commands run on the blocking pool. The first
+/// one looks for the indexer's command line, under both of its names;
+/// with neither the connector disables itself and tells the host why,
+/// quietly: the Extensions dialogue shows it, the search box nothing.
+/// Probes that overlap, the loop's first and one that was asked for, look
+/// once between them: the others wait for the first one's answer.
+async fn probe_once(state: &Arc<State>, service: &Arc<dyn Service>) -> bool {
     let service = Arc::clone(service);
-    let found = ext::blocking(move || Ok(backend::probe(&*service)))
-        .await
-        .unwrap_or_default();
+    let shared = Arc::clone(state);
+    let answer = ext::blocking(move || {
+        let mut looked = false;
+        let installed = *shared.installed.get_or_init(|| {
+            looked = true;
+            backend::installed(&*service)
+        });
+        let found = installed.and_then(|tools| backend::probe(&*service, tools));
+        Ok((looked, installed, found))
+    })
+    .await;
+    let Ok((looked, installed, found)) = answer else {
+        state.record(None);
+        return false;
+    };
+    if looked {
+        if let Some(tools) = installed {
+            tracing::info!(?tools, "the indexer's command line");
+            ext::attention::clear(ID);
+        } else {
+            tracing::info!("neither localsearch nor tracker3 is installed");
+            ext::attention::report(ID, t!("search-tracker-neither-found"));
+        }
+    }
     state.record(found);
     state.available()
 }
@@ -222,6 +271,8 @@ impl SearchIndex for TrackerIndex {
     fn availability(&self) -> Availability {
         if self.state.available() {
             Availability::Enabled
+        } else if self.state.missing() {
+            Availability::Disabled(t!("search-tracker-neither-found"))
         } else if self.state.probed() {
             Availability::Disabled(t!("search-tracker-tracker-is-not-running"))
         } else {

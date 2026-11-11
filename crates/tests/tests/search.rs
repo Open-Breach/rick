@@ -116,7 +116,11 @@ fn the_walk_plugin_streams_the_subtree_search_through_the_host() {
         start: Some(local(&tree)),
     });
     settle(&mut app, &mut events);
-    assert!(app.model().subtree_search, "the toggle is there");
+    assert_eq!(
+        app.subtree_search(&local(&tree)),
+        ext::Availability::Enabled,
+        "the toggle is there"
+    );
     assert!(
         app.model().search_indexes.is_empty(),
         "a walk is no platform index"
@@ -200,6 +204,7 @@ impl FixedIndex {
             manifest: Manifest {
                 id: ExtId("search-fixed"),
                 name: "Fixed index",
+                description: "",
                 version: Version::new(0, 1, 0),
                 api_version: API_VERSION,
                 requires: Capabilities::empty(),
@@ -422,6 +427,412 @@ fn the_search_box_lists_index_hits_with_their_paths_and_opens_one() {
     assert!(step_until(&mut harness, Duration::from_secs(2), |h| {
         h.state().app().model().index_search.text.is_empty()
     }));
+}
+
+/// The dropdown has a width of its own, grows with its rows, and its rows
+/// keep their texts apart. In a window too narrow for a full search box
+/// the card is still 560 px wide and inside the window; it is as tall as
+/// its rows when a hit of the index comes after the folder's own names,
+/// where it used to keep its first height; a name too long for its row
+/// ends in
+/// an ellipsis before the text at its right, a folder too long is cut at
+/// its start, and the two never share a pixel. Both stay whole for a
+/// screen reader.
+#[test]
+fn the_dropdown_has_its_own_width_and_keeps_a_name_and_its_folder_apart() {
+    const WINDOW: egui::Vec2 = egui::vec2(700.0, 600.0);
+    let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+    let here = dir.path().join("here");
+    let elsewhere = dir
+        .path()
+        .join("an-archive-of-everything-that-was-ever-scanned")
+        .join("letters-and-statements-by-year")
+        .join("2026")
+        .join("Backup");
+    fs::create_dir_all(&here).unwrap_or_else(|e| panic!("{e}"));
+    fs::create_dir_all(&elsewhere).unwrap_or_else(|e| panic!("{e}"));
+    let long = "report-of-the-third-quarter-with-every-appendix-and-the-notes-of-the-meeting-that-followed.pdf";
+    let hit = "report-on-the-container-examination-with-the-letter-and-all-of-its-enclosures.xlsx";
+    fs::write(here.join(long), "x").unwrap_or_else(|e| panic!("{e}"));
+    fs::write(here.join("report.md"), "x").unwrap_or_else(|e| panic!("{e}"));
+    fs::write(elsewhere.join(hit), "x").unwrap_or_else(|e| panic!("{e}"));
+    let indexed = entries_of(&[elsewhere.join(hit)]);
+
+    let fake = Arc::new(Fake::new().unwrap_or_else(|e| panic!("{e}")));
+    let host = Arc::new(EguiHost::new());
+    let app = App::new(Config {
+        platform: fake.clone(),
+        ui: host.clone(),
+        extensions: vec![FixedIndex::new(indexed)],
+        config_dir: Some(fake.config_dir()),
+        start: Some(local(&here)),
+    });
+    let mut harness = Harness::builder()
+        .with_size(WINDOW)
+        .build_eframe(move |cc| RickUi::new(app, host, &cc.egui_ctx));
+    settle_ui(&mut harness);
+    assert!(harness.state().search_dropdown().is_none(), "closed");
+
+    harness.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::P);
+    harness.step();
+    harness.event(egui::Event::Text("report".to_owned()));
+    harness.step();
+    assert!(
+        step_until(&mut harness, Duration::from_secs(5), |h| {
+            h.state().app().model().index_search.done
+                && h.state()
+                    .search_dropdown()
+                    .is_some_and(|drawn| drawn.rows.len() == 3)
+        }),
+        "two names here and the hit of the index: {:?}",
+        harness.state().search_dropdown()
+    );
+    // The card grows to its rows in the frame after they came.
+    harness.step();
+    harness.step();
+    let drawn = harness
+        .state()
+        .search_dropdown()
+        .unwrap_or_else(|| panic!("no dropdown"));
+
+    // The card: 560 px, wider than the box can ever be, inside the window.
+    let card = drawn.card;
+    assert!(
+        (card.width() - ui_egui::search::DROPDOWN_WIDTH).abs() < 1.0,
+        "{card:?}"
+    );
+    assert!(
+        card.left() >= 8.0 - 0.5 && card.right() <= WINDOW.x - 8.0 + 0.5,
+        "inside the window: {card:?}"
+    );
+    // It opened with the two names of this folder and grew for the hit
+    // that the index sent after them: three rows of 30 px, none scrolled.
+    assert!(card.height() >= 90.0, "{card:?}");
+
+    // Every row is a line of its own, its texts inside the card and apart.
+    for (i, row) in drawn.rows.iter().enumerate() {
+        assert!(card.contains_rect(row.label_rect), "{row:?} in {card:?}");
+        let aside = row.hint_rect.unwrap_or_else(|| panic!("{row:?}"));
+        assert!(card.contains_rect(aside), "{row:?} in {card:?}");
+        assert!(
+            row.label_rect.right() + 23.5 <= aside.left(),
+            "the label ends before the text at its right: {row:?}"
+        );
+        if let Some(next) = drawn.rows.get(i + 1) {
+            assert!(
+                row.label_rect.bottom() <= next.label_rect.top(),
+                "{row:?} above {next:?}"
+            );
+        }
+    }
+    let by_label = |label: &str| {
+        drawn
+            .rows
+            .iter()
+            .find(|row| row.label == label)
+            .unwrap_or_else(|| panic!("no row {label}: {drawn:?}"))
+    };
+    // A long name is cut, its short type is not; a short name is whole.
+    assert!(by_label(long).label_cut && !by_label(long).hint_cut);
+    assert!(!by_label("report.md").label_cut);
+    // The hit: both its name and its folder are longer than their share.
+    assert!(by_label(hit).label_cut && by_label(hit).hint_cut);
+    let hint_width = |label: &str| by_label(label).hint_rect.map_or(0.0, |rect| rect.width());
+    assert!(
+        hint_width(hit) > 4.0 * hint_width("report.md"),
+        "a folder has its half of the row, a type what it needs"
+    );
+
+    // Cut on the screen, whole for a screen reader: the names, and the
+    // folder as a label of its own.
+    let folder = elsewhere.to_string_lossy().into_owned();
+    harness.get_by_label(folder.as_str());
+    assert_eq!(harness.get_all_by_label(hit).count(), 1);
+    assert_eq!(
+        harness.get_all_by_label(long).count(),
+        2,
+        "in the list and in the dropdown"
+    );
+}
+
+/// A click with the primary button at `at`, as the mouse makes it: the
+/// pointer goes there, the button goes down, and up a frame later.
+fn click_at(harness: &mut Harness<'_, RickUi>, at: egui::Pos2) {
+    harness.event(egui::Event::PointerMoved(at));
+    harness.step();
+    for pressed in [true, false] {
+        harness.event(egui::Event::PointerButton {
+            pos: at,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::default(),
+        });
+        harness.step();
+    }
+    harness.step();
+}
+
+/// The dropdown as the last frame drew it.
+fn dropdown(harness: &Harness<'_, RickUi>) -> ui_egui::search::Drawn {
+    harness
+        .state()
+        .search_dropdown()
+        .unwrap_or_else(|| panic!("no dropdown"))
+}
+
+/// A click on a hit does what Enter does: the pane goes to the hit's
+/// folder and selects the file there, and the box closes. A click on a
+/// name of the current folder selects it in the list.
+#[test]
+fn a_click_on_a_hit_takes_the_pane_to_its_folder_and_selects_it() {
+    let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+    let here = dir.path().join("here");
+    let elsewhere = dir.path().join("elsewhere").join("2026");
+    fs::create_dir_all(&here).unwrap_or_else(|e| panic!("{e}"));
+    fs::create_dir_all(&elsewhere).unwrap_or_else(|e| panic!("{e}"));
+    fs::write(here.join("budget-notes.txt"), "x").unwrap_or_else(|e| panic!("{e}"));
+    fs::write(here.join("other.txt"), "x").unwrap_or_else(|e| panic!("{e}"));
+    fs::write(elsewhere.join("Budget.xlsx"), "x").unwrap_or_else(|e| panic!("{e}"));
+    let indexed = entries_of(&[elsewhere.join("Budget.xlsx")]);
+    let fake = Arc::new(Fake::new().unwrap_or_else(|e| panic!("{e}")));
+    let host = Arc::new(EguiHost::new());
+    let app = App::new(Config {
+        platform: fake.clone(),
+        ui: host.clone(),
+        extensions: vec![FixedIndex::new(indexed)],
+        config_dir: Some(fake.config_dir()),
+        start: Some(local(&here)),
+    });
+    let mut harness = Harness::builder()
+        .with_size(egui::vec2(1100.0, 720.0))
+        .build_eframe(move |cc| RickUi::new(app, host, &cc.egui_ctx));
+    settle_ui(&mut harness);
+    let search = |harness: &mut Harness<'_, RickUi>| {
+        harness.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::P);
+        harness.step();
+        harness.event(egui::Event::Text("budget".to_owned()));
+        harness.step();
+        assert!(step_until(harness, Duration::from_secs(5), |h| {
+            h.state().app().model().index_search.done
+                && h.state()
+                    .search_dropdown()
+                    .is_some_and(|drawn| drawn.rows.len() == 2)
+        }));
+        harness.step();
+    };
+    let row_of = |harness: &Harness<'_, RickUi>, label: &str| {
+        dropdown(harness)
+            .rows
+            .iter()
+            .find(|row| row.label == label)
+            .unwrap_or_else(|| panic!("no row {label}"))
+            .label_rect
+            .center()
+    };
+    let selected_names = |harness: &Harness<'_, RickUi>| -> Vec<String> {
+        let model = harness.state().app().model();
+        model
+            .active_tab(model.focused)
+            .map(|(_, tab)| {
+                tab.selection
+                    .iter()
+                    .filter_map(|id| tab.entry(*id).map(|e| e.name.clone()))
+                    .collect()
+            })
+            .unwrap_or_default()
+    };
+
+    // A name of this folder: the click selects it here.
+    search(&mut harness);
+    let at = row_of(&harness, "budget-notes.txt");
+    click_at(&mut harness, at);
+    assert!(!harness.state().search_active(), "a pick closes the box");
+    assert!(harness.state().search_dropdown().is_none());
+    assert_eq!(selected_names(&harness), ["budget-notes.txt"]);
+
+    // The hit of the index: the pane goes to its folder and selects it.
+    search(&mut harness);
+    let at = row_of(&harness, "Budget.xlsx");
+    click_at(&mut harness, at);
+    assert!(!harness.state().search_active(), "a pick closes the box");
+    settle_ui(&mut harness);
+    assert!(
+        step_until(&mut harness, Duration::from_secs(5), |h| {
+            let model = h.state().app().model();
+            model
+                .active_tab(model.focused)
+                .is_some_and(|(_, tab)| tab.location == local(&elsewhere))
+                && selected_names(h) == ["Budget.xlsx"]
+        }),
+        "the pane shows the hit's folder with the hit selected"
+    );
+}
+
+/// A folder of thirty notes with *note* typed into the search box: thirty
+/// rows, twelve of them in view. Returns the window and the folder, which
+/// lives as long as the window needs it.
+fn thirty_notes() -> (Harness<'static, RickUi>, tempfile::TempDir) {
+    let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+    for i in 1..=30 {
+        fs::write(dir.path().join(format!("note-{i:02}.txt")), "x")
+            .unwrap_or_else(|e| panic!("{e}"));
+    }
+    let fake = Arc::new(Fake::new().unwrap_or_else(|e| panic!("{e}")));
+    let host = Arc::new(EguiHost::new());
+    let app = App::new(Config {
+        platform: fake.clone(),
+        ui: host.clone(),
+        extensions: Vec::new(),
+        config_dir: Some(fake.config_dir()),
+        start: Some(local(dir.path())),
+    });
+    let mut harness = Harness::builder()
+        .with_size(egui::vec2(1100.0, 720.0))
+        .build_eframe(move |cc| RickUi::new(app, host, &cc.egui_ctx));
+    settle_ui(&mut harness);
+    harness.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::P);
+    harness.step();
+    harness.event(egui::Event::Text("note".to_owned()));
+    for _ in 0..3 {
+        harness.step();
+    }
+    let drawn = dropdown(&harness);
+    assert_eq!(drawn.rows.len(), 30);
+    assert_eq!(drawn.selected, 0);
+    assert!(
+        drawn.card.height() < 13.0 * 30.0,
+        "twelve rows at once: {:?}",
+        drawn.card
+    );
+    assert!(
+        !drawn.card.contains_rect(drawn.rows[29].label_rect),
+        "below"
+    );
+    (harness, dir)
+}
+
+/// The arrow keys reach every row: they move the highlight past the
+/// twelfth and bring its row into view, also while the pointer rests on
+/// the list, where the row under it used to take the highlight back in
+/// every frame. Enter picks the highlighted row.
+#[test]
+fn the_arrow_keys_move_the_highlight_past_a_resting_pointer_and_out_of_view() {
+    let (mut harness, _dir) = thirty_notes();
+    let drawn = dropdown(&harness);
+    let card = drawn.card;
+    // The pointer comes to rest on the second row and has the highlight.
+    harness.event(egui::Event::PointerMoved(drawn.rows[1].label_rect.center()));
+    harness.step();
+    harness.step();
+    assert_eq!(dropdown(&harness).selected, 1, "the pointer has it");
+    for _ in 0..18 {
+        harness.key_press(egui::Key::ArrowDown);
+        harness.step();
+    }
+    for _ in 0..20 {
+        harness.step();
+    }
+    let drawn = dropdown(&harness);
+    assert_eq!(drawn.selected, 19, "the keys moved it past the pointer");
+    assert!(
+        card.contains_rect(drawn.rows[19].label_rect),
+        "the highlighted row is in view: {:?} in {card:?}",
+        drawn.rows[19]
+    );
+    harness.key_press(egui::Key::Enter);
+    harness.step();
+    harness.step();
+    assert!(!harness.state().search_active(), "a pick closes the box");
+    let model = harness.state().app().model();
+    let (_, tab) = model
+        .active_tab(model.focused)
+        .unwrap_or_else(|| panic!("tab"));
+    let picked: Vec<_> = tab
+        .selection
+        .iter()
+        .filter_map(|id| tab.entry(*id).map(|e| e.name.clone()))
+        .collect();
+    assert_eq!(picked, ["note-20.txt"]);
+}
+
+/// The pointer reaches every row. The wheel scrolls the list to its last
+/// row and the list stays there, the row under the pointer highlighted. A
+/// drag of the scroll bar scrolls it back without closing it, where the
+/// press used to take the keyboard from the box and the list with it.
+#[test]
+fn the_wheel_and_the_scroll_bar_reach_every_row_and_keep_the_dropdown_open() {
+    let (mut harness, _dir) = thirty_notes();
+    let card = dropdown(&harness).card;
+    let top = egui::pos2(card.center().x, card.top() + 20.0);
+    harness.event(egui::Event::PointerMoved(top));
+    harness.step();
+    for _ in 0..40 {
+        harness.event(egui::Event::MouseWheel {
+            unit: egui::MouseWheelUnit::Point,
+            delta: egui::vec2(0.0, -60.0),
+            modifiers: egui::Modifiers::default(),
+            phase: egui::TouchPhase::Move,
+        });
+        harness.step();
+    }
+    for _ in 0..30 {
+        harness.step();
+    }
+    let drawn = dropdown(&harness);
+    assert!(
+        card.contains_rect(drawn.rows[29].label_rect),
+        "the last row is in view: {:?} in {card:?}",
+        drawn.rows[29]
+    );
+    let under = drawn
+        .rows
+        .iter()
+        .position(|row| {
+            row.label_rect.top() <= top.y + 15.0 && row.label_rect.bottom() >= top.y - 15.0
+        })
+        .unwrap_or_else(|| panic!("no row at {top:?}"));
+    assert_eq!(drawn.selected, under, "the row under the pointer");
+    assert!(under >= 18, "{under}");
+
+    // The scroll bar, at the card's right edge: dragged from the bottom to
+    // the top, button down over several frames.
+    let from = egui::pos2(card.right() - 9.0, card.bottom() - 30.0);
+    let to = egui::pos2(from.x, card.top() + 12.0);
+    harness.event(egui::Event::PointerMoved(from));
+    harness.step();
+    harness.event(egui::Event::PointerButton {
+        pos: from,
+        button: egui::PointerButton::Primary,
+        pressed: true,
+        modifiers: egui::Modifiers::default(),
+    });
+    harness.step();
+    for step in 1..=8_u8 {
+        let at = from + (to - from) * (f32::from(step) / 8.0);
+        harness.event(egui::Event::PointerMoved(at));
+        harness.step();
+        assert!(
+            harness.state().search_dropdown().is_some(),
+            "open while the bar is dragged"
+        );
+    }
+    harness.event(egui::Event::PointerButton {
+        pos: to,
+        button: egui::PointerButton::Primary,
+        pressed: false,
+        modifiers: egui::Modifiers::default(),
+    });
+    for _ in 0..4 {
+        harness.step();
+    }
+    assert!(harness.state().search_active(), "the box has the keyboard");
+    let drawn = dropdown(&harness);
+    assert!(
+        card.contains_rect(drawn.rows[0].label_rect),
+        "back at the first row: {:?} in {card:?}",
+        drawn.rows[0]
+    );
+    assert_eq!(harness.state().search_text(), "note", "nothing was picked");
 }
 
 /// Without an index the box behaves as in 0.1: the dropdown lists the

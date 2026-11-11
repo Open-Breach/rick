@@ -23,7 +23,7 @@ pub const PLUS: &str = ph::PLUS;
 pub const MENU: &str = ph::LIST;
 /// The search box.
 pub const SEARCH: &str = ph::MAGNIFYING_GLASS;
-/// Undo.
+/// Undo; the reset button of a changed shortcut.
 pub const UNDO: &str = ph::ARROW_U_UP_LEFT;
 /// Redo.
 pub const REDO: &str = ph::ARROW_U_UP_RIGHT;
@@ -114,6 +114,11 @@ pub const NEW_FOLDER: &str = ph::FOLDER_PLUS;
 pub const REVEAL: &str = ph::ARROW_SQUARE_OUT;
 pub const MOUNT: &str = ph::HARD_DRIVES;
 pub const OPEN_WITH: &str = ph::APP_WINDOW;
+/// The application menu's entries (SPEC.md *Menu*).
+pub const NEW_WINDOW: &str = ph::APP_WINDOW;
+pub const LAYOUTS: &str = ph::LAYOUT;
+pub const SETTINGS: &str = ph::SLIDERS;
+pub const SHORTCUTS: &str = ph::KEYBOARD;
 /// An open folder, for the expanded folder tree node.
 pub const FOLDER_OPEN: &str = ph::FOLDER_OPEN;
 /// Pause a job.
@@ -160,6 +165,8 @@ pub const EJECT: &str = ph::EJECT;
 pub const REFUSED: &str = ph::PROHIBIT;
 /// The General page of the settings.
 pub const GEAR: &str = ph::GEAR;
+/// The Behaviour page of the settings.
+pub const BEHAVIOUR: &str = ph::CURSOR_CLICK;
 /// A plugin without an icon of its own, in the settings' category list.
 pub const PLUGIN: &str = ph::PUZZLE_PIECE;
 /// A PDF plugin.
@@ -352,6 +359,58 @@ pub fn by_extension(name: &str) -> &'static str {
     }
 }
 
+/// The Selection category of the Keyboard shortcuts dialogue.
+pub const LIST_CHECKS: &str = ph::LIST_CHECKS;
+/// The Panes & tabs category of the Keyboard shortcuts dialogue.
+pub const COLUMNS: &str = ph::COLUMNS;
+
+/// A plugin's icon, by what its id says it is for: the glyph beside the
+/// plugin's name in the settings' category list, in the Keyboard
+/// shortcuts dialogue and in the Extensions dialogue. A plugin the table
+/// does not know gets the puzzle piece.
+#[must_use]
+pub fn for_plugin(id: &str) -> &'static str {
+    let id = id.to_lowercase();
+    let has = |part: &str| id.contains(part);
+    if has("pdf") {
+        FILE_PDF
+    } else if has("office") {
+        FILE_DOC
+    } else if has("3d") {
+        CUBE
+    } else if has("console") || has("terminal") {
+        TERMINAL
+    } else if has("ssh") || has("network") {
+        NETWORK
+    } else if has("archive") || has("compress") {
+        ARCHIVE
+    } else if has("git") || has("svn") {
+        BRANCH
+    } else if has("rename") {
+        RENAME
+    } else if has("compare") {
+        COMPARE
+    } else if has("installer") {
+        INSTALL
+    } else if has("trash") {
+        TRASH
+    } else if has("azure") || has("s3") || has("gcs") || has("cloud") {
+        CLOUD
+    } else if has("search") {
+        SEARCH
+    } else if has("image") || has("icons") {
+        PREVIEW
+    } else if has("media") {
+        FILM
+    } else if has("hex") || has("code") {
+        CODE
+    } else if has("text") || has("markup") {
+        DOCUMENT
+    } else {
+        PLUGIN
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -427,6 +486,10 @@ mod tests {
         REVEAL,
         MOUNT,
         OPEN_WITH,
+        NEW_WINDOW,
+        LAYOUTS,
+        SETTINGS,
+        SHORTCUTS,
         FOLDER_OPEN,
         PAUSE,
         PLAY,
@@ -454,6 +517,8 @@ mod tests {
         FILE_PDF,
         FILE_DOC,
         CUBE,
+        LIST_CHECKS,
+        COLUMNS,
     ];
 
     #[test]

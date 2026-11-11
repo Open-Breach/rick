@@ -113,10 +113,18 @@ fn the_search_box_searches_names_and_runs_commands() {
     harness.step();
     assert!(harness.state().search_active());
     assert_eq!(harness.state().search_text(), ">");
-    harness.get_by_label_contains("Toggle side panel");
+    // The command is listed under the box; the title row's own toggle
+    // carries the same name, above it.
+    let listed = |harness: &Harness<'_, RickUi>| {
+        harness
+            .query_all_by_label_contains("Toggle side panel")
+            .filter(|node| node.rect().top() > 44.0)
+            .count()
+    };
+    assert_eq!(listed(&harness), 1);
     harness.event(egui::Event::Text("toggle side".to_owned()));
     harness.step();
-    harness.get_by_label_contains("Toggle side panel");
+    assert_eq!(listed(&harness), 1);
     assert!(side_panel_visible(&harness));
     harness.key_press(egui::Key::Enter);
     harness.step();
@@ -375,6 +383,97 @@ fn the_window_frame_resizes_from_its_edges() {
     harness.step();
     let mut commands = root_commands(&harness);
     for dx in [-3.0, -8.0] {
+        harness.event(egui::Event::PointerMoved(edge + egui::vec2(dx, 0.0)));
+        harness.step();
+        commands.extend(root_commands(&harness));
+    }
+    assert!(
+        commands.iter().any(|c| matches!(
+            c,
+            egui::ViewportCommand::BeginResize(egui::viewport::ResizeDirection::West)
+        )),
+        "{commands:?}"
+    );
+    harness.event(egui::Event::PointerButton {
+        pos: edge,
+        button: egui::PointerButton::Primary,
+        pressed: false,
+        modifiers: egui::Modifiers::default(),
+    });
+    harness.step();
+}
+
+/// As [`harness`], with the plain frame of an opaque window (issue 158).
+fn plain_harness(start: &Path, size: egui::Vec2) -> Harness<'static, RickUi> {
+    let fake = Arc::new(Fake::new().unwrap_or_else(|e| panic!("{e}")));
+    let host = Arc::new(EguiHost::new());
+    let app = app::App::new(app::Config {
+        platform: fake.clone(),
+        ui: host.clone(),
+        extensions: Vec::new(),
+        config_dir: Some(fake.config_dir()),
+        start: Some(local(start)),
+    });
+    let mut harness = Harness::builder().with_size(size).build_eframe(move |cc| {
+        RickUi::new(app, host, &cc.egui_ctx).with_frame(ui_egui::frame::Mode::Plain)
+    });
+    settle(&mut harness);
+    harness
+}
+
+/// Where the window cannot be transparent Rick draws the plain frame
+/// (specs/gui-title-row.md, *Window frame*): no margin, so the content
+/// fills the window inside a one-pixel border, and the window resizes from
+/// its very edge and corners, the grips reaching 4 px inwards.
+#[test]
+fn the_plain_window_frame_fills_the_window_and_resizes_from_its_edge() {
+    let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+    let mut harness = plain_harness(dir.path(), egui::vec2(900.0, 600.0));
+    let content = harness
+        .state()
+        .framed_content()
+        .unwrap_or_else(|| panic!("the fake platform has no native chrome, so Rick frames"));
+    assert_eq!(
+        content,
+        egui::Rect::from_min_max(egui::pos2(1.0, 1.0), egui::pos2(899.0, 599.0)),
+        "the window inside its one-pixel border"
+    );
+    let pane = harness.state().app().model().focused;
+    let pane_rect = rect_of(&harness, pane);
+    assert!(pane_rect.right() > 890.0, "{pane_rect:?} reaches the edge");
+
+    // The cursor over the edges and corners, and just inside the grips.
+    let hovered = |harness: &mut Harness<'static, RickUi>, pos: egui::Pos2| {
+        harness.event(egui::Event::PointerMoved(pos));
+        harness.step();
+        harness.step();
+        harness.output().platform_output.cursor_icon
+    };
+    let edge = egui::pos2(2.0, 300.0);
+    for (pos, cursor) in [
+        (edge, egui::CursorIcon::ResizeWest),
+        (egui::pos2(898.0, 300.0), egui::CursorIcon::ResizeEast),
+        (egui::pos2(450.0, 598.0), egui::CursorIcon::ResizeSouth),
+        (egui::pos2(2.0, 2.0), egui::CursorIcon::ResizeNorthWest),
+        (egui::pos2(898.0, 598.0), egui::CursorIcon::ResizeSouthEast),
+    ] {
+        assert_eq!(hovered(&mut harness, pos), cursor, "at {pos:?}");
+    }
+    let inside = hovered(&mut harness, egui::pos2(899.0 - 6.0, 590.0));
+    assert_ne!(inside, egui::CursorIcon::ResizeEast, "6 px inside the edge");
+    assert_ne!(inside, egui::CursorIcon::ResizeSouthEast);
+
+    // Press on the edge and pull: the backend is asked to resize westwards.
+    hovered(&mut harness, edge);
+    harness.event(egui::Event::PointerButton {
+        pos: edge,
+        button: egui::PointerButton::Primary,
+        pressed: true,
+        modifiers: egui::Modifiers::default(),
+    });
+    harness.step();
+    let mut commands = root_commands(&harness);
+    for dx in [3.0, 8.0] {
         harness.event(egui::Event::PointerMoved(edge + egui::vec2(dx, 0.0)));
         harness.step();
         commands.extend(root_commands(&harness));

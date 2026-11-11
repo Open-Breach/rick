@@ -557,6 +557,7 @@ fn counted_ssh() -> (Arc<AtomicU64>, Arc<dyn Extension>) {
         manifest: Manifest {
             id: ext_ssh::ID,
             name: "SSH",
+            description: "",
             version: ext::Version::new(0, 0, 0),
             api_version: API_VERSION,
             requires: Capabilities::empty(),
@@ -1384,7 +1385,7 @@ fn host_rows_offer_the_ssh_actions_and_the_host_key_dialogue_asks_before_connect
 #[test]
 // One scenario start to finish; splitting it would repeat the server.
 #[allow(clippy::too_many_lines)]
-fn a_connection_that_fails_shows_a_banner_with_retry_not_a_dialogue() {
+fn a_host_that_refuses_shows_the_connection_lost_card_with_retry_not_a_dialogue() {
     use egui_kittest::kittest::Queryable as _;
 
     if !unix_shell_or_skip() {
@@ -1436,8 +1437,8 @@ fn a_connection_that_fails_shows_a_banner_with_retry_not_a_dialogue() {
     }));
     settle_ui(&mut harness);
 
-    // Opening the host fails to connect: the tab shows the banner with
-    // Retry and no dialogue opened.
+    // Opening the host fails to connect: the tab stays on the host and
+    // shows the Connection lost card with Retry, and no dialogue opened.
     let pane = harness.state().app().model().focused;
     harness.state_mut().app_mut().handle(
         Command::Navigate {
@@ -1451,24 +1452,23 @@ fn a_connection_that_fails_shows_a_banner_with_retry_not_a_dialogue() {
             let model = h.state().app().model();
             model
                 .active_tab(model.focused)
-                .is_some_and(|(_, t)| t.failure.is_some())
+                .is_some_and(|(_, t)| t.lost.is_some())
         }),
-        "the failure"
+        "the lost connection"
     );
     settle_ui(&mut harness);
     let model = harness.state().app().model();
     let (_, tab) = model
         .active_tab(model.focused)
         .unwrap_or_else(|| panic!("a tab"));
-    let failure = tab.failure.clone().unwrap_or_default();
-    assert!(failure.contains("could not be listed"), "{failure}");
+    let lost = tab.lost.clone().unwrap_or_else(|| panic!("lost"));
+    assert_eq!(lost.source, "dead");
+    assert!(lost.message.contains("127.0.0.1"), "{}", lost.message);
+    assert_eq!(tab.failure, None, "the card, not the banner");
+    assert_eq!(tab.location, at("dead", ""), "the tab stays on the host");
     assert!(model.questions.is_empty(), "no dialogue");
     assert_eq!(tab.listing.rows().count(), 0);
-    assert!(
-        harness
-            .query_by_label_contains("could not be listed")
-            .is_some()
-    );
+    assert!(harness.query_by_label("Connection lost to dead").is_some());
     assert!(harness.query_by_label("Retry").is_some());
     assert!(
         harness
@@ -1477,7 +1477,7 @@ fn a_connection_that_fails_shows_a_banner_with_retry_not_a_dialogue() {
     );
 
     // The server comes up; Retry lists again, which asks for the host key
-    // this time and then shows the listing with the banner gone.
+    // this time and then shows the listing with the card gone.
     let server = runtime::block_on(FakeSshd::start(
         Options {
             home: home.path().to_path_buf(),
@@ -1501,6 +1501,7 @@ fn a_connection_that_fails_shows_a_banner_with_retry_not_a_dialogue() {
         .active_tab(model.focused)
         .unwrap_or_else(|| panic!("a tab"));
     assert!(tab.failure.is_none(), "{:?}", tab.failure);
+    assert_eq!(tab.lost, None);
     let mut names: Vec<String> = tab.listing.rows().map(|e| e.name.clone()).collect();
     names.sort();
     assert_eq!(names, ["archive", "notes.txt", "photos"]);

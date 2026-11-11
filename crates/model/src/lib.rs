@@ -20,6 +20,7 @@
 mod integration;
 mod listing;
 mod panel;
+pub mod placement;
 mod session;
 mod settings;
 mod tree;
@@ -44,9 +45,10 @@ pub use session::{
     parse_entry_id,
 };
 pub use settings::{
-    AfterDrag, Archives, ConnectionEntry, Density, Drag, LAST_SESSION, OnOpen, PanelSide, Plugins,
-    Preview, Search, Section, SessionSettings, Settings, SettingsChange, SidePanel,
-    SidePanelChange, TextPreview, Theme, parse_location,
+    AfterDrag, Archives, ConnectionEntry, DateFormat, Density, Drag, LAST_SESSION, OnOpen,
+    PanelSide, Plugins, Preview, Rgb, Search, Section, SessionSettings, Settings, SettingsChange,
+    SidePanel, SidePanelChange, TextPreview, Theme, TitlebarColour, WindowFrame, WindowSettings,
+    parse_location,
 };
 pub use tree::{Tree, TreeRow};
 use types::{
@@ -343,6 +345,21 @@ pub struct History {
     pub forward: Vec<HistoryEntry>,
 }
 
+/// A remote location that stopped answering (SPEC.md *Removed and
+/// unreachable locations*): what the pane shows in place of the list, as
+/// the File info card with *Retry*, while its tab stays where it is.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConnectionLost {
+    /// The account or the host the connection was to.
+    pub source: String,
+    /// The provider's name, as its connections are titled.
+    pub provider: String,
+    /// What the provider said.
+    pub message: String,
+    /// How many times Rick has tried again by itself so far.
+    pub retries: u8,
+}
+
 /// One tab: a location and everything shown for it. An explorer shows the
 /// location's entries; the preview tab carries a location for form's sake
 /// and lists nothing.
@@ -396,6 +413,10 @@ pub struct Tab {
     /// *Retry* over the empty list (a connection that failed, a folder that
     /// refused); cleared by the next listing that works.
     pub failure: Option<String>,
+    /// The connection the location is on was lost: the pane shows the card
+    /// with *Retry* in place of the list. Cleared by the next listing that
+    /// works and by a navigation.
+    pub lost: Option<ConnectionLost>,
     /// The title of a console or compare tab, as the action named it; the
     /// other kinds are titled from their location.
     pub title: Option<String>,
@@ -426,6 +447,7 @@ impl Tab {
             columns: BTreeMap::new(),
             note: None,
             failure: None,
+            lost: None,
             title: None,
         }
     }
@@ -533,6 +555,7 @@ impl Tab {
         self.tree.clear();
         self.scroll = 0.0;
         self.note = None;
+        self.lost = None;
     }
 
     /// The view specification this tab's listing follows.
@@ -546,6 +569,28 @@ impl Tab {
             show_hidden: self.show_hidden,
             show_system: settings.show_system,
         }
+    }
+
+    /// The folder's entries as the tab shows them without its filter and
+    /// its type filter: all that are known but the hidden and the system
+    /// ones it leaves out.
+    pub fn unfiltered(&self, settings: &Settings) -> impl Iterator<Item = &Entry> + use<'_> {
+        self.listing
+            .unfiltered(self.show_hidden, settings.show_system)
+    }
+
+    /// How many entries of the folder the tab does not show because they
+    /// are hidden, and *Select all* therefore leaves out (SPEC.md *Select
+    /// all*): zero while hidden entries are shown, and in Tree view, whose
+    /// rows are not the listing's alone.
+    #[must_use]
+    pub fn hidden_left_out(&self, settings: &Settings) -> usize {
+        if self.is_tree() {
+            return 0;
+        }
+        let filter = self.filter_text();
+        self.listing
+            .hidden_left_out(&self.spec_with(settings, &filter, self.types.as_ref()))
     }
 
     /// The selected entries, in view order.
@@ -630,6 +675,14 @@ pub struct Window {
     pub active: WorkspaceId,
     /// Position, size and maximised state, once the UI reported them.
     pub geometry: Option<Geometry>,
+    /// The monitor the window is on, by the name the system gives it, once
+    /// the UI reported it; `None` where the platform reports no monitors.
+    pub monitor: Option<String>,
+    /// The window was opened from another one and `geometry` is still that
+    /// window's: the UI places it beside it — the same size, a title row's
+    /// height down and to the right (SPEC.md *Window geometry*) — and
+    /// reports where it went.
+    pub beside: bool,
     /// The side panel: side, width, collapsed state, folded sections.
     pub side_panel: SidePanel,
 }
@@ -641,7 +694,18 @@ impl Window {
             active: workspace.id,
             workspaces: vec![workspace],
             geometry,
+            monitor: None,
+            beside: false,
             side_panel,
+        }
+    }
+
+    /// A window with one workspace, opened from the window whose geometry
+    /// `opener` is: to be placed beside it.
+    fn beside(workspace: Workspace, opener: Option<Geometry>) -> Self {
+        Self {
+            beside: opener.is_some(),
+            ..Self::one(workspace, opener, SidePanel::default())
         }
     }
 
@@ -797,6 +861,9 @@ pub struct Model {
     pub places: Places,
     /// The mounted volumes: the machine's drives and the network mounts.
     pub volumes: Vec<Volume>,
+    /// Whether the system has a tool of its own for formatting a drive:
+    /// without one the side panel's *Format…* is disabled.
+    pub format_tool: bool,
     /// The cloud providers mounted, sorted; the Cloud section shows while
     /// there is one.
     pub cloud_providers: Vec<ProviderId>,
@@ -823,9 +890,6 @@ pub struct Model {
     /// the title-row search box queries. Empty when the platform has none;
     /// the box then searches the current location alone, as in 0.1.
     pub search_indexes: Vec<ExtId>,
-    /// A subdirectory search index is registered, so the filter bar offers
-    /// *Search in subdirectories*.
-    pub subtree_search: bool,
     /// The explorer tab the preview follows: the last one focused.
     preview_follows: Option<TabId>,
     next_pane: u64,
@@ -856,6 +920,7 @@ impl Model {
             questions: Vec::new(),
             places: Places::default(),
             volumes: Vec::new(),
+            format_tool: false,
             cloud_providers: Vec::new(),
             cloud: Vec::new(),
             network_providers: Vec::new(),
@@ -865,7 +930,6 @@ impl Model {
             integration: Integration::default(),
             index_search: IndexSearch::default(),
             search_indexes: Vec::new(),
-            subtree_search: false,
             preview_follows: None,
             next_pane: 1,
             next_tab: 1,
@@ -991,8 +1055,9 @@ impl Model {
         );
         self.tabs.insert(tab, Tab::new(location, &self.settings));
         let workspace = self.workspace_for(pane);
+        let opener = self.opener_geometry(self.focused_window);
         self.windows
-            .insert(window, Window::one(workspace, None, SidePanel::default()));
+            .insert(window, Window::beside(workspace, opener));
         self.focused_window = window;
         self.focused = pane;
         self.refollow();
@@ -1208,7 +1273,7 @@ impl Model {
         if target.is_some_and(|t| !self.windows.contains_key(&t)) {
             return false;
         }
-        let geometry = self.offset_geometry(from);
+        let geometry = self.opener_geometry(from);
         let Some(w) = self.windows.get_mut(&from) else {
             return false;
         };
@@ -1228,28 +1293,38 @@ impl Model {
         } else {
             let window = WindowId(self.next_window);
             self.next_window += 1;
-            self.windows.insert(
-                window,
-                Window::one(workspace, geometry, SidePanel::default()),
-            );
+            self.windows
+                .insert(window, Window::beside(workspace, geometry));
         }
         self.drop_empty_window(from);
         self.activate_workspace(id);
         true
     }
 
-    /// The geometry for a window torn off `window`: the same size, a little
-    /// down and right, not maximised.
-    fn offset_geometry(&self, window: WindowId) -> Option<Geometry> {
+    /// The geometry a window opened from `window` starts with: that
+    /// window's, not maximised, for the UI to place the new one beside it.
+    fn opener_geometry(&self, window: WindowId) -> Option<Geometry> {
         self.windows
             .get(&window)
             .and_then(|w| w.geometry)
             .map(|g| Geometry {
-                x: g.x + 40.0,
-                y: g.y + 40.0,
                 maximised: false,
                 ..g
             })
+    }
+
+    /// Marks `window` as opened from `opener`: it takes that window's
+    /// geometry, for the UI to place it beside it. What a new window that
+    /// opens with a saved layout gets, whatever the layout held.
+    pub fn open_beside(&mut self, window: WindowId, opener: WindowId) {
+        let geometry = self.opener_geometry(opener);
+        if let Some(w) = self.windows.get_mut(&window)
+            && geometry.is_some()
+        {
+            w.geometry = geometry;
+            w.monitor = None;
+            w.beside = true;
+        }
     }
 
     /// Forgets a window left without a workspace; the focus moves to another
@@ -1307,6 +1382,8 @@ impl Model {
                 workspaces,
                 active,
                 geometry: saved.geometry,
+                monitor: saved.monitor.clone(),
+                beside: false,
                 side_panel: saved.side_panel.clone(),
             },
         );
@@ -1439,6 +1516,7 @@ impl Model {
             }
             windows.push(WindowSession {
                 geometry: window.geometry,
+                monitor: window.monitor.clone(),
                 side_panel: window.side_panel.clone(),
                 active_workspace: window.position(window.active).unwrap_or(0),
                 workspaces: window
@@ -1578,11 +1656,20 @@ impl Model {
         true
     }
 
-    /// Records where a window is on the screen.
-    pub fn set_geometry(&mut self, window: WindowId, geometry: Geometry) -> bool {
+    /// Records where a window is on the screen and on which monitor, as
+    /// the UI reports it; a window that was to be placed beside another is
+    /// placed with this.
+    pub fn set_geometry(
+        &mut self,
+        window: WindowId,
+        geometry: Geometry,
+        monitor: Option<String>,
+    ) -> bool {
         match self.windows.get_mut(&window) {
             Some(w) => {
                 w.geometry = Some(geometry);
+                w.monitor = monitor;
+                w.beside = false;
                 true
             }
             None => false,
@@ -2260,7 +2347,7 @@ impl Model {
                     // A window alone with this pane is one already.
                     return true;
                 }
-                let geometry = self.offset_geometry(window);
+                let geometry = self.opener_geometry(window);
                 if !self.detach_pane(from) {
                     return false;
                 }
@@ -2269,7 +2356,7 @@ impl Model {
                 let new_window = WindowId(self.next_window);
                 self.next_window += 1;
                 self.windows
-                    .insert(new_window, Window::one(ws, geometry, SidePanel::default()));
+                    .insert(new_window, Window::beside(ws, geometry));
                 self.activate_workspace(id);
                 true
             }
@@ -2382,6 +2469,44 @@ impl Model {
             }
             None => false,
         }
+    }
+
+    /// Records that the connection of the pane's active tab's location was
+    /// lost, for the card with *Retry*; `None` clears it.
+    pub fn connection_lost(&mut self, pane: PaneId, lost: Option<ConnectionLost>) -> bool {
+        match self.active_tab_mut(pane) {
+            Some((_, tab)) => {
+                tab.lost = lost;
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// Sends every explorer tab whose location `gone` names to `home`: what
+    /// happens when a medium is removed or ejected, an account or a host is
+    /// removed, or a provider is unmounted (SPEC.md *Removed and
+    /// unreachable locations*). The steps of its history that lead to such
+    /// a location go with it, so that Back never returns to what is gone.
+    /// Returns how many tabs moved.
+    pub fn evacuate(&mut self, gone: &dyn Fn(&Location) -> bool, home: &Location) -> usize {
+        let mut moved = 0;
+        for tab in self.tabs.values_mut() {
+            if !tab.kind.lists() {
+                continue;
+            }
+            tab.history.back.retain(|step| !gone(&step.location));
+            tab.history.forward.retain(|step| !gone(&step.location));
+            if gone(&tab.location) {
+                tab.location = home.clone();
+                tab.flatten = false;
+                tab.subtree = false;
+                tab.failure = None;
+                tab.leave();
+                moved += 1;
+            }
+        }
+        moved
     }
 
     /// Records why the pane's active tab's listing failed, for the banner
@@ -3090,6 +3215,52 @@ mod tests {
         assert_eq!(model.preview_follows(), Some(TabId(1)));
     }
 
+    /// Issue 149: a window opened from another starts with that window's
+    /// geometry, marked to be placed beside it; where the UI puts it ends
+    /// the mark and names its monitor.
+    #[test]
+    fn a_new_window_starts_from_its_openers_geometry_to_be_placed_beside_it() {
+        let mut model = Model::new(Settings::default(), loc("/home"));
+        let first = model.focused_window;
+        let opener = Geometry {
+            x: 100.0,
+            y: 80.0,
+            width: 1000.0,
+            height: 700.0,
+            maximised: true,
+        };
+        assert!(model.set_geometry(first, opener, Some("DP-1".into())));
+        let (second, _, _) = model.new_window(loc("/tmp"));
+        let w = model.window(second).unwrap_or_else(|| panic!("window"));
+        assert!(w.beside);
+        assert_eq!(
+            w.geometry,
+            Some(Geometry {
+                maximised: false,
+                ..opener
+            }),
+            "the opener's place and size, restored"
+        );
+        assert_eq!(w.monitor, None);
+        let placed = Geometry {
+            x: 140.0,
+            y: 120.0,
+            maximised: false,
+            ..opener
+        };
+        assert!(model.set_geometry(second, placed, Some("DP-1".into())));
+        let w = model.window(second).unwrap_or_else(|| panic!("window"));
+        assert!(!w.beside);
+        assert_eq!(w.geometry, Some(placed));
+        assert_eq!(w.monitor.as_deref(), Some("DP-1"));
+        // A first window that never reported a place hands none on.
+        let mut bare = Model::new(Settings::default(), loc("/home"));
+        let (third, _, _) = bare.new_window(loc("/tmp"));
+        let w = bare.window(third).unwrap_or_else(|| panic!("window"));
+        assert!(!w.beside);
+        assert_eq!(w.geometry, None);
+    }
+
     #[test]
     fn sessions_round_trip_every_detail() {
         let mut model = Model::new(Settings::default(), loc("/a"));
@@ -3126,7 +3297,8 @@ mod tests {
                 width: 800.0,
                 height: 600.0,
                 maximised: false,
-            }
+            },
+            Some("DP-1".into()),
         ));
         assert!(model.side_panel(window, SidePanelChange::Visible(false)));
         assert!(model.side_panel(
@@ -3148,6 +3320,7 @@ mod tests {
         assert!(!w.side_panel.visible);
         assert!(w.side_panel.folded.contains(&Section::Network));
         assert_eq!(w.geometry.map(|g| g.width), Some(800.0));
+        assert_eq!(w.monitor.as_deref(), Some("DP-1"), "the monitor comes back");
         assert_eq!(w.workspaces.len(), 2);
         assert_eq!(
             w.active, w.workspaces[0].id,
@@ -3425,8 +3598,10 @@ mod tests {
             job: JobId(7),
             source: loc("/s"),
             target: loc("/t"),
-            target_is_dir: false,
+            existing: types::ConflictSide::default(),
+            incoming: types::ConflictSide::default(),
             proposed: "t (2)".into(),
+            position: None,
             remaining: 0,
         };
         model.conflict_opened(conflict.clone());

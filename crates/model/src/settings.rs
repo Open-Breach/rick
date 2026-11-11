@@ -37,6 +37,184 @@ pub enum Density {
     Comfortable,
 }
 
+/// How a date is written (SPEC.md *Dates*): in the list's date columns, the
+/// File info card, the footers and the tooltips.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
+#[serde(rename_all = "kebab-case")]
+pub enum DateFormat {
+    /// *Today 15:58*, *Yesterday 09:17*, *Tue 21:24*, *Aug 24 14:12*, and
+    /// the year when it is not this year; the default.
+    #[default]
+    SmartTime,
+    /// The same without the clock: *Today*, *Tue*, *Aug 24*.
+    Smart,
+    /// *2026-08-24 14:12*.
+    Iso,
+    /// The short date and time of the operating system's locale.
+    System,
+}
+
+impl DateFormat {
+    /// The four formats, in the order the settings list them.
+    pub const ALL: [Self; 4] = [Self::SmartTime, Self::Smart, Self::Iso, Self::System];
+}
+
+/// The `date_format` key: a name that is no format reads as the default
+/// instead of failing the whole file.
+fn lenient_date_format<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<DateFormat, D::Error> {
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Value {
+        Known(DateFormat),
+        Other(serde::de::IgnoredAny),
+    }
+    Ok(match Value::deserialize(deserializer)? {
+        Value::Known(format) => format,
+        Value::Other(_) => DateFormat::default(),
+    })
+}
+
+/// A colour as `rick.toml` writes it, `#rrggbb`: red, green, blue.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct Rgb(pub [u8; 3]);
+
+impl Rgb {
+    /// The colour a `#rrggbb` text names, the `#` optional and the case
+    /// free; `None` for anything else.
+    #[must_use]
+    pub fn parse(text: &str) -> Option<Self> {
+        let hex = text.trim();
+        let hex = hex.strip_prefix('#').unwrap_or(hex);
+        if hex.len() != 6 || !hex.bytes().all(|b| b.is_ascii_hexdigit()) {
+            return None;
+        }
+        let channel = |at: usize| u8::from_str_radix(&hex[at..at + 2], 16).ok();
+        Some(Self([channel(0)?, channel(2)?, channel(4)?]))
+    }
+
+    /// The colour as `#rrggbb`.
+    #[must_use]
+    pub fn text(self) -> String {
+        let [r, g, b] = self.0;
+        format!("#{r:02x}{g:02x}{b:02x}")
+    }
+}
+
+impl Serialize for Rgb {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(&self.text())
+    }
+}
+
+/// The colour of the title row's band (SPEC.md *Title bar colour*): one
+/// of six presets, each a light and a dark value so that one choice works
+/// in both schemes, or the user's own pair.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
+#[serde(rename_all = "kebab-case")]
+pub enum TitlebarColour {
+    /// `#ece0db` and `#332c2c`: the values of the `bg/titlebar` token.
+    #[default]
+    DustyRose,
+    /// `#e6e2dc` and `#2c2a28`.
+    WarmGrey,
+    /// `#d9e4e4` and `#263233`.
+    SlateTeal,
+    /// `#dfe6d8` and `#283027`.
+    Sage,
+    /// `#e4dcea` and `#3a2e4a`.
+    Plum,
+    /// `#2f3237` in both schemes: a dark band in Light too.
+    DarkBand,
+    /// `titlebar_custom_light` and `titlebar_custom_dark`.
+    Custom,
+}
+
+impl TitlebarColour {
+    /// The choices in the order the settings show them: the presets as
+    /// SPEC.md's table lists them, then *Custom*.
+    pub const ALL: [Self; 7] = [
+        Self::DustyRose,
+        Self::WarmGrey,
+        Self::SlateTeal,
+        Self::Sage,
+        Self::Plum,
+        Self::DarkBand,
+        Self::Custom,
+    ];
+
+    /// A preset's light and dark value; `None` for *Custom*, whose pair
+    /// the settings hold.
+    #[must_use]
+    pub const fn preset(self) -> Option<(Rgb, Rgb)> {
+        let pair = match self {
+            Self::DustyRose => ([0xec, 0xe0, 0xdb], [0x33, 0x2c, 0x2c]),
+            Self::WarmGrey => ([0xe6, 0xe2, 0xdc], [0x2c, 0x2a, 0x28]),
+            Self::SlateTeal => ([0xd9, 0xe4, 0xe4], [0x26, 0x32, 0x33]),
+            Self::Sage => ([0xdf, 0xe6, 0xd8], [0x28, 0x30, 0x27]),
+            Self::Plum => ([0xe4, 0xdc, 0xea], [0x3a, 0x2e, 0x4a]),
+            Self::DarkBand => ([0x2f, 0x32, 0x37], [0x2f, 0x32, 0x37]),
+            Self::Custom => return None,
+        };
+        Some((Rgb(pair.0), Rgb(pair.1)))
+    }
+}
+
+/// The default of `titlebar_custom_light`: the default preset's light
+/// value, so that *Custom* starts from the band the user knows.
+const fn custom_light() -> Rgb {
+    Rgb([0xec, 0xe0, 0xdb])
+}
+
+/// The default of `titlebar_custom_dark`.
+const fn custom_dark() -> Rgb {
+    Rgb([0x33, 0x2c, 0x2c])
+}
+
+/// A `#rrggbb` key of `rick.toml`: anything that is no colour reads as
+/// `fallback` instead of failing the whole file.
+fn lenient_rgb<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+    fallback: Rgb,
+) -> Result<Rgb, D::Error> {
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Value {
+        Text(String),
+        Other(serde::de::IgnoredAny),
+    }
+    Ok(match Value::deserialize(deserializer)? {
+        Value::Text(text) => Rgb::parse(&text).unwrap_or(fallback),
+        Value::Other(_) => fallback,
+    })
+}
+
+fn lenient_light<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<Rgb, D::Error> {
+    lenient_rgb(deserializer, custom_light())
+}
+
+fn lenient_dark<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<Rgb, D::Error> {
+    lenient_rgb(deserializer, custom_dark())
+}
+
+/// The `titlebar_colour` key: a name that is no preset reads as the
+/// default instead of failing the whole file.
+fn lenient_titlebar<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<TitlebarColour, D::Error> {
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Value {
+        Known(TitlebarColour),
+        Other(serde::de::IgnoredAny),
+    }
+    Ok(match Value::deserialize(deserializer)? {
+        Value::Known(colour) => colour,
+        Value::Other(_) => TitlebarColour::default(),
+    })
+}
+
 /// Everything in `rick.toml`. Missing keys take their defaults, so a file
 /// with one line is valid.
 // Settings are flags by nature; each maps to one TOML key.
@@ -64,6 +242,25 @@ pub struct Settings {
     pub font_size: u8,
     /// The density of the interface.
     pub density: Density,
+    /// How a date is written: `smart-time`, `smart`, `iso` or `system`.
+    #[serde(deserialize_with = "lenient_date_format")]
+    pub date_format: DateFormat,
+    /// Whether a second click on the one selected row renames it; F2 and
+    /// *Rename* in the context menu always do (SPEC.md *Inline rename*).
+    pub rename_on_click: bool,
+    /// The command of *Open in editor*, with its arguments, to which the
+    /// files' paths are appended; empty for the system's default text
+    /// editor (SPEC.md *Open in editor*).
+    pub editor: String,
+    /// The colour of the title row's band: a preset, or `custom`.
+    #[serde(deserialize_with = "lenient_titlebar")]
+    pub titlebar_colour: TitlebarColour,
+    /// The band in the light scheme while `titlebar_colour` is `custom`.
+    #[serde(deserialize_with = "lenient_light")]
+    pub titlebar_custom_light: Rgb,
+    /// The band in the dark scheme while `titlebar_colour` is `custom`.
+    #[serde(deserialize_with = "lenient_dark")]
+    pub titlebar_custom_dark: Rgb,
     /// The language of the user interface as a tag (`de`), or `None` for
     /// the system's; applied live, English the fallback for a missing key.
     pub language: Option<String>,
@@ -72,6 +269,8 @@ pub struct Settings {
     pub shortcuts: BTreeMap<String, String>,
     /// What Rick opens with: the last session or a named layout.
     pub session: SessionSettings,
+    /// The windows: which frame Rick draws around one it decorates itself.
+    pub window: WindowSettings,
     /// Folders and files pinned to the side panel, in display order.
     /// Written as `provider:path` strings; a bare path is a local one.
     #[serde(with = "pinned_toml")]
@@ -256,9 +455,38 @@ pub fn parse_location(text: &str) -> Location {
 pub struct Preview {
     /// Text and code defaults.
     pub text: TextPreview,
-    /// The pinned info section's id by content kind (`"text"`, `"image"`,
-    /// `"pages"`); a kind without an entry has nothing pinned.
-    pub pinned: BTreeMap<String, String>,
+    /// Whether the File info card is pinned, by the id of the previewer
+    /// that shows the file (`preview-image = true`); a previewer without
+    /// an entry has it unpinned. An entry of 0.3, which named a section
+    /// per content kind, is dropped when the file is read.
+    #[serde(deserialize_with = "lenient_pins")]
+    pub pinned: BTreeMap<String, bool>,
+    /// The widths of the columns of the table a previewer shows, by the
+    /// previewer's id and then by position — every column but the last,
+    /// which takes what is left (`preview-archive = [240, 72, 112, 88]`).
+    /// A previewer without an entry has the default widths, and so has a
+    /// column beyond those remembered.
+    pub columns: BTreeMap<String, Vec<u16>>,
+}
+
+/// The pins of `[preview.pinned]`: the entries that are `true`. Anything
+/// else under a key — 0.3's section name — is no pin and is dropped
+/// instead of failing the whole file.
+fn lenient_pins<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<BTreeMap<String, bool>, D::Error> {
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Pin {
+        Flag(bool),
+        Other(serde::de::IgnoredAny),
+    }
+    let entries: BTreeMap<String, Pin> = BTreeMap::deserialize(deserializer)?;
+    Ok(entries
+        .into_iter()
+        .filter(|(_, pin)| matches!(pin, Pin::Flag(true)))
+        .map(|(previewer, _)| (previewer, true))
+        .collect())
 }
 
 /// How text and code open in the preview pane.
@@ -432,6 +660,62 @@ impl SessionSettings {
     }
 }
 
+/// The `[window]` table. Its keys are in the config file only, with no
+/// entry in Settings.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(default)]
+pub struct WindowSettings {
+    /// Which frame Rick draws around a window it decorates itself. Read
+    /// when Rick starts.
+    #[serde(deserialize_with = "lenient_frame")]
+    pub frame: WindowFrame,
+}
+
+/// `frame` in the `[window]` table (specs/gui-title-row.md, *Window
+/// frame*): the override of the check whether the window is transparent,
+/// for a system that reports a transparent surface and composites it
+/// wrongly, or the other way round.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum WindowFrame {
+    /// The shadow frame where the window is transparent, the plain frame
+    /// where it is not.
+    #[default]
+    Auto,
+    /// Always the shadow frame: a transparent margin with a shadow.
+    Shadow,
+    /// Always the plain frame, and no transparent window is asked for.
+    Plain,
+}
+
+/// The `frame` key: a value that is none of the three reads as `auto`
+/// instead of failing the whole file.
+fn lenient_frame<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<WindowFrame, D::Error> {
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Value {
+        Known(WindowFrame),
+        Other(serde::de::IgnoredAny),
+    }
+    Ok(match Value::deserialize(deserializer)? {
+        Value::Known(frame) => frame,
+        Value::Other(_) => WindowFrame::default(),
+    })
+}
+
+impl Settings {
+    /// The band of the title row in the light and in the dark scheme: the
+    /// chosen preset's pair, or the custom one.
+    #[must_use]
+    pub fn titlebar(&self) -> (Rgb, Rgb) {
+        self.titlebar_colour
+            .preset()
+            .unwrap_or((self.titlebar_custom_light, self.titlebar_custom_dark))
+    }
+}
+
 impl Default for Settings {
     fn default() -> Self {
         Self {
@@ -445,8 +729,15 @@ impl Default for Settings {
             theme: Theme::System,
             font_size: 13,
             density: Density::Comfortable,
+            date_format: DateFormat::default(),
+            rename_on_click: false,
+            editor: String::new(),
+            titlebar_colour: TitlebarColour::default(),
+            titlebar_custom_light: custom_light(),
+            titlebar_custom_dark: custom_dark(),
             shortcuts: BTreeMap::new(),
             session: SessionSettings::default(),
+            window: WindowSettings::default(),
             pinned: Vec::new(),
             drag: Drag::default(),
             preview: Preview::default(),
@@ -481,6 +772,22 @@ pub enum SettingsChange {
     FontSize(u8),
     /// The density of the interface.
     Density(Density),
+    /// How a date is written.
+    DateFormat(DateFormat),
+    /// Whether a second click on the selected row renames it.
+    RenameOnClick(bool),
+    /// The command of *Open in editor*; empty for the system's default.
+    Editor(String),
+    /// The title row's band: a preset, or the custom pair.
+    TitlebarColour(TitlebarColour),
+    /// One colour of the custom pair: the light scheme's, or the dark
+    /// scheme's.
+    TitlebarCustom {
+        /// The dark scheme's value; the light scheme's otherwise.
+        dark: bool,
+        /// The colour.
+        colour: Rgb,
+    },
     /// The language, `None` for the system's.
     Language(Option<String>),
     /// Rebind an action; `None` restores its default.
@@ -510,12 +817,19 @@ pub enum SettingsChange {
     PreviewLineNumbers(bool),
     /// Word wrap in text previews, the new default.
     PreviewWrap(bool),
-    /// Pin an info section for a content kind, or unpin with `None`.
+    /// Remember the widths of the columns of a previewer's table.
+    PreviewColumns {
+        /// The previewer's id.
+        previewer: String,
+        /// The widths by position, every column's but the last.
+        widths: Vec<u16>,
+    },
+    /// Pin or unpin the File info card for the files a previewer shows.
     PreviewPin {
-        /// The content kind: `"text"`, `"image"`, `"pages"`.
-        kind: String,
-        /// The section id to pin, or nothing.
-        section: Option<String>,
+        /// The previewer's id.
+        previewer: String,
+        /// Pinned above the content, or not.
+        pinned: bool,
     },
     /// The names the subtree search skips.
     SearchIgnore(Vec<String>),
@@ -556,6 +870,17 @@ impl Settings {
             SettingsChange::Theme(v) => self.theme = v,
             SettingsChange::FontSize(v) => self.font_size = v,
             SettingsChange::Density(v) => self.density = v,
+            SettingsChange::DateFormat(v) => self.date_format = v,
+            SettingsChange::RenameOnClick(v) => self.rename_on_click = v,
+            SettingsChange::Editor(v) => self.editor = v,
+            SettingsChange::TitlebarColour(v) => self.titlebar_colour = v,
+            SettingsChange::TitlebarCustom { dark: true, colour } => {
+                self.titlebar_custom_dark = colour;
+            }
+            SettingsChange::TitlebarCustom {
+                dark: false,
+                colour,
+            } => self.titlebar_custom_light = colour,
             SettingsChange::Language(v) => self.language = v,
             SettingsChange::Shortcut { action, binding } => match binding {
                 Some(binding) => {
@@ -582,14 +907,16 @@ impl Settings {
             SettingsChange::AfterDrag(after) => self.drag.after = after,
             SettingsChange::PreviewLineNumbers(v) => self.preview.text.line_numbers = v,
             SettingsChange::PreviewWrap(v) => self.preview.text.wrap = v,
-            SettingsChange::PreviewPin { kind, section } => match section {
-                Some(section) => {
-                    self.preview.pinned.insert(kind, section);
+            SettingsChange::PreviewColumns { previewer, widths } => {
+                self.preview.columns.insert(previewer, widths);
+            }
+            SettingsChange::PreviewPin { previewer, pinned } => {
+                if pinned {
+                    self.preview.pinned.insert(previewer, true);
+                } else {
+                    self.preview.pinned.remove(&previewer);
                 }
-                None => {
-                    self.preview.pinned.remove(&kind);
-                }
-            },
+            }
             SettingsChange::SearchIgnore(names) => self.search.ignore = names,
             SettingsChange::ArchivesOnOpen(on_open) => self.archives.on_open = on_open,
             SettingsChange::Plugin { id, enabled } => {
@@ -634,6 +961,131 @@ mod tests {
     }
 
     #[test]
+    fn the_title_bar_colour_is_a_preset_or_a_custom_pair() {
+        // The presets, as SPEC.md's table lists them.
+        let table = [
+            (
+                TitlebarColour::DustyRose,
+                "dusty-rose",
+                "#ece0db",
+                "#332c2c",
+            ),
+            (TitlebarColour::WarmGrey, "warm-grey", "#e6e2dc", "#2c2a28"),
+            (
+                TitlebarColour::SlateTeal,
+                "slate-teal",
+                "#d9e4e4",
+                "#263233",
+            ),
+            (TitlebarColour::Sage, "sage", "#dfe6d8", "#283027"),
+            (TitlebarColour::Plum, "plum", "#e4dcea", "#3a2e4a"),
+            (TitlebarColour::DarkBand, "dark-band", "#2f3237", "#2f3237"),
+        ];
+        for (index, (preset, key, light, dark)) in table.into_iter().enumerate() {
+            assert_eq!(TitlebarColour::ALL[index], preset);
+            let pair = preset.preset().map(|(l, d)| (l.text(), d.text()));
+            assert_eq!(pair, Some((light.to_owned(), dark.to_owned())), "{key}");
+            // The choice is written under its name and read back.
+            let mut s = Settings::default();
+            s.apply(SettingsChange::TitlebarColour(preset));
+            let text = toml::to_string(&s).unwrap_or_default();
+            assert!(
+                text.contains(&format!("titlebar_colour = \"{key}\"")),
+                "{text}"
+            );
+            let back: Settings = toml::from_str(&text).unwrap_or_default();
+            assert_eq!(back.titlebar_colour, preset);
+            assert_eq!(back.titlebar().0.text(), light);
+        }
+        assert_eq!(TitlebarColour::ALL[6], TitlebarColour::Custom);
+        assert_eq!(TitlebarColour::Custom.preset(), None);
+
+        // The default is Dusty rose, and Custom starts from its pair.
+        let mut s = Settings::default();
+        assert_eq!(s.titlebar_colour, TitlebarColour::DustyRose);
+        s.apply(SettingsChange::TitlebarColour(TitlebarColour::Custom));
+        assert_eq!(
+            s.titlebar(),
+            (Rgb([0xec, 0xe0, 0xdb]), Rgb([0x33, 0x2c, 0x2c]))
+        );
+        s.apply(SettingsChange::TitlebarCustom {
+            dark: false,
+            colour: Rgb([0x10, 0x20, 0x30]),
+        });
+        s.apply(SettingsChange::TitlebarCustom {
+            dark: true,
+            colour: Rgb([0xa0, 0xb0, 0xc0]),
+        });
+        assert_eq!(
+            s.titlebar(),
+            (Rgb([0x10, 0x20, 0x30]), Rgb([0xa0, 0xb0, 0xc0]))
+        );
+        let text = toml::to_string(&s).unwrap_or_default();
+        assert!(text.contains("titlebar_colour = \"custom\""), "{text}");
+        assert!(
+            text.contains("titlebar_custom_light = \"#102030\""),
+            "{text}"
+        );
+        assert!(
+            text.contains("titlebar_custom_dark = \"#a0b0c0\""),
+            "{text}"
+        );
+        let back: Settings = toml::from_str(&text).unwrap_or_default();
+        assert_eq!(back, s);
+        // A preset keeps the custom pair for the next time.
+        s.apply(SettingsChange::TitlebarColour(TitlebarColour::Sage));
+        assert_eq!(s.titlebar().0.text(), "#dfe6d8");
+        assert_eq!(s.titlebar_custom_light, Rgb([0x10, 0x20, 0x30]));
+
+        // What is no colour and no preset reads as the default, and the
+        // rest of the file stands.
+        let odd = "show_hidden = true\ntitlebar_colour = \"neon\"\n\
+                   titlebar_custom_light = \"blue\"\ntitlebar_custom_dark = 7\n";
+        let read: Settings = toml::from_str(odd).unwrap_or_else(|e| panic!("{e}"));
+        assert!(read.show_hidden);
+        assert_eq!(read.titlebar_colour, TitlebarColour::DustyRose);
+        assert_eq!(read.titlebar_custom_light, Rgb([0xec, 0xe0, 0xdb]));
+        assert_eq!(read.titlebar_custom_dark, Rgb([0x33, 0x2c, 0x2c]));
+        // A colour is six hex digits, the hash and the case free.
+        assert_eq!(Rgb::parse("#ECE0DB"), Some(Rgb([0xec, 0xe0, 0xdb])));
+        assert_eq!(Rgb::parse(" 2f3237 "), Some(Rgb([0x2f, 0x32, 0x37])));
+        for bad in ["", "#fff", "#12345g", "#1234567", "rose"] {
+            assert_eq!(Rgb::parse(bad), None, "{bad}");
+        }
+    }
+
+    /// Issue 158: `frame` of the `[window]` table is `auto`, `shadow` or
+    /// `plain`; absent it is `auto`, and so is a value Rick does not know.
+    #[test]
+    fn the_window_frame_is_auto_shadow_or_plain() {
+        assert_eq!(Settings::default().window.frame, WindowFrame::Auto);
+        let old: Settings = toml::from_str("show_hidden = true\n").unwrap_or_default();
+        assert_eq!(old.window, WindowSettings::default(), "an older file");
+        for (text, frame) in [
+            ("auto", WindowFrame::Auto),
+            ("shadow", WindowFrame::Shadow),
+            ("plain", WindowFrame::Plain),
+        ] {
+            let file = format!("[window]\nframe = \"{text}\"\n");
+            let read: Settings = toml::from_str(&file).unwrap_or_else(|e| panic!("{e}"));
+            assert_eq!(read.window.frame, frame, "{text}");
+            // Written under the same name and read back.
+            let written = toml::to_string(&read).unwrap_or_default();
+            assert!(written.contains(&file), "{written}");
+            let back: Settings = toml::from_str(&written).unwrap_or_else(|e| panic!("{e}"));
+            assert_eq!(back, read);
+        }
+        // What is none of the three reads as `auto`, and the rest of the
+        // file stands.
+        for odd in ["frame = \"glass\"", "frame = 3", "frame = true"] {
+            let file = format!("show_hidden = true\n[window]\n{odd}\n");
+            let read: Settings = toml::from_str(&file).unwrap_or_else(|e| panic!("{e}"));
+            assert!(read.show_hidden, "{odd}");
+            assert_eq!(read.window.frame, WindowFrame::Auto, "{odd}");
+        }
+    }
+
+    #[test]
     fn the_integration_table_has_its_switches_and_records() {
         use crate::integration::ItemState;
         let mut s = Settings::default();
@@ -663,6 +1115,42 @@ mod tests {
         // A file from before the table reads as the defaults.
         let old: Settings = toml::from_str("theme = \"dark\"\n").unwrap_or_else(|e| panic!("{e}"));
         assert_eq!(old.integration, IntegrationSettings::default());
+    }
+
+    #[test]
+    fn the_date_format_and_the_rename_click_read_and_write_their_keys() {
+        // Issue 149: smart with the time, and no rename on a click, unless
+        // the file says otherwise.
+        let s = Settings::default();
+        assert_eq!(s.date_format, DateFormat::SmartTime);
+        assert!(!s.rename_on_click);
+        let text = toml::to_string(&s).unwrap_or_else(|e| panic!("{e}"));
+        assert!(text.contains("date_format = \"smart-time\""), "{text}");
+        assert!(text.contains("rename_on_click = false"), "{text}");
+        assert!(text.contains("editor = \"\""), "{text}");
+        let named: Settings =
+            toml::from_str("editor = \"code --wait\"\n").unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(named.editor, "code --wait");
+        for (key, format) in [
+            ("smart-time", DateFormat::SmartTime),
+            ("smart", DateFormat::Smart),
+            ("iso", DateFormat::Iso),
+            ("system", DateFormat::System),
+        ] {
+            let s: Settings = toml::from_str(&format!("date_format = \"{key}\"\n"))
+                .unwrap_or_else(|e| panic!("{e}"));
+            assert_eq!(s.date_format, format);
+        }
+        // A name that is no format is the default, and the rest still reads.
+        let s: Settings = toml::from_str("date_format = \"roman\"\nrename_on_click = true\n")
+            .unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(s.date_format, DateFormat::SmartTime);
+        assert!(s.rename_on_click);
+        let mut s = Settings::default();
+        s.apply(SettingsChange::DateFormat(DateFormat::Iso));
+        s.apply(SettingsChange::RenameOnClick(true));
+        assert_eq!(s.date_format, DateFormat::Iso);
+        assert!(s.rename_on_click);
     }
 
     #[test]
@@ -772,40 +1260,55 @@ mod tests {
     }
 
     #[test]
-    fn preview_changes_apply_and_pins_are_per_kind() {
+    fn preview_changes_apply_and_pins_are_per_previewer() {
         let mut s = Settings::default();
         s.apply(SettingsChange::PreviewWrap(true));
         s.apply(SettingsChange::PreviewLineNumbers(false));
         assert!(s.preview.text.wrap);
         assert!(!s.preview.text.line_numbers);
-        s.apply(SettingsChange::PreviewPin {
-            kind: "image".into(),
-            section: Some("exif".into()),
-        });
-        s.apply(SettingsChange::PreviewPin {
-            kind: "text".into(),
-            section: Some("file".into()),
-        });
-        assert_eq!(
-            s.preview.pinned.get("image").map(String::as_str),
-            Some("exif")
+        let pin = |previewer: &str, pinned: bool| SettingsChange::PreviewPin {
+            previewer: previewer.into(),
+            pinned,
+        };
+        s.apply(pin("preview-image", true));
+        s.apply(pin("preview-text", true));
+        assert_eq!(s.preview.pinned.get("preview-image"), Some(&true));
+        s.apply(pin("preview-image", false));
+        assert_eq!(s.preview.pinned.get("preview-image"), None);
+        assert_eq!(s.preview.pinned.get("preview-text"), Some(&true));
+        // Written as a table of switches and read back.
+        let text = toml::to_string(&s).unwrap_or_else(|e| panic!("{e}"));
+        assert!(
+            text.contains("[preview.pinned]\npreview-text = true"),
+            "{text}"
         );
-        s.apply(SettingsChange::PreviewPin {
-            kind: "image".into(),
-            section: Some("file".into()),
+        let back: Settings = toml::from_str(&text).unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(back.preview.pinned, s.preview.pinned);
+        // The widths of a previewer's table are kept by position.
+        s.apply(SettingsChange::PreviewColumns {
+            previewer: "preview-archive".into(),
+            widths: vec![240, 72, 112, 88],
         });
-        assert_eq!(
-            s.preview.pinned.get("image").map(String::as_str),
-            Some("file")
+        let text = toml::to_string(&s).unwrap_or_else(|e| panic!("{e}"));
+        assert!(
+            text.contains("preview-archive = [240, 72, 112, 88]"),
+            "{text}"
         );
-        s.apply(SettingsChange::PreviewPin {
-            kind: "image".into(),
-            section: None,
-        });
-        assert_eq!(s.preview.pinned.get("image"), None);
+        let back: Settings = toml::from_str(&text).unwrap_or_else(|e| panic!("{e}"));
         assert_eq!(
-            s.preview.pinned.get("text").map(String::as_str),
-            Some("file")
+            back.preview.columns.get("preview-archive"),
+            Some(&vec![240, 72, 112, 88])
+        );
+        // A pin of 0.3, a section per content kind, is not carried over
+        // and does not stop the file from being read.
+        let old: Settings = toml::from_str(
+            "theme = \"dark\"\n[preview.pinned]\nimage = \"exif\"\npreview-pdf = true\noff = false\n",
+        )
+        .unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(old.theme, Theme::Dark);
+        assert_eq!(
+            old.preview.pinned.keys().collect::<Vec<_>>(),
+            ["preview-pdf"]
         );
     }
 

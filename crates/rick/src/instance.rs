@@ -261,7 +261,8 @@ fn reveal(
 /// extension that declared it, its text or error going back to the
 /// caller; the help and the version are text for the caller. Whatever
 /// changed the window is followed by its activation, with the launcher's
-/// `token`, so the caller sees what happened.
+/// `token`, so the caller sees what happened; `--activate` without a path
+/// is that activation alone (§4).
 pub fn apply(
     app: &mut App,
     events: &mut Vec<Event>,
@@ -296,6 +297,13 @@ pub fn apply(
         }
         // The instance is up, which is all the bus's activation asked.
         Parsed::Service => Reply::ok(None),
+        // A click on the launcher: the window comes forward and nothing
+        // opens, whatever the launcher's working directory is.
+        Parsed::Activate => {
+            tracing::info!("activated from a launcher");
+            activate(app, events, token);
+            Reply::ok(None)
+        }
         Parsed::Help(text) | Parsed::Version(text) => Reply::ok(Some(text)),
     }
 }
@@ -576,6 +584,7 @@ mod tests {
         Arc::new(Echoer(Manifest {
             id: ExtId("echoer"),
             name: "Echoer",
+            description: "",
             version: Version::new(0, 1, 0),
             api_version: API_VERSION,
             requires: Capabilities::empty(),
@@ -683,6 +692,69 @@ mod tests {
                 .is_some_and(|t| t.contains("--new-window")),
             "{reply:?}"
         );
+    }
+
+    /// A click on the launcher entry or on a dock favourite runs
+    /// `rick --activate` (specs/system-integration.md §4): the window
+    /// comes forward with the launcher's token and no tab, no window and
+    /// no workspace is opened, wherever the launcher was started from;
+    /// what the launcher hands over still opens.
+    #[test]
+    fn the_launchers_argument_raises_the_window_and_opens_nothing() {
+        let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+        let home = dir.path().join("home");
+        let sub = dir.path().join("sub");
+        std::fs::create_dir_all(&home).unwrap_or_else(|e| panic!("{e}"));
+        std::fs::create_dir_all(&sub).unwrap_or_else(|e| panic!("{e}"));
+        let fake = Arc::new(Fake::new().unwrap_or_else(|e| panic!("{e}")));
+        let mut app = app(&fake, &home, Vec::new());
+        let mut events = Vec::new();
+        let windows = app.model().windows().count();
+        let panes = app.model().panes().count();
+        let window = app.model().focused_window;
+        let workspaces = app.model().workspaces(window).len();
+        let focused = app.model().focused;
+        let shown = app.model().active_tab(focused).map(|(id, _)| id);
+
+        let mut click = request(&["--activate"], &sub);
+        click
+            .env
+            .insert("XDG_ACTIVATION_TOKEN".to_owned(), "tok-2".to_owned());
+        assert_eq!(dispatch(&mut app, &mut events, &click), Reply::ok(None));
+        assert_eq!(app.model().windows().count(), windows);
+        assert_eq!(app.model().panes().count(), panes);
+        assert_eq!(app.model().workspaces(window).len(), workspaces);
+        assert_eq!(app.model().focused, focused);
+        assert_eq!(app.model().active_tab(focused).map(|(id, _)| id), shown);
+        assert_eq!(
+            events
+                .iter()
+                .filter(|e| matches!(
+                    e,
+                    Event::Activate { window: raised, token } if *raised == window && token.as_deref() == Some("tok-2")
+                ))
+                .count(),
+            1,
+            "{events:?}"
+        );
+
+        // A folder dropped on the launcher arrives as a path and opens.
+        let reply = dispatch(
+            &mut app,
+            &mut events,
+            &request(&["--activate", "sub"], dir.path()),
+        );
+        assert_eq!(reply, Reply::ok(None));
+        assert_eq!(app.model().panes().count(), panes + 1);
+        // And a plain `rick` in a terminal opens where it was typed.
+        let reply = dispatch(&mut app, &mut events, &request(&[], &sub));
+        assert_eq!(reply, Reply::ok(None));
+        assert_eq!(app.model().panes().count(), panes + 2);
+        let (_, tab) = app
+            .model()
+            .active_tab(app.model().focused)
+            .unwrap_or_else(|| panic!("a focused tab"));
+        assert_eq!(tab.location, location(&cli::resolve(&sub, Path::new("."))));
     }
 
     /// `rick:///<folder>` opens the folder, `rick:///<file>` reveals it,

@@ -26,7 +26,7 @@ use crate::Native;
 use crate::time::parse_iso8601;
 use crate::traits::{
     Activation, Application, Chrome, ConfigDir, ControlsSide, DragSource, DropTarget, Elevate,
-    ElevatedOutput, ImageFormat, IncomingFiles, Mount, OpenWith, Point, Properties,
+    ElevatedOutput, ImageFormat, IncomingFiles, Monitor, Mount, OpenWith, Point, Properties,
     PropertiesOutcome, RecentItem, RecentlyUsed, StandardFolder, StandardFolders, Terminal, Trash,
     TrashedItem, Volume, VolumeKind, Volumes, WindowChrome, WindowRef,
 };
@@ -236,7 +236,30 @@ impl Volumes for Native {
             said.to_owned()
         })))
     }
+
+    /// Disk Utility is part of the system.
+    fn has_format_tool(&self) -> bool {
+        Path::new(DISK_UTILITY).exists()
+    }
+
+    /// Opens Disk Utility, where the volume is erased; it takes no volume
+    /// to start on.
+    fn open_format_tool(&self, _volume: &Volume) -> Result<(), Error> {
+        if !self.has_format_tool() {
+            return Err(Error::Unsupported("no disk utility is installed"));
+        }
+        run_detached(
+            "open",
+            &[
+                std::ffi::OsStr::new("-a"),
+                std::ffi::OsStr::new(DISK_UTILITY),
+            ],
+        )
+    }
 }
+
+/// Where Disk Utility is on every macOS Rick supports.
+const DISK_UTILITY: &str = "/System/Applications/Utilities/Disk Utility.app";
 
 /// Network file systems by the name `statfs` reports.
 const NETWORK_FS: &[&str] = &[
@@ -556,6 +579,17 @@ impl OpenWith for Native {
         args.push(path.as_os_str());
         run_detached(program, &args)
     }
+
+    fn has_execute_bit(&self) -> bool {
+        true
+    }
+
+    /// `open -t`: the default text editor, whatever the files' types.
+    fn open_in_text_editor(&self, paths: &[PathBuf]) -> Result<(), Error> {
+        let mut args: Vec<&std::ffi::OsStr> = vec![std::ffi::OsStr::new("-t")];
+        args.extend(paths.iter().map(|path| path.as_os_str()));
+        run_detached("open", &args)
+    }
 }
 
 impl Elevate for Native {
@@ -695,6 +729,43 @@ impl Chrome for Native {
             native_controls: true,
             native_controls_width: 78.0,
         }
+    }
+
+    /// The screens of `AppKit`, which counts in points already, the first
+    /// being the one with the menu bar. Its origin is the bottom left
+    /// corner of that screen with y upwards; a window is placed from the
+    /// top left with y downwards, so the rectangles are turned over.
+    fn monitors(&self, _pixels_per_point: f32) -> Vec<Monitor> {
+        let Some(mtm) = objc2::MainThreadMarker::new() else {
+            return Vec::new();
+        };
+        let screens = objc2_app_kit::NSScreen::screens(mtm);
+        let Some(top) = screens
+            .iter()
+            .next()
+            .map(|main| main.frame().origin.y + main.frame().size.height)
+        else {
+            return Vec::new();
+        };
+        #[allow(clippy::cast_possible_truncation)]
+        let turned = |rect: objc2_foundation::NSRect| {
+            [
+                rect.origin.x as f32,
+                (top - (rect.origin.y + rect.size.height)) as f32,
+                rect.size.width as f32,
+                rect.size.height as f32,
+            ]
+        };
+        screens
+            .iter()
+            .enumerate()
+            .map(|(index, screen)| Monitor {
+                id: screen.localizedName().to_string(),
+                primary: index == 0,
+                bounds: turned(screen.frame()),
+                work: turned(screen.visibleFrame()),
+            })
+            .collect()
     }
 }
 

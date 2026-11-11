@@ -484,7 +484,13 @@ impl Provider for ArchiveProvider {
     /// listed; nothing for RAR, disc images and single files.
     fn capabilities(&self, loc: &Location) -> Capabilities {
         match self.cached_format(loc) {
-            Some(format) if format.writable() => Capabilities::WRITE | Capabilities::RENAME,
+            // An archive that can be rewritten takes new folders and files.
+            Some(format) if format.writable() => {
+                Capabilities::WRITE
+                    | Capabilities::RENAME
+                    | Capabilities::CREATE_DIR
+                    | Capabilities::CREATE_FILE
+            }
             _ => Capabilities::empty(),
         }
     }
@@ -798,6 +804,7 @@ impl ArchiveExtension {
             manifest: Manifest {
                 id: ID,
                 name: "Archives",
+                description: "Opens archives and disk images as folders: zip, the tar family, 7z, RAR, ISO and more, with zip, tar and 7z writable.",
                 version: Version::parse(env!("CARGO_PKG_VERSION"))
                     .unwrap_or_else(|_| Version::new(0, 0, 0)),
                 api_version: API_VERSION,

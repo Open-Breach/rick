@@ -106,7 +106,7 @@ scheme! {
     text_primary => "text/primary", "#2b2b2b", "#ededed";
     /// Column headers, section headers, footer statistics, the secondary
     /// columns, inactive tabs, detail lines, shortcuts in menus.
-    text_secondary => "text/secondary", "#6b6b6b", "#a0a0a0";
+    text_secondary => "text/secondary", "#646464", "#a6a6a6";
     /// Icons at rest.
     icon_default => "icon/default", "#4a4a4a", "#cfcfcf";
     /// Hairlines, dividers, field and card borders, the window border.
@@ -147,7 +147,7 @@ scheme! {
     /// A switch that is off.
     bg_switch_off => "bg/switch-off", "#8e8e8e", "#7a7a7a";
     /// Checkbox borders and other small controls that need more contrast.
-    border_strong => "border/strong", "#939393", "#777777";
+    border_strong => "border/strong", "#8c8c8c", "#777777";
     /// A hash that matches: field border, pill text, row label.
     status_success => "status/success", "#1d7943", "#6fd49a";
     /// The *Matches* pill.
@@ -157,13 +157,17 @@ scheme! {
     /// Warning text, such as the missing version in the installer.
     status_warning => "status/warning", "#8c5c00", "#f2c46b";
     /// The border of a field with a warning.
-    status_warning_border => "status/warning-border", "#d98c0d", "#d98c0d";
+    status_warning_border => "status/warning-border", "#c27d0b", "#d98c0d";
     /// Destructive menu entries, a hash that does not match, errors.
     status_danger => "status/danger", "#b3261a", "#ff8a80";
     /// The background of dialogues and of the settings window.
     dialog_bg => "dialog/bg", "#fafafa", "#2a2a2a";
     /// The background of a primary button, with white text on it.
     accent_button => "accent/button", "#2a77c6", "#2975c7";
+    /// The band of the title row. The values are the *Dusty rose* preset;
+    /// the *Title bar colour* setting puts the chosen pair in their place
+    /// ([`apply`]), so read the band through [`band`], not from here.
+    bg_titlebar => "bg/titlebar", "#ece0db", "#332c2c";
 }
 
 impl Scheme {
@@ -343,6 +347,9 @@ struct Active {
     light: &'static Scheme,
     dark: &'static Scheme,
     metrics: &'static Metrics,
+    /// What the *Title bar colour* setting wrote into `bg/titlebar`: the
+    /// band in the light scheme and in the dark one.
+    titlebar: (Color32, Color32),
 }
 
 impl Default for Active {
@@ -351,6 +358,7 @@ impl Default for Active {
             light: &Scheme::LIGHT,
             dark: &Scheme::DARK,
             metrics: &Metrics::COMFORTABLE,
+            titlebar: (Scheme::LIGHT.bg_titlebar, Scheme::DARK.bg_titlebar),
         }
     }
 }
@@ -366,11 +374,14 @@ fn active(ctx: &egui::Context) -> Active {
 
 /// Installs the tokens on a context: the light scheme on egui's light
 /// theme, the dark one on its dark theme, and the metrics of `density` on
-/// both, so following the system keeps working. Call it when the settings
-/// change; it is cheap enough to call every frame.
-pub fn apply(ctx: &egui::Context, density: Density) {
+/// both, so following the system keeps working; `titlebar` is the pair
+/// the *Title bar colour* setting chose, written into `bg/titlebar` for
+/// the light and for the dark scheme. Call it when the settings change;
+/// it is cheap enough to call every frame.
+pub fn apply(ctx: &egui::Context, density: Density, titlebar: (Color32, Color32)) {
     let active = Active {
         metrics: Metrics::of(density),
+        titlebar,
         ..Active::default()
     };
     ctx.data_mut(|d| d.insert_temp(active_id(), active));
@@ -411,6 +422,149 @@ pub fn scheme(ui: &egui::Ui) -> &'static Scheme {
 #[must_use]
 pub fn metrics(ctx: &egui::Context) -> &'static Metrics {
     active(ctx).metrics
+}
+
+/// The title row's band as the `ui` draws it: `bg/titlebar` with what the
+/// *Title bar colour* setting wrote into it, and everything that sits on
+/// the band.
+#[must_use]
+pub fn band(ui: &egui::Ui) -> Band {
+    let active = active(ui.ctx());
+    if ui.visuals().dark_mode {
+        Band::on(active.dark, active.titlebar.1)
+    } else {
+        Band::on(active.light, active.titlebar.0)
+    }
+}
+
+/// The title row's band in the theme a context shows now.
+#[must_use]
+pub fn band_of(ctx: &egui::Context) -> Band {
+    let active = active(ctx);
+    match ctx.theme() {
+        egui::Theme::Dark => Band::on(active.dark, active.titlebar.1),
+        egui::Theme::Light => Band::on(active.light, active.titlebar.0),
+    }
+}
+
+/// A colour of the settings as egui's.
+#[must_use]
+pub fn rgb(colour: model::Rgb) -> Color32 {
+    let [r, g, b] = colour.0;
+    Color32::from_rgb(r, g, b)
+}
+
+/// `top` at `share` of its strength over `under`, as one opaque colour:
+/// the mix a translucent fill gives, so its contrast can be measured.
+#[must_use]
+pub fn over(top: Color32, share: f32, under: Color32) -> Color32 {
+    let mix = |t: u8, u: u8| {
+        let value = f32::from(t) * share + f32::from(u) * (1.0 - share);
+        // The channels are bytes: the mix is one too.
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let byte = value.round().clamp(0.0, 255.0) as u8;
+        byte
+    };
+    Color32::from_rgb(
+        mix(top.r(), under.r()),
+        mix(top.g(), under.g()),
+        mix(top.b(), under.b()),
+    )
+}
+
+/// What is drawn on the title row's band, chosen by contrast with it
+/// (SPEC.md *Title bar colour*, *On the band*). The active tab is not
+/// here: it is `bg/pane` with the scheme's own colours whatever the band.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Band {
+    /// The band itself.
+    pub fill: Color32,
+    /// The band does not agree with the scheme — dark in Light, light in
+    /// Dark — so the row is drawn in the band's own text colour.
+    pub contrary: bool,
+    /// The titles of the inactive tabs.
+    pub title: Color32,
+    /// The icons: the menu button, the tab icons and close buttons, the
+    /// new-tab button, the layout toggles and the window controls.
+    pub icon: Color32,
+    /// The divider of the window group.
+    pub divider: Color32,
+    /// A tool button under the pointer.
+    pub hover: Color32,
+    /// An inactive tab under the pointer.
+    pub tab_hover: Color32,
+    /// The search box at rest.
+    pub search_fill: Color32,
+    /// The text typed into the search box.
+    pub search_text: Color32,
+    /// The search box's icon and placeholder.
+    pub search_placeholder: Color32,
+}
+
+impl Band {
+    /// The text colour of a light band: `text/primary` of the light
+    /// scheme.
+    pub const INK: Color32 = Scheme::LIGHT.text_primary;
+
+    /// Whether a band is dark: white contrasts with it more than
+    /// [`INK`](Self::INK) does.
+    #[must_use]
+    pub fn is_dark(fill: Color32) -> bool {
+        contrast(Color32::WHITE, fill) > contrast(Self::INK, fill)
+    }
+
+    /// The colours on a band of `fill` under `scheme`.
+    ///
+    /// A band that agrees with the scheme is drawn from the scheme: icons
+    /// in `icon/default`, inactive titles in `text/secondary` — or, where
+    /// that does not reach 4.5:1 on the band, in the band's own text
+    /// colour at 78 %, and at full strength should that fall short too —
+    /// a hovered tab `bg/pane` at 50 % over the band, the search box a
+    /// `bg/pane` field. A band that does not agree switches the row to its
+    /// own text colour, white on a dark band and [`INK`](Self::INK) on a
+    /// light one: titles at 78 %, icons at 90 %, the divider at 25 %, a
+    /// hovered button or tab at 12 %, the search box at 14 % with its
+    /// placeholder at 70 % and its text at 90 %.
+    #[must_use]
+    pub fn on(scheme: &Scheme, fill: Color32) -> Self {
+        let dark = Self::is_dark(fill);
+        let own = if dark { Color32::WHITE } else { Self::INK };
+        let readable = |candidates: &[Color32]| {
+            candidates
+                .iter()
+                .copied()
+                .find(|colour| contrast(*colour, fill) >= 4.5)
+                .unwrap_or(own)
+        };
+        if dark == scheme.dark {
+            Self {
+                fill,
+                contrary: false,
+                title: readable(&[scheme.text_secondary, over(own, 0.78, fill)]),
+                icon: scheme.icon_default,
+                divider: scheme.border_default,
+                hover: scheme.bg_subtle,
+                tab_hover: over(scheme.bg_pane, 0.5, fill),
+                search_fill: scheme.bg_pane,
+                search_text: scheme.text_primary,
+                search_placeholder: scheme.text_placeholder,
+            }
+        } else {
+            let search_fill = over(own, 0.14, fill);
+            Self {
+                fill,
+                contrary: true,
+                title: readable(&[over(own, 0.78, fill)]),
+                icon: over(own, 0.90, fill),
+                divider: over(own, 0.25, fill),
+                hover: over(own, 0.12, fill),
+                tab_hover: over(own, 0.12, fill),
+                search_fill,
+                search_text: over(own, 0.90, search_fill),
+                search_placeholder: over(own, 0.70, search_fill),
+            }
+        }
+    }
 }
 
 /// egui's visuals derived from a scheme.
@@ -597,7 +751,7 @@ mod tests {
         ("bg/selected", "#90d1ff", "#2e5e8f"),
         ("bg/active", "#90d1ff", "#2e5e8f"),
         ("text/primary", "#2b2b2b", "#ededed"),
-        ("text/secondary", "#6b6b6b", "#a0a0a0"),
+        ("text/secondary", "#646464", "#a6a6a6"),
         ("icon/default", "#4a4a4a", "#cfcfcf"),
         ("border/default", "#d6d6d6", "#3d3d3d"),
         ("accent/usage", "#3c84c2", "#5ab0ff"),
@@ -616,15 +770,16 @@ mod tests {
         ("text/on-selected", "#1f528c", "#a9d2ff"),
         ("text/placeholder", "#737373", "#979797"),
         ("bg/switch-off", "#8e8e8e", "#7a7a7a"),
-        ("border/strong", "#939393", "#777777"),
+        ("border/strong", "#8c8c8c", "#777777"),
         ("status/success", "#1d7943", "#6fd49a"),
         ("status/success-bg", "#d9f2e0", "#1e3b2a"),
         ("status/success-row", "#edfaf0", "#1b2e22"),
         ("status/warning", "#8c5c00", "#f2c46b"),
-        ("status/warning-border", "#d98c0d", "#d98c0d"),
+        ("status/warning-border", "#c27d0b", "#d98c0d"),
         ("status/danger", "#b3261a", "#ff8a80"),
         ("dialog/bg", "#fafafa", "#2a2a2a"),
         ("accent/button", "#2a77c6", "#2975c7"),
+        ("bg/titlebar", "#ece0db", "#332c2c"),
     ];
 
     /// The collection *Density*: name, Comfortable, Compact.
@@ -640,6 +795,9 @@ mod tests {
         ("radius/control", 6.0, 4.0),
         ("search/height", 28.0, 22.0),
     ];
+
+    /// The default band: the token's own pair.
+    const ROSE: (Color32, Color32) = (Scheme::LIGHT.bg_titlebar, Scheme::DARK.bg_titlebar);
 
     fn hex_text(color: Color32) -> String {
         format!("#{:02x}{:02x}{:02x}", color.r(), color.g(), color.b())
@@ -685,16 +843,16 @@ mod tests {
     }
 
     /// The text pairs the design puts together, at 4.5:1, and the control
-    /// and icon pairs, at 3:1, in both schemes. The pairs the Figma file
-    /// holds that fall short are listed in QUESTIONS.md 242 and are not
-    /// here: `text/secondary` on `bg/control` and `bg/selected-inactive`,
-    /// `border/strong` on `bg/pane` in Light, and the warning border on
-    /// light backgrounds.
+    /// and icon pairs, at 3:1, in both schemes. Every pair is here: the
+    /// three that fell short until the Figma variables changed
+    /// (specs/decisions.md Q242) are held like the rest — `text/secondary`
+    /// on `bg/control` and `bg/selected-inactive`, `border/strong` on
+    /// `bg/pane`, and the warning border on `bg/pane` and `dialog/bg`.
     #[test]
     fn the_pairs_meet_wcag_contrast() {
         for scheme in [&Scheme::LIGHT, &Scheme::DARK] {
             let s = scheme;
-            let text_pairs: [(&str, Color32, Color32); 27] = [
+            let text_pairs: [(&str, Color32, Color32); 29] = [
                 ("primary on window", s.text_primary, s.bg_window),
                 ("primary on panel", s.text_primary, s.bg_panel),
                 ("primary on pane", s.text_primary, s.bg_pane),
@@ -717,6 +875,12 @@ mod tests {
                 ("secondary on pane", s.text_secondary, s.bg_pane),
                 ("secondary on card", s.text_secondary, s.bg_card),
                 ("secondary on subtle", s.text_secondary, s.bg_subtle),
+                ("secondary on control", s.text_secondary, s.bg_control),
+                (
+                    "secondary on inactive",
+                    s.text_secondary,
+                    s.bg_selected_inactive,
+                ),
                 ("secondary on dialog", s.text_secondary, s.dialog_bg),
                 ("placeholder on pane", s.text_placeholder, s.bg_pane),
                 ("placeholder on card", s.text_placeholder, s.bg_card),
@@ -741,7 +905,7 @@ mod tests {
             }
             assert!(contrast(s.trash_mid_text, s.trash_mid_bg) >= 4.5);
             assert!(contrast(s.trash_high_text, s.trash_high_bg) >= 4.5);
-            let control_pairs: [(&str, Color32, Color32); 14] = [
+            let control_pairs: [(&str, Color32, Color32); 17] = [
                 ("icon on window", s.icon_default, s.bg_window),
                 ("icon on panel", s.icon_default, s.bg_panel),
                 ("icon on pane", s.icon_default, s.bg_pane),
@@ -753,6 +917,13 @@ mod tests {
                 ("focus on subtle", s.accent_focus, s.bg_subtle),
                 ("focus on soft", s.accent_focus, s.bg_selected_soft),
                 ("strong border on card", s.border_strong, s.bg_card),
+                ("strong border on pane", s.border_strong, s.bg_pane),
+                ("warning border on pane", s.status_warning_border, s.bg_pane),
+                (
+                    "warning border on dialog",
+                    s.status_warning_border,
+                    s.dialog_bg,
+                ),
                 ("switch off on pane", s.bg_switch_off, s.bg_pane),
                 ("usage on track", s.accent_usage, s.bg_track),
                 ("button on dialog", s.accent_button, s.dialog_bg),
@@ -762,6 +933,99 @@ mod tests {
                 assert!(ratio >= 3.0, "{}: {what} {ratio:.2}", s.name);
             }
         }
+    }
+
+    /// Every preset of *Title bar colour*, in both schemes: the titles of
+    /// the inactive tabs and the search box's text at 4.5:1, the icons at
+    /// 3:1, at rest and on hover (SPEC.md *On the band*).
+    #[test]
+    fn every_title_bar_preset_holds_its_contrast_in_both_schemes() {
+        use model::TitlebarColour;
+        let mut presets = 0;
+        for preset in TitlebarColour::ALL {
+            let Some((light, dark)) = preset.preset() else {
+                assert_eq!(preset, TitlebarColour::Custom);
+                continue;
+            };
+            presets += 1;
+            for (scheme, fill) in [(&Scheme::LIGHT, rgb(light)), (&Scheme::DARK, rgb(dark))] {
+                let band = Band::on(scheme, fill);
+                let at = format!("{preset:?} in {}", scheme.name);
+                assert_eq!(band.fill, fill);
+                // Light in Light and dark in Dark, but for the Dark band.
+                let dark_band = Band::is_dark(fill);
+                assert_eq!(
+                    dark_band,
+                    scheme.dark || preset == TitlebarColour::DarkBand,
+                    "{at}"
+                );
+                assert_eq!(band.contrary, dark_band != scheme.dark, "{at}");
+                let text = [
+                    ("title", band.title, band.fill),
+                    ("title on a hovered tab", band.title, band.tab_hover),
+                    ("search text", band.search_text, band.search_fill),
+                    (
+                        "search placeholder",
+                        band.search_placeholder,
+                        band.search_fill,
+                    ),
+                ];
+                for (what, fg, bg) in text {
+                    let ratio = contrast(fg, bg);
+                    assert!(ratio >= 4.5, "{at}: {what} {ratio:.2}");
+                }
+                let icons = [
+                    ("icon", band.icon, band.fill),
+                    ("icon on a hovered tab", band.icon, band.tab_hover),
+                    ("icon on a hovered button", band.icon, band.hover),
+                    ("search icon", band.search_placeholder, band.search_fill),
+                ];
+                for (what, fg, bg) in icons {
+                    let ratio = contrast(fg, bg);
+                    assert!(ratio >= 3.0, "{at}: {what} {ratio:.2}");
+                }
+            }
+        }
+        assert_eq!(presets, 6);
+
+        // The default preset is the token.
+        assert_eq!(
+            TitlebarColour::default()
+                .preset()
+                .map(|(l, d)| (rgb(l), rgb(d))),
+            Some((Scheme::LIGHT.bg_titlebar, Scheme::DARK.bg_titlebar))
+        );
+        // On four of the five light presets in Light `text/secondary`
+        // holds and stays; on Plum it falls short, and the titles are the
+        // band's text colour at 78 %. In Dark it holds on every preset.
+        let rose = Band::on(&Scheme::LIGHT, Scheme::LIGHT.bg_titlebar);
+        assert_eq!(rose.title, Scheme::LIGHT.text_secondary);
+        assert_eq!(rose.icon, Scheme::LIGHT.icon_default);
+        assert_eq!(rose.search_fill, Scheme::LIGHT.bg_pane);
+        let plum = Band::on(&Scheme::LIGHT, hex("#e4dcea"));
+        assert!(contrast(Scheme::LIGHT.text_secondary, plum.fill) < 4.5);
+        assert_eq!(plum.title, over(Band::INK, 0.78, plum.fill));
+        let charcoal = Band::on(&Scheme::DARK, Scheme::DARK.bg_titlebar);
+        assert_eq!(charcoal.title, Scheme::DARK.text_secondary);
+        // The Dark band in Light: the row in white, as frame 167:5261
+        // draws it.
+        let fill = hex("#2f3237");
+        let dark = Band::on(&Scheme::LIGHT, fill);
+        assert!(dark.contrary);
+        assert_eq!(dark.title, over(Color32::WHITE, 0.78, fill));
+        assert_eq!(dark.icon, over(Color32::WHITE, 0.90, fill));
+        assert_eq!(dark.divider, over(Color32::WHITE, 0.25, fill));
+        assert_eq!(dark.hover, over(Color32::WHITE, 0.12, fill));
+        assert_eq!(dark.tab_hover, dark.hover);
+        assert_eq!(dark.search_fill, over(Color32::WHITE, 0.14, fill));
+        // A light custom colour in Dark is the mirror image.
+        let light = Band::on(&Scheme::DARK, hex("#e6e2dc"));
+        assert!(light.contrary);
+        assert_eq!(light.icon, over(Band::INK, 0.90, light.fill));
+        // A mid grey no 78 % reads on takes the text colour whole.
+        let grey = hex("#808080");
+        let mid = Band::on(&Scheme::LIGHT, grey);
+        assert!(contrast(mid.title, grey) >= contrast(over(Color32::WHITE, 0.78, grey), grey));
     }
 
     #[test]
@@ -774,7 +1038,7 @@ mod tests {
     #[test]
     fn apply_derives_both_themes_and_keeps_the_sets() {
         let ctx = egui::Context::default();
-        apply(&ctx, Density::Compact);
+        apply(&ctx, Density::Compact, ROSE);
         let light = ctx.style_of(egui::Theme::Light);
         let dark = ctx.style_of(egui::Theme::Dark);
         assert_eq!(light.visuals.panel_fill, Scheme::LIGHT.bg_window);
@@ -803,7 +1067,7 @@ mod tests {
         assert_eq!(scheme_of(&ctx), &Scheme::DARK);
         ctx.set_theme(egui::Theme::Light);
         assert_eq!(scheme_of(&ctx), &Scheme::LIGHT);
-        apply(&ctx, Density::Comfortable);
+        apply(&ctx, Density::Comfortable, ROSE);
         assert_eq!(metrics(&ctx), &Metrics::COMFORTABLE);
         assert_eq!(
             ctx.style_of(egui::Theme::Light).spacing.button_padding.y,

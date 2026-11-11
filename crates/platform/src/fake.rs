@@ -4,7 +4,7 @@
 use std::ffi::OsString;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
 use std::time::SystemTime;
 
 use async_trait::async_trait;
@@ -18,10 +18,10 @@ use crate::perms::{
 };
 use crate::traits::{
     Activation, Application, Chrome, Clipboard, ConfigDir, ControlsSide, DialogFilter, DragSource,
-    DropTarget, Elevate, ElevatedOutput, ImageFormat, IncomingFiles, Mount, NativeDialogs,
-    OpenWith, Point, Properties, PropertiesOutcome, RecentItem, RecentlyUsed, Secrets,
-    SingleInstance, StandardFolder, StandardFolders, Terminal, Trash, TrashedItem, Volume,
-    VolumeKind, Volumes, WindowChrome, WindowRef,
+    DropTarget, Elevate, ElevatedOutput, ImageFormat, IncomingFiles, Monitor, Mount, MountWatch,
+    MountsChanged, NativeDialogs, OpenWith, Point, Properties, PropertiesOutcome, RecentItem,
+    RecentlyUsed, Secrets, SingleInstance, StandardFolder, StandardFolders, Terminal, Trash,
+    TrashedItem, Volume, VolumeKind, Volumes, WindowChrome, WindowRef,
 };
 
 /// The applications the fake offers for every file, the default first.
@@ -49,6 +49,16 @@ pub const FAKE_STANDARD_FOLDERS: [StandardFolder; 3] = [
 /// availability can be tried for every platform; the standard folders are
 /// the directories under the fake's home; the secrets live in a map the
 /// test can read back.
+/// The listeners [`Volumes::watch_mounts`] was handed.
+#[derive(Default)]
+struct MountListeners(Mutex<Vec<Arc<MountsChanged>>>);
+
+impl std::fmt::Debug for MountListeners {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "MountListeners({})", lock(&self.0).len())
+    }
+}
+
 #[derive(Debug)]
 pub struct Fake {
     dir: TempDir,
@@ -58,6 +68,13 @@ pub struct Fake {
     trashed_count: Mutex<u64>,
     opened: Mutex<Vec<PathBuf>>,
     opened_with: Mutex<Vec<(PathBuf, Application)>>,
+    /// What `run_detached` was handed: the program, its arguments and its
+    /// working directory. Nothing is started.
+    ran: Mutex<Vec<(PathBuf, Vec<OsString>, PathBuf)>>,
+    /// The files handed to `open_in_text_editor`, one list a call.
+    edited: Mutex<Vec<Vec<PathBuf>>>,
+    /// Whether an execute bit makes a program here; it does at first.
+    execute_bit: Mutex<bool>,
     /// The tokens handed to [`Activation::activate_window`], oldest first;
     /// nothing is raised.
     activations: Mutex<Vec<Option<String>>>,
@@ -70,6 +87,9 @@ pub struct Fake {
     elevate_runs: Mutex<bool>,
     revealed: Mutex<Vec<PathBuf>>,
     clipboard: Mutex<Option<String>>,
+    /// Whether [`Permissions::permissions`] waits: a test holds the
+    /// Properties dialogue's read back with it, as a slow volume would.
+    permissions_held: (Mutex<bool>, Condvar),
     dragged: Mutex<Vec<Vec<String>>>,
     /// A drag handed to `start_drag` runs until the test ends it.
     drag_running: Mutex<bool>,
@@ -80,6 +100,14 @@ pub struct Fake {
     answers: Mutex<Answers>,
     volumes: Mutex<Vec<Volume>>,
     ejected: Mutex<Vec<PathBuf>>,
+    /// Whether a disk utility is installed, for *Format…*.
+    format_tool: Mutex<bool>,
+    /// The monitors `monitors` reports; none at first.
+    monitors: Mutex<Vec<Monitor>>,
+    /// What `watch_mounts` was handed, called by `mounts_changed`.
+    mount_listeners: Arc<MountListeners>,
+    /// The mount points handed to `open_format_tool`.
+    formatting: Mutex<Vec<PathBuf>>,
     /// The disk-image formats [`Mount::mountable`] answers; the current
     /// platform's unless a test says otherwise.
     mountable: Mutex<&'static [ImageFormat]>,
@@ -142,12 +170,16 @@ impl Fake {
             trashed_count: Mutex::new(0),
             opened: Mutex::new(Vec::new()),
             opened_with: Mutex::new(Vec::new()),
+            ran: Mutex::new(Vec::new()),
+            edited: Mutex::new(Vec::new()),
+            execute_bit: Mutex::new(true),
             activations: Mutex::new(Vec::new()),
             terminals: Mutex::new(Vec::new()),
             elevated: Mutex::new(Vec::new()),
             elevate_runs: Mutex::new(false),
             revealed: Mutex::new(Vec::new()),
             clipboard: Mutex::new(None),
+            permissions_held: (Mutex::new(false), Condvar::new()),
             dragged: Mutex::new(Vec::new()),
             drag_running: Mutex::new(false),
             drop_position: Mutex::new(None),
@@ -155,6 +187,10 @@ impl Fake {
             answers: Mutex::new(Answers::default()),
             volumes: Mutex::new(Vec::new()),
             ejected: Mutex::new(Vec::new()),
+            format_tool: Mutex::new(true),
+            monitors: Mutex::new(Vec::new()),
+            mount_listeners: Arc::default(),
+            formatting: Mutex::new(Vec::new()),
             mountable: Mutex::new(crate::NATIVE_MOUNTABLE),
             mounted: Mutex::new(Vec::new()),
             recent: Mutex::new(Vec::new()),
@@ -184,6 +220,26 @@ impl Fake {
     #[must_use]
     pub fn opened_with(&self) -> Vec<(PathBuf, Application)> {
         lock(&self.opened_with).clone()
+    }
+
+    /// The programs handed to [`OpenWith::run_detached`], oldest first,
+    /// each with its arguments and its working directory.
+    #[must_use]
+    pub fn ran(&self) -> Vec<(PathBuf, Vec<OsString>, PathBuf)> {
+        lock(&self.ran).clone()
+    }
+
+    /// The files handed to [`OpenWith::open_in_text_editor`], one list a
+    /// call, oldest first.
+    #[must_use]
+    pub fn edited(&self) -> Vec<Vec<PathBuf>> {
+        lock(&self.edited).clone()
+    }
+
+    /// Whether an execute bit makes a program from now on, as it does on
+    /// Linux and macOS and does not on Windows.
+    pub fn set_execute_bit(&self, on: bool) {
+        *lock(&self.execute_bit) = on;
     }
 
     /// The folders and commands handed to [`Terminal::open_terminal`],
@@ -267,6 +323,20 @@ impl Fake {
         lock(&self.answers).folder = folder;
     }
 
+    /// Makes [`Permissions::permissions`] wait from now on, until
+    /// [`release_permissions`](Self::release_permissions): the read of an
+    /// entry's properties takes as long as the test wants.
+    pub fn hold_permissions(&self) {
+        *lock(&self.permissions_held.0) = true;
+    }
+
+    /// Lets the reads held by [`hold_permissions`](Self::hold_permissions)
+    /// go on.
+    pub fn release_permissions(&self) {
+        *lock(&self.permissions_held.0) = false;
+        self.permissions_held.1.notify_all();
+    }
+
     /// What `pick_files` answers from now on.
     pub fn answer_files(&self, files: Vec<PathBuf>) {
         lock(&self.answers).files = files;
@@ -299,6 +369,32 @@ impl Fake {
     #[must_use]
     pub fn ejected(&self) -> Vec<PathBuf> {
         lock(&self.ejected).clone()
+    }
+
+    /// The monitors that are connected from now on, in logical pixels.
+    pub fn set_monitors(&self, monitors: Vec<Monitor>) {
+        *lock(&self.monitors) = monitors;
+    }
+
+    /// The stand-in for the system's mount or unmount event: every running
+    /// [`Volumes::watch_mounts`] is told.
+    pub fn mounts_changed(&self) {
+        let listeners = lock(&self.mount_listeners.0).clone();
+        for changed in listeners {
+            changed();
+        }
+    }
+
+    /// Whether a disk utility is installed from now on; one is at first.
+    pub fn set_format_tool(&self, installed: bool) {
+        *lock(&self.format_tool) = installed;
+    }
+
+    /// The mount points the system's format tool was opened on, oldest
+    /// first.
+    #[must_use]
+    pub fn format_opened(&self) -> Vec<PathBuf> {
+        lock(&self.formatting).clone()
     }
 
     /// What [`Mount::mountable`] answers from now on: another platform's
@@ -361,6 +457,40 @@ impl Volumes for Fake {
         volumes.retain(|v| v.mount_point != volume.mount_point);
         lock(&self.ejected).push(volume.mount_point.clone());
         Ok(())
+    }
+
+    fn has_format_tool(&self) -> bool {
+        *lock(&self.format_tool)
+    }
+
+    /// Records the volume; nothing is formatted.
+    fn open_format_tool(&self, volume: &Volume) -> Result<(), Error> {
+        if !self.has_format_tool() {
+            return Err(Error::Unsupported("no disk utility is installed"));
+        }
+        lock(&self.formatting).push(volume.mount_point.clone());
+        Ok(())
+    }
+
+    /// Keeps `changed` for [`Fake::mounts_changed`] until the watch is
+    /// dropped.
+    fn watch_mounts(&self, changed: MountsChanged) -> Option<MountWatch> {
+        /// Takes its listener off the list when the watch ends.
+        struct Listening {
+            listeners: Arc<MountListeners>,
+            changed: Arc<MountsChanged>,
+        }
+        impl Drop for Listening {
+            fn drop(&mut self) {
+                lock(&self.listeners.0).retain(|other| !Arc::ptr_eq(other, &self.changed));
+            }
+        }
+        let changed = Arc::new(changed);
+        lock(&self.mount_listeners.0).push(Arc::clone(&changed));
+        Some(MountWatch::new(Listening {
+            listeners: Arc::clone(&self.mount_listeners),
+            changed,
+        }))
     }
 }
 
@@ -538,6 +668,22 @@ impl OpenWith for Fake {
         lock(&self.opened_with).push((path.to_path_buf(), app.clone()));
         Ok(())
     }
+
+    fn has_execute_bit(&self) -> bool {
+        *lock(&self.execute_bit)
+    }
+
+    /// Records the call; nothing is started.
+    fn run_detached(&self, program: &Path, args: &[OsString], dir: &Path) -> Result<(), Error> {
+        lock(&self.ran).push((program.to_path_buf(), args.to_vec(), dir.to_path_buf()));
+        Ok(())
+    }
+
+    /// Records the files; nothing is opened.
+    fn open_in_text_editor(&self, paths: &[PathBuf]) -> Result<(), Error> {
+        lock(&self.edited).push(paths.to_vec());
+        Ok(())
+    }
 }
 
 impl Terminal for Fake {
@@ -576,6 +722,15 @@ impl Permissions for Fake {
     /// The real entry's permissions: the fake's temporary directory is a
     /// real one, and the acceptance tests change modes on it.
     fn permissions(&self, path: &Path) -> Result<FilePermissions, Error> {
+        let mut held = lock(&self.permissions_held.0);
+        while *held {
+            held = self
+                .permissions_held
+                .1
+                .wait(held)
+                .unwrap_or_else(PoisonError::into_inner);
+        }
+        drop(held);
         crate::Native.permissions(path)
     }
 
@@ -733,6 +888,11 @@ impl Chrome for Fake {
             native_controls: false,
             native_controls_width: 0.0,
         }
+    }
+
+    /// What [`Fake::set_monitors`] was given, whatever the scale.
+    fn monitors(&self, _pixels_per_point: f32) -> Vec<Monitor> {
+        lock(&self.monitors).clone()
     }
 }
 

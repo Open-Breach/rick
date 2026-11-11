@@ -790,9 +790,10 @@ fn connection_items(
     }
 }
 
-/// *Always preview* in a connection row's menu, for a provider whose
-/// editor has the switch (`preview_always` in its schema): the preview
-/// size cap on or off for this source, as its connection entry has it.
+/// *Always preview* in a connection row's menu, for every source that has
+/// connections — an SSH host and a cloud account alike: the size limit of
+/// previews on or off for this source, as its connection entry has it.
+/// It is where the switch of the size-limit card is taken back.
 fn preview_always_item(
     ui: &mut egui::Ui,
     app: &App,
@@ -801,9 +802,6 @@ fn preview_always_item(
     name: &str,
 ) {
     let provider = connector.provider();
-    if connector.schema().field(app::PREVIEW_ALWAYS).is_none() {
-        return;
-    }
     let mut on = app
         .model()
         .settings
@@ -1292,11 +1290,12 @@ fn titled_section(
         .cloned()
         .collect();
     let density = app.model().settings.density;
+    let format_tool = app.model().format_tool;
     match section {
         Section::Machine => {
             for volume in &volumes {
                 any = true;
-                drive_card(ui, state, requests, pane, volume, density);
+                drive_card(ui, state, requests, pane, volume, density, format_tool);
             }
         }
         Section::Network => {
@@ -1461,6 +1460,7 @@ fn drive_card(
     pane: PaneId,
     volume: &Volume,
     density: model::Density,
+    format_tool: bool,
 ) {
     let metrics = theme::metrics(ui.ctx());
     let scheme = theme::scheme(ui);
@@ -1621,6 +1621,7 @@ fn drive_card(
         state.take_focus(id);
     }
     let mount_point = volume.mount_point.clone();
+    let formattable = matches!(volume.kind, VolumeKind::Removable | VolumeKind::Fixed);
     if eject.is_some_and(|eject| eject.clicked()) {
         state.take_focus(id);
         requests.push(Request::Command(Command::Eject(mount_point.clone())));
@@ -1635,6 +1636,22 @@ fn drive_card(
             if removable && ui.button(format!("{} Eject", icons::EJECT)).clicked() {
                 requests.push(Request::Command(Command::Eject(mount_point.clone())));
                 ui.close();
+            }
+            // Format… on a drive of the machine, removable or fixed: the
+            // system's own tool opens on it, and Rick formats nothing
+            // itself. Where no such tool is installed the entry is
+            // disabled and says so.
+            if formattable {
+                let entry = egui::Button::new(t!("panel-format"));
+                if format_tool {
+                    if ui.add(entry).clicked() {
+                        requests.push(Request::Command(Command::Format(mount_point.clone())));
+                        ui.close();
+                    }
+                } else {
+                    ui.add_enabled(false, entry)
+                        .on_disabled_hover_text(t!("panel-no-disk-utility"));
+                }
             }
         });
 }

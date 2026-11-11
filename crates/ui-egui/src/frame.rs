@@ -2,25 +2,109 @@
 //!
 //! Turning the decorations off, which every platform but macOS does for the
 //! title row, takes the system's border, shadow and resize handles with it.
-//! This module puts them back: a transparent margin around the content holds
-//! a light shadow, a one-point border runs around the content, and grips along
-//! the edges and corners resize the window through the backend. A maximised
-//! or fullscreen window has no frame, and neither has one whose system keeps
-//! its own controls.
+//! This module puts them back, in one of two ways ([`Mode`];
+//! specs/gui-title-row.md, *Window frame*). Around a transparent window, the
+//! shadow frame: a transparent margin around the content holds a light
+//! shadow, a one-point border runs around the content, and grips along the
+//! edges and corners resize the window through the backend. Around a window
+//! that cannot be transparent, where that margin would be composited as a
+//! black band, the plain frame: no margin and no shadow, the border at the
+//! window's edge and the grips on it. On X11, where nothing tells whether a
+//! transparent window is composited, the plain frame is the default. A
+//! maximised or fullscreen window has no frame, and neither has one whose
+//! system keeps its own controls.
 
 use egui::viewport::{ResizeDirection, ViewportCommand};
 use egui::{CursorIcon, Pos2, Rect, Sense, StrokeKind, Vec2, pos2};
+use model::WindowFrame;
 use platform::WindowChrome;
 
-/// The margin around the content, holding the shadow.
+/// The margin around the content of the shadow frame, holding the shadow.
 pub const MARGIN: f32 = 10.0;
 /// How far inside the border a grip still reaches.
 const GRIP_INSIDE: f32 = 4.0;
 /// How far from a corner a grip resizes diagonally.
 const CORNER: f32 = 24.0;
 
+/// Which of the two frames Rick draws around a window it decorates itself
+/// (specs/gui-title-row.md, *Window frame*), the same for every window of
+/// the process.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Mode {
+    /// The frame of a transparent window: a transparent margin around the
+    /// content holds the shadow, the border runs around the content, and
+    /// the grips cover the margin.
+    Shadow,
+    /// The frame of an opaque window, where a transparent margin would be
+    /// composited as a black band: no margin and no shadow, the border at
+    /// the window's edge and the grips on it.
+    Plain,
+}
+
+impl Mode {
+    /// The frame of this process's windows: what `frame` in the `[window]`
+    /// table of `rick.toml` says, and under `auto` what the first window's
+    /// surface can do. `blends` is whether that surface blends the window
+    /// with the desktop; `None`, not known, counts as opaque, so the margin
+    /// of a shadow frame never shows as a black band, not even for a frame.
+    ///
+    /// `x11` is whether the windows are X11 windows
+    /// ([`Chrome::on_x11`](platform::Chrome::on_x11)). There `auto` is the
+    /// plain frame whatever the surface says: an X11 surface offers its
+    /// alpha mode with or without a compositing manager to blend it, and
+    /// without one the margin is the black band. `shadow` still decides by
+    /// itself.
+    #[must_use]
+    pub const fn of(setting: WindowFrame, x11: bool, blends: Option<bool>) -> Self {
+        match (setting, x11, blends) {
+            (WindowFrame::Shadow, _, _) | (WindowFrame::Auto, false, Some(true)) => Self::Shadow,
+            (WindowFrame::Plain, _, _)
+            | (WindowFrame::Auto, true, _)
+            | (WindowFrame::Auto, false, Some(false) | None) => Self::Plain,
+        }
+    }
+
+    /// Whether a window with this frame asks the system for transparency.
+    #[must_use]
+    pub const fn transparent(self) -> bool {
+        matches!(self, Self::Shadow)
+    }
+
+    /// The frame's name, as `rick.toml` and the log spell it.
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Shadow => "shadow",
+            Self::Plain => "plain",
+        }
+    }
+
+    /// The margin between the window's edge and the border.
+    #[must_use]
+    pub const fn margin(self) -> f32 {
+        match self {
+            Self::Shadow => MARGIN,
+            Self::Plain => 0.0,
+        }
+    }
+}
+
+/// Whether the first window asks the system for transparency, before the
+/// frame is chosen. Under `auto` it does, because asking is how Rick finds
+/// out whether transparency can be had, except on X11 (`x11`), where the
+/// answer says nothing and the frame is the plain one; with `shadow` it
+/// does and with `plain` it does not, wherever.
+#[must_use]
+pub const fn asks_transparency(setting: WindowFrame, x11: bool) -> bool {
+    match setting {
+        WindowFrame::Shadow => true,
+        WindowFrame::Plain => false,
+        WindowFrame::Auto => !x11,
+    }
+}
+
 /// Whether the frame is drawn now: the system draws no chrome and the
-/// window is neither maximised nor fullscreen.
+/// window is neither maximised nor fullscreen. The same in both modes.
 #[must_use]
 pub fn wanted(ctx: &egui::Context, chrome: WindowChrome) -> bool {
     if chrome.native_controls {
@@ -32,7 +116,8 @@ pub fn wanted(ctx: &egui::Context, chrome: WindowChrome) -> bool {
     })
 }
 
-/// A painted frame: the window rect and the bordered rect inside the margin.
+/// A painted frame: the window rect and the bordered rect inside the
+/// mode's margin.
 #[derive(Debug, Clone, Copy)]
 pub struct Frame {
     outer: Rect,
@@ -40,19 +125,33 @@ pub struct Frame {
 }
 
 impl Frame {
-    /// Paints the shadow, the fill and the border into `outer`.
+    /// The frame of `mode` in the window rect `outer`, not painted: the
+    /// border runs inside the mode's margin.
     #[must_use]
-    pub fn paint(ui: &egui::Ui, outer: Rect) -> Self {
-        let inner = outer.shrink(MARGIN);
+    pub fn of(outer: Rect, mode: Mode) -> Self {
+        Self {
+            outer,
+            inner: outer.shrink(mode.margin()),
+        }
+    }
+
+    /// Paints the frame of `mode` into `outer`: the shadow in the margin
+    /// of the shadow frame, then the fill and the border, square-cornered.
+    #[must_use]
+    pub fn paint(ui: &egui::Ui, outer: Rect, mode: Mode) -> Self {
+        let frame = Self::of(outer, mode);
+        let inner = frame.inner;
         let visuals = ui.visuals();
-        let shadow = egui::epaint::Shadow {
-            offset: [0, 2],
-            blur: 14,
-            spread: 0,
-            color: crate::theme::scheme(ui).shadow(),
-        };
         let painter = ui.painter();
-        painter.add(shadow.as_shape(inner, 0));
+        if mode == Mode::Shadow {
+            let shadow = egui::epaint::Shadow {
+                offset: [0, 2],
+                blur: 14,
+                spread: 0,
+                color: crate::theme::scheme(ui).shadow(),
+            };
+            painter.add(shadow.as_shape(inner, 0));
+        }
         painter.rect(
             inner,
             0,
@@ -60,7 +159,7 @@ impl Frame {
             visuals.window_stroke(),
             StrokeKind::Inside,
         );
-        Self { outer, inner }
+        frame
     }
 
     /// The rect the content gets: inside the border.
@@ -70,7 +169,9 @@ impl Frame {
     }
 
     /// Registers the resize grips along the edges, after the content so they
-    /// win the pointer where they overlap it. Hovering shows the resize
+    /// win the pointer where they overlap it: each covers the margin and
+    /// reaches `GRIP_INSIDE` inside the border, which for the plain frame is
+    /// a band of that width on the window's edge. Hovering shows the resize
     /// cursor; a drag starts a resize through the backend. `salt` tells one
     /// window's grips from another's.
     pub fn grips(&self, ui: &mut egui::Ui, salt: u64) {
@@ -114,6 +215,11 @@ impl Frame {
             if response.drag_started() {
                 ui.ctx()
                     .send_viewport_cmd(ViewportCommand::BeginResize(direction));
+                // The window manager has the pointer from here on, and the
+                // button's release goes to it, not to this window: without
+                // this the grip would count as dragged until a click
+                // elsewhere, and the next press on it would start nothing.
+                ui.ctx().stop_dragging();
             }
         }
     }
@@ -165,10 +271,11 @@ fn cursor(direction: ResizeDirection) -> CursorIcon {
     }
 }
 
-/// The size the content loses to the frame on each axis.
+/// The size the content loses to the frame of `mode` on each axis: its
+/// margin and the border, on both sides.
 #[must_use]
-pub fn inset() -> Vec2 {
-    Vec2::splat(2.0 * (MARGIN + 1.0))
+pub fn inset(mode: Mode) -> Vec2 {
+    Vec2::splat(2.0 * (mode.margin() + 1.0))
 }
 
 #[cfg(test)]
@@ -237,5 +344,220 @@ mod tests {
             ..native
         };
         assert!(wanted(&ctx, own));
+    }
+
+    /// A 900 by 600 window, as a frame is given it.
+    const WINDOW: Rect = Rect::from_min_max(pos2(0.0, 0.0), pos2(900.0, 600.0));
+
+    /// The chrome of a platform where Rick draws the controls.
+    const OWN: WindowChrome = WindowChrome {
+        controls: platform::ControlsSide::Right,
+        native_controls: false,
+        native_controls_width: 0.0,
+    };
+
+    #[test]
+    fn the_shadow_frame_keeps_its_margin() {
+        assert!((Mode::Shadow.margin() - MARGIN).abs() < f32::EPSILON);
+        assert_eq!(inset(Mode::Shadow), Vec2::splat(22.0));
+        assert_eq!(
+            Frame::of(WINDOW, Mode::Shadow).content(),
+            Rect::from_min_max(pos2(11.0, 11.0), pos2(889.0, 589.0))
+        );
+    }
+
+    /// Issue 158: an opaque window has no margin to show as a black band.
+    #[test]
+    fn the_plain_frame_has_no_margin() {
+        assert!(Mode::Plain.margin().abs() < f32::EPSILON);
+        assert_eq!(inset(Mode::Plain), Vec2::splat(2.0), "the border only");
+    }
+
+    #[test]
+    fn the_plain_frames_content_is_the_window_inside_its_border() {
+        assert_eq!(
+            Frame::of(WINDOW, Mode::Plain).content(),
+            Rect::from_min_max(pos2(1.0, 1.0), pos2(899.0, 599.0))
+        );
+    }
+
+    #[test]
+    fn the_plain_frames_grips_are_on_the_windows_edge() {
+        let frame = Frame::of(WINDOW, Mode::Plain);
+        let at = |x, y| direction(pos2(x, y), frame.inner);
+        // Along the edges, reaching 4 points inwards and no further.
+        assert_eq!(at(2.0, 300.0), Some(ResizeDirection::West));
+        assert_eq!(at(898.0, 300.0), Some(ResizeDirection::East));
+        assert_eq!(at(450.0, 2.0), Some(ResizeDirection::North));
+        assert_eq!(at(450.0, 598.0), Some(ResizeDirection::South));
+        assert_eq!(at(3.5, 300.0), Some(ResizeDirection::West));
+        assert_eq!(at(5.0, 300.0), None);
+        assert_eq!(at(450.0, 594.0), None);
+        // The same corner rule: within 24 points of a corner, diagonally.
+        assert_eq!(at(2.0, 2.0), Some(ResizeDirection::NorthWest));
+        assert_eq!(at(2.0, 20.0), Some(ResizeDirection::NorthWest));
+        assert_eq!(at(880.0, 2.0), Some(ResizeDirection::NorthEast));
+        assert_eq!(at(2.0, 590.0), Some(ResizeDirection::SouthWest));
+        assert_eq!(at(898.0, 598.0), Some(ResizeDirection::SouthEast));
+        assert_eq!(at(2.0, 30.0), Some(ResizeDirection::West));
+    }
+
+    /// The resizes the grips of a plain 900 by 600 frame begin when
+    /// `events` arrive, one batch a frame.
+    fn resizes_begun(ctx: &egui::Context, events: Vec<egui::Event>) -> Vec<ResizeDirection> {
+        let input = egui::RawInput {
+            screen_rect: Some(WINDOW),
+            events,
+            ..egui::RawInput::default()
+        };
+        let mut output = ctx.run_ui(input, |ui| {
+            Frame::of(WINDOW, Mode::Plain).grips(ui, 0);
+        });
+        output.textures_delta.clear();
+        output
+            .viewport_output
+            .values()
+            .flat_map(|viewport| viewport.commands.iter())
+            .filter_map(|command| match command {
+                ViewportCommand::BeginResize(direction) => Some(*direction),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// Issue 149: the corner grip resizes every time. The window manager
+    /// takes the pointer when a resize begins and keeps the button's
+    /// release to itself, so the second press arrives without a release
+    /// before it, and must begin a resize all the same.
+    #[test]
+    fn a_grip_resizes_again_after_a_resize_whose_release_never_arrived() {
+        let ctx = egui::Context::default();
+        let corner = pos2(898.0, 598.0);
+        let press = || egui::Event::PointerButton {
+            pos: corner,
+            button: egui::PointerButton::Primary,
+            pressed: true,
+            modifiers: egui::Modifiers::NONE,
+        };
+        let begun = |events| resizes_begun(&ctx, events);
+        assert_eq!(begun(vec![egui::Event::PointerMoved(corner)]), []);
+        let mut first = begun(vec![press()]);
+        // A drag is known as one a frame after the press at the latest.
+        first.extend(begun(vec![egui::Event::PointerMoved(corner)]));
+        assert_eq!(first, [ResizeDirection::SouthEast]);
+        // The resize runs and ends in the window manager's hands: frames
+        // pass, and no release is ever seen.
+        for _ in 0..3 {
+            assert_eq!(begun(vec![egui::Event::PointerMoved(corner)]), []);
+        }
+        let mut second = begun(vec![press()]);
+        second.extend(begun(vec![egui::Event::PointerMoved(corner)]));
+        assert_eq!(
+            second,
+            [ResizeDirection::SouthEast],
+            "the grip is dead after one resize"
+        );
+    }
+
+    /// What `paint` hands the renderer for a 900 by 600 window: the rects
+    /// of its shapes, the frame's own after the pass's background.
+    fn painted(mode: Mode) -> Vec<egui::epaint::RectShape> {
+        let ctx = egui::Context::default();
+        let mut rects = Vec::new();
+        let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+            let layer = egui::LayerId::new(egui::Order::Middle, egui::Id::new("frame-test"));
+            let ui = ui.new_child(egui::UiBuilder::new().layer_id(layer).max_rect(WINDOW));
+            let _ = Frame::paint(&ui, WINDOW, mode);
+            ui.ctx().graphics(|graphics| {
+                if let Some(list) = graphics.get(layer) {
+                    for clipped in list.all_entries() {
+                        if let egui::Shape::Rect(rect) = &clipped.shape {
+                            rects.push(rect.clone());
+                        }
+                    }
+                }
+            });
+        });
+        // No renderer takes the font atlas in a unit test.
+        output.textures_delta.clear();
+        rects
+    }
+
+    #[test]
+    fn the_shadow_frame_paints_its_shadow_and_its_border_inside_the_margin() {
+        let rects = painted(Mode::Shadow);
+        assert_eq!(rects.len(), 2, "the shadow, then the bordered fill");
+        assert!(rects[0].blur_width > 0.0, "the shadow is blurred");
+        assert_eq!(rects[1].rect, WINDOW.shrink(MARGIN));
+        assert!((rects[1].stroke.width - 1.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn the_plain_frame_paints_its_border_at_the_windows_edge_and_no_shadow() {
+        let rects = painted(Mode::Plain);
+        assert_eq!(rects.len(), 1, "the bordered fill only: {rects:?}");
+        let border = &rects[0];
+        assert_eq!(border.rect, WINDOW, "at the window's edge");
+        assert!((border.stroke.width - 1.0).abs() < f32::EPSILON);
+        assert_eq!(border.stroke_kind, StrokeKind::Inside);
+        assert_eq!(border.corner_radius, egui::CornerRadius::ZERO, "square");
+        assert!(border.blur_width.abs() < f32::EPSILON);
+        assert_eq!(border.fill.a(), 255, "nothing shows through");
+    }
+
+    /// `rick.toml` decides, and under `auto` the surface does; a surface
+    /// nothing is known about counts as opaque. On X11 `auto` is the plain
+    /// frame whatever the surface says.
+    #[test]
+    fn the_frame_follows_the_setting_and_then_the_surface() {
+        for x11 in [false, true] {
+            for blends in [None, Some(false), Some(true)] {
+                assert_eq!(Mode::of(WindowFrame::Shadow, x11, blends), Mode::Shadow);
+                assert_eq!(Mode::of(WindowFrame::Plain, x11, blends), Mode::Plain);
+            }
+        }
+        let elsewhere = |blends| Mode::of(WindowFrame::Auto, false, blends);
+        assert_eq!(elsewhere(Some(true)), Mode::Shadow);
+        assert_eq!(elsewhere(Some(false)), Mode::Plain);
+        assert_eq!(elsewhere(None), Mode::Plain, "not known");
+        // X11: its surface offers an alpha mode with or without a
+        // compositing manager, so its word is not taken.
+        for blends in [None, Some(false), Some(true)] {
+            let on_x11 = Mode::of(WindowFrame::Auto, true, blends);
+            assert_eq!(on_x11, Mode::Plain, "{blends:?}");
+        }
+        // The first window asks for transparency unless told not to, and
+        // on X11 only when told to; a later one asks when the frame is the
+        // shadow frame.
+        assert!(asks_transparency(WindowFrame::Auto, false));
+        assert!(!asks_transparency(WindowFrame::Auto, true), "X11");
+        for x11 in [false, true] {
+            assert!(asks_transparency(WindowFrame::Shadow, x11));
+            assert!(!asks_transparency(WindowFrame::Plain, x11));
+        }
+        assert!(Mode::Shadow.transparent());
+        assert!(!Mode::Plain.transparent());
+        assert_eq!(Mode::Shadow.name(), "shadow");
+        assert_eq!(Mode::Plain.name(), "plain");
+    }
+
+    /// As before, and in both modes: a maximised or fullscreen window has
+    /// no frame.
+    #[test]
+    fn no_frame_when_maximised_or_fullscreen() {
+        let seen_with = |maximized: bool, fullscreen: bool| {
+            let ctx = egui::Context::default();
+            let mut raw = egui::RawInput::default();
+            let viewport = raw.viewports.entry(egui::ViewportId::ROOT).or_default();
+            viewport.maximized = Some(maximized);
+            viewport.fullscreen = Some(fullscreen);
+            let mut seen = None;
+            let mut output = ctx.run_ui(raw, |ui| seen = Some(wanted(ui.ctx(), OWN)));
+            output.textures_delta.clear();
+            seen
+        };
+        assert_eq!(seen_with(false, false), Some(true));
+        assert_eq!(seen_with(true, false), Some(false));
+        assert_eq!(seen_with(false, true), Some(false));
     }
 }

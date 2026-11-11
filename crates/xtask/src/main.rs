@@ -8,7 +8,11 @@
 //! config directory) names it, the GStreamer runtime when
 //! `RICK_GSTREAMER_DIR` names it (QUESTIONS.md 106: on macOS into
 //! `gstreamer/lib/`, on Windows the DLLs beside the binary and the
-//! elements into `gstreamer-1.0/`; Linux uses the system's),
+//! elements into `gstreamer-1.0/`; Linux uses the system's), the Visual
+//! C++ runtime's libraries beside the binary when `RICK_VCRUNTIME_DIR`
+//! names the toolset's redistributable folder (Windows: every module of
+//! the bundle imports them, and a machine without the Visual C++
+//! Redistributable has none),
 //! `plugins/<id>/plugin.toml` with the library for every plugin crate (an
 //! `ext-*` member built as a `cdylib`) whose manifest names this platform,
 //! and the 7-Zip library (`7z.so` / `7z.dll`, LGPL) with its licence into
@@ -42,6 +46,10 @@ const SEVENZIP_PLUGIN: &str = "vfs-archive";
 /// The licence file beside the library in `RICK_SEVENZIP_DIR`, and its
 /// name in the bundle.
 const SEVENZIP_LICENSE: (&str, &str) = ("License.txt", "7-Zip-License.txt");
+/// How the names of the Visual C++ runtime's libraries start: the C and
+/// C++ runtimes (`vcruntime140.dll`, `vcruntime140_1.dll`, `msvcp140.dll`),
+/// the concurrency runtime, OpenMP and C++/CX.
+const VCRUNTIME_PREFIXES: [&str; 5] = ["vcruntime", "msvcp", "concrt", "vcomp", "vccorlib"];
 /// The manifest helper's exit code for a plugin built for other platforms.
 const NOT_FOR_THIS_PLATFORM: i32 = 3;
 
@@ -130,6 +138,9 @@ fn bundle(args: &[String]) -> Result<()> {
     pdfium(&out)?;
     if let Some(dir) = std::env::var_os("RICK_GSTREAMER_DIR") {
         gstreamer(Path::new(&dir), &out)?;
+    }
+    if let Some(dir) = std::env::var_os("RICK_VCRUNTIME_DIR") {
+        vcruntime(Path::new(&dir), &out)?;
     }
 
     // The helper links the kernel dylibs and libstd dynamically, like every
@@ -335,6 +346,36 @@ fn gstreamer(dir: &Path, out: &Path) -> Result<()> {
     Ok(())
 }
 
+/// Copies the Visual C++ runtime's libraries from `dir` — the toolset's
+/// redistributable folder, `VC\Redist\MSVC\<version>\x64\Microsoft.VC143.CRT`
+/// of the Visual Studio that built Rick — beside the binary, where Windows
+/// looks first for every library the process loads. `rick.exe`, the kernel
+/// libraries, every plugin and the GStreamer runtime import them, and a
+/// machine without the Visual C++ Redistributable has none: the 0.3.0
+/// archive stopped there with "VCRUNTIME140.dll was not found".
+fn vcruntime(dir: &Path, out: &Path) -> Result<()> {
+    let count = copy_matching(dir, out, is_vcruntime)?;
+    if count == 0 {
+        return Err(format!("no Visual C++ runtime libraries in {}", dir.display()).into());
+    }
+    println!("vcruntime: {count} files from {}", dir.display());
+    Ok(())
+}
+
+/// Whether `name` is a library of the Visual C++ runtime: a `.dll` whose
+/// name starts as one of [`VCRUNTIME_PREFIXES`] followed by the toolset's
+/// number, whatever the case.
+fn is_vcruntime(name: &str) -> bool {
+    let name = name.to_ascii_lowercase();
+    let Some(stem) = name.strip_suffix(".dll") else {
+        return false;
+    };
+    VCRUNTIME_PREFIXES.iter().any(|prefix| {
+        stem.strip_prefix(prefix)
+            .is_some_and(|rest| rest.starts_with(|c: char| c.is_ascii_digit()))
+    })
+}
+
 /// Copies the regular files of `from` whose name `keep` accepts into `to`
 /// (created), skipping symbolic links (the framework's version-less
 /// aliases, which would double the size); returns how many.
@@ -342,7 +383,7 @@ fn copy_matching(from: &Path, to: &Path, keep: impl Fn(&str) -> bool) -> Result<
     let entries = match std::fs::read_dir(from) {
         Ok(entries) => entries,
         Err(error) => {
-            println!("gstreamer: {}: {error}; skipped", from.display());
+            println!("{}: {error}; skipped", from.display());
             return Ok(0);
         }
     };
@@ -513,4 +554,103 @@ fn dylib(name: &str) -> String {
         std::env::consts::DLL_PREFIX,
         std::env::consts::DLL_SUFFIX
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A directory of its own under the system's temporary one, removed
+    /// when it goes out of scope.
+    struct Scratch(PathBuf);
+
+    impl Scratch {
+        fn new(name: &str) -> Self {
+            let path =
+                std::env::temp_dir().join(format!("rick-xtask-{}-{name}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&path);
+            std::fs::create_dir_all(&path).unwrap_or_else(|e| panic!("{e}"));
+            Self(path)
+        }
+
+        fn file(&self, name: &str) -> PathBuf {
+            let path = self.0.join(name);
+            std::fs::write(&path, name).unwrap_or_else(|e| panic!("{e}"));
+            path
+        }
+    }
+
+    impl Drop for Scratch {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    #[test]
+    fn the_visual_c_runtime_is_told_by_its_libraries_names() {
+        for name in [
+            "vcruntime140.dll",
+            "VCRUNTIME140_1.DLL",
+            "msvcp140.dll",
+            "msvcp140_atomic_wait.dll",
+            "concrt140.dll",
+            "vcomp140.dll",
+            "vccorlib140.dll",
+        ] {
+            assert!(is_vcruntime(name), "{name}");
+        }
+        // Not the import libraries and symbols beside them, not the
+        // Universal C Runtime, which is Windows' own, and no other DLL.
+        for name in [
+            "vcruntime140.pdb",
+            "msvcprt.lib",
+            "msvcp.dll",
+            "vcruntime.dll",
+            "ucrtbase.dll",
+            "api-ms-win-crt-runtime-l1-1-0.dll",
+            "kernel32.dll",
+            "Microsoft.VC143.CRT.manifest",
+        ] {
+            assert!(!is_vcruntime(name), "{name}");
+        }
+    }
+
+    #[test]
+    fn the_runtime_s_libraries_land_beside_the_binary_and_a_folder_without_them_is_an_error() {
+        let redist = Scratch::new("redist");
+        let out = Scratch::new("bundle");
+        for name in [
+            "vcruntime140.dll",
+            "vcruntime140_1.dll",
+            "msvcp140.dll",
+            "readme.txt",
+        ] {
+            redist.file(name);
+        }
+        vcruntime(&redist.0, &out.0).unwrap_or_else(|e| panic!("{e}"));
+        let mut copied: Vec<String> = std::fs::read_dir(&out.0)
+            .unwrap_or_else(|e| panic!("{e}"))
+            .filter_map(std::result::Result::ok)
+            .map(|entry| entry.file_name().to_string_lossy().into_owned())
+            .collect();
+        copied.sort();
+        assert_eq!(
+            copied,
+            ["msvcp140.dll", "vcruntime140.dll", "vcruntime140_1.dll"]
+        );
+
+        // A folder that holds none, and one that is not there: the bundle
+        // stops, so a release never goes out without the runtime it was
+        // asked to carry.
+        let empty = Scratch::new("empty");
+        empty.file("readme.txt");
+        let error = vcruntime(&empty.0, &out.0).err().map(|e| e.to_string());
+        assert!(
+            error
+                .as_deref()
+                .is_some_and(|e| e.starts_with("no Visual C++ runtime libraries in ")),
+            "{error:?}"
+        );
+        assert!(vcruntime(&empty.0.join("missing"), &out.0).is_err());
+    }
 }

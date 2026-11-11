@@ -11,17 +11,12 @@
 //! up.
 
 use std::collections::{HashMap, HashSet};
-use std::time::SystemTime;
 
 use egui::{Align, Rect, RichText, TextureHandle, TextureOptions, pos2, vec2};
-use egui_extras::{Column as TableColumn, TableBuilder};
-use ext::{
-    Block, Content, Document, Grid, Image, InfoSection, Inline, Listing, ListingEntry,
-    MissingLibrary, Style,
-};
+use ext::{Block, Content, Document, Grid, Image, Inline, Listing, ListingEntry, Style};
 use types::EntryKind;
 
-use crate::preview::PreviewAct;
+use crate::table::Column;
 use crate::{format, icons};
 
 /// How far a nested row or block is indented, in points.
@@ -30,6 +25,15 @@ const INDENT: f32 = 18.0;
 const CHEVRON: f32 = 16.0;
 /// How many grid columns are laid out; a wider table says so.
 const MAX_COLUMNS: usize = 200;
+/// The archive tree's columns as they start: Name is never narrower than
+/// this, and takes what the others leave.
+const LISTING_NAME: f32 = 160.0;
+const LISTING_TYPE: f32 = 72.0;
+const LISTING_MODIFIED: f32 = 112.0;
+/// Size, and Packed.
+const LISTING_SIZE: f32 = 88.0;
+/// A grid's column as it starts.
+const GRID_COLUMN: f32 = 132.0;
 /// The heading sizes, level 1 to 6, as factors of the body size.
 const HEADING_SCALE: [f32; 6] = [1.8, 1.5, 1.3, 1.15, 1.05, 1.0];
 
@@ -47,6 +51,12 @@ pub struct State {
     images: HashMap<usize, Option<TextureHandle>>,
     /// What the last frame laid out, for tests.
     pub drawn: Drawn,
+    /// The widths of a table's columns, every one but the last: the
+    /// remembered ones or the defaults, then what the dividers were
+    /// dragged to. Empty until the table is first laid out.
+    widths: Vec<f32>,
+    /// The table of the last frame, when the content is one.
+    pub table: Option<crate::table::Drawn>,
 }
 
 impl std::fmt::Debug for State {
@@ -56,6 +66,8 @@ impl std::fmt::Debug for State {
             .field("visible", &self.visible.as_ref().map(Vec::len))
             .field("images", &self.images.len())
             .field("drawn", &self.drawn)
+            .field("widths", &self.widths)
+            .field("table", &self.table)
             .finish()
     }
 }
@@ -127,101 +139,51 @@ impl State {
     }
 }
 
-/// Draws `content` into the Ui's available space; `sections` are the
-/// document's, whose first is the file's information a missing-library
-/// message shows above itself. Returns what a button asked for.
+/// Draws `content` into the Ui's available space. A table's columns
+/// start at the `remembered` widths, by position, where there are any;
+/// the return value is the widths to remember once a resize ended. A
+/// missing library is not laid out here: the pane shows the File info card
+/// for it.
 pub fn draw(
     ui: &mut egui::Ui,
     content: &Content,
-    sections: &[InfoSection],
     state: &mut State,
-    now: SystemTime,
-) -> Option<PreviewAct> {
+    dates: format::Dates,
+    remembered: &[u16],
+) -> Option<Vec<u16>> {
     ui.style_mut().interaction.selectable_labels = false;
+    state.table = None;
     match content {
-        Content::Listing(listing) => draw_listing(ui, listing, state, now),
-        Content::Grid(grid) => draw_grid(ui, &**grid, state),
+        Content::Listing(listing) => draw_listing(ui, listing, state, dates, remembered),
+        Content::Grid(grid) => draw_grid(ui, &**grid, state, remembered),
         Content::Document(document) => draw_document(ui, document, state),
-        Content::MissingLibrary(missing) => return draw_missing(ui, missing, sections.first()),
+        Content::MissingLibrary(_) => {}
     }
-    None
+    let resized = state.table.as_ref()?.resized.as_ref()?;
+    // Whole points are what the settings hold.
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    Some(
+        resized
+            .iter()
+            .map(|width| width.round().clamp(0.0, f32::from(u16::MAX)) as u16)
+            .collect(),
+    )
 }
 
-/// The message for a third-party library the previewer could not find
-/// (SPEC.md, *Third-party libraries*): the file's information at the top,
-/// then the library's name, how to install it on this platform, where it
-/// was looked for, and *Browse…* and *Retry*.
-fn draw_missing(
-    ui: &mut egui::Ui,
-    missing: &MissingLibrary,
-    info: Option<&InfoSection>,
-) -> Option<PreviewAct> {
-    let whole = ui.available_rect_before_wrap();
-    if let Some(info) = info {
-        let section = crate::inspector::Section {
-            id: info.id,
-            title: info.title.get(),
-            glyph: icons::for_icon(info.icon),
-            rows: info.rows.clone(),
-        };
-        crate::inspector::section_rows(ui, &section, None, whole.height() * 0.4);
-        ui.add_space(8.0);
-    }
-    let mut act = None;
-    ui.style_mut().interaction.selectable_labels = true;
-    egui::ScrollArea::vertical()
-        .id_salt("preview-missing-library")
-        .auto_shrink([false, false])
-        .show(ui, |ui| {
-            ui.add_space(6.0);
-            ui.horizontal_wrapped(|ui| {
-                ui.add_space(6.0);
-                ui.label(
-                    RichText::new(ext::t!(
-                        "preview-library-needed",
-                        name = missing.name.as_str()
-                    ))
-                    .strong(),
-                );
-            });
-            ui.add_space(4.0);
-            ui.horizontal_wrapped(|ui| {
-                ui.add_space(6.0);
-                ui.label(ext::t!(
-                    "preview-library-install",
-                    name = missing.name.as_str()
-                ));
-            });
-            ui.horizontal_wrapped(|ui| {
-                ui.add_space(6.0);
-                if is_url(&missing.install) {
-                    ui.hyperlink(&missing.install);
-                } else {
-                    ui.add(egui::Label::new(RichText::new(&missing.install).code()).wrap());
-                }
-            });
-            ui.add_space(8.0);
-            ui.horizontal(|ui| {
-                ui.add_space(6.0);
-                if ui.button(ext::t!("preview-browse")).clicked() {
-                    act = Some(PreviewAct::Browse {
-                        setting: missing.setting,
-                        filters: missing.filters.clone(),
-                    });
-                }
-                if ui.button(ext::t!("preview-retry")).clicked() {
-                    act = Some(PreviewAct::Retry);
-                }
-            });
-            if !missing.detail.is_empty() {
-                ui.add_space(8.0);
-                ui.horizontal_wrapped(|ui| {
-                    ui.add_space(6.0);
-                    ui.add(egui::Label::new(RichText::new(&missing.detail).small().weak()).wrap());
-                });
-            }
-        });
-    act
+/// The widths a table starts with, every column's but the last: the
+/// remembered one by position, the default for a column beyond those
+/// remembered.
+fn start_widths(remembered: &[u16], defaults: &[f32]) -> Vec<f32> {
+    defaults
+        .iter()
+        .enumerate()
+        .map(|(index, default)| {
+            remembered
+                .get(index)
+                .map_or(*default, |width| f32::from(*width))
+                .max(crate::table::MIN)
+        })
+        .collect()
 }
 
 /// The glyph of a listing row: the folder, the link, or the type by name.
@@ -233,12 +195,18 @@ fn listing_icon(entry: &ListingEntry) -> &'static str {
     }
 }
 
-/// A read-only file list in the explorer's columns (name, type, date
-/// modified, size; the compressed size when the format records it), the
-/// directories folding in place, and the stats line under it.
-fn draw_listing(ui: &mut egui::Ui, listing: &Listing, state: &mut State, now: SystemTime) {
+/// A read-only file list as a table (SPEC.md *Tables in previews*, the
+/// archive tree): Name, Type, Modified, Size and, when the format records
+/// it, Packed; the directories folding in place, and the stats line under
+/// it.
+fn draw_listing(
+    ui: &mut egui::Ui,
+    listing: &Listing,
+    state: &mut State,
+    dates: format::Dates,
+    remembered: &[u16],
+) {
     let compressed = listing.entries.iter().any(|e| e.compressed.is_some());
-    let height = crate::views::row_height(ui);
     let stats_h = ui.text_style_height(&egui::TextStyle::Small) + 8.0;
     let whole = ui.available_rect_before_wrap();
     let table_rect = Rect::from_min_max(
@@ -246,57 +214,52 @@ fn draw_listing(ui: &mut egui::Ui, listing: &Listing, state: &mut State, now: Sy
         pos2(whole.right(), (whole.bottom() - stats_h).max(whole.top())),
     );
     let visible: Vec<usize> = state.visible(listing).to_vec();
+    let mut columns = vec![
+        Column::new(ext::t!("preview-column-name")),
+        Column::new(ext::t!("preview-column-type")),
+        Column::new(ext::t!("preview-column-modified")),
+        Column::right(ext::t!("preview-column-size")),
+    ];
+    if compressed {
+        columns.push(Column::right(ext::t!("preview-column-compressed")));
+    }
+    if state.widths.len() + 1 != columns.len() {
+        // Name takes what the other columns leave, the last one included.
+        let others = [LISTING_TYPE, LISTING_MODIFIED, LISTING_SIZE, LISTING_SIZE];
+        let rest: f32 = others.iter().take(columns.len() - 1).sum();
+        let name = (table_rect.width() - rest).max(LISTING_NAME);
+        let defaults: Vec<f32> = [name]
+            .into_iter()
+            .chain(others)
+            .take(columns.len() - 1)
+            .collect();
+        state.widths = start_widths(remembered, &defaults);
+    }
     let mut toggled: Option<String> = None;
+    let folds = state.collapsed.clone();
     let mut table_ui = ui.new_child(
         egui::UiBuilder::new()
             .max_rect(table_rect)
             .layout(egui::Layout::top_down(Align::Min)),
     );
     table_ui.set_clip_rect(table_rect.intersect(ui.clip_rect()));
-    table_ui.visuals_mut().widgets.noninteractive.bg_stroke = egui::Stroke::NONE;
-    let mut builder = TableBuilder::new(&mut table_ui)
-        .id_salt("preview-listing")
-        .resizable(true)
-        .auto_shrink([false, false])
-        .cell_layout(egui::Layout::left_to_right(Align::Center))
-        .column(TableColumn::remainder().at_least(80.0).clip(true))
-        .column(TableColumn::initial(60.0).at_least(30.0).clip(true))
-        .column(TableColumn::initial(110.0).at_least(40.0).clip(true))
-        .column(TableColumn::initial(70.0).at_least(40.0).clip(true));
-    if compressed {
-        builder = builder.column(TableColumn::initial(70.0).at_least(40.0).clip(true));
-    }
-    let mut headers = vec![
-        ext::t!("preview-column-name"),
-        ext::t!("preview-column-type"),
-        ext::t!("preview-column-modified"),
-        ext::t!("preview-column-size"),
-    ];
-    if compressed {
-        headers.push(ext::t!("preview-column-compressed"));
-    }
-    builder
-        .header(height, |mut row| {
-            for header in &headers {
-                row.col(|ui| {
-                    ui.add(egui::Label::new(RichText::new(header).strong()).truncate());
-                });
+    let entry_at = |row: usize| visible.get(row).and_then(|i| listing.entries.get(*i));
+    let drawn = crate::table::show(
+        &mut table_ui,
+        egui::Id::new("preview-listing"),
+        &columns,
+        &mut state.widths,
+        visible.len(),
+        &mut |ui, row, col| {
+            if let Some(entry) = entry_at(row)
+                && listing_cell(ui, entry, col, folds.contains(&entry.path), dates)
+            {
+                toggled = Some(entry.path.clone());
             }
-        })
-        .body(|body| {
-            body.rows(height, visible.len(), |mut row| {
-                let Some(entry) = visible
-                    .get(row.index())
-                    .and_then(|i| listing.entries.get(*i))
-                else {
-                    return;
-                };
-                let folded = state.is_collapsed(&entry.path);
-                if listing_row(&mut row, entry, folded, compressed, now) {
-                    toggled = Some(entry.path.clone());
-                }
-            });
-        });
+        },
+        &|ui, row, col| entry_at(row).map_or(0.0, |entry| listing_width(ui, entry, col, dates)),
+    );
+    state.table = Some(drawn);
     if let Some(path) = toggled {
         state.toggle(&path);
         ui.ctx().request_repaint();
@@ -309,63 +272,79 @@ fn draw_listing(ui: &mut egui::Ui, listing: &Listing, state: &mut State, now: Sy
     };
 }
 
-/// One row of the listing in the explorer's columns; returns whether its
-/// chevron was clicked.
-fn listing_row(
-    row: &mut egui_extras::TableRow<'_, '_>,
-    entry: &ListingEntry,
-    folded: bool,
-    compressed: bool,
-    now: SystemTime,
-) -> bool {
-    let mut toggled = false;
-    row.col(|ui| {
-        ui.add_space(entry.depth as f32 * INDENT);
-        if entry.kind == EntryKind::Dir {
-            let glyph = if folded {
-                icons::TREE_CLOSED
-            } else {
-                icons::TREE_OPEN
-            };
-            let chevron = ui.add_sized(
-                [CHEVRON, ui.available_height()],
-                egui::Button::new(RichText::new(glyph).weak()).frame(false),
-            );
-            toggled = chevron.clicked();
-        } else {
-            ui.add_space(CHEVRON + ui.spacing().item_spacing.x);
-        }
-        ui.label(listing_icon(entry));
-        if entry.encrypted {
-            ui.label(RichText::new(icons::LOCK).weak())
-                .on_hover_text(ext::t!("preview-encrypted"));
-        }
-        ui.add(egui::Label::new(&entry.name).truncate());
-    });
-    row.col(|ui| {
-        ui.add(egui::Label::new(listing_type(entry)).truncate());
-    });
-    row.col(|ui| {
-        let (brief, full) = format::date(entry.modified, now);
-        ui.add(egui::Label::new(brief).truncate())
-            .on_hover_text(full);
-    });
-    row.col(|ui| {
-        ui.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
-            if entry.kind != EntryKind::Dir {
-                ui.label(format::size(entry.size));
-            }
-        });
-    });
-    if compressed {
-        row.col(|ui| {
-            ui.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
-                if let Some(size) = entry.compressed {
-                    ui.label(format::size(Some(size)));
-                }
-            });
-        });
+/// The texts of a listing row's Type, Modified, Size and Packed cells.
+fn listing_text(entry: &ListingEntry, col: usize, dates: format::Dates) -> String {
+    match col {
+        1 => listing_type(entry),
+        2 => dates.write(entry.modified).0,
+        3 if entry.kind != EntryKind::Dir => format::size(entry.size),
+        4 => entry
+            .compressed
+            .map_or_else(String::new, |size| format::size(Some(size))),
+        _ => String::new(),
     }
+}
+
+/// How wide the content of a listing cell is, for a column's fit.
+fn listing_width(ui: &egui::Ui, entry: &ListingEntry, col: usize, dates: format::Dates) -> f32 {
+    let body = egui::TextStyle::Body.resolve(ui.style());
+    let measure = |text: &str| {
+        ui.painter()
+            .layout_no_wrap(text.to_owned(), body.clone(), egui::Color32::PLACEHOLDER)
+            .size()
+            .x
+    };
+    if col == 0 {
+        let spacing = ui.spacing().item_spacing.x;
+        #[allow(clippy::cast_precision_loss)]
+        let indent = entry.depth as f32 * INDENT;
+        indent + CHEVRON + spacing + measure(listing_icon(entry)) + spacing + measure(&entry.name)
+    } else {
+        measure(&listing_text(entry, col, dates))
+    }
+}
+
+/// One cell of a listing row; the Name cell holds the caret of a folder,
+/// the icon and the name, indented 18 px per level. Returns whether the
+/// caret was clicked.
+fn listing_cell(
+    ui: &mut egui::Ui,
+    entry: &ListingEntry,
+    col: usize,
+    folded: bool,
+    dates: format::Dates,
+) -> bool {
+    if col > 0 {
+        let text = listing_text(entry, col, dates);
+        let label = ui.add(egui::Label::new(text).truncate());
+        if col == 2 {
+            label.on_hover_text(dates.write(entry.modified).1);
+        }
+        return false;
+    }
+    let mut toggled = false;
+    #[allow(clippy::cast_precision_loss)]
+    ui.add_space(entry.depth as f32 * INDENT);
+    if entry.kind == EntryKind::Dir {
+        let glyph = if folded {
+            icons::TREE_CLOSED
+        } else {
+            icons::TREE_OPEN
+        };
+        let chevron = ui.add_sized(
+            [CHEVRON, ui.available_height()],
+            egui::Button::new(RichText::new(glyph).weak()).frame(false),
+        );
+        toggled = chevron.clicked();
+    } else {
+        ui.add_space(CHEVRON + ui.spacing().item_spacing.x);
+    }
+    ui.label(listing_icon(entry));
+    if entry.encrypted {
+        ui.label(RichText::new(icons::LOCK).weak())
+            .on_hover_text(ext::t!("preview-encrypted"));
+    }
+    ui.add(egui::Label::new(&entry.name).truncate());
     toggled
 }
 
@@ -403,58 +382,59 @@ fn listing_type(entry: &ListingEntry) -> String {
     }
 }
 
-/// A table as a virtualised grid: the header row in bold, then the rows,
-/// each parsed as it comes into view.
-fn draw_grid(ui: &mut egui::Ui, grid: &dyn Grid, state: &mut State) {
+/// A grid as a table (SPEC.md *Tables in previews*): the header's titles,
+/// then the rows, each parsed as it comes into view.
+fn draw_grid(ui: &mut egui::Ui, grid: &dyn Grid, state: &mut State, remembered: &[u16]) {
     let header = grid.header();
     let rows = grid.rows();
-    let columns = header.len().clamp(1, MAX_COLUMNS);
-    let height = crate::views::row_height(ui);
-    ui.visuals_mut().widgets.noninteractive.bg_stroke = egui::Stroke::NONE;
-    let mut builder = TableBuilder::new(ui)
-        .id_salt("preview-grid")
-        .striped(true)
-        .resizable(true)
-        .auto_shrink([false, false])
-        .cell_layout(egui::Layout::left_to_right(Align::Center));
-    for _ in 0..columns {
-        builder = builder.column(TableColumn::initial(110.0).at_least(32.0).clip(true));
-    }
-    builder
-        .header(height, |mut row| {
-            for (i, title) in header.iter().take(columns).enumerate() {
-                row.col(|ui| {
-                    let shown = if title.is_empty() {
-                        (i + 1).to_string()
-                    } else {
-                        title.clone()
-                    };
-                    ui.add(egui::Label::new(RichText::new(shown).strong()).truncate());
-                });
-            }
-            if header.len() > columns {
-                row.col(|ui| {
-                    ui.weak(ext::t!(
-                        "preview-more-columns",
-                        count = header.len() - columns
-                    ));
-                });
-            }
+    let shown = header.len().clamp(1, MAX_COLUMNS);
+    let mut columns: Vec<Column> = (0..shown)
+        .map(|i| match header.get(i).filter(|title| !title.is_empty()) {
+            Some(title) => Column::new(title.clone()),
+            // A column without a title is named by its number.
+            None => Column::new((i + 1).to_string()),
         })
-        .body(|body| {
-            body.rows(height, rows, |mut row| {
-                let index = row.index();
-                let cells = grid.cells(index..index + 1);
-                let cells = cells.first().map_or(&[][..], Vec::as_slice);
-                for i in 0..columns {
-                    row.col(|ui| {
-                        if let Some(cell) = cells.get(i) {
-                            ui.add(egui::Label::new(cell).truncate());
-                        }
-                    });
-                }
-            });
-        });
+        .collect();
+    if header.len() > shown {
+        columns.push(Column::new(ext::t!(
+            "preview-more-columns",
+            count = header.len() - shown
+        )));
+    }
+    if state.widths.len() + 1 != columns.len() {
+        let defaults = vec![GRID_COLUMN; columns.len() - 1];
+        state.widths = start_widths(remembered, &defaults);
+    }
+    let cell_text = |row: usize, col: usize| {
+        grid.cells(row..row + 1)
+            .into_iter()
+            .next()
+            .and_then(|mut cells| (col < cells.len()).then(|| cells.swap_remove(col)))
+    };
+    let drawn = crate::table::show(
+        ui,
+        egui::Id::new("preview-grid"),
+        &columns,
+        &mut state.widths,
+        rows,
+        &mut |ui, row, col| {
+            if col < shown
+                && let Some(text) = cell_text(row, col)
+            {
+                ui.add(egui::Label::new(text).truncate());
+            }
+        },
+        &|ui, row, col| {
+            let body = egui::TextStyle::Body.resolve(ui.style());
+            cell_text(row, col).map_or(0.0, |text| {
+                ui.painter()
+                    .layout_no_wrap(text, body, egui::Color32::PLACEHOLDER)
+                    .size()
+                    .x
+            })
+        },
+    );
+    state.table = Some(drawn);
     state.drawn = Drawn::Grid {
         header: header.to_vec(),
         rows,

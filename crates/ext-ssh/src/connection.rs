@@ -627,13 +627,18 @@ impl Pool {
             let tcp =
                 tokio::time::timeout(CONNECT_TIMEOUT, tokio::net::TcpStream::connect(address))
                     .await
+                    // A host that does not answer, or refuses, is a lost
+                    // connection, not a missing folder: the pane keeps its
+                    // place and tries again.
                     .map_err(|_| {
-                        message(format!(
+                        Error::unreachable(format!(
                             "{label}: {}:{} did not answer in time",
                             host.host, host.port
                         ))
                     })?
-                    .map_err(|e| message(format!("{label}: {}:{}: {e}", host.host, host.port)))?;
+                    .map_err(|e| {
+                        Error::unreachable(format!("{label}: {}:{}: {e}", host.host, host.port))
+                    })?;
             client::connect_stream(config, tcp, handler).await
         } else {
             // Each hop runs over the one before it: the first hop is
@@ -1045,6 +1050,11 @@ impl Pool {
                     live.full.store(true, Ordering::Relaxed);
                     drop(token);
                     last = Some(message(format!("{alias}: channel refused: {failure:?}")));
+                }
+                // A connection that died under the channel is a lost
+                // connection; anything else is the server's own answer.
+                Err(error) if live.handle.is_closed() => {
+                    return Err(Error::unreachable(format!("{alias}: {error}")));
                 }
                 Err(error) => return Err(ssh_error(error)),
             }

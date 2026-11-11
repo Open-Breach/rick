@@ -7,6 +7,317 @@ the pull request that brought the change.
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-11-11
+
+The fixes of the test session of 2026-11-09 and what followed from them, on
+Linux, macOS and Windows: the application menu, the paste-conflict,
+Properties, Keyboard shortcuts and Extensions dialogues and the preview pane
+redrawn, with the File info card for every previewer and a title bar colour
+to choose; remote providers that say what a location offers, with Download,
+containers on Azure and search in subfolders; a tab that goes Home when its
+drive is removed and stays, with Retry, when a connection is lost; the List
+view in columns, the date formats, the window's place and size across
+launches, programs and scripts that start, Open in editor and Git clone; and
+the fixes for copy, cut and paste by keyboard, the black band around the
+window, the search results and the Windows archive that would not start
+without the Visual C++ runtime.
+
+The GUI fixes of the test session of 2026-11-09 (issue 139, SPEC.md *Version
+0.4 — scope*): the menus, the dialogues and the preview pane redrawn from
+their Figma frames on the dialogue shell, the tokens and the Portal burst of
+the design refresh, in Light and Dark and in both densities. Each item has
+its acceptance test and its screenshots in the four modes
+(`crates/tests/tests/screenshots.rs`, taken by CI tier 2); what a rule left
+open is in `QUESTIONS.md` 323 to 366. The rules went into SPEC.md first
+(#155).
+
+The functional fixes of the same test session (issue 149,
+`specs/version-0.4.md`): remote providers, removable media and lost
+connections, the file list, the window, launching, search and previewers.
+Every bug fixed has a test that fails before the fix. The rules went into
+the specification first (#174).
+
+### Added
+
+- **Title bar colour.** The title row sits on a band of its own colour, the
+  new token `bg/titlebar`, and the active workspace tab lifts out of it in
+  `bg/pane`, with no accent line. *Settings → Appearance → Title bar colour*
+  chooses the band: six presets, each a light and a dark value so that one
+  choice works in both modes — *Dusty rose* (the default), *Warm grey*,
+  *Slate teal*, *Sage*, *Plum* and *Dark band* — and *Custom* with a
+  `#rrggbb` field per scheme. The choice is `titlebar_colour` in
+  `rick.toml`, with `titlebar_custom_light` and `titlebar_custom_dark`. On a
+  band that is dark in Light — the *Dark band*, or a dark custom colour —
+  the tab titles, the icons, the window controls and the search box turn to
+  light text, and a light custom colour in Dark is the mirror image; the
+  titles hold 4.5:1 and the icons 3:1 on every preset (#168).
+- **Extensions dialogue.** Master and detail: a searchable list grouped by
+  what a plugin contributes, each row with its icon, name and enable switch
+  and an amber dot when it needs attention; beside it the plugin's name, id,
+  version and kind, a *Built-in plugin* or *User plugin* chip, the
+  description from its manifest, an attention card when there is one, and a
+  card with *Contributes*, *Status*, *Location* and *Config*. *Settings*
+  opens the plugin's settings page, *Open folder* its folder, and *Remove*
+  deletes a user plugin's folder. *Install from file…* unpacks an `.rkp`
+  package — a zip archive of the plugin's folder — into the plugins folder.
+  An installed plugin loads at the next start and a removed one is gone at
+  the next start; neither asks nor checks anything yet. A manifest carries a
+  `description`, and the extension API version is 18 (#167).
+- **Keyboard shortcuts dialogue.** The categories with their counts at the
+  left, one per plugin that contributes actions, so a plugin's actions are
+  no longer filed under *File operations*; at the right a search field that
+  also takes a pressed chord, and the rows grouped by category with their
+  shortcuts as key caps, *Not set* when unbound. A click on the shortcut
+  cell records, Backspace unbinds, Esc cancels; a changed row has an accent
+  dot and a reset button, and a chord that is taken shows an amber *also: …*
+  chip on both rows (#165).
+- **The File info card** in the preview pane: one card for every previewer —
+  icon tile, name, type and size, label and value rows with a copy button
+  each, *Show all n fields* for the rest. It opens under the info button on
+  hover, can be pinned above the content, and sits centred in the pane when
+  there is nothing to show; the info rows above each previewer's content are
+  gone. A file no previewer claims shows the card with *Open as hex* and
+  *Open with…*; a missing library shows it with *Download*, *Browse…*,
+  *Retry* and *Where Rick looked*, which unfolds the paths and the loader's
+  error. With nothing selected the pane reads *No file selected*, and
+  loading is always the centred Portal burst (#162).
+- **Always preview on an account.** A remote file over the size limit shows
+  the File info card with *Preview this file* and *Always preview on* the
+  account's name; *Always* is kept per provider account, across restarts,
+  and is also in the context menu of the account's row in the side panel.
+  Either button shows the Portal burst with a progress line and
+  *Downloading… x of y MiB*, and Esc cancels the download and returns to the
+  card. This holds for every remote provider; the limit stays 4 MiB (#164).
+- **Git clone.** *Git clone…* in the right-click menu of a folder and of a
+  pane's empty area clones a repository into that folder, outside a
+  repository too. Its dialogue asks for the URL: an `https://`, `ssh://`,
+  `git://` or `file://` URL, `user@host:path`, or the path of a local
+  repository. The field is prefilled, and selected, when the clipboard
+  holds one of these. The dialogue names the folder the clone creates and
+  has *Branch*, *Depth* and *Submodules* as options, folded away. The clone
+  is `git clone` as a job in the operations: git's own progress line, a
+  cancel that stops git and removes the folder the clone had created, never
+  one that was there before, and git's message in the job when it fails.
+  The dialogue is built from the form fields a plugin has, so it does not
+  match its Figma frames in every detail yet (#188).
+- **Download.** Enter and a double-click on a remote file copy it into
+  Downloads as a job and open nothing; *Download…* in the menu of remote
+  files and folders does it for the whole selection, folders included, into
+  a folder asked for first (#193).
+- **New folder at an Azure account's root creates a container**, its name
+  checked against the naming rules before anything is asked of the service.
+  Inside a container, and inside an S3 or GCS bucket, New folder and New
+  file work at every depth (#193).
+- **Search in subfolders on Azure, S3 and GCS**, by prefix. Where a location
+  cannot be searched beneath, as over SSH, the toggle is disabled with the
+  reason (#193).
+- **Format…** in the menu of a drive's card opens the system's own tool on
+  that drive: GNOME Disks or the desktop's equivalent, Disk Utility, the
+  format dialogue of Windows. Rick formats nothing itself (#194).
+- **Connection lost.** A remote location that stops answering keeps its tab
+  and shows *Connection lost to* with the account's name and *Retry*; Rick
+  tries again by itself after 2, 5 and 15 seconds (#194).
+- **List view** as its Figma frame draws it: icon and name, columns of one
+  width filled top to bottom, sideways scrolling, Left and Right between
+  the columns (#195).
+- **Date format**, *Settings → Appearance*, `date_format` in `rick.toml`:
+  *Smart with time* (the default: *Today 15:58*, *Yesterday 09:17*, *Tue
+  21:24*, *Aug 24 14:12*), *Smart without time*, *ISO* and *System* (#195).
+- **Settings → Behaviour**, a new page: *Rename on a second click*
+  (`rename_on_click`, off by default) and *Editor* (`editor`) (#195, #197).
+- **Window geometry.** A window comes back on its monitor where that is
+  still connected and the window would be visible; otherwise it opens
+  centred on the primary monitor at the default size, 80 % of the working
+  area capped at 1920 × 1200 and at 16:9. A second window opens beside the
+  first (#196).
+- **Programs start.** A binary with the execute bit runs on Enter and a
+  double-click; an executable script asks *Run script?* with *Cancel*,
+  *Edit* and *Run* (#197).
+- **Open in editor**, F4 and the context menu of local files: the system's
+  default text editor, or the command of the `editor` setting (#197).
+- **The path bar expands** a leading `~` and `$VAR`, `${VAR}` and on Windows
+  `%VAR%`, on Enter and on paste (#197).
+- **`localsearch`.** The Tracker connector finds GNOME's indexer under its
+  new name too and queries it through `tinysparql` (#198).
+
+### Changed
+
+- **The dividers between the column headers always show**, in
+  `border/default`, so that the place to grab a column by is seen; under
+  the pointer a divider is `border/strong`, as before (#199).
+- **Application menu.** The pattern of the View options and context menus:
+  an icon on every item, the shortcut hint or the submenu caret at the
+  right, three groups — *New window* and *Layouts*; *Installer*, *Settings*,
+  *Keyboard shortcuts* and *Extensions*; *About Rick* with the version. No
+  trailing “…” and no theme switch. The hints come from the keymap, are
+  empty when an action is unbound, and spell *Mod* as the platform's key.
+  The menu is at least 280 px wide and opens under the menu button with a
+  6 px gap (#159).
+- **Paste-conflict dialogue.** *Replace file?*, with “(n of m)” when there
+  are several, replaces the “already exists” question: two cards, *Existing
+  file* and *New file*, each with icon, name, size and modified time, and
+  the dialogue keeps its 520 px for a long name. *Cancel* at the left;
+  *Skip*, *Replace* as a caution button and *Keep both* at the right. *Keep
+  both* is the primary button and the Enter default and pastes as
+  `name (2).ext` with the next free number. With several conflicts, *Do the
+  same for the remaining n conflicts*. Between two folders *Merge* takes the
+  place of *Replace*, without *Keep both*. `Conflicts::ask` takes a
+  `ConflictDetails`, and the extension API version went to 17 (#160).
+- **Properties dialogue** on the dialogue shell: a header with the icon
+  tile, the name and type · size, and two tabs. *General* in cards —
+  *Location*, *Size* or *Link*, *Dates*, *Options* — with a copy button on
+  every path row; a symbolic link has *Target* with its copy button,
+  *Resolves to* and *Open target folder*. *Permissions* has the ownership
+  dropdowns, the access grid with its octal row, the ACL as a row that
+  unfolds into its table with an *Add entry* line, and *Apply to enclosed
+  items* as a switch. *Apply* and *Revert* stay disabled until something
+  changes (#161).
+- **Tables in previews.** The archive tree and the CSV grid take the file
+  list's header — a `bg/panel` band with a hairline below — and their
+  stripes start white. The column dividers are always visible in the header,
+  one between every pair of columns, and are the resize handles:
+  `border/strong` on hover, a drag resizes, a double-click fits, and the
+  widths are remembered per previewer (#163).
+- **Window group.** The layout toggles and the window controls are 16 px
+  icons 12 px apart, each answering over its whole 28 px step, with the
+  divider in the middle of a 25 px gap; every control has its name, and the
+  window's is *Close window* (#169).
+- **Errors of operations.** A failed job's row in the operations drawer
+  unfolds on a click to the whole error, wrapped, and the failure is also a
+  notice at the top right of the window the job was started from, with the
+  job's name and the whole text; an error notice stays until its close
+  button is pressed. `Event::JobFailed` names the pane a failed job was
+  started from (#169).
+- **Paste in the context menu** is always there where the folder can be
+  written to, greyed with *nothing to paste* until something is copied or
+  cut. On a folder it pastes into that folder, and *Paste as link* with it;
+  on the empty area into the folder the pane shows (issue 176, #179).
+- **A click on the launcher only raises the window.** The desktop entry
+  runs `rick --activate %U`: a click on the launcher entry or on a dock
+  favourite brings the window of the running Rick forward and opens no
+  tab, and starts Rick with its session when none runs. A folder dropped
+  on the icon, *Open with* and a `rick://` link open as before, and `rick`
+  typed in a terminal keeps opening the current directory. A launcher
+  entry written by an earlier version reads as changed in the integration
+  dialog and is rewritten when its row is applied (specs/decisions.md
+  Q264, #191).
+- **Three colour tokens follow the revised Figma variables.**
+  `text/secondary` is `#646464` in Light and `#a6a6a6` in Dark,
+  `border/strong` is `#8c8c8c` in Light and `status/warning-border` is
+  `#c27d0b` in Light. Every text and control pair now meets WCAG contrast,
+  and the test that holds them has no exception left. In Light the
+  inactive tab titles on the *Dusty rose*, *Warm grey*, *Slate teal* and
+  *Sage* bands are `text/secondary` again; *Plum*, where it still falls
+  short, keeps `#2b2b2b` at 78 % (specs/decisions.md Q242, #191).
+- The workspace version is `0.4.0-dev` until 0.4.0 is tagged (#154).
+- **The extension API is version 19.** `Capabilities` gains `CREATE_DIR`,
+  `CREATE_FILE`, `SEARCH_SUBTREE` and `DOWNLOAD`, and `Provider` gains
+  `unavailable_reason` and `name_problem`; plugins built against 18 are
+  rebuilt (#193).
+- **A menu entry a location's capabilities rule out is greyed** with the
+  reason as its tooltip, not hidden: New folder, New file and Download…
+  (#193).
+- **Single-click rename is off by default.** F2 and the context menu rename
+  as before (#195).
+- **Select all** says how many hidden items it left out (#195).
+- **The hex view is the fallback previewer**: it takes whatever no other
+  previewer recognises, and *Open as hex* is gone from the *No previewer*
+  card (#198).
+
+### Fixed
+
+- **Every search result can be reached and picked.** A click on a row
+  picks it, a hit of the index taking the pane to its folder, where the
+  click was lost; the arrow keys move past a pointer that rests on the list
+  and bring every row into view, where the row under the pointer held the
+  highlight; and the scroll bar's handle shows whenever there are more rows
+  than the twelve in view (#202).
+- **The search box's results list** has a width of its own, 560 px, where
+  the tabs squeeze the box; it grows with the hits the index sends after
+  the folder's own names, where it kept the height it had opened with and
+  showed two rows; and a long name and its folder each end in an ellipsis,
+  the folder at its start, where they were drawn over each other (#201).
+- **The Windows archive starts on a machine without the Visual C++
+  Redistributable.** `rick.exe`, Rick's kernel libraries, every plugin and
+  the GStreamer runtime import `vcruntime140.dll`, some of them
+  `vcruntime140_1.dll` and `msvcp140.dll` too, and the archives up to 0.3.0
+  carried none: on a Windows without the redistributable Rick stopped
+  before its first window with “VCRUNTIME140.dll was not found”. The
+  release workflow now puts the runtime's libraries beside `rick.exe`
+  (`cargo xtask bundle` copies them from `RICK_VCRUNTIME_DIR`, the
+  toolset's redistributable folder), and its smoke test reads the imports
+  of every module in the archive and fails when a library of the Visual
+  C++ runtime is not in it (#186).
+- **No black band around the window where it cannot be transparent**
+  (issue 158). Rick asks for a transparent window to paint its shadow into
+  a 10 px margin; where the surface is opaque — as on Windows under
+  DirectX 12, which is what a virtual machine without a graphics driver
+  gets — that margin showed as a solid black band. Rick now checks once,
+  before the first frame,
+  whether the first window's surface offers an alpha mode that blends, and
+  draws the plain frame where it does not: no margin and no shadow, a
+  one-pixel border at the window's edge, and the resize grips on the edge.
+  The shadow frame is unchanged where the window is transparent. One line
+  in the log at startup names the graphics backend, the adapter and the
+  frame chosen. `frame` in the `[window]` table of `rick.toml` overrides
+  the check: `auto` (the default), `shadow` or `plain` (#182).
+- **The plain frame is the default on X11.** An X11 window is blended with
+  the desktop only while a compositing manager runs, and its surface offers
+  an alpha mode either way, so without one the shadow frame's margin was
+  still a black band. On X11 `auto` now draws the plain frame and asks for
+  no transparent window; `frame = "shadow"` in the `[window]` table of
+  `rick.toml` brings the shadow frame back where a compositing manager
+  runs. Wayland, macOS and Windows are unchanged (#189).
+- **Copy, cut and paste by keyboard** work in the file list (issue 176). A
+  window delivers Mod+C, Mod+X and Mod+V as copy, cut and paste events, not
+  as key presses, and the paste event only when the clipboard holds text;
+  the list matched key presses alone, so the three chords did nothing in a
+  running Rick. They now go through the keymap like any key — Mod+Shift+C,
+  Mod+Alt+C and Mod+Shift+V with them — and a paste is taken at the release
+  of its key, whatever the clipboard holds. A text field keeps the chords
+  for its text. CI tier 2 drives the chords through a real window on Linux
+  (#179).
+- **A dialogue keeps the keyboard** (issue 177). Behind *File hashes* and
+  *Set up Rick on this system* the file list took every key: Escape cleared
+  its selection instead of closing the dialogue, and Delete would have
+  trashed the selected file. Escape now closes *File hashes*, with its
+  *Verify* field focused too, and cancels the job while the hashes are
+  still being computed (#183).
+- **Escape calls off Properties** that has not opened yet (issue 178). The
+  dialogue opens once its entry is read, which takes a moment on a slow or
+  remote volume; Escape pressed in between used to go to the list, and the
+  dialogue opened afterwards. An answer to a request that was called off,
+  or overtaken by a later one, is dropped — on a remote entry too (#185).
+- EXIF in the image preview shows only the tags Rick names and that have a
+  real value, with the exposure as `1/120 s` and dates without seconds: a
+  photo without GPS data has no GPS rows and no “NaN” (#162).
+- The two commit actions are *Git commit* and *SVN commit*; *Commit* no
+  longer appears twice in the keyboard shortcuts (#165).
+- A download's progress that arrives before the preview pane has seen its
+  file is kept, not cleared (#165).
+- A console's tab is titled *Console*, not the folder it was opened in; the
+  settings in a window of their own no longer draw a second close button;
+  the *File hashes* dialogue's secondary line ends in an ellipsis before the
+  close button; and an operation's error is no longer cut to “Invali…”
+  (#169).
+- **Azure requests**: a `PUT` without a body carries its `Content-Length`,
+  a space in a query is `%20` in the request as in its signature, and a
+  container's name is signed encoded (#193).
+- **A tab on a drive that is pulled out or ejected goes Home**, with a
+  toast that names the drive, *… was removed*; so does a tab on an account
+  or a host that is removed (#194).
+- **The drive list is read again on the system's mount events** on Linux,
+  so a partition that mounts a moment after its stick is there at once
+  (#194).
+- **The corner grip resizes every time**, not once (#196).
+- **No raw error in the search box** on a machine with neither `tracker3`
+  nor `localsearch`: the Tracker connector disables itself and the
+  Extensions dialogue says why (#198).
+- **The first setting changed after the start is kept.** Rick reads the
+  settings file again when something in its configuration folder changes;
+  when that happened before the change had been written, the window went
+  back to the old value while the file got the new one (#206).
+
 ## [0.3.0] - 2026-11-10
 
 The design refresh and the first part of system integration, on Linux, macOS
@@ -1099,7 +1410,8 @@ text, code, images and PDF, and Git, on Linux, macOS and Windows.
   in the middle of a write can no longer read a truncated file and lose
   the pinned folders (#14).
 
-[Unreleased]: https://github.com/Open-Breach/rick/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/Open-Breach/rick/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/Open-Breach/rick/releases/tag/v0.4.0
 [0.3.0]: https://github.com/Open-Breach/rick/releases/tag/v0.3.0
 [0.2.0]: https://github.com/Open-Breach/rick/releases/tag/v0.2.0
 [0.1.0]: https://github.com/Open-Breach/rick/releases/tag/v0.1.0

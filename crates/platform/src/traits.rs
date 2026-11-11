@@ -133,6 +133,33 @@ impl Volume {
     }
 }
 
+/// What [`Volumes::watch_mounts`] calls on each mount and unmount.
+pub type MountsChanged = Box<dyn Fn() + Send + Sync>;
+
+/// A running watch of the system's mount and unmount events
+/// ([`Volumes::watch_mounts`]). Dropping it ends the watch.
+pub struct MountWatch {
+    /// What the platform holds its listener by.
+    _keep: Box<dyn Send + Sync>,
+}
+
+impl MountWatch {
+    /// A watch that runs for as long as `keep` lives: whatever the platform
+    /// holds its listener by, which ends it when dropped.
+    #[must_use]
+    pub fn new(keep: impl Send + Sync + 'static) -> Self {
+        Self {
+            _keep: Box::new(keep),
+        }
+    }
+}
+
+impl std::fmt::Debug for MountWatch {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("MountWatch")
+    }
+}
+
 /// The volumes the OS has mounted, for the side panel's This Machine and
 /// Network sections. Mounting is not part of 0.2's milestone 2; ejecting
 /// removable media is.
@@ -154,6 +181,39 @@ pub trait Volumes: Send + Sync {
     /// `Error::Unsupported` for a volume that is not removable; otherwise
     /// the I/O or platform error, with what the OS said.
     fn eject(&self, volume: &Volume) -> Result<(), Error>;
+
+    /// Whether the system has a tool of its own for formatting a drive,
+    /// which [`open_format_tool`](Self::open_format_tool) opens: GNOME
+    /// Disks or the desktop's equivalent on Linux, Disk Utility on macOS,
+    /// the format dialogue on Windows. Without one *Format…* is disabled
+    /// (SPEC.md *This Machine*).
+    fn has_format_tool(&self) -> bool {
+        false
+    }
+
+    /// Opens the system's own tool for formatting `volume` and returns at
+    /// once. Rick formats nothing itself.
+    ///
+    /// # Errors
+    ///
+    /// `Error::Unsupported` where no such tool is installed; otherwise the
+    /// I/O error from starting it.
+    fn open_format_tool(&self, volume: &Volume) -> Result<(), Error> {
+        let _ = volume;
+        Err(Error::Unsupported("no disk utility is installed"))
+    }
+
+    /// Listens for the system's mount and unmount events and calls
+    /// `changed` on each, until the returned watch is dropped, so that the
+    /// caller reads [`volumes`](Self::volumes) again at once: a partition
+    /// that mounts a moment after its stick was plugged in is then seen
+    /// like the first (SPEC.md *This Machine*). `None` where the platform
+    /// has no such listener; the caller is then left with reading the list
+    /// at intervals.
+    fn watch_mounts(&self, changed: MountsChanged) -> Option<MountWatch> {
+        let _ = changed;
+        None
+    }
 }
 
 /// A disk-image format, by the file's extension: what the *Mount* action
@@ -391,6 +451,53 @@ pub trait OpenWith: Send + Sync {
     ///
     /// Fails when the application cannot be started.
     fn open_with(&self, path: &Path, app: &Application) -> Result<(), Error>;
+
+    /// Whether a file's execute bit says it is a program here, so that
+    /// opening it runs it (SPEC.md *Executables and scripts*). Windows has
+    /// no such bit: there every file is handed to the system, which runs a
+    /// program and decides about a script by its association.
+    fn has_execute_bit(&self) -> bool {
+        false
+    }
+
+    /// Starts `program` with `args`, detached from Rick and with `dir` as
+    /// its working directory, and returns at once: a binary the user
+    /// opened, or the editor they named.
+    ///
+    /// # Errors
+    ///
+    /// The I/O error from starting it.
+    fn run_detached(&self, program: &Path, args: &[OsString], dir: &Path) -> Result<(), Error> {
+        let mut child = std::process::Command::new(program)
+            .args(args)
+            .current_dir(dir)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .map_err(Error::from_io)?;
+        // Nobody waits for it but this thread, so that it leaves no
+        // zombie behind when it ends before Rick does.
+        std::thread::Builder::new()
+            .name("rick-child".to_owned())
+            .spawn(move || {
+                let _ = child.wait();
+            })
+            .map(drop)
+            .map_err(Error::from_io)
+    }
+
+    /// Opens `paths` in the system's default text editor, the application
+    /// registered for plain text (SPEC.md *Open in editor*).
+    ///
+    /// # Errors
+    ///
+    /// `Error::Unsupported` where the system names none; otherwise the
+    /// error from starting it.
+    fn open_in_text_editor(&self, paths: &[PathBuf]) -> Result<(), Error> {
+        let _ = paths;
+        Err(Error::Unsupported("no text editor is registered"))
+    }
 }
 
 /// The user's terminal emulator.
@@ -500,6 +607,14 @@ pub trait NativeDialogs: Send + Sync {
     /// Asks for a directory; `None` when dismissed.
     async fn pick_folder(&self, title: &str) -> Option<PathBuf>;
 
+    /// Asks for a directory with the dialogue starting in `start`: the
+    /// Downloads folder for *Download…*. The default starts wherever the
+    /// platform's dialogue does.
+    async fn pick_folder_in(&self, title: &str, start: &Path) -> Option<PathBuf> {
+        let _ = start;
+        self.pick_folder(title).await
+    }
+
     /// Asks for one or more files; empty when dismissed.
     async fn pick_files(&self, title: &str, filters: &[DialogFilter]) -> Vec<PathBuf>;
 
@@ -548,11 +663,51 @@ pub struct WindowChrome {
     pub native_controls_width: f32,
 }
 
+/// A monitor as the system has it: which one it is, where it is on the
+/// desktop and what of it is free for windows (SPEC.md *Window geometry*).
+/// The rectangles are `[x, y, width, height]` in the logical pixels a
+/// window is placed in.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Monitor {
+    /// What tells the monitor from the others across restarts: the name of
+    /// its output (`DP-1`), its device (`\\.\DISPLAY1`) or the name the
+    /// system shows for it.
+    pub id: String,
+    /// Whether the system calls it the primary one.
+    pub primary: bool,
+    /// The whole monitor.
+    pub bounds: [f32; 4],
+    /// The working area: the monitor less the system's panels, dock and
+    /// task bar.
+    pub work: [f32; 4],
+}
+
 /// Window chrome placement, per platform.
 pub trait Chrome: Send + Sync {
     /// How this platform's windows are decorated when the title bar is
     /// Rick's own.
     fn window_chrome(&self) -> WindowChrome;
+
+    /// Whether the windows are X11 windows, as against Wayland ones on
+    /// Linux; `false` on every other platform. It matters for the frame
+    /// Rick draws around a window: on X11 a transparent window is blended
+    /// with the desktop only while a compositing manager runs, and its
+    /// surface offers an alpha mode whether one runs or not, so what the
+    /// surface says about transparency cannot be relied on there. Asked
+    /// before the first window exists.
+    fn on_x11(&self) -> bool {
+        false
+    }
+
+    /// The monitors that are connected, for placing a window: in the
+    /// logical pixels of a window whose scale is `pixels_per_point`. Empty
+    /// where the platform tells an application no position and lets it set
+    /// none — a Wayland session — and there the placing is the system's.
+    /// Called on the thread that runs the windows.
+    fn monitors(&self, pixels_per_point: f32) -> Vec<Monitor> {
+        let _ = pixels_per_point;
+        Vec::new()
+    }
 }
 
 /// The window a drag starts from or a drop lands in, as the windowing

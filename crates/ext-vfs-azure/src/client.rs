@@ -26,6 +26,15 @@ const PATH: &AsciiSet = &NON_ALPHANUMERIC
     .remove(b'~')
     .remove(b'/');
 
+/// The characters a query value keeps in a URI: a space travels as `%20`,
+/// never as the `+` of a form, which a service may read as a plus and
+/// which would then not be the value that was signed.
+const QUERY: &AsciiSet = &NON_ALPHANUMERIC
+    .remove(b'-')
+    .remove(b'_')
+    .remove(b'.')
+    .remove(b'~');
+
 /// How many blobs one listing page asks for.
 const PAGE: &str = "5000";
 
@@ -77,8 +86,21 @@ fn failed(status: StatusCode, body: &str) -> Error {
     }
 }
 
-/// A transport error as the kernel error.
+/// A transport error as the kernel error. A request that never reached the
+/// service, or went unanswered, is a lost connection
+/// ([`Error::unreachable`]): the pane keeps its place and tries again.
 pub(crate) fn transport(error: reqwest::Error) -> Error {
+    if error.is_connect() || error.is_timeout() {
+        // The cause is in the chain, not in the error's own text.
+        let mut text = error.to_string();
+        let mut cause = std::error::Error::source(&error);
+        while let Some(inner) = cause {
+            text.push_str(": ");
+            text.push_str(&inner.to_string());
+            cause = inner.source();
+        }
+        return Error::unreachable(text);
+    }
     Error::Extension {
         ext: ID,
         source: Box::new(error),
@@ -115,6 +137,22 @@ fn parse_error(body: &str) -> (String, String) {
 #[must_use]
 pub fn encode_path(text: &str) -> String {
     utf8_percent_encode(text, PATH).to_string()
+}
+
+/// The query string of `pairs`, each name and value percent-encoded.
+#[must_use]
+pub fn encode_query(pairs: &[(&str, &str)]) -> String {
+    pairs
+        .iter()
+        .map(|(k, v)| {
+            format!(
+                "{}={}",
+                utf8_percent_encode(k, QUERY),
+                utf8_percent_encode(v, QUERY)
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("&")
 }
 
 /// A request before signing.
@@ -322,12 +360,22 @@ impl AzureClient {
     /// The absolute URL of a blob, as `x-ms-copy-source` wants it.
     pub(crate) fn blob_url(&self, container: &str, blob: &str) -> Url {
         let mut url = self.base.clone();
-        url.set_path(&format!(
-            "{}{container}/{}",
-            self.base.path(),
-            encode_path(blob)
-        ));
+        url.set_path(&self.path_of(Some(container), Some(blob)));
         url
+    }
+
+    /// The URI path of the account, a container or a blob, percent-encoded
+    /// as it is sent: the path the signature is made over, too.
+    fn path_of(&self, container: Option<&str>, blob: Option<&str>) -> String {
+        let mut path = self.base.path().to_owned();
+        if let Some(container) = container {
+            path.push_str(&encode_path(container));
+            if let Some(blob) = blob {
+                path.push('/');
+                path.push_str(&encode_path(blob));
+            }
+        }
+        path
     }
 
     /// Sends one signed request and returns the response, or the error the
@@ -342,20 +390,10 @@ impl AzureClient {
             body,
         } = req;
         let mut url = self.base.clone();
-        let mut path = self.base.path().to_owned();
-        if let Some(container) = container {
-            path.push_str(container);
-            if let Some(blob) = blob {
-                path.push('/');
-                path.push_str(&encode_path(blob));
-            }
-        }
+        let path = self.path_of(container, blob);
         url.set_path(&path);
         if !query.is_empty() {
-            let mut pairs = url.query_pairs_mut();
-            for (k, v) in query {
-                pairs.append_pair(k, v);
-            }
+            url.set_query(Some(&encode_query(query)));
         }
         let date = date_now();
         let mut ms: Vec<(&str, &str)> =
@@ -393,6 +431,12 @@ impl AzureClient {
             request = request
                 .header("content-length", bytes.len().to_string())
                 .body(bytes);
+        } else if method == Method::PUT {
+            // The service wants a length on every PUT, and the HTTP client
+            // sends none for a request without a body: creating a
+            // container, copying a blob and aborting a copy were answered
+            // `MissingContentLengthHeader` (411).
+            request = request.header("content-length", "0");
         }
         debug!(%method, %url, "azure request");
         let response = request.send().await.map_err(transport)?;
@@ -455,27 +499,38 @@ impl AzureClient {
         parse_page(&text)
     }
 
+    /// One page of every blob under `prefix`, however deep: the listing
+    /// without a delimiter, which answers for a whole subtree.
+    pub(crate) async fn list_flat(
+        &self,
+        container: &str,
+        prefix: &str,
+        marker: Option<&str>,
+    ) -> Result<Page, Error> {
+        let mut query: Vec<(&str, &str)> = vec![
+            ("restype", "container"),
+            ("comp", "list"),
+            ("prefix", prefix),
+            ("maxresults", PAGE),
+        ];
+        if let Some(m) = marker {
+            query.push(("marker", m));
+        }
+        let text = self
+            .send(Req::new(Method::GET, Some(container), None).query(&query))
+            .await?
+            .text()
+            .await
+            .map_err(transport)?;
+        parse_page(&text)
+    }
+
     /// Every blob under `prefix`, however deep.
     pub(crate) async fn list_all(&self, container: &str, prefix: &str) -> Result<Vec<Blob>, Error> {
         let mut out = Vec::new();
         let mut marker: Option<String> = None;
         loop {
-            let mut query: Vec<(&str, &str)> = vec![
-                ("restype", "container"),
-                ("comp", "list"),
-                ("prefix", prefix),
-                ("maxresults", PAGE),
-            ];
-            if let Some(m) = marker.as_deref() {
-                query.push(("marker", m));
-            }
-            let text = self
-                .send(Req::new(Method::GET, Some(container), None).query(&query))
-                .await?
-                .text()
-                .await
-                .map_err(transport)?;
-            let page = parse_page(&text)?;
+            let page = self.list_flat(container, prefix, marker.as_deref()).await?;
             out.extend(page.blobs);
             match page.next {
                 Some(next) => marker = Some(next),

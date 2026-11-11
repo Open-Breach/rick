@@ -193,8 +193,10 @@ fn the_empty_areas_menu_selects_all_refreshes_and_opens_the_folders_properties()
         .unwrap_or_default();
     assert!(
         step_until(&mut harness, Duration::from_secs(5), |h| {
-            h.query_by_label_contains(&format!("Properties of {name}"))
-                .is_some()
+            h.state()
+                .properties()
+                .info()
+                .is_some_and(|info| info.entry.name == name)
         }),
         "the folder's Properties dialogue"
     );

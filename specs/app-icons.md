@@ -76,7 +76,7 @@ Type=Application
 Name=Rick
 GenericName=File Manager
 Comment=A god-like file manager
-Exec=rick %F
+Exec=rick --activate %U
 Icon=rick
 Terminal=false
 Categories=System;FileTools;FileManager;Utility;
@@ -86,7 +86,7 @@ StartupNotify=true
 StartupWMClass=rick
 ```
 
-`%F` passes selected folders as arguments; Rick opens them as tabs, or ignores them if argument handling is not there yet (it must at least not fail on them). `Exec=rick` relies on the binary being on the PATH — the installer plugin rewrites `Exec` to the absolute path through its `current` symlink, and a manual install is expected to put `rick` on the PATH. The MIME type registration makes Rick appear in "Open with" for folders; making it the default file manager stays Version 0.3.
+`%U` passes what the launcher hands over — selected folders, a `rick://` link — and Rick opens them as tabs. `--activate` is the launcher's own argument form (`specs/system-integration.md` §4): with nothing handed over, a click only raises the window of the running Rick and never opens a tab. `Exec=rick` relies on the binary being on the PATH — the installer plugin rewrites `Exec` to the absolute path through its `current` symlink, and a manual install is expected to put `rick` on the PATH. The MIME type registration makes Rick appear in "Open with" for folders; making it the default file manager stays Version 0.3.
 
 ### Archive layout
 

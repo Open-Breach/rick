@@ -1,7 +1,7 @@
 //! Native file dialogues through `rfd`: the XDG desktop portal on Linux,
 //! `NSOpenPanel` on macOS, `IFileDialog` on Windows.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use crate::traits::DialogFilter;
 
@@ -15,6 +15,14 @@ fn dialog(title: &str, filters: &[DialogFilter]) -> rfd::AsyncFileDialog {
 
 pub(crate) async fn pick_folder(title: &str) -> Option<PathBuf> {
     let handle = dialog(title, &[]).pick_folder().await?;
+    Some(handle.path().to_path_buf())
+}
+
+pub(crate) async fn pick_folder_in(title: &str, start: &Path) -> Option<PathBuf> {
+    let handle = dialog(title, &[])
+        .set_directory(start)
+        .pick_folder()
+        .await?;
     Some(handle.path().to_path_buf())
 }
 

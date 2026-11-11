@@ -14,7 +14,9 @@ preview, and `FormLater` with its `Continuation`, the form an action
 opens when a job of its finishes and the rest of the action the
 application runs with the values through `UiHost::form_later`; an
 action's `app_menu` puts it in the burger menu under its extension), the
-`Manifest` every extension declares (with `previews`, the
+`Manifest` every extension declares (with `description`, what the
+extension does in a sentence or two, which the Extensions dialogue shows;
+`previews`, the
 file extensions its previewers claim, so the host can say a disabled
 plugin is available for a file without loading it, and `commands`, the
 subcommands of the `rick` command line it provides, each a `CliCommand`

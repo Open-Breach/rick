@@ -7,7 +7,7 @@ use std::collections::BTreeMap;
 
 use egui::{Align, Sense};
 use egui_extras::{Column as TableColumn, TableBuilder};
-use ext::{ActionId, Badge, CellValue, ColumnDef, Decoration, t};
+use ext::{ActionId, Badge, CellValue, ColumnDef, t};
 use model::{Column, IconSize, SelectionChange, SortDir, Tab, ViewMode};
 use types::{Entry, EntryId, EntryKind};
 
@@ -36,12 +36,31 @@ pub const COLUMN_MIN: f32 = 48.0;
 /// The hit zone of the boundary between two headers.
 const BOUNDARY_HIT: f32 = 6.0;
 
+/// The List view, as the Figma frame *List view mode* draws it (SPEC.md
+/// *List view*): where the columns start in the pane, a row's padding, its
+/// icon and the gap after it.
+const LIST_LEFT: f32 = 8.0;
+const LIST_TOP: f32 = 6.0;
+const LIST_ROW_LEFT: f32 = 8.0;
+const LIST_ROW_RIGHT: f32 = 10.0;
+const LIST_ICON: f32 = 16.0;
+const LIST_GAP: f32 = 8.0;
+/// The headroom added to the average name width.
+const LIST_HEADROOM: f32 = 24.0;
+/// No List view column is narrower than this, and none wider than a third
+/// of the pane.
+pub const LIST_COLUMN_MIN: f32 = 160.0;
+/// How many names at most are measured for the average: a folder with more
+/// is sampled at even steps, so 200k entries cost what a few thousand do.
+const LIST_SAMPLE: usize = 4096;
+
 /// Indent per tree level, in points.
 const TREE_INDENT: f32 = 16.0;
 /// Width of the expand chevron's slot, in points.
 const CHEVRON: f32 = 16.0;
-/// A second click on the sole selected row this long after the first (and
-/// past the double-click window) starts a rename, in seconds.
+/// With *Rename on a second click* on, a second click on the sole selected
+/// row this long after the first (and past the double-click window) starts
+/// a rename, in seconds.
 const SLOW_CLICK: f64 = 0.5;
 
 /// The glyph in front of a name.
@@ -142,7 +161,11 @@ pub fn show(ui: &mut egui::Ui, cx: &mut PaneCx<'_>) {
     // empty-folder message take the view's place, unless a New file or New
     // folder is being named.
     let bare = overview.is_none() && cx.tab.row_count() == 0 && cx.tab_ui.edit.is_none();
-    if bare && !cx.tab.listing.complete {
+    if let Some(lost) = cx.tab.lost.clone() {
+        // The connection is lost: the card takes the list's place, and the
+        // tab stays where it is.
+        connection_lost(ui, cx, &lost);
+    } else if bare && !cx.tab.listing.complete {
         loading_state(ui, cx);
     } else if bare && cx.tab.failure.is_none() {
         empty_state(ui, cx);
@@ -339,6 +362,34 @@ fn new_row_strip(ui: &mut egui::Ui, cx: &mut PaneCx<'_>) {
         name_taken(tab, name)
     });
     finish_edit(cx, outcome);
+}
+
+/// A remote location that stopped answering (SPEC.md *Removed and
+/// unreachable locations*): the File info card, centred in place of the
+/// list — the source's icon, *Connection lost to <account>* with the
+/// provider's name under it, one row, *Error*, holding the provider's
+/// message, and **Retry**, which lists the location again.
+fn connection_lost(ui: &mut egui::Ui, cx: &mut PaneCx<'_>, lost: &model::ConnectionLost) {
+    use crate::info_card::{self, Action, Card, Row};
+    let name = t!("pane-connection-lost", source = lost.source.clone());
+    let rows = [Row::new(t!("pane-connection-error"), lost.message.as_str())];
+    let actions = [Action {
+        glyph: None,
+        label: t!("retry"),
+    }];
+    let card = Card {
+        glyph: crate::icons::CLOUD,
+        name: &name,
+        line: &lost.provider,
+        rows: &rows,
+        actions: &actions,
+        ..Card::default()
+    };
+    let outcome = info_card::show_centred(ui, &card, &mut cx.tab_ui.lost_card, info_card::CENTRED);
+    if outcome.action.is_some() {
+        cx.requests
+            .push(Request::Command(app::Command::Refresh(cx.pane)));
+    }
 }
 
 /// Turns an editor's outcome into the shell's requests.
@@ -755,7 +806,10 @@ pub fn details(ui: &mut egui::Ui, cx: &mut PaneCx<'_>) {
     });
     let show_extensions = settings.show_extensions;
     let zebra = settings.zebra_stripes;
-    let now = cx.now;
+    let dates = format::Dates {
+        now: cx.now,
+        format: cx.app.model().settings.date_format,
+    };
     let tab = cx.tab;
     let is_tree = tab.view == ViewMode::Tree;
     let focused = cx.focused;
@@ -791,7 +845,7 @@ pub fn details(ui: &mut egui::Ui, cx: &mut PaneCx<'_>) {
                     depth,
                     is_tree,
                     show_extensions,
-                    now,
+                    dates,
                     focused,
                     cursor,
                     zebra: zebra && index % 2 == 1,
@@ -858,7 +912,8 @@ struct RowLook {
     /// Whether folders get a chevron.
     is_tree: bool,
     show_extensions: bool,
-    now: std::time::SystemTime,
+    /// How the date columns write a date.
+    dates: format::Dates,
     /// Whether the pane has the focus: its selection is blue, another
     /// pane's grey.
     focused: bool,
@@ -898,28 +953,19 @@ impl RowLook {
             .ctx()
             .pointer_hover_pos()
             .is_some_and(|p| rect.contains(p) && self.clip.contains(p));
-        let mut text = None;
-        if selected {
-            if self.focused {
-                painter.rect_filled(rect, self.radius, self.scheme.bg_selected_soft);
-                text = Some(self.scheme.text_on_selected);
-            } else {
-                painter.rect_filled(rect, self.radius, self.scheme.bg_selected_inactive);
-            }
-        } else if hovered {
-            painter.rect_filled(rect, self.radius, self.scheme.bg_subtle);
-        } else if self.zebra {
-            painter.rect_filled(rect, self.radius, self.scheme.bg_subtle.gamma_multiply(0.5));
-        }
-        if self.focused && self.cursor == Some(id) {
-            painter.rect_stroke(
-                rect,
-                self.radius,
-                self.scheme.focus_ring(),
-                egui::StrokeKind::Inside,
-            );
-        }
-        text
+        paint_row_states(
+            &painter,
+            rect,
+            self.scheme,
+            self.radius,
+            RowStates {
+                selected,
+                focused: self.focused,
+                hovered,
+                zebra: self.zebra,
+                cursor: self.cursor == Some(id),
+            },
+        )
     }
 
     /// The colour of a secondary column's text: `text/secondary`, or the
@@ -927,6 +973,51 @@ impl RowLook {
     fn secondary(&self, selection_text: Option<egui::Color32>) -> egui::Color32 {
         selection_text.unwrap_or(self.scheme.text_secondary)
     }
+}
+
+/// The states a row of the list can be in at once (SPEC.md *Row states*).
+#[derive(Debug, Clone, Copy)]
+#[allow(clippy::struct_excessive_bools)]
+struct RowStates {
+    selected: bool,
+    /// The pane has the focus: its selection is blue, another pane's grey.
+    focused: bool,
+    hovered: bool,
+    /// A tinted zebra stripe.
+    zebra: bool,
+    /// The keyboard cursor is on the row.
+    cursor: bool,
+}
+
+/// Paints a row's background on `rect`, in the details view and the List
+/// view alike: the zebra tint, hover `bg/subtle`, the selection in
+/// `bg/selected-soft` or `bg/selected-inactive`, and the 2 px
+/// `accent/focus` ring of the keyboard cursor. Returns the text colour the
+/// row takes, when the selection changes it.
+fn paint_row_states(
+    painter: &egui::Painter,
+    rect: egui::Rect,
+    scheme: &Scheme,
+    radius: egui::CornerRadius,
+    states: RowStates,
+) -> Option<egui::Color32> {
+    let mut text = None;
+    if states.selected {
+        if states.focused {
+            painter.rect_filled(rect, radius, scheme.bg_selected_soft);
+            text = Some(scheme.text_on_selected);
+        } else {
+            painter.rect_filled(rect, radius, scheme.bg_selected_inactive);
+        }
+    } else if states.hovered {
+        painter.rect_filled(rect, radius, scheme.bg_subtle);
+    } else if states.zebra {
+        painter.rect_filled(rect, radius, scheme.bg_subtle.gamma_multiply(0.5));
+    }
+    if states.focused && states.cursor {
+        painter.rect_stroke(rect, radius, scheme.focus_ring(), egui::StrokeKind::Inside);
+    }
+    text
 }
 
 /// What a details row produced.
@@ -1060,8 +1151,8 @@ fn details_row(
         );
     });
     row.col(|ui| {
-        let (brief, full) = format::date(entry.modified, look.now);
-        cell(ui, egui::RichText::new(brief).color(secondary)).on_hover_text(full);
+        let (written, exact) = look.dates.write(entry.modified);
+        cell(ui, egui::RichText::new(written).color(secondary)).on_hover_text(exact);
     });
     for def in extra {
         row.col(|ui| {
@@ -1179,9 +1270,10 @@ fn column_widths(tab: &Tab, ids: &[&str], available: f32, spacing: f32) -> Vec<f
         .collect()
 }
 
-/// The boundaries between the columns (SPEC.md *File list*): no permanent
-/// line; a hit zone about 6 px wide over the header band that, hovered,
-/// shows a 1 px `border/strong` divider across the band and the
+/// The boundaries between the columns (SPEC.md *File list*): a 1 px
+/// divider across the header band that always shows, in `border/default`,
+/// so that the place to grab is seen; its hit zone is about 6 px wide, and
+/// under the pointer or dragged the divider is `border/strong` with the
 /// column-resize cursor. Dragging it resizes the column before it, a
 /// double-click fits that column to its content, and no column gets
 /// narrower than [`COLUMN_MIN`]. A change goes to the model as the tab's
@@ -1214,14 +1306,20 @@ fn column_boundaries(
             egui::Id::new(("column-boundary", cx.tab_id, i)),
             Sense::click_and_drag(),
         );
-        if response.hovered() || response.dragged() {
+        let grabbed = response.hovered() || response.dragged();
+        if grabbed {
             ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeColumn);
-            ui.painter().vline(
-                x.round() + 0.5,
-                band.y_range(),
-                egui::Stroke::new(1.0, scheme.border_strong),
-            );
         }
+        let colour = if grabbed {
+            scheme.border_strong
+        } else {
+            scheme.border_default
+        };
+        ui.painter().vline(
+            x.round() + 0.5,
+            band.y_range(),
+            egui::Stroke::new(1.0, colour),
+        );
         let new_width = if response.double_clicked() {
             Some(fit_width(ui, cx, i, ids[i], extra))
         } else if response.dragged() {
@@ -1293,7 +1391,10 @@ fn fit_width(ui: &egui::Ui, cx: &PaneCx<'_>, index: usize, id: &str, extra: &[Co
             }
             "size" => measure(&format::size(entry.size), &body),
             "type" => measure(&model::type_of(entry), &body),
-            "modified" => measure(&format::date(entry.modified, cx.now).0, &body),
+            "modified" => measure(
+                &format::date(entry.modified, cx.now, cx.app.model().settings.date_format).0,
+                &body,
+            ),
             _ => cx
                 .tab
                 .decorations
@@ -1327,80 +1428,290 @@ fn sort_header(ui: &mut egui::Ui, label: &str, column: Column, sort: model::Sort
     ui.add(egui::Button::new(text).frame(false)).clicked()
 }
 
-/// The list grid: icon and name only, in as many columns as fit.
-pub fn list(ui: &mut egui::Ui, cx: &mut PaneCx<'_>) {
-    let settings = &cx.app.model().settings;
-    let height = row_height(ui);
-    let cell_width = 220.0;
-    let columns = ((ui.available_width() / cell_width).floor() as usize).max(1);
+/// The List view's grid in a frame: how the entries, one sequence in the
+/// sort order, fall into columns filled top to bottom.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ListGrid {
+    /// How many rows a column holds: as many whole rows as the pane's
+    /// height has room for, at least one.
+    pub rows: usize,
+    /// The one width every column has.
+    pub column_width: f32,
+}
+
+impl ListGrid {
+    /// The entry a step of `by` columns from `index` lands on, among
+    /// `count` entries: the same row of that column, the last entry where
+    /// the column is shorter, and `index` itself at the first or the last
+    /// column (SPEC.md *List view*, Left and Right).
+    #[must_use]
+    pub fn step_columns(&self, index: usize, by: isize, count: usize) -> usize {
+        if count == 0 || self.rows == 0 {
+            return index;
+        }
+        let columns = count.div_ceil(self.rows);
+        let (column, row) = (index / self.rows, index % self.rows);
+        let last = isize::try_from(columns - 1).unwrap_or(isize::MAX);
+        let target = isize::try_from(column)
+            .unwrap_or(isize::MAX)
+            .saturating_add(by)
+            .clamp(0, last);
+        let target = usize::try_from(target).unwrap_or(column);
+        if target == column {
+            return index;
+        }
+        (target * self.rows + row).min(count - 1)
+    }
+}
+
+/// The average width of a folder's names as the List view draws them, and
+/// what it was measured for: it is measured again when the rows, their
+/// number, the extension switch or the font change, not every frame.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct NameWidths {
+    count: usize,
+    first: Option<EntryId>,
+    last: Option<EntryId>,
+    show_extensions: bool,
+    font_size: f32,
+    /// The average width, in points.
+    pub average: f32,
+}
+
+/// The one width of the List view's columns (SPEC.md *List view*): the
+/// icon, its gap and the row's padding, then the average width of the
+/// names plus 24 px of headroom; never less than 160 px and never more
+/// than a third of the pane's width, so one very long name widens nothing.
+#[must_use]
+pub fn list_column_width(average_name: f32, pane_width: f32) -> f32 {
+    let wanted =
+        LIST_ROW_LEFT + LIST_ICON + LIST_GAP + average_name + LIST_HEADROOM + LIST_ROW_RIGHT;
+    wanted.min(pane_width / 3.0).max(LIST_COLUMN_MIN)
+}
+
+/// The average width of the names of the tab's rows in `font`, from the
+/// cache where nothing it depends on changed.
+fn average_name_width(ui: &egui::Ui, cx: &mut PaneCx<'_>, font: &egui::FontId) -> f32 {
+    let show_extensions = cx.app.model().settings.show_extensions;
     let count = cx.tab.row_count();
-    let rows = count.div_ceil(columns);
-    cx.tab_ui.visible_rows =
-        ((ui.available_height() / (height + ui.spacing().item_spacing.y)) as usize).max(1)
-            * columns;
-    let show_extensions = settings.show_extensions;
-    let mut area = egui::ScrollArea::vertical()
+    let key = NameWidths {
+        count,
+        first: cx.tab.row(0).map(|e| e.id),
+        last: count
+            .checked_sub(1)
+            .and_then(|i| cx.tab.row(i))
+            .map(|e| e.id),
+        show_extensions,
+        font_size: font.size,
+        average: 0.0,
+    };
+    if let Some(known) = cx.tab_ui.list_names
+        && (NameWidths {
+            average: 0.0,
+            ..known
+        }) == key
+    {
+        return known.average;
+    }
+    let step = count.div_ceil(LIST_SAMPLE).max(1);
+    let (mut total, mut measured) = (0.0f32, 0usize);
+    ui.fonts_mut(|fonts| {
+        for index in (0..count).step_by(step) {
+            let Some(entry) = cx.tab.row(index) else {
+                continue;
+            };
+            total += shown_name(cx.tab, entry, show_extensions)
+                .chars()
+                .map(|c| fonts.glyph_width(font, c))
+                .sum::<f32>();
+            measured += 1;
+        }
+    });
+    #[allow(clippy::cast_precision_loss)]
+    let average = if measured == 0 {
+        0.0
+    } else {
+        total / measured as f32
+    };
+    cx.tab_ui.list_names = Some(NameWidths { average, ..key });
+    average
+}
+
+/// The List view (SPEC.md *List view*): icon and name only, the entries
+/// filled top to bottom and then continued in the next column to the
+/// right. Every column has the one width [`list_column_width`] gives, the
+/// pane scrolls sideways and never up or down, and a name longer than its
+/// column ends in an ellipsis and is shown whole on hover.
+#[allow(clippy::too_many_lines)]
+pub fn list(ui: &mut egui::Ui, cx: &mut PaneCx<'_>) {
+    let scheme = theme::scheme(ui);
+    let metrics = theme::metrics(ui.ctx());
+    let radius = egui::CornerRadius::same(metrics.radius_control as u8);
+    let show_extensions = cx.app.model().settings.show_extensions;
+    let row_height = row_height(ui);
+    let font = egui::FontId::proportional(TEXT_BODY);
+    let pane = ui.available_rect_before_wrap();
+    // As many whole rows as the height has room for, above the scroll bar.
+    let bar = ui.spacing().scroll.allocated_width();
+    let rows = (((pane.height() - LIST_TOP - bar) / row_height).floor() as usize).max(1);
+    let count = cx.tab.row_count();
+    let columns = count.div_ceil(rows);
+    let column_width = list_column_width(average_name_width(ui, cx, &font), pane.width());
+    let grid = ListGrid { rows, column_width };
+    cx.tab_ui.list = Some(grid);
+    let whole_columns = ((pane.width() - LIST_LEFT) / column_width).floor() as usize;
+    cx.tab_ui.visible_rows = rows * whole_columns.max(1);
+
+    // The wheel moves the columns sideways: the one direction there is.
+    ui.style_mut().always_scroll_the_only_direction = true;
+    let mut area = egui::ScrollArea::horizontal()
         .id_salt(("list", cx.tab_id))
         .auto_shrink([false, false]);
-    if let Some(index) = cx.tab_ui.scroll_to.take() {
-        let row = index / columns;
-        area = area.vertical_scroll_offset(row as f32 * (height + ui.spacing().item_spacing.y));
-    }
     if let Some(offset) = cx.tab_ui.pending_offset.take() {
-        area = area.vertical_scroll_offset(offset);
+        area = area.horizontal_scroll_offset(offset);
     }
+    let scroll_to = cx.tab_ui.scroll_to.take();
+    let focused = cx.focused;
+    let cursor = cx.tab_ui.cursor;
+    let text_colour = ui.visuals().text_color();
     let mut clicked: Vec<(usize, egui::Response)> = Vec::new();
     let mut drawn: Vec<(usize, egui::Rect)> = Vec::new();
     let mut edit_outcome: Option<EditOutcome> = None;
-    // A pane without the focus shows its selection grey (SPEC.md *Row
-    // states*).
-    if !cx.focused {
-        let scheme = theme::scheme(ui);
-        ui.visuals_mut().selection.bg_fill = scheme.bg_selected_inactive;
-        ui.visuals_mut().selection.stroke.color = scheme.text_primary;
-    }
-    let out = area.show_rows(ui, height, rows, |ui, range| {
-        for row in range {
-            ui.horizontal(|ui| {
-                for column in 0..columns {
-                    let index = row * columns + column;
-                    let Some(entry) = cx.tab.row(index) else {
-                        break;
-                    };
-                    let selected = cx.tab.selection.contains(&entry.id);
-                    let decoration = cx.tab.decorations.get(&entry.id);
-                    let text = cell_text(
-                        ui,
-                        icon(entry),
-                        &shown_name(cx.tab, entry, show_extensions),
-                        decoration,
-                    );
-                    let response = ui.add_sized(
-                        [cell_width - ui.spacing().item_spacing.x, height],
-                        egui::Button::selectable(selected, text).sense(Sense::click_and_drag()),
-                    );
-                    if cx
-                        .tab_ui
-                        .edit
-                        .as_ref()
-                        .is_some_and(|e| e.kind == EditKind::Rename(entry.id))
-                    {
-                        let tab = cx.tab;
-                        let rect = response.rect.shrink2(egui::vec2(2.0, 1.0));
-                        let outcome = cx.tab_ui.edit.as_mut().map(|edit| {
-                            editor(ui, edit, rect, true, &|name| name_taken(tab, name))
-                        });
-                        edit_outcome = outcome;
-                    }
-                    drawn.push((index, response.rect));
-                    if interacted(&response) {
-                        clicked.push((index, response));
-                    }
-                }
+    #[allow(clippy::cast_precision_loss)]
+    let out = area.show_viewport(ui, |ui, viewport| {
+        let size = egui::vec2(
+            LIST_LEFT + columns as f32 * column_width,
+            LIST_TOP + rows as f32 * row_height,
+        );
+        let (content, _) = ui.allocate_exact_size(size, Sense::hover());
+        let cell = |index: usize| {
+            let (column, row) = (index / rows, index % rows);
+            egui::Rect::from_min_size(
+                content.min
+                    + egui::vec2(
+                        LIST_LEFT + column as f32 * column_width,
+                        LIST_TOP + row as f32 * row_height,
+                    ),
+                egui::vec2(column_width, row_height),
+            )
+        };
+        if let Some(index) = scroll_to.filter(|index| *index < count) {
+            ui.scroll_to_rect(cell(index), None);
+        }
+        // Only the columns in view are laid out.
+        let first = (((viewport.min.x - LIST_LEFT) / column_width)
+            .floor()
+            .max(0.0)) as usize;
+        let last = ((((viewport.max.x - LIST_LEFT) / column_width)
+            .ceil()
+            .max(0.0)) as usize)
+            .min(columns);
+        let clip = ui.clip_rect();
+        let hover = ui.ctx().pointer_hover_pos().filter(|p| clip.contains(*p));
+        for index in (first * rows)..(last * rows).min(count) {
+            let Some(entry) = cx.tab.row(index) else {
+                break;
+            };
+            let rect = cell(index);
+            let id = entry.id;
+            let name = shown_name(cx.tab, entry, show_extensions);
+            let selected = cx.tab.selection.contains(&id);
+            let decoration = cx.tab.decorations.get(&id);
+            let response = ui.interact(
+                rect,
+                ui.id().with(("list-row", id)),
+                Sense::click_and_drag(),
+            );
+            response.widget_info(|| {
+                egui::WidgetInfo::selected(egui::WidgetType::Button, true, selected, name.as_str())
             });
+            let painter = ui.painter();
+            let selection_text = paint_row_states(
+                painter,
+                rect,
+                scheme,
+                radius,
+                RowStates {
+                    selected,
+                    focused,
+                    hovered: hover.is_some_and(|p| rect.contains(p)),
+                    zebra: false,
+                    cursor: cursor == Some(id),
+                },
+            );
+            let colour = selection_text.unwrap_or(text_colour);
+            let mut x = rect.left() + LIST_ROW_LEFT;
+            painter.text(
+                egui::pos2(x + LIST_ICON / 2.0, rect.center().y),
+                egui::Align2::CENTER_CENTER,
+                icon(entry),
+                egui::FontId::proportional(LIST_ICON),
+                colour,
+            );
+            x += LIST_ICON + LIST_GAP;
+            if let Some(badge) = decoration.and_then(|d| d.badge) {
+                let drawn = painter.text(
+                    egui::pos2(x, rect.center().y),
+                    egui::Align2::LEFT_CENTER,
+                    badge.glyph,
+                    font.clone(),
+                    color(badge.color),
+                );
+                x = drawn.right() + 4.0;
+            }
+            let name_rect = egui::Rect::from_min_max(
+                egui::pos2(x, rect.top()),
+                egui::pos2(rect.right() - LIST_ROW_RIGHT, rect.bottom()),
+            );
+            if cx
+                .tab_ui
+                .edit
+                .as_ref()
+                .is_some_and(|e| e.kind == EditKind::Rename(id))
+            {
+                let tab = cx.tab;
+                let field = name_rect.shrink2(egui::vec2(0.0, 1.0));
+                edit_outcome = cx
+                    .tab_ui
+                    .edit
+                    .as_mut()
+                    .map(|edit| editor(ui, edit, field, true, &|name| name_taken(tab, name)));
+            } else {
+                // The name on one line, cut with an ellipsis where the
+                // column ends, and whole in the tooltip then.
+                let tint = decoration.and_then(|d| d.tint).map(color);
+                let mut job = egui::text::LayoutJob::simple_singleline(
+                    name.clone(),
+                    font.clone(),
+                    selection_text.or(tint).unwrap_or(colour),
+                );
+                job.wrap = egui::text::TextWrapping {
+                    max_width: name_rect.width(),
+                    max_rows: 1,
+                    break_anywhere: true,
+                    overflow_character: Some('…'),
+                };
+                let galley = ui.fonts_mut(|fonts| fonts.layout_job(job));
+                let cut = galley.elided;
+                ui.painter().galley(
+                    egui::pos2(
+                        name_rect.left(),
+                        name_rect.center().y - galley.size().y / 2.0,
+                    ),
+                    galley,
+                    colour,
+                );
+                if cut {
+                    response.clone().on_hover_text(name.as_str());
+                }
+            }
+            drawn.push((index, rect));
+            if interacted(&response) {
+                clicked.push((index, response));
+            }
         }
     });
-    cx.tab_ui.scroll_offset = out.state.offset.y;
+    cx.tab_ui.scroll_offset = out.state.offset.x;
     if let Some(outcome) = edit_outcome {
         finish_edit(cx, outcome);
     }
@@ -1409,30 +1720,6 @@ pub fn list(ui: &mut egui::Ui, cx: &mut PaneCx<'_>) {
         drag_start(cx, index, &response);
         interact(ui, cx, index, &response);
     }
-}
-
-/// Icon, badge and name of a list cell, the badge in its colour and the
-/// name in its tint.
-fn cell_text(
-    ui: &egui::Ui,
-    icon: &str,
-    name: &str,
-    decoration: Option<&Decoration>,
-) -> egui::WidgetText {
-    let font = egui::TextStyle::Button.resolve(ui.style());
-    let plain = ui.visuals().text_color();
-    let mut job = egui::text::LayoutJob::default();
-    job.append(icon, 0.0, egui::TextFormat::simple(font.clone(), plain));
-    if let Some(badge) = decoration.and_then(|d| d.badge) {
-        job.append(
-            badge.glyph,
-            4.0,
-            egui::TextFormat::simple(font.clone(), color(badge.color)),
-        );
-    }
-    let tint = decoration.and_then(|d| d.tint).map_or(plain, color);
-    job.append(name, 4.0, egui::TextFormat::simple(font, tint));
-    job.into()
 }
 
 /// Clicks on a row: select, extend, toggle, open, new tab, context menu.
@@ -1448,8 +1735,11 @@ fn interact(ui: &mut egui::Ui, cx: &mut PaneCx<'_>, index: usize, response: &egu
         cx.tab_ui.last_click = None;
         cx.requests.push(Request::OpenEntry { pane: cx.pane, id });
     } else if response.clicked() {
-        // A slow second click on the one selected row renames it.
-        let slow_second = modifiers.is_none()
+        // A slow second click on the one selected row renames it, where
+        // the setting says so; it is off unless the user turns it on
+        // (SPEC.md *Inline rename*).
+        let slow_second = cx.app.model().settings.rename_on_click
+            && modifiers.is_none()
             && selected
             && cx.tab.selection.len() == 1
             && cx
@@ -1511,4 +1801,44 @@ fn interact(ui: &mut egui::Ui, cx: &mut PaneCx<'_>, index: usize, response: &egu
     egui::Popup::context_menu(response)
         .style(menus::menu_style)
         .show(|ui| menus::context_menu(ui, cx, &action_ctx, Some(entry)));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Issue 149: one width for every column of the List view — the
+    /// average name width with its headroom and the row's own parts,
+    /// never under 160 px, never over a third of the pane.
+    #[test]
+    fn the_list_views_column_width_is_the_average_name_within_its_bounds() {
+        // 8 + 16 + 8 of padding, icon and gap, 24 of headroom, 10 of padding.
+        assert!((list_column_width(150.0, 1200.0) - 216.0).abs() < f32::EPSILON);
+        // Short names: never less than 160.
+        assert!((list_column_width(20.0, 1200.0) - LIST_COLUMN_MIN).abs() < f32::EPSILON);
+        // Long names: never more than a third of the pane.
+        assert!((list_column_width(900.0, 1200.0) - 400.0).abs() < f32::EPSILON);
+        // A pane too narrow for three columns of 160 keeps the 160.
+        assert!((list_column_width(900.0, 300.0) - LIST_COLUMN_MIN).abs() < f32::EPSILON);
+    }
+
+    /// Left and Right keep the row, land on the last entry where the
+    /// column is shorter, and stay put at the first and the last column.
+    #[test]
+    fn a_step_of_columns_keeps_the_row_and_stops_at_the_ends() {
+        let grid = ListGrid {
+            rows: 4,
+            column_width: 200.0,
+        };
+        // Ten entries: columns of 4, 4 and 2.
+        assert_eq!(grid.step_columns(1, 1, 10), 5);
+        assert_eq!(grid.step_columns(5, -1, 10), 1);
+        assert_eq!(grid.step_columns(5, 1, 10), 9);
+        // The third column has no fourth row: the last entry.
+        assert_eq!(grid.step_columns(7, 1, 10), 9);
+        assert_eq!(grid.step_columns(2, -1, 10), 2);
+        assert_eq!(grid.step_columns(9, 1, 10), 9);
+        assert_eq!(grid.step_columns(0, 5, 10), 8);
+        assert_eq!(grid.step_columns(0, 1, 0), 0);
+    }
 }

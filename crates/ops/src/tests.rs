@@ -531,7 +531,7 @@ fn mount_shows_on_the_images_this_platform_mounts_and_goes_through_it() {
 #[test]
 fn every_action_has_an_id_label_and_core_group() {
     let h = harness();
-    assert_eq!(h.registry.actions().len(), 24);
+    assert_eq!(h.registry.actions().len(), 26);
     for action in h.registry.actions() {
         assert!(action.id().0.starts_with("core."), "{}", action.id().0);
         assert_ne!(action.label(), "");
@@ -549,6 +549,7 @@ fn every_action_has_an_id_label_and_core_group() {
                 | "core.create_link"
                 | "core.hash"
                 | "core.mount"
+                | "core.download"
         );
         assert_eq!(
             action.default_shortcut().is_some(),
@@ -780,13 +781,23 @@ fn a_paste_over_existing_names_asks_and_skip_leaves_the_target_alone() {
     };
     let first = answer_conflict(&h, types::ConflictAnswer::once(types::Resolution::Skip));
     assert_eq!(first.job, id);
-    assert!(!first.target_is_dir);
+    // Both sides are there to compare: a file meets a file.
+    assert!(!first.existing.is_dir && !first.incoming.is_dir);
+    assert_eq!(first.existing.size, Some(5), "old a");
+    assert_eq!(first.incoming.size, Some(5), "new a");
+    assert!(first.existing.modified.is_some() && first.incoming.modified.is_some());
     assert_eq!(first.proposed, "a (2).txt");
+    // The job counted its conflicts before it brought anything.
+    assert_eq!(first.position, Some((1, 3)));
     assert_eq!(first.remaining, 2);
     let second = answer_conflict(&h, types::ConflictAnswer::once(types::Resolution::Skip));
     assert_eq!(second.proposed, "b (2).txt");
+    assert_eq!(second.position, Some((2, 3)));
     let third = answer_conflict(&h, types::ConflictAnswer::once(types::Resolution::Skip));
-    assert!(third.target_is_dir);
+    assert!(third.between_folders());
+    assert_eq!(third.existing.size, None, "a folder's size is not counted");
+    assert_eq!(third.position, Some((3, 3)));
+    assert_eq!(third.remaining, 0);
     h.settle();
     assert_eq!(
         fs::read_to_string(dst.join("a.txt")).ok(),
@@ -827,7 +838,52 @@ fn overwrite_replaces_files_and_merges_folders() {
 }
 
 #[test]
-fn rename_puts_the_item_under_the_proposed_name_and_apply_to_all_numbers_the_rest() {
+fn keep_both_lands_under_the_first_free_number_and_leaves_the_existing_file() {
+    let h = harness();
+    let (src, dst) = conflicting_tree(&h);
+    // `a (2).txt` is taken too: the first free number is 3.
+    write(&dst.join("a (2).txt"), "an earlier copy");
+    let ctx = h.ctx(&src, &[&src.join("a.txt")]);
+    h.run("core.copy", ctx);
+    h.action("core.paste")
+        .run(h.ctx(&dst, &[]), &h.jobs, &h.ui)
+        .unwrap_or_else(|e| panic!("{e}"));
+    let asked = h.conflicts.take_new();
+    let deadline = Instant::now() + Duration::from_secs(2);
+    let mut asked = asked;
+    while asked.is_empty() {
+        assert!(Instant::now() < deadline, "no conflict was asked");
+        std::thread::sleep(Duration::from_millis(5));
+        asked = h.conflicts.take_new();
+    }
+    let conflict = asked.remove(0);
+    assert_eq!(conflict.proposed, "a (3).txt");
+    // One conflict: no "n of m", nothing remaining.
+    assert_eq!(conflict.position, Some((1, 1)));
+    assert_eq!(conflict.remaining, 0);
+    // Keep both is the proposed name.
+    assert!(h.conflicts.answer(
+        conflict.id,
+        types::ConflictAnswer::once(types::Resolution::Rename(conflict.proposed.clone())),
+    ));
+    h.settle();
+    assert_eq!(
+        fs::read_to_string(dst.join("a (3).txt")).ok(),
+        Some("new a".into())
+    );
+    assert_eq!(
+        fs::read_to_string(dst.join("a.txt")).ok(),
+        Some("old a".into()),
+        "the existing file is untouched"
+    );
+    assert_eq!(
+        fs::read_to_string(dst.join("a (2).txt")).ok(),
+        Some("an earlier copy".into())
+    );
+}
+
+#[test]
+fn keep_both_for_the_remaining_numbers_the_files_and_still_asks_about_two_folders() {
     let h = harness();
     let (src, dst) = conflicting_tree(&h);
     paste_all(&h, &src, &dst);
@@ -839,6 +895,13 @@ fn rename_puts_the_item_under_the_proposed_name_and_apply_to_all_numbers_the_res
         &h,
         types::ConflictAnswer::for_all(types::Resolution::Rename(String::new())),
     );
+    // Keeping both does not answer for a folder that meets a folder.
+    let folders = answer_conflict(
+        &h,
+        types::ConflictAnswer::once(types::Resolution::Overwrite),
+    );
+    assert!(folders.between_folders());
+    assert_eq!(folders.position, Some((3, 3)));
     h.settle();
     assert_eq!(
         fs::read_to_string(dst.join("fresh.txt")).ok(),
@@ -852,10 +915,8 @@ fn rename_puts_the_item_under_the_proposed_name_and_apply_to_all_numbers_the_res
         fs::read_to_string(dst.join("b (2).txt")).ok(),
         Some("new b".into())
     );
-    assert!(
-        dst.join("sub (2)/inner.txt").exists(),
-        "folders are numbered too"
-    );
+    assert!(dst.join("sub/inner.txt").exists(), "the folders merged");
+    assert!(!dst.join("sub (2)").exists(), "a folder is not kept twice");
     assert!(dst.join("sub/other.txt").exists());
 }
 
@@ -1072,8 +1133,13 @@ mod native {
 
     pub(super) const ID: ProviderId = ProviderId("store");
 
+    /// A store shaped like an object store's account: its root takes
+    /// folders (containers) and no file, and a new folder's name there has
+    /// lowercase letters only.
     pub(super) struct Native {
         files: Mutex<BTreeMap<String, Vec<u8>>>,
+        /// Every `create_dir` call, by path.
+        pub(super) made: Mutex<Vec<String>>,
         copies: bool,
         /// Bytes handed out through `open_read`.
         pub(super) read_bytes: Arc<AtomicU64>,
@@ -1098,6 +1164,7 @@ mod native {
                         .map(|(p, b)| ((*p).to_owned(), b.to_vec()))
                         .collect(),
                 ),
+                made: Mutex::new(Vec::new()),
                 copies,
                 read_bytes: Arc::new(AtomicU64::new(0)),
                 transfers: Mutex::new(Vec::new()),
@@ -1108,7 +1175,7 @@ mod native {
             lock(&self.files).keys().cloned().collect()
         }
 
-        fn entry(path: &str, size: Option<u64>) -> Entry {
+        pub(super) fn entry(path: &str, size: Option<u64>) -> Entry {
             Entry {
                 id: EntryId::new(ID, u128::from(path.len() as u64)),
                 name: path.rsplit('/').next().unwrap_or(path).to_owned(),
@@ -1152,16 +1219,46 @@ mod native {
         fn id(&self) -> ProviderId {
             ID
         }
-        fn capabilities(&self, _loc: &Location) -> Capabilities {
-            Capabilities::WRITE | Capabilities::NATIVE_TRANSFER | Capabilities::REMOTE
+        fn capabilities(&self, loc: &Location) -> Capabilities {
+            let caps = Capabilities::WRITE
+                | Capabilities::NATIVE_TRANSFER
+                | Capabilities::REMOTE
+                | Capabilities::CREATE_DIR
+                | Capabilities::DOWNLOAD;
+            if key(loc).is_empty() {
+                caps
+            } else {
+                caps | Capabilities::CREATE_FILE
+            }
+        }
+        fn unavailable_reason(&self, loc: &Location, capability: Capabilities) -> Option<String> {
+            (key(loc).is_empty() && capability.contains(Capabilities::CREATE_FILE))
+                .then(|| "Files live inside a container".to_owned())
+        }
+        fn name_problem(&self, loc: &Location) -> Option<String> {
+            let path = key(loc);
+            let (parent, name) = path.rsplit_once('/')?;
+            (parent.is_empty() && !name.chars().all(|c| c.is_ascii_lowercase()))
+                .then(|| "A container name has lowercase letters only".to_owned())
         }
         fn list(&self, loc: &Location, _opts: ListOptions, _cancel: CancelToken) -> EntryStream {
             let dir = key(loc);
-            let entries: Vec<Entry> = lock(&self.files)
+            let prefix = format!("{dir}/");
+            let files = lock(&self.files);
+            let mut entries: Vec<Entry> = files
                 .iter()
                 .filter(|(p, _)| p.rsplit_once('/').is_some_and(|(parent, _)| parent == dir))
                 .map(|(p, b)| Self::entry(p, Some(b.len() as u64)))
                 .collect();
+            // The folders directly below: the prefixes files share.
+            let mut folders: Vec<String> = files
+                .keys()
+                .filter_map(|p| p.strip_prefix(&prefix))
+                .filter_map(|rest| rest.split_once('/'))
+                .map(|(folder, _)| format!("{prefix}{folder}"))
+                .collect();
+            folders.dedup();
+            entries.extend(folders.iter().map(|p| Self::entry(p, None)));
             stream::once(async move { Ok(entries) }).boxed()
         }
         async fn stat(&self, loc: &Location) -> Result<Entry, Error> {
@@ -1195,6 +1292,7 @@ mod native {
             Ok(Box::new(tokio::io::sink()))
         }
         async fn create_dir(&self, loc: &Location) -> Result<Entry, Error> {
+            lock(&self.made).push(key(loc));
             Ok(Self::entry(&key(loc), None))
         }
         async fn rename(&self, _from: &Location, _to: &Location) -> Result<Entry, Error> {
@@ -1571,4 +1669,229 @@ fn select_by_pattern_matches_globs_and_regular_expressions() {
         h.run("core.select_pattern", h.ctx(&dir, &[])),
         ActionOutcome::Done
     ));
+}
+
+/// A context at a location of the store, with these entries selected.
+fn store_ctx(path: &str, selection: Vec<Entry>) -> ActionCtx {
+    ActionCtx {
+        pane: PaneId(1),
+        location: Location::new(native::ID, path),
+        selection,
+        invoked_from: Invocation::ContextMenu,
+        other: None,
+    }
+}
+
+/// Issue 149, *Capabilities decide what is offered*: New folder and New
+/// file follow `CREATE_DIR` and `CREATE_FILE` at the location, not
+/// `WRITE`. At an account's root a folder can be made and a file cannot,
+/// and New file says why instead of running and failing.
+#[test]
+fn new_file_is_disabled_with_the_providers_reason_where_only_a_folder_can_be_made() {
+    let h = harness();
+    let store = native::Native::new(true, &[("/photos/a.jpg", &b"x"[..])]);
+    h.mounts.mount(Arc::clone(&store) as Arc<dyn ext::Provider>);
+    let new_folder = h.action("core.new_folder");
+    let new_file = h.action("core.new_file");
+
+    assert_eq!(
+        new_folder.availability(&store_ctx("/", Vec::new())),
+        Availability::Enabled
+    );
+    assert_eq!(
+        new_file.availability(&store_ctx("/", Vec::new())),
+        Availability::Disabled("Files live inside a container".to_owned())
+    );
+    for inside in ["/photos", "/photos/2026/may"] {
+        assert_eq!(
+            new_folder.availability(&store_ctx(inside, Vec::new())),
+            Availability::Enabled,
+            "{inside}"
+        );
+        assert_eq!(
+            new_file.availability(&store_ctx(inside, Vec::new())),
+            Availability::Enabled,
+            "{inside}"
+        );
+    }
+    // The local file system takes both; a read-only view offers neither
+    // and hides them, as before.
+    let dir = h.dir.path().to_path_buf();
+    assert_eq!(
+        new_file.availability(&h.ctx(&dir, &[])),
+        Availability::Enabled
+    );
+    let trash = ActionCtx {
+        location: vfs_rick::trash_location(),
+        ..store_ctx("/", Vec::new())
+    };
+    assert_eq!(new_folder.availability(&trash), Availability::Hidden);
+    assert_eq!(new_file.availability(&trash), Availability::Hidden);
+}
+
+/// Issue 149: a new folder's name is checked against the provider's own
+/// rules before any request goes out. *New folder* at an account's root
+/// with a name no container can have asks the provider for nothing and
+/// says which rule it breaks.
+#[test]
+fn a_folder_name_the_provider_refuses_sends_no_request() {
+    let h = harness();
+    let store = native::Native::new(true, &[("/photos/a.jpg", &b"x"[..])]);
+    h.mounts.mount(Arc::clone(&store) as Arc<dyn ext::Provider>);
+    let answer = |name: &str| {
+        *h.ui.prompt.lock().unwrap_or_else(PoisonError::into_inner) = Some(name.to_owned());
+    };
+    let made = || {
+        store
+            .made
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+    };
+
+    answer("New folder");
+    let outcome = h.run("core.new_folder", store_ctx("/", Vec::new()));
+    assert!(matches!(outcome, ActionOutcome::Done), "{outcome:?}");
+    assert_eq!(made(), Vec::<String>::new(), "nothing was asked for");
+    let notices =
+        h.ui.notices
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone();
+    assert_eq!(
+        notices,
+        [(
+            Level::Warning,
+            "A container name has lowercase letters only".to_owned()
+        )]
+    );
+
+    // A name the rules take is created, and the default name is fine
+    // inside a container, at any depth.
+    answer("archive");
+    let outcome = h.run("core.new_folder", store_ctx("/", Vec::new()));
+    assert!(matches!(outcome, ActionOutcome::Undoable(_)), "{outcome:?}");
+    answer("New folder");
+    h.run("core.new_folder", store_ctx("/photos/2026", Vec::new()));
+    assert_eq!(made(), ["/archive", "/photos/2026/New folder"]);
+}
+
+/// Issue 149, *Remote files*: Enter on a remote file — the Open action —
+/// hands nothing to the system. It starts a job that leaves the file in
+/// the Downloads folder, and a folder in the selection is not brought
+/// along.
+#[test]
+fn opening_a_remote_file_downloads_it_and_opens_nothing() {
+    let h = harness();
+    let downloads = h.fake.home_dir().join("Downloads");
+    fs::create_dir_all(&downloads).unwrap_or_else(|e| panic!("{e}"));
+    let store = native::Native::new(
+        true,
+        &[
+            ("/photos/a.jpg", &b"jpeg"[..]),
+            ("/photos/raw/b.dng", &b"dng"[..]),
+        ],
+    );
+    h.mounts.mount(Arc::clone(&store) as Arc<dyn ext::Provider>);
+
+    let selection = vec![
+        native::Native::entry("/photos/a.jpg", Some(4)),
+        native::Native::entry("/photos/raw", None),
+    ];
+    let outcome = h.run("core.open_default", store_ctx("/photos", selection));
+    assert!(matches!(outcome, ActionOutcome::Started(_)), "{outcome:?}");
+    assert_eq!(
+        fs::read(downloads.join("a.jpg")).unwrap_or_else(|e| panic!("{e}")),
+        b"jpeg"
+    );
+    assert!(!downloads.join("raw").exists(), "Open brings files only");
+    assert_eq!(h.fake.opened(), Vec::<PathBuf>::new(), "nothing is opened");
+
+    // Without a Downloads folder the home takes it.
+    fs::remove_dir_all(&downloads).unwrap_or_else(|e| panic!("{e}"));
+    let selection = vec![native::Native::entry("/photos/a.jpg", Some(4))];
+    h.run("core.open_default", store_ctx("/photos", selection));
+    assert!(h.fake.home_dir().join("a.jpg").is_file());
+}
+
+/// Issue 149, *Download…*: the action is in the menu on remote locations
+/// only, asks for the target folder first, Downloads being the
+/// suggestion, and brings the whole selection down, folders with
+/// everything beneath them.
+#[test]
+fn download_asks_for_the_folder_and_brings_files_and_folders_down() {
+    let h = harness();
+    let downloads = h.fake.home_dir().join("Downloads");
+    fs::create_dir_all(&downloads).unwrap_or_else(|e| panic!("{e}"));
+    let store = native::Native::new(
+        true,
+        &[
+            ("/photos/a.jpg", &b"jpeg"[..]),
+            ("/photos/b.jpg", &b"jpeg2"[..]),
+            ("/photos/raw/c.dng", &b"dng"[..]),
+        ],
+    );
+    h.mounts.mount(Arc::clone(&store) as Arc<dyn ext::Provider>);
+    let download = h.action("core.download");
+    let selection = || {
+        vec![
+            native::Native::entry("/photos/a.jpg", Some(4)),
+            native::Native::entry("/photos/b.jpg", Some(5)),
+            native::Native::entry("/photos/raw", None),
+        ]
+    };
+
+    // Not on a local folder; on a remote one, with something selected.
+    let dir = h.dir.path().to_path_buf();
+    assert_eq!(
+        download.availability(&h.ctx(&dir, &[])),
+        Availability::Hidden
+    );
+    assert!(matches!(
+        download.availability(&store_ctx("/photos", Vec::new())),
+        Availability::Disabled(_)
+    ));
+
+    // Dismissing the question downloads nothing.
+    let outcome = h.run("core.download", store_ctx("/photos", selection()));
+    assert!(matches!(outcome, ActionOutcome::Done), "{outcome:?}");
+    assert_eq!(fs::read_dir(&downloads).map(Iterator::count).ok(), Some(0));
+
+    let target = h.dir.path().join("taken down");
+    fs::create_dir_all(&target).unwrap_or_else(|e| panic!("{e}"));
+    *h.ui.prompt.lock().unwrap_or_else(PoisonError::into_inner) =
+        Some(target.to_string_lossy().into_owned());
+    let outcome = h.run("core.download", store_ctx("/photos", selection()));
+    assert!(matches!(outcome, ActionOutcome::Started(_)), "{outcome:?}");
+    let read = |name: &str| fs::read(target.join(name)).unwrap_or_else(|e| panic!("{name}: {e}"));
+    assert_eq!(read("a.jpg"), b"jpeg");
+    assert_eq!(read("b.jpg"), b"jpeg2");
+    assert_eq!(read("raw/c.dng"), b"dng");
+    assert_eq!(h.fake.opened(), Vec::<PathBuf>::new(), "nothing is opened");
+    // The store keeps what was downloaded: it is a copy.
+    assert_eq!(
+        store.paths(),
+        ["/photos/a.jpg", "/photos/b.jpg", "/photos/raw/c.dng"]
+    );
+}
+
+/// Issue 149: the editor's command is split at spaces outside double
+/// quotes, and the quotes are dropped.
+#[test]
+fn an_editor_command_is_split_at_spaces_outside_double_quotes() {
+    let split = crate::split_command;
+    assert_eq!(split("code"), ["code"]);
+    assert_eq!(split("  code   --wait  "), ["code", "--wait"]);
+    assert_eq!(
+        split(r#""C:\Program Files\Editor\edit.exe" --wait"#),
+        [r"C:\Program Files\Editor\edit.exe", "--wait"]
+    );
+    assert_eq!(
+        split(r#"code --user-data-dir="/tmp/my code" -n"#),
+        ["code", "--user-data-dir=/tmp/my code", "-n"]
+    );
+    // An empty argument stays one; nothing at all is no command.
+    assert_eq!(split(r#"edit "" x"#), ["edit", "", "x"]);
+    assert_eq!(split(""), [] as [&str; 0]);
+    assert_eq!(split("   "), [] as [&str; 0]);
 }

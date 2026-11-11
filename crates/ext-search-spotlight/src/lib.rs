@@ -71,6 +71,7 @@ impl SpotlightExtension {
             manifest: Manifest {
                 id: ID,
                 name: "Spotlight",
+                description: "Searches the macOS Spotlight index from the search box.",
                 version: Version::parse(env!("CARGO_PKG_VERSION"))
                     .unwrap_or_else(|_| Version::new(0, 0, 0)),
                 api_version: API_VERSION,

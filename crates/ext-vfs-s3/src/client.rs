@@ -85,8 +85,21 @@ fn failed(status: StatusCode, body: &str) -> Error {
     }
 }
 
-/// A transport error as the kernel error.
+/// A transport error as the kernel error. A request that never reached the
+/// service, or went unanswered, is a lost connection
+/// ([`Error::unreachable`]): the pane keeps its place and tries again.
 pub(crate) fn transport(error: reqwest::Error) -> Error {
+    if error.is_connect() || error.is_timeout() {
+        // The cause is in the chain, not in the error's own text.
+        let mut text = error.to_string();
+        let mut cause = std::error::Error::source(&error);
+        while let Some(inner) = cause {
+            text.push_str(": ");
+            text.push_str(&inner.to_string());
+            cause = inner.source();
+        }
+        return Error::unreachable(text);
+    }
     Error::Extension {
         ext: ID,
         source: Box::new(error),
@@ -507,23 +520,34 @@ impl S3Client {
         parse_page(&text)
     }
 
+    /// One page of every object under `prefix`, however deep: the listing
+    /// without a delimiter, which answers for a whole subtree.
+    pub(crate) async fn list_flat(
+        &self,
+        bucket: &str,
+        prefix: &str,
+        continuation: Option<&str>,
+    ) -> Result<Page, Error> {
+        let mut query: Vec<(&str, &str)> =
+            vec![("list-type", "2"), ("prefix", prefix), ("max-keys", PAGE)];
+        if let Some(token) = continuation {
+            query.push(("continuation-token", token));
+        }
+        let text = self
+            .send(Req::new(Method::GET, Some(bucket), None).query(&query))
+            .await?
+            .text()
+            .await
+            .map_err(transport)?;
+        parse_page(&text)
+    }
+
     /// Every object under `prefix`, however deep.
     pub(crate) async fn list_all(&self, bucket: &str, prefix: &str) -> Result<Vec<Object>, Error> {
         let mut out = Vec::new();
         let mut token: Option<String> = None;
         loop {
-            let mut query: Vec<(&str, &str)> =
-                vec![("list-type", "2"), ("prefix", prefix), ("max-keys", PAGE)];
-            if let Some(t) = token.as_deref() {
-                query.push(("continuation-token", t));
-            }
-            let text = self
-                .send(Req::new(Method::GET, Some(bucket), None).query(&query))
-                .await?
-                .text()
-                .await
-                .map_err(transport)?;
-            let page = parse_page(&text)?;
+            let page = self.list_flat(bucket, prefix, token.as_deref()).await?;
             out.extend(page.objects);
             match page.next {
                 Some(next) => token = Some(next),

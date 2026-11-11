@@ -89,6 +89,7 @@ impl TrashExtension {
             manifest: Manifest {
                 id: ID,
                 name: "Trash",
+                description: "Shows the system trash as a folder, with Restore and Empty trash.",
                 version: Version::parse(env!("CARGO_PKG_VERSION"))
                     .unwrap_or_else(|_| Version::new(0, 0, 0)),
                 api_version: API_VERSION,

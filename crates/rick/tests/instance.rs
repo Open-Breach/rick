@@ -453,6 +453,73 @@ mod routed {
         });
     }
 
+    /// A click on the launcher entry or on a dock favourite
+    /// (specs/system-integration.md §4): the desktop entry runs
+    /// `rick --activate`, and a running Rick answers by bringing its
+    /// window forward and opening nothing, whatever directory the
+    /// launcher started the process in.
+    #[test]
+    fn a_launcher_click_raises_the_window_and_opens_no_tab() {
+        runtime::block_on(async {
+            let mut instance = Instance::start().await;
+            let windows = instance.app.model().windows().count();
+            let panes = instance.app.model().panes().count();
+            let focused = instance.app.model().focused;
+            let shown = instance
+                .app
+                .model()
+                .active_tab(focused)
+                .map(|(id, tab)| (id, tab.location.clone()));
+            let out = instance.launch(&["--activate"]).await;
+            assert!(
+                out.status.success(),
+                "{}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+            assert_eq!(String::from_utf8_lossy(&out.stdout), "");
+            for _ in 0..5 {
+                instance.drive().await;
+            }
+            let model = instance.app.model();
+            assert_eq!(model.windows().count(), windows);
+            assert_eq!(model.panes().count(), panes, "{:?}", instance.tabs());
+            assert_eq!(model.focused, focused);
+            assert_eq!(
+                model
+                    .active_tab(focused)
+                    .map(|(id, tab)| (id, tab.location.clone())),
+                shown
+            );
+            assert!(
+                instance.events.iter().any(|e| matches!(
+                    e,
+                    Event::Activate { window, token: None } if *window == model.focused_window
+                )),
+                "{:?}",
+                instance.events
+            );
+            // The bus was not asked for: this is not its activation.
+            assert_eq!(instance.asked_for_the_bus.load(Ordering::SeqCst), 0);
+
+            // What the launcher hands over still opens: a folder dropped
+            // on the icon arrives as the entry's `%U`.
+            let out = instance.launch(&["--activate", "folder"]).await;
+            assert!(
+                out.status.success(),
+                "{}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+            let folder = opened(&instance.dir.path().join("folder"));
+            instance
+                .wait_for("the dropped folder's tab", |app| {
+                    app.model()
+                        .active_tab(app.model().focused)
+                        .is_some_and(|(_, tab)| tab.location == folder)
+                })
+                .await;
+        });
+    }
+
     #[test]
     fn a_launch_for_the_bus_opens_nothing_and_tells_the_instance() {
         /// The focused pane's tab and where it is.

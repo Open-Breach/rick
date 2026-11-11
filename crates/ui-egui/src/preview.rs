@@ -30,7 +30,7 @@
 use ext::t;
 use std::collections::HashMap;
 use std::ops::Range;
-use std::time::{Duration, SystemTime};
+use std::time::Duration;
 
 use egui::text::{LayoutJob, TextFormat};
 use egui::{Align2, Color32, FontId, Rect, TextStyle, TextureHandle, TextureOptions, pos2, vec2};
@@ -40,9 +40,10 @@ use ext::{
 };
 use model::{PaneId, TextPreview};
 use runtime::oneshot;
-use types::{Entry, EntryId, Error};
+use types::{Attrs, Entry, EntryId, EntryKind, Error, ExtId};
 
-use crate::{content, icons};
+use crate::info_card::{self, Action, Card, Row};
+use crate::{content, format, icons, portal, theme};
 
 type Rendered = (Box<dyn PreviewDoc>, Result<Frame, Error>);
 
@@ -282,9 +283,19 @@ pub struct Slot {
     capped: Option<(u64, u64)>,
     /// The source the capped file is on, for *Always preview on <source>*.
     cap_source: Option<String>,
-    /// No previewer claims the file: the pane shows the placeholder, and
-    /// this says whether a disabled plugin would claim it.
+    /// The name of the provider that source is on, for the card's head.
+    cap_provider: Option<String>,
+    /// A whole remote file is being fetched for the preview: the bytes
+    /// read so far and the file's size.
+    download: Option<(u64, Option<u64>)>,
+    /// No previewer claims the file: the pane shows the File info card,
+    /// centred, and this says whether a disabled plugin would claim it.
     placeholder: Option<Placeholder>,
+    /// The previewer that opened the document, by its extension's id: what
+    /// the File info card's pin is remembered under.
+    previewer: Option<ExtId>,
+    /// The centred card's folds, for as long as the pane shows this file.
+    card: info_card::State,
     /// Control changes made while the document was out rendering.
     queued: Vec<(ControlId, ControlValue)>,
     /// Rasters at actual pixels instead of fitted to the pane.
@@ -338,6 +349,7 @@ impl Slot {
     }
 
     fn set_doc(&mut self, doc: Box<dyn PreviewDoc>) {
+        self.download = None;
         self.pages = None;
         self.text_layer = None;
         self.take_facts(&*doc);
@@ -359,10 +371,24 @@ impl Slot {
         self.prefix
     }
 
-    /// The size and the cap of a remote file held behind *Preview anyway*.
+    /// The size and the cap of a remote file held behind *Preview this
+    /// file*.
     #[must_use]
     pub fn capped(&self) -> Option<(u64, u64)> {
         self.capped
+    }
+
+    /// Whether a whole remote file is being fetched for the preview, which
+    /// Escape cancels.
+    #[must_use]
+    pub fn downloading(&self) -> bool {
+        self.download.is_some() && self.doc.is_none()
+    }
+
+    /// How far that download is: the bytes read and the file's size.
+    #[must_use]
+    pub fn download(&self) -> Option<(u64, Option<u64>)> {
+        self.download
     }
 
     /// The placeholder shown because no previewer claims the file, if so.
@@ -439,6 +465,12 @@ impl Slot {
     #[must_use]
     pub fn is_raster(&self) -> bool {
         self.kind() == Some(KIND_IMAGE)
+    }
+
+    /// The previewer that opened the document, by its extension's id.
+    #[must_use]
+    pub fn previewer(&self) -> Option<ExtId> {
+        self.previewer
     }
 
     /// The document's info sections.
@@ -816,13 +848,21 @@ impl Previews {
         self.slot(pane)
     }
 
-    /// A document arrived for `pane`, about `entry`.
-    pub fn ready(&mut self, pane: PaneId, doc: Box<dyn PreviewDoc>, entry: Option<EntryId>) {
+    /// A document arrived for `pane`, about `entry`, opened by
+    /// `previewer`.
+    pub fn ready(
+        &mut self,
+        pane: PaneId,
+        doc: Box<dyn PreviewDoc>,
+        entry: Option<EntryId>,
+        previewer: ExtId,
+    ) {
         let slot = self.slot(pane);
         if slot.entry != entry {
             slot.reset(entry);
         }
         slot.set_doc(doc);
+        slot.previewer = Some(previewer);
     }
 
     /// No document could be opened for `pane`'s selection.
@@ -832,22 +872,35 @@ impl Previews {
             slot.reset(entry);
         }
         slot.capped = None;
+        slot.download = None;
         slot.placeholder = None;
         slot.error = Some(error.to_string());
     }
 
     /// No previewer claims `pane`'s selection, about `entry`: the pane
-    /// shows the placeholder; `plugin` names a disabled plugin that would
-    /// claim it, when there is one.
-    pub fn none(&mut self, pane: PaneId, plugin: Option<String>, entry: Option<EntryId>) {
+    /// shows the File info card, centred; `plugin` names a disabled plugin
+    /// that would claim it, when there is one, and `permissions` is the
+    /// file's mode string and `owner:group`, where they could be read.
+    pub fn none(
+        &mut self,
+        pane: PaneId,
+        plugin: Option<String>,
+        permissions: Option<String>,
+        entry: Option<EntryId>,
+    ) {
         let slot = self.slot(pane);
         if slot.entry != entry {
             slot.reset(entry);
         }
         slot.doc = None;
+        slot.previewer = None;
         slot.error = None;
         slot.capped = None;
-        slot.placeholder = Some(Placeholder { plugin });
+        slot.download = None;
+        slot.placeholder = Some(Placeholder {
+            plugin,
+            permissions,
+        });
     }
 
     /// The document just opened for `pane` shows the first `served` bytes
@@ -857,13 +910,15 @@ impl Previews {
     }
 
     /// `pane`'s selection is a remote file of `size` bytes above `cap`,
-    /// about `entry`; nothing opens until *Preview anyway*.
+    /// about `entry`; nothing opens until *Preview this file*. `source`
+    /// is the account or host the file is on and the name of its
+    /// provider.
     pub fn capped(
         &mut self,
         pane: PaneId,
         size: u64,
         cap: u64,
-        source: Option<String>,
+        source: (Option<String>, Option<String>),
         entry: Option<EntryId>,
     ) {
         let slot = self.slot(pane);
@@ -871,10 +926,42 @@ impl Previews {
             slot.reset(entry);
         }
         slot.doc = None;
+        slot.previewer = None;
         slot.error = None;
         slot.placeholder = None;
+        slot.download = None;
         slot.capped = Some((size, cap));
-        slot.cap_source = source;
+        (slot.cap_source, slot.cap_provider) = source;
+    }
+
+    /// A whole remote file is being fetched for `pane`'s preview, which
+    /// is about `entry`: `read` of `total` bytes so far. The size-limit
+    /// card, if it was shown, gives way to the download. The report may
+    /// come before the pane has laid out anything for the file, and a
+    /// stream that stalls sends no second one: the slot is the file's
+    /// from here on, so the next layout keeps what was reported.
+    pub fn progress(
+        &mut self,
+        pane: PaneId,
+        entry: Option<EntryId>,
+        read: u64,
+        total: Option<u64>,
+    ) {
+        let slot = self.slot(pane);
+        if slot.entry != entry {
+            slot.reset(entry);
+        }
+        slot.capped = None;
+        slot.download = Some((read, total));
+    }
+
+    /// The size-limit card's button was pressed: the card goes at once,
+    /// and the pane shows the download until the file arrives.
+    pub fn fetching(&mut self, pane: PaneId) {
+        let slot = self.slot(pane);
+        if let Some((size, _)) = slot.capped.take() {
+            slot.download = Some((0, Some(size)));
+        }
     }
 
     /// Brings `pane`'s slot up to date with the entry the app is following:
@@ -889,11 +976,14 @@ impl Previews {
     }
 
     /// Draws `pane`'s content into the space the caller allocated: the
-    /// frame fitted to it, text scrolling inside it, or a placeholder; a
-    /// prefix of a remote file ends in a *Load more* bar and a file above
-    /// the cap shows its facts and *Preview anyway*; a file no previewer
-    /// claims shows `entry`'s facts, its type icon and whether a plugin is
-    /// there. Returns what a button of those asked for.
+    /// frame fitted to it, text scrolling inside it, or the Portal burst
+    /// while it loads; a prefix of a remote file ends in a *Load more* bar
+    /// and a file above the cap shows its facts and *Preview anyway*.
+    /// Where there is a file and nothing to show for it — no previewer
+    /// claims it, a library is missing, the preview failed — the File info
+    /// card stands centred with what can be done about it; `around` is
+    /// what the card needs to know of the machine. Returns what a button
+    /// asked for.
     pub fn content(
         &mut self,
         ui: &mut egui::Ui,
@@ -901,16 +991,30 @@ impl Previews {
         target: Option<EntryId>,
         entry: Option<&Entry>,
         text_settings: TextPreview,
+        around: &Around<'_>,
     ) -> Option<PreviewAct> {
         let slot = self.slot(pane);
-        if let Some((size, cap)) = slot.capped.filter(|_| target.is_some()) {
-            return capped_message(ui, size, cap, slot.cap_source.as_deref());
+        let shown = entry.filter(|e| Some(e.id) == target);
+        if let Some((size, cap)) = slot.capped
+            && let Some(entry) = shown
+        {
+            let source = (slot.cap_source.clone(), slot.cap_provider.clone());
+            return capped_card(ui, entry, (size, cap), &source, &mut slot.card);
         }
         if let Some(placeholder) = slot.placeholder.as_ref().filter(|_| target.is_some())
-            && let Some(entry) = entry.filter(|e| Some(e.id) == target)
+            && let Some(entry) = shown
         {
-            draw_placeholder(ui, entry, placeholder.plugin.as_deref(), SystemTime::now());
-            return None;
+            return no_previewer_card(ui, entry, placeholder, around, &mut slot.card);
+        }
+        if let Some(Content::MissingLibrary(missing)) = &slot.content
+            && let Some(entry) = shown
+        {
+            return missing_card(ui, entry, missing, around, &mut slot.card);
+        }
+        if let Some(error) = &slot.error
+            && let Some(entry) = shown
+        {
+            return error_card(ui, entry, error, &mut slot.card);
         }
         let mut act = None;
         if let Some((served, total)) = slot.prefix.filter(|_| slot.doc.is_some()) {
@@ -923,15 +1027,18 @@ impl Previews {
             let body = ui.available_rect_before_wrap();
             slot.frame_rect = Some(body);
             ui.set_clip_rect(body.intersect(ui.clip_rect()));
-            let sections = slot.sections.clone();
-            return content::draw(
+            let remembered = slot
+                .previewer
+                .and_then(|id| around.columns.get(id.0))
+                .map_or(&[][..], Vec::as_slice);
+            let resized = content::draw(
                 ui,
                 &content,
-                &sections,
                 &mut slot.content_state,
-                SystemTime::now(),
-            )
-            .or(act);
+                around.dates,
+                remembered,
+            );
+            return resized.map(PreviewAct::Columns).or(act);
         }
         let ctx = ui.ctx().clone();
         let body = ui.available_rect_before_wrap();
@@ -961,8 +1068,8 @@ impl Previews {
             slot.drawn = drawn;
             slot.h_scroll = h_scroll;
             slot.frame_rect = Some(body);
-        } else {
-            draw_waiting(ui, slot, target.is_some());
+        } else if target.is_some() && slot.error.is_none() {
+            draw_loading(ui, around.still, slot.download);
         }
         act
     }
@@ -1037,96 +1144,294 @@ fn draw_texture(
     }
 }
 
-/// What the pane shows while it has no frame to draw: the error that
-/// stopped the preview, a spinner while it opens or renders, or the hint
-/// to select a file.
-fn draw_waiting(ui: &mut egui::Ui, slot: &Slot, selected: bool) {
-    if let Some(error) = &slot.error {
-        ui.add(
-            egui::Label::new(
-                egui::RichText::new(t!("preview-failed", error = error.as_str()))
-                    .color(ui.visuals().warn_fg_color),
-            )
-            .wrap(),
-        );
-    } else if selected {
-        ui.horizontal(|ui| {
-            ui.spinner();
-            ui.weak(if slot.has_doc() {
-                "Rendering…"
-            } else {
-                "Opening…"
-            });
-        });
-    } else {
-        ui.weak(t!("inspector-select-a-file-to-preview"));
+/// What the centred card needs to know of the machine it is shown on.
+#[derive(Debug, Clone, Copy)]
+pub struct Around<'a> {
+    /// The home directory, which a path is written from as `~`.
+    pub home: &'a std::path::Path,
+    /// The per-user plugins folder, where a downloaded library goes.
+    pub plugins: &'a std::path::Path,
+    /// Whether motion is reduced: the Portal burst stands still.
+    pub still: bool,
+    /// How dates are written (SPEC.md *Dates*).
+    pub dates: format::Dates,
+    /// The widths remembered for the columns of a previewer's table, by
+    /// the previewer's id.
+    pub columns: &'a std::collections::BTreeMap<String, Vec<u16>>,
+}
+
+/// `read` of `total` in the unit `total` is written in, `7.7 of 18.4 MiB`;
+/// without a total, the bytes read alone.
+fn download_text(read: u64, total: Option<u64>) -> String {
+    const UNITS: [(&str, u64); 4] = [
+        ("GiB", 1 << 30),
+        ("MiB", 1 << 20),
+        ("KiB", 1 << 10),
+        ("B", 1),
+    ];
+    let Some(total) = total.filter(|total| *total > 0) else {
+        return t!("preview-downloading-some", read = format::size(Some(read)));
+    };
+    let (unit, scale) = UNITS
+        .into_iter()
+        .find(|(_, scale)| total >= *scale)
+        .unwrap_or(("B", 1));
+    // Sizes of files: the precision of an f64 is plenty.
+    #[allow(clippy::cast_precision_loss)]
+    let in_unit = |bytes: u64| bytes as f64 / scale as f64;
+    t!(
+        "preview-downloading",
+        read = format!("{:.1}", in_unit(read.min(total))),
+        total = format!("{:.1} {unit}", in_unit(total))
+    )
+}
+
+/// The loading state (SPEC.md *Preview*): the Portal burst centred in the
+/// content with *Loading preview…* under it — for a local file and for a
+/// download alike, never a spinner in a corner. While a whole file is
+/// fetched from a remote source, `download` says how far it is: a slim
+/// progress line, 220 × 4 px in `accent/focus` on `bg/track`, and
+/// *Downloading…  7.7 of 18.4 MiB* under the burst.
+fn draw_loading(ui: &mut egui::Ui, still: bool, download: Option<(u64, Option<u64>)>) {
+    let rect = ui.available_rect_before_wrap();
+    let scheme = theme::scheme(ui);
+    let time = ui.input(|i| i.time);
+    let centre = rect.center();
+    portal::burst(
+        ui.painter(),
+        centre - vec2(0.0, 24.0),
+        time,
+        scheme.accent_focus,
+        scheme.icon_default,
+        still,
+    );
+    let mut text_y = centre.y + 48.0;
+    let text = match download {
+        Some((read, total)) => {
+            let track = Rect::from_center_size(pos2(centre.x, centre.y + 44.0), vec2(220.0, 4.0));
+            ui.painter().rect_filled(track, 2.0, scheme.bg_track);
+            // The share fetched; nothing of the line without a size.
+            #[allow(clippy::cast_precision_loss)]
+            let share = total
+                .filter(|total| *total > 0)
+                .map_or(0.0, |total| (read as f64 / total as f64).clamp(0.0, 1.0));
+            #[allow(clippy::cast_possible_truncation)]
+            let filled = Rect::from_min_size(track.min, vec2(track.width() * share as f32, 4.0));
+            ui.painter().rect_filled(filled, 2.0, scheme.accent_focus);
+            text_y = track.bottom() + 18.0;
+            download_text(read, total)
+        }
+        None => t!("preview-loading"),
+    };
+    let galley = ui.painter().layout_no_wrap(
+        text.clone(),
+        FontId::proportional(theme::TEXT_SECONDARY),
+        scheme.text_secondary,
+    );
+    let at = Rect::from_center_size(pos2(centre.x, text_y), galley.size());
+    ui.painter().galley(at.min, galley, scheme.text_secondary);
+    ui.interact(at, ui.id().with("preview-loading"), egui::Sense::hover())
+        .widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Label, true, text.clone()));
+    if !still {
+        ui.ctx().request_repaint();
     }
 }
 
-/// Why the pane shows its placeholder instead of a preview: no previewer
+/// Why the pane shows the centred card instead of a preview: no previewer
 /// claims the file.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Placeholder {
     /// A disabled previewer plugin whose manifest claims the file's type,
-    /// by id: the line reads *Plugin available*; `None` reads *No plugin
-    /// available*.
+    /// by id: the card's head reads *plugin available*; `None` reads *no
+    /// previewer for .bin*.
     pub plugin: Option<String>,
+    /// The file's mode string and `owner:group`, where they could be read.
+    pub permissions: Option<String>,
 }
 
-/// The rows of the File info section the pane builds itself for a file no
-/// previewer describes: name, type, size, modified.
+/// The type and the size of `entry`, as the card's head has them under
+/// the name; `binary` says no previewer took the file for text.
 #[must_use]
-pub fn file_info_rows(entry: &Entry, now: SystemTime) -> Vec<(String, String)> {
-    let (_, modified) = crate::format::date(entry.modified, now);
-    vec![
-        (t!("preview-name"), entry.name.clone()),
-        (t!("preview-type"), model::type_of(entry)),
-        (t!("preview-size"), crate::format::size(entry.size)),
-        (t!("preview-modified"), modified),
-    ]
+pub fn type_and_size(entry: &Entry, binary: bool) -> String {
+    let executable = entry.attrs.contains(Attrs::EXECUTABLE);
+    let kind = if binary {
+        format::binary_type_name(&entry.kind, &entry.name, executable)
+    } else {
+        format::type_name(&entry.kind, &entry.name, executable)
+    };
+    match entry.size.filter(|_| entry.kind != EntryKind::Dir) {
+        Some(bytes) => format!("{kind}  ·  {}", format::size(Some(bytes))),
+        None => kind,
+    }
 }
 
-/// The placeholder of SPEC.md's *No previewer*: the File info rows at the
-/// top, the file-type icon the list uses drawn large and centred in the
-/// space below, and under it one plain line of small text, *Plugin
-/// available* or *No plugin available*. Nothing in it is clickable.
-fn draw_placeholder(ui: &mut egui::Ui, entry: &Entry, plugin: Option<&str>, now: SystemTime) {
-    let whole = ui.available_rect_before_wrap();
-    let section = crate::inspector::Section {
-        id: "file",
-        title: t!("preview-file-info"),
-        glyph: icons::INFO,
-        rows: file_info_rows(entry, now),
+/// The folder that holds `entry`, the home directory written `~`.
+fn location_of(entry: &Entry, home: &std::path::Path) -> Option<String> {
+    let parent = entry.path.parent()?;
+    Some(match platform::paths::to_path(&parent) {
+        Ok(path) if entry.id.provider.0 == "local" => crate::integration::tilde(&path, home),
+        _ => parent.to_string(),
+    })
+}
+
+/// The rows every centred card has of the file itself: where it is and
+/// when it was modified.
+fn file_rows(entry: &Entry, home: &std::path::Path, dates: format::Dates) -> Vec<Row> {
+    let mut rows = Vec::new();
+    if let Some(location) = location_of(entry, home) {
+        rows.push(Row::new(t!("preview-location"), location).mono());
+    }
+    if let Some(modified) = entry.modified {
+        rows.push(Row::new(t!("preview-modified"), dates.text(modified)));
+    }
+    rows
+}
+
+/// The card of SPEC.md's *No previewer*: the name and, under it, the type,
+/// the size and *no previewer for .bin*; *Location*, *Modified* and
+/// *Permissions*; and **Open with…**, its one button. With the hex view
+/// loaded no file comes here: it takes what nothing else recognises.
+fn no_previewer_card(
+    ui: &mut egui::Ui,
+    entry: &Entry,
+    placeholder: &Placeholder,
+    around: &Around<'_>,
+    state: &mut info_card::State,
+) -> Option<PreviewAct> {
+    let extension = entry
+        .name
+        .rsplit_once('.')
+        .filter(|(stem, ext)| !stem.is_empty() && !ext.is_empty())
+        .map(|(_, ext)| ext.to_lowercase());
+    let why = match (&placeholder.plugin, extension) {
+        (Some(_), _) => t!("preview-plugin-available"),
+        (None, Some(ext)) => t!("preview-no-previewer-for", extension = ext),
+        (None, None) => t!("preview-no-previewer-for-type"),
     };
-    crate::inspector::section_rows(ui, &section, None, whole.height() * 0.5);
-    let rest = ui.available_rect_before_wrap();
-    let glyph = icons::for_entry(entry);
-    let line = if plugin.is_some() {
-        t!("preview-plugin-available")
+    let line = format!("{}  ·  {why}", type_and_size(entry, true));
+    let mut rows = file_rows(entry, around.home, around.dates);
+    if let Some(permissions) = &placeholder.permissions {
+        rows.push(Row::new(t!("permissions"), permissions).mono());
+    }
+    // The card's one button: with the hex view loaded every file has a
+    // previewer, and without it there is nothing to open the bytes with.
+    let actions = [Action {
+        glyph: Some(icons::FOLDER_OPEN),
+        label: t!("preview-open-with"),
+    }];
+    let acts = [PreviewAct::OpenWith];
+    let card = Card {
+        glyph: icons::for_entry(entry),
+        name: &entry.name,
+        line: &line,
+        rows: &rows,
+        actions: &actions,
+        ..Card::default()
+    };
+    let outcome = info_card::show_centred(ui, &card, state, info_card::CENTRED);
+    outcome.action.and_then(|index| acts.get(index).cloned())
+}
+
+/// Whether `text` is an address to open in the browser, not a command.
+fn is_address(text: &str) -> bool {
+    let lower = text.to_ascii_lowercase();
+    lower.starts_with("http://") || lower.starts_with("https://")
+}
+
+/// The card for a third-party library the previewer could not find
+/// (SPEC.md *Third-party libraries*): *Preview* names what is missing;
+/// *Destination* is the folder a downloaded library goes into, with a
+/// button that opens it; **Download**, which opens the library's page in
+/// the browser, **Browse…** and **Retry**. A library installed with a
+/// command has the command as its *Install* row and no *Download*. The
+/// places that were searched stay folded under *Where Rick looked*.
+fn missing_card(
+    ui: &mut egui::Ui,
+    entry: &Entry,
+    missing: &ext::MissingLibrary,
+    around: &Around<'_>,
+    state: &mut info_card::State,
+) -> Option<PreviewAct> {
+    let line = type_and_size(entry, false);
+    let download = is_address(&missing.install);
+    let mut rows = vec![Row::new(
+        t!("preview-preview"),
+        t!("preview-library-needed", name = missing.name.as_str()),
+    )];
+    if download {
+        let mut destination = Row::new(
+            t!("preview-destination"),
+            crate::integration::tilde(around.plugins, around.home),
+        )
+        .mono();
+        destination.button = Some((icons::FOLDER_OPEN, t!("preview-open-destination")));
+        rows.push(destination);
     } else {
-        t!("preview-no-plugin-available")
+        rows.push(Row::new(t!("preview-install"), missing.install.as_str()).mono());
+    }
+    let mut actions = Vec::new();
+    let mut acts = Vec::new();
+    if download {
+        actions.push(Action {
+            glyph: Some(icons::INSTALL),
+            label: t!("preview-download", name = missing.name.as_str()),
+        });
+        acts.push(PreviewAct::Download(missing.install.clone()));
+    }
+    actions.push(Action {
+        glyph: Some(icons::FOLDER_OPEN),
+        label: t!("preview-browse"),
+    });
+    acts.push(PreviewAct::Browse {
+        setting: missing.setting,
+        filters: missing.filters.clone(),
+    });
+    actions.push(Action {
+        glyph: None,
+        label: t!("preview-retry"),
+    });
+    acts.push(PreviewAct::Retry);
+    let card = Card {
+        glyph: icons::for_entry(entry),
+        name: &entry.name,
+        line: &line,
+        rows: &rows,
+        actions: &actions,
+        looked: Some(missing.detail.as_str()).filter(|detail| !detail.is_empty()),
+        ..Card::default()
     };
-    let icon_size = (rest.height() * 0.4).clamp(24.0, 96.0);
-    let line_h = ui.text_style_height(&TextStyle::Small) + 4.0;
-    let gap = 8.0;
-    let top = rest.center().y - (icon_size + gap + line_h) / 2.0;
-    let weak = ui.visuals().weak_text_color();
-    ui.put(
-        Rect::from_center_size(
-            pos2(rest.center().x, top + icon_size / 2.0),
-            vec2(rest.width(), icon_size + 4.0),
-        ),
-        egui::Label::new(egui::RichText::new(glyph).size(icon_size).color(weak)).selectable(false),
-    );
-    ui.put(
-        Rect::from_center_size(
-            pos2(rest.center().x, top + icon_size + gap + line_h / 2.0),
-            vec2(rest.width(), line_h),
-        ),
-        egui::Label::new(egui::RichText::new(line).small().color(weak))
-            .selectable(false)
-            .truncate(),
-    );
+    let outcome = info_card::show_centred(ui, &card, state, info_card::CENTRED);
+    if outcome.row_button.is_some() {
+        return Some(PreviewAct::OpenFolder(around.plugins.to_path_buf()));
+    }
+    outcome.action.and_then(|index| acts.get(index).cloned())
+}
+
+/// The card for a preview that failed: one row, *Preview*, holding the
+/// message, and **Retry**.
+fn error_card(
+    ui: &mut egui::Ui,
+    entry: &Entry,
+    error: &str,
+    state: &mut info_card::State,
+) -> Option<PreviewAct> {
+    let line = type_and_size(entry, false);
+    let rows = [Row::new(t!("preview-preview"), error)];
+    let actions = [Action {
+        glyph: None,
+        label: t!("preview-retry"),
+    }];
+    let card = Card {
+        glyph: icons::for_entry(entry),
+        name: &entry.name,
+        line: &line,
+        rows: &rows,
+        actions: &actions,
+        ..Card::default()
+    };
+    info_card::show_centred(ui, &card, state, info_card::CENTRED)
+        .action
+        .map(|_| PreviewAct::Retry)
 }
 
 /// What a button of the preview's own asked for.
@@ -1140,6 +1445,16 @@ pub enum PreviewAct {
     PreviewAlways,
     /// Open the preview again: a missing library may be there now.
     Retry,
+    /// Run *Open with…* on the file.
+    OpenWith,
+    /// Open this address, a library's download page, in the browser.
+    Download(String),
+    /// Show this folder in the system file manager, making it first when
+    /// it is not there.
+    OpenFolder(std::path::PathBuf),
+    /// A table's columns were resized: remember these widths, every
+    /// column's but the last, for the previewer that shows the file.
+    Columns(Vec<u16>),
     /// Ask for the file of a missing library with a file dialogue and
     /// store the choice into the previewer's setting, then open again.
     Browse {
@@ -1178,42 +1493,68 @@ pub fn prefix_bar(ui: &mut egui::Ui, served: u64, total: Option<u64>) -> Option<
     act
 }
 
-/// The cap message: the file's size against the cap, *Preview anyway*
-/// and, for a file on a source with a connection, *Always preview on
-/// <source>*.
-pub fn capped_message(
+/// A size limit in words: whole mebibytes without a fraction, `4 MiB`.
+fn limit_text(cap: u64) -> String {
+    const MIB: u64 = 1024 * 1024;
+    if cap >= MIB && cap.is_multiple_of(MIB) {
+        format!("{} MiB", cap / MIB)
+    } else {
+        format::size(Some(cap))
+    }
+}
+
+/// The card for a remote file above the size limit (SPEC.md *Remote
+/// sources*): the head reads the name and, under it, the type, the size
+/// and the source — the provider's name and the account or host; in place
+/// of rows *Not previewed automatically* and a sentence that names the
+/// limit; **Preview this file** and, for a source with a connection,
+/// **Always preview on ‹source›**, wrapping when the name is long.
+fn capped_card(
     ui: &mut egui::Ui,
-    size: u64,
-    cap: u64,
-    source: Option<&str>,
+    entry: &Entry,
+    (size, cap): (u64, u64),
+    (source, provider): &(Option<String>, Option<String>),
+    state: &mut info_card::State,
 ) -> Option<PreviewAct> {
-    let mut act = None;
-    ui.add_space(12.0);
-    ui.vertical_centered(|ui| {
-        ui.label(
-            egui::RichText::new(format!(
-                "{} on a remote host, above the {} preview cap",
-                crate::format::size(Some(size)),
-                crate::format::size(Some(cap))
-            ))
-            .strong(),
-        );
-        ui.weak(t!("preview-the-whole-file-would-be"));
-        ui.add_space(6.0);
-        ui.horizontal(|ui| {
-            if ui.button(t!("preview-preview-anyway")).clicked() {
-                act = Some(PreviewAct::PreviewAnyway);
-            }
-            if let Some(source) = source
-                && ui
-                    .button(t!("preview-always-preview-on", source = source))
-                    .clicked()
-            {
-                act = Some(PreviewAct::PreviewAlways);
-            }
+    let executable = entry.attrs.contains(Attrs::EXECUTABLE);
+    let mut line = format!(
+        "{}  ·  {}",
+        format::type_name(&entry.kind, &entry.name, executable),
+        format::size(Some(size))
+    );
+    let place = match (provider, source) {
+        (Some(provider), Some(source)) => Some(format!("{provider}, {source}")),
+        (Some(one), None) | (None, Some(one)) => Some(one.clone()),
+        (None, None) => None,
+    };
+    if let Some(place) = place {
+        line = format!("{line}  ·  {place}");
+    }
+    let title = t!("preview-not-previewed");
+    let sentence = t!("preview-over-limit", limit = limit_text(cap));
+    let mut actions = vec![Action {
+        glyph: Some(icons::INSTALL),
+        label: t!("preview-preview-this-file"),
+    }];
+    if let Some(source) = source {
+        actions.push(Action {
+            glyph: None,
+            label: t!("preview-always-preview-on", source = source.as_str()),
         });
-    });
-    act
+    }
+    let card = Card {
+        glyph: icons::for_entry(entry),
+        name: &entry.name,
+        line: &line,
+        note: Some((&title, &sentence)),
+        actions: &actions,
+        ..Card::default()
+    };
+    match info_card::show_centred(ui, &card, state, info_card::CENTRED_WIDE).action {
+        Some(0) => Some(PreviewAct::PreviewAnyway),
+        Some(_) => Some(PreviewAct::PreviewAlways),
+        None => None,
+    }
 }
 
 /// Points to pixels, rounded up to the [`QUANTUM`].
@@ -1496,6 +1837,34 @@ fn append_line(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_download_reported_before_the_pane_saw_its_file_is_still_shown() {
+        let ctx = egui::Context::default();
+        let pane = PaneId(7);
+        let file = |key| {
+            Some(EntryId {
+                provider: types::ProviderId("mem"),
+                key,
+            })
+        };
+        let mut previews = Previews::default();
+        // The pane shows one file; the selection moves on, and the first
+        // bytes of the next file are reported before the pane is laid out
+        // again. The stream then stalls, so no second report follows.
+        previews.sync(&ctx, pane, file(1));
+        previews.progress(pane, file(2), 100, Some(200));
+        let slot = previews.sync(&ctx, pane, file(2));
+        assert!(slot.downloading(), "the layout keeps the report");
+        assert_eq!(slot.download(), Some((100, Some(200))));
+        // A report for the file the pane already shows only moves on.
+        previews.progress(pane, file(2), 150, Some(200));
+        let slot = previews.sync(&ctx, pane, file(2));
+        assert_eq!(slot.download(), Some((150, Some(200))));
+        // Another file starts from nothing.
+        let slot = previews.sync(&ctx, pane, file(3));
+        assert!(!slot.downloading());
+    }
 
     #[test]
     fn lines_split_on_newlines_and_keep_a_trailing_line() {

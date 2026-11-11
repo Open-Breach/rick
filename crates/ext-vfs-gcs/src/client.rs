@@ -79,8 +79,21 @@ fn error_message(body: &str) -> String {
     )
 }
 
-/// A transport error as the kernel error.
+/// A transport error as the kernel error. A request that never reached the
+/// service, or went unanswered, is a lost connection
+/// ([`Error::unreachable`]): the pane keeps its place and tries again.
 pub(crate) fn transport(error: reqwest::Error) -> Error {
+    if error.is_connect() || error.is_timeout() {
+        // The cause is in the chain, not in the error's own text.
+        let mut text = error.to_string();
+        let mut cause = std::error::Error::source(&error);
+        while let Some(inner) = cause {
+            text.push_str(": ");
+            text.push_str(&inner.to_string());
+            cause = inner.source();
+        }
+        return Error::unreachable(text);
+    }
     Error::Extension {
         ext: ID,
         source: Box::new(error),
@@ -462,24 +475,35 @@ impl GcsClient {
         parse_page(&json)
     }
 
+    /// One page of every object under `prefix`, however deep: the listing
+    /// without a delimiter, which answers for a whole subtree.
+    pub(crate) async fn list_flat(
+        &self,
+        bucket: &str,
+        prefix: &str,
+        page_token: Option<&str>,
+    ) -> Result<Page, Error> {
+        let mut query: Vec<(&str, &str)> = vec![("prefix", prefix), ("maxResults", PAGE)];
+        if let Some(t) = page_token {
+            query.push(("pageToken", t));
+        }
+        let json = self
+            .text(
+                Method::GET,
+                self.url(&format!("/storage/v1/b/{}/o", encode(bucket)), &query),
+                &[],
+                None,
+            )
+            .await?;
+        parse_page(&json)
+    }
+
     /// Every object under `prefix`, however deep.
     pub(crate) async fn list_all(&self, bucket: &str, prefix: &str) -> Result<Vec<Object>, Error> {
         let mut out = Vec::new();
         let mut token: Option<String> = None;
         loop {
-            let mut query: Vec<(&str, &str)> = vec![("prefix", prefix), ("maxResults", PAGE)];
-            if let Some(t) = token.as_deref() {
-                query.push(("pageToken", t));
-            }
-            let json = self
-                .text(
-                    Method::GET,
-                    self.url(&format!("/storage/v1/b/{}/o", encode(bucket)), &query),
-                    &[],
-                    None,
-                )
-                .await?;
-            let page = parse_page(&json)?;
+            let page = self.list_flat(bucket, prefix, token.as_deref()).await?;
             out.extend(page.objects);
             match page.next {
                 Some(next) => token = Some(next),

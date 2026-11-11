@@ -68,6 +68,7 @@ impl ImagePreview {
             manifest: Manifest {
                 id: ID,
                 name: "Image preview",
+                description: "Previews images: the common raster formats with their EXIF data, and SVG drawn at the size of the pane.",
                 version: Version::new(0, 1, 0),
                 api_version: API_VERSION,
                 requires: Capabilities::empty(),
@@ -192,8 +193,11 @@ impl Header {
 /// A value longer than this is cut with an ellipsis in the EXIF section.
 const MAX_VALUE: usize = 200;
 
-/// The orientation, the File info photo rows and every tag of the EXIF
-/// block, if any.
+/// The orientation, the File info photo rows and the tags of the EXIF
+/// block that have something to show, if any (SPEC.md *File info card*,
+/// EXIF): a tag known by name, with a value, and a number that is one —
+/// no row for an empty value, for `NaN` or a zero denominator, or under a
+/// raw tag number; no GPS rows for a photo without a position.
 #[allow(clippy::type_complexity)]
 fn read_exif(bytes: &[u8]) -> (Orientation, Vec<(String, String)>, Vec<(String, String)>) {
     let Ok(exif) = exif::Reader::new().read_from_container(&mut Cursor::new(bytes)) else {
@@ -216,26 +220,73 @@ fn read_exif(bytes: &[u8]) -> (Orientation, Vec<(String, String)>, Vec<(String, 
     .into_iter()
     .filter_map(|(label, tag)| {
         let field = exif.get_field(tag, exif::In::PRIMARY)?;
-        let value = shown_value(field, &exif);
-        (!value.is_empty()).then(|| (label.to_owned(), value))
+        Some((label.to_owned(), shown_field(field, &exif)?))
     })
     .collect();
+    // A position is a latitude and a longitude that are numbers.
+    let located = [exif::Tag::GPSLatitude, exif::Tag::GPSLongitude]
+        .into_iter()
+        .all(|tag| {
+            exif.get_field(tag, exif::In::PRIMARY)
+                .is_some_and(|field| is_real(&field.value))
+        });
     let all = exif
         .fields()
-        .map(|field| {
+        .filter(|field| located || field.tag.context() != exif::Context::Gps)
+        .filter_map(|field| {
+            let mut value = shown_field(field, &exif)?;
             let name = if field.ifd_num == exif::In::PRIMARY {
                 field.tag.to_string()
             } else {
                 format!("{} ({})", field.tag, field.ifd_num)
             };
-            let mut value = shown_value(field, &exif);
             if value.chars().count() > MAX_VALUE {
                 value = value.chars().take(MAX_VALUE).collect::<String>() + "…";
             }
-            (name, value)
+            Some((name, value))
         })
         .collect();
     (orientation, rows, all)
+}
+
+/// Whether every number of a value is one: no zero denominator, no `NaN`,
+/// nothing infinite. A value that is no number passes.
+fn is_real(value: &exif::Value) -> bool {
+    match value {
+        exif::Value::Rational(v) => v.iter().all(|r| r.denom != 0),
+        exif::Value::SRational(v) => v.iter().all(|r| r.denom != 0),
+        exif::Value::Float(v) => v.iter().all(|f| f.is_finite()),
+        exif::Value::Double(v) => v.iter().all(|f| f.is_finite()),
+        _ => true,
+    }
+}
+
+/// A field's text for its row, or `None` for a field with nothing to
+/// show: a tag without a name, a number that is none, an empty value. A
+/// date reads `YYYY-MM-DD HH:MM`.
+fn shown_field(field: &exif::Field, exif: &exif::Exif) -> Option<String> {
+    field.tag.description()?;
+    if !is_real(&field.value) {
+        return None;
+    }
+    let dated = matches!(
+        field.tag,
+        exif::Tag::DateTime | exif::Tag::DateTimeOriginal | exif::Tag::DateTimeDigitized
+    );
+    let date = match &field.value {
+        exif::Value::Ascii(texts) if dated => texts
+            .first()
+            .and_then(|text| exif::DateTime::from_ascii(text).ok())
+            .map(|d| {
+                format!(
+                    "{:04}-{:02}-{:02} {:02}:{:02}",
+                    d.year, d.month, d.day, d.hour, d.minute
+                )
+            }),
+        _ => None,
+    };
+    let value = date.unwrap_or_else(|| shown_value(field, exif));
+    (!value.is_empty()).then_some(value)
 }
 
 /// A field's value as text: with its unit, trimmed, and without the quotes
@@ -975,6 +1026,11 @@ mod tests {
     /// A JPEG whose EXIF block has a camera, a date and an exposure, as a
     /// photo would.
     fn photo_jpeg() -> Vec<u8> {
+        jpeg_with(&exif_payload())
+    }
+
+    /// A JPEG carrying `payload` as its EXIF block.
+    fn jpeg_with(payload: &[u8]) -> Vec<u8> {
         let rgb = DynamicImage::ImageRgba8(sample()).into_rgb8();
         let mut out = Cursor::new(Vec::new());
         image::codecs::jpeg::JpegEncoder::new_with_quality(&mut out, 90)
@@ -987,11 +1043,10 @@ mod tests {
             .unwrap_or_else(|e| panic!("{e}"));
         let jpeg = out.into_inner();
         let mut with_exif = jpeg[..2].to_vec();
-        let payload = exif_payload();
         let length = u16::try_from(payload.len() + 2).unwrap_or_else(|e| panic!("{e}"));
         with_exif.extend_from_slice(&[0xFF, 0xE1]);
         with_exif.extend_from_slice(&length.to_be_bytes());
-        with_exif.extend_from_slice(&payload);
+        with_exif.extend_from_slice(payload);
         with_exif.extend_from_slice(&jpeg[2..]);
         with_exif
     }
@@ -1043,8 +1098,80 @@ mod tests {
         payload
     }
 
+    /// An EXIF block as a phone without a position writes it: a camera, a
+    /// resolution with a zero denominator, a GPS block whose latitude is
+    /// `0/0` three times, and a tag `kamadak-exif` has no name for.
+    fn exif_without_a_position() -> Vec<u8> {
+        let len = |bytes: &[u8]| u32::try_from(bytes.len()).unwrap_or_else(|e| panic!("{e}"));
+        let mut tiff = vec![b'I', b'I', 42, 0, 8, 0, 0, 0];
+        let make = b"Rick Cameras\0";
+        // IFD0 at 8: 4 entries of 12 bytes + the next pointer = 54.
+        let make_at: u32 = 8 + 54;
+        let resolution_at = make_at + len(make);
+        let gps_at = resolution_at + 8;
+        // The GPS IFD: 3 entries + the next pointer = 42.
+        let latitude_at = gps_at + 42;
+        let entry = |tiff: &mut Vec<u8>, tag: u16, kind: u16, count: u32, value: [u8; 4]| {
+            tiff.extend_from_slice(&tag.to_le_bytes());
+            tiff.extend_from_slice(&kind.to_le_bytes());
+            tiff.extend_from_slice(&count.to_le_bytes());
+            tiff.extend_from_slice(&value);
+        };
+        tiff.extend_from_slice(&4u16.to_le_bytes());
+        entry(&mut tiff, 0x010F, 2, len(make), make_at.to_le_bytes());
+        entry(&mut tiff, 0x011A, 5, 1, resolution_at.to_le_bytes());
+        entry(&mut tiff, 0x8825, 4, 1, gps_at.to_le_bytes());
+        entry(&mut tiff, 0xC7A0, 3, 1, [7, 0, 0, 0]);
+        tiff.extend_from_slice(&0u32.to_le_bytes());
+        assert_eq!(len(&tiff), make_at);
+        tiff.extend_from_slice(make);
+        tiff.extend_from_slice(&72u32.to_le_bytes());
+        tiff.extend_from_slice(&0u32.to_le_bytes());
+        assert_eq!(len(&tiff), gps_at);
+        tiff.extend_from_slice(&3u16.to_le_bytes());
+        entry(&mut tiff, 0x0000, 1, 4, [2, 3, 0, 0]);
+        entry(&mut tiff, 0x0001, 2, 2, [b'N', 0, 0, 0]);
+        entry(&mut tiff, 0x0002, 5, 3, latitude_at.to_le_bytes());
+        tiff.extend_from_slice(&0u32.to_le_bytes());
+        assert_eq!(len(&tiff), latitude_at);
+        tiff.extend_from_slice(&[0u8; 24]);
+        let mut payload = b"Exif\0\0".to_vec();
+        payload.extend_from_slice(&tiff);
+        payload
+    }
+
     #[test]
-    fn a_photo_has_file_info_with_the_camera_and_an_exif_section_with_every_tag() {
+    fn a_photo_without_a_position_has_no_gps_rows_and_no_value_that_is_no_number() {
+        let doc =
+            ImageDoc::new(jpeg_with(&exif_without_a_position())).unwrap_or_else(|e| panic!("{e}"));
+        let sections = doc.sections();
+        let rows: Vec<&(String, String)> = sections.iter().flat_map(|s| &s.rows).collect();
+        assert!(
+            rows.iter()
+                .any(|(k, v)| k == "Camera" && v == "Rick Cameras"),
+            "the block was read: {rows:?}"
+        );
+        for (label, value) in &rows {
+            assert!(!label.starts_with("GPS"), "a GPS row: {label} = {value}");
+            assert!(!label.starts_with("Tag("), "a raw tag number: {label}");
+            assert!(
+                !value.contains("NaN") && !value.contains("inf") && !value.is_empty(),
+                "no number: {label} = {value}"
+            );
+        }
+        let exif = sections
+            .iter()
+            .find(|s| s.id == "exif")
+            .unwrap_or_else(|| panic!("an EXIF section"));
+        assert_eq!(
+            exif.rows,
+            [("Make".to_owned(), "Rick Cameras".to_owned())],
+            "the one tag with a name and a value"
+        );
+    }
+
+    #[test]
+    fn a_photo_has_file_info_with_the_camera_and_an_exif_section_with_its_tags() {
         let doc = ImageDoc::new(photo_jpeg()).unwrap_or_else(|e| panic!("{e}"));
         let sections = doc.sections();
         assert_eq!(sections.len(), 2, "{sections:?}");
@@ -1062,7 +1189,7 @@ mod tests {
         assert_eq!(row(&file.rows, "Dimensions"), "40 × 20");
         assert_eq!(row(&file.rows, "Camera"), "Rick Cameras");
         assert_eq!(row(&file.rows, "Model"), "RC-1");
-        assert_eq!(row(&file.rows, "Taken"), "2026-11-06 12:34:56");
+        assert_eq!(row(&file.rows, "Taken"), "2026-11-06 12:34");
         assert_eq!(row(&file.rows, "Exposure"), "1/250 s");
         assert_eq!(row(&file.rows, "Aperture"), "f/2.8");
         let exif = &sections[1];
@@ -1070,9 +1197,14 @@ mod tests {
             (exif.id, exif.title.key(), exif.icon),
             ("exif", "preview-image-exif", Icon::Camera)
         );
-        assert_eq!(exif.rows.len(), 5, "every tag: {:?}", exif.rows);
+        assert_eq!(
+            exif.rows.len(),
+            5,
+            "every tag with a value: {:?}",
+            exif.rows
+        );
         assert_eq!(row(&exif.rows, "Make"), "Rick Cameras");
-        assert_eq!(row(&exif.rows, "DateTimeOriginal"), "2026-11-06 12:34:56");
+        assert_eq!(row(&exif.rows, "DateTimeOriginal"), "2026-11-06 12:34");
         assert_eq!(row(&exif.rows, "FNumber"), "f/2.8");
         assert_eq!(doc.status()[0], "40 × 20");
         assert_eq!(doc.status()[1], "JPEG");

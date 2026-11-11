@@ -7,9 +7,11 @@
 //! `rick --version` prints the build's details — the text the About
 //! dialog's *Copy details* copies (specs/about-dialog.md) — and exits;
 //! `rick --list-plugins` prints the table the Extensions screen shows and
-//! exits; `rick [<path>…]` opens each folder in a tab of its own (as the
-//! desktop entry's `%F` passes the selected folders; specs/app-icons.md),
-//! the working directory without any; `rick reveal <file>…` opens the
+//! exits; `rick [<path>…]` opens each folder in a tab of its own, the
+//! working directory without any; `rick --activate [<path>…]` is the
+//! desktop entry's form (specs/app-icons.md): its `%U` passes what the
+//! launcher hands over, and without anything a click only brings the
+//! window forward; `rick reveal <file>…` opens the
 //! files' folders; `--new-window` puts them in a window of their own;
 //! `rick <command> <args…>` runs a plugin's subcommand, and `--help` lists
 //! the core and plugin commands.
@@ -543,6 +545,7 @@ fn row(plugin: &plugins_native::Plugin) -> app::Plugin {
     app::Plugin {
         id: plugin.id.clone(),
         name: plugin.name.clone(),
+        description: plugin.description.clone(),
         version: plugin.version.clone(),
         points: plugin.points,
         previews: plugin.previews.clone(),
@@ -552,6 +555,8 @@ fn row(plugin: &plugins_native::Plugin) -> app::Plugin {
             PluginStatus::Refused(reason) => app::PluginStatus::Refused(reason.clone()),
         },
         path: plugin.dir.clone(),
+        built_in: plugin.source == plugins_native::Source::BesideBinary,
+        removed: false,
     }
 }
 

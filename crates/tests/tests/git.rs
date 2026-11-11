@@ -3,6 +3,14 @@
 //! 16 ms and completes within 500 ms; every action runs headlessly through
 //! the app on a temporary repository; the context menu shows the "Git"
 //! group only inside a work tree.
+//!
+//! Acceptance (issue 173): *Git clone…* is in the menu of the empty area
+//! and of a folder, not of a file or of several entries; its dialogue
+//! opens with a Git URL or a local repository's path from the clipboard,
+//! names the folder the clone creates and folds the options away; the
+//! clone runs as a job through the app, which shows a failure in the job,
+//! takes a cancel, and shows the new folder in the pane when the job is
+//! done.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -11,7 +19,7 @@ use std::time::{Duration, Instant};
 
 use app::{App, Command, Config, Event};
 use egui_kittest::Harness;
-use egui_kittest::kittest::Queryable as _;
+use egui_kittest::kittest::{NodeT as _, Queryable as _};
 use ext::{ActionId, CellValue, DecorateCtx, Invocation, Level, UiHost};
 use ext_git::{GitExtension, STATUS_COLUMN};
 use model::PaneId;
@@ -35,6 +43,16 @@ fn git(dir: &Path, args: &[&str]) -> String {
         String::from_utf8_lossy(&output.stderr)
     );
     String::from_utf8_lossy(&output.stdout).into_owned()
+}
+
+/// The text of a file a clone checked out, with its line endings as
+/// committed. A clone is a new repository, which the fixture's own
+/// `core.autocrlf` does not reach: Git for Windows checks text out with
+/// CRLF unless told otherwise.
+fn checked_out(path: &Path) -> Option<String> {
+    fs::read_to_string(path)
+        .ok()
+        .map(|text| text.replace("\r\n", "\n"))
 }
 
 /// Turns `dir` into a repository with one commit of everything in it.
@@ -551,7 +569,460 @@ fn the_context_menu_shows_the_git_group_only_inside_the_repository() {
     harness.get_by_label("Show log");
     harness.get_by_label("Blame");
     assert!(
-        harness.query_by_label("Commit").is_some(),
-        "Commit is in the group"
+        harness.query_by_label("Git commit").is_some(),
+        "Git commit is in the group"
+    );
+}
+
+/// `path` as a `file://` URL, which git clones like a remote one.
+fn file_url(path: &Path) -> String {
+    let text = path.to_string_lossy().replace('\\', "/");
+    if text.starts_with('/') {
+        format!("file://{text}")
+    } else {
+        format!("file:///{text}")
+    }
+}
+
+impl Driver {
+    /// Runs *Git clone…* on the selection `names` with the dialogue's
+    /// defaults, the URL being what the clipboard holds, and returns
+    /// without waiting for the job.
+    fn start_clone(&mut self, clipboard: &str, names: &[&str]) {
+        self.app
+            .platform()
+            .set_text(clipboard)
+            .unwrap_or_else(|e| panic!("{e}"));
+        let ids: Vec<EntryId> = names.iter().map(|n| self.id_of(n)).collect();
+        self.app.handle(
+            Command::Select {
+                pane: self.pane,
+                change: model::SelectionChange::Set(ids),
+            },
+            &mut self.events,
+        );
+        let ctx = self
+            .app
+            .action_ctx(self.pane, Invocation::ContextMenu)
+            .unwrap_or_else(|| panic!("no context"));
+        self.app.handle(
+            Command::Run {
+                action: ActionId("git.clone"),
+                ctx,
+            },
+            &mut self.events,
+        );
+    }
+
+    /// Lets the app work until `done` holds.
+    fn pump_until(&mut self, what: &str, done: impl Fn(&Self) -> bool) {
+        let deadline = Instant::now() + Duration::from_secs(30);
+        while !done(self) {
+            assert!(Instant::now() < deadline, "{what}: {:?}", self.app);
+            runtime::block_on(async {
+                let _ = tokio::time::timeout(
+                    Duration::from_millis(20),
+                    self.app.tick(&mut self.events),
+                )
+                .await;
+            });
+        }
+    }
+
+    /// The job named `name`, with its id.
+    fn job(&self, name: &str) -> Option<(types::JobId, &model::JobInfo)> {
+        self.app
+            .model()
+            .jobs
+            .iter()
+            .find(|(_, job)| job.name == name)
+            .map(|(id, job)| (*id, job))
+    }
+
+    /// The names the pane lists, sorted.
+    fn names(&self) -> Vec<String> {
+        let mut names: Vec<String> = self
+            .tab()
+            .listing
+            .entries()
+            .iter()
+            .map(|e| e.name.clone())
+            .collect();
+        names.sort();
+        names
+    }
+}
+
+/// What the clipboard holds is what the dialogue opens with — a local
+/// repository's path, and a `file://` URL; the clone runs as a job,
+/// creates the repository's folder in the pane's folder, or in the folder
+/// it was invoked on, and the pane shows it when the job is done.
+#[test]
+fn a_clone_lands_in_the_target_folder_and_the_pane_shows_it() {
+    let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+    repo_with_origin(dir.path());
+    let origin = dir.path().join("origin.git");
+    let into = dir.path().join("into");
+    fs::create_dir_all(into.join("nested")).unwrap_or_else(|e| panic!("{e}"));
+    let mut d = Driver::new(&into);
+    assert_eq!(d.names(), ["nested"]);
+
+    // On the empty area, from the repository's path: into the folder the
+    // pane shows.
+    d.start_clone(&origin.to_string_lossy(), &[]);
+    d.pump_until("the clone is a job", |d| {
+        d.job("Git clone origin").is_some()
+    });
+    d.settle();
+    assert_eq!(
+        d.job("Git clone origin").map(|(_, job)| job.state.clone()),
+        Some(model::JobState::Done)
+    );
+    assert_eq!(
+        checked_out(&into.join("origin/tracked.txt")).as_deref(),
+        Some("one\n")
+    );
+    assert_eq!(d.names(), ["nested", "origin"], "the pane shows the clone");
+
+    // On a folder, from a `file://` URL: inside that folder.
+    d.start_clone(&file_url(&origin), &["nested"]);
+    d.settle();
+    assert!(into.join("nested/origin/.git").is_dir());
+    assert_eq!(d.names(), ["nested", "origin"]);
+    let errors: Vec<&Event> = d
+        .events
+        .iter()
+        .filter(|event| matches!(event, Event::JobFailed { .. }))
+        .collect();
+    assert!(errors.is_empty(), "{errors:?}");
+}
+
+/// A clone that fails shows what git said in its job; one that is
+/// cancelled stops and leaves nothing behind. Neither asks in a dialogue.
+#[test]
+fn a_failed_clone_is_reported_in_its_job_and_a_running_one_is_cancelled() {
+    let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+    fs::create_dir(dir.path().join("tool")).unwrap_or_else(|e| panic!("{e}"));
+    fs::write(dir.path().join("tool/mine.txt"), "mine").unwrap_or_else(|e| panic!("{e}"));
+    let mut d = Driver::new(dir.path());
+
+    // The folder is taken: git refuses it before it looks for the host.
+    d.start_clone("https://example.invalid/team/tool.git", &[]);
+    d.settle();
+    let state = d.job("Git clone tool").map(|(_, job)| job.state.clone());
+    let Some(model::JobState::Failed(error)) = state else {
+        panic!("the job did not fail: {state:?}");
+    };
+    assert!(error.contains("tool"), "{error}");
+    assert!(
+        d.events.iter().any(
+            |event| matches!(event, Event::JobFailed { pane: Some(pane), .. } if *pane == d.pane)
+        ),
+        "the failure is the job's, in the pane it was started from"
+    );
+    assert_eq!(
+        fs::read_to_string(dir.path().join("tool/mine.txt"))
+            .ok()
+            .as_deref(),
+        Some("mine")
+    );
+
+    // A server that takes the connection and never answers.
+    let silent = std::net::TcpListener::bind("127.0.0.1:0").unwrap_or_else(|e| panic!("{e}"));
+    let port = silent.local_addr().unwrap_or_else(|e| panic!("{e}")).port();
+    d.start_clone(&format!("git://127.0.0.1:{port}/team/slow.git"), &[]);
+    let created = dir.path().join("slow");
+    d.pump_until("the clone runs", |d| {
+        created.is_dir()
+            && d.job("Git clone slow")
+                .is_some_and(|(_, job)| matches!(job.state, model::JobState::Running(_)))
+    });
+    let id = d
+        .job("Git clone slow")
+        .map_or_else(|| panic!("no job"), |(id, _)| id);
+    d.step(Command::CancelJob(id));
+    assert_eq!(
+        d.job("Git clone slow").map(|(_, job)| job.state.clone()),
+        Some(model::JobState::Cancelled)
+    );
+    // Where `git` is a launcher (Git for Windows), the git it started is
+    // not the process that was stopped: it ends when its server goes away
+    // and removes its folder itself.
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while created.exists() && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    if created.exists() {
+        eprintln!("note: git outlived the process that was stopped");
+    }
+    drop(silent);
+    d.pump_until("the folder is removed", |_| !created.exists());
+}
+
+/// Right-clicks at `at` and lets the menu lay itself out.
+fn secondary_click_at(harness: &mut Harness<'_, RickUi>, at: egui::Pos2) {
+    harness.event(egui::Event::PointerMoved(at));
+    harness.step();
+    for pressed in [true, false] {
+        harness.event(egui::Event::PointerButton {
+            pos: at,
+            button: egui::PointerButton::Secondary,
+            pressed,
+            modifiers: egui::Modifiers::default(),
+        });
+        harness.step();
+    }
+    harness.step();
+    harness.step();
+}
+
+/// Closes an open menu.
+fn close_menu(harness: &mut Harness<'_, RickUi>) {
+    harness.key_press(egui::Key::Escape);
+    harness.step();
+    harness.step();
+}
+
+/// A point of the pane's empty area, below its last row `last`.
+fn empty_area(harness: &Harness<'_, RickUi>, last: &str) -> egui::Pos2 {
+    let pane = harness.state().app().model().focused;
+    let tab = harness
+        .state()
+        .app()
+        .model()
+        .active_tab(pane)
+        .map_or_else(|| panic!("no tab"), |(id, _)| id);
+    let toolbar = harness
+        .state()
+        .toolbar_row(tab)
+        .unwrap_or_else(|| panic!("no toolbar"));
+    egui::pos2(
+        toolbar.center().x,
+        harness.get_by_label(last).rect().bottom() + 120.0,
+    )
+}
+
+/// *Git clone…* is in the menu of the empty area and of a folder, outside
+/// a repository as the group's one entry and inside one with the other Git
+/// actions; a file and a selection of several entries do not have it.
+#[test]
+fn git_clone_is_in_the_menu_of_the_empty_area_and_of_a_folder() {
+    let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+    let plain = dir.path().join("plain");
+    fs::create_dir_all(plain.join("folder")).unwrap_or_else(|e| panic!("{e}"));
+    fs::write(plain.join("file.txt"), "x").unwrap_or_else(|e| panic!("{e}"));
+    let work = repo_with_origin(dir.path());
+
+    let mut harness = harness(&plain);
+    // A file: no entry.
+    harness.get_by_label("file.txt").click_secondary();
+    harness.step();
+    harness.step();
+    harness.get_by_label_contains("Properties");
+    assert!(harness.query_by_label("Git clone…").is_none(), "on a file");
+    close_menu(&mut harness);
+    // A folder, and the empty area.
+    harness.get_by_label("folder").click_secondary();
+    harness.step();
+    harness.step();
+    harness.get_by_label("Git clone…");
+    close_menu(&mut harness);
+    let empty = empty_area(&harness, "file.txt");
+    secondary_click_at(&mut harness, empty);
+    harness.get_by_label("Folder properties");
+    harness.get_by_label("Git clone…");
+    close_menu(&mut harness);
+    // Several entries selected: no entry, on the folder among them either.
+    let pane = harness.state().app().model().focused;
+    let ids: Vec<EntryId> = harness
+        .state()
+        .app()
+        .model()
+        .active_tab(pane)
+        .map(|(_, tab)| tab.rows().map(|e| e.id).collect())
+        .unwrap_or_default();
+    assert_eq!(ids.len(), 2);
+    harness.state_mut().app_mut().handle(
+        Command::Select {
+            pane,
+            change: model::SelectionChange::Set(ids),
+        },
+        &mut Vec::new(),
+    );
+    settle(&mut harness);
+    harness.get_by_label("folder").click_secondary();
+    harness.step();
+    harness.step();
+    harness.get_by_label_contains("Properties");
+    assert!(
+        harness.query_by_label("Git clone…").is_none(),
+        "on a selection of several"
+    );
+    close_menu(&mut harness);
+
+    // Inside a repository it sits in the group with the other actions.
+    harness.state_mut().app_mut().handle(
+        Command::Navigate {
+            pane,
+            to: local(&work),
+        },
+        &mut Vec::new(),
+    );
+    settle(&mut harness);
+    harness.get_by_label("sub").click_secondary();
+    harness.step();
+    harness.step();
+    harness.get_by_label_contains("Git ⏵").hover();
+    harness.step();
+    harness.step();
+    harness.get_by_label("Git commit");
+    harness.get_by_label("Git clone…");
+}
+
+/// Clicks at `at` with the primary button.
+fn primary_click_at(harness: &mut Harness<'_, RickUi>, at: egui::Pos2) {
+    harness.event(egui::Event::PointerMoved(at));
+    harness.step();
+    for pressed in [true, false] {
+        harness.event(egui::Event::PointerButton {
+            pos: at,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::default(),
+        });
+        harness.step();
+    }
+    harness.step();
+}
+
+/// Opens *Git clone…* from the menu of the empty area below the row
+/// `last`, with `clipboard` on the clipboard.
+fn open_clone_dialogue(harness: &mut Harness<'_, RickUi>, last: &str, clipboard: &str) {
+    harness
+        .state()
+        .app()
+        .platform()
+        .set_text(clipboard)
+        .unwrap_or_else(|e| panic!("{e}"));
+    let empty = empty_area(harness, last);
+    secondary_click_at(harness, empty);
+    let entry = harness.get_by_label("Git clone…").rect().center();
+    primary_click_at(harness, entry);
+    for _ in 0..4 {
+        harness.step();
+    }
+    harness.get_by_label("Clone repository");
+}
+
+/// The dialogue: the header with the target folder, the URL field, the
+/// card with the folder the clone creates, the options folded away, the
+/// note and the buttons in the footer. With nothing that is a Git URL on
+/// the clipboard the field is blank and asks for the URL; Escape cancels.
+#[test]
+fn the_clone_dialogue_names_the_target_and_folds_the_options_away() {
+    let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+    let plain = dir.path().join("plain");
+    fs::create_dir_all(plain.join("tool")).unwrap_or_else(|e| panic!("{e}"));
+    let mut harness = harness(&plain);
+    open_clone_dialogue(&mut harness, "tool", "meeting notes");
+    harness.get_by_label(&format!("Into {}", plain.display()));
+    harness.get_by_label("Repository URL");
+    harness.get_by_label("Enter the repository's URL.");
+    harness.get_by_label("DESTINATION");
+    harness.get_by_label_contains("Creates ·");
+    harness.get_by_label("Runs as a job — progress in Operations");
+    harness.get_by_label("Cancel");
+    harness.get_by_role_and_label(egui::accesskit::Role::Button, "Clone");
+    // The options are folded away until their row is clicked.
+    assert!(harness.query_by_label("Depth").is_none());
+    let options = harness
+        .get_by_role_and_label(egui::accesskit::Role::CheckBox, "Options")
+        .rect()
+        .center();
+    primary_click_at(&mut harness, options);
+    harness.get_by_label("Branch");
+    harness.get_by_label("Depth");
+    harness.get_by_role_and_label(egui::accesskit::Role::CheckBox, "Submodules");
+    // Escape cancels: no dialogue, no job.
+    harness.key_press(egui::Key::Escape);
+    harness.step();
+    harness.step();
+    assert!(harness.query_by_label("Clone repository").is_none());
+    assert!(harness.state().app().model().jobs.is_empty());
+}
+
+/// A Git URL on the clipboard is in the field when the dialogue opens,
+/// selected, so typing replaces it; the *Creates* line follows the URL as
+/// it is typed; what is not a Git URL says so; and Enter starts the clone
+/// as a job, whose failure is in the operations and not in a dialogue.
+#[test]
+fn the_clone_dialogue_opens_with_the_clipboards_url_and_starts_a_job() {
+    let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+    let plain = dir.path().join("plain");
+    // The folder the clone of this test would create is taken.
+    fs::create_dir_all(plain.join("tool")).unwrap_or_else(|e| panic!("{e}"));
+    fs::write(plain.join("tool/mine.txt"), "mine").unwrap_or_else(|e| panic!("{e}"));
+    let mut harness = harness(&plain);
+    open_clone_dialogue(&mut harness, "tool", "git@example.com:team/rick.git");
+    assert!(
+        harness
+            .query_by_label("Enter the repository's URL.")
+            .is_none()
+    );
+    let creates = |harness: &Harness<'_, RickUi>| {
+        harness
+            .get_by_label_contains("Creates ·")
+            .accesskit_node()
+            .value()
+            .unwrap_or_default()
+    };
+    // The card cuts a long path in its middle and keeps its end, the
+    // folder the clone creates; the temporary directory's path is that
+    // long on macOS and Windows.
+    let ends_in = |line: &str, folder: &str| {
+        let end = Path::new("plain").join(folder).display().to_string();
+        line.starts_with("Creates · ") && line.ends_with(&end)
+    };
+    let line = creates(&harness);
+    assert!(ends_in(&line, "rick"), "{line}");
+    // The prefilled text is selected: typing replaces it, and the line
+    // follows.
+    harness.event(egui::Event::Text("not a url".to_owned()));
+    harness.step();
+    harness.step();
+    assert_eq!(creates(&harness), "Creates · not a url");
+    // What is not a Git URL says so, which holds Clone back.
+    harness.get_by_label_contains("not a Git URL");
+    harness.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+    harness.step();
+    harness.event(egui::Event::Text(
+        "https://example.invalid/team/tool.git".to_owned(),
+    ));
+    harness.step();
+    harness.step();
+    let line = creates(&harness);
+    assert!(ends_in(&line, "tool"), "{line}");
+
+    // Enter starts the clone: the dialogue closes and the job, whose
+    // folder is taken, fails in the operations, with no dialogue.
+    harness.key_press(egui::Key::Enter);
+    let failed = |harness: &Harness<'_, RickUi>| {
+        harness.state().app().model().jobs.values().any(|job| {
+            job.name == "Git clone tool" && matches!(job.state, model::JobState::Failed(_))
+        })
+    };
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while !failed(&harness) {
+        assert!(Instant::now() < deadline, "the clone did not fail as a job");
+        harness.step();
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    settle(&mut harness);
+    assert!(harness.query_by_label("Clone repository").is_none());
+    assert_eq!(
+        fs::read_to_string(plain.join("tool/mine.txt"))
+            .ok()
+            .as_deref(),
+        Some("mine")
     );
 }

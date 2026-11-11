@@ -46,6 +46,7 @@ use windows::Win32::UI::Shell::{
     SHERB_NOSOUND, SHEmptyRecycleBinW, SHGetKnownFolderItem, SHGetKnownFolderPath,
     SIGDN_FILESYSPATH, SIGDN_NORMALDISPLAY, ShellExecuteExW, ShellExecuteW, ShellLink,
 };
+use windows::Win32::UI::Shell::{SHFMT_ID_DEFAULT, SHFMT_OPT_NONE, SHFormatDrive};
 use windows::Win32::UI::WindowsAndMessaging::{
     ASFW_ANY, AllowSetForegroundWindow, IsIconic, SW_RESTORE, SW_SHOW, SW_SHOWNORMAL,
     SetForegroundWindow, ShowWindow,
@@ -56,7 +57,7 @@ use crate::Native;
 use crate::fs::windows::{filetime, io_error, wide};
 use crate::traits::{
     Activation, Application, Chrome, ConfigDir, ControlsSide, DragSource, DropTarget, Elevate,
-    ElevatedOutput, ImageFormat, IncomingFiles, Mount, OpenWith, Point, Properties,
+    ElevatedOutput, ImageFormat, IncomingFiles, Monitor, Mount, OpenWith, Point, Properties,
     PropertiesOutcome, RecentItem, RecentlyUsed, StandardFolder, StandardFolders, Terminal, Trash,
     TrashedItem, Volume, VolumeKind, Volumes, WindowChrome, WindowRef,
 };
@@ -557,6 +558,38 @@ impl Volumes for Native {
         let _ = unsafe { CloseHandle(handle) };
         result
     }
+
+    /// The shell's format dialogue is part of the system.
+    fn has_format_tool(&self) -> bool {
+        true
+    }
+
+    /// Opens the shell's format dialogue on the volume's drive letter. The
+    /// dialogue is modal to its own thread, which this starts and leaves;
+    /// whether anything is formatted is the user's answer to it.
+    fn open_format_tool(&self, volume: &Volume) -> Result<(), Error> {
+        let letter = volume
+            .mount_point
+            .to_string_lossy()
+            .chars()
+            .next()
+            .filter(char::is_ascii_alphabetic)
+            .ok_or(Error::Unsupported("the volume has no drive letter"))?;
+        let drive = u32::from(letter.to_ascii_uppercase()) - u32::from('A');
+        std::thread::Builder::new()
+            .name("format-dialogue".to_owned())
+            .spawn(move || {
+                // SAFETY: `SHFormatDrive` takes no pointer but the owner
+                // window, which may be null; the drive number is one of
+                // the 26 letters, and the two ids are the documented
+                // defaults.
+                let _ = unsafe {
+                    SHFormatDrive(HWND::default(), drive, SHFMT_ID_DEFAULT, SHFMT_OPT_NONE)
+                };
+            })
+            .map(drop)
+            .map_err(Error::from_io)
+    }
 }
 
 /// One `DeviceIoControl` with an optional input buffer and no output.
@@ -901,6 +934,19 @@ impl OpenWith for Native {
             .map(drop)
             .map_err(Error::from_io)
     }
+
+    /// Notepad, which every Windows has: one window a file.
+    fn open_in_text_editor(&self, paths: &[PathBuf]) -> Result<(), Error> {
+        for path in paths {
+            let dir = path.parent().unwrap_or(path);
+            self.run_detached(
+                Path::new("notepad.exe"),
+                &[path.as_os_str().to_owned()],
+                dir,
+            )?;
+        }
+        Ok(())
+    }
 }
 
 /// Whether `program` is on the `PATH`.
@@ -1122,6 +1168,85 @@ impl Chrome for Native {
             native_controls: false,
             native_controls_width: 0.0,
         }
+    }
+
+    /// The display monitors with their work areas, which Windows counts in
+    /// physical pixels.
+    fn monitors(&self, pixels_per_point: f32) -> Vec<Monitor> {
+        use windows::Win32::Foundation::{LPARAM, RECT};
+        use windows::Win32::Graphics::Gdi::{
+            EnumDisplayMonitors, GetMonitorInfoW, HDC, HMONITOR, MONITORINFO, MONITORINFOEXW,
+        };
+        use windows::core::BOOL;
+
+        /// `MONITORINFOF_PRIMARY`: the monitor is the primary one.
+        const PRIMARY: u32 = 1;
+
+        unsafe extern "system" fn each(
+            monitor: HMONITOR,
+            _: HDC,
+            _: *mut RECT,
+            data: LPARAM,
+        ) -> BOOL {
+            // SAFETY: `data` is the address of the `Vec` that
+            // `EnumDisplayMonitors` was handed below, which outlives the
+            // call and is touched by nothing else while it runs.
+            let found = unsafe { &mut *(data.0 as *mut Vec<HMONITOR>) };
+            found.push(monitor);
+            true.into()
+        }
+
+        let mut found: Vec<HMONITOR> = Vec::new();
+        // SAFETY: the callback matches `MONITORENUMPROC`, and the pointer
+        // it is handed is to `found`, alive for the whole call.
+        let _ = unsafe {
+            EnumDisplayMonitors(
+                None,
+                None,
+                Some(each),
+                LPARAM(std::ptr::from_mut(&mut found) as isize),
+            )
+        };
+        let scale = if pixels_per_point > 0.0 {
+            pixels_per_point
+        } else {
+            1.0
+        };
+        #[allow(clippy::cast_precision_loss)]
+        let area = |rect: RECT| {
+            [
+                rect.left as f32 / scale,
+                rect.top as f32 / scale,
+                (rect.right - rect.left) as f32 / scale,
+                (rect.bottom - rect.top) as f32 / scale,
+            ]
+        };
+        found
+            .into_iter()
+            .filter_map(|monitor| {
+                let mut info = MONITORINFOEXW::default();
+                #[allow(clippy::cast_possible_truncation)]
+                {
+                    info.monitorInfo.cbSize = size_of::<MONITORINFOEXW>() as u32;
+                }
+                // SAFETY: `info` is a `MONITORINFOEXW` with its size set,
+                // which begins with the `MONITORINFO` the call fills, and
+                // it lives across the call.
+                let known = unsafe {
+                    GetMonitorInfoW(monitor, std::ptr::from_mut(&mut info).cast::<MONITORINFO>())
+                };
+                known.as_bool().then(|| {
+                    let name = info.szDevice;
+                    let end = name.iter().position(|c| *c == 0).unwrap_or(name.len());
+                    Monitor {
+                        id: String::from_utf16_lossy(&name[..end]),
+                        primary: info.monitorInfo.dwFlags & PRIMARY != 0,
+                        bounds: area(info.monitorInfo.rcMonitor),
+                        work: area(info.monitorInfo.rcWork),
+                    }
+                })
+            })
+            .collect()
     }
 }
 

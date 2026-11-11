@@ -113,6 +113,7 @@ impl CodePreview {
             manifest: Manifest {
                 id: ID,
                 name: "Code preview",
+                description: "Previews source code with syntax highlighting, and shows the source of Markdown and HTML files.",
                 version: Version::new(0, 1, 0),
                 api_version: API_VERSION,
                 requires: Capabilities::empty(),

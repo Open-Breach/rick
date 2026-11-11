@@ -18,6 +18,7 @@ use app::{App, Command, Event};
 use egui::{ViewportBuilder, ViewportCommand, ViewportId};
 use egui_dock::{DockArea, TabViewer};
 use ext::{ActionCtx, ActionId, Invocation, Level};
+use model::placement::{self, Area, Screen};
 use model::{
     Column, Density, DockTarget, Geometry, IconSize, JobState, PaneId, PanelSide, SelectionChange,
     SettingsChange, SidePanelChange, SortDir, Tab, TabId, TabKind, Theme, ViewMode, WindowId,
@@ -31,13 +32,14 @@ use crate::about::{self, AboutDialog};
 use crate::console::ConsoleUi;
 use crate::dnd::{Dnd, DragView, Source, Spring, Target, Zone};
 use crate::dock::DockSync;
+use crate::extensions::ExtensionsDialog;
 use crate::host::{Ask, EguiHost};
 use crate::inline::{EditKind, RowEdit};
-use crate::keys::{Direction, Intent, KeyMap};
+use crate::keys::{self, Direction, Intent, KeyMap};
 use crate::operations::Operations;
 use crate::preview::Previews;
 use crate::search::{Pick, SearchBox};
-use crate::settings_ui::ShortcutsScreen;
+use crate::shortcuts::ShortcutsScreen;
 use crate::side_panel::SidePanelState;
 use crate::thumbs::Thumbnails;
 use crate::{compare, console};
@@ -75,6 +77,13 @@ pub struct TabUi {
     pub column_boundaries: Vec<f32>,
     /// How many rows the last frame could show, for Page Up and Down.
     pub visible_rows: usize,
+    /// The List view of the last frame: how many rows a column holds and
+    /// the one width of its columns, for Left and Right and for tests.
+    /// `None` before the List view was drawn.
+    pub list: Option<crate::views::ListGrid>,
+    /// The average width of the names the List view's columns are sized
+    /// by, with what it was measured for.
+    pub list_names: Option<crate::views::NameWidths>,
     /// The list's vertical scroll offset in the last frame.
     pub scroll_offset: f32,
     /// Scroll to this offset on the next frame.
@@ -86,6 +95,8 @@ pub struct TabUi {
     pub restore_scroll: Option<f32>,
     /// The location drawn last frame, to notice a change.
     pub last_location: Option<Location>,
+    /// What stays of the *Connection lost* card between frames.
+    pub lost_card: crate::info_card::State,
     /// Select the entry with this name once it is listed, giving up after
     /// `SELECT_FOR` (5 s): the entry may still be on its way (a new folder's
     /// job, a renamed entry's change event).
@@ -153,6 +164,8 @@ pub enum Request {
     Toast(Level, String),
     /// Show the About window.
     About,
+    /// Open the Settings window on a plugin's page, by the plugin's id.
+    PluginSettings(String),
     /// Rows were dragged past the threshold: start a drag of them.
     StartDrag {
         /// The pane.
@@ -264,10 +277,15 @@ pub struct Dispatched {
     pub pane: PaneId,
 }
 
+/// A notice at the top right of a window.
 struct Toast {
     level: Level,
     text: String,
-    until: Instant,
+    /// When it leaves by itself; an error stays until it is dismissed.
+    until: Option<Instant>,
+    /// The window it is shown in — the one the user acted in — or the
+    /// window in front when it is tied to none.
+    window: Option<WindowId>,
 }
 
 /// A text an action asked the host to show.
@@ -314,6 +332,13 @@ struct LibraryBrowse {
     answer: runtime::oneshot::Receiver<Vec<std::path::PathBuf>>,
 }
 
+/// The folder dialogue *Download…* opened: what to download once a folder
+/// is picked, and the answer.
+struct DownloadPick {
+    ctx: ActionCtx,
+    answer: runtime::oneshot::Receiver<Option<std::path::PathBuf>>,
+}
+
 /// What a name typed into the name prompt is for.
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum NameFor {
@@ -343,8 +368,8 @@ pub struct WindowUi {
     /// Each workspace tab of the title row in the last frame, by the tab
     /// its title comes from, for tests that drop on one.
     tab_headers: HashMap<TabId, egui::Rect>,
-    /// Rick's own window frame as the last frame drew it, if it did; the
-    /// window is then cleared to transparent around it.
+    /// Rick's own window frame as the last frame drew it, if it did; around
+    /// a shadow frame the window is then cleared to transparent.
     window_frame: Option<frame::Frame>,
     /// Drag and drop of entries.
     dnd: Dnd,
@@ -741,10 +766,9 @@ fn workspace_label(model: &model::Model, ws: &model::Workspace) -> TabLabel {
 fn tab_label(model: &model::Model, tab: &Tab) -> (&'static str, String) {
     match tab.kind {
         TabKind::Preview => (icons::PREVIEW, t!("shell-preview-tab")),
-        TabKind::Console => (
-            icons::TERMINAL,
-            tab.title.clone().unwrap_or_else(|| t!("shell-console-tab")),
-        ),
+        // A console is titled Console: not the folder it was opened in,
+        // and not what its shell sets as its title.
+        TabKind::Console => (icons::TERMINAL, t!("shell-console-tab")),
         TabKind::Compare => (
             icons::COMPARE,
             tab.title.clone().unwrap_or_else(|| t!("shell-compare-tab")),
@@ -766,11 +790,13 @@ fn tab_label(model: &model::Model, tab: &Tab) -> (&'static str, String) {
 }
 
 /// Draws one workspace tab at `rect`: a 16 px icon, the title truncated
-/// with an ellipsis and a close button; filled `bg/pane` when active,
-/// `bg/subtle` when hovered, the inactive title in `text/secondary` and its
-/// close button at half opacity; the grab cursor over its body (SPEC.md
-/// *Workspace tabs*). Returns the tab's response and whether the close
-/// button was pressed.
+/// with an ellipsis and a close button. The active tab is filled `bg/pane`
+/// and drawn in the scheme's own colours, lifting out of the title row's
+/// band; an inactive one shows the band and takes its colours from it —
+/// the band's hover under the pointer, its title and icon colours, the
+/// close button at half opacity (SPEC.md *Workspace tabs*, *On the
+/// band*). The grab cursor is over the tab's body. Returns the tab's
+/// response and whether the close button was pressed.
 fn workspace_tab(
     ui: &mut egui::Ui,
     rect: egui::Rect,
@@ -780,6 +806,7 @@ fn workspace_tab(
 ) -> (egui::Response, bool) {
     use crate::theme::{ICON, TAB_CORNER, TEXT_BODY};
     let scheme = crate::theme::scheme(ui);
+    let band = crate::theme::band(ui);
     let response = ui.interact(
         rect,
         egui::Id::new(("workspace-tab", id.0)),
@@ -816,21 +843,22 @@ fn workspace_tab(
     if active {
         painter.rect_filled(rect, corners, scheme.bg_pane);
     } else if response.hovered() || close.hovered() {
-        painter.rect_filled(rect, corners, scheme.bg_subtle);
+        painter.rect_filled(rect, corners, band.tab_hover);
     }
+    // The active tab is the scheme's; the others sit on the band.
+    let (icon, colour, close_hover) = if active {
+        (scheme.icon_default, scheme.text_primary, scheme.bg_control)
+    } else {
+        (band.icon, band.title, band.hover)
+    };
     let icon_font = egui::FontId::proportional(ICON);
     painter.text(
         egui::pos2(rect.left() + 14.0, rect.center().y),
         egui::Align2::LEFT_CENTER,
         label.icon,
         icon_font.clone(),
-        scheme.icon_default,
+        icon,
     );
-    let colour = if active {
-        scheme.text_primary
-    } else {
-        scheme.text_secondary
-    };
     let title_left = rect.left() + 38.0;
     let title_width = (close_rect.left() - 6.0 - title_left).max(0.0);
     let mut job = egui::text::LayoutJob::simple_singleline(
@@ -843,13 +871,13 @@ fn workspace_tab(
     let text_pos = egui::pos2(title_left, rect.center().y - galley.size().y / 2.0);
     ui.painter().galley(text_pos, galley, colour);
     let x_colour = if active {
-        scheme.icon_default
+        icon
     } else {
-        scheme.icon_default.gamma_multiply(0.5)
+        icon.gamma_multiply(0.5)
     };
     if close.hovered() {
         ui.painter()
-            .circle_filled(close_rect.center(), 10.0, scheme.bg_control);
+            .circle_filled(close_rect.center(), 10.0, close_hover);
     }
     ui.painter().text(
         close_rect.center(),
@@ -874,11 +902,17 @@ pub struct RickUi {
     requests: Vec<Request>,
     dispatched: VecDeque<Dispatched>,
     toasts: Vec<Toast>,
+    /// The window of the pane a job that just failed was started from:
+    /// where the notice that follows is shown.
+    failed_in: Option<WindowId>,
+    /// What each window has seen of the copy, cut and paste chords, which
+    /// do not arrive as key presses.
+    chords: HashMap<WindowId, crate::chords::ClipboardChords>,
     dialog: Option<Dialog>,
     name_prompt: Option<NamePrompt>,
     settings: settings_ui::SettingsWindow,
     shortcuts: ShortcutsScreen,
-    extensions_open: bool,
+    extensions: ExtensionsDialog,
     /// The About dialog (specs/about-dialog.md), with the binary's build
     /// details once it says them.
     about: AboutDialog,
@@ -892,6 +926,8 @@ pub struct RickUi {
     /// The file dialogue a preview's *Browse…* opened for a missing
     /// library, while it is open.
     library_browse: Option<LibraryBrowse>,
+    /// The folder dialogue of a *Download…* that waits for its answer.
+    download_pick: Option<DownloadPick>,
     /// The Hash dialogue, open or not.
     hash: hash::HashDialog,
     /// The integration dialog, open or not, and the check after the
@@ -922,7 +958,7 @@ pub struct RickUi {
     /// Set while the inline editor commits through the action, so the shell
     /// runs the action instead of starting another edit.
     inline_commit: bool,
-    applied: Option<(Theme, u8, Density)>,
+    applied: Option<(Theme, u8, Density, (model::Rgb, model::Rgb))>,
     now: SystemTime,
     /// Each model window's state.
     windows: BTreeMap<WindowId, WindowUi>,
@@ -944,6 +980,15 @@ pub struct RickUi {
     window_ref: Option<WindowRef>,
     /// The platform has been told about `window_ref`.
     attached: bool,
+    /// The frame drawn around every window Rick decorates itself: the
+    /// shadow frame unless [`with_frame`](Self::with_frame) said otherwise.
+    frame_mode: frame::Mode,
+    /// The monitors as the platform listed them last and when, so that a
+    /// window being dragged does not ask for them every frame.
+    screens: Option<(Instant, Vec<Screen>)>,
+    /// The windows that were put where *Window geometry* says: restored,
+    /// centred at the default size, or beside the window they came from.
+    arranged: std::collections::BTreeSet<WindowId>,
     /// Work from outside the windows (a second launch's command line,
     /// handed over through the single-instance endpoint), run against the
     /// application before the root window's frame.
@@ -1025,17 +1070,65 @@ fn dock_style(egui_style: &egui::Style, scheme: &crate::theme::Scheme) -> egui_d
     style
 }
 
-/// An icon-only toggle; the fill weight marks it active.
-fn toggle_icon(glyph: &str, on: bool) -> egui::Button<'static> {
-    let text = if on {
-        egui::RichText::new(glyph).family(egui::FontFamily::Name(t!("shell-phosphor-fill").into()))
+/// The gap between two icons of the title row's window group.
+const WINDOW_ICON_GAP: f32 = 12.0;
+/// The gap between the layout toggles' icons and the window controls',
+/// with the divider in its middle.
+const WINDOW_GROUP_GAP: f32 = 25.0;
+
+/// One control of the title row's window group (SPEC.md *Title row*): a
+/// 16 px icon in a step of the icon and its 12 px gap, as tall as a tool
+/// button, which answers over the whole of it — so the controls are
+/// neither crowded nor small to hit. It is drawn on the band, in the
+/// band's colours; `on` makes it a toggle, whose filled glyph and — on a
+/// band that agrees with the scheme — `accent/focus` tint mark it active.
+/// `name` is its accessible name and its tooltip.
+fn window_control(ui: &mut egui::Ui, glyph: &str, name: &str, on: Option<bool>) -> egui::Response {
+    use crate::theme::ICON;
+    let metrics = crate::theme::metrics(ui.ctx());
+    let scheme = crate::theme::scheme(ui);
+    let band = crate::theme::band(ui);
+    let (rect, response) = ui.allocate_exact_size(
+        egui::vec2(ICON + WINDOW_ICON_GAP, metrics.button_size),
+        egui::Sense::click(),
+    );
+    if response.hovered() {
+        ui.painter()
+            .rect_filled(rect, metrics.corner_radius(), band.hover);
+    }
+    let active = on == Some(true);
+    let colour = if active && !band.contrary {
+        scheme.accent_focus
     } else {
-        egui::RichText::new(glyph)
+        band.icon
     };
-    egui::Button::new(text).frame(false).selected(on)
+    let family = if active {
+        egui::FontFamily::Name(icons::FILL_FAMILY.into())
+    } else {
+        egui::FontFamily::Proportional
+    };
+    ui.painter().text(
+        rect.center(),
+        egui::Align2::CENTER_CENTER,
+        glyph,
+        egui::FontId::new(ICON, family),
+        colour,
+    );
+    response.widget_info(|| match on {
+        Some(on) => {
+            egui::WidgetInfo::selected(egui::WidgetType::Checkbox, true, on, name.to_owned())
+        }
+        None => egui::WidgetInfo::labeled(egui::WidgetType::Button, true, name.to_owned()),
+    });
+    response.on_hover_text(name)
 }
-/// How long a notification stays.
+/// How long a notice that is not an error stays.
 const TOAST_FOR: Duration = Duration::from_secs(5);
+/// The width a notice's text wraps at.
+const TOAST_WIDTH: f32 = 340.0;
+/// The gap between the notices and the title row above them, and the
+/// window's edge at their right.
+const TOAST_GAP: f32 = 8.0;
 /// How long a `SelectNamed` waits for its entry to be listed.
 const SELECT_FOR: Duration = Duration::from_secs(5);
 
@@ -1046,11 +1139,16 @@ fn viewport_of(window: WindowId) -> ViewportId {
 
 /// The viewport builder for a window: Rick's own chrome, the app id and the
 /// window icon, at the window's restored geometry when it has one.
+/// `transparent` is whether a window Rick frames itself asks the system for
+/// transparency: the first window by [`frame::asks_transparency`], every
+/// later one by the frame that was chosen ([`frame::Mode::transparent`]). A
+/// window whose system keeps its controls never asks.
 #[must_use]
 pub fn viewport_builder(
     title: &str,
     chrome: platform::WindowChrome,
     geometry: Option<Geometry>,
+    transparent: bool,
 ) -> ViewportBuilder {
     let mut viewport = ViewportBuilder::default()
         .with_title(title)
@@ -1066,15 +1164,18 @@ pub fn viewport_builder(
             .with_maximized(g.maximised),
         None => viewport.with_inner_size(DEFAULT_SIZE),
     };
-    // Without decorations Rick draws the frame itself (`frame`): the window
-    // is transparent so the margin around the content shows the shadow.
+    // Without decorations Rick draws the frame itself (`frame`): for the
+    // shadow frame the window is transparent, so the margin around the
+    // content shows the shadow; for the plain frame it is not.
     if chrome.native_controls {
         viewport
             .with_titlebar_shown(false)
             .with_title_shown(false)
             .with_fullsize_content_view(true)
     } else {
-        viewport.with_decorations(false).with_transparent(true)
+        viewport
+            .with_decorations(false)
+            .with_transparent(transparent)
     }
 }
 
@@ -1100,7 +1201,7 @@ impl RickUi {
                 wake.request_repaint_of(id);
             }
         }));
-        let keys = KeyMap::new(app.registry(), &app.model().settings);
+        let keys = KeyMap::of(&keys::rows_of(&app), &app.model().settings);
         let keys_from = app.model().settings.shortcuts.clone();
         let root = app.model().focused_window;
         let inspector_width = 260.0;
@@ -1117,16 +1218,19 @@ impl RickUi {
             requests: Vec::new(),
             dispatched: VecDeque::new(),
             toasts: Vec::new(),
+            failed_in: None,
+            chords: HashMap::new(),
             dialog: None,
             name_prompt: None,
             settings: settings_ui::SettingsWindow::default(),
             shortcuts: ShortcutsScreen::default(),
-            extensions_open: false,
+            extensions: ExtensionsDialog::default(),
             about: AboutDialog::default(),
             inspector_state: inspector::PaneState::default(),
             inspector_width,
             properties: properties::PropertiesDialog::default(),
             library_browse: None,
+            download_pick: None,
             hash: hash::HashDialog::default(),
             integration: integration::IntegrationDialog::default(),
             texts: Vec::new(),
@@ -1151,10 +1255,24 @@ impl RickUi {
             quitting: false,
             window_ref: None,
             attached: false,
+            frame_mode: frame::Mode::Shadow,
+            screens: None,
+            arranged: std::collections::BTreeSet::new(),
             viewports,
             externals: None,
             relaunch: None,
         }
+    }
+
+    /// Sets the frame Rick draws around its windows (specs/gui-title-row.md,
+    /// *Window frame*). Without this call it is the shadow frame, which is
+    /// right where the window is rendered off screen, as the test harness
+    /// does; [`run`](crate::run) always calls it, with the plain frame
+    /// unless the window is known to be transparent.
+    #[must_use]
+    pub fn with_frame(mut self, mode: frame::Mode) -> Self {
+        self.frame_mode = mode;
+        self
     }
 
     /// Takes the hook that continues Rick from the copy it was installed
@@ -1270,10 +1388,17 @@ impl RickUi {
         &self.inspector_state.toolbar
     }
 
-    /// The preview pane's badges of the last frame, for tests.
+    /// The info button of the Preview tab as last drawn: inert, with a
+    /// card to open, or pinned.
     #[must_use]
-    pub fn preview_badges(&self) -> &[inspector::BadgeItem] {
-        &self.inspector_state.badges
+    pub fn preview_info(&self) -> inspector::Info {
+        self.inspector_state.info
+    }
+
+    /// The File info card's rows of the last frame, as label and value.
+    #[must_use]
+    pub fn preview_fields(&self) -> &[(String, String)] {
+        &self.inspector_state.fields
     }
 
     /// The preview pane's status bar text of the last frame, for tests.
@@ -1298,6 +1423,16 @@ impl RickUi {
             .map_or("", |w| w.search.text.as_str())
     }
 
+    /// The dropdown of the root window's search box as the last frame drew
+    /// it, for tests: its card and where each row's texts stand. `None`
+    /// while it is closed.
+    #[must_use]
+    pub fn search_dropdown(&self) -> Option<crate::search::Drawn> {
+        self.windows
+            .get(&self.root)
+            .and_then(|w| w.search.drawn().cloned())
+    }
+
     /// Whether the Settings window is open.
     #[must_use]
     pub fn settings_open(&self) -> bool {
@@ -1319,7 +1454,7 @@ impl RickUi {
     /// Whether the Extensions screen is open.
     #[must_use]
     pub fn extensions_open(&self) -> bool {
-        self.extensions_open
+        self.extensions.is_open()
     }
 
     /// The About dialog, for the tests.
@@ -1457,6 +1592,19 @@ impl RickUi {
     #[must_use]
     pub fn toolbar_row(&self, tab: TabId) -> Option<egui::Rect> {
         self.tabs.get(&tab).and_then(|t| t.toolbar_row)
+    }
+
+    /// The text in a tab's path bar while it is being edited, for tests.
+    #[must_use]
+    pub fn path_text(&self, tab: TabId) -> Option<&str> {
+        self.tabs.get(&tab).and_then(|t| t.path_edit.as_deref())
+    }
+
+    /// The List view's grid of a tab in the last frame it was drawn, for
+    /// tests: the rows a column holds and the columns' one width.
+    #[must_use]
+    pub fn list_grid(&self, tab: TabId) -> Option<crate::views::ListGrid> {
+        self.tabs.get(&tab).and_then(|t| t.list)
     }
 
     /// The footer row of a tab in the last frame, for tests.
@@ -1614,34 +1762,68 @@ impl RickUi {
     }
 
     fn toast(&mut self, level: Level, text: impl Into<String>) {
+        self.toast_in(level, text, None);
+    }
+
+    /// A notice in `window`, or in the window in front. An error stays
+    /// until it is dismissed, so it is never missed; any other notice
+    /// leaves by itself after [`TOAST_FOR`] (SPEC.md *Operations*).
+    fn toast_in(&mut self, level: Level, text: impl Into<String>, window: Option<WindowId>) {
+        let until = (level != Level::Error).then(|| Instant::now() + TOAST_FOR);
         self.toasts.push(Toast {
             level,
             text: text.into(),
-            until: Instant::now() + TOAST_FOR,
+            until,
+            window,
         });
     }
 
     fn absorb(&mut self, events: Vec<Event>) {
+        // A failed job and its notice come in one batch.
+        self.failed_in = None;
         for event in events {
             match event {
                 Event::Thumbnail { id, size, frame } => {
                     self.thumbnails.arrived(&self.ctx, id, size, frame);
                 }
-                Event::Notify { level, text } => self.toast(level, text),
+                Event::JobFailed { pane, .. } => {
+                    // The notice that follows is shown where the user
+                    // acted: in the window of the pane the job was
+                    // started from.
+                    self.failed_in = pane.and_then(|pane| self.app.model().window_of(pane));
+                }
+                Event::Notify { level, text } => {
+                    let window = self.failed_in.take().filter(|_| level == Level::Error);
+                    self.toast_in(level, text, window);
+                }
                 Event::Activate { window, token } => self.activate(window, token.as_deref()),
                 Event::Properties(info) => self.properties.open(*info),
+                Event::PluginInstalled { path } => self.extensions.installed(path),
+                Event::PropertiesCounted {
+                    pane,
+                    path,
+                    contents,
+                } => self.properties.counted(pane, &path, contents),
                 Event::HashesOpened { hashes, format, .. } => self.hash.open(hashes, format),
-                Event::PreviewReady { pane, doc } => {
+                Event::PreviewReady {
+                    pane,
+                    doc,
+                    previewer,
+                } => {
                     let entry = self.preview_entry(pane);
-                    self.previews.ready(pane, doc, entry);
+                    self.previews.ready(pane, doc, entry, previewer);
                 }
                 Event::PreviewFailed { pane, error } => {
                     let entry = self.preview_entry(pane);
                     self.previews.failed(pane, &error, entry);
                 }
-                Event::PreviewNone { pane, plugin } => {
+                Event::PreviewNone {
+                    pane,
+                    plugin,
+                    permissions,
+                } => {
                     let entry = self.preview_entry(pane);
-                    self.previews.none(pane, plugin, entry);
+                    self.previews.none(pane, plugin, permissions, entry);
                 }
                 Event::PreviewPrefix {
                     pane,
@@ -1653,9 +1835,15 @@ impl RickUi {
                     size,
                     cap,
                     source,
+                    provider,
                 } => {
                     let entry = self.preview_entry(pane);
-                    self.previews.capped(pane, size, cap, source, entry);
+                    self.previews
+                        .capped(pane, size, cap, (source, provider), entry);
+                }
+                Event::PreviewProgress { pane, read, total } => {
+                    let entry = self.preview_entry(pane);
+                    self.previews.progress(pane, entry, read, total);
                 }
                 Event::ViewOpened { tab, view, .. } => {
                     if let ext::View::Console(console) = &view {
@@ -1728,7 +1916,12 @@ impl RickUi {
 
     fn apply_settings(&mut self, ctx: &egui::Context) {
         let settings = &self.app.model().settings;
-        let key = (settings.theme, settings.font_size, settings.density);
+        let key = (
+            settings.theme,
+            settings.font_size,
+            settings.density,
+            settings.titlebar(),
+        );
         if self.applied != Some(key) {
             ctx.set_theme(match settings.theme {
                 Theme::System => egui::ThemePreference::System,
@@ -1738,11 +1931,13 @@ impl RickUi {
             ctx.set_zoom_factor(f32::from(settings.font_size) / crate::theme::TEXT_BODY);
             // The scheme and density tokens on both of egui's themes, so
             // following the system keeps working.
-            crate::theme::apply(ctx, settings.density);
+            let (light, dark) = settings.titlebar();
+            let band = (crate::theme::rgb(light), crate::theme::rgb(dark));
+            crate::theme::apply(ctx, settings.density, band);
             self.applied = Some(key);
         }
         if settings.shortcuts != self.keys_from {
-            self.keys = KeyMap::new(self.app.registry(), settings);
+            self.keys = KeyMap::of(&keys::rows_of(&self.app), settings);
             self.keys_from = settings.shortcuts.clone();
         }
     }
@@ -1810,20 +2005,84 @@ impl RickUi {
 
     /// Turns this frame's key presses into intents, unless a text field, a
     /// dialogue, the palette or the shortcuts screen wants them.
-    fn handle_keys(&mut self, ctx: &egui::Context, window: WindowId) {
-        let pane = self.explorer_pane(self.focused_in(window));
-        if self.dialog.is_some()
+    /// Whether a dialogue is open: it has the keyboard, not the list
+    /// behind it. Every dialogue the window shows is named here — one left
+    /// out lets the list take its keys, Escape before all (issue 177).
+    fn dialogue_open(&self) -> bool {
+        self.dialog.is_some()
             || self.name_prompt.is_some()
-            || self.shortcuts.rebinding.is_some()
+            || self.shortcuts.open
+            || self.extensions.is_open()
             || self.about.is_open()
+            || self.properties.is_open()
+            || self.hash.is_open()
+            || self.integration.is_open()
             || !self.app.model().conflicts.is_empty()
             || !self.app.model().questions.is_empty()
+    }
+
+    /// The intents of the copy, cut and paste chords of this frame, for a
+    /// list that has the keyboard: the window delivers them as events of
+    /// their own, and they go through the keymap like any key press.
+    fn clipboard_intents(
+        &mut self,
+        ctx: &egui::Context,
+        window: WindowId,
+        in_preview: bool,
+    ) -> Vec<Intent> {
+        let chords = self.chords.entry(window).or_default();
+        ctx.input_mut(|input| chords.take(input))
+            .into_iter()
+            .filter_map(|chord| {
+                self.keys
+                    .match_key(chord.modifiers, chord.key, None, in_preview)
+            })
+            .collect()
+    }
+
+    /// What Escape calls off before the key clears a filter or the
+    /// selection: Properties that is on its way, its entry still being
+    /// read (issue 178), and a download for the preview (SPEC.md *Remote
+    /// sources*). Returns whether the key was taken for one of them.
+    fn escape_calls_off(&mut self, ctx: &egui::Context) -> bool {
+        let escape = |ctx: &egui::Context| {
+            ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape))
+        };
+        if self.app.properties_pending() && escape(ctx) {
+            self.requests
+                .push(Request::Command(Command::PropertiesClosed));
+            return true;
+        }
+        if let Some(preview) = self.app.preview_pane()
+            && self
+                .previews
+                .get(preview)
+                .is_some_and(crate::preview::Slot::downloading)
+            && escape(ctx)
         {
+            self.requests
+                .push(Request::Command(Command::PreviewCancel(preview)));
+            return true;
+        }
+        false
+    }
+
+    fn handle_keys(&mut self, ctx: &egui::Context, window: WindowId) {
+        // The copy, cut and paste chords are followed in every frame,
+        // whoever has the keyboard: a paste is told by its key's release.
+        let now = Instant::now();
+        let chords = self.chords.entry(window).or_default();
+        ctx.input(|input| chords.track(input, now));
+        let pane = self.explorer_pane(self.focused_in(window));
+        if self.dialogue_open() {
             return;
         }
         // An open menu owns the keyboard: Escape closes it, nothing else —
         // not even the side panel, whose row the menu may belong to.
         if egui::Popup::is_any_open(ctx) {
+            return;
+        }
+        if self.escape_calls_off(ctx) {
             return;
         }
         if self.side.focused() && self.side.handle_keys(ctx, &self.app, &mut self.requests) {
@@ -1845,6 +2104,7 @@ impl RickUi {
         let mut intents = Vec::new();
         let mut typed = String::new();
         let mut backspace = false;
+        intents.extend(self.clipboard_intents(ctx, window, in_preview));
         ctx.input_mut(|input| {
             input.events.retain(|event| match event {
                 egui::Event::Key {
@@ -1919,6 +2179,7 @@ impl RickUi {
                     Request::FocusPane(pane) => self.handle(Command::FocusPane(pane)),
                     Request::Toast(level, text) => self.toast(level, text),
                     Request::About => self.about.open(),
+                    Request::PluginSettings(id) => self.settings.open_plugin(self.root, &id),
                     Request::StartDrag {
                         pane,
                         tab,
@@ -1932,7 +2193,8 @@ impl RickUi {
                     }
                     Request::StartEdit { pane, kind } => self.start_edit(pane, kind),
                     Request::CommitEdit { pane, kind, name } => {
-                        self.commit_edit(pane, kind, &name);
+                        let now = ctx.input(|i| i.time);
+                        self.commit_edit(pane, kind, &name, now);
                     }
                     Request::OpenContaining {
                         pane,
@@ -2111,6 +2373,101 @@ impl RickUi {
         }
     }
 
+    /// The monitors that are connected, as the platform lists them, in the
+    /// logical pixels of this viewport; asked for at most once a second.
+    /// Empty where the platform places the windows itself.
+    fn screens(&mut self, ctx: &egui::Context) -> Vec<Screen> {
+        let now = Instant::now();
+        if let Some((at, screens)) = &self.screens
+            && now.duration_since(*at) < Duration::from_secs(1)
+        {
+            return screens.clone();
+        }
+        let area = |[x, y, width, height]: [f32; 4]| Area::new(x, y, width, height);
+        let screens: Vec<Screen> = self
+            .app
+            .platform()
+            .monitors(ctx.pixels_per_point())
+            .into_iter()
+            .map(|monitor| Screen {
+                id: monitor.id,
+                primary: monitor.primary,
+                bounds: area(monitor.bounds),
+                work: area(monitor.work),
+            })
+            .collect();
+        self.screens = Some((now, screens.clone()));
+        screens
+    }
+
+    /// Where `window` goes when it is first shown (SPEC.md *Window
+    /// geometry*): beside the window it was opened from; or what the
+    /// session held for it, where its monitor is still there and the
+    /// window would be visible on it; or centred on the primary monitor at
+    /// the default size. `None` where there is nothing to decide: the
+    /// platform reports no monitors and the window came from no other.
+    fn arrangement(&mut self, ctx: &egui::Context, window: WindowId) -> Option<placement::Placed> {
+        self.arranged.insert(window);
+        let title = crate::theme::metrics(ctx).titlebar_height;
+        let screens = self.screens(ctx);
+        let model = self.app.model().window(window)?;
+        match (model.beside, model.geometry) {
+            (true, Some(opener)) => Some(placement::beside(&opener, &screens, title)),
+            (_, geometry) => {
+                placement::restore(geometry.as_ref(), model.monitor.as_deref(), &screens, title)
+            }
+        }
+    }
+
+    /// Puts the first window where *Window geometry* says, once it is
+    /// there: the backend opened it at a size and a place of its own.
+    /// Where the platform reports no monitors the saved size and state
+    /// are restored and the place is the system's; a first launch there
+    /// takes the default size from the monitor the window opened on.
+    fn place_root(
+        &mut self,
+        ctx: &egui::Context,
+        window: WindowId,
+        monitor_size: Option<egui::Vec2>,
+    ) {
+        let saved = self.app.model().window(window).and_then(|w| w.geometry);
+        let size = |g: &Geometry| egui::vec2(g.width.max(MIN_SIZE[0]), g.height.max(MIN_SIZE[1]));
+        match (self.arrangement(ctx, window), saved) {
+            (Some(placed), _) => {
+                let g = placed.geometry;
+                ctx.send_viewport_cmd(ViewportCommand::OuterPosition(egui::pos2(g.x, g.y)));
+                ctx.send_viewport_cmd(ViewportCommand::InnerSize(size(&g)));
+                if g.maximised {
+                    ctx.send_viewport_cmd(ViewportCommand::Maximized(true));
+                }
+                if saved != Some(g) {
+                    self.handle(Command::WindowGeometry {
+                        window,
+                        geometry: g,
+                        monitor: placed.monitor,
+                    });
+                }
+            }
+            (None, Some(g)) => {
+                ctx.send_viewport_cmd(ViewportCommand::OuterPosition(egui::pos2(g.x, g.y)));
+                ctx.send_viewport_cmd(ViewportCommand::InnerSize(size(&g)));
+                if g.maximised {
+                    ctx.send_viewport_cmd(ViewportCommand::Maximized(true));
+                }
+            }
+            (None, None) => {
+                if let Some(monitor) = monitor_size.filter(|m| m.x > 0.0 && m.y > 0.0) {
+                    let (width, height) =
+                        placement::default_size(&Area::new(0.0, 0.0, monitor.x, monitor.y));
+                    ctx.send_viewport_cmd(ViewportCommand::InnerSize(egui::vec2(
+                        width.max(MIN_SIZE[0]),
+                        height.max(MIN_SIZE[1]),
+                    )));
+                }
+            }
+        }
+    }
+
     /// Reports the window's place on the screen, focus and close requests
     /// to the app, and hands a restored geometry to the backend once.
     fn report_viewport(&mut self, ctx: &egui::Context, window: WindowId) {
@@ -2123,15 +2480,8 @@ impl RickUi {
         w.screen = info.inner_rect;
         if !w.placed {
             w.placed = true;
-            if is_root && let Some(g) = model_geometry {
-                ctx.send_viewport_cmd(ViewportCommand::OuterPosition(egui::pos2(g.x, g.y)));
-                ctx.send_viewport_cmd(ViewportCommand::InnerSize(egui::vec2(
-                    g.width.max(MIN_SIZE[0]),
-                    g.height.max(MIN_SIZE[1]),
-                )));
-                if g.maximised {
-                    ctx.send_viewport_cmd(ViewportCommand::Maximized(true));
-                }
+            if is_root {
+                self.place_root(ctx, window, info.monitor_size);
             }
             return;
         }
@@ -2171,7 +2521,14 @@ impl RickUi {
                     && g.maximised == geometry.maximised
             });
             if !same && geometry.width > 0.0 && geometry.height > 0.0 {
-                self.handle(Command::WindowGeometry { window, geometry });
+                let title = crate::theme::metrics(ctx).titlebar_height;
+                let monitor = placement::screen_of(&geometry, &self.screens(ctx), title)
+                    .map(|screen| screen.id.clone());
+                self.handle(Command::WindowGeometry {
+                    window,
+                    geometry,
+                    monitor,
+                });
             }
         }
         if info.close_requested() {
@@ -2226,11 +2583,31 @@ impl RickUi {
     }
 
     /// Runs the action behind an inline edit with the name pre-answered,
-    /// then selects the result once it is listed.
-    fn commit_edit(&mut self, pane: PaneId, kind: EditKind, name: &str) {
-        let Some((_, tab)) = self.app.model().active_tab(pane) else {
+    /// then selects the result once it is listed. A new folder's name the
+    /// provider's own rules refuse — a container's — is refused in place,
+    /// before anything is asked of the provider: the row stays in edit,
+    /// shaking as for a name that is taken, and a notice names the rule.
+    fn commit_edit(&mut self, pane: PaneId, kind: EditKind, name: &str, now: f64) {
+        let Some((tab_id, tab)) = self.app.model().active_tab(pane) else {
             return;
         };
+        if kind == EditKind::NewFolder {
+            let at = Location::new(
+                tab.location.provider,
+                tab.location.path.join(name.as_bytes()),
+            );
+            let problem = self
+                .app
+                .mounts()
+                .resolve(&at)
+                .ok()
+                .and_then(|provider| provider.name_problem(&at));
+            if let Some(problem) = problem {
+                self.tabs.entry(tab_id).or_default().edit = Some(RowEdit::refused(kind, name, now));
+                self.toast(Level::Warning, problem);
+                return;
+            }
+        }
         let (action, selection) = match kind {
             EditKind::Rename(id) => match tab.entry(id) {
                 Some(entry) => (ActionId("core.rename"), vec![entry.clone()]),
@@ -2267,25 +2644,29 @@ impl RickUi {
             return;
         };
         let to = Location::new(entry.id.provider, parent);
-        if new_tab {
+        // A new tab opens in the focused pane; otherwise the pane asked
+        // for is the one that goes there, focused or not.
+        let pane = if new_tab {
             self.handle(Command::NewTab(to));
+            self.app.model().focused
         } else {
             self.handle(Command::Navigate { pane, to });
-        }
-        let pane = self.app.model().focused;
+            pane
+        };
         self.requests.push(Request::SelectNamed {
             pane,
             name: name.to_vec(),
         });
     }
 
-    /// Whether the provider at `location` takes new entries: the inline
-    /// edits start only where New file and New folder can finish.
-    fn writable(&self, location: &Location) -> bool {
+    /// Whether the provider at `location` offers `needed`: the inline
+    /// edits start only where New file (`CREATE_FILE`) and New folder
+    /// (`CREATE_DIR`) can finish.
+    fn offers(&self, location: &Location, needed: ext::Capabilities) -> bool {
         self.app
             .mounts()
             .resolve(location)
-            .is_ok_and(|p| p.capabilities(location).contains(ext::Capabilities::WRITE))
+            .is_ok_and(|p| p.capabilities(location).contains(needed))
     }
 
     /// Whether the shell handles an action itself rather than running it:
@@ -2306,18 +2687,40 @@ impl RickUi {
                 });
                 true
             }
-            "core.new_file" if !self.inline_commit && self.writable(&ctx.location) => {
+            "core.new_file"
+                if !self.inline_commit
+                    && self.offers(&ctx.location, ext::Capabilities::CREATE_FILE) =>
+            {
                 self.requests.push(Request::StartEdit {
                     pane: ctx.pane,
                     kind: EditKind::NewFile,
                 });
                 true
             }
-            "core.new_folder" if !self.inline_commit && self.writable(&ctx.location) => {
+            "core.new_folder"
+                if !self.inline_commit
+                    && self.offers(&ctx.location, ext::Capabilities::CREATE_DIR) =>
+            {
                 self.requests.push(Request::StartEdit {
                     pane: ctx.pane,
                     kind: EditKind::NewFolder,
                 });
+                true
+            }
+            // Download… asks for the folder with the system's dialogue
+            // before the action runs with it as the answer; where the
+            // action is not available it runs, and says why.
+            "core.download"
+                if !self.inline_commit
+                    && self
+                        .app
+                        .registry()
+                        .actions()
+                        .iter()
+                        .find(|a| a.id() == action)
+                        .is_some_and(|a| a.availability(ctx) == ext::Availability::Enabled) =>
+            {
+                self.pick_download_folder(ctx.clone());
                 true
             }
             "core.open_containing" | "core.open_containing_tab" => {
@@ -2593,10 +2996,11 @@ impl RickUi {
                 }
             }
             Intent::ToggleSubtree => {
-                // Without a subdirectory search index there is nothing to
-                // walk, and the filter bar shows no toggle either.
-                if self.app.model().subtree_search
-                    && let Some((tab_id, tab)) = self.app.model().active_tab(pane)
+                // Only where the location can be searched beneath: the
+                // filter bar's toggle is disabled elsewhere, and the
+                // shortcut does nothing.
+                if let Some((tab_id, tab)) = self.app.model().active_tab(pane)
+                    && self.app.subtree_search(&tab.location) == ext::Availability::Enabled
                 {
                     let on = !tab.subtree;
                     self.handle(Command::Subtree { pane, on });
@@ -2614,8 +3018,8 @@ impl RickUi {
                 self.handle(Command::TogglePreview { window, fraction });
             }
             Intent::Settings => self.settings.open(window),
-            Intent::Shortcuts => self.shortcuts.open = true,
-            Intent::Extensions => self.extensions_open = true,
+            Intent::Shortcuts => self.shortcuts.open(),
+            Intent::Extensions => self.extensions.open(),
             Intent::ViewList => self.handle(Command::SetView {
                 pane,
                 mode: ViewMode::List,
@@ -2669,6 +3073,8 @@ impl RickUi {
                     self.handle(Command::SwitchLayout(Some(name)));
                 }
             }
+            Intent::CursorLeft => self.move_cursor_column(pane, -1),
+            Intent::CursorRight => self.move_cursor_column(pane, 1),
             Intent::CursorUp => self.move_cursor(pane, -1, false),
             Intent::CursorDown => self.move_cursor(pane, 1, false),
             Intent::CursorPageUp => self.move_cursor(pane, -self.page(pane), false),
@@ -2831,6 +3237,52 @@ impl RickUi {
         }
     }
 
+    /// *Download…* asks for the target folder first (SPEC.md *Remote
+    /// files*): the system's folder dialogue, starting in Downloads. The
+    /// answer is polled each frame ([`poll_download_pick`](Self::poll_download_pick)).
+    fn pick_download_folder(&mut self, ctx: ActionCtx) {
+        if self.download_pick.is_some() {
+            return;
+        }
+        let platform = Arc::clone(self.app.platform());
+        let title = t!("download-to");
+        let (tx, rx) = runtime::oneshot::channel();
+        runtime::handle().spawn(async move {
+            let start = platform
+                .standard_folder(platform::StandardFolder::Downloads)
+                .unwrap_or_else(|| platform.home_dir());
+            let _ = tx.send(platform.pick_folder_in(&title, &start).await);
+        });
+        self.download_pick = Some(DownloadPick { ctx, answer: rx });
+    }
+
+    /// The folder the dialogue of *Download…* picked answers the action's
+    /// question, and the download starts; a dismissed dialogue downloads
+    /// nothing.
+    fn poll_download_pick(&mut self, ctx: &egui::Context) {
+        let Some(pick) = self.download_pick.as_mut() else {
+            return;
+        };
+        match pick.answer.try_recv() {
+            Ok(folder) => {
+                let Some(pick) = self.download_pick.take() else {
+                    return;
+                };
+                if let Some(folder) = folder {
+                    self.host.answer_prompt(folder.display().to_string());
+                    self.inline_commit = true;
+                    self.run_action_with(ActionId("core.download"), pick.ctx);
+                    self.inline_commit = false;
+                    self.host.clear_answers();
+                }
+            }
+            Err(runtime::oneshot::error::TryRecvError::Closed) => self.download_pick = None,
+            Err(runtime::oneshot::error::TryRecvError::Empty) => {
+                ctx.request_repaint_after(Duration::from_millis(100));
+            }
+        }
+    }
+
     /// Properties on the selection: the application reads the entry and
     /// answers with `Event::Properties`, which opens the dialogue.
     fn inspect(&mut self, pane: PaneId) {
@@ -2885,6 +3337,36 @@ impl RickUi {
             .active_tab(pane)
             .and_then(|(id, _)| self.tabs.get(&id))
             .map_or(20, |t| t.visible_rows.max(1) as isize)
+    }
+
+    /// Left and Right in the List view: one column over with the row kept,
+    /// the last entry where that column is shorter (SPEC.md *List view*).
+    /// The other views have no columns of entries, and nothing moves.
+    fn move_cursor_column(&mut self, pane: PaneId, by: isize) {
+        let Some((tab_id, tab)) = self.app.model().active_tab(pane) else {
+            return;
+        };
+        if tab.view != ViewMode::List {
+            return;
+        }
+        let Some(grid) = self.tabs.get(&tab_id).and_then(|t| t.list) else {
+            return;
+        };
+        let current = self
+            .tabs
+            .get(&tab_id)
+            .and_then(|t| t.cursor)
+            .and_then(|c| tab.rows().position(|e| e.id == c));
+        let Some(index) = current else {
+            // No cursor yet: the first key puts it on an end of the list.
+            self.move_cursor(pane, by, false);
+            return;
+        };
+        let target = grid.step_columns(index, by, tab.row_count());
+        let step = isize::try_from(target).unwrap_or(0) - isize::try_from(index).unwrap_or(0);
+        if step != 0 {
+            self.move_cursor(pane, step, false);
+        }
     }
 
     fn move_cursor(&mut self, pane: PaneId, by: isize, extend: bool) {
@@ -2944,7 +3426,7 @@ impl RickUi {
         egui::Panel::top(egui::Id::new(("title", window.0)))
             .exact_size(height)
             .show_separator_line(false)
-            .frame(egui::Frame::NONE.fill(crate::theme::scheme_of(ctx).bg_window))
+            .frame(egui::Frame::NONE.fill(crate::theme::band_of(ctx).fill))
             .show(ui, |ui| {
                 let rect = ui.max_rect();
                 // The background first, so every widget drawn after it wins
@@ -2974,7 +3456,14 @@ impl RickUi {
                 if chrome.native_controls && chrome.controls == ControlsSide::Left {
                     left.add_space(chrome.native_controls_width);
                 }
-                menus::burger(&mut left, &mut self.requests, focused, &self.app);
+                menus::burger(
+                    &mut left,
+                    &mut self.requests,
+                    focused,
+                    &self.app,
+                    &self.keys,
+                    &self.about.build().version,
+                );
                 let side = self
                     .app
                     .model()
@@ -2994,7 +3483,14 @@ impl RickUi {
                         .max_rect(rect)
                         .layout(egui::Layout::right_to_left(egui::Align::Center)),
                 );
-                right.add_space(metrics.space_toolbar_x);
+                // The last icon ends `space/toolbar-x` from the edge: its
+                // step reaches half an icon gap further.
+                right.add_space((metrics.space_toolbar_x - WINDOW_ICON_GAP / 2.0).max(0.0));
+                // The running count is text on the band, in its colours.
+                let band = crate::theme::band(&right);
+                let visuals = right.visuals_mut();
+                visuals.weak_text_color = Some(band.title);
+                visuals.widgets.noninteractive.fg_stroke.color = band.icon;
                 self.title_right(&mut right, ctx, chrome, window, focused);
                 let right_edge = right.min_rect().left();
 
@@ -3309,17 +3805,18 @@ impl RickUi {
         plus.widget_info(|| {
             egui::WidgetInfo::labeled(egui::WidgetType::Button, true, t!("shell-new-tab"))
         });
+        let band = crate::theme::band(&child);
         if plus.hovered() {
             child
                 .painter()
-                .rect_filled(plus_rect, metrics.corner_radius(), scheme.bg_subtle);
+                .rect_filled(plus_rect, metrics.corner_radius(), band.hover);
         }
         child.painter().text(
             plus_rect.center(),
             egui::Align2::CENTER_CENTER,
             icons::PLUS,
             egui::FontId::proportional(ICON),
-            scheme.icon_default,
+            band.icon,
         );
         let plus_clicked = plus.on_hover_text(t!("shell-new-tab")).clicked();
 
@@ -3733,6 +4230,8 @@ impl RickUi {
             return;
         }
         let height = crate::theme::metrics(&self.ctx).titlebar_height;
+        // Where it was dropped is where it goes: not beside its window.
+        self.arranged.insert(new);
         self.handle(Command::WindowGeometry {
             window: new,
             geometry: Geometry {
@@ -3742,6 +4241,8 @@ impl RickUi {
                 height: size.y,
                 maximised: false,
             },
+            // Its first report names the monitor.
+            monitor: None,
         });
     }
 
@@ -3763,7 +4264,7 @@ impl RickUi {
         if !side.visible {
             if jobs {
                 let mut collapsed = w.drawer_collapsed;
-                let height = Operations::height(self.app.model(), collapsed);
+                let height = self.operations.height(self.app.model(), collapsed);
                 egui::Panel::bottom(egui::Id::new(("operations", window.0)))
                     .exact_size(height)
                     .frame(egui::Frame::NONE)
@@ -3793,7 +4294,7 @@ impl RickUi {
             .show(ui, |ui| {
                 let panel_rect = ui.max_rect();
                 let height = if jobs {
-                    Operations::height(self.app.model(), w.drawer_collapsed)
+                    self.operations.height(self.app.model(), w.drawer_collapsed)
                 } else {
                     0.0
                 };
@@ -3857,46 +4358,43 @@ impl RickUi {
         window: WindowId,
         focused: PaneId,
     ) {
+        // The group's icons are 16 px and 12 px apart: each control is a
+        // 28 px step that answers over its whole width (SPEC.md *Title
+        // row*).
+        right.spacing_mut().item_spacing.x = 0.0;
         if !chrome.native_controls {
-            if right
-                .add(egui::Button::new(icons::CLOSE).frame(false))
-                .on_hover_text(t!("close"))
-                .clicked()
-            {
+            // Named apart from a dialogue's Close, which may be open.
+            if window_control(right, icons::CLOSE, &t!("shell-close-window"), None).clicked() {
                 self.requests.push(Request::CloseWindow(window));
             }
             let maximized = ctx.input(|i| i.viewport().maximized.unwrap_or(false));
-            let glyph = if maximized {
-                icons::RESTORE
+            let (glyph, name) = if maximized {
+                (icons::RESTORE, t!("shell-restore"))
             } else {
-                icons::MAXIMISE
+                (icons::MAXIMISE, t!("shell-maximise"))
             };
-            if right
-                .add(egui::Button::new(glyph).frame(false))
-                .on_hover_text(if maximized {
-                    t!("shell-restore")
-                } else {
-                    t!("shell-maximise")
-                })
-                .clicked()
-            {
+            if window_control(right, glyph, &name, None).clicked() {
                 ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(!maximized));
             }
-            if right
-                .add(egui::Button::new(icons::MINIMISE).frame(false))
-                .on_hover_text(t!("shell-minimise"))
-                .clicked()
-            {
+            if window_control(right, icons::MINIMISE, &t!("shell-minimise"), None).clicked() {
                 ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true));
             }
-            right.separator();
+            // The divider in the middle of the 25 px between the toggles'
+            // icons and the window controls'.
+            let band = crate::theme::band(right);
+            let (gap, _) = right.allocate_exact_size(
+                egui::vec2(WINDOW_GROUP_GAP - WINDOW_ICON_GAP, crate::theme::ICON),
+                egui::Sense::hover(),
+            );
+            right.painter().vline(
+                gap.center().x,
+                gap.y_range(),
+                egui::Stroke::new(1.0, band.divider),
+            );
         }
         let preview_open = self.app.model().preview_tab(window).is_some();
-        if right
-            .add(toggle_icon(icons::PREVIEW, preview_open))
-            .on_hover_text(t!("shell-toggle-preview-pane"))
-            .clicked()
-        {
+        let name = t!("shell-toggle-preview-pane");
+        if window_control(right, icons::PREVIEW, &name, Some(preview_open)).clicked() {
             self.requests.push(Request::Intent {
                 intent: Intent::ToggleInspector,
                 pane: focused,
@@ -3907,16 +4405,14 @@ impl RickUi {
             .model()
             .window(window)
             .is_none_or(|w| w.side_panel.visible);
-        if right
-            .add(toggle_icon(icons::SIDE_PANEL, side_visible))
-            .on_hover_text(t!("shell-toggle-side-panel"))
-            .clicked()
-        {
+        let name = t!("shell-toggle-side-panel");
+        if window_control(right, icons::SIDE_PANEL, &name, Some(side_visible)).clicked() {
             self.requests.push(Request::Intent {
                 intent: Intent::ToggleSidePanel,
                 pane: focused,
             });
         }
+        right.add_space(crate::theme::metrics(ctx).space_toolbar_x);
         let running = self
             .app
             .model()
@@ -4178,29 +4674,90 @@ impl RickUi {
         }
     }
 
-    fn show_toasts(&mut self, ctx: &egui::Context) {
+    /// The notices of `window` at its top right, under the title row: the
+    /// ones tied to it and, when it is the window in `front`, the ones
+    /// tied to none or to a window that is gone. A notice carries its
+    /// whole text, wrapped and never cut; an error has a close button and
+    /// stays until that is pressed.
+    fn show_toasts(&mut self, ctx: &egui::Context, window: WindowId, front: bool) {
         let now = Instant::now();
-        self.toasts.retain(|t| t.until > now);
-        if self.toasts.is_empty() {
+        self.toasts
+            .retain(|t| t.until.is_none_or(|until| until > now));
+        let shown: Vec<usize> = self
+            .toasts
+            .iter()
+            .enumerate()
+            .filter(|(_, toast)| match toast.window {
+                Some(of) if self.windows.contains_key(&of) => of == window,
+                _ => front,
+            })
+            .map(|(index, _)| index)
+            .collect();
+        if shown.is_empty() {
             return;
         }
-        egui::Area::new(egui::Id::new("toasts"))
-            .anchor(egui::Align2::RIGHT_TOP, egui::vec2(-12.0, 40.0))
+        let scheme = crate::theme::scheme_of(ctx);
+        // Under the title row, at the right of what the window draws.
+        let content = self
+            .windows
+            .get(&window)
+            .and_then(|w| w.content)
+            .unwrap_or_else(|| ctx.content_rect());
+        let corner = egui::pos2(
+            content.right() - TOAST_GAP,
+            content.top() + crate::theme::metrics(ctx).titlebar_height + TOAST_GAP,
+        );
+        let mut dismissed = None;
+        egui::Area::new(egui::Id::new(("toasts", window.0)))
+            .pivot(egui::Align2::RIGHT_TOP)
+            .fixed_pos(corner)
             .order(egui::Order::Foreground)
-            .interactable(false)
             .show(ctx, |ui| {
-                for toast in &self.toasts {
+                for index in shown {
+                    let toast = &self.toasts[index];
+                    let sticky = toast.until.is_none();
                     egui::Frame::popup(ui.style()).show(ui, |ui| {
-                        let color = match toast.level {
-                            Level::Info => ui.visuals().text_color(),
-                            Level::Warning => ui.visuals().warn_fg_color,
-                            Level::Error => ui.visuals().error_fg_color,
+                        let colour = match toast.level {
+                            Level::Info => scheme.text_primary,
+                            Level::Warning => scheme.status_warning,
+                            Level::Error => scheme.status_danger,
                         };
-                        ui.colored_label(color, &toast.text);
+                        ui.horizontal_top(|ui| {
+                            ui.spacing_mut().item_spacing.x = 8.0;
+                            ui.allocate_ui(egui::vec2(TOAST_WIDTH, 0.0), |ui| {
+                                ui.set_max_width(TOAST_WIDTH);
+                                ui.add(
+                                    egui::Label::new(
+                                        egui::RichText::new(&toast.text).color(colour),
+                                    )
+                                    .wrap(),
+                                );
+                            });
+                            if sticky {
+                                let (rect, _) = ui.allocate_exact_size(
+                                    egui::vec2(20.0, 20.0),
+                                    egui::Sense::hover(),
+                                );
+                                let close = crate::properties::icon_button(
+                                    ui,
+                                    rect,
+                                    icons::CLOSE,
+                                    &t!("jobs-dismiss"),
+                                );
+                                if close.clicked() {
+                                    dismissed = Some(index);
+                                }
+                            }
+                        });
                     });
                 }
             });
-        ctx.request_repaint_after(Duration::from_millis(250));
+        if let Some(index) = dismissed {
+            self.toasts.remove(index);
+        }
+        if self.toasts.iter().any(|toast| toast.until.is_some()) {
+            ctx.request_repaint_after(Duration::from_millis(250));
+        }
     }
 }
 
@@ -4777,6 +5334,7 @@ impl RickUi {
         self.cancel_layout_drag(ctx, window);
         self.resolve_pending_selects();
         self.poll_library_browse(ctx);
+        self.poll_download_pick(ctx);
         self.handle_keys(ctx, window);
         self.apply_requests(ctx);
         // A closed console or comparison takes its view with it; dropping a
@@ -4788,8 +5346,8 @@ impl RickUi {
         // Rick's own window frame where the system draws none; the panels
         // go inside it.
         let chrome = self.app.platform().window_chrome();
-        let window_frame =
-            frame::wanted(ctx, chrome).then(|| frame::Frame::paint(ui, ui.max_rect()));
+        let window_frame = frame::wanted(ctx, chrome)
+            .then(|| frame::Frame::paint(ui, ui.max_rect(), self.frame_mode));
         let content = window_frame.map_or(ui.max_rect(), |f| f.content());
         if let Some(w) = self.windows.get_mut(&window) {
             w.window_frame = window_frame;
@@ -4818,21 +5376,18 @@ impl RickUi {
             question::show(ctx, &self.app, &mut self.question, &mut self.requests);
             self.show_name_prompt(ctx);
             self.shortcuts
-                .show(ctx, &self.keys, self.app.registry(), &mut self.requests);
-            settings_ui::extensions_window(
-                ctx,
-                &mut self.extensions_open,
-                &self.app,
-                &mut self.requests,
-            );
+                .show(ctx, &self.keys, &self.app, &mut self.requests);
+            self.extensions.show(ctx, &self.app, &mut self.requests);
             self.about.show(ctx, &self.app, &mut self.requests);
-            self.properties.show(ctx, &mut self.requests);
+            self.properties.show(ctx, &self.app, &mut self.requests);
             self.hash.show(ctx, &self.app, &mut self.requests);
             self.integration.show(ctx, &self.app, &mut self.requests);
             self.show_texts(ctx);
-            self.show_toasts(ctx);
             self.apply_requests(ctx);
         }
+        // A notice is shown in the window it belongs to, in front or not.
+        let front = self.is_front(ctx, window);
+        self.show_toasts(ctx, window, front);
 
         // The closed hand for as long as a pane or a tab is dragged,
         // whatever the cursor is over and in whichever window: set last,
@@ -4870,6 +5425,7 @@ impl RickUi {
         }
         let model_windows: Vec<WindowId> = self.app.model().windows().map(|(id, _)| id).collect();
         self.windows.retain(|id, _| model_windows.contains(id));
+        self.arranged.retain(|id| model_windows.contains(id));
         if !model_windows.contains(&self.root) {
             let Some(next) = model_windows.first().copied() else {
                 return;
@@ -4898,12 +5454,24 @@ impl RickUi {
             if id == self.root {
                 continue;
             }
+            // A window shown for the first time is put where it belongs
+            // before its viewport is built: beside the window it came
+            // from, or where the session had it.
+            if !self.arranged.contains(&id)
+                && let Some(placed) = self.arrangement(ctx, id)
+            {
+                self.handle(Command::WindowGeometry {
+                    window: id,
+                    geometry: placed.geometry,
+                    monitor: placed.monitor,
+                });
+            }
             let geometry = self.app.model().window(id).and_then(|w| w.geometry);
             let viewport = viewport_of(id);
             ids.push(viewport);
             ctx.show_viewport_immediate(
                 viewport,
-                viewport_builder("Rick", chrome, geometry),
+                viewport_builder("Rick", chrome, geometry, self.frame_mode.transparent()),
                 |ui, _class| self.draw_window(ui, id),
             );
         }
@@ -4915,10 +5483,13 @@ impl RickUi {
 }
 
 impl eframe::App for RickUi {
-    /// Transparent around Rick's own frame, so its shadow shows the desktop
-    /// through the margin; the panel colour otherwise.
+    /// Transparent around Rick's shadow frame, so its shadow shows the
+    /// desktop through the margin; the panel colour otherwise, and always
+    /// behind the plain frame of a window that cannot be transparent.
     fn clear_color(&self, visuals: &egui::Visuals) -> [f32; 4] {
-        if self.windows.values().any(|w| w.window_frame.is_some()) {
+        if self.frame_mode == frame::Mode::Shadow
+            && self.windows.values().any(|w| w.window_frame.is_some())
+        {
             [0.0; 4]
         } else {
             visuals.panel_fill.to_normalized_gamma_f32()
@@ -5042,6 +5613,79 @@ mod tests {
         assert_eq!(home.cursor_in(second, Some(origins[1]), None), None);
     }
 
+    /// A 900 by 600 window on the fake platform, where Rick draws the
+    /// frame, after its first frame.
+    fn framed(mode: frame::Mode) -> egui_kittest::Harness<'static, RickUi> {
+        let fake = Arc::new(platform::Fake::new().unwrap_or_else(|e| panic!("{e}")));
+        let host = Arc::new(EguiHost::new());
+        let app = App::new(app::Config {
+            platform: fake.clone(),
+            ui: host.clone(),
+            extensions: Vec::new(),
+            config_dir: Some(platform::ConfigDir::config_dir(fake.as_ref())),
+            start: None,
+        });
+        let mut harness = egui_kittest::Harness::builder()
+            .with_size(egui::vec2(900.0, 600.0))
+            .build_eframe(move |cc| RickUi::new(app, host, &cc.egui_ctx).with_frame(mode));
+        harness.step();
+        harness
+    }
+
+    /// Issue 158: behind a plain frame the window is cleared to the panel
+    /// colour, opaque, so nothing of an opaque surface shows as black; the
+    /// shadow frame's margin is cleared to transparent as before.
+    #[test]
+    fn the_window_is_cleared_to_the_panel_colour_behind_a_plain_frame() {
+        let visuals = egui::Visuals::dark();
+        let plain = framed(frame::Mode::Plain);
+        assert!(plain.state().framed_content().is_some(), "a frame is drawn");
+        let cleared = eframe::App::clear_color(plain.state(), &visuals);
+        let panel = visuals.panel_fill.to_normalized_gamma_f32();
+        assert!(
+            cleared
+                .iter()
+                .zip(panel)
+                .all(|(c, p)| (c - p).abs() < f32::EPSILON),
+            "{cleared:?} is the panel colour {panel:?}"
+        );
+        assert!(
+            (cleared[3] - 1.0).abs() < f32::EPSILON,
+            "opaque: {cleared:?}"
+        );
+
+        let shadow = framed(frame::Mode::Shadow);
+        assert!(
+            shadow.state().framed_content().is_some(),
+            "a frame is drawn"
+        );
+        let cleared = eframe::App::clear_color(shadow.state(), &visuals);
+        assert!(
+            cleared.iter().all(|c| c.abs() < f32::EPSILON),
+            "transparent: {cleared:?}"
+        );
+    }
+
+    /// Issue 158, every window: one Rick frames itself is undecorated and
+    /// asks for transparency only when told to, which is for the shadow
+    /// frame; one whose system keeps its controls never asks.
+    #[test]
+    fn a_window_asks_for_transparency_only_for_the_shadow_frame() {
+        let chrome = |native_controls| platform::WindowChrome {
+            controls: ControlsSide::Right,
+            native_controls,
+            native_controls_width: 0.0,
+        };
+        for (asked, mode) in [(true, frame::Mode::Shadow), (false, frame::Mode::Plain)] {
+            let own = viewport_builder("Rick", chrome(false), None, mode.transparent());
+            assert_eq!(own.decorations, Some(false));
+            assert_eq!(own.transparent, Some(asked), "{mode:?}");
+            let native = viewport_builder("Rick", chrome(true), None, mode.transparent());
+            assert_eq!(native.transparent, None, "the system's frame");
+            assert_eq!(native.decorations, None);
+        }
+    }
+
     /// The bundled icon is the 256 px tile, decoded once.
     #[test]
     fn the_window_icon_is_the_256_px_tile() {
@@ -5063,7 +5707,7 @@ mod tests {
                 native_controls,
                 native_controls_width: 0.0,
             };
-            let viewport = viewport_builder("Rick", chrome, None);
+            let viewport = viewport_builder("Rick", chrome, None, true);
             assert_eq!(viewport.app_id.as_deref(), Some(APP_ID));
             assert_eq!(APP_ID, "rick");
             let icon = viewport

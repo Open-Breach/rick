@@ -80,10 +80,13 @@ mod ext_settings;
 mod external;
 mod integration;
 mod places;
+pub mod plugins;
 mod session;
 pub mod settings;
 
-pub use command::{Command, ConnectionOp, Event, PropertiesInfo, TransferMode};
+pub use command::{
+    Command, ConnectionOp, Contents, Event, FolderContents, PropertiesInfo, TransferMode,
+};
 pub use ext_settings::ExtSettings;
 pub use external::{External, ExternalReceiver, ExternalSender, external_channel};
 pub use integration::{INSTALL_RICK_COMMAND, IntegrationCommand};
@@ -117,14 +120,14 @@ use platform::{Platform, TrashedItem};
 use runtime::{JobEvent, JobRunner, mpsc};
 use tracing::{debug, warn};
 use types::{
-    CancelToken, Entry, EntryId, EntryKind, Error, ExtId, JobId, Location, Progress, ProviderId,
-    VPath,
+    Answer, Attrs, CancelToken, Entry, EntryId, EntryKind, Error, ExtId, JobId, Location, Progress,
+    ProviderId, QuestionKind, VPath,
 };
 use vfs::Mounts;
 use vfs_local::LocalProvider;
 use vfs_rick::{RickProvider, Virtual};
 
-/// What became of a plugin the host found, for the Extensions screen.
+/// What became of a plugin the host found, for the Extensions dialogue.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PluginStatus {
     /// Loaded; its contributions are registered.
@@ -133,6 +136,9 @@ pub enum PluginStatus {
     Disabled,
     /// Not loaded, for the reason given.
     Refused(String),
+    /// Unpacked in this session by *Install from file…*: on disk, and
+    /// loaded or refused by the next start.
+    Installed,
 }
 
 /// One plugin the host found, as the Extensions screen and
@@ -144,6 +150,8 @@ pub struct Plugin {
     pub id: String,
     /// The name its manifest gives.
     pub name: String,
+    /// What its manifest says it does; empty when it says nothing.
+    pub description: String,
     /// The version its manifest gives.
     pub version: String,
     /// The extension points its manifest lists.
@@ -155,6 +163,12 @@ pub struct Plugin {
     pub status: PluginStatus,
     /// The plugin's directory.
     pub path: PathBuf,
+    /// It ships beside the binary; a user's plugin sits in the per-user
+    /// plugins folder and can be removed.
+    pub built_in: bool,
+    /// Its folder was deleted in this session by *Remove*: the next start
+    /// no longer finds it.
+    pub removed: bool,
 }
 
 /// What an [`App`] is built from.
@@ -215,6 +229,11 @@ enum Msg {
         generation: u64,
         result: Result<(), Error>,
     },
+    /// The wait before a lost connection is tried again is over.
+    RetryLost {
+        pane: PaneId,
+        generation: u64,
+    },
     Change {
         pane: PaneId,
         generation: u64,
@@ -225,6 +244,8 @@ enum Msg {
         pane: PaneId,
         generation: u64,
         result: Result<Box<dyn PreviewDoc>, Error>,
+        /// The previewer that was asked.
+        previewer: ExtId,
         /// The bytes served and the file's size, when the previewer got a
         /// prefix of a remote file.
         prefix: Option<(u64, Option<u64>)>,
@@ -264,8 +285,15 @@ enum Msg {
     Conflicts,
     /// An extension asked the user a question.
     Prompts,
-    /// `Command::ShowProperties` read the entry.
-    Properties(Box<Result<PropertiesInfo, Error>>),
+    /// `Command::ShowProperties` read the entry: the request's number and
+    /// what was read.
+    Properties(u64, Box<Result<PropertiesInfo, Error>>),
+    /// The count of the folder the Properties dialogue shows ended.
+    PropertiesCounted {
+        pane: PaneId,
+        path: PathBuf,
+        contents: FolderContents,
+    },
     /// A permission job ended.
     PermissionsApplied {
         pane: PaneId,
@@ -277,6 +305,9 @@ enum Msg {
     PreviewNone {
         pane: PaneId,
         generation: u64,
+        /// The file's mode string and `owner:group`, where they could be
+        /// read.
+        permissions: Option<String>,
     },
     /// The pane's *Copy* read the file: its text, for the clipboard.
     PreviewText {
@@ -289,10 +320,34 @@ enum Msg {
         size: u64,
         cap: u64,
     },
+    /// A whole remote file is being read for a preview.
+    PreviewProgress {
+        pane: PaneId,
+        generation: u64,
+        read: u64,
+        total: Option<u64>,
+    },
+    /// A plugin package was unpacked, or was not.
+    PluginInstalled(Result<Box<Plugin>, String>),
+    /// A plugin's folder was deleted, or was not.
+    PluginRemoved {
+        path: PathBuf,
+        result: Result<(), String>,
+    },
     /// A job started waiting for its volume, or stopped.
     Schedule,
     /// The mounted volumes were enumerated.
     Volumes(Result<Vec<Volume>, Error>),
+    /// Whether the system has a tool for formatting a drive, as looked up
+    /// with the volumes: one that is installed while Rick runs is found.
+    FormatTool(bool),
+    /// *Run script?* was answered with Run, or with Edit.
+    Script {
+        pane: PaneId,
+        entry: Entry,
+        /// Run; Edit otherwise.
+        run: bool,
+    },
     /// Open's job answered: the archive provider browses the file as a
     /// location (navigate there), or does not (the system default).
     Opened {
@@ -355,11 +410,23 @@ enum Msg {
 
 /// How long changes are collected before the decorators run again.
 const REDECORATE_AFTER: Duration = Duration::from_millis(150);
-/// How often the mounted volumes are enumerated again, so a drive that is
-/// plugged in or a share that is mounted shows up without a user action.
+/// How often the mounted volumes are enumerated again, whatever the
+/// platform reported: the net under its mount events, and all there is
+/// where it has none.
 const VOLUMES_EVERY: Duration = Duration::from_secs(2);
+/// How long after a mount or unmount event the volumes are enumerated: the
+/// events of one stick, one per partition, come in a burst.
+const VOLUMES_AFTER_EVENT: Duration = Duration::from_millis(100);
 /// How often a location its provider cannot watch is checked for a change.
 const POLL_EVERY: Duration = Duration::from_secs(3);
+/// When Rick tries a lost connection again by itself: after the loss, then
+/// after each try that failed; after the last one it waits for *Retry*
+/// (SPEC.md *Removed and unreachable locations*).
+pub const RETRY_LOST_AFTER: [Duration; 3] = [
+    Duration::from_secs(2),
+    Duration::from_secs(5),
+    Duration::from_secs(15),
+];
 /// How long one [`App::poll`] may spend applying messages before it leaves
 /// the rest to the next one.
 const POLL_BUDGET: Duration = Duration::from_millis(8);
@@ -370,6 +437,32 @@ const REVEAL_FOR: Duration = Duration::from_secs(5);
 /// The line typed into a console to take its shell to `path`: quoted for
 /// the shell, with a leading space so a shell that ignores such lines
 /// keeps it out of its history, and Enter.
+/// The embedded console's action, `ext-action-terminal`'s *Open console*.
+const EMBEDDED_CONSOLE: ext::ActionId = ext::ActionId("terminal.console");
+/// How much of a file with the execute bit is read to tell a binary from
+/// a script.
+const PROGRAM_PROBE: u64 = 4096;
+
+/// Whether the file is a binary and no script: its first 4 KiB hold a NUL
+/// byte (SPEC.md *Executables and scripts*).
+fn is_binary(path: &Path) -> Result<bool, Error> {
+    use std::io::Read as _;
+    let mut head = Vec::new();
+    std::fs::File::open(path)
+        .map_err(Error::from_io)?
+        .take(PROGRAM_PROBE)
+        .read_to_end(&mut head)
+        .map_err(Error::from_io)?;
+    Ok(head.contains(&0))
+}
+
+/// The line that runs the script `name` of the console's folder, as it is
+/// typed at the shell's prompt.
+fn run_line(name: &str) -> Vec<u8> {
+    let quoted = name.replace('\'', "'\\''");
+    format!("'./{quoted}'\r").into_bytes()
+}
+
 fn cd_command(path: &Path) -> Vec<u8> {
     if ext::Platforms::current() == ext::Platforms::WINDOWS {
         format!(" cd /d \"{}\"\r", path.display()).into_bytes()
@@ -381,8 +474,9 @@ fn cd_command(path: &Path) -> Vec<u8> {
 /// How long the title-row search box's text must stand before the search
 /// indexes are asked, so a typist does not start a query per keystroke.
 const INDEX_SEARCH_AFTER: Duration = Duration::from_millis(150);
-/// How many of this process's own settings writes are remembered, so the
-/// watcher's report of each is told from an edit.
+/// How many states of the settings file are remembered, its state at the
+/// start and this process's own writes, so the watcher's report of each is
+/// told from an edit.
 const RECENT_SAVES: usize = 16;
 /// How much of a file on a remote provider a prefix previewer is served at
 /// first, and per *Load more* (`specs/ext-ssh.md`, "Previews over SSH").
@@ -415,6 +509,8 @@ pub const LOCALE_DE: &str = include_str!("../../../locales/de.ftl");
 struct PinBridge {
     pinned: RwLock<Vec<Location>>,
     pending: Mutex<Vec<SettingsChange>>,
+    /// The command of *Open in editor*, as the settings have it.
+    editor: RwLock<String>,
 }
 
 impl PinBridge {
@@ -423,9 +519,25 @@ impl PinBridge {
         pinned.clone_into(&mut self.pinned.write().unwrap_or_else(PoisonError::into_inner));
     }
 
+    /// Takes what the open actions read of `settings`.
+    fn sync_open(&self, settings: &Settings) {
+        settings
+            .editor
+            .clone_into(&mut self.editor.write().unwrap_or_else(PoisonError::into_inner));
+    }
+
     /// The changes asked for since the last call.
     fn take(&self) -> Vec<SettingsChange> {
         std::mem::take(&mut self.pending.lock().unwrap_or_else(PoisonError::into_inner))
+    }
+}
+
+impl ops::OpenSettings for PinBridge {
+    fn editor(&self) -> String {
+        self.editor
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
     }
 }
 
@@ -544,6 +656,9 @@ struct ConsoleLink {
     /// The explorer's location last seen, so a navigation is typed once,
     /// and one the console itself caused not at all.
     location_seen: Location,
+    /// A line still to type into the console: the script it was opened to
+    /// run, typed once the shell is at its prompt.
+    line: Option<Vec<u8>>,
 }
 
 /// The application: model, registry, jobs, undo log and settings.
@@ -583,8 +698,10 @@ pub struct App {
     settings_watch: CancelToken,
     /// Writes the settings file in order, one at a time.
     settings_saver: mpsc::UnboundedSender<Settings>,
-    /// What this process wrote lately: a reload that matches one is the
-    /// watcher reporting our own write, not an edit to pick up.
+    /// What this process wrote lately, after what the file held when it
+    /// was read at the start: a reload that matches one is the watcher
+    /// reporting our own write, or the file as it was before a change that
+    /// is still on its way to it, not an edit to pick up.
     recent_saves: VecDeque<Settings>,
     /// The previews being opened or shown, by pane.
     preview: BTreeMap<PaneId, PreviewJob>,
@@ -594,6 +711,9 @@ pub struct App {
     preview_more: BTreeMap<PaneId, (EntryId, u32)>,
     /// The entry a pane previews whatever its size, after *Preview anyway*.
     preview_force: BTreeMap<PaneId, EntryId>,
+    /// The entry a pane previews through one previewer whatever the
+    /// scores say, after [`Command::PreviewWith`].
+    preview_with: BTreeMap<PaneId, (EntryId, ExtId)>,
     /// Thumbnails being rendered, so a cell asked for twice renders once.
     thumbnails: BTreeSet<(EntryId, u32)>,
     /// Events from start-up, delivered on the first poll.
@@ -616,6 +736,13 @@ pub struct App {
     places_saver: mpsc::UnboundedSender<Vec<Place>>,
     /// Stops the volume poll.
     volumes_watch: CancelToken,
+    /// The line the console that is being opened is to type: the script
+    /// *Run* starts, between asking for the console and its link.
+    console_line: Option<Vec<u8>>,
+    /// The platform's watch of mounts and unmounts, which makes the volume
+    /// poll read the list at once; kept for as long as the application
+    /// runs. `None` where the platform has no such events.
+    mounts_watch: Option<platform::MountWatch>,
     /// Rung to make every polled location check for a change now; see
     /// [`poll_location`].
     poke: runtime::watch::Sender<u64>,
@@ -638,6 +765,17 @@ pub struct App {
     exit: bool,
     /// The plugins the host found, for the Extensions screen.
     plugins: Vec<Plugin>,
+    /// The extension that registered each action, by the action's id; the
+    /// kernel's own actions are not in it.
+    action_owners: BTreeMap<&'static str, ExtId>,
+    /// What each extension's providers serve, as the schemes of their
+    /// locations: `azure://`, `rick://trash`.
+    provider_schemes: BTreeMap<ExtId, Vec<String>>,
+    /// The third-party library a plugin's previewer reported missing in
+    /// this session, by the plugin's id.
+    missing_libraries: BTreeMap<String, String>,
+    /// The config directory, where the extensions' settings files live.
+    config_dir: PathBuf,
     /// The values of the settings extensions declared, one TOML file each;
     /// shared with the extensions through the registry.
     ext_settings: Arc<ExtSettings>,
@@ -646,6 +784,18 @@ pub struct App {
     /// The entry the Properties dialogue shows, while it is open: a change
     /// to it reports the new state through `Event::Properties`.
     properties_shown: Option<(PaneId, PathBuf)>,
+    /// The count of that entry's contents, when it is a folder: running,
+    /// or done and kept for as long as the dialogue shows the folder.
+    properties_count: Option<PropertiesCount>,
+    /// The entries whose facts a background thread is still reading for
+    /// the Properties dialogue: each ends in one `Msg::Properties`, and
+    /// until then the application is busy.
+    properties_reading: usize,
+    /// Numbers the requests for Properties.
+    properties_asked: u64,
+    /// The request whose answer the dialogue waits for: the latest one,
+    /// until it is answered or called off. Any other answer is dropped.
+    properties_waiting: Option<u64>,
     /// Numbers the index searches, so a superseded one's hits are dropped.
     index_generation: u64,
     /// The integration check or apply in flight.
@@ -715,15 +865,49 @@ impl App {
             Arc::clone(&pins) as Arc<dyn PinStore>,
             Arc::clone(&conflicts),
             Arc::clone(&scheduler),
-        );
-        for ext in std::iter::once(&core as &dyn Extension).chain(extensions.iter().map(|e| &**e)) {
-            if let Err(error) = registry.load(ext) {
-                let id = ext.manifest().id;
-                warn!(%error, ext = id.0, "extension refused");
-                pending.push(Event::Notify {
-                    level: Level::Error,
-                    text: format!("Extension {} refused: {error}", id.0),
-                });
+        )
+        .with_open_settings(Arc::clone(&pins) as Arc<dyn ops::OpenSettings>);
+        // Which extension an action came from, the kernel's own apart: the
+        // Keyboard shortcuts dialogue files a plugin's actions under the
+        // plugin.
+        let mut action_owners = BTreeMap::new();
+        // And what its providers serve, for the Extensions dialogue.
+        let mut provider_schemes: BTreeMap<ExtId, Vec<String>> = BTreeMap::new();
+        let plugins = extensions.iter().map(|e| (&**e, true));
+        for (ext, plugin) in std::iter::once((&core as &dyn Extension, false)).chain(plugins) {
+            let id = ext.manifest().id;
+            let before = (
+                registry.actions().len(),
+                registry.providers().len(),
+                registry.views().len(),
+            );
+            match registry.load(ext) {
+                Ok(()) if plugin => {
+                    for action in &registry.actions()[before.0..] {
+                        action_owners.insert(action.id().0, id);
+                    }
+                    let mut schemes: Vec<String> = registry.providers()[before.1..]
+                        .iter()
+                        .map(|provider| format!("{}://", provider.id().0))
+                        .chain(
+                            registry.views()[before.2..]
+                                .iter()
+                                .map(|(name, _)| format!("rick://{name}")),
+                        )
+                        .collect();
+                    schemes.dedup();
+                    if !schemes.is_empty() {
+                        provider_schemes.insert(id, schemes);
+                    }
+                }
+                Ok(()) => {}
+                Err(error) => {
+                    warn!(%error, ext = id.0, "extension refused");
+                    pending.push(Event::Notify {
+                        level: Level::Error,
+                        text: format!("Extension {} refused: {error}", id.0),
+                    });
+                }
             }
         }
         for provider in registry.providers() {
@@ -773,8 +957,15 @@ impl App {
         };
         let session_path = config_dir.join(SESSION_FILE);
         let layouts_dir = config_dir.join(LAYOUTS_DIR);
+        // What the file holds now is no edit to pick up later: a reload
+        // that reads it again before our first change has been written
+        // must not undo that change.
+        let mut recent_saves = VecDeque::new();
         let settings = match settings::load(&settings_path) {
-            Ok(settings) => settings,
+            Ok(settings) => {
+                recent_saves.push_back(settings.clone());
+                settings
+            }
             Err(error) => {
                 warn!(%error, path = %settings_path.display(), "settings not read");
                 pending.push(Event::Notify {
@@ -791,6 +982,7 @@ impl App {
         ext::i18n::load_overrides(&config_dir);
         ext::i18n::set_language(settings.language.as_deref());
         pins.sync(&settings.pinned);
+        pins.sync_open(&settings);
         for connector in registry.connectors() {
             connector.update(connections_of(&settings, connector.provider()));
         }
@@ -839,14 +1031,12 @@ impl App {
             None => Model::new(settings, start.unwrap_or_else(|| home.clone())),
         };
         model.set_places(places);
+        model.format_tool = platform.has_format_tool();
         model.cloud_providers = cloud_providers;
         model.network_providers = network_providers;
-        // The search indexes: a walk gives the filter bar its subtree
-        // toggle, the platform's indexes feed the title-row search box.
-        model.subtree_search = registry
-            .search_indexes()
-            .iter()
-            .any(|index| matches!(index.scope(), SearchScope::Under(_)));
+        // The search indexes: the platform's feed the title-row search
+        // box; a walk searches beneath a location, which the filter bar's
+        // toggle asks about per location (`subtree_search`).
         model.search_indexes = available_indexes(&registry)
             .iter()
             .map(|index| index.id())
@@ -905,11 +1095,12 @@ impl App {
             settings_path,
             settings_watch: CancelToken::new(),
             settings_saver,
-            recent_saves: VecDeque::new(),
+            recent_saves,
             preview: BTreeMap::new(),
             preview_generation: 0,
             preview_more: BTreeMap::new(),
             preview_force: BTreeMap::new(),
+            preview_with: BTreeMap::new(),
             thumbnails: BTreeSet::new(),
             pending,
             later: Vec::new(),
@@ -918,6 +1109,8 @@ impl App {
             console_links: BTreeMap::new(),
             places_saver,
             volumes_watch: CancelToken::new(),
+            console_line: None,
+            mounts_watch: None,
             poke: runtime::watch::channel(0).0,
             home,
             session_saver: session::Saver::new(session_path),
@@ -927,9 +1120,17 @@ impl App {
             layouts,
             exit: false,
             plugins: Vec::new(),
+            action_owners,
+            provider_schemes,
+            missing_libraries: BTreeMap::new(),
+            config_dir: config_dir.clone(),
             ext_settings,
             index_search: None,
             properties_shown: None,
+            properties_count: None,
+            properties_reading: 0,
+            properties_asked: 0,
+            properties_waiting: None,
             index_generation: 0,
             integration: integration::IntegrationRun::default(),
         };
@@ -994,9 +1195,58 @@ impl App {
         self.session_saver.writes()
     }
 
-    /// Records the plugins the host found, for the Extensions screen.
+    /// Records the plugins the host found, for the Extensions dialogue.
     pub fn set_plugins(&mut self, plugins: Vec<Plugin>) {
         self.plugins = plugins;
+    }
+
+    /// Unpacks a plugin package into the per-user plugins folder as a job
+    /// (SPEC.md *Extensions dialogue*): nothing is checked and nothing is
+    /// asked, and the plugin loads at the next start. Answered by
+    /// [`Event::PluginInstalled`], or by an error notice.
+    fn install_plugin(&mut self, package: PathBuf) {
+        let dir = self.plugins_dir();
+        let tx = self.mailbox.clone();
+        let name = format!("Install {}", package.display());
+        let handle = self.jobs.spawn_named(name, move |_job| async move {
+            let result = tokio::task::spawn_blocking(move || {
+                plugins::install(&package, &dir)
+                    .map(|folder| Box::new(plugins::describe(&folder)))
+                    .map_err(|error| error.to_string())
+            })
+            .await
+            .unwrap_or_else(|join| Err(join.to_string()));
+            tx.send(Msg::PluginInstalled(result));
+            Ok(())
+        });
+        self.internal.insert(handle.id);
+    }
+
+    /// Deletes the folder of a user's plugin as a job, at once and
+    /// without a question; a plugin that ships beside the binary is not
+    /// removed. The plugin stays loaded until the next start.
+    fn remove_plugin(&mut self, path: PathBuf) {
+        let listed = self
+            .plugins
+            .iter()
+            .any(|row| row.path == path && !row.built_in && !row.removed);
+        if !listed {
+            return;
+        }
+        let dir = self.plugins_dir();
+        let tx = self.mailbox.clone();
+        let name = format!("Remove {}", path.display());
+        let handle = self.jobs.spawn_named(name, move |_job| async move {
+            let folder = path.clone();
+            let result = tokio::task::spawn_blocking(move || {
+                plugins::remove(&folder, &dir).map_err(|error| error.to_string())
+            })
+            .await
+            .unwrap_or_else(|join| Err(join.to_string()));
+            tx.send(Msg::PluginRemoved { path, result });
+            Ok(())
+        });
+        self.internal.insert(handle.id);
     }
 
     /// The plugins the host found, as the binary recorded them; empty when
@@ -1004,6 +1254,54 @@ impl App {
     #[must_use]
     pub fn plugins(&self) -> &[Plugin] {
         &self.plugins
+    }
+
+    /// The extension an action came from, as its manifest describes it:
+    /// the plugin the Keyboard shortcuts dialogue files the action under.
+    /// `None` for the kernel's own actions, the file operations of
+    /// [`ops::Core`].
+    #[must_use]
+    pub fn action_extension(&self, action: ext::ActionId) -> Option<&ext::Manifest> {
+        let id = self.action_owners.get(action.0)?;
+        self.registry.manifests().iter().find(|m| m.id == *id)
+    }
+
+    /// The per-user plugins folder: where *Install from file…* unpacks a
+    /// package, and the only place *Remove* deletes from.
+    #[must_use]
+    pub fn plugins_dir(&self) -> PathBuf {
+        self.config_dir.join(plugins::PLUGINS_DIR)
+    }
+
+    /// What the providers of the loaded plugin `id` serve, as the schemes
+    /// of their locations (`azure://`, `rick://trash`); empty for a
+    /// plugin without providers, and for one that is not loaded.
+    #[must_use]
+    pub fn plugin_schemes(&self, id: &str) -> &[String] {
+        self.provider_schemes
+            .iter()
+            .find(|(ext, _)| ext.0 == id)
+            .map_or(&[], |(_, schemes)| schemes.as_slice())
+    }
+
+    /// The settings file of the plugin `id`, when it declares settings:
+    /// `<config dir>/<id>.toml`.
+    #[must_use]
+    pub fn plugin_config(&self, id: &str) -> Option<PathBuf> {
+        self.registry
+            .settings_schemas()
+            .iter()
+            .any(|schema| schema.ext.0 == id)
+            .then(|| ext_settings::file_of(&self.config_dir, id))
+    }
+
+    /// The third-party library the plugin `id` reported missing in this
+    /// session, by its name (`pdfium`, `LibreOffice`): its previewer
+    /// answered a file with the missing-library card and has shown no
+    /// file since.
+    #[must_use]
+    pub fn missing_library(&self, id: &str) -> Option<&str> {
+        self.missing_libraries.get(id).map(String::as_str)
     }
 
     /// The id of a disabled plugin in the plugins directory whose manifest
@@ -1096,8 +1394,12 @@ impl App {
             layout.windows.into_iter().nth(index)
         });
         if let Some(saved) = window {
+            // A new window opens beside the one it was opened from,
+            // whatever place the layout held for its own.
+            let opener = self.model.focused_window;
             let home = self.home.clone();
-            self.model.add_window(&saved, &home);
+            let new = self.model.add_window(&saved, &home);
+            self.model.open_beside(new, opener);
         } else {
             let location = self
                 .model
@@ -1291,12 +1593,15 @@ impl App {
     }
 
     /// Whether a listing is still streaming or a job still running, the
-    /// decorators' jobs included (a Git status being read, for instance).
+    /// decorators' jobs included (a Git status being read, for instance),
+    /// or an entry's properties are still being read for the Properties
+    /// dialogue: whether an event is still to come without a new command.
     #[must_use]
     pub fn is_busy(&self) -> bool {
         self.live.values().any(|l| !l.complete)
             || !self.jobs.running().is_empty()
             || !self.decor_jobs.running().is_empty()
+            || self.properties_reading > 0
     }
 
     /// The context an action gets for `pane`: its location and selection,
@@ -1419,8 +1724,24 @@ impl App {
             }
             Command::Refresh(pane) => self.refresh(pane),
             Command::Select { pane, change } => {
+                // Select all selects what the list shows and nothing else;
+                // the hidden entries it leaves out are named by their
+                // number (SPEC.md *Select all*).
+                let left_out = if change == SelectionChange::All {
+                    self.model
+                        .active_tab(pane)
+                        .map_or(0, |(_, tab)| tab.hidden_left_out(&self.model.settings))
+                } else {
+                    0
+                };
                 if let Some(ids) = self.model.select(pane, change) {
                     events.push(Event::SelectionChanged { pane, ids });
+                }
+                if left_out > 0 {
+                    events.push(Event::Notify {
+                        level: Level::Info,
+                        text: ext::t!("notice-hidden-not-selected", count = left_out),
+                    });
                 }
             }
             Command::SetView { pane, mode } => {
@@ -1448,6 +1769,10 @@ impl App {
                 }
             }
             Command::Subtree { pane, on } => {
+                // Only where the location can be searched beneath: the
+                // toggle is disabled elsewhere, and so is its shortcut.
+                let on =
+                    on && self.subtree_search(&self.pane_location(pane)) == Availability::Enabled;
                 let before = self.selection_len(pane);
                 if self.model.set_subtree(pane, on) {
                     Self::selection_cleared(pane, before, events);
@@ -1500,6 +1825,7 @@ impl App {
                 }
             }
             Command::Eject(mount_point) => self.eject(&mount_point, events),
+            Command::Format(mount_point) => self.format(&mount_point, events),
             Command::AddConnection {
                 provider,
                 name,
@@ -1606,7 +1932,14 @@ impl App {
                 self.model.question_closed(id);
             }
             Command::ShowProperties(pane) => self.show_properties(pane, events),
-            Command::PropertiesClosed => self.properties_shown = None,
+            Command::PropertiesClosed => {
+                self.properties_shown = None;
+                // A request still on its way is called off with it.
+                self.properties_waiting = None;
+                if let Some(count) = self.properties_count.take() {
+                    count.cancel.cancel();
+                }
+            }
             Command::HashFormat(format) => {
                 if let Err(error) = ops::hash::remember(&*self.platform, format) {
                     events.push(Event::Notify {
@@ -1648,6 +1981,15 @@ impl App {
                     self.restart_preview(pane);
                 }
             }
+            Command::PreviewCancel(pane) => self.cancel_preview(pane, events),
+            Command::InstallPlugin(package) => self.install_plugin(package),
+            Command::RemovePlugin(path) => self.remove_plugin(path),
+            Command::PreviewWith { pane, previewer } => {
+                if let Some(job) = self.preview.get(&pane) {
+                    self.preview_with.insert(pane, (job.entry, previewer));
+                    self.restart_preview(pane);
+                }
+            }
             Command::PreviewAlways(pane) => self.preview_always(pane),
             Command::SetPreviewAlways { provider, name, on } => {
                 self.set_preview_always(provider, &name, on);
@@ -1663,8 +2005,12 @@ impl App {
             Command::ColumnWidths { tab, columns } => {
                 self.model.set_column_widths(tab, columns);
             }
-            Command::WindowGeometry { window, geometry } => {
-                self.model.set_geometry(window, geometry);
+            Command::WindowGeometry {
+                window,
+                geometry,
+                monitor,
+            } => {
+                self.model.set_geometry(window, geometry, monitor);
             }
             Command::SidePanel { window, change } => {
                 self.model.side_panel(window, change);
@@ -1901,25 +2247,39 @@ impl App {
         });
     }
 
-    /// Enumerates the volumes now and every [`VOLUMES_EVERY`], so media
-    /// that come and go show up without a user action.
-    fn poll_volumes(&self) {
+    /// Enumerates the volumes now, on every mount and unmount event of the
+    /// platform and every [`VOLUMES_EVERY`], so media that come and go show
+    /// up without a user action (SPEC.md *This Machine*): the list is never
+    /// one read at start, and a partition that mounts a moment after its
+    /// stick was plugged in is read like the first.
+    fn poll_volumes(&mut self) {
         let platform = Arc::clone(&self.platform);
         let tx = self.mailbox.clone();
         let cancel = self.volumes_watch.clone();
+        let mounted = Arc::new(tokio::sync::Notify::new());
+        let ring = Arc::clone(&mounted);
+        self.mounts_watch = self
+            .platform
+            .watch_mounts(Box::new(move || ring.notify_one()));
         runtime::handle().spawn(async move {
             loop {
                 let platform = Arc::clone(&platform);
-                let result = runtime::handle()
-                    .spawn_blocking(move || platform.volumes())
+                let (result, format_tool) = runtime::handle()
+                    .spawn_blocking(move || (platform.volumes(), platform.has_format_tool()))
                     .await
-                    .unwrap_or_else(|join| Err(Error::Io(std::io::Error::other(join))));
-                if !tx.send(Msg::Volumes(result)) {
+                    .unwrap_or_else(|join| (Err(Error::Io(std::io::Error::other(join))), false));
+                if !tx.send(Msg::Volumes(result)) || !tx.send(Msg::FormatTool(format_tool)) {
                     break;
                 }
                 tokio::select! {
                     () = cancel.cancelled() => break,
                     () = tokio::time::sleep(VOLUMES_EVERY) => {}
+                    () = mounted.notified() => {
+                        tokio::select! {
+                            () = cancel.cancelled() => break,
+                            () = tokio::time::sleep(VOLUMES_AFTER_EVENT) => {}
+                        }
+                    }
                 }
             }
         });
@@ -1948,6 +2308,40 @@ impl App {
         let _ = self.places_saver.send(self.model.places.rows().to_vec());
     }
 
+    /// Opens the system's own format tool on the volume at `mount_point`:
+    /// GNOME Disks or the desktop's equivalent, Disk Utility, the format
+    /// dialogue of Windows. Rick formats nothing itself.
+    fn format(&mut self, mount_point: &Path, events: &mut Vec<Event>) {
+        let Some(volume) = self
+            .model
+            .volumes
+            .iter()
+            .find(|v| v.mount_point == mount_point)
+            .cloned()
+        else {
+            events.push(Event::Notify {
+                level: Level::Warning,
+                text: format!("{} is not mounted", mount_point.display()),
+            });
+            return;
+        };
+        // The entry is disabled where the system has no such tool; a
+        // command that comes all the same is told what the tooltip says.
+        if !self.platform.has_format_tool() {
+            events.push(Event::Notify {
+                level: Level::Warning,
+                text: ext::t!("panel-no-disk-utility"),
+            });
+            return;
+        }
+        if let Err(error) = self.platform.open_format_tool(&volume) {
+            events.push(Event::Notify {
+                level: Level::Error,
+                text: format!("Format {}: {error}", volume.name),
+            });
+        }
+    }
+
     /// Ejects the removable volume at `mount_point` as a job, then lists
     /// the volumes again.
     fn eject(&mut self, mount_point: &Path, events: &mut Vec<Event>) {
@@ -1964,6 +2358,15 @@ impl App {
             });
             return;
         };
+        // The panes on the drive leave it first, so that none points at a
+        // drive that is gone and no listing keeps it busy while it is
+        // unmounted.
+        self.evacuate(
+            &volume.name,
+            &|location| on_volume(&volume.mount_point, location),
+            events,
+        );
+        self.sync_panes(events);
         let platform = Arc::clone(&self.platform);
         let name = volume.name.clone();
         let handle = self
@@ -2233,8 +2636,94 @@ impl App {
                 );
                 self.pane_jobs.insert(handle.id, self.model.focused);
                 self.refresh_rows_of(provider);
+                // The panes on the account or the host leave with it.
+                self.evacuate(
+                    name,
+                    &|location| {
+                        location.provider == provider
+                            && source_at(location).as_deref() == Some(name)
+                    },
+                    events,
+                );
             }
         }
+    }
+
+    /// Sends every pane on a location `gone` names Home, at once, and says
+    /// `<name> was removed` when one went: a medium that was pulled out or
+    /// ejected, an account or a host that was removed (SPEC.md *Removed and
+    /// unreachable locations*). It is no error, and none is shown.
+    fn evacuate(&mut self, name: &str, gone: &dyn Fn(&Location) -> bool, events: &mut Vec<Event>) {
+        let home = self.home.clone();
+        let moved = self.model.evacuate(gone, &home);
+        if moved > 0 {
+            debug!(name, moved, "panes went home");
+            events.push(Event::Notify {
+                level: Level::Info,
+                text: ext::t!("notice-was-removed", name = name.to_owned()),
+            });
+        }
+    }
+
+    /// The pane's listing failed because its location could not be
+    /// reached: the tab stays where it is and shows the card with *Retry*,
+    /// and Rick tries again by itself after each of [`RETRY_LOST_AFTER`].
+    fn lost(&mut self, pane: PaneId, generation: u64, location: &Location, error: &Error) {
+        let retries = self
+            .model
+            .active_tab(pane)
+            .and_then(|(_, tab)| tab.lost.as_ref())
+            .map_or(0, |lost| lost.retries);
+        let connector = self.registry.connector_of(location.provider);
+        let lost = model::ConnectionLost {
+            source: connector
+                .as_ref()
+                .and_then(|_| source_at(location))
+                .unwrap_or_else(|| location.provider.0.to_owned()),
+            provider: connector.map_or_else(
+                || location.provider.0.to_owned(),
+                |connector| connector.schema().title.get(),
+            ),
+            // The provider's own words, without the kernel's prefix.
+            message: match error {
+                Error::Io(io) => io.to_string(),
+                other => other.to_string(),
+            },
+            retries,
+        };
+        self.model.connection_lost(pane, Some(lost));
+        self.model.listing_failed(pane, None);
+        if let Some(after) = RETRY_LOST_AFTER.get(usize::from(retries)).copied() {
+            let tx = self.mailbox.clone();
+            runtime::handle().spawn(async move {
+                tokio::time::sleep(after).await;
+                tx.send(Msg::RetryLost { pane, generation });
+            });
+        }
+    }
+
+    /// Tries a lost connection again, when the pane is still where it was
+    /// and still without its listing.
+    fn retry_lost(&mut self, pane: PaneId, generation: u64) {
+        let current = self.live.get(&pane).map(|live| live.generation);
+        let Some(mut lost) = self
+            .model
+            .active_tab(pane)
+            .and_then(|(_, tab)| tab.lost.clone())
+        else {
+            return;
+        };
+        if current != Some(generation) {
+            return;
+        }
+        lost.retries += 1;
+        debug!(
+            ?pane,
+            retries = lost.retries,
+            "trying a lost connection again"
+        );
+        self.model.connection_lost(pane, Some(lost));
+        self.refresh(pane);
     }
 
     /// The connection (one SSH host, one cloud account) an entry is on:
@@ -2252,6 +2741,57 @@ impl App {
             .next()
             .filter(|first| !first.is_empty())?;
         Some(String::from_utf8_lossy(first).into_owned())
+    }
+
+    /// The size-limit card's event for `entry`: its size against the cap,
+    /// its source and the name of the provider the source is on.
+    fn capped_event(&self, pane: PaneId, entry: &Entry, size: u64, cap: u64) -> Event {
+        Event::PreviewCapped {
+            pane,
+            size,
+            cap,
+            source: self.source_of(entry),
+            provider: self
+                .registry
+                .connector_of(entry.id.provider)
+                .map(|connector| connector.schema().title.get()),
+        }
+    }
+
+    /// Whether *Always preview* is on for the source `entry` is on: the
+    /// switch in the source's connection, whichever provider keeps it.
+    fn always_previewed(&self, entry: &Entry) -> bool {
+        self.source_of(entry).is_some_and(|source| {
+            self.model.settings.connections.iter().any(|c| {
+                c.provider == entry.id.provider.0
+                    && c.name == source
+                    && c.settings
+                        .get(PREVIEW_ALWAYS)
+                        .is_some_and(|on| on == "true")
+            })
+        })
+    }
+
+    /// Escape during a download: the fetch stops, the file is no longer
+    /// previewed whatever its size, and the size-limit card is back.
+    fn cancel_preview(&mut self, pane: PaneId, events: &mut Vec<Event>) {
+        let Some(job) = self.preview.get(&pane) else {
+            return;
+        };
+        job.cancel.cancel();
+        self.preview_force.remove(&pane);
+        let entry = job.full.clone();
+        let Ok(provider) = self
+            .mounts
+            .resolve(&Location::new(entry.id.provider, entry.path.clone()))
+        else {
+            return;
+        };
+        let loc = Location::new(entry.id.provider, entry.path.clone());
+        let cap = provider
+            .remote_preview_cap(&loc)
+            .unwrap_or(REMOTE_PREVIEW_CAP);
+        events.push(self.capped_event(pane, &entry, entry.size.unwrap_or(0), cap));
     }
 
     /// *Always preview on <source>*: the switch goes on for the source of
@@ -2395,6 +2935,16 @@ impl App {
             self.dispatch(Command::Navigate { pane, to }, events);
             return;
         }
+        // A local file with the execute bit is a program, where that bit
+        // means one: it is started, not handed to the system (SPEC.md
+        // *Executables and scripts*).
+        if tab.location.provider == ProviderId::LOCAL
+            && entry.attrs.contains(Attrs::EXECUTABLE)
+            && self.platform.has_execute_bit()
+        {
+            self.launch(pane, entry);
+            return;
+        }
         let archive = (tab.location.provider == ProviderId::LOCAL
             && self.model.settings.archives.on_open == model::OnOpen::Enter)
             .then(|| self.mounts.provider(ProviderId::ARCHIVE))
@@ -2428,6 +2978,107 @@ impl App {
                 Ok(())
             });
         self.internal.insert(handle.id);
+    }
+
+    /// Starts a program the user opened (SPEC.md *Executables and
+    /// scripts*). A binary — its first 4 KiB hold a NUL byte — runs
+    /// detached from Rick, with its folder as the working directory and
+    /// without a question. An executable script is a readable file as
+    /// well, so Rick asks first: *Run script?* with **Cancel**, **Edit**
+    /// and **Run**; the answer comes back as [`Msg::Script`].
+    fn launch(&mut self, pane: PaneId, entry: Entry) {
+        let Ok(path) = platform::paths::to_path(&entry.path) else {
+            return;
+        };
+        let platform = Arc::clone(&self.platform);
+        let prompts = Arc::clone(&self.prompts);
+        let tx = self.mailbox.clone();
+        let name = entry.name.clone();
+        let handle = self
+            .jobs
+            .spawn_named(format!("Open {name}"), move |_job| async move {
+                let probe = path.clone();
+                let binary = runtime::handle()
+                    .spawn_blocking(move || is_binary(&probe))
+                    .await
+                    .unwrap_or_else(|join| Err(Error::Io(std::io::Error::other(join))))?;
+                if binary {
+                    let dir = path.parent().unwrap_or(&path).to_path_buf();
+                    return platform.run_detached(&path, &[], &dir);
+                }
+                let answer = prompts
+                    .ask(
+                        ext::t!("run-script-title"),
+                        name,
+                        QuestionKind::Choice {
+                            options: vec![
+                                ext::t!("cancel"),
+                                ext::t!("run-script-edit"),
+                                ext::t!("run-script-run"),
+                            ],
+                            default: 2,
+                        },
+                        false,
+                    )
+                    .await;
+                let run = match answer {
+                    Answer::Choice(1) => false,
+                    Answer::Choice(2) => true,
+                    _ => return Ok(()),
+                };
+                tx.send(Msg::Script { pane, entry, run });
+                Ok(())
+            });
+        self.internal.insert(handle.id);
+    }
+
+    /// What the user chose for an executable script: **Run** starts it in
+    /// a console in its folder, so that its output is visible — the
+    /// embedded console where `ext-action-terminal` is loaded, the
+    /// system's terminal otherwise — and **Edit** opens it in the editor.
+    fn script(&mut self, pane: PaneId, entry: Entry, run: bool, events: &mut Vec<Event>) {
+        let Ok(path) = platform::paths::to_path(&entry.path) else {
+            return;
+        };
+        let dir = path.parent().unwrap_or(&path).to_path_buf();
+        let folder = Location::new(ProviderId::LOCAL, platform::paths::from_path(&dir));
+        if !run {
+            let ctx = ActionCtx {
+                pane,
+                location: folder,
+                selection: vec![entry],
+                invoked_from: Invocation::Shortcut,
+                other: None,
+            };
+            self.run(ext::ActionId("core.open_in_editor"), ctx, events);
+            return;
+        }
+        let embedded = self
+            .registry
+            .actions()
+            .iter()
+            .any(|action| action.id() == EMBEDDED_CONSOLE);
+        if embedded {
+            // The console the action opens is handed the line to type.
+            self.console_line = Some(run_line(&entry.name));
+            let ctx = ActionCtx {
+                pane,
+                location: folder,
+                selection: Vec::new(),
+                invoked_from: Invocation::Shortcut,
+                other: None,
+            };
+            self.run(EMBEDDED_CONSOLE, ctx, events);
+            self.console_line = None;
+        } else if let Err(error) = self
+            .platform
+            .open_terminal(&dir, Some(&[path.to_string_lossy().into_owned()]))
+        {
+            events.push(Event::Notify {
+                level: Level::Error,
+                text: format!("{}: {error}", entry.name),
+            });
+        }
     }
 
     /// Opens an entry with the system default application, through the
@@ -2549,6 +3200,7 @@ impl App {
             ext::i18n::set_language(settings.language.as_deref());
         }
         self.pins.sync(&settings.pinned);
+        self.pins.sync_open(&settings);
         self.model.apply_settings(settings.clone());
         if settings.pinned != pinned_before {
             self.rick.changed(Virtual::Favorites);
@@ -2578,13 +3230,90 @@ impl App {
             .then(|| platform::paths::to_path(&entry.path).ok())
             .flatten();
         self.properties_shown = path.clone().map(|path| (pane, path));
+        let folder = path
+            .as_deref()
+            .filter(|_| entry.kind == types::EntryKind::Dir);
+        let contents = self.count_contents(pane, &entry.name, folder);
         let platform = Arc::clone(&self.platform);
         let tx = self.mailbox.clone();
         let location = ctx.location.clone();
-        runtime::handle().spawn_blocking(move || {
-            let info = read_properties(&*platform, pane, entry, path, &location);
-            tx.send(Msg::Properties(Box::new(info)));
+        let asked = self.properties_asking();
+        runtime::handle().spawn(async move {
+            // Every read is answered, one that failed on its thread too:
+            // the application is busy until the answer is in.
+            let info = runtime::handle()
+                .spawn_blocking(move || {
+                    read_properties(&*platform, pane, entry, path, &location, contents)
+                })
+                .await
+                .unwrap_or_else(|join| Err(Error::Io(std::io::Error::other(join))));
+            tx.send(Msg::Properties(asked, Box::new(info)));
         });
+    }
+
+    /// Numbers a request for Properties whose read is about to start: the
+    /// dialogue waits for this one now, and the application is busy until
+    /// it is answered.
+    fn properties_asking(&mut self) -> u64 {
+        self.properties_asked += 1;
+        self.properties_waiting = Some(self.properties_asked);
+        self.properties_reading += 1;
+        self.properties_asked
+    }
+
+    /// Whether Properties was asked for and its dialogue has not opened
+    /// yet, the entry still being read: Escape calls it off with
+    /// [`Command::PropertiesClosed`].
+    #[must_use]
+    pub fn properties_pending(&self) -> bool {
+        self.properties_waiting.is_some()
+    }
+
+    /// Starts the count of what is inside `folder` for the Properties
+    /// dialogue, as a job the operations drawer does not list, and says
+    /// where the count stands: a count of the same folder already running
+    /// or done is kept, any other is cancelled. `None` counts nothing.
+    fn count_contents(&mut self, pane: PaneId, name: &str, folder: Option<&Path>) -> Contents {
+        if let (Some(count), Some(folder)) = (&self.properties_count, folder)
+            && count.pane == pane
+            && count.path == folder
+        {
+            return count.result.map_or(Contents::Counting, Contents::Counted);
+        }
+        if let Some(count) = self.properties_count.take() {
+            count.cancel.cancel();
+        }
+        let Some(folder) = folder else {
+            return Contents::None;
+        };
+        let path = folder.to_path_buf();
+        let walked = path.clone();
+        let tx = self.mailbox.clone();
+        let handle = self
+            .jobs
+            .spawn_named(format!("Count {name}"), move |job| async move {
+                let cancel = job.cancel.clone();
+                let root = walked.clone();
+                let contents = runtime::handle()
+                    .spawn_blocking(move || count_tree(&root, &cancel))
+                    .await
+                    .map_err(|join| Error::Io(std::io::Error::other(join)))?
+                    .ok_or(Error::Cancelled)?;
+                tx.send(Msg::PropertiesCounted {
+                    pane,
+                    path: walked,
+                    contents,
+                });
+                Ok(())
+            });
+        self.internal.insert(handle.id);
+        self.properties_count = Some(PropertiesCount {
+            pane,
+            path,
+            cancel: handle.cancel,
+            result: None,
+        });
+        Contents::Counting
     }
 
     /// The Properties dialogue for the pane's folder itself: the location
@@ -2606,21 +3335,26 @@ impl App {
             .then(|| platform::paths::to_path(&location.path).ok())
             .flatten();
         self.properties_shown = path.clone().map(|path| (pane, path));
+        let name = runtime::name_of(&location);
+        let contents = self.count_contents(pane, &name, path.as_deref());
         let platform = Arc::clone(&self.platform);
         let tx = self.mailbox.clone();
+        let asked = self.properties_asking();
         runtime::handle().spawn(async move {
             let entry = match provider.stat(&location).await {
                 Ok(entry) => entry,
                 Err(error) => {
-                    tx.send(Msg::Properties(Box::new(Err(error))));
+                    tx.send(Msg::Properties(asked, Box::new(Err(error))));
                     return;
                 }
             };
             let info = runtime::handle()
-                .spawn_blocking(move || read_properties(&*platform, pane, entry, path, &location))
+                .spawn_blocking(move || {
+                    read_properties(&*platform, pane, entry, path, &location, contents)
+                })
                 .await
                 .unwrap_or_else(|join| Err(Error::Io(std::io::Error::other(join))));
-            tx.send(Msg::Properties(Box::new(info)));
+            tx.send(Msg::Properties(asked, Box::new(info)));
         });
     }
 
@@ -2922,6 +3656,7 @@ impl App {
                                 console: Arc::clone(console),
                                 cwd_seen: console.cwd(),
                                 location_seen,
+                                line: self.console_line.take(),
                             },
                         );
                     }
@@ -2995,6 +3730,14 @@ impl App {
             }
         }
         for pane in panes {
+            // A pane that moved to where nothing can be searched beneath
+            // lists the folder again; the toggle goes off with it.
+            let unsearchable = self.model.active_tab(pane).is_some_and(|(_, tab)| {
+                tab.subtree && self.subtree_search(&tab.location) != Availability::Enabled
+            });
+            if unsearchable {
+                self.model.set_subtree(pane, false);
+            }
             let key = self.list_key(pane);
             let current = self.live.get(&pane).map(|l| &l.key);
             match key {
@@ -3070,7 +3813,14 @@ impl App {
         }
         let tx = self.mailbox.clone();
         let location = key.location.clone();
-        let opts = key.opts;
+        // A folder is listed with its hidden entries whatever the tab
+        // shows: the view leaves them out, and Select all can say how many
+        // it did not select (SPEC.md *Select all*). A flattened listing is
+        // not, so that hidden folders are not walked.
+        let opts = ListOptions {
+            hidden: key.opts.hidden || key.opts.depth == Depth::One,
+            ..key.opts
+        };
         let poke = self.poke.clone();
         let handle = self
             .jobs
@@ -3173,46 +3923,59 @@ impl App {
         );
     }
 
-    /// Starts the subtree search of `key` as a job the operations area
-    /// shows, through the search index whose scope is `Under` the
-    /// location (the `ext-search-walk` plugin; QUESTIONS.md 118): the
-    /// matches stream into the pane's listing like a listing's batches, and
-    /// a change of text or location cancels it. The pane's hidden toggle
-    /// and the `[search] ignore` list travel as the query's filters.
-    fn search(&mut self, pane: PaneId, key: ListKey, generation: u64, text: &str) {
-        let location = key.location.clone();
-        let index = self
-            .registry
+    /// Whether `location` can be searched beneath (SPEC.md, *Footer*):
+    /// through a search index whose scope is under it, as the local file
+    /// system is through the walk, or by its provider's own listing of a
+    /// whole subtree (`SEARCH_SUBTREE`). Where it cannot, the reason is
+    /// the tooltip of the filter bar's disabled toggle.
+    #[must_use]
+    pub fn subtree_search(&self, location: &Location) -> Availability {
+        if self.subtree_index(location).is_some() {
+            return Availability::Enabled;
+        }
+        match self.mounts.resolve(location) {
+            Ok(provider)
+                if provider
+                    .capabilities(location)
+                    .contains(Capabilities::SEARCH_SUBTREE) =>
+            {
+                Availability::Enabled
+            }
+            Ok(provider) => Availability::Disabled(
+                provider
+                    .unavailable_reason(location, Capabilities::SEARCH_SUBTREE)
+                    .unwrap_or_else(|| ext::t!("reason-not-available-here")),
+            ),
+            Err(_) => Availability::Disabled(ext::t!("reason-not-available-here")),
+        }
+    }
+
+    /// The available search index whose scope is under `location`.
+    fn subtree_index(&self, location: &Location) -> Option<Arc<dyn SearchIndex>> {
+        self.registry
             .search_indexes()
             .iter()
             .find(|index| {
                 let scope = index.scope();
                 matches!(scope, SearchScope::Under(_))
-                    && scope.covers(&location)
+                    && scope.covers(location)
                     && index.availability() == Availability::Enabled
             })
-            .cloned();
-        let Some(index) = index else {
-            self.pending.push(Event::Notify {
-                level: Level::Error,
-                text: format!(
-                    "No subdirectory search for {location}: the search-walk plugin is not loaded"
-                ),
-            });
-            self.model.listing_done(pane);
-            self.live.insert(
-                pane,
-                Live {
-                    key,
-                    generation,
-                    cancel: CancelToken::new(),
-                    complete: true,
-                    buffer: None,
-                    decorators: Vec::new(),
-                    redecorate_scheduled: false,
-                    children: BTreeMap::new(),
-                },
-            );
+            .cloned()
+    }
+
+    /// Starts the subtree search of `key` as a job the operations area
+    /// shows: through the search index whose scope is `Under` the location
+    /// (the `ext-search-walk` plugin; QUESTIONS.md 118), or, on a provider
+    /// with `SEARCH_SUBTREE`, by listing everything beneath the location
+    /// and matching the names here. The matches stream into the pane's
+    /// listing like a listing's batches, and a change of text or location
+    /// cancels it. The pane's hidden toggle and the `[search] ignore` list
+    /// narrow both.
+    fn search(&mut self, pane: PaneId, key: ListKey, generation: u64, text: &str) {
+        let location = key.location.clone();
+        let Some(index) = self.subtree_index(&location) else {
+            self.search_listing(pane, key, generation, text);
             return;
         };
         let tx = self.mailbox.clone();
@@ -3234,6 +3997,102 @@ impl App {
                 let result = async {
                     while let Some(batch) = stream.next().await {
                         let batch: Vec<Entry> = batch?.into_iter().map(|hit| hit.entry).collect();
+                        count += batch.len() as u64;
+                        job.progress.report(Progress::Items {
+                            done: count,
+                            total: None,
+                        });
+                        if !tx.send(Msg::Batch {
+                            pane,
+                            generation,
+                            batch,
+                        }) {
+                            break;
+                        }
+                    }
+                    Ok(())
+                }
+                .await;
+                tx.send(Msg::ListDone {
+                    pane,
+                    generation,
+                    result: result.as_ref().copied().map_err(Error::replicate),
+                });
+                result
+            },
+        );
+        self.live.insert(
+            pane,
+            Live {
+                key,
+                generation,
+                cancel: handle.cancel,
+                complete: false,
+                buffer: None,
+                decorators: Vec::new(),
+                redecorate_scheduled: false,
+                children: BTreeMap::new(),
+            },
+        );
+    }
+
+    /// The subtree search on a provider that lists a whole subtree itself
+    /// (`SEARCH_SUBTREE`): one listing of everything beneath the location,
+    /// the names matched here as the walk matches them — the text anywhere
+    /// in the name, whatever the case — and what the ignore list names
+    /// left out with everything under it. Where the location has neither
+    /// an index nor the capability the search finds nothing and says
+    /// nothing: the toggle that starts it is disabled there.
+    fn search_listing(&mut self, pane: PaneId, key: ListKey, generation: u64, text: &str) {
+        let location = key.location.clone();
+        let provider = self.mounts.resolve(&location).ok().filter(|provider| {
+            provider
+                .capabilities(&location)
+                .contains(Capabilities::SEARCH_SUBTREE)
+        });
+        let Some(provider) = provider else {
+            debug!(%location, "nothing searches beneath this location");
+            self.model.listing_done(pane);
+            self.live.insert(
+                pane,
+                Live {
+                    key,
+                    generation,
+                    cancel: CancelToken::new(),
+                    complete: true,
+                    buffer: None,
+                    decorators: Vec::new(),
+                    redecorate_scheduled: false,
+                    children: BTreeMap::new(),
+                },
+            );
+            return;
+        };
+        let tx = self.mailbox.clone();
+        let needle = text.to_lowercase();
+        let ignore = self.model.settings.search.ignore.clone();
+        let opts = ListOptions {
+            depth: Depth::Unlimited,
+            ..key.opts
+        };
+        let root = location.path.clone();
+        let handle = self.jobs.spawn_named(
+            format!("Search {text} in {location}"),
+            move |job| async move {
+                let mut stream = provider.list(&location, opts, job.cancel.clone());
+                let mut count = 0u64;
+                let result = async {
+                    while let Some(batch) = stream.next().await {
+                        let batch: Vec<Entry> = batch?
+                            .into_iter()
+                            .filter(|entry| {
+                                entry.name.to_lowercase().contains(&needle)
+                                    && !below_ignored(&root, &entry.path, &ignore)
+                            })
+                            .collect();
+                        if batch.is_empty() {
+                            continue;
+                        }
                         count += batch.len() as u64;
                         job.progress.report(Progress::Items {
                             done: count,
@@ -3548,6 +4407,7 @@ impl App {
                 generation,
                 result,
             } => self.list_done(pane, generation, &result, events),
+            Msg::RetryLost { pane, generation } => self.retry_lost(pane, generation),
             Msg::Change {
                 pane,
                 generation,
@@ -3597,7 +4457,8 @@ impl App {
                 if self.recent_saves.contains(&settings) {
                     // Our own write coming back through the watcher; an
                     // earlier one may have been written over by a later
-                    // change already.
+                    // change already. Or the file as it was at the start,
+                    // read again before our first change reached it.
                     return;
                 }
                 if settings != self.model.settings {
@@ -3606,6 +4467,7 @@ impl App {
                         ext::i18n::set_language(settings.language.as_deref());
                     }
                     self.pins.sync(&settings.pinned);
+                    self.pins.sync_open(&settings);
                     let connections_changed =
                         settings.connections != self.model.settings.connections;
                     self.model.apply_settings(settings);
@@ -3635,6 +4497,7 @@ impl App {
                 pane,
                 generation,
                 result,
+                previewer,
                 prefix,
             } => {
                 if self
@@ -3645,8 +4508,24 @@ impl App {
                     return;
                 }
                 let opened = result.is_ok();
+                if let Ok(doc) = &result {
+                    // What the Extensions dialogue calls needing attention.
+                    match doc.content() {
+                        Some(ext::Content::MissingLibrary(missing)) => {
+                            self.missing_libraries
+                                .insert(missing.setting.0.0.to_owned(), missing.name.clone());
+                        }
+                        _ => {
+                            self.missing_libraries.remove(previewer.0);
+                        }
+                    }
+                }
                 events.push(match result {
-                    Ok(doc) => Event::PreviewReady { pane, doc },
+                    Ok(doc) => Event::PreviewReady {
+                        pane,
+                        doc,
+                        previewer,
+                    },
                     Err(error) => Event::PreviewFailed { pane, error },
                 });
                 if let Some((served, total)) = prefix.filter(|_| opened) {
@@ -3677,14 +4556,22 @@ impl App {
                     }),
                 }
             }
-            Msg::PreviewNone { pane, generation } => {
+            Msg::PreviewNone {
+                pane,
+                generation,
+                permissions,
+            } => {
                 if let Some(job) = self
                     .preview
                     .get(&pane)
                     .filter(|job| job.generation == generation)
                 {
                     let plugin = self.disabled_plugin_for(&job.full.name);
-                    events.push(Event::PreviewNone { pane, plugin });
+                    events.push(Event::PreviewNone {
+                        pane,
+                        plugin,
+                        permissions,
+                    });
                 }
             }
             Msg::PreviewCapped {
@@ -3693,23 +4580,58 @@ impl App {
                 size,
                 cap,
             } => {
+                if let Some(job) = self
+                    .preview
+                    .get(&pane)
+                    .filter(|job| job.generation == generation)
+                {
+                    events.push(self.capped_event(pane, &job.full, size, cap));
+                }
+            }
+            Msg::PreviewProgress {
+                pane,
+                generation,
+                read,
+                total,
+            } => {
                 if self
                     .preview
                     .get(&pane)
                     .is_some_and(|job| job.generation == generation)
                 {
-                    let source = self
-                        .preview
-                        .get(&pane)
-                        .and_then(|job| self.source_of(&job.full));
-                    events.push(Event::PreviewCapped {
-                        pane,
-                        size,
-                        cap,
-                        source,
-                    });
+                    events.push(Event::PreviewProgress { pane, read, total });
                 }
             }
+            Msg::PluginInstalled(Ok(plugin)) => {
+                // The row of what is on disk now: in place of the plugin
+                // it replaced, or a new one.
+                let path = plugin.path.clone();
+                match self.plugins.iter_mut().find(|row| row.path == path) {
+                    Some(row) => *row = *plugin,
+                    None => self.plugins.push(*plugin),
+                }
+                events.push(Event::PluginInstalled { path });
+            }
+            Msg::PluginRemoved {
+                path,
+                result: Ok(()),
+            } => {
+                // A plugin unpacked in this session was never loaded: its
+                // row goes with its folder. One the host loaded stays,
+                // marked, until the next start.
+                self.plugins
+                    .retain(|row| row.path != path || row.status != PluginStatus::Installed);
+                if let Some(row) = self.plugins.iter_mut().find(|row| row.path == path) {
+                    row.removed = true;
+                }
+            }
+            Msg::PluginInstalled(Err(text))
+            | Msg::PluginRemoved {
+                result: Err(text), ..
+            } => events.push(Event::Notify {
+                level: Level::Error,
+                text,
+            }),
             Msg::Decorated {
                 pane,
                 generation,
@@ -3800,21 +4722,59 @@ impl App {
                     events.push(Event::Question(question));
                 }
             }
-            Msg::Properties(result) => match *result {
-                Ok(info) => {
-                    // A dialogue closed in the meantime takes no answer.
-                    if self.properties_shown.as_ref().is_some_and(|(pane, path)| {
-                        *pane == info.pane && Some(path) == info.path.as_ref()
-                    }) || info.path.is_none()
-                    {
-                        events.push(Event::Properties(Box::new(info)));
-                    }
+            Msg::PropertiesCounted {
+                pane,
+                path,
+                contents,
+            } => {
+                // A count the dialogue no longer waits for is dropped.
+                if let Some(count) = &mut self.properties_count
+                    && count.pane == pane
+                    && count.path == path
+                {
+                    count.result = Some(contents);
+                    events.push(Event::PropertiesCounted {
+                        pane,
+                        path,
+                        contents,
+                    });
                 }
-                Err(error) => events.push(Event::Notify {
-                    level: Level::Error,
-                    text: format!("Properties: {error}"),
-                }),
-            },
+            }
+            Msg::Properties(asked, result) => {
+                // The read is answered: nothing more comes of it.
+                self.properties_reading = self.properties_reading.saturating_sub(1);
+                // Only the request the dialogue waits for opens it: one
+                // called off in the meantime, or overtaken by a later one,
+                // is dropped with whatever it read.
+                if self.properties_waiting != Some(asked) {
+                    return;
+                }
+                self.properties_waiting = None;
+                match *result {
+                    Ok(mut info) => {
+                        // The count may have ended while the entry was read.
+                        if info.contents == Contents::Counting
+                            && let Some(count) = &self.properties_count
+                            && count.pane == info.pane
+                            && Some(&count.path) == info.path.as_ref()
+                            && let Some(contents) = count.result
+                        {
+                            info.contents = Contents::Counted(contents);
+                        }
+                        // A dialogue closed in the meantime takes no answer.
+                        if self.properties_shown.as_ref().is_some_and(|(pane, path)| {
+                            *pane == info.pane && Some(path) == info.path.as_ref()
+                        }) || info.path.is_none()
+                        {
+                            events.push(Event::Properties(Box::new(info)));
+                        }
+                    }
+                    Err(error) => events.push(Event::Notify {
+                        level: Level::Error,
+                        text: format!("Properties: {error}"),
+                    }),
+                }
+            }
             Msg::PermissionsApplied {
                 pane,
                 label,
@@ -3825,6 +4785,22 @@ impl App {
             Msg::Volumes(Ok(volumes)) => {
                 if volumes != self.model.volumes {
                     debug!(count = volumes.len(), "volumes");
+                    // A volume that is gone — pulled out, or unmounted by
+                    // another program — sends the panes on it Home.
+                    let removed: Vec<Volume> = self
+                        .model
+                        .volumes
+                        .iter()
+                        .filter(|old| !volumes.iter().any(|v| v.mount_point == old.mount_point))
+                        .cloned()
+                        .collect();
+                    for volume in &removed {
+                        self.evacuate(
+                            &volume.name,
+                            &|location| on_volume(&volume.mount_point, location),
+                            events,
+                        );
+                    }
                     self.model.volumes = volumes;
                     // The trash's disk may be among them now.
                     let size = self.model.trash.size;
@@ -3835,6 +4811,8 @@ impl App {
                 }
             }
             Msg::Volumes(Err(error)) => debug!(%error, "volumes not enumerated"),
+            Msg::FormatTool(installed) => self.model.format_tool = installed,
+            Msg::Script { pane, entry, run } => self.script(pane, entry, run, events),
             Msg::Opened {
                 pane,
                 tab,
@@ -3950,10 +4928,12 @@ impl App {
                     let frame = async {
                         let sniff =
                             ext::read_bytes(&*provider, &loc, Some(4096), &job.cancel).await?;
+                        // What only the fallback takes has no picture of
+                        // its own: the file-type icon stays.
                         let best = previewers
                             .iter()
                             .map(|p| (p.score(&entry, &sniff), p))
-                            .filter(|(score, _)| *score > 0)
+                            .filter(|(score, _)| *score > ext::FALLBACK_SCORE)
                             .max_by_key(|(score, _)| *score)
                             .map(|(_, p)| Arc::clone(p))
                             .ok_or(Error::Unsupported("no previewer"))?;
@@ -4001,6 +4981,8 @@ impl App {
             if let Some(job) = self.preview.remove(&pane) {
                 job.cancel.cancel();
             }
+            // The named previewer was for that one look at the file.
+            self.preview_with.remove(&pane);
         }
         for (pane, entry) in wanted {
             if !self.preview.contains_key(&pane) {
@@ -4053,6 +5035,21 @@ impl App {
         }
     }
 
+    /// The entry's provider cannot be reached: the preview failed before
+    /// it began, and the pane keeps the entry so *Retry* can try again.
+    fn preview_unreachable(&mut self, pane: PaneId, entry: Entry, generation: u64, error: Error) {
+        self.pending.push(Event::PreviewFailed { pane, error });
+        self.preview.insert(
+            pane,
+            PreviewJob {
+                entry: entry.id,
+                full: entry,
+                generation,
+                cancel: CancelToken::new(),
+            },
+        );
+    }
+
     /// Opens `entry` for `pane` through the best-scoring previewer as a
     /// job, answered by [`Event::PreviewReady`] or [`Event::PreviewFailed`].
     /// On a remote provider a prefix previewer is served the first chunk
@@ -4067,16 +5064,7 @@ impl App {
         let provider = match self.mounts.resolve(&loc) {
             Ok(provider) => provider,
             Err(error) => {
-                self.pending.push(Event::PreviewFailed { pane, error });
-                self.preview.insert(
-                    pane,
-                    PreviewJob {
-                        entry: entry.id,
-                        full: job_entry,
-                        generation,
-                        cancel: CancelToken::new(),
-                    },
-                );
+                self.preview_unreachable(pane, job_entry, generation, error);
                 return;
             }
         };
@@ -4084,72 +5072,43 @@ impl App {
         let cap = provider
             .remote_preview_cap(&loc)
             .unwrap_or(REMOTE_PREVIEW_CAP);
-        // The source's *Always preview* switch takes the cap off there.
-        let always = remote && provider.remote_preview_always(&loc);
+        // The source's *Always preview* switch takes the cap off there,
+        // on every remote provider: the provider's own answer, or the
+        // switch in the source's connection.
+        let always =
+            remote && (provider.remote_preview_always(&loc) || self.always_previewed(&entry));
         let more = self
             .preview_more
             .get(&pane)
             .filter(|(id, _)| *id == entry.id)
             .map_or(0, |(_, n)| *n);
         let force = self.preview_force.get(&pane) == Some(&entry.id);
-        let previewers: Vec<Arc<dyn Previewer>> = self.registry.previewers().to_vec();
-        let tx = self.mailbox.clone();
+        // One named previewer for this file, whatever the scores.
+        let with = self
+            .preview_with
+            .get(&pane)
+            .filter(|(id, _)| *id == entry.id)
+            .map(|(_, previewer)| *previewer);
         let id = entry.id;
-        let handle =
-            self.jobs
-                .spawn_named(format!("Preview {}", entry.name), move |job| async move {
-                    let sniff = ext::read_bytes(&*provider, &loc, Some(4096), &job.cancel).await?;
-                    let best = previewers
-                        .iter()
-                        .map(|p| (p.score(&entry, &sniff), p))
-                        .filter(|(score, _)| *score > 0)
-                        .max_by_key(|(score, _)| *score)
-                        .map(|(_, p)| Arc::clone(p));
-                    let mut prefix = None;
-                    let result = match best {
-                        Some(previewer) if remote && previewer.reads() == Reads::Prefix => {
-                            let limit = REMOTE_PREFIX_CHUNK * (u64::from(more) + 1);
-                            if entry.size.is_none_or(|size| size > limit) {
-                                prefix =
-                                    Some((entry.size.map_or(limit, |s| s.min(limit)), entry.size));
-                            }
-                            let limited: Arc<dyn ext::Provider> = Arc::new(Prefixed {
-                                inner: provider,
-                                limit,
-                            });
-                            previewer.open(&loc, limited, job.cancel.clone()).await
-                        }
-                        Some(_)
-                            if remote
-                                && !force
-                                && !always
-                                && entry.size.is_some_and(|size| size > cap) =>
-                        {
-                            tx.send(Msg::PreviewCapped {
-                                pane,
-                                generation,
-                                size: entry.size.unwrap_or(0),
-                                cap,
-                            });
-                            return Ok(());
-                        }
-                        Some(previewer) => previewer.open(&loc, provider, job.cancel.clone()).await,
-                        None => {
-                            tx.send(Msg::PreviewNone { pane, generation });
-                            return Ok(());
-                        }
-                    };
-                    if job.cancel.is_cancelled() {
-                        return Err(Error::Cancelled);
-                    }
-                    tx.send(Msg::Preview {
-                        pane,
-                        generation,
-                        result,
-                        prefix,
-                    });
-                    Ok(())
-                });
+        let name = format!("Preview {}", entry.name);
+        let run = PreviewRun {
+            pane,
+            generation,
+            previewers: self.registry.previewers().to_vec(),
+            with,
+            platform: Arc::clone(&self.platform),
+            local: local_path(&entry),
+            entry,
+            loc,
+            provider,
+            remote,
+            // Held behind the size limit unless something lifts it.
+            capped: remote && !force && !always,
+            cap,
+            more,
+            tx: self.mailbox.clone(),
+        };
+        let handle = self.jobs.spawn_named(name, move |job| run.open(job.cancel));
         self.internal.insert(handle.id);
         self.preview.insert(
             pane,
@@ -4178,16 +5137,31 @@ impl App {
         live.complete = true;
         let buffered = live.buffer.take();
         let location = live.key.location.clone();
-        // A failure is the tab's banner with *Retry*, never a dialogue
-        // (`specs/ext-ssh.md`, "Connections"); a listing that works clears
-        // it.
-        self.model.listing_failed(
-            pane,
-            result
-                .as_ref()
-                .err()
-                .map(|error| format!("{location} could not be listed: {error}")),
-        );
+        // A remote location that cannot be reached keeps the pane where it
+        // is, with the card and *Retry* (SPEC.md *Removed and unreachable
+        // locations*). Any other failure is the tab's banner with *Retry*,
+        // never a dialogue (`specs/ext-ssh.md`, "Connections"); a listing
+        // that works clears both.
+        let remote = self.mounts.resolve(&location).is_ok_and(|provider| {
+            provider
+                .capabilities(&location)
+                .contains(Capabilities::REMOTE)
+        });
+        match result {
+            Err(error) if remote && error.is_unreachable() => {
+                self.lost(pane, generation, &location, error);
+            }
+            _ => {
+                self.model.connection_lost(pane, None);
+                self.model.listing_failed(
+                    pane,
+                    result
+                        .as_ref()
+                        .err()
+                        .map(|error| format!("{location} could not be listed: {error}")),
+                );
+            }
+        }
         let batch = match buffered {
             Some(entries) if result.is_ok() => {
                 let before = self.selected_ids(pane);
@@ -4355,6 +5329,16 @@ impl App {
             .retain(|tab, link| model.tab(*tab).is_some() && model.tab(link.explorer).is_some());
         let tabs: Vec<TabId> = self.console_links.keys().copied().collect();
         for tab in tabs {
+            // A script the console was opened to run is typed once the
+            // shell is at its prompt, or at once where the session cannot
+            // tell: a new console has nothing running that could take it.
+            if let Some(link) = self.console_links.get_mut(&tab)
+                && link.line.is_some()
+                && link.console.foreground_job() != Some(true)
+                && let Some(line) = link.line.take()
+            {
+                link.console.write(&line);
+            }
             let Some(link) = self.console_links.get(&tab) else {
                 continue;
             };
@@ -4449,6 +5433,12 @@ impl App {
                         .get(&id)
                         .map(|job| job.name.clone())
                         .unwrap_or_default();
+                    // Where the user acted, then what went wrong: the
+                    // notice is shown in that pane's window.
+                    events.push(Event::JobFailed {
+                        id,
+                        pane: self.pane_jobs.get(&id).copied(),
+                    });
                     events.push(Event::Notify {
                         level: Level::Error,
                         text: format!("{name}: {error}"),
@@ -4522,6 +5512,35 @@ impl App {
             }
         });
     }
+}
+
+/// Whether `location` is on the volume mounted at `mount_point`: a local
+/// folder below it, or a location inside an archive or a disk image whose
+/// file is.
+fn on_volume(mount_point: &Path, location: &Location) -> bool {
+    (location.provider == ProviderId::LOCAL || location.provider == ProviderId::ARCHIVE)
+        && platform::paths::to_path(&location.path).is_ok_and(|path| path.starts_with(mount_point))
+}
+
+/// The connection a location is on, for a provider that keeps its
+/// connections as the folders at its root: the first component of the
+/// path.
+fn source_at(location: &Location) -> Option<String> {
+    location
+        .path
+        .as_bytes()
+        .split(|b| matches!(b, b'/' | b'\\'))
+        .find(|part| !part.is_empty())
+        .map(|first| String::from_utf8_lossy(first).into_owned())
+}
+
+/// Whether `path`, below `root`, is or lies under an entry the ignore
+/// list names: a component of its path from `root` on is one of `names`.
+fn below_ignored(root: &VPath, path: &VPath, names: &[String]) -> bool {
+    let (root, path) = (root.as_bytes(), path.as_bytes());
+    let rest = path.strip_prefix(root).unwrap_or(path);
+    rest.split(|b| matches!(b, b'/' | b'\\'))
+        .any(|part| names.iter().any(|name| name.as_bytes() == part))
 }
 
 /// The search indexes the title-row search box queries: every registered
@@ -4733,62 +5752,29 @@ fn repair(mounts: &Mounts, home: &Location, session: &mut Session) {
     }
 }
 
-/// A provider whose reads stop after `limit` bytes: what a prefix
-/// previewer is handed for a file on a remote provider, so a 1 GiB log
-/// previews from its first chunk. Everything else goes to the provider
-/// itself.
-/// The contents of the Properties dialogue for `entry`: the general rows,
-/// and the permissions of a local entry the platform can read them of.
+/// The contents of the Properties dialogue for `entry`: where it is, what
+/// it occupies, what a link resolves to, and the permissions of a local
+/// entry the platform can read them of. `contents` is where the count of
+/// a folder stands.
 fn read_properties(
     platform: &dyn Platform,
     pane: PaneId,
     entry: Entry,
     path: Option<PathBuf>,
     location: &Location,
+    contents: Contents,
 ) -> Result<PropertiesInfo, Error> {
-    let kind = match &entry.kind {
-        types::EntryKind::File => "File",
-        types::EntryKind::Dir => "Folder",
-        types::EntryKind::Symlink { .. } => "Symbolic link",
-        types::EntryKind::Other => "Special file",
+    let shown = path
+        .as_ref()
+        .and_then(|p| p.parent())
+        .map_or_else(|| location.to_string(), |p| p.display().to_string());
+    let on_disk = path
+        .as_ref()
+        .and_then(|p| platform::fs::allocated_size(p).ok());
+    let target = match (&entry.kind, &path) {
+        (types::EntryKind::Symlink { target, .. }, Some(path)) => link_target(path, target),
+        _ => None,
     };
-    let mut rows = vec![
-        ("Name".to_owned(), entry.name.clone()),
-        ("Type".to_owned(), kind.to_owned()),
-        (
-            "Location".to_owned(),
-            path.as_ref()
-                .and_then(|p| p.parent())
-                .map_or_else(|| location.to_string(), |p| p.display().to_string()),
-        ),
-    ];
-    if let Some(mime) = &entry.mime {
-        rows.push(("Media type".to_owned(), mime.as_str().to_owned()));
-    }
-    if let Some(size) = entry.size {
-        rows.push(("Size".to_owned(), format!("{size} bytes")));
-    }
-    if let Some(path) = &path
-        && let Ok(allocated) = platform::fs::allocated_size(path)
-    {
-        rows.push(("On disk".to_owned(), format!("{allocated} bytes")));
-    }
-    for (label, time) in [
-        ("Modified", entry.modified),
-        ("Accessed", entry.accessed),
-        ("Created", entry.created),
-    ] {
-        if let Some(time) = time {
-            rows.push((label.to_owned(), platform::iso8601(time)));
-        }
-    }
-    if let types::EntryKind::Symlink { target, broken } = &entry.kind {
-        let mut text = target.to_string();
-        if *broken {
-            text.push_str(" (missing)");
-        }
-        rows.push(("Target".to_owned(), text));
-    }
     let permissions = match &path {
         Some(path) => match platform.permissions(path) {
             Ok(permissions) => Some(permissions),
@@ -4806,16 +5792,369 @@ fn read_properties(
         pane,
         entry,
         path,
-        rows,
+        location: shown,
+        on_disk,
+        target,
+        contents,
         permissions,
         principals,
         native: platform::NATIVE_PROPERTIES,
     })
 }
 
+/// What the link at `path` resolves to: the entry at the end of the chain
+/// of links, with the path the link holds — `held`, taken from the link's
+/// folder when it is relative — as its path, so its folder is the one the
+/// link names. `None` for a broken link.
+fn link_target(path: &Path, held: &VPath) -> Option<Entry> {
+    let real = std::fs::canonicalize(path).ok()?;
+    let held = platform::paths::to_path(held).ok()?;
+    let named = lexical(&path.parent()?.join(held));
+    // `..` after a link in the path names another folder than the text
+    // says: then the real path is the one to go to.
+    let at = if std::fs::symlink_metadata(&named).is_ok() {
+        named
+    } else {
+        real.clone()
+    };
+    vfs_local::entry_at(&real, &platform::paths::from_path(&at)).ok()
+}
+
+/// `path` without its `.` and `..` components, as the text reads; nothing
+/// is looked up.
+fn lexical(path: &Path) -> PathBuf {
+    let mut out = PathBuf::new();
+    for component in path.components() {
+        match component {
+            std::path::Component::CurDir => {}
+            std::path::Component::ParentDir => {
+                if !out.pop() {
+                    out.push(component);
+                }
+            }
+            other => out.push(other),
+        }
+    }
+    out
+}
+
+/// Counts what is inside the folder at `path`: every file and folder below
+/// it, the files' sizes and what all of it occupies on disk. Links count as
+/// themselves and are never followed; an entry that cannot be read counts
+/// nothing. `None` when `cancel` was set before the end.
+fn count_tree(path: &Path, cancel: &CancelToken) -> Option<FolderContents> {
+    let mut contents = FolderContents::default();
+    let mut folders = vec![path.to_path_buf()];
+    while let Some(folder) = folders.pop() {
+        let Ok(entries) = std::fs::read_dir(&folder) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            if cancel.is_cancelled() {
+                return None;
+            }
+            let path = entry.path();
+            let Ok(meta) = std::fs::symlink_metadata(&path) else {
+                continue;
+            };
+            contents.items += 1;
+            contents.on_disk += platform::fs::allocated_size(&path).unwrap_or(0);
+            if meta.is_dir() {
+                folders.push(path);
+            } else {
+                contents.bytes += meta.len();
+            }
+        }
+    }
+    Some(contents)
+}
+
+/// One opening of a preview: what [`App::start_preview`] gathered for the
+/// job.
+struct PreviewRun {
+    pane: PaneId,
+    generation: u64,
+    entry: Entry,
+    loc: Location,
+    provider: Arc<dyn ext::Provider>,
+    previewers: Vec<Arc<dyn Previewer>>,
+    /// The previewer asked for whatever the scores say.
+    with: Option<ExtId>,
+    /// The entry is on a remote source.
+    remote: bool,
+    /// A whole-file preview above `cap` waits for the user.
+    capped: bool,
+    cap: u64,
+    /// How many times *Load more* was pressed.
+    more: u32,
+    platform: Arc<dyn Platform>,
+    local: Option<PathBuf>,
+    tx: Mailbox,
+}
+
+impl PreviewRun {
+    /// Sniffs the file, chooses its previewer and opens it, answering
+    /// through the mailbox: a document or its error, nobody's file, or a
+    /// file held behind the size limit.
+    async fn open(self, cancel: CancelToken) -> Result<(), Error> {
+        let Self {
+            pane,
+            generation,
+            entry,
+            loc,
+            provider,
+            previewers,
+            with,
+            remote,
+            capped,
+            cap,
+            more,
+            platform,
+            local,
+            tx,
+        } = self;
+        let sniff = ext::read_bytes(&*provider, &loc, Some(4096), &cancel).await?;
+        let Some(previewer) = choose_previewer(&previewers, with, &entry, &sniff) else {
+            let permissions = permissions_of(platform, local, entry.kind.clone()).await;
+            tx.send(Msg::PreviewNone {
+                pane,
+                generation,
+                permissions,
+            });
+            return Ok(());
+        };
+        let mut prefix = None;
+        let result = if remote && previewer.reads() == Reads::Prefix {
+            let limit = REMOTE_PREFIX_CHUNK * (u64::from(more) + 1);
+            if entry.size.is_none_or(|size| size > limit) {
+                prefix = Some((entry.size.map_or(limit, |s| s.min(limit)), entry.size));
+            }
+            let limited: Arc<dyn ext::Provider> = Arc::new(Prefixed {
+                inner: provider,
+                limit,
+                meter: None,
+            });
+            previewer.open(&loc, limited, cancel.clone()).await
+        } else if capped && entry.size.is_some_and(|size| size > cap) {
+            tx.send(Msg::PreviewCapped {
+                pane,
+                generation,
+                size: entry.size.unwrap_or(0),
+                cap,
+            });
+            return Ok(());
+        } else if remote {
+            // A whole file from a remote source: its bytes are counted as
+            // they arrive, for the pane's progress.
+            let metered: Arc<dyn ext::Provider> = Arc::new(Prefixed {
+                inner: provider,
+                limit: u64::MAX,
+                meter: Some(Meter::new(tx.clone(), pane, generation, entry.size)),
+            });
+            previewer.open(&loc, metered, cancel.clone()).await
+        } else {
+            previewer.open(&loc, provider, cancel.clone()).await
+        };
+        if cancel.is_cancelled() {
+            return Err(Error::Cancelled);
+        }
+        tx.send(Msg::Preview {
+            pane,
+            generation,
+            result,
+            previewer: previewer.id(),
+            prefix,
+        });
+        Ok(())
+    }
+}
+
+/// The entry as a path on this machine, for an entry of the local
+/// provider.
+fn local_path(entry: &Entry) -> Option<PathBuf> {
+    (entry.id.provider == vfs_local::PROVIDER_ID)
+        .then(|| platform::paths::to_path(&entry.path).ok())
+        .flatten()
+}
+
+/// The previewer that shows `entry`: the one `asked` for, whatever the
+/// scores say, else the highest-scoring one that claims the entry at all.
+fn choose_previewer(
+    previewers: &[Arc<dyn Previewer>],
+    asked: Option<ExtId>,
+    entry: &Entry,
+    sniff: &[u8],
+) -> Option<Arc<dyn Previewer>> {
+    match asked {
+        Some(asked) => previewers.iter().find(|p| p.id() == asked).cloned(),
+        None => previewers
+            .iter()
+            .map(|p| (p.score(entry, sniff), p))
+            .filter(|(score, _)| *score > 0)
+            .max_by_key(|(score, _)| *score)
+            .map(|(_, p)| Arc::clone(p)),
+    }
+}
+
+/// The [`permission_line`] of the local file at `path`, read off the UI
+/// thread; `None` for an entry that is not on this machine.
+async fn permissions_of(
+    platform: Arc<dyn Platform>,
+    path: Option<PathBuf>,
+    kind: EntryKind,
+) -> Option<String> {
+    let path = path?;
+    runtime::handle()
+        .spawn_blocking(move || {
+            let read = platform.permissions(&path).ok()?;
+            permission_line(&read, &kind)
+        })
+        .await
+        .ok()
+        .flatten()
+}
+
+/// An entry's mode as `ls -l` writes it and its `owner:group`,
+/// `-rw-r--r-- serge:serge`, for the File info card; `None` where the
+/// platform has no mode bits.
+fn permission_line(permissions: &platform::FilePermissions, kind: &EntryKind) -> Option<String> {
+    let mode = permissions.mode?;
+    let mut text = String::with_capacity(10);
+    text.push(match kind {
+        EntryKind::Dir => 'd',
+        EntryKind::Symlink { .. } => 'l',
+        EntryKind::File | EntryKind::Other => '-',
+    });
+    // The execute place of each triplet carries its special bit: setuid,
+    // setgid, sticky.
+    let special = [(0o4000, 's', 'S'), (0o2000, 's', 'S'), (0o1000, 't', 'T')];
+    for (index, (bit, set, alone)) in special.into_iter().enumerate() {
+        let shift = 6 - 3 * index;
+        let triplet = (mode >> shift) & 7;
+        text.push(if triplet & 4 == 0 { '-' } else { 'r' });
+        text.push(if triplet & 2 == 0 { '-' } else { 'w' });
+        text.push(match (triplet & 1 != 0, mode & bit != 0) {
+            (true, true) => set,
+            (false, true) => alone,
+            (true, false) => 'x',
+            (false, false) => '-',
+        });
+    }
+    Some(format!(
+        "{text} {}:{}",
+        permissions.owner.display(),
+        permissions.group.display()
+    ))
+}
+
+/// The count the Properties dialogue waits for or holds.
+struct PropertiesCount {
+    /// The pane the dialogue was opened from.
+    pane: PaneId,
+    /// The folder counted.
+    path: PathBuf,
+    /// Stops the count.
+    cancel: CancelToken,
+    /// What it found, once it ended.
+    result: Option<FolderContents>,
+}
+
+/// A provider whose reads stop after `limit` bytes: what a prefix
+/// previewer is handed for a file on a remote provider, so a 1 GiB log
+/// previews from its first chunk. Everything else goes to the provider
+/// itself.
 struct Prefixed {
     inner: Arc<dyn ext::Provider>,
     limit: u64,
+    /// Counts what is read and tells the pane, for a whole file fetched
+    /// from a remote source.
+    meter: Option<Meter>,
+}
+
+/// How often a download tells how far it is.
+const PROGRESS_STEP: u64 = 128 * 1024;
+
+/// Counts the bytes a preview reads from a remote file and reports them
+/// to the application's loop, every [`PROGRESS_STEP`] and at the end.
+#[derive(Clone)]
+struct Meter {
+    tx: Mailbox,
+    pane: PaneId,
+    generation: u64,
+    total: Option<u64>,
+    read: Arc<std::sync::atomic::AtomicU64>,
+    told: Arc<std::sync::atomic::AtomicU64>,
+}
+
+impl Meter {
+    fn new(tx: Mailbox, pane: PaneId, generation: u64, total: Option<u64>) -> Self {
+        Self {
+            tx,
+            pane,
+            generation,
+            total,
+            read: Arc::default(),
+            told: Arc::default(),
+        }
+    }
+
+    /// `bytes` more were read; `end` says the reader is done, or waits.
+    fn add(&self, bytes: u64, end: bool) {
+        use std::sync::atomic::Ordering;
+        let read = self.read.fetch_add(bytes, Ordering::Relaxed) + bytes;
+        let told = self.told.load(Ordering::Relaxed);
+        if read >= told + PROGRESS_STEP || (end && read != told) {
+            self.told.store(read, Ordering::Relaxed);
+            self.tx.send(Msg::PreviewProgress {
+                pane: self.pane,
+                generation: self.generation,
+                read,
+                total: self.total,
+            });
+        }
+    }
+
+    /// `reader` with its bytes counted.
+    fn wrap(&self, reader: ext::ReadHandle) -> ext::ReadHandle {
+        // Before the first byte: the pane shows the download has begun.
+        self.tx.send(Msg::PreviewProgress {
+            pane: self.pane,
+            generation: self.generation,
+            read: self.read.load(std::sync::atomic::Ordering::Relaxed),
+            total: self.total,
+        });
+        Box::new(Metered {
+            inner: reader,
+            meter: self.clone(),
+        })
+    }
+}
+
+/// A reader whose bytes a [`Meter`] counts.
+struct Metered {
+    inner: ext::ReadHandle,
+    meter: Meter,
+}
+
+impl tokio::io::AsyncRead for Metered {
+    fn poll_read(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buf: &mut tokio::io::ReadBuf<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        let before = buf.filled().len();
+        let polled = std::pin::Pin::new(&mut self.inner).poll_read(cx, buf);
+        match &polled {
+            std::task::Poll::Ready(Ok(())) => {
+                let bytes = (buf.filled().len() - before) as u64;
+                self.meter.add(bytes, bytes == 0);
+            }
+            // The link stalls: what has arrived is told now.
+            std::task::Poll::Pending => self.meter.add(0, true),
+            std::task::Poll::Ready(Err(_)) => {}
+        }
+        polled
+    }
 }
 
 impl std::fmt::Debug for Prefixed {
@@ -4843,12 +6182,20 @@ impl ext::Provider for Prefixed {
     async fn open_read(&self, loc: &Location) -> Result<ext::ReadHandle, Error> {
         use tokio::io::AsyncReadExt as _;
         let reader = self.inner.open_read(loc).await?;
-        Ok(Box::new(reader.take(self.limit)))
+        let reader: ext::ReadHandle = Box::new(reader.take(self.limit));
+        Ok(match &self.meter {
+            Some(meter) => meter.wrap(reader),
+            None => reader,
+        })
     }
     async fn open_read_at(&self, loc: &Location, offset: u64) -> Result<ext::ReadHandle, Error> {
         use tokio::io::AsyncReadExt as _;
         let reader = self.inner.open_read_at(loc, offset).await?;
-        Ok(Box::new(reader.take(self.limit.saturating_sub(offset))))
+        let reader: ext::ReadHandle = Box::new(reader.take(self.limit.saturating_sub(offset)));
+        Ok(match &self.meter {
+            Some(meter) => meter.wrap(reader),
+            None => reader,
+        })
     }
     async fn open_write(
         &self,

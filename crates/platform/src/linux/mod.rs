@@ -14,6 +14,7 @@ mod drag;
 mod elevate;
 pub(crate) mod file_manager;
 pub(crate) mod integration;
+mod monitors;
 mod mount;
 mod terminal;
 mod trash;
@@ -33,9 +34,9 @@ use crate::Native;
 use crate::time::iso8601;
 use crate::traits::{
     Activation, Application, Chrome, ConfigDir, ControlsSide, DragSource, DropTarget, Elevate,
-    ElevatedOutput, ImageFormat, IncomingFiles, Mount, OpenWith, Point, Properties,
-    PropertiesOutcome, RecentItem, RecentlyUsed, StandardFolder, StandardFolders, Terminal, Trash,
-    TrashedItem, Volume, Volumes, WindowChrome, WindowRef,
+    ElevatedOutput, ImageFormat, IncomingFiles, Monitor, Mount, MountWatch, MountsChanged,
+    OpenWith, Point, Properties, PropertiesOutcome, RecentItem, RecentlyUsed, StandardFolder,
+    StandardFolders, Terminal, Trash, TrashedItem, Volume, Volumes, WindowChrome, WindowRef,
 };
 
 /// The distribution and the desktop: `PRETTY_NAME` of `/etc/os-release`
@@ -104,6 +105,19 @@ impl Volumes for Native {
 
     fn eject(&self, volume: &Volume) -> Result<(), Error> {
         volumes::eject(volume)
+    }
+
+    fn has_format_tool(&self) -> bool {
+        volumes::format_tool().is_some()
+    }
+
+    fn open_format_tool(&self, volume: &Volume) -> Result<(), Error> {
+        volumes::open_format_tool(volume)
+    }
+
+    /// The kernel's own notice of a change to the mount table.
+    fn watch_mounts(&self, changed: MountsChanged) -> Option<MountWatch> {
+        volumes::watch_mounts(changed)
     }
 }
 
@@ -183,6 +197,21 @@ impl OpenWith for Native {
 
     fn open_with(&self, path: &Path, app: &Application) -> Result<(), Error> {
         apps::open_with(path, app)
+    }
+
+    fn has_execute_bit(&self) -> bool {
+        true
+    }
+
+    /// With the application registered for `text/plain`.
+    fn open_in_text_editor(&self, paths: &[PathBuf]) -> Result<(), Error> {
+        let editor = apps::text_editor().ok_or(Error::Unsupported(
+            "no application is registered for plain text",
+        ))?;
+        for path in paths {
+            apps::open_with(path, &editor)?;
+        }
+        Ok(())
     }
 }
 
@@ -314,6 +343,26 @@ impl Chrome for Native {
             native_controls_width: 0.0,
         }
     }
+
+    fn on_x11(&self) -> bool {
+        x11_backend(|name| std::env::var(name).ok())
+    }
+
+    /// From `RandR` on X11; none on Wayland.
+    fn monitors(&self, pixels_per_point: f32) -> Vec<Monitor> {
+        monitors::list(pixels_per_point)
+    }
+}
+
+/// Whether the windowing backend opens X11 windows, told before it has
+/// opened one by the rule it chooses with (winit 0.30, `EventLoop::new`):
+/// Wayland when `WAYLAND_DISPLAY`, or failing that `WAYLAND_SOCKET`, names a
+/// display, X11 when only `DISPLAY` does. An empty variable counts as unset,
+/// and so does one that is not Unicode. `var` reads the environment.
+fn x11_backend(var: impl Fn(&str) -> Option<String>) -> bool {
+    let set = |name: &str| var(name).is_some_and(|value| !value.is_empty());
+    let wayland = set("WAYLAND_DISPLAY") || set("WAYLAND_SOCKET");
+    !wayland && set("DISPLAY")
 }
 
 impl Activation for Native {
@@ -400,6 +449,34 @@ mod tests {
             Native.show(&dir.path().join("missing")),
             Err(Error::NotFound)
         ));
+    }
+
+    /// The windows are X11 windows when the environment names an X11
+    /// display and no Wayland one, as the windowing backend chooses.
+    #[test]
+    fn the_windows_are_x11_windows_without_a_wayland_display() {
+        let with = |vars: &'static [(&'static str, &'static str)]| {
+            x11_backend(|name| {
+                vars.iter()
+                    .find(|(key, _)| *key == name)
+                    .map(|(_, value)| (*value).to_owned())
+            })
+        };
+        assert!(with(&[("DISPLAY", ":0")]), "an X11 session");
+        assert!(
+            with(&[("DISPLAY", ":0"), ("WAYLAND_DISPLAY", "")]),
+            "an empty variable is not set"
+        );
+        // A Wayland session, with or without Xwayland beside it.
+        assert!(!with(&[("WAYLAND_DISPLAY", "wayland-0")]));
+        assert!(!with(&[
+            ("DISPLAY", ":0"),
+            ("WAYLAND_DISPLAY", "wayland-0")
+        ]));
+        assert!(!with(&[("DISPLAY", ":0"), ("WAYLAND_SOCKET", "5")]));
+        // No display at all: no window, and no X11 one.
+        assert!(!with(&[]));
+        assert!(!with(&[("DISPLAY", "")]));
     }
 
     #[test]

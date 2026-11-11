@@ -30,11 +30,23 @@ its prompt (`Console::foreground_job`). A drag and drop's `Transfer`, `Receive`,
 and enters as a location when it browses it (unless the setting
 `archives.on_open` says `system`), anything else opens with the system
 default; nothing opens a viewer. The preview pane's *Copy* reads the whole
-file as a job and puts its text on the clipboard; a file no previewer
-claims is reported with the disabled plugin whose manifest claims its type,
-for the pane's placeholder; *Always preview on <source>* writes
-`preview_always` into the source's connection and takes the size cap off
-there. The extension settings store is shared with the plugins through the
+file as a job and puts its text on the clipboard; a preview is reported
+with the previewer that opened it, and a file no previewer claims with the
+disabled plugin whose manifest claims its type and the file's permission
+line, for the pane's File info card (`Command::PreviewWith` shows one file
+through a named previewer whatever the scores); *Always preview on <source>* writes
+`preview_always` into the source's connection and takes the size limit off
+there, whichever remote provider keeps the source; a whole file fetched
+from a remote source for a preview is counted as it arrives
+(`Event::PreviewProgress`), and `Command::PreviewCancel` stops the fetch
+and brings the size-limit card back. For the Extensions dialogue it keeps the
+plugins' rows with what their manifests say, which schemes a plugin's
+providers serve, where its settings file is and whether its previewer
+reported a third-party library missing; `Command::InstallPlugin` unpacks a
+plugin package — an `.rkp` file, a zip archive of a plugin's folder — into
+the per-user plugins folder and `Command::RemovePlugin` deletes a user's
+plugin there (`plugins`), each as a job, checking and asking nothing and
+never writing outside that folder. The extension settings store is shared with the plugins through the
 registry, so a plugin that found its third-party library writes the path
 into its own setting. The pinned list lives in its settings, and the pin actions
 in `ops` see it through the `PinStore` bridge it hands them. It feeds the

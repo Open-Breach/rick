@@ -58,6 +58,7 @@ impl WalkExtension {
             manifest: Manifest {
                 id: ID,
                 name: "Subdirectory search",
+                description: "Searches the folder and its subfolders by walking them: the search in subdirectories of the filter bar.",
                 version: Version::parse(env!("CARGO_PKG_VERSION"))
                     .unwrap_or_else(|_| Version::new(0, 0, 0)),
                 api_version: API_VERSION,

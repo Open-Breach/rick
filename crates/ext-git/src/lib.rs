@@ -3,7 +3,8 @@
 //! with its ahead/behind counts into the info panel; the "Git" action group
 //! runs Commit, Stash, Stash pop, Pull, Push, Checkout branch, Discard
 //! changes, Show log and Blame through the `git` command line; both only
-//! inside a work tree.
+//! inside a work tree. *Git clone…* is the exception: it is offered on any
+//! local folder and clones a repository into it as a job ([`clone`]).
 //!
 //! Status is read through gix once per work tree and cached in [`Repos`]
 //! until the kernel reports a change in the work tree or its `.git`
@@ -21,6 +22,7 @@
 #![deny(unsafe_code)]
 
 pub mod actions;
+pub mod clone;
 pub mod repo;
 
 use ext::t;
@@ -78,6 +80,7 @@ impl GitExtension {
             manifest: Manifest {
                 id: ID,
                 name: "Git",
+                description: "Shows Git status badges, the branch and how far it is ahead or behind, and adds the Git actions: commit, stash, pull, push, checkout, discard, log, blame and clone.",
                 version: Version::parse(env!("CARGO_PKG_VERSION"))
                     .unwrap_or_else(|_| Version::new(0, 0, 0)),
                 api_version: API_VERSION,
@@ -111,6 +114,7 @@ impl Extension for GitExtension {
         reg.decorator(Arc::new(GitDecorator::new(Arc::clone(&self.repos))));
         let shared = Arc::new(actions::Shared {
             repos: Arc::clone(&self.repos),
+            platform: reg.platform().cloned(),
         });
         for action in actions::all(&shared) {
             reg.action(action);

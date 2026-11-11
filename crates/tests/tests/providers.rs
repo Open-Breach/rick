@@ -871,6 +871,7 @@ fn a_vhdx_without_the_library_shows_the_instructions_and_browsing_to_it_lists() 
         ext::Manifest {
             id: types::ExtId("test-preview-archive"),
             name: "Archive preview over a chosen resolver",
+            description: "",
             version: ext::Version::new(0, 1, 0),
             api_version: ext::API_VERSION,
             requires: ext::Capabilities::empty(),

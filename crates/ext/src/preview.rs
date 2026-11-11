@@ -662,6 +662,12 @@ pub enum Reads {
     Prefix,
 }
 
+/// The score of a previewer that takes any file as a last resort — the hex
+/// view — and so wins only where no other previewer recognises the file:
+/// low, and not zero. A file that is claimed at no more than this gets no
+/// thumbnail; the Icons view keeps its file-type icon.
+pub const FALLBACK_SCORE: u8 = 1;
+
 /// Turns an entry into something the preview pane can show.
 #[async_trait]
 pub trait Previewer: Send + Sync + 'static {

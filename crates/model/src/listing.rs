@@ -309,6 +309,38 @@ impl Listing {
     }
 }
 
+impl Listing {
+    /// The entries the view would show without its filter and its type
+    /// filter: every known entry, but a hidden one only with `hidden` and
+    /// a system one only with `system`. What a count "of the folder"
+    /// counts.
+    pub fn unfiltered(&self, hidden: bool, system: bool) -> impl Iterator<Item = &Entry> + '_ {
+        self.entries.iter().filter(move |entry| {
+            (hidden || !entry.attrs.contains(Attrs::HIDDEN))
+                && (system || !entry.attrs.contains(Attrs::SYSTEM))
+        })
+    }
+
+    /// How many entries the view leaves out only because they are hidden:
+    /// the ones flagged `HIDDEN` that the rest of `spec` — the filter, the
+    /// types, the system flag — would show. Zero while hidden entries are
+    /// shown.
+    #[must_use]
+    pub fn hidden_left_out(&self, spec: &ViewSpec<'_>) -> usize {
+        if spec.show_hidden {
+            return 0;
+        }
+        let shown = ViewSpec {
+            show_hidden: true,
+            ..*spec
+        };
+        self.entries
+            .iter()
+            .filter(|entry| entry.attrs.contains(Attrs::HIDDEN) && passes(entry, &shown))
+            .count()
+    }
+}
+
 fn passes(entry: &Entry, spec: &ViewSpec<'_>) -> bool {
     if !spec.show_hidden && entry.attrs.contains(Attrs::HIDDEN) {
         return false;
@@ -616,6 +648,112 @@ mod tests {
         for e in listing.entries() {
             assert_eq!(listing.get(e.id).map(|x| &x.name), Some(&e.name));
         }
+    }
+
+    /// Issue 149: sorting by Modified sorts the timestamp, never the label
+    /// the column shows; equal times fall back to the name; and folders
+    /// stay first in both directions while that switch is on.
+    #[test]
+    fn modified_sorts_by_the_timestamp_with_the_name_as_tiebreak() {
+        const DAY: u64 = 24 * 3600;
+        // Read as labels, on a day in 2026: "Yesterday", "Aug 24" and
+        // "Aug 24 2025" — an order by the text would be another one.
+        let now = 1_790_000_000;
+        let mut listing = Listing::new();
+        let by_modified = |dir| Sort {
+            by: Column::Modified,
+            dir,
+        };
+        let descending = by_modified(SortDir::Descending);
+        listing.extend(
+            vec![
+                entry(1, "august.txt", EntryKind::File, Some(1), now - 80 * DAY),
+                entry(2, "yesterday.txt", EntryKind::File, Some(1), now - DAY),
+                entry(
+                    3,
+                    "last-year.txt",
+                    EntryKind::File,
+                    Some(1),
+                    now - 400 * DAY,
+                ),
+                entry(4, "twin-b.txt", EntryKind::File, Some(1), now - 10 * DAY),
+                entry(5, "twin-a.txt", EntryKind::File, Some(1), now - 10 * DAY),
+                entry(6, "old-folder", EntryKind::Dir, None, now - 900 * DAY),
+                entry(7, "new-folder", EntryKind::Dir, None, now - 2 * DAY),
+            ],
+            &spec(descending, ""),
+        );
+        assert_eq!(
+            names(&listing),
+            [
+                "new-folder",
+                "old-folder",
+                "yesterday.txt",
+                "twin-a.txt",
+                "twin-b.txt",
+                "august.txt",
+                "last-year.txt",
+            ]
+        );
+        listing.refresh_view(&spec(by_modified(SortDir::Ascending), ""));
+        assert_eq!(
+            names(&listing),
+            [
+                "old-folder",
+                "new-folder",
+                "last-year.txt",
+                "august.txt",
+                "twin-a.txt",
+                "twin-b.txt",
+                "yesterday.txt",
+            ]
+        );
+        // Without folders first, they take their place by their time.
+        let mixed = ViewSpec {
+            folders_first: false,
+            ..spec(descending, "")
+        };
+        listing.refresh_view(&mixed);
+        assert_eq!(names(&listing)[0], "yesterday.txt");
+        assert_eq!(names(&listing)[1], "new-folder");
+        assert_eq!(names(&listing)[6], "old-folder");
+    }
+
+    /// Issue 149: what the view leaves out only for being hidden is
+    /// counted, for Select all, and the rest of the folder is what a count
+    /// "of the folder" counts.
+    #[test]
+    fn hidden_entries_are_counted_apart_from_what_the_filter_leaves_out() {
+        let mut listing = Listing::new();
+        let sort = Sort {
+            by: Column::Name,
+            dir: SortDir::Ascending,
+        };
+        let hidden = |id, name: &str| {
+            let mut e = entry(id, name, EntryKind::File, Some(1), 1);
+            e.attrs |= Attrs::HIDDEN;
+            e
+        };
+        listing.extend(
+            vec![
+                entry(1, "a.txt", EntryKind::File, Some(1), 1),
+                entry(2, "b.txt", EntryKind::File, Some(1), 1),
+                hidden(3, ".cache"),
+                hidden(4, ".secret"),
+            ],
+            &spec(sort, ""),
+        );
+        assert_eq!(names(&listing), ["a.txt", "b.txt"]);
+        assert_eq!(listing.hidden_left_out(&spec(sort, "")), 2);
+        // The filter narrows what counts, as it narrows what is shown.
+        assert_eq!(listing.hidden_left_out(&spec(sort, "a")), 1);
+        assert_eq!(listing.unfiltered(false, false).count(), 2);
+        assert_eq!(listing.unfiltered(true, false).count(), 4);
+        let shown = ViewSpec {
+            show_hidden: true,
+            ..spec(sort, "")
+        };
+        assert_eq!(listing.hidden_left_out(&shown), 0);
     }
 
     #[test]

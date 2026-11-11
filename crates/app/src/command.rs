@@ -13,8 +13,8 @@ use model::{
 use ops::PermissionRequest;
 use platform::{FilePermissions, Principals};
 use types::{
-    Answer, Conflict, ConflictAnswer, ConflictId, Entry, EntryId, Error, JobId, Location, Progress,
-    ProviderId, Question, QuestionId,
+    Answer, Conflict, ConflictAnswer, ConflictId, Entry, EntryId, Error, ExtId, JobId, Location,
+    Progress, ProviderId, Question, QuestionId,
 };
 
 /// Whether a transfer moves or copies, or asks on drop.
@@ -191,6 +191,10 @@ pub enum Command {
     },
     /// Eject the removable volume mounted at this path, as a job.
     Eject(PathBuf),
+    /// Open the system's own format tool on the volume mounted at this
+    /// path (SPEC.md *This Machine*, *Format…*). Rick formats nothing
+    /// itself.
+    Format(PathBuf),
     /// Add a connection of a network or cloud provider, as its *Add
     /// connection…* dialogue filled it in: the fields of
     /// [`ConnectionFieldKind::Secret`](ext::ConnectionFieldKind::Secret) go into the platform
@@ -361,6 +365,32 @@ pub enum Command {
     /// A remote file held behind the size cap (`Event::PreviewCapped`):
     /// open the preview whatever its size.
     PreviewAnyway(PaneId),
+    /// Stop fetching the remote file the pane is about to preview —
+    /// Escape during the download — and show the size-limit card again
+    /// (`Event::PreviewCapped`), from which it can be fetched after all.
+    PreviewCancel(PaneId),
+    /// Unpack a plugin package — an `.rkp` file, a zip archive of a
+    /// plugin's folder — into the per-user plugins folder, as *Install
+    /// from file…* of the Extensions dialogue asks. Nothing is checked and
+    /// nothing is asked; a plugin of the same folder name is replaced, and
+    /// the next start loads what is there. Answered by
+    /// `Event::PluginInstalled`.
+    InstallPlugin(PathBuf),
+    /// Delete the folder of a user's plugin, by the path its row gives:
+    /// *Remove* of the Extensions dialogue, at once and without a
+    /// question. A plugin beside the binary is left alone.
+    RemovePlugin(PathBuf),
+    /// Show the pane's file through one previewer whatever the scores
+    /// say. It holds for this file only, until the selection moves on.
+    /// The card of a file no previewer claims sent it for *Open as hex*
+    /// until the hex view became the fallback (issue 149); nothing of the
+    /// UI sends it now.
+    PreviewWith {
+        /// The pane.
+        pane: PaneId,
+        /// The previewer, by its extension's id.
+        previewer: ExtId,
+    },
     /// The cap message's *Always preview on <source>*: switch the cap off
     /// for the source (one SSH host, one cloud account) that holds the
     /// pane's file, `preview_always = true` in its connection, then open
@@ -386,12 +416,15 @@ pub enum Command {
     /// file (read again as a job, not the window the pane has loaded), the
     /// raw source for a rendered format, never the file itself.
     PreviewCopy(PaneId),
-    /// Open Properties on the pane's selected entry: the general rows and,
-    /// for a local entry, its owner, group, mode bits and ACL; answered by
-    /// `Event::Properties`, and again after a change while the dialogue is
-    /// open.
+    /// Open Properties on the pane's selected entry: its location, sizes
+    /// and dates, what a link resolves to and, for a local entry, its
+    /// owner, group, mode bits and ACL; answered by `Event::Properties`,
+    /// and again after a change while the dialogue is open. A local
+    /// folder's contents are counted in the background and follow with
+    /// `Event::PropertiesCounted`.
     ShowProperties(PaneId),
-    /// The Properties dialogue closed; a later change does not report back.
+    /// The Properties dialogue closed: a later change does not report
+    /// back, and a count still running is cancelled.
     PropertiesClosed,
     /// The Hash dialogue's format toggle changed: remember the format as
     /// `[hash] format` in `core.toml`, so the next dialogue opens with it.
@@ -494,6 +527,9 @@ pub enum Command {
         window: WindowId,
         /// Its position, size and maximised state.
         geometry: Geometry,
+        /// The monitor it is on, by the name the system gives it; `None`
+        /// where the platform reports no monitors.
+        monitor: Option<String>,
     },
     /// Change a window's side panel.
     SidePanel {
@@ -614,6 +650,9 @@ pub enum Event {
         pane: PaneId,
         /// The document.
         doc: Box<dyn PreviewDoc>,
+        /// The previewer that opened it, by its extension's id: what the
+        /// pin of the File info card is remembered under.
+        previewer: ExtId,
     },
     /// No preview could be opened for the pane's selection: a previewer
     /// claimed the file and failed to open it.
@@ -623,16 +662,19 @@ pub enum Event {
         /// Why.
         error: Error,
     },
-    /// No previewer claims the pane's selection; the pane shows the
-    /// placeholder of SPEC.md's *No previewer*: the file's facts, its type
-    /// icon and one line saying whether a plugin for the type is there.
+    /// No previewer claims the pane's selection; the pane shows the File
+    /// info card of SPEC.md's *No previewer*, centred: the file's facts
+    /// and what can be done about it.
     PreviewNone {
         /// The pane.
         pane: PaneId,
         /// A previewer plugin in the plugins directory whose manifest
-        /// claims the file's type but which is disabled, by id: *Plugin
-        /// available*. `None`: *No plugin available*.
+        /// claims the file's type but which is disabled, by id: the card's
+        /// head reads *plugin available*. `None`: *no previewer for …*.
         plugin: Option<String>,
+        /// The file's mode string and `owner:group`, `-rw-r--r--
+        /// serge:serge`, for a local file where the platform has them.
+        permissions: Option<String>,
     },
     /// The preview just opened for the pane shows a prefix of a file on a
     /// remote provider; the pane offers *Load more*
@@ -658,6 +700,19 @@ pub enum Event {
         /// The source the file is on, when its provider keeps connections:
         /// the host or account *Always preview on <source>* names.
         source: Option<String>,
+        /// The provider's name, as its connections are titled (*Azure
+        /// Blob*, *SSH*), for the card's head.
+        provider: Option<String>,
+    },
+    /// A whole file is being fetched from a remote source for the pane's
+    /// preview: how far it is.
+    PreviewProgress {
+        /// The pane.
+        pane: PaneId,
+        /// The bytes read so far.
+        read: u64,
+        /// The file's size, when it is known.
+        total: Option<u64>,
     },
     /// A thumbnail finished: the frame, or `None` when no previewer claims
     /// the entry or the render failed.
@@ -700,8 +755,32 @@ pub enum Event {
         /// The launcher's activation token, for the platform.
         token: Option<String>,
     },
+    /// A job failed. `pane` is the pane it was started from, when it has
+    /// one: the failure is reported in that pane's window. The
+    /// [`Event::Notify`] that words the failure follows at once.
+    JobFailed {
+        /// The job.
+        id: JobId,
+        /// Where the user acted.
+        pane: Option<PaneId>,
+    },
+    /// A plugin package was unpacked into the per-user plugins folder:
+    /// `App::plugins` has its row, under this path.
+    PluginInstalled {
+        /// The plugin's folder.
+        path: PathBuf,
+    },
     /// What `Command::ShowProperties` found: the dialogue's contents.
     Properties(Box<PropertiesInfo>),
+    /// The count of the folder the Properties dialogue shows is in.
+    PropertiesCounted {
+        /// The pane the dialogue was opened from.
+        pane: PaneId,
+        /// The folder.
+        path: PathBuf,
+        /// What is inside.
+        contents: FolderContents,
+    },
     /// Compute hash started on the pane's selection: open the Hash
     /// dialogue on the slot, which the job fills file by file.
     HashesOpened {
@@ -745,8 +824,18 @@ pub struct PropertiesInfo {
     /// The entry as a path on this machine, for a local entry: what the
     /// permissions and the platform's dialogue work on.
     pub path: Option<PathBuf>,
-    /// The general rows: name, type, location, size, dates, link target.
-    pub rows: Vec<(String, String)>,
+    /// The folder that holds the entry, as the *Location* row shows and
+    /// copies it.
+    pub location: String,
+    /// The bytes the entry itself occupies on disk, where that can be told.
+    pub on_disk: Option<u64>,
+    /// What a symbolic link resolves to: the entry at the end of the link,
+    /// its path the one the link holds, made absolute. `None` for anything
+    /// but a link, for a broken link and where the link cannot be followed
+    /// from this machine.
+    pub target: Option<Entry>,
+    /// Where the count of a folder's contents stands.
+    pub contents: Contents,
     /// The owner, group, mode bits and ACL, for a local entry the platform
     /// could read them of.
     pub permissions: Option<FilePermissions>,
@@ -755,6 +844,32 @@ pub struct PropertiesInfo {
     /// Whether the platform has a dialogue of its own to offer
     /// (`Command::SystemProperties`).
     pub native: bool,
+}
+
+/// Where the count of a folder's contents stands, for the Properties
+/// dialogue's *Contents* row.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Contents {
+    /// Nothing is counted: the entry is no folder, or no folder on this
+    /// machine.
+    #[default]
+    None,
+    /// The count is running; [`Event::PropertiesCounted`] brings the result.
+    Counting,
+    /// What the count found.
+    Counted(FolderContents),
+}
+
+/// What is inside a folder: everything below it, at any depth, links
+/// counted as themselves and never followed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct FolderContents {
+    /// The files and folders inside.
+    pub items: u64,
+    /// The sum of the files' sizes.
+    pub bytes: u64,
+    /// The bytes they occupy on disk, the folders' own included.
+    pub on_disk: u64,
 }
 
 /// A `debug_struct` of `name` with the pane and one more field: the shape
@@ -818,7 +933,7 @@ impl fmt::Debug for Event {
             Self::PreviewFailed { pane, error } => {
                 pane_struct(f, "PreviewFailed", *pane, "error", error)
             }
-            Self::PreviewNone { pane, plugin } => {
+            Self::PreviewNone { pane, plugin, .. } => {
                 pane_struct(f, "PreviewNone", *pane, "plugin", plugin)
             }
             Self::PreviewPrefix {
@@ -836,20 +951,40 @@ impl fmt::Debug for Event {
                 size,
                 cap,
                 source,
+                provider,
             } => f
                 .debug_struct("PreviewCapped")
                 .field("pane", pane)
                 .field("size", size)
                 .field("cap", cap)
                 .field("source", source)
+                .field("provider", provider)
+                .finish(),
+            Self::PreviewProgress { pane, read, total } => f
+                .debug_struct("PreviewProgress")
+                .field("pane", pane)
+                .field("read", read)
+                .field("total", total)
                 .finish(),
             Self::Conflict(conflict) => f.debug_tuple("Conflict").field(&conflict.id).finish(),
             Self::Question(question) => f.debug_tuple("Question").field(&question.id).finish(),
+            Self::JobFailed { id, pane } => f
+                .debug_struct("JobFailed")
+                .field("id", id)
+                .field("pane", pane)
+                .finish(),
+            Self::PluginInstalled { path } => f
+                .debug_struct("PluginInstalled")
+                .field("path", path)
+                .finish(),
             Self::Properties(info) => f
                 .debug_struct("Properties")
                 .field("entry", &info.entry.name)
                 .field("permissions", &info.permissions.is_some())
                 .finish(),
+            Self::PropertiesCounted { pane, contents, .. } => {
+                pane_struct(f, "PropertiesCounted", *pane, "contents", contents)
+            }
             Self::ViewOpened { pane, tab, view } => f
                 .debug_struct("ViewOpened")
                 .field("pane", pane)

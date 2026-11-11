@@ -1,17 +1,16 @@
-//! The Settings window, the Keyboard shortcuts and Extensions screens; the
-//! About dialog is [`crate::about`].
+//! The Settings window; the Keyboard shortcuts dialogue is
+//! [`crate::shortcuts`], the Extensions dialogue [`crate::extensions`] and
+//! the About dialog [`crate::about`].
 
-use app::{App, Command, IntegrationCommand, PluginStatus};
+use app::{App, Command, IntegrationCommand};
 use egui::{Align, Align2, FontId, Rect, Sense, pos2, vec2};
 use ext::t;
-use ext::{Registry, Shortcut};
 use model::{
-    AfterDrag, Column, Density, OnOpen, PanelSide, SettingsChange, SidePanelChange, SortDir, Theme,
-    WindowId,
+    AfterDrag, Column, DateFormat, Density, OnOpen, PanelSide, Rgb, SettingsChange,
+    SidePanelChange, SortDir, Theme, TitlebarColour, WindowId,
 };
 use platform::integration::Item;
 
-use crate::keys::{Intent, KeyMap, UI_INTENTS, from_egui_key, from_egui_modifiers};
 use crate::shell::Request;
 use crate::{dialog, icons, integration, theme, widgets};
 
@@ -70,6 +69,9 @@ enum Page {
     General,
     View,
     Appearance,
+    /// How Rick behaves on a click and on opening a file (SPEC.md
+    /// *Settings window*).
+    Behaviour,
     /// The integration items and their preferences
     /// (specs/system-integration.md §6.1).
     Integration,
@@ -147,6 +149,14 @@ impl SettingsWindow {
         self.window = Some(window);
     }
 
+    /// Opens the window on the settings page of the plugin `id`, as
+    /// *Settings* of the Extensions dialogue asks.
+    pub fn open_plugin(&mut self, window: WindowId, id: &str) {
+        self.open(window);
+        self.page = Page::Plugin(id.to_owned());
+        self.search.clear();
+    }
+
     /// Whether the window is open.
     #[must_use]
     pub fn is_open(&self) -> bool {
@@ -207,9 +217,11 @@ impl SettingsWindow {
         }
     }
 
-    /// The two columns in `rect`; `rounded` rounds the column's corners,
-    /// as the embedded frame does.
-    fn content(
+    /// The two columns in `rect`; `rounded` says the settings are embedded
+    /// in the main window: the column's corners are rounded, as the
+    /// frame's are, and the page has the close button. A window of its own
+    /// passes `false`: it has its own close control.
+    pub fn content(
         &mut self,
         ui: &mut egui::Ui,
         rect: Rect,
@@ -254,20 +266,24 @@ impl SettingsWindow {
                 .max_rect(page)
                 .layout(egui::Layout::top_down(Align::Min)),
         );
-        if self.page_ui(&mut page_ui, app, requests) {
+        if self.page_ui(&mut page_ui, rounded, app, requests) {
             self.open = false;
         }
         ui.allocate_rect(rect, Sense::hover());
     }
 
-    /// The pages, in the list's order: the four of Rick's own, then one
-    /// per plugin that declares settings.
+    /// The pages, in the list's order: the five of Rick's own — General,
+    /// View, Appearance and Behaviour in that order (SPEC.md *Settings
+    /// window*), Integration right after Appearance
+    /// (specs/system-integration.md §6.1) — then one per plugin that
+    /// declares settings.
     fn pages(app: &App) -> Vec<Page> {
         let mut pages = vec![
             Page::General,
             Page::View,
             Page::Appearance,
             Page::Integration,
+            Page::Behaviour,
         ];
         for schema in app.registry().settings_schemas() {
             if !schema.fields.is_empty() {
@@ -434,10 +450,18 @@ impl SettingsWindow {
         ui.allocate_rect(rect, Sense::hover());
     }
 
-    /// The right column: the page's title with the close button, then its
-    /// groups as cards in a scroll area. Returns whether the close button
-    /// was clicked.
-    fn page_ui(&mut self, ui: &mut egui::Ui, app: &App, requests: &mut Vec<Request>) -> bool {
+    /// The right column: the page's title, then its groups as cards in a
+    /// scroll area. A window of its own is closed with its own close
+    /// control, so the page draws no second one; only `embedded`, drawn
+    /// inside the main window, does the page keep its round close button,
+    /// being the only one there. Returns whether that button was clicked.
+    fn page_ui(
+        &mut self,
+        ui: &mut egui::Ui,
+        embedded: bool,
+        app: &App,
+        requests: &mut Vec<Request>,
+    ) -> bool {
         let scheme = theme::scheme(ui);
         let (head, _) = ui.allocate_exact_size(
             vec2(ui.available_width(), PAGE_PAD + CLOSE_BUTTON + 12.0),
@@ -461,10 +485,11 @@ impl SettingsWindow {
         );
         ui.interact(heading, ui.id().with("settings-page-title"), Sense::hover())
             .widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Label, true, name.clone()));
-        let close = close_button(
-            ui,
-            pos2(head.right() - PAGE_PAD - CLOSE_BUTTON / 2.0, title_y),
-        );
+        let close = embedded
+            && close_button(
+                ui,
+                pos2(head.right() - PAGE_PAD - CLOSE_BUTTON / 2.0, title_y),
+            );
         let groups = groups_of(&self.page, app);
         let search = self.search.clone();
         let page = self.page.clone();
@@ -540,25 +565,9 @@ fn page_icon(page: &Page) -> &'static str {
         Page::General => icons::GEAR,
         Page::View => icons::VIEW_LIST,
         Page::Appearance => icons::HIDDEN_SHOWN,
+        Page::Behaviour => icons::BEHAVIOUR,
         Page::Integration => icons::LINK,
-        Page::Plugin(id) => {
-            let id = id.to_lowercase();
-            if id.contains("pdf") {
-                icons::FILE_PDF
-            } else if id.contains("office") {
-                icons::FILE_DOC
-            } else if id.contains("3d") {
-                icons::CUBE
-            } else if id.contains("console") || id.contains("terminal") {
-                icons::TERMINAL
-            } else if id.contains("ssh") || id.contains("network") {
-                icons::NETWORK
-            } else if id.contains("archive") {
-                icons::ARCHIVE
-            } else {
-                icons::PLUGIN
-            }
-        }
+        Page::Plugin(id) => icons::for_plugin(id),
     }
 }
 
@@ -568,6 +577,7 @@ fn page_name(page: &Page, app: &App) -> String {
         Page::General => t!("settings-general"),
         Page::View => t!("settings-view"),
         Page::Appearance => t!("settings-appearance"),
+        Page::Behaviour => t!("settings-behaviour"),
         Page::Integration => t!("settings-integration"),
         Page::Plugin(id) => app
             .registry()
@@ -665,7 +675,32 @@ fn groups_of(page: &Page, app: &App) -> Vec<Group> {
                 rows: vec![
                     Spec::described(t!("settings-density"), t!("settings-density-desc")),
                     Spec::new(t!("settings-font-size")),
+                    Spec::described(t!("settings-date-format"), t!("settings-date-format-desc")),
                 ],
+            },
+            // A card with its title inside, as its frame draws it.
+            Group {
+                title: String::new(),
+                rows: vec![Spec::described(
+                    t!("settings-titlebar-colour"),
+                    t!("settings-titlebar-colour-desc"),
+                )],
+            },
+        ],
+        Page::Behaviour => vec![
+            Group {
+                title: t!("settings-group-files"),
+                rows: vec![Spec::described(
+                    t!("settings-rename-on-click"),
+                    t!("settings-rename-on-click-desc"),
+                )],
+            },
+            Group {
+                title: t!("settings-group-opening"),
+                rows: vec![Spec::described(
+                    t!("settings-editor"),
+                    t!("settings-editor-desc"),
+                )],
             },
         ],
         Page::Integration => integration_groups(app),
@@ -692,21 +727,26 @@ fn groups_of(page: &Page, app: &App) -> Vec<Group> {
 /// are separated by hairlines; `draw` adds the rows through the card.
 fn group_ui(ui: &mut egui::Ui, group: &Group, visible: &[bool], draw: impl FnOnce(&mut Card<'_>)) {
     let scheme = theme::scheme(ui);
-    let (title, _) = ui.allocate_exact_size(vec2(ui.available_width(), 18.0), Sense::hover());
-    ui.painter().text(
-        pos2(title.left(), title.center().y),
-        Align2::LEFT_CENTER,
-        &group.title,
-        FontId::proportional(theme::TEXT_BODY),
-        scheme.text_secondary,
-    );
-    ui.interact(
-        title,
-        ui.id().with(("settings-group", &group.title)),
-        Sense::hover(),
-    )
-    .widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Label, true, group.title.clone()));
-    ui.add_space(8.0);
+    // A group without a title is a card that carries its own inside.
+    if !group.title.is_empty() {
+        let (title, _) = ui.allocate_exact_size(vec2(ui.available_width(), 18.0), Sense::hover());
+        ui.painter().text(
+            pos2(title.left(), title.center().y),
+            Align2::LEFT_CENTER,
+            &group.title,
+            FontId::proportional(theme::TEXT_BODY),
+            scheme.text_secondary,
+        );
+        ui.interact(
+            title,
+            ui.id().with(("settings-group", &group.title)),
+            Sense::hover(),
+        )
+        .widget_info(|| {
+            egui::WidgetInfo::labeled(egui::WidgetType::Label, true, group.title.clone())
+        });
+        ui.add_space(8.0);
+    }
     egui::Frame::new()
         .fill(scheme.bg_card)
         .stroke(egui::Stroke::new(1.0, scheme.border_default))
@@ -735,6 +775,48 @@ struct Card<'a> {
 }
 
 impl Card<'_> {
+    /// Row `index` of the group as a block of its own: the label, under
+    /// it the description over the card's width, then whatever `content`
+    /// lays out — the *Title bar colour* card.
+    fn block(&mut self, index: usize, content: impl FnOnce(&mut egui::Ui)) {
+        if !self.visible.get(index).copied().unwrap_or(false) {
+            return;
+        }
+        let Some(spec) = self.rows.get(index) else {
+            return;
+        };
+        let scheme = theme::scheme(self.ui);
+        self.drawn += 1;
+        egui::Frame::new()
+            .inner_margin(egui::Margin::symmetric(19, 17))
+            .show(self.ui, |ui| {
+                ui.set_width(ui.available_width());
+                ui.spacing_mut().item_spacing = vec2(0.0, 0.0);
+                ui.add(
+                    egui::Label::new(
+                        egui::RichText::new(&spec.label)
+                            .size(theme::TEXT_BODY)
+                            .color(scheme.text_primary),
+                    )
+                    .selectable(false),
+                );
+                if let Some(description) = &spec.description {
+                    ui.add_space(9.0);
+                    ui.add(
+                        egui::Label::new(
+                            egui::RichText::new(description)
+                                .size(theme::TEXT_SECONDARY)
+                                .color(scheme.text_secondary),
+                        )
+                        .wrap()
+                        .selectable(false),
+                    );
+                }
+                ui.add_space(12.0);
+                content(ui);
+            });
+    }
+
     /// Row `index` of the group, its control drawn by `control` in a
     /// right-to-left child: the first widget sits at the right edge.
     fn row(&mut self, index: usize, control: impl FnOnce(&mut egui::Ui)) {
@@ -877,6 +959,18 @@ fn field_row(
     text: &str,
     set: impl FnOnce(String),
 ) {
+    hinted_field_row(card, index, id, text, "", set);
+}
+
+/// [`field_row`] with `hint` shown while the field is empty.
+fn hinted_field_row(
+    card: &mut Card<'_>,
+    index: usize,
+    id: egui::Id,
+    text: &str,
+    hint: &str,
+    set: impl FnOnce(String),
+) {
     card.row(index, |ui| {
         let (slot, _) = ui.allocate_exact_size(vec2(FIELD, widgets::FIELD_HEIGHT), Sense::hover());
         let mut field_ui = ui.new_child(
@@ -886,7 +980,7 @@ fn field_row(
                 .id_salt(id),
         );
         let mut edited = text.to_owned();
-        let response = dialog::text_field(&mut field_ui, &mut edited, "", false, None, false);
+        let response = dialog::text_field(&mut field_ui, &mut edited, hint, false, None, false);
         if response.changed() {
             set(edited);
         }
@@ -1159,6 +1253,40 @@ fn rows_of(page: &Page, index: usize, card: &mut Card<'_>, cx: &mut PageCx<'_>) 
                     }
                 },
             );
+            let options: Vec<String> = DateFormat::ALL.into_iter().map(date_format_name).collect();
+            let selected = DateFormat::ALL
+                .iter()
+                .position(|f| *f == settings.date_format)
+                .unwrap_or(0);
+            dropdown_row(
+                card,
+                2,
+                egui::Id::new("settings-date-format"),
+                &options,
+                selected,
+                |i| {
+                    if let Some(format) = DateFormat::ALL.get(i) {
+                        cx.change(SettingsChange::DateFormat(*format));
+                    }
+                },
+            );
+        }
+        (Page::Appearance, 2) => card.block(0, |ui| titlebar_colour(ui, cx)),
+        (Page::Behaviour, 0) => {
+            switch_row(card, 0, settings.rename_on_click, |v| {
+                cx.change(SettingsChange::RenameOnClick(v));
+            });
+        }
+        (Page::Behaviour, 1) => {
+            // The command of Open in editor; empty is the system's own.
+            hinted_field_row(
+                card,
+                0,
+                egui::Id::new("settings-editor"),
+                &settings.editor,
+                &t!("settings-editor-hint"),
+                |text| cx.change(SettingsChange::Editor(text)),
+            );
         }
         (Page::Integration, group) => integration_rows(group, card, cx),
         (Page::Plugin(id), 0) => plugin_rows(id, card, cx),
@@ -1417,258 +1545,253 @@ fn after_drag_name(after: AfterDrag) -> String {
     }
 }
 
+/// A choice of *Title bar colour* as its tile names it.
+fn titlebar_name(colour: TitlebarColour) -> String {
+    match colour {
+        TitlebarColour::DustyRose => t!("settings-titlebar-dusty-rose"),
+        TitlebarColour::WarmGrey => t!("settings-titlebar-warm-grey"),
+        TitlebarColour::SlateTeal => t!("settings-titlebar-slate-teal"),
+        TitlebarColour::Sage => t!("settings-titlebar-sage"),
+        TitlebarColour::Plum => t!("settings-titlebar-plum"),
+        TitlebarColour::DarkBand => t!("settings-titlebar-dark-band"),
+        TitlebarColour::Custom => t!("settings-titlebar-custom"),
+    }
+}
+
+/// The swatch of a tile.
+const SWATCH: egui::Vec2 = vec2(64.0, 40.0);
+/// A tile: the swatch with 4 px around it, over the name.
+const TILE: egui::Vec2 = vec2(72.0, 67.0);
+
+/// The choices of *Title bar colour* (SPEC.md *Settings window*): a tile
+/// per preset, in the order of the table, then *Custom…* — a swatch split
+/// into the choice's light half and its dark half over its name, the
+/// chosen one in a 2 px `accent/focus` ring — and, with *Custom* chosen,
+/// the two colour fields under the tiles. A click is the choice, which
+/// shows in the title row at once.
+fn titlebar_colour(ui: &mut egui::Ui, cx: &mut PageCx<'_>) {
+    let scheme = theme::scheme(ui);
+    let settings = &cx.app.model().settings;
+    let chosen = settings.titlebar_colour;
+    let custom = (
+        settings.titlebar_custom_light,
+        settings.titlebar_custom_dark,
+    );
+    let mut picked = None;
+    ui.horizontal_wrapped(|ui| {
+        ui.spacing_mut().item_spacing = vec2(10.0, 10.0);
+        for colour in TitlebarColour::ALL {
+            let name = titlebar_name(colour);
+            let (tile, response) = ui.allocate_exact_size(TILE, Sense::click());
+            let is_chosen = colour == chosen;
+            response.widget_info(|| {
+                egui::WidgetInfo::selected(
+                    egui::WidgetType::RadioButton,
+                    true,
+                    is_chosen,
+                    name.clone(),
+                )
+            });
+            let swatch = Rect::from_min_size(tile.min + vec2(4.0, 4.0), SWATCH);
+            // A preset's pair; the custom pair once Custom is the choice.
+            swatch_ui(ui, swatch, colour.preset().or(is_chosen.then_some(custom)));
+            ui.painter().text(
+                pos2(tile.center().x, tile.top() + 56.5),
+                Align2::CENTER_CENTER,
+                &name,
+                FontId::proportional(theme::TEXT_CAPS),
+                if is_chosen {
+                    scheme.text_primary
+                } else {
+                    scheme.text_secondary
+                },
+            );
+            if is_chosen {
+                ui.painter().rect_stroke(
+                    tile.expand(2.0),
+                    f32::from(theme::CARD_RADIUS) + 2.0,
+                    scheme.focus_ring(),
+                    egui::StrokeKind::Inside,
+                );
+            } else if response.hovered() {
+                ui.painter().rect_stroke(
+                    tile.expand(2.0),
+                    f32::from(theme::CARD_RADIUS) + 2.0,
+                    scheme.hairline(),
+                    egui::StrokeKind::Inside,
+                );
+            }
+            if response.clicked() {
+                picked = Some(colour);
+            }
+        }
+    });
+    if let Some(colour) = picked {
+        cx.change(SettingsChange::TitlebarColour(colour));
+    }
+    if chosen == TitlebarColour::Custom {
+        ui.add_space(14.0);
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing = vec2(8.0, 0.0);
+            for (dark, label, value) in [
+                (false, t!("settings-theme-light"), custom.0),
+                (true, t!("settings-theme-dark"), custom.1),
+            ] {
+                custom_field(ui, cx, dark, &label, value);
+                ui.add_space(16.0);
+            }
+        });
+    }
+}
+
+/// A tile's swatch: split into the pair's light half and its dark half,
+/// or, for *Custom* before it is chosen, a dashed outline reading *L / D*.
+fn swatch_ui(ui: &egui::Ui, swatch: Rect, pair: Option<(Rgb, Rgb)>) {
+    let scheme = theme::scheme(ui);
+    let Some((light, dark)) = pair else {
+        let outline = dashed_outline(swatch.shrink(0.5), f32::from(theme::CARD_RADIUS));
+        ui.painter().extend(egui::Shape::dashed_line(
+            &outline,
+            egui::Stroke::new(1.0, scheme.border_strong),
+            4.0,
+            3.0,
+        ));
+        ui.painter().text(
+            swatch.center(),
+            Align2::CENTER_CENTER,
+            t!("settings-titlebar-light-dark"),
+            FontId::proportional(theme::TEXT_CAPS),
+            scheme.text_secondary,
+        );
+        return;
+    };
+    let half = swatch.center().x;
+    let corners = |left: bool| egui::CornerRadius {
+        nw: if left { theme::CARD_RADIUS } else { 0 },
+        sw: if left { theme::CARD_RADIUS } else { 0 },
+        ne: if left { 0 } else { theme::CARD_RADIUS },
+        se: if left { 0 } else { theme::CARD_RADIUS },
+    };
+    ui.painter().rect_filled(
+        Rect::from_min_max(swatch.min, pos2(half, swatch.bottom())),
+        corners(true),
+        theme::rgb(light),
+    );
+    ui.painter().rect_filled(
+        Rect::from_min_max(pos2(half, swatch.top()), swatch.max),
+        corners(false),
+        theme::rgb(dark),
+    );
+    ui.painter().rect_stroke(
+        swatch,
+        theme::CARD_RADIUS,
+        scheme.hairline(),
+        egui::StrokeKind::Inside,
+    );
+}
+
+/// One field of the custom pair: its name, a swatch of the colour it
+/// holds and a `#rrggbb` text field. What is typed is taken as soon as it
+/// is a colour; until then the field has its warning border and the band
+/// keeps the colour it had.
+fn custom_field(ui: &mut egui::Ui, cx: &mut PageCx<'_>, dark: bool, label: &str, value: Rgb) {
+    let scheme = theme::scheme(ui);
+    let id = ui.id().with(("titlebar-custom", dark));
+    let mut text = ui
+        .data_mut(|d| d.get_temp::<String>(id))
+        .unwrap_or_default();
+    // The field shows the setting unless something else is being typed.
+    let typed = Rgb::parse(&text);
+    let focused = ui
+        .data(|d| d.get_temp::<bool>(id.with("focus")))
+        .unwrap_or(false);
+    if !focused && typed != Some(value) {
+        text = value.text();
+    }
+    ui.add(
+        egui::Label::new(
+            egui::RichText::new(label)
+                .size(theme::TEXT_SECONDARY)
+                .color(scheme.text_secondary),
+        )
+        .selectable(false),
+    );
+    let (swatch, _) = ui.allocate_exact_size(vec2(22.0, 22.0), Sense::hover());
+    ui.painter().rect(
+        swatch,
+        theme::metrics(ui.ctx()).corner_radius(),
+        theme::rgb(value),
+        scheme.hairline(),
+        egui::StrokeKind::Inside,
+    );
+    let invalid = Rgb::parse(&text).is_none();
+    let border = invalid.then_some(scheme.status_warning_border);
+    let name = t!("settings-titlebar-custom-field", scheme = label);
+    let response = ui
+        .scope(|ui| {
+            ui.set_width(104.0);
+            dialog::text_field(ui, &mut text, "#rrggbb", true, border, false)
+        })
+        .inner;
+    response.widget_info(|| {
+        let mut info = egui::WidgetInfo::text_edit(true, String::new(), text.clone(), "#rrggbb");
+        info.label = Some(name.clone());
+        info
+    });
+    if response.changed()
+        && let Some(colour) = Rgb::parse(&text)
+        && colour != value
+    {
+        cx.change(SettingsChange::TitlebarCustom { dark, colour });
+    }
+    // Asked before the data is locked: the focus is behind the same lock.
+    let has_focus = response.has_focus();
+    ui.data_mut(|d| {
+        d.insert_temp(id, text);
+        d.insert_temp(id.with("focus"), has_focus);
+    });
+}
+
+/// The outline of a rectangle with rounded corners as a closed run of
+/// points, for a dashed stroke.
+fn dashed_outline(rect: Rect, radius: f32) -> Vec<egui::Pos2> {
+    use std::f32::consts::FRAC_PI_2;
+    let centres = [
+        (pos2(rect.right() - radius, rect.top() + radius), -FRAC_PI_2),
+        (pos2(rect.right() - radius, rect.bottom() - radius), 0.0),
+        (
+            pos2(rect.left() + radius, rect.bottom() - radius),
+            FRAC_PI_2,
+        ),
+        (
+            pos2(rect.left() + radius, rect.top() + radius),
+            2.0 * FRAC_PI_2,
+        ),
+    ];
+    let mut points = Vec::new();
+    for (centre, start) in centres {
+        for step in 0_u8..=6 {
+            let angle = start + FRAC_PI_2 * f32::from(step) / 6.0;
+            points.push(centre + radius * vec2(angle.cos(), angle.sin()));
+        }
+    }
+    points.extend(points.first().copied());
+    points
+}
+
+/// A date format's name in the *Date format* dropdown.
+fn date_format_name(format: DateFormat) -> String {
+    match format {
+        DateFormat::SmartTime => t!("settings-date-smart-time"),
+        DateFormat::Smart => t!("settings-date-smart"),
+        DateFormat::Iso => t!("settings-date-iso"),
+        DateFormat::System => t!("settings-date-system"),
+    }
+}
+
 fn density_name(density: Density) -> String {
     match density {
         Density::Compact => t!("settings-density-compact"),
         Density::Comfortable => t!("settings-density-comfortable"),
     }
-}
-
-/// What the shortcuts screen is doing.
-#[derive(Debug, Default)]
-pub struct ShortcutsScreen {
-    /// Shown.
-    pub open: bool,
-    /// Waiting for a key press to bind to this intent.
-    pub rebinding: Option<Intent>,
-    /// Filter text.
-    pub filter: String,
-}
-
-impl ShortcutsScreen {
-    /// The Keyboard shortcuts screen: the live table, with Change and Reset
-    /// per row. A change is a `SettingsChange::Shortcut`.
-    // Capture, header and table are one screen.
-    #[allow(clippy::too_many_lines)]
-    pub fn show(
-        &mut self,
-        ctx: &egui::Context,
-        keys: &KeyMap,
-        registry: &Registry,
-        requests: &mut Vec<Request>,
-    ) {
-        if !self.open {
-            return;
-        }
-        if let Some(intent) = self.rebinding {
-            let captured = ctx.input_mut(|i| {
-                let mut found = None;
-                i.events.retain(|event| {
-                    if found.is_some() {
-                        return true;
-                    }
-                    if let egui::Event::Key {
-                        key,
-                        modifiers,
-                        pressed: true,
-                        ..
-                    } = event
-                    {
-                        found = Some((*modifiers, *key));
-                        return false;
-                    }
-                    true
-                });
-                found
-            });
-            if let Some((modifiers, key)) = captured {
-                self.rebinding = None;
-                if key != egui::Key::Escape
-                    && let Some(key) = from_egui_key(key)
-                {
-                    let shortcut = Shortcut {
-                        modifiers: from_egui_modifiers(modifiers),
-                        key,
-                    };
-                    requests.push(Request::Command(Command::Settings(
-                        SettingsChange::Shortcut {
-                            action: intent.id().to_owned(),
-                            binding: Some(shortcut.text()),
-                        },
-                    )));
-                }
-            }
-        }
-
-        let mut open = self.open;
-        egui::Window::new(t!("keyboard-shortcuts"))
-            .open(&mut open)
-            .default_width(560.0)
-            .show(ctx, |ui| {
-                ui.horizontal(|ui| {
-                    ui.label(t!("settings-filter"));
-                    ui.text_edit_singleline(&mut self.filter);
-                    if let Some(intent) = self.rebinding {
-                        ui.strong(format!(
-                            "Press the new shortcut for {}; Escape cancels",
-                            label_of(intent, registry)
-                        ));
-                    }
-                });
-                ui.separator();
-                let filter = self.filter.to_lowercase();
-                egui::ScrollArea::vertical()
-                    .max_height(480.0)
-                    .show(ui, |ui| {
-                        egui::Grid::new("shortcuts-grid")
-                            .num_columns(4)
-                            .striped(true)
-                            .spacing([16.0, 4.0])
-                            .show(ui, |ui| {
-                                let mut rows: Vec<(String, Intent, String)> = registry
-                                    .actions()
-                                    .iter()
-                                    .map(|a| {
-                                        (
-                                            "File operations".to_owned(),
-                                            Intent::Action(a.id()),
-                                            a.label(),
-                                        )
-                                    })
-                                    .chain(UI_INTENTS.iter().filter(|s| s.group != "List").map(
-                                        |s| (s.group.to_owned(), s.intent, s.label.to_owned()),
-                                    ))
-                                    .collect();
-                                rows.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.2.cmp(&b.2)));
-                                for (group, intent, label) in rows {
-                                    if !filter.is_empty()
-                                        && !label.to_lowercase().contains(&filter)
-                                        && !group.to_lowercase().contains(&filter)
-                                    {
-                                        continue;
-                                    }
-                                    ui.weak(group);
-                                    ui.label(&label);
-                                    let bound: Vec<String> =
-                                        keys.shortcuts_for(intent).map(|s| s.text()).collect();
-                                    if bound.is_empty() {
-                                        ui.weak("—");
-                                    } else {
-                                        ui.monospace(bound.join(", "));
-                                    }
-                                    ui.horizontal(|ui| {
-                                        if ui.small_button(t!("settings-change")).clicked() {
-                                            self.rebinding = Some(intent);
-                                        }
-                                        if ui.small_button(t!("settings-reset")).clicked() {
-                                            requests.push(Request::Command(Command::Settings(
-                                                SettingsChange::Shortcut {
-                                                    action: intent.id().to_owned(),
-                                                    binding: None,
-                                                },
-                                            )));
-                                        }
-                                        if ui.small_button(t!("settings-unbind")).clicked() {
-                                            requests.push(Request::Command(Command::Settings(
-                                                SettingsChange::Shortcut {
-                                                    action: intent.id().to_owned(),
-                                                    binding: Some(String::new()),
-                                                },
-                                            )));
-                                        }
-                                    });
-                                    ui.end_row();
-                                }
-                            });
-                    });
-            });
-        self.open = open;
-        if !self.open {
-            self.rebinding = None;
-        }
-    }
-}
-
-/// The label of an intent: the action's, or the table row's.
-#[must_use]
-pub fn label_of(intent: Intent, registry: &Registry) -> String {
-    match intent {
-        Intent::Action(id) => registry
-            .actions()
-            .iter()
-            .find(|a| a.id() == id)
-            .map_or_else(|| id.0.to_owned(), |a| a.label()),
-        other => other
-            .spec()
-            .map_or_else(|| format!("{other:?}"), |s| s.label.to_owned()),
-    }
-}
-
-/// The Extensions screen: the plugins the host found, each with its name,
-/// version, the points it fills and its status (loaded, disabled, or
-/// refused with the reason), and an Enabled toggle per row. The toggle is a
-/// `SettingsChange::Plugin`, which writes `rick.toml`; the row says that it
-/// takes effect on the next start.
-pub fn extensions_window(
-    ctx: &egui::Context,
-    open: &mut bool,
-    app: &App,
-    requests: &mut Vec<Request>,
-) {
-    let plugins = app.plugins();
-    let disabled = &app.model().settings.plugins.disabled;
-    egui::Window::new(t!("extensions"))
-        .open(open)
-        .default_width(640.0)
-        .show(ctx, |ui| {
-            if plugins.is_empty() {
-                ui.label(t!("settings-no-plugins-found"));
-            }
-            egui::Grid::new("extensions-grid")
-                .num_columns(5)
-                .striped(true)
-                .spacing([16.0, 6.0])
-                .show(ui, |ui| {
-                    for heading in ["Name", "Version", "Points", "Status", ""] {
-                        ui.strong(heading);
-                    }
-                    ui.end_row();
-                    for plugin in plugins {
-                        let name = if plugin.name.is_empty() {
-                            plugin.id.as_str()
-                        } else {
-                            plugin.name.as_str()
-                        };
-                        ui.label(name).on_hover_text(format!(
-                            "{}\n{}",
-                            plugin.id,
-                            plugin.path.display()
-                        ));
-                        ui.label(&plugin.version);
-                        ui.label(plugin.points.to_string());
-                        let status = match &plugin.status {
-                            PluginStatus::Loaded => "loaded".to_owned(),
-                            PluginStatus::Disabled => "disabled".to_owned(),
-                            PluginStatus::Refused(reason) => format!("refused: {reason}"),
-                        };
-                        ui.label(status);
-                        let mut enabled = !disabled.contains(&plugin.id);
-                        ui.horizontal(|ui| {
-                            if ui.checkbox(&mut enabled, t!("settings-enabled")).changed() {
-                                requests.push(Request::Command(Command::Settings(
-                                    SettingsChange::Plugin {
-                                        id: plugin.id.clone(),
-                                        enabled,
-                                    },
-                                )));
-                            }
-                            let disabled_at_start = plugin.status == PluginStatus::Disabled;
-                            if enabled == disabled_at_start {
-                                ui.weak(if enabled {
-                                    "loads on the next start"
-                                } else {
-                                    "disabled on the next start"
-                                });
-                            }
-                        });
-                        ui.end_row();
-                    }
-                });
-            ui.separator();
-            ui.weak(
-                "Plugins live in the plugins folder beside the binary and in the config \
-                 directory; a per-user plugin wins on an id clash. Changes take effect \
-                 on the next start.",
-            );
-        });
 }

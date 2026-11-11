@@ -338,7 +338,7 @@ fn a_file_dragged_onto_a_folder_row_moves_and_the_modifiers_force_the_mode() {
     harness.step();
     assert!(!harness.state().drop_prompt_open());
     // `sub/b.txt` exists from the forced copy: the conflict dialogue asks,
-    // and Overwrite replaces it.
+    // and Replace overwrites it.
     let deadline = Instant::now() + Duration::from_secs(5);
     while harness.state().app().model().conflicts.is_empty() {
         assert!(Instant::now() < deadline, "no conflict dialogue");
@@ -348,7 +348,7 @@ fn a_file_dragged_onto_a_folder_row_moves_and_the_modifiers_force_the_mode() {
     // The dialogue takes a frame to find its place.
     harness.step();
     harness.step();
-    harness.get_by_label("Overwrite").click();
+    harness.get_by_label("Replace").click();
     harness.step();
     settle(&mut harness);
     assert_eq!(

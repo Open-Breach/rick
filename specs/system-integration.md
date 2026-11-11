@@ -1,6 +1,6 @@
 # Rick — System integration & distribution
 
-Status: decided 2026-11-07 and 2026-11-09; part of Version 0.3 (see SPEC.md, *Version 0.3*). Binding in the same way as SPEC.md; where the two disagree, the question goes to `QUESTIONS.md`. Design reference for the dialogs: the Figma file *Rick - FileExplorer*, section *System integration* (frames *Integration dialog — first run (Linux)* and *Settings — Integration*, plus the yellow *Spec notes — integration* frame).
+Status: decided 2026-11-07 and 2026-11-09; part of Version 0.3 (see SPEC.md, *Version 0.3*). Binding in the same way as SPEC.md; where the two disagree, the question goes into the pull request. Design reference for the dialogs: the Figma file *Rick - FileExplorer*, section *System integration* (frames *Integration dialog — first run (Linux)* and *Settings — Integration*, plus the yellow *Spec notes — integration* frame).
 
 ## 1. Purpose and scope
 
@@ -33,7 +33,8 @@ Out of scope, by decision: replacing the system file chooser (the portal `FileCh
 
 ## 4. Command line and `rick://`
 
-- The command line gains subcommands. **Core:** `rick [<path>…]` (no argument: the current directory; several paths: one tab each), `rick reveal <file>…` (opens the folder and selects the files), `rick --new-window [<path>…]`, and the existing `rick --version` and `rick --list-plugins`. Paths are resolved against the caller's working directory before they are sent.
+- The command line gains subcommands. **Core:** `rick [<path>…]` (no argument: the current directory; several paths: one tab each), `rick reveal <file>…` (opens the folder and selects the files), `rick --new-window [<path>…]`, `rick --activate [<path>…]` (no argument: the window of the running Rick comes forward and nothing opens, and when none runs Rick starts with its session and no tab for the working directory; with paths: as `rick <path>…`), and the existing `rick --version` and `rick --list-plugins`. Paths are resolved against the caller's working directory before they are sent.
+- **Launchers.** A click on the launcher entry or on a dock favourite never opens a tab: the desktop entry runs `rick --activate %U`, so a click only raises the window of the running Rick, and starts Rick when none runs. What a launcher hands over — a folder dropped on the icon, *Open with*, a `rick://` link — arrives as paths and opens as §3 says. `rick` typed in a terminal keeps opening the current directory. A launcher entry that starts Rick without `--activate` is not the item of §7.1: it reads as changed and is offered again.
 - **Plugins register their own subcommands** through the plugin manifest (`[[commands]]` with name and help line); the host dispatches `rick <command> <args>` to the plugin, e.g. `rick install <archive>` from `ext-installer`. Unknown commands print the help and exit 2.
 - Over the socket this is one message type, *run command with arguments*, with the caller's working directory and environment subset (`DISPLAY`/`WAYLAND_DISPLAY`, the activation token). The same message is what every platform entry point sends.
 - **Thin wrappers:** the D-Bus `ShowItems` call maps to `reveal`, `ShowFolders` to open, `ShowItemProperties` to open plus the Properties dialog; the Windows registry verb runs `rick "%1"`; the macOS Apple Event for opened folders and the Finder extension run the same open command.

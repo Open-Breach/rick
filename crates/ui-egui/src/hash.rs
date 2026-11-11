@@ -173,6 +173,19 @@ struct Asked {
     close: bool,
 }
 
+impl Asked {
+    /// The dialogue is closed from outside its buttons: by Escape, or by a
+    /// click beside it. Escape while the hashes are being computed is
+    /// Cancel, so the job `computing` stops with the dialogue; the click
+    /// closes it and lets the job end, as Done does.
+    fn closed(&mut self, escape: bool, computing: Option<JobId>) {
+        self.close = true;
+        if escape {
+            self.cancel = computing;
+        }
+    }
+}
+
 impl HashDialog {
     /// Shows the dialogue on `hashes`, with the remembered `format`.
     pub fn open(&mut self, hashes: Arc<Hashes>, format: Format) {
@@ -285,7 +298,8 @@ impl HashDialog {
             );
         });
         if modal.should_close() {
-            asked.close = true;
+            let computing = job.as_ref().filter(|_| running).map(|(id, _)| *id);
+            asked.closed(!modal.backdrop_response.clicked(), computing);
         }
         if running {
             ctx.request_repaint();

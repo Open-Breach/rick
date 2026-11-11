@@ -1,5 +1,6 @@
 //! The "Git" action group: each action runs the `git` command line in the
 //! work tree as a job, then drops the cached status so the badges follow.
+//! *Git clone…* ([`crate::clone`]) is the one that needs no work tree.
 
 use ext::t;
 use std::path::{Path, PathBuf};
@@ -20,6 +21,9 @@ pub const GROUP: ActionGroup = ActionGroup::Extension("Git");
 /// What every Git action shares.
 pub struct Shared {
     pub repos: Arc<Repos>,
+    /// The platform services the host lent, when it lent any: the
+    /// clipboard *Git clone…* prefills its URL from.
+    pub platform: Option<Arc<dyn ext::platform::Platform>>,
 }
 
 /// The work tree of the context's location, if it is in one.
@@ -371,5 +375,6 @@ pub fn all(shared: &Arc<Shared>) -> Vec<Arc<dyn Action>> {
         Arc::new(DiscardChanges(Arc::clone(shared))),
         Arc::new(ShowLog(Arc::clone(shared))),
         Arc::new(Blame(Arc::clone(shared))),
+        Arc::new(crate::clone::CloneRepository(Arc::clone(shared))),
     ]
 }

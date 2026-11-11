@@ -10,8 +10,24 @@ is the system's UI and monospace fonts (`fonts`, through the platform's
 `SystemFonts`), egui's bundled fonts behind them, and the Phosphor icons. It renders every window from
 the `model` the `app` owns, the first as eframe's root viewport and the
 others as viewports of their own drawn in the same frame: the window frame
-with its shadow and resize grips where the system draws none, the title row
-with the burger menu (New window, the Layouts submenu), the workspace tabs
+where the system draws none (`frame`: the shadow frame, a transparent margin
+with a shadow and the resize grips, around a transparent window, and the
+plain frame, a one-pixel border at the window's edge with the grips on it,
+around one that cannot be transparent; `surface` finds out which, once, from
+the alpha modes the first window's surface offers, except on X11, where that
+answer says nothing without a compositing manager and the plain frame is the
+default; `frame` in the `[window]` table of `rick.toml` overrides either),
+the title row
+on its band (`theme::band`: `bg/titlebar` with the pair the *Title bar
+colour* setting wrote into it, the active tab lifting out of it in
+`bg/pane`, and everything else in the row — inactive titles, icons, the
+divider, hovers, the search box — chosen by contrast with the band, so a
+dark band in Light turns the row to light text)
+with the burger menu (the application menu, `menus.rs`: a card in the form of
+the other menus, 280 px at least, 6 px under its button — New window, the
+Layouts submenu and the extensions' submenus; Settings, Keyboard shortcuts
+and Extensions; About Rick with the version — every entry with its icon and
+the chord the keymap binds to it, spelled *Ctrl* or *Cmd*), the workspace tabs
 (one per workspace, titled after the folder in its focused pane, reordered
 by drag with the neighbours sliding apart for the gap where it will land, the dragged tab its own ghost lifted with a shadow, a tab of one pane docking into the shown layout on the side targets of the pane under it, the tabs spring-loading under a dragged pane, tab or entries, Escape cancelling the drag of a tab or a pane, a tab dragged outside every window opening a new one, a tab or a pane dragged onto another window landing in its tab row or on its dock targets) and the
 search box, the `egui_dock` tree of the shown workspace's split panes, whose
@@ -24,13 +40,21 @@ Rename, New file and New folder) and footer (the toolbar's height under a
 hairline: the hidden-files toggle, the folder and file counts and the
 files' size — *12 of 340* while a filter narrows the list — the selection
 pill, and the 200 px filter field with the include-subfolders toggle
-inside its right end), the Preview tab (toolbar with the media transport and *Copy*, info
-badges, content, status bar; one per window, following the focused
+inside its right end), the Preview tab (toolbar with the media transport, *Copy* and
+the info button, content, status bar; one per window, following the focused
 explorer, docked and torn out like any tab; Rick's only viewer, laying out
 every kind of content a previewer returns itself in `content.rs`: a file
-list in the explorer's columns, a grid, a rendered document, and the
-message for a missing third-party library with *Browse…* and *Retry*; the
-placeholder for a file no previewer claims), the side panel (rows
+list and a grid as the one table of `table.rs` (a header band whose
+dividers resize the columns, rows striped from the second, widths
+remembered per previewer), a rendered document; one File info
+card for every file (`info_card.rs`: the icon, name, type and size, rows
+with a copy button each and *Show all n fields*) — hanging under the info
+button while the pointer is on it, pinned above the content per previewer,
+and centred with its buttons where there is nothing to show: no previewer
+(*Open with…*), a missing third-party library (*Download*,
+*Browse…*, *Retry*, *Where Rick looked*) or a failed preview; the Portal
+burst while a preview loads and a glyph with *No file selected* when
+there is none), the side panel (rows
 `sidebar/item-height` tall inset from the panel's edges; the editable
 Places list with its drag reorder, Edit… dialogue and keyboard, Favorites,
 Recent and the Trash view among the places, the Trash row's pill with the
@@ -51,10 +75,19 @@ buttons; a form's fields in a label-left grid with cards, disclosure
 cards, segmented controls, switches, file pickers and the preview as a
 card of effects — the install dialogue's shape — taken by every form,
 prompt and confirmation an action asks), the shared controls in
-`widgets.rs`, the conflict dialogue, the question dialogue an extension asks through, the
-Properties dialogue (the general rows and, for a local entry, its owner,
-group, mode bits and ACL edited in place, applied to the enclosed entries
-too when asked), the Hash dialogue (620 px in the dialogue frame: *File
+`widgets.rs`, the paste-conflict dialogue (`conflict.rs`: *Replace file?* with its
+place among the job's conflicts, the existing and the arriving entry as two
+cards, Skip, Replace or Merge, and Keep both as the default, 520 px wide
+whatever the name), the question dialogue an extension asks through, the
+Properties dialogue (`properties.rs`, on the shared shell at 560 px: the
+entry's icon, name, type and size in the header and two tabs — *General*,
+groups of rows for where it is, what a link resolves to, its size, a
+folder's contents as the application counts them, its dates and whether it
+is hidden, with a copy button on every path and *Open target folder* for a
+link; *Permissions*, for a local entry, its owner and group as dropdowns,
+the mode bits as a grid with the octal field, the ACL opened in place as a
+table that moves with the grid, and *Apply to enclosed items*), the Hash
+dialogue (620 px in the dialogue frame: *File
 hashes* with the file's name and size and a close button; the *VERIFY*
 field on top, prefilled from the clipboard when it holds a hash and
 compared live against every row — a `status/success` border, the
@@ -87,7 +120,16 @@ line naming the system, the desktop and the last check beside *Check
 again*, lists every integration item with the line its state words and
 its pill — *Set up*, *Reset by system* with *Restore*, *Skipped* or *Not
 set up* with *Add*, *Unsupported* — and has the switches for shell
-integration and the check at startup and *Reset choices*) and the Keyboard shortcuts screen, and drag and drop of entries: rows are drag
+integration and the check at startup and *Reset choices*) and the Keyboard
+shortcuts dialogue (`shortcuts`: the categories with one per plugin that
+contributes actions, the search field that takes a name or a pressed
+chord, key caps, recording in the shortcut cell, the reset button of a
+changed row and the *also:* chip of a chord bound twice) and the Extensions
+dialogue (`extensions`: the plugins grouped by what they contribute, each
+with its enable switch and an amber dot when it needs attention; the
+chosen plugin's details with the manifest's description, the attention
+card and an info card whose rows copy; *Settings*, *Open folder*, *Remove*
+for a user's plugin and *Install from file…*), and drag and drop of entries: rows are drag
 sources, folders, pane space, breadcrumb segments and tab headers are drop
 zones with the ghost, the live indicator and spring-loading in between (a
 pane at the Trash view trashes what lands in it); the side panel is never a

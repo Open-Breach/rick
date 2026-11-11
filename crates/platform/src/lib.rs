@@ -109,10 +109,11 @@ pub use raw_window_handle;
 pub use time::iso8601;
 pub use traits::{
     Activation, Application, Chrome, Clipboard, ConfigDir, ControlsSide, DialogFilter, DragSource,
-    DropTarget, Elevate, ElevatedOutput, FontFile, Fonts, ImageFormat, IncomingFiles, Motion,
-    Mount, NativeDialogs, OpenWith, Platform, Point, Properties, PropertiesOutcome, RecentItem,
-    RecentlyUsed, Secrets, SingleInstance, StandardFolder, StandardFolders, SystemFonts, Terminal,
-    Trash, TrashedItem, Volume, VolumeKind, Volumes, WindowChrome, WindowRef,
+    DropTarget, Elevate, ElevatedOutput, FontFile, Fonts, ImageFormat, IncomingFiles, Monitor,
+    Motion, Mount, MountWatch, MountsChanged, NativeDialogs, OpenWith, Platform, Point, Properties,
+    PropertiesOutcome, RecentItem, RecentlyUsed, Secrets, SingleInstance, StandardFolder,
+    StandardFolders, SystemFonts, Terminal, Trash, TrashedItem, Volume, VolumeKind, Volumes,
+    WindowChrome, WindowRef,
 };
 pub use trash_record::TRASH_FILE;
 use types::Error;
@@ -165,6 +166,15 @@ pub fn os_description() -> String {
 /// ([`Properties::show`] opens it): Windows and macOS. Rick's own dialogue
 /// offers it as *System properties…* there.
 pub const NATIVE_PROPERTIES: bool = cfg!(any(windows, target_os = "macos"));
+
+/// How this platform names the key the spec calls Mod: *Cmd* on macOS,
+/// *Ctrl* on Linux and Windows. A shortcut hint is spelled with it; a
+/// binding is stored as `Mod`.
+pub const MOD_KEY: &str = if cfg!(target_os = "macos") {
+    "Cmd"
+} else {
+    "Ctrl"
+};
 
 /// The platform the binary runs on.
 ///
@@ -275,6 +285,14 @@ impl Secrets for Native {
 impl NativeDialogs for Native {
     async fn pick_folder(&self, title: &str) -> Option<std::path::PathBuf> {
         dialogs::pick_folder(title).await
+    }
+
+    async fn pick_folder_in(
+        &self,
+        title: &str,
+        start: &std::path::Path,
+    ) -> Option<std::path::PathBuf> {
+        dialogs::pick_folder_in(title, start).await
     }
 
     async fn pick_files(&self, title: &str, filters: &[DialogFilter]) -> Vec<std::path::PathBuf> {

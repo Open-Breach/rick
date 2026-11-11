@@ -9,8 +9,9 @@
 //! ```toml
 //! id = "git"
 //! name = "Git"
+//! description = "Shows Git status badges and adds the Git actions."
 //! version = "0.2.0-dev"
-//! api_version = 12
+//! api_version = 19
 //! points = ["decorator", "action"]
 //! platforms = ["linux", "macos", "windows"]
 //! previews = []
@@ -138,6 +139,11 @@ pub struct PluginToml {
     pub id: String,
     /// The human-readable name.
     pub name: String,
+    /// What the plugin does, in a sentence or two: the text under its
+    /// name in the Extensions dialogue. Absent in a manifest written
+    /// before API 18.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub description: String,
     /// The crate's version, from its `Cargo.toml`.
     pub version: String,
     /// The extension API version the library was built against.
@@ -171,6 +177,7 @@ impl PluginToml {
         Self {
             id: manifest.id.0.to_owned(),
             name: manifest.name.to_owned(),
+            description: manifest.description.to_owned(),
             version: manifest.version.to_string(),
             api_version: manifest.api_version,
             points: manifest
@@ -267,6 +274,7 @@ mod tests {
         let manifest = Manifest {
             id: ExtId("git"),
             name: "Git",
+            description: "",
             version: Version::parse("0.2.0-dev").unwrap_or_else(|e| panic!("{e}")),
             api_version: API_VERSION,
             requires: Capabilities::empty(),

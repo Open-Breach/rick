@@ -1,19 +1,24 @@
 //! The Preview tab's content: the content is the point of it, everything
 //! else is one row. Top to bottom: a toolbar, the explorer toolbar's
 //! height (the entry's file-type icon, the controls for this kind of
-//! content and the previewer's own, info badges, close, a hairline and the
-//! pane handle), the pinned info section when one is pinned, the content,
+//! content and the previewer's own, the info button, close, a hairline and
+//! the pane handle), the File info card when it is pinned, the content,
 //! and a one-line status bar, the explorer footer's height under its
 //! hairline, in the file list's status size. The pane shows
 //! no heading: the dock tab's label is enough, and the word "Inspector"
 //! appears nowhere in it. It shows the selection of the explorer tab the
 //! preview follows ([`App::preview_pane`]), whichever window that is in.
 //!
-//! Info badges come from the previewer's sections and from the decorators'
-//! panels. Hovering one shows its rows as an overlay; clicking pins it as a
-//! panel above the content, one at a time, remembered per content kind in
-//! the settings. Line numbers and wrap are settings too; pretty print is the
-//! previewer's own control and starts off for every file.
+//! One card shows a file's facts ([`crate::info_card`]): the previewer's
+//! sections in order, then the decorators' panels, with the entry's
+//! *Modified* time after the *Size* row. While the pointer is on the info
+//! button, or on the card that opened, the card hangs under the button; a
+//! click on the button or on the card's pin pins it above the content, and
+//! the pin is remembered per previewer in the settings. With no file
+//! selected the pane shows a glyph and two lines, and its toolbar holds
+//! only the info button, close and the handle. Line numbers and wrap are
+//! settings too; pretty print is the previewer's own control and starts
+//! off for every file.
 //!
 //! Nothing here asks for width: the pane is as wide as the dock makes it,
 //! labels truncate, rows clip, and the content is fitted or scrolled.
@@ -21,20 +26,26 @@
 use std::time::Duration;
 
 use app::{App, Command};
-use egui::{Align, Rect, pos2, vec2};
+use egui::{Align, Align2, FontId, Rect, pos2, vec2};
 use ext::t;
-use ext::{Content, ControlValue, PreviewControl};
+use ext::{Content, ControlValue, Invocation, PreviewControl};
 use model::{PaneId, SettingsChange, TextPreview};
-use types::{Entry, EntryId};
+use types::{Entry, EntryId, ExtId};
 
 use crate::icons;
-use crate::preview::{PreviewAct, Previews, Slot};
+use crate::info_card::{self, Card, Row};
+use crate::preview::{Around, PreviewAct, Previews, Slot};
 use crate::shell::{PaneDrag, Request};
+use crate::theme::{self, CARD_RADIUS, TEXT_SECONDARY};
 
-/// Rows beyond this get a search box.
-const SEARCHABLE_FROM: usize = 20;
-/// A pinned panel takes at most this share of the pane's height.
-const PANEL_SHARE: f32 = 0.45;
+/// The rows the card shows before *Show all n fields*: as a popover, and
+/// pinned.
+const ROWS_POPOVER: usize = 5;
+const ROWS_PINNED: usize = 4;
+/// The popover's greatest width.
+const POPOVER_WIDTH: f32 = 360.0;
+/// The content's margin around the pinned card.
+const CARD_MARGIN: f32 = 12.0;
 /// The least width the pane lays anything out in; the dock sizes it.
 pub const MIN_WIDTH: f32 = 96.0;
 
@@ -45,8 +56,10 @@ pub struct PaneRects {
     pub toolbar: Option<Rect>,
     /// The pane handle at the toolbar's right end.
     pub handle: Option<Rect>,
-    /// The pinned section's panel, when one is pinned.
+    /// The File info card pinned above the content, when it is pinned.
     pub panel: Option<Rect>,
+    /// The File info card hanging under the info button, while it is open.
+    pub popover: Option<Rect>,
     /// The content area.
     pub content: Option<Rect>,
     /// The status bar.
@@ -62,30 +75,37 @@ pub struct ToolbarItem {
     pub on: Option<bool>,
 }
 
-/// One info badge as drawn.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct BadgeItem {
-    /// The section id.
-    pub id: String,
-    /// The section title.
-    pub title: String,
-    /// Whether its panel is pinned.
-    pub pinned: bool,
+/// The info button as drawn.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Info {
+    /// Nothing to show: no file, or the card stands centred already.
+    #[default]
+    Inert,
+    /// A card to open, not pinned.
+    Unpinned,
+    /// The card is pinned above the content.
+    Pinned,
 }
 
 /// The pane's own state between frames.
 #[derive(Debug, Default)]
 pub struct PaneState {
-    /// The pinned panel's search text.
-    pub filter: String,
     /// What the last frame drew.
     pub rects: PaneRects,
     /// The toolbar's controls of the last frame, left to right.
     pub toolbar: Vec<ToolbarItem>,
-    /// The badges of the last frame, left to right.
-    pub badges: Vec<BadgeItem>,
+    /// The info button of the last frame.
+    pub info: Info,
+    /// The File info card's rows of the last frame, as label and value,
+    /// every section's in order.
+    pub fields: Vec<(String, String)>,
     /// The status bar's text of the last frame.
     pub status: String,
+    /// The folds of the File info card.
+    card: info_card::State,
+    /// The popover is open: the pointer is on the info button or on the
+    /// card it opened.
+    popover: bool,
 }
 
 /// The pane handle's wiring: the drag it starts and where the window keeps
@@ -100,9 +120,7 @@ pub struct Handle<'a> {
 /// An info section as the pane shows it, from either source: the
 /// previewer's sections and the decorators' panels.
 pub(crate) struct Section {
-    pub(crate) id: &'static str,
     pub(crate) title: String,
-    pub(crate) glyph: &'static str,
     pub(crate) rows: Vec<(String, String)>,
 }
 
@@ -114,9 +132,7 @@ pub(crate) fn sections_for(app: &App, slot: Option<&Slot>, entry: Option<&Entry>
         .unwrap_or_default()
         .iter()
         .map(|s| Section {
-            id: s.id,
             title: s.title.get(),
-            glyph: icons::for_icon(s.icon),
             rows: s.rows.clone(),
         })
         .collect();
@@ -124,15 +140,52 @@ pub(crate) fn sections_for(app: &App, slot: Option<&Slot>, entry: Option<&Entry>
         for decorator in app.registry().decorators() {
             if let Some(panel) = decorator.panel(entry) {
                 sections.push(Section {
-                    id: decorator.id().0,
                     title: panel.title,
-                    glyph: icons::for_decorator(decorator.id().0),
                     rows: panel.rows,
                 });
             }
         }
     }
     sections
+}
+
+/// The File info card's rows (SPEC.md *File info card*, the fields): the
+/// sections' rows in order, each section after the first beginning under
+/// its title, with the entry's *Modified* time — which the pane supplies,
+/// written as the *Date format* setting has it — after the first section's *Size* row, or at
+/// that section's end when it has none.
+pub(crate) fn card_rows(
+    sections: &[Section],
+    entry: Option<&Entry>,
+    dates: crate::format::Dates,
+) -> Vec<Row> {
+    let modified = entry
+        .and_then(|entry| entry.modified)
+        .map(|time| Row::new(t!("preview-modified"), dates.text(time)));
+    let mut rows = Vec::new();
+    if sections.is_empty() {
+        rows.extend(modified);
+        return rows;
+    }
+    let size = t!("preview-size");
+    let mut modified = modified;
+    for (index, section) in sections.iter().enumerate() {
+        for (at, (label, value)) in section.rows.iter().enumerate() {
+            let mut row = Row::new(label, value);
+            if index > 0 && at == 0 {
+                row.section = Some(section.title.clone());
+            }
+            rows.push(row);
+            // Previewers write the label in English.
+            if index == 0 && (label == "Size" || *label == size) {
+                rows.extend(modified.take());
+            }
+        }
+        if index == 0 {
+            rows.extend(modified.take());
+        }
+    }
+    rows
 }
 
 /// What a toolbar control asked for.
@@ -171,8 +224,8 @@ struct View<'a> {
     target: Option<EntryId>,
     entry: Option<&'a Entry>,
     selected: usize,
-    entries: Option<usize>,
-    kind: &'static str,
+    /// The previewer that shows the file, by its extension's id.
+    previewer: Option<ExtId>,
     is_text: bool,
     is_raster: bool,
     actual_size: bool,
@@ -180,14 +233,47 @@ struct View<'a> {
     shown_page: usize,
     text_settings: TextPreview,
     controls: Vec<PreviewControl>,
-    sections: Vec<Section>,
-    pinned: Option<usize>,
+    /// The type and the size, as the card's head has them.
+    line: String,
+    /// The File info card's rows.
+    rows: Vec<Row>,
+    /// Whether the card is pinned for this previewer.
+    pinned: bool,
     status: Vec<String>,
     /// Whether the preview has a text layer to copy: text, code, Markdown,
     /// HTML, CSV; never a file list or a paged document.
     copy: bool,
     /// The media transport, when the document is media.
     transport: Option<TransportView>,
+}
+
+impl View<'_> {
+    /// The File info card for the file shown, with its pin button in the
+    /// state `pin` and `first` rows before *Show all n fields*; `None`
+    /// while there is no document to describe.
+    fn card(&self, pin: Option<bool>, first: usize) -> Option<Card<'_>> {
+        let entry = self.entry?;
+        self.previewer?;
+        Some(Card {
+            glyph: icons::for_entry(entry),
+            name: &entry.name,
+            line: &self.line,
+            rows: &self.rows,
+            first: Some(first),
+            pin,
+            ..Card::default()
+        })
+    }
+
+    /// Pins or unpins the card for the previewer that shows the file.
+    fn pin(&self, pinned: bool) -> Act {
+        Act::Setting(SettingsChange::PreviewPin {
+            previewer: self
+                .previewer
+                .map_or_else(String::new, |id| id.0.to_owned()),
+            pinned,
+        })
+    }
 }
 
 /// Draws the pane for the selection of the explorer tab the preview
@@ -208,35 +294,22 @@ pub fn show(
     let view = collect(ui, app, previews);
 
     // Toolbar: the explorer toolbar's height (SPEC.md *Preview*).
-    let toolbar_h = crate::theme::metrics(ui.ctx()).toolbar_height();
+    let toolbar_h = theme::metrics(ui.ctx()).toolbar_height();
     let (row, _) = ui.allocate_exact_size(vec2(width, toolbar_h), egui::Sense::hover());
     state.rects.toolbar = Some(row);
     state.toolbar.clear();
-    state.badges.clear();
+    state.fields = view
+        .rows
+        .iter()
+        .map(|row| (row.label.clone(), row.value.clone()))
+        .collect();
     let mut acts = Vec::new();
-    toolbar(ui, row, &view, state, &mut acts, handle);
+    let info = toolbar(ui, row, &view, state, &mut acts, handle);
     separator(ui, width);
-
-    // Pinned panel.
-    state.rects.panel = None;
-    if let Some(section) = view.pinned.and_then(|i| view.sections.get(i)) {
-        let max_h = (ui.available_height() * PANEL_SHARE).max(60.0);
-        let before = ui.cursor().top();
-        ui.scope(|ui| {
-            ui.set_max_height(max_h);
-            section_rows(ui, section, Some(&mut state.filter), max_h);
-        });
-        let after = ui.cursor().top();
-        state.rects.panel = Some(Rect::from_min_max(
-            pos2(row.left(), before),
-            pos2(row.right(), after),
-        ));
-        separator(ui, width);
-    }
 
     // Status bar at the foot, the explorer footer's height with its
     // hairline (SPEC.md *Footer*); the content gets what is left.
-    let status_h = crate::theme::metrics(ui.ctx()).footer_height();
+    let status_h = theme::metrics(ui.ctx()).footer_height();
     let content_h = (ui.available_height() - status_h).max(0.0);
     let (content, _) = ui.allocate_exact_size(vec2(width, content_h), egui::Sense::hover());
     state.rects.content = Some(content);
@@ -246,42 +319,232 @@ pub fn show(
             .layout(egui::Layout::top_down(Align::Min)),
     );
     inner.set_clip_rect(content.intersect(ui.clip_rect()));
-    match view.pane {
-        Some(pane) => match previews.content(
-            &mut inner,
-            pane,
-            view.target,
-            view.entry,
-            view.text_settings,
-        ) {
-            Some(PreviewAct::LoadMore) => {
-                requests.push(Request::Command(Command::PreviewMore(pane)));
-            }
-            Some(PreviewAct::PreviewAnyway) => {
-                requests.push(Request::Command(Command::PreviewAnyway(pane)));
-            }
-            Some(PreviewAct::PreviewAlways) => {
-                requests.push(Request::Command(Command::PreviewAlways(pane)));
-            }
-            Some(PreviewAct::Retry) => {
-                requests.push(Request::Command(Command::PreviewRetry(pane)));
-            }
-            Some(PreviewAct::Browse { setting, filters }) => {
-                requests.push(Request::BrowseLibrary {
-                    pane,
-                    setting,
-                    filters,
-                });
-            }
-            None => {}
-        },
-        None => {
-            inner.weak(t!("inspector-select-a-file-to-preview"));
+    inner.spacing_mut().item_spacing.y = 0.0;
+
+    // The pinned card: at the top of the content, inside its margin, and
+    // the content below it.
+    state.rects.panel = None;
+    if view.pinned
+        && let Some(card) = view.card(Some(true), ROWS_PINNED)
+    {
+        inner.add_space(10.0);
+        let mut pinned = inner.new_child(egui::UiBuilder::new().max_rect(Rect::from_min_max(
+            pos2(content.left() + CARD_MARGIN, inner.cursor().top()),
+            pos2(content.right() - CARD_MARGIN, content.bottom()),
+        )));
+        let outcome = info_card::show(&mut pinned, &card, &mut state.card, content.height() * 0.5);
+        if outcome.pin {
+            acts.push(view.pin(false));
         }
+        state.rects.panel = outcome.rect;
+        let used = outcome.rect.map_or(0.0, |rect| rect.height());
+        inner.add_space(used + 10.0);
+    }
+    let body = inner.available_rect_before_wrap();
+    let mut body_ui = inner.new_child(
+        egui::UiBuilder::new()
+            .max_rect(body)
+            .layout(egui::Layout::top_down(Align::Min)),
+    );
+    body_ui.set_clip_rect(body.intersect(ui.clip_rect()));
+    match view.pane.filter(|_| view.target.is_some()) {
+        Some(pane) => {
+            let home = app.platform().home_dir();
+            let plugins = app.platform().config_dir().join("plugins");
+            let around = Around {
+                home: &home,
+                plugins: &plugins,
+                still: app.platform().reduce_motion(),
+                dates: crate::format::Dates::of(&app.model().settings),
+                columns: &app.model().settings.preview.columns,
+            };
+            let act = previews.content(
+                &mut body_ui,
+                pane,
+                view.target,
+                view.entry,
+                view.text_settings,
+                &around,
+            );
+            // Either button of the size-limit card clears the card at
+            // once: the download is what the pane shows from here.
+            if matches!(
+                act,
+                Some(PreviewAct::PreviewAnyway | PreviewAct::PreviewAlways)
+            ) {
+                previews.fetching(pane);
+            }
+            match act {
+                Some(PreviewAct::Columns(widths)) => {
+                    if let Some(previewer) = view.previewer {
+                        acts.push(Act::Setting(SettingsChange::PreviewColumns {
+                            previewer: previewer.0.to_owned(),
+                            widths,
+                        }));
+                    }
+                }
+                Some(act) => apply_preview_act(act, pane, app, ui.ctx(), requests),
+                None => {}
+            }
+        }
+        None => nothing_selected(&mut body_ui),
     }
     status_bar(ui, width, status_h, &view, state);
+    popover(ui, &view, state, info, content, &mut acts);
 
     apply_acts(acts, view.pane, previews, requests)
+}
+
+/// What a button in the content asked for.
+fn apply_preview_act(
+    act: PreviewAct,
+    pane: PaneId,
+    app: &App,
+    ctx: &egui::Context,
+    requests: &mut Vec<Request>,
+) {
+    match act {
+        PreviewAct::LoadMore => requests.push(Request::Command(Command::PreviewMore(pane))),
+        PreviewAct::PreviewAnyway => {
+            requests.push(Request::Command(Command::PreviewAnyway(pane)));
+        }
+        PreviewAct::PreviewAlways => {
+            requests.push(Request::Command(Command::PreviewAlways(pane)));
+        }
+        PreviewAct::Retry => requests.push(Request::Command(Command::PreviewRetry(pane))),
+        PreviewAct::Browse { setting, filters } => requests.push(Request::BrowseLibrary {
+            pane,
+            setting,
+            filters,
+        }),
+        PreviewAct::OpenWith => {
+            if let Some(ctx) = app.action_ctx(pane, Invocation::ContextMenu) {
+                requests.push(Request::RunAction {
+                    action: ext::ActionId("core.open_with"),
+                    ctx,
+                });
+            }
+        }
+        PreviewAct::Download(address) => ctx.open_url(egui::OpenUrl::new_tab(address)),
+        // The pane itself stores a table's widths.
+        PreviewAct::Columns(_) => {}
+        PreviewAct::OpenFolder(folder) => {
+            // The folder a library goes into is made when it is first shown.
+            let shown = std::fs::create_dir_all(&folder)
+                .map_err(types::Error::from_io)
+                .and_then(|()| app.platform().open(&folder));
+            if let Err(error) = shown {
+                requests.push(Request::Toast(ext::Level::Error, error.to_string()));
+            }
+        }
+    }
+}
+
+/// The empty state (SPEC.md *Nothing selected*): a 72 px `bg/subtle`
+/// circle holding the file glyph, *No file selected* and, under it,
+/// *Select a file to preview it here*, centred in the content.
+fn nothing_selected(ui: &mut egui::Ui) {
+    let scheme = theme::scheme(ui);
+    let rect = ui.available_rect_before_wrap();
+    let centre = rect.center();
+    let circle = centre - vec2(0.0, 36.0);
+    ui.painter().circle_filled(circle, 36.0, scheme.bg_subtle);
+    ui.painter().text(
+        circle,
+        Align2::CENTER_CENTER,
+        icons::FILE,
+        FontId::proportional(32.0),
+        scheme.icon_default,
+    );
+    let line = |text: String, y: f32, size: f32, colour: egui::Color32| {
+        let galley = ui
+            .painter()
+            .layout_no_wrap(text.clone(), FontId::proportional(size), colour);
+        let at = Rect::from_center_size(pos2(centre.x, y), galley.size());
+        ui.painter().galley(at.min, galley, colour);
+        ui.interact(
+            at,
+            ui.id().with(("empty", y.to_bits())),
+            egui::Sense::hover(),
+        )
+        .widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Label, true, text.clone()));
+    };
+    line(
+        t!("preview-no-file-selected"),
+        centre.y + 18.0,
+        14.0,
+        scheme.text_secondary,
+    );
+    line(
+        t!("inspector-select-a-file-to-preview"),
+        centre.y + 43.0,
+        TEXT_SECONDARY,
+        scheme.text_placeholder,
+    );
+}
+
+/// The card hanging under the info button (SPEC.md *File info card*, the
+/// popover): open while the pointer is on the button or on the card that
+/// opened, its right edge on the button's, at most 360 px wide, with a
+/// soft shadow and a pin in its head. Leaving both closes it.
+fn popover(
+    ui: &mut egui::Ui,
+    view: &View<'_>,
+    state: &mut PaneState,
+    info: Option<egui::Response>,
+    content: Rect,
+    acts: &mut Vec<Act>,
+) {
+    let last = state.rects.popover.take();
+    let Some(info) = info.filter(|_| !view.pinned) else {
+        state.popover = false;
+        return;
+    };
+    let Some(card) = view.card(Some(false), ROWS_POPOVER) else {
+        state.popover = false;
+        return;
+    };
+    let pointer = ui.ctx().pointer_hover_pos();
+    // The way from the button down to the card belongs to both.
+    let over_card = state.popover
+        && last.is_some_and(|rect| {
+            let reach = rect.union(info.rect).expand(4.0);
+            pointer.is_some_and(|at| reach.contains(at))
+        });
+    state.popover = info.hovered() || over_card;
+    if !state.popover {
+        return;
+    }
+    let scheme = theme::scheme(ui);
+    let width = POPOVER_WIDTH.min(content.width() - 16.0).max(MIN_WIDTH);
+    let right = info.rect.right().min(content.right() - 8.0);
+    let at = pos2(
+        (right - width).max(content.left() + 8.0),
+        content.top() + 6.0,
+    );
+    let area = egui::Area::new(ui.id().with("file-info-popover"))
+        .order(egui::Order::Foreground)
+        .fixed_pos(at)
+        .constrain(false)
+        .show(ui.ctx(), |ui| {
+            egui::Frame::new()
+                .corner_radius(CARD_RADIUS)
+                .shadow(egui::epaint::Shadow {
+                    offset: [0, 6],
+                    blur: 20,
+                    spread: 0,
+                    color: scheme.shadow(),
+                })
+                .show(ui, |ui| {
+                    ui.set_width(width);
+                    info_card::show(ui, &card, &mut state.card, content.height() * 0.6)
+                })
+                .inner
+        });
+    if area.inner.pin {
+        acts.push(view.pin(true));
+    }
+    state.rects.popover = area.inner.rect;
 }
 
 /// Applies what the toolbar asked for; returns whether the close button
@@ -376,14 +639,25 @@ fn collect<'a>(ui: &egui::Ui, app: &'a App, previews: &mut Previews) -> View<'a>
     };
     let settings = &app.model().settings;
     let slot: Option<&Slot> = pane.map(|pane| previews.sync(ui.ctx(), pane, target));
-    let kind = slot.and_then(Slot::kind).unwrap_or("other");
-    let sections = sections_for(app, slot, entry);
-    let pinned = settings
-        .preview
-        .pinned
-        .get(kind)
-        .and_then(|id| sections.iter().position(|s| s.id == id));
-    let copy = slot.is_some_and(|s| {
+    // The card belongs to a document that is shown: a file no previewer
+    // took, or one that failed, has its card centred in the content.
+    let previewer = slot
+        .filter(|s| s.has_doc() && !matches!(s.content(), Some(Content::MissingLibrary(_))))
+        .and_then(Slot::previewer);
+    let rows = if previewer.is_some() {
+        card_rows(
+            &sections_for(app, slot, entry),
+            entry,
+            crate::format::Dates::of(settings),
+        )
+    } else {
+        Vec::new()
+    };
+    let pinned = previewer.is_some_and(|id| settings.preview.pinned.contains_key(id.0));
+    // The controls belong to a document that is shown; with the card
+    // centred in the content there is nothing for them to act on.
+    let shown = slot.filter(|_| previewer.is_some());
+    let copy = shown.is_some_and(|s| {
         s.text_layer().is_some()
             && s.pages().is_none()
             && !matches!(s.content(), Some(Content::Listing(_)))
@@ -393,16 +667,16 @@ fn collect<'a>(ui: &egui::Ui, app: &'a App, previews: &mut Previews) -> View<'a>
         target,
         entry,
         selected: selected.len(),
-        entries: tab.map(|t| t.listing.len()),
-        kind,
-        is_text: slot.is_some_and(Slot::is_text),
-        is_raster: slot.is_some_and(Slot::is_raster),
-        actual_size: slot.is_some_and(|s| s.actual_size),
-        pages: slot.and_then(Slot::pages),
-        shown_page: slot.map_or(0, |s| s.page),
+        previewer,
+        is_text: shown.is_some_and(Slot::is_text),
+        is_raster: shown.is_some_and(Slot::is_raster),
+        actual_size: shown.is_some_and(|s| s.actual_size),
+        pages: shown.and_then(Slot::pages),
+        shown_page: shown.map_or(0, |s| s.page),
         text_settings: settings.preview.text,
-        controls: slot.map(|s| s.controls().to_vec()).unwrap_or_default(),
-        sections,
+        controls: shown.map(|s| s.controls().to_vec()).unwrap_or_default(),
+        line: entry.map_or_else(String::new, |e| crate::preview::type_and_size(e, false)),
+        rows,
         pinned,
         status: slot.map(|s| s.status().to_vec()).unwrap_or_default(),
         copy,
@@ -500,9 +774,8 @@ fn status_bar(ui: &mut egui::Ui, width: f32, height: f32, view: &View<'_>, state
     let text = if view.status.is_empty() {
         match (view.entry, view.selected) {
             (Some(entry), _) => model::type_of(entry).clone(),
-            (None, 0) => view
-                .entries
-                .map_or_else(String::new, |n| format!("{n} entries")),
+            // Nothing selected: the footer is empty.
+            (None, 0) => String::new(),
             (None, n) => format!("{n} items selected"),
         }
     } else {
@@ -537,7 +810,8 @@ fn separator(ui: &mut egui::Ui, width: f32) {
 
 /// One row with `space/toolbar-x` padding: the file icon, the controls,
 /// then from the right the pane handle after a hairline, the close button
-/// and the badges. Icons only, labels as tooltips.
+/// and the info button. Icons only, labels as tooltips. Returns the info
+/// button's response while it has a card to open.
 fn toolbar(
     ui: &mut egui::Ui,
     row: Rect,
@@ -545,10 +819,10 @@ fn toolbar(
     state: &mut PaneState,
     acts: &mut Vec<Act>,
     handle: &mut Handle<'_>,
-) {
-    let inner = row.shrink2(vec2(crate::theme::metrics(ui.ctx()).space_toolbar_x, 0.0));
-    // Right: the handle and its hairline, close, then the badges, so they
-    // keep their place.
+) -> Option<egui::Response> {
+    let inner = row.shrink2(vec2(theme::metrics(ui.ctx()).space_toolbar_x, 0.0));
+    // Right: the handle and its hairline, close, then the info button, so
+    // they keep their place.
     let mut right = ui.new_child(
         egui::UiBuilder::new()
             .max_rect(inner)
@@ -561,10 +835,10 @@ fn toolbar(
         *handle.slot = Some(handle.drag);
     }
     crate::widgets::divider(&mut right, 16.0);
-    if icon_button(&mut right, icons::CLOSE, "Close", None).clicked() {
+    if icon_button(&mut right, icons::CLOSE, &t!("close"), None).clicked() {
         acts.push(Act::Close);
     }
-    badges(&mut right, view, state, acts);
+    let info = info_button(&mut right, view, state, acts);
     let right_edge = right.min_rect().left();
 
     // Left: the file icon, then the controls.
@@ -599,33 +873,72 @@ fn toolbar(
     if view.copy && button(&mut left, state, icons::COPY, &t!("inspector-copy"), true) {
         acts.push(Act::Copy);
     }
+    info
 }
 
-/// The badges, right to left so the first section ends up leftmost.
-fn badges(ui: &mut egui::Ui, view: &View<'_>, state: &mut PaneState, acts: &mut Vec<Act>) {
-    for (i, section) in view.sections.iter().enumerate().rev() {
-        let is_pinned = view.pinned == Some(i);
-        let response = icon_button(ui, section.glyph, &section.title, Some(is_pinned));
-        let response = response.on_hover_ui(|ui| {
-            ui.set_max_width(360.0);
-            ui.strong(&section.title);
-            section_rows(ui, section, None, 320.0);
-        });
-        if response.clicked() {
-            acts.push(Act::Setting(SettingsChange::PreviewPin {
-                kind: view.kind.to_owned(),
-                section: (!is_pinned).then(|| section.id.to_owned()),
-            }));
-        }
-        state.badges.insert(
-            0,
-            BadgeItem {
-                id: section.id.to_owned(),
-                title: section.title.clone(),
-                pinned: is_pinned,
-            },
+/// The info button: one for every file. With a document shown it opens
+/// the File info card under itself while the pointer is on it, and a click
+/// pins or unpins the card; pinned, it carries the tint of an active
+/// toggle. With nothing to describe it is there and inert.
+fn info_button(
+    ui: &mut egui::Ui,
+    view: &View<'_>,
+    state: &mut PaneState,
+    acts: &mut Vec<Act>,
+) -> Option<egui::Response> {
+    let name = t!("preview-file-info");
+    let (rect, _) = ui.allocate_exact_size(vec2(26.0, 26.0), egui::Sense::hover());
+    if view.card(None, 0).is_none() {
+        state.info = Info::Inert;
+        let scheme = theme::scheme(ui);
+        ui.painter().text(
+            rect.center(),
+            Align2::CENTER_CENTER,
+            icons::INFO,
+            FontId::proportional(theme::ICON),
+            scheme.icon_default,
         );
+        ui.interact(rect, ui.id().with("file-info-inert"), egui::Sense::hover())
+            .widget_info(|| {
+                egui::WidgetInfo::labeled(egui::WidgetType::Button, false, name.clone())
+            });
+        return None;
     }
+    state.info = if view.pinned {
+        Info::Pinned
+    } else {
+        Info::Unpinned
+    };
+    // No tooltip of its own: the card is what the pointer brings up.
+    let scheme = theme::scheme(ui);
+    let radius = theme::metrics(ui.ctx()).corner_radius();
+    let response = ui.interact(rect, ui.id().with("file-info"), egui::Sense::click());
+    let open = state.popover;
+    if view.pinned {
+        ui.painter()
+            .rect_filled(rect, radius, scheme.bg_selected_soft);
+    } else if response.hovered() || open {
+        ui.painter().rect_filled(rect, radius, scheme.bg_subtle);
+    }
+    ui.painter().text(
+        rect.center(),
+        Align2::CENTER_CENTER,
+        icons::INFO,
+        FontId::proportional(theme::ICON),
+        if view.pinned {
+            scheme.accent_focus
+        } else {
+            scheme.icon_default
+        },
+    );
+    let pinned = view.pinned;
+    response.widget_info(|| {
+        egui::WidgetInfo::selected(egui::WidgetType::Button, true, pinned, name.clone())
+    });
+    if response.clicked() {
+        acts.push(view.pin(!view.pinned));
+    }
+    Some(response)
 }
 
 /// The controls the kind of document supplies: line numbers and wrap for
@@ -754,82 +1067,4 @@ fn icon_button(ui: &mut egui::Ui, glyph: &str, label: &str, on: Option<bool>) ->
             .min_size(vec2(24.0, 24.0)),
     )
     .on_hover_text(label)
-}
-
-/// A section's rows as a key–value list: searchable when long, copy on
-/// every row, scrolling past `max_h`. Values truncate to the width.
-pub(crate) fn section_rows(
-    ui: &mut egui::Ui,
-    section: &Section,
-    filter: Option<&mut String>,
-    max_h: f32,
-) {
-    let width = ui.available_width();
-    let needle = match filter {
-        Some(filter) if section.rows.len() > SEARCHABLE_FROM => {
-            ui.add_space(4.0);
-            ui.add_sized(
-                vec2(width - 8.0, ui.spacing().interact_size.y),
-                egui::TextEdit::singleline(filter).hint_text(t!("inspector-search")),
-            );
-            ui.add_space(2.0);
-            filter.trim().to_lowercase()
-        }
-        _ => String::new(),
-    };
-    let rows: Vec<&(String, String)> = section
-        .rows
-        .iter()
-        .filter(|(k, v)| {
-            needle.is_empty()
-                || k.to_lowercase().contains(&needle)
-                || v.to_lowercase().contains(&needle)
-        })
-        .collect();
-    let key_w = (width * 0.35).clamp(48.0, 160.0);
-    egui::ScrollArea::vertical()
-        .id_salt(("section", section.id))
-        .max_height(max_h)
-        .auto_shrink([false, true])
-        .show(ui, |ui| {
-            ui.set_width(width);
-            for (key, value) in rows {
-                section_row(ui, width, key_w, key, value);
-            }
-            if section.rows.is_empty() {
-                ui.weak(t!("inspector-nothing-to-show"));
-            }
-        });
-}
-
-/// One key–value row with a copy button; both labels truncate.
-fn section_row(ui: &mut egui::Ui, width: f32, key_w: f32, key: &str, value: &str) {
-    let height = ui.spacing().interact_size.y;
-    let (rect, _) = ui.allocate_exact_size(vec2(width, height), egui::Sense::hover());
-    let mut row = ui.new_child(
-        egui::UiBuilder::new()
-            .max_rect(rect)
-            .layout(egui::Layout::left_to_right(Align::Center)),
-    );
-    row.set_clip_rect(rect.intersect(ui.clip_rect()));
-    row.add_space(6.0);
-    row.add_sized(
-        vec2(key_w, height),
-        egui::Label::new(egui::RichText::new(key).weak())
-            .selectable(false)
-            .truncate(),
-    );
-    let copy_w = 22.0;
-    let value_w = (rect.right() - row.cursor().left() - copy_w - 8.0).max(8.0);
-    row.add_sized(
-        vec2(value_w, height),
-        egui::Label::new(value).selectable(false).truncate(),
-    );
-    if row
-        .add(egui::Button::new(egui::RichText::new(icons::COPY).small()).frame(false))
-        .on_hover_text(t!("inspector-copy"))
-        .clicked()
-    {
-        row.ctx().copy_text(value.to_owned());
-    }
 }

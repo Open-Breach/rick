@@ -386,11 +386,11 @@ fn screenshots_of_the_preview_pane() {
     settle(&mut harness);
     shoot(&mut harness, "preview-json-pretty");
 
-    // A photo with its EXIF section pinned.
+    // A photo with its File info card pinned.
     preview(&mut harness, "IMG_1200.jpg");
-    harness.get_by_label(icons::CAMERA).click();
+    harness.get_by_label("File info").click();
     settle(&mut harness);
-    shoot(&mut harness, "preview-image-exif-pinned");
+    shoot(&mut harness, "preview-image-info-pinned");
 
     // An A3 page in a narrow pane.
     let mut harness = shell(&root, egui::vec2(1100.0, 760.0));
@@ -2266,6 +2266,1411 @@ fn screenshots_of_the_context_menus() {
     }
 }
 
+/// Issue 139, item 2: the application menu under its button — the three
+/// groups, an icon on every entry, the shortcut hints, the submenu carets
+/// and the version beside About Rick — with the pointer on New window as
+/// the Figma frame has it (`138:4031`, dark `138:4115`), in Light and Dark
+/// at both densities. The installer is loaded where it runs, for its
+/// submenu.
+#[test]
+#[ignore = "needs a wgpu adapter; CI runs it and uploads the images"]
+fn screenshots_of_the_app_menu() {
+    use egui_kittest::kittest::Queryable as _;
+    let (_dir, deep) = sample_tree();
+    let fake = Arc::new(Fake::new().unwrap_or_else(|e| panic!("{e}")));
+    let host = Arc::new(EguiHost::new());
+    let app = app::App::new(app::Config {
+        platform: fake.clone(),
+        ui: host.clone(),
+        extensions: vec![
+            Arc::new(ext_preview_text::TextPreview::new()),
+            Arc::new(ext_preview_image::ImagePreview::new()),
+            Arc::new(ext_installer::InstallerExtension::new()),
+        ],
+        config_dir: Some(fake.config_dir()),
+        start: Some(local(&deep)),
+    });
+    let mut harness = Harness::builder()
+        .with_size(egui::vec2(1280.0, 720.0))
+        .with_pixels_per_point(2.0)
+        .build_eframe(move |cc| RickUi::new(app, host, &cc.egui_ctx));
+    settle(&mut harness);
+    for (theme, density) in [
+        (Theme::Light, Density::Comfortable),
+        (Theme::Light, Density::Compact),
+        (Theme::Dark, Density::Comfortable),
+        (Theme::Dark, Density::Compact),
+    ] {
+        for change in [
+            SettingsChange::Theme(theme),
+            SettingsChange::Density(density),
+        ] {
+            harness
+                .state_mut()
+                .app_mut()
+                .handle(app::Command::Settings(change), &mut Vec::new());
+        }
+        settle(&mut harness);
+        let theme_name = match theme {
+            Theme::Light => "light",
+            Theme::Dark => "dark",
+            Theme::System => "system",
+        };
+        let density_name = match density {
+            Density::Comfortable => "comfortable",
+            Density::Compact => "compact",
+        };
+        harness.get_by_label("Menu").click();
+        harness.step();
+        harness.step();
+        let first = harness.get_by_label("New window").rect().center();
+        harness.event(egui::Event::PointerMoved(first));
+        harness.step();
+        harness.step();
+        shoot(
+            &mut harness,
+            &format!("app-menu-{theme_name}-{density_name}"),
+        );
+        // A submenu is a card of the same form: Layouts, opened by hover.
+        let layouts = harness.get_by_label_contains("Layouts").rect().center();
+        harness.event(egui::Event::PointerMoved(layouts));
+        for _ in 0..4 {
+            harness.step();
+        }
+        shoot(
+            &mut harness,
+            &format!("app-menu-layouts-{theme_name}-{density_name}"),
+        );
+        harness.key_press(egui::Key::Escape);
+        harness.step();
+        harness.step();
+    }
+}
+
+/// Issue 139, item 3: the paste-conflict dialogue as the Figma frames
+/// have it (`141:4082`) — one conflict; the third of twelve with the
+/// checkbox; and two folders, which the frames do not draw — in Light and
+/// Dark at both densities. The files are sparse, with the frames' sizes
+/// and dates.
+#[test]
+#[ignore = "needs a wgpu adapter; CI runs it and uploads the images"]
+#[allow(clippy::too_many_lines)]
+fn screenshots_of_the_paste_conflict_dialogue() {
+    use egui_kittest::kittest::Queryable as _;
+    use std::time::SystemTime;
+    const MIB: f64 = 1024.0 * 1024.0;
+    let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+    let (from, into) = (dir.path().join("from"), dir.path().join("test"));
+    fs::create_dir_all(from.join("Holiday")).unwrap_or_else(|e| panic!("{e}"));
+    fs::create_dir_all(into.join("Holiday")).unwrap_or_else(|e| panic!("{e}"));
+    let long = "Camera white appartment 5-14-2026 1.32.41pm GMT2 - 5-14-2026 1.33.08pm GMT2.mp4";
+    // A sparse file of `mib` MiB, modified `ago` before now.
+    let sparse = |path: &Path, mib: f64, ago: Duration| {
+        let file = fs::File::create(path).unwrap_or_else(|e| panic!("{e}"));
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        file.set_len((mib * MIB) as u64)
+            .unwrap_or_else(|e| panic!("{e}"));
+        file.set_modified(SystemTime::now() - ago)
+            .unwrap_or_else(|e| panic!("{e}"));
+    };
+    let mut names = vec![
+        "Alpha.txt".to_owned(),
+        "Beta.txt".to_owned(),
+        long.to_owned(),
+    ];
+    names.extend((1..=9).map(|n| format!("Notes {n:02}.txt")));
+    for name in &names {
+        let (old, new) = if name == long {
+            (48.2, 51.7)
+        } else {
+            (0.1, 0.2)
+        };
+        sparse(&into.join(name), old, Duration::from_secs(26 * 3600));
+        sparse(&from.join(name), new, Duration::from_secs(2 * 3600));
+    }
+    let mut harness = shell(&from, egui::vec2(1280.0, 800.0));
+    let run = |harness: &mut Harness<'_, RickUi>, action: &'static str| {
+        let pane = harness.state().app().model().focused;
+        harness
+            .state_mut()
+            .queue(Intent::Action(ext::ActionId(action)), pane);
+        harness.step();
+        harness.step();
+    };
+    // Copies the rows named by `pick` in `from` and pastes them into
+    // `into`, then waits for the dialogue.
+    let paste = |harness: &mut Harness<'_, RickUi>, pick: &dyn Fn(&str) -> bool| {
+        let pane = harness.state().app().model().focused;
+        harness.state_mut().app_mut().handle(
+            app::Command::Navigate {
+                pane,
+                to: local(&from),
+            },
+            &mut Vec::new(),
+        );
+        settle(harness);
+        let ids: Vec<types::EntryId> = harness
+            .state()
+            .app()
+            .model()
+            .active_tab(pane)
+            .map_or_else(|| panic!("no tab"), |(_, tab)| tab.clone())
+            .rows()
+            .filter(|e| pick(&e.name))
+            .map(|e| e.id)
+            .collect();
+        harness.state_mut().app_mut().handle(
+            app::Command::Select {
+                pane,
+                change: SelectionChange::Set(ids),
+            },
+            &mut Vec::new(),
+        );
+        settle(harness);
+        run(harness, "core.copy");
+        harness.state_mut().app_mut().handle(
+            app::Command::Navigate {
+                pane,
+                to: local(&into),
+            },
+            &mut Vec::new(),
+        );
+        settle(harness);
+        run(harness, "core.paste");
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while harness.state().app().model().conflicts.is_empty() {
+            assert!(Instant::now() < deadline, "no conflict dialogue");
+            harness.step();
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        harness.step();
+        harness.step();
+    };
+    let cancel = |harness: &mut Harness<'_, RickUi>| {
+        harness.get_by_label("Cancel").click();
+        harness.step();
+        settle(harness);
+    };
+    let modes = [
+        (Theme::Light, Density::Comfortable, "light-comfortable"),
+        (Theme::Light, Density::Compact, "light-compact"),
+        (Theme::Dark, Density::Comfortable, "dark-comfortable"),
+        (Theme::Dark, Density::Compact, "dark-compact"),
+    ];
+    let set = |harness: &mut Harness<'_, RickUi>, theme: Theme, density: Density| {
+        for change in [
+            SettingsChange::Theme(theme),
+            SettingsChange::Density(density),
+        ] {
+            harness
+                .state_mut()
+                .app_mut()
+                .handle(app::Command::Settings(change), &mut Vec::new());
+        }
+        // The pointer rests outside the dialogue, on no button.
+        harness.event(egui::Event::PointerMoved(egui::pos2(40.0, 780.0)));
+        for _ in 0..4 {
+            harness.step();
+        }
+    };
+
+    // One conflict: no count, no checkbox.
+    paste(&mut harness, &|name| name == long);
+    for (theme, density, mode) in modes {
+        set(&mut harness, theme, density);
+        shoot(&mut harness, &format!("paste-conflict-one-{mode}"));
+    }
+    cancel(&mut harness);
+
+    // The third of twelve, with the checkbox.
+    paste(&mut harness, &|name| name != "Holiday");
+    for _ in 0..2 {
+        harness.get_by_label("Skip").click();
+        harness.step();
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while harness.state().app().model().conflicts.is_empty() {
+            assert!(Instant::now() < deadline, "no further conflict");
+            harness.step();
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        harness.step();
+        harness.step();
+    }
+    for (theme, density, mode) in modes {
+        set(&mut harness, theme, density);
+        shoot(&mut harness, &format!("paste-conflict-several-{mode}"));
+    }
+    cancel(&mut harness);
+
+    // Two folders: Merge, and no Keep both.
+    paste(&mut harness, &|name| name == "Holiday");
+    for (theme, density, mode) in modes {
+        set(&mut harness, theme, density);
+        shoot(&mut harness, &format!("paste-conflict-folders-{mode}"));
+    }
+    cancel(&mut harness);
+}
+
+/// Issue 139, item 5: the preview pane as the Figma frames have it
+/// (`149:4630`) — nothing selected; a photo with the File info card
+/// hanging under the info button, and with it pinned; a file no previewer
+/// claims; and a PDF on a machine without pdfium — in Light and Dark at
+/// both densities, in a pane 600 px wide as the frames are.
+#[test]
+#[ignore = "needs a wgpu adapter; CI runs it and uploads the images"]
+#[allow(clippy::too_many_lines)]
+fn screenshots_of_the_file_info_card() {
+    use egui_kittest::kittest::Queryable as _;
+    let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+    let root = dir.path().join("16-binary-hex");
+    fs::create_dir_all(&root).unwrap_or_else(|e| panic!("{e}"));
+    let photo = "Camera white appartment 5-14-2026 1.32.41pm GMT2.jpg";
+    fs::write(root.join(photo), media::photo_jpeg(1024, 768)).unwrap_or_else(|e| panic!("{e}"));
+    let noise: Vec<u8> = (0..4096u32)
+        .map(|i| (i.wrapping_mul(2_654_435_761) >> 13).to_le_bytes()[0])
+        .collect();
+    fs::write(root.join("random-4k.bin"), noise).unwrap_or_else(|e| panic!("{e}"));
+    fs::write(
+        root.join("hallway_chandeliers_sign_v2.pdf"),
+        media::pdf(1, 595, 842),
+    )
+    .unwrap_or_else(|e| panic!("{e}"));
+    // A window whose PDF previewer looks in its setting alone, as on a
+    // machine without pdfium, with the hex previewer loaded.
+    let fake = Arc::new(Fake::new().unwrap_or_else(|e| panic!("{e}")));
+    let host = Arc::new(EguiHost::new());
+    let app = app::App::new(app::Config {
+        platform: fake.clone(),
+        ui: host.clone(),
+        extensions: vec![
+            Arc::new(ext_preview_text::TextPreview::new()),
+            Arc::new(ext_preview_image::ImagePreview::new()),
+            Arc::new(ext_preview_hex::HexPreview::new()),
+            Arc::new(ext_preview_pdf::PdfPreview::with_search(
+                ext_preview_pdf::Search::SettingOnly,
+            )),
+        ],
+        config_dir: Some(fake.config_dir()),
+        start: Some(local(&root)),
+    });
+    let mut harness = Harness::builder()
+        .with_size(egui::vec2(1280.0, 800.0))
+        .with_pixels_per_point(2.0)
+        .build_eframe(move |cc| RickUi::new(app, host, &cc.egui_ctx));
+    settle(&mut harness);
+    harness.state_mut().set_inspector_width(600.0);
+    let pane = harness.state().app().model().focused;
+    harness.state_mut().queue(Intent::ToggleInspector, pane);
+    settle(&mut harness);
+    let modes = [
+        (Theme::Light, Density::Comfortable, "light-comfortable"),
+        (Theme::Light, Density::Compact, "light-compact"),
+        (Theme::Dark, Density::Comfortable, "dark-comfortable"),
+        (Theme::Dark, Density::Compact, "dark-compact"),
+    ];
+    let set = |harness: &mut Harness<'_, RickUi>, theme: Theme, density: Density| {
+        for change in [
+            SettingsChange::Theme(theme),
+            SettingsChange::Density(density),
+        ] {
+            harness
+                .state_mut()
+                .app_mut()
+                .handle(app::Command::Settings(change), &mut Vec::new());
+        }
+        // The pointer rests on nothing.
+        harness.event(egui::Event::PointerMoved(egui::pos2(300.0, 780.0)));
+        for _ in 0..4 {
+            harness.step();
+        }
+    };
+
+    // Nothing selected.
+    for (theme, density, mode) in modes {
+        set(&mut harness, theme, density);
+        shoot(&mut harness, &format!("preview-empty-{mode}"));
+    }
+    eprintln!("the preview pane: {:?}", harness.state().inspector_rect());
+
+    // A photo: the card hanging under the info button.
+    preview(&mut harness, photo);
+    for (theme, density, mode) in modes {
+        set(&mut harness, theme, density);
+        harness.get_by_label("File info").hover();
+        for _ in 0..6 {
+            harness.step();
+        }
+        shoot(&mut harness, &format!("preview-info-hover-{mode}"));
+    }
+
+    // The card pinned above the picture.
+    harness.get_by_label("File info").click();
+    settle(&mut harness);
+    for (theme, density, mode) in modes {
+        set(&mut harness, theme, density);
+        shoot(&mut harness, &format!("preview-info-pinned-{mode}"));
+    }
+    harness.get_by_label("File info").click();
+    settle(&mut harness);
+
+    // A file no previewer claims, and a PDF without pdfium: the card
+    // centred, with what can be done.
+    for (name, scene) in [
+        ("random-4k.bin", "preview-no-previewer"),
+        ("hallway_chandeliers_sign_v2.pdf", "preview-missing-library"),
+    ] {
+        let pane = harness.state().app().model().focused;
+        let id = harness
+            .state()
+            .app()
+            .model()
+            .active_tab(pane)
+            .and_then(|(_, t)| t.listing.rows().find(|e| e.name == name).map(|e| e.id))
+            .unwrap_or_else(|| panic!("no entry {name}"));
+        harness.state_mut().app_mut().handle(
+            app::Command::Select {
+                pane,
+                change: SelectionChange::Set(vec![id]),
+            },
+            &mut Vec::new(),
+        );
+        settle(&mut harness);
+        for _ in 0..6 {
+            harness.step();
+        }
+        for (theme, density, mode) in modes {
+            set(&mut harness, theme, density);
+            shoot(&mut harness, &format!("{scene}-{mode}"));
+        }
+    }
+}
+
+/// Issue 139, item 6: the tables of the preview as the Figma frame has
+/// them (`150:4368`) — the archive tree and the CSV grid under the one
+/// header band, striped from the second row — in Light and Dark at both
+/// densities.
+#[test]
+#[ignore = "needs a wgpu adapter; CI runs it and uploads the images"]
+fn screenshots_of_the_preview_tables() {
+    use std::io::Write as _;
+    let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+    let root = dir.path().join("tables");
+    fs::create_dir_all(&root).unwrap_or_else(|e| panic!("{e}"));
+    // The frame's archive: a folder, a folder inside it, three documents.
+    let mut zip = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+    let options = zip::write::SimpleFileOptions::default()
+        .compression_method(zip::CompressionMethod::Deflated);
+    for folder in [
+        "Kreditkarte - Farbcodiert/",
+        "Kreditkarte - Farbcodiert/2024/",
+    ] {
+        zip.add_directory(folder, options)
+            .unwrap_or_else(|e| panic!("{e}"));
+    }
+    for (index, kib) in [150usize, 249, 135].into_iter().enumerate() {
+        let name = format!(
+            "Kreditkarte - Farbcodiert/2024/default_0{}_2024_annotated.pdf",
+            index + 1
+        );
+        zip.start_file(name, options)
+            .unwrap_or_else(|e| panic!("{e}"));
+        // Text that deflates a little, as a document would.
+        let body: Vec<u8> = (0..kib * 1024)
+            .map(|i| (i.wrapping_mul(2_654_435_761) >> 11).to_le_bytes()[0] | 0x20)
+            .collect();
+        zip.write_all(&body).unwrap_or_else(|e| panic!("{e}"));
+    }
+    let bytes = zip.finish().unwrap_or_else(|e| panic!("{e}")).into_inner();
+    fs::write(root.join("Kreditkarte.zip"), bytes).unwrap_or_else(|e| panic!("{e}"));
+    fs::write(
+        root.join("products.csv"),
+        "id,title,description,price\n\
+         1,\"Rick, the file manager\",\"Fast listing, \"\"god-like\"\"\",0.00\n\
+         2,Multi-line field,First line of two,12.50\n\
+         3,Trailing spaces  ,  leading spaces,7\n\
+         4,Unquoted,plain,3\n",
+    )
+    .unwrap_or_else(|e| panic!("{e}"));
+
+    let fake = Arc::new(Fake::new().unwrap_or_else(|e| panic!("{e}")));
+    let host = Arc::new(EguiHost::new());
+    let app = app::App::new(app::Config {
+        platform: fake.clone(),
+        ui: host.clone(),
+        extensions: vec![
+            Arc::new(ext_preview_text::TextPreview::new()),
+            Arc::new(ext_preview_markup::MarkupPreview::new()),
+            Arc::new(ext_preview_archive::ArchivePreview::new()),
+        ],
+        config_dir: Some(fake.config_dir()),
+        start: Some(local(&root)),
+    });
+    let mut harness = Harness::builder()
+        .with_size(egui::vec2(1280.0, 800.0))
+        .with_pixels_per_point(2.0)
+        .build_eframe(move |cc| RickUi::new(app, host, &cc.egui_ctx));
+    settle(&mut harness);
+    harness.state_mut().set_inspector_width(600.0);
+    let modes = [
+        (Theme::Light, Density::Comfortable, "light-comfortable"),
+        (Theme::Light, Density::Compact, "light-compact"),
+        (Theme::Dark, Density::Comfortable, "dark-comfortable"),
+        (Theme::Dark, Density::Compact, "dark-compact"),
+    ];
+    for (name, scene) in [
+        ("Kreditkarte.zip", "preview-table-archive"),
+        ("products.csv", "preview-table-csv"),
+    ] {
+        preview(&mut harness, name);
+        settle(&mut harness);
+        for (theme, density, mode) in modes {
+            for change in [
+                SettingsChange::Theme(theme),
+                SettingsChange::Density(density),
+            ] {
+                harness
+                    .state_mut()
+                    .app_mut()
+                    .handle(app::Command::Settings(change), &mut Vec::new());
+            }
+            // The pointer rests on nothing.
+            harness.event(egui::Event::PointerMoved(egui::pos2(300.0, 780.0)));
+            for _ in 0..4 {
+                harness.step();
+            }
+            shoot(&mut harness, &format!("{scene}-{mode}"));
+        }
+    }
+    eprintln!("the preview pane: {:?}", harness.state().inspector_rect());
+}
+
+/// The small items of issue 139 (item 11), in Light and Dark at both
+/// densities: the window group with its wider steps beside a console's
+/// tab titled *Console*; the Hash dialogue's secondary line cut before
+/// the close button; and a failed job — the notice that stays, and the
+/// drawer's row at rest and unfolded to the whole error.
+#[test]
+#[ignore = "needs a wgpu adapter; CI runs it and uploads the images"]
+#[allow(clippy::too_many_lines)]
+fn screenshots_of_the_small_items() {
+    use egui::accesskit::Role;
+    use egui_kittest::kittest::{NodeT as _, Queryable as _};
+    use ext::{
+        API_VERSION, Action, ActionCtx, ActionGroup, ActionId, ActionOutcome, Availability,
+        Capabilities, Extension, Manifest, Platforms, Points, Registry, Shortcut, UiHost, Version,
+    };
+    use types::Error;
+
+    /// An action whose job fails with a long error.
+    struct Sync;
+    impl Action for Sync {
+        fn id(&self) -> ActionId {
+            ActionId("test.sync")
+        }
+        fn label(&self) -> String {
+            "Sync photos".to_owned()
+        }
+        fn group(&self) -> ActionGroup {
+            ActionGroup::Core
+        }
+        fn default_shortcut(&self) -> Option<Shortcut> {
+            None
+        }
+        fn availability(&self, _: &ActionCtx) -> Availability {
+            Availability::Enabled
+        }
+        fn run(
+            &self,
+            _ctx: ActionCtx,
+            jobs: &runtime::JobRunner,
+            _ui: &dyn UiHost,
+        ) -> Result<ActionOutcome, Error> {
+            let handle = jobs.spawn_named("Copy 14 items to archive", |_job| async move {
+                Err::<(), Error>(Error::Io(std::io::Error::other(
+                    "Invalid argument: the destination \
+                     /mnt/archive/2026/photos/holiday/day-one/edited/IMG_1204-final-retouched.png \
+                     could not be written, because the volume it is on was taken away while the \
+                     copy was running",
+                )))
+            });
+            Ok(ActionOutcome::Started(handle.id))
+        }
+    }
+    struct SyncExtension(Manifest);
+    impl Extension for SyncExtension {
+        fn manifest(&self) -> &Manifest {
+            &self.0
+        }
+        fn register(&self, reg: &mut Registry) -> Result<(), Error> {
+            reg.action(Arc::new(Sync));
+            Ok(())
+        }
+    }
+
+    let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+    let folder = dir.path().join("holiday-2026");
+    fs::create_dir_all(&folder).unwrap_or_else(|e| panic!("{e}"));
+    let long = format!("{}.tar.zst", "backup-of-the-whole-photo-archive-".repeat(4));
+    fs::write(folder.join(&long), vec![7_u8; 70_000]).unwrap_or_else(|e| panic!("{e}"));
+    fs::write(folder.join("notes.txt"), "notes").unwrap_or_else(|e| panic!("{e}"));
+    let fake = Arc::new(Fake::new().unwrap_or_else(|e| panic!("{e}")));
+    let host = Arc::new(EguiHost::new());
+    let app = app::App::new(app::Config {
+        platform: fake.clone(),
+        ui: host.clone(),
+        extensions: vec![
+            Arc::new(ext_action_terminal::TerminalExtension::new()),
+            Arc::new(SyncExtension(Manifest {
+                id: types::ExtId("test-sync"),
+                name: "Sync",
+                description: "",
+                version: Version::new(1, 0, 0),
+                api_version: API_VERSION,
+                requires: Capabilities::empty(),
+                points: Points::ACTION,
+                platforms: Platforms::ALL,
+                previews: &[],
+                commands: &[],
+            })),
+        ],
+        config_dir: Some(fake.config_dir()),
+        start: Some(local(&folder)),
+    });
+    let mut harness = Harness::builder()
+        .with_size(egui::vec2(1280.0, 720.0))
+        .with_pixels_per_point(2.0)
+        .build_eframe(move |cc| RickUi::new(app, host, &cc.egui_ctx));
+    settle(&mut harness);
+    let modes = [
+        (Theme::Light, Density::Comfortable, "light-comfortable"),
+        (Theme::Light, Density::Compact, "light-compact"),
+        (Theme::Dark, Density::Comfortable, "dark-comfortable"),
+        (Theme::Dark, Density::Compact, "dark-compact"),
+    ];
+    let set = |harness: &mut Harness<'_, RickUi>, theme: Theme, density: Density| {
+        for change in [
+            SettingsChange::Theme(theme),
+            SettingsChange::Density(density),
+        ] {
+            harness
+                .state_mut()
+                .app_mut()
+                .handle(app::Command::Settings(change), &mut Vec::new());
+        }
+        harness.event(egui::Event::PointerMoved(egui::pos2(640.0, 500.0)));
+        for _ in 0..4 {
+            harness.step();
+        }
+    };
+    let explorer = harness.state().app().model().focused;
+
+    // The hash dialogue on the file with the long name.
+    let id = harness
+        .state()
+        .app()
+        .model()
+        .active_tab(explorer)
+        .and_then(|(_, tab)| tab.listing.rows().find(|e| e.name == long).map(|e| e.id))
+        .unwrap_or_else(|| panic!("the file is listed"));
+    harness.state_mut().app_mut().handle(
+        app::Command::Select {
+            pane: explorer,
+            change: SelectionChange::Set(vec![id]),
+        },
+        &mut Vec::new(),
+    );
+    harness.step();
+    harness
+        .state_mut()
+        .queue(Intent::Action(ActionId("core.hash")), explorer);
+    settle(&mut harness);
+    for (theme, density, mode) in modes {
+        set(&mut harness, theme, density);
+        shoot(&mut harness, &format!("small-hash-{mode}"));
+    }
+    harness.get_by_role_and_label(Role::Button, "Done").click();
+    settle(&mut harness);
+
+    // A failed job: the notice, and the drawer's row at rest.
+    harness
+        .state_mut()
+        .queue(Intent::Action(ActionId("test.sync")), explorer);
+    let deadline = Instant::now() + Duration::from_secs(20);
+    while harness.state().toasts().is_empty() {
+        harness.step();
+        assert!(Instant::now() < deadline, "the job did not fail");
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    for (theme, density, mode) in modes {
+        set(&mut harness, theme, density);
+        shoot(&mut harness, &format!("small-error-{mode}"));
+    }
+    // The row unfolded to the whole text.
+    harness
+        .query_all_by_label_contains("Copy 14 items to archive · ")
+        .find(|node| node.accesskit_node().role() == Role::Button)
+        .unwrap_or_else(|| panic!("the failed row"))
+        .click();
+    for _ in 0..4 {
+        harness.step();
+    }
+    for (theme, density, mode) in modes {
+        set(&mut harness, theme, density);
+        shoot(&mut harness, &format!("small-error-unfolded-{mode}"));
+    }
+
+    // A console's tab, beside the window group.
+    harness
+        .state_mut()
+        .queue(Intent::Action(ActionId("terminal.console")), explorer);
+    let deadline = Instant::now() + Duration::from_secs(20);
+    while harness.state().app().model().focused == explorer {
+        harness.step();
+        assert!(Instant::now() < deadline, "no console");
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    for (theme, density, mode) in modes {
+        set(&mut harness, theme, density);
+        shoot(&mut harness, &format!("small-title-row-{mode}"));
+    }
+}
+
+/// SPEC.md *Title bar colour* (issue 139, item 10): the title row on
+/// every preset's band with three workspace tabs, the middle one hovered,
+/// in Light and Dark at both densities; and the setting's card on the
+/// Appearance page, with a preset and with *Custom* chosen.
+#[test]
+#[ignore = "needs a wgpu adapter; CI runs it and uploads the images"]
+#[allow(clippy::too_many_lines)]
+fn screenshots_of_the_title_bar_colour() {
+    use egui::accesskit::Role;
+    use egui_kittest::kittest::Queryable as _;
+    use model::TitlebarColour;
+    let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+    let folders = ["icons — android-studio", "flowcpt", "Downloads"];
+    for folder in folders {
+        fs::create_dir_all(dir.path().join(folder)).unwrap_or_else(|e| panic!("{e}"));
+    }
+    let mut harness = shell(&dir.path().join(folders[0]), egui::vec2(1600.0, 300.0));
+    for folder in &folders[1..] {
+        harness.state_mut().app_mut().handle(
+            app::Command::NewTab(local(&dir.path().join(folder))),
+            &mut Vec::new(),
+        );
+        settle(&mut harness);
+    }
+    let model = harness.state().app().model();
+    let first = model.workspaces(model.focused_window)[0].id;
+    harness
+        .state_mut()
+        .app_mut()
+        .handle(app::Command::ActivateWorkspace(first), &mut Vec::new());
+    settle(&mut harness);
+    let modes = [
+        (Theme::Light, Density::Comfortable, "light-comfortable"),
+        (Theme::Light, Density::Compact, "light-compact"),
+        (Theme::Dark, Density::Comfortable, "dark-comfortable"),
+        (Theme::Dark, Density::Compact, "dark-compact"),
+    ];
+    let change = |harness: &mut Harness<'_, RickUi>, change: SettingsChange| {
+        harness
+            .state_mut()
+            .app_mut()
+            .handle(app::Command::Settings(change), &mut Vec::new());
+    };
+    let presets = [
+        (TitlebarColour::DustyRose, "dusty-rose"),
+        (TitlebarColour::WarmGrey, "warm-grey"),
+        (TitlebarColour::SlateTeal, "slate-teal"),
+        (TitlebarColour::Sage, "sage"),
+        (TitlebarColour::Plum, "plum"),
+        (TitlebarColour::DarkBand, "dark-band"),
+    ];
+    for (preset, name) in presets {
+        change(&mut harness, SettingsChange::TitlebarColour(preset));
+        for (theme, density, mode) in modes {
+            change(&mut harness, SettingsChange::Theme(theme));
+            change(&mut harness, SettingsChange::Density(density));
+            for _ in 0..4 {
+                harness.step();
+            }
+            // At rest: the pointer is nowhere near the row.
+            harness.event(egui::Event::PointerMoved(egui::pos2(800.0, 280.0)));
+            for _ in 0..4 {
+                harness.step();
+            }
+            shoot(&mut harness, &format!("titlebar-{name}-{mode}"));
+            // An inactive tab under the pointer, on the default band and
+            // on the one that turns the row to light text.
+            let hovered = matches!(preset, TitlebarColour::DustyRose | TitlebarColour::DarkBand)
+                && density == Density::Comfortable;
+            if hovered {
+                let tab = harness.get_by_label("flowcpt").rect().center();
+                harness.event(egui::Event::PointerMoved(tab));
+                harness.step();
+                harness.step();
+                shoot(&mut harness, &format!("titlebar-hover-{name}-{mode}"));
+            }
+        }
+    }
+
+    // The setting's card, in a window tall enough for the page.
+    std::mem::drop(harness);
+    let mut harness = shell(&dir.path().join(folders[0]), egui::vec2(1280.0, 800.0));
+    harness.state_mut().open_settings();
+    for _ in 0..4 {
+        harness.step();
+    }
+    harness
+        .get_by_role_and_label(Role::RadioButton, "Appearance")
+        .click();
+    for (choice, name) in [
+        (TitlebarColour::DustyRose, "setting"),
+        (TitlebarColour::Custom, "setting-custom"),
+    ] {
+        change(&mut harness, SettingsChange::TitlebarColour(choice));
+        for (theme, density, mode) in modes {
+            change(&mut harness, SettingsChange::Theme(theme));
+            change(&mut harness, SettingsChange::Density(density));
+            harness.event(egui::Event::PointerMoved(egui::pos2(300.0, 780.0)));
+            for _ in 0..4 {
+                harness.step();
+            }
+            shoot(&mut harness, &format!("titlebar-{name}-{mode}"));
+        }
+    }
+}
+
+/// SPEC.md *Extensions dialogue* (issue 139, item 9): the list grouped by
+/// what the plugins contribute, with a plugin switched off and one that
+/// needs attention, and the details of a built-in provider, of the plugin
+/// the host refused and of a user's plugin that waits for a restart — in
+/// Light and Dark at both densities.
+#[test]
+#[ignore = "needs a wgpu adapter; CI runs it and uploads the images"]
+#[allow(clippy::too_many_lines)]
+fn screenshots_of_the_extensions_dialogue() {
+    use app::{Plugin, PluginStatus};
+    use egui::accesskit::Role;
+    use egui_kittest::kittest::Queryable as _;
+    use ext::Extension;
+    let (_keep, root) = sample_tree();
+    let fake = Arc::new(Fake::new().unwrap_or_else(|e| panic!("{e}")));
+    let host = Arc::new(EguiHost::new());
+    // The plugins that ship, loaded for real so that the dialogue shows
+    // what they register, as rows beside the binary.
+    let loaded: Vec<Arc<dyn Extension>> = vec![
+        Arc::new(ext_vfs_azure::AzureExtension::new()),
+        Arc::new(ext_vfs_s3::S3Extension::new()),
+        Arc::new(ext_vfs_gcs::GcsExtension::new()),
+        Arc::new(ext_ssh::SshExtension::new()),
+        Arc::new(ext_vfs_archive::ArchiveExtension::new()),
+        Arc::new(ext_vfs_trash::TrashExtension::new()),
+        Arc::new(ext_preview_3d::Preview3d::new()),
+        Arc::new(ext_preview_archive::ArchivePreview::new()),
+        Arc::new(ext_preview_hex::HexPreview::new()),
+        Arc::new(ext_preview_media::MediaPreview::new()),
+        Arc::new(ext_preview_pdf::PdfPreview::new()),
+        Arc::new(ext_git::GitExtension::new()),
+        Arc::new(ext_action_rename::RenameExtension::new()),
+    ];
+    let beside = Path::new("/opt/rick/plugins");
+    let row = |ext: &dyn Extension| {
+        let manifest = ext.manifest();
+        Plugin {
+            id: manifest.id.0.to_owned(),
+            name: manifest.name.to_owned(),
+            description: manifest.description.to_owned(),
+            version: manifest.version.to_string(),
+            points: manifest.points,
+            previews: manifest.previews.iter().map(|p| (*p).to_owned()).collect(),
+            status: PluginStatus::Loaded,
+            path: beside.join(manifest.id.0),
+            built_in: true,
+            removed: false,
+        }
+    };
+    let mut rows: Vec<Plugin> = loaded.iter().map(|ext| row(&**ext)).collect();
+    // One switched off, one the host refused, one of the user's.
+    rows.push(Plugin {
+        status: PluginStatus::Disabled,
+        ..row(&ext_preview_office::OfficePreview::new())
+    });
+    rows.push(Plugin {
+        status: PluginStatus::Refused(
+            "built with rustc 1.97.0, and this Rick with rustc 1.99.1".to_owned(),
+        ),
+        ..row(&ext_search_tracker::TrackerExtension::new())
+    });
+    let per_user = fake.config_dir().join("plugins");
+    rows.push(Plugin {
+        id: "word-count".to_owned(),
+        name: "Word count".to_owned(),
+        description: "Counts the words, lines and characters of the selected text files."
+            .to_owned(),
+        version: "1.2.0".to_owned(),
+        points: ext::Points::ACTION,
+        previews: Vec::new(),
+        status: PluginStatus::Loaded,
+        path: per_user.join("word-count"),
+        built_in: false,
+        removed: false,
+    });
+    let mut app = app::App::new(app::Config {
+        platform: fake.clone(),
+        ui: host.clone(),
+        extensions: loaded,
+        config_dir: Some(fake.config_dir()),
+        start: Some(local(&root)),
+    });
+    app.set_plugins(rows);
+    app.handle(
+        app::Command::Settings(SettingsChange::Plugin {
+            id: "preview-office".to_owned(),
+            enabled: false,
+        }),
+        &mut Vec::new(),
+    );
+    let mut harness = Harness::builder()
+        .with_size(egui::vec2(1280.0, 840.0))
+        .with_pixels_per_point(2.0)
+        .build_eframe(move |cc| RickUi::new(app, host, &cc.egui_ctx));
+    settle(&mut harness);
+    let modes = [
+        (Theme::Light, Density::Comfortable, "light-comfortable"),
+        (Theme::Light, Density::Compact, "light-compact"),
+        (Theme::Dark, Density::Comfortable, "dark-comfortable"),
+        (Theme::Dark, Density::Compact, "dark-compact"),
+    ];
+    let set = |harness: &mut Harness<'_, RickUi>, theme: Theme, density: Density| {
+        for change in [
+            SettingsChange::Theme(theme),
+            SettingsChange::Density(density),
+        ] {
+            harness
+                .state_mut()
+                .app_mut()
+                .handle(app::Command::Settings(change), &mut Vec::new());
+        }
+        // The pointer rests outside the dialogue, on no button.
+        harness.event(egui::Event::PointerMoved(egui::pos2(40.0, 820.0)));
+        for _ in 0..4 {
+            harness.step();
+        }
+    };
+    let choose = |harness: &mut Harness<'_, RickUi>, name: &str| {
+        harness
+            .get_by_role_and_label(Role::RadioButton, name)
+            .click();
+        for _ in 0..4 {
+            harness.step();
+        }
+    };
+    let pane = harness.state().app().model().focused;
+    harness.state_mut().queue(Intent::Extensions, pane);
+    for _ in 0..4 {
+        harness.step();
+    }
+
+    // A built-in provider, the first of the list.
+    choose(&mut harness, "Azure Blob");
+    for (theme, density, mode) in modes {
+        set(&mut harness, theme, density);
+        shoot(&mut harness, &format!("extensions-{mode}"));
+    }
+    // The plugin the host refused, at the list's end: the attention card.
+    harness.event(egui::Event::PointerMoved(egui::pos2(400.0, 500.0)));
+    harness.event(egui::Event::MouseWheel {
+        unit: egui::MouseWheelUnit::Point,
+        delta: egui::vec2(0.0, -600.0),
+        phase: egui::TouchPhase::Move,
+        modifiers: egui::Modifiers::NONE,
+    });
+    for _ in 0..12 {
+        harness.step();
+    }
+    choose(&mut harness, "Tracker");
+    for (theme, density, mode) in modes {
+        set(&mut harness, theme, density);
+        shoot(&mut harness, &format!("extensions-attention-{mode}"));
+    }
+    // A user's plugin, switched off a moment ago: the restart chips and
+    // Remove.
+    choose(&mut harness, "Word count");
+    harness
+        .get_all_by_label("Enable Word count")
+        .next()
+        .unwrap_or_else(|| panic!("the switch"))
+        .click();
+    for (theme, density, mode) in [modes[0], modes[2]] {
+        set(&mut harness, theme, density);
+        shoot(&mut harness, &format!("extensions-user-{mode}"));
+    }
+}
+
+/// SPEC.md *Keyboard shortcuts dialogue* (issue 139, item 8): the
+/// dialogue on *File operations* with a changed row and a cell that
+/// records, on *Git* with a chord that Copy has too — the amber chip —
+/// and with a chord pressed in the search field, in Light and Dark at
+/// both densities.
+#[test]
+#[ignore = "needs a wgpu adapter; CI runs it and uploads the images"]
+#[allow(clippy::too_many_lines)]
+fn screenshots_of_the_keyboard_shortcuts_dialogue() {
+    use egui::accesskit::Role;
+    use egui_kittest::kittest::Queryable as _;
+    let (_keep, root) = sample_tree();
+    let fake = Arc::new(Fake::new().unwrap_or_else(|e| panic!("{e}")));
+    let host = Arc::new(EguiHost::new());
+    let app = app::App::new(app::Config {
+        platform: fake.clone(),
+        ui: host.clone(),
+        extensions: vec![
+            Arc::new(ext_git::GitExtension::new()),
+            Arc::new(ext_svn::SvnExtension::new()),
+            Arc::new(ext_ssh::SshExtension::new()),
+            Arc::new(ext_action_compress::CompressExtension::new()),
+            Arc::new(ext_action_compare::CompareExtension::new()),
+            Arc::new(ext_action_rename::RenameExtension::new()),
+            Arc::new(ext_action_terminal::TerminalExtension::new()),
+        ],
+        config_dir: Some(fake.config_dir()),
+        start: Some(local(&root)),
+    });
+    let mut harness = Harness::builder()
+        .with_size(egui::vec2(1280.0, 800.0))
+        .with_pixels_per_point(2.0)
+        .build_eframe(move |cc| RickUi::new(app, host, &cc.egui_ctx));
+    settle(&mut harness);
+    let modes = [
+        (Theme::Light, Density::Comfortable, "light-comfortable"),
+        (Theme::Light, Density::Compact, "light-compact"),
+        (Theme::Dark, Density::Comfortable, "dark-comfortable"),
+        (Theme::Dark, Density::Compact, "dark-compact"),
+    ];
+    let steps = |harness: &mut Harness<'_, RickUi>| {
+        for _ in 0..4 {
+            harness.step();
+        }
+    };
+    let set = |harness: &mut Harness<'_, RickUi>, theme: Theme, density: Density| {
+        for change in [
+            SettingsChange::Theme(theme),
+            SettingsChange::Density(density),
+        ] {
+            harness
+                .state_mut()
+                .app_mut()
+                .handle(app::Command::Settings(change), &mut Vec::new());
+        }
+        // The pointer rests outside the dialogue, on no button.
+        harness.event(egui::Event::PointerMoved(egui::pos2(40.0, 780.0)));
+        for _ in 0..4 {
+            harness.step();
+        }
+    };
+    let bind = |harness: &mut Harness<'_, RickUi>, action: &str, binding: &str| {
+        harness.state_mut().app_mut().handle(
+            app::Command::Settings(SettingsChange::Shortcut {
+                action: action.to_owned(),
+                binding: Some(binding.to_owned()),
+            }),
+            &mut Vec::new(),
+        );
+    };
+    let choose = |harness: &mut Harness<'_, RickUi>, category: &str| {
+        harness
+            .get_by_role_and_label(Role::RadioButton, category)
+            .click();
+        for _ in 0..4 {
+            harness.step();
+        }
+    };
+    let cell = |harness: &mut Harness<'_, RickUi>, name: &str| {
+        harness.get_by_label(name).click();
+        for _ in 0..4 {
+            harness.step();
+        }
+    };
+    let ctrl = platform::MOD_KEY;
+
+    // A changed row, a chord taken twice.
+    bind(&mut harness, "core.duplicate", "Mod+Alt+D");
+    bind(&mut harness, "git.commit", "Mod+K");
+    bind(&mut harness, "svn.commit", "Mod+K");
+    let pane = harness.state().app().model().focused;
+    harness.state_mut().queue(Intent::Shortcuts, pane);
+    steps(&mut harness);
+
+    // File operations, one cell recording.
+    choose(&mut harness, "File operations");
+    cell(
+        &mut harness,
+        &format!("Shortcut for New folder: {ctrl}+Shift+N"),
+    );
+    for (theme, density, mode) in modes {
+        set(&mut harness, theme, density);
+        shoot(&mut harness, &format!("shortcuts-{mode}"));
+    }
+    harness.key_press(egui::Key::Escape);
+    steps(&mut harness);
+
+    // Git, whose commit shares its chord with SVN's.
+    choose(&mut harness, "Git");
+    for (theme, density, mode) in modes {
+        set(&mut harness, theme, density);
+        shoot(&mut harness, &format!("shortcuts-git-{mode}"));
+    }
+
+    // All, narrowed by a chord pressed in the search field.
+    choose(&mut harness, "All");
+    harness
+        .get_all_by_role(Role::TextInput)
+        .find(|field| (100.0..300.0).contains(&field.rect().top()))
+        .unwrap_or_else(|| panic!("the search field"))
+        .click();
+    steps(&mut harness);
+    harness.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::K);
+    steps(&mut harness);
+    for (theme, density, mode) in [modes[0], modes[2]] {
+        set(&mut harness, theme, density);
+        shoot(&mut harness, &format!("shortcuts-chord-{mode}"));
+    }
+}
+
+/// Issue 139, item 7: the size limit of remote previews as the Figma
+/// frame has it (`151:4550`) — the File info card for a picture above the
+/// limit on a cloud account, and the download half way, with its progress
+/// under the Portal burst — in Light and Dark at both densities. The
+/// account is an in-memory stand-in whose reads a gate holds.
+#[test]
+#[ignore = "needs a wgpu adapter; CI runs it and uploads the images"]
+fn screenshots_of_the_remote_size_cap() {
+    use egui_kittest::kittest::Queryable as _;
+    use tests::mem::{MemExtension, MemProvider};
+    use types::{Location, ProviderId};
+    const MIB: f64 = 1024.0 * 1024.0;
+    let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+    let mem = Arc::new(MemProvider::new(ProviderId("azure"), Duration::ZERO));
+    mem.set_native(true);
+    mem.dir("/flowcptstorage/media");
+    let mut photo = media::photo_jpeg(64, 48);
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    photo.resize((18.4 * MIB) as usize, 0);
+    mem.file("/flowcptstorage/media/3K6ehNLhnRsPfWhzju8Qe2Lk.jpg", &photo);
+    ext::i18n::add_bundled("en", "screenshot-cloud-provider = Azure Blob");
+    let fake = Arc::new(Fake::new().unwrap_or_else(|e| panic!("{e}")));
+    let host = Arc::new(EguiHost::new());
+    let app = app::App::new(app::Config {
+        platform: fake.clone(),
+        ui: host.clone(),
+        extensions: vec![
+            Arc::new(ext_preview_image::ImagePreview::new()),
+            Arc::new(MemExtension::with_accounts(
+                Arc::clone(&mem),
+                "screenshot-cloud-provider",
+            )),
+        ],
+        config_dir: Some(fake.config_dir()),
+        start: Some(local(dir.path())),
+    });
+    let mut harness = Harness::builder()
+        .with_size(egui::vec2(1280.0, 800.0))
+        .with_pixels_per_point(2.0)
+        .build_eframe(move |cc| RickUi::new(app, host, &cc.egui_ctx));
+    settle(&mut harness);
+    harness.state_mut().set_inspector_width(600.0);
+    let pane = harness.state().app().model().focused;
+    harness.state_mut().queue(Intent::ToggleInspector, pane);
+    harness.state_mut().app_mut().handle(
+        app::Command::Navigate {
+            pane,
+            to: Location::new(ProviderId("azure"), "/flowcptstorage/media"),
+        },
+        &mut Vec::new(),
+    );
+    settle(&mut harness);
+    let id = harness
+        .state()
+        .app()
+        .model()
+        .active_tab(pane)
+        .and_then(|(_, t)| t.listing.rows().next().map(|e| e.id))
+        .unwrap_or_else(|| panic!("the picture is listed"));
+    harness.state_mut().app_mut().handle(
+        app::Command::Select {
+            pane,
+            change: SelectionChange::Set(vec![id]),
+        },
+        &mut Vec::new(),
+    );
+    let wait = |harness: &mut Harness<'_, RickUi>,
+                what: &str,
+                done: &dyn Fn(&ui_egui::preview::Slot) -> bool| {
+        let deadline = Instant::now() + Duration::from_secs(20);
+        while !harness.state().previews().get(pane).is_some_and(done) {
+            assert!(Instant::now() < deadline, "{what}");
+            harness.step();
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        for _ in 0..6 {
+            harness.step();
+        }
+    };
+    let modes = [
+        (Theme::Light, Density::Comfortable, "light-comfortable"),
+        (Theme::Light, Density::Compact, "light-compact"),
+        (Theme::Dark, Density::Comfortable, "dark-comfortable"),
+        (Theme::Dark, Density::Compact, "dark-compact"),
+    ];
+    let set = |harness: &mut Harness<'_, RickUi>, theme: Theme, density: Density| {
+        for change in [
+            SettingsChange::Theme(theme),
+            SettingsChange::Density(density),
+        ] {
+            harness
+                .state_mut()
+                .app_mut()
+                .handle(app::Command::Settings(change), &mut Vec::new());
+        }
+        // The pointer rests on nothing.
+        harness.event(egui::Event::PointerMoved(egui::pos2(300.0, 780.0)));
+        for _ in 0..4 {
+            harness.step();
+        }
+    };
+
+    // Above the limit: the card.
+    wait(&mut harness, "no size-limit card", &|slot| {
+        slot.capped().is_some()
+    });
+    for (theme, density, mode) in modes {
+        set(&mut harness, theme, density);
+        shoot(&mut harness, &format!("preview-size-limit-{mode}"));
+    }
+
+    // Preview this file, held at 7.7 of 18.4 MiB.
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    let held = (7.7 * MIB) as u64;
+    mem.hold_reads_at(held);
+    harness.get_by_label("Preview this file").click();
+    wait(&mut harness, "no download half way", &|slot| {
+        slot.download().is_some_and(|(read, _)| read >= held)
+    });
+    for (theme, density, mode) in modes {
+        set(&mut harness, theme, density);
+        shoot(&mut harness, &format!("preview-downloading-{mode}"));
+    }
+    mem.release_reads();
+    settle(&mut harness);
+}
+
+/// Issue 139, item 4: the Properties dialogue as the Figma frames have it
+/// (`144:4115`) — a folder and a symbolic link on the General tab, the
+/// Permissions tab, and the tab with the access control list open — in
+/// Light and Dark at both densities. The folder's files are sparse, so
+/// what they occupy on disk is next to nothing; the list's extra entry is
+/// a user this machine has, where the file system takes one.
+#[cfg(unix)]
+#[test]
+#[ignore = "needs a wgpu adapter; CI runs it and uploads the images"]
+#[allow(clippy::too_many_lines)]
+fn screenshots_of_the_properties_dialogue() {
+    use egui_kittest::kittest::Queryable as _;
+    use platform::{Acl, PermissionChange, Permissions as _, PosixAce, PosixTag};
+    use std::os::unix::fs::PermissionsExt as _;
+    const MIB: u64 = 1024 * 1024;
+    let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+    let home = dir.path().join("home");
+    let serge = home.join("serge");
+    let rider = serge.join(".local/opt/jetbrains-rider/current/bin");
+    let bin = serge.join(".local/bin");
+    fs::create_dir_all(&rider).unwrap_or_else(|e| panic!("{e}"));
+    fs::create_dir_all(&bin).unwrap_or_else(|e| panic!("{e}"));
+    let sparse = |path: &Path, bytes: u64| {
+        let file = fs::File::create(path).unwrap_or_else(|e| panic!("{e}"));
+        file.set_len(bytes).unwrap_or_else(|e| panic!("{e}"));
+    };
+    // Twelve items inside, 3.4 GiB.
+    sparse(&rider.join("rider"), 2 * MIB + 100 * 1024);
+    fs::set_permissions(rider.join("rider"), fs::Permissions::from_mode(0o755))
+        .unwrap_or_else(|e| panic!("{e}"));
+    sparse(&serge.join("backup.tar"), 3 * 1024 * MIB);
+    sparse(&serge.join("movie.mkv"), 407 * MIB);
+    for name in ["notes.md", "todo.txt"] {
+        sparse(&serge.join(name), 12 * 1024);
+    }
+    std::os::unix::fs::symlink(rider.join("rider"), bin.join("jetbrains-rider"))
+        .unwrap_or_else(|e| panic!("{e}"));
+    fs::set_permissions(&serge, fs::Permissions::from_mode(0o710))
+        .unwrap_or_else(|e| panic!("{e}"));
+
+    let mut harness = shell(&home, egui::vec2(1280.0, 1000.0));
+    let modes = [
+        (Theme::Light, Density::Comfortable, "light-comfortable"),
+        (Theme::Light, Density::Compact, "light-compact"),
+        (Theme::Dark, Density::Comfortable, "dark-comfortable"),
+        (Theme::Dark, Density::Compact, "dark-compact"),
+    ];
+    let set = |harness: &mut Harness<'_, RickUi>, theme: Theme, density: Density| {
+        for change in [
+            SettingsChange::Theme(theme),
+            SettingsChange::Density(density),
+        ] {
+            harness
+                .state_mut()
+                .app_mut()
+                .handle(app::Command::Settings(change), &mut Vec::new());
+        }
+        // The pointer rests outside the dialogue, on no button.
+        harness.event(egui::Event::PointerMoved(egui::pos2(40.0, 980.0)));
+        for _ in 0..4 {
+            harness.step();
+        }
+    };
+    // Goes to `folder`, selects `name` there and opens Properties on it.
+    let open =
+        |harness: &mut Harness<'_, RickUi>, folder: &Path, name: &str| {
+            let pane = harness.state().app().model().focused;
+            harness.state_mut().app_mut().handle(
+                app::Command::Navigate {
+                    pane,
+                    to: local(folder),
+                },
+                &mut Vec::new(),
+            );
+            settle(harness);
+            let id = harness
+                .state()
+                .app()
+                .model()
+                .active_tab(pane)
+                .and_then(|(_, tab)| tab.rows().find(|e| e.name == name).map(|e| e.id))
+                .unwrap_or_else(|| panic!("{name} is listed"));
+            for command in [
+                app::Command::Select {
+                    pane,
+                    change: SelectionChange::Set(vec![id]),
+                },
+                app::Command::ShowProperties(pane),
+            ] {
+                harness
+                    .state_mut()
+                    .app_mut()
+                    .handle(command, &mut Vec::new());
+            }
+            let deadline = Instant::now() + Duration::from_secs(10);
+            // Open, and a folder counted.
+            while !harness.state().properties().info().is_some_and(|info| {
+                info.entry.name == name && info.contents != app::Contents::Counting
+            }) {
+                assert!(Instant::now() < deadline, "no Properties dialogue");
+                harness.step();
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            for _ in 0..4 {
+                harness.step();
+            }
+        };
+    let close = |harness: &mut Harness<'_, RickUi>| {
+        harness.key_press(egui::Key::Escape);
+        for _ in 0..4 {
+            harness.step();
+        }
+        settle(harness);
+    };
+
+    // The folder, on the General tab.
+    open(&mut harness, &home, "serge");
+    for (theme, density, mode) in modes {
+        set(&mut harness, theme, density);
+        shoot(&mut harness, &format!("properties-folder-{mode}"));
+    }
+    close(&mut harness);
+
+    // The symbolic link.
+    open(&mut harness, &bin, "jetbrains-rider");
+    for (theme, density, mode) in modes {
+        set(&mut harness, theme, density);
+        shoot(&mut harness, &format!("properties-link-{mode}"));
+    }
+    close(&mut harness);
+
+    // An extra entry on the folder's list: a user of this machine, with
+    // execute, under a mask of execute — where the file system takes it.
+    let pane = harness.state().app().model().focused;
+    let posix = matches!(
+        platform::Native.permissions(&serge).map(|p| p.acl),
+        Ok(Some(Acl::Posix { .. }))
+    );
+    let users = platform::Native.principals().ok().filter(|_| posix);
+    let extra = users.and_then(|p| {
+        p.users.into_iter().find(|u| {
+            u.id != "0"
+                && u.name
+                    .as_deref()
+                    .is_some_and(|name| name.chars().all(char::is_alphanumeric))
+        })
+    });
+    if let Some(user) = extra {
+        let ace = |tag, qualifier, perms| PosixAce {
+            tag,
+            qualifier,
+            perms,
+        };
+        let change = PermissionChange {
+            acl: Some(Acl::Posix {
+                access: vec![
+                    ace(PosixTag::UserObj, None, 7),
+                    ace(PosixTag::User, Some(user), 1),
+                    ace(PosixTag::GroupObj, None, 0),
+                    ace(PosixTag::Mask, None, 1),
+                    ace(PosixTag::Other, None, 0),
+                ],
+                default: Vec::new(),
+            }),
+            ..PermissionChange::default()
+        };
+        harness.state_mut().app_mut().handle(
+            app::Command::SetPermissions {
+                pane,
+                request: app::PermissionRequest {
+                    targets: vec![serge.clone()],
+                    change,
+                    recursive: None,
+                },
+            },
+            &mut Vec::new(),
+        );
+        settle(&mut harness);
+    }
+
+    // The Permissions tab, then the list open.
+    open(&mut harness, &home, "serge");
+    harness.get_by_label("Permissions").click();
+    for _ in 0..4 {
+        harness.step();
+    }
+    for (theme, density, mode) in modes {
+        set(&mut harness, theme, density);
+        shoot(&mut harness, &format!("properties-permissions-{mode}"));
+    }
+    if harness
+        .query_by_label("Access control list (ACL)")
+        .is_some()
+    {
+        harness.get_by_label("Access control list (ACL)").click();
+        for _ in 0..4 {
+            harness.step();
+        }
+        for (theme, density, mode) in modes {
+            set(&mut harness, theme, density);
+            shoot(&mut harness, &format!("properties-acl-{mode}"));
+        }
+    }
+    close(&mut harness);
+}
+
 /// Issue 60: the install dialogue — the JetBrains-shaped archive with its
 /// icon, the effects card and the collapsed Advanced options — in Light
 /// and Dark at both densities, then with Advanced options expanded, and
@@ -2421,6 +3826,104 @@ fn screenshots_of_the_install_dialogue() {
     close(&mut harness);
     open(&mut harness, Fixture::Tarbomb.file_name());
     shoot(&mut harness, "install-dialogue-no-version");
+    close(&mut harness);
+}
+
+/// Issue 173: the Git clone dialogue — opened on the empty area with a
+/// Git URL on the clipboard, in Light and Dark; then with the options
+/// open; and with nothing on the clipboard, where the field asks for the
+/// URL.
+#[test]
+#[ignore = "needs a wgpu adapter; CI runs it and uploads the images"]
+fn screenshots_of_the_git_clone_dialogue() {
+    use egui_kittest::kittest::Queryable as _;
+    let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+    let projects = dir.path().join("projects");
+    fs::create_dir_all(projects.join("notes")).unwrap_or_else(|e| panic!("{e}"));
+    let fake = Arc::new(Fake::new().unwrap_or_else(|e| panic!("{e}")));
+    let host = Arc::new(EguiHost::new());
+    let app = app::App::new(app::Config {
+        platform: fake.clone(),
+        ui: host.clone(),
+        extensions: vec![Arc::new(ext_git::GitExtension::new())],
+        config_dir: Some(fake.config_dir()),
+        start: Some(local(&projects)),
+    });
+    let mut harness = Harness::builder()
+        .with_size(egui::vec2(1920.0, 1000.0))
+        .with_pixels_per_point(2.0)
+        .build_eframe(move |cc| RickUi::new(app, host, &cc.egui_ctx));
+    settle(&mut harness);
+    let open = |harness: &mut Harness<'_, RickUi>, clipboard: &str| {
+        platform::Clipboard::set_text(&*fake, clipboard).unwrap_or_else(|e| panic!("{e}"));
+        let pane = harness.state().app().model().focused;
+        harness.state_mut().app_mut().handle(
+            app::Command::Select {
+                pane,
+                change: SelectionChange::Set(Vec::new()),
+            },
+            &mut Vec::new(),
+        );
+        settle(harness);
+        harness
+            .state_mut()
+            .queue(Intent::Action(ext::ActionId("git.clone")), pane);
+        step_until(harness, Duration::from_secs(15), |h| {
+            h.query_by_label("Clone repository").is_some()
+        });
+        harness.event(egui::Event::PointerMoved(egui::pos2(960.0, 30.0)));
+        for _ in 0..8 {
+            harness.step();
+        }
+    };
+    let close = |harness: &mut Harness<'_, RickUi>| {
+        harness.key_press(egui::Key::Escape);
+        harness.step();
+        harness.step();
+        settle(harness);
+    };
+    let url = "https://github.com/Open-Breach/rick.git";
+    for (theme, name) in [(Theme::Light, "light"), (Theme::Dark, "dark")] {
+        harness.state_mut().app_mut().handle(
+            app::Command::Settings(SettingsChange::Theme(theme)),
+            &mut Vec::new(),
+        );
+        settle(&mut harness);
+        open(&mut harness, url);
+        shoot(&mut harness, &format!("git-clone-dialogue-{name}"));
+        close(&mut harness);
+    }
+    harness.state_mut().app_mut().handle(
+        app::Command::Settings(SettingsChange::Theme(Theme::Light)),
+        &mut Vec::new(),
+    );
+    settle(&mut harness);
+    // The options open.
+    open(&mut harness, url);
+    let options = harness
+        .get_by_role_and_label(egui::accesskit::Role::CheckBox, "Options")
+        .rect()
+        .center();
+    harness.event(egui::Event::PointerMoved(options));
+    harness.step();
+    for pressed in [true, false] {
+        harness.event(egui::Event::PointerButton {
+            pos: options,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::default(),
+        });
+        harness.step();
+    }
+    harness.event(egui::Event::PointerMoved(egui::pos2(960.0, 30.0)));
+    for _ in 0..8 {
+        harness.step();
+    }
+    shoot(&mut harness, "git-clone-dialogue-options");
+    close(&mut harness);
+    // Nothing on the clipboard that is a Git URL.
+    open(&mut harness, "meeting notes");
+    shoot(&mut harness, "git-clone-dialogue-blank");
     close(&mut harness);
 }
 
@@ -3532,4 +5035,71 @@ fn screenshots_of_the_integration_settings() {
         shoot(&mut harness, &format!("integration-settings-end-{name}"));
     }
     std::mem::drop(dir);
+}
+
+/// Issue 149: the List view in Light and in Dark — the Downloads folder of
+/// the Figma frame *List view mode*: folders first, columns of one width
+/// filled top to bottom, a selected row, the cursor's ring and a long name
+/// cut to its column.
+#[test]
+#[ignore = "needs a wgpu adapter; CI runs it and uploads the images"]
+fn screenshots_of_the_list_view() {
+    let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+    let downloads = dir.path().join("Downloads");
+    for folder in [
+        "Backup",
+        "android-studio-rabbit1-linux",
+        "code-stable-x64-1793133762",
+        "rick-day-zero",
+        "support-B87E-1788041812146",
+    ] {
+        fs::create_dir_all(downloads.join(folder)).unwrap_or_else(|e| panic!("{e}"));
+    }
+    let mut files: Vec<String> = [
+        "20260828_CA ABR TITEL VERSAND.pdf",
+        "a-photograph-with-a-name-so-long-that-no-column-of-the-list-view-could-hold-it-whole.jpg",
+        "us-states-with-detail.json",
+        "notes.md",
+        "main.rs",
+        "invoice-2026-08.pdf",
+        "rick-0.3.0-linux-x64.tar.gz",
+    ]
+    .map(str::to_owned)
+    .to_vec();
+    files.extend((1..=40).map(|i| format!("20260903_1215{i:02}.jpg")));
+    files.extend((1..=12).map(|i| format!("report-{i:02}.xlsx")));
+    for name in &files {
+        fs::write(downloads.join(name), name).unwrap_or_else(|e| panic!("{e}"));
+    }
+    let mut harness = shell(&downloads, egui::vec2(1100.0, 520.0));
+    let pane = harness.state().app().model().focused;
+    let mut send = |harness: &mut Harness<'static, RickUi>, command: app::Command| {
+        harness
+            .state_mut()
+            .app_mut()
+            .handle(command, &mut Vec::new());
+        settle(harness);
+    };
+    send(
+        &mut harness,
+        app::Command::SetView {
+            pane,
+            mode: model::ViewMode::List,
+        },
+    );
+    // One row selected, with the keyboard cursor on it.
+    harness.key_press(egui::Key::Home);
+    harness.step();
+    for _ in 0..7 {
+        harness.key_press(egui::Key::ArrowDown);
+        harness.step();
+    }
+    settle(&mut harness);
+    for (theme, name) in [(Theme::Light, "light"), (Theme::Dark, "dark")] {
+        send(
+            &mut harness,
+            app::Command::Settings(SettingsChange::Theme(theme)),
+        );
+        shoot(&mut harness, &format!("list-view-{name}"));
+    }
 }

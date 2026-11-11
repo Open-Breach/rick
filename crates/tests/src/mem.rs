@@ -5,7 +5,11 @@
 //! [`MemProvider::set_native`] on, it moves and copies through
 //! [`Provider::transfer`] under `NATIVE_TRANSFER`, like a cloud provider,
 //! and counts the bytes read through `open_read`, so a test can prove a
-//! transfer streamed nothing.
+//! transfer streamed nothing. With [`MemProvider::set_store`] on, it
+//! offers what an object store offers place by place (issue 149): its
+//! root folders are accounts, which take a folder — a container, whose
+//! name has rules — and no file, and everything below is searched beneath
+//! and downloaded from.
 
 use std::collections::BTreeMap;
 use std::pin::Pin;
@@ -16,7 +20,7 @@ use std::time::{Duration, SystemTime};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use ext::{
-    API_VERSION, Capabilities, ChangeStream, CopyOptions, EntryStream, Extension, LinkKind,
+    API_VERSION, Capabilities, ChangeStream, CopyOptions, Depth, EntryStream, Extension, LinkKind,
     ListOptions, Manifest, Platforms, Points, Provider, ReadHandle, Registry, RemoveMode,
     TransferMode, Version, WriteHandle, WriteOptions, async_trait,
 };
@@ -45,10 +49,27 @@ pub struct MemProvider {
     copy_delay: Duration,
     /// Moves and copies run through `transfer`, as a cloud provider's do.
     native: AtomicBool,
+    /// The capabilities are an object store's, place by place.
+    store: AtomicBool,
+    /// Every `create_dir` call, by path, whatever came of it.
+    made: Mutex<Vec<String>>,
+    /// What a listing fails with while the store cannot be reached.
+    unreachable: Mutex<Option<&'static str>>,
     /// Bytes handed out through `open_read`.
     read_bytes: Arc<AtomicU64>,
     /// Every `transfer` call: the mode, the items and the target folder.
     transfers: Mutex<Vec<(TransferMode, Vec<String>, String)>>,
+    /// Where reads wait, for a test that looks at a download half way.
+    gate: Arc<Gate>,
+}
+
+/// Holds every reader at a byte position until it is opened again.
+struct Gate {
+    /// Readers stop once this many bytes of their file are handed out;
+    /// `u64::MAX` lets them run.
+    limit: AtomicU64,
+    /// The readers waiting at the gate.
+    waiting: Mutex<Vec<std::task::Waker>>,
 }
 
 impl std::fmt::Debug for MemProvider {
@@ -75,6 +96,11 @@ fn name(path: &str) -> &str {
     path.rsplit('/').next().unwrap_or(path)
 }
 
+/// How deep a path lies: 0 for the root, 1 for `/a`, 2 for `/a/b`.
+fn depth(path: &str) -> usize {
+    path.split('/').filter(|part| !part.is_empty()).count()
+}
+
 fn key(loc: &Location) -> String {
     let text = loc.path.to_string_lossy().into_owned();
     let trimmed = text.trim_end_matches('/');
@@ -96,8 +122,37 @@ impl MemProvider {
             tree: Arc::new(Mutex::new(tree)),
             copy_delay,
             native: AtomicBool::new(false),
+            store: AtomicBool::new(false),
+            made: Mutex::new(Vec::new()),
+            unreachable: Mutex::new(None),
             read_bytes: Arc::new(AtomicU64::new(0)),
             transfers: Mutex::new(Vec::new()),
+            gate: Arc::new(Gate {
+                limit: AtomicU64::new(u64::MAX),
+                waiting: Mutex::new(Vec::new()),
+            }),
+        }
+    }
+
+    /// Makes every read stop after `bytes` of its file, as a slow link
+    /// would leave it for a while, until [`release_reads`](Self::release_reads).
+    pub fn hold_reads_at(&self, bytes: u64) {
+        self.gate.limit.store(bytes, Ordering::SeqCst);
+    }
+
+    /// Lets the reads held by [`hold_reads_at`](Self::hold_reads_at) run
+    /// to their end.
+    pub fn release_reads(&self) {
+        self.gate.limit.store(u64::MAX, Ordering::SeqCst);
+        let waiting = std::mem::take(
+            &mut *self
+                .gate
+                .waiting
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner),
+        );
+        for waker in waiting {
+            waker.wake();
         }
     }
 
@@ -105,6 +160,35 @@ impl MemProvider {
     /// the provider go through [`Provider::transfer`] and are recorded.
     pub fn set_native(&self, on: bool) {
         self.native.store(on, Ordering::SeqCst);
+    }
+
+    /// Makes the provider an object store, place by place: its root lists
+    /// accounts and is only remote; an account takes a folder, which is a
+    /// container with a name of lowercase letters, digits and hyphens, and
+    /// no file, and says why; a container and every folder below take
+    /// both. Everything from an account down is listed beneath in one
+    /// pass (`SEARCH_SUBTREE`) and downloaded from (`DOWNLOAD`).
+    pub fn set_store(&self, on: bool) {
+        self.store.store(on, Ordering::SeqCst);
+    }
+
+    /// From now on the store cannot be reached: every listing below its
+    /// root fails with a connection error that says `why`. `None` makes it
+    /// answer again.
+    pub fn set_unreachable(&self, why: Option<&'static str>) {
+        *self
+            .unreachable
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = why;
+    }
+
+    /// Every `create_dir` call so far, by path.
+    #[must_use]
+    pub fn made(&self) -> Vec<String> {
+        self.made
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
     }
 
     /// Bytes handed out through `open_read` so far.
@@ -210,23 +294,75 @@ impl Provider for MemProvider {
         self.id
     }
 
-    fn capabilities(&self, _loc: &Location) -> Capabilities {
-        let mut caps = Capabilities::WRITE | Capabilities::RENAME;
+    fn capabilities(&self, loc: &Location) -> Capabilities {
+        if self.store.load(Ordering::SeqCst) {
+            let below = Capabilities::REMOTE
+                | Capabilities::WRITE
+                | Capabilities::NATIVE_TRANSFER
+                | Capabilities::CREATE_DIR
+                | Capabilities::SEARCH_SUBTREE
+                | Capabilities::DOWNLOAD;
+            return match depth(&key(loc)) {
+                0 => Capabilities::REMOTE,
+                1 => below,
+                _ => below | Capabilities::CREATE_FILE,
+            };
+        }
+        let mut caps = Capabilities::WRITE
+            | Capabilities::RENAME
+            | Capabilities::CREATE_DIR
+            | Capabilities::CREATE_FILE;
         if self.native.load(Ordering::SeqCst) {
-            caps |= Capabilities::NATIVE_TRANSFER | Capabilities::REMOTE;
+            caps |= Capabilities::NATIVE_TRANSFER | Capabilities::REMOTE | Capabilities::DOWNLOAD;
         }
         caps
     }
 
-    fn list(&self, loc: &Location, _opts: ListOptions, _cancel: CancelToken) -> EntryStream {
+    fn unavailable_reason(&self, loc: &Location, capability: Capabilities) -> Option<String> {
+        (self.store.load(Ordering::SeqCst)
+            && depth(&key(loc)) == 1
+            && capability.contains(Capabilities::CREATE_FILE))
+        .then(|| "Files live inside a container".to_owned())
+    }
+
+    fn name_problem(&self, loc: &Location) -> Option<String> {
+        let path = key(loc);
+        let plain = name(&path)
+            .chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-');
+        (self.store.load(Ordering::SeqCst) && depth(&path) == 2 && !plain)
+            .then(|| "A container name has lowercase letters, digits and hyphens only".to_owned())
+    }
+
+    fn list(&self, loc: &Location, opts: ListOptions, _cancel: CancelToken) -> EntryStream {
         let dir = key(loc);
+        let unreachable = *self
+            .unreachable
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        if let Some(why) = unreachable
+            && dir != "/"
+        {
+            return stream::once(async move { Err(Error::unreachable(why)) }).boxed();
+        }
         let tree = lock(&self.tree);
         if !matches!(tree.get(&dir), Some(Node::Dir)) {
             return stream::once(async { Err(Error::NotFound) }).boxed();
         }
+        let below = if dir == "/" {
+            "/".to_owned()
+        } else {
+            format!("{dir}/")
+        };
         let entries: Vec<Entry> = tree
             .iter()
-            .filter(|(path, _)| path.as_str() != "/" && parent(path) == dir)
+            .filter(|(path, _)| {
+                path.as_str() != "/"
+                    && match opts.depth {
+                        Depth::One => parent(path) == dir,
+                        Depth::Unlimited => path.starts_with(&below),
+                    }
+            })
             .map(|(path, node)| self.entry(path, node))
             .collect();
         stream::once(async move { Ok(entries) }).boxed()
@@ -246,6 +382,7 @@ impl Provider for MemProvider {
             Some(Node::File(bytes)) => Ok(Box::new(Counted {
                 inner: std::io::Cursor::new(bytes.clone()),
                 count: Arc::clone(&self.read_bytes),
+                gate: Arc::clone(&self.gate),
             })),
             Some(Node::Dir) => Err(Error::Unsupported("a folder cannot be read")),
             None => Err(Error::NotFound),
@@ -268,6 +405,10 @@ impl Provider for MemProvider {
 
     async fn create_dir(&self, loc: &Location) -> Result<Entry, Error> {
         let path = key(loc);
+        self.made
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push(path.clone());
         {
             let mut tree = lock(&self.tree);
             if tree.contains_key(&path) {
@@ -421,25 +562,77 @@ impl Provider for MemProvider {
 struct Counted {
     inner: std::io::Cursor<Vec<u8>>,
     count: Arc<AtomicU64>,
+    gate: Arc<Gate>,
 }
 
 impl tokio::io::AsyncRead for Counted {
     fn poll_read(
         mut self: Pin<&mut Self>,
-        _cx: &mut Context<'_>,
+        cx: &mut Context<'_>,
         buf: &mut tokio::io::ReadBuf<'_>,
     ) -> Poll<std::io::Result<()>> {
-        let n = std::io::Read::read(&mut self.inner, buf.initialize_unfilled())?;
+        // Up to the gate and no further while it is shut.
+        let limit = self.gate.limit.load(Ordering::SeqCst);
+        let room = limit.saturating_sub(self.inner.position());
+        let left = (self.inner.get_ref().len() as u64).saturating_sub(self.inner.position());
+        if room == 0 && left > 0 {
+            self.gate
+                .waiting
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .push(cx.waker().clone());
+            // The gate may have opened while the waker was being left.
+            if self.gate.limit.load(Ordering::SeqCst) == limit {
+                return Poll::Pending;
+            }
+        }
+        let unfilled = buf.initialize_unfilled();
+        let take = usize::try_from(room.max(1))
+            .unwrap_or(usize::MAX)
+            .min(unfilled.len());
+        let n = std::io::Read::read(&mut self.inner, &mut unfilled[..take])?;
         buf.advance(n);
         self.count.fetch_add(n as u64, Ordering::SeqCst);
         Poll::Ready(Ok(()))
     }
 }
 
-/// An extension that registers one [`MemProvider`].
+/// An extension that registers one [`MemProvider`] and, asked to, a
+/// connector for it, so the folders at its root are accounts as a cloud
+/// provider has them.
 pub struct MemExtension {
     manifest: Manifest,
     provider: Arc<MemProvider>,
+    /// The connector's title, a Fluent key, when it has one.
+    accounts: Option<&'static str>,
+}
+
+/// The connector of a [`MemProvider`] with accounts: it keeps nothing and
+/// every account is always connected.
+struct MemConnector {
+    provider: ProviderId,
+    title: &'static str,
+}
+
+#[async_trait]
+impl ext::Connector for MemConnector {
+    fn provider(&self) -> ProviderId {
+        self.provider
+    }
+    fn schema(&self) -> ext::ConnectionSchema {
+        ext::ConnectionSchema {
+            title: ext::Text(self.title),
+            fields: Vec::new(),
+        }
+    }
+    fn update(&self, _connections: Vec<ext::Connection>) {}
+    async fn connect(&self, _name: &str) -> Result<(), Error> {
+        Ok(())
+    }
+    fn disconnect(&self, _name: &str) {}
+    fn is_connected(&self, _name: &str) -> bool {
+        true
+    }
 }
 
 impl MemExtension {
@@ -452,6 +645,7 @@ impl MemExtension {
             manifest: Manifest {
                 id: ExtId(id),
                 name: "In-memory provider",
+                description: "",
                 version: Version::new(0, 1, 0),
                 api_version: API_VERSION,
                 requires: Capabilities::empty(),
@@ -461,6 +655,18 @@ impl MemExtension {
                 commands: &[],
             },
             provider,
+            accounts: None,
+        }
+    }
+
+    /// [`new`](Self::new) with a connector whose connections are titled by
+    /// the Fluent key `title`: the provider's root folders are its
+    /// accounts, as *Always preview on ‹account›* needs them.
+    #[must_use]
+    pub fn with_accounts(provider: Arc<MemProvider>, title: &'static str) -> Self {
+        Self {
+            accounts: Some(title),
+            ..Self::new(provider)
         }
     }
 }
@@ -472,6 +678,12 @@ impl Extension for MemExtension {
 
     fn register(&self, reg: &mut Registry) -> Result<(), Error> {
         reg.provider(Arc::clone(&self.provider) as Arc<dyn Provider>);
+        if let Some(title) = self.accounts {
+            reg.connector(Arc::new(MemConnector {
+                provider: self.provider.id,
+                title,
+            }));
+        }
         Ok(())
     }
 }

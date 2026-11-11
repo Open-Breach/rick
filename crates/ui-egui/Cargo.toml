@@ -16,6 +16,8 @@ vfs-rick = { workspace = true }
 model = { workspace = true }
 app = { workspace = true }
 chrono = { workspace = true }
+# The system's locale, for the *System* date format.
+sys-locale = { workspace = true }
 eframe = { workspace = true }
 egui = { workspace = true }
 egui_dock = { workspace = true }

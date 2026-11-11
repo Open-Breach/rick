@@ -15,7 +15,7 @@ use model::{Column, SelectionChange, SettingsChange, SortDir};
 use platform::{ConfigDir, Fake};
 use types::{Attrs, CancelToken, Entry, EntryId, EntryKind, Error, ExtId, Location, VPath};
 
-use super::{App, Command, Config, Event, SETTINGS_FILE};
+use super::{App, Command, Config, Contents, Event, SETTINGS_FILE};
 
 /// The text of the file at `path` once `done` holds for it, or as it is
 /// after ten seconds: the settings saver writes on a task of the runtime
@@ -292,6 +292,53 @@ fn tabs_and_splits_keep_their_listings_live() {
         [first]
     );
     assert!(!h.app.is_busy());
+}
+
+/// A change that is still on its way to the settings file is not undone
+/// by the file as it was. The watcher reloads the file on any removal or
+/// rescan in the configuration directory, and another file written there
+/// through its temporary file is enough for one; until the saver has
+/// written, the file holds what it held at the start, which is no edit to
+/// pick up. The Windows runner of tier 2 lost a plugin's *disabled* this
+/// way (full.yml run 42962612644, `extensions.rs`).
+#[test]
+fn the_settings_file_as_it_was_at_the_start_does_not_undo_a_change_on_its_way_to_it() {
+    let mut h = harness();
+    let path = h.app.settings_path().to_path_buf();
+    let as_it_was = super::settings::load(&path).unwrap_or_else(|e| panic!("{e}"));
+    assert_ne!(as_it_was.sort_by, Column::Size);
+
+    h.send(Command::Settings(SettingsChange::Sort(
+        Column::Size,
+        SortDir::Descending,
+    )));
+    // What the watcher's reload reports when it read the file before the
+    // saver wrote it.
+    h.app
+        .on_msg(super::Msg::Settings(Ok(as_it_was)), &mut h.events);
+    assert_eq!(
+        h.app.model().settings.sort_by,
+        Column::Size,
+        "the file as it was undid the change"
+    );
+
+    // The change reaches the file, and an edit to the file is still
+    // picked up afterwards.
+    h.settle();
+    let text = read_until(&path, |t| t.contains("sort_by = \"size\""));
+    assert!(text.contains("sort_by = \"size\""), "{text}");
+    fs::write(&path, "font_size = 15\n").unwrap_or_else(|e| panic!("{e}"));
+    let started = Instant::now();
+    while h.app.model().settings.font_size != 15 {
+        assert!(
+            started.elapsed() < Duration::from_secs(10),
+            "settings not reloaded"
+        );
+        runtime::block_on(async {
+            let _ =
+                tokio::time::timeout(Duration::from_millis(20), h.app.tick(&mut h.events)).await;
+        });
+    }
 }
 
 #[test]
@@ -788,6 +835,7 @@ impl IndexExtension {
             manifest: Manifest {
                 id: ExtId(id),
                 name: "Fake index",
+                description: "",
                 version: Version::new(0, 1, 0),
                 api_version: API_VERSION,
                 requires: Capabilities::empty(),
@@ -968,29 +1016,40 @@ fn hit(id: u128, path: &str) -> Entry {
     }
 }
 
+/// Issue 149: where nothing searches beneath a location — no search
+/// index under it and no `SEARCH_SUBTREE` on its provider — the toggle
+/// cannot be switched on, the filter narrows the folder as always, and no
+/// error is shown anywhere. The "search-walk plugin is not loaded" notice
+/// is gone.
 #[test]
-fn without_a_subtree_index_the_toggle_is_absent_and_a_search_ends_with_a_notice() {
+fn where_nothing_searches_beneath_the_toggle_stays_off_and_no_error_is_shown() {
     let mut h = harness();
     h.settle();
-    assert!(!h.app.model().subtree_search);
-    assert_eq!(h.app.model().search_indexes, Vec::<ExtId>::new());
     let pane = h.app.model().focused;
+    let location = h.tab(pane).location.clone();
+    assert_eq!(
+        h.app.subtree_search(&location),
+        Availability::Disabled("Not available in this location".to_owned())
+    );
+    assert_eq!(h.app.model().search_indexes, Vec::<ExtId>::new());
+    h.take_events();
     h.send(Command::Subtree { pane, on: true });
     h.send(Command::Filter {
         pane,
-        text: "foo".into(),
+        text: "a.t".into(),
     });
     h.settle();
     let events = h.take_events();
     assert!(
-        events.iter().any(|e| matches!(
-            e,
-            Event::Notify { level: Level::Error, text } if text.contains("No subdirectory search")
-        )),
+        !events
+            .iter()
+            .any(|e| matches!(e, Event::Notify { level, .. } if *level != Level::Info)),
         "{events:?}"
     );
+    assert!(!h.tab(pane).subtree, "the toggle stays off");
+    assert!(!h.tab(pane).is_searching());
     assert!(!h.app.is_busy());
-    assert_eq!(h.names(), Vec::<String>::new());
+    assert_eq!(h.names(), ["a.txt"], "the filter narrows the folder itself");
 }
 
 #[test]
@@ -1000,12 +1059,16 @@ fn subtree_search_streams_matches_as_a_job_and_a_new_text_supersedes_it() {
         Arc::new(FakeWalk),
     )]);
     h.settle();
-    assert!(h.app.model().subtree_search);
+    let pane = h.app.model().focused;
+    assert_eq!(
+        h.app.subtree_search(&h.tab(pane).location),
+        Availability::Enabled,
+        "the walk searches beneath a local folder"
+    );
     assert!(
         h.app.model().search_indexes.is_empty(),
         "a walk is not a platform index"
     );
-    let pane = h.app.model().focused;
     let mut dir = h.root.path().join("sub");
     for level in 0..20 {
         dir.push(format!("l{level}"));
@@ -1449,6 +1512,378 @@ fn eject_goes_through_the_platform_and_the_list_follows() {
     assert_eq!(h.fake.ejected().len(), 1);
 }
 
+/// Acceptance (issue 149, item 4): in a folder with hidden files that are
+/// not shown, Select all selects the visible entries only and a notice
+/// names how many hidden ones it left out; with them shown it selects
+/// all and says nothing.
+#[test]
+fn select_all_selects_what_is_shown_and_counts_the_hidden_it_left_out() {
+    let mut h = harness();
+    for name in [".cache", ".secret"] {
+        fs::write(h.root.path().join(name), name).unwrap_or_else(|e| panic!("{e}"));
+    }
+    h.settle();
+    let pane = h.app.model().focused;
+    assert_eq!(h.names(), ["sub", "a.txt", "b.txt", "c.txt"]);
+    h.take_events();
+    let hidden_notices = |events: &[Event]| -> Vec<String> {
+        events
+            .iter()
+            .filter_map(|event| match event {
+                Event::Notify {
+                    level: Level::Info,
+                    text,
+                } if text.contains("not selected") => Some(text.clone()),
+                _ => None,
+            })
+            .collect()
+    };
+
+    h.send(Command::Select {
+        pane,
+        change: SelectionChange::All,
+    });
+    assert_eq!(h.tab(pane).selection.len(), 4, "the four that are shown");
+    assert!(
+        h.tab(pane)
+            .selected()
+            .all(|entry| !entry.name.starts_with('.'))
+    );
+    assert_eq!(
+        hidden_notices(&h.take_events()),
+        ["2 hidden items not selected"]
+    );
+
+    // One hidden item reads in the singular; the filter narrows what
+    // counts, as it narrows what is shown.
+    h.send(Command::Filter {
+        pane,
+        text: "a".into(),
+    });
+    h.send(Command::Select {
+        pane,
+        change: SelectionChange::All,
+    });
+    assert_eq!(h.names(), ["a.txt"]);
+    assert_eq!(
+        hidden_notices(&h.take_events()),
+        ["1 hidden item not selected"],
+        "of the hidden two only .cache has an a"
+    );
+    h.send(Command::Filter {
+        pane,
+        text: String::new(),
+    });
+
+    // With the hidden files shown, everything is selected and nothing is
+    // said.
+    h.send(Command::ToggleHidden(pane));
+    h.settle();
+    h.take_events();
+    h.send(Command::Select {
+        pane,
+        change: SelectionChange::All,
+    });
+    assert_eq!(h.tab(pane).selection.len(), 6);
+    assert_eq!(hidden_notices(&h.take_events()), [] as [String; 0]);
+}
+
+/// A stick mounted at `sub` of the harness's root, as the platform lists it.
+fn stick(h: &Harness) -> platform::Volume {
+    platform::Volume {
+        name: "STICK".into(),
+        mount_point: h.root.path().join("sub"),
+        kind: platform::VolumeKind::Removable,
+        fs_type: "vfat".into(),
+        device: None,
+        total: Some(100),
+        free: Some(50),
+        read_only: false,
+    }
+}
+
+/// The texts of the notices in `events` that say something was removed.
+fn removal_notices(events: &[Event]) -> Vec<(Level, String)> {
+    events
+        .iter()
+        .filter_map(|event| match event {
+            Event::Notify { level, text } if text.contains("was removed") => {
+                Some((*level, text.clone()))
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+/// Acceptance (issue 149, item 3): with a tab three folders deep on a
+/// stick, pulling the stick sends every pane on it Home at once, with one
+/// notice that names the drive, and Back never returns to what is gone.
+#[test]
+fn pulling_a_stick_sends_every_pane_on_it_home_and_says_so_once() {
+    let mut h = harness();
+    h.settle();
+    let sub = h.root.path().join("sub");
+    let deep = sub.join("one").join("two").join("three");
+    fs::create_dir_all(&deep).unwrap_or_else(|e| panic!("{e}"));
+    h.fake.add_volume(stick(&h));
+    h.send(Command::RefreshVolumes);
+    assert!(wait_until(&mut h, Duration::from_secs(5), |h| {
+        h.app.model().volumes.len() == 1
+    }));
+    // One pane walks down the stick, a second tab opens on its root.
+    let first = h.app.model().focused;
+    for folder in [
+        sub.clone(),
+        sub.join("one"),
+        sub.join("one").join("two"),
+        deep.clone(),
+    ] {
+        h.send(Command::Navigate {
+            pane: first,
+            to: local(&folder),
+        });
+        h.settle();
+    }
+    h.send(Command::NewTab(local(&sub)));
+    h.settle();
+    let second = h.app.model().focused;
+    assert_ne!(second, first);
+    h.take_events();
+
+    h.fake.remove_volume(&sub);
+    h.send(Command::RefreshVolumes);
+    assert!(wait_until(&mut h, Duration::from_secs(5), |h| {
+        h.app.model().volumes.is_empty()
+    }));
+    let home = local(&h.fake.home_dir());
+    assert_eq!(explorer_at(&h, first), home);
+    assert_eq!(explorer_at(&h, second), home);
+    h.settle();
+    let events = h.take_events();
+    assert_eq!(
+        removal_notices(&events),
+        [(Level::Info, "STICK was removed".to_owned())]
+    );
+    assert!(
+        !events.iter().any(|e| matches!(
+            e,
+            Event::Notify {
+                level: Level::Error | Level::Warning,
+                ..
+            }
+        )),
+        "a removed drive is no error: {events:?}"
+    );
+    assert_eq!(h.tab(first).failure, None);
+
+    // The steps on the stick left the history with it.
+    h.send(Command::Back(first));
+    h.settle();
+    assert_eq!(explorer_at(&h, first), local(h.root.path()));
+}
+
+/// Eject sends the panes Home first and unmounts afterwards, so no pane
+/// points at a drive that is gone; the list that follows the unmount says
+/// nothing a second time.
+#[test]
+fn eject_sends_the_panes_home_before_it_unmounts() {
+    let mut h = harness();
+    h.settle();
+    let sub = h.root.path().join("sub");
+    h.fake.add_volume(stick(&h));
+    h.send(Command::RefreshVolumes);
+    assert!(wait_until(&mut h, Duration::from_secs(5), |h| {
+        h.app.model().volumes.len() == 1
+    }));
+    let pane = h.app.model().focused;
+    h.send(Command::Navigate {
+        pane,
+        to: local(&sub),
+    });
+    h.settle();
+    h.take_events();
+
+    h.send(Command::Eject(sub.clone()));
+    // Before the loop has run once more, and so before the unmount is
+    // reported: the pane is Home already.
+    let home = local(&h.fake.home_dir());
+    assert_eq!(explorer_at(&h, pane), home);
+    assert_eq!(
+        removal_notices(&h.events),
+        [(Level::Info, "STICK was removed".to_owned())]
+    );
+    assert!(wait_until(&mut h, Duration::from_secs(5), |h| {
+        h.fake.ejected() == [sub.clone()] && h.app.model().volumes.is_empty()
+    }));
+    h.settle();
+    assert_eq!(removal_notices(&h.take_events()).len(), 1);
+    assert_eq!(explorer_at(&h, pane), home);
+}
+
+/// The drive list is read again on the platform's mount event, not only at
+/// its interval: a partition that mounts a moment after the first is there
+/// well before the next interval.
+#[test]
+fn a_mount_event_reads_the_drive_list_again_at_once() {
+    let mut h = harness();
+    h.settle();
+    // The first partition, seen by the interval: a read has just happened,
+    // and the next one by the clock is a whole interval away.
+    h.fake.add_volume(stick(&h));
+    assert!(wait_until(&mut h, super::VOLUMES_EVERY * 3, |h| {
+        h.app.model().volumes.len() == 1
+    }));
+    h.fake.add_volume(platform::Volume {
+        name: "SECOND".into(),
+        mount_point: h.root.path().to_path_buf(),
+        ..stick(&h)
+    });
+    h.fake.mounts_changed();
+    assert!(
+        wait_until(&mut h, super::VOLUMES_EVERY / 2, |h| {
+            h.app.model().volumes.len() == 2
+        }),
+        "the second partition waits for the interval"
+    );
+}
+
+/// A harness with the stub network provider and its one host `nas`, the
+/// focused pane on it.
+fn harness_on_a_host() -> (Harness, Arc<net::Stub>, model::PaneId, Location) {
+    let stub = net::Stub::new();
+    let mut h = harness_with(vec![Arc::new(net::StubExtension::new(Arc::clone(&stub)))]);
+    h.settle();
+    h.send(Command::AddConnection {
+        provider: net::ID,
+        name: "nas".into(),
+        values: vec![("host".into(), "10.0.0.2".into())],
+    });
+    h.settle();
+    let pane = h.app.model().focused;
+    let host = Location::new(net::ID, "/nas/share");
+    h.send(Command::Navigate {
+        pane,
+        to: host.clone(),
+    });
+    h.settle();
+    assert_eq!(explorer_at(&h, pane), host);
+    assert_eq!(h.tab(pane).failure, None);
+    h.take_events();
+    (h, stub, pane, host)
+}
+
+/// Removing a host from the side panel sends the panes on it Home with
+/// `<host> was removed`.
+#[test]
+fn removing_a_connection_sends_the_panes_on_it_home() {
+    let (mut h, _stub, pane, _host) = harness_on_a_host();
+    h.send(Command::Connection {
+        provider: net::ID,
+        name: "nas".into(),
+        op: super::ConnectionOp::Remove,
+    });
+    assert_eq!(explorer_at(&h, pane), local(&h.fake.home_dir()));
+    h.settle();
+    assert_eq!(
+        removal_notices(&h.take_events()),
+        [(Level::Info, "nas was removed".to_owned())]
+    );
+    assert_eq!(explorer_at(&h, pane), local(&h.fake.home_dir()));
+}
+
+/// Acceptance (issue 149, item 3): a connection that drops keeps the pane
+/// where it is and shows *Connection lost to <host>* with the provider's
+/// message; Rick tries again by itself, and the listing is back once the
+/// host answers. A missing path is not a lost connection.
+#[test]
+fn a_lost_connection_keeps_the_pane_and_is_tried_again_until_it_answers() {
+    let (mut h, stub, pane, host) = harness_on_a_host();
+    stub.set_down(Some("connection timed out"));
+    h.send(Command::Refresh(pane));
+    assert!(wait_until(&mut h, Duration::from_secs(5), |h| {
+        h.tab(pane).lost.is_some()
+    }));
+    let lost = h.tab(pane).lost.clone().unwrap_or_else(|| panic!("lost"));
+    assert_eq!(lost.source, "nas");
+    assert_eq!(lost.provider, "Stub");
+    assert_eq!(lost.message, "connection timed out");
+    assert_eq!(explorer_at(&h, pane), host, "the pane stays where it is");
+    assert_eq!(h.tab(pane).failure, None, "the card, not the banner");
+
+    // Rick tries again by itself: the first time after two seconds.
+    assert!(wait_until(
+        &mut h,
+        super::RETRY_LOST_AFTER[0] + Duration::from_secs(3),
+        |h| h.tab(pane).lost.as_ref().is_some_and(|l| l.retries == 1)
+    ));
+    assert_eq!(explorer_at(&h, pane), host);
+    // Retry, the card's button, is a refresh: the host still does not
+    // answer, and the card stays.
+    h.send(Command::Refresh(pane));
+    h.settle();
+    assert!(h.tab(pane).lost.is_some());
+
+    // The host answers again: the next try shows the listing where the
+    // pane was, with nothing asked of the user.
+    stub.set_down(None);
+    assert!(wait_until(
+        &mut h,
+        super::RETRY_LOST_AFTER[1] + Duration::from_secs(3),
+        |h| h.tab(pane).lost.is_none()
+    ));
+    assert_eq!(explorer_at(&h, pane), host);
+    assert_eq!(h.tab(pane).failure, None);
+    let events = h.take_events();
+    assert!(
+        !events.iter().any(|e| matches!(
+            e,
+            Event::Notify {
+                level: Level::Error,
+                ..
+            }
+        )),
+        "a lost connection is shown in the pane, not as a notice: {events:?}"
+    );
+
+    // A folder that is not there is a failed listing, as it was.
+    h.send(Command::Navigate {
+        pane,
+        to: Location::new(net::ID, "/gone"),
+    });
+    h.settle();
+    assert_eq!(h.tab(pane).lost, None);
+    assert!(h.tab(pane).failure.is_some());
+}
+
+/// Format… opens the system's tool on the drive, and says so where the
+/// system has none.
+#[test]
+fn format_opens_the_systems_tool_on_the_drive() {
+    let mut h = harness();
+    h.settle();
+    let sub = h.root.path().join("sub");
+    h.fake.add_volume(stick(&h));
+    h.send(Command::RefreshVolumes);
+    assert!(wait_until(&mut h, Duration::from_secs(5), |h| {
+        h.app.model().volumes.len() == 1
+    }));
+    assert!(h.app.model().format_tool);
+    h.send(Command::Format(sub.clone()));
+    assert!(wait_until(&mut h, Duration::from_secs(5), |h| {
+        h.fake.format_opened() == [sub.clone()]
+    }));
+
+    h.fake.set_format_tool(false);
+    h.take_events();
+    h.send(Command::Format(sub.clone()));
+    h.settle();
+    assert_eq!(h.fake.format_opened().len(), 1);
+    assert!(h.take_events().iter().any(|e| matches!(
+        e,
+        Event::Notify { level: Level::Warning, text } if text == "No disk utility is installed"
+    )));
+}
+
 #[test]
 fn a_virtual_location_comes_back_with_the_session() {
     let mut h = harness();
@@ -1548,6 +1983,8 @@ mod net {
     pub(super) struct Stub {
         pub(super) connections: Mutex<Vec<Connection>>,
         pub(super) connected: Mutex<Vec<String>>,
+        /// What the hosts answer with while they cannot be reached.
+        down: Mutex<Option<&'static str>>,
         schema: Option<ConnectionSchema>,
     }
 
@@ -1592,6 +2029,14 @@ mod net {
         }
     }
 
+    impl Stub {
+        /// From now on the hosts cannot be reached and say `why`, or
+        /// answer again with `None`.
+        pub(super) fn set_down(&self, why: Option<&'static str>) {
+            *lock(&self.down) = why;
+        }
+    }
+
     #[async_trait]
     impl Connector for Stub {
         fn provider(&self) -> ProviderId {
@@ -1630,7 +2075,17 @@ mod net {
         }
         fn list(&self, loc: &Location, _opts: ListOptions, _cancel: CancelToken) -> EntryStream {
             if loc.path.as_bytes() != b"/" {
-                return stream::once(async { Err(Error::NotFound) }).boxed();
+                // A host's own folder is empty, while the host answers.
+                let host = loc.path.as_bytes()[1..].split(|b| *b == b'/').next();
+                let known = lock(&self.connections)
+                    .iter()
+                    .any(|c| Some(c.name.as_bytes()) == host);
+                let answer = match *lock(&self.down) {
+                    _ if !known => Err(Error::NotFound),
+                    Some(why) => Err(Error::unreachable(why)),
+                    None => Ok(Vec::new()),
+                };
+                return stream::once(async { answer }).boxed();
             }
             let entries: Vec<Entry> = lock(&self.connections)
                 .iter()
@@ -1696,6 +2151,7 @@ mod net {
                 manifest: Manifest {
                     id: ExtId("stub-net"),
                     name: "Stub network provider",
+                    description: "",
                     version: Version::new(0, 1, 0),
                     api_version: API_VERSION,
                     requires: Capabilities::empty(),
@@ -2065,6 +2521,335 @@ fn reveal_opens_the_folder_in_a_tab_and_selects_the_files_once_listed() {
     );
 }
 
+/// The Properties dialogue on a folder (SPEC.md *Dialogues*): the entry
+/// arrives with its contents still being counted, the count follows as an
+/// event of its own and is no job of the operations drawer; asked again
+/// for the same folder the application answers with the count it has; a
+/// file is not counted.
+#[test]
+fn properties_count_a_folder_s_contents_in_the_background() {
+    let mut h = harness();
+    h.settle();
+    let sub = h.root.path().join("sub");
+    fs::create_dir(sub.join("deeper")).unwrap_or_else(|e| panic!("{e}"));
+    fs::write(sub.join("one.bin"), vec![0u8; 1000]).unwrap_or_else(|e| panic!("{e}"));
+    fs::write(sub.join("deeper/two.bin"), vec![0u8; 500]).unwrap_or_else(|e| panic!("{e}"));
+    let pane = h.app.model().focused;
+    let select = |h: &mut Harness, name: &str| {
+        let id = h
+            .tab(pane)
+            .listing
+            .rows()
+            .find(|e| e.name == name)
+            .map_or_else(|| panic!("{name} is listed"), |e| e.id);
+        h.send(Command::Select {
+            pane,
+            change: SelectionChange::Set(vec![id]),
+        });
+    };
+    let shown = |events: &[Event]| {
+        events.iter().rev().find_map(|e| match e {
+            Event::Properties(info) => Some((info.entry.name.clone(), info.contents)),
+            _ => None,
+        })
+    };
+    let counted = |events: &[Event]| {
+        events.iter().find_map(|e| match e {
+            Event::PropertiesCounted { path, contents, .. } => Some((path.clone(), *contents)),
+            _ => None,
+        })
+    };
+
+    select(&mut h, "sub");
+    h.events.clear();
+    h.send(Command::ShowProperties(pane));
+    h.settle();
+    let (path, contents) = counted(&h.events).unwrap_or_else(|| panic!("{:?}", h.events));
+    assert_eq!(path, sub);
+    assert_eq!(contents.items, 3, "two files and the folder between them");
+    assert_eq!(contents.bytes, 1500);
+    // The entry came with the count running, or already with its result.
+    let (name, first) = shown(&h.events).unwrap_or_else(|| panic!("{:?}", h.events));
+    assert_eq!(name, "sub");
+    assert!(
+        first == Contents::Counting || first == Contents::Counted(contents),
+        "{first:?}"
+    );
+    assert!(
+        h.app.model().jobs.is_empty(),
+        "the count is not in the drawer: {:?}",
+        h.app.model().jobs
+    );
+
+    // Asked again while the dialogue shows the folder: the count it has.
+    h.events.clear();
+    h.send(Command::ShowProperties(pane));
+    h.settle();
+    assert_eq!(
+        shown(&h.events),
+        Some(("sub".to_owned(), Contents::Counted(contents)))
+    );
+    assert!(counted(&h.events).is_none(), "not counted twice");
+
+    // Closed, the count is dropped: the next dialogue counts again.
+    h.send(Command::PropertiesClosed);
+    h.events.clear();
+    h.send(Command::ShowProperties(pane));
+    h.settle();
+    assert!(counted(&h.events).is_some());
+
+    // A file has nothing to count.
+    h.send(Command::PropertiesClosed);
+    select(&mut h, "c.txt");
+    h.events.clear();
+    h.send(Command::ShowProperties(pane));
+    h.settle();
+    assert_eq!(shown(&h.events), Some(("c.txt".to_owned(), Contents::None)));
+    assert!(counted(&h.events).is_none());
+}
+
+/// The Properties dialogue's entry is read off the loop, and the
+/// application is busy until that read is answered: whoever waits for the
+/// application to be idle has the entry by then. On a slow machine the
+/// answer used to come after the wait (issue 139, the macOS runner).
+#[test]
+fn a_properties_read_under_way_counts_as_busy() {
+    let mut h = harness();
+    h.settle();
+    let pane = h.app.model().focused;
+    let shown = |events: &[Event]| {
+        events.iter().find_map(|e| match e {
+            Event::Properties(info) => Some(info.entry.name.clone()),
+            _ => None,
+        })
+    };
+
+    // A file: nothing is counted, so no job stands in for the read.
+    let id = h
+        .tab(pane)
+        .listing
+        .rows()
+        .find(|e| e.name == "c.txt")
+        .map_or_else(|| panic!("c.txt is listed"), |e| e.id);
+    h.send(Command::Select {
+        pane,
+        change: SelectionChange::Set(vec![id]),
+    });
+    h.settle();
+    assert!(!h.app.is_busy());
+    h.events.clear();
+    h.send(Command::ShowProperties(pane));
+    assert!(h.app.model().jobs.is_empty(), "no job runs for a file");
+    assert!(h.app.is_busy(), "the entry is being read");
+    h.settle();
+    assert_eq!(shown(&h.events).as_deref(), Some("c.txt"), "{:?}", h.events);
+    assert!(!h.app.is_busy(), "the read was answered");
+
+    // The folder's own properties, with nothing selected, are read through
+    // its provider first; the wait covers that too.
+    h.send(Command::PropertiesClosed);
+    h.send(Command::Select {
+        pane,
+        change: SelectionChange::Clear,
+    });
+    h.settle();
+    h.events.clear();
+    h.send(Command::ShowProperties(pane));
+    assert!(h.app.is_busy());
+    h.settle();
+    assert!(shown(&h.events).is_some(), "{:?}", h.events);
+    assert!(!h.app.is_busy());
+}
+
+/// Issue 178: Properties that is called off while its entry is still being
+/// read does not open when the read is answered, and neither does a
+/// request a later one overtook.
+#[test]
+fn properties_called_off_or_overtaken_do_not_open() {
+    let mut h = harness();
+    h.settle();
+    let pane = h.app.model().focused;
+    let id_of = |h: &Harness, name: &str| {
+        h.tab(pane)
+            .listing
+            .rows()
+            .find(|e| e.name == name)
+            .map_or_else(|| panic!("{name} is listed"), |e| e.id)
+    };
+    let shown = |events: &[Event]| -> Vec<String> {
+        events
+            .iter()
+            .filter_map(|e| match e {
+                Event::Properties(info) => Some(info.entry.name.clone()),
+                _ => None,
+            })
+            .collect()
+    };
+    let (c, a) = (id_of(&h, "c.txt"), id_of(&h, "a.txt"));
+    h.send(Command::Select {
+        pane,
+        change: SelectionChange::Set(vec![c]),
+    });
+    h.settle();
+
+    // The read is held back, as a slow volume would hold it.
+    h.fake.hold_permissions();
+    h.events.clear();
+    h.send(Command::ShowProperties(pane));
+    assert!(h.app.properties_pending(), "asked for, not open yet");
+    // Called off, as Escape does.
+    h.send(Command::PropertiesClosed);
+    assert!(!h.app.properties_pending());
+    assert!(h.app.is_busy(), "the read itself still runs");
+    h.fake.release_permissions();
+    h.settle();
+    assert_eq!(shown(&h.events), Vec::<String>::new(), "it does not open");
+    assert!(!h.app.is_busy());
+
+    // Asked again it opens.
+    h.events.clear();
+    h.send(Command::ShowProperties(pane));
+    h.settle();
+    assert_eq!(shown(&h.events), ["c.txt"]);
+    assert!(!h.app.properties_pending());
+    h.send(Command::PropertiesClosed);
+
+    // Overtaken: asked for one entry, then for another before the first
+    // was read. Only the one last asked for opens.
+    h.fake.hold_permissions();
+    h.events.clear();
+    h.send(Command::ShowProperties(pane));
+    h.send(Command::Select {
+        pane,
+        change: SelectionChange::Set(vec![a]),
+    });
+    h.send(Command::ShowProperties(pane));
+    h.fake.release_permissions();
+    h.settle();
+    assert_eq!(shown(&h.events), ["a.txt"]);
+}
+
+/// Issue 178, on a provider that is not the local one — where the read is
+/// slowest, and where the entry has no local path to tell a stale answer
+/// by: Properties called off before its answer is in does not open.
+#[test]
+fn properties_called_off_on_a_remote_entry_do_not_open() {
+    let stub = net::Stub::new();
+    let mut h = harness_with(vec![Arc::new(net::StubExtension::new(Arc::clone(&stub)))]);
+    h.settle();
+    h.send(Command::AddConnection {
+        provider: net::ID,
+        name: "nas".into(),
+        values: vec![("host".into(), "10.0.0.2".into())],
+    });
+    h.settle();
+    let pane = h.app.model().focused;
+    h.send(Command::Navigate {
+        pane,
+        to: Location::new(net::ID, "/"),
+    });
+    h.settle();
+    let id = h
+        .tab(pane)
+        .listing
+        .rows()
+        .find(|e| e.name == "nas")
+        .map_or_else(|| panic!("nas is listed: {:?}", h.names()), |e| e.id);
+    h.send(Command::Select {
+        pane,
+        change: SelectionChange::Set(vec![id]),
+    });
+    h.settle();
+    let shown = |events: &[Event]| -> Vec<String> {
+        events
+            .iter()
+            .filter_map(|e| match e {
+                Event::Properties(info) => Some(info.entry.name.clone()),
+                _ => None,
+            })
+            .collect()
+    };
+
+    // Asked for and called off before the answer is taken in.
+    h.events.clear();
+    h.send(Command::ShowProperties(pane));
+    assert!(h.app.properties_pending());
+    h.send(Command::PropertiesClosed);
+    h.settle();
+    assert_eq!(shown(&h.events), Vec::<String>::new(), "{:?}", h.events);
+
+    // Asked for and left alone, it opens.
+    h.events.clear();
+    h.send(Command::ShowProperties(pane));
+    h.settle();
+    assert_eq!(shown(&h.events), ["nas"]);
+}
+
+/// What the Properties dialogue reads through links: these need a
+/// symbolic link to be made, which only Unix lets a test do freely.
+#[cfg(unix)]
+mod links {
+    use std::fs;
+    use std::path::{Path, PathBuf};
+
+    use types::{CancelToken, EntryKind, VPath};
+
+    use crate::{count_tree, lexical, link_target};
+
+    /// What a link resolves to (SPEC.md *Dialogues*, Properties): the entry at
+    /// the end of the link, under the path the link's text names, a relative
+    /// text taken from the link's folder; nothing for a broken link.
+    #[test]
+    fn a_link_s_target_is_the_entry_it_names_from_its_own_folder() {
+        let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+        let bin = dir.path().join("bin");
+        let links = dir.path().join("links");
+        fs::create_dir(&bin).unwrap_or_else(|e| panic!("{e}"));
+        fs::create_dir(&links).unwrap_or_else(|e| panic!("{e}"));
+        fs::write(bin.join("tool"), b"abc").unwrap_or_else(|e| panic!("{e}"));
+        let link = links.join("tool-link");
+        std::os::unix::fs::symlink("../bin/./tool", &link).unwrap_or_else(|e| panic!("{e}"));
+        let target = link_target(&link, &VPath::from("../bin/./tool"))
+            .unwrap_or_else(|| panic!("the link resolves"));
+        assert_eq!(target.name, "tool");
+        assert_eq!(target.kind, EntryKind::File);
+        assert_eq!(target.size, Some(3));
+        assert_eq!(target.path, platform::paths::from_path(&bin.join("tool")));
+
+        let broken = links.join("gone");
+        std::os::unix::fs::symlink("nowhere", &broken).unwrap_or_else(|e| panic!("{e}"));
+        assert!(link_target(&broken, &VPath::from("nowhere")).is_none());
+
+        assert_eq!(lexical(Path::new("/a/b/../c/./d")), PathBuf::from("/a/c/d"));
+    }
+
+    /// The count walks everything below the folder, never through a link, and
+    /// stops when it is cancelled.
+    #[test]
+    fn the_count_follows_no_link_and_stops_when_cancelled() {
+        let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+        let inside = dir.path().join("inside");
+        let outside = dir.path().join("outside");
+        fs::create_dir_all(inside.join("sub")).unwrap_or_else(|e| panic!("{e}"));
+        fs::create_dir(&outside).unwrap_or_else(|e| panic!("{e}"));
+        fs::write(inside.join("a"), vec![0u8; 10]).unwrap_or_else(|e| panic!("{e}"));
+        fs::write(inside.join("sub/b"), vec![0u8; 20]).unwrap_or_else(|e| panic!("{e}"));
+        fs::write(outside.join("big"), vec![0u8; 5000]).unwrap_or_else(|e| panic!("{e}"));
+        std::os::unix::fs::symlink(&outside, inside.join("out")).unwrap_or_else(|e| panic!("{e}"));
+        let contents =
+            count_tree(&inside, &CancelToken::new()).unwrap_or_else(|| panic!("not cancelled"));
+        assert_eq!(contents.items, 4, "a, sub, sub/b and the link itself");
+        let link = fs::symlink_metadata(inside.join("out"))
+            .unwrap_or_else(|e| panic!("{e}"))
+            .len();
+        assert_eq!(contents.bytes, 30 + link, "nothing from behind the link");
+
+        let cancelled = CancelToken::new();
+        cancelled.cancel();
+        assert!(count_tree(&inside, &cancelled).is_none());
+    }
+}
+
 /// `Command::Reveal` with `properties` (specs/system-integration.md §4,
 /// `ShowItemProperties`): the Properties dialogue opens on the file once
 /// it is listed and selected, and not before.
@@ -2174,15 +2959,17 @@ impl ext::Console for FakeConsole {
 struct ConsoleOpener {
     manifest: Manifest,
     console: Arc<FakeConsole>,
+    /// The id its action goes by.
+    action: ActionId,
 }
 
 const OPEN_FAKE_CONSOLE: ActionId = ActionId("fake.console");
 
-struct OpenFakeConsole(Arc<FakeConsole>);
+struct OpenFakeConsole(Arc<FakeConsole>, ActionId);
 
 impl ext::Action for OpenFakeConsole {
     fn id(&self) -> ActionId {
-        OPEN_FAKE_CONSOLE
+        self.1
     }
     fn label(&self) -> String {
         "Fake console".to_owned()
@@ -2213,19 +3000,276 @@ impl Extension for ConsoleOpener {
         &self.manifest
     }
     fn register(&self, reg: &mut Registry) -> Result<(), Error> {
-        reg.action(Arc::new(OpenFakeConsole(Arc::clone(&self.console))));
+        reg.action(Arc::new(OpenFakeConsole(
+            Arc::clone(&self.console),
+            self.action,
+        )));
         Ok(())
     }
 }
 
-/// A harness with the fake console opened from its explorer tab: the
-/// harness, the console and the pane both are in.
-fn with_fake_console() -> (Harness, Arc<FakeConsole>, model::PaneId) {
+/// Writes `bytes` to `name` in the harness's root and sets its execute
+/// bit, or leaves it off.
+#[cfg(unix)]
+fn program(h: &Harness, name: &str, bytes: &[u8], executable: bool) -> std::path::PathBuf {
+    use std::os::unix::fs::PermissionsExt as _;
+    let path = h.root.path().join(name);
+    fs::write(&path, bytes).unwrap_or_else(|e| panic!("{e}"));
+    let mode = if executable { 0o755 } else { 0o644 };
+    fs::set_permissions(&path, fs::Permissions::from_mode(mode)).unwrap_or_else(|e| panic!("{e}"));
+    path
+}
+
+/// Opens the entry named `name` in the focused pane, as Enter does.
+#[cfg(unix)]
+fn open_named(h: &mut Harness, name: &str) {
+    let pane = h.app.model().focused;
+    let id = id_of(h, name);
+    h.send(Command::Open { pane, id });
+}
+
+/// The question that is open, once one is.
+#[cfg(unix)]
+fn question(h: &mut Harness) -> types::Question {
+    assert!(
+        wait_until(h, Duration::from_secs(5), |h| {
+            !h.app.model().questions.is_empty()
+        }),
+        "no question was asked"
+    );
+    h.app.model().questions[0].clone()
+}
+
+/// Acceptance (issue 149, item 6): a binary with the execute bit starts
+/// on Enter, detached, in its folder and without a question; nothing is
+/// handed to the system.
+#[cfg(unix)]
+#[test]
+fn a_binary_with_the_execute_bit_runs_detached_in_its_folder() {
+    let mut h = harness();
+    let tool = program(&h, "tool", b"\x7fELF\x02\x01\x01\0\0\0\0\0\0\0\0\0", true);
+    h.settle();
+    open_named(&mut h, "tool");
+    assert!(wait_until(&mut h, Duration::from_secs(5), |h| {
+        !h.fake.ran().is_empty()
+    }));
+    assert_eq!(
+        h.fake.ran(),
+        [(tool, Vec::new(), h.root.path().to_path_buf())]
+    );
+    h.settle();
+    assert!(h.app.model().questions.is_empty(), "no question");
+    assert!(h.fake.opened().is_empty(), "not handed to the system");
+}
+
+/// An executable script asks first, *Run script?* with Cancel, Edit and
+/// Run, Run being the one Enter picks. Run starts it in the system's
+/// terminal in its folder where no embedded console is loaded; Edit opens
+/// it in the editor; Cancel does nothing.
+#[cfg(unix)]
+#[test]
+fn an_executable_script_asks_to_run_edit_or_cancel() {
+    let mut h = harness();
+    let script = program(&h, "build.sh", b"#!/bin/sh\necho built\n", true);
+    h.settle();
+    let answer = |h: &mut Harness, choice: usize| {
+        open_named(h, "build.sh");
+        let asked = question(h);
+        assert_eq!(asked.title, "Run script?");
+        assert_eq!(asked.text, "build.sh");
+        assert_eq!(
+            asked.kind,
+            types::QuestionKind::Choice {
+                options: vec!["Cancel".into(), "Edit".into(), "Run".into()],
+                default: 2,
+            }
+        );
+        h.send(Command::AnswerQuestion {
+            id: asked.id,
+            answer: types::Answer::Choice(choice),
+        });
+        h.settle();
+        assert!(h.app.model().questions.is_empty(), "answered");
+    };
+
+    // Cancel: nothing runs, nothing opens.
+    answer(&mut h, 0);
+    assert!(h.fake.ran().is_empty() && h.fake.terminals().is_empty());
+    assert!(h.fake.edited().is_empty() && h.fake.opened().is_empty());
+
+    // Run: a terminal in the script's folder, running it.
+    answer(&mut h, 2);
+    assert_eq!(
+        h.fake.terminals(),
+        [(
+            h.root.path().to_path_buf(),
+            Some(vec![script.to_string_lossy().into_owned()])
+        )]
+    );
+    assert!(h.fake.ran().is_empty(), "a script is not started blind");
+
+    // Edit: the editor.
+    answer(&mut h, 1);
+    assert_eq!(h.fake.edited(), [vec![script.clone()]]);
+    assert_eq!(h.fake.terminals().len(), 1);
+
+    // Escape, or closing the dialogue: as Cancel.
+    open_named(&mut h, "build.sh");
+    let asked = question(&mut h);
+    h.send(Command::AnswerQuestion {
+        id: asked.id,
+        answer: types::Answer::Cancelled,
+    });
+    h.settle();
+    assert_eq!(h.fake.terminals().len(), 1);
+    assert_eq!(h.fake.edited().len(), 1);
+}
+
+/// With the embedded console loaded, Run opens a console in the script's
+/// folder and types the script at its prompt.
+#[cfg(unix)]
+#[test]
+fn run_starts_a_script_in_the_embedded_console_where_it_is_loaded() {
     let console = Arc::new(FakeConsole::default());
-    let opener: Arc<dyn Extension> = Arc::new(ConsoleOpener {
+    let mut h = harness_with(vec![console_opener(&console, ActionId("terminal.console"))]);
+    program(&h, "it's a build.sh", b"#!/bin/sh\necho built\n", true);
+    h.settle();
+    // The shell is busy starting: nothing is typed yet.
+    *console.job.lock().unwrap_or_else(PoisonError::into_inner) = Some(true);
+    open_named(&mut h, "it's a build.sh");
+    let asked = question(&mut h);
+    h.send(Command::AnswerQuestion {
+        id: asked.id,
+        answer: types::Answer::Choice(2),
+    });
+    h.settle();
+    let typed = |console: &FakeConsole| {
+        String::from_utf8_lossy(&console.typed.lock().unwrap_or_else(PoisonError::into_inner))
+            .into_owned()
+    };
+    assert!(
+        h.events
+            .iter()
+            .any(|e| matches!(e, Event::ViewOpened { .. })),
+        "the console is opened: {:?}",
+        h.events
+    );
+    assert_eq!(typed(&console), "");
+    // At its prompt: the script, quoted, and Enter.
+    *console.job.lock().unwrap_or_else(PoisonError::into_inner) = Some(false);
+    assert!(wait_until(&mut h, Duration::from_secs(5), |_| {
+        !typed(&console).is_empty()
+    }));
+    assert_eq!(typed(&console), "'./it'\\''s a build.sh'\r");
+    assert!(h.fake.terminals().is_empty(), "not the system's terminal");
+}
+
+/// A script without the execute bit is a text file like any other; and
+/// where the execute bit makes no program, as on Windows, every file is
+/// handed to the system as before.
+#[cfg(unix)]
+#[test]
+fn without_the_execute_bit_a_file_opens_with_the_system_default() {
+    let mut h = harness();
+    let plain = program(&h, "notes.sh", b"#!/bin/sh\necho hi\n", false);
+    let tool = program(&h, "tool", b"\x7fELF\0\0\0\0", true);
+    h.settle();
+    open_named(&mut h, "notes.sh");
+    assert!(wait_until(&mut h, Duration::from_secs(5), |h| {
+        h.fake.opened() == [plain.clone()]
+    }));
+    assert!(h.app.model().questions.is_empty(), "nothing is asked");
+
+    h.fake.set_execute_bit(false);
+    open_named(&mut h, "tool");
+    assert!(wait_until(&mut h, Duration::from_secs(5), |h| {
+        h.fake.opened() == [plain.clone(), tool.clone()]
+    }));
+    assert!(h.fake.ran().is_empty(), "nothing is started");
+}
+
+/// Acceptance (issue 149, item 6): Open in editor opens the selected
+/// files in the system's default text editor, or with the command the
+/// setting names, split at spaces outside double quotes, the files
+/// appended; it is not offered for a folder.
+#[test]
+fn open_in_editor_uses_the_systems_editor_or_the_command_the_setting_names() {
+    let mut h = harness();
+    h.settle();
+    let pane = h.app.model().focused;
+    let (a, b) = (h.root.path().join("a.txt"), h.root.path().join("b.txt"));
+    let select = |h: &mut Harness, names: &[&str]| {
+        let ids = names.iter().map(|name| id_of(h, name)).collect();
+        h.send(Command::Select {
+            pane,
+            change: SelectionChange::Set(ids),
+        });
+    };
+    select(&mut h, &["a.txt"]);
+    h.run(pane, "core.open_in_editor");
+    h.settle();
+    assert_eq!(h.fake.edited(), [vec![a.clone()]]);
+    assert!(h.fake.ran().is_empty(), "the editor is no program");
+
+    h.send(Command::Settings(SettingsChange::Editor(
+        "code --wait \"--user-data-dir=/tmp/my code\"".into(),
+    )));
+    select(&mut h, &["a.txt", "b.txt"]);
+    h.run(pane, "core.open_in_editor");
+    h.settle();
+    assert_eq!(
+        h.fake.ran(),
+        [(
+            std::path::PathBuf::from("code"),
+            vec![
+                "--wait".into(),
+                "--user-data-dir=/tmp/my code".into(),
+                a.clone().into_os_string(),
+                b.into_os_string(),
+            ],
+            h.root.path().to_path_buf(),
+        )]
+    );
+    assert_eq!(
+        h.fake.edited().len(),
+        1,
+        "the setting's editor, not the system's"
+    );
+
+    // A folder is not offered the editor: nothing happens, nothing is said.
+    select(&mut h, &["sub"]);
+    h.take_events();
+    h.run(pane, "core.open_in_editor");
+    h.settle();
+    assert_eq!(h.fake.ran().len(), 1);
+    assert!(
+        !h.take_events()
+            .iter()
+            .any(|e| matches!(e, Event::Notify { .. }))
+    );
+    // F4 is its key.
+    let action = h
+        .app
+        .registry()
+        .actions()
+        .iter()
+        .find(|action| action.id() == ActionId("core.open_in_editor"))
+        .cloned()
+        .unwrap_or_else(|| panic!("the action"));
+    assert_eq!(
+        action.default_shortcut().map(|s| s.to_string()),
+        Some("F4".to_owned())
+    );
+    assert_eq!(action.label(), "Open in editor");
+}
+
+/// The extension whose action, known as `action`, opens `console`.
+fn console_opener(console: &Arc<FakeConsole>, action: ActionId) -> Arc<dyn Extension> {
+    Arc::new(ConsoleOpener {
         manifest: Manifest {
             id: ExtId("fake-console"),
             name: "Fake console",
+            description: "",
             version: Version::new(0, 1, 0),
             api_version: API_VERSION,
             requires: Capabilities::empty(),
@@ -2234,8 +3278,16 @@ fn with_fake_console() -> (Harness, Arc<FakeConsole>, model::PaneId) {
             previews: &[],
             commands: &[],
         },
-        console: Arc::clone(&console),
-    });
+        console: Arc::clone(console),
+        action,
+    })
+}
+
+/// A harness with the fake console opened from its explorer tab: the
+/// harness, the console and the pane both are in.
+fn with_fake_console() -> (Harness, Arc<FakeConsole>, model::PaneId) {
+    let console = Arc::new(FakeConsole::default());
+    let opener = console_opener(&console, OPEN_FAKE_CONSOLE);
     let mut h = harness_with(vec![opener]);
     h.settle();
     let pane = h.app.model().focused;
@@ -2833,6 +3885,7 @@ mod integration {
             manifest: Manifest {
                 id: ExtId("installer"),
                 name: "Installer",
+                description: "",
                 version: Version::new(0, 1, 0),
                 api_version: API_VERSION,
                 requires: Capabilities::empty(),

@@ -1,7 +1,9 @@
 //! Acceptance (preview pane layout): the Preview tab's toolbar, status bar
-//! and info badges; wrap, line numbers and pretty print; the pinned section
-//! per content kind surviving files and restarts; the pane's width never set
-//! by its content; and the Git badge only inside a work tree.
+//! and File info card; wrap, line numbers and pretty print; the card
+//! hanging under the info button, pinned per previewer and surviving files
+//! and restarts; the centred card where there is nothing to show, and the
+//! empty state; the pane's width never set by its content; and the Git
+//! section only inside a work tree.
 
 use std::fs;
 use std::path::Path;
@@ -141,20 +143,31 @@ fn toolbar_item(harness: &Harness<'_, RickUi>, label: &str) -> Option<bool> {
         .on
 }
 
-/// The ids of the pinned badges, in order.
-fn pinned_ids(harness: &Harness<'_, RickUi>) -> Vec<String> {
+/// The labels of the File info card's rows, in order.
+fn field_labels(harness: &Harness<'_, RickUi>) -> Vec<String> {
     harness
         .state()
-        .preview_badges()
+        .preview_fields()
         .iter()
-        .filter(|b| b.pinned)
-        .map(|b| b.id.clone())
+        .map(|(label, _)| label.clone())
         .collect()
 }
 
+/// The value of the File info card's row `label`.
+fn field(harness: &Harness<'_, RickUi>, label: &str) -> String {
+    harness
+        .state()
+        .preview_fields()
+        .iter()
+        .find(|(l, _)| l == label)
+        .map_or_else(
+            || panic!("no field {label}: {:?}", harness.state().preview_fields()),
+            |(_, value)| value.clone(),
+        )
+}
+
 /// Clicks the widget labelled `glyph` inside the preview pane; the same
-/// glyph may serve elsewhere in the window (the File info badge shares its
-/// glyph with the title row's toggle).
+/// glyph or name may serve elsewhere in the window.
 fn click_in_pane(harness: &mut Harness<'_, RickUi>, glyph: &str) {
     let pane_rect = harness
         .state()
@@ -495,11 +508,16 @@ fn two_hundred_thousand_wrapped_lines_keep_every_frame_under_the_budget() {
     tests::bench::record("wrap-frame", &worsts);
 }
 
-/// A photo has File info and EXIF badges; hovering shows the rows, clicking
-/// pins the panel (and pushes the content down), pinning another replaces
-/// it, and the pin survives another photo and a restart.
+/// One card for a photo's facts (SPEC.md *File info card*): its rows are
+/// the previewer's fields with *Modified* after *Size*; hovering the info
+/// button hangs the card under it with the first five and *Show all n
+/// fields*; the pin, or a click on the button, pins it above the content,
+/// which moves down; the pin is the previewer's, so another photo keeps it
+/// and so does a restart; a click unpins.
 #[test]
-fn exif_badges_hover_pin_and_survive_files_and_restarts() {
+#[allow(clippy::too_many_lines)]
+fn the_file_info_card_hovers_pins_and_the_pin_survives_files_and_restarts() {
+    use ui_egui::inspector::Info;
     let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
     fs::write(dir.path().join("a.jpg"), media::photo_jpeg(80, 60))
         .unwrap_or_else(|e| panic!("{e}"));
@@ -510,79 +528,94 @@ fn exif_badges_hover_pin_and_survive_files_and_restarts() {
         &fake,
         dir.path(),
         egui::vec2(1200.0, 700.0),
-        340.0,
+        440.0,
         previewers(),
     );
     select(&mut harness, "a.jpg");
 
-    let titles: Vec<(String, bool)> = harness
-        .state()
-        .preview_badges()
-        .iter()
-        .map(|b| (b.title.clone(), b.pinned))
-        .collect();
+    assert_eq!(harness.state().preview_info(), Info::Unpinned);
+    let labels = field_labels(&harness);
     assert_eq!(
-        titles,
-        [("File info".to_owned(), false), ("EXIF".to_owned(), false)]
+        labels[..4],
+        ["Format", "Dimensions", "Size", "Modified"],
+        "the pane supplies Modified after Size: {labels:?}"
     );
+    assert_eq!(field(&harness, "Camera"), "Rick Cameras");
+    assert_eq!(field(&harness, "Dimensions"), "80 × 60");
+    // As the Date format setting writes it: smart with the time, and the
+    // picture was written a moment ago.
+    let modified = field(&harness, "Modified");
+    assert!(modified.starts_with("Today "), "{modified}");
+    assert_eq!(modified.len(), "Today 17:29".len(), "{modified}");
     assert!(
         harness.state().preview_rects().panel.is_none(),
         "nothing pinned yet"
     );
     assert!(
-        harness.query_by_label("Make").is_none(),
-        "rows hidden until hovered"
+        harness.query_by_label("Rick Cameras").is_none(),
+        "the rows are hidden until the button is hovered"
     );
 
-    // Hover: the overlay with the rows.
-    hover_until(&mut harness, icons::CAMERA, "Make");
-    harness.get_by_label("Rick Cameras");
-
-    // Click: pinned, the content moves down by the panel's height.
-    let content_before = harness
-        .state()
-        .preview_rects()
-        .content
-        .unwrap_or_else(|| panic!("content"));
-    harness.get_by_label(icons::CAMERA).click();
-    settle(&mut harness);
-    let rects = harness.state().preview_rects();
-    let panel = rects
-        .panel
-        .unwrap_or_else(|| panic!("EXIF pinned: {rects:?}"));
-    let content_after = rects.content.unwrap_or_else(|| panic!("content"));
-    assert!(panel.height() > 40.0, "{panel:?}");
-    assert!(
-        (content_after.top() - (content_before.top() + panel.height() + 1.0)).abs() < 1.5,
-        "content {content_before:?} -> {content_after:?}, panel {panel:?}"
-    );
+    // Hover: the card hangs under the button, inside the pane, with the
+    // name, the type and the size in its head, five rows and the line
+    // that unfolds the rest.
+    let all = labels.len();
+    hover_until(&mut harness, "File info", "Rick Cameras");
     assert!(
         harness
-            .state()
-            .preview_badges()
-            .iter()
-            .any(|b| b.id == "exif" && b.pinned),
-        "{:?}",
-        harness.state().preview_badges()
+            .query_all_by_label_contains("JPEG image  ·  ")
+            .next()
+            .is_some(),
+        "the type and the size under the name"
     );
+    let rects = harness.state().preview_rects();
+    let card = rects
+        .popover
+        .unwrap_or_else(|| panic!("the popover: {rects:?}"));
+    let content = rects.content.unwrap_or_else(|| panic!("content"));
+    assert!(card.width() <= 360.5, "{card:?}");
     assert!(
-        settings_text(&harness).contains("image = \"exif\"")
-            || wait_settings(&mut harness, "image = \"exif\"").contains("exif")
+        card.top() >= content.top() && card.right() <= content.right(),
+        "{card:?} in {content:?}"
+    );
+    harness.get_by_label(format!("Show all {all} fields").as_str());
+    assert!(
+        harness.query_by_label("Model").is_none(),
+        "the sixth row waits behind the line"
     );
 
-    // Pinning File info unpins EXIF.
-    click_in_pane(&mut harness, icons::INFO);
+    // The pin in the card's head pins it: the card sits above the
+    // content, which keeps its place in the pane and gives up the room.
+    harness.get_by_label("Pin file info").click();
     settle(&mut harness);
-    assert_eq!(pinned_ids(&harness), ["file"]);
-
-    // Another photo keeps the pin.
-    select(&mut harness, "b.jpg");
-    assert_eq!(
-        pinned_ids(&harness),
-        ["file"],
-        "the pin follows the content kind"
+    let rects = harness.state().preview_rects();
+    let panel = rects.panel.unwrap_or_else(|| panic!("pinned: {rects:?}"));
+    assert!(rects.popover.is_none(), "{rects:?}");
+    assert!(panel.height() > 150.0, "{panel:?}");
+    assert!(
+        (panel.width() - (content.width() - 24.0)).abs() < 1.0,
+        "the pane's width inside the content's margin: {panel:?}"
     );
-    wait_settings(&mut harness, "image = \"file\"");
+    assert_eq!(harness.state().preview_info(), Info::Pinned);
+    wait_settings(&mut harness, "preview-image = true");
+    let frame = harness
+        .state()
+        .previews()
+        .get(
+            harness
+                .state()
+                .app()
+                .preview_pane()
+                .unwrap_or_else(|| panic!("pane")),
+        )
+        .and_then(ui_egui::preview::Slot::frame_rect)
+        .unwrap_or_else(|| panic!("a frame"));
+    assert!(frame.top() >= panel.bottom(), "{frame:?} under {panel:?}");
+
+    // Another photo keeps the pin: it is the previewer's.
+    select(&mut harness, "b.jpg");
+    assert_eq!(harness.state().preview_info(), Info::Pinned);
+    assert_eq!(field(&harness, "Dimensions"), "60 × 80");
 
     // And a restart.
     drop(harness);
@@ -590,12 +623,35 @@ fn exif_badges_hover_pin_and_survive_files_and_restarts() {
         &fake,
         dir.path(),
         egui::vec2(1200.0, 700.0),
-        340.0,
+        440.0,
         previewers(),
     );
     select(&mut harness, "a.jpg");
-    assert_eq!(pinned_ids(&harness), ["file"], "the pin survives a restart");
+    assert_eq!(
+        harness.state().preview_info(),
+        Info::Pinned,
+        "the pin survives a restart"
+    );
     assert!(harness.state().preview_rects().panel.is_some());
+
+    // Show all n fields unfolds the rest in place, each further section
+    // under its title; the line folds them again.
+    assert!(harness.query_by_label("EXIF").is_none());
+    click_in_pane(&mut harness, &format!("Show all {all} fields"));
+    settle(&mut harness);
+    harness.get_by_label("EXIF");
+    harness.get_by_label("Make");
+
+    // A click on the info button unpins.
+    click_in_pane(&mut harness, "File info");
+    settle(&mut harness);
+    assert_eq!(harness.state().preview_info(), Info::Unpinned);
+    assert!(harness.state().preview_rects().panel.is_none());
+    let started = Instant::now();
+    while settings_text(&harness).contains("preview-image = true") {
+        settle(&mut harness);
+        assert!(started.elapsed() < Duration::from_secs(10), "still pinned");
+    }
 }
 
 /// A landscape A3 page and a 6000-pixel-wide image in a 300-point pane: the
@@ -822,7 +878,7 @@ fn git(dir: &Path, args: &[&str]) {
 
 /// The Git badge appears for a file inside a work tree and not outside.
 #[test]
-fn the_git_badge_appears_only_inside_a_work_tree() {
+fn the_git_section_appears_only_inside_a_work_tree() {
     let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
     let repo = dir.path().join("repo");
     let plain = dir.path().join("plain");
@@ -845,28 +901,20 @@ fn the_git_badge_appears_only_inside_a_work_tree() {
     // The Git section arrives with the decoration job, which may land after
     // the preview's first frame.
     let started = Instant::now();
-    while !harness
-        .state()
-        .preview_badges()
-        .iter()
-        .any(|b| b.id == "git")
+    while !field_labels(&harness).iter().any(|l| l == "Branch")
         && started.elapsed() < Duration::from_secs(10)
     {
         harness.step();
     }
-    let badges: Vec<&str> = harness
-        .state()
-        .preview_badges()
-        .iter()
-        .map(|b| b.id.as_str())
-        .collect();
-    assert_eq!(
-        badges,
-        ["file", "git"],
-        "{:?}",
-        harness.state().preview_badges()
-    );
-    hover_until(&mut harness, icons::BRANCH, "Branch");
+    assert_eq!(field(&harness, "Branch"), "main");
+    // It is a section of the one card, after the previewer's: unfolded,
+    // it stands under its title.
+    let all = field_labels(&harness).len();
+    let unfold = format!("Show all {all} fields");
+    hover_until(&mut harness, "File info", &unfold);
+    harness.get_by_label(unfold.as_str()).click();
+    settle(&mut harness);
+    harness.get_by_label("GIT");
     harness.get_by_label("main");
 
     let pane = harness.state().app().model().focused;
@@ -879,14 +927,168 @@ fn the_git_badge_appears_only_inside_a_work_tree() {
     );
     settle(&mut harness);
     select(&mut harness, "loose.txt");
-    let badges: Vec<&str> = harness
+    assert!(
+        !field_labels(&harness).iter().any(|l| l == "Branch"),
+        "{:?}",
+        harness.state().preview_fields()
+    );
+}
+
+/// The table of the pane's content as last drawn.
+fn table_of(harness: &Harness<'_, RickUi>) -> ui_egui::table::Drawn {
+    let pane = harness.state().app().model().focused;
+    harness
         .state()
-        .preview_badges()
-        .iter()
-        .map(|b| b.id.as_str())
-        .collect();
-    assert_eq!(badges, ["file"]);
-    assert!(harness.query_by_label(icons::BRANCH).is_none());
+        .previews()
+        .get(pane)
+        .and_then(|slot| slot.content_state().table.clone())
+        .unwrap_or_else(|| panic!("the content is no table"))
+}
+
+/// Issue 139, item 6 (SPEC.md *Tables in previews*): the archive tree and
+/// the CSV grid are one table — a 30 px header band with a divider
+/// between every pair of header cells, the rows starting right under it;
+/// a divider dragged resizes the column before it, never under 48 px, and
+/// the last column takes the rest; a double-click fits the column; the
+/// widths are remembered per previewer, by position, across files and
+/// restarts.
+#[test]
+#[allow(clippy::too_many_lines)]
+fn preview_tables_share_a_header_whose_dividers_resize_and_are_remembered() {
+    let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+    fs::write(
+        dir.path().join("data.csv"),
+        "id,title,description,price\n1,Rick,Fast listing,0.00\n2,Multi-line field,First line,12.50\n",
+    )
+    .unwrap_or_else(|e| panic!("{e}"));
+    for name in ["bundle.zip", "other.zip"] {
+        fs::write(
+            dir.path().join(name),
+            ext_preview_archive::fixtures::sample_zip(),
+        )
+        .unwrap_or_else(|e| panic!("{e}"));
+    }
+    let fake = Arc::new(Fake::new().unwrap_or_else(|e| panic!("{e}")));
+    let size = egui::vec2(1400.0, 700.0);
+    let mut harness = window(&fake, dir.path(), size, 600.0, content_previewers());
+
+    // The archive tree: Name, Type, Modified, Size and Packed.
+    select(&mut harness, "bundle.zip");
+    let table = table_of(&harness);
+    let content = harness
+        .state()
+        .preview_rects()
+        .content
+        .unwrap_or_else(|| panic!("content"));
+    assert!((table.header.height() - 30.0).abs() < 0.1, "{table:?}");
+    assert!((table.header.top() - content.top()).abs() < 0.1);
+    assert_eq!(table.widths.len(), 5, "{table:?}");
+    assert_eq!(
+        table.dividers.len(),
+        4,
+        "one between every pair of header cells"
+    );
+    for title in ["Name", "Type", "Modified", "Size", "Packed"] {
+        assert!(in_pane(&harness, title) >= 1, "the {title} title");
+    }
+    let first = table.first_row.unwrap_or_else(|| panic!("rows"));
+    assert!(
+        (first.top() - table.header.bottom()).abs() < 0.1,
+        "the first row sits right under the header: {table:?}"
+    );
+    assert!(table.widths.iter().all(|w| *w >= 48.0), "{table:?}");
+    let total: f32 = table.widths.iter().sum();
+    assert!(
+        (total - content.width()).abs() < 1.0,
+        "the last column takes the rest: {table:?} in {content:?}"
+    );
+
+    // Dragging the second divider widens Type by the drag, and the last
+    // column gives the room.
+    let y = table.header.center().y;
+    let divider = egui::pos2(table.dividers[1], y);
+    drag(&mut harness, divider, divider + egui::vec2(40.0, 0.0));
+    settle(&mut harness);
+    let wider = table_of(&harness);
+    // The first few points of a drag are egui's threshold.
+    let grown = wider.widths[1] - table.widths[1];
+    assert!(
+        (33.0..=40.5).contains(&grown),
+        "{:?} -> {:?}",
+        table.widths,
+        wider.widths
+    );
+    assert!((wider.widths[0] - table.widths[0]).abs() < 0.1);
+    assert!((wider.widths[4] - (table.widths[4] - grown)).abs() < 0.1);
+    let text = wait_settings(&mut harness, "preview-archive = [");
+    assert!(text.contains("[preview.columns]"), "{text}");
+
+    // No column gets narrower than 48 px.
+    let divider = egui::pos2(wider.dividers[1], y);
+    drag(&mut harness, divider, divider - egui::vec2(400.0, 0.0));
+    settle(&mut harness);
+    let narrow = table_of(&harness);
+    assert!((narrow.widths[1] - 48.0).abs() < 0.1, "{narrow:?}");
+
+    // A double-click fits the column to the cells in view: Type holds
+    // "Folder" and extensions, which need more than 48 px with the padding.
+    // Both clicks go into one frame's input: the harness's clock moves a
+    // quarter second per frame, more than the double-click window.
+    let divider = egui::pos2(narrow.dividers[1], y);
+    harness.event(egui::Event::PointerMoved(divider));
+    harness.step();
+    for _ in 0..2 {
+        for pressed in [true, false] {
+            harness.input_mut().events.push(egui::Event::PointerButton {
+                pos: divider,
+                button: egui::PointerButton::Primary,
+                pressed,
+                modifiers: egui::Modifiers::default(),
+            });
+        }
+    }
+    harness.step();
+    settle(&mut harness);
+    let fitted = table_of(&harness);
+    assert!(
+        fitted.widths[1] > 48.5 && fitted.widths[1] < table.widths[1] + 40.0,
+        "{fitted:?}"
+    );
+
+    // Another archive opens with the widths the first was left with, and
+    // so does a new window.
+    select(&mut harness, "other.zip");
+    let other = table_of(&harness);
+    assert!(
+        (other.widths[1] - fitted.widths[1]).abs() < 1.0,
+        "{other:?} after {fitted:?}"
+    );
+    let remembered = fitted.widths[1];
+    settle(&mut harness);
+    let fitted_text = format!("{}", remembered.round());
+    wait_settings(&mut harness, &fitted_text);
+    drop(harness);
+    let mut harness = window(&fake, dir.path(), size, 600.0, content_previewers());
+    select(&mut harness, "bundle.zip");
+    assert!(
+        (table_of(&harness).widths[1] - remembered).abs() < 1.0,
+        "the widths survive a restart"
+    );
+
+    // The CSV grid is the same table, its widths kept by position under
+    // its own previewer.
+    select(&mut harness, "data.csv");
+    let grid = table_of(&harness);
+    assert!((grid.header.height() - 30.0).abs() < 0.1);
+    assert_eq!(grid.widths.len(), 4);
+    assert_eq!(grid.dividers.len(), 3);
+    let y = grid.header.center().y;
+    let divider = egui::pos2(grid.dividers[0], y);
+    drag(&mut harness, divider, divider + egui::vec2(30.0, 0.0));
+    settle(&mut harness);
+    let grown = table_of(&harness).widths[0] - grid.widths[0];
+    assert!((23.0..=30.5).contains(&grown), "{grown}");
+    wait_settings(&mut harness, "preview-markup = [");
 }
 
 /// Selects `name` and steps until the pane shows its placeholder for it.
@@ -915,7 +1117,8 @@ fn select_unclaimed(harness: &mut Harness<'_, RickUi>, name: &str) {
         }
         assert!(
             started.elapsed() < Duration::from_secs(20),
-            "{name}: no placeholder: {slot:?}"
+            "{name}: no placeholder: {slot:?}, shown by {:?}",
+            slot.and_then(ui_egui::preview::Slot::previewer)
         );
         std::thread::sleep(Duration::from_millis(2));
     }
@@ -923,22 +1126,28 @@ fn select_unclaimed(harness: &mut Harness<'_, RickUi>, name: &str) {
     harness.step();
 }
 
-/// Issue 50, *No previewer*: a file nobody claims shows the placeholder
-/// (its facts, the type icon, one line), never a hex dump; the line reads
-/// *No plugin available* when no plugin claims the type and *Plugin
-/// available* when a disabled plugin's manifest does.
+/// Issue 139, item 5, *No previewer*, as issue 149 changed it: without
+/// the hex view loaded, a file nobody claims shows the File info card,
+/// centred — not a bare line: its head says *no previewer for .bin*, or
+/// *plugin available* when a disabled plugin's manifest claims the type;
+/// its rows are where the file is, when it was modified and its
+/// permissions; and its one button is *Open with…*. *Open as hex* is gone:
+/// with the hex view loaded it takes such a file by itself (the test
+/// below).
 #[test]
-fn a_file_no_previewer_claims_shows_the_placeholder_with_the_right_line() {
+#[allow(clippy::too_many_lines)]
+fn a_file_no_previewer_claims_shows_the_centred_card_with_open_with_alone() {
+    use ui_egui::inspector::Info;
     let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
-    fs::write(dir.path().join("blob.xyz"), [0u8, 1, 2, 3, 255, 254])
+    fs::write(dir.path().join("random.bin"), [0u8, 1, 2, 3, 255, 254])
         .unwrap_or_else(|e| panic!("{e}"));
     fs::write(dir.path().join("notes.abc"), b"abc\0").unwrap_or_else(|e| panic!("{e}"));
     let fake = Arc::new(Fake::new().unwrap_or_else(|e| panic!("{e}")));
     let mut harness = window(
         &fake,
         dir.path(),
-        egui::vec2(1100.0, 700.0),
-        340.0,
+        egui::vec2(1300.0, 700.0),
+        520.0,
         previewers(),
     );
     // A disabled plugin in the plugins directory whose manifest claims
@@ -951,10 +1160,13 @@ fn a_file_no_previewer_claims_shows_the_placeholder_with_the_right_line() {
         previews: vec!["abc".to_owned()],
         status: app::PluginStatus::Disabled,
         path: dir.path().join("plugins").join("preview-abc"),
+        description: String::new(),
+        built_in: false,
+        removed: false,
     }]);
     let pane = harness.state().app().model().focused;
 
-    select_unclaimed(&mut harness, "blob.xyz");
+    select_unclaimed(&mut harness, "random.bin");
     let slot = harness
         .state()
         .previews()
@@ -963,34 +1175,53 @@ fn a_file_no_previewer_claims_shows_the_placeholder_with_the_right_line() {
     assert_eq!(
         slot.placeholder().map(|p| p.plugin.clone()),
         Some(None),
-        "no plugin claims .xyz"
+        "no plugin claims .bin"
     );
     assert!(!slot.has_frame(), "no hex dump, no frame at all");
     assert!(slot.text_view().is_none());
     assert!(slot.error().is_none(), "not an error either");
-    harness.get_by_label("No plugin available");
-    assert!(harness.query_by_label("Plugin available").is_none());
-    // The facts at the top: the File info rows the pane builds itself (the
-    // name and the size are in the list too, so the pane's copies are the
-    // ones looked for).
-    let pane_rect = harness
-        .state()
-        .inspector_rect()
-        .unwrap_or_else(|| panic!("pane"));
-    for label in ["blob.xyz", "6 B", "XYZ"] {
+    for _ in 0..3 {
+        harness.step();
+    }
+    // The head, the rows and the buttons, all inside the pane.
+    assert!(in_pane(&harness, "random.bin") >= 1, "the name");
+    harness.get_by_label("Binary file  ·  6 B  ·  no previewer for .bin");
+    assert!(harness.query_by_label("No plugin available").is_none());
+    for label in ["Location", "Modified"] {
+        assert_eq!(in_pane(&harness, label), 1, "the {label} row");
+    }
+    #[cfg(unix)]
+    {
+        assert_eq!(in_pane(&harness, "Permissions"), 1);
         assert!(
-            harness
-                .get_all_by_label(label)
-                .any(|node| pane_rect.contains(node.rect().center())),
-            "{label} in the pane's File info rows"
+            harness.query_all_by_label_contains("-rw-").next().is_some(),
+            "the mode string and owner:group"
         );
     }
-    assert_eq!(harness.state().preview_status(), "XYZ");
+    // The card stands in the middle of the content, 400 px wide.
+    let content = harness
+        .state()
+        .preview_rects()
+        .content
+        .unwrap_or_else(|| panic!("content"));
     assert!(
-        harness.state().preview_badges().is_empty(),
-        "no previewer, no section badge"
+        harness.query_by_label("Open as hex").is_none(),
+        "the card has one button"
     );
+    let with = harness.get_by_label("Open with…").rect();
+    assert!(
+        (with.left() - (content.center().x - 200.0 + 15.0)).abs() < 2.0,
+        "left-aligned in a 400 px card centred in {content:?}: {with:?}"
+    );
+    assert!(
+        (with.center().y - content.center().y).abs() < content.height() / 3.0,
+        "{with:?} in {content:?}"
+    );
+    // Nothing for the info button to open: the card is on show already.
+    assert_eq!(harness.state().preview_info(), Info::Inert);
+    assert_eq!(harness.state().preview_fields(), [], "no rows to list");
 
+    // The other file: a disabled plugin claims its type.
     select_unclaimed(&mut harness, "notes.abc");
     let slot = harness
         .state()
@@ -1002,8 +1233,128 @@ fn a_file_no_previewer_claims_shows_the_placeholder_with_the_right_line() {
         Some(Some("preview-abc".to_owned())),
         "the disabled plugin claims .abc"
     );
-    harness.get_by_label("Plugin available");
-    assert!(harness.query_by_label("No plugin available").is_none());
+    for _ in 0..3 {
+        harness.step();
+    }
+    assert!(
+        harness
+            .query_all_by_label_contains("plugin available")
+            .next()
+            .is_some()
+    );
+}
+
+/// Issue 149, item 7: with the hex view loaded, a file nothing else
+/// recognises opens in it by itself — `random-4k.bin` of the test files —
+/// while a file with a recognised type still goes to its own previewer.
+#[test]
+fn the_hex_view_takes_a_file_nothing_else_recognises() {
+    let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+    let noise: Vec<u8> = (0..4096u32).map(|i| (i * 31 % 251) as u8).collect();
+    fs::write(dir.path().join("random-4k.bin"), noise).unwrap_or_else(|e| panic!("{e}"));
+    fs::write(dir.path().join("notes.txt"), "hello\n").unwrap_or_else(|e| panic!("{e}"));
+    let fake = Arc::new(Fake::new().unwrap_or_else(|e| panic!("{e}")));
+    let mut extensions = previewers();
+    extensions.push(Arc::new(ext_preview_hex::HexPreview::new()));
+    let mut harness = window(
+        &fake,
+        dir.path(),
+        egui::vec2(1300.0, 700.0),
+        520.0,
+        extensions,
+    );
+    let pane = harness.state().app().model().focused;
+    let shown_by = |harness: &mut Harness<'_, RickUi>, name: &str| {
+        let id = harness
+            .state()
+            .app()
+            .model()
+            .active_tab(pane)
+            .and_then(|(_, t)| t.listing.rows().find(|e| e.name == name).map(|e| e.id))
+            .unwrap_or_else(|| panic!("no entry {name}"));
+        harness.state_mut().app_mut().handle(
+            app::Command::Select {
+                pane,
+                change: SelectionChange::Set(vec![id]),
+            },
+            &mut Vec::new(),
+        );
+        let started = Instant::now();
+        loop {
+            harness.step();
+            let slot = harness.state().previews().get(pane);
+            if let Some(previewer) = slot
+                .filter(|s| s.has_doc())
+                .and_then(ui_egui::preview::Slot::previewer)
+            {
+                return previewer;
+            }
+            assert!(
+                started.elapsed() < Duration::from_secs(20),
+                "{name}: no preview: {slot:?}"
+            );
+            std::thread::sleep(Duration::from_millis(2));
+        }
+    };
+    assert_eq!(
+        shown_by(&mut harness, "random-4k.bin"),
+        ext_preview_hex::ID,
+        "the hex view, and no card"
+    );
+    settle(&mut harness);
+    assert!(harness.query_by_label("Open with…").is_none(), "no card");
+    assert!(
+        harness
+            .query_all_by_label_contains("no previewer for")
+            .next()
+            .is_none()
+    );
+    // A recognised type still goes to its own previewer.
+    assert_ne!(shown_by(&mut harness, "notes.txt"), ext_preview_hex::ID);
+}
+
+/// Nothing selected (SPEC.md *Nothing selected*): the glyph with *No file
+/// selected* and the hint under it, a toolbar of the info button — inert —
+/// close and the handle, and an empty footer.
+#[test]
+fn with_nothing_selected_the_pane_shows_the_empty_state() {
+    use ui_egui::inspector::Info;
+    let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+    fs::write(dir.path().join("notes.txt"), "hello\n").unwrap_or_else(|e| panic!("{e}"));
+    let fake = Arc::new(Fake::new().unwrap_or_else(|e| panic!("{e}")));
+    let mut harness = window(
+        &fake,
+        dir.path(),
+        egui::vec2(1200.0, 700.0),
+        400.0,
+        previewers(),
+    );
+    settle(&mut harness);
+    let content = harness
+        .state()
+        .preview_rects()
+        .content
+        .unwrap_or_else(|| panic!("content"));
+    let title = harness.get_by_label("No file selected").rect();
+    let hint = harness
+        .get_by_label("Select a file to preview it here")
+        .rect();
+    assert!((title.center().x - content.center().x).abs() < 1.0);
+    assert!((hint.center().x - content.center().x).abs() < 1.0);
+    assert!(title.bottom() <= hint.top(), "{title:?} over {hint:?}");
+    assert!(content.contains(title.center()) && content.contains(hint.center()));
+    assert_eq!(harness.state().preview_info(), Info::Inert);
+    assert!(
+        harness.state().preview_toolbar().is_empty(),
+        "no file icon, no controls: {:?}",
+        harness.state().preview_toolbar()
+    );
+    assert_eq!(harness.state().preview_status(), "", "an empty footer");
+
+    // A file selected: its preview, and the empty state is gone.
+    select(&mut harness, "notes.txt");
+    assert!(harness.query_by_label("No file selected").is_none());
+    assert_eq!(harness.state().preview_info(), Info::Unpinned);
 }
 
 /// The four built-in previewers plus the markup (Markdown, HTML, CSV) and
@@ -1161,9 +1512,12 @@ fn markdown_csv_and_a_zip_are_laid_out_by_the_pane_itself() {
     assert_eq!(rows, 4, "docs, docs/readme.txt, a.txt, secret.bin");
     assert_ne!(stats, "");
     assert!(in_pane(&harness, "readme.txt") >= 1);
+    // The archive tree's columns; in a pane this narrow the last ones are
+    // reached by scrolling sideways.
+    assert!(in_pane(&harness, "Type") >= 1, "the Type title");
     assert!(
-        in_pane(&harness, "Date modified") >= 1,
-        "the explorer's columns"
+        harness.query_all_by_label("Packed").next().is_some(),
+        "the Packed title"
     );
     assert!(in_pane(&harness, &stats) >= 1, "the stats line");
     // Folding docs hides its contents.
@@ -1324,11 +1678,36 @@ fn a_missing_pdfium_shows_the_message_and_browsing_to_it_stores_the_setting() {
         (ext_preview_pdf::ID, ext_preview_pdf::LIBRARY_SETTING)
     );
     assert!(slot.pages().is_none(), "nothing rendered");
+    // The File info card, centred: what is missing, where a download
+    // goes, and the three buttons.
+    assert_eq!(in_pane(&harness, "Download pdfium"), 1);
     assert!(in_pane(&harness, "Browse…") >= 1, "the Browse… button");
     assert!(in_pane(&harness, "Retry") >= 1, "the Retry button");
     assert!(
         in_pane(&harness, "paper.pdf") >= 1,
-        "the file's information"
+        "the file's name in the card's head"
+    );
+    assert_eq!(in_pane(&harness, "Needs pdfium, which was not found"), 1);
+    assert_eq!(in_pane(&harness, "Destination"), 1);
+    assert_eq!(in_pane(&harness, "Open folder"), 1);
+    // No path is on show until *Where Rick looked* is opened.
+    assert!(
+        harness
+            .query_all_by_label_contains("Looked in")
+            .next()
+            .is_none(),
+        "the search places stay folded"
+    );
+    click_in_pane(&mut harness, "Where Rick looked");
+    for _ in 0..4 {
+        harness.step();
+    }
+    assert!(
+        harness
+            .query_all_by_label_contains("Looked in")
+            .next()
+            .is_some(),
+        "unfolded: the places and the loader's error"
     );
     assert!(
         harness

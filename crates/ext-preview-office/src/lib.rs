@@ -92,6 +92,7 @@ impl OfficePreview {
             manifest: Manifest {
                 id: ID,
                 name: "Office preview",
+                description: "Previews office documents, Word, Excel, PowerPoint and OpenDocument, by converting them with LibreOffice.",
                 version: Version::parse(env!("CARGO_PKG_VERSION"))
                     .unwrap_or_else(|_| Version::new(0, 0, 0)),
                 api_version: API_VERSION,
