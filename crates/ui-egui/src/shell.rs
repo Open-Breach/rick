@@ -1423,6 +1423,16 @@ impl RickUi {
             .map_or("", |w| w.search.text.as_str())
     }
 
+    /// The dropdown of the root window's search box as the last frame drew
+    /// it, for tests: its card and where each row's texts stand. `None`
+    /// while it is closed.
+    #[must_use]
+    pub fn search_dropdown(&self) -> Option<crate::search::Drawn> {
+        self.windows
+            .get(&self.root)
+            .and_then(|w| w.search.drawn().cloned())
+    }
+
     /// Whether the Settings window is open.
     #[must_use]
     pub fn settings_open(&self) -> bool {

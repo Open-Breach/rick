@@ -488,6 +488,39 @@ pub fn elided(
     ui.painter().layout_job(job)
 }
 
+/// One line of text laid out for `width`, cut at its **start** when it is
+/// longer: an ellipsis and then as much of the text's end as fits. For a
+/// path, whose end says the most. Returns the galley and whether it was
+/// cut.
+#[must_use]
+pub fn elided_at_start(
+    ui: &egui::Ui,
+    text: &str,
+    font: &FontId,
+    colour: egui::Color32,
+    width: f32,
+) -> (std::sync::Arc<egui::Galley>, bool) {
+    let layout = |text: String| ui.painter().layout_no_wrap(text, font.clone(), colour);
+    let whole = layout(text.to_owned());
+    if whole.size().x <= width {
+        return (whole, false);
+    }
+    // The longest tail that fits behind the ellipsis. A tail is no wider
+    // than a longer one, so the first that fits is found by halving.
+    let starts: Vec<usize> = text.char_indices().map(|(at, _)| at).skip(1).collect();
+    let tail = |index: usize| starts.get(index).map_or("", |&at| &text[at..]);
+    let (mut low, mut high) = (0, starts.len());
+    while low < high {
+        let middle = usize::midpoint(low, high);
+        if layout(format!("…{}", tail(middle))).size().x <= width {
+            high = middle;
+        } else {
+            low = middle + 1;
+        }
+    }
+    (layout(format!("…{}", tail(low))), true)
+}
+
 /// Paints one line of text at `pos` (its left centre), cut with an
 /// ellipsis at `width`. The line is a label for a screen reader, with the
 /// whole text as its name, and shows the whole text as its tooltip when
@@ -554,6 +587,39 @@ mod tests {
             let whole = elided(ui, "notes.md", font, egui::Color32::WHITE, 398.0);
             assert!(!whole.elided);
             assert_eq!(whole.text(), "notes.md");
+        });
+        // No renderer takes the font atlas in a unit test.
+        output.textures_delta.clear();
+    }
+
+    #[test]
+    fn a_long_path_is_cut_at_its_start_and_keeps_its_end() {
+        let ctx = egui::Context::default();
+        let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+            let font = FontId::proportional(TEXT_SECONDARY);
+            let path = "/home/serge/Documents/Firma/Kunden/2026/Erledigung/Backup";
+            let (cut, was_cut) = elided_at_start(ui, path, &font, egui::Color32::WHITE, 160.0);
+            assert!(was_cut, "the path is longer than its room");
+            assert!(cut.size().x <= 160.0, "{} px", cut.size().x);
+            assert_eq!(cut.rows.len(), 1, "one line, never wrapped");
+            let text = cut.text();
+            assert!(text.starts_with('…'), "{text}");
+            assert!(text.ends_with("/Backup"), "the folder itself stays: {text}");
+            // As much of the end as fits: one character more would not.
+            let kept = text.chars().count() - 1;
+            let more: String = path.chars().skip(path.chars().count() - kept - 1).collect();
+            let wider =
+                ui.painter()
+                    .layout_no_wrap(format!("…{more}"), font.clone(), egui::Color32::WHITE);
+            assert!(wider.size().x > 160.0, "{more}");
+
+            let (whole, was_cut) = elided_at_start(ui, "/tmp", &font, egui::Color32::WHITE, 160.0);
+            assert!(!was_cut);
+            assert_eq!(whole.text(), "/tmp");
+            // No room at all leaves the ellipsis alone.
+            let (none, was_cut) = elided_at_start(ui, path, &font, egui::Color32::WHITE, 1.0);
+            assert!(was_cut);
+            assert_eq!(none.text(), "…");
         });
         // No renderer takes the font atlas in a unit test.
         output.textures_delta.clear();
