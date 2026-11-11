@@ -709,7 +709,7 @@ pub struct App {
     /// The entry a pane previews whatever its size, after *Preview anyway*.
     preview_force: BTreeMap<PaneId, EntryId>,
     /// The entry a pane previews through one previewer whatever the
-    /// scores say, after *Open as hex*.
+    /// scores say, after [`Command::PreviewWith`].
     preview_with: BTreeMap<PaneId, (EntryId, ExtId)>,
     /// Thumbnails being rendered, so a cell asked for twice renders once.
     thumbnails: BTreeSet<(EntryId, u32)>,
@@ -4917,10 +4917,12 @@ impl App {
                     let frame = async {
                         let sniff =
                             ext::read_bytes(&*provider, &loc, Some(4096), &job.cancel).await?;
+                        // What only the fallback takes has no picture of
+                        // its own: the file-type icon stays.
                         let best = previewers
                             .iter()
                             .map(|p| (p.score(&entry, &sniff), p))
-                            .filter(|(score, _)| *score > 0)
+                            .filter(|(score, _)| *score > ext::FALLBACK_SCORE)
                             .max_by_key(|(score, _)| *score)
                             .map(|(_, p)| Arc::clone(p))
                             .ok_or(Error::Unsupported("no previewer"))?;
@@ -4968,7 +4970,7 @@ impl App {
             if let Some(job) = self.preview.remove(&pane) {
                 job.cancel.cancel();
             }
-            // *Open as hex* was for that one look at the file.
+            // The named previewer was for that one look at the file.
             self.preview_with.remove(&pane);
         }
         for (pane, entry) in wanted {
@@ -5070,7 +5072,7 @@ impl App {
             .filter(|(id, _)| *id == entry.id)
             .map_or(0, |(_, n)| *n);
         let force = self.preview_force.get(&pane) == Some(&entry.id);
-        // *Open as hex*: one previewer for this file, whatever the scores.
+        // One named previewer for this file, whatever the scores.
         let with = self
             .preview_with
             .get(&pane)

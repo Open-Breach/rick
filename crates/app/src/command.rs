@@ -380,9 +380,11 @@ pub enum Command {
     /// *Remove* of the Extensions dialogue, at once and without a
     /// question. A plugin beside the binary is left alone.
     RemovePlugin(PathBuf),
-    /// Show the pane's file through one previewer whatever the scores say
-    /// — *Open as hex* on a file no previewer claims. It holds for this
-    /// file only, until the selection moves on.
+    /// Show the pane's file through one previewer whatever the scores
+    /// say. It holds for this file only, until the selection moves on.
+    /// The card of a file no previewer claims sent it for *Open as hex*
+    /// until the hex view became the fallback (issue 149); nothing of the
+    /// UI sends it now.
     PreviewWith {
         /// The pane.
         pane: PaneId,

@@ -33,8 +33,8 @@ default; nothing opens a viewer. The preview pane's *Copy* reads the whole
 file as a job and puts its text on the clipboard; a preview is reported
 with the previewer that opened it, and a file no previewer claims with the
 disabled plugin whose manifest claims its type and the file's permission
-line, for the pane's File info card, whose *Open as hex* shows that one
-file through the hex previewer (`Command::PreviewWith`); *Always preview on <source>* writes
+line, for the pane's File info card (`Command::PreviewWith` shows one file
+through a named previewer whatever the scores); *Always preview on <source>* writes
 `preview_always` into the source's connection and takes the size limit off
 there, whichever remote provider keeps the source; a whole file fetched
 from a remote source for a preview is counted as it arrives
