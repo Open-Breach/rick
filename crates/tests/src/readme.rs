@@ -395,7 +395,8 @@ fn install_block(title: &str, links: &[String], steps: &str) -> Option<String> {
 /// The body of the Install section (specs/readme.md, *Install*): per
 /// operating system the direct link to each archive of `platforms` for
 /// the release `version`, and the steps to get Rick running from it; then
-/// the line on the plugins.
+/// what the Office and media previews need installed, and the line on the
+/// plugins.
 #[must_use]
 pub fn install(version: &str, platforms: &[String]) -> String {
     let base = format!(
@@ -443,6 +444,11 @@ pub fn install(version: &str, platforms: &[String]) -> String {
         ),
     ];
     let mut out: Vec<String> = blocks.into_iter().flatten().collect();
+    out.push(
+        "Office documents preview through LibreOffice when it is installed; on Linux, audio and \
+         video need the GStreamer plug-ins."
+            .to_owned(),
+    );
     out.push(
         "Plugins ship in the archive's `plugins/` folder; delete a plugin's folder and that \
          plugin is gone."
@@ -612,6 +618,7 @@ mod tests {
         assert!(text.contains("rick-1.2.3-windows-x64.zip"));
         // No archive for a platform, no block for it.
         assert!(!text.contains("macOS"));
+        assert!(text.contains("\n\nOffice documents preview through LibreOffice when it is"));
         assert!(text.ends_with("that plugin is gone."));
     }
 

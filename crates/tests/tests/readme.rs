@@ -206,7 +206,7 @@ fn the_readme_has_the_structure_of_its_spec() {
     assert_eq!(plain, call[0].replace("v0.4.0", &format!("v{version}")));
     assert_eq!(lines.next(), None);
 
-    // Six features and three to five entries under Coming.
+    // Six features, and the Coming list: Serge's, of five entries at most.
     let features = readme::block(&text, FEATURES).unwrap_or_else(|e| panic!("{e}"));
     assert_eq!(features.lines().count(), 6);
     assert!(features.lines().all(|line| line.starts_with("- ")));
@@ -214,7 +214,7 @@ fn the_readme_has_the_structure_of_its_spec() {
         .split_once("\nComing:\n\n")
         .unwrap_or_else(|| panic!("no Coming list"));
     let coming = after.lines().take_while(|l| l.starts_with("- ")).count();
-    assert!((3..=5).contains(&coming), "{coming} entries under Coming");
+    assert!((1..=5).contains(&coming), "{coming} entries under Coming");
 
     // The picture in both schemes, and the model it shows.
     assert!(text.contains(

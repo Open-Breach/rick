@@ -29,10 +29,8 @@ I also believe more and more people will move to Linux, and those coming from Wi
 
 Coming:
 
-- Signed and notarised builds, with an installer or a package for each platform.
-- Copy and paste of files between Rick and other applications.
-- The system setup that Linux has, on macOS and Windows: default file manager, shell entries, the `rick` command.
-- An extension store: find and install plugins from inside Rick.
+- Distribution images: an installer or a package for each platform, signed.
+- Further bug fixes.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/readme-dark.png">
@@ -57,6 +55,8 @@ Unzip, drag `Rick.app` to Applications and open it. The app is not notarised yet
 **Windows** · [x64](https://github.com/Open-Breach/rick/releases/download/v0.4.0/rick-0.4.0-windows-x64.zip)
 
 Unpack and run `rick.exe`. SmartScreen may warn the first time.
+
+Office documents preview through LibreOffice when it is installed; on Linux, audio and video need the GStreamer plug-ins.
 
 Plugins ship in the archive's `plugins/` folder; delete a plugin's folder and that plugin is gone.
 <!-- /generated:install -->
