@@ -47,6 +47,11 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
+      # The README the archives carry describes this release
+      # (specs/readme.md): the version in its status line is the tag's.
+      # First, so a release cut from a commit without its README stops
+      # before anything is built.
+      - run: .github/scripts/check-readme.sh "$TAG"
       - uses: dtolnay/rust-toolchain@stable
       - uses: taiki-e/install-action@v2
         with: { tool: cargo-about }
@@ -497,7 +502,7 @@ jobs:
           python3 .github/scripts/changelog-section.py "$TAG" CHANGELOG.md > body.md
           {
             echo
-            echo "Archives: the \`rick\` binary with the shared kernel libraries, libstd and the pdfium library beside it, \`plugins/\` with the Git, SVN, archive, trash, Office, media, archive-preview, markup (Markdown, HTML, CSV), hex-preview and subdirectory-search plugins and the platform's search-index connector (Windows Search, Spotlight, or Tracker and Baloo), the 7-Zip library (LGPL) beside the archive plugin for the disk images, the GStreamer runtime on macOS and Windows (Linux uses the system's: install the gstreamer1.0 plug-in packages for playback), on Linux the desktop entry and the icons under \`share/\` in the XDG layout (copy \`share/\` into \`~/.local/share/\` and put \`rick\` on the PATH, or install the tarball with Rick's installer plugin), on macOS all of it inside \`Rick.app\` (drag it to Applications), LICENSE, README, CHANGELOG, THIRD-PARTY-LICENSES, the 7-Zip licence and \`third-party.json\` beside the binary (the component list the About dialog shows); \`SHA256SUMS.txt\` has the checksums. Not signed or notarised (see README, Try it)."
+            echo "Archives: the \`rick\` binary with the shared kernel libraries, libstd and the pdfium library beside it, \`plugins/\` with the Git, SVN, archive, trash, Office, media, archive-preview, markup (Markdown, HTML, CSV), hex-preview and subdirectory-search plugins and the platform's search-index connector (Windows Search, Spotlight, or Tracker and Baloo), the 7-Zip library (LGPL) beside the archive plugin for the disk images, the GStreamer runtime on macOS and Windows (Linux uses the system's: install the gstreamer1.0 plug-in packages for playback), on Linux the desktop entry and the icons under \`share/\` in the XDG layout (copy \`share/\` into \`~/.local/share/\` and put \`rick\` on the PATH, or install the tarball with Rick's installer plugin), on macOS all of it inside \`Rick.app\` (drag it to Applications), LICENSE, README, CHANGELOG, THIRD-PARTY-LICENSES, the 7-Zip licence and \`third-party.json\` beside the binary (the component list the About dialog shows); \`SHA256SUMS.txt\` has the checksums. Not signed or notarised (see docs/building.md)."
           } >> body.md
           cat body.md
       - uses: softprops/action-gh-release@v2
