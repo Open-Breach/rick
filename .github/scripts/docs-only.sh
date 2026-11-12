@@ -3,9 +3,11 @@
 # `code=false` to the step's outputs when every changed file is
 # documentation, `code=true` otherwise. Documentation is Markdown anywhere
 # and docs/, except BENCHMARKS.md, whose tables a unit test in crates/tests
-# checks. On `code=false` the workflows skip their build jobs while the
-# tier's gate job still reports success, so a docs-only pull request is
-# green without a build and never waits for a check that cannot come.
+# checks, and README.md with specs/readme.md, which the test `readme` there
+# holds against each other and against the code. On `code=false` the
+# workflows skip their build jobs while the tier's gate job still reports
+# success, so a docs-only pull request is green without a build and never
+# waits for a check that cannot come.
 #
 # A pull request lists its files through the API; a push compares the
 # commit before it with the one pushed. Whatever cannot be listed (a new or
@@ -45,11 +47,13 @@ if [ "$listed" = false ]; then
   exit 0
 fi
 
-# Everything that is not documentation, BENCHMARKS.md included.
+# Everything that is not documentation, and the Markdown a test reads.
 code="$(grep -v -E '^docs/|(^|/)[^/]*\.md$' <<<"$files" | grep -v '^$' || true)"
-if grep -qx 'BENCHMARKS.md' <<<"$files"; then
-  code="BENCHMARKS.md${code:+$'\n'$code}"
-fi
+for tested in BENCHMARKS.md README.md specs/readme.md; do
+  if grep -qx "$tested" <<<"$files"; then
+    code="$tested${code:+$'\n'$code}"
+  fi
+done
 
 if [ -n "$code" ]; then
   echo "code=true" >> "$GITHUB_OUTPUT"

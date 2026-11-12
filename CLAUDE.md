@@ -89,8 +89,8 @@ is changed. Do not change SPEC.md yourself.
 Three tiers in `.github/workflows/` (issue 35). A new push to a branch
 cancels its running check. A change to Markdown and `docs/` only builds
 nothing, and the tier's gate job still reports success, so a docs-only
-pull request is green in a minute; `BENCHMARKS.md` counts as code, a unit
-test reads it.
+pull request is green in a minute; `BENCHMARKS.md`, `README.md` and
+`specs/readme.md` count as code, a test reads them.
 
 - Tier 1, `ci.yml`: pull requests into `dev` and pushes to `dev`, Linux
   x64 only, a few minutes. `cargo fmt --check`, then side by side clippy

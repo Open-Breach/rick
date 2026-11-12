@@ -3,9 +3,11 @@
 //! The crate exposes [`fixture`], which generates a deterministic directory
 //! tree of N entries for tests and benchmarks, [`media`], which writes a
 //! photo with EXIF and a PDF of any page size, [`mem`], an in-memory
-//! provider that stands in for a cloud provider, and [`mod@bench`], the
-//! targets of the acceptance benchmarks per operating system. The
-//! integration tests themselves live under `tests/`.
+//! provider that stands in for a cloud provider, [`mod@bench`], the
+//! targets of the acceptance benchmarks per operating system, and
+//! [`readme`], the parts of `README.md` that are regenerated with every
+//! release from what the extensions register. The integration tests
+//! themselves live under `tests/`.
 
 #![forbid(unsafe_code)]
 
@@ -13,6 +15,7 @@ pub mod bench;
 pub mod fixture;
 pub mod media;
 pub mod mem;
+pub mod readme;
 
 /// A local location for an OS path.
 #[must_use]
