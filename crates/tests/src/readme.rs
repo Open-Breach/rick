@@ -297,8 +297,8 @@ const TYPE_NAMES: &[(&[&str], &str)] = &[
     (&["qcow2", "qcow"], "QCOW2"),
 ];
 
-/// The short name of the file type a previewer claims as `extension`:
-/// the entry of [`TYPE_NAMES`], or the extension in capitals.
+/// The short name of the file type a previewer claims as `extension`: the
+/// name the table of known spellings gives it, or the extension in capitals.
 #[must_use]
 pub fn type_name(extension: &str) -> String {
     TYPE_NAMES
