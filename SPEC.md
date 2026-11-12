@@ -45,6 +45,7 @@ Proposed performance targets, to confirm: a 200,000-entry directory paints its f
 | `specs/app-icons.md` | Separate specs: the app icon on all three platforms and the Linux desktop entry | The icon, the `rick` identifier, the `Rick.app` bundle or the Linux `share/` layout |
 | `specs/about-dialog.md` | Separate specs: the About dialog | The About dialog, the build details or the third-party component list |
 | `specs/system-integration.md` | Separate specs: system integration and distribution, the second track of 0.3 | Single instance, the command line, `rick://`, the system clipboard, the integration check, signing, plugin trust, the release channels |
+| `specs/readme.md` | Separate specs: the README, its fixed structure and how each release brings it up to date | `README.md` is written or changed, or a release is prepared |
 | `specs/ext-zfs.md` | Separate specs: `ext-zfs`, OpenZFS snapshots | Version 0.4, Linux only; the file is not in the repository yet |
 
 A citation `QUESTIONS.md N` anywhere in the repository means entry `QN` in `specs/decisions.md`.
