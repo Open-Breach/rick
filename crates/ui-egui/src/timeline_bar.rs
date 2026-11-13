@@ -6,7 +6,7 @@
 //! Layout as the mock-up proposes it: as tall as the toolbar with its
 //! padding; the clock, the current point (*Now* with the count of earlier
 //! states, or the point's date, label and source with a *Read-only* pill),
-//! the axis with one tick per point and the handle, and *Now* or *Back to
+//! the axis with one dot per point, evenly spaced, and the handle, and *Now* or *Back to
 //! now* at the right end. At a past point the row takes `bg/selected-soft`.
 
 use std::sync::Arc;
@@ -22,14 +22,15 @@ use crate::icons;
 use crate::shell::{PaneCx, Request};
 use crate::theme::{self, ICON, TEXT_BODY, TEXT_SECONDARY};
 
-/// Ticks closer than this, in logical pixels, are drawn as one.
-pub const MIN_TICK_GAP: f32 = 3.0;
+/// A point's dot radius.
+const DOT: f32 = 3.5;
+/// Dots closer than this, in logical pixels, are drawn as one: a dot's
+/// width and a pixel of air.
+pub const MIN_TICK_GAP: f32 = 2.0 * DOT + 1.0;
 /// How long a dragged handle rests on a point before the pane goes there.
 pub const REST: Duration = Duration::from_millis(200);
 /// The handle's radius.
 const HANDLE: f32 = 7.0;
-/// A tick's height.
-const TICK: f32 = 12.0;
 /// The track's thickness.
 const TRACK: f32 = 4.0;
 /// The gap between the row's parts.
@@ -64,7 +65,8 @@ pub struct BarState {
     pub axis: Option<egui::Rect>,
 }
 
-/// One drawn tick: the points `first..=last`, merged where they crowd.
+/// One drawn dot: the points `first..=last`, merged into a pill where
+/// they crowd.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Tick {
     /// The leftmost x of the merged points.
@@ -77,36 +79,17 @@ pub struct Tick {
     pub last: usize,
 }
 
-/// Where `time` sits on an axis from `oldest` (at `left`) to `now` (at
-/// `right`), linearly; a time outside the span is clamped to it.
-#[must_use]
-pub fn x_of(time: SystemTime, oldest: SystemTime, now: SystemTime, left: f32, right: f32) -> f32 {
-    let span = now.duration_since(oldest).unwrap_or_default().as_secs_f64();
-    if span <= 0.0 {
-        return left;
-    }
-    let at = time
-        .duration_since(oldest)
-        .unwrap_or_default()
-        .as_secs_f64();
-    #[allow(clippy::cast_possible_truncation)]
-    let share = (at / span).clamp(0.0, 1.0) as f32;
-    left + share * (right - left)
-}
-
 /// The x of every point of `timeline` on an axis from `left` to `right`
-/// whose right end is `now`.
+/// whose right end is *Now*: evenly spaced by index, oldest first, the
+/// newest one step left of *Now*, so every point is seen whatever its
+/// time. The date is in the tooltip and the label.
 #[must_use]
-pub fn positions(timeline: &Timeline, now: SystemTime, left: f32, right: f32) -> Vec<f32> {
-    let Some(oldest) = timeline.points.first().map(|p| p.time) else {
-        return Vec::new();
-    };
-    let now = now.max(timeline.points.last().map_or(now, |p| p.time));
-    timeline
-        .points
-        .iter()
-        .map(|p| x_of(p.time, oldest, now, left, right))
-        .collect()
+pub fn positions(timeline: &Timeline, left: f32, right: f32) -> Vec<f32> {
+    let n = timeline.points.len();
+    #[allow(clippy::cast_precision_loss)]
+    let step = (right - left) / n.max(1) as f32;
+    #[allow(clippy::cast_precision_loss)]
+    (0..n).map(|i| left + i as f32 * step).collect()
 }
 
 /// The ticks to draw for points at `xs` (sorted): neighbours closer than
@@ -263,7 +246,7 @@ fn row(ui: &mut egui::Ui, cx: &mut PaneCx<'_>, shown: &Shown) {
     };
     ui.painter().rect_filled(track, TRACK / 2.0, track_colour);
     if let Some(timeline) = timeline {
-        let xs = positions(timeline, cx.now, axis.left(), axis.right());
+        let xs = positions(timeline, axis.left(), axis.right());
         draw_axis(ui, &xs, showing, axis);
         axis_input(ui, cx, timeline, &xs, at, axis);
     }
@@ -425,7 +408,7 @@ fn right_end(
     }
 }
 
-/// The ticks, merged where they crowd, and the handle on the point shown.
+/// The dots, merged where they crowd, and the handle on the point shown.
 fn draw_axis(ui: &egui::Ui, xs: &[f32], showing: Option<usize>, axis: egui::Rect) {
     let scheme = theme::scheme(ui);
     let painter = ui.painter();
@@ -437,16 +420,11 @@ fn draw_axis(ui: &egui::Ui, xs: &[f32], showing: Option<usize>, axis: egui::Rect
         scheme.text_secondary
     };
     for tick in ticks(xs, MIN_TICK_GAP) {
-        let width = if tick.last > tick.first {
-            (tick.to - tick.from).max(6.0)
-        } else {
-            2.0
-        };
         let r = egui::Rect::from_center_size(
             egui::pos2(f32::midpoint(tick.from, tick.to), centre),
-            egui::vec2(width, TICK),
+            egui::vec2(tick.to - tick.from + 2.0 * DOT, 2.0 * DOT),
         );
-        painter.rect_filled(r, 1.0, tick_colour);
+        painter.rect_filled(r, DOT, tick_colour);
     }
     let handle_x = showing
         .and_then(|i| xs.get(i).copied())
@@ -639,24 +617,38 @@ mod tests {
         SystemTime::UNIX_EPOCH + Duration::from_secs(secs)
     }
 
+    fn timeline(times: &[u64]) -> Timeline {
+        let here = || Location::new(types::ProviderId("t"), "/docs");
+        Timeline {
+            live: here(),
+            points: times
+                .iter()
+                .map(|&t| ext::TimePoint {
+                    time: at(t),
+                    label: t.to_string(),
+                    source: "test".to_owned(),
+                    location: here(),
+                })
+                .collect(),
+        }
+    }
+
+    /// Two snapshots in the same minute and one three days later, as on a
+    /// real dataset: each has a place of its own, the newest clear of
+    /// *Now*'s handle.
     #[test]
-    fn time_maps_linearly_from_the_oldest_point_to_now() {
-        assert!((x_of(at(0), at(0), at(100), 10.0, 110.0) - 10.0).abs() < f32::EPSILON);
-        assert!((x_of(at(50), at(0), at(100), 10.0, 110.0) - 60.0).abs() < 1e-3);
-        assert!((x_of(at(100), at(0), at(100), 10.0, 110.0) - 110.0).abs() < 1e-3);
-        assert!(
-            (x_of(at(500), at(0), at(100), 10.0, 110.0) - 110.0).abs() < 1e-3,
-            "clamped"
-        );
-        assert!(
-            (x_of(at(5), at(5), at(5), 10.0, 110.0) - 10.0).abs() < f32::EPSILON,
-            "no span"
-        );
+    fn points_are_evenly_spaced_by_index() {
+        let xs = positions(&timeline(&[0, 30, 259_200]), 10.0, 130.0);
+        assert_eq!(xs, [10.0, 50.0, 90.0]);
+        assert!(130.0 - xs[2] > 2.0 * HANDLE, "clear of Now's handle");
+        assert_eq!(ticks(&xs, MIN_TICK_GAP).len(), 3, "none merged");
+        assert_eq!(positions(&timeline(&[]), 10.0, 130.0), Vec::<f32>::new());
+        assert_eq!(positions(&timeline(&[5]), 10.0, 130.0), [10.0]);
     }
 
     #[test]
     fn crowded_ticks_merge() {
-        let merged = ticks(&[0.0, 1.0, 2.5, 10.0, 20.0, 21.0], MIN_TICK_GAP);
+        let merged = ticks(&[0.0, 3.0, 7.5, 20.0, 40.0, 42.0], MIN_TICK_GAP);
         let spans: Vec<(usize, usize)> = merged.iter().map(|t| (t.first, t.last)).collect();
         assert_eq!(spans, [(0, 2), (3, 3), (4, 5)]);
         assert_eq!(ticks(&[], MIN_TICK_GAP), []);

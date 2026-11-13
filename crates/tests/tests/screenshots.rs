@@ -5196,12 +5196,7 @@ fn screenshots_of_the_time_slider() {
         let (timeline, _) = model
             .timeline_points(pane)
             .unwrap_or_else(|| panic!("no timeline"));
-        let xs = ui_egui::timeline_bar::positions(
-            timeline,
-            std::time::SystemTime::now(),
-            axis.left(),
-            axis.right(),
-        );
+        let xs = ui_egui::timeline_bar::positions(timeline, axis.left(), axis.right());
         harness
             .ctx
             .memory_mut(|m| m.request_focus(ui_egui::timeline_bar::id(pane)));

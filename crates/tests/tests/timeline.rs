@@ -133,12 +133,7 @@ impl Scene {
             .timeline_points(self.pane)
             .unwrap_or_else(|| panic!("no timeline"));
         let axis = self.axis();
-        ui_egui::timeline_bar::positions(
-            timeline,
-            std::time::SystemTime::now(),
-            axis.left(),
-            axis.right(),
-        )[index]
+        ui_egui::timeline_bar::positions(timeline, axis.left(), axis.right())[index]
     }
 
     fn at(&self, label: &str) -> types::Location {
