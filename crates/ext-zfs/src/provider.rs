@@ -395,6 +395,17 @@ impl Provider for ZfsProvider {
         Capabilities::empty()
     }
 
+    fn local_path(&self, loc: &Location) -> Option<PathBuf> {
+        match target(loc).ok()? {
+            Target::Snapshot {
+                dataset,
+                snapshot,
+                rel,
+            } if !rel.as_os_str().is_empty() => self.os_path(&dataset, &snapshot, &rel).ok(),
+            _ => None,
+        }
+    }
+
     fn list(&self, loc: &Location, opts: ListOptions, cancel: CancelToken) -> EntryStream {
         let target = match target(loc) {
             Ok(target) => target,

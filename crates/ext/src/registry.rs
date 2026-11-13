@@ -188,8 +188,10 @@ use crate::search::SearchIndex;
 /// of a control a location rules out, and `name_problem`, a new folder's
 /// name checked against the provider's own rules before any request; 20 a
 /// decorator can offer a location's earlier states (the time slider, #156):
-/// [`Decorator`] gained `offers_timelines` and `timeline`, both defaulted.
-pub const API_VERSION: u32 = 20;
+/// [`Decorator`] gained `offers_timelines` and `timeline`, both defaulted;
+/// 21 a provider's files can open from where they lie (#156):
+/// [`Provider`] gained `local_path`, defaulted.
+pub const API_VERSION: u32 = 21;
 
 bitflags::bitflags! {
     /// The extension points an extension fills, as its manifest declares

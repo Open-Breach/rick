@@ -6,7 +6,9 @@
 //! real pool. Inside the snapshot the context menu offers no rename, trash or
 //! new item; *Delete permanently*, which the core offers wherever there is a
 //! selection, fails and changes nothing; and a file copied out of the
-//! snapshot into a live folder arrives through the normal copy job.
+//! snapshot into a live folder arrives through the normal copy job. A file
+//! in a snapshot opens like any file: the system is handed its path under
+//! `.zfs/snapshot/`.
 
 use std::fs;
 use std::path::Path;
@@ -80,6 +82,7 @@ fn pool(dir: &Path) -> Arc<ScriptedZfs> {
 
 struct Driver {
     app: App,
+    fake: Arc<Fake>,
     events: Vec<Event>,
     pane: model::PaneId,
 }
@@ -88,7 +91,7 @@ impl Driver {
     fn new(dir: &Path, zfs: Arc<ScriptedZfs>) -> Self {
         let fake = Arc::new(Fake::new().unwrap_or_else(|e| panic!("{e}")));
         let app = App::new(Config {
-            platform: fake.clone(),
+            platform: Arc::clone(&fake) as Arc<dyn platform::Platform>,
             ui: Arc::new(Agreeing),
             extensions: vec![Arc::new(ZfsExtension::with_zfs(zfs))],
             config_dir: Some(fake.config_dir()),
@@ -97,6 +100,7 @@ impl Driver {
         let pane = app.model().focused;
         let mut driver = Self {
             app,
+            fake,
             events: Vec::new(),
             pane,
         };
@@ -231,5 +235,45 @@ fn a_file_copied_out_of_a_snapshot_arrives_through_the_copy_job() {
             .join("home/.zfs/snapshot/b/notes/report.txt")
             .exists(),
         "the snapshot keeps its file"
+    );
+}
+
+/// specs/ext-zfs.md: a snapshot "opens, previews and copies out like any
+/// folder". Enter hands the system the file's path in the snapshot
+/// directory, and the editor is offered for it.
+#[test]
+fn a_file_in_a_snapshot_opens_from_its_snapshot_directory() {
+    let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+    let mut d = Driver::new(dir.path(), pool(dir.path()));
+    let pane = d.pane;
+    d.step(Command::Navigate {
+        pane,
+        to: snapshot_location("tank/home", "b", Path::new("notes")),
+    });
+    d.select("report.txt");
+    assert!(d.enabled("core.open_in_editor"), "the editor is offered");
+    let id = d
+        .rows()
+        .iter()
+        .find(|e| e.name == "report.txt")
+        .map_or_else(|| panic!("no report.txt"), |e| e.id);
+    d.step(Command::Open { pane, id });
+    let failed: Vec<&Event> = d
+        .events
+        .iter()
+        .filter(|e| {
+            matches!(
+                e,
+                Event::Notify {
+                    level: Level::Error,
+                    ..
+                }
+            )
+        })
+        .collect();
+    assert!(failed.is_empty(), "{failed:?}");
+    assert_eq!(
+        d.fake.opened(),
+        [dir.path().join("home/.zfs/snapshot/b/notes/report.txt")]
     );
 }
