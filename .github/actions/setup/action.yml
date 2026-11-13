@@ -60,7 +60,7 @@ inputs:
 runs:
   using: composite
   steps:
-    - uses: dtolnay/rust-toolchain@stable
+    - uses: dtolnay/rust-toolchain@1.99.1
       with:
         components: ${{ inputs.components }}
     # The cargo registry and the dependencies' build artifacts, keyed by the

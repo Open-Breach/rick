@@ -45,7 +45,7 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@1.99.1
         with: { components: rustfmt }
       - run: cargo fmt --check
       # No Unicode symbol character is used as an icon (SPEC.md "Icons").

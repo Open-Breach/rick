@@ -52,7 +52,7 @@ jobs:
       # First, so a release cut from a commit without its README stops
       # before anything is built.
       - run: .github/scripts/check-readme.sh "$TAG"
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@1.99.1
       - uses: taiki-e/install-action@v2
         with: { tool: cargo-about }
       # about.toml lists the four release targets, so one run covers them
@@ -94,7 +94,7 @@ jobs:
       # shallow clone would name one person.
       - uses: actions/checkout@v4
         with: { fetch-depth: 0 }
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@1.99.1
       - uses: Swatinem/rust-cache@v2
       # GStreamer for the media previewer (issue 18). Linux: the system
       # packages, development files for the build and the codec plug-ins
