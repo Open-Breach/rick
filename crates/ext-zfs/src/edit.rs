@@ -8,7 +8,8 @@
 //! value's source, marks a size that does not parse or a quota below the
 //! space already used, and keeps the form from being confirmed while a row
 //! has a problem or nothing changed. Applying runs as one ordered job: one
-//! `zfs set` for every explicit value, then one `zfs inherit` per property
+//! `zfs set` for every explicit value and every quota reset (to `none`, as
+//! ZFS never inherits a quota), then one `zfs inherit` per other property
 //! reset, stopping at the first failure; the permission rule is that of
 //! snapshot management ([`crate::manage`]), with the helper `rick-zfs`
 //! accepting the same commands ([`crate::helper`]). No undo.
@@ -41,6 +42,10 @@ pub const EDITABLE: [&str; 7] = [
     "quota",
     "refquota",
 ];
+
+/// The properties ZFS never inherits: `zfs inherit` refuses them, and
+/// *Inherit* sets them to `none`, which is also what it shows.
+const NOT_INHERITED: [&str; 2] = ["quota", "refquota"];
 
 /// The properties whose new value applies only to data written from now on.
 const FORWARD_ONLY: [&str; 3] = ["compression", "copies", "recordsize"];
@@ -169,11 +174,14 @@ impl Current {
 
     /// The value *Inherit* would give `name`, as shown.
     fn inherit_label(&self, name: &str) -> String {
-        let value = self
-            .inherited
-            .iter()
-            .find(|p| p.name == name)
-            .map_or_else(|| t!("zfs-edit-default"), shown);
+        let value = if NOT_INHERITED.contains(&name) {
+            "none".to_owned()
+        } else {
+            self.inherited
+                .iter()
+                .find(|p| p.name == name)
+                .map_or_else(|| t!("zfs-edit-default"), shown)
+        };
         t!("zfs-edit-inherit", value = value)
     }
 
@@ -267,7 +275,9 @@ impl Current {
             }
         };
         let unchanged = match &wanted {
-            Wanted::Inherit => !local,
+            Wanted::Inherit => {
+                !local || (NOT_INHERITED.contains(&name) && current.value.parse() == Ok(0_u64))
+            }
             Wanted::Value(v) => local && *v == shown(current),
             Wanted::Size(bytes) => local && current.value.parse::<u64>().ok() == Some(*bytes),
             Wanted::Invalid(_) => false,
@@ -341,8 +351,8 @@ impl Current {
     }
 
     /// The commands that apply `values`: one `zfs set` for every explicit
-    /// value, then one `zfs inherit` per property reset; empty when
-    /// nothing changed.
+    /// value and every quota reset, then one `zfs inherit` per other
+    /// property reset; empty when nothing changed.
     ///
     /// # Errors
     ///
@@ -358,6 +368,9 @@ impl Current {
                 }
                 Some(Wanted::Size(bytes)) if self.too_small(name, bytes).is_some() => {
                     return Err(self.too_small(name, bytes).unwrap_or_default());
+                }
+                Some(Wanted::Inherit) if NOT_INHERITED.contains(&name) => {
+                    set.push(format!("{name}=none"));
                 }
                 Some(Wanted::Inherit) => inherit.push(vec![
                     "inherit".to_owned(),

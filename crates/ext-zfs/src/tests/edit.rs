@@ -260,6 +260,86 @@ fn explicit_values_go_in_one_set_and_each_reset_in_an_inherit() {
     }
 }
 
+/// ZFS refuses `zfs inherit quota`: a quota is never inherited. Emptying
+/// a local quota sets it to `none`, and the placeholder says so even when
+/// the parent has a quota of its own.
+#[test]
+fn a_quota_reset_is_set_to_none_not_inherited() {
+    let fx = Fixture::new();
+    on_get(
+        &fx,
+        "tank/home",
+        &format!(
+            "compression\tlz4\tinherited from tank\natime\ton\tdefault\nrelatime\ton\tdefault\n\
+             copies\t1\tdefault\nrecordsize\t131072\tdefault\nquota\t{}\tlocal\n\
+             refquota\t{}\tlocal\nused\t{}\t-\nreferenced\t{}\t-\n",
+            100 * GIB,
+            90 * GIB,
+            GIB,
+            GIB
+        ),
+    );
+    on_get(
+        &fx,
+        "tank",
+        &format!(
+            "compression\tlz4\tlocal\natime\ton\tdefault\nrelatime\ton\tdefault\n\
+             copies\t1\tdefault\nrecordsize\t131072\tdefault\nquota\t{}\tlocal\n\
+             refquota\t{}\tlocal\nused\t1\t-\nreferenced\t1\t-\n",
+            500 * GIB,
+            400 * GIB
+        ),
+    );
+    let current = Arc::new(read(&*fx.zfs.clone(), "tank/home").unwrap_or_else(|e| panic!("{e}")));
+    let form = current.form();
+    for key in ["quota", "refquota"] {
+        let field = form.fields.iter().find(|f| f.key == key);
+        assert!(
+            matches!(field.map(|f| &f.kind), Some(FieldKind::Text { hint, .. }) if hint.contains("Inherit (none)")),
+            "{field:?}"
+        );
+    }
+    let values = with(
+        &form,
+        &[
+            ("quota", Value::Text(String::new())),
+            ("refquota", Value::Text(String::new())),
+        ],
+    );
+    let rows = form.preview_rows(&values);
+    assert!(rows.iter().all(|r| r.to == "Inherit (none)"), "{rows:?}");
+    assert_eq!(
+        current.commands(&values),
+        Ok(vec![vec![
+            "set".to_owned(),
+            "quota=none".to_owned(),
+            "refquota=none".to_owned(),
+            "tank/home".to_owned()
+        ]])
+    );
+    // A quota set to none locally is what Inherit gives: no change.
+    let none = Current {
+        properties: current
+            .properties
+            .iter()
+            .map(|p| Property {
+                value: if p.name == "quota" {
+                    "0".to_owned()
+                } else {
+                    p.value.clone()
+                },
+                ..p.clone()
+            })
+            .collect(),
+        ..(*current).clone()
+    };
+    let rows = none.preview(&with(&form, &[("quota", Value::Text(String::new()))]));
+    assert!(
+        rows.iter().all(|r| !r.from.starts_with("quota")),
+        "{rows:?}"
+    );
+}
+
 #[test]
 fn offered_on_live_folders_and_dataset_folders_only() {
     let fx = Fixture::new();
