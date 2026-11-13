@@ -23,7 +23,7 @@
 
 ## 5. Integration
 
-- [ ] 5.1 Extend the opt-in real-pool test (`RICK_REQUIRE_ZFS=1`) to set `compression` and `quota` on its test dataset, check the values, and inherit them back; verify by hand on a ZFS machine
+- [x] 5.1 Extend the opt-in real-pool test (`RICK_REQUIRE_ZFS=1`) to set `compression` and `quota` on its test dataset, check the values, and reset them as the editor does (`compression` inherited, `quota` set to `none`, as ZFS never inherits a quota); verified on `rpool/rick-test`
 - [x] 5.2 Run `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, `cargo test --workspace`, `cargo deny check`, `cargo doc --no-deps`; verify all pass, and add the editor to CHANGELOG.md
 
 ## Workflow follow-up

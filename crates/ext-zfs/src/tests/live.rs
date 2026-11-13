@@ -99,7 +99,8 @@ fn a_real_pool_creates_browses_restores_renames_and_destroys() {
 }
 
 /// The property editor's commands (change `add-zfs-property-editor`): set
-/// `compression` and `quota`, read them back, inherit them again.
+/// `compression` and `quota`, read them back, and reset them as the editor
+/// does: `compression` inherited, `quota` back to `none`.
 fn properties_round_trip(datasets: &Arc<Datasets>, dataset: &str) {
     let ordered = |commands: Vec<Vec<String>>| {
         let outcome = run_first(datasets, &Batch::ordered(dataset.to_owned(), commands));
@@ -129,21 +130,17 @@ fn properties_round_trip(datasets: &Arc<Datasets>, dataset: &str) {
         value(&after, "quota"),
         Some((quota.to_string(), crate::props::Source::Local))
     );
-    ordered(vec![
-        vec![
-            "inherit".to_owned(),
-            "compression".to_owned(),
-            dataset.to_owned(),
-        ],
-        vec!["inherit".to_owned(), "quota".to_owned(), dataset.to_owned()],
-    ]);
+    // The resets as the editor builds them: compression inherited, the
+    // quota set to none, since ZFS never inherits a quota.
+    let after = Arc::new(after);
+    let mut values = after.form().defaults();
+    values.set("compression", ext::Value::Choice(0));
+    values.set("quota", ext::Value::Text(String::new()));
+    ordered(after.commands(&values).unwrap_or_else(|e| panic!("{e}")));
     let back = crate::edit::read(&**datasets.zfs(), dataset).unwrap_or_else(|e| panic!("{e}"));
     assert_ne!(
         value(&back, "compression").map(|(_, s)| s),
         Some(crate::props::Source::Local)
     );
-    assert_ne!(
-        value(&back, "quota").map(|(_, s)| s),
-        Some(crate::props::Source::Local)
-    );
+    assert_eq!(value(&back, "quota").map(|(v, _)| v), Some("0".to_owned()));
 }
