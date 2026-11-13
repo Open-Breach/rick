@@ -25,6 +25,10 @@ name: release
 # same build and smoke test, then a draft release under that name on the
 # branch's commit (the tag itself is only created if the draft is published).
 # No signing, notarisation or installers in 0.1.
+#
+# Runners: the labels come from the repository variables RUNNER_LINUX_X64,
+# RUNNER_LINUX_ARM64, RUNNER_MACOS and RUNNER_WINDOWS; where one is not
+# set, the job runs on GitHub's runner of that platform.
 on:
   push:
     tags: ["v*"]
@@ -43,7 +47,7 @@ env:
   GSTREAMER_VERSION: "1.28.8"
 jobs:
   licenses:
-    runs-on: ubuntu-24.04
+    runs-on: ${{ vars.RUNNER_LINUX_X64 || 'ubuntu-24.04' }}
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
@@ -80,12 +84,12 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { os: ubuntu-24.04, platform: linux-x64, pdfium: pdfium-linux-x64 }
+          - { os: "${{ vars.RUNNER_LINUX_X64 || 'ubuntu-24.04' }}", platform: linux-x64, pdfium: pdfium-linux-x64 }
           # aarch64 Linux builds natively on GitHub's arm runner, no cross
           # toolchain needed.
-          - { os: ubuntu-24.04-arm, platform: linux-arm64, pdfium: pdfium-linux-arm64 }
-          - { os: macos-latest, platform: macos-arm64, pdfium: pdfium-mac-arm64 }
-          - { os: windows-latest, platform: windows-x64, pdfium: pdfium-win-x64 }
+          - { os: "${{ vars.RUNNER_LINUX_ARM64 || 'ubuntu-24.04-arm' }}", platform: linux-arm64, pdfium: pdfium-linux-arm64 }
+          - { os: "${{ vars.RUNNER_MACOS || 'macos-latest' }}", platform: macos-arm64, pdfium: pdfium-mac-arm64 }
+          - { os: "${{ vars.RUNNER_WINDOWS || 'windows-latest' }}", platform: windows-x64, pdfium: pdfium-win-x64 }
     runs-on: ${{ matrix.os }}
     timeout-minutes: 45
     steps:
@@ -393,10 +397,10 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { os: ubuntu-24.04, platform: linux-x64 }
-          - { os: ubuntu-24.04-arm, platform: linux-arm64 }
-          - { os: macos-latest, platform: macos-arm64 }
-          - { os: windows-latest, platform: windows-x64 }
+          - { os: "${{ vars.RUNNER_LINUX_X64 || 'ubuntu-24.04' }}", platform: linux-x64 }
+          - { os: "${{ vars.RUNNER_LINUX_ARM64 || 'ubuntu-24.04-arm' }}", platform: linux-arm64 }
+          - { os: "${{ vars.RUNNER_MACOS || 'macos-latest' }}", platform: macos-arm64 }
+          - { os: "${{ vars.RUNNER_WINDOWS || 'windows-latest' }}", platform: windows-x64 }
     runs-on: ${{ matrix.os }}
     timeout-minutes: 15
     steps:
@@ -534,7 +538,7 @@ jobs:
 
   release:
     needs: [build, smoke]
-    runs-on: ubuntu-24.04
+    runs-on: ${{ vars.RUNNER_LINUX_X64 || 'ubuntu-24.04' }}
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4

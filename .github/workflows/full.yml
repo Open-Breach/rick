@@ -13,6 +13,10 @@ name: full
 # main's copy of this file and checks dev out, so dev must carry
 # .github/actions/setup and .github/scripts: it does once it is level with
 # main.
+#
+# Runners: the labels come from the repository variables RUNNER_LINUX_X64,
+# RUNNER_LINUX_ARM64, RUNNER_MACOS and RUNNER_WINDOWS; where one is not
+# set, the job runs on GitHub's runner of that platform.
 on:
   pull_request:
     branches: [main]
@@ -28,7 +32,7 @@ env:
   CHECKOUT_REF: ${{ github.event_name == 'schedule' && 'dev' || '' }}
 jobs:
   changes:
-    runs-on: ubuntu-24.04
+    runs-on: ${{ vars.RUNNER_LINUX_X64 || 'ubuntu-24.04' }}
     timeout-minutes: 5
     outputs:
       code: ${{ steps.filter.outputs.code }}
@@ -45,9 +49,16 @@ jobs:
       # One platform failing must not cancel the others: their results are
       # the point of the matrix.
       fail-fast: false
+      # `os` names the platform, and the steps' conditions read it;
+      # `runner` is the label the job runs on.
       matrix:
-        os: [ubuntu-24.04, ubuntu-24.04-arm, macos-latest, windows-latest]
-    runs-on: ${{ matrix.os }}
+        include:
+          - { os: ubuntu-24.04, runner: "${{ vars.RUNNER_LINUX_X64 || 'ubuntu-24.04' }}" }
+          - { os: ubuntu-24.04-arm, runner: "${{ vars.RUNNER_LINUX_ARM64 || 'ubuntu-24.04-arm' }}" }
+          - { os: macos-latest, runner: "${{ vars.RUNNER_MACOS || 'macos-latest' }}" }
+          - { os: windows-latest, runner: "${{ vars.RUNNER_WINDOWS || 'windows-latest' }}" }
+    name: check (${{ matrix.os }})
+    runs-on: ${{ matrix.runner }}
     # The Windows runner spends about 15 minutes on the steps and several
     # more saving the cache, which the shared libraries and the plugin
     # libraries made larger.
@@ -141,7 +152,7 @@ jobs:
   deny:
     needs: changes
     if: needs.changes.outputs.code == 'true'
-    runs-on: ubuntu-24.04
+    runs-on: ${{ vars.RUNNER_LINUX_X64 || 'ubuntu-24.04' }}
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
@@ -153,7 +164,7 @@ jobs:
     # was skipped for a docs-only change, red on any failure.
     needs: [changes, check, deny]
     if: always()
-    runs-on: ubuntu-24.04
+    runs-on: ${{ vars.RUNNER_LINUX_X64 || 'ubuntu-24.04' }}
     timeout-minutes: 5
     steps:
       - env: { RESULTS: "${{ toJSON(needs) }}" }

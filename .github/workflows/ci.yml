@@ -10,6 +10,10 @@ name: ci
 # only (Markdown, docs/) builds nothing: the `changes` job says so, the
 # other jobs are skipped, and `tier 1`, the one check to require, still
 # reports success.
+#
+# Runners: the labels come from the repository variables RUNNER_LINUX_X64,
+# RUNNER_LINUX_ARM64, RUNNER_MACOS and RUNNER_WINDOWS; where one is not
+# set, the job runs on GitHub's runner of that platform.
 on:
   pull_request:
     branches: [dev]
@@ -28,7 +32,7 @@ env:
   RICK_WS_FEATURES: --features ext-preview-media/gstreamer,tests/gstreamer
 jobs:
   changes:
-    runs-on: ubuntu-24.04
+    runs-on: ${{ vars.RUNNER_LINUX_X64 || 'ubuntu-24.04' }}
     timeout-minutes: 5
     outputs:
       code: ${{ steps.filter.outputs.code }}
@@ -41,7 +45,7 @@ jobs:
   fmt:
     needs: changes
     if: needs.changes.outputs.code == 'true'
-    runs-on: ubuntu-24.04
+    runs-on: ${{ vars.RUNNER_LINUX_X64 || 'ubuntu-24.04' }}
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
@@ -56,7 +60,7 @@ jobs:
   deny:
     needs: changes
     if: needs.changes.outputs.code == 'true'
-    runs-on: ubuntu-24.04
+    runs-on: ${{ vars.RUNNER_LINUX_X64 || 'ubuntu-24.04' }}
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
@@ -66,7 +70,7 @@ jobs:
   clippy:
     needs: [changes, fmt]
     if: needs.changes.outputs.code == 'true'
-    runs-on: ubuntu-24.04
+    runs-on: ${{ vars.RUNNER_LINUX_X64 || 'ubuntu-24.04' }}
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
@@ -79,7 +83,7 @@ jobs:
   test:
     needs: [changes, fmt]
     if: needs.changes.outputs.code == 'true'
-    runs-on: ubuntu-24.04
+    runs-on: ${{ vars.RUNNER_LINUX_X64 || 'ubuntu-24.04' }}
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
@@ -105,7 +109,7 @@ jobs:
   bundle:
     needs: [changes, fmt]
     if: needs.changes.outputs.code == 'true'
-    runs-on: ubuntu-24.04
+    runs-on: ${{ vars.RUNNER_LINUX_X64 || 'ubuntu-24.04' }}
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
@@ -126,7 +130,7 @@ jobs:
     # skipped for a docs-only change, red on any failure.
     needs: [changes, fmt, deny, clippy, test, bundle]
     if: always()
-    runs-on: ubuntu-24.04
+    runs-on: ${{ vars.RUNNER_LINUX_X64 || 'ubuntu-24.04' }}
     timeout-minutes: 5
     steps:
       - env: { RESULTS: "${{ toJSON(needs) }}" }
