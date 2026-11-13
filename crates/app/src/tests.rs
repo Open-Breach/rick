@@ -4175,7 +4175,43 @@ mod timeline {
             for source in &self.sources {
                 reg.decorator(Arc::clone(source) as Arc<dyn Decorator>);
             }
+            reg.action(Arc::new(TakeSnapshot));
             Ok(())
+        }
+    }
+
+    /// An action as *Create snapshot* is: it changes the timeline in a
+    /// job and answers "later", for a question that may follow.
+    struct TakeSnapshot;
+
+    impl ext::Action for TakeSnapshot {
+        fn id(&self) -> ActionId {
+            ActionId("sources.snapshot")
+        }
+        fn label(&self) -> String {
+            "Take snapshot".to_owned()
+        }
+        fn group(&self) -> ext::ActionGroup {
+            ext::ActionGroup::Core
+        }
+        fn default_shortcut(&self) -> Option<ext::Shortcut> {
+            None
+        }
+        fn availability(&self, _: &ext::ActionCtx) -> Availability {
+            Availability::Enabled
+        }
+        fn run(
+            &self,
+            _: ext::ActionCtx,
+            jobs: &ext::JobRunner,
+            _: &dyn UiHost,
+        ) -> Result<ext::ActionOutcome, Error> {
+            let (sender, later) = ext::FormLater::channel();
+            jobs.spawn_named("Take snapshot", move |_job| async move {
+                drop(sender);
+                Ok(())
+            });
+            Ok(ext::ActionOutcome::Later(later))
         }
     }
 
@@ -4206,7 +4242,7 @@ mod timeline {
                 version: Version::new(0, 1, 0),
                 api_version: API_VERSION,
                 requires: Capabilities::empty(),
-                points: Points::DECORATOR,
+                points: Points::DECORATOR.union(Points::ACTION),
                 platforms: Platforms::ALL,
                 previews: &[],
                 commands: &[],
@@ -4425,7 +4461,7 @@ mod timeline {
                 version: Version::new(0, 1, 0),
                 api_version: API_VERSION,
                 requires: Capabilities::empty(),
-                points: Points::DECORATOR,
+                points: Points::DECORATOR.union(Points::ACTION),
                 platforms: Platforms::ALL,
                 previews: &[],
                 commands: &[],
@@ -4461,6 +4497,23 @@ mod timeline {
         h.settle();
         assert_eq!((zfs.calls(), backup.calls()), (2, 2));
         assert_eq!(labels(&h, pane).len(), 3, "the bar keeps its points");
+    }
+
+    /// A snapshot the user takes in Rick shows on the bar when its job
+    /// ends, without a refresh: the action's job is the pane's.
+    #[test]
+    fn an_actions_job_reads_the_timeline_again_when_it_ends() {
+        let (mut h, zfs, _) = with_sources(Duration::ZERO);
+        let pane = h.app.model().focused;
+        h.send(Command::ToggleTimeline(pane));
+        h.settle();
+        assert_eq!(zfs.calls(), 1);
+        h.run(pane, "sources.snapshot");
+        assert!(
+            wait_until(&mut h, Duration::from_secs(5), |_| zfs.calls() == 2),
+            "asked {} times",
+            zfs.calls()
+        );
     }
 
     #[test]
