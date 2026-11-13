@@ -5261,3 +5261,181 @@ fn screenshots_of_the_time_slider() {
         shoot(&mut slow, &format!("timeline-reading-{name}"));
     }
 }
+
+/// The fixture folders of the README's picture: a maker's `Projects`
+/// folder and in it the project around the sample model
+/// `assets/readme/robot-dog.stl`, every file and folder with a fixed
+/// modification time so the Modified column reads the same on every run.
+/// Returns `Projects` and the project folder.
+fn readme_tree(home: &Path) -> (PathBuf, PathBuf) {
+    use std::time::SystemTime;
+    let projects = home.join("Projects");
+    let project = projects.join("robot-dog");
+    let folders = [
+        projects.join("desk-lamp"),
+        projects.join("plant-waterer"),
+        projects.join("weather-station"),
+        project.join("parts"),
+        project.join("photos"),
+        project.join("prints"),
+    ];
+    for folder in &folders {
+        fs::create_dir_all(folder).unwrap_or_else(|e| panic!("{e}"));
+    }
+    let model = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets/readme/robot-dog.stl");
+    let model = fs::read(&model).unwrap_or_else(|e| panic!("{}: {e}", model.display()));
+    let files: [(&Path, &str, Vec<u8>); 10] = [
+        (
+            &projects,
+            "ideas.md",
+            b"# Ideas\n\n- A robot cat, obviously.\n".to_vec(),
+        ),
+        (
+            &projects,
+            "filament.csv",
+            b"material,colour,grams\nPLA,grey,640\nTPU,black,210\n".to_vec(),
+        ),
+        (&project, "robot-dog.stl", model),
+        (
+            &project,
+            "README.md",
+            b"# Robot dog\n\nA desk-sized robot dog, printed in six parts.\n".to_vec(),
+        ),
+        (&project, "assembly.pdf", ext_preview_pdf::sample_pdf(4)),
+        (
+            &project,
+            "parts-list.csv",
+            b"part,count,material\nbody,1,PLA\nleg,4,PLA\near,2,TPU\n".to_vec(),
+        ),
+        (&project, "front.jpg", media::photo_jpeg(640, 480)),
+        (
+            &project,
+            "print-settings.json",
+            br#"{"layer":0.2,"infill":15,"supports":false}"#.to_vec(),
+        ),
+        (
+            &project,
+            "wag.rs",
+            b"fn main() {\n    println!(\"wag\");\n}\n".to_vec(),
+        ),
+        (&project, "notes.txt", b"Glue the ears last.\n".to_vec()),
+    ];
+    // From 2026-11-02 09:00 UTC, each entry ninety minutes after the one
+    // before; the folders that hold them last.
+    let start = SystemTime::UNIX_EPOCH + Duration::from_hours(498_225);
+    let stamp = |path: &Path, n: u64| {
+        fs::File::open(path)
+            .and_then(|file| file.set_modified(start + Duration::from_mins(n * 90)))
+            .unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+    };
+    let mut n = 0;
+    for (dir, name, bytes) in files {
+        let path = dir.join(name);
+        fs::write(&path, bytes).unwrap_or_else(|e| panic!("{e}"));
+        stamp(&path, n);
+        n += 1;
+    }
+    for folder in folders.iter().chain([&project, &projects]) {
+        stamp(folder, n);
+        n += 1;
+    }
+    (projects, project)
+}
+
+/// specs/readme.md *Screenshot*: the picture of the README, a two-pane
+/// window with the preview pane open on the sample robot dog, in Light and
+/// in Dark at the same size and state. Rendered from the fixture folders
+/// above and a fixed configuration (Comfortable, ISO dates), each scheme
+/// in a window of its own built the same way, so two runs on the same
+/// code give the same picture; `cargo xtask readme` runs this test and
+/// copies the two files to `docs/screenshots/`.
+#[test]
+#[ignore = "needs a wgpu adapter; CI runs it and uploads the images"]
+fn screenshots_of_the_readme() {
+    for (theme, name) in [(Theme::Light, "light"), (Theme::Dark, "dark")] {
+        let mut harness = readme_window(theme);
+        shoot(&mut harness, &format!("readme-{name}"));
+    }
+}
+
+/// The window of the README's picture in `theme`, settled.
+fn readme_window(theme: Theme) -> Harness<'static, RickUi> {
+    use platform::StandardFolders as _;
+    let fake = Arc::new(Fake::new().unwrap_or_else(|e| panic!("{e}")));
+    let home = fake
+        .standard_folder(platform::StandardFolder::Home)
+        .unwrap_or_else(|| panic!("the fake's home"));
+    let (projects, project) = readme_tree(&home);
+    let host = Arc::new(EguiHost::new());
+    let mut app = app::App::new(app::Config {
+        platform: fake.clone(),
+        ui: host.clone(),
+        extensions: vec![
+            Arc::new(ext_preview_text::TextPreview::new()),
+            Arc::new(ext_preview_code::CodePreview::new()),
+            Arc::new(ext_preview_image::ImagePreview::new()),
+            Arc::new(ext_preview_pdf::PdfPreview::new()),
+            Arc::new(ext_preview_3d::Preview3d::new()),
+        ],
+        config_dir: Some(fake.config_dir()),
+        start: Some(local(&projects)),
+    });
+    // The fixture configuration, before the first frame.
+    for change in [
+        SettingsChange::Theme(theme),
+        SettingsChange::Density(Density::Comfortable),
+        SettingsChange::DateFormat(model::DateFormat::Iso),
+    ] {
+        app.handle(app::Command::Settings(change), &mut Vec::new());
+    }
+    let mut harness = Harness::builder()
+        .with_size(egui::vec2(1680.0, 920.0))
+        .with_pixels_per_point(1.5)
+        .build_eframe(move |cc| RickUi::new(app, host, &cc.egui_ctx));
+    settle(&mut harness);
+    let send = |harness: &mut Harness<'static, RickUi>, command: app::Command| {
+        harness
+            .state_mut()
+            .app_mut()
+            .handle(command, &mut Vec::new());
+        settle(harness);
+    };
+    // Projects on the left; the split's new pane, which has the focus,
+    // goes into the project, and the preview pane opens beside it.
+    let left = harness.state().app().model().focused;
+    send(
+        &mut harness,
+        app::Command::Split {
+            pane: left,
+            dir: model::SplitDir::Right,
+        },
+    );
+    let pane = harness.state().app().model().focused;
+    assert_ne!(pane, left);
+    send(
+        &mut harness,
+        app::Command::Navigate {
+            pane,
+            to: local(&project),
+        },
+    );
+    harness.state_mut().set_inspector_width(460.0);
+    preview(&mut harness, "robot-dog.stl");
+    // The model is drawn off the UI thread: the picture is taken once no
+    // render has been in flight for a while and every animation has run
+    // out, since a fade a frame short of its end is a picture one step of
+    // a colour away from the next.
+    let mut quiet = 0;
+    step_until(&mut harness, Duration::from_secs(20), |harness| {
+        let slot = harness.state().previews().get(pane);
+        if slot.is_some_and(|s| s.has_frame() && !s.rendering()) {
+            quiet += 1;
+        } else {
+            quiet = 0;
+        }
+        quiet >= 20
+    });
+    std::thread::sleep(Duration::from_millis(800));
+    hold_still(&mut harness, 8);
+    harness
+}

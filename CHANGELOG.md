@@ -7,6 +7,19 @@ the pull request that brought the change.
 
 ## [Unreleased]
 
+- **The README, regenerated with every release.** `README.md` follows
+  `specs/readme.md`: what Rick is, why it exists, six features, one
+  screenshot, how to install it. `cargo xtask readme` writes the version,
+  the Features list (the previewable file types, the storage providers and
+  the platform search, from what the extensions register) and the Install
+  section (the archives the release workflow builds), and renders the
+  screenshot in Light and Dark with the sample model
+  `assets/readme/robot-dog.stl` in the 3D preview. The test `readme` fails
+  when the page of a release version is not what the code registers, and
+  the release workflow stops when the status line's version is not the
+  tag's. Building from source, the command line and the architecture moved
+  to `docs/` (#207).
+
 ## [0.4.0] - 2026-11-11
 
 The fixes of the test session of 2026-11-09 and what followed from them, on

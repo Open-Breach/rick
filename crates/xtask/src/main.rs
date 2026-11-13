@@ -26,7 +26,16 @@
 //! nothing copied by hand, and the release workflow archives the same
 //! directory.
 //!
-//! The task builds with `--workspace --exclude xtask --lib --bins
+//! `readme` brings `README.md` up to the release the workspace's version
+//! names (specs/readme.md, *Rules for the release*), in the release pull
+//! request: the test `readme` of the `tests` crate writes the version, the
+//! Features list and the Install section from what the extensions
+//! register (`RICK_README_WRITE`), the screenshot harness renders the
+//! README's window in Light and Dark and the two pictures are copied to
+//! `docs/screenshots/`, and the same test then checks the page. The
+//! pictures need a wgpu adapter; a software one will do.
+//!
+//! The bundle task builds with `--workspace --exclude xtask --lib --bins
 //! --examples` (every library, binary and example of every member but this
 //! one: the one build flavour the tests use too, QUESTIONS.md 81) and runs the workspace's own
 //! `rick-plugin-manifest` to write the manifests, so that it depends on no
@@ -57,7 +66,11 @@ fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let outcome = match args.first().map(String::as_str) {
         Some("bundle") => bundle(&args[1..]),
-        _ => Err("usage: cargo xtask bundle [--release] [--features <spec>]".into()),
+        Some("readme") if args.len() == 1 => readme(),
+        _ => Err(
+            "usage: cargo xtask bundle [--release] [--features <spec>]\n       cargo xtask readme"
+                .into(),
+        ),
     };
     match outcome {
         Ok(()) => ExitCode::SUCCESS,
@@ -192,6 +205,56 @@ fn bundle(args: &[String]) -> Result<()> {
         None => println!("7-zip: RICK_SEVENZIP_DIR not set; the library is not bundled"),
     }
     println!("bundle: {}", out.display());
+    Ok(())
+}
+
+/// The test of the `tests` crate that writes and checks the README's
+/// regenerated parts, and the one of the screenshot harness that renders
+/// its two pictures.
+const README_TEST: &str = "the_regenerated_parts_are_what_the_release_registers";
+const README_SCREENSHOTS: &str = "screenshots_of_the_readme";
+/// Where the README's pictures live, from the workspace's root.
+const README_PICTURES: &str = "docs/screenshots";
+
+fn readme() -> Result<()> {
+    let cargo = std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
+    let meta = metadata(&cargo)?;
+
+    // The version, the Features list and the Install section.
+    let mut write = Command::new(&cargo);
+    write
+        .args(["test", "-p", "tests", "--test", "readme", "--", "--exact"])
+        .arg(README_TEST)
+        .env("RICK_README_WRITE", "1");
+    run(&mut write)?;
+
+    // The two pictures, from the harness's folder into the repository.
+    let mut shoot = Command::new(&cargo);
+    shoot
+        .args(["test", "-p", "tests", "--features", "screenshots"])
+        .args(["--test", "screenshots", "--", "--ignored", "--exact"])
+        .arg(README_SCREENSHOTS);
+    run(&mut shoot)?;
+    let pictures = meta.workspace_root.join(README_PICTURES);
+    std::fs::create_dir_all(&pictures)?;
+    for scheme in ["light", "dark"] {
+        let from = meta
+            .target_dir
+            .join("screenshots")
+            .join(format!("{}-readme-{scheme}.png", std::env::consts::OS));
+        let to = pictures.join(format!("readme-{scheme}.png"));
+        std::fs::copy(&from, &to).map_err(|e| format!("copying {}: {e}", from.display()))?;
+        println!("readme: {}", to.display());
+    }
+
+    // The page as it now stands, held against the spec and the code.
+    let mut check = Command::new(&cargo);
+    check.args(["test", "-p", "tests", "--test", "readme"]);
+    run(&mut check)?;
+    println!(
+        "readme: {} is up to date",
+        meta.workspace_root.join("README.md").display()
+    );
     Ok(())
 }
 
@@ -410,6 +473,7 @@ fn copy_matching(from: &Path, to: &Path, keep: impl Fn(&str) -> bool) -> Result<
 
 /// What `cargo metadata` tells about the workspace.
 struct Metadata {
+    workspace_root: PathBuf,
     target_dir: PathBuf,
     /// The `ext-*` members built as a `cdylib`: the plugins.
     plugin_crates: Vec<String>,
@@ -451,7 +515,11 @@ fn metadata(cargo: &std::ffi::OsStr) -> Result<Metadata> {
         }
     }
     plugin_crates.sort();
+    let workspace_root = json["workspace_root"]
+        .as_str()
+        .ok_or("cargo metadata: no workspace_root")?;
     Ok(Metadata {
+        workspace_root: PathBuf::from(workspace_root),
         target_dir: PathBuf::from(target_dir),
         plugin_crates,
     })
