@@ -58,7 +58,10 @@ the specification first (#174).
   dataset, shows nothing. A read-only `zfs` location lists the datasets
   with snapshots, each dataset's snapshots newest first and each
   snapshot's files as they were (`zfs:/tank/home/@b/docs`), so a snapshot
-  opens, previews and copies out like any folder; `/~versions/<path>`
+  opens, previews and copies out like any folder: a file in it opens with
+  the system, *Open with…* or the editor from its path under
+  `.zfs/snapshot`, which providers can now name through the defaulted
+  `Provider::local_path` (API 21); `/~versions/<path>`
   lists the snapshots holding a different version of one file. The "ZFS"
   group has *Browse snapshots*, *Back to live folder*, *Versions*,
   *Restore* (one question naming the snapshot; a live item it replaces
@@ -67,7 +70,10 @@ the specification first (#174).
   for lack of permission: through the platform prompt as a call of
   `rick-zfs`, a helper beside `rick` that runs only a snapshot's
   `snapshot`, `rename` or `destroy`, under the polkit action
-  `org.openbreach.rick.zfs` where it is installed. The
+  `org.openbreach.rick.zfs` where it is installed. `pkexec` is called
+  without the caller's `SHELL`, which it refuses when it is not in
+  `/etc/shells` (a shell from Nix or Home Manager), and its own failures
+  reach the user in its words. The
   info panel gets a ZFS section with the dataset, its snapshots and its
   main properties with their source. *Edit ZFS properties…* changes
   `compression`, `atime`, `relatime`, `copies`, `recordsize`, `quota`
@@ -76,13 +82,14 @@ the specification first (#174).
   labelled with the value it gives, a preview of each change with the old
   value's source that refuses a size it cannot read, a quota below the
   space used or no change; applied as one job of `zfs set` then
-  `zfs inherit`, with the same permission rule. Specified in
+  `zfs inherit`, with the same permission rule; a quota reset is
+  `quota=none`, as ZFS never inherits a quota. Specified in
   `specs/ext-zfs.md`.
 - **Time slider** (OpenSpec change `add-zfs-time-slider`, review of #156):
   a row under a pane's toolbar that moves the pane through the earlier
   states of the folder it shows — *Now* with the count of earlier states,
-  an axis with one tick per point, and at a past point the date, name and
-  source with *Read-only* and *Back to now*. Click a tick, drag (the pane
+  an axis with one dot per point, evenly spaced, and at a past point the
+  date, name and source with *Read-only* and *Back to now*. Click a dot, drag (the pane
   follows after a 200 ms rest or on release), or Left/Right/Home/End while
   focused; a run of moves is one Back. Switched per pane with *Timeline* in
   the view options menu or *Toggle timeline* in the palette, saved with
