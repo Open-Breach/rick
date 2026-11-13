@@ -14,6 +14,10 @@ name: deps-cache
 # must stay the same text as there (the path is part of what a cache is
 # found by), and the downloads the same files under the same names; the two
 # files change together. The version is read from release.yml.
+#
+# Runners: the labels come from the repository variables RUNNER_MACOS and
+# RUNNER_WINDOWS, as in release.yml; where one is not set, the job runs on
+# GitHub's runner of that platform.
 on:
   workflow_dispatch:
   schedule:
@@ -24,8 +28,13 @@ jobs:
   gstreamer:
     strategy:
       fail-fast: false
+      # The runners release.yml's macOS and Windows builds use: a cache is
+      # found by its path, and the runner's temporary directory is part of
+      # it, so the cache has to be filled where the release reads it.
       matrix:
-        os: [macos-latest, windows-latest]
+        os:
+          - "${{ vars.RUNNER_MACOS || 'macos-latest' }}"
+          - "${{ vars.RUNNER_WINDOWS || 'windows-latest' }}"
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
     steps:
