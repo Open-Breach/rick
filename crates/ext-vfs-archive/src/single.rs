@@ -18,8 +18,7 @@ use crate::io_error;
 pub fn entry_name(path: &Path) -> Vec<u8> {
     let name = path
         .file_name()
-        .map(|n| n.to_string_lossy().into_owned())
-        .unwrap_or_default();
+        .map_or_default(|n| n.to_string_lossy().into_owned());
     match name.rsplit_once('.') {
         Some((stem, ext))
             if !stem.is_empty() && Codec::by_extension(&ext.to_ascii_lowercase()).is_some() =>

@@ -147,8 +147,7 @@ impl Form {
     pub fn preview_rows(&self, values: &Values) -> Vec<PreviewRow> {
         self.preview
             .as_ref()
-            .map(|preview| preview(values))
-            .unwrap_or_default()
+            .map_or_default(|preview| preview(values))
     }
 }
 

@@ -236,8 +236,7 @@ fn process(
     let dir_name = candidate
         .dir
         .file_name()
-        .map(|n| n.to_string_lossy().into_owned())
-        .unwrap_or_default();
+        .map_or_default(|n| n.to_string_lossy().into_owned());
     let toml = match &candidate.toml {
         Ok(toml) => toml,
         Err(error) => {

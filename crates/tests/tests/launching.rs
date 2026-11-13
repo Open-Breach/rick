@@ -353,8 +353,7 @@ fn the_path_bar_expands_the_home_folder_and_variables() {
     let shown = harness
         .state()
         .path_text(tab(harness).0)
-        .map(str::to_owned)
-        .unwrap_or_default();
+        .map_or_default(str::to_owned);
     assert_eq!(shown, manifest.join("tests").to_string_lossy());
     harness.key_press(egui::Key::Enter);
     settle(harness);

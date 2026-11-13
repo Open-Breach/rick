@@ -505,8 +505,7 @@ pub fn problems(record: &Record, layout: &Layout) -> Vec<Problem> {
             FileKind::Symlink if std::fs::read_link(&path).is_err() || !path.exists() => {
                 out.push(Problem::SymlinkBroken(
                     path.file_name()
-                        .map(|n| n.to_string_lossy().into_owned())
-                        .unwrap_or_default(),
+                        .map_or_default(|n| n.to_string_lossy().into_owned()),
                 ));
             }
             _ => {}

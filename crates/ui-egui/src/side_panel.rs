@@ -1832,8 +1832,7 @@ pub fn sections_shown(app: &App) -> Vec<Section> {
 pub fn folded(app: &App, window: WindowId) -> BTreeSet<Section> {
     app.model()
         .window(window)
-        .map(|w| w.side_panel.folded.clone())
-        .unwrap_or_default()
+        .map_or_default(|w| w.side_panel.folded.clone())
 }
 
 #[cfg(test)]

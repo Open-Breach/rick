@@ -128,8 +128,7 @@ pub(crate) struct Section {
 /// one per decorator with a panel for the entry.
 pub(crate) fn sections_for(app: &App, slot: Option<&Slot>, entry: Option<&Entry>) -> Vec<Section> {
     let mut sections: Vec<Section> = slot
-        .map(Slot::sections)
-        .unwrap_or_default()
+        .map_or_default(Slot::sections)
         .iter()
         .map(|s| Section {
             title: s.title.get(),
@@ -632,7 +631,7 @@ fn collect<'a>(ui: &egui::Ui, app: &'a App, previews: &mut Previews) -> View<'a>
         .model()
         .preview_follows()
         .and_then(|id| app.model().tab(id));
-    let selected: Vec<&Entry> = tab.map(|t| t.selected().collect()).unwrap_or_default();
+    let selected: Vec<&Entry> = tab.map_or_default(|t| t.selected().collect());
     let entry = match (target, selected.as_slice()) {
         (Some(id), [one]) if one.id == id => Some(*one),
         _ => None,
@@ -674,11 +673,11 @@ fn collect<'a>(ui: &egui::Ui, app: &'a App, previews: &mut Previews) -> View<'a>
         pages: shown.and_then(Slot::pages),
         shown_page: shown.map_or(0, |s| s.page),
         text_settings: settings.preview.text,
-        controls: shown.map(|s| s.controls().to_vec()).unwrap_or_default(),
+        controls: shown.map_or_default(|s| s.controls().to_vec()),
         line: entry.map_or_else(String::new, |e| crate::preview::type_and_size(e, false)),
         rows,
         pinned,
-        status: slot.map(|s| s.status().to_vec()).unwrap_or_default(),
+        status: slot.map_or_default(|s| s.status().to_vec()),
         copy,
         transport: None,
     };

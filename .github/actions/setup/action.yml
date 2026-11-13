@@ -60,7 +60,7 @@ inputs:
 runs:
   using: composite
   steps:
-    - uses: dtolnay/rust-toolchain@stable
+    - uses: dtolnay/rust-toolchain@1.99.1
       with:
         components: ${{ inputs.components }}
     # The cargo registry and the dependencies' build artifacts, keyed by the
@@ -95,6 +95,24 @@ runs:
         # no longer ships `baloo_file`; `baloo-kf5` on 24.04, which has no
         # `baloo6`. with-indexers.sh finds the indexer where either puts it.
         sudo apt-get install -y --no-install-recommends baloo6 || sudo apt-get install -y --no-install-recommends baloo-kf5
+        # Ubuntu 24.04's libsqlite3-0 3.45.1-1ubuntu2.9 (noble-updates, on
+        # the runner image since 20261111) carries SQLite 3.45.3's change
+        # to ROWID in views, and Tracker 3.7.1 cannot write its index with
+        # it: the miner logs "ambiguous column name: ROWID" and the
+        # connector's real-service test finds nothing (GNOME tracker issue
+        # 435; fixed upstream, not in noble). On exactly that build the
+        # tests run with the one before it, from noble-security; any later
+        # build is left alone, and the test says whether it works.
+        if [ "$(dpkg-query -W -f='${Version}' libsqlite3-0)" = "3.45.1-1ubuntu2.9" ]; then
+          packages=""
+          for package in libsqlite3-0 sqlite3 libsqlite3-dev; do
+            if dpkg-query -W -f='${Status}' "$package" 2>/dev/null | grep -q "ok installed"; then
+              packages="$packages $package=3.45.1-1ubuntu2.8"
+            fi
+          done
+          # shellcheck disable=SC2086
+          sudo apt-get install -y --allow-downgrades $packages
+        fi
         echo "RICK_REQUIRE_SVN=1" >> "$GITHUB_ENV"
         # Issue 44: desktop-file-validate checks every desktop entry the
         # installer writes; its tests fail rather than skip without it here.

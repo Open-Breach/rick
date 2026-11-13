@@ -128,11 +128,10 @@ fn split(name: &str, is_dir: bool) -> (&str, &str) {
 
 /// `{date}` for an entry: its modification date, local time.
 fn date_of(time: Option<SystemTime>) -> String {
-    time.map(|t| {
+    time.map_or_default(|t| {
         let local: DateTime<Local> = t.into();
         local.format("%Y-%m-%d").to_string()
     })
-    .unwrap_or_default()
 }
 
 /// Fills the pattern's placeholders.
@@ -245,13 +244,12 @@ pub fn plan(
     let renamed: BTreeSet<&str> = planned.iter().map(|p| p.entry.name.as_str()).collect();
     let taken: BTreeSet<String> = folder
         .and_then(|dir| std::fs::read_dir(dir).ok())
-        .map(|dir| {
+        .map_or_default(|dir| {
             dir.flatten()
                 .map(|e| e.file_name().to_string_lossy().into_owned())
                 .filter(|name| !renamed.contains(name.as_str()))
                 .collect()
-        })
-        .unwrap_or_default();
+        });
     for p in &mut planned {
         if p.problem.is_some() {
             continue;

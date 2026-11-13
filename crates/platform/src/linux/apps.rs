@@ -309,8 +309,7 @@ fn registered(mimes: &[String]) -> Vec<Application> {
     // mimeapps.list: the user's, then the system's; defaults first.
     let mut lists: Vec<PathBuf> = Vec::new();
     let desktops: Vec<String> = std::env::var("XDG_CURRENT_DESKTOP")
-        .map(|d| d.split(':').map(str::to_lowercase).collect())
-        .unwrap_or_default();
+        .map_or_default(|d| d.split(':').map(str::to_lowercase).collect());
     for dir in config_dirs() {
         for desktop in &desktops {
             lists.push(dir.join(format!("{desktop}-mimeapps.list")));

@@ -352,8 +352,7 @@ fn two_files_diff_and_two_panes_folders_diff() {
         .app
         .model()
         .window(window)
-        .map(|w| w.dock().panes())
-        .unwrap_or_default();
+        .map_or_default(|w| w.dock().panes());
     let second = panes
         .into_iter()
         .find(|p| *p != first)
@@ -536,12 +535,7 @@ fn select_by_pattern_selects_the_expected_set() {
         })
         .unwrap_or_else(|| panic!("no selection change: {events:?}"))
         .into_iter()
-        .map(|id| {
-            d.tab()
-                .entry(id)
-                .map(|e| e.name.clone())
-                .unwrap_or_default()
-        })
+        .map(|id| d.tab().entry(id).map_or_default(|e| e.name.clone()))
         .collect();
     assert_eq!(selected, ["draft.txt", "notes.TXT"]);
     // Adding a regular expression's matches.

@@ -500,8 +500,7 @@ fn root_commands(harness: &Harness<'_, RickUi>) -> Vec<egui::ViewportCommand> {
         .output()
         .viewport_output
         .get(&egui::ViewportId::ROOT)
-        .map(|out| out.commands.clone())
-        .unwrap_or_default()
+        .map_or_default(|out| out.commands.clone())
 }
 
 /// The toolbar at three widths with a twelve-segment path: no widget

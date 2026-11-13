@@ -370,14 +370,13 @@ fn clicking_a_name_in_details_view_selects_the_row() {
             .app()
             .model()
             .active_tab(pane)
-            .map(|(_, t)| {
+            .map_or_default(|(_, t)| {
                 t.listing
                     .rows()
                     .filter(|e| t.selection.contains(&e.id))
                     .map(|e| e.name.clone())
                     .collect()
             })
-            .unwrap_or_default()
     };
     assert_eq!(selected(&harness), Vec::<String>::new());
 

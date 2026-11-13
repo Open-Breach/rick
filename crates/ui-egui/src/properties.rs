@@ -779,7 +779,7 @@ mod tests {
         general_groups(info)
             .into_iter()
             .find(|(title, _)| title == heading)
-            .map(|(_, rows)| {
+            .map_or_default(|(_, rows)| {
                 rows.into_iter()
                     .map(|row| match row {
                         Row::Value { label, value } | Row::Path { label, value, .. } => {
@@ -789,7 +789,6 @@ mod tests {
                     })
                     .collect()
             })
-            .unwrap_or_default()
     }
 
     fn pair(label: &str, value: &str) -> (String, String) {

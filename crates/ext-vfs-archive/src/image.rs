@@ -72,8 +72,7 @@ fn walk<F: FileSystem>(volume: &Volume<F>, dir: &[u8], items: &mut Vec<Item>) ->
             FileType::Symlink => EntryKind::Symlink {
                 target: volume
                     .read_link([b"/", full.as_slice()].concat())
-                    .map(VPath::from_bytes)
-                    .unwrap_or_default(),
+                    .map_or_default(VPath::from_bytes),
                 broken: false,
             },
             _ => EntryKind::Other,

@@ -1900,11 +1900,7 @@ fn a_folder_reads_as_an_archive_of_its_files() {
         .items
         .iter()
         .filter(|item| item.kind == ItemKind::File)
-        .map(|item| {
-            fs::metadata(folder.join(&item.path))
-                .map(|meta| meta.len())
-                .unwrap_or_default()
-        })
+        .map(|item| fs::metadata(folder.join(&item.path)).map_or_default(|meta| meta.len()))
         .sum();
     assert_eq!(index.total_size, files);
     assert!(files > tiny_elf(this_machine(), &[]).len() as u64);

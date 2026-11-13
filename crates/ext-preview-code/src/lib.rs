@@ -685,8 +685,7 @@ impl Previewer for CodePreviewer {
         let name = loc
             .path
             .file_name()
-            .map(|n| String::from_utf8_lossy(n).into_owned())
-            .unwrap_or_default();
+            .map_or_default(|n| String::from_utf8_lossy(n).into_owned());
         Ok(Box::new(CodeDoc::new(&name, shown, truncated, size)))
     }
 }

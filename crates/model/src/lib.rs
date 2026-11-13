@@ -1207,8 +1207,7 @@ impl Model {
             .workspaces
             .iter()
             .find(|ws| ws.id == id)
-            .map(|ws| ws.dock.panes())
-            .unwrap_or_default();
+            .map_or_default(|ws| ws.dock.panes());
         for pane in panes {
             self.remove_pane(pane);
         }
@@ -1547,8 +1546,7 @@ impl Model {
                     // A console or a comparison cannot come back with the
                     // session: its tab is left out.
                     let tabs: Vec<TabId> = pane
-                        .map(|p| p.tabs.clone())
-                        .unwrap_or_default()
+                        .map_or_default(|p| p.tabs.clone())
                         .into_iter()
                         .filter(|id| self.tabs.get(id).is_some_and(|t| !t.kind.is_view()))
                         .collect();
@@ -3469,9 +3467,9 @@ mod tests {
             ],
         );
         let names = |m: &Model| {
-            m.active_tab(pane)
-                .map(|(_, t)| t.listing.rows().map(|e| e.name.clone()).collect::<Vec<_>>())
-                .unwrap_or_default()
+            m.active_tab(pane).map_or_default(|(_, t)| {
+                t.listing.rows().map(|e| e.name.clone()).collect::<Vec<_>>()
+            })
         };
         assert_eq!(names(&model), ["zdir", "file"]);
         model.apply_settings(Settings {
