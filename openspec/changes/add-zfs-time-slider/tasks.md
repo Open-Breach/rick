@@ -4,9 +4,9 @@
 
 - [ ] 1.1 Confirm `add-zfs-snapshots` is merged and archived, so `openspec/specs/zfs-snapshots` exists; verify `openspec list --specs` lists it
 - [x] 1.2 Record the decision in the pull request (#156, review of the proposal): the bar adds a row to SPEC.md's pane layout, `Decorator` gains `offers_timelines` and `timeline`, `Command` gains `ToggleTimeline` and `TimeTravel`; accepted with five changes (review of #156); verify the numbering
-- [ ] 1.3 SPEC.md names the bar in the pane layout and the two Decorator methods in "Core types and extension traits" (Serge's edit, or his approval of the agent's pull request); verify the text matches design Decisions 1, 5 and 8
+- [ ] 1.3 SPEC.md names the bar in the pane layout and the two Decorator methods in "Core types and extension traits" (the maintainer's edit, or the maintainer's approval of the agent's pull request); verify the text matches design Decisions 1, 5 and 8
 - [x] 1.4 Propose the bar's frame as a mock-up (`mockup.html`): at *Now*, at a past point read-only, reading, focused, in Light and Dark, from SPEC.md's tokens; verify it opens in a browser and every state is shown in both schemes
-- [ ] 1.5 The design is approved on screenshots of the built bar (no Figma access): every state in Light and Dark from `screenshots_of_the_time_slider`, and the same on a real dataset; verify design Decisions 7 and 8 match what is approved, updating bar and design where the review asks
+- [x] 1.5 The design is approved on screenshots of the built bar (no Figma access): every state in Light and Dark from `screenshots_of_the_time_slider`, and the same on a real dataset; verify design Decisions 7 and 8 match what is approved, updating bar and design where the review asks. Approved by the maintainer on 2026-11-13, with the points evenly spaced as dots (Decision 6 revised)
 
 ## 2. Extension contract
 

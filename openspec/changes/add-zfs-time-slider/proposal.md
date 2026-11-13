@@ -4,7 +4,7 @@
 
 `add-zfs-snapshots` makes snapshots browsable one at a time, but going back in time is still a hunt through a list of names. A time slider in a bar under the toolbar, as Time Machine has it, lets the user scrub through the states of the folder they are looking at and stop where the file they lost is still there. Rick's extensions never draw, so the bar has to be a kernel element fed by extensions; built that way, a later Btrfs, Time Machine or backup plugin gets the same slider for free, and several sources can feed one bar.
 
-**Conflict with SPEC.md, decided.** SPEC.md's pane layout has no row between the toolbar and the file list, the Decorator signature in "Core types and extension traits" gains methods, and `Command` gains two variants; signatures change only through a spec change. Serge accepted the approach on 2026-11-10 in the review of #156 with five changes, which this revision carries: the timeline is read off the UI thread and only while the bar is visible, cached per source scope; the toggle is per pane; several sources merge into one list; no empty bar; and the design is approved before the bar ships (on screenshots, as there is no Figma access). It depends on `add-zfs-snapshots` and is applied after it.
+**Conflict with SPEC.md, decided.** SPEC.md's pane layout has no row between the toolbar and the file list, the Decorator signature in "Core types and extension traits" gains methods, and `Command` gains two variants; signatures change only through a spec change. The maintainer accepted the approach on 2026-11-10 in the review of #156 with five changes, which this revision carries: the timeline is read off the UI thread and only while the bar is visible, cached per source scope; the toggle is per pane; several sources merge into one list; no empty bar; and the design is approved before the bar ships (on screenshots, as there is no Figma access). It depends on `add-zfs-snapshots` and is applied after it.
 
 ## What Changes
 
@@ -34,4 +34,4 @@
 - **`ui-egui`**: the bar in `pane.rs` below the toolbar, the view options menu entry, palette entry, keyboard focus and screenshots, built to the approved design. The toolbar itself gets no new control (SPEC.md: "Other controls are not added to the toolbar").
 - **`ext-zfs`**: implements both methods from its snapshot list cached per dataset.
 - **Locales**: kernel strings in the core locale files, ZFS strings in the plugin's.
-- **SPEC.md** (Serge): the pane layout names the bar, and "Core types and extension traits" the two Decorator methods.
+- **SPEC.md** (the maintainer): the pane layout names the bar, and "Core types and extension traits" the two Decorator methods.
