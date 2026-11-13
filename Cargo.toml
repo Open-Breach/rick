@@ -231,3 +231,15 @@ expect_used = "warn"
 
 [workspace.lints.rust]
 unsafe_code = "warn"
+
+# Debug and test builds carry file names and line numbers only: a panic
+# and a backtrace still say where, and the test executables are a fraction
+# of the size, which is what the build of the test job spends its time
+# writing and linking. `test` inherits `dev`; both are spelled out, since
+# the dependencies the tests link are built by the same rule. `release` and
+# `bench` are as Cargo has them.
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.test]
+debug = "line-tables-only"
