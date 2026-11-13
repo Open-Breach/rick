@@ -55,7 +55,7 @@ The editor SHALL show one preview row per changed property, old value with its s
 - **THEN** applying is disabled
 
 ### Requirement: Applying changes
-Applying SHALL run as one job that sets all explicit values, resets each property chosen as *Inherit* to inheritance, and then refreshes the dataset's cached properties. If one step fails, the steps before it SHALL stay applied and the message SHALL name the property that failed and ZFS's reason.
+Applying SHALL run as one job that sets all explicit values, resets each property chosen as *Inherit* to inheritance (`quota` and `refquota`, which ZFS never inherits, to `none`, which is also what their *Inherit* shows), and then refreshes the dataset's cached properties. If one step fails, the steps before it SHALL stay applied and the message SHALL name the property that failed and ZFS's reason.
 
 #### Scenario: Set and inherit
 - **WHEN** the user sets `compression` to `zstd` and `atime` to *Inherit*, and applies
