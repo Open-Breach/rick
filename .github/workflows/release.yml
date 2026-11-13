@@ -111,40 +111,68 @@ jobs:
             libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev \
             gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-plugins-bad \
             gstreamer1.0-plugins-ugly gstreamer1.0-libav
+      # The downloaded packages are cached per GStreamer release: about
+      # 920 MB on macOS and 520 MB on Windows, from a server that is slow
+      # and cuts transfers short. A tag run's own cache
+      # is visible to that tag only, so deps-cache.yml fills the cache from
+      # main, where every tag and branch finds it; its cache steps and
+      # downloads are these, and the two files change together.
+      - name: gstreamer packages cache (macos)
+        if: runner.os == 'macOS'
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/gstreamer-pkgs
+          key: gstreamer-${{ env.GSTREAMER_VERSION }}-macos-universal
       - name: gstreamer (macos)
         if: runner.os == 'macOS'
         run: |
           set -euo pipefail
           base="https://gstreamer.freedesktop.org/data/pkg/osx/$GSTREAMER_VERSION"
-          # The packages are large and the server cuts a transfer short
+          pkgs="$RUNNER_TEMP/gstreamer-pkgs"
+          mkdir -p "$pkgs"
+          # A package the cache restored is not downloaded again. The
+          # packages are large and the server cuts a transfer short
           # now and then (release.yml runs 42664667120 and 43014231048):
           # HTTP/1.1, and five retries with a pause between them. A retry
           # resumes the partial download (`-C -`). The loop does the
           # retrying, not curl's --retry, which removes what the failed
           # try wrote and starts again from byte zero, `-C -` or not.
           for pkg in gstreamer-1.0 gstreamer-1.0-devel; do
-            try=0
-            until curl -sSL --http1.1 -C - \
-              -o "$RUNNER_TEMP/$pkg.pkg" "$base/$pkg-$GSTREAMER_VERSION-universal.pkg"; do
-              try=$((try + 1))
-              if [ "$try" -gt 5 ]; then
-                echo "$pkg did not download in five retries"
-                exit 1
-              fi
-              sleep 15
-            done
-            sudo installer -pkg "$RUNNER_TEMP/$pkg.pkg" -target /
+            if [ -f "$pkgs/$pkg.pkg" ]; then
+              echo "$pkg.pkg is in the cache, no download"
+            else
+              try=0
+              until curl -sSL --http1.1 -C - \
+                -o "$pkgs/$pkg.pkg" "$base/$pkg-$GSTREAMER_VERSION-universal.pkg"; do
+                try=$((try + 1))
+                if [ "$try" -gt 5 ]; then
+                  echo "$pkg did not download in five retries"
+                  exit 1
+                fi
+                sleep 15
+              done
+            fi
+            sudo installer -pkg "$pkgs/$pkg.pkg" -target /
           done
           framework="/Library/Frameworks/GStreamer.framework/Versions/1.0"
           echo "PKG_CONFIG_PATH=$framework/lib/pkgconfig" >> "$GITHUB_ENV"
           echo "RICK_GSTREAMER_DIR=$framework" >> "$GITHUB_ENV"
           echo "$framework/bin" >> "$GITHUB_PATH"
+      - name: gstreamer packages cache (windows)
+        if: runner.os == 'Windows'
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}\gstreamer-pkgs
+          key: gstreamer-${{ env.GSTREAMER_VERSION }}-windows-msvc-x86_64
       - name: gstreamer (windows)
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
           $base = "https://gstreamer.freedesktop.org/data/pkg/windows/$env:GSTREAMER_VERSION/msvc"
-          $installer = "$env:RUNNER_TEMP\gstreamer.exe"
+          $pkgs = "$env:RUNNER_TEMP\gstreamer-pkgs"
+          $installer = "$pkgs\gstreamer.exe"
+          New-Item -ItemType Directory -Force -Path $pkgs | Out-Null
+          # An installer the cache restored is not downloaded again.
           # The installer is large and the server cuts a transfer short now
           # and then (release.yml run 42664667120); Invoke-WebRequest retries
           # error codes only, not a response that ends early, so curl does
@@ -152,11 +180,15 @@ jobs:
           # A retry resumes the partial download (`-C -`). The loop does the
           # retrying, not curl's --retry, which removes what the failed try
           # wrote and starts again from byte zero, `-C -` or not.
-          for ($try = 0; ; $try++) {
-            curl.exe -sSL --http1.1 -C - -o $installer "$base/gstreamer-1.0-msvc-x86_64-$env:GSTREAMER_VERSION.exe"
-            if ($LASTEXITCODE -eq 0) { break }
-            if ($try -ge 5) { throw "the GStreamer installer did not download (curl exit $LASTEXITCODE)" }
-            Start-Sleep -Seconds 15
+          if (Test-Path $installer) {
+            Write-Host "gstreamer.exe is in the cache, no download"
+          } else {
+            for ($try = 0; ; $try++) {
+              curl.exe -sSL --http1.1 -C - -o $installer "$base/gstreamer-1.0-msvc-x86_64-$env:GSTREAMER_VERSION.exe"
+              if ($LASTEXITCODE -eq 0) { break }
+              if ($try -ge 5) { throw "the GStreamer installer did not download (curl exit $LASTEXITCODE)" }
+              Start-Sleep -Seconds 15
+            }
           }
           $root = "C:\gstreamer\1.0\msvc_x86_64"
           Start-Process -FilePath $installer -ArgumentList "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/TYPE=full", "/DIR=$root" -Wait

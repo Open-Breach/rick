@@ -1,0 +1,97 @@
+name: deps-cache
+# Fills the cache of the GStreamer packages release.yml installs on macOS
+# and Windows: about 920 MB on macOS and 520 MB on Windows, from a server
+# that is slow and cuts transfers short (release.yml run 43014231048 spent
+# 27 minutes on them). A cache saved by a tag's run is
+# visible to that tag only; one saved on main is visible to every tag and
+# branch, so this workflow runs on main: weekly, because a cache nobody has
+# read for seven days is removed, and by hand after the GStreamer version in
+# release.yml changes. A run that finds the cache only restores it, which
+# counts as a read; one that does not downloads the packages and saves them.
+#
+# Only the cache step and the download of release.yml's `gstreamer (macos)`
+# and `gstreamer (windows)` steps, no install and no build. The cache steps
+# must stay the same text as there (the path is part of what a cache is
+# found by), and the downloads the same files under the same names; the two
+# files change together. The version is read from release.yml.
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "41 4 * * 1"
+permissions:
+  contents: read
+jobs:
+  gstreamer:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - name: gstreamer version
+        shell: bash
+        run: |
+          version="$(sed -n 's/^  GSTREAMER_VERSION: "\(.*\)"$/\1/p' .github/workflows/release.yml)"
+          if [ -z "$version" ]; then
+            echo "no GSTREAMER_VERSION in release.yml"
+            exit 1
+          fi
+          echo "GStreamer $version"
+          echo "GSTREAMER_VERSION=$version" >> "$GITHUB_ENV"
+      - name: gstreamer packages cache (macos)
+        if: runner.os == 'macOS'
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/gstreamer-pkgs
+          key: gstreamer-${{ env.GSTREAMER_VERSION }}-macos-universal
+      - name: gstreamer packages (macos)
+        if: runner.os == 'macOS'
+        run: |
+          set -euo pipefail
+          base="https://gstreamer.freedesktop.org/data/pkg/osx/$GSTREAMER_VERSION"
+          pkgs="$RUNNER_TEMP/gstreamer-pkgs"
+          mkdir -p "$pkgs"
+          for pkg in gstreamer-1.0 gstreamer-1.0-devel; do
+            if [ -f "$pkgs/$pkg.pkg" ]; then
+              echo "$pkg.pkg is in the cache, no download"
+            else
+              try=0
+              until curl -sSL --http1.1 -C - \
+                -o "$pkgs/$pkg.pkg" "$base/$pkg-$GSTREAMER_VERSION-universal.pkg"; do
+                try=$((try + 1))
+                if [ "$try" -gt 5 ]; then
+                  echo "$pkg did not download in five retries"
+                  exit 1
+                fi
+                sleep 15
+              done
+            fi
+          done
+          ls -l "$pkgs"
+      - name: gstreamer packages cache (windows)
+        if: runner.os == 'Windows'
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}\gstreamer-pkgs
+          key: gstreamer-${{ env.GSTREAMER_VERSION }}-windows-msvc-x86_64
+      - name: gstreamer packages (windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $base = "https://gstreamer.freedesktop.org/data/pkg/windows/$env:GSTREAMER_VERSION/msvc"
+          $pkgs = "$env:RUNNER_TEMP\gstreamer-pkgs"
+          $installer = "$pkgs\gstreamer.exe"
+          New-Item -ItemType Directory -Force -Path $pkgs | Out-Null
+          if (Test-Path $installer) {
+            Write-Host "gstreamer.exe is in the cache, no download"
+          } else {
+            for ($try = 0; ; $try++) {
+              curl.exe -sSL --http1.1 -C - -o $installer "$base/gstreamer-1.0-msvc-x86_64-$env:GSTREAMER_VERSION.exe"
+              if ($LASTEXITCODE -eq 0) { break }
+              if ($try -ge 5) { throw "the GStreamer installer did not download (curl exit $LASTEXITCODE)" }
+              Start-Sleep -Seconds 15
+            }
+          }
+          Get-ChildItem $pkgs | Select-Object Name, Length
