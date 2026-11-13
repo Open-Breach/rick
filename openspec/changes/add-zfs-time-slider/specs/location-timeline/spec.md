@@ -26,29 +26,29 @@ The system SHALL let a Decorator declare that it offers timelines and answer for
 - **THEN** the pane lists and responds as usual meanwhile, and the bar shows its reading state until the answer arrives
 
 ### Requirement: Timeline bar position and content
-The timeline bar SHALL be one row directly below the pane's toolbar and above the file list, the full width of the pane, laid out as the approved design draws it, with an axis that does not move when the pane goes to a past point. It SHALL show a time axis from the oldest point to *Now*, one tick per point at its time, a handle at the current point, and the current point's date, label and source; at *Now* it SHALL show "Now". At a past point it SHALL show that the pane shows the past and is read-only.
+The timeline bar SHALL be one row directly below the pane's toolbar and above the file list, the full width of the pane, laid out as the approved design draws it, with an axis that does not move when the pane goes to a past point. It SHALL show an axis from the oldest point to *Now* with one dot per point, the points evenly spaced in time order, a handle at the current point, and the current point's date, label and source; at *Now* it SHALL show "Now". At a past point it SHALL show that the pane shows the past and is read-only.
 
 #### Scenario: Bar layout
 - **WHEN** the bar is shown for a folder with snapshots on Monday, Tuesday and Thursday and the pane is at the live folder
-- **THEN** three ticks are placed by time on the axis, the handle is at *Now* at the right end, and the label reads "Now"
+- **THEN** three dots are evenly spaced on the axis, oldest first, the handle is at *Now* at the right end, and the label reads "Now"
 
 #### Scenario: At a past point
 - **WHEN** the pane is at the Tuesday snapshot
 - **THEN** the bar shows Tuesday's date, the snapshot's name and "ZFS", marked read-only
 
-#### Scenario: Dense ticks
-- **WHEN** a timeline has more points than the axis has room for separate ticks
-- **THEN** ticks closer than the minimum spacing are drawn as one, and moving the handle still reaches every point
+#### Scenario: Dense points
+- **WHEN** a timeline has more points than the axis has room for separate dots
+- **THEN** dots closer than the minimum spacing are drawn as one, and moving the handle still reaches every point
 
 #### Scenario: Hover
-- **WHEN** the pointer rests on a tick
+- **WHEN** the pointer rests on a dot
 - **THEN** a tooltip shows that point's date, time, label and source
 
 ### Requirement: Navigating along the timeline
-Dragging the handle SHALL snap to the nearest point and take the pane to that point's location once the drag pauses or ends; clicking a tick SHALL go to its point; with the bar focused, Left and Right SHALL step to the previous and next point, Home to the oldest and End to *Now*. Going to *Now* SHALL take the pane to the live location.
+Dragging the handle SHALL snap to the nearest point and take the pane to that point's location once the drag pauses or ends; clicking a dot SHALL go to its point; with the bar focused, Left and Right SHALL step to the previous and next point, Home to the oldest and End to *Now*. Going to *Now* SHALL take the pane to the live location.
 
-#### Scenario: Click a tick
-- **WHEN** the user clicks the Tuesday tick while at the live folder `/tank/home/ann/docs`
+#### Scenario: Click a dot
+- **WHEN** the user clicks the Tuesday dot while at the live folder `/tank/home/ann/docs`
 - **THEN** the pane shows `ann/docs` as of the Tuesday snapshot and the handle sits on Tuesday
 
 #### Scenario: Keyboard
