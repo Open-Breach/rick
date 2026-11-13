@@ -146,6 +146,17 @@ runs:
         mkdir -p "$HOME/rick-search-fixture"
         echo "RICK_SEARCH_FIXTURE=$HOME/rick-search-fixture" >> "$GITHUB_ENV"
         echo "RICK_REQUIRE_SPOTLIGHT=1" >> "$GITHUB_ENV"
+        # Some runner images have Spotlight off: its server, mds, disabled
+        # and not loaded, and indexing off on every volume. Enable the
+        # service, load it and turn indexing on. Where Spotlight already
+        # runs this changes nothing: launchctl answers that the service is
+        # loaded, and indexing is on as it was.
+        sudo launchctl enable system/com.apple.metadata.mds || true
+        if sudo launchctl bootstrap system /System/Library/LaunchDaemons/com.apple.metadata.mds.plist; then
+          # Just loaded: mds takes a moment before mdutil can reach it.
+          sleep 3
+        fi
+        sudo mdutil -a -i on || true
         mdutil -s / || true
     - name: subversion and windows search
       if: runner.os == 'Windows' && inputs.system == 'test'

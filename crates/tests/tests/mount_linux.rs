@@ -4,7 +4,9 @@
 //! unmounts it and deletes the loop device. The test runs where udisks
 //! answers (CI installs udisks2 with a polkit rule for the runner and sets
 //! `RICK_REQUIRE_UDISKS`); elsewhere it skips with a note, and the fake
-//! platform's test in `side_panel.rs` covers the action.
+//! platform's test in `side_panel.rs` covers the action. It skips with a
+//! note as well where the kernel cannot mount ISO 9660 at all, neither
+//! built in nor as a module, as on a runner with a pared-down kernel.
 
 #![cfg(target_os = "linux")]
 
@@ -22,6 +24,27 @@ fn udisks_answers() -> bool {
         .stderr(Stdio::null())
         .status()
         .is_ok_and(|status| status.success())
+}
+
+/// Whether the kernel can mount ISO 9660: the file system is registered,
+/// built in or with its module loaded, or `modprobe` finds the module it
+/// would load for it (a dry run, by the file system's name or the
+/// module's own).
+fn kernel_reads_iso9660() -> bool {
+    let registered = fs::read_to_string("/proc/filesystems").is_ok_and(|list| {
+        list.lines()
+            .any(|line| line.split_whitespace().last() == Some("iso9660"))
+    });
+    registered
+        || ["iso9660", "isofs"].into_iter().any(|module| {
+            Command::new("modprobe")
+                .args(["-n", module])
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status()
+                .is_ok_and(|status| status.success())
+        })
 }
 
 /// A small ISO 9660 image with a file at the top and one in a folder.
@@ -57,6 +80,10 @@ fn an_iso_mounted_through_udisks_is_a_volume_until_eject() {
             std::env::var_os("RICK_REQUIRE_UDISKS").is_none(),
             "udisks is required here but does not answer"
         );
+        return;
+    }
+    if !kernel_reads_iso9660() {
+        eprintln!("this kernel has no iso9660 file system; the real mount test is skipped");
         return;
     }
     let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));

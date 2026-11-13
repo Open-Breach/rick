@@ -13,6 +13,10 @@ name: bench
 # branch, so a regression can be traced to a day range (a schedule runs
 # from main's copy of this file and checks dev out). A manual run records
 # there too when asked.
+#
+# Runners: the labels come from the repository variables RUNNER_LINUX_X64,
+# RUNNER_LINUX_ARM64, RUNNER_MACOS and RUNNER_WINDOWS; where one is not
+# set, the job runs on GitHub's runner of that platform.
 on:
   workflow_dispatch:
     inputs:
@@ -40,7 +44,9 @@ jobs:
       fail-fast: false
       matrix:
         os: ${{ github.event_name == 'schedule' && fromJSON('["ubuntu-24.04"]') || fromJSON('["ubuntu-24.04", "macos-latest", "windows-latest"]') }}
-    runs-on: ${{ matrix.os }}
+    # `os` names the platform, and the steps read it; the label the job
+    # runs on is the platform's variable or GitHub's runner.
+    runs-on: ${{ matrix.os == 'ubuntu-24.04' && (vars.RUNNER_LINUX_X64 || 'ubuntu-24.04') || matrix.os == 'macos-latest' && (vars.RUNNER_MACOS || 'macos-latest') || (vars.RUNNER_WINDOWS || 'windows-latest') }}
     timeout-minutes: 90
     permissions:
       # The summary goes to the benchmark-history branch.
