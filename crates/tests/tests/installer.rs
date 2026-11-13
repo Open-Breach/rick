@@ -534,8 +534,7 @@ fn reading_the_archive_is_a_job_that_returns_at_once_and_cancels_cleanly() {
     let before = files_under(&home);
     let name = archive
         .file_name()
-        .map(|n| n.to_string_lossy().into_owned())
-        .unwrap_or_default();
+        .map_or_default(|n| n.to_string_lossy().into_owned());
     d.select(&[&name]);
 
     // The action returns at once; the reading is the job.

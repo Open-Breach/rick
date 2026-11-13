@@ -133,7 +133,7 @@ fn bus_error(message: &gst::MessageRef) -> Option<GstError> {
     match message.view() {
         gst::MessageView::Error(error) => {
             let text = error.error().to_string();
-            let debug = error.debug().map(|d| d.to_string()).unwrap_or_default();
+            let debug = error.debug().map_or_default(|d| d.to_string());
             if text.contains("missing a plug-in") || debug.contains("no suitable plugins") {
                 Some(GstError::MissingPlugin(
                     debug
@@ -492,8 +492,7 @@ impl Transport for Player {
     fn position(&self) -> Duration {
         self.pipeline
             .query_position::<gst::ClockTime>()
-            .map(Duration::from)
-            .unwrap_or_default()
+            .map_or_default(Duration::from)
     }
 
     fn duration(&self) -> Option<Duration> {
@@ -630,8 +629,7 @@ fn describe_streams(info: &gst_pbutils::DiscovererInfo, out: &mut Discovered) {
     for video in info.video_streams() {
         let codec = video
             .caps()
-            .map(|c| gst_pbutils::pb_utils_get_codec_description(&c).to_string())
-            .unwrap_or_default();
+            .map_or_default(|c| gst_pbutils::pb_utils_get_codec_description(&c).to_string());
         let fps = video.framerate();
         let fps_value = if fps.denom() > 0 {
             f64::from(fps.numer()) / f64::from(fps.denom())
@@ -661,8 +659,7 @@ fn describe_streams(info: &gst_pbutils::DiscovererInfo, out: &mut Discovered) {
     for audio in info.audio_streams() {
         let codec = audio
             .caps()
-            .map(|c| gst_pbutils::pb_utils_get_codec_description(&c).to_string())
-            .unwrap_or_default();
+            .map_or_default(|c| gst_pbutils::pb_utils_get_codec_description(&c).to_string());
         let mut text = format!(
             "{codec} {} Hz {}",
             audio.sample_rate(),

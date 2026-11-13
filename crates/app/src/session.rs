@@ -60,7 +60,7 @@ pub fn save(path: &Path, session: &Session) -> Result<(), Error> {
 ///
 /// The I/O error.
 pub(crate) fn write_atomically(path: &Path, text: &str) -> Result<(), Error> {
-    let dir = path.parent().map(Path::to_path_buf).unwrap_or_default();
+    let dir = path.parent().map_or_default(Path::to_path_buf);
     if !dir.as_os_str().is_empty() {
         std::fs::create_dir_all(&dir).map_err(Error::from_io)?;
     }

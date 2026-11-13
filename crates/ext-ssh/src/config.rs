@@ -230,8 +230,7 @@ fn include_files(value: &str, env: &Env) -> Vec<PathBuf> {
     };
     let name = path
         .file_name()
-        .map(|n| n.to_string_lossy().into_owned())
-        .unwrap_or_default();
+        .map_or_default(|n| n.to_string_lossy().into_owned());
     if !name.contains(['*', '?']) {
         return vec![path];
     }
@@ -351,14 +350,13 @@ fn resolve_one(blocks: &[Block], env: &Env, alias: &str) -> ConfigHost {
     });
     host.proxy_jump = proxy_jump
         .filter(|j| !j.eq_ignore_ascii_case("none"))
-        .map(|j| {
+        .map_or_default(|j| {
             j.split(',')
                 .map(str::trim)
                 .filter(|h| !h.is_empty())
                 .map(str::to_owned)
                 .collect()
-        })
-        .unwrap_or_default();
+        });
     host
 }
 

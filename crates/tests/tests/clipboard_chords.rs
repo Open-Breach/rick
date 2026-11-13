@@ -223,8 +223,7 @@ fn a_text_field_keeps_the_chords_for_its_text() {
         let model = harness.state().app().model();
         model
             .active_tab(model.focused)
-            .map(|(_, tab)| tab.filter.clone())
-            .unwrap_or_default()
+            .map_or_default(|(_, tab)| tab.filter.clone())
     };
 
     // The filter field has the keyboard.

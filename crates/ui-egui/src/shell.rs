@@ -1540,8 +1540,7 @@ impl RickUi {
     pub fn pane_rects_of(&self, window: WindowId) -> Vec<(PaneId, egui::Rect)> {
         self.windows
             .get(&window)
-            .map(|w| w.dock.pane_rects(self.app.model()))
-            .unwrap_or_default()
+            .map_or_default(|w| w.dock.pane_rects(self.app.model()))
     }
 
     /// The content of `window` in the last frame, in its own coordinates;
@@ -1568,8 +1567,7 @@ impl RickUi {
     pub fn toolbar_rects(&self, tab: TabId) -> Vec<(&'static str, egui::Rect)> {
         self.tabs
             .get(&tab)
-            .map(|t| t.toolbar_rects.clone())
-            .unwrap_or_default()
+            .map_or_default(|t| t.toolbar_rects.clone())
     }
 
     /// A tab's column header band in the last frame, for tests.
@@ -1584,8 +1582,7 @@ impl RickUi {
     pub fn column_boundaries(&self, tab: TabId) -> Vec<f32> {
         self.tabs
             .get(&tab)
-            .map(|t| t.column_boundaries.clone())
-            .unwrap_or_default()
+            .map_or_default(|t| t.column_boundaries.clone())
     }
 
     /// The toolbar row of a tab in the last frame, for tests.
@@ -1629,8 +1626,7 @@ impl RickUi {
     pub fn pane_rects(&self) -> Vec<(PaneId, egui::Rect)> {
         self.windows
             .get(&self.root)
-            .map(|w| w.dock.pane_rects(self.app.model()))
-            .unwrap_or_default()
+            .map_or_default(|w| w.dock.pane_rects(self.app.model()))
     }
 
     /// The texts shown right now, as (title, text), for tests.
@@ -2096,8 +2092,7 @@ impl RickUi {
             .app
             .model()
             .active_tab(pane)
-            .map(|(_, tab)| tab.filter.clone())
-            .unwrap_or_default();
+            .map_or_default(|(_, tab)| tab.filter.clone());
         // The Preview tab has the focus: its own table (Space plays) comes
         // first.
         let in_preview = crate::dock::shows_preview(self.app.model(), self.focused_in(window));
@@ -3144,8 +3139,7 @@ impl RickUi {
         let model = self.app.model();
         model
             .window_of(pane)
-            .map(|window| model.workspaces(window).iter().map(|ws| ws.id).collect())
-            .unwrap_or_default()
+            .map_or_default(|window| model.workspaces(window).iter().map(|ws| ws.id).collect())
     }
 
     /// Closes a workspace tab, remembering the folder of its focused pane
@@ -3305,8 +3299,7 @@ impl RickUi {
     fn focus_towards(&mut self, pane: PaneId, direction: Direction) {
         let rects = self
             .window_ui_of(pane)
-            .map(|w| w.dock.pane_rects(self.app.model()))
-            .unwrap_or_default();
+            .map_or_default(|w| w.dock.pane_rects(self.app.model()));
         let Some((_, from)) = rects.iter().find(|(p, _)| *p == pane) else {
             return;
         };
@@ -3468,8 +3461,7 @@ impl RickUi {
                     .app
                     .model()
                     .window(window)
-                    .map(|w| w.side_panel.clone())
-                    .unwrap_or_default();
+                    .map_or_default(|w| w.side_panel.clone());
                 let burger_right = left.min_rect().right() + metrics.space_toolbar_y;
                 let left_edge = if side.visible && side.side == PanelSide::Left {
                     burger_right.max(rect.left() + f32::from(side.width))
@@ -4254,8 +4246,7 @@ impl RickUi {
             .app
             .model()
             .window(window)
-            .map(|w| w.side_panel.clone())
-            .unwrap_or_default();
+            .map_or_default(|w| w.side_panel.clone());
         let jobs = !self.app.model().jobs.is_empty();
         let still = self.app.platform().reduce_motion();
         let Some(w) = self.windows.get_mut(&window) else {
@@ -5159,8 +5150,7 @@ impl RickUi {
             // What a screen reader hears of the drag.
             let title = model
                 .tab(drag.tab)
-                .map(|t| tab_label(model, t).1)
-                .unwrap_or_default();
+                .map_or_default(|t| tab_label(model, t).1);
             crate::drag::announce(
                 ui,
                 egui::Id::new(("drag-status", window.0)),

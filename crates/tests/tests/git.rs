@@ -839,8 +839,7 @@ fn git_clone_is_in_the_menu_of_the_empty_area_and_of_a_folder() {
         .app()
         .model()
         .active_tab(pane)
-        .map(|(_, tab)| tab.rows().map(|e| e.id).collect())
-        .unwrap_or_default();
+        .map_or_default(|(_, tab)| tab.rows().map(|e| e.id).collect());
     assert_eq!(ids.len(), 2);
     harness.state_mut().app_mut().handle(
         Command::Select {

@@ -251,10 +251,7 @@ impl Properties for Native {
             || path.display().to_string(),
             |n| n.to_string_lossy().into_owned(),
         );
-        let location = path
-            .parent()
-            .map(|p| p.display().to_string())
-            .unwrap_or_default();
+        let location = path.parent().map_or_default(|p| p.display().to_string());
         let mode = meta.permissions().mode();
         let mut rows = vec![
             ("Name".to_owned(), name),
@@ -267,11 +264,11 @@ impl Properties for Native {
             ),
             (
                 "Modified".to_owned(),
-                meta.modified().map(iso8601).unwrap_or_default(),
+                meta.modified().map_or_default(iso8601),
             ),
             (
                 "Accessed".to_owned(),
-                meta.accessed().map(iso8601).unwrap_or_default(),
+                meta.accessed().map_or_default(iso8601),
             ),
         ];
         if let Ok(created) = meta.created() {

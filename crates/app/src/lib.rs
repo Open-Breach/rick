@@ -3477,8 +3477,7 @@ impl App {
         let after: Vec<EntryId> = self
             .model
             .active_tab(pane)
-            .map(|(_, tab)| tab.selection.iter().copied().collect())
-            .unwrap_or_default();
+            .map_or_default(|(_, tab)| tab.selection.iter().copied().collect());
         if after != before {
             events.push(Event::SelectionChanged { pane, ids: after });
         }
@@ -3613,16 +3612,12 @@ impl App {
                 self.redo.clear();
             }
             Ok(ActionOutcome::Select(selector)) => {
-                let ids: Vec<EntryId> = self
-                    .model
-                    .active_tab(pane)
-                    .map(|(_, tab)| {
-                        tab.rows()
-                            .filter(|entry| (selector.matches)(entry))
-                            .map(|entry| entry.id)
-                            .collect()
-                    })
-                    .unwrap_or_default();
+                let ids: Vec<EntryId> = self.model.active_tab(pane).map_or_default(|(_, tab)| {
+                    tab.rows()
+                        .filter(|entry| (selector.matches)(entry))
+                        .map(|entry| entry.id)
+                        .collect()
+                });
                 let change = if selector.replace {
                     SelectionChange::Set(ids)
                 } else {
@@ -4369,8 +4364,7 @@ impl App {
         let entries: Vec<Entry> = self
             .model
             .active_tab(pane)
-            .map(|(_, tab)| tab.listing.entries().to_vec())
-            .unwrap_or_default();
+            .map_or_default(|(_, tab)| tab.listing.entries().to_vec());
         self.decorate(pane, &entries, events);
     }
 
@@ -5187,16 +5181,14 @@ impl App {
                 let rows: Vec<Entry> = self
                     .model
                     .active_tab(pane)
-                    .map(|(_, tab)| tab.listing.entries().to_vec())
-                    .unwrap_or_default();
+                    .map_or_default(|(_, tab)| tab.listing.entries().to_vec());
                 self.model.cloud = rows;
             }
             (Ok(()), Some(Virtual::Network)) => {
                 let rows: Vec<Entry> = self
                     .model
                     .active_tab(pane)
-                    .map(|(_, tab)| tab.listing.entries().to_vec())
-                    .unwrap_or_default();
+                    .map_or_default(|(_, tab)| tab.listing.entries().to_vec());
                 self.model.network = provider_rows(rows);
             }
             _ => {}
@@ -5284,21 +5276,17 @@ impl App {
         let Some((names, since)) = self.reveal_pending.get(&pane) else {
             return;
         };
-        let ids: Vec<EntryId> = self
-            .model
-            .active_tab(pane)
-            .map(|(_, tab)| {
-                tab.listing
-                    .rows()
-                    .filter(|e| {
-                        e.path
-                            .file_name()
-                            .is_some_and(|n| names.iter().any(|w| w == n))
-                    })
-                    .map(|e| e.id)
-                    .collect()
-            })
-            .unwrap_or_default();
+        let ids: Vec<EntryId> = self.model.active_tab(pane).map_or_default(|(_, tab)| {
+            tab.listing
+                .rows()
+                .filter(|e| {
+                    e.path
+                        .file_name()
+                        .is_some_and(|n| names.iter().any(|w| w == n))
+                })
+                .map(|e| e.id)
+                .collect()
+        });
         let all = ids.len() >= names.len();
         if !all && !complete && since.elapsed() < REVEAL_FOR {
             return;
@@ -5398,8 +5386,7 @@ impl App {
     fn selected_ids(&self, pane: PaneId) -> Vec<EntryId> {
         self.model
             .active_tab(pane)
-            .map(|(_, tab)| tab.selected().map(|e| e.id).collect())
-            .unwrap_or_default()
+            .map_or_default(|(_, tab)| tab.selected().map(|e| e.id).collect())
     }
 
     fn on_job_event(&mut self, event: JobEvent, events: &mut Vec<Event>) {
@@ -5431,8 +5418,7 @@ impl App {
                         .model
                         .jobs
                         .get(&id)
-                        .map(|job| job.name.clone())
-                        .unwrap_or_default();
+                        .map_or_default(|job| job.name.clone());
                     // Where the user acted, then what went wrong: the
                     // notice is shown in that pane's window.
                     events.push(Event::JobFailed {

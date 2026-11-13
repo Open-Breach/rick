@@ -805,8 +805,7 @@ mod tests {
                 let selected: Vec<String> = app
                     .model()
                     .active_tab(pane)
-                    .map(|(_, tab)| tab.selected().map(|e| e.name.clone()).collect())
-                    .unwrap_or_default();
+                    .map_or_default(|(_, tab)| tab.selected().map(|e| e.name.clone()).collect());
                 if selected == ["a.txt"] {
                     break;
                 }

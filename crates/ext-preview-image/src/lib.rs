@@ -691,8 +691,7 @@ impl Previewer for ImagePreviewer {
         let ext = entry
             .name
             .rsplit_once('.')
-            .map(|(_, e)| e.to_ascii_lowercase())
-            .unwrap_or_default();
+            .map_or_default(|(_, e)| e.to_ascii_lowercase());
         if EXTENSIONS.contains(&ext.as_str()) {
             60
         } else {

@@ -522,7 +522,7 @@ impl Pool {
         let Some(slot) = lock(&self.slots).get(alias).cloned() else {
             return Vec::new();
         };
-        slot.live.try_lock().map(|l| l.clone()).unwrap_or_default()
+        slot.live.try_lock().map_or_default(|l| l.clone())
     }
 
     /// Whether `alias` has an open connection.

@@ -203,8 +203,7 @@ pub fn parse(argv: &[String], cwd: &Path, plugins: &[CommandSpec]) -> Result<Par
     {
         let rest = sub
             .get_many::<String>("args")
-            .map(|values| values.cloned().collect())
-            .unwrap_or_default();
+            .map_or_default(|values| values.cloned().collect());
         return Ok(Parsed::Plugin {
             name: name.to_owned(),
             args: rest,

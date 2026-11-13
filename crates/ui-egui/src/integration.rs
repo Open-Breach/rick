@@ -151,7 +151,7 @@ fn row_title(item: Item) -> String {
 /// the check found.
 fn row_detail(row: &IntegrationItem, desktop: Option<Desktop>, home: &Path) -> String {
     let check = &row.check;
-    let shown = |path: Option<&Path>| path.map(|p| tilde(p, home)).unwrap_or_default();
+    let shown = |path: Option<&Path>| path.map_or_default(|p| tilde(p, home));
     match row.item {
         Item::InstallLocation => t!(
             "integration-row-install-location-detail",
@@ -639,7 +639,7 @@ fn footer(ui: &mut egui::Ui, integration: &Integration, open: &mut Open, asked: 
                 let text = match &integration.applying {
                     Some(progress) => t!(
                         "integration-applying",
-                        item = progress.current.map(row_title).unwrap_or_default(),
+                        item = progress.current.map_or_default(row_title),
                         done = (progress.done + 1).min(progress.total),
                         total = progress.total
                     ),
@@ -738,7 +738,7 @@ pub(crate) fn settings_line(
     home: &Path,
 ) -> String {
     let check = &row.check;
-    let shown = |path: Option<&Path>| path.map(|p| tilde(p, home)).unwrap_or_default();
+    let shown = |path: Option<&Path>| path.map_or_default(|p| tilde(p, home));
     if let Some(path) = check.foreign.first() {
         return t!("integration-foreign", path = tilde(path, home));
     }

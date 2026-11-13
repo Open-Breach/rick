@@ -683,8 +683,7 @@ fn files_of_another_origin_are_replaced_only_when_the_user_agreed() {
             .model()
             .integration
             .get(item)
-            .map(|row| row.check.foreign.clone())
-            .unwrap_or_default()
+            .map_or_default(|row| row.check.foreign.clone())
     };
     assert_eq!(
         in_the_way(&start, Item::LauncherEntry),

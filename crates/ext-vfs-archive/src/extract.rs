@@ -208,8 +208,7 @@ fn extract_tar(archive: &Path, codec: Option<Codec>, decide: &mut Decide<'_>) ->
             EntryKind::Symlink {
                 target: entry
                     .link_name_bytes()
-                    .map(|b| types::VPath::from_bytes(b.into_owned()))
-                    .unwrap_or_default(),
+                    .map_or_default(|b| types::VPath::from_bytes(b.into_owned())),
                 broken: false,
             }
         } else if kind.is_file() {

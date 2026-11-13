@@ -165,8 +165,7 @@ where
     let afternoon = chrono::Utc
         .with_ymd_and_hms(2000, 1, 1, 13, 0, 0)
         .single()
-        .map(|one| one.format_localized("%X", locale).to_string())
-        .unwrap_or_default();
+        .map_or_default(|one| one.format_localized("%X", locale).to_string());
     let clock = if afternoon.contains("13") {
         "%H:%M"
     } else {

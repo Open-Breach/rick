@@ -682,8 +682,7 @@ fn every_disk_image_fixture_lists_its_files_through_the_library() {
             .rows
             .iter()
             .find(|(k, _)| k == "Layout")
-            .map(|(_, v)| v.clone())
-            .unwrap_or_default();
+            .map_or_default(|(_, v)| v.clone());
         assert!(layout.ends_with("FAT"), "{name}: {layout}");
         assert!(
             listed

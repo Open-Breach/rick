@@ -373,10 +373,7 @@ fn column_boundaries_always_show_resize_fit_and_survive_a_restart() {
 
     // The widths are the tab's and come back with the session.
     let model = harness.state().app().model();
-    let saved = model
-        .tab(tab)
-        .map(|t| t.columns.clone())
-        .unwrap_or_default();
+    let saved = model.tab(tab).map_or_default(|t| t.columns.clone());
     assert!(
         saved.contains_key("name") && saved.contains_key("size"),
         "{saved:?}"

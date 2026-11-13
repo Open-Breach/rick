@@ -42,8 +42,7 @@ pub fn index(path: &Path, codec: Option<Codec>) -> Result<Vec<Item>, Error> {
             EntryKind::Symlink {
                 target: entry
                     .link_name_bytes()
-                    .map(|b| VPath::from_bytes(b.into_owned()))
-                    .unwrap_or_default(),
+                    .map_or_default(|b| VPath::from_bytes(b.into_owned())),
                 broken: false,
             }
         } else if kind.is_file() {
@@ -156,8 +155,7 @@ fn rewrite_into(
         } else if header.entry_type().is_symlink() || header.entry_type().is_hard_link() {
             let link = entry
                 .link_name_bytes()
-                .map(|b| String::from_utf8_lossy(&b).into_owned())
-                .unwrap_or_default();
+                .map_or_default(|b| String::from_utf8_lossy(&b).into_owned());
             header.set_size(0);
             builder
                 .append_link(&mut header, &target, link)

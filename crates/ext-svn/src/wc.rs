@@ -232,8 +232,7 @@ impl Snapshot {
                     .children()
                     .find(|n| n.has_tag_name(tag))
                     .and_then(|n| n.text())
-                    .map(str::to_owned)
-                    .unwrap_or_default()
+                    .map_or_default(str::to_owned)
             };
             self.last_commit = commit
                 .attribute("revision")

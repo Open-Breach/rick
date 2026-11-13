@@ -244,11 +244,7 @@ impl Wayland {
         let mut shared = lock(&self.shared);
         IncomingFiles {
             hovering: shared.incoming.is_some(),
-            hovered: shared
-                .incoming
-                .as_ref()
-                .map(|i| i.paths.clone())
-                .unwrap_or_default(),
+            hovered: shared.incoming.as_ref().map_or_default(|i| i.paths.clone()),
             dropped: std::mem::take(&mut shared.dropped),
         }
     }
@@ -528,8 +524,7 @@ impl Dispatch<WlDataSource, ()> for State {
                 let data = shared
                     .outgoing
                     .as_ref()
-                    .map(|o| Arc::clone(&o.data))
-                    .unwrap_or_default();
+                    .map_or_default(|o| Arc::clone(&o.data));
                 // The receiver reads the pipe at its own pace; the write
                 // waits for it off this thread.
                 runtime::handle().spawn_blocking(move || write_all(&fd, &data));

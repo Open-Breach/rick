@@ -314,16 +314,13 @@ impl CsvDoc {
             starts.pop();
         }
         let delimiter = sniff_delimiter(text.as_bytes(), &starts, name);
-        let first: Vec<String> = starts
-            .first()
-            .map(|&start| {
-                let end = starts.get(1).copied().unwrap_or(text.len());
-                parse_rows(&text.as_bytes()[start..end], delimiter)
-                    .into_iter()
-                    .next()
-                    .unwrap_or_default()
-            })
-            .unwrap_or_default();
+        let first: Vec<String> = starts.first().map_or_default(|&start| {
+            let end = starts.get(1).copied().unwrap_or(text.len());
+            parse_rows(&text.as_bytes()[start..end], delimiter)
+                .into_iter()
+                .next()
+                .unwrap_or_default()
+        });
         let has_header = first_row_is_header(&first);
         let header = if has_header {
             first
@@ -522,8 +519,7 @@ impl Previewer for CsvPreviewer {
         let name = loc
             .path
             .file_name()
-            .map(|n| String::from_utf8_lossy(n).into_owned())
-            .unwrap_or_default();
+            .map_or_default(|n| String::from_utf8_lossy(n).into_owned());
         // Indexing a quarter gigabyte is CPU work: off the runtime's
         // worker threads.
         let doc = ext::blocking(move || {

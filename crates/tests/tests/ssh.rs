@@ -195,8 +195,7 @@ impl Driver {
         self.app
             .model()
             .active_tab(self.pane())
-            .map(|(_, t)| t.listing.rows().map(|e| e.name.clone()).collect())
-            .unwrap_or_default()
+            .map_or_default(|(_, t)| t.listing.rows().map(|e| e.name.clone()).collect())
     }
 
     fn navigate(&mut self, to: Location) {

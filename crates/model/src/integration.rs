@@ -119,9 +119,7 @@ impl IntegrationSettings {
     /// What Rick wrote for `item` so far.
     #[must_use]
     pub fn receipt(&self, item: Item) -> Receipt {
-        self.record(item)
-            .map(ItemRecord::receipt)
-            .unwrap_or_default()
+        self.record(item).map_or_default(ItemRecord::receipt)
     }
 
     /// Whether the user declined `item`.
