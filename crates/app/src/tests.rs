@@ -4448,6 +4448,21 @@ mod timeline {
         assert!(!h.app.model().timeline_visible(pane), "never an empty bar");
     }
 
+    /// A refresh reads the timeline anew, so a snapshot taken meanwhile
+    /// shows on the bar at once, not only after the 30 seconds.
+    #[test]
+    fn a_refresh_reads_the_timeline_again() {
+        let (mut h, zfs, backup) = with_sources(Duration::ZERO);
+        let pane = h.app.model().focused;
+        h.send(Command::ToggleTimeline(pane));
+        h.settle();
+        assert_eq!((zfs.calls(), backup.calls()), (1, 1));
+        h.send(Command::Refresh(pane));
+        h.settle();
+        assert_eq!((zfs.calls(), backup.calls()), (2, 2));
+        assert_eq!(labels(&h, pane).len(), 3, "the bar keeps its points");
+    }
+
     #[test]
     fn no_source_no_timeline() {
         let mut h = harness();
