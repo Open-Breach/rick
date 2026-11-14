@@ -133,15 +133,16 @@ fn dataset(name: &str) -> Result<(), Refusal> {
     }
 }
 
-/// Whether `dataset` is a dataset name: components of letters, digits and
-/// `_ - . :`, separated by `/`, the first not starting with `-`.
+/// Whether `dataset` is a dataset name: components of letters, digits,
+/// spaces and `_ - . :`, the characters ZFS allows, separated by `/`, the
+/// first not starting with `-`.
 fn dataset_ok(dataset: &str) -> bool {
     !dataset.starts_with('-')
         && dataset.split('/').all(|part| {
             !part.is_empty()
                 && part
                     .chars()
-                    .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.' | ':'))
+                    .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.' | ':' | ' '))
         })
 }
 
@@ -250,6 +251,24 @@ mod tests {
         ] {
             assert_eq!(check(&args(ok)), Ok(()), "{ok:?}");
         }
+    }
+
+    /// ZFS allows a space in a dataset's name as in a snapshot's, so the
+    /// helper takes such a dataset for every command; the arguments reach
+    /// `zfs` as they are, without a shell.
+    #[test]
+    fn a_dataset_with_a_space_in_its_name_passes() {
+        for ok in [
+            &["snapshot", "tank/my data@rick-2026-11-14-120000"][..],
+            &["destroy", "tank/my data@before update"],
+            &["rename", "tank/my data@a", "tank/my data@b"],
+            &["set", "compression=lz4", "tank/my data"],
+            &["inherit", "compression", "tank/my data"],
+        ] {
+            assert_eq!(check(&args(ok)), Ok(()), "{ok:?}");
+        }
+        assert!(check(&args(&["destroy", "tank/my data"])).is_err());
+        assert!(check(&args(&["set", "compression=lz4", "-tank/my data"])).is_err());
     }
 
     #[test]
