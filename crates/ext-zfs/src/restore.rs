@@ -3,14 +3,16 @@
 //! The plugin cannot use `ops` (it sits above the plugins), so Restore is
 //! its own job: for each selected entry it computes the live path (mount
 //! point plus the path below the snapshot), asks once, naming the snapshot
-//! and the live items it replaces, moves those to the trash through the
-//! platform's
-//! [`Trash`], creates missing parents and copies the entry back: regular
-//! files, folders and symbolic links, with their permissions and
-//! modification times. The cancel token is checked between files. An item
-//! whose live version cannot be trashed is skipped and reported. Not
-//! undoable: the replaced version is in the trash, the restored one still
-//! in the snapshot.
+//! and the live items it replaces, creates missing parents and copies the
+//! entry back: regular files, folders and symbolic links, with their
+//! permissions and modification times. The copy goes to a hidden staging
+//! name beside the live item first; only when it is complete is the live
+//! item moved to the trash through the platform's [`Trash`] and the copy
+//! renamed into its place, so a copy that fails or is cancelled halfway
+//! leaves the live item as it was and removes what it had copied. The
+//! cancel token is checked between files. An item whose live version
+//! cannot be trashed is skipped and reported. Not undoable: the replaced
+//! version is in the trash, the restored one still in the snapshot.
 
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
@@ -101,14 +103,7 @@ pub fn restore(
         if cancel.is_cancelled() {
             return Err(Error::Cancelled);
         }
-        if item.to.symlink_metadata().is_ok()
-            && let Err(error) = trash.trash(&item.to)
-        {
-            tracing::warn!(path = %item.to.display(), %error, "live item not trashed; not restored");
-            let _ = writeln!(skipped, "{}: {error}", item.to.display());
-            continue;
-        }
-        if let Err(error) = put_back(&item.from, &item.to, cancel) {
+        if let Err(error) = put_back(&item.from, &item.to, trash, cancel) {
             if matches!(error, Error::Cancelled) {
                 return Err(error);
             }
@@ -129,12 +124,71 @@ pub fn restore(
     }
 }
 
-/// Creates the missing parents of `to` and copies `from` there.
-fn put_back(from: &Path, to: &Path, cancel: &CancelToken) -> Result<(), Error> {
-    if let Some(parent) = to.parent() {
-        std::fs::create_dir_all(parent).map_err(Error::from_io)?;
+/// Creates the missing parents of `to`, copies `from` to a staging name
+/// beside it, then trashes the live item at `to`, if any, and renames the
+/// copy into its place. A failed or cancelled copy, or a live item that
+/// cannot be trashed, removes the staging copy and leaves `to` alone.
+fn put_back(from: &Path, to: &Path, trash: &dyn Trash, cancel: &CancelToken) -> Result<(), Error> {
+    let parent = to
+        .parent()
+        .ok_or(Error::Unsupported("nothing to restore over the root"))?;
+    std::fs::create_dir_all(parent).map_err(Error::from_io)?;
+    let staging = staging_path(to);
+    if let Err(error) = copy_tree(from, &staging, cancel) {
+        remove(&staging);
+        return Err(error);
     }
-    copy_tree(from, to, cancel)
+    if to.symlink_metadata().is_ok()
+        && let Err(error) = trash.trash(to)
+    {
+        tracing::warn!(path = %to.display(), %error, "live item not trashed; not restored");
+        remove(&staging);
+        return Err(error);
+    }
+    std::fs::rename(&staging, to).map_err(|error| {
+        // The live item is in the trash; the restored copy stays at its
+        // staging name, and the message says where.
+        tracing::warn!(from = %staging.display(), to = %to.display(), %error, "restored copy not moved into place");
+        Error::from_io(std::io::Error::new(
+            error.kind(),
+            format!("{error}; the restored copy is at {}", staging.display()),
+        ))
+    })
+}
+
+/// A name beside `to` that is not taken: `.<name>.rick-restore`, with a
+/// number added when needed.
+fn staging_path(to: &Path) -> PathBuf {
+    let name = to
+        .file_name()
+        .map_or_else(String::new, |n| n.to_string_lossy().into_owned());
+    let mut n = 0u32;
+    loop {
+        let candidate = to.with_file_name(if n == 0 {
+            format!(".{name}.rick-restore")
+        } else {
+            format!(".{name}.rick-restore-{n}")
+        });
+        if candidate.symlink_metadata().is_err() {
+            return candidate;
+        }
+        n += 1;
+    }
+}
+
+/// Removes a partial copy, whatever it is; a failure is only logged.
+fn remove(path: &Path) {
+    let Ok(meta) = path.symlink_metadata() else {
+        return;
+    };
+    let removed = if meta.is_dir() {
+        std::fs::remove_dir_all(path)
+    } else {
+        std::fs::remove_file(path)
+    };
+    if let Err(error) = removed {
+        tracing::warn!(path = %path.display(), %error, "partial restore not removed");
+    }
 }
 
 /// Copies a file, a folder with everything in it, or a symbolic link as a

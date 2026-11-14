@@ -276,6 +276,55 @@ fn an_item_whose_live_version_cannot_be_trashed_is_skipped() {
 }
 
 #[test]
+fn a_folder_whose_copy_fails_leaves_the_live_folder_alone() {
+    if !crate::supported() {
+        return;
+    }
+    let b = bench();
+    let proj = b.fx.snapshot_dir("b").join("ann/proj");
+    write(&proj.join("a.txt"), "a");
+    write(&proj.join("z-unreadable.txt"), "z");
+    let Ok(Some(_)) = ext::platform::fs::unix_mode(&proj.join("z-unreadable.txt")) else {
+        return; // No permission bits to take away here.
+    };
+    ext::platform::fs::set_unix_mode(&proj.join("z-unreadable.txt"), 0o000)
+        .unwrap_or_else(|e| panic!("{e}"));
+    if fs::read(proj.join("z-unreadable.txt")).is_ok() {
+        return; // Running as root: permissions do not stop anything.
+    }
+    let live = b.fx.home().join("ann/proj");
+    write(&live.join("keep.txt"), "live");
+
+    let restore_items = items(
+        &b.shared,
+        &[snapshot_location("tank/home", "b", Path::new("ann/proj"))],
+    )
+    .unwrap_or_else(|e| panic!("{e}"));
+    let result = restore(&restore_items, &*b.fake, &CancelToken::new(), &mut |_| {});
+    let _ = ext::platform::fs::set_unix_mode(&proj.join("z-unreadable.txt"), 0o644);
+
+    let message = result.err().map(|e| e.to_string()).unwrap_or_default();
+    assert!(
+        message.contains("proj"),
+        "the failure names the item: {message}"
+    );
+    assert!(b.trashed().is_empty(), "the live folder was not trashed");
+    assert_eq!(
+        fs::read_to_string(live.join("keep.txt")).ok().as_deref(),
+        Some("live"),
+        "the live folder is as it was"
+    );
+    assert!(!live.join("a.txt").exists(), "no half-restored folder");
+    let leftovers: Vec<_> = fs::read_dir(b.fx.home().join("ann"))
+        .unwrap_or_else(|e| panic!("{e}"))
+        .filter_map(Result::ok)
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .filter(|name| name.starts_with('.'))
+        .collect();
+    assert!(leftovers.is_empty(), "no partial copy left: {leftovers:?}");
+}
+
+#[test]
 fn a_cancelled_restore_stops_before_copying() {
     let b = bench();
     let restore_items = items(
