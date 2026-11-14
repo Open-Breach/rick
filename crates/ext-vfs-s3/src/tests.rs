@@ -65,8 +65,7 @@ fn signature_version_4_matches_the_documented_example() {
     let authorization = signed
         .iter()
         .find(|(k, _)| k == "authorization")
-        .map(|(_, v)| v.as_str())
-        .unwrap_or_default();
+        .map_or_default(|(_, v)| v.as_str());
     assert_eq!(
         authorization,
         "AWS4-HMAC-SHA256 Credential=AKIAIOSFODNN7EXAMPLE/20130524/us-east-1/s3/aws4_request, SignedHeaders=host;range;x-amz-content-sha256;x-amz-date, Signature=f0e8bdb87c964420e857bd35b5d6ed310bd44f0170aba48dd91039c6036bdb41"

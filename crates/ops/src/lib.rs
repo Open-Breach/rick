@@ -150,8 +150,7 @@ impl State {
     fn capabilities(&self, loc: &Location) -> Capabilities {
         self.mounts
             .resolve(loc)
-            .map(|p| p.capabilities(loc))
-            .unwrap_or_default()
+            .map_or_default(|p| p.capabilities(loc))
     }
 
     /// `Hidden` unless the provider at `loc` offers `needed`.

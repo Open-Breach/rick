@@ -88,7 +88,7 @@ pub fn model_shape(model: &Model, window: WindowId) -> Shape {
             Dock::Pane(pane) => {
                 let pane = model.pane(*pane);
                 Shape::Leaf {
-                    tabs: pane.map(|p| p.tabs().to_vec()).unwrap_or_default(),
+                    tabs: pane.map_or_default(|p| p.tabs().to_vec()),
                     active: pane.and_then(model::Pane::active),
                 }
             }
@@ -324,8 +324,7 @@ impl DockSync {
         let model_tabs: Vec<TabId> = app
             .model()
             .window(self.window)
-            .map(|w| w.dock().panes())
-            .unwrap_or_default()
+            .map_or_default(|w| w.dock().panes())
             .into_iter()
             .filter_map(|pane| app.model().pane(pane))
             .flat_map(|pane| pane.tabs().to_vec())
@@ -812,10 +811,7 @@ mod tests {
         assert_eq!(
             tree_shape(dock.state.main_surface()),
             Some(Shape::Leaf {
-                tabs: model
-                    .pane(other)
-                    .map(|p| p.tabs().to_vec())
-                    .unwrap_or_default(),
+                tabs: model.pane(other).map_or_default(|p| p.tabs().to_vec()),
                 active: model.pane(other).and_then(model::Pane::active),
             })
         );

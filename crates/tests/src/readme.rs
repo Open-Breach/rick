@@ -1,14 +1,16 @@
 //! The parts of `README.md` that are regenerated with every release
 //! (specs/readme.md): the version in the status line and the call to
-//! action, the Features list with its live items, and the Install section.
+//! action, the Features list with its live items, the previewed file types
+//! by kind, and the Install section.
 //!
 //! Nothing here is typed from memory. [`extensions`] is every extension a
 //! release carries, the ones compiled into the binary and the plugins;
 //! [`Facts::gather`] loads each into a registry and keeps what it
 //! registered and what its manifest declares: the file types its
 //! previewers claim, the providers, the search connectors and the
-//! platforms they are for. [`features`] and [`install`] write the Markdown
-//! from that, and [`regenerate`] puts it between the README's markers:
+//! platforms they are for. [`features`], [`file_types`] and [`install`]
+//! write the Markdown from that, and [`regenerate`] puts it between the
+//! README's markers:
 //!
 //! ```text
 //! <!-- generated:features -->
@@ -21,6 +23,7 @@
 //! instead; `cargo xtask readme` runs it that way.
 
 use std::ops::Range;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use ext::{Extension, Platforms, Registry};
@@ -29,6 +32,8 @@ use ext::{Extension, Platforms, Registry};
 pub const STATUS: &str = "status";
 /// The block with the six feature items.
 pub const FEATURES: &str = "features";
+/// The block with the previewed file types, one folded list per kind.
+pub const FILE_TYPES: &str = "file-types";
 /// The block with the Install section's body.
 pub const INSTALL: &str = "install";
 
@@ -41,6 +46,17 @@ pub enum ReadmeError {
     /// The status block has no line that starts with `v<version>`.
     #[error("the status line of README.md names no version")]
     NoVersion,
+    /// A previewer declares a file type the README has no kind for.
+    #[error("{previewer} previews {name}, which has no kind in the README's file types")]
+    NoKind {
+        /// The type's short name.
+        name: String,
+        /// The crate of the previewer that declares it.
+        previewer: &'static str,
+    },
+    /// `assets/readme/` does not hold exactly one model.
+    #[error("assets/readme holds {0} `.stl` files; the release's animal is the one model there")]
+    Model(usize),
     /// An extension of the bundle did not register.
     #[error("{name} did not register: {reason}")]
     Extension {
@@ -49,6 +65,29 @@ pub enum ReadmeError {
         /// What the registry said.
         reason: String,
     },
+}
+
+/// The sample model of the README's picture: the one `.stl` of
+/// `assets/readme/` under the workspace's `root`, the animal of the
+/// release (specs/readme.md, *Screenshot*). A release replaces the model
+/// and the script that writes it, and nothing else names the animal: the
+/// picture's fixture and the README's test read it from here.
+///
+/// # Errors
+///
+/// [`ReadmeError::Model`] when the folder holds no model or more than one.
+pub fn model(root: &Path) -> Result<PathBuf, ReadmeError> {
+    let mut models: Vec<PathBuf> = std::fs::read_dir(root.join("assets/readme"))
+        .into_iter()
+        .flatten()
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .filter(|path| path.extension().is_some_and(|e| e == "stl"))
+        .collect();
+    match models.len() {
+        1 => Ok(models.remove(0)),
+        count => Err(ReadmeError::Model(count)),
+    }
 }
 
 /// Every extension a release carries, by the name of its crate: the
@@ -159,13 +198,104 @@ pub fn extensions() -> Vec<(&'static str, Arc<dyn Extension>)> {
     ]
 }
 
+/// The kinds the README lists the previewed file types under
+/// (specs/readme.md, *File types*), in its order.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Kind {
+    /// Images, icons, audio and video.
+    Media,
+    /// PDF, Office documents, Markdown, HTML, CSV and plain text.
+    Documents,
+    /// 3D and 3D-printing models.
+    ThreeD,
+    /// Source code, and data and config formats.
+    Programming,
+    /// Archives and disk images.
+    Archives,
+}
+
+impl Kind {
+    /// Every kind, in the order the README lists them.
+    pub const ALL: [Self; 5] = [
+        Self::Media,
+        Self::Documents,
+        Self::ThreeD,
+        Self::Programming,
+        Self::Archives,
+    ];
+
+    /// The kind as its list is headed.
+    #[must_use]
+    pub fn title(self) -> &'static str {
+        match self {
+            Self::Media => "Media",
+            Self::Documents => "Documents",
+            Self::ThreeD => "3D",
+            Self::Programming => "Programming",
+            Self::Archives => "Archives and disk images",
+        }
+    }
+}
+
+/// A previewer's crate, the kind of the types it declares, and the types
+/// of its that are of another kind, by their short names.
+type PreviewerKinds = (&'static str, Kind, &'static [(&'static str, Kind)]);
+
+/// The kind each previewer gives the types it declares. A previewer that
+/// is not here, or a new kind, is a decision (specs/readme.md): its types
+/// fail [`Facts::gather`] instead of landing in a catch-all.
+const KINDS: &[PreviewerKinds] = &[
+    ("ext-preview-pdf", Kind::Documents, &[]),
+    ("ext-preview-image", Kind::Media, &[]),
+    ("ext-preview-3d", Kind::ThreeD, &[]),
+    ("ext-preview-markup", Kind::Documents, &[]),
+    (
+        "ext-preview-text",
+        Kind::Documents,
+        // The config and data formats the text previewer shows as text.
+        &[
+            ("INI", Kind::Programming),
+            ("CFG", Kind::Programming),
+            ("CONF", Kind::Programming),
+            ("TOML", Kind::Programming),
+            ("Diff", Kind::Programming),
+            (".gitignore", Kind::Programming),
+            (".env", Kind::Programming),
+        ],
+    ),
+    ("ext-preview-code", Kind::Programming, &[]),
+    ("ext-preview-media", Kind::Media, &[]),
+    ("ext-preview-office", Kind::Documents, &[]),
+    // An eBook is a document (specs/readme.md, *File types*), though its
+    // preview is the list of what the book holds.
+    (
+        "ext-preview-archive",
+        Kind::Archives,
+        &[("EPUB", Kind::Documents)],
+    ),
+    ("ext-preview-icons", Kind::Media, &[]),
+];
+
+/// The kind of the type `name` that the previewer of the crate
+/// `previewer` declares.
+fn kind_of(previewer: &str, name: &str) -> Option<Kind> {
+    let (_, kind, others) = KINDS.iter().find(|(krate, _, _)| *krate == previewer)?;
+    Some(
+        others
+            .iter()
+            .find(|(other, _)| *other == name)
+            .map_or(*kind, |(_, kind)| *kind),
+    )
+}
+
 /// What the extensions of a release register, as the Features list says
 /// it.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Facts {
-    /// The file types the previewers claim, by their short names, each
-    /// once, in the order of [`extensions`] and of each manifest.
-    pub previews: Vec<String>,
+    /// The file types the previewers claim, by their short names with
+    /// their kinds, each once, in the order of [`extensions`] and of each
+    /// manifest.
+    pub previews: Vec<(Kind, String)>,
     /// The extensions that register a provider outside the cloud, by
     /// their manifests' names.
     pub storage: Vec<String>,
@@ -185,7 +315,9 @@ impl Facts {
     ///
     /// # Errors
     ///
-    /// [`ReadmeError::Extension`] when one does not register.
+    /// [`ReadmeError::Extension`] when one does not register, and
+    /// [`ReadmeError::NoKind`] when a previewer declares a type the README
+    /// has no kind for.
     pub fn gather(
         extensions: &[(&'static str, Arc<dyn Extension>)],
         platform: &Arc<dyn platform::Platform>,
@@ -208,10 +340,15 @@ impl Facts {
             let manifest = extension.manifest();
             if !registry.previewers().is_empty() {
                 for extension in manifest.previews {
-                    let name = type_name(extension);
-                    if !facts.previews.contains(&name) {
-                        facts.previews.push(name);
+                    let type_name = type_name(extension);
+                    if facts.previews.iter().any(|(_, known)| *known == type_name) {
+                        continue;
                     }
+                    let kind = kind_of(name, &type_name).ok_or_else(|| ReadmeError::NoKind {
+                        name: type_name.clone(),
+                        previewer: name,
+                    })?;
+                    facts.previews.push((kind, type_name));
                 }
             }
             if let Some(provider) = registry.providers().first() {
@@ -341,9 +478,8 @@ pub fn features(facts: &Facts) -> String {
     };
     [
         format!(
-            "- **Previews {} file types:** {}.",
-            facts.previews.len(),
-            facts.previews.join(", ")
+            "- **Previews {} file types**, listed by kind below.",
+            facts.previews.len()
         ),
         "- **Multi-pane, multi-tab view:** split panes side by side, drag them around, keep as \
          many tabs as you like."
@@ -364,6 +500,34 @@ pub fn features(facts: &Facts) -> String {
             .to_owned(),
     ]
     .join("\n")
+}
+
+/// The previewed file types of the first feature item, complete, one
+/// collapsible list per kind (specs/readme.md, *File types*): the kind and
+/// its count in the summary, the types inside, the first kind open and the
+/// others folded. A kind without a type has no list.
+#[must_use]
+pub fn file_types(facts: &Facts) -> String {
+    let mut lists = Vec::new();
+    for kind in Kind::ALL {
+        let types: Vec<&str> = facts
+            .previews
+            .iter()
+            .filter(|(of, _)| *of == kind)
+            .map(|(_, name)| name.as_str())
+            .collect();
+        if types.is_empty() {
+            continue;
+        }
+        let open = if lists.is_empty() { " open" } else { "" };
+        lists.push(format!(
+            "<details{open}>\n<summary>{} ({})</summary>\n\n{}\n\n</details>",
+            kind.title(),
+            types.len(),
+            types.join(", ")
+        ));
+    }
+    lists.join("\n\n")
 }
 
 /// The platforms the release workflow builds an archive for, as its build
@@ -522,8 +686,8 @@ pub fn version(readme: &str) -> Result<String, ReadmeError> {
 
 /// The README brought up to the release `version`: the version in the
 /// status line and the call to action, whose wording stays as it is, the
-/// Features list from `facts` and the Install section for `platforms`.
-/// Everything outside the three blocks is left alone.
+/// Features list and the file types from `facts` and the Install section
+/// for `platforms`. Everything outside the four blocks is left alone.
 ///
 /// # Errors
 ///
@@ -538,6 +702,7 @@ pub fn regenerate(
     let status = block(readme, STATUS)?.replace(&format!("v{old}"), &format!("v{version}"));
     let readme = with_block(readme, STATUS, &status)?;
     let readme = with_block(&readme, FEATURES, &features(facts))?;
+    let readme = with_block(&readme, FILE_TYPES, &file_types(facts))?;
     with_block(&readme, INSTALL, &install(version, platforms))
 }
 
@@ -547,12 +712,17 @@ mod tests {
 
     const README: &str = "# Rick\n\n<!-- generated:status -->\nv0.4.0 · early · this page.\n\n\
         [Download v0.4.0](#install) now.\n<!-- /generated:status -->\n\n## Features\n\n\
-        <!-- generated:features -->\nold\n<!-- /generated:features -->\n\nComing:\n\n- more\n\n\
+        <!-- generated:features -->\nold\n<!-- /generated:features -->\n\n\
+        <!-- generated:file-types -->\nold\n<!-- /generated:file-types -->\n\nComing:\n\n- more\n\n\
         ## Install\n\n<!-- generated:install -->\nold\n<!-- /generated:install -->\n\nEnd.\n";
 
     fn facts() -> Facts {
         Facts {
-            previews: vec!["PDF".to_owned(), "JPG".to_owned()],
+            previews: vec![
+                (Kind::Documents, "PDF".to_owned()),
+                (Kind::Media, "JPG".to_owned()),
+                (Kind::Media, "PNG".to_owned()),
+            ],
             storage: vec!["Archives".to_owned()],
             cloud: vec!["S3".to_owned(), "Azure Blob".to_owned()],
             search: vec![
@@ -580,7 +750,10 @@ mod tests {
         let text = features(&facts());
         let lines: Vec<&str> = text.lines().collect();
         assert_eq!(lines.len(), 6);
-        assert_eq!(lines[0], "- **Previews 2 file types:** PDF, JPG.");
+        assert_eq!(
+            lines[0],
+            "- **Previews 3 file types**, listed by kind below."
+        );
         assert_eq!(
             lines[2],
             "- **Browses** local disks, Archives and the cloud (S3, Azure Blob), and \
@@ -593,6 +766,24 @@ mod tests {
             ..facts()
         });
         assert!(none.contains("you already use**: status badges"));
+    }
+
+    #[test]
+    fn the_file_types_are_listed_by_kind_the_first_open() {
+        assert_eq!(
+            file_types(&facts()),
+            "<details open>\n<summary>Media (2)</summary>\n\nJPG, PNG\n\n</details>\n\n\
+             <details>\n<summary>Documents (1)</summary>\n\nPDF\n\n</details>"
+        );
+    }
+
+    #[test]
+    fn a_type_takes_its_previewers_kind_unless_it_is_named_otherwise() {
+        assert_eq!(kind_of("ext-preview-text", "TXT"), Some(Kind::Documents));
+        assert_eq!(kind_of("ext-preview-text", "TOML"), Some(Kind::Programming));
+        assert_eq!(kind_of("ext-preview-code", "Rust"), Some(Kind::Programming));
+        // A previewer nobody gave a kind has none for its types.
+        assert_eq!(kind_of("ext-preview-new", "NEW"), None);
     }
 
     #[test]
@@ -634,12 +825,13 @@ mod tests {
             Ok("v0.5.0 · early · this page.\n\n[Download v0.5.0](#install) now.")
         );
         assert_eq!(block(&new, FEATURES), Ok(features(&facts()).as_str()));
+        assert_eq!(block(&new, FILE_TYPES), Ok(file_types(&facts()).as_str()));
         assert_eq!(
             block(&new, INSTALL),
             Ok(install("0.5.0", &platforms).as_str())
         );
         assert!(new.starts_with("# Rick\n\n<!-- generated:status -->\n"));
-        assert!(new.contains("<!-- /generated:features -->\n\nComing:\n\n- more\n\n## Install"));
+        assert!(new.contains("<!-- /generated:file-types -->\n\nComing:\n\n- more\n\n## Install"));
         assert!(new.ends_with("<!-- /generated:install -->\n\nEnd.\n"));
         // The same again changes nothing.
         assert_eq!(regenerate(&new, "0.5.0", &facts(), &platforms), Ok(new));

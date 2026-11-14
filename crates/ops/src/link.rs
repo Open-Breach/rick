@@ -278,9 +278,7 @@ impl Action for CreateLink {
             return Ok(ActionOutcome::Done);
         }
         let kinds = kinds_for(self.0.capabilities(&ctx.location));
-        let current = crate::local_path(&ctx.location)
-            .map(|p| p.display().to_string())
-            .unwrap_or_default();
+        let current = crate::local_path(&ctx.location).map_or_default(|p| p.display().to_string());
         let mut form = Form::new(
             format!("Create link to {}", describe(&ctx.selection)),
             "Create",

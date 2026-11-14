@@ -75,8 +75,7 @@ pub fn entry_at(path: &Path) -> std::io::Result<Entry> {
         RawKind::Other => EntryKind::Other,
         RawKind::Symlink => EntryKind::Symlink {
             target: std::fs::read_link(path)
-                .map(|target| ext::platform::paths::from_path(&target))
-                .unwrap_or_default(),
+                .map_or_default(|target| ext::platform::paths::from_path(&target)),
             broken: std::fs::metadata(path).is_err(),
         },
     };

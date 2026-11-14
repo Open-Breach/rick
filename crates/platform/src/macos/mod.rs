@@ -268,18 +268,15 @@ const NETWORK_FS: &[&str] = &[
 
 /// The file system type name `statfs` reports for a mount point.
 fn fs_type_of(mount_point: &Path) -> String {
-    rustix::fs::statfs(mount_point)
-        .ok()
-        .map(|stat| {
-            let bytes: Vec<u8> = stat
-                .f_fstypename
-                .iter()
-                .take_while(|&&c| c != 0)
-                .map(|c| c.to_ne_bytes()[0])
-                .collect();
-            String::from_utf8_lossy(&bytes).into_owned()
-        })
-        .unwrap_or_default()
+    rustix::fs::statfs(mount_point).ok().map_or_default(|stat| {
+        let bytes: Vec<u8> = stat
+            .f_fstypename
+            .iter()
+            .take_while(|&&c| c != 0)
+            .map(|c| c.to_ne_bytes()[0])
+            .collect();
+        String::from_utf8_lossy(&bytes).into_owned()
+    })
 }
 
 /// `MNT_RDONLY` of `sys/mount.h`: the volume is mounted read-only.
@@ -318,8 +315,7 @@ impl Mount for Native {
         let path = std::path::absolute(path).map_err(Error::from_io)?;
         let name = path
             .file_name()
-            .map(|n| n.to_string_lossy().into_owned())
-            .unwrap_or_default();
+            .map_or_default(|n| n.to_string_lossy().into_owned());
         let format = ImageFormat::for_name(&name)
             .filter(|f| crate::NATIVE_MOUNTABLE.contains(f))
             .ok_or(Error::Unsupported(

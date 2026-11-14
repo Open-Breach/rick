@@ -92,8 +92,7 @@ pub(crate) fn entry_from_raw(dir: &Path, dir_vpath: &VPath, raw: RawEntry) -> En
             let full = dir.join(&name);
             EntryKind::Symlink {
                 target: std::fs::read_link(&full)
-                    .map(|target| platform::paths::from_path(&target))
-                    .unwrap_or_default(),
+                    .map_or_default(|target| platform::paths::from_path(&target)),
                 broken: std::fs::metadata(&full).is_err(),
             }
         }

@@ -304,9 +304,7 @@ pub(super) fn list_groups() -> Vec<Principal> {
 /// The `name:x:id:` records of a passwd-style file.
 #[cfg(not(target_os = "macos"))]
 fn database(path: &str) -> Vec<Principal> {
-    std::fs::read_to_string(path)
-        .map(|text| parse_database(&text))
-        .unwrap_or_default()
+    std::fs::read_to_string(path).map_or_default(|text| parse_database(&text))
 }
 
 /// The names and ids of the records in a passwd-style text.

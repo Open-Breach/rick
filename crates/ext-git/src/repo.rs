@@ -189,18 +189,11 @@ impl Snapshot {
             Err(_) => {}
         }
         if let Ok(commit) = repo.head_commit() {
-            let summary = commit
-                .message()
-                .map(|m| m.summary().to_string())
-                .unwrap_or_default();
-            let author = commit
-                .author()
-                .map(|a| a.name.to_string())
-                .unwrap_or_default();
+            let summary = commit.message().map_or_default(|m| m.summary().to_string());
+            let author = commit.author().map_or_default(|a| a.name.to_string());
             let date = commit
                 .time()
-                .map(|t| t.format_or_unix(gix::date::time::format::SHORT))
-                .unwrap_or_default();
+                .map_or_default(|t| t.format_or_unix(gix::date::time::format::SHORT));
             let id = commit
                 .id()
                 .shorten()

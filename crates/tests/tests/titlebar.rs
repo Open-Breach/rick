@@ -153,7 +153,10 @@ fn every_preset_shows_its_band_in_both_schemes_and_survives_a_restart() {
     loop {
         settle(&mut harness);
         let text = std::fs::read_to_string(&settings).unwrap_or_default();
-        if text.contains("titlebar_colour = \"sage\"") {
+        // Both, as the last two changes left them: the file is written
+        // behind the commands, and with the colour alone it can still
+        // hold the scheme of the change before.
+        if text.contains("titlebar_colour = \"sage\"") && text.contains("theme = \"light\"") {
             break;
         }
         assert!(

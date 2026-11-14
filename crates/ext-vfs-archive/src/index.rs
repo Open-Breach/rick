@@ -221,8 +221,7 @@ impl Index {
     pub fn children(&self, dir: &[u8]) -> Vec<&Item> {
         self.children
             .get(dir)
-            .map(|ids| ids.iter().map(|i| &self.items[*i]).collect())
-            .unwrap_or_default()
+            .map_or_default(|ids| ids.iter().map(|i| &self.items[*i]).collect())
     }
 
     /// Everything under a folder, at any depth.

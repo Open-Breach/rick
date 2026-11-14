@@ -1093,8 +1093,7 @@ impl CliCommand for InstallCommand {
         let path = std::fs::canonicalize(&path).unwrap_or(path);
         let name = path
             .file_name()
-            .map(|n| n.to_string_lossy().into_owned())
-            .unwrap_or_default();
+            .map_or_default(|n| n.to_string_lossy().into_owned());
         if Format::by_name(&name).is_none() {
             return Err(Error::Unsupported(
                 "the archive must be a tar (gz, xz, bz2, zst) or zip file",

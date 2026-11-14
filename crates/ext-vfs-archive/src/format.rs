@@ -316,8 +316,7 @@ impl Format {
     pub fn detect(path: &Path) -> Result<Self, Error> {
         let name = path
             .file_name()
-            .map(|n| n.to_string_lossy().into_owned())
-            .unwrap_or_default();
+            .map_or_default(|n| n.to_string_lossy().into_owned());
         let mut file = std::fs::File::open(path).map_err(Error::from_io)?;
         let format = if let Some(format) = Self::by_extension(&name) {
             format

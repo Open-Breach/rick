@@ -192,18 +192,14 @@ impl Host {
             .unwrap_or(22);
         let identity_files = connection
             .get(field::IDENTITY_FILE)
-            .map(|f| vec![expand_home(f, env)])
-            .unwrap_or_default();
-        let jump = connection
-            .get(field::JUMP)
-            .map(|j| {
-                j.split(',')
-                    .map(str::trim)
-                    .filter(|h| !h.is_empty())
-                    .map(Hop::parse)
-                    .collect()
-            })
-            .unwrap_or_default();
+            .map_or_default(|f| vec![expand_home(f, env)]);
+        let jump = connection.get(field::JUMP).map_or_default(|j| {
+            j.split(',')
+                .map(str::trim)
+                .filter(|h| !h.is_empty())
+                .map(Hop::parse)
+                .collect()
+        });
         let preview_cap = connection
             .get(field::PREVIEW_CAP)
             .and_then(|c| c.parse::<u64>().ok())
@@ -370,9 +366,8 @@ impl Hosts {
         let modified = std::fs::metadata(&path).and_then(|m| m.modified()).ok();
         let mut cached = lock(&self.settings);
         if cached.0 != modified || cached.0.is_none() {
-            let settings = std::fs::read_to_string(&path)
-                .map(|text| Settings::parse(&text))
-                .unwrap_or_default();
+            let settings =
+                std::fs::read_to_string(&path).map_or_default(|text| Settings::parse(&text));
             *cached = (modified, settings);
         }
         cached.1

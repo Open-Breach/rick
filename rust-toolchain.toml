@@ -1,3 +1,7 @@
 [toolchain]
-channel = "stable"
+# Pinned to 1.99.1 until issue 211 is done: Cargo 1.100 moved the build
+# directory, and the tests find the plugin libraries by the old layout.
+# The setup action and the workflows that install the toolchain themselves
+# (ci.yml, release.yml) name the same version; the four change together.
+channel = "1.99.1"
 components = ["rustfmt", "clippy"]

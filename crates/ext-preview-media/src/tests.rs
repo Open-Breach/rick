@@ -437,7 +437,7 @@ mod with_gstreamer {
             doc.transport()
                 .is_some_and(|t| t.position() > Duration::from_millis(1050))
         });
-        let position = doc.transport().map(|t| t.position()).unwrap_or_default();
+        let position = doc.transport().map_or_default(|t| t.position());
         assert!(
             position < Duration::from_secs(1) + started.elapsed() + Duration::from_millis(500),
             "{position:?}"
@@ -445,9 +445,9 @@ mod with_gstreamer {
         doc.transport()
             .unwrap_or_else(|| panic!("transport"))
             .pause();
-        let paused_at = doc.transport().map(|t| t.position()).unwrap_or_default();
+        let paused_at = doc.transport().map_or_default(|t| t.position());
         std::thread::sleep(Duration::from_millis(200));
-        let later = doc.transport().map(|t| t.position()).unwrap_or_default();
+        let later = doc.transport().map_or_default(|t| t.position());
         assert!(
             later.abs_diff(paused_at) < Duration::from_millis(100),
             "paused: {paused_at:?} vs {later:?}"
@@ -510,14 +510,14 @@ mod with_gstreamer {
                 t.position().abs_diff(Duration::from_secs(2)) < Duration::from_millis(150)
             })
         });
-        let before = doc.transport().map(|t| t.position()).unwrap_or_default();
+        let before = doc.transport().map_or_default(|t| t.position());
         doc.transport()
             .unwrap_or_else(|| panic!("transport"))
             .step();
         wait_until("a frame step", || {
             doc.transport().is_some_and(|t| t.position() > before)
         });
-        let after = doc.transport().map(|t| t.position()).unwrap_or_default();
+        let after = doc.transport().map_or_default(|t| t.position());
         assert!(
             after.saturating_sub(before) < Duration::from_millis(100),
             "one frame: {before:?} -> {after:?}"
@@ -647,8 +647,7 @@ mod with_gstreamer {
             .rows
             .iter()
             .find(|(k, _)| k == "Playback")
-            .map(|(_, v)| v.clone())
-            .unwrap_or_default();
+            .map_or_default(|(_, v)| v.clone());
         assert!(playback.contains("GStreamer"), "{playback}");
         assert!(
             !playback.starts_with("GStreamer 1"),

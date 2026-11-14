@@ -13,6 +13,10 @@ name: full
 # main's copy of this file and checks dev out, so dev must carry
 # .github/actions/setup and .github/scripts: it does once it is level with
 # main.
+#
+# Runners: the labels come from the repository variables RUNNER_LINUX_X64,
+# RUNNER_LINUX_ARM64, RUNNER_MACOS and RUNNER_WINDOWS; where one is not
+# set, the job runs on GitHub's runner of that platform.
 on:
   pull_request:
     branches: [main]
@@ -28,7 +32,7 @@ env:
   CHECKOUT_REF: ${{ github.event_name == 'schedule' && 'dev' || '' }}
 jobs:
   changes:
-    runs-on: ubuntu-24.04
+    runs-on: ${{ vars.RUNNER_LINUX_X64 || 'ubuntu-24.04' }}
     timeout-minutes: 5
     outputs:
       code: ${{ steps.filter.outputs.code }}
@@ -45,9 +49,16 @@ jobs:
       # One platform failing must not cancel the others: their results are
       # the point of the matrix.
       fail-fast: false
+      # `os` names the platform, and the steps' conditions read it;
+      # `runner` is the label the job runs on.
       matrix:
-        os: [ubuntu-24.04, ubuntu-24.04-arm, macos-latest, windows-latest]
-    runs-on: ${{ matrix.os }}
+        include:
+          - { os: ubuntu-24.04, runner: "${{ vars.RUNNER_LINUX_X64 || 'ubuntu-24.04' }}" }
+          - { os: ubuntu-24.04-arm, runner: "${{ vars.RUNNER_LINUX_ARM64 || 'ubuntu-24.04-arm' }}" }
+          - { os: macos-latest, runner: "${{ vars.RUNNER_MACOS || 'macos-latest' }}" }
+          - { os: windows-latest, runner: "${{ vars.RUNNER_WINDOWS || 'windows-latest' }}" }
+    name: check (${{ matrix.os }})
+    runs-on: ${{ matrix.runner }}
     # The Windows runner spends about 15 minutes on the steps and several
     # more saving the cache, which the shared libraries and the plugin
     # libraries made larger.
@@ -106,7 +117,7 @@ jobs:
         if: matrix.os == 'ubuntu-24.04'
         run: |
           sudo apt-get install -y --no-install-recommends xvfb xauth xdotool xclip mesa-vulkan-drivers libxkbcommon-x11-0
-          xvfb-run -a -s "-screen 0 1400x900x24" cargo test --workspace ${{ env.RICK_WS_FEATURES }} --test real_chords -- --nocapture
+          xvfb-run -a -s "-screen 0 1400x900x24" cargo test --workspace ${{ env.RICK_WS_FEATURES }} --test main -- --nocapture real_chords::
         env: { RICK_REQUIRE_REAL_CHORDS: "1", WGPU_BACKEND: vulkan }
       - run: cargo doc --no-deps ${{ env.RICK_WS_FEATURES }}
         env: { RUSTDOCFLAGS: "-D warnings" }
@@ -115,10 +126,13 @@ jobs:
       # job's progress events stay at twenty a second (0.2 milestone 2). In
       # release, as their fixture asks, on Linux x64, where the fixture
       # takes a minute; what they check is not the platform's. The timed
-      # tests on the fixture are bench.yml's.
+      # tests on the fixture are bench.yml's. The tests are one binary, so
+      # the two are picked by name; built with the screenshots feature, which
+      # they do not need, so that the next step runs the same binary and the
+      # release build happens once.
       - name: integration tests on the 200k fixture
         if: matrix.os == 'ubuntu-24.04'
-        run: cargo test -p tests --release ${{ env.RICK_TESTS_FEATURES }} --test closeout --test side_panel -- --ignored --nocapture --test-threads=1 a_new_text_cancels_the_running_walk_on_the_200k_fixture progress_over_the_200k_fixture_is_throttled_to_twenty_events_a_second
+        run: cargo test -p tests --release ${{ env.RICK_TESTS_FEATURES }} --features screenshots --test main -- --ignored --nocapture --test-threads=1 a_new_text_cancels_the_running_walk_on_the_200k_fixture progress_over_the_200k_fixture_is_throttled_to_twenty_events_a_second
         env: { TMP: "${{ runner.temp }}", TEMP: "${{ runner.temp }}", TMPDIR: "${{ runner.temp }}" }
       # Screenshots of the chrome for the pull request, through wgpu on the
       # runner's software adapter: lavapipe on Linux x64, Metal on macOS.
@@ -130,7 +144,7 @@ jobs:
         shell: bash
         run: |
           if [ "$RUNNER_OS" = "Linux" ]; then sudo apt-get install -y mesa-vulkan-drivers; fi
-          cargo test -p tests --release ${{ env.RICK_TESTS_FEATURES }} --features screenshots --test screenshots -- --ignored --nocapture
+          cargo test -p tests --release ${{ env.RICK_TESTS_FEATURES }} --features screenshots --test main -- --ignored --nocapture screenshots::
         env: { TMP: "${{ runner.temp }}", TEMP: "${{ runner.temp }}", TMPDIR: "${{ runner.temp }}", WGPU_BACKEND: "${{ runner.os == 'macOS' && 'metal' || 'vulkan' }}" }
       - uses: actions/upload-artifact@v4
         if: always() && (matrix.os == 'ubuntu-24.04' || runner.os == 'macOS')
@@ -141,7 +155,7 @@ jobs:
   deny:
     needs: changes
     if: needs.changes.outputs.code == 'true'
-    runs-on: ubuntu-24.04
+    runs-on: ${{ vars.RUNNER_LINUX_X64 || 'ubuntu-24.04' }}
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
@@ -153,7 +167,7 @@ jobs:
     # was skipped for a docs-only change, red on any failure.
     needs: [changes, check, deny]
     if: always()
-    runs-on: ubuntu-24.04
+    runs-on: ${{ vars.RUNNER_LINUX_X64 || 'ubuntu-24.04' }}
     timeout-minutes: 5
     steps:
       - env: { RESULTS: "${{ toJSON(needs) }}" }

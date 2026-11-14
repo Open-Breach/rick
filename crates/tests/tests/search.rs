@@ -631,15 +631,12 @@ fn a_click_on_a_hit_takes_the_pane_to_its_folder_and_selects_it() {
     };
     let selected_names = |harness: &Harness<'_, RickUi>| -> Vec<String> {
         let model = harness.state().app().model();
-        model
-            .active_tab(model.focused)
-            .map(|(_, tab)| {
-                tab.selection
-                    .iter()
-                    .filter_map(|id| tab.entry(*id).map(|e| e.name.clone()))
-                    .collect()
-            })
-            .unwrap_or_default()
+        model.active_tab(model.focused).map_or_default(|(_, tab)| {
+            tab.selection
+                .iter()
+                .filter_map(|id| tab.entry(*id).map(|e| e.name.clone()))
+                .collect()
+        })
     };
 
     // A name of this folder: the click selects it here.
@@ -950,7 +947,11 @@ fn real_service(name: &str, index: &dyn SearchIndex, probe: bool) {
     let _ = fs::remove_file(&file);
 }
 
+// Probing takes the connector's attention report back where the tools
+// are installed, and the report is one for the process: not while
+// `tracker_missing` reads the one it made.
 #[test]
+#[serial_test::serial(tracker_attention)]
 fn tracker_answers_through_its_real_service_where_it_runs() {
     let index = ext_search_tracker::TrackerIndex::new(Arc::new(ext_search_tracker::Process));
     let probe = runtime::block_on(index.probe());

@@ -13,6 +13,10 @@ name: bench
 # branch, so a regression can be traced to a day range (a schedule runs
 # from main's copy of this file and checks dev out). A manual run records
 # there too when asked.
+#
+# Runners: the labels come from the repository variables RUNNER_LINUX_X64,
+# RUNNER_LINUX_ARM64, RUNNER_MACOS and RUNNER_WINDOWS; where one is not
+# set, the job runs on GitHub's runner of that platform.
 on:
   workflow_dispatch:
     inputs:
@@ -40,7 +44,9 @@ jobs:
       fail-fast: false
       matrix:
         os: ${{ github.event_name == 'schedule' && fromJSON('["ubuntu-24.04"]') || fromJSON('["ubuntu-24.04", "macos-latest", "windows-latest"]') }}
-    runs-on: ${{ matrix.os }}
+    # `os` names the platform, and the steps read it; the label the job
+    # runs on is the platform's variable or GitHub's runner.
+    runs-on: ${{ matrix.os == 'ubuntu-24.04' && (vars.RUNNER_LINUX_X64 || 'ubuntu-24.04') || matrix.os == 'macos-latest' && (vars.RUNNER_MACOS || 'macos-latest') || (vars.RUNNER_WINDOWS || 'windows-latest') }}
     timeout-minutes: 90
     permissions:
       # The summary goes to the benchmark-history branch.
@@ -84,16 +90,17 @@ jobs:
         run: cargo test -p tests --release ${{ env.RICK_TESTS_FEATURES }} --no-run
       - name: measure
         shell: bash
-        # The fixtures on the runner's temp disk, as full.yml puts them. The
-        # one ignored close-out test that is not a timing (the search walk
-        # cancelled by a new text) is skipped: full.yml runs it.
+        # The fixtures on the runner's temp disk, as full.yml puts them.
+        # Every ignored test of the one test binary is a timing but two,
+        # which are skipped: the search walk cancelled by a new text and
+        # the throttled progress events, both full.yml's.
         env: { TMP: "${{ runner.temp }}", TEMP: "${{ runner.temp }}", TMPDIR: "${{ runner.temp }}" }
         run: |
           set -o pipefail
           for i in $(seq 1 "$RUNS"); do
             echo "::group::run $i"
-            cargo test -p tests --release ${{ env.RICK_TESTS_FEATURES }} --test fixture --test listing --test copy --test ui --test preview --test git --test chrome --test preview_pane --test startup --test plugins --test providers --test closeout --test previewers --test preview_3d -- --ignored --nocapture --test-threads 1 --skip a_new_text_cancels_the_running_walk 2>&1 | tee "bench-$i.log"
-            cargo test -p tests --release ${{ env.RICK_TESTS_FEATURES }} --test session -- --nocapture --test-threads 1 a_big_session_starts 2>&1 | tee -a "bench-$i.log"
+            cargo test -p tests --release ${{ env.RICK_TESTS_FEATURES }} --test main -- --ignored --nocapture --test-threads 1 --skip a_new_text_cancels_the_running_walk --skip progress_over_the_200k_fixture 2>&1 | tee "bench-$i.log"
+            cargo test -p tests --release ${{ env.RICK_TESTS_FEATURES }} --test main -- --nocapture --test-threads 1 session::a_big_session_starts 2>&1 | tee -a "bench-$i.log"
             echo "::endgroup::"
           done
       - name: summary

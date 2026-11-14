@@ -124,8 +124,7 @@ pub fn rick_plan(
 ) -> Plan {
     let name = folder
         .file_name()
-        .map(|n| n.to_string_lossy().into_owned())
-        .unwrap_or_default();
+        .map_or_default(|n| n.to_string_lossy().into_owned());
     Plan {
         layout,
         archive: folder.to_path_buf(),
@@ -159,8 +158,7 @@ impl Plan {
     pub fn archive_name(&self) -> String {
         self.archive
             .file_name()
-            .map(|n| n.to_string_lossy().into_owned())
-            .unwrap_or_default()
+            .map_or_default(|n| n.to_string_lossy().into_owned())
     }
 
     /// Whether this is an update of an installed app.
@@ -370,8 +368,7 @@ fn flip_symlink(link: &Path, target: &Path) -> Result<(), Error> {
     let tmp = link.with_file_name(format!(
         "{}.tmp-{}",
         link.file_name()
-            .map(|n| n.to_string_lossy().into_owned())
-            .unwrap_or_default(),
+            .map_or_default(|n| n.to_string_lossy().into_owned()),
         std::process::id()
     ));
     let _ = fs::remove_file(&tmp);
@@ -1195,8 +1192,7 @@ pub fn repair(installed: &Installed) -> Result<Vec<String>, Error> {
                 // by the detection rules: a file named like the app.
                 let wanted = path
                     .extension()
-                    .map(|e| e.to_string_lossy().into_owned())
-                    .unwrap_or_default();
+                    .map_or_default(|e| e.to_string_lossy().into_owned());
                 if let Some(source) = find_icon_in(&version_dir, &record.id, &wanted) {
                     if let Some(parent) = path.parent() {
                         fs::create_dir_all(parent).map_err(io_write)?;
@@ -1208,8 +1204,7 @@ pub fn repair(installed: &Installed) -> Result<Vec<String>, Error> {
             FileKind::Symlink if fs::read_link(&path).is_err() || !path.exists() => {
                 let name = path
                     .file_name()
-                    .map(|n| n.to_string_lossy().into_owned())
-                    .unwrap_or_default();
+                    .map_or_default(|n| n.to_string_lossy().into_owned());
                 let target = if version_dir.join("bin").join(&name).is_file() {
                     PathBuf::from("bin").join(&name)
                 } else {

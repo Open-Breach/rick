@@ -521,8 +521,7 @@ fn the_search_in_subfolders_finds_a_blob_three_levels_below_and_is_disabled_wher
         .1
         .rows()
         .next()
-        .map(|e| e.path.to_string())
-        .unwrap_or_default();
+        .map_or_default(|e| e.path.to_string());
     assert_eq!(found, format!("{CONTAINER}/2026/may/trip/needle.jpg"));
     assert_eq!(complaints(harness), Vec::new());
 

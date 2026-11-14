@@ -1367,10 +1367,7 @@ fn fit_width(ui: &egui::Ui, cx: &PaneCx<'_>, index: usize, id: &str, extra: &[Co
         1 => t!("list-column-size"),
         2 => t!("list-column-type"),
         3 => t!("list-column-modified"),
-        _ => extra
-            .get(index - 4)
-            .map(|d| d.label.get())
-            .unwrap_or_default(),
+        _ => extra.get(index - 4).map_or_default(|d| d.label.get()),
     };
     let mut widest =
         measure(&title, &small) + pad + spacing + measure(crate::icons::SORT_ASC, &small);

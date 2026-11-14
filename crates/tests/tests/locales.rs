@@ -114,6 +114,15 @@ fn the_string_literal_check_passes_over_the_egui_ui() {
 fn switching_the_language_relabels_the_settings_screen_and_the_menus_live() {
     use egui_kittest::kittest::Queryable as _;
 
+    // The language is one for the whole process: German here would be
+    // German in every window the other tests draw meanwhile, and their
+    // windows opening would set it back under this one.
+    if !tests::alone(
+        "locales::switching_the_language_relabels_the_settings_screen_and_the_menus_live",
+    ) {
+        return;
+    }
+
     let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
     let fake = Arc::new(Fake::new().unwrap_or_else(|e| panic!("{e}")));
     let host = Arc::new(ui_egui::EguiHost::new());

@@ -697,8 +697,7 @@ fn a_host_behind_a_bastion_and_a_two_hop_chain_browse_like_a_direct_one() {
             .live("behind")
             .await
             .err()
-            .map(|e| e.to_string())
-            .unwrap_or_default();
+            .map_or_default(|e| e.to_string());
         assert!(error.contains("wall"), "the hop is named: {error}");
         // A ProxyJump loop is refused, not followed.
         list.push(World::host("loop-a", target.port, &[("jump", "loop-b")]));
@@ -709,8 +708,7 @@ fn a_host_behind_a_bastion_and_a_two_hop_chain_browse_like_a_direct_one() {
             .live("loop-a")
             .await
             .err()
-            .map(|e| e.to_string())
-            .unwrap_or_default();
+            .map_or_default(|e| e.to_string());
         assert!(error.contains("loops"), "{error}");
     });
 }
@@ -744,8 +742,7 @@ fn host_keys_are_never_trusted_silently() {
             .live("box")
             .await
             .err()
-            .map(|e| e.to_string())
-            .unwrap_or_default();
+            .map_or_default(|e| e.to_string());
         assert!(error.contains("nobody can be asked"), "{error}");
         assert!(!fake.home_dir().join(".ssh").join("known_hosts").exists());
 
@@ -760,8 +757,7 @@ fn host_keys_are_never_trusted_silently() {
             .live("box")
             .await
             .err()
-            .map(|e| e.to_string())
-            .unwrap_or_default();
+            .map_or_default(|e| e.to_string());
         assert!(error.contains("not trusted"), "{error}");
         assert!(!world.known_hosts().exists());
 
@@ -804,8 +800,7 @@ fn host_keys_are_never_trusted_silently() {
             .live("box")
             .await
             .err()
-            .map(|e| e.to_string())
-            .unwrap_or_default();
+            .map_or_default(|e| e.to_string());
         assert!(error.contains("changed"), "{error}");
         let warning = world
             .questions()
@@ -1057,8 +1052,7 @@ fn identity_files_passphrases_keyboard_interactive_and_passwords_authenticate() 
             .live("box")
             .await
             .err()
-            .map(|e| e.to_string())
-            .unwrap_or_default();
+            .map_or_default(|e| e.to_string());
         assert!(error.contains("refused every authentication"), "{error}");
     });
 }

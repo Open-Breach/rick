@@ -975,8 +975,7 @@ mod routed {
                 let mut env = platform::LinuxEnv::under(&home, &stand_in, "GNOME");
                 env.session_bus = Some(bus.address.clone());
                 env.path = std::env::var_os("PATH")
-                    .map(|path| std::env::split_paths(&path).collect())
-                    .unwrap_or_default();
+                    .map_or_default(|path| std::env::split_paths(&path).collect());
                 let integration = platform::LinuxIntegration::new(env, Arc::new(NoSettings));
                 let request = Request {
                     scope: Scope::User,

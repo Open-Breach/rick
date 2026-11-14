@@ -301,15 +301,14 @@ fn screenshots_of_drag_and_drop() {
         .app()
         .model()
         .active_tab(pane)
-        .map(|(_, t)| {
+        .map_or_default(|(_, t)| {
             t.listing
                 .rows()
                 .filter(|e| e.name.starts_with("IMG_"))
                 .take(3)
                 .map(|e| e.id)
                 .collect()
-        })
-        .unwrap_or_default();
+        });
     harness.state_mut().app_mut().handle(
         app::Command::Select {
             pane,
@@ -1857,13 +1856,12 @@ fn screenshots_of_the_footer() {
         .app()
         .model()
         .active_tab(pane)
-        .map(|(_, t)| {
+        .map_or_default(|(_, t)| {
             t.rows()
                 .filter(|e| e.name == "IMG_1201.png" || e.name == "IMG_1202.png")
                 .map(|e| e.id)
                 .collect()
-        })
-        .unwrap_or_default();
+        });
     harness.state_mut().app_mut().handle(
         app::Command::Select {
             pane,
@@ -2012,8 +2010,7 @@ fn screenshots_of_the_side_panel() {
     let fake_root = fake
         .config_dir()
         .parent()
-        .map(std::path::Path::to_path_buf)
-        .unwrap_or_else(|| fake.config_dir());
+        .map_or_else(|| fake.config_dir(), std::path::Path::to_path_buf);
     fake.add_volume(platform::Volume {
         name: "System".into(),
         mount_point: fake_root,
@@ -2385,8 +2382,8 @@ fn screenshots_of_the_paste_conflict_dialogue() {
         } else {
             (0.1, 0.2)
         };
-        sparse(&into.join(name), old, Duration::from_secs(26 * 3600));
-        sparse(&from.join(name), new, Duration::from_secs(2 * 3600));
+        sparse(&into.join(name), old, Duration::from_hours(26));
+        sparse(&from.join(name), new, Duration::from_hours(2));
     }
     let mut harness = shell(&from, egui::vec2(1280.0, 800.0));
     let run = |harness: &mut Harness<'_, RickUi>, action: &'static str| {
@@ -5073,7 +5070,7 @@ fn screenshots_of_the_list_view() {
     }
     let mut harness = shell(&downloads, egui::vec2(1100.0, 520.0));
     let pane = harness.state().app().model().focused;
-    let mut send = |harness: &mut Harness<'static, RickUi>, command: app::Command| {
+    let send = |harness: &mut Harness<'static, RickUi>, command: app::Command| {
         harness
             .state_mut()
             .app_mut()
@@ -5105,14 +5102,23 @@ fn screenshots_of_the_list_view() {
 }
 
 /// The fixture folders of the README's picture: a maker's `Projects`
-/// folder and in it the project around the sample model
-/// `assets/readme/robot-dog.stl`, every file and folder with a fixed
-/// modification time so the Modified column reads the same on every run.
-/// Returns `Projects` and the project folder.
-fn readme_tree(home: &Path) -> (PathBuf, PathBuf) {
+/// folder and in it the project around the sample model, the one of
+/// `assets/readme/` (the release's animal, which names the project and
+/// its files), every file and folder with a fixed modification time so
+/// the Modified column reads the same on every run. Returns `Projects`,
+/// the project folder and the model's file name.
+fn readme_tree(home: &Path) -> (PathBuf, PathBuf, String) {
     use std::time::SystemTime;
+    let model = tests::readme::model(&Path::new(env!("CARGO_MANIFEST_DIR")).join("../.."))
+        .unwrap_or_else(|e| panic!("{e}"));
+    let stem = model
+        .file_stem()
+        .map(|stem| stem.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let animal = stem.replace('-', " ");
+    let model_name = format!("{stem}.stl");
     let projects = home.join("Projects");
-    let project = projects.join("robot-dog");
+    let project = projects.join(&stem);
     let folders = [
         projects.join("desk-lamp"),
         projects.join("plant-waterer"),
@@ -5124,8 +5130,11 @@ fn readme_tree(home: &Path) -> (PathBuf, PathBuf) {
     for folder in &folders {
         fs::create_dir_all(folder).unwrap_or_else(|e| panic!("{e}"));
     }
-    let model = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets/readme/robot-dog.stl");
     let model = fs::read(&model).unwrap_or_else(|e| panic!("{}: {e}", model.display()));
+    let mut title = animal.clone();
+    if let Some(first) = title.get_mut(..1) {
+        first.make_ascii_uppercase();
+    }
     let files: [(&Path, &str, Vec<u8>); 10] = [
         (
             &projects,
@@ -5137,11 +5146,11 @@ fn readme_tree(home: &Path) -> (PathBuf, PathBuf) {
             "filament.csv",
             b"material,colour,grams\nPLA,grey,640\nTPU,black,210\n".to_vec(),
         ),
-        (&project, "robot-dog.stl", model),
+        (&project, &model_name, model),
         (
             &project,
             "README.md",
-            b"# Robot dog\n\nA desk-sized robot dog, printed in six parts.\n".to_vec(),
+            format!("# {title}\n\nA desk-sized {animal}, printed in six parts.\n").into_bytes(),
         ),
         (&project, "assembly.pdf", ext_preview_pdf::sample_pdf(4)),
         (
@@ -5181,11 +5190,11 @@ fn readme_tree(home: &Path) -> (PathBuf, PathBuf) {
         stamp(folder, n);
         n += 1;
     }
-    (projects, project)
+    (projects, project, model_name)
 }
 
 /// specs/readme.md *Screenshot*: the picture of the README, a two-pane
-/// window with the preview pane open on the sample robot dog, in Light and
+/// window with the preview pane open on the sample model, in Light and
 /// in Dark at the same size and state. Rendered from the fixture folders
 /// above and a fixed configuration (Comfortable, ISO dates), each scheme
 /// in a window of its own built the same way, so two runs on the same
@@ -5207,7 +5216,7 @@ fn readme_window(theme: Theme) -> Harness<'static, RickUi> {
     let home = fake
         .standard_folder(platform::StandardFolder::Home)
         .unwrap_or_else(|| panic!("the fake's home"));
-    let (projects, project) = readme_tree(&home);
+    let (projects, project, model) = readme_tree(&home);
     let host = Arc::new(EguiHost::new());
     let mut app = app::App::new(app::Config {
         platform: fake.clone(),
@@ -5262,7 +5271,7 @@ fn readme_window(theme: Theme) -> Harness<'static, RickUi> {
         },
     );
     harness.state_mut().set_inspector_width(460.0);
-    preview(&mut harness, "robot-dog.stl");
+    preview(&mut harness, &model);
     // The model is drawn off the UI thread: the picture is taken once no
     // render has been in flight for a while and every animation has run
     // out, since a fade a frame short of its end is a picture one step of

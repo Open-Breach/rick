@@ -294,8 +294,7 @@ fn check_shape(provider: &ArchiveProvider, archive: &Path, readme: &[u8]) {
         root_entry.name,
         archive
             .file_name()
-            .map(|n| n.to_string_lossy().into_owned())
-            .unwrap_or_default()
+            .map_or_default(|n| n.to_string_lossy().into_owned())
     );
     assert_eq!(
         stat(provider, &loc(archive, "docs/readme.txt"))
