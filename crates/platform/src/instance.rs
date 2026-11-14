@@ -295,12 +295,65 @@ impl Endpoint {
     /// The newcomer's half: connects, sends `request` and waits `patience`
     /// for the reply.
     ///
+    /// A connection that was taken and then dropped is not an answer about
+    /// the endpoint: it was held when this launch connected and let go of
+    /// while the launch waited in its queue, by an instance on its way out,
+    /// or by a process that instance had just started and that still
+    /// carried the socket. The endpoint is then looked at once more.
+    ///
+    /// - Dropped unread, a reset or a broken pipe: the request reached
+    ///   nobody, so the hand-over is done again, and what it finds is the
+    ///   result.
+    /// - Closed without a word, which is all some systems say in the case
+    ///   above too: the request may have been read, so it is not sent
+    ///   again. Nothing listening any more is [`Handover::NoInstance`];
+    ///   an endpoint that still takes a connection is an instance that
+    ///   does not answer, [`Handover::Unresponsive`].
+    ///
     /// # Errors
     ///
     /// An I/O error other than nothing listening: the socket's directory
-    /// is not readable, the pipe refuses the user. Nothing listening is
+    /// is not readable, the pipe refuses the user, or the connection was
+    /// dropped unread a second time. Nothing listening is
     /// [`Handover::NoInstance`], not an error.
     pub async fn hand_over(&self, request: &Request, patience: Duration) -> io::Result<Handover> {
+        let error = match self.hand_over_once(request, patience).await {
+            Ok(found) => return Ok(found),
+            Err(error) => error,
+        };
+        match error.kind() {
+            io::ErrorKind::ConnectionReset | io::ErrorKind::BrokenPipe => {
+                match self.hand_over_once(request, patience).await {
+                    Err(again) if again.kind() == io::ErrorKind::UnexpectedEof => {
+                        Ok(Handover::Unresponsive)
+                    }
+                    found => found,
+                }
+            }
+            io::ErrorKind::UnexpectedEof => Ok(if self.listens(patience).await {
+                Handover::Unresponsive
+            } else {
+                Handover::NoInstance
+            }),
+            _ => Err(error),
+        }
+    }
+
+    /// Whether the endpoint takes a connection now; one that cannot be
+    /// asked in time counts as taking it.
+    async fn listens(&self, patience: Duration) -> bool {
+        !matches!(
+            tokio::time::timeout(patience, self.connect()).await,
+            Ok(Err(error)) if matches!(
+                error.kind(),
+                io::ErrorKind::NotFound | io::ErrorKind::ConnectionRefused
+            )
+        )
+    }
+
+    /// One connection, one request, one reply. `UnexpectedEof` when the
+    /// other side closed without a word.
+    async fn hand_over_once(&self, request: &Request, patience: Duration) -> io::Result<Handover> {
         let mut stream = match tokio::time::timeout(patience, self.connect()).await {
             Ok(Ok(stream)) => stream,
             Ok(Err(error))
@@ -320,11 +373,6 @@ impl Endpoint {
         };
         match tokio::time::timeout(patience, exchange).await {
             Ok(Ok(reply)) => Ok(Handover::Answered(reply)),
-            // The instance closed without a word: it is there, but not
-            // listening to us; the same as no answer.
-            Ok(Err(error)) if error.kind() == io::ErrorKind::UnexpectedEof => {
-                Ok(Handover::Unresponsive)
-            }
             Ok(Err(error)) => Err(error),
             Err(_) => Ok(Handover::Unresponsive),
         }
@@ -809,6 +857,65 @@ mod tests {
             let again = endpoint.bind().await;
             assert!(again.is_ok(), "{again:?}");
         });
+    }
+
+    /// An instance that takes the connection and closes it without a word
+    /// while it goes on listening is there and does not answer.
+    #[test]
+    fn an_instance_that_closes_without_a_word_is_unresponsive() {
+        let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+        let endpoint = Endpoint::in_dir(dir.path());
+        runtime::block_on(async {
+            let mut listener = endpoint.bind().await.unwrap_or_else(|e| panic!("{e}"));
+            let server = async {
+                let conn = listener.accept().await.unwrap_or_else(|e| panic!("{e}"));
+                drop(conn);
+                // Still listening while the launch looks again.
+                tokio::time::sleep(Duration::from_millis(300)).await;
+            };
+            let client = async {
+                let found = endpoint
+                    .hand_over(&request(&[]), Duration::from_millis(150))
+                    .await
+                    .unwrap_or_else(|e| panic!("{e}"));
+                assert_eq!(found, Handover::Unresponsive);
+            };
+            tokio::join!(server, client);
+        });
+    }
+
+    /// An endpoint that is let go of while a launch waits in its queue: the
+    /// launch's connection is reset, or just closed where the system says
+    /// no more than that, and it finds no instance at its second look
+    /// instead of failing. What holds the socket here is a second handle
+    /// to the listener, as a process the instance has just started holds
+    /// one until it runs its own program.
+    #[cfg(unix)]
+    #[test]
+    fn an_endpoint_let_go_of_under_a_waiting_launch_is_no_instance() {
+        let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+        let endpoint = Endpoint::in_dir(dir.path());
+        let listener = std::os::unix::net::UnixListener::bind(endpoint.path())
+            .unwrap_or_else(|e| panic!("{e}"));
+        let held = listener.try_clone().unwrap_or_else(|e| panic!("{e}"));
+        drop(listener);
+        // Nobody accepts; the last handle goes while the launch waits for
+        // its reply.
+        let letting_go = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(200));
+            drop(held);
+        });
+        runtime::block_on(async {
+            let found = endpoint
+                .hand_over(&request(&[]), PATIENCE)
+                .await
+                .unwrap_or_else(|e| panic!("{e}"));
+            assert_eq!(found, Handover::NoInstance);
+            // And the launch takes the endpoint, as after a crash.
+            let listener = endpoint.bind().await.unwrap_or_else(|e| panic!("{e}"));
+            drop(listener);
+        });
+        letting_go.join().unwrap_or_else(|_| panic!("the thread"));
     }
 
     /// A socket file left by a crash: nothing answers on it, so the next
