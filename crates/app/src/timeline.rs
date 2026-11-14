@@ -61,7 +61,9 @@ impl App {
     /// source, unread while the bar is off, a fresh cached answer, or a
     /// read started in a job. A location that is a point of the timeline
     /// the pane already holds keeps it, so moving along the bar asks
-    /// nobody.
+    /// nobody; so does its live folder while the answer for it is fresh. A
+    /// refresh or a change forgets that answer, and the live folder is
+    /// then read again, so a snapshot taken meanwhile shows on the bar.
     pub(crate) fn sync_timeline(&mut self, pane: PaneId) {
         let Some(location) = self
             .model
@@ -71,7 +73,10 @@ impl App {
         else {
             return;
         };
-        if matches!(self.model.timeline(pane), TimelineState::Points(t) if t.covers(&location)) {
+        if let TimelineState::Points(held) = self.model.timeline(pane)
+            && held.covers(&location)
+            && (held.live != location || self.cached_timeline(&location).is_some())
+        {
             return;
         }
         self.cancel_timeline_read(pane);

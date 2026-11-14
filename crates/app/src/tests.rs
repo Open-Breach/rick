@@ -4155,10 +4155,14 @@ mod timeline {
                     location: local(&self.root.join(".snaps").join(label).join(&rel)),
                 })
                 .collect();
-            (!points.is_empty()).then(|| Timeline {
-                live: local(&self.root.join(&rel)),
-                points,
-            })
+            // The folder asked about, as the ZFS and Btrfs sources answer:
+            // `join` of an empty path would end it with a separator.
+            let live = if rel.as_os_str().is_empty() {
+                local(&self.root)
+            } else {
+                local(&self.root.join(&rel))
+            };
+            (!points.is_empty()).then_some(Timeline { live, points })
         }
     }
 
