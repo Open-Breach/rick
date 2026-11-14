@@ -1,4 +1,4 @@
-//! Acceptance (change add-zfs-snapshots): the ZFS plugin's read-only
+//! Acceptance (`specs/ext-zfs.md`): the ZFS plugin's read-only
 //! provider inside the application.
 //!
 //! A scripted `zfs` reports one dataset mounted at a temporary directory

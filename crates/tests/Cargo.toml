@@ -61,7 +61,7 @@ ext-search-spotlight = { workspace = true }
 ext-search-tracker = { workspace = true }
 ext-search-baloo = { workspace = true }
 ext-svn = { workspace = true }
-# The ZFS plugin of change add-zfs-snapshots, tested against a scripted
+# The ZFS plugin (specs/ext-zfs.md), tested against a scripted
 # `zfs` and a fixture tree; the real-pool test is opt-in.
 ext-zfs = { workspace = true }
 # The action plugins of issue 23: linked for the headless acceptance tests

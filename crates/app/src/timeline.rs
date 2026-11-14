@@ -1,4 +1,4 @@
-//! The time slider (`add-zfs-time-slider`): a pane's timeline is read from
+//! The time slider: a pane's timeline is read from
 //! the decorators that offer timelines, in a job and only while the pane's
 //! bar is shown; the answers of several sources are merged and kept per
 //! location for [`TIMELINE_FOR`]. Moving along the bar is a

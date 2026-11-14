@@ -1,5 +1,5 @@
 //! *Edit ZFS properties…*: sizes, the form, the preview, the commands and
-//! the permission rule (change `add-zfs-property-editor`).
+//! the permission rule, as `specs/ext-zfs.md` specifies.
 
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};

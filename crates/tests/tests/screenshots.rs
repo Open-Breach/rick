@@ -5101,7 +5101,7 @@ fn screenshots_of_the_list_view() {
     }
 }
 
-/// The time slider (`add-zfs-time-slider`) in Light and Dark: at *Now*, at
+/// The time slider in Light and Dark: at *Now*, at
 /// a past point (read-only), while reading, focused with a tick's tooltip,
 /// and the view options menu with its *Timeline* entry. For the design
 /// review that stands in for the Figma frame.

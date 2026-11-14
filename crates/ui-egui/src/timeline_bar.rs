@@ -1,4 +1,4 @@
-//! The time slider (`add-zfs-time-slider`): one row under a pane's toolbar
+//! The time slider: one row under a pane's toolbar
 //! that moves the pane through the earlier states of the folder it shows.
 //! It draws from the timeline the model holds, never asks a source itself,
 //! and emits [`Command::TimeTravel`] — one history step per run.

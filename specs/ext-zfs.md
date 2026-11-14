@@ -4,7 +4,7 @@
 
 People who keep their home or their data on OpenZFS take snapshots, by hand or through a timer, and then rarely look at them, because getting a file back means a shell, the hidden `.zfs/snapshot` folder and the exact name of the snapshot. `ext-zfs` lets Rick show those snapshots as folders, list the versions of one file across them, put a file back where it was, create, rename and destroy snapshots, and change the few dataset properties that are safe to change on a running system, all without leaving the file manager.
 
-This file is the binding specification for the plugin; where it disagrees with `SPEC.md`, the question goes into the pull request. It was built as the OpenSpec changes `add-zfs-snapshots` and `add-zfs-property-editor` and placed in the review of #156: its own plugin, not part of `ext-deco-fs`.
+This file is the binding specification for the plugin; where it disagrees with `SPEC.md`, the question goes into the pull request. It was placed in the review of #156: its own plugin, not part of `ext-deco-fs`.
 
 ## Decisions
 
@@ -95,7 +95,7 @@ A *ZFS* section in the info badges of a local entry inside a dataset: the datase
 
 ## Timeline
 
-The decorator offers the kernel's time slider (`add-zfs-time-slider`) a timeline for a live folder inside a dataset and for a folder inside one of its snapshots: one point per snapshot of that dataset, oldest first in the order ZFS took them, labelled with the snapshot's name, source *ZFS*, at its creation time, each pointing at the same relative folder inside that snapshot (`zfs:/<dataset>/@<snapshot>/<path>`), with the live folder as *Now*. It answers from the snapshot list cached per dataset, so the folders of one dataset read `zfs list` at most once in 30 seconds. A dataset without snapshots offers none. The kernel asks only while the pane's bar is shown, in a job.
+The decorator offers the kernel's time slider a timeline for a live folder inside a dataset and for a folder inside one of its snapshots: one point per snapshot of that dataset, oldest first in the order ZFS took them, labelled with the snapshot's name, source *ZFS*, at its creation time, each pointing at the same relative folder inside that snapshot (`zfs:/<dataset>/@<snapshot>/<path>`), with the live folder as *Now*. It answers from the snapshot list cached per dataset, so the folders of one dataset read `zfs list` at most once in 30 seconds. A dataset without snapshots offers none. The kernel asks only while the pane's bar is shown, in a job.
 
 ## Configuration
 

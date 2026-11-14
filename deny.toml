@@ -88,7 +88,7 @@ deny = [
     { crate = "ext-search-tracker", wrappers = ["rick", "tests"] },
     { crate = "ext-search-baloo", wrappers = ["rick", "tests"] },
     { crate = "ext-svn", wrappers = ["rick", "tests"] },
-    # The ZFS plugin of change add-zfs-snapshots, loaded the same way.
+    # The ZFS plugin (specs/ext-zfs.md), loaded the same way.
     { crate = "ext-zfs", wrappers = ["rick", "tests"] },
     # The 3D previewer plugin of issue 19, loaded the same way.
     { crate = "ext-preview-3d", wrappers = ["rick", "tests"] },

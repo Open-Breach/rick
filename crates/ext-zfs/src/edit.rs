@@ -1,5 +1,5 @@
 //! *Edit ZFS properties…*: the few dataset properties that are safe to
-//! change on a running system (change `add-zfs-property-editor`).
+//! change on a running system, as `specs/ext-zfs.md` specifies.
 //!
 //! The action reads the dataset's current values fresh in a job, then
 //! opens a form through [`ActionOutcome::Later`]: one field per property of

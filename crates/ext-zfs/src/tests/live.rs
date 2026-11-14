@@ -98,7 +98,7 @@ fn a_real_pool_creates_browses_restores_renames_and_destroys() {
     properties_round_trip(&datasets, &dataset);
 }
 
-/// The property editor's commands (change `add-zfs-property-editor`): set
+/// The property editor's commands: set
 /// `compression` and `quota`, read them back, and reset them as the editor
 /// does: `compression` inherited, `quota` back to `none`.
 fn properties_round_trip(datasets: &Arc<Datasets>, dataset: &str) {

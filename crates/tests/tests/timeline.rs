@@ -1,4 +1,4 @@
-//! The time slider in the real UI (`add-zfs-time-slider`): the bar under
+//! The time slider in the real UI: the bar under
 //! the toolbar, a click on a tick, the keys while focused, a drag with its
 //! release, *Back to now*, the view options entry and the palette command.
 

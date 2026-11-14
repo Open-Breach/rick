@@ -4056,7 +4056,7 @@ mod integration {
     }
 }
 
-/// The time slider (`add-zfs-time-slider`): reading off the UI thread and
+/// The time slider: reading off the UI thread and
 /// only while shown, merging sources, one history step per run, and the
 /// nearest parent where a point lacks the folder.
 mod timeline {
