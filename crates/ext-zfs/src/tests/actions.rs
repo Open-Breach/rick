@@ -20,6 +20,19 @@ fn shared(fx: &Fixture) -> Arc<Shared> {
     })
 }
 
+/// What the decorator's job does while the folder `rel` of `tank/home` is
+/// shown: find the newest snapshot holding it.
+fn shown(fx: &Fixture, rel: &str) {
+    let fs = fx
+        .datasets
+        .named("tank/home")
+        .cloned()
+        .unwrap_or_else(|| panic!("no tank/home"));
+    fx.datasets
+        .newest_holding(&fs, Path::new(rel))
+        .unwrap_or_else(|e| panic!("{e}"));
+}
+
 fn navigated(outcome: Result<ActionOutcome, types::Error>) -> Location {
     match outcome {
         Ok(ActionOutcome::Navigate(to)) => to,
@@ -32,6 +45,7 @@ fn browse_goes_into_the_newest_snapshot_holding_the_folder() {
     let fx = Fixture::new();
     let browse = Browse(shared(&fx));
     let docs = ctx(local(&fx.home().join("ann/docs")), Vec::new());
+    shown(&fx, "ann/docs");
     assert_eq!(browse.availability(&docs), Availability::Enabled);
     let to = navigated(browse.run(docs, &JobRunner::new(), &Scripted::default()));
     assert_eq!(
@@ -43,6 +57,7 @@ fn browse_goes_into_the_newest_snapshot_holding_the_folder() {
     fs::create_dir_all(fx.snapshot_dir("a").join("ann/kept")).unwrap_or_else(|e| panic!("{e}"));
     fs::create_dir_all(fx.home().join("ann/kept")).unwrap_or_else(|e| panic!("{e}"));
     let kept = ctx(local(&fx.home().join("ann/kept")), Vec::new());
+    shown(&fx, "ann/kept");
     let to = navigated(browse.run(kept, &JobRunner::new(), &Scripted::default()));
     assert_eq!(
         to,
@@ -51,6 +66,7 @@ fn browse_goes_into_the_newest_snapshot_holding_the_folder() {
 
     // The dataset's own root.
     let root = ctx(local(&fx.home()), Vec::new());
+    shown(&fx, "");
     let to = navigated(browse.run(root, &JobRunner::new(), &Scripted::default()));
     assert_eq!(to, snapshot_location("tank/home", "b", Path::new("")));
 }
@@ -61,6 +77,7 @@ fn browse_is_disabled_for_a_folder_no_snapshot_holds() {
     fs::create_dir_all(fx.home().join("ann/fresh")).unwrap_or_else(|e| panic!("{e}"));
     let browse = Browse(shared(&fx));
     let fresh = ctx(local(&fx.home().join("ann/fresh")), Vec::new());
+    shown(&fx, "ann/fresh");
     assert!(matches!(
         browse.availability(&fresh),
         Availability::Disabled(_)
@@ -70,6 +87,59 @@ fn browse_is_disabled_for_a_folder_no_snapshot_holds() {
             .run(fresh, &JobRunner::new(), &Scripted::default())
             .is_err()
     );
+}
+
+#[test]
+fn browse_runs_no_zfs_and_looks_into_no_snapshot_on_the_app_thread() {
+    if !crate::supported() {
+        return;
+    }
+    let fx = Fixture::new();
+    let browse = Browse(shared(&fx));
+    let docs = ctx(local(&fx.home().join("ann/docs")), Vec::new());
+    // The file systems are read once per start, as every contribution
+    // needs them; everything after that belongs in a job.
+    let _ = fx.datasets.filesystems();
+    let before = fx.zfs.calls().len();
+
+    // Nothing read yet: disabled while the snapshots are read, and no
+    // `zfs list -t snapshot` from the menu or the run.
+    assert!(matches!(
+        browse.availability(&docs),
+        Availability::Disabled(_)
+    ));
+    assert!(
+        browse
+            .run(docs.clone(), &JobRunner::new(), &Scripted::default())
+            .is_err()
+    );
+    assert_eq!(
+        fx.zfs.calls().len(),
+        before,
+        "zfs ran on the app thread: {:?}",
+        &fx.zfs.calls()[before..]
+    );
+
+    // Once a job found the newest snapshot holding the folder (the
+    // decorator's, while the folder is shown), the menu answers at once.
+    let fs = fx
+        .datasets
+        .named("tank/home")
+        .cloned()
+        .unwrap_or_else(|| panic!("no tank/home"));
+    let found = fx
+        .datasets
+        .newest_holding(&fs, Path::new("ann/docs"))
+        .unwrap_or_else(|e| panic!("{e}"));
+    assert_eq!(found.as_deref(), Some("b"));
+    let after = fx.zfs.calls().len();
+    assert_eq!(browse.availability(&docs), Availability::Enabled);
+    let to = navigated(browse.run(docs, &JobRunner::new(), &Scripted::default()));
+    assert_eq!(
+        to,
+        snapshot_location("tank/home", "b", Path::new("ann/docs"))
+    );
+    assert_eq!(fx.zfs.calls().len(), after, "no zfs once the job ran");
 }
 
 #[test]

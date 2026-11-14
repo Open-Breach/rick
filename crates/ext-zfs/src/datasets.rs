@@ -4,7 +4,9 @@
 //! time anyone asks; a live path maps to the dataset with the longest mount
 //! point that is a prefix of it on whole path components. The snapshot
 //! lists are read per dataset and kept for [`TTL`]; a management job drops
-//! its dataset's list when it finishes. Without `zfs`, or when the list
+//! its dataset's list when it finishes. Which snapshot is the newest to hold
+//! a folder is found in a job ([`Datasets::newest_holding`]) and kept until
+//! the dataset's list is read again, so a menu can ask without reading. Without `zfs`, or when the list
 //! fails, there are no datasets: that is logged once, at `debug`.
 
 use std::collections::HashMap;
@@ -33,6 +35,9 @@ struct Read {
 /// A property read and when it was made.
 type ReadProperties = (Instant, Arc<Vec<Property>>);
 
+/// A dataset and a folder below its mount point.
+type Folder = (String, PathBuf);
+
 /// The datasets of this machine and their snapshots, as far as `zfs`
 /// tells.
 #[derive(Debug)]
@@ -42,6 +47,8 @@ pub struct Datasets {
     filesystems: OnceLock<Vec<FileSystem>>,
     snapshots: Mutex<HashMap<String, Read>>,
     properties: Mutex<HashMap<String, ReadProperties>>,
+    /// The newest snapshot holding a folder, or `None` when none does.
+    holding: Mutex<HashMap<Folder, Option<String>>>,
     told: AtomicBool,
 }
 
@@ -65,6 +72,7 @@ impl Datasets {
             filesystems: OnceLock::new(),
             snapshots: Mutex::default(),
             properties: Mutex::default(),
+            holding: Mutex::default(),
             told: AtomicBool::new(false),
         }
     }
@@ -151,6 +159,8 @@ impl Datasets {
             .filter(|s| s.dataset == dataset)
             .collect();
         let read = Arc::new(read);
+        // What was found against the old list is found again on demand.
+        lock(&self.holding).retain(|(of, _), _| of != dataset);
         lock(&self.snapshots).insert(
             dataset.to_owned(),
             Read {
@@ -180,6 +190,36 @@ impl Datasets {
     pub fn invalidate(&self, dataset: &str) {
         lock(&self.snapshots).remove(dataset);
         lock(&self.properties).remove(dataset);
+        lock(&self.holding).retain(|(of, _), _| of != dataset);
+    }
+
+    /// The newest snapshot of `fs` that holds the folder `rel` (relative to
+    /// the mount point), or `None` when none does; remembered for
+    /// [`Datasets::cached_holding`]. It may read the snapshot list and looks
+    /// into the snapshots one by one, which mounts each on a real pool, so
+    /// it belongs in a job.
+    ///
+    /// # Errors
+    ///
+    /// `Error::Unsupported` without `zfs`; ZFS's error when the list fails.
+    pub fn newest_holding(&self, fs: &FileSystem, rel: &Path) -> Result<Option<String>, Error> {
+        let found = self
+            .snapshots(&fs.name)?
+            .into_iter()
+            .find(|s| Self::snapshot_dir(fs, &s.name).join(rel).is_dir())
+            .map(|s| s.name);
+        lock(&self.holding).insert((fs.name.clone(), rel.to_path_buf()), found.clone());
+        Ok(found)
+    }
+
+    /// What [`Datasets::newest_holding`] last found for `rel` in `dataset`:
+    /// `None` when it has not been asked since the list was read; nothing
+    /// is read.
+    #[must_use]
+    pub fn cached_holding(&self, dataset: &str, rel: &Path) -> Option<Option<String>> {
+        lock(&self.holding)
+            .get(&(dataset.to_owned(), rel.to_path_buf()))
+            .cloned()
     }
 
     /// The properties of `dataset` the info section shows, from the cache

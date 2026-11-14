@@ -4,8 +4,10 @@
 //!
 //! `panel` must answer at once, so it only reads the cache; `decorate`, for
 //! a visible batch, starts the background read of the dataset's snapshot
-//! list and properties when they are missing or stale. A panel asked for
-//! before that read arrives shows the dataset and a *Loading…* row.
+//! list and properties when they are missing or stale, and finds the newest
+//! snapshot that holds the folder shown, which *Browse snapshots* needs. A
+//! panel asked for before that read arrives shows the dataset and a
+//! *Loading…* row.
 //!
 //! The decorator also offers the time slider's timeline: for a live folder
 //! inside a dataset and for a folder inside one of its snapshots, one point
@@ -13,7 +15,7 @@
 //! dataset cache keeps for 30 seconds.
 
 use std::collections::HashSet;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::SystemTime;
 
@@ -22,6 +24,7 @@ use types::{Entry, EntryId, ExtId, Location};
 
 use crate::actions::{local, local_path};
 use crate::datasets::Datasets;
+use crate::parse::FileSystem;
 use crate::provider::{Target, snapshot_location, target};
 
 /// The source's name on the time slider.
@@ -31,8 +34,9 @@ const SOURCE: &str = "ZFS";
 #[derive(Debug)]
 pub struct ZfsDecorator {
     datasets: Arc<Datasets>,
-    /// Datasets whose read is under way; one read serves every batch.
-    reading: Arc<Mutex<HashSet<String>>>,
+    /// Folders (dataset, path below the mount point) whose read is under
+    /// way; one read serves every batch.
+    reading: Arc<Mutex<HashSet<(String, PathBuf)>>>,
 }
 
 /// A date in local time, as the panel shows it.
@@ -58,19 +62,32 @@ impl ZfsDecorator {
         self.datasets.dataset_of(&path).map(|fs| fs.name.clone())
     }
 
-    /// Starts reading the snapshot list and properties of `dataset` unless
-    /// both are fresh or a read is under way.
-    fn refresh(&self, dataset: String, ctx: &DecorateCtx) {
+    /// The dataset a live folder lies in, and the folder below its mount
+    /// point.
+    fn folder_of(&self, loc: &Location) -> Option<(FileSystem, PathBuf)> {
+        let path = local_path(loc)?;
+        let fs = self.datasets.dataset_of(&path)?;
+        let rel = path.strip_prefix(&fs.mountpoint).unwrap_or(Path::new(""));
+        Some((fs.clone(), rel.to_path_buf()))
+    }
+
+    /// Starts reading the snapshot list and properties of the dataset and
+    /// the newest snapshot holding `rel`, unless all are known and fresh or
+    /// a read of this folder is under way.
+    fn refresh(&self, fs: FileSystem, rel: PathBuf, ctx: &DecorateCtx) {
+        let dataset = fs.name.clone();
         if self.datasets.cached(&dataset).is_some()
             && self.datasets.cached_properties(&dataset).is_some()
+            && self.datasets.cached_holding(&dataset, &rel).is_some()
         {
             return;
         }
+        let key = (dataset.clone(), rel.clone());
         if !self
             .reading
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
-            .insert(dataset.clone())
+            .insert(key.clone())
         {
             return;
         }
@@ -79,16 +96,16 @@ impl ZfsDecorator {
         ctx.jobs.spawn_named(
             t!("zfs-reading", dataset = dataset.clone()),
             move |_job| async move {
-                let read = dataset.clone();
                 let result = ext::blocking(move || {
-                    datasets.snapshots(&read)?;
-                    datasets.properties(&read).map(|_| ())
+                    datasets.snapshots(&fs.name)?;
+                    datasets.newest_holding(&fs, &rel)?;
+                    datasets.properties(&fs.name).map(|_| ())
                 })
                 .await;
                 reading
                     .lock()
                     .unwrap_or_else(PoisonError::into_inner)
-                    .remove(&dataset);
+                    .remove(&key);
                 if let Err(error) = &result {
                     tracing::debug!(%dataset, %error, "ZFS info not read");
                 }
@@ -112,8 +129,8 @@ impl Decorator for ZfsDecorator {
     }
 
     fn decorate(&self, _entries: &[Entry], ctx: &DecorateCtx) -> Vec<(EntryId, Decoration)> {
-        if let Some(dataset) = self.dataset_of(&ctx.location) {
-            self.refresh(dataset, ctx);
+        if let Some((fs, rel)) = self.folder_of(&ctx.location) {
+            self.refresh(fs, rel, ctx);
         }
         Vec::new()
     }

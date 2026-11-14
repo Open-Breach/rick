@@ -67,6 +67,13 @@ fn the_section_shows_the_dataset_its_snapshots_and_properties() {
     assert_eq!(before.rows[1].0, "Loading…");
 
     decorate(&decorator, folder, std::slice::from_ref(&file));
+    // The same read found the newest snapshot holding the folder, which
+    // *Browse snapshots* asks for without reading.
+    assert_eq!(
+        fx.datasets
+            .cached_holding("tank/home", std::path::Path::new("ann/docs")),
+        Some(Some("b".to_owned()))
+    );
     let after = decorator
         .panel(&file)
         .unwrap_or_else(|| panic!("no section"));

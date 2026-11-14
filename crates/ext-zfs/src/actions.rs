@@ -99,15 +99,6 @@ fn live_folder<'a>(datasets: &'a Datasets, ctx: &ActionCtx) -> Option<(PathBuf, 
     Some((dir, fs))
 }
 
-/// The newest snapshot of `fs` that holds the folder `rel`.
-fn newest_holding(datasets: &Datasets, fs: &FileSystem, rel: &Path) -> Option<String> {
-    let snapshots = datasets.snapshots(&fs.name).ok()?;
-    snapshots
-        .into_iter()
-        .find(|s| Datasets::snapshot_dir(fs, &s.name).join(rel).is_dir())
-        .map(|s| s.name)
-}
-
 /// The nearest existing folder at or above `path`.
 fn nearest_existing(path: &Path) -> PathBuf {
     let mut at = path;
@@ -124,6 +115,11 @@ fn nearest_existing(path: &Path) -> PathBuf {
 
 /// Takes the pane from a live folder in a dataset into the newest snapshot
 /// that holds it.
+///
+/// Both the menu's question and the run happen on the app thread, so
+/// neither reads: the decorator's job finds the snapshot while the folder
+/// is shown ([`Datasets::newest_holding`]), and until it has, the action is
+/// disabled with the reason that the snapshots are being read.
 #[derive(Debug)]
 pub struct Browse(pub Arc<Shared>);
 
@@ -133,9 +129,10 @@ impl Browse {
             return Err(Availability::Hidden);
         };
         let rel = dir.strip_prefix(&fs.mountpoint).unwrap_or(Path::new(""));
-        match newest_holding(&self.0.datasets, fs, rel) {
-            Some(snapshot) => Ok(snapshot_location(&fs.name, &snapshot, rel)),
-            None => Err(Availability::Disabled(t!("zfs-no-snapshot-holds-folder"))),
+        match self.0.datasets.cached_holding(&fs.name, rel) {
+            Some(Some(snapshot)) => Ok(snapshot_location(&fs.name, &snapshot, rel)),
+            Some(None) => Err(Availability::Disabled(t!("zfs-no-snapshot-holds-folder"))),
+            None => Err(Availability::Disabled(t!("zfs-reading-snapshots"))),
         }
     }
 }

@@ -42,7 +42,7 @@ Everything below `/` is read-only. The provider declares no write capability and
 
 All in the "ZFS" group of the context menu and the palette, shown only where they apply.
 
-- **Browse snapshots** — on a live folder in a dataset: the same folder inside the newest snapshot that has it. Disabled, with the reason, when no snapshot has the folder.
+- **Browse snapshots** — on a live folder in a dataset: the same folder inside the newest snapshot that has it. Disabled, with the reason, when no snapshot has the folder. Which snapshot that is, is found in the background while the folder is shown, never when the menu asks; until then the action is disabled with the reason that the snapshots are being read.
 - **Back to live folder** — inside a snapshot: the corresponding live folder, or its nearest existing parent.
 - **Versions** — on one live file, or one file inside a snapshot: navigates the pane to `/~versions/<live path>`, which lists, newest first, each snapshot whose copy of the file differs from the next newer one listed (size or modification time), named `<snapshot> — <file name>`. A file deleted live still has its versions. Each version previews and copies like a file in a snapshot.
 - **Restore** — on entries inside a snapshot (below its root) or in a versions view: one confirmation that names the snapshot and the live paths the items go to, and, apart, the live items that will be replaced. Then one job: each live item in the way goes to the trash first, missing parent folders are created, and the snapshot's item is copied back with its permissions and modification times, folders and symbolic links included. An item whose live version cannot be trashed is skipped and reported. Hidden when the host lent no platform (no trash).

@@ -11,6 +11,7 @@ zfs-browse-snapshots = Browse snapshots
 zfs-back-to-live-folder = Back to live folder
 zfs-versions = Versions
 zfs-no-snapshot-holds-folder = no snapshot contains this folder
+zfs-reading-snapshots = reading the snapshots of this folder
 zfs-select-one-file = select one file first
 zfs-restore = Restore
 zfs-select-items-to-restore = select what to restore first
