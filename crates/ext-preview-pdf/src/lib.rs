@@ -734,8 +734,7 @@ impl Previewer for PdfPreviewer {
         let name = loc
             .path
             .file_name()
-            .map(|n| String::from_utf8_lossy(n).into_owned())
-            .unwrap_or_default();
+            .map_or_default(|n| String::from_utf8_lossy(n).into_owned());
         ext::blocking(move || match library.bind() {
             Ok(pdfium) => Ok(Box::new(PdfDoc::new(pdfium, bytes)?) as Box<dyn PreviewDoc>),
             Err(missing) => Ok(Box::new(MissingDoc::new(*missing, name, Some(size)))),

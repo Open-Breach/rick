@@ -102,8 +102,7 @@ impl fmt::Debug for Loaded {
 pub fn crate_stem(path: &Path) -> String {
     let name = path
         .file_name()
-        .map(|n| n.to_string_lossy().into_owned())
-        .unwrap_or_default();
+        .map_or_default(|n| n.to_string_lossy().into_owned());
     name.strip_prefix(std::env::consts::DLL_PREFIX)
         .unwrap_or(&name)
         .strip_suffix(std::env::consts::DLL_SUFFIX)

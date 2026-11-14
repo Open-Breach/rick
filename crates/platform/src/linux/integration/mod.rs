@@ -93,9 +93,7 @@ impl LinuxEnv {
             current_desktop: std::env::var("XDG_CURRENT_DESKTOP").unwrap_or_default(),
             system: super::os_description(),
             exe: std::env::current_exe().unwrap_or_else(|_| PathBuf::from(BINARY)),
-            path: var("PATH")
-                .map(|path| std::env::split_paths(&path).collect())
-                .unwrap_or_default(),
+            path: var("PATH").map_or_default(|path| std::env::split_paths(&path).collect()),
             session_bus: std::env::var("DBUS_SESSION_BUS_ADDRESS")
                 .ok()
                 .filter(|address| !address.is_empty()),

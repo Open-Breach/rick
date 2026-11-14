@@ -215,9 +215,8 @@ pub(super) fn check(env: &LinuxEnv, gsettings: &dyn Gsettings) -> Check {
         }
         Desktop::Plasma => {
             let file = plasma_file(env);
-            let managers = fs::read_to_string(&file)
-                .map(|text| plasma_task_managers(&text))
-                .unwrap_or_default();
+            let managers =
+                fs::read_to_string(&file).map_or_default(|text| plasma_task_managers(&text));
             if managers.is_empty() {
                 return unsupported(Reason::Config(file));
             }

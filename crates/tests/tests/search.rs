@@ -631,15 +631,12 @@ fn a_click_on_a_hit_takes_the_pane_to_its_folder_and_selects_it() {
     };
     let selected_names = |harness: &Harness<'_, RickUi>| -> Vec<String> {
         let model = harness.state().app().model();
-        model
-            .active_tab(model.focused)
-            .map(|(_, tab)| {
-                tab.selection
-                    .iter()
-                    .filter_map(|id| tab.entry(*id).map(|e| e.name.clone()))
-                    .collect()
-            })
-            .unwrap_or_default()
+        model.active_tab(model.focused).map_or_default(|(_, tab)| {
+            tab.selection
+                .iter()
+                .filter_map(|id| tab.entry(*id).map(|e| e.name.clone()))
+                .collect()
+        })
     };
 
     // A name of this folder: the click selects it here.

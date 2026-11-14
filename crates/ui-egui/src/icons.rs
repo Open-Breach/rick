@@ -330,8 +330,7 @@ pub fn for_entry(entry: &Entry) -> &'static str {
 pub fn by_extension(name: &str) -> &'static str {
     let ext = name
         .rsplit_once('.')
-        .map(|(_, e)| e.to_ascii_lowercase())
-        .unwrap_or_default();
+        .map_or_default(|(_, e)| e.to_ascii_lowercase());
     match ext.as_str() {
         "png" | "jpg" | "jpeg" | "gif" | "bmp" | "webp" | "tif" | "tiff" | "ico" | "heic"
         | "avif" => ph::FILE_IMAGE,

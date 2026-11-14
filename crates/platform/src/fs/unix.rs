@@ -37,7 +37,7 @@ pub(super) fn attrs(name: &OsStr, mode: u32, kind: RawKind, extra: Attrs) -> Att
 
 pub(super) fn stat(path: &Path) -> io::Result<RawEntry> {
     let meta = std::fs::symlink_metadata(path)?;
-    let name: OsString = path.file_name().map(ToOwned::to_owned).unwrap_or_default();
+    let name: OsString = path.file_name().map_or_default(ToOwned::to_owned);
     let file_type = meta.file_type();
     let kind = if file_type.is_symlink() {
         RawKind::Symlink

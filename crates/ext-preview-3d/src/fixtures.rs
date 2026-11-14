@@ -266,9 +266,7 @@ pub fn package_3mf(model: &str) -> Vec<u8> {
             let _ = zip.write_all(text.as_bytes());
         }
     }
-    zip.finish()
-        .map(std::io::Cursor::into_inner)
-        .unwrap_or_default()
+    zip.finish().map_or_default(std::io::Cursor::into_inner)
 }
 
 /// A cube of `size` units as a 3MF in `unit` (`"millimeter"`, `"inch"`,

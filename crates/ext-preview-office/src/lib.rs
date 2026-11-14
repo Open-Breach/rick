@@ -700,19 +700,16 @@ pub fn convert(
             Err(e) => return Err(Error::from_io(e)),
         }
     };
-    let output = child
-        .wait_with_output()
-        .map(|o| {
-            let stderr = String::from_utf8_lossy(&o.stderr);
-            let stdout = String::from_utf8_lossy(&o.stdout);
-            let text = if stderr.trim().is_empty() {
-                stdout.trim()
-            } else {
-                stderr.trim()
-            };
-            text.lines().last().unwrap_or("").to_owned()
-        })
-        .unwrap_or_default();
+    let output = child.wait_with_output().map_or_default(|o| {
+        let stderr = String::from_utf8_lossy(&o.stderr);
+        let stdout = String::from_utf8_lossy(&o.stdout);
+        let text = if stderr.trim().is_empty() {
+            stdout.trim()
+        } else {
+            stderr.trim()
+        };
+        text.lines().last().unwrap_or("").to_owned()
+    });
     let produced = std::fs::read_dir(work.path())
         .ok()
         .into_iter()

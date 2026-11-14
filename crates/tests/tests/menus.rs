@@ -189,8 +189,7 @@ fn the_empty_areas_menu_selects_all_refreshes_and_opens_the_folders_properties()
     let name = dir
         .path()
         .file_name()
-        .map(|n| n.to_string_lossy().into_owned())
-        .unwrap_or_default();
+        .map_or_default(|n| n.to_string_lossy().into_owned());
     assert!(
         step_until(&mut harness, Duration::from_secs(5), |h| {
             h.state()

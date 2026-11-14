@@ -218,7 +218,7 @@ pub fn quote(path: &Path) -> String {
 #[must_use]
 pub fn exec_through(program: &Path, original: Option<&str>) -> String {
     let mut out = quote(program);
-    for arg in original.map(exec_arguments).unwrap_or_default() {
+    for arg in original.map_or_default(exec_arguments) {
         out.push(' ');
         if arg.starts_with('%') && arg.len() == 2 {
             out.push_str(&arg);

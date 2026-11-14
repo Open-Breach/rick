@@ -136,7 +136,7 @@ fn contributors(manifest: &Path) {
         .output()
         .ok()
         .filter(|out| out.status.success())
-        .map(|out| {
+        .map_or_default(|out| {
             String::from_utf8_lossy(&out.stdout)
                 .lines()
                 .filter_map(|line| line.split_once('\t').map(|(_, name)| name.trim()))
@@ -146,8 +146,7 @@ fn contributors(manifest: &Path) {
                     names.push('\n');
                     names
                 })
-        })
-        .unwrap_or_default();
+        });
     let roles_file = manifest.join("../../CONTRIBUTORS.md");
     // A file that is not there cannot be watched; the next commit reruns
     // the script and picks a new one up.

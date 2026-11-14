@@ -143,8 +143,7 @@ pub fn install(package: &Path, plugins: &Path) -> Result<PathBuf, PluginError> {
     } else {
         package
             .file_stem()
-            .map(|stem| stem.to_string_lossy().into_owned())
-            .unwrap_or_default()
+            .map_or_default(|stem| stem.to_string_lossy().into_owned())
     };
     if !is_folder_name(&name) {
         return Err(PluginError::Unnamed(package.to_owned()));
@@ -241,8 +240,7 @@ struct Described {
 pub fn describe(dir: &Path) -> Plugin {
     let folder = dir
         .file_name()
-        .map(|name| name.to_string_lossy().into_owned())
-        .unwrap_or_default();
+        .map_or_default(|name| name.to_string_lossy().into_owned());
     let said: Described = fs::read_to_string(dir.join(MANIFEST_FILE))
         .ok()
         .and_then(|text| toml::from_str(&text).ok())

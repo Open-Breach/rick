@@ -144,18 +144,15 @@ impl DirReader {
                 unsafe { std::ptr::read_unaligned(record.as_ptr().cast()) };
             let name_offset = std::mem::offset_of!(FILE_ID_BOTH_DIR_INFO, FileName);
             let name_len = (info.FileNameLength as usize) / 2;
-            let name: Vec<u16> = record
-                .get(name_offset..)
-                .map(|bytes| {
-                    bytes
-                        .as_chunks::<2>()
-                        .0
-                        .iter()
-                        .take(name_len)
-                        .map(|c| u16::from_le_bytes(*c))
-                        .collect()
-                })
-                .unwrap_or_default();
+            let name: Vec<u16> = record.get(name_offset..).map_or_default(|bytes| {
+                bytes
+                    .as_chunks::<2>()
+                    .0
+                    .iter()
+                    .take(name_len)
+                    .map(|c| u16::from_le_bytes(*c))
+                    .collect()
+            });
             let name = OsString::from_wide(&name);
             if name != "." && name != ".." && !name.is_empty() {
                 self.pending.push_back(entry_from(&info, name, self.serial));
@@ -349,7 +346,7 @@ fn identity(path: &Path) -> io::Result<(u32, u64)> {
 pub(super) fn stat(path: &Path) -> io::Result<RawEntry> {
     use std::os::windows::fs::MetadataExt as _;
     let meta = std::fs::symlink_metadata(path)?;
-    let name: OsString = path.file_name().map(ToOwned::to_owned).unwrap_or_default();
+    let name: OsString = path.file_name().map_or_default(ToOwned::to_owned);
     let attributes = meta.file_attributes();
     let kind = if meta.file_type().is_symlink() {
         RawKind::Symlink

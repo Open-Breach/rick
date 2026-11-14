@@ -25,6 +25,10 @@ name: release
 # same build and smoke test, then a draft release under that name on the
 # branch's commit (the tag itself is only created if the draft is published).
 # No signing, notarisation or installers in 0.1.
+#
+# Runners: the labels come from the repository variables RUNNER_LINUX_X64,
+# RUNNER_LINUX_ARM64, RUNNER_MACOS and RUNNER_WINDOWS; where one is not
+# set, the job runs on GitHub's runner of that platform.
 on:
   push:
     tags: ["v*"]
@@ -43,7 +47,7 @@ env:
   GSTREAMER_VERSION: "1.28.8"
 jobs:
   licenses:
-    runs-on: ubuntu-24.04
+    runs-on: ${{ vars.RUNNER_LINUX_X64 || 'ubuntu-24.04' }}
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
@@ -52,7 +56,7 @@ jobs:
       # First, so a release cut from a commit without its README stops
       # before anything is built.
       - run: .github/scripts/check-readme.sh "$TAG"
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@1.99.1
       - uses: taiki-e/install-action@v2
         with: { tool: cargo-about }
       # about.toml lists the four release targets, so one run covers them
@@ -80,12 +84,12 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { os: ubuntu-24.04, platform: linux-x64, pdfium: pdfium-linux-x64 }
+          - { os: "${{ vars.RUNNER_LINUX_X64 || 'ubuntu-24.04' }}", platform: linux-x64, pdfium: pdfium-linux-x64 }
           # aarch64 Linux builds natively on GitHub's arm runner, no cross
           # toolchain needed.
-          - { os: ubuntu-24.04-arm, platform: linux-arm64, pdfium: pdfium-linux-arm64 }
-          - { os: macos-latest, platform: macos-arm64, pdfium: pdfium-mac-arm64 }
-          - { os: windows-latest, platform: windows-x64, pdfium: pdfium-win-x64 }
+          - { os: "${{ vars.RUNNER_LINUX_ARM64 || 'ubuntu-24.04-arm' }}", platform: linux-arm64, pdfium: pdfium-linux-arm64 }
+          - { os: "${{ vars.RUNNER_MACOS || 'macos-latest' }}", platform: macos-arm64, pdfium: pdfium-mac-arm64 }
+          - { os: "${{ vars.RUNNER_WINDOWS || 'windows-latest' }}", platform: windows-x64, pdfium: pdfium-win-x64 }
     runs-on: ${{ matrix.os }}
     timeout-minutes: 45
     steps:
@@ -94,7 +98,7 @@ jobs:
       # shallow clone would name one person.
       - uses: actions/checkout@v4
         with: { fetch-depth: 0 }
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@1.99.1
       - uses: Swatinem/rust-cache@v2
       # GStreamer for the media previewer (issue 18). Linux: the system
       # packages, development files for the build and the codec plug-ins
@@ -111,35 +115,85 @@ jobs:
             libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev \
             gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-plugins-bad \
             gstreamer1.0-plugins-ugly gstreamer1.0-libav
+      # The downloaded packages are cached per GStreamer release: about
+      # 920 MB on macOS and 520 MB on Windows, from a server that is slow
+      # and cuts transfers short. A tag run's own cache
+      # is visible to that tag only, so deps-cache.yml fills the cache from
+      # main, where every tag and branch finds it; its cache steps and
+      # downloads are these, and the two files change together.
+      - name: gstreamer packages cache (macos)
+        if: runner.os == 'macOS'
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/gstreamer-pkgs
+          key: gstreamer-${{ env.GSTREAMER_VERSION }}-macos-universal
       - name: gstreamer (macos)
         if: runner.os == 'macOS'
         run: |
           set -euo pipefail
           base="https://gstreamer.freedesktop.org/data/pkg/osx/$GSTREAMER_VERSION"
-          # The packages are large and the server cuts a transfer short
-          # now and then (release.yml run 42664667120): HTTP/1.1, and five
-          # tries with a pause between them.
+          pkgs="$RUNNER_TEMP/gstreamer-pkgs"
+          mkdir -p "$pkgs"
+          # A package the cache restored is not downloaded again. The
+          # packages are large and the server cuts a transfer short
+          # now and then (release.yml runs 42664667120 and 43014231048):
+          # HTTP/1.1, and five retries with a pause between them. A retry
+          # resumes the partial download (`-C -`). The loop does the
+          # retrying, not curl's --retry, which removes what the failed
+          # try wrote and starts again from byte zero, `-C -` or not.
           for pkg in gstreamer-1.0 gstreamer-1.0-devel; do
-            curl -sSL --http1.1 --retry 5 --retry-all-errors --retry-delay 15 \
-              -o "$RUNNER_TEMP/$pkg.pkg" "$base/$pkg-$GSTREAMER_VERSION-universal.pkg"
-            sudo installer -pkg "$RUNNER_TEMP/$pkg.pkg" -target /
+            if [ -f "$pkgs/$pkg.pkg" ]; then
+              echo "$pkg.pkg is in the cache, no download"
+            else
+              try=0
+              until curl -sSL --http1.1 -C - \
+                -o "$pkgs/$pkg.pkg" "$base/$pkg-$GSTREAMER_VERSION-universal.pkg"; do
+                try=$((try + 1))
+                if [ "$try" -gt 5 ]; then
+                  echo "$pkg did not download in five retries"
+                  exit 1
+                fi
+                sleep 15
+              done
+            fi
+            sudo installer -pkg "$pkgs/$pkg.pkg" -target /
           done
           framework="/Library/Frameworks/GStreamer.framework/Versions/1.0"
           echo "PKG_CONFIG_PATH=$framework/lib/pkgconfig" >> "$GITHUB_ENV"
           echo "RICK_GSTREAMER_DIR=$framework" >> "$GITHUB_ENV"
           echo "$framework/bin" >> "$GITHUB_PATH"
+      - name: gstreamer packages cache (windows)
+        if: runner.os == 'Windows'
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}\gstreamer-pkgs
+          key: gstreamer-${{ env.GSTREAMER_VERSION }}-windows-msvc-x86_64
       - name: gstreamer (windows)
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
           $base = "https://gstreamer.freedesktop.org/data/pkg/windows/$env:GSTREAMER_VERSION/msvc"
-          $installer = "$env:RUNNER_TEMP\gstreamer.exe"
+          $pkgs = "$env:RUNNER_TEMP\gstreamer-pkgs"
+          $installer = "$pkgs\gstreamer.exe"
+          New-Item -ItemType Directory -Force -Path $pkgs | Out-Null
+          # An installer the cache restored is not downloaded again.
           # The installer is large and the server cuts a transfer short now
           # and then (release.yml run 42664667120); Invoke-WebRequest retries
           # error codes only, not a response that ends early, so curl does
-          # the download: HTTP/1.1, five tries with a pause between them.
-          curl.exe -sSL --http1.1 --retry 5 --retry-all-errors --retry-delay 15 -o $installer "$base/gstreamer-1.0-msvc-x86_64-$env:GSTREAMER_VERSION.exe"
-          if ($LASTEXITCODE -ne 0) { throw "the GStreamer installer did not download (curl exit $LASTEXITCODE)" }
+          # the download: HTTP/1.1, five retries with a pause between them.
+          # A retry resumes the partial download (`-C -`). The loop does the
+          # retrying, not curl's --retry, which removes what the failed try
+          # wrote and starts again from byte zero, `-C -` or not.
+          if (Test-Path $installer) {
+            Write-Host "gstreamer.exe is in the cache, no download"
+          } else {
+            for ($try = 0; ; $try++) {
+              curl.exe -sSL --http1.1 -C - -o $installer "$base/gstreamer-1.0-msvc-x86_64-$env:GSTREAMER_VERSION.exe"
+              if ($LASTEXITCODE -eq 0) { break }
+              if ($try -ge 5) { throw "the GStreamer installer did not download (curl exit $LASTEXITCODE)" }
+              Start-Sleep -Seconds 15
+            }
+          }
           $root = "C:\gstreamer\1.0\msvc_x86_64"
           Start-Process -FilePath $installer -ArgumentList "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/TYPE=full", "/DIR=$root" -Wait
           if (-not (Test-Path "$root\lib\pkgconfig\gstreamer-1.0.pc")) {
@@ -347,10 +401,10 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { os: ubuntu-24.04, platform: linux-x64 }
-          - { os: ubuntu-24.04-arm, platform: linux-arm64 }
-          - { os: macos-latest, platform: macos-arm64 }
-          - { os: windows-latest, platform: windows-x64 }
+          - { os: "${{ vars.RUNNER_LINUX_X64 || 'ubuntu-24.04' }}", platform: linux-x64 }
+          - { os: "${{ vars.RUNNER_LINUX_ARM64 || 'ubuntu-24.04-arm' }}", platform: linux-arm64 }
+          - { os: "${{ vars.RUNNER_MACOS || 'macos-latest' }}", platform: macos-arm64 }
+          - { os: "${{ vars.RUNNER_WINDOWS || 'windows-latest' }}", platform: windows-x64 }
     runs-on: ${{ matrix.os }}
     timeout-minutes: 15
     steps:
@@ -488,7 +542,7 @@ jobs:
 
   release:
     needs: [build, smoke]
-    runs-on: ubuntu-24.04
+    runs-on: ${{ vars.RUNNER_LINUX_X64 || 'ubuntu-24.04' }}
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4

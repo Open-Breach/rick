@@ -677,8 +677,7 @@ fn the_3d_preview_keeps_its_frame_while_it_orbits() {
         .state()
         .previews()
         .get(pane)
-        .map(|s| s.status().to_vec())
-        .unwrap_or_default();
+        .map_or_default(|s| s.status().to_vec());
     assert!(status.iter().any(|f| f == "10 × 10 × 10 mm"), "{status:?}");
     assert!(status.iter().any(|f| f == "12 triangles"), "{status:?}");
     if !gpu_or_skip("the frame in the pane") {

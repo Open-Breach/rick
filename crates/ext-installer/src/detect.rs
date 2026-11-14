@@ -218,8 +218,7 @@ impl Detected {
     pub fn archive_name(&self) -> String {
         self.archive
             .file_name()
-            .map(|n| n.to_string_lossy().into_owned())
-            .unwrap_or_default()
+            .map_or_default(|n| n.to_string_lossy().into_owned())
     }
 
     /// The app id detection proposes.
@@ -496,8 +495,7 @@ pub fn detect_with(
 
     let archive_name = path
         .file_name()
-        .map(|n| n.to_string_lossy().into_owned())
-        .unwrap_or_default();
+        .map_or_default(|n| n.to_string_lossy().into_owned());
     let stem = archive_stem(&archive_name);
     let (file_version, pattern) = split_version(&stem).map_or_else(
         || (None, archive_name.clone()),

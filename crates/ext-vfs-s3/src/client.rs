@@ -397,7 +397,7 @@ impl S3Client {
         key: Option<&str>,
     ) -> Result<(Url, String, String), Error> {
         let mut url = self.endpoint.clone();
-        let encoded_key = key.map(encode_path).unwrap_or_default();
+        let encoded_key = key.map_or_default(encode_path);
         let path = match (bucket, self.path_style) {
             (None, _) => "/".to_owned(),
             (Some(bucket), true) => format!("/{bucket}/{encoded_key}"),

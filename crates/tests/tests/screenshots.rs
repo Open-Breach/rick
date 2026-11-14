@@ -301,15 +301,14 @@ fn screenshots_of_drag_and_drop() {
         .app()
         .model()
         .active_tab(pane)
-        .map(|(_, t)| {
+        .map_or_default(|(_, t)| {
             t.listing
                 .rows()
                 .filter(|e| e.name.starts_with("IMG_"))
                 .take(3)
                 .map(|e| e.id)
                 .collect()
-        })
-        .unwrap_or_default();
+        });
     harness.state_mut().app_mut().handle(
         app::Command::Select {
             pane,
@@ -1857,13 +1856,12 @@ fn screenshots_of_the_footer() {
         .app()
         .model()
         .active_tab(pane)
-        .map(|(_, t)| {
+        .map_or_default(|(_, t)| {
             t.rows()
                 .filter(|e| e.name == "IMG_1201.png" || e.name == "IMG_1202.png")
                 .map(|e| e.id)
                 .collect()
-        })
-        .unwrap_or_default();
+        });
     harness.state_mut().app_mut().handle(
         app::Command::Select {
             pane,
@@ -2012,8 +2010,7 @@ fn screenshots_of_the_side_panel() {
     let fake_root = fake
         .config_dir()
         .parent()
-        .map(std::path::Path::to_path_buf)
-        .unwrap_or_else(|| fake.config_dir());
+        .map_or_else(|| fake.config_dir(), std::path::Path::to_path_buf);
     fake.add_volume(platform::Volume {
         name: "System".into(),
         mount_point: fake_root,
@@ -2385,8 +2382,8 @@ fn screenshots_of_the_paste_conflict_dialogue() {
         } else {
             (0.1, 0.2)
         };
-        sparse(&into.join(name), old, Duration::from_secs(26 * 3600));
-        sparse(&from.join(name), new, Duration::from_secs(2 * 3600));
+        sparse(&into.join(name), old, Duration::from_hours(26));
+        sparse(&from.join(name), new, Duration::from_hours(2));
     }
     let mut harness = shell(&from, egui::vec2(1280.0, 800.0));
     let run = |harness: &mut Harness<'_, RickUi>, action: &'static str| {
@@ -5073,7 +5070,7 @@ fn screenshots_of_the_list_view() {
     }
     let mut harness = shell(&downloads, egui::vec2(1100.0, 520.0));
     let pane = harness.state().app().model().focused;
-    let mut send = |harness: &mut Harness<'static, RickUi>, command: app::Command| {
+    let send = |harness: &mut Harness<'static, RickUi>, command: app::Command| {
         harness
             .state_mut()
             .app_mut()

@@ -409,8 +409,7 @@ impl SettingKind {
                 options
                     .get(*default)
                     .or(options.first())
-                    .map(|o| (*o).to_owned())
-                    .unwrap_or_default(),
+                    .map_or_default(|o| (*o).to_owned()),
             ),
         }
     }

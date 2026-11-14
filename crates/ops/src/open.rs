@@ -303,8 +303,7 @@ impl Action for OpenInEditor {
             .0
             .open_settings
             .as_ref()
-            .map(|settings| settings.editor())
-            .unwrap_or_default();
+            .map_or_default(|settings| settings.editor());
         let mut words = split_command(&command).into_iter();
         let Some(program) = words.next() else {
             self.0.platform.open_in_text_editor(&paths)?;

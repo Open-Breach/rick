@@ -111,8 +111,7 @@ pub(super) fn mount(path: &Path) -> Result<Volume, Error> {
     let path = std::path::absolute(path).map_err(Error::from_io)?;
     let name = path
         .file_name()
-        .map(|n| n.to_string_lossy().into_owned())
-        .unwrap_or_default();
+        .map_or_default(|n| n.to_string_lossy().into_owned());
     let format = ImageFormat::for_name(&name)
         .filter(|f| crate::NATIVE_MOUNTABLE.contains(f))
         .ok_or(Error::Unsupported(

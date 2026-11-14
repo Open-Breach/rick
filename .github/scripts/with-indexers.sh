@@ -69,4 +69,22 @@ done
 has_owner org.kde.baloo || { echo "baloo_file did not come up"; cat "$HOME/baloo.log"; exit 1; }
 has_owner org.freedesktop.Tracker3.Miner.Files || { echo "tracker-miner-fs-3 did not come up"; cat "$HOME/tracker.log"; exit 1; }
 echo "indexers up over $fixture"
-"$@"
+status=0
+"$@" || status=$?
+if [ "$status" -ne 0 ]; then
+  # A failure of the connectors' tests says "did not index" and no more:
+  # what the indexers logged and how they stand goes into the job's log.
+  echo "::group::indexers after the failure (exit $status)"
+  echo "--- tracker.log"; tail -n 60 "$HOME/tracker.log" || true
+  echo "--- baloo.log"; tail -n 30 "$HOME/baloo.log" || true
+  echo "--- tracker3 status"; tracker3 status 2>&1 | tail -n 20 || true
+  echo "--- tracker3 daemon"; tracker3 daemon 2>&1 | tail -n 20 || true
+  echo "--- miner settings"
+  GSETTINGS_BACKEND=keyfile gsettings list-recursively org.freedesktop.Tracker3.Miner.Files 2>&1 || true
+  echo "--- fixture"; ls -la "$fixture" | tail -n 8 || true
+  findmnt -T "$fixture" 2>&1 || true
+  df -h "$fixture" 2>&1 || true
+  echo "--- inotify limits"; sysctl fs.inotify 2>&1 || true
+  echo "::endgroup::"
+fi
+exit "$status"

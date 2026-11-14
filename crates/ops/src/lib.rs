@@ -150,8 +150,7 @@ impl State {
     fn capabilities(&self, loc: &Location) -> Capabilities {
         self.mounts
             .resolve(loc)
-            .map(|p| p.capabilities(loc))
-            .unwrap_or_default()
+            .map_or_default(|p| p.capabilities(loc))
     }
 
     /// The OS path of `loc` to hand to the system: a local location's

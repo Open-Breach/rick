@@ -125,15 +125,12 @@ fn entry_below(path: &Path, vpath: VPath) -> Result<Entry, Error> {
     let meta = std::fs::symlink_metadata(path).map_err(Error::from_io)?;
     let name = path
         .file_name()
-        .map(|n| n.to_string_lossy().into_owned())
-        .unwrap_or_default();
+        .map_or_default(|n| n.to_string_lossy().into_owned());
     let kind = if meta.is_dir() {
         EntryKind::Dir
     } else if meta.file_type().is_symlink() {
         EntryKind::Symlink {
-            target: std::fs::read_link(path)
-                .map(|t| VPath::from_os_str(t.as_os_str()))
-                .unwrap_or_default(),
+            target: std::fs::read_link(path).map_or_default(|t| VPath::from_os_str(t.as_os_str())),
             broken: std::fs::metadata(path).is_err(),
         }
     } else if meta.is_file() {

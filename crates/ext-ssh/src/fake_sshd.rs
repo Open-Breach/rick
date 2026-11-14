@@ -500,8 +500,7 @@ impl server::Handler for Conn {
 #[must_use]
 pub fn key_text(key: &PrivateKey) -> String {
     key.to_openssh(russh::keys::ssh_key::LineEnding::LF)
-        .map(|z| z.to_string())
-        .unwrap_or_default()
+        .map_or_default(|z| z.to_string())
 }
 
 /// Writes `key` as an identity file at `path`, readable by the owner only.

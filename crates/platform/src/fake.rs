@@ -505,8 +505,7 @@ impl Mount for Fake {
     fn mount_image(&self, path: &Path) -> Result<Volume, Error> {
         let name = path
             .file_name()
-            .map(|n| n.to_string_lossy().into_owned())
-            .unwrap_or_default();
+            .map_or_default(|n| n.to_string_lossy().into_owned());
         let format = ImageFormat::for_name(&name)
             .filter(|f| self.mountable().contains(f))
             .ok_or(Error::Unsupported(

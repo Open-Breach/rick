@@ -61,8 +61,7 @@ fn names(harness: &Harness<'_, RickUi>) -> Vec<String> {
     let model = harness.state().app().model();
     model
         .active_tab(model.focused)
-        .map(|(_, t)| t.rows().map(|e| e.name.clone()).collect())
-        .unwrap_or_default()
+        .map_or_default(|(_, t)| t.rows().map(|e| e.name.clone()).collect())
 }
 
 fn tab(harness: &Harness<'_, RickUi>) -> model::Tab {

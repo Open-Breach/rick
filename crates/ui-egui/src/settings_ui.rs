@@ -709,7 +709,7 @@ fn groups_of(page: &Page, app: &App) -> Vec<Group> {
             .settings_schemas()
             .iter()
             .find(|schema| schema.ext.0 == id)
-            .map(|schema| {
+            .map_or_default(|schema| {
                 vec![Group {
                     title: page_name(page, app),
                     rows: schema
@@ -718,8 +718,7 @@ fn groups_of(page: &Page, app: &App) -> Vec<Group> {
                         .map(|field| Spec::new(field.label.get()))
                         .collect(),
                 }]
-            })
-            .unwrap_or_default(),
+            }),
     }
 }
 
@@ -894,11 +893,7 @@ impl Card<'_> {
 
 /// A switch in a row: toggled on a click, named after the row.
 fn switch_row(card: &mut Card<'_>, index: usize, on: bool, set: impl FnOnce(bool)) {
-    let label = card
-        .rows
-        .get(index)
-        .map(|s| s.label.clone())
-        .unwrap_or_default();
+    let label = card.rows.get(index).map_or_default(|s| s.label.clone());
     card.row(index, |ui| {
         if widgets::toggle(ui, on, &label).clicked() {
             set(!on);
