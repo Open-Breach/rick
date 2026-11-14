@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
-"""Writes robot-dog.stl, the sample 3D model of the README's screenshot.
+"""Writes giraffe.stl, the sample 3D model of the README's screenshot.
 
-An original low-poly robot dog made for this repository (specs/readme.md,
-"Screenshot"): convex blocks put together, in millimetres, Z up, facing -Y
-as the 3D previewer's default view expects. Run it to regenerate the file
-beside it; the output is the same bytes every time.
+An original low-poly giraffe made for this repository (specs/readme.md,
+"Screenshot"), the animal of release 0.4.1: convex blocks put together, in
+millimetres, Z up, facing -Y as the 3D previewer's default view expects.
+Run it to regenerate the file beside it; the output is the same bytes
+every time.
 
-    python3 assets/readme/robot-dog.py
+    python3 assets/readme/giraffe.py
 """
 
 import itertools
@@ -121,35 +122,46 @@ def lean(points, pivot, degrees):
     return out
 
 
-def robot_dog():
+def giraffe():
     parts = [
-        # Body, the pack on its back and the plate on its chest.
-        box((0, 2, 27), (13, 22, 10), 3),
-        box((0, 7, 38.5), (8, 10, 2), 1),
-        box((0, -20.5, 27), (7, 1.2, 5)),
-        # Head, snout and nose.
-        box((0, -27, 47), (14, 11, 11), 3),
-        box((0, -41, 43), (7, 5, 5), 1.5),
-        box((0, -46.5, 46.5), (2.5, 1.2, 1.8)),
-        # The antenna with its ball.
-        box((0, -22, 62), (0.8, 0.8, 5)),
-        ball((0, -22, 69), 2.6),
-        # One ear up, one flopped to the side.
-        frustum((-9, -26, 57.5), (3.5, 5), (-10, -26, 70), (1.5, 2)),
-        frustum((9, -26, 57.5), (3.5, 5), (17, -26, 65), (1.5, 2)),
+        # Body, on long legs.
+        box((0, 4, 44), (9, 15, 8), 3),
     ]
     for side in (-1, 1):
-        # Eyes.
-        parts.append(prism((side * 6.5, -38.6, 51.5), 3.6, 1.4, 8, 1))
-        for y in (-13, 17):
-            # A leg: the shoulder joint, the leg and the foot.
-            parts.append(prism((side * 13.5, y, 21), 4.6, 1.6, 6, 0))
-            parts.append(box((side * 10, y, 11.5), (3.5, 3.5, 7.5)))
-            parts.append(box((side * 10, y - 2, 2.5), (4.5, 6, 2.5), 1))
-    # The tail, up and back, with its ball.
-    pivot = (0, 22, 34)
-    parts.append(lean(frustum((0, 22, 33), (2, 2), (0, 22, 51), (1.1, 1.1)), pivot, 38))
-    parts.append(lean(ball((0, 22, 53), 2.6), pivot, 38))
+        for y in (-7, 15):
+            # A leg and its hoof.
+            parts.append(box((side * 6.2, y, 19), (2.3, 2.3, 19)))
+            parts.append(box((side * 6.2, y - 0.6, 2.2), (3.2, 3.8, 2.2), 0.8))
+        # Spots on the flanks.
+        for y, z, radius in ((-4, 46.5, 3.2), (5, 42, 2.6), (12, 47, 3.0)):
+            parts.append(prism((side * 9.0, y, z), radius, 0.9, 6, 0))
+    # The neck and what it carries, built upright and tipped forward as one.
+    pivot = (0, -8, 48)
+    upright = [
+        # Neck and the mane down its back.
+        frustum((0, -8, 46), (5, 5.5), (0, -8, 90), (3.2, 3.4)),
+        box((0, -3.4, 70), (0.9, 1.5, 17)),
+        # Head and muzzle.
+        box((0, -13, 94.5), (5.5, 9, 5.5), 2),
+        box((0, -24, 92.5), (4, 3.2, 3.6), 1.2),
+        # The two horns with their knobs.
+        box((-2.7, -8.5, 102.5), (0.8, 0.8, 3)),
+        box((2.7, -8.5, 102.5), (0.8, 0.8, 3)),
+        ball((-2.7, -8.5, 106.6), 1.9),
+        ball((2.7, -8.5, 106.6), 1.9),
+    ]
+    for side in (-1, 1):
+        # Ears out to the sides, eyes, and spots on the neck.
+        upright.append(frustum((side * 6, -6.5, 96.5), (2.4, 1.6), (side * 11, -6.5, 100), (1.0, 0.8)))
+        upright.append(prism((side * 5.4, -16, 96.5), 1.6, 0.5, 8, 0))
+        for z, half_width, radius in ((58, 4.5, 2.4), (72, 4.0, 2.0), (83, 3.5, 1.6)):
+            upright.append(prism((side * half_width, -8, z), radius, 0.9, 6, 0))
+    for part in upright:
+        parts.append(lean(part, pivot, -16))
+    # The tail, down and back, with its tuft.
+    root = (0, 19, 46)
+    parts.append(lean(frustum((0, 19, 30), (0.8, 0.8), (0, 19, 46), (1.2, 1.2)), root, -22))
+    parts.append(lean(ball((0, 19, 28), 2.2), root, -22))
     triangles = []
     for part in parts:
         triangles.extend(hull(part))
@@ -157,13 +169,13 @@ def robot_dog():
 
 
 def main():
-    triangles = robot_dog()
-    header = b"robot-dog: an original low-poly model made for Rick (Apache-2.0)"
+    triangles = giraffe()
+    header = b"giraffe: an original low-poly model made for Rick (Apache-2.0)"
     data = bytearray(header.ljust(80, b" "))
     data += struct.pack("<I", len(triangles))
     for normal, a, b, c in triangles:
         data += struct.pack("<12fH", *normal, *a, *b, *c, 0)
-    path = pathlib.Path(__file__).with_name("robot-dog.stl")
+    path = pathlib.Path(__file__).with_name("giraffe.stl")
     path.write_bytes(data)
     print(f"{path}: {len(triangles)} triangles, {len(data)} bytes")
 
