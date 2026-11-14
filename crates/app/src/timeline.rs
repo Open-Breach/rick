@@ -1,7 +1,8 @@
 //! The time slider: a pane's timeline is read from
 //! the decorators that offer timelines, in a job and only while the pane's
 //! bar is shown; the answers of several sources are merged and kept per
-//! location for [`TIMELINE_FOR`]. Moving along the bar is a
+//! location for [`TIMELINE_FOR`], and dropped when a later answer arrives.
+//! Moving along the bar is a
 //! [`Command::TimeTravel`](crate::Command::TimeTravel), recorded as one
 //! history step per run, and a point that does not hold the folder falls
 //! back to its nearest parent with a notice.
@@ -33,6 +34,16 @@ pub(crate) struct Timelines {
     /// Where a pane's time travel aimed, so a point that does not hold the
     /// folder falls back to its nearest parent.
     travel: HashMap<PaneId, Location>,
+}
+
+impl Timelines {
+    /// Keeps the merged answer for `location`, and drops the answers past
+    /// [`TIMELINE_FOR`], which are never used again: the cache holds only
+    /// what was read in the last half minute.
+    fn store(&mut self, location: Location, timeline: Option<Arc<Timeline>>) {
+        self.cache.retain(|_, (at, _)| at.elapsed() < TIMELINE_FOR);
+        self.cache.insert(location, (Instant::now(), timeline));
+    }
 }
 
 impl App {
@@ -148,9 +159,7 @@ impl App {
         events: &mut Vec<Event>,
     ) {
         let timeline = timeline.map(Arc::new);
-        self.timelines
-            .cache
-            .insert(location.clone(), (Instant::now(), timeline.clone()));
+        self.timelines.store(location.clone(), timeline.clone());
         if self.timelines.reading.get(&pane).map(|(g, _)| *g) != Some(generation) {
             return;
         }
@@ -218,5 +227,34 @@ impl App {
     /// the decorators watch.
     pub(crate) fn forget_timeline(&mut self, location: &Location) {
         self.timelines.cache.remove(location);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::{Duration, Instant};
+
+    use types::Location;
+
+    use super::{TIMELINE_FOR, Timelines};
+
+    fn at(path: &str) -> Location {
+        Location::new(vfs_local::PROVIDER_ID, path)
+    }
+
+    #[test]
+    fn an_answer_past_its_time_is_dropped_when_the_next_arrives() {
+        let mut timelines = Timelines::default();
+        let old = Instant::now()
+            .checked_sub(TIMELINE_FOR + Duration::from_secs(1))
+            .unwrap_or_else(|| panic!("no instant that old"));
+        timelines.cache.insert(at("/old"), (old, None));
+        timelines
+            .cache
+            .insert(at("/recent"), (Instant::now(), None));
+        timelines.store(at("/new"), None);
+        assert!(!timelines.cache.contains_key(&at("/old")), "kept forever");
+        assert!(timelines.cache.contains_key(&at("/recent")));
+        assert!(timelines.cache.contains_key(&at("/new")));
     }
 }
