@@ -232,6 +232,9 @@ rpool/ROOT/ubuntu_62wyjh/var/lib@before update\t1790963775\t81920
 
     #[test]
     fn mounted_filesystems_are_read_and_the_rest_skipped() {
+        if !crate::supported() {
+            return;
+        }
         let read = filesystems(FILESYSTEMS);
         let names: Vec<&str> = read.iter().map(|f| f.name.as_str()).collect();
         assert_eq!(
@@ -268,6 +271,9 @@ rpool/ROOT/ubuntu_62wyjh/var/lib@before update\t1790963775\t81920
 
     #[test]
     fn malformed_lines_are_skipped() {
+        if !crate::supported() {
+            return;
+        }
         let fs = filesystems("tank\t/tank\n\t/x\tyes\ntank/a\t/a\tyes\textra\nok\t/ok\tyes\n");
         assert_eq!(fs.len(), 1);
         assert_eq!(fs[0].name, "ok");

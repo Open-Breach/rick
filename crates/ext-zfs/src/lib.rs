@@ -44,6 +44,14 @@ pub use zfs::{Output, ScriptedZfs, SystemZfs, Zfs, ZfsError};
 /// The extension id.
 pub const ID: ExtId = ExtId("zfs");
 
+/// Whether the plugin works on this platform: Linux only, as its manifest
+/// says. Its tests that need a POSIX path (a mount point such as
+/// `/tank/home`) return early elsewhere.
+#[must_use]
+pub fn supported() -> bool {
+    Platforms::current() == Platforms::LINUX
+}
+
 /// The extension: the `zfs` provider, the decorator and the "ZFS" group.
 #[derive(Debug)]
 pub struct ZfsExtension {

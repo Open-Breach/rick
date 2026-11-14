@@ -171,6 +171,10 @@ impl Driver {
 
 #[test]
 fn the_context_menu_offers_no_change_inside_a_snapshot() {
+    if !ext_zfs::supported() {
+        eprintln!("the ZFS plugin is Linux only; skipping");
+        return;
+    }
     let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
     let mut d = Driver::new(dir.path(), pool(dir.path()));
     let pane = d.pane;
@@ -214,6 +218,10 @@ fn the_context_menu_offers_no_change_inside_a_snapshot() {
 
 #[test]
 fn a_file_copied_out_of_a_snapshot_arrives_through_the_copy_job() {
+    if !ext_zfs::supported() {
+        eprintln!("the ZFS plugin is Linux only; skipping");
+        return;
+    }
     let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
     let mut d = Driver::new(dir.path(), pool(dir.path()));
     let live = dir.path().join("home/notes");
@@ -243,6 +251,10 @@ fn a_file_copied_out_of_a_snapshot_arrives_through_the_copy_job() {
 /// directory, and the editor is offered for it.
 #[test]
 fn a_file_in_a_snapshot_opens_from_its_snapshot_directory() {
+    if !ext_zfs::supported() {
+        eprintln!("the ZFS plugin is Linux only; skipping");
+        return;
+    }
     let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
     let mut d = Driver::new(dir.path(), pool(dir.path()));
     let pane = d.pane;

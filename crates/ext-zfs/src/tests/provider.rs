@@ -130,6 +130,9 @@ fn a_dataset_lists_its_snapshots_newest_first() {
 
 #[test]
 fn a_snapshot_lists_its_files_as_they_were() {
+    if !crate::supported() {
+        return;
+    }
     let fx = Fixture::new();
     let provider = fx.provider();
     let ann = snapshot_location("tank/home", "b", Path::new("ann"));
@@ -262,6 +265,9 @@ fn nothing_can_be_changed() {
 
 #[test]
 fn unchanged_versions_collapse_into_the_newest() {
+    if !crate::supported() {
+        return;
+    }
     let fx = Fixture::new();
     // c holds a changed report; b and a the same older one.
     super::on_snapshots(
@@ -286,6 +292,9 @@ fn unchanged_versions_collapse_into_the_newest() {
 
 #[test]
 fn a_file_deleted_live_still_has_its_versions() {
+    if !crate::supported() {
+        return;
+    }
     let fx = Fixture::new();
     let provider = fx.provider();
     let live = fx.home().join("ann/old.txt");

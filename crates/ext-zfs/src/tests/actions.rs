@@ -87,6 +87,9 @@ fn browse_is_hidden_off_zfs_and_inside_a_snapshot() {
 
 #[test]
 fn back_to_live_goes_to_the_folder_or_its_nearest_parent() {
+    if !crate::supported() {
+        return;
+    }
     let fx = Fixture::new();
     let live = Live(shared(&fx));
     let docs = ctx(
@@ -119,6 +122,9 @@ fn back_to_live_goes_to_the_folder_or_its_nearest_parent() {
 
 #[test]
 fn versions_opens_for_one_live_or_snapshot_file() {
+    if !crate::supported() {
+        return;
+    }
     let fx = Fixture::new();
     let versions = Versions(shared(&fx));
     let report = fx.home().join("ann/docs/report.txt");

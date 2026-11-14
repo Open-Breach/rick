@@ -186,6 +186,9 @@ fn missing_live_parents_are_created() {
 
 #[test]
 fn a_folder_comes_back_with_its_files_and_links() {
+    if !crate::supported() {
+        return;
+    }
     let b = bench();
     let proj = b.fx.snapshot_dir("b").join("ann/proj");
     write(&proj.join("a.txt"), "a");

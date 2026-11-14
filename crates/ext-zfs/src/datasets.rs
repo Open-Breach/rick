@@ -273,6 +273,9 @@ mod tests {
 
     #[test]
     fn nested_datasets_pick_the_longest_mount_point() {
+        if !crate::supported() {
+            return;
+        }
         let zfs = scripted();
         let sets = Datasets::new(zfs.clone());
         let name = |p: &str| sets.dataset_of(Path::new(p)).map(|fs| fs.name.clone());
@@ -293,6 +296,9 @@ mod tests {
 
     #[test]
     fn a_path_outside_every_dataset_has_none() {
+        if !crate::supported() {
+            return;
+        }
         let sets = Datasets::new(scripted());
         assert!(sets.dataset_of(Path::new("/home/ann")).is_none());
         assert!(sets.dataset_of(Path::new("relative/tank")).is_none());
@@ -350,6 +356,9 @@ mod tests {
 
     #[test]
     fn only_datasets_with_snapshots_are_offered() {
+        if !crate::supported() {
+            return;
+        }
         let zfs = scripted();
         on_snapshots(&zfs, "tank", "");
         on_snapshots(&zfs, "tank/home", "tank/home@a\t100\t1\n");
