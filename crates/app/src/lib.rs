@@ -4312,12 +4312,36 @@ impl App {
     }
 
     /// Runs the pane's decorators over `entries`, records what they answer at
-    /// once and routes what they publish later through the mailbox.
+    /// once and routes what they publish later through the mailbox. An
+    /// empty batch asks nobody.
     fn decorate(&mut self, pane: PaneId, entries: &[Entry], events: &mut Vec<Event>) {
+        if !entries.is_empty() {
+            self.decorate_folder(pane, entries, events);
+        }
+    }
+
+    /// Batches are decorated as they come; a folder listed without entries
+    /// had no batch, and its decorators are asked once, with none.
+    fn decorate_if_empty(&mut self, pane: PaneId, events: &mut Vec<Event>) {
+        if self
+            .model
+            .active_tab(pane)
+            .is_some_and(|(_, tab)| tab.listing.entries().is_empty())
+        {
+            self.decorate_folder(pane, &[], events);
+        }
+    }
+
+    /// The same for all of the folder's entries, once its listing is
+    /// complete: also when it has none, so that a decorator whose answers
+    /// are about the folder itself starts its reads there too (the ZFS and
+    /// Btrfs plugins read the folder's snapshots, which *Browse snapshots*
+    /// needs, in a job they start from `decorate`).
+    fn decorate_folder(&mut self, pane: PaneId, entries: &[Entry], events: &mut Vec<Event>) {
         let Some(live) = self.live.get(&pane) else {
             return;
         };
-        if live.decorators.is_empty() || entries.is_empty() {
+        if live.decorators.is_empty() {
             return;
         }
         let generation = live.generation;
@@ -4384,7 +4408,7 @@ impl App {
             .model
             .active_tab(pane)
             .map_or_default(|(_, tab)| tab.listing.entries().to_vec());
-        self.decorate(pane, &entries, events);
+        self.decorate_folder(pane, &entries, events);
     }
 
     // One arm per message: the enum is the table.
@@ -5208,6 +5232,9 @@ impl App {
                 Vec::new()
             }
         };
+        if result.is_ok() {
+            self.decorate_if_empty(pane, events);
+        }
         self.resolve_reveal(pane, true, events);
         // The Cloud overview's rows are the side panel's Cloud rows too, and
         // the Network overview's provider rows its Network rows (the

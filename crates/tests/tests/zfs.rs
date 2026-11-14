@@ -289,3 +289,33 @@ fn a_file_in_a_snapshot_opens_from_its_snapshot_directory() {
         [dir.path().join("home/.zfs/snapshot/b/notes/report.txt")]
     );
 }
+
+/// *Browse snapshots* in an empty live folder: the decorator's job, which
+/// finds the snapshot holding the folder, starts there too, although the
+/// folder has no entries to decorate.
+#[test]
+fn browse_snapshots_is_offered_in_an_empty_live_folder() {
+    if !ext_zfs::supported() {
+        eprintln!("the ZFS plugin is Linux only; skipping");
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+    let mut d = Driver::new(dir.path(), pool(dir.path()));
+    let pane = d.pane;
+    let notes = dir.path().join("home/notes");
+    assert!(
+        fs::read_dir(&notes).is_ok_and(|mut e| e.next().is_none()),
+        "empty"
+    );
+    d.step(Command::Navigate {
+        pane,
+        to: local(&notes),
+    });
+    assert!(
+        d.enabled("zfs.browse"),
+        "Browse snapshots in an empty folder"
+    );
+    // A refresh drops nothing the menu needs.
+    d.step(Command::Refresh(pane));
+    assert!(d.enabled("zfs.browse"), "Browse snapshots after a refresh");
+}
