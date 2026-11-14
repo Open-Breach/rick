@@ -39,7 +39,7 @@
 use std::collections::BTreeMap;
 use std::fmt;
 use std::path::Path;
-use std::sync::{LazyLock, RwLock, RwLockReadGuard, RwLockWriteGuard};
+use std::sync::{Arc, LazyLock, RwLock, RwLockReadGuard, RwLockWriteGuard};
 
 use fluent_bundle::concurrent::FluentBundle;
 use fluent_bundle::{FluentArgs, FluentResource};
@@ -49,12 +49,26 @@ use unic_langid::LanguageIdentifier;
 pub const FALLBACK: &str = "en";
 
 /// One language's messages: the bundled sources in the order given, then
-/// the override file, compiled into a bundle on demand.
+/// the override file, each parsed once, compiled into a bundle on demand.
 struct Language {
     tag: LanguageIdentifier,
-    sources: Vec<String>,
-    override_source: Option<String>,
-    bundle: Option<FluentBundle<FluentResource>>,
+    sources: Vec<Arc<FluentResource>>,
+    override_source: Option<Arc<FluentResource>>,
+    bundle: Option<FluentBundle<Arc<FluentResource>>>,
+}
+
+/// Parses a Fluent file's text; a syntax error is logged and the rest of
+/// the file is kept.
+fn parse(tag: &LanguageIdentifier, source: &str) -> Arc<FluentResource> {
+    Arc::new(match FluentResource::try_new(source.to_owned()) {
+        Ok(resource) => resource,
+        Err((resource, errors)) => {
+            for error in errors {
+                tracing::warn!(language = %tag, %error, "a translation file has a syntax error");
+            }
+            resource
+        }
+    })
 }
 
 impl Language {
@@ -67,29 +81,38 @@ impl Language {
         }
     }
 
-    /// The compiled bundle, built from the sources on first use after a
-    /// change.
-    fn bundle(&mut self) -> &FluentBundle<FluentResource> {
+    /// Adds a bundled source as the last one. A text that is there already
+    /// moves to the end instead of being kept twice, so a key still takes
+    /// the message given last, and a process that registers the same files
+    /// again and again (every `App` of a test binary does) holds each file
+    /// once. Says whether anything changed.
+    fn add(&mut self, source: &str) -> bool {
+        if self
+            .sources
+            .last()
+            .is_some_and(|last| last.source() == source)
+        {
+            return false;
+        }
+        let resource = match self.sources.iter().position(|r| r.source() == source) {
+            Some(index) => self.sources.remove(index),
+            None => parse(&self.tag, source),
+        };
+        self.sources.push(resource);
+        self.bundle = None;
+        true
+    }
+
+    /// Builds the bundle from the parsed sources, if a change dropped it.
+    fn compile(&mut self) {
         if self.bundle.is_none() {
             let mut bundle = FluentBundle::new_concurrent(vec![self.tag.clone()]);
             bundle.set_use_isolating(false);
-            for source in self.sources.iter().chain(self.override_source.iter()) {
-                let resource = match FluentResource::try_new(source.clone()) {
-                    Ok(resource) => resource,
-                    Err((resource, errors)) => {
-                        for error in errors {
-                            tracing::warn!(language = %self.tag, %error, "a translation file has a syntax error");
-                        }
-                        resource
-                    }
-                };
-                bundle.add_resource_overriding(resource);
+            for resource in self.sources.iter().chain(self.override_source.iter()) {
+                bundle.add_resource_overriding(Arc::clone(resource));
             }
             self.bundle = Some(bundle);
         }
-        self.bundle
-            .as_ref()
-            .unwrap_or_else(|| unreachable!("built above"))
     }
 }
 
@@ -102,6 +125,44 @@ struct State {
     active: String,
     /// What the system reports, read once.
     system: Vec<LanguageIdentifier>,
+}
+
+impl State {
+    /// The languages a lookup reads, in order: the active one, then
+    /// English.
+    fn chain(&self) -> impl Iterator<Item = &Language> {
+        let fallback = (self.active != FALLBACK).then_some(FALLBACK);
+        [Some(self.active.as_str()), fallback]
+            .into_iter()
+            .flatten()
+            .filter_map(|tag| self.languages.get(tag))
+    }
+
+    /// Whether every language a lookup reads has its bundle.
+    fn compiled(&self) -> bool {
+        self.chain().all(|language| language.bundle.is_some())
+    }
+
+    /// Builds the bundles a lookup reads.
+    fn compile(&mut self) {
+        let active = self.active.clone();
+        for tag in [active.as_str(), FALLBACK] {
+            if let Some(language) = self.languages.get_mut(tag) {
+                language.compile();
+            }
+        }
+    }
+
+    /// The text for `key`: the active language's message, else English's,
+    /// else the key itself. The bundles are compiled.
+    fn text(&self, key: &str, args: &FluentArgs<'_>) -> String {
+        self.chain()
+            .find_map(|language| message_of(language, key, args))
+            .unwrap_or_else(|| {
+                tracing::debug!(key, "no translation; the key stands in");
+                key.to_owned()
+            })
+    }
 }
 
 static STATE: LazyLock<RwLock<State>> = LazyLock::new(|| {
@@ -140,13 +201,14 @@ pub fn add_bundled(language: &str, source: &str) {
         return;
     };
     let mut state = write();
-    let entry = state
+    let changed = state
         .languages
         .entry(tag.to_string())
-        .or_insert_with(|| Language::new(tag));
-    entry.sources.push(source.to_owned());
-    entry.bundle = None;
-    renegotiate(&mut state);
+        .or_insert_with(|| Language::new(tag))
+        .add(source);
+    if changed {
+        renegotiate(&mut state);
+    }
 }
 
 /// Reads `<config_dir>/locales/<lang>.ftl` for every language, each file
@@ -177,8 +239,14 @@ pub fn load_overrides(config_dir: &Path) {
                     .languages
                     .entry(tag.to_string())
                     .or_insert_with(|| Language::new(tag));
-                language.override_source = Some(text);
-                language.bundle = None;
+                if language
+                    .override_source
+                    .as_ref()
+                    .is_none_or(|old| old.source() != text)
+                {
+                    language.override_source = Some(parse(&language.tag, &text));
+                    language.bundle = None;
+                }
             }
             Err(error) => {
                 tracing::warn!(file = %path.display(), %error, "a translation file that does not read");
@@ -216,6 +284,7 @@ pub fn language_name(tag: &str) -> String {
     let Some(language) = state.languages.get_mut(tag) else {
         return tag.to_owned();
     };
+    language.compile();
     message_of(language, "language-name", &FluentArgs::new()).unwrap_or_else(|| tag.to_owned())
 }
 
@@ -254,9 +323,10 @@ fn negotiate(
     None
 }
 
-/// The message `key` formats to in `language`, when it has one.
-fn message_of(language: &mut Language, key: &str, args: &FluentArgs<'_>) -> Option<String> {
-    let bundle = language.bundle();
+/// The message `key` formats to in `language`, when it has one; `language`
+/// is compiled.
+fn message_of(language: &Language, key: &str, args: &FluentArgs<'_>) -> Option<String> {
+    let bundle = language.bundle.as_ref()?;
     let message = bundle.get_message(key)?;
     let pattern = message.value()?;
     let mut errors = Vec::new();
@@ -275,21 +345,18 @@ pub fn lookup(key: &str, args: &[(&str, FluentValue<'_>)]) -> String {
     for (name, value) in args {
         fluent_args.set(*name, value.clone());
     }
+    // Readers side by side: a window draws hundreds of labels a frame, and
+    // a job on another thread words its progress at the same time. Only
+    // the first lookup after a change takes the lock alone, to compile.
+    {
+        let state = read();
+        if state.compiled() {
+            return state.text(key, &fluent_args);
+        }
+    }
     let mut state = write();
-    let active = state.active.clone();
-    if let Some(language) = state.languages.get_mut(&active)
-        && let Some(text) = message_of(language, key, &fluent_args)
-    {
-        return text;
-    }
-    if active != FALLBACK
-        && let Some(language) = state.languages.get_mut(FALLBACK)
-        && let Some(text) = message_of(language, key, &fluent_args)
-    {
-        return text;
-    }
-    tracing::debug!(key, "no translation; the key stands in");
-    key.to_owned()
+    state.compile();
+    state.text(key, &fluent_args)
 }
 
 /// A Fluent key that reads as its message every time it is shown: for the
@@ -428,6 +495,28 @@ mod tests {
         // Later bundled messages do not undo the override.
         add_bundled("en", "i18n-test-override = bundled again");
         assert_eq!(lookup("i18n-test-override", &[]), "overridden");
+    }
+
+    #[test]
+    fn a_file_given_again_is_held_once_and_is_the_later_one() {
+        let _turn = turn();
+        add_bundled("en", "i18n-test-again = first");
+        add_bundled("en", "i18n-test-again = second");
+        set_language(Some("en"));
+        assert_eq!(lookup("i18n-test-again", &[]), "second");
+        // The first file once more: its message is the later one again,
+        // and the language holds two files for the key, not three.
+        add_bundled("en", "i18n-test-again = first");
+        assert_eq!(lookup("i18n-test-again", &[]), "first");
+        add_bundled("en", "i18n-test-again = first");
+        let held = read().languages.get("en").map(|language| {
+            language
+                .sources
+                .iter()
+                .filter(|file| file.source().starts_with("i18n-test-again"))
+                .count()
+        });
+        assert_eq!(held, Some(2));
     }
 
     #[test]

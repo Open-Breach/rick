@@ -947,7 +947,11 @@ fn real_service(name: &str, index: &dyn SearchIndex, probe: bool) {
     let _ = fs::remove_file(&file);
 }
 
+// Probing takes the connector's attention report back where the tools
+// are installed, and the report is one for the process: not while
+// `tracker_missing` reads the one it made.
 #[test]
+#[serial_test::serial(tracker_attention)]
 fn tracker_answers_through_its_real_service_where_it_runs() {
     let index = ext_search_tracker::TrackerIndex::new(Arc::new(ext_search_tracker::Process));
     let probe = runtime::block_on(index.probe());

@@ -202,6 +202,10 @@ rustix = { version = "1", default-features = false }
 semver = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }
+# For the integration tests (crate `tests`), which share one process: the
+# tests that write the same process-wide state take turns. Without the
+# async and logging halves, which nothing here uses.
+serial_test = { version = "4", default-features = false }
 smallvec = "1"
 tempfile = "3"
 thiserror = "2"

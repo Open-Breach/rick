@@ -1428,6 +1428,9 @@ mod tests {
 
     #[test]
     fn the_credits_are_the_fixed_rows_then_the_contributors_with_their_roles() {
+        // The role is read twice, by `credits` and below: with English
+        // loaded first, another test loading it cannot come between.
+        crate::english();
         let list = credits(build().contributors, build().roles);
         let names: Vec<&str> = list.iter().map(|c| c.name.as_str()).collect();
         assert_eq!(names, ["Serge", "Claude (Anthropic)", "Ada Lovelace"]);

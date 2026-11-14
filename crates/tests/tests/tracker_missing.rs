@@ -136,7 +136,10 @@ fn window(dir: &Path) -> Harness<'static, RickUi> {
     harness
 }
 
+// The connector's attention report is one for the process, and the probe
+// of the real service in `search` takes it back: not at the same time.
 #[test]
+#[serial_test::serial(tracker_attention)]
 fn with_neither_tool_the_search_shows_no_error_and_the_plugin_needs_attention() {
     let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
     std::fs::write(dir.path().join("notes.txt"), "notes").unwrap_or_else(|e| panic!("{e}"));
