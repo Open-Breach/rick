@@ -295,12 +295,36 @@ impl Endpoint {
     /// The newcomer's half: connects, sends `request` and waits `patience`
     /// for the reply.
     ///
+    /// A connection that was taken and then dropped unread, a reset or a
+    /// broken pipe, is not an answer about the endpoint: it was held when
+    /// this launch connected and let go of while the launch waited in its
+    /// queue, by an instance on its way out, or by a process that instance
+    /// had just started and that still carried the socket. The endpoint is
+    /// then looked at once more, and what that second look finds is the
+    /// result: nothing listening any more is [`Handover::NoInstance`].
+    ///
     /// # Errors
     ///
     /// An I/O error other than nothing listening: the socket's directory
-    /// is not readable, the pipe refuses the user. Nothing listening is
+    /// is not readable, the pipe refuses the user, or the connection was
+    /// dropped unread a second time. Nothing listening is
     /// [`Handover::NoInstance`], not an error.
     pub async fn hand_over(&self, request: &Request, patience: Duration) -> io::Result<Handover> {
+        match self.hand_over_once(request, patience).await {
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    io::ErrorKind::ConnectionReset | io::ErrorKind::BrokenPipe
+                ) =>
+            {
+                self.hand_over_once(request, patience).await
+            }
+            found => found,
+        }
+    }
+
+    /// One connection, one request, one reply.
+    async fn hand_over_once(&self, request: &Request, patience: Duration) -> io::Result<Handover> {
         let mut stream = match tokio::time::timeout(patience, self.connect()).await {
             Ok(Ok(stream)) => stream,
             Ok(Err(error))
@@ -809,6 +833,39 @@ mod tests {
             let again = endpoint.bind().await;
             assert!(again.is_ok(), "{again:?}");
         });
+    }
+
+    /// An endpoint that is let go of while a launch waits in its queue: the
+    /// launch's connection is reset, and it finds no instance at its second
+    /// look instead of failing. What holds the socket here is a second
+    /// handle to the listener, as a process the instance has just started
+    /// holds one until it runs its own program.
+    #[cfg(unix)]
+    #[test]
+    fn an_endpoint_let_go_of_under_a_waiting_launch_is_no_instance() {
+        let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+        let endpoint = Endpoint::in_dir(dir.path());
+        let listener = std::os::unix::net::UnixListener::bind(endpoint.path())
+            .unwrap_or_else(|e| panic!("{e}"));
+        let held = listener.try_clone().unwrap_or_else(|e| panic!("{e}"));
+        drop(listener);
+        // Nobody accepts; the last handle goes while the launch waits for
+        // its reply.
+        let letting_go = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(200));
+            drop(held);
+        });
+        runtime::block_on(async {
+            let found = endpoint
+                .hand_over(&request(&[]), PATIENCE)
+                .await
+                .unwrap_or_else(|e| panic!("{e}"));
+            assert_eq!(found, Handover::NoInstance);
+            // And the launch takes the endpoint, as after a crash.
+            let listener = endpoint.bind().await.unwrap_or_else(|e| panic!("{e}"));
+            drop(listener);
+        });
+        letting_go.join().unwrap_or_else(|_| panic!("the thread"));
     }
 
     /// A socket file left by a crash: nothing answers on it, so the next
