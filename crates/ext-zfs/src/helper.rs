@@ -217,6 +217,28 @@ mod tests {
         s.iter().map(|a| (*a).to_owned()).collect()
     }
 
+    /// The polkit prompt names everything the helper may do: snapshots
+    /// and the property editor's changes, in English and German.
+    #[test]
+    fn the_polkit_action_names_snapshots_and_properties() {
+        let policy = include_str!("../../../packaging/linux/org.openbreach.rick.zfs.policy");
+        assert!(policy.contains(&format!("<action id=\"{POLKIT_ACTION}\">")));
+        let texts: Vec<&str> = policy
+            .lines()
+            .map(str::trim)
+            .filter(|l| l.starts_with("<description") || l.starts_with("<message"))
+            .collect();
+        assert_eq!(texts.len(), 4, "{texts:?}");
+        for text in texts {
+            let lower = text.to_lowercase();
+            assert!(lower.contains("snapshot"), "{text}");
+            assert!(
+                lower.contains("propert") || lower.contains("eigenschaft"),
+                "the prompt does not name property changes: {text}"
+            );
+        }
+    }
+
     #[test]
     fn the_three_forms_pass() {
         for ok in [
