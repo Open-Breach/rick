@@ -15,7 +15,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use platform::Fake;
-use tests::readme::{self, FEATURES, Facts, INSTALL, STATUS};
+use tests::readme::{self, FEATURES, FILE_TYPES, Facts, INSTALL, Kind, STATUS};
 
 /// The workspace's version: every crate has it.
 const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -73,7 +73,7 @@ fn the_regenerated_parts_are_what_the_release_registers() {
     }
     let expected =
         readme::regenerate(&text, VERSION, &facts(), &platforms).unwrap_or_else(|e| panic!("{e}"));
-    for name in [STATUS, FEATURES, INSTALL] {
+    for name in [STATUS, FEATURES, FILE_TYPES, INSTALL] {
         assert_eq!(
             readme::block(&text, name),
             readme::block(&expected, name),
@@ -109,16 +109,33 @@ fn every_extension_crate_is_asked() {
 }
 
 /// What the previewers, providers and connectors of this build register
-/// reaches the facts: the model of the screenshot has a previewer, the
-/// cloud is told from the rest, each platform has its search, and the
-/// plugins with a view of their own are not tools.
+/// reaches the facts: the model of the screenshot has a previewer, every
+/// previewed type has its kind and every kind has types, the cloud is told
+/// from the rest, each platform has its search, and the plugins with a
+/// view of their own are not tools.
 #[test]
 fn the_facts_are_read_from_the_registries() {
     let facts = facts();
-    for name in ["PDF", "PNG", "JPG", "SVG", "STL", "Markdown"] {
-        assert!(facts.previews.iter().any(|p| p == name), "{name}");
+    for (kind, name) in [
+        (Kind::Documents, "PDF"),
+        (Kind::Media, "PNG"),
+        (Kind::Media, "JPG"),
+        (Kind::Media, "SVG"),
+        (Kind::ThreeD, "STL"),
+        (Kind::Documents, "Markdown"),
+        (Kind::Programming, "Rust"),
+        (Kind::Programming, "TOML"),
+        (Kind::Archives, "ZIP"),
+    ] {
+        assert!(
+            facts.previews.iter().any(|(k, n)| *k == kind && n == name),
+            "{name}"
+        );
     }
-    let mut once = facts.previews.clone();
+    for kind in Kind::ALL {
+        assert!(facts.previews.iter().any(|(k, _)| *k == kind), "{kind:?}");
+    }
+    let mut once: Vec<&String> = facts.previews.iter().map(|(_, name)| name).collect();
     once.sort();
     once.dedup();
     assert_eq!(once.len(), facts.previews.len(), "a type is named twice");
@@ -150,12 +167,14 @@ fn the_readme_has_the_structure_of_its_spec() {
         "## Why Rick exists\n",
         "## Features\n",
         "<!-- generated:features -->",
+        "<!-- generated:file-types -->",
         "\nComing:\n",
         "<picture>",
         "## Install\n",
         "<!-- generated:install -->",
         "> **Use with caution.**",
         "## Join in\n",
+        "src=\"assets/rick_portal_about.webp\"",
         "(docs/building.md)",
         "(docs/command-line.md)",
         "(docs/architecture.md)",
@@ -190,11 +209,12 @@ fn the_readme_has_the_structure_of_its_spec() {
     let version = readme::version(&text).unwrap_or_else(|e| panic!("{e}"));
     let status = readme::block(&text, STATUS).unwrap_or_else(|e| panic!("{e}"));
     let mut lines = status.lines().filter(|line| !line.is_empty());
-    let line = lines.next().unwrap_or_default();
-    assert!(
-        line.starts_with(&format!("v{version} · "))
-            && line.ends_with(" · this page describes the latest release; main may be ahead."),
-        "{line}"
+    // The status text is the spec's, word for word.
+    let said = quoted(&spec, "2. The **status line**");
+    assert_eq!(said.len(), 1);
+    assert_eq!(
+        lines.next().unwrap_or_default(),
+        format!("v{version} · {}", said[0])
     );
     let call = quoted(&spec, "3. The **call to action**");
     let plain: String = lines
@@ -210,21 +230,17 @@ fn the_readme_has_the_structure_of_its_spec() {
     let features = readme::block(&text, FEATURES).unwrap_or_else(|e| panic!("{e}"));
     assert_eq!(features.lines().count(), 6);
     assert!(features.lines().all(|line| line.starts_with("- ")));
+
     let (_, after) = text
         .split_once("\nComing:\n\n")
         .unwrap_or_else(|| panic!("no Coming list"));
     let coming = after.lines().take_while(|l| l.starts_with("- ")).count();
     assert!((1..=5).contains(&coming), "{coming} entries under Coming");
 
-    // The picture in both schemes, and the model it shows.
-    assert!(text.contains(
-        "<source media=\"(prefers-color-scheme: dark)\" srcset=\"docs/screenshots/readme-dark.png\">"
-    ));
-    assert!(text.contains("src=\"docs/screenshots/readme-light.png\""));
     for file in [
         "docs/screenshots/readme-light.png",
         "docs/screenshots/readme-dark.png",
-        "assets/readme/robot-dog.stl",
+        "assets/rick_portal_about.webp",
         "docs/building.md",
         "docs/command-line.md",
         "docs/architecture.md",
@@ -241,4 +257,85 @@ fn the_readme_has_the_structure_of_its_spec() {
         .any(|(at, _)| text[at + 1..].starts_with(|c: char| c.is_ascii_digit()));
     assert!(!numbered, "README.md names an issue or pull request number");
     assert!(!text.contains("QUESTIONS.md"));
+}
+
+/// The file types under the six items (specs/readme.md, *File types*): one
+/// list per kind in the spec's order, the first open and the others
+/// folded, their counts the number of the first feature item, and no type
+/// twice.
+#[test]
+fn the_file_types_are_listed_by_kind_and_counted() {
+    let text = read("README.md");
+    let features = readme::block(&text, FEATURES).unwrap_or_else(|e| panic!("{e}"));
+    let types = readme::block(&text, FILE_TYPES).unwrap_or_else(|e| panic!("{e}"));
+    let summaries: Vec<&str> = types
+        .lines()
+        .filter_map(|line| line.strip_prefix("<summary>"))
+        .filter_map(|line| line.strip_suffix("</summary>"))
+        .collect();
+    let titles: Vec<&str> = summaries
+        .iter()
+        .filter_map(|summary| summary.rsplit_once(" (").map(|(title, _)| title))
+        .collect();
+    assert_eq!(titles, Kind::ALL.map(Kind::title));
+    let counted: usize = summaries
+        .iter()
+        .filter_map(|summary| {
+            summary
+                .rsplit_once(" (")?
+                .1
+                .strip_suffix(')')?
+                .parse::<usize>()
+                .ok()
+        })
+        .sum();
+    assert!(
+        features.starts_with(&format!(
+            "- **Previews {counted} file types**, listed by kind below."
+        )),
+        "the lists hold {counted} types: {}",
+        features.lines().next().unwrap_or_default()
+    );
+    assert!(
+        types.starts_with("<details open>\n"),
+        "the first kind starts open"
+    );
+    assert_eq!(types.matches("<details open>").count(), 1);
+    assert_eq!(types.matches("<details>").count(), Kind::ALL.len() - 1);
+    let mut listed: Vec<&str> = types
+        .lines()
+        .filter(|line| !line.is_empty() && !line.starts_with('<'))
+        .flat_map(|line| line.split(", "))
+        .collect();
+    assert_eq!(listed.len(), counted);
+    listed.sort_unstable();
+    listed.dedup();
+    assert_eq!(listed.len(), counted, "a type is listed twice");
+}
+
+/// The picture in both schemes, and the model it shows (specs/readme.md,
+/// *Screenshot*): the one model of `assets/readme`, the release's animal,
+/// with the script that wrote it beside it and its name in the picture's
+/// alt text.
+#[test]
+fn the_picture_shows_the_one_model_of_the_release() {
+    let text = read("README.md");
+    assert!(text.contains(
+        "<source media=\"(prefers-color-scheme: dark)\" srcset=\"docs/screenshots/readme-dark.png\">"
+    ));
+    assert!(text.contains("src=\"docs/screenshots/readme-light.png\""));
+    let model = readme::model(&root()).unwrap_or_else(|e| panic!("{e}"));
+    assert!(
+        model.with_extension("py").is_file(),
+        "{} has no script beside it",
+        model.display()
+    );
+    let animal = model
+        .file_stem()
+        .map(|stem| stem.to_string_lossy().replace('-', " "))
+        .unwrap_or_default();
+    assert!(
+        text.contains(&format!("showing a 3D model of a {animal}\" src=")),
+        "the picture's alt text does not name the {animal}"
+    );
 }
