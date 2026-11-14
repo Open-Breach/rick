@@ -105,6 +105,11 @@ tokio = { workspace = true, features = ["rt", "time"] }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 
+[dev-dependencies]
+# The tests that write the same process-wide state take turns
+# (`#[serial]`); see `tests/main.rs`.
+serial_test = { workspace = true }
+
 [lints]
 workspace = true
 

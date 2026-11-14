@@ -8,6 +8,14 @@
 //!
 //! One file's tests are run with its module's name as the filter:
 //! `cargo test -p tests --test main -- listing::`.
+//!
+//! The tests share a process, and with it what the application has once
+//! per process. Two cases so far. A test that changes such a thing for
+//! everybody, the interface language, runs in a process of its own
+//! (`tests::alone`). Tests that write the same such thing and read it
+//! back, the Tracker connector's attention report, take turns
+//! (`#[serial_test::serial(key)]`, one key per thing); a turn keeps them
+//! apart from each other only, not from the tests without the attribute.
 
 mod about;
 mod actions;
