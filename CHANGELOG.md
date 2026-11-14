@@ -7,6 +7,55 @@ the pull request that brought the change.
 
 ## [Unreleased]
 
+### Added
+
+- `ext-zfs`, a plugin for OpenZFS snapshots, Linux only (placed by the review of
+  #156): through the `zfs` command line
+  it finds the dataset a folder lies in and, without `zfs` or outside a
+  dataset, shows nothing. A read-only `zfs` location lists the datasets
+  with snapshots, each dataset's snapshots newest first and each
+  snapshot's files as they were (`zfs:/tank/home/@b/docs`), so a snapshot
+  opens, previews and copies out like any folder: a file in it opens with
+  the system, *Open with…* or the editor from its path under
+  `.zfs/snapshot`, which providers can now name through the defaulted
+  `Provider::local_path` (API 21); `/~versions/<path>`
+  lists the snapshots holding a different version of one file. The "ZFS"
+  group has *Browse snapshots*, *Back to live folder*, *Versions*,
+  *Restore* (one question naming the snapshot; a live item it replaces
+  goes to the trash first), and *Create*, *Rename* and *Destroy snapshot*
+  as jobs, which offer to run once more as administrator when ZFS refuses
+  for lack of permission: through the platform prompt as a call of
+  `rick-zfs`, a helper beside `rick` that runs only a snapshot's
+  `snapshot`, `rename` or `destroy`, under the polkit action
+  `org.openbreach.rick.zfs` where it is installed. `pkexec` is called
+  without the caller's `SHELL`, which it refuses when it is not in
+  `/etc/shells` (a shell from Nix or Home Manager), and its own failures
+  reach the user in its words. The
+  info panel gets a ZFS section with the dataset, its snapshots and its
+  main properties with their source. *Edit ZFS properties…* changes
+  `compression`, `atime`, `relatime`, `copies`, `recordsize`, `quota`
+  and `refquota` of a dataset: a form opened with the current values, *Inherit*
+  labelled with the value it gives, a preview of each change with the old
+  value's source that refuses a size it cannot read, a quota below the
+  space used or no change; applied as one job of `zfs set` then
+  `zfs inherit`, with the same permission rule; a quota reset is
+  `quota=none`, as ZFS never inherits a quota. Specified in
+  `specs/ext-zfs.md`.
+- **Time slider** (review of #156):
+  a row under a pane's toolbar that moves the pane through the earlier
+  states of the folder it shows — *Now* with the count of earlier states,
+  an axis with one dot per point, evenly spaced, and at a past point the
+  date, name and source with *Read-only* and *Back to now*. Click a dot, drag (the pane
+  follows after a 200 ms rest or on release), or Left/Right/Home/End while
+  focused; a run of moves is one Back. Switched per pane with *Timeline* in
+  the view options menu or *Toggle timeline* in the palette, saved with
+  the session; absent where nothing offers a timeline, disabled where the
+  folder has no earlier states, never empty. Extensions offer timelines
+  through two new defaulted `Decorator` methods, `offers_timelines` and
+  `timeline` (API 20), asked in a job and only while the bar is shown;
+  several sources merge into one bar. `ext-zfs` offers a dataset's
+  snapshots.
+
 ## [0.4.1] - 2026-11-14
 
 A small release after 0.4.0: a launch that meets an instance on its way out,
@@ -69,52 +118,6 @@ the specification first (#174).
 
 ### Added
 
-- `ext-zfs`, a plugin for OpenZFS snapshots, Linux only (placed by the review of
-  #156): through the `zfs` command line
-  it finds the dataset a folder lies in and, without `zfs` or outside a
-  dataset, shows nothing. A read-only `zfs` location lists the datasets
-  with snapshots, each dataset's snapshots newest first and each
-  snapshot's files as they were (`zfs:/tank/home/@b/docs`), so a snapshot
-  opens, previews and copies out like any folder: a file in it opens with
-  the system, *Open with…* or the editor from its path under
-  `.zfs/snapshot`, which providers can now name through the defaulted
-  `Provider::local_path` (API 21); `/~versions/<path>`
-  lists the snapshots holding a different version of one file. The "ZFS"
-  group has *Browse snapshots*, *Back to live folder*, *Versions*,
-  *Restore* (one question naming the snapshot; a live item it replaces
-  goes to the trash first), and *Create*, *Rename* and *Destroy snapshot*
-  as jobs, which offer to run once more as administrator when ZFS refuses
-  for lack of permission: through the platform prompt as a call of
-  `rick-zfs`, a helper beside `rick` that runs only a snapshot's
-  `snapshot`, `rename` or `destroy`, under the polkit action
-  `org.openbreach.rick.zfs` where it is installed. `pkexec` is called
-  without the caller's `SHELL`, which it refuses when it is not in
-  `/etc/shells` (a shell from Nix or Home Manager), and its own failures
-  reach the user in its words. The
-  info panel gets a ZFS section with the dataset, its snapshots and its
-  main properties with their source. *Edit ZFS properties…* changes
-  `compression`, `atime`, `relatime`, `copies`, `recordsize`, `quota`
-  and `refquota` of a dataset: a form opened with the current values, *Inherit*
-  labelled with the value it gives, a preview of each change with the old
-  value's source that refuses a size it cannot read, a quota below the
-  space used or no change; applied as one job of `zfs set` then
-  `zfs inherit`, with the same permission rule; a quota reset is
-  `quota=none`, as ZFS never inherits a quota. Specified in
-  `specs/ext-zfs.md`.
-- **Time slider** (review of #156):
-  a row under a pane's toolbar that moves the pane through the earlier
-  states of the folder it shows — *Now* with the count of earlier states,
-  an axis with one dot per point, evenly spaced, and at a past point the
-  date, name and source with *Read-only* and *Back to now*. Click a dot, drag (the pane
-  follows after a 200 ms rest or on release), or Left/Right/Home/End while
-  focused; a run of moves is one Back. Switched per pane with *Timeline* in
-  the view options menu or *Toggle timeline* in the palette, saved with
-  the session; absent where nothing offers a timeline, disabled where the
-  folder has no earlier states, never empty. Extensions offer timelines
-  through two new defaulted `Decorator` methods, `offers_timelines` and
-  `timeline` (API 20), asked in a job and only while the bar is shown;
-  several sources merge into one bar. `ext-zfs` offers a dataset's
-  snapshots.
 - **Title bar colour.** The title row sits on a band of its own colour, the
   new token `bg/titlebar`, and the active workspace tab lifts out of it in
   `bg/pane`, with no accent line. *Settings → Appearance → Title bar colour*
