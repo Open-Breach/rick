@@ -210,9 +210,10 @@ fn bundle(args: &[String]) -> Result<()> {
 
 /// The test of the `tests` crate that writes and checks the README's
 /// regenerated parts, and the one of the screenshot harness that renders
-/// its two pictures.
-const README_TEST: &str = "the_regenerated_parts_are_what_the_release_registers";
-const README_SCREENSHOTS: &str = "screenshots_of_the_readme";
+/// its two pictures: each with its module, the file it is in, since the
+/// crate's tests are one binary.
+const README_TEST: &str = "readme::the_regenerated_parts_are_what_the_release_registers";
+const README_SCREENSHOTS: &str = "screenshots::screenshots_of_the_readme";
 /// Where the README's pictures live, from the workspace's root.
 const README_PICTURES: &str = "docs/screenshots";
 
@@ -223,7 +224,7 @@ fn readme() -> Result<()> {
     // The version, the Features list and the Install section.
     let mut write = Command::new(&cargo);
     write
-        .args(["test", "-p", "tests", "--test", "readme", "--", "--exact"])
+        .args(["test", "-p", "tests", "--test", "main", "--", "--exact"])
         .arg(README_TEST)
         .env("RICK_README_WRITE", "1");
     run(&mut write)?;
@@ -232,7 +233,7 @@ fn readme() -> Result<()> {
     let mut shoot = Command::new(&cargo);
     shoot
         .args(["test", "-p", "tests", "--features", "screenshots"])
-        .args(["--test", "screenshots", "--", "--ignored", "--exact"])
+        .args(["--test", "main", "--", "--ignored", "--exact"])
         .arg(README_SCREENSHOTS);
     run(&mut shoot)?;
     let pictures = meta.workspace_root.join(README_PICTURES);
@@ -249,7 +250,7 @@ fn readme() -> Result<()> {
 
     // The page as it now stands, held against the spec and the code.
     let mut check = Command::new(&cargo);
-    check.args(["test", "-p", "tests", "--test", "readme"]);
+    check.args(["test", "-p", "tests", "--test", "main", "--", "readme::"]);
     run(&mut check)?;
     println!(
         "readme: {} is up to date",

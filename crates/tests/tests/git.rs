@@ -732,8 +732,10 @@ fn a_failed_clone_is_reported_in_its_job_and_a_running_one_is_cancelled() {
     let port = silent.local_addr().unwrap_or_else(|e| panic!("{e}")).port();
     d.start_clone(&format!("git://127.0.0.1:{port}/team/slow.git"), &[]);
     let created = dir.path().join("slow");
+    // With git's `.git` in it: a folder without one is not removed as a
+    // clone's, and on a busy machine git is stopped between the two.
     d.pump_until("the clone runs", |d| {
-        created.is_dir()
+        created.join(".git").is_dir()
             && d.job("Git clone slow")
                 .is_some_and(|(_, job)| matches!(job.state, model::JobState::Running(_)))
     });

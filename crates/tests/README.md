@@ -1,6 +1,7 @@
 # tests
 
-`tests` holds Rick's integration tests and the `fixture` module that generates
+`tests` holds Rick's integration tests, one test binary (`tests/main.rs`)
+with each file under `tests/` as a module of it, and the `fixture` module that generates
 the directory tree they and the benchmarks run against: N entries (200 000 by
 default) with configurable depth and file-size distribution, written into a
 temporary directory, identical for the same seed on every platform, and never

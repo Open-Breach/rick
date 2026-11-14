@@ -413,8 +413,10 @@ fn reset_choices_makes_the_dialog_ask_again() {
     harness.get_by_role_and_label(Role::Button, "Add: Dock favourite");
     assert_eq!(count(&harness, "Skipped"), 0);
     let path = harness.state().app().settings_path().to_path_buf();
-    let text = tests::read_until(&path, |text| !text.contains("declined"));
-    assert!(!text.contains("ask = false"), "{text}");
+    // Reset is two changes, the rows and then `ask`, and the file is
+    // written behind each: wait for the second.
+    let text = tests::read_until(&path, |text| !text.contains("ask = false"));
+    assert!(!text.contains("declined"), "{text}");
     drop(harness);
 
     // The next start asks about the two rows that are not set up.

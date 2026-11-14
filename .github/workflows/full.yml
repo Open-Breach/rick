@@ -117,7 +117,7 @@ jobs:
         if: matrix.os == 'ubuntu-24.04'
         run: |
           sudo apt-get install -y --no-install-recommends xvfb xauth xdotool xclip mesa-vulkan-drivers libxkbcommon-x11-0
-          xvfb-run -a -s "-screen 0 1400x900x24" cargo test --workspace ${{ env.RICK_WS_FEATURES }} --test real_chords -- --nocapture
+          xvfb-run -a -s "-screen 0 1400x900x24" cargo test --workspace ${{ env.RICK_WS_FEATURES }} --test main -- --nocapture real_chords::
         env: { RICK_REQUIRE_REAL_CHORDS: "1", WGPU_BACKEND: vulkan }
       - run: cargo doc --no-deps ${{ env.RICK_WS_FEATURES }}
         env: { RUSTDOCFLAGS: "-D warnings" }
@@ -126,10 +126,13 @@ jobs:
       # job's progress events stay at twenty a second (0.2 milestone 2). In
       # release, as their fixture asks, on Linux x64, where the fixture
       # takes a minute; what they check is not the platform's. The timed
-      # tests on the fixture are bench.yml's.
+      # tests on the fixture are bench.yml's. The tests are one binary, so
+      # the two are picked by name; built with the screenshots feature, which
+      # they do not need, so that the next step runs the same binary and the
+      # release build happens once.
       - name: integration tests on the 200k fixture
         if: matrix.os == 'ubuntu-24.04'
-        run: cargo test -p tests --release ${{ env.RICK_TESTS_FEATURES }} --test closeout --test side_panel -- --ignored --nocapture --test-threads=1 a_new_text_cancels_the_running_walk_on_the_200k_fixture progress_over_the_200k_fixture_is_throttled_to_twenty_events_a_second
+        run: cargo test -p tests --release ${{ env.RICK_TESTS_FEATURES }} --features screenshots --test main -- --ignored --nocapture --test-threads=1 a_new_text_cancels_the_running_walk_on_the_200k_fixture progress_over_the_200k_fixture_is_throttled_to_twenty_events_a_second
         env: { TMP: "${{ runner.temp }}", TEMP: "${{ runner.temp }}", TMPDIR: "${{ runner.temp }}" }
       # Screenshots of the chrome for the pull request, through wgpu on the
       # runner's software adapter: lavapipe on Linux x64, Metal on macOS.
@@ -141,7 +144,7 @@ jobs:
         shell: bash
         run: |
           if [ "$RUNNER_OS" = "Linux" ]; then sudo apt-get install -y mesa-vulkan-drivers; fi
-          cargo test -p tests --release ${{ env.RICK_TESTS_FEATURES }} --features screenshots --test screenshots -- --ignored --nocapture
+          cargo test -p tests --release ${{ env.RICK_TESTS_FEATURES }} --features screenshots --test main -- --ignored --nocapture screenshots::
         env: { TMP: "${{ runner.temp }}", TEMP: "${{ runner.temp }}", TMPDIR: "${{ runner.temp }}", WGPU_BACKEND: "${{ runner.os == 'macOS' && 'metal' || 'vulkan' }}" }
       - uses: actions/upload-artifact@v4
         if: always() && (matrix.os == 'ubuntu-24.04' || runner.os == 'macOS')
