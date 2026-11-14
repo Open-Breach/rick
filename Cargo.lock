@@ -2579,6 +2579,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "ext-zfs"
+version = "0.4.1"
+dependencies = [
+ "chrono",
+ "ext",
+ "futures",
+ "platform",
+ "runtime",
+ "tempfile",
+ "thiserror 2.0.21",
+ "tokio",
+ "tracing",
+ "types",
+]
+
+[[package]]
 name = "fancy-regex"
 version = "0.16.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7059,6 +7075,7 @@ dependencies = [
  "ext-vfs-gcs",
  "ext-vfs-s3",
  "ext-vfs-trash",
+ "ext-zfs",
  "model",
  "ops",
  "platform",
@@ -8204,6 +8221,7 @@ dependencies = [
  "ext-vfs-gcs",
  "ext-vfs-s3",
  "ext-vfs-trash",
+ "ext-zfs",
  "flate2",
  "futures",
  "hadris-fs",

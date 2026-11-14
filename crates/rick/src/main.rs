@@ -94,6 +94,8 @@ fn built_ins() -> Vec<Arc<dyn ext::Extension>> {
     extensions.push(Arc::new(ext_vfs_archive::ArchiveExtension::new()));
     #[cfg(feature = "svn")]
     extensions.push(Arc::new(ext_svn::SvnExtension::new()));
+    #[cfg(feature = "zfs")]
+    extensions.push(Arc::new(ext_zfs::ZfsExtension::new()));
     #[cfg(feature = "search-walk")]
     extensions.push(Arc::new(ext_search_walk::WalkExtension::new()));
     #[cfg(feature = "search-windows")]

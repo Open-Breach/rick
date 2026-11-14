@@ -95,6 +95,7 @@ pub fn model(root: &Path) -> Result<PathBuf, ReadmeError> {
 /// `tests/readme.rs` holds this list against the `ext-*` crates of the
 /// workspace, so a new plugin cannot be left out of the README.
 #[must_use]
+#[allow(clippy::too_many_lines)]
 pub fn extensions() -> Vec<(&'static str, Arc<dyn Extension>)> {
     vec![
         (
@@ -175,6 +176,7 @@ pub fn extensions() -> Vec<(&'static str, Arc<dyn Extension>)> {
         ),
         ("ext-git", Arc::new(ext_git::GitExtension::new())),
         ("ext-svn", Arc::new(ext_svn::SvnExtension::new())),
+        ("ext-zfs", Arc::new(ext_zfs::ZfsExtension::new())),
         (
             "ext-action-compress",
             Arc::new(ext_action_compress::CompressExtension::new()),

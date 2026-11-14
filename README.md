@@ -21,7 +21,7 @@ I also believe more and more people will move to Linux, and those coming from Wi
 <!-- generated:features -->
 - **Previews 87 file types**, listed by kind below.
 - **Multi-pane, multi-tab view:** split panes side by side, drag them around, keep as many tabs as you like.
-- **Browses** local disks, Archives, SSH and the cloud (S3, Azure Blob, Google Cloud Storage), and **searches** through Tracker and Baloo on Linux, Spotlight on macOS and Windows Search on Windows.
+- **Browses** local disks, Archives, SSH, ZFS and the cloud (S3, Azure Blob, Google Cloud Storage), and **searches** through Tracker and Baloo on Linux, Spotlight on macOS and Windows Search on Windows.
 - **Works with the tools you already use**, like Git and SVN: status badges in the file list and actions in the context menu.
 - **Installs and uninstalls software distributed as tarballs**, so a tar.gz download becomes a managed install instead of a folder you forget about. Linux only.
 - **Small things done right**, such as computing a file's hash from the context menu.

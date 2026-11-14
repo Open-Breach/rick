@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE policyconfig PUBLIC
+ "-//freedesktop//DTD PolicyKit Policy Configuration 1.0//EN"
+ "http://www.freedesktop.org/standards/PolicyKit/1/policyconfig.dtd">
+<!--
+  The polkit action of `rick-zfs`, the ZFS plugin's privileged helper
+  (crates/ext-zfs/src/helper.rs). pkexec applies it when it runs the
+  program at exec.path; it takes effect once this file is installed in
+  /usr/share/polkit-1/actions and the helper is at that path, which is
+  where a system-wide install through ext-installer puts it
+  (#156). Anywhere else pkexec asks under its generic action.
+-->
+<policyconfig>
+  <vendor>Rick</vendor>
+  <vendor_url>https://github.com/Open-Breach/rick</vendor_url>
+  <action id="org.openbreach.rick.zfs">
+    <description>Change ZFS snapshots</description>
+    <description xml:lang="de">ZFS-Snapshots ändern</description>
+    <message>Authentication is required to create, rename or destroy a ZFS snapshot</message>
+    <message xml:lang="de">Zum Anlegen, Umbenennen oder Löschen eines ZFS-Snapshots ist eine Legitimierung notwendig</message>
+    <icon_name>rick</icon_name>
+    <defaults>
+      <allow_any>auth_admin</allow_any>
+      <allow_inactive>auth_admin</allow_inactive>
+      <allow_active>auth_admin</allow_active>
+    </defaults>
+    <annotate key="org.freedesktop.policykit.exec.path">/opt/rick/current/rick-zfs</annotate>
+  </action>
+</policyconfig>

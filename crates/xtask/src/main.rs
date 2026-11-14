@@ -194,6 +194,12 @@ fn bundle(args: &[String]) -> Result<()> {
             plugins_dir.join(&id).display()
         );
     }
+    // The ZFS plugin's privileged helper goes beside the binary, where the
+    // plugin looks for it (`ext_zfs::helper::path`), wherever the plugin
+    // itself was bundled.
+    if plugins_dir.join("zfs").is_dir() {
+        copy(&profile_dir.join(exe("rick-zfs")), &out)?;
+    }
     match std::env::var_os("RICK_SEVENZIP_DIR") {
         Some(dir) => sevenzip(Path::new(&dir), &plugins_dir)?,
         None => println!("7-zip: RICK_SEVENZIP_DIR not set; the library is not bundled"),

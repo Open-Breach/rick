@@ -5101,6 +5101,159 @@ fn screenshots_of_the_list_view() {
     }
 }
 
+/// The time slider in Light and Dark: at *Now*, at
+/// a past point (read-only), while reading, focused with a tick's tooltip,
+/// and the view options menu with its *Timeline* entry. For the design
+/// review that stands in for the Figma frame.
+#[test]
+#[allow(clippy::too_many_lines)]
+fn screenshots_of_the_time_slider() {
+    use tests::timeline::{SNAPSHOTS, Snapshots, write_tree};
+    let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+    let root = dir.path().join("docs");
+    write_tree(&root, &SNAPSHOTS);
+    let build = |delay: Duration| {
+        let source = Snapshots::new(&root, &SNAPSHOTS, delay);
+        let fake = Arc::new(Fake::new().unwrap_or_else(|e| panic!("{e}")));
+        let host = Arc::new(EguiHost::new());
+        let app = app::App::new(app::Config {
+            platform: fake.clone(),
+            ui: host.clone(),
+            extensions: vec![source.extension()],
+            config_dir: Some(fake.config_dir()),
+            start: Some(local(&root)),
+        });
+        let mut harness = Harness::builder()
+            .with_size(egui::vec2(1100.0, 560.0))
+            .with_pixels_per_point(2.0)
+            .build_eframe(move |cc| RickUi::new(app, host, &cc.egui_ctx));
+        settle(&mut harness);
+        (harness, source)
+    };
+    let look = |harness: &mut Harness<'_, RickUi>, theme: Theme| {
+        harness.state_mut().app_mut().handle(
+            app::Command::Settings(SettingsChange::Theme(theme)),
+            &mut Vec::new(),
+        );
+        settle(harness);
+    };
+    let click = |harness: &mut Harness<'_, RickUi>, at: egui::Pos2| {
+        harness.event(egui::Event::PointerMoved(at));
+        harness.step();
+        for pressed in [true, false] {
+            harness.event(egui::Event::PointerButton {
+                pos: at,
+                button: egui::PointerButton::Primary,
+                pressed,
+                modifiers: egui::Modifiers::default(),
+            });
+            harness.step();
+        }
+        settle(harness);
+    };
+    for theme in [Theme::Light, Theme::Dark] {
+        let name = if theme == Theme::Light {
+            "light"
+        } else {
+            "dark"
+        };
+        let (mut harness, source) = build(Duration::ZERO);
+        look(&mut harness, theme);
+        let pane = harness.state().app().model().focused;
+        let tab = harness
+            .state()
+            .app()
+            .model()
+            .active_tab(pane)
+            .map_or_else(|| panic!("no tab"), |(id, _)| id);
+
+        // The view options menu, the entry ticked once switched on.
+        harness.state_mut().queue(Intent::ToggleTimeline, pane);
+        settle(&mut harness);
+        let button = harness.get_by_label("View options").rect().center();
+        click(&mut harness, button);
+        harness.event(egui::Event::PointerMoved(egui::pos2(5.0, 540.0)));
+        harness.step();
+        shoot(&mut harness, &format!("timeline-menu-{name}"));
+        harness.key_press(egui::Key::Escape);
+        settle(&mut harness);
+
+        // At Now.
+        harness.event(egui::Event::PointerMoved(egui::pos2(5.0, 540.0)));
+        settle(&mut harness);
+        shoot(&mut harness, &format!("timeline-now-{name}"));
+
+        // Focused, the pointer resting on a tick.
+        let (_, axis) = harness
+            .state()
+            .timeline_bar(tab)
+            .unwrap_or_else(|| panic!("no bar"));
+        let axis = axis.unwrap_or_else(|| panic!("no axis"));
+        let model = harness.state().app().model();
+        let (timeline, _) = model
+            .timeline_points(pane)
+            .unwrap_or_else(|| panic!("no timeline"));
+        let xs = ui_egui::timeline_bar::positions(timeline, axis.left(), axis.right());
+        harness
+            .ctx
+            .memory_mut(|m| m.request_focus(ui_egui::timeline_bar::id(pane)));
+        harness.event(egui::Event::PointerMoved(egui::pos2(
+            xs[1],
+            axis.center().y,
+        )));
+        for _ in 0..6 {
+            harness.step();
+        }
+        shoot(&mut harness, &format!("timeline-focused-{name}"));
+
+        // At a past point: read-only, the file that is gone now selected.
+        harness
+            .ctx
+            .memory_mut(|m| m.surrender_focus(ui_egui::timeline_bar::id(pane)));
+        harness.state_mut().app_mut().handle(
+            app::Command::TimeTravel {
+                pane,
+                to: source.point("daily-wed", Path::new("")),
+                first: true,
+            },
+            &mut Vec::new(),
+        );
+        settle(&mut harness);
+        let lost = harness
+            .state()
+            .app()
+            .model()
+            .active_tab(pane)
+            .and_then(|(_, t)| {
+                t.listing
+                    .rows()
+                    .find(|e| e.name == "lost-notes.md")
+                    .map(|e| e.id)
+            })
+            .unwrap_or_else(|| panic!("no lost-notes.md"));
+        harness.state_mut().app_mut().handle(
+            app::Command::Select {
+                pane,
+                change: SelectionChange::Set(vec![lost]),
+            },
+            &mut Vec::new(),
+        );
+        harness.event(egui::Event::PointerMoved(egui::pos2(5.0, 540.0)));
+        settle(&mut harness);
+        shoot(&mut harness, &format!("timeline-past-{name}"));
+
+        // Reading: a source that takes its time.
+        let (mut slow, _) = build(Duration::from_secs(5));
+        look(&mut slow, theme);
+        let pane = slow.state().app().model().focused;
+        slow.state_mut().queue(Intent::ToggleTimeline, pane);
+        for _ in 0..4 {
+            slow.step();
+        }
+        shoot(&mut slow, &format!("timeline-reading-{name}"));
+    }
+}
+
 /// The fixture folders of the README's picture: a maker's `Projects`
 /// folder and in it the project around the sample model, the one of
 /// `assets/readme/` (the release's animal, which names the project and

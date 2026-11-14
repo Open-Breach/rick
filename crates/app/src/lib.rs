@@ -83,6 +83,7 @@ mod places;
 pub mod plugins;
 mod session;
 pub mod settings;
+mod timeline;
 
 pub use command::{
     Command, ConnectionOp, Contents, Event, FolderContents, PropertiesInfo, TransferMode,
@@ -255,6 +256,13 @@ enum Msg {
         pane: PaneId,
         generation: u64,
         items: Vec<(EntryId, Decoration)>,
+    },
+    /// A pane's timeline was read: the merged answer of its sources.
+    Timeline {
+        pane: PaneId,
+        generation: u64,
+        location: Location,
+        timeline: Option<ext::Timeline>,
     },
     /// Something a pane's decorators depend on changed; decorate again.
     Invalidate {
@@ -716,6 +724,8 @@ pub struct App {
     preview_with: BTreeMap<PaneId, (EntryId, ExtId)>,
     /// Thumbnails being rendered, so a cell asked for twice renders once.
     thumbnails: BTreeSet<(EntryId, u32)>,
+    /// The time slider's reads, answers and travels.
+    timelines: timeline::Timelines,
     /// Events from start-up, delivered on the first poll.
     pending: Vec<Event>,
     /// The forms actions will show once a job of theirs finishes
@@ -1085,6 +1095,7 @@ impl App {
             jobs,
             job_events,
             decor_jobs: JobRunner::new(),
+            timelines: timeline::Timelines::default(),
             mailbox,
             rx,
             live: BTreeMap::new(),
@@ -1698,6 +1709,12 @@ impl App {
                     Self::selection_cleared(pane, before, events);
                 }
             }
+            Command::TimeTravel { pane, to, first } => {
+                let before = self.selection_len(pane);
+                self.time_travel(pane, to, first);
+                Self::selection_cleared(pane, before, events);
+            }
+            Command::ToggleTimeline(pane) => self.toggle_timeline(pane, events),
             Command::Transfer {
                 items,
                 from,
@@ -3767,6 +3784,7 @@ impl App {
                     decorator.invalidate(&live.key.location);
                 }
             }
+            self.forget_timeline(&key.location);
             let stale = self
                 .model
                 .active_tab(pane)
@@ -3916,6 +3934,7 @@ impl App {
                 children: BTreeMap::new(),
             },
         );
+        self.sync_timeline(pane);
     }
 
     /// Whether `location` can be searched beneath (SPEC.md, *Footer*):
@@ -4860,14 +4879,20 @@ impl App {
                 self.integration_applied(results, relaunch, events);
             }
             Msg::Invalidate { pane, generation } => {
-                if self
-                    .live
-                    .get(&pane)
-                    .is_some_and(|l| l.generation == generation)
+                if let Some(live) = self.live.get(&pane)
+                    && live.generation == generation
                 {
+                    let location = live.key.location.clone();
+                    self.forget_timeline(&location);
                     self.redecorate(pane, events);
                 }
             }
+            Msg::Timeline {
+                pane,
+                generation,
+                location,
+                timeline,
+            } => self.timeline_read(pane, generation, location, timeline, events),
         }
     }
 
@@ -5128,9 +5153,20 @@ impl App {
         if live.generation != generation {
             return;
         }
+        let location = live.key.location.clone();
+        match result {
+            Err(error) if self.travel_missed(pane, &location, error, events) => {
+                self.sync_panes(events);
+                return;
+            }
+            Err(_) => {}
+            Ok(()) => self.travel_arrived(pane),
+        }
+        let Some(live) = self.live.get_mut(&pane) else {
+            return;
+        };
         live.complete = true;
         let buffered = live.buffer.take();
-        let location = live.key.location.clone();
         // A remote location that cannot be reached keeps the pane where it
         // is, with the card and *Retry* (SPEC.md *Removed and unreachable
         // locations*). Any other failure is the tab's banner with *Retry*,

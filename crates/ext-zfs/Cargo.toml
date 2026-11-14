@@ -1,0 +1,29 @@
+[package]
+name = "ext-zfs"
+version.workspace = true
+description = "Rick's ZFS extension: snapshots as a read-only location, file versions, restore, snapshot management and the dataset's properties in the info panel, through the zfs command line. Linux only."
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+# A plugin: a `cdylib` the host loads from `plugins/zfs/`, and an `rlib`
+# for the binary's opt-in `zfs` feature and the tests.
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+types = { workspace = true }
+ext = { workspace = true }
+chrono = { workspace = true }
+futures = { workspace = true }
+tokio = { workspace = true, features = ["fs", "sync"] }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+runtime = { workspace = true }
+platform = { workspace = true }
+tempfile = { workspace = true }
+
+[lints]
+workspace = true
