@@ -7,18 +7,35 @@ the pull request that brought the change.
 
 ## [Unreleased]
 
-- **The README, regenerated with every release.** `README.md` follows
-  `specs/readme.md`: what Rick is, why it exists, six features, one
-  screenshot, how to install it. `cargo xtask readme` writes the version,
-  the Features list (the previewable file types, the storage providers and
-  the platform search, from what the extensions register) and the Install
-  section (the archives the release workflow builds), and renders the
-  screenshot in Light and Dark with the sample model
-  `assets/readme/robot-dog.stl` in the 3D preview. The test `readme` fails
-  when the page of a release version is not what the code registers, and
-  the release workflow stops when the status line's version is not the
-  tag's. Building from source, the command line and the architecture moved
-  to `docs/` (#207).
+## [0.4.1] - 2026-11-14
+
+A small release after 0.4.0: a launch that meets an instance on its way out,
+a faster start, and a README written from what the release ships.
+
+### Fixed
+
+- A Rick launched while the previous instance is leaving now becomes the
+  instance and opens its window, where it could end with an error or with
+  "a Rick is running but did not answer" (#215).
+
+### Changed
+
+- Rick starts faster: each translation file is parsed once and kept, and
+  one text is looked up without waiting for another (#214).
+- The README is regenerated with every release by `cargo xtask readme`: the
+  version, the previewable file types, the storage providers, the platform
+  search and the Install section come from what the release registers and
+  builds, with one screenshot in Light and Dark; building from source, the
+  command line and the architecture moved to `docs/` (#207).
+- The README lists the file types Rick previews by kind, Media, Documents,
+  3D, Programming and Archives and disk images, with the first list open;
+  its status line says how finished Rick is, its screenshot shows a new
+  sample model, a giraffe, and Rick's portal closes the page (#217).
+- Building and testing, with nothing to see in Rick itself: the release
+  build keeps its GStreamer downloads between runs and resumes one that
+  broke off, the toolchain is pinned to 1.99.1, test builds carry less
+  debug information, the runners are chosen by repository variables, and
+  the integration tests are one binary (#209, #210, #212, #213, #214).
 
 ## [0.4.0] - 2026-11-11
 
@@ -1423,7 +1440,8 @@ text, code, images and PDF, and Git, on Linux, macOS and Windows.
   in the middle of a write can no longer read a truncated file and lose
   the pinned folders (#14).
 
-[Unreleased]: https://github.com/Open-Breach/rick/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/Open-Breach/rick/compare/v0.4.1...HEAD
+[0.4.1]: https://github.com/Open-Breach/rick/releases/tag/v0.4.1
 [0.4.0]: https://github.com/Open-Breach/rick/releases/tag/v0.4.0
 [0.3.0]: https://github.com/Open-Breach/rick/releases/tag/v0.3.0
 [0.2.0]: https://github.com/Open-Breach/rick/releases/tag/v0.2.0
