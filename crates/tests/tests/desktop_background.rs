@@ -288,5 +288,5 @@ fn a_desktop_that_refuses_is_told_like_any_other_failure() {
         )),
         "the refusal reaches the user: {events:?}"
     );
-    assert!(fake.desktop_backgrounds().is_empty());
+    assert_eq!(fake.desktop_backgrounds(), Vec::<std::path::PathBuf>::new());
 }
