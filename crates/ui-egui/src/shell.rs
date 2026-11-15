@@ -797,14 +797,17 @@ fn tab_label(model: &model::Model, tab: &Tab) -> (&'static str, String) {
 /// band; an inactive one shows the band and takes its colours from it —
 /// the band's hover under the pointer, its title and icon colours, the
 /// close button at half opacity (SPEC.md *Workspace tabs*, *On the
-/// band*). The grab cursor is over the tab's body. Returns the tab's
-/// response and whether the close button was pressed.
+/// band*). A tab that is not `closable`, the last workspace of the last
+/// window, has no close button, and its title takes the room (*The tab
+/// that cannot be closed*). The grab cursor is over the tab's body.
+/// Returns the tab's response and whether the close button was pressed.
 fn workspace_tab(
     ui: &mut egui::Ui,
     rect: egui::Rect,
     id: WorkspaceId,
     label: &TabLabel,
     active: bool,
+    closable: bool,
 ) -> (egui::Response, bool) {
     use crate::theme::{ICON, TAB_CORNER, TEXT_BODY};
     let scheme = crate::theme::scheme(ui);
@@ -821,14 +824,18 @@ fn workspace_tab(
         egui::pos2(rect.right() - 8.0 - ICON / 2.0, rect.center().y),
         egui::vec2(20.0, 20.0),
     );
-    let close = ui.interact(
-        close_rect,
-        egui::Id::new(("workspace-tab-close", id.0)),
-        egui::Sense::click(),
-    );
-    close.widget_info(|| {
-        egui::WidgetInfo::labeled(egui::WidgetType::Button, true, t!("shell-close-tab"))
+    let close = closable.then(|| {
+        let close = ui.interact(
+            close_rect,
+            egui::Id::new(("workspace-tab-close", id.0)),
+            egui::Sense::click(),
+        );
+        close.widget_info(|| {
+            egui::WidgetInfo::labeled(egui::WidgetType::Button, true, t!("shell-close-tab"))
+        });
+        close
     });
+    let close_hovered = close.as_ref().is_some_and(egui::Response::hovered);
     let corners = egui::CornerRadius {
         nw: TAB_CORNER,
         ne: TAB_CORNER,
@@ -838,13 +845,13 @@ fn workspace_tab(
     // The open hand over the tab's body: it can be dragged. Its close
     // button keeps the cursor it has (QUESTIONS.md 277); the tab counts
     // as hovered under it too, as it would take a drag from there.
-    if response.hovered() && !close.hovered() {
+    if response.hovered() && !close_hovered {
         ui.ctx().set_cursor_icon(egui::CursorIcon::Grab);
     }
     let painter = ui.painter();
     if active {
         painter.rect_filled(rect, corners, scheme.bg_pane);
-    } else if response.hovered() || close.hovered() {
+    } else if response.hovered() || close_hovered {
         painter.rect_filled(rect, corners, band.tab_hover);
     }
     // The active tab is the scheme's; the others sit on the band.
@@ -855,14 +862,21 @@ fn workspace_tab(
     };
     let icon_font = egui::FontId::proportional(ICON);
     painter.text(
-        egui::pos2(rect.left() + 14.0, rect.center().y),
+        egui::pos2(rect.left() + TAB_INSET, rect.center().y),
         egui::Align2::LEFT_CENTER,
         label.icon,
         icon_font.clone(),
         icon,
     );
     let title_left = rect.left() + 38.0;
-    let title_width = (close_rect.left() - 6.0 - title_left).max(0.0);
+    // Up to the close button; without one, up to the inset the icon has
+    // at the other end.
+    let title_right = if closable {
+        close_rect.left() - 6.0
+    } else {
+        rect.right() - TAB_INSET
+    };
+    let title_width = (title_right - title_left).max(0.0);
     let mut job = egui::text::LayoutJob::simple_singleline(
         label.title.clone(),
         egui::FontId::proportional(TEXT_BODY),
@@ -872,6 +886,9 @@ fn workspace_tab(
     let galley = ui.fonts_mut(|fonts| fonts.layout_job(job));
     let text_pos = egui::pos2(title_left, rect.center().y - galley.size().y / 2.0);
     ui.painter().galley(text_pos, galley, colour);
+    let Some(close) = close else {
+        return (response, false);
+    };
     let x_colour = if active {
         icon
     } else {
@@ -1011,6 +1028,9 @@ pub type Relaunch = Arc<dyn Fn(&std::path::Path) + Send + Sync>;
 const RECENTS: usize = 64;
 /// The room between two workspace tabs.
 const TAB_GAP: f32 = 2.0;
+/// From a workspace tab's left edge to its icon, and from the title's end
+/// to its right edge where the tab has no close button.
+const TAB_INSET: f32 = 14.0;
 /// The new-tab button's width.
 const NEW_TAB_WIDTH: f32 = 28.0;
 /// The slot the tab row shows where a dropped pane would land as a new tab.
@@ -3160,10 +3180,12 @@ impl RickUi {
     }
 
     /// Closes a workspace tab, remembering the folder of its focused pane
-    /// so that *Reopen closed tab* brings it back.
+    /// so that *Reopen closed tab* brings it back. The tab that cannot be
+    /// closed stays and is not remembered: there is nothing to bring back.
     fn close_workspace(&mut self, id: WorkspaceId) {
         let model = self.app.model();
-        if let Some(window) = model.window_of_workspace(id)
+        if model.can_close_workspace(id)
+            && let Some(window) = model.window_of_workspace(id)
             && let Some(ws) = model.workspaces(window).iter().find(|ws| ws.id == id)
             && let Some((_, tab)) = model.active_tab(ws.focused)
             && tab.kind.lists()
@@ -3728,8 +3750,14 @@ impl RickUi {
                 egui::pos2(drawn, row.top()),
                 egui::vec2(TAB_WIDTH, row.height()),
             );
-            let (response, close) =
-                workspace_tab(&mut child, tab_rect, *id, label, Some(*id) == active);
+            let (response, close) = workspace_tab(
+                &mut child,
+                tab_rect,
+                *id,
+                label,
+                Some(*id) == active,
+                model.can_close_workspace(*id),
+            );
             if let Some(tab) = label.tab {
                 w.tab_headers.insert(tab, tab_rect);
             }
@@ -3874,7 +3902,8 @@ impl RickUi {
                     se: 0,
                 },
             );
-            let (_, _) = workspace_tab(&mut top, float, d.id, label, true);
+            let closable = model.can_close_workspace(d.id);
+            let (_, _) = workspace_tab(&mut top, float, d.id, label, true, closable);
             // The dock targets over the lifted tab, not under it: the
             // cursor is inside the tab, which is wider than the cross and
             // would hide the targets it is being taken to.

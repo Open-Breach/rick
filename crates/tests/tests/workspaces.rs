@@ -180,14 +180,15 @@ fn the_title_row_opens_shows_closes_cycles_and_reorders_workspace_tabs() {
     fs::write(alpha.join("a.txt"), "a").unwrap_or_else(|e| panic!("{e}"));
     let mut harness = harness(&alpha, egui::vec2(1400.0, 800.0));
 
-    // One tab, titled after the folder, with a close button named for a
-    // screen reader; the new-tab button after it.
+    // One tab, titled after the folder; the new-tab button after it. It
+    // is the tab that cannot be closed, so it has no close button.
     assert_eq!(titles(&harness), ["alpha-folder"]);
     tab_centre(&harness, "alpha-folder");
-    assert_eq!(harness.query_all_by_label("Close tab").count(), 1);
+    assert_eq!(harness.query_all_by_label("Close tab").count(), 0);
 
     // The new-tab button opens a workspace at the focused pane's folder,
-    // right after the shown one, and shows it.
+    // right after the shown one, and shows it. Each tab has a close
+    // button, named for a screen reader.
     harness.get_by_label("New tab").click();
     harness.step();
     settle(&mut harness);
@@ -274,6 +275,121 @@ fn the_title_row_opens_shows_closes_cycles_and_reorders_workspace_tabs() {
     harness.step();
     settle(&mut harness);
     assert_eq!(titles(&harness), ["beta-folder"]);
+}
+
+/// The widths at which the last frame painted the text `title` inside the
+/// tab row, one per tab with that title, as drawn: cut where it was cut.
+fn title_widths(harness: &Harness<'_, RickUi>, title: &str) -> Vec<f32> {
+    let row = harness
+        .state()
+        .tab_row()
+        .unwrap_or_else(|| panic!("no tab row"));
+    harness
+        .output()
+        .shapes
+        .iter()
+        .filter_map(|clipped| match &clipped.shape {
+            egui::Shape::Text(text) if text.galley.job.text == title => {
+                let at = text.galley.rect.translate(text.pos.to_vec2());
+                row.contains(at.center()).then(|| at.width())
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+/// Acceptance (issue 219, item 2; SPEC.md *Workspace tabs*, *The tab that
+/// cannot be closed*): the last workspace of the last window stays when it
+/// is closed, so its tab has no close button and its title takes the
+/// room. A second tab brings the button back on both and closing one
+/// takes it away again; with two windows the only tab of each closes its
+/// window and so has its button. Mod+W and a middle click on the tab
+/// without a button do nothing, and leave nothing for *Reopen closed
+/// tab* to bring back.
+#[test]
+fn the_tab_that_cannot_be_closed_has_no_close_button() {
+    let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+    // A name too long for a tab with a close button or without one.
+    let name = "a-folder-whose-name-is-far-too-long-for-a-workspace-tab";
+    let folder = dir.path().join(name);
+    fs::create_dir(&folder).unwrap_or_else(|e| panic!("{e}"));
+    let mut harness = harness(&folder, egui::vec2(1400.0, 800.0));
+    let buttons = |harness: &Harness<'_, RickUi>| harness.query_all_by_label("Close tab").count();
+
+    // One window with one tab: no close button, and the title runs on to
+    // where the button would have ended.
+    assert_eq!(titles(&harness), [name]);
+    assert_eq!(buttons(&harness), 0);
+    let alone = title_widths(&harness, name);
+    assert_eq!(alone.len(), 1, "one title: {alone:?}");
+
+    // Mod+W and a middle click on it do nothing.
+    harness.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::W);
+    harness.step();
+    settle(&mut harness);
+    let tab = tab_centre(&harness, name);
+    click_at(&mut harness, tab, egui::PointerButton::Middle);
+    settle(&mut harness);
+    assert_eq!(titles(&harness), [name]);
+    assert_eq!(buttons(&harness), 0);
+    // Nothing closed, so there is nothing to reopen.
+    harness.key_press_modifiers(
+        egui::Modifiers::COMMAND | egui::Modifiers::SHIFT,
+        egui::Key::T,
+    );
+    harness.step();
+    settle(&mut harness);
+    assert_eq!(titles(&harness), [name], "no tab was closed");
+
+    // A second tab brings the button back on both, and the titles give
+    // way to it.
+    harness.get_by_label("New tab").click();
+    harness.step();
+    settle(&mut harness);
+    assert_eq!(titles(&harness), [name, name]);
+    assert_eq!(buttons(&harness), 2);
+    let two = title_widths(&harness, name);
+    assert_eq!(two.len(), 2, "two titles: {two:?}");
+    for width in &two {
+        assert!(
+            *width + 10.0 < alone[0],
+            "a title beside a close button is shorter: {width} against {}",
+            alone[0]
+        );
+    }
+
+    // Closing one takes the button away again.
+    let row = harness
+        .state()
+        .tab_row()
+        .unwrap_or_else(|| panic!("no tab row"));
+    let close = harness
+        .query_all_by_label("Close tab")
+        .map(|n| n.rect())
+        .find(|r| row.contains(r.center()))
+        .unwrap_or_else(|| panic!("no close button"));
+    click_at(&mut harness, close.center(), egui::PointerButton::Primary);
+    settle(&mut harness);
+    assert_eq!(titles(&harness), [name]);
+    assert_eq!(buttons(&harness), 0);
+    assert_eq!(title_widths(&harness, name), alone);
+
+    // With two windows, each window's only tab has its button: it closes
+    // its window.
+    let first = harness.state().app().model().focused_window;
+    command(&mut harness, app::Command::NewWindow);
+    let second = harness.state().app().model().focused_window;
+    assert_ne!(first, second, "a second window");
+    assert_eq!(workspaces_of(&harness, first).len(), 1);
+    assert_eq!(workspaces_of(&harness, second).len(), 1);
+    assert_eq!(buttons(&harness), 2, "one in each window");
+    let only = workspaces_of(&harness, second)[0];
+    command(&mut harness, app::Command::CloseWorkspace(only));
+    assert!(
+        harness.state().app().model().window(second).is_none(),
+        "the window went with its only tab"
+    );
+    assert_eq!(buttons(&harness), 0, "the last tab of the last window");
 }
 
 #[test]

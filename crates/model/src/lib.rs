@@ -1198,11 +1198,26 @@ impl Model {
         true
     }
 
+    /// Whether closing a workspace does anything: every workspace can be
+    /// closed but the last one of the last window, which stays
+    /// ([`Model::close_workspace`]). Its tab is the one drawn without a
+    /// close button (SPEC.md *Workspace tabs*, *The tab that cannot be
+    /// closed*).
+    #[must_use]
+    pub fn can_close_workspace(&self, id: WorkspaceId) -> bool {
+        self.window_of_workspace(id)
+            .and_then(|window| self.windows.get(&window))
+            .is_some_and(|w| w.workspaces.len() > 1 || self.windows.len() > 1)
+    }
+
     /// Closes a workspace with every pane and tab in it; the neighbour
     /// after it, else before it, is shown. A window left without a
     /// workspace closes unless it is the last one, whose last workspace
     /// stays. Returns whether it closed.
     pub fn close_workspace(&mut self, id: WorkspaceId) -> bool {
+        if !self.can_close_workspace(id) {
+            return false;
+        }
         let Some(window) = self.window_of_workspace(id) else {
             return false;
         };
@@ -1210,7 +1225,7 @@ impl Model {
             return false;
         };
         if w.workspaces.len() < 2 {
-            return self.windows.len() > 1 && self.close_window(window);
+            return self.close_window(window);
         }
         let panes: Vec<PaneId> = w
             .workspaces
@@ -3026,6 +3041,34 @@ mod tests {
         assert_eq!(model.focused, pane_a);
         assert!(!model.close_workspace(first), "the last one stays");
         assert!(!model.close_workspace(second), "gone already");
+    }
+
+    #[test]
+    fn every_workspace_can_be_closed_but_the_last_one_of_the_last_window() {
+        let mut model = Model::new(Settings::default(), loc("/a"));
+        let window = model.focused_window;
+        let first = model.workspaces(window)[0].id;
+        assert!(!model.can_close_workspace(first), "it would stay");
+        assert!(!model.can_close_workspace(WorkspaceId(99)), "no such one");
+
+        // A second tab in the window: both close.
+        let (second, _, _) = model
+            .new_workspace(window, loc("/b"))
+            .unwrap_or_else(|| panic!("workspace"));
+        assert!(model.can_close_workspace(first));
+        assert!(model.can_close_workspace(second));
+        assert!(model.close_workspace(second));
+        assert!(!model.can_close_workspace(first), "alone again");
+
+        // A second window: the only tab of each closes its window.
+        let (other, _, _) = model.new_window(loc("/c"));
+        let third = model.workspaces(other)[0].id;
+        assert!(model.can_close_workspace(first));
+        assert!(model.can_close_workspace(third));
+        assert!(model.close_workspace(third));
+        assert!(model.window(other).is_none(), "its window went with it");
+        assert!(!model.can_close_workspace(first));
+        assert!(!model.close_workspace(first));
     }
 
     #[test]
