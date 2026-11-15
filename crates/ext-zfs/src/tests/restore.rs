@@ -324,6 +324,42 @@ fn a_folder_whose_copy_fails_leaves_the_live_folder_alone() {
     assert!(leftovers.is_empty(), "no partial copy left: {leftovers:?}");
 }
 
+/// A name as long as a file system allows comes back like any other: the
+/// staging copy is named after the beginning of it only, and so fits too.
+#[test]
+fn an_item_with_a_name_at_the_limit_is_restored() {
+    if !crate::supported() {
+        return;
+    }
+    let b = bench();
+    // Three bytes a character: the cut falls inside one.
+    let name = "\u{540d}".repeat(85);
+    assert_eq!(name.len(), 255);
+    if fs::write(b.fx.snapshot_dir("b").join("ann").join(&name), "as it was").is_err() {
+        return; // No name that long on this file system.
+    }
+    let restore_items = items(
+        &b.shared,
+        &[snapshot_location(
+            "tank/home",
+            "b",
+            &Path::new("ann").join(&name),
+        )],
+    )
+    .unwrap_or_else(|e| panic!("{e}"));
+    let result = restore(&restore_items, &*b.fake, &CancelToken::new(), &mut |_| {});
+    assert!(result.is_ok(), "{result:?}");
+    let live = b.fx.home().join("ann").join(&name);
+    assert_eq!(fs::read_to_string(&live).ok().as_deref(), Some("as it was"));
+    let left: Vec<_> = fs::read_dir(b.fx.home().join("ann"))
+        .unwrap_or_else(|e| panic!("{e}"))
+        .filter_map(Result::ok)
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .filter(|name| name.contains("rick-restore"))
+        .collect();
+    assert!(left.is_empty(), "the staging copy stayed: {left:?}");
+}
+
 #[test]
 fn a_cancelled_restore_stops_before_copying() {
     let b = bench();

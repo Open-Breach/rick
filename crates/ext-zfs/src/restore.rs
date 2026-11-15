@@ -156,12 +156,18 @@ fn put_back(from: &Path, to: &Path, trash: &dyn Trash, cancel: &CancelToken) -> 
     })
 }
 
+/// The bytes of an item's name that its staging name takes at most: a name
+/// may be 255 bytes long, and the staging name has to fit as well.
+const STAGING_NAME: usize = 200;
+
 /// A name beside `to` that is not taken: `.<name>.rick-restore`, with a
-/// number added when needed.
+/// number added when needed, and of a long name only its beginning
+/// ([`STAGING_NAME`]).
 fn staging_path(to: &Path) -> PathBuf {
-    let name = to
+    let mut name = to
         .file_name()
         .map_or_else(String::new, |n| n.to_string_lossy().into_owned());
+    name.truncate(name.floor_char_boundary(STAGING_NAME));
     let mut n = 0u32;
     loop {
         let candidate = to.with_file_name(if n == 0 {
