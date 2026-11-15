@@ -142,6 +142,42 @@ fn browse_runs_no_zfs_and_looks_into_no_snapshot_on_the_app_thread() {
     assert_eq!(fx.zfs.calls().len(), after, "no zfs once the job ran");
 }
 
+/// The dataset's list is read again by whoever asks next (the time slider,
+/// another pane) and dropped when a snapshot job ends. What was found for a
+/// folder stays, as nothing reads for a folder that is merely shown; its
+/// next read looks again.
+#[test]
+fn browse_keeps_its_answer_when_the_list_is_read_again() {
+    if !crate::supported() {
+        return;
+    }
+    let fx = Fixture::new();
+    let browse = Browse(shared(&fx));
+    let docs = ctx(local(&fx.home().join("ann/docs")), Vec::new());
+    let current = || {
+        fx.datasets
+            .holding_is_current("tank/home", Path::new("ann/docs"))
+    };
+    assert!(!current(), "nothing found yet");
+    shown(&fx, "ann/docs");
+    assert_eq!(browse.availability(&docs), Availability::Enabled);
+    assert!(current());
+
+    fx.datasets.invalidate("tank/home");
+    fx.datasets
+        .snapshots("tank/home")
+        .unwrap_or_else(|e| panic!("{e}"));
+    assert_eq!(
+        browse.availability(&docs),
+        Availability::Enabled,
+        "left reading with nobody to read"
+    );
+    assert!(!current(), "found against the list before");
+
+    shown(&fx, "ann/docs");
+    assert!(current());
+}
+
 #[test]
 fn browse_is_hidden_off_zfs_and_inside_a_snapshot() {
     let fx = Fixture::new();

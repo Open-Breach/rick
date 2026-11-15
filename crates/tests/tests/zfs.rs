@@ -17,7 +17,7 @@ use std::time::{Duration, Instant};
 
 use app::{App, Command, Config, Event, TransferMode};
 use ext::{ActionId, Availability, Invocation, Level, UiHost};
-use ext_zfs::{Output, ScriptedZfs, ZfsExtension, snapshot_location};
+use ext_zfs::{Datasets, Output, ScriptedZfs, ZfsExtension, snapshot_location};
 use model::SelectionChange;
 use platform::{ConfigDir, Fake};
 use tests::local;
@@ -89,11 +89,16 @@ struct Driver {
 
 impl Driver {
     fn new(dir: &Path, zfs: Arc<ScriptedZfs>) -> Self {
+        Self::with(ZfsExtension::with_zfs(zfs), dir)
+    }
+
+    /// The application with `extension` as its ZFS plugin, started in `dir`.
+    fn with(extension: ZfsExtension, dir: &Path) -> Self {
         let fake = Arc::new(Fake::new().unwrap_or_else(|e| panic!("{e}")));
         let app = App::new(Config {
             platform: Arc::clone(&fake) as Arc<dyn platform::Platform>,
             ui: Arc::new(Agreeing),
-            extensions: vec![Arc::new(ZfsExtension::with_zfs(zfs))],
+            extensions: vec![Arc::new(extension)],
             config_dir: Some(fake.config_dir()),
             start: Some(local(dir)),
         });
@@ -318,4 +323,31 @@ fn browse_snapshots_is_offered_in_an_empty_live_folder() {
     // A refresh drops nothing the menu needs.
     d.step(Command::Refresh(pane));
     assert!(d.enabled("zfs.browse"), "Browse snapshots after a refresh");
+}
+
+/// *Browse snapshots* stays offered when the dataset's snapshot list is read
+/// again by someone other than the folder's decorators: here the time
+/// slider, switched on once the list's time is up (a time of zero stands in
+/// for the half minute). Nothing decorates the folder then, so an answer
+/// dropped with the old list would leave the action reading for good.
+#[test]
+fn browse_snapshots_stays_offered_when_the_list_is_read_again() {
+    if !ext_zfs::supported() {
+        eprintln!("the ZFS plugin is Linux only; skipping");
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+    let datasets = Datasets::with_ttl(pool(dir.path()), Duration::ZERO);
+    let mut d = Driver::with(ZfsExtension::with_datasets(Arc::new(datasets)), dir.path());
+    let pane = d.pane;
+    d.step(Command::Navigate {
+        pane,
+        to: local(&dir.path().join("home/notes")),
+    });
+    assert!(d.enabled("zfs.browse"), "Browse snapshots in the folder");
+    d.step(Command::ToggleTimeline(pane));
+    assert!(
+        d.enabled("zfs.browse"),
+        "Browse snapshots after the time slider read the snapshots again"
+    );
 }

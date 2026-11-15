@@ -78,7 +78,7 @@ impl ZfsDecorator {
         let dataset = fs.name.clone();
         if self.datasets.cached(&dataset).is_some()
             && self.datasets.cached_properties(&dataset).is_some()
-            && self.datasets.cached_holding(&dataset, &rel).is_some()
+            && self.datasets.holding_is_current(&dataset, &rel)
         {
             return;
         }

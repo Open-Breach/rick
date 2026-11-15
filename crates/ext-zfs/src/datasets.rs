@@ -5,8 +5,10 @@
 //! point that is a prefix of it on whole path components. The snapshot
 //! lists are read per dataset and kept for [`TTL`]; a management job drops
 //! its dataset's list when it finishes. Which snapshot is the newest to hold
-//! a folder is found in a job ([`Datasets::newest_holding`]) and kept until
-//! the dataset's list is read again, so a menu can ask without reading. Without `zfs`, or when the list
+//! a folder is found in a job ([`Datasets::newest_holding`]) and kept, so a
+//! menu can ask without reading; once the dataset's list is read again the
+//! answer stays, marked as found against the older list, until the folder's
+//! next read replaces it. Without `zfs`, or when the list
 //! fails, there are no datasets: that is logged once, at `debug`.
 
 use std::collections::HashMap;
@@ -38,6 +40,15 @@ type ReadProperties = (Instant, Arc<Vec<Property>>);
 /// A dataset and a folder below its mount point.
 type Folder = (String, PathBuf);
 
+/// What was found for a folder.
+#[derive(Debug, Clone)]
+struct Held {
+    /// The newest snapshot holding it, or `None` when none does.
+    found: Option<String>,
+    /// The dataset's list was read again, or dropped, since.
+    outdated: bool,
+}
+
 /// The datasets of this machine and their snapshots, as far as `zfs`
 /// tells.
 #[derive(Debug)]
@@ -47,8 +58,8 @@ pub struct Datasets {
     filesystems: OnceLock<Vec<FileSystem>>,
     snapshots: Mutex<HashMap<String, Read>>,
     properties: Mutex<HashMap<String, ReadProperties>>,
-    /// The newest snapshot holding a folder, or `None` when none does.
-    holding: Mutex<HashMap<Folder, Option<String>>>,
+    /// What was last found for each folder shown.
+    holding: Mutex<HashMap<Folder, Held>>,
     told: AtomicBool,
 }
 
@@ -159,8 +170,7 @@ impl Datasets {
             .filter(|s| s.dataset == dataset)
             .collect();
         let read = Arc::new(read);
-        // What was found against the old list is found again on demand.
-        lock(&self.holding).retain(|(of, _), _| of != dataset);
+        self.outdate(dataset);
         lock(&self.snapshots).insert(
             dataset.to_owned(),
             Read {
@@ -190,7 +200,19 @@ impl Datasets {
     pub fn invalidate(&self, dataset: &str) {
         lock(&self.snapshots).remove(dataset);
         lock(&self.properties).remove(dataset);
-        lock(&self.holding).retain(|(of, _), _| of != dataset);
+        self.outdate(dataset);
+    }
+
+    /// Marks what was found for the folders of `dataset` as found against
+    /// an older list. The answers stay, so that a menu is never left
+    /// without one while nothing reads; a folder's next read replaces its
+    /// own.
+    fn outdate(&self, dataset: &str) {
+        for ((of, _), held) in lock(&self.holding).iter_mut() {
+            if of == dataset {
+                held.outdated = true;
+            }
+        }
     }
 
     /// The newest snapshot of `fs` that holds the folder `rel` (relative to
@@ -208,18 +230,36 @@ impl Datasets {
             .into_iter()
             .find(|s| Self::snapshot_dir(fs, &s.name).join(rel).is_dir())
             .map(|s| s.name);
-        lock(&self.holding).insert((fs.name.clone(), rel.to_path_buf()), found.clone());
+        lock(&self.holding).insert(
+            (fs.name.clone(), rel.to_path_buf()),
+            Held {
+                found: found.clone(),
+                outdated: false,
+            },
+        );
         Ok(found)
     }
 
     /// What [`Datasets::newest_holding`] last found for `rel` in `dataset`:
-    /// `None` when it has not been asked since the list was read; nothing
-    /// is read.
+    /// `None` when it was never asked; nothing is read. The answer stays
+    /// when the dataset's list is read again, see
+    /// [`Datasets::holding_is_current`].
     #[must_use]
     pub fn cached_holding(&self, dataset: &str, rel: &Path) -> Option<Option<String>> {
         lock(&self.holding)
             .get(&(dataset.to_owned(), rel.to_path_buf()))
-            .cloned()
+            .map(|held| held.found.clone())
+    }
+
+    /// Whether what [`Datasets::cached_holding`] answers for `rel` was
+    /// found against the dataset's list as it was last read: `false` when
+    /// it was never asked, or when the list was read again or dropped
+    /// since, and then the folder's next read looks once more.
+    #[must_use]
+    pub fn holding_is_current(&self, dataset: &str, rel: &Path) -> bool {
+        lock(&self.holding)
+            .get(&(dataset.to_owned(), rel.to_path_buf()))
+            .is_some_and(|held| !held.outdated)
     }
 
     /// The properties of `dataset` the info section shows, from the cache
