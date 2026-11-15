@@ -59,6 +59,9 @@ pub struct TabUi {
     pub path_edit: Option<String>,
     /// Focus the path bar on the next frame.
     pub focus_path: bool,
+    /// The text the clipboard held when the breadcrumb bar's menu opened,
+    /// for its *Paste from clipboard*: read then, not watched.
+    pub bar_clipboard: Option<String>,
     /// Focus the filter on the next frame.
     pub focus_filter: bool,
     /// Scroll this row into view on the next frame.

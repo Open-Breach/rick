@@ -579,7 +579,8 @@ fn the_toolbar_groups_never_overlap_and_the_right_group_keeps_its_width() {
             "{width}: no last segment in the toolbar row"
         );
         if width < 500.0 {
-            harness.get_by_label(ui_egui::icons::COLLAPSED);
+            // The chevron of the folded ancestors, by its name.
+            harness.get_by_label("Hidden ancestors");
         }
     }
     assert!(

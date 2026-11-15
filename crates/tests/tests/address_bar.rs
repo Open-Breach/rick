@@ -1,9 +1,13 @@
-//! Acceptance (issue 219, items 6a and 6b; SPEC.md *A file's path*, *A
-//! path that exists only in part*): a typed path that names a file opens
-//! the file's folder in the same tab with the file selected, in view and
-//! previewed; a path of which only the beginning exists opens the deepest
-//! folder that does and names the rest in a banner without *Retry*, and
-//! creates nothing.
+//! Acceptance (issue 219, item 6; SPEC.md *Path bar*): the address bar.
+//! A typed path that names a file opens the file's folder in the same tab
+//! with the file selected, in view and previewed; a path of which only
+//! the beginning exists opens the deepest folder that does and names the
+//! rest in a banner without *Retry*, and creates nothing; a right-click
+//! anywhere on the bar opens a menu whose *Paste from clipboard* goes
+//! where the clipboard's text leads without the text field ever showing;
+//! and the bar at rest is one rounded surface with the Up button, a
+//! divider, the segments and the copy button on it, bordered under the
+//! pointer.
 
 use std::fs;
 use std::path::Path;
@@ -12,7 +16,7 @@ use std::time::{Duration, Instant};
 
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable as _;
-use platform::{ConfigDir, Fake};
+use platform::{Clipboard as _, ConfigDir, Fake};
 use tests::local;
 use ui_egui::{EguiHost, RickUi};
 
@@ -80,6 +84,33 @@ fn type_path(harness: &mut Harness<'_, RickUi>, path: &str) {
         harness.state().path_text(tab(harness).0).is_none(),
         "the breadcrumbs are back"
     );
+}
+
+/// The breadcrumb bar: the toolbar's middle part.
+fn bar(harness: &Harness<'_, RickUi>) -> egui::Rect {
+    harness
+        .state()
+        .toolbar_rects(tab(harness).0)
+        .into_iter()
+        .find(|(group, _)| *group == "middle")
+        .map_or_else(|| panic!("no breadcrumb bar"), |(_, rect)| rect)
+}
+
+/// Presses and releases `button` at `at`.
+fn click_at(harness: &mut Harness<'_, RickUi>, at: egui::Pos2, button: egui::PointerButton) {
+    harness.event(egui::Event::PointerMoved(at));
+    harness.step();
+    for pressed in [true, false] {
+        harness.event(egui::Event::PointerButton {
+            pos: at,
+            button,
+            pressed,
+            modifiers: egui::Modifiers::default(),
+        });
+        harness.step();
+    }
+    harness.step();
+    harness.step();
 }
 
 /// A folder `docs` with enough files to scroll, and a folder `other`.
@@ -209,6 +240,244 @@ fn a_path_that_exists_only_in_part_opens_the_deepest_folder_and_names_the_rest()
     assert!(t.missing.is_none());
     assert!(t.failure.is_some(), "reported as before");
     harness.get_by_label("Retry");
+}
+
+/// Item 6c: a right-click anywhere on the bar — a segment, the Up button,
+/// the empty part — opens the menu of three entries. *Paste from
+/// clipboard* ends at the file whose path the clipboard holds, without
+/// the text field ever showing; with no text on the clipboard it is
+/// greyed and does nothing. *Copy path* copies the folder's path, and
+/// *Edit path* opens the text field.
+#[test]
+fn the_bars_menu_pastes_from_the_clipboard_copies_the_path_and_edits_it() {
+    let dir = tree();
+    let docs = dir.path().join("docs");
+    let other = dir.path().join("other");
+    let (mut harness, fake) = harness(&other);
+    let editing = |h: &Harness<'_, RickUi>| h.state().path_text(tab(h).0).is_some();
+    let entries = ["Paste from clipboard", "Copy path", "Edit path"];
+    let close = |harness: &mut Harness<'_, RickUi>| {
+        harness.key_press(egui::Key::Escape);
+        harness.step();
+        harness.step();
+    };
+
+    // Anywhere on the bar: the last segment, the Up button, the empty
+    // part at its right.
+    let bar_rect = bar(&harness);
+    let places = [
+        harness
+            .query_all_by_label("other")
+            .map(|n| n.rect())
+            .find(|r| bar_rect.contains(r.center()))
+            .unwrap_or_else(|| panic!("no last segment"))
+            .center(),
+        harness.get_by_label("Parent directory").rect().center(),
+        egui::pos2(bar_rect.right() - 20.0, bar_rect.center().y),
+    ];
+    for at in places {
+        click_at(&mut harness, at, egui::PointerButton::Secondary);
+        for entry in entries {
+            assert_eq!(
+                harness.query_all_by_label(entry).count(),
+                usize::from(entry != "Copy path") + usize::from(entry == "Copy path") * 2,
+                "{entry} after a right-click at {at:?}"
+            );
+        }
+        assert!(!editing(&harness), "a right-click does not edit");
+        assert_eq!(tab(&harness).1.location, local(&other), "nor navigate");
+        close(&mut harness);
+        assert!(harness.query_by_label("Paste from clipboard").is_none());
+    }
+
+    // A file's path on the clipboard, with the home folder's tilde to
+    // expand: Paste from clipboard ends at the file.
+    let home = fake.home_dir();
+    fs::create_dir_all(&home).unwrap_or_else(|e| panic!("{e}"));
+    fs::write(home.join("pasted.txt"), "pasted\n").unwrap_or_else(|e| panic!("{e}"));
+    fake.set_text("  ~/pasted.txt\n")
+        .unwrap_or_else(|e| panic!("{e}"));
+    click_at(&mut harness, places[2], egui::PointerButton::Secondary);
+    harness.get_by_label("Paste from clipboard").click();
+    for _ in 0..3 {
+        harness.step();
+        assert!(!editing(&harness), "the text field never shows");
+    }
+    settle(&mut harness);
+    assert!(!editing(&harness));
+    assert_eq!(tab(&harness).1.location, local(&home));
+    assert_eq!(selected(&harness), ["pasted.txt"]);
+
+    // No text on the clipboard: greyed, with the reason, and inert.
+    fake.set_text("").unwrap_or_else(|e| panic!("{e}"));
+    let empty = egui::pos2(bar(&harness).right() - 20.0, bar(&harness).center().y);
+    click_at(&mut harness, empty, egui::PointerButton::Secondary);
+    let paste = harness.get_by_label("Paste from clipboard").rect().center();
+    harness.event(egui::Event::PointerMoved(paste));
+    for _ in 0..8 {
+        harness.step();
+    }
+    harness.get_by_label("The clipboard holds no text");
+    click_at(&mut harness, paste, egui::PointerButton::Primary);
+    settle(&mut harness);
+    assert_eq!(tab(&harness).1.location, local(&home), "it does nothing");
+    close(&mut harness);
+
+    // Copy path: the folder's path, as the copy button copies it.
+    type_path(&mut harness, &docs.to_string_lossy());
+    let empty = egui::pos2(bar(&harness).right() - 20.0, bar(&harness).center().y);
+    click_at(&mut harness, empty, egui::PointerButton::Secondary);
+    let menu_entry = harness
+        .query_all_by_label("Copy path")
+        .map(|n| n.rect())
+        .find(|r| !bar(&harness).contains(r.center()))
+        .unwrap_or_else(|| panic!("no Copy path in the menu"));
+    click_at(
+        &mut harness,
+        menu_entry.center(),
+        egui::PointerButton::Primary,
+    );
+    settle(&mut harness);
+    assert_eq!(fake.clipboard_text(), Some(docs.display().to_string()));
+
+    // Edit path: the text field, as Mod+L opens it.
+    click_at(&mut harness, empty, egui::PointerButton::Secondary);
+    harness.get_by_label("Edit path").click();
+    harness.step();
+    harness.step();
+    assert!(editing(&harness));
+    assert_eq!(
+        harness.state().path_text(tab(&harness).0),
+        Some(docs.to_string_lossy().as_ref())
+    );
+}
+
+/// The rectangles the last frame filled with `colour` inside `area`.
+fn filled(
+    harness: &Harness<'_, RickUi>,
+    area: egui::Rect,
+    colour: egui::Color32,
+) -> Vec<egui::Rect> {
+    harness
+        .output()
+        .shapes
+        .iter()
+        .filter_map(|clipped| match &clipped.shape {
+            egui::Shape::Rect(r) if r.fill == colour && area.contains_rect(r.rect) => Some(r.rect),
+            _ => None,
+        })
+        .collect()
+}
+
+/// The rectangles the last frame outlined in `colour` inside `area`.
+fn outlined(
+    harness: &Harness<'_, RickUi>,
+    area: egui::Rect,
+    colour: egui::Color32,
+) -> Vec<egui::Rect> {
+    harness
+        .output()
+        .shapes
+        .iter()
+        .filter_map(|clipped| match &clipped.shape {
+            egui::Shape::Rect(r)
+                if r.stroke.color == colour
+                    && r.stroke.width > 0.0
+                    && area.contains_rect(r.rect) =>
+            {
+                Some(r.rect)
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+/// Item 6d: the bar at rest is one `bg/subtle` surface, `button/size`
+/// tall with 6 px at its left, and has no border; the Up button on it is
+/// 28 × 26 with no fill, then a divider of 1 × 18 px in `border/strong`
+/// 6 px after it. Under the pointer the surface has a 1 px
+/// `border/strong` border, and the hovered Up button is `bg/control`.
+#[test]
+fn the_bar_at_rest_is_one_surface_with_a_border_under_the_pointer() {
+    let dir = tree();
+    let (mut harness, _fake) = harness(&dir.path().join("docs"));
+    let scheme = ui_egui::theme::scheme_of(&harness.ctx);
+    let row = harness
+        .state()
+        .toolbar_row(tab(&harness).0)
+        .unwrap_or_else(|| panic!("toolbar"));
+    let middle = bar(&harness);
+
+    // At rest, the pointer elsewhere.
+    harness.event(egui::Event::PointerMoved(egui::pos2(
+        row.center().x,
+        row.bottom() + 200.0,
+    )));
+    harness.step();
+    harness.step();
+    let surface = filled(&harness, row, scheme.bg_subtle)
+        .into_iter()
+        .find(|r| (r.width() - middle.width()).abs() < 0.5)
+        .unwrap_or_else(|| panic!("no surface in {row:?}"));
+    assert!(
+        (surface.height() - 34.0).abs() < 0.5,
+        "button/size tall in Comfortable: {surface:?}"
+    );
+    assert!(
+        (surface.center().y - row.center().y).abs() < 0.5,
+        "on the line of Back and Forward"
+    );
+    assert_eq!(
+        outlined(&harness, row, scheme.border_strong),
+        Vec::<egui::Rect>::new(),
+        "no border at rest"
+    );
+    let up = harness.get_by_label("Parent directory").rect();
+    assert!(
+        (up.width() - 28.0).abs() < 0.5 && (up.height() - 26.0).abs() < 0.5,
+        "{up:?}"
+    );
+    assert!(
+        (up.left() - surface.left() - 6.0).abs() < 0.5,
+        "6 px of padding at the left: {up:?} on {surface:?}"
+    );
+    assert_eq!(
+        filled(&harness, row, scheme.bg_control),
+        Vec::<egui::Rect>::new(),
+        "the Up button has no fill of its own"
+    );
+    let divider = filled(&harness, surface, scheme.border_strong);
+    assert_eq!(divider.len(), 1, "one divider: {divider:?}");
+    assert!(
+        (divider[0].width() - 1.0).abs() < 0.01 && (divider[0].height() - 18.0).abs() < 0.01,
+        "1 × 18 px: {:?}",
+        divider[0]
+    );
+    assert!(
+        (divider[0].left() - up.right() - 6.0).abs() < 0.5,
+        "6 px after the Up button"
+    );
+
+    // The pointer on the Up button: the border, and the button one step
+    // up from the surface.
+    harness.event(egui::Event::PointerMoved(up.center()));
+    harness.step();
+    harness.step();
+    let border = outlined(&harness, row, scheme.border_strong);
+    assert_eq!(border, [surface], "a border around the surface");
+    assert_eq!(filled(&harness, row, scheme.bg_control), [up]);
+
+    // The pointer on a segment: that segment is the one lit.
+    let segment = harness
+        .query_all_by_label("docs")
+        .map(|n| n.rect())
+        .find(|r| middle.contains(r.center()))
+        .unwrap_or_else(|| panic!("no last segment"));
+    harness.event(egui::Event::PointerMoved(segment.center()));
+    harness.step();
+    harness.step();
+    assert_eq!(filled(&harness, row, scheme.bg_control), [segment]);
+    assert_eq!(outlined(&harness, row, scheme.border_strong), [surface]);
 }
 
 /// Items 6a and 6b on a provider that is not the local one: the rule

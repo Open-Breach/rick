@@ -24,8 +24,19 @@ const VIEW_OPTIONS_WIDTH: f32 = 48.0;
 const MENU_WIDTH: f32 = 260.0;
 /// A row of the view options menu.
 const MENU_ROW: f32 = 32.0;
-/// The parent chip's size.
-const CHIP: egui::Vec2 = egui::vec2(28.0, 26.0);
+/// The Up button on the breadcrumb bar.
+const UP: egui::Vec2 = egui::vec2(28.0, 26.0);
+/// The breadcrumb bar's padding at its left and at its right.
+const BAR_PAD: (f32, f32) = (6.0, 8.0);
+/// The room between two things on the breadcrumb bar.
+const BAR_GAP: f32 = 6.0;
+/// The height of the divider after the Up button.
+const BAR_DIVIDER: f32 = 18.0;
+/// What a segment's highlight has at each side of its text: inside the
+/// gap, so the texts stand [`BAR_GAP`] from their carets.
+const CRUMB_PAD: f32 = 4.0;
+/// The copy button on the bar: its 16 px glyph with 2 px at each side.
+const BAR_COPY: f32 = 20.0;
 /// The footer's filter field: 200 px wide, 26 px tall (SPEC.md *Footer*).
 const FILTER_FIELD: egui::Vec2 = egui::vec2(200.0, FOOTER_CONTROL);
 /// The padding inside the filter field.
@@ -802,16 +813,53 @@ fn fit_segments(widths: &[f32], separator_w: f32, chevron_w: f32, available: f32
     (first_shown, used)
 }
 
-/// The breadcrumb: segments from the right as far as they fit, the rest
-/// folded into a chevron with a dropdown, the last one truncated when even
-/// it does not fit, and the copy button at the right end.
-// The breadcrumb's collapsing, editing and copy button in one pass.
+/// The breadcrumb bar at rest (SPEC.md *Path bar*): one rounded surface,
+/// `button/size` tall on the line of Back and Forward, `bg/subtle` with
+/// `radius/control` corners, 6 px of padding at its left and 8 px at its
+/// right, and a 1 px `border/strong` border while the pointer is over it.
+/// On it: the Up button, a divider, the segments from the right as far as
+/// they fit — the rest folded into a chevron with a dropdown, the last
+/// one cut when even it does not fit — and the copy button. A click on
+/// the empty part edits the path; a right-click anywhere on the bar opens
+/// its menu (*The bar's menu*).
+// The bar's surface, what is on it and its menu in one pass.
 #[allow(clippy::too_many_lines)]
 fn breadcrumb(ui: &mut egui::Ui, cx: &mut PaneCx<'_>, rect: egui::Rect) {
+    let scheme = theme::scheme(ui);
+    let radius = theme::metrics(ui.ctx()).corner_radius();
+    let bar = egui::Rect::from_center_size(
+        rect.center(),
+        egui::vec2(rect.width(), button_size(ui).min(rect.height())),
+    );
+    remember(cx, "middle", rect);
+    ui.painter().rect_filled(bar, radius, scheme.bg_subtle);
+    if ui.rect_contains_pointer(bar) {
+        ui.painter().rect_stroke(
+            bar,
+            radius,
+            egui::Stroke::new(1.0, scheme.border_strong),
+            egui::StrokeKind::Inside,
+        );
+    }
+    let inner = egui::Rect::from_min_max(
+        egui::pos2(bar.left() + BAR_PAD.0, bar.top()),
+        egui::pos2(
+            (bar.right() - BAR_PAD.1).max(bar.left() + BAR_PAD.0),
+            bar.bottom(),
+        ),
+    );
+    let mut on_bar = ui.new_child(
+        egui::UiBuilder::new()
+            .max_rect(inner)
+            .layout(egui::Layout::left_to_right(Align::Center)),
+    );
+    on_bar.set_clip_rect(inner.intersect(ui.clip_rect()));
+    // Everything on the bar is placed by hand: the gaps are the design's.
+    on_bar.spacing_mut().item_spacing.x = 0.0;
+    let ui = &mut on_bar;
+
     let segments: Vec<paths::Crumb> = cx.tab_ui.crumbs_of(&cx.tab.location).to_vec();
     let last = segments.len().saturating_sub(1);
-    let spacing = ui.spacing().item_spacing.x;
-    let pad = 2.0 * ui.spacing().button_padding.x;
     let font = egui::TextStyle::Button.resolve(ui.style());
     let text_width = |ui: &egui::Ui, text: &str| {
         ui.fonts_mut(|f| {
@@ -820,60 +868,112 @@ fn breadcrumb(ui: &mut egui::Ui, cx: &mut PaneCx<'_>, rect: egui::Rect) {
                 .x
         })
     };
-    let separator_w = text_width(ui, icons::SEGMENT) + spacing;
-    let copy_w = button_size(ui) + spacing;
-    let chevron_w = button_size(ui) + separator_w;
+    // A caret stands `BAR_GAP` from the texts at its sides, of which each
+    // segment's highlight takes `CRUMB_PAD`.
+    let beside = BAR_GAP - CRUMB_PAD;
+    let separator_w = beside + ICON + beside;
+    let chevron_w = ICON + 2.0 * CRUMB_PAD + separator_w;
     let widths: Vec<f32> = segments
         .iter()
-        .map(|crumb| text_width(ui, &crumb.label) + pad)
+        .map(|crumb| text_width(ui, &crumb.label) + 2.0 * CRUMB_PAD)
         .collect();
 
-    // The parent chip and its divider come first and take their room off
-    // the segments'.
-    let chip_w = CHIP.x + 4.0 + 1.0 + 6.0 + spacing;
-    let available = (rect.width() - copy_w - chip_w).max(0.0);
+    // The Up button and its divider come first and take their room off
+    // the segments', and so does the copy button at the other end.
+    let lead = UP.x + BAR_GAP + 1.0 + beside;
+    let available = (inner.width() - lead - BAR_COPY).max(0.0);
     let (first_shown, used) = fit_segments(&widths, separator_w, chevron_w, available);
-    remember(cx, "middle", rect);
-    parent_chip(ui, cx);
+    up_button(ui, cx);
+    ui.add_space(BAR_GAP);
+    let (line, _) = ui.allocate_exact_size(egui::vec2(1.0, BAR_DIVIDER), egui::Sense::hover());
+    ui.painter().rect_filled(line, 0.0, scheme.border_strong);
+    ui.add_space(beside);
 
+    let height = UP.y.min(bar.height() - 2.0);
+    let caret = |ui: &mut egui::Ui| {
+        ui.add_space(beside);
+        let (at, _) = ui.allocate_exact_size(egui::vec2(ICON, ICON), egui::Sense::hover());
+        ui.painter().text(
+            at.center(),
+            egui::Align2::CENTER_CENTER,
+            icons::SEGMENT,
+            egui::FontId::proportional(ICON),
+            scheme.icon_default,
+        );
+        ui.add_space(beside);
+    };
     if first_shown > 0 {
         let hidden: Vec<paths::Crumb> = segments[..first_shown].to_vec();
-        let response = ui.menu_button(icons::COLLAPSED, |ui| {
-            for crumb in hidden {
-                if ui.button(crumb.label).clicked() {
-                    cx.requests.push(Request::Command(Command::Navigate {
-                        pane: cx.pane,
-                        to: crumb.location,
-                    }));
-                    ui.close();
+        // The folded ancestors: a button of the bar's kind, `bg/control`
+        // under the pointer and while its dropdown is open.
+        let folded = ui
+            .scope(|ui| {
+                let widgets = &mut ui.visuals_mut().widgets;
+                widgets.inactive.weak_bg_fill = egui::Color32::TRANSPARENT;
+                widgets.inactive.bg_stroke = egui::Stroke::NONE;
+                for state in [&mut widgets.hovered, &mut widgets.active, &mut widgets.open] {
+                    state.weak_bg_fill = scheme.bg_control;
+                    state.bg_stroke = egui::Stroke::NONE;
+                    state.expansion = 0.0;
                 }
-            }
+                ui.spacing_mut().button_padding = egui::vec2(CRUMB_PAD, 0.0);
+                let button = egui::Button::new(
+                    egui::RichText::new(icons::COLLAPSED)
+                        .size(ICON)
+                        .color(scheme.icon_default),
+                )
+                .min_size(egui::vec2(ICON + 2.0 * CRUMB_PAD, height));
+                egui::containers::menu::MenuButton::from_button(button).ui(ui, |ui| {
+                    for crumb in hidden {
+                        if ui.button(crumb.label).clicked() {
+                            cx.requests.push(Request::Command(Command::Navigate {
+                                pane: cx.pane,
+                                to: crumb.location,
+                            }));
+                            ui.close();
+                        }
+                    }
+                })
+            })
+            .inner;
+        let name = t!("pane-hidden-ancestors");
+        folded.0.widget_info(|| {
+            egui::WidgetInfo::labeled(egui::WidgetType::Button, true, name.as_str())
         });
-        response.response.on_hover_text(t!("pane-hidden-ancestors"));
-        ui.weak(icons::SEGMENT);
+        folded.0.on_hover_text(name.as_str());
+        caret(ui);
     }
     let room_for_last = (available - (used - widths[last])).max(24.0);
     for (i, crumb) in segments.iter().enumerate().skip(first_shown) {
-        let label = &crumb.label;
-        let text = if i == last {
-            egui::RichText::new(label).strong()
+        // The last segment is the folder shown: in the stronger text, and
+        // cut where even it does not fit.
+        let width = if i == last {
+            widths[i].min(room_for_last)
         } else {
-            egui::RichText::new(label)
+            widths[i]
         };
-        let mut button = egui::Button::new(text).frame(false);
-        if i == last {
-            button = button
-                .wrap_mode(egui::TextWrapMode::Truncate)
-                .min_size(egui::vec2(0.0, 0.0));
-        }
-        let response = if i == last {
-            ui.add_sized(
-                egui::vec2(widths[i].min(room_for_last), ui.spacing().interact_size.y),
-                button,
-            )
+        let colour = if i == last {
+            ui.visuals().strong_text_color()
         } else {
-            ui.add(button)
+            ui.visuals().text_color()
         };
+        let (at, response) = bar_item(ui, egui::vec2(width, height), true);
+        let galley = crate::widgets::elided(
+            ui,
+            &crumb.label,
+            font.clone(),
+            colour,
+            width - 2.0 * CRUMB_PAD,
+        );
+        ui.painter().galley(
+            egui::pos2(at.left() + CRUMB_PAD, at.center().y - galley.size().y / 2.0),
+            galley,
+            colour,
+        );
+        let label = crumb.label.clone();
+        response.widget_info(|| {
+            egui::WidgetInfo::labeled(egui::WidgetType::Button, true, label.as_str())
+        });
         response
             .clone()
             .on_hover_text(paths::text_of(&crumb.location));
@@ -885,57 +985,109 @@ fn breadcrumb(ui: &mut egui::Ui, cx: &mut PaneCx<'_>, rect: egui::Rect) {
             }));
         }
         if i != last {
-            ui.weak(icons::SEGMENT);
+            caret(ui);
         }
     }
 
     // The copy button, inside the breadcrumb at its right end; empty space
-    // before it switches to editing.
+    // after it switches to editing.
     let copy = CopyButton::new(&t!("pane-copy-path"))
-        .glyph(font.size)
-        .hover(Hover::Bare)
-        .colour(ui.visuals().widgets.inactive.fg_stroke.color)
-        .show(ui, egui::Vec2::ZERO);
+        .hover(Hover::Tile)
+        .fill(scheme.bg_control)
+        .show(ui, egui::vec2(BAR_COPY, height));
     if copy.clicked() {
-        cx.requests.push(Request::RunAction {
-            action: ext::ActionId("core.copy_path"),
-            ctx: ext::ActionCtx {
-                pane: cx.pane,
-                location: cx.tab.location.clone(),
-                selection: Vec::new(),
-                invoked_from: ext::Invocation::Menu,
-                other: None,
-            },
-        });
+        copy_path(cx);
     }
     let remaining = ui.available_size_before_wrap();
-    let (_, response) = ui.allocate_exact_size(
-        egui::vec2(
-            remaining.x.max(8.0),
-            remaining.y.max(ui.spacing().interact_size.y),
-        ),
+    let (_, empty) = ui.allocate_exact_size(
+        egui::vec2(remaining.x.max(0.0), bar.height()),
         egui::Sense::click(),
     );
-    if response.clicked() {
+    if empty.clicked() {
         cx.tab_ui.path_edit = Some(paths::text_of(&cx.tab.location));
         cx.tab_ui.focus_path = true;
     }
+    bar_menu(cx, &empty, bar);
 }
 
-/// The parent chip: `ARROW_UP` on a `bg/subtle` chip with `radius/control`
-/// corners, click for the parent folder, then a 14 px hairline (SPEC.md
-/// *Path bar*). A location without a parent shows the chip faded.
-fn parent_chip(ui: &mut egui::Ui, cx: &mut PaneCx<'_>) {
-    let has_parent = cx.tab_ui.crumbs_of(&cx.tab.location).len() >= 2;
-    ui.add_space(4.0);
+/// Runs *Copy path* on the pane's folder.
+fn copy_path(cx: &mut PaneCx<'_>) {
+    cx.requests.push(Request::RunAction {
+        action: ext::ActionId("core.copy_path"),
+        ctx: ext::ActionCtx {
+            pane: cx.pane,
+            location: cx.tab.location.clone(),
+            selection: Vec::new(),
+            invoked_from: ext::Invocation::Menu,
+            other: None,
+        },
+    });
+}
+
+/// The menu of the breadcrumb bar (SPEC.md *The bar's menu*): a
+/// right-click anywhere on `bar` — a segment, the empty part, the Up
+/// button — opens it at the pointer. *Paste from clipboard* goes where
+/// the clipboard's text leads, expanded, as if it had been typed and
+/// confirmed, and the text field never shows; the clipboard is read when
+/// the menu opens, not watched.
+fn bar_menu(cx: &mut PaneCx<'_>, anchor: &egui::Response, bar: egui::Rect) {
+    let ctx = &anchor.ctx;
+    let opened = ctx.input(|i| i.pointer.secondary_clicked())
+        && ctx
+            .pointer_interact_pos()
+            .is_some_and(|at| bar.contains(at))
+        && ctx.layer_id_at(ctx.pointer_interact_pos().unwrap_or_default()) == Some(anchor.layer_id);
+    if opened {
+        cx.tab_ui.bar_clipboard = cx.app.platform().text().ok().flatten();
+    }
+    let pick =
+        crate::menus::path_bar_menu(anchor, opened, cx.tab_ui.bar_clipboard.as_deref(), cx.keys);
+    match pick {
+        Some(crate::menus::BarPick::Paste(text)) => {
+            let home = cx.app.platform().home_dir();
+            let typed = paths::expand_here(&text, &home);
+            cx.requests.push(Request::Command(Command::GoTo {
+                pane: cx.pane,
+                to: paths::typed(&cx.tab.location, &typed),
+            }));
+        }
+        Some(crate::menus::BarPick::CopyPath) => copy_path(cx),
+        Some(crate::menus::BarPick::Edit) => intent(cx, Intent::FocusPath),
+        None => {}
+    }
+}
+
+/// One thing on the breadcrumb bar that takes a click, `size` large:
+/// `bg/control` with `radius/control` corners under the pointer, one step
+/// up from the surface, on which the `bg/subtle` of a hovered tool button
+/// would not show (SPEC.md *Path bar*). `enabled` is whether it does
+/// anything.
+fn bar_item(ui: &mut egui::Ui, size: egui::Vec2, enabled: bool) -> (egui::Rect, egui::Response) {
     let (rect, response) = ui.allocate_exact_size(
-        CHIP,
-        if has_parent {
+        size,
+        if enabled {
             egui::Sense::click()
         } else {
             egui::Sense::hover()
         },
     );
+    if enabled && response.hovered() {
+        ui.painter().rect_filled(
+            rect,
+            theme::metrics(ui.ctx()).corner_radius(),
+            theme::scheme(ui).bg_control,
+        );
+    }
+    (rect, response)
+}
+
+/// The Up button, the first thing on the breadcrumb bar: `ARROW_UP`, click
+/// for the parent folder, with no fill of its own (SPEC.md *Path bar*). A
+/// location without a parent shows it faded.
+fn up_button(ui: &mut egui::Ui, cx: &mut PaneCx<'_>) {
+    let has_parent = cx.tab_ui.crumbs_of(&cx.tab.location).len() >= 2;
+    let size = egui::vec2(UP.x, UP.y.min(ui.max_rect().height() - 2.0));
+    let (rect, response) = bar_item(ui, size, has_parent);
     response.widget_info(|| {
         egui::WidgetInfo::labeled(
             egui::WidgetType::Button,
@@ -944,13 +1096,6 @@ fn parent_chip(ui: &mut egui::Ui, cx: &mut PaneCx<'_>) {
         )
     });
     let scheme = theme::scheme(ui);
-    let fill = if response.hovered() && has_parent {
-        scheme.bg_control
-    } else {
-        scheme.bg_subtle
-    };
-    ui.painter()
-        .rect_filled(rect, theme::metrics(ui.ctx()).corner_radius(), fill);
     let colour = if has_parent {
         scheme.icon_default
     } else {
@@ -969,10 +1114,7 @@ fn parent_chip(ui: &mut egui::Ui, cx: &mut PaneCx<'_>) {
     {
         intent(cx, Intent::Parent);
     }
-    ui.add_space(6.0);
-    divider(ui, 14.0);
-    ui.add_space(6.0);
-    // A drop on the chip goes to the parent folder, as on a segment.
+    // A drop on the button goes to the parent folder, as on a segment.
     if has_parent && let Some(parent) = paths::parent_of(cx.tab_ui.crumbs_of(&cx.tab.location)) {
         crumb_zone(ui, cx, usize::MAX, true, &parent, rect);
     }

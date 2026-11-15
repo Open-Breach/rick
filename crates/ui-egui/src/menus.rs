@@ -110,6 +110,71 @@ pub fn context_popup(response: &egui::Response) -> egui::Popup<'_> {
     )
 }
 
+/// What an entry of the breadcrumb bar's menu asks for.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BarPick {
+    /// Go where this text leads, as if it had been typed and confirmed.
+    Paste(String),
+    /// Copy the folder's path.
+    CopyPath,
+    /// Edit the path.
+    Edit,
+}
+
+/// The menu of the breadcrumb bar (SPEC.md *The bar's menu*), on `bar`:
+/// **Paste from clipboard**, greyed with the reason as its tooltip while
+/// `clipboard` holds no text, **Copy path** and **Edit path**. `opened`
+/// is a right-click anywhere on the bar this frame, which opens it at the
+/// pointer. Returns the entry that was clicked.
+pub fn path_bar_menu(
+    bar: &egui::Response,
+    opened: bool,
+    clipboard: Option<&str>,
+    keys: &KeyMap,
+) -> Option<BarPick> {
+    let popup = egui::Popup::context_menu(bar)
+        .style(menu_style)
+        .open_memory(opened.then_some(egui::SetOpenCommand::Bool(true)));
+    let mut pick = None;
+    fitted(&bar.ctx, popup, 0.0).show(|ui| {
+        scrolling(ui, |ui| {
+            card_width(ui);
+            let paste = t!("pane-paste-from-clipboard");
+            match clipboard.map(str::trim).filter(|text| !text.is_empty()) {
+                Some(text) => {
+                    if entry(ui, Some(icons::PASTE), &paste, None, false).clicked() {
+                        pick = Some(BarPick::Paste(text.to_owned()));
+                        ui.close();
+                    }
+                }
+                None => greyed_entry(
+                    ui,
+                    Some(icons::PASTE),
+                    &paste,
+                    None,
+                    &t!("pane-clipboard-no-text"),
+                ),
+            }
+            if entry(ui, Some(icons::COPY), &t!("pane-copy-path"), None, false).clicked() {
+                pick = Some(BarPick::CopyPath);
+                ui.close();
+            }
+            let edit = entry(
+                ui,
+                Some(icons::EDIT),
+                &t!("pane-edit-path"),
+                keys.text_for(Intent::FocusPath),
+                false,
+            );
+            if edit.clicked() {
+                pick = Some(BarPick::Edit);
+                ui.close();
+            }
+        });
+    });
+    pick
+}
+
 /// A menu card's entries. They scroll where the card would be taller
 /// than its [`room`]: the card is then as tall as fits (SPEC.md *A menu
 /// that does not fit*).
