@@ -159,4 +159,48 @@ mod tests {
         std::fs::write(&path, "font_size = \n").unwrap_or_else(|e| panic!("{e}"));
         assert!(matches!(load(&path), Err(Error::Io(_))));
     }
+
+    /// The icon size chosen last (SPEC.md *Configuration*): the key
+    /// `icon_size` at the top level, one of four names; without the key,
+    /// and for a value Rick does not know, it reads as medium and the
+    /// rest of the file is read all the same.
+    #[test]
+    fn the_icon_size_chosen_last_is_a_key_that_reads_leniently() {
+        use model::IconSize;
+        let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+        let path = dir.path().join(SETTINGS_FILE);
+        assert_eq!(Settings::default().icon_size, IconSize::Medium);
+
+        for (size, name) in [
+            (IconSize::Small, "small"),
+            (IconSize::Medium, "medium"),
+            (IconSize::Large, "large"),
+            (IconSize::ExtraLarge, "extra_large"),
+        ] {
+            let settings = Settings {
+                icon_size: size,
+                ..Settings::default()
+            };
+            save(&path, &settings).unwrap_or_else(|e| panic!("{e}"));
+            let text = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{e}"));
+            let key = format!("icon_size = \"{name}\"\n");
+            let table = text.find("\n[").unwrap_or(text.len());
+            assert!(
+                text.find(&key).is_some_and(|at| at < table),
+                "{key:?} at the top level of {text}"
+            );
+            assert_eq!(load(&path).ok().map(|s| s.icon_size), Some(size));
+        }
+
+        for text in [
+            "font_size = 16\n",
+            "icon_size = \"huge\"\nfont_size = 16\n",
+            "icon_size = 3\nfont_size = 16\n",
+        ] {
+            std::fs::write(&path, text).unwrap_or_else(|e| panic!("{e}"));
+            let loaded = load(&path).unwrap_or_else(|e| panic!("{text}: {e}"));
+            assert_eq!(loaded.icon_size, IconSize::Medium, "{text}");
+            assert_eq!(loaded.font_size, 16, "{text}: the rest is read");
+        }
+    }
 }

@@ -3295,6 +3295,107 @@ fn enter_on_an_appimage_runs_the_installers_run() {
     assert_eq!(seen(&ran).len(), 2);
 }
 
+/// Issue 221, item 3 (SPEC.md *Icons view for a folder of media* and
+/// *View mode*), through real listings. A folder of eight photos, a video
+/// and a text file opens in Icons, and going back to its parent shows the
+/// parent in the view it had; a folder of seven photos and three text
+/// files stays as it was; Details chosen inside the media folder stays,
+/// a refresh included, until the tab leaves it. Choosing Large is written
+/// to the settings file, and an application started on that file opens
+/// Icons in Large, by the rule too.
+#[test]
+fn a_folder_of_media_opens_in_icons_in_the_size_chosen_last() {
+    use model::{IconSize, ViewMode};
+    let mut h = harness();
+    h.settle();
+    let pane = h.app.model().focused;
+    let photos = h.root.path().join("photos");
+    let mixed = h.root.path().join("mixed");
+    for dir in [&photos, &mixed] {
+        fs::create_dir(dir).unwrap_or_else(|e| panic!("{e}"));
+    }
+    let put = |dir: &Path, name: &str| {
+        fs::write(dir.join(name), "x").unwrap_or_else(|e| panic!("{e}"));
+    };
+    for i in 0..8 {
+        put(&photos, &format!("photo-{i}.jpg"));
+    }
+    put(&photos, "clip.mp4");
+    put(&photos, "notes.txt");
+    for i in 0..7 {
+        put(&mixed, &format!("photo-{i}.jpg"));
+    }
+    for name in ["a.txt", "b.txt", "c.txt"] {
+        put(&mixed, name);
+    }
+    let go = |h: &mut Harness, to: &Path| {
+        h.send(Command::Navigate {
+            pane,
+            to: local(to),
+        });
+        h.settle();
+    };
+    assert_eq!(h.tab(pane).view, ViewMode::Details);
+
+    // Nine media files in ten: Icons, and the parent as it was.
+    go(&mut h, &photos);
+    assert_eq!(h.tab(pane).view, ViewMode::Icons(IconSize::Medium));
+    h.send(Command::Back(pane));
+    h.settle();
+    assert_eq!(h.tab(pane).view, ViewMode::Details, "the parent's view");
+
+    // Seven in ten: as it was.
+    go(&mut h, &mixed);
+    assert_eq!(h.tab(pane).view, ViewMode::Details);
+
+    // Details by hand inside the media folder stays, a refresh included.
+    go(&mut h, &photos);
+    assert_eq!(h.tab(pane).view, ViewMode::Icons(IconSize::Medium));
+    h.send(Command::SetView {
+        pane,
+        mode: ViewMode::Details,
+    });
+    h.send(Command::Refresh(pane));
+    h.settle();
+    assert_eq!(h.tab(pane).view, ViewMode::Details, "nothing flips back");
+    assert_eq!(h.app.model().settings.icon_size, IconSize::Medium);
+
+    // A size chosen by hand is kept in the settings file.
+    h.send(Command::SetView {
+        pane,
+        mode: ViewMode::Icons(IconSize::Large),
+    });
+    assert_eq!(h.app.model().settings.icon_size, IconSize::Large);
+    let file = h.fake.config_dir().join(SETTINGS_FILE);
+    assert!(
+        wait_until(&mut h, Duration::from_secs(2), |_| {
+            fs::read_to_string(&file).is_ok_and(|t| t.contains("icon_size = \"large\""))
+        }),
+        "the size is in the settings file"
+    );
+    // Leaving puts back the view the tab had before the folder all the
+    // same: what was picked there belonged to the stay.
+    go(&mut h, &mixed);
+    assert_eq!(h.tab(pane).view, ViewMode::Details);
+
+    // Started again on the same configuration, in the media folder.
+    h.app = App::new(Config {
+        platform: h.fake.clone(),
+        ui: h.ui.clone(),
+        extensions: Vec::new(),
+        config_dir: Some(h.fake.config_dir()),
+        start: Some(local(&photos)),
+    });
+    h.settle();
+    let pane = h.app.model().focused;
+    assert_eq!(h.app.model().settings.icon_size, IconSize::Large);
+    assert_eq!(
+        h.tab(pane).view,
+        ViewMode::Icons(IconSize::Large),
+        "the rule opens Icons in the size chosen last"
+    );
+}
+
 /// Acceptance (issue 149, item 6): Open in editor opens the selected
 /// files in the system's default text editor, or with the command the
 /// setting names, split at spaces outside double quotes, the files
