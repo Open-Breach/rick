@@ -47,7 +47,7 @@ the pull request that brought the change.
   space and the usage bar of the drive card; **Flags**, read-only and
   removable; and *Eject* and *Format…* in the footer, for the drives that
   have them. A value the system does not report is left out, and a drive
-  that is unmounted takes its dialogue with it (#243).
+  that is unmounted takes its dialogue with it (#244).
 - `ext-zfs`, a plugin for OpenZFS snapshots, Linux only (placed by the review of
   #156): through the `zfs` command line
   it finds the dataset a folder lies in and, without `zfs` or outside a
