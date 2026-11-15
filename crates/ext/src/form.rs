@@ -237,6 +237,9 @@ pub struct Field {
     /// The field must not be empty: while it is, this warning shows under
     /// it in `status/warning` and the confirming button is disabled.
     pub required: Option<String>,
+    /// The clipboard rule, if the field has one: a regular expression
+    /// ([`from_clipboard`](Self::from_clipboard)).
+    pub clipboard: Option<String>,
 }
 
 impl Field {
@@ -251,6 +254,33 @@ impl Field {
     #[must_use]
     pub fn required(mut self, warning: impl Into<String>) -> Self {
         self.required = Some(warning.into());
+        self
+    }
+
+    /// Lets the field take its value from the clipboard (SPEC.md *A form
+    /// field can take its value from the clipboard*). `rule` is a regular
+    /// expression. When the form opens, the UI reads the clipboard's text
+    /// once and searches the trimmed text for the rule: where it matches,
+    /// the field opens with the match — the first capture group where the
+    /// rule has one, the whole match otherwise — in place of its written
+    /// value. A rule that is to take the whole text anchors itself
+    /// (`^…$`). Without a match, without text on the clipboard or without
+    /// a clipboard the field opens as written, and so it does where the
+    /// rule is no regular expression. One rule per field; it fills this
+    /// field and no other, and only a field whose value is text — a line
+    /// of text, a folder, a file.
+    ///
+    /// ```
+    /// use ext::Field;
+    ///
+    /// // An issue's number, from "#123" or from a whole link to it.
+    /// let field = Field::text("issue", "Issue", "", "A number")
+    ///     .from_clipboard(r"(?:#|/issues/)(\d+)$");
+    /// assert_eq!(field.clipboard.as_deref(), Some(r"(?:#|/issues/)(\d+)$"));
+    /// ```
+    #[must_use]
+    pub fn from_clipboard(mut self, rule: impl Into<String>) -> Self {
+        self.clipboard = Some(rule.into());
         self
     }
 
@@ -336,6 +366,7 @@ impl Field {
             kind,
             mono: false,
             required: None,
+            clipboard: None,
         }
     }
 }
