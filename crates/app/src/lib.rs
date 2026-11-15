@@ -465,6 +465,10 @@ const REVEAL_FOR: Duration = Duration::from_secs(5);
 /// keeps it out of its history, and Enter.
 /// The embedded console's action, `ext-action-terminal`'s *Open console*.
 const EMBEDDED_CONSOLE: ext::ActionId = ext::ActionId("terminal.console");
+/// *Run* on an AppImage, `ext-installer`'s action: what Enter and a
+/// double-click on an AppImage do where the plugin is loaded
+/// (specs/ext-installer.md "AppImages").
+const APPIMAGE_RUN: ext::ActionId = ext::ActionId("installer.run");
 /// How much of a file with the execute bit is read to tell a binary from
 /// a script.
 const PROGRAM_PROBE: u64 = 4096;
@@ -2951,11 +2955,12 @@ impl App {
     }
 
     /// Opens an entry as *Opening files* says (SPEC.md): a folder
-    /// navigates; a local archive enters as a read-only location through
-    /// the archive provider, which says in an internal job whether it
-    /// browses the file, unless `archives.on_open` is `system`; every other
-    /// file goes to the system default application. Nothing opens a
-    /// viewer: the preview pane is the only one.
+    /// navigates; a local AppImage is run by the installer's *Run*, where
+    /// that plugin is loaded; a local archive enters as a read-only
+    /// location through the archive provider, which says in an internal
+    /// job whether it browses the file, unless `archives.on_open` is
+    /// `system`; every other file goes to the system default application.
+    /// Nothing opens a viewer: the preview pane is the only one.
     fn open(&mut self, pane: PaneId, id: EntryId, events: &mut Vec<Event>) {
         let Some((tab_id, tab)) = self.model.active_tab(pane) else {
             return;
@@ -2970,6 +2975,26 @@ impl App {
             let to = tab.location_of(&entry);
             self.dispatch(Command::Navigate { pane, to }, events);
             return;
+        }
+        // An AppImage is run as its *Run* does, with the execute bit or
+        // without it: the installer says whether the file is one, sets
+        // the bit and makes its checks. Without the plugin an AppImage is
+        // the binary it is, below.
+        if tab.location.provider == ProviderId::LOCAL {
+            let ctx = ActionCtx {
+                pane,
+                location: tab.location.clone(),
+                selection: vec![entry.clone()],
+                invoked_from: Invocation::Shortcut,
+                other: None,
+            };
+            let runs = self.registry.actions().iter().any(|action| {
+                action.id() == APPIMAGE_RUN && action.availability(&ctx) == Availability::Enabled
+            });
+            if runs {
+                self.run(APPIMAGE_RUN, ctx, events);
+                return;
+            }
         }
         // A local file with the execute bit is a program, where that bit
         // means one: it is started, not handed to the system (SPEC.md
