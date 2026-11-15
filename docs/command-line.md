@@ -13,7 +13,7 @@ One Rick runs per user session and config directory: a second `rick` hands its c
 | `rick --config-dir <dir> …` | Runs a Rick of its own on another config directory |
 | `rick --dbus-service` | What the session bus runs for *“Show in folder”* when no Rick is up; opens no folder of its own |
 
-Plugins add subcommands of their own, which `rick --help` lists beside the core ones: `rick install <archive>` opens the tarball installer's form on an archive (Linux).
+Plugins add subcommands of their own, which `rick --help` lists beside the core ones: `rick install <file>` opens the installer's form on a tar or zip archive or an AppImage (Linux).
 
 ## Links
 

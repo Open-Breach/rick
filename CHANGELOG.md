@@ -66,6 +66,32 @@ the pull request that brought the change.
 - Every copy button answers a click: a tick in place of the copy glyph
   and *Copied* as its tooltip for 1.5 s, without a fade where the system
   asks for reduced motion (#225).
+- **AppImages in the installer**, Linux only (#229, #232, #234). An
+  AppImage, told by a name ending in `.AppImage` or by the magic in its
+  ELF header, has *Run* and *Install as application…* in its context
+  menu. *Run* checks the file's machine type, sets the execute bit for
+  the owner when it is missing and starts the file detached in its
+  folder; Enter and a double-click on an AppImage do the same. *Install
+  as application…* opens the install dialogue with the name, the icon
+  and the version read out of the file: its own desktop entry, `.DirIcon`
+  or the icon the entry names, and for the version `X-AppImage-Version`,
+  then the newest release of the AppStream metainfo, then the file name;
+  with none of them the version is typed. The install follows the
+  archive's: the version folder holds the AppImage itself as
+  `<app-id>.AppImage`, so the path through `current` and the desktop
+  entry stay the same from one update to the next, and update, revert,
+  repair and uninstall work as for an archive, as do `rick install
+  <file>` and *Update from archive…*. Nothing from an AppImage is run to
+  learn about it: the SquashFS image behind its runtime is read through
+  the new `backhand` dependency, links followed only inside the image,
+  and where the image cannot be read the dialogue opens with the name
+  and version of the file name and no icon. The downloaded file is left
+  as it was. An AppImage on the older runtime needs `libfuse.so.2`,
+  which is read from its runtime: where the library is missing, *Run*
+  stops with *FUSE 2 is required to run this AppImage*, the install line
+  of each distribution and a link, and an install works and carries the
+  same warning in its summary. Specified in `specs/ext-installer.md`,
+  *AppImages*.
 
 ### Changed
 
