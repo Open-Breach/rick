@@ -48,18 +48,20 @@ use windows::Win32::UI::Shell::{
 };
 use windows::Win32::UI::Shell::{SHFMT_ID_DEFAULT, SHFMT_OPT_NONE, SHFormatDrive};
 use windows::Win32::UI::WindowsAndMessaging::{
-    ASFW_ANY, AllowSetForegroundWindow, IsIconic, SW_RESTORE, SW_SHOW, SW_SHOWNORMAL,
-    SetForegroundWindow, ShowWindow,
+    ASFW_ANY, AllowSetForegroundWindow, IsIconic, SPI_SETDESKWALLPAPER, SPIF_SENDCHANGE,
+    SPIF_UPDATEINIFILE, SW_RESTORE, SW_SHOW, SW_SHOWNORMAL, SetForegroundWindow, ShowWindow,
+    SystemParametersInfoW,
 };
 use windows::core::{GUID, Interface, PCWSTR, PWSTR, w};
 
 use crate::Native;
 use crate::fs::windows::{filetime, io_error, wide};
 use crate::traits::{
-    Activation, Application, Chrome, ConfigDir, ControlsSide, DragSource, DropTarget, Elevate,
-    ElevatedOutput, ImageFormat, IncomingFiles, Monitor, Mount, OpenWith, Point, Properties,
-    PropertiesOutcome, RecentItem, RecentlyUsed, StandardFolder, StandardFolders, Terminal, Trash,
-    TrashedItem, Volume, VolumeKind, Volumes, WindowChrome, WindowRef,
+    Activation, Application, Chrome, ConfigDir, ControlsSide, DesktopBackground, DragSource,
+    DropTarget, Elevate, ElevatedOutput, ImageFormat, IncomingFiles, Monitor, Mount, OpenWith,
+    Point, Properties, PropertiesOutcome, RecentItem, RecentlyUsed, StandardFolder,
+    StandardFolders, Terminal, Trash, TrashedItem, Volume, VolumeKind, Volumes, WindowChrome,
+    WindowRef,
 };
 
 /// `System.Recycle.DeletedFrom`: the folder a recycled item came from.
@@ -627,6 +629,32 @@ fn known_folder(id: &GUID) -> Option<PathBuf> {
     // exactly once by `take_string`.
     let path = unsafe { SHGetKnownFolderPath(id, KF_FLAG_DEFAULT, None) }.ok()?;
     take_string(path).map(PathBuf::from)
+}
+
+impl DesktopBackground for Native {
+    /// What the desktop takes through `SPI_SETDESKWALLPAPER` since
+    /// Windows 8.
+    fn background_formats(&self) -> &'static [&'static str] {
+        &["jpg", "jpeg", "png", "bmp"]
+    }
+
+    /// One call sets the picture on every monitor; the system keeps the
+    /// path and reads the file from where it lies.
+    fn set_desktop_background(&self, image: &Path) -> Result<(), Error> {
+        let mut path = wide(image);
+        // SAFETY: for `SPI_SETDESKWALLPAPER` the parameter is a
+        // NUL-terminated wide string, which `wide` builds and which
+        // outlives the call; the call reads it and keeps no pointer.
+        unsafe {
+            SystemParametersInfoW(
+                SPI_SETDESKWALLPAPER,
+                0,
+                Some(path.as_mut_ptr().cast()),
+                SPIF_UPDATEINIFILE | SPIF_SENDCHANGE,
+            )
+        }
+        .map_err(|error| Error::Io(io_error(error)))
+    }
 }
 
 impl Mount for Native {

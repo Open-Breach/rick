@@ -917,6 +917,25 @@ pub trait Activation: Send + Sync {
     fn allow_activation(&self);
 }
 
+/// The desktop's background picture (SPEC.md *Set as desktop background*).
+pub trait DesktopBackground: Send + Sync {
+    /// The image formats this desktop takes as its background, as the
+    /// lower-case extensions of their files. Empty where Rick cannot set
+    /// the background: on Linux, any desktop but GNOME and KDE Plasma.
+    fn background_formats(&self) -> &'static [&'static str];
+
+    /// Points the desktop of every screen at `image`, where it lies:
+    /// nothing is copied. Called on the application's thread, which is
+    /// the main thread and the one macOS wants the call on.
+    ///
+    /// # Errors
+    ///
+    /// `Error::Unsupported` where
+    /// [`background_formats`](Self::background_formats) is empty;
+    /// otherwise what the system's call or tool answered.
+    fn set_desktop_background(&self, image: &Path) -> Result<(), Error>;
+}
+
 /// All platform services behind one object.
 pub trait Platform:
     Trash
@@ -941,6 +960,7 @@ pub trait Platform:
     + SingleInstance
     + Activation
     + Integration
+    + DesktopBackground
 {
 }
 
@@ -966,7 +986,8 @@ impl<
         + Motion
         + SingleInstance
         + Activation
-        + Integration,
+        + Integration
+        + DesktopBackground,
 > Platform for T
 {
 }

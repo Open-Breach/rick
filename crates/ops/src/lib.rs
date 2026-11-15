@@ -58,6 +58,7 @@ mod conflict;
 mod containing;
 mod core_toml;
 mod create;
+mod desktop;
 mod download;
 mod edit;
 pub mod hash;
@@ -290,6 +291,7 @@ impl Extension for Core {
         reg.action(Arc::new(open::CopyPathAndName(Arc::clone(s))));
         reg.action(Arc::new(open::OpenDefault(Arc::clone(s))));
         reg.action(Arc::new(open::OpenInEditor(Arc::clone(s))));
+        reg.action(Arc::new(desktop::SetDesktopBackground(Arc::clone(s))));
         reg.action(Arc::new(download::Download(Arc::clone(s))));
         reg.action(Arc::new(open::Reveal(Arc::clone(s))));
         reg.action(Arc::new(containing::OpenContaining));

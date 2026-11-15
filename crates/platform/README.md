@@ -70,7 +70,13 @@ asked to read its services again) and the dock favourite (Rick appended
 to the desktop's list and taken out of it again by the undo, the rest of
 the list left as it is; Plasma's shell asked to start over from its
 configuration); a file of another origin in an item's
-way is replaced only when the request says the user agreed), the
+way is replaced only when the request says the user agreed),
+`DesktopBackground` (the image formats the desktop takes as its
+background, and pointing every screen at a file where it lies:
+`gsettings` for the two picture keys of GNOME,
+`plasma-apply-wallpaperimage` on KDE Plasma and nothing on any other
+Linux desktop, which takes no format; `NSWorkspace` for each screen on
+macOS; `SystemParametersInfoW` on Windows), the
 `file_manager` module that serves `org.freedesktop.FileManager1` on the
 session bus and hands each call (`ShowItems`, `ShowFolders`,
 `ShowItemProperties`) to the caller's closure, waiting in the queue when

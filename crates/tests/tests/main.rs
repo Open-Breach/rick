@@ -28,6 +28,7 @@ mod closeout;
 mod cloud;
 mod copy;
 mod copy_buttons;
+mod desktop_background;
 mod desktop_entry;
 mod dnd;
 mod extensions;

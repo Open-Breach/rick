@@ -10,6 +10,7 @@
 
 mod activate;
 mod apps;
+mod background;
 mod drag;
 mod elevate;
 pub(crate) mod file_manager;
@@ -33,10 +34,11 @@ use types::Error;
 use crate::Native;
 use crate::time::iso8601;
 use crate::traits::{
-    Activation, Application, Chrome, ConfigDir, ControlsSide, DragSource, DropTarget, Elevate,
-    ElevatedOutput, ImageFormat, IncomingFiles, Monitor, Mount, MountWatch, MountsChanged,
-    OpenWith, Point, Properties, PropertiesOutcome, RecentItem, RecentlyUsed, StandardFolder,
-    StandardFolders, Terminal, Trash, TrashedItem, Volume, Volumes, WindowChrome, WindowRef,
+    Activation, Application, Chrome, ConfigDir, ControlsSide, DesktopBackground, DragSource,
+    DropTarget, Elevate, ElevatedOutput, ImageFormat, IncomingFiles, Monitor, Mount, MountWatch,
+    MountsChanged, OpenWith, Point, Properties, PropertiesOutcome, RecentItem, RecentlyUsed,
+    StandardFolder, StandardFolders, Terminal, Trash, TrashedItem, Volume, Volumes, WindowChrome,
+    WindowRef,
 };
 
 /// The distribution and the desktop: `PRETTY_NAME` of `/etc/os-release`
@@ -118,6 +120,16 @@ impl Volumes for Native {
     /// The kernel's own notice of a change to the mount table.
     fn watch_mounts(&self, changed: MountsChanged) -> Option<MountWatch> {
         volumes::watch_mounts(changed)
+    }
+}
+
+impl DesktopBackground for Native {
+    fn background_formats(&self) -> &'static [&'static str] {
+        background::formats()
+    }
+
+    fn set_desktop_background(&self, image: &Path) -> Result<(), Error> {
+        background::set(image)
     }
 }
 

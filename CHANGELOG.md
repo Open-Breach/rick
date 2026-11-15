@@ -9,6 +9,14 @@ the pull request that brought the change.
 
 ### Added
 
+- *Set as desktop background*, in the context menu of one selected image
+  file on the local file system and as a button after *Fit* and *1:1* in
+  the preview pane's toolbar while the pane shows such a file. Rick
+  points the desktop of every screen at the file where it lies and copies
+  nothing: through `SystemParametersInfoW` on Windows, `NSWorkspace` on
+  macOS, `gsettings` on GNOME and `plasma-apply-wallpaperimage` on KDE
+  Plasma. It is offered for JPEG, PNG and BMP, on macOS for HEIC and TIFF
+  as well, and not at all on another Linux desktop (#239).
 - `ext-zfs`, a plugin for OpenZFS snapshots, Linux only (placed by the review of
   #156): through the `zfs` command line
   it finds the dataset a folder lies in and, without `zfs` or outside a

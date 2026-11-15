@@ -25,10 +25,11 @@ use types::Error;
 use crate::Native;
 use crate::time::parse_iso8601;
 use crate::traits::{
-    Activation, Application, Chrome, ConfigDir, ControlsSide, DragSource, DropTarget, Elevate,
-    ElevatedOutput, ImageFormat, IncomingFiles, Monitor, Mount, OpenWith, Point, Properties,
-    PropertiesOutcome, RecentItem, RecentlyUsed, StandardFolder, StandardFolders, Terminal, Trash,
-    TrashedItem, Volume, VolumeKind, Volumes, WindowChrome, WindowRef,
+    Activation, Application, Chrome, ConfigDir, ControlsSide, DesktopBackground, DragSource,
+    DropTarget, Elevate, ElevatedOutput, ImageFormat, IncomingFiles, Monitor, Mount, OpenWith,
+    Point, Properties, PropertiesOutcome, RecentItem, RecentlyUsed, StandardFolder,
+    StandardFolders, Terminal, Trash, TrashedItem, Volume, VolumeKind, Volumes, WindowChrome,
+    WindowRef,
 };
 use crate::trash_record::{self, TRASH_FILE};
 
@@ -299,6 +300,40 @@ fn volume_kind(mount_point: &Path, fs_type: &str) -> VolumeKind {
         VolumeKind::Removable
     } else {
         VolumeKind::Fixed
+    }
+}
+
+impl DesktopBackground for Native {
+    /// What `NSImage` reads and the desktop shows.
+    fn background_formats(&self) -> &'static [&'static str] {
+        &["jpg", "jpeg", "png", "heic", "tif", "tiff", "bmp"]
+    }
+
+    /// Every screen gets the picture through `NSWorkspace`, each with the
+    /// options it has, so how the picture is fitted stays as it is set.
+    /// `AppKit` wants the call on the main thread.
+    fn set_desktop_background(&self, image: &Path) -> Result<(), Error> {
+        let mtm = objc2::MainThreadMarker::new().ok_or(Error::Unsupported(
+            "the desktop's background is set from the main thread",
+        ))?;
+        let url = NSURL::fileURLWithPath(&NSString::from_str(utf8(image)?));
+        let workspace = objc2_app_kit::NSWorkspace::sharedWorkspace();
+        for screen in objc2_app_kit::NSScreen::screens(mtm) {
+            let options = workspace
+                .desktopImageOptionsForScreen(&screen)
+                .unwrap_or_default();
+            // SAFETY: the options are the dictionary the workspace itself
+            // gave for this screen, or an empty one, so every value in it
+            // has the type its key wants; the URL and the screen are live
+            // objects for the length of the call.
+            unsafe {
+                workspace.setDesktopImageURL_forScreen_options_error(&url, &screen, &options)
+            }
+            .map_err(|error| {
+                Error::Io(io::Error::other(error.localizedDescription().to_string()))
+            })?;
+        }
+        Ok(())
     }
 }
 
