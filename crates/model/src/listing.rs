@@ -409,8 +409,12 @@ pub fn is_media(entry: &Entry) -> bool {
             .rsplit_once('.')
             .filter(|(stem, _)| !stem.is_empty())
             .is_some_and(|(_, ext)| {
-                let ext = ext.to_ascii_lowercase();
-                IMAGE_EXTENSIONS.contains(&ext.as_str()) || VIDEO_EXTENSIONS.contains(&ext.as_str())
+                // No copy of the name: the rule looks at every file of a
+                // folder that may hold 200,000.
+                IMAGE_EXTENSIONS
+                    .iter()
+                    .chain(VIDEO_EXTENSIONS)
+                    .any(|known| ext.eq_ignore_ascii_case(known))
             })
 }
 
