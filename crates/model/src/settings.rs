@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use types::{Location, ProviderId};
 
 use crate::integration::{IntegrationSettings, ItemRecord};
-use crate::listing::{Column, SortDir};
+use crate::listing::{Column, IconSize, SortDir};
 
 /// Light or dark, or whatever the system says.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -57,6 +57,23 @@ pub enum DateFormat {
 impl DateFormat {
     /// The four formats, in the order the settings list them.
     pub const ALL: [Self; 4] = [Self::SmartTime, Self::Smart, Self::Iso, Self::System];
+}
+
+/// The `icon_size` key: a value that is no size reads as medium instead
+/// of failing the whole file.
+fn lenient_icon_size<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<IconSize, D::Error> {
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Value {
+        Known(IconSize),
+        Other(serde::de::IgnoredAny),
+    }
+    Ok(match Value::deserialize(deserializer)? {
+        Value::Known(size) => size,
+        Value::Other(_) => IconSize::Medium,
+    })
 }
 
 /// The `date_format` key: a name that is no format reads as the default
@@ -242,6 +259,11 @@ pub struct Settings {
     pub font_size: u8,
     /// The density of the interface.
     pub density: Density,
+    /// The icon size chosen last, which *Icons* opens in: `small`,
+    /// `medium`, `large` or `extra_large` (SPEC.md *Configuration*).
+    /// Written whenever a size is chosen; it has no row in Settings.
+    #[serde(deserialize_with = "lenient_icon_size")]
+    pub icon_size: IconSize,
     /// How a date is written: `smart-time`, `smart`, `iso` or `system`.
     #[serde(deserialize_with = "lenient_date_format")]
     pub date_format: DateFormat,
@@ -729,6 +751,7 @@ impl Default for Settings {
             theme: Theme::System,
             font_size: 13,
             density: Density::Comfortable,
+            icon_size: IconSize::Medium,
             date_format: DateFormat::default(),
             rename_on_click: false,
             editor: String::new(),
@@ -772,6 +795,8 @@ pub enum SettingsChange {
     FontSize(u8),
     /// The density of the interface.
     Density(Density),
+    /// The icon size chosen last, which *Icons* opens in.
+    IconSize(IconSize),
     /// How a date is written.
     DateFormat(DateFormat),
     /// Whether a second click on the selected row renames it.
@@ -870,6 +895,7 @@ impl Settings {
             SettingsChange::Theme(v) => self.theme = v,
             SettingsChange::FontSize(v) => self.font_size = v,
             SettingsChange::Density(v) => self.density = v,
+            SettingsChange::IconSize(v) => self.icon_size = v,
             SettingsChange::DateFormat(v) => self.date_format = v,
             SettingsChange::RenameOnClick(v) => self.rename_on_click = v,
             SettingsChange::Editor(v) => self.editor = v,
