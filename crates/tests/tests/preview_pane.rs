@@ -850,6 +850,110 @@ fn fitted_frames_are_centred_and_actual_size_pans_by_dragging() {
     );
 }
 
+/// Issue 220 (SPEC.md *Audio and video*): a video filmed upright is shown
+/// upright inside the pane as it is. Its frame is taller than wide, fitted
+/// and centred with the pane's background at its sides, and the pane, its
+/// toolbar with the transport and its status bar are exactly where a clip
+/// that lies has them.
+#[cfg(feature = "gstreamer")]
+#[test]
+fn an_upright_video_is_letterboxed_and_the_pane_and_its_transport_stay() {
+    use ext_preview_media::fixtures::encode;
+    let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+    // Both are stored 640 × 480; the second says it is turned by a quarter.
+    let encoded = encode::mp4(&dir.path().join("lying.mp4"), 30, 640, 480)
+        .and_then(|()| encode::mp4_turned(&dir.path().join("upright.mp4"), 30, 640, 480, 90));
+    if let Err(error) = encoded {
+        eprintln!("mp4 fixtures: {error}; not shown here");
+        assert!(
+            std::env::var_os("RICK_REQUIRE_GSTREAMER").is_none(),
+            "GStreamer required but {error}"
+        );
+        return;
+    }
+    let fake = Arc::new(Fake::new().unwrap_or_else(|e| panic!("{e}")));
+    let mut harness = window(
+        &fake,
+        dir.path(),
+        egui::vec2(1100.0, 700.0),
+        500.0,
+        vec![Arc::new(ext_preview_media::MediaPreview::new())],
+    );
+    let pane = harness.state().app().model().focused;
+
+    // The pane, its parts, its toolbar, and the frame with its pixel size.
+    let shown = |harness: &mut Harness<'_, RickUi>, name: &str| {
+        select(harness, name);
+        for _ in 0..3 {
+            harness.step();
+        }
+        let slot = harness
+            .state()
+            .previews()
+            .get(pane)
+            .unwrap_or_else(|| panic!("slot"));
+        assert!(slot.has_frame(), "{name}: {slot:?}");
+        (
+            harness.state().inspector_rect(),
+            harness.state().preview_rects(),
+            harness.state().preview_toolbar().to_vec(),
+            slot.frame_size(0),
+            slot.frame_rect()
+                .unwrap_or_else(|| panic!("{name}: no frame rect")),
+        )
+    };
+    let (lying_pane, lying_rects, lying_toolbar, lying_size, lying) =
+        shown(&mut harness, "lying.mp4");
+    let (pane_rect, rects, toolbar, size, upright) = shown(&mut harness, "upright.mp4");
+
+    // The frames: as stored, and turned.
+    assert_eq!(lying_size, Some((640, 480)));
+    assert_eq!(
+        size,
+        Some((480, 640)),
+        "the upright clip's frame is upright"
+    );
+
+    // Nothing of the pane moved for it: not the pane, not the toolbar and
+    // the transport in it, not the content area, not the status bar.
+    assert!(pane_rect.is_some());
+    assert_eq!(pane_rect, lying_pane, "the pane");
+    assert_eq!(rects, lying_rects, "the pane's parts");
+    assert_eq!(toolbar, lying_toolbar, "the toolbar and its transport");
+    assert!(
+        toolbar.iter().any(|item| item.label.starts_with("Play")),
+        "the transport is in the toolbar: {toolbar:?}"
+    );
+
+    // Fitted into the content and centred, the pane's background at its
+    // sides; the lying clip takes the width instead.
+    let content = rects.content.unwrap_or_else(|| panic!("content"));
+    let scale = (content.width() / 480.0)
+        .min(content.height() / 640.0)
+        .min(1.0);
+    assert!(
+        (upright.width() - 480.0 * scale).abs() < 1.0
+            && (upright.height() - 640.0 * scale).abs() < 1.0,
+        "three to four, fitted: {upright:?} in {content:?}"
+    );
+    assert!(
+        (upright.center() - content.center()).length() < 1.5,
+        "{upright:?} centred in {content:?}"
+    );
+    assert!(
+        content.contains_rect(upright.shrink(0.5)),
+        "inside the content: {upright:?} in {content:?}"
+    );
+    assert!(
+        upright.left() - content.left() > 8.0 && content.right() - upright.right() > 8.0,
+        "bands at its sides: {upright:?} in {content:?}"
+    );
+    assert!(
+        lying.width() > lying.height() && lying.width() > upright.width(),
+        "the lying clip is wider: {lying:?}"
+    );
+}
+
 /// Presses the primary button at `from`, moves to `to` in small steps and
 /// releases.
 fn drag(harness: &mut Harness<'_, RickUi>, from: egui::Pos2, to: egui::Pos2) {
