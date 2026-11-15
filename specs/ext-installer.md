@@ -20,9 +20,9 @@ Target user: someone who normally installs via the package manager or Flatpak an
 
 ## Scope
 
-**In:** prebuilt GUI apps and CLI toolchains in tar (gz, xz, bz2, zst) and zip archives; user-space and system-wide installs; desktop entry, icon and PATH integration; update with one previous version kept; revert; uninstall; repair of broken state; an Installed Apps view.
+**In:** prebuilt GUI apps and CLI toolchains in tar (gz, xz, bz2, zst) and zip archives; AppImages, run as they are or installed (see *AppImages*); user-space and system-wide installs; desktop entry, icon and PATH integration; update with one previous version kept; revert; uninstall; repair of broken state; an Installed Apps view.
 
-**Out (this version):** AppImage, `.deb`/`.rpm`, source builds, automatic update checks, adopting apps installed manually before Rick, macOS `.app` bundles and Windows portable zips (candidates for a later version using the same model).
+**Out (this version):** `.deb`/`.rpm`, source builds, automatic update checks, AppImage self-update (zsync, AppImageUpdate) and signature verification, browsing into an AppImage like an archive, adopting apps installed manually before Rick, macOS `.app` bundles and Windows portable zips (candidates for a later version using the same model).
 
 ## Detection
 
@@ -152,11 +152,46 @@ A virtual view provided by the plugin, opened from the command palette and the a
 
 **Launch** runs a GUI app through its desktop entry (`gio launch` or equivalent) rather than executing the binary directly, so environment, startup notification and window matching behave exactly as from the app menu. For command-line tools Launch is not shown; the row lists the command names instead.
 
+## AppImages
+
+An AppImage is an application in one file: a small ELF program, the *runtime*, with a file-system image behind it that holds the app; started, the runtime mounts the image and runs what is inside. Rick runs such a file as it is, and installs it on the archive model, followed exactly: the install locations, the `current` symlink, the install record, the dialog with its modes, collisions and checksum, the job, *Failure handling*, update with one previous version kept, revert, uninstall and the Installed Apps view are the ones of this document. This section holds only what differs. Linux only, like the rest of the plugin.
+
+**Detection.** A file is an AppImage when its name ends in `.AppImage`, in any case, or its ELF header carries the AppImage magic: the bytes `AI` and then `0x01` (type 1) or `0x02` (type 2) at offset 8. An AppImage never goes through the archive detection of *Detection*.
+
+**Actions.** An AppImage on the local file system has two entries in its context menu, and so in the command palette, side by side where an archive has *Install as application…*: **Run** and **Install as application…**. Neither appears on a remote location or on a file that is not an AppImage.
+
+**Run** starts the AppImage as it is; nothing is installed. In this order:
+
+1. *Architecture.* Where the file's ELF machine type is not the running machine's, Rick says so and stops, as the *Bonus check* does.
+2. *Execute bit.* A downloaded AppImage usually has none. It is set for the owner when it is missing; nothing else about the file changes.
+3. *FUSE check*, below. Where FUSE 2 is needed and missing, Rick stops with the warning.
+4. The file is started detached from Rick, with its folder as the working directory, the way *Opening files* starts a binary.
+
+Enter and a double-click are not *Run*. They follow *Opening files* (specs/gui-windows.md), which decides by the execute bit: with it an AppImage starts like any binary, without the FUSE check; without it the file is handed to the system.
+
+**Install.** *Install as application…* on an AppImage opens the install dialog in AppImage mode: new install or update, the scope, the collision rules and the checksum are those of an archive. Dropping an AppImage onto the Installed Apps view and `rick install <file>` open it too. What differs:
+
+- *Nothing is run.* *Archive safety* holds for an AppImage as for an archive, so the file is never asked to unpack itself (`--appimage-extract`): the desktop entry, the icon and the version are read out of it. An AppImage of type 2 is its runtime followed by a SquashFS image that starts where the ELF ends. Rick reads from that image the `.desktop` file at its top, the icon — `.DirIcon`, or the one the entry names — and the AppStream metainfo, following links only inside the image. The reading is the detection job (*Detection is a job*), here *Reading AppImage…*.
+- *An image that cannot be read* — an AppImage of type 1, a compression the reader does not have, a damaged image — is not an error. The dialog opens with a minimal entry from the file name and the generic icon, as for an archive without one, and the version from the file name.
+- *Version.* Tried in this order, the first hit fills the field: `X-AppImage-Version` in the bundled desktop entry; the newest release in the AppStream metainfo (`usr/share/metainfo/*.xml`); the file name, on the usual `Name-<version>-<arch>.AppImage` pattern. With none of them the field stays empty and *Install* waits until the user has typed a version. Rick generates none and uses no date.
+- *The file.* The version folder `<app-id>/<version>/` holds the AppImage itself under the fixed name `<app-id>.AppImage`, with the execute bit set, and `current` points at the version folder as usual. The fixed name keeps the path through `current` the same after every update, whatever the downloaded files were called, so the desktop entry is never rewritten (*Avoiding the vanishing-launcher problem*). The copy is the job, with progress and cancel, through the staging folder of *Failure handling*. The downloaded file is left where it was and as it was: the same bytes and the same permissions.
+- *Desktop entry and icon.* The entry read from the image is reused as a vendor's is (*Desktop integration*): `Exec` goes through `current` and keeps its arguments (`%U`, `%F`), `TryExec` is dropped, and `Icon` is the installed icon's name. Entry, icon and install record are written exactly as for an archive, per user and system-wide; in the record `main_executable` is `<app-id>.AppImage` and `source_archive` the downloaded file's name.
+- *Architecture.* The *Bonus check* and the verification of *Failure handling* read the AppImage's own ELF header. The AppImage is the main executable, and the dialog has no list to pick one from.
+- *Commands.* No command symlink and no PATH mode by default; the dialog offers one command name, not ticked, as it offers them for a toolchain.
+- *Update, revert and uninstall* are unchanged: an AppImage with the id of an installed app is offered as an update, one previous version is kept, and uninstall removes exactly what the record lists.
+
+**FUSE check.** An AppImage on the older runtime needs `libfuse.so.2` to mount its image, and newer distributions no longer ship that library by default; one on the newer, static runtime does not need it.
+
+- Whether a file needs it is read from its runtime, the ELF at the head of the file, without running it. The older runtime loads `libfuse.so.2` by name, so the name is in it, among its needed libraries or as the string it opens the library by; the static runtime carries no such name. An AppImage that does not need FUSE 2 is never held back.
+- Where it is needed, the library is looked up in the dynamic loader cache as the *Library check* does — the plugin reads `/etc/ld.so.cache` — and not by calling `ldconfig`.
+- Needed and missing is a warning, and nothing automatic: *FUSE 2 is required to run this AppImage*, the install line of each distribution — Debian and Ubuntu `sudo apt install libfuse2`, `libfuse2t64` on Ubuntu 24.04 and later; Fedora `sudo dnf install fuse-libs`; Arch `sudo pacman -S fuse2` — and a link to the AppImage documentation on FUSE, <https://docs.appimage.org/user-guide/troubleshooting/fuse.html>.
+- *Run* stops with the warning. *Install* works without FUSE 2 and carries the same warning in its summary, where the *Library check* lists a missing library, so nobody installs an app that then does not start without being told why.
+
 ## Plugin architecture
 
 - Crate `ext-installer`, loadable plugin file, removable like any other plugin.
-- Contributes an **Action** ("Install as application", on archive files) and a **Provider** (the Installed Apps virtual view). A **Decorator** badge on archives that are already installed is optional garnish for later.
-- Extracts archives itself with the tar and zip crates, so it does not depend on the archives plugin; permissions and symlinks inside the archive are preserved. The only kernel support it needs is generic: an Action opening a plugin-drawn dialog, and a plugin submitting a job with progress to the operations area. Bulk rename and compress need the same two hooks.
+- Contributes the **Actions** "Install as application", on archive files and on AppImages, and "Run", on AppImages (see *AppImages*), and a **Provider** (the Installed Apps virtual view). A **Decorator** badge on archives that are already installed is optional garnish for later.
+- Extracts archives itself with the tar and zip crates, so it does not depend on the archives plugin; permissions and symlinks inside the archive are preserved. It reads an AppImage's image itself as well, and *Run* starts the file through the platform services the host lends, so the plugin stays free of `cfg`. The only kernel support it needs is generic: an Action opening a plugin-drawn dialog, and a plugin submitting a job with progress to the operations area. Bulk rename and compress need the same two hooks.
 - Declares in its manifest that it writes outside the browsed location (`~/.local/opt`, `~/.local/share`, `~/.local/bin`) and may invoke `pkexec`; a good first real test of the declarative permission model.
 - All extraction runs as a job in the operations area with progress, on the per-volume queue.
 
@@ -187,6 +222,8 @@ The archive is untrusted input. Nothing from it is ever executed during install,
 - Uncompressed size is checked against free space before extraction and tracked as it proceeds; an entry-count cap guards against pathological archives.
 - No post-install scripts. An `install.sh` or similar is never run; if one is present, the summary says so, and the user may run it by hand.
 - Detection reads headers and text only (ELF magic, dynamic section, `.desktop` content). It never runs a candidate binary, for instance to ask it for its version.
+
+**An AppImage** is untrusted input in the same way, and all of this holds for it. Nothing from it is run during detection or install: asking the file to unpack itself (`--appimage-extract`) would be running it, so its desktop entry, icon and version are read out of its image as data, and a link in the image is followed only when its target is inside the image. The file is started only when the user asks for exactly that, with *Run* or as the installed app.
 
 ## Privileged helper (system-wide installs)
 
@@ -224,7 +261,22 @@ The plugin crate carries a `fixtures/` folder of small archives, generated by a 
 | `update-v2.tar.gz` | same app id, higher version | update mode; `current` flipped; previous kept |
 | `update-v1.tar.gz` | same app id, lower version | downgrade warning |
 
-In addition: unit tests for the version parser and the app-id slug; an integration test that runs install, update, revert and uninstall against a temporary `HOME` and asserts the filesystem is empty afterwards; and `desktop-file-validate` on every generated desktop entry in CI.
+The AppImage fixtures are generated the same way and never committed: the tiny ELF program of the other fixtures with the AppImage magic in its header and, for type 2, a small SquashFS image behind it. The first one's app is the one `update-v2.AppImage` updates.
+
+| Fixture | What it exercises | Expected result |
+| --- | --- | --- |
+| `entry.AppImage` | type 2 without the execute bit; desktop entry with `X-AppImage-Version`, `.DirIcon` linking to a PNG in the image, metainfo naming another version | AppImage mode; name, icon and version from the desktop entry; nothing run; the file left as it was |
+| `metainfo.AppImage` | entry without a version, metainfo with two releases | version of the newer release |
+| `Fixname-3.2.1-x86_64.AppImage` | entry without a version, no metainfo | version `3.2.1` from the file name |
+| `no-version.AppImage` | none of the three version sources | version field empty; *Install* waits for one |
+| `type1.AppImage` | magic `AI` `0x01`, no SquashFS image | minimal entry from the file name; generic icon |
+| `magic-only` | the magic under a name without the extension | an AppImage all the same: *Run* and *Install as application…* offered |
+| `fuse2.AppImage` | a runtime that names `libfuse.so.2`; every other fixture's runtime does not | FUSE 2 needed: where the loader cache lacks it *Run* stops with the warning and the install summary carries it; the others are never held back |
+| `wrong-arch.AppImage` | ELF for the other architecture | *Run* and install refused with the architecture message |
+| `outside-links.AppImage` | `.DirIcon` and the entry's icon are links that point out of the image | links not followed; generic icon |
+| `update-v2.AppImage` | the app of `entry.AppImage`, a higher version, another file name | update mode; `current` flipped; previous kept; desktop entry untouched |
+
+In addition: unit tests for the version parser and the app-id slug; an integration test that runs install, update, revert and uninstall against a temporary `HOME` and asserts the filesystem is empty afterwards, once from the archives and once from the AppImages, where it also asserts that the desktop entry is the same after the update and that the downloaded file kept its bytes and its permissions; and `desktop-file-validate` on every generated desktop entry in CI.
 
 ## Settled questions
 
@@ -235,3 +287,9 @@ All open questions were settled on 2026-11-07.
 - **Previous versions kept:** exactly one, not configurable.
 - **`StartupWMClass` auto-detection:** no; editable in the Installed Apps view is enough.
 - **Adopting apps installed by hand before Rick:** deferred to a later version.
+
+AppImage support was settled on 2026-11-13 and 2026-11-14.
+
+- **FUSE 2 missing:** a warning only, with the install line of each distribution. No fallback that unpacks and runs (`--appimage-extract-and-run`), and nothing is installed for the user.
+- **Version of an AppImage:** the desktop entry, then the metainfo, then the file name. No generated fallback and no date: with none of the three the user types one.
+- **Model:** the archive model, followed exactly — version folder, `current`, record, one previous version, the same dialog — with the AppImage kept as the one file it is, never unpacked.
