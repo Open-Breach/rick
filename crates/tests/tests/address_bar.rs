@@ -208,9 +208,12 @@ fn a_path_that_exists_only_in_part_opens_the_deepest_folder_and_names_the_rest()
     type_path(&mut harness, &typed.to_string_lossy());
     let (_, t) = tab(&harness);
     assert_eq!(t.location, local(&reports), "the deepest folder there is");
-    assert_eq!(t.missing.as_deref(), Some("2026/q3"));
+    // The rest is named as it was written: `typed` was joined by `Path`,
+    // so with the platform's separator, a backslash on Windows.
+    let rest = Path::new("2026").join("q3").to_string_lossy().into_owned();
+    assert_eq!(t.missing.as_deref(), Some(rest.as_str()));
     assert!(t.failure.is_none(), "not a failure");
-    harness.get_by_label("2026/q3 does not exist here");
+    harness.get_by_label(&format!("{rest} does not exist here"));
     assert!(
         harness.query_by_label("Retry").is_none(),
         "the banner has no Retry"
