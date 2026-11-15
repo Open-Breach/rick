@@ -62,7 +62,7 @@ Items 1 and 3 are **live**: they are generated from what the release's bundle re
 2. **Interface** (fixed). `Multi-pane, multi-tab view: split panes side by side, drag them around, keep as many tabs as you like.`
 3. **Storage and search** (live). The file systems and storage providers Rick browses, the cloud providers among them, and the platform search it queries on each OS. The lists are what the providers and search connectors of the bundle declare.
 4. **Tool integration** (fixed wording, live names). `Works with the tools you already use, like Git: status badges in the file list and actions in the context menu.` A tool is named only when its plugin ships in the archives and loads.
-5. **Tarball manager** (fixed). `Installs and uninstalls software distributed as tarballs, so a tar.gz download becomes a managed install instead of a folder you forget about.` Marked as Linux only for as long as `ext-installer` is.
+5. **Tarball and AppImage manager** (fixed). `Installs and uninstalls software distributed as tarballs and AppImages, so a tar.gz or AppImage download becomes a managed install instead of a folder or file you forget about.` Marked as Linux only for as long as `ext-installer` is.
 6. **Convenience functions** (fixed). `Small things done right, such as computing a file's hash from the context menu.`
 
 **File types** (live). Directly under the six items, the full list of item 1, one collapsible `<details>` block per kind, its `<summary>` naming the kind and its count, the types comma-separated inside. The kinds, in this order:
