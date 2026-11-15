@@ -67,6 +67,7 @@ pane-not-implemented-yet = Not implemented yet
 pane-view-mode = View mode
 pane-hidden-ancestors = Hidden ancestors
 pane-copy-path = Copy path
+pane-path-missing = { $path } does not exist here
 pane-view-options = View options
 pane-drag-pane = Drag pane
 pane-group-view = View

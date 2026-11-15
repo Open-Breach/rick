@@ -50,6 +50,10 @@ pub fn show(ui: &mut egui::Ui, cx: &mut PaneCx<'_>) {
         egui::Panel::top(egui::Id::new(("failure", cx.tab_id)))
             .show_separator_line(true)
             .show(ui, |ui| failure_banner(ui, cx));
+    } else if cx.tab.missing.is_some() {
+        egui::Panel::top(egui::Id::new(("missing", cx.tab_id)))
+            .show_separator_line(true)
+            .show(ui, |ui| missing_banner(ui, cx));
     }
     // The footer paints its own hairline and sits on `bg/pane` like the
     // toolbar: no panel frame, no second line.
@@ -78,6 +82,32 @@ fn failure_banner(ui: &mut egui::Ui, cx: &mut PaneCx<'_>) {
             }
         });
     });
+}
+
+/// The banner over the list of the folder a typed path led to when only
+/// its beginning exists (SPEC.md *A path that exists only in part*):
+/// *`reports/2026/q3` does not exist here*, the missing rest in the
+/// monospace. It has no *Retry*, and the next navigation takes it away.
+fn missing_banner(ui: &mut egui::Ui, cx: &PaneCx<'_>) {
+    /// Where the path goes in the sentence, which is laid out around it.
+    const PATH: &str = "\u{1}";
+    let Some(missing) = cx.tab.missing.as_deref() else {
+        return;
+    };
+    // The sentence around the path, in the language's own order.
+    let sentence = t!("pane-path-missing", path = PATH);
+    let (before, after) = sentence.split_once(PATH).unwrap_or(("", sentence.as_str()));
+    let colour = ui.visuals().warn_fg_color;
+    let spoken = format!("{before}{missing}{after}");
+    let row = ui
+        .horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 0.0;
+            ui.label(egui::RichText::new(format!("{} {before}", icons::FAILED)).color(colour));
+            ui.label(egui::RichText::new(missing).monospace().color(colour));
+            ui.label(egui::RichText::new(after).color(colour));
+        })
+        .response;
+    row.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Label, true, &spoken));
 }
 
 fn intent(cx: &mut PaneCx<'_>, intent: Intent) {
@@ -736,8 +766,10 @@ fn path_edit(ui: &mut egui::Ui, cx: &mut PaneCx<'_>, rect: egui::Rect) {
         let typed = paths::expand_here(text.trim(), &home);
         cx.tab_ui.path_edit = None;
         if !typed.is_empty() {
+            // A folder, a file in its folder, or as far as the path
+            // exists.
             let location = paths::typed(&cx.tab.location, &typed);
-            cx.requests.push(Request::Command(Command::Navigate {
+            cx.requests.push(Request::Command(Command::GoTo {
                 pane: cx.pane,
                 to: location,
             }));
