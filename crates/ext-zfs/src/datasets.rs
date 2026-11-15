@@ -6,9 +6,12 @@
 //! lists are read per dataset and kept for [`TTL`]; a management job drops
 //! its dataset's list when it finishes. Which snapshot is the newest to hold
 //! a folder is found in a job ([`Datasets::newest_holding`]) and kept, so a
-//! menu can ask without reading; once the dataset's list is read again the
-//! answer stays, marked as found against the older list, until the folder's
-//! next read replaces it. Without `zfs`, or when the list
+//! menu can ask without reading; once the dataset's list is read again and
+//! has changed, the answer stays, marked as found against the older list,
+//! until the folder's next read replaces it. A list that reads the same
+//! leaves the answers as they are, and a folder below one that no snapshot
+//! holds is in none either, so most folders are answered without a look
+//! into any snapshot. Without `zfs`, or when the list
 //! fails, there are no datasets: that is logged once, at `debug`.
 
 use std::collections::HashMap;
@@ -45,7 +48,7 @@ type Folder = (String, PathBuf);
 struct Held {
     /// The newest snapshot holding it, or `None` when none does.
     found: Option<String>,
-    /// The dataset's list was read again, or dropped, since.
+    /// The dataset's list changed, or was dropped, since.
     outdated: bool,
 }
 
@@ -60,6 +63,9 @@ pub struct Datasets {
     properties: Mutex<HashMap<String, ReadProperties>>,
     /// What was last found for each folder shown.
     holding: Mutex<HashMap<Folder, Held>>,
+    /// Held while a snapshot list is read, so that readers of one stale
+    /// list take turns and all but the first find it read.
+    reading: Mutex<()>,
     told: AtomicBool,
 }
 
@@ -84,6 +90,7 @@ impl Datasets {
             snapshots: Mutex::default(),
             properties: Mutex::default(),
             holding: Mutex::default(),
+            reading: Mutex::default(),
             told: AtomicBool::new(false),
         }
     }
@@ -164,20 +171,29 @@ impl Datasets {
         if let Some(fresh) = self.fresh(dataset) {
             return Ok(newest_first(&fresh));
         }
+        // One reader at a time: whoever waited finds the list read.
+        let _reading = lock(&self.reading);
+        if let Some(fresh) = self.fresh(dataset) {
+            return Ok(newest_first(&fresh));
+        }
         let out = self.run(&parse::list_snapshots_args(dataset))?;
         let read: Vec<Snapshot> = parse::snapshots(&out)
             .into_iter()
             .filter(|s| s.dataset == dataset)
             .collect();
         let read = Arc::new(read);
-        self.outdate(dataset);
-        lock(&self.snapshots).insert(
+        let before = lock(&self.snapshots).insert(
             dataset.to_owned(),
             Read {
                 at: Instant::now(),
                 snapshots: Arc::clone(&read),
             },
         );
+        // The same snapshots hold the same folders: what was found stays
+        // current unless the list changed.
+        if !before.is_some_and(|before| same_snapshots(&before.snapshots, &read)) {
+            self.outdate(dataset);
+        }
         Ok(newest_first(&read))
     }
 
@@ -221,15 +237,44 @@ impl Datasets {
     /// into the snapshots one by one, which mounts each on a real pool, so
     /// it belongs in a job.
     ///
+    /// It looks no further than it must. What was found for `rel` against
+    /// the list as it is, is the answer. Otherwise a folder is in a
+    /// snapshot only if the folder above it is: the search starts at the
+    /// newest snapshot holding the nearest folder above that is known, and
+    /// is over at once when no snapshot holds that one.
+    ///
     /// # Errors
     ///
     /// `Error::Unsupported` without `zfs`; ZFS's error when the list fails.
     pub fn newest_holding(&self, fs: &FileSystem, rel: &Path) -> Result<Option<String>, Error> {
-        let found = self
-            .snapshots(&fs.name)?
-            .into_iter()
-            .find(|s| Self::snapshot_dir(fs, &s.name).join(rel).is_dir())
-            .map(|s| s.name);
+        let snapshots = self.snapshots(&fs.name)?;
+        let above = {
+            let holding = lock(&self.holding);
+            let current = |folder: &Path| {
+                holding
+                    .get(&(fs.name.clone(), folder.to_path_buf()))
+                    .filter(|held| !held.outdated)
+                    .map(|held| held.found.clone())
+            };
+            if let Some(found) = current(rel) {
+                return Ok(found);
+            }
+            rel.ancestors().skip(1).find_map(current)
+        };
+        let found = match above {
+            Some(None) => None,
+            from => {
+                let start = from
+                    .flatten()
+                    .and_then(|from| snapshots.iter().position(|s| s.name == from))
+                    .unwrap_or(0);
+                snapshots
+                    .into_iter()
+                    .skip(start)
+                    .find(|s| Self::snapshot_dir(fs, &s.name).join(rel).is_dir())
+                    .map(|s| s.name)
+            }
+        };
         lock(&self.holding).insert(
             (fs.name.clone(), rel.to_path_buf()),
             Held {
@@ -252,9 +297,9 @@ impl Datasets {
     }
 
     /// Whether what [`Datasets::cached_holding`] answers for `rel` was
-    /// found against the dataset's list as it was last read: `false` when
-    /// it was never asked, or when the list was read again or dropped
-    /// since, and then the folder's next read looks once more.
+    /// found against the dataset's list as it is: `false` when it was
+    /// never asked, or when the list changed or was dropped since, and
+    /// then the folder's next read looks once more.
     #[must_use]
     pub fn holding_is_current(&self, dataset: &str, rel: &Path) -> bool {
         lock(&self.holding)
@@ -315,6 +360,16 @@ impl Datasets {
 
 fn newest_first(list: &[Snapshot]) -> Vec<Snapshot> {
     list.iter().rev().cloned().collect()
+}
+
+/// Whether two reads of a dataset's list name the same snapshots: by name
+/// and creation time, as the space a snapshot holds changes while it stays
+/// the same snapshot.
+fn same_snapshots(a: &[Snapshot], b: &[Snapshot]) -> bool {
+    a.len() == b.len()
+        && a.iter()
+            .zip(b)
+            .all(|(a, b)| a.name == b.name && a.created == b.created)
 }
 
 #[cfg(test)]
@@ -432,6 +487,63 @@ mod tests {
         assert_eq!(sets.snapshots("tank/home").unwrap_or_default().len(), 1);
         sets.invalidate("tank/home");
         assert_eq!(sets.snapshots("tank/home").unwrap_or_default().len(), 2);
+    }
+
+    /// The same snapshots hold the same folders, so a list that reads the
+    /// same leaves what was found as it is; one that changed marks it as
+    /// found against the older list, and keeps it.
+    #[test]
+    fn a_list_that_reads_the_same_keeps_what_was_found_current() {
+        if !crate::supported() {
+            return;
+        }
+        let zfs = scripted();
+        on_snapshots(&zfs, "tank/home", "tank/home@a\t100\t1\n");
+        let sets = Datasets::with_ttl(zfs.clone(), Duration::ZERO);
+        let fs = sets
+            .named("tank/home")
+            .cloned()
+            .unwrap_or_else(|| panic!("no tank/home"));
+        let docs = Path::new("docs");
+        assert_eq!(sets.newest_holding(&fs, docs).ok(), Some(None));
+        assert!(sets.holding_is_current("tank/home", docs));
+
+        // Read again, with more space held by the same snapshot.
+        on_snapshots(&zfs, "tank/home", "tank/home@a\t100\t2\n");
+        assert_eq!(sets.snapshots("tank/home").map(|l| l.len()).ok(), Some(1));
+        assert!(sets.holding_is_current("tank/home", docs), "looked up anew");
+
+        on_snapshots(
+            &zfs,
+            "tank/home",
+            "tank/home@a\t100\t2\ntank/home@b\t200\t1\n",
+        );
+        assert_eq!(sets.snapshots("tank/home").map(|l| l.len()).ok(), Some(2));
+        assert!(!sets.holding_is_current("tank/home", docs));
+        assert_eq!(sets.cached_holding("tank/home", docs), Some(None));
+    }
+
+    /// Two folders of one dataset shown at once each start a read; the
+    /// second waits for the first and finds the list read.
+    #[test]
+    fn readers_of_one_stale_list_read_it_once() {
+        let zfs = scripted();
+        on_snapshots(&zfs, "tank/home", "tank/home@a\t100\t1\n");
+        let sets = Arc::new(Datasets::new(zfs.clone()));
+        let start = Arc::new(std::sync::Barrier::new(8));
+        let readers: Vec<_> = (0..8)
+            .map(|_| {
+                let (sets, start) = (Arc::clone(&sets), Arc::clone(&start));
+                std::thread::spawn(move || {
+                    start.wait();
+                    sets.snapshots("tank/home").map(|list| list.len()).ok()
+                })
+            })
+            .collect();
+        for reader in readers {
+            assert_eq!(reader.join().ok().flatten(), Some(1));
+        }
+        assert_eq!(zfs.calls(), [snapshot_args("tank/home")]);
     }
 
     #[test]

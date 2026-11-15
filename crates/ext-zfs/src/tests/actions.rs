@@ -178,6 +178,53 @@ fn browse_keeps_its_answer_when_the_list_is_read_again() {
     assert!(current());
 }
 
+/// A snapshot does not change: what was found for a folder holds while the
+/// list is the same, and a folder is in a snapshot only if the folder above
+/// it is. So nothing is looked up for a folder already answered, nor below
+/// one that no snapshot holds, and below one whose newest snapshot is older
+/// the newer ones are passed over. The fixture puts folders into its
+/// snapshots afterwards, which no pool does, to show that none was looked
+/// into; a list that changed is.
+#[test]
+fn no_snapshot_is_looked_into_for_what_is_known() {
+    if !crate::supported() {
+        return;
+    }
+    let fx = Fixture::new();
+    let fs = fx
+        .datasets
+        .named("tank/home")
+        .cloned()
+        .unwrap_or_else(|| panic!("no tank/home"));
+    let holding = |rel: &str| {
+        fx.datasets
+            .newest_holding(&fs, Path::new(rel))
+            .unwrap_or_else(|e| panic!("{e}"))
+    };
+    let add = |snap: &str, rel: &str| {
+        fs::create_dir_all(fx.snapshot_dir(snap).join(rel)).unwrap_or_else(|e| panic!("{e}"));
+    };
+
+    assert_eq!(holding("ann/fresh"), None);
+    add("b", "ann/fresh/sub");
+    assert_eq!(holding("ann/fresh/sub"), None, "below a folder in none");
+    assert_eq!(holding("ann/fresh"), None, "answered before");
+
+    add("a", "ann/kept/sub");
+    assert_eq!(holding("ann/kept").as_deref(), Some("a"));
+    add("b", "ann/kept/sub");
+    assert_eq!(holding("ann/kept/sub").as_deref(), Some("a"), "b was tried");
+
+    super::on_snapshots(
+        &fx.zfs,
+        "tank/home",
+        "tank/home@a\t100\t10\ntank/home@b\t200\t20\ntank/home@c\t300\t30\n",
+    );
+    fx.datasets.invalidate("tank/home");
+    assert_eq!(holding("ann/fresh/sub").as_deref(), Some("b"));
+    assert_eq!(holding("ann/kept/sub").as_deref(), Some("b"));
+}
+
 #[test]
 fn browse_is_hidden_off_zfs_and_inside_a_snapshot() {
     let fx = Fixture::new();
