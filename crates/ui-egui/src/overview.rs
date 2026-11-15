@@ -262,47 +262,23 @@ fn row_interaction(cx: &mut PaneCx<'_>, entry: &Entry, response: &egui::Response
     if !cx.focused && (response.clicked() || response.middle_clicked()) {
         cx.requests.push(Request::FocusPane(cx.pane));
     }
-    response.clone().context_menu(|ui| {
-        if ui.button(t!("open")).clicked() {
+    // The menu card of the file list (SPEC.md *Context menu*). A drive's
+    // row has what its card in the side panel has: Eject, Format… and
+    // Properties.
+    crate::menus::card(response, |ui| {
+        if crate::menus::item(ui, Some(icons::FOLDER_OPEN), &t!("open")).clicked() {
             cx.requests.push(Request::Command(Command::Navigate {
                 pane: cx.pane,
                 to: location.clone(),
             }));
             ui.close();
         }
-        if ui.button(t!("open-in-new-tab")).clicked() {
+        if crate::menus::item(ui, None, &t!("open-in-new-tab")).clicked() {
             cx.requests.push(Request::NewTabAt(location.clone()));
             ui.close();
         }
-        // A drive's row has what its card in the side panel has (SPEC.md
-        // *This Machine*): Eject for a removable one, Format… for a
-        // removable or a local one, and Properties.
-        let Some(volume) = &volume else {
-            return;
-        };
-        if volume.is_removable() && ui.button(format!("{} Eject", icons::EJECT)).clicked() {
-            cx.requests
-                .push(Request::Command(Command::Eject(volume.mount_point.clone())));
-            ui.close();
-        }
-        if matches!(volume.kind, VolumeKind::Removable | VolumeKind::Fixed) {
-            let entry = egui::Button::new(t!("panel-format"));
-            if format_tool {
-                if ui.add(entry).clicked() {
-                    cx.requests.push(Request::Command(Command::Format(
-                        volume.mount_point.clone(),
-                    )));
-                    ui.close();
-                }
-            } else {
-                ui.add_enabled(false, entry)
-                    .on_disabled_hover_text(t!("panel-no-disk-utility"));
-            }
-        }
-        if ui.button(t!("properties")).clicked() {
-            cx.requests
-                .push(Request::DriveProperties(volume.mount_point.clone()));
-            ui.close();
+        if let Some(volume) = &volume {
+            crate::menus::drive_items(ui, volume, format_tool, cx.requests);
         }
     });
 }

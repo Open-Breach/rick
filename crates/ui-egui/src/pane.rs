@@ -924,17 +924,27 @@ fn breadcrumb(ui: &mut egui::Ui, cx: &mut PaneCx<'_>, rect: egui::Rect) {
                         .color(scheme.icon_default),
                 )
                 .min_size(egui::vec2(ICON + 2.0 * CRUMB_PAD, height));
-                egui::containers::menu::MenuButton::from_button(button).ui(ui, |ui| {
-                    for crumb in hidden {
-                        if ui.button(crumb.label).clicked() {
-                            cx.requests.push(Request::Command(Command::Navigate {
-                                pane: cx.pane,
-                                to: crumb.location,
-                            }));
-                            ui.close();
-                        }
-                    }
-                })
+                // The folded ancestors, on the menu card every menu is
+                // (SPEC.md *Context menu*): a folder to an entry.
+                egui::containers::menu::MenuButton::from_button(button)
+                    .config(
+                        egui::containers::menu::MenuConfig::new().style(crate::menus::menu_style),
+                    )
+                    .ui(ui, |ui| {
+                        crate::menus::card_contents(ui, |ui| {
+                            for crumb in hidden {
+                                let entry =
+                                    crate::menus::item(ui, Some(icons::FOLDER), &crumb.label);
+                                if entry.clicked() {
+                                    cx.requests.push(Request::Command(Command::Navigate {
+                                        pane: cx.pane,
+                                        to: crumb.location,
+                                    }));
+                                    ui.close();
+                                }
+                            }
+                        });
+                    })
             })
             .inner;
         let name = t!("pane-hidden-ancestors");
