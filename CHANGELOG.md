@@ -7,6 +7,14 @@ the pull request that brought the change.
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-11-15
+
+On Linux, ZFS snapshots with a time slider and AppImages in the installer.
+Everywhere: set as desktop background, the Icons view for a folder of
+media, workspace tabs that stay within reach, the properties of a drive,
+an address bar that takes more, and a round of polish. The extension API
+is 22: a plugin built for 0.4.1 is refused until it is rebuilt.
+
 ### Added
 
 - *Set as desktop background*, in the context menu of one selected image
@@ -1619,7 +1627,8 @@ text, code, images and PDF, and Git, on Linux, macOS and Windows.
   in the middle of a write can no longer read a truncated file and lose
   the pinned folders (#14).
 
-[Unreleased]: https://github.com/Open-Breach/rick/compare/v0.4.1...HEAD
+[Unreleased]: https://github.com/Open-Breach/rick/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/Open-Breach/rick/releases/tag/v0.5.0
 [0.4.1]: https://github.com/Open-Breach/rick/releases/tag/v0.4.1
 [0.4.0]: https://github.com/Open-Breach/rick/releases/tag/v0.4.0
 [0.3.0]: https://github.com/Open-Breach/rick/releases/tag/v0.3.0
