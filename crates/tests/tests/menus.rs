@@ -601,11 +601,10 @@ fn the_folded_ancestors_are_listed_on_the_menu_card() {
     harness.step();
 
     // The temporary folder is one of them, and its entry is a card's.
-    let name = dir
-        .path()
-        .file_name()
-        .map(|n| n.to_string_lossy().into_owned())
-        .unwrap_or_else(|| panic!("the folder has a name"));
+    let name = dir.path().file_name().map_or_else(
+        || panic!("the folder has a name"),
+        |n| n.to_string_lossy().into_owned(),
+    );
     let entries: Vec<egui::Rect> = harness
         .query_all_by_role(egui::accesskit::Role::Button)
         .map(|n| n.rect())
