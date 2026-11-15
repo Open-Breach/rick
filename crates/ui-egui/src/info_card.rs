@@ -106,6 +106,9 @@ pub struct Card<'a> {
     pub pin: Option<bool>,
     /// The action row's buttons, the first one primary.
     pub actions: &'a [Action],
+    /// The action row has no primary button: its first is a secondary one
+    /// too, as the empty file's *Move to trash* is.
+    pub no_primary: bool,
     /// What *Where Rick looked* unfolds, when there is something.
     pub looked: Option<&'a str>,
 }
@@ -501,7 +504,7 @@ fn actions(ui: &mut egui::Ui, card: &Card<'_>, state: &mut State, outcome: &mut 
             ui.spacing_mut().item_spacing = vec2(8.0, 8.0);
             ui.horizontal_wrapped(|ui| {
                 for (index, action) in card.actions.iter().enumerate() {
-                    let kind = if index == 0 {
+                    let kind = if index == 0 && !card.no_primary {
                         ButtonKind::Primary
                     } else {
                         ButtonKind::Secondary

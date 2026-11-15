@@ -425,6 +425,14 @@ fn apply_preview_act(
                 });
             }
         }
+        PreviewAct::Trash => {
+            if let Some(ctx) = app.action_ctx(pane, Invocation::ContextMenu) {
+                requests.push(Request::RunAction {
+                    action: ext::ActionId("core.trash"),
+                    ctx,
+                });
+            }
+        }
         PreviewAct::Download(address) => ctx.open_url(egui::OpenUrl::new_tab(address)),
         // The pane itself stores a table's widths.
         PreviewAct::Columns(_) => {}

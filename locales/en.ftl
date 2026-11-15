@@ -132,6 +132,7 @@ preview-modified = Modified
 preview-plugin-available = plugin available
 preview-no-previewer-for = no previewer for .{ $extension }
 preview-no-previewer-for-type = no previewer for this type
+preview-file-empty = This file is empty
 preview-no-file-selected = No file selected
 preview-loading = Loading preview…
 preview-location = Location
