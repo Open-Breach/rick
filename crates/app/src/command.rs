@@ -696,6 +696,17 @@ pub enum Event {
         /// serge:serge`, for a local file where the platform has them.
         permissions: Option<String>,
     },
+    /// The pane's selection is an empty file — 0 bytes by its listing, and
+    /// a first read returned nothing — which is given to no previewer; the
+    /// pane shows the File info card of SPEC.md's *An empty file*,
+    /// centred, with *Move to trash*.
+    PreviewEmpty {
+        /// The pane.
+        pane: PaneId,
+        /// The file's mode string and `owner:group`, as in
+        /// [`Event::PreviewNone`].
+        permissions: Option<String>,
+    },
     /// The preview just opened for the pane shows a prefix of a file on a
     /// remote provider; the pane offers *Load more*
     /// (`specs/ext-ssh.md`, "Previews over SSH").
@@ -956,6 +967,9 @@ impl fmt::Debug for Event {
             }
             Self::PreviewNone { pane, plugin, .. } => {
                 pane_struct(f, "PreviewNone", *pane, "plugin", plugin)
+            }
+            Self::PreviewEmpty { pane, permissions } => {
+                pane_struct(f, "PreviewEmpty", *pane, "permissions", permissions)
             }
             Self::PreviewPrefix {
                 pane,

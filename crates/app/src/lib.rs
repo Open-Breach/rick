@@ -317,6 +317,14 @@ enum Msg {
         /// read.
         permissions: Option<String>,
     },
+    /// The pane's file is empty: 0 bytes by its listing, and nothing read.
+    PreviewEmpty {
+        pane: PaneId,
+        generation: u64,
+        /// The file's mode string and `owner:group`, where they could be
+        /// read.
+        permissions: Option<String>,
+    },
     /// The pane's *Copy* read the file: its text, for the clipboard.
     PreviewText {
         result: Result<String, Error>,
@@ -4611,6 +4619,19 @@ impl App {
                     });
                 }
             }
+            Msg::PreviewEmpty {
+                pane,
+                generation,
+                permissions,
+            } => {
+                if self
+                    .preview
+                    .get(&pane)
+                    .is_some_and(|job| job.generation == generation)
+                {
+                    events.push(Event::PreviewEmpty { pane, permissions });
+                }
+            }
             Msg::PreviewCapped {
                 pane,
                 generation,
@@ -5963,6 +5984,18 @@ impl PreviewRun {
             tx,
         } = self;
         let sniff = ext::read_bytes(&*provider, &loc, Some(4096), &cancel).await?;
+        // An empty file is given to no previewer (SPEC.md *An empty
+        // file*). The size alone does not decide: a file of 0 bytes that
+        // reads content, as the files of /proc do, has its previewer.
+        if entry.kind == EntryKind::File && entry.size == Some(0) && sniff.is_empty() {
+            let permissions = permissions_of(platform, local, entry.kind.clone()).await;
+            tx.send(Msg::PreviewEmpty {
+                pane,
+                generation,
+                permissions,
+            });
+            return Ok(());
+        }
         let Some(previewer) = choose_previewer(&previewers, with, &entry, &sniff) else {
             let permissions = permissions_of(platform, local, entry.kind.clone()).await;
             tx.send(Msg::PreviewNone {
