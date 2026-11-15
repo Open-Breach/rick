@@ -166,8 +166,8 @@ the pull request that brought the change.
   slot, their groups set apart by hairlines, kept inside a small window.
   They were the toolkit's plain menu, with its spacing and the glyph
   written into the label, so a screen reader now hears *Eject* and
-  *Edit…* by their names alone. The list under *Add…* is the same card
-  (#246).
+  *Edit…* by their names alone. The list under *Add…* and the list of
+  the address bar's folded ancestors are the same card (#246).
 - Mod+W or a middle click on the last tab of the last window, which
   close nothing, no longer leave a tab for *Reopen closed tab* to open
   (#224).

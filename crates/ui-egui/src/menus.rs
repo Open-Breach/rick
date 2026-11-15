@@ -119,11 +119,17 @@ pub fn context_popup(response: &egui::Response) -> egui::Popup<'_> {
 /// `entries` adds them with [`item`], [`greyed_item`], [`check_item`],
 /// [`item_of`] and [`divider`].
 pub fn card(response: &egui::Response, entries: impl FnOnce(&mut egui::Ui)) {
-    context_popup(response).show(|ui| {
-        scrolling(ui, |ui| {
-            card_width(ui);
-            entries(ui);
-        });
+    context_popup(response).show(|ui| card_contents(ui, entries));
+}
+
+/// What stands in a [`card`]: `entries` at the card's width, scrolling
+/// where they are more than the window has room for. For a menu that is
+/// opened by something else than [`card`] and [`card_under`] — a menu
+/// button — and styled with [`menu_style`].
+pub fn card_contents(ui: &mut egui::Ui, entries: impl FnOnce(&mut egui::Ui)) {
+    scrolling(ui, |ui| {
+        card_width(ui);
+        entries(ui);
     });
 }
 
@@ -134,12 +140,7 @@ pub fn card_under(button: &egui::Response, entries: impl FnOnce(&mut egui::Ui)) 
         egui::Popup::menu(button).style(menu_style),
         0.0,
     )
-    .show(|ui| {
-        scrolling(ui, |ui| {
-            card_width(ui);
-            entries(ui);
-        });
-    });
+    .show(|ui| card_contents(ui, entries));
 }
 
 /// An entry of a [`card`]: `icon` in its slot — the slot stays where the

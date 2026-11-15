@@ -583,3 +583,56 @@ fn the_application_menu_scrolls_in_a_low_window() {
         "the card ends 8 px over the window's edge: {last:?} in {room:?}"
     );
 }
+
+/// The list of the address bar's folded ancestors is the menu card every
+/// menu is (SPEC.md *Context menu* and *Sizes*): 260 px wide, a folder to
+/// an entry, each 30 px high. It was the toolkit's plain menu, as narrow
+/// as its longest name. Choosing a folder goes there.
+#[test]
+fn the_folded_ancestors_are_listed_on_the_menu_card() {
+    let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+    let deep = dir.path().join("alpha/bravo/charlie/delta/echo");
+    fs::create_dir_all(&deep).unwrap_or_else(|e| panic!("{e}"));
+    // A window too narrow for the whole path: its ancestors fold.
+    let mut harness = git_harness(&deep, egui::vec2(560.0, 600.0));
+    let chevron = harness.get_by_label("Hidden ancestors").rect().center();
+    click_at(&mut harness, chevron, egui::PointerButton::Primary);
+    harness.step();
+    harness.step();
+
+    // The temporary folder is one of them, and its entry is a card's.
+    let name = dir
+        .path()
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| panic!("the folder has a name"));
+    let entries: Vec<egui::Rect> = harness
+        .query_all_by_role(egui::accesskit::Role::Button)
+        .map(|n| n.rect())
+        .filter(|r| (r.height() - 30.0).abs() < 1.0 && (r.width() - 246.0).abs() < 2.0)
+        .collect();
+    assert!(entries.len() >= 2, "the folded ancestors: {entries:?}");
+    assert!(
+        entries
+            .windows(2)
+            .all(|w| (w[0].left() - w[1].left()).abs() < 0.5
+                && (w[1].top() - w[0].bottom()).abs() < 0.5),
+        "one under the other, at one edge: {entries:?}"
+    );
+    let folder = harness.get_by_label(&name).rect();
+    assert!(
+        entries
+            .iter()
+            .any(|e| (e.center() - folder.center()).length() < 0.5),
+        "{name} is an entry of the card: {folder:?} among {entries:?}"
+    );
+
+    // Choosing it goes there, and the list closes.
+    click_at(&mut harness, folder.center(), egui::PointerButton::Primary);
+    settle(&mut harness);
+    let model = harness.state().app().model();
+    let location = model
+        .active_tab(model.focused)
+        .map_or_else(|| panic!("no tab"), |(_, tab)| tab.location.clone());
+    assert_eq!(location, local(dir.path()));
+}
