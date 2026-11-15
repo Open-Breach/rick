@@ -19,7 +19,10 @@
 //! *System properties…* opens it.
 
 mod acl;
+mod drive;
 mod permissions;
+
+pub use drive::DriveDialog;
 
 use app::{App, Command, Contents, PermissionRequest, PropertiesInfo, Recursion};
 use egui::{Align2, FontId, Rect, Sense, pos2, vec2};
