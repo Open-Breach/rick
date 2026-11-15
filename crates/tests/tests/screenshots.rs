@@ -2555,6 +2555,27 @@ fn screenshots_of_a_form_field_from_the_clipboard() {
     }
 }
 
+/// The address bar's folded ancestors, listed on the menu card.
+#[test]
+#[ignore = "needs a wgpu adapter; CI runs it and uploads the images"]
+fn screenshots_of_the_folded_ancestors() {
+    let (_dir, deep) = sample_tree();
+    for (theme, name) in SCHEMES {
+        let fake = Arc::new(Fake::new().unwrap_or_else(|e| panic!("{e}")));
+        let mut harness = features_shell(&fake, &deep, egui::vec2(760.0, 520.0), Vec::new());
+        scheme(&mut harness, theme);
+        let chevron = harness.get_by_label("Hidden ancestors").rect().center();
+        press(&mut harness, chevron, egui::PointerButton::Primary);
+        harness.step();
+        // The pointer on an entry, for its fill under the pointer.
+        let entry = harness.get_by_label("projects").rect().center();
+        harness.event(egui::Event::PointerMoved(entry));
+        harness.step();
+        harness.step();
+        shoot(&mut harness, &format!("menu-ancestors-{name}"));
+    }
+}
+
 /// The right-click menus of the side panel on the menu card of the file
 /// list: a place's, a section header's and a drive card's.
 #[test]
