@@ -103,8 +103,9 @@ the pull request that brought the change.
   tab or a second window (#224).
 - A menu with more entries than a small window has room for is as tall as
   fits, 8 px clear of the window's top and bottom edges, and scrolls: the
-  context menus, the application menu and their submenus. It used to be
-  cut off at the window's edge (#227).
+  context menus, the application menu and their submenus. A menu the
+  window has room for is shown whole, however many entries it has. It
+  used to be cut off at the window's edge (#227, #237).
 - An empty file shows a card in the preview pane, with *This file is
   empty* and **Move to trash**, where it used to show an empty text or
   the hex view's *(empty file)*. A file listed with 0 bytes that has
