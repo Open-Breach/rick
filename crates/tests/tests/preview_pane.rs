@@ -153,6 +153,22 @@ fn field_labels(harness: &Harness<'_, RickUi>) -> Vec<String> {
         .collect()
 }
 
+/// Clicks *Copy* in the preview pane's toolbar. The button is named
+/// *Copy*, and *Copied* for a moment after a click (SPEC.md *Copy
+/// buttons*).
+fn click_copy(harness: &mut Harness<'_, RickUi>) {
+    let pane_rect = harness
+        .state()
+        .inspector_rect()
+        .unwrap_or_else(|| panic!("pane"));
+    harness
+        .query_all_by_label("Copy")
+        .chain(harness.query_all_by_label("Copied"))
+        .find(|node| pane_rect.contains(node.rect().center()))
+        .unwrap_or_else(|| panic!("no Copy in the pane"))
+        .click();
+}
+
 /// The value of the File info card's row `label`.
 fn field(harness: &Harness<'_, RickUi>, label: &str) -> String {
     harness
@@ -1580,7 +1596,7 @@ fn copy_puts_the_whole_text_on_the_clipboard_and_the_raw_source_for_markdown() {
     // A code file: its full text.
     select(&mut harness, "main.rs");
     let pane = harness.state().app().model().focused;
-    click_in_pane(&mut harness, icons::COPY);
+    click_copy(&mut harness);
     assert_eq!(wait_clipboard(&mut harness, &fake), code);
 
     // Past the loaded window: the whole file all the same.
@@ -1595,7 +1611,7 @@ fn copy_puts_the_whole_text_on_the_clipboard_and_the_raw_source_for_markdown() {
             .is_some_and(|l| l.pages[0].len() < big.len()),
         "the pane loaded a window, not the file"
     );
-    click_in_pane(&mut harness, icons::COPY);
+    click_copy(&mut harness);
     let started = Instant::now();
     loop {
         settle(&mut harness);
@@ -1613,7 +1629,7 @@ fn copy_puts_the_whole_text_on_the_clipboard_and_the_raw_source_for_markdown() {
     // Markdown: the raw source, not the rendered document.
     fake.set_text("").unwrap_or_else(|e| panic!("{e}"));
     select(&mut harness, "README.md");
-    click_in_pane(&mut harness, icons::COPY);
+    click_copy(&mut harness);
     let started = Instant::now();
     loop {
         settle(&mut harness);
@@ -1918,7 +1934,7 @@ fn an_svg_is_rasterised_at_the_pane_size_and_again_after_a_resize_and_copy_gives
     );
 
     // Copy: the raw source.
-    click_in_pane(&mut harness, icons::COPY);
+    click_copy(&mut harness);
     let started = Instant::now();
     loop {
         settle(&mut harness);
@@ -1964,7 +1980,7 @@ fn an_svg_is_rasterised_at_the_pane_size_and_again_after_a_resize_and_copy_gives
         "{}",
         harness.state().preview_status()
     );
-    click_in_pane(&mut harness, icons::COPY);
+    click_copy(&mut harness);
     let started = Instant::now();
     loop {
         settle(&mut harness);

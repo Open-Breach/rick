@@ -9,6 +9,7 @@ use egui::Align;
 use model::{IconSize, SettingsChange, TimelineState, ViewMode};
 use types::{EntryKind, Location};
 
+use crate::copy_button::{CopyButton, Hover};
 use crate::dnd::{self, Spring, Target, Zone};
 use crate::keys::Intent;
 use crate::shell::{PaneCx, PaneDrag, Request};
@@ -858,9 +859,11 @@ fn breadcrumb(ui: &mut egui::Ui, cx: &mut PaneCx<'_>, rect: egui::Rect) {
 
     // The copy button, inside the breadcrumb at its right end; empty space
     // before it switches to editing.
-    let copy = ui
-        .add(egui::Button::new(icons::COPY).frame(false))
-        .on_hover_text(t!("pane-copy-path"));
+    let copy = CopyButton::new(&t!("pane-copy-path"))
+        .glyph(font.size)
+        .hover(Hover::Bare)
+        .colour(ui.visuals().widgets.inactive.fg_stroke.color)
+        .show(ui, egui::Vec2::ZERO);
     if copy.clicked() {
         cx.requests.push(Request::RunAction {
             action: ext::ActionId("core.copy_path"),

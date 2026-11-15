@@ -22,7 +22,7 @@ use egui::{Align, Align2, FontId, Rect, Sense, pos2, vec2};
 use ext::{Level, Points, t};
 use model::SettingsChange;
 
-use crate::properties::icon_button;
+use crate::copy_button::CopyButton;
 use crate::shell::Request;
 use crate::theme::{self, ICON, TEXT_BODY, TEXT_CAPS, TEXT_SECONDARY};
 use crate::widgets::{self, ButtonKind};
@@ -924,7 +924,7 @@ fn info_card(ui: &mut egui::Ui, app: &App, plugin: &Plugin, asked: &mut Option<A
                     button.left() - 12.0 - left,
                 );
                 let name = t!("extensions-copy", what = label.as_str());
-                if icon_button(ui, button, icons::COPY, &name).clicked() {
+                if CopyButton::new(&name).show_at(ui, button, &name).clicked() {
                     *asked = Some(Ask::Copy(copied.clone().unwrap_or_else(|| value.clone())));
                 }
             }

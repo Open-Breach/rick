@@ -32,6 +32,7 @@ use ext::{Content, ControlValue, Invocation, PreviewControl};
 use model::{PaneId, SettingsChange, TextPreview};
 use types::{Entry, EntryId, ExtId};
 
+use crate::copy_button::{CopyButton, Hover};
 use crate::icons;
 use crate::info_card::{self, Card, Row};
 use crate::preview::{Around, PreviewAct, Previews, Slot};
@@ -869,8 +870,21 @@ fn toolbar(
     }
     // Copy closes the middle group of every text-based preview: the whole
     // file's text, the raw source of a rendered one, never the file.
-    if view.copy && button(&mut left, state, icons::COPY, &t!("inspector-copy"), true) {
-        acts.push(Act::Copy);
+    if view.copy {
+        let label = t!("inspector-copy");
+        state.toolbar.push(ToolbarItem {
+            label: label.clone(),
+            on: None,
+        });
+        let colour = left.visuals().widgets.inactive.fg_stroke.color;
+        let copy = CopyButton::new(&label)
+            .glyph(15.0)
+            .hover(Hover::Bare)
+            .colour(colour)
+            .show(&mut left, vec2(24.0, 24.0));
+        if copy.clicked() {
+            acts.push(Act::Copy);
+        }
     }
     info
 }

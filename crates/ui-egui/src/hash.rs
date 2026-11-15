@@ -26,6 +26,7 @@ use ext::{Algorithm, Digests, Hashes, Header, HeaderIcon, Level};
 use model::JobState;
 use types::{JobId, Progress};
 
+use crate::copy_button::{self, CopyButton, Hover};
 use crate::operations::{self, Rate};
 use crate::shell::Request;
 use crate::theme::{self, CARD_RADIUS, ICON, TEXT_BODY, TEXT_SECONDARY};
@@ -272,13 +273,7 @@ impl HashDialog {
             dialog::footer(
                 ui,
                 |left| {
-                    let copy = widgets::icon_button(
-                        left,
-                        Some(icons::COPY),
-                        &t!("hash-copy-all"),
-                        false,
-                        !running,
-                    );
+                    let copy = copy_button::labelled(left, &t!("hash-copy-all"), !running);
                     if copy.clicked() && !running {
                         asked.copy = Some(copy_everything(&hashes, open.format));
                     }
@@ -639,26 +634,12 @@ fn block(
             )
             .truncate(),
         );
-        let copy = ui.interact(
-            copy_rect,
-            ui.id().with(("hash-copy", index, i)),
-            Sense::click(),
-        );
-        if copy.hovered() {
-            ui.painter()
-                .circle_filled(copy_rect.center(), COPY / 2.0, scheme.bg_subtle);
-        }
-        ui.painter().text(
-            copy_rect.center(),
-            Align2::CENTER_CENTER,
-            icons::COPY,
-            FontId::proportional(ICON),
-            scheme.icon_default,
-        );
         let spoken = t!("hash-copy", algorithm = algorithm.label());
-        copy.widget_info(|| {
-            egui::WidgetInfo::labeled(egui::WidgetType::Button, true, spoken.clone())
-        });
+        let copy = CopyButton::new(&spoken).hover(Hover::Round).show_at(
+            ui,
+            copy_rect,
+            ("hash-copy", index, i),
+        );
         if copy.clicked() {
             asked.copy = Some(value);
         }
