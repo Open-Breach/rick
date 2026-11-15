@@ -51,6 +51,8 @@ pub struct MemProvider {
     native: AtomicBool,
     /// The capabilities are an object store's, place by place.
     store: AtomicBool,
+    /// Every file is listed with a size of 0, whatever it holds.
+    sizeless: AtomicBool,
     /// Every `create_dir` call, by path, whatever came of it.
     made: Mutex<Vec<String>>,
     /// What a listing fails with while the store cannot be reached.
@@ -123,6 +125,7 @@ impl MemProvider {
             copy_delay,
             native: AtomicBool::new(false),
             store: AtomicBool::new(false),
+            sizeless: AtomicBool::new(false),
             made: Mutex::new(Vec::new()),
             unreachable: Mutex::new(None),
             read_bytes: Arc::new(AtomicU64::new(0)),
@@ -160,6 +163,13 @@ impl MemProvider {
     /// the provider go through [`Provider::transfer`] and are recorded.
     pub fn set_native(&self, on: bool) {
         self.native.store(on, Ordering::SeqCst);
+    }
+
+    /// Lists every file with a size of 0 whatever it holds, as a file
+    /// system lists the files it makes up when they are read: those of
+    /// `/proc` on Linux.
+    pub fn set_sizeless(&self, on: bool) {
+        self.sizeless.store(on, Ordering::SeqCst);
     }
 
     /// Makes the provider an object store, place by place: its root lists
@@ -248,6 +258,7 @@ impl MemProvider {
             },
             size: match node {
                 Node::Dir => None,
+                Node::File(_) if self.sizeless.load(Ordering::SeqCst) => Some(0),
                 Node::File(bytes) => Some(bytes.len() as u64),
             },
             created: None,

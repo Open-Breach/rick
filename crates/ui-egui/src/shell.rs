@@ -1851,6 +1851,10 @@ impl RickUi {
                     let entry = self.preview_entry(pane);
                     self.previews.none(pane, plugin, permissions, entry);
                 }
+                Event::PreviewEmpty { pane, permissions } => {
+                    let entry = self.preview_entry(pane);
+                    self.previews.empty(pane, permissions, entry);
+                }
                 Event::PreviewPrefix {
                     pane,
                     served,

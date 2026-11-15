@@ -1150,6 +1150,157 @@ fn select_unclaimed(harness: &mut Harness<'_, RickUi>, name: &str) {
 /// permissions; and its one button is *Open with…*. *Open as hex* is gone:
 /// with the hex view loaded it takes such a file by itself (the test
 /// below).
+/// The names the focused pane lists.
+fn listed(harness: &Harness<'_, RickUi>) -> Vec<String> {
+    let model = harness.state().app().model();
+    model
+        .active_tab(model.focused)
+        .map(|(_, t)| t.listing.rows().map(|e| e.name.clone()).collect())
+        .unwrap_or_default()
+}
+
+/// Acceptance (issue 219, item 5; SPEC.md *An empty file*): a file of 0
+/// bytes is given to no previewer, the hex view included. The pane shows
+/// the File info card, centred: the type, the size and *This file is
+/// empty* under the name, the rows of *No previewer*, and one button,
+/// **Move to trash**, a secondary one. The button is the action: the file
+/// goes to the trash, and Undo brings it back.
+#[test]
+// One file from its card to the trash and back.
+#[allow(clippy::too_many_lines)]
+fn an_empty_file_shows_the_card_with_move_to_trash_and_goes_to_no_previewer() {
+    let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+    fs::write(dir.path().join("empty.txt"), b"").unwrap_or_else(|e| panic!("{e}"));
+    fs::write(dir.path().join("empty.bin"), b"").unwrap_or_else(|e| panic!("{e}"));
+    fs::write(dir.path().join("notes.txt"), b"some text\n").unwrap_or_else(|e| panic!("{e}"));
+    let fake = Arc::new(Fake::new().unwrap_or_else(|e| panic!("{e}")));
+    // With the hex view loaded every other file has a previewer.
+    let mut extensions = previewers();
+    extensions.push(Arc::new(ext_preview_hex::HexPreview::new()));
+    let mut harness = window(
+        &fake,
+        dir.path(),
+        egui::vec2(1300.0, 700.0),
+        520.0,
+        extensions,
+    );
+    let pane = harness.state().app().model().focused;
+
+    for name in ["empty.txt", "empty.bin"] {
+        select_unclaimed(&mut harness, name);
+        let slot = harness
+            .state()
+            .previews()
+            .get(pane)
+            .unwrap_or_else(|| panic!("slot"));
+        assert_eq!(
+            slot.placeholder().map(|p| p.empty),
+            Some(true),
+            "{name} is empty"
+        );
+        assert!(!slot.has_frame(), "{name}: no hex dump, no frame");
+        assert!(slot.text_view().is_none(), "{name}: no text view");
+        assert!(slot.error().is_none(), "{name}: not an error");
+        for _ in 0..3 {
+            harness.step();
+        }
+        // The head: the type, the size and why there is nothing to show.
+        assert!(in_pane(&harness, name) >= 1, "the name of {name}");
+        assert_eq!(
+            harness
+                .query_all_by_label_contains("  ·  0 B  ·  This file is empty")
+                .count(),
+            1,
+            "the head of {name}"
+        );
+        assert!(
+            harness
+                .query_all_by_label_contains("Binary file")
+                .next()
+                .is_none(),
+            "{name} is not called binary for being empty"
+        );
+        assert!(
+            harness
+                .query_all_by_label_contains("(empty file)")
+                .next()
+                .is_none(),
+            "{name}: the hex view's line is not reached"
+        );
+        // The rows of *No previewer*, and the one button.
+        for label in ["Location", "Modified"] {
+            assert_eq!(in_pane(&harness, label), 1, "the {label} row of {name}");
+        }
+        assert_eq!(in_pane(&harness, "Move to trash"), 1, "{name}");
+        assert!(harness.query_by_label("Open with…").is_none(), "{name}");
+    }
+
+    // The button is a secondary one: on `bg/control`, not `accent/button`.
+    let scheme = ui_egui::theme::scheme_of(&harness.ctx);
+    let pane_rect = harness
+        .state()
+        .inspector_rect()
+        .unwrap_or_else(|| panic!("pane"));
+    let button = harness
+        .query_all_by_label("Move to trash")
+        .map(|n| n.rect())
+        .find(|r| pane_rect.contains(r.center()))
+        .unwrap_or_else(|| panic!("no button"));
+    let fills: Vec<egui::Color32> = harness
+        .output()
+        .shapes
+        .iter()
+        .filter_map(|clipped| match &clipped.shape {
+            egui::Shape::Rect(r) if (r.rect.center() - button.center()).length() < 1.0 => {
+                Some(r.fill)
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(fills, [scheme.bg_control], "a secondary button");
+
+    // A file with something in it has its previewer as before.
+    select(&mut harness, "notes.txt");
+    settle(&mut harness);
+    assert!(
+        harness
+            .state()
+            .previews()
+            .get(pane)
+            .is_some_and(|slot| slot.placeholder().is_none() && slot.text_view().is_some()),
+        "notes.txt is shown as text"
+    );
+
+    // Move to trash removes the file; Undo brings it back.
+    select_unclaimed(&mut harness, "empty.bin");
+    for _ in 0..3 {
+        harness.step();
+    }
+    click_in_pane(&mut harness, "Move to trash");
+    let started = Instant::now();
+    while listed(&harness).iter().any(|n| n == "empty.bin") {
+        settle(&mut harness);
+        assert!(started.elapsed() < Duration::from_secs(10), "not trashed");
+    }
+    assert!(
+        !dir.path().join("empty.bin").exists(),
+        "gone from the folder"
+    );
+    harness
+        .state_mut()
+        .app_mut()
+        .handle(app::Command::Undo, &mut Vec::new());
+    let started = Instant::now();
+    while !listed(&harness).iter().any(|n| n == "empty.bin") {
+        settle(&mut harness);
+        assert!(started.elapsed() < Duration::from_secs(10), "not restored");
+    }
+    assert!(
+        dir.path().join("empty.bin").exists(),
+        "Undo brought it back"
+    );
+}
+
 #[test]
 #[allow(clippy::too_many_lines)]
 fn a_file_no_previewer_claims_shows_the_centred_card_with_open_with_alone() {

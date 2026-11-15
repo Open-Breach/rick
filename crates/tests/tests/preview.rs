@@ -416,6 +416,94 @@ fn settle(app: &mut App, events: &mut Vec<Event>) {
     });
 }
 
+/// Issue 219, item 5 (SPEC.md *An empty file*): the size alone does not
+/// make a file empty. A file its listing gives 0 bytes that reads content
+/// — as a file system lists the files it makes up, those of `/proc` — goes
+/// to its previewer as any other; one that reads nothing is reported
+/// empty and is given to none.
+#[test]
+fn a_file_of_0_bytes_that_reads_content_has_its_previewer_and_one_that_reads_nothing_is_empty() {
+    use tests::mem::{MemExtension, MemProvider};
+    use types::{Location, ProviderId};
+
+    let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+    let mem = Arc::new(MemProvider::new(ProviderId("mem"), Duration::ZERO));
+    mem.file("/proc/version", b"Linux version 6.18\n");
+    mem.file("/proc/nothing", b"");
+    mem.set_sizeless(true);
+    let fake = Arc::new(Fake::new().unwrap_or_else(|e| panic!("{e}")));
+    let mut all = extensions();
+    all.push(Arc::new(MemExtension::new(Arc::clone(&mem))));
+    let mut app = App::new(Config {
+        platform: fake.clone(),
+        ui: Arc::new(Quiet),
+        extensions: all,
+        config_dir: Some(fake.config_dir()),
+        start: Some(local(dir.path())),
+    });
+    let pane = app.model().focused;
+    let mut events = Vec::new();
+    settle(&mut app, &mut events);
+    app.handle(
+        Command::Navigate {
+            pane,
+            to: Location::new(ProviderId("mem"), "/proc"),
+        },
+        &mut events,
+    );
+    settle(&mut app, &mut events);
+    let entry = |app: &App, name: &str| -> Entry {
+        app.model()
+            .active_tab(pane)
+            .and_then(|(_, t)| t.listing.rows().find(|e| e.name == name).cloned())
+            .unwrap_or_else(|| panic!("no entry {name}"))
+    };
+    let select = |app: &mut App, name: &str| -> Vec<Event> {
+        let entry = entry(app, name);
+        assert_eq!(entry.size, Some(0), "{name} is listed with 0 bytes");
+        let mut events = Vec::new();
+        app.handle(
+            Command::Select {
+                pane,
+                change: SelectionChange::Set(vec![entry.id]),
+            },
+            &mut events,
+        );
+        settle(app, &mut events);
+        events
+    };
+
+    // 0 bytes by the listing, and text when it is read: the text preview.
+    let events = select(&mut app, "version");
+    assert!(
+        events
+            .iter()
+            .any(|e| matches!(e, Event::PreviewReady { pane: p, .. } if *p == pane)),
+        "a previewer opened it: {events:?}"
+    );
+    assert!(
+        !events
+            .iter()
+            .any(|e| matches!(e, Event::PreviewEmpty { .. })),
+        "it is not empty: {events:?}"
+    );
+
+    // 0 bytes by the listing, and nothing when it is read: empty.
+    let events = select(&mut app, "nothing");
+    assert!(
+        events
+            .iter()
+            .any(|e| matches!(e, Event::PreviewEmpty { pane: p, .. } if *p == pane)),
+        "an empty file: {events:?}"
+    );
+    assert!(
+        !events
+            .iter()
+            .any(|e| matches!(e, Event::PreviewReady { .. } | Event::PreviewNone { .. })),
+        "given to no previewer, and not for want of one: {events:?}"
+    );
+}
+
 /// A 48 MB uncompressed bitmap: 4096 × 4096 × 3 bytes.
 fn big_bitmap(path: &Path) {
     let image = image::RgbImage::from_fn(4096, 4096, |x, y| {

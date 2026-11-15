@@ -898,9 +898,19 @@ impl Previews {
         slot.capped = None;
         slot.download = None;
         slot.placeholder = Some(Placeholder {
+            empty: false,
             plugin,
             permissions,
         });
+    }
+
+    /// `pane`'s selection is an empty file, which no previewer is given:
+    /// the pane shows the File info card with *Move to trash*.
+    pub fn empty(&mut self, pane: PaneId, permissions: Option<String>, entry: Option<EntryId>) {
+        self.none(pane, None, permissions, entry);
+        if let Some(placeholder) = &mut self.slot(pane).placeholder {
+            placeholder.empty = true;
+        }
     }
 
     /// The document just opened for `pane` shows the first `served` bytes
@@ -1238,9 +1248,12 @@ fn draw_loading(ui: &mut egui::Ui, still: bool, download: Option<(u64, Option<u6
 }
 
 /// Why the pane shows the centred card instead of a preview: no previewer
-/// claims the file.
+/// claims the file, or the file is empty and is given to none.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Placeholder {
+    /// The file is empty (SPEC.md *An empty file*): the head reads *This
+    /// file is empty* and the card's button is *Move to trash*.
+    pub empty: bool,
     /// A disabled previewer plugin whose manifest claims the file's type,
     /// by id: the card's head reads *plugin available*; `None` reads *no
     /// previewer for .bin*.
@@ -1291,6 +1304,10 @@ fn file_rows(entry: &Entry, home: &std::path::Path, dates: format::Dates) -> Vec
 /// the size and *no previewer for .bin*; *Location*, *Modified* and
 /// *Permissions*; and **Open with…**, its one button. With the hex view
 /// loaded no file comes here: it takes what nothing else recognises.
+///
+/// An empty file has the same card (SPEC.md *An empty file*), whatever
+/// previewers are loaded: its head reads *This file is empty*, and its
+/// one button is **Move to trash**, a secondary one.
 fn no_previewer_card(
     ui: &mut egui::Ui,
     entry: &Entry,
@@ -1304,28 +1321,45 @@ fn no_previewer_card(
         .filter(|(stem, ext)| !stem.is_empty() && !ext.is_empty())
         .map(|(_, ext)| ext.to_lowercase());
     let why = match (&placeholder.plugin, extension) {
+        _ if placeholder.empty => t!("preview-file-empty"),
         (Some(_), _) => t!("preview-plugin-available"),
         (None, Some(ext)) => t!("preview-no-previewer-for", extension = ext),
         (None, None) => t!("preview-no-previewer-for-type"),
     };
-    let line = format!("{}  ·  {why}", type_and_size(entry, true));
+    // An empty file is not called binary for having no text in it.
+    let line = format!("{}  ·  {why}", type_and_size(entry, !placeholder.empty));
     let mut rows = file_rows(entry, around.home, around.dates);
     if let Some(permissions) = &placeholder.permissions {
         rows.push(Row::new(t!("permissions"), permissions).mono());
     }
     // The card's one button: with the hex view loaded every file has a
     // previewer, and without it there is nothing to open the bytes with.
-    let actions = [Action {
-        glyph: Some(icons::FOLDER_OPEN),
-        label: t!("preview-open-with"),
-    }];
-    let acts = [PreviewAct::OpenWith];
+    let (action, act) = if placeholder.empty {
+        (
+            Action {
+                glyph: Some(icons::TRASH),
+                label: t!("action-move-to-trash"),
+            },
+            PreviewAct::Trash,
+        )
+    } else {
+        (
+            Action {
+                glyph: Some(icons::FOLDER_OPEN),
+                label: t!("preview-open-with"),
+            },
+            PreviewAct::OpenWith,
+        )
+    };
+    let actions = [action];
+    let acts = [act];
     let card = Card {
         glyph: icons::for_entry(entry),
         name: &entry.name,
         line: &line,
         rows: &rows,
         actions: &actions,
+        no_primary: placeholder.empty,
         ..Card::default()
     };
     let outcome = info_card::show_centred(ui, &card, state, info_card::CENTRED);
@@ -1447,6 +1481,8 @@ pub enum PreviewAct {
     Retry,
     /// Run *Open with…* on the file.
     OpenWith,
+    /// Run *Move to trash* on the file: the empty file's one button.
+    Trash,
     /// Open this address, a library's download page, in the browser.
     Download(String),
     /// Show this folder in the system file manager, making it first when

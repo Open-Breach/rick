@@ -290,6 +290,7 @@ preview-show-all-fields = Alle { $count } Felder anzeigen
 preview-where-rick-looked = Wo Rick gesucht hat
 preview-no-previewer-for = keine Vorschau für .{ $extension }
 preview-no-previewer-for-type = keine Vorschau für diesen Typ
+preview-file-empty = Diese Datei ist leer
 type-file-of = { $format }-Datei
 type-image = { $format }-Bild
 type-video = { $format }-Video
