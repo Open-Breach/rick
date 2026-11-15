@@ -193,6 +193,36 @@ fn frame_of(sample: &gst::Sample) -> Option<VideoFrame> {
     })
 }
 
+/// The element that turns a video's frames the way its container says.
+const UPRIGHT: &str = "videoflip";
+
+/// The filter that makes every frame of a video upright (SPEC.md *Audio
+/// and video*): the element `name`, `videoflip`, following the
+/// orientation the stream carries — the display matrix of an MP4 or MOV
+/// track, the orientation tag of Matroska — which GStreamer hands on as
+/// the `image-orientation` tag. A stream without one passes untouched.
+///
+/// `None` where the element is missing or does not take the setting, with
+/// a line in the log: the video then plays as it is stored, and plays.
+pub(crate) fn upright(name: &str) -> Option<gst::Element> {
+    let element = match gst::ElementFactory::make(name).build() {
+        Ok(element) => element,
+        Err(error) => {
+            tracing::warn!(element = name, %error, "no element to turn a video by its orientation; it plays as stored");
+            return None;
+        }
+    };
+    if element.find_property("video-direction").is_none() {
+        tracing::warn!(
+            element = name,
+            "the element cannot follow a video's orientation; it plays as stored"
+        );
+        return None;
+    }
+    element.set_property_from_str("video-direction", "auto");
+    Some(element)
+}
+
 /// The shared state the sink's callback and the transport read and write.
 #[derive(Debug, Default)]
 struct Shared {
@@ -293,6 +323,10 @@ impl Player {
                 )
                 .build();
             builder = builder.property("video-sink", appsink.to_value());
+            // The frames arrive upright: turned as the container says.
+            if let Some(upright) = upright(UPRIGHT) {
+                builder = builder.property("video-filter", upright.to_value());
+            }
         }
         if muted {
             let fake = gst::ElementFactory::make("fakesink")
