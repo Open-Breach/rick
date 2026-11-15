@@ -27,7 +27,7 @@ use crate::appimage;
 use crate::archive::{Format, OnProgress};
 use crate::detect::{self, CATEGORIES, Detected};
 use crate::error::{InstallError, err};
-use crate::install::{self, CommandLink, IconSource, Plan};
+use crate::install::{self, CommandLink, IconSource, Libraries, Plan};
 use crate::provider::AppsProvider;
 use crate::record::{Installed, Kind, Layout, PathMode, Scan, glob_matches};
 use crate::{is_view, location};
@@ -109,6 +109,9 @@ pub struct Installer {
     /// Whether the files asked about carry the AppImage magic: a menu asks
     /// on every frame, and a file's header is read once.
     appimages: Mutex<HashMap<PathBuf, (Listed, bool)>>,
+    /// The libraries a test puts in the place of the machine's; `None`
+    /// everywhere else.
+    libraries: Option<Libraries>,
 }
 
 impl std::fmt::Debug for Installer {
@@ -131,7 +134,26 @@ impl Installer {
             provider,
             detections: Mutex::new(HashMap::new()),
             appimages: Mutex::new(HashMap::new()),
+            libraries: None,
         }
+    }
+
+    /// The actions' state on a machine that has exactly `libraries`: a
+    /// test's stand-in for the system's loader cache and library folders.
+    #[cfg(any(test, feature = "fixtures"))]
+    #[must_use]
+    pub fn with_libraries(provider: Arc<AppsProvider>, libraries: Libraries) -> Self {
+        Self {
+            libraries: Some(libraries),
+            ..Self::new(provider)
+        }
+    }
+
+    /// The machine's shared libraries, looked up anew: a library installed
+    /// while Rick runs is found the next time it is asked for.
+    #[must_use]
+    pub fn libraries(&self) -> Libraries {
+        self.libraries.clone().unwrap_or_else(Libraries::system)
     }
 
     /// Whether the local file `entry`, at `path`, is an AppImage: by its
@@ -397,7 +419,9 @@ fn chosen_main(values: &Values, detected: &Detected) -> Option<usize> {
     .filter(|i| *i < detected.candidates.len())
 }
 
-/// Builds the plan and the summary from the form's values.
+/// Builds the plan and the summary from the form's values. `libraries` is
+/// the machine's: an AppImage that needs FUSE 2 where there is none gets
+/// the warning as a row, which holds nothing back.
 #[allow(clippy::too_many_lines)]
 #[must_use]
 pub fn assemble(
@@ -406,6 +430,7 @@ pub fn assemble(
     scan: &Scan,
     layout: &Layout,
     forced_update_of: Option<&Installed>,
+    libraries: &Libraries,
 ) -> Assembled {
     let mut rows: Vec<PreviewRow> = Vec::new();
     let mut row = |from: &str, to: String, problem: Option<String>| {
@@ -715,6 +740,11 @@ pub fn assemble(
             None,
         );
     }
+    // The install works without FUSE 2; the app will not start without it,
+    // and the user is told before installing.
+    if detected.needs_fuse2 && !libraries.has(appimage::FUSE2) {
+        row("Warning", appimage::FUSE2_WARNING.to_owned(), None);
+    }
 
     let plan = (rows.iter().all(|r| r.problem.is_none()) && main.is_some()).then(|| Plan {
         layout: layout.clone(),
@@ -770,6 +800,7 @@ pub fn install_form(
     layout: &Layout,
     update_of: Option<&Installed>,
     forced: bool,
+    libraries: &Libraries,
 ) -> Form {
     let matched = update_of;
     let id = matched.map_or_else(|| detected.app_id(), |m| m.record.id.clone());
@@ -1051,6 +1082,7 @@ pub fn install_form(
     let preview_scan = scan.clone();
     let preview_layout = layout.clone();
     let preview_forced = forced.then(|| update_of.cloned()).flatten();
+    let preview_libraries = libraries.clone();
     form.preview(Arc::new(move |values: &Values| {
         assemble(
             values,
@@ -1058,6 +1090,7 @@ pub fn install_form(
             &preview_scan,
             &preview_layout,
             preview_forced.as_ref(),
+            &preview_libraries,
         )
         .rows
     }))
@@ -1110,8 +1143,9 @@ fn spawn_install(
     let handle = jobs.spawn_named(name, move |job| async move {
         let progress = job.progress.clone();
         let cancel = job.cancel.clone();
+        let libraries = installer.libraries();
         let result = ext::blocking(move || {
-            install::install(&plan, &scan, &*platform, &progress, &cancel).map(drop)
+            install::install(&plan, &scan, &*platform, &libraries, &progress, &cancel).map(drop)
         })
         .await;
         installer.provider.set_busy(&staging, false);
@@ -1154,12 +1188,27 @@ fn install_through_form(
             let layout = installer.provider.user_layout();
             let forced = update_of.is_some();
             let matched = update_of.clone().or_else(|| matching(&scan, &detected));
-            let form = install_form(&detected, &scan, &layout, matched.as_ref(), forced);
+            let libraries = installer.libraries();
+            let form = install_form(
+                &detected,
+                &scan,
+                &layout,
+                matched.as_ref(),
+                forced,
+                &libraries,
+            );
             let then = Continuation::new(label, move |values| {
                 let Some(values) = values else {
                     return Ok(ActionOutcome::Done);
                 };
-                let assembled = assemble(&values, &detected, &scan, &layout, update_of.as_ref());
+                let assembled = assemble(
+                    &values,
+                    &detected,
+                    &scan,
+                    &layout,
+                    update_of.as_ref(),
+                    &libraries,
+                );
                 if let Some(problem) = assembled.problem() {
                     return Err(err(InstallError::Invalid(problem.to_owned())));
                 }
@@ -1296,6 +1345,7 @@ impl CliCommand for InstallRickCommand {
             let progress = job.progress.clone();
             let cancel = job.cancel.clone();
             let provider = Arc::clone(&installer.provider);
+            let libraries = installer.libraries();
             let result = ext::blocking(move || {
                 let index = crate::archive::scan(
                     &folder,
@@ -1314,7 +1364,7 @@ impl CliCommand for InstallRickCommand {
                     .map(|app| app.record.clone());
                 let plan =
                     install::rick_plan(layout, &folder, &version, Arc::new(index), update_of);
-                install::install(&plan, &scan, &*platform, &progress, &cancel).map(drop)
+                install::install(&plan, &scan, &*platform, &libraries, &progress, &cancel).map(drop)
             })
             .await;
             installer.provider.set_busy(&staging, false);
@@ -1364,7 +1414,10 @@ impl Action for Install {
 }
 
 /// *Run* on a selected AppImage: starts it as it is, with the checks of
-/// [`appimage::run`]. Nothing is installed.
+/// [`appimage::run`]. Nothing is installed. Where the file needs FUSE 2
+/// and the machine does not have it, nothing is started and the warning
+/// is shown: what is missing, the install line of each distribution and
+/// where to read more.
 pub struct Run(Arc<Installer>);
 
 impl Action for Run {
@@ -1391,14 +1444,21 @@ impl Action for Run {
         &self,
         ctx: ActionCtx,
         _jobs: &JobRunner,
-        _ui: &dyn UiHost,
+        ui: &dyn UiHost,
     ) -> Result<ActionOutcome, Error> {
         if !crate::supported() {
             return Err(err(InstallError::Unsupported));
         }
         let path = selected_appimage(&self.0, &ctx)
             .ok_or(Error::Unsupported("select one AppImage on the local disk"))?;
-        appimage::run(&**self.0.provider.platform(), &path)?;
+        let platform = self.0.provider.platform();
+        match appimage::run(&**platform, &self.0.libraries(), &path)? {
+            appimage::Ran::Started => {}
+            appimage::Ran::NeedsFuse2 => ui.show(
+                &t!("installer-fuse2-title"),
+                &t!("installer-fuse2-text", link = appimage::FUSE_DOCUMENTATION),
+            ),
+        }
         Ok(ActionOutcome::Done)
     }
 }

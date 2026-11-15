@@ -292,6 +292,9 @@ pub struct Report {
     /// Libraries the main executable and the commands need and the machine
     /// does not have.
     pub unresolved: Vec<String>,
+    /// The installed AppImage needs FUSE 2 to run and the machine does not
+    /// have it: the install is done, and the app will not start yet.
+    pub fuse2_missing: bool,
     /// Anything else worth a line.
     pub notes: Vec<String>,
 }
@@ -313,6 +316,10 @@ impl Report {
         }
         for lib in &self.unresolved {
             let _ = write!(out, " This app needs {lib}, which is not installed.");
+        }
+        if self.fuse2_missing {
+            out.push(' ');
+            out.push_str(appimage::FUSE2_WARNING);
         }
         if !self.skipped.is_empty() {
             let _ = write!(out, " {} entries were left out:", self.skipped.len());
@@ -419,6 +426,7 @@ pub fn install(
     plan: &Plan,
     scan: &Scan,
     platform: &dyn Platform,
+    libraries: &Libraries,
     progress: &ProgressSink,
     cancel: &CancelToken,
 ) -> Result<Report, Error> {
@@ -715,7 +723,17 @@ pub fn install(
     // The library check.
     let mut exes = vec![version_dir.join(&plan.main)];
     exes.extend(plan.commands.iter().map(|c| version_dir.join(&c.target)));
-    report.unresolved = unresolved_libraries(&version_dir, &exes);
+    report.unresolved = unresolved_libraries(&version_dir, &exes, libraries);
+    // An AppImage on the older runtime does not start without FUSE 2: the
+    // install stands, and its summary says why the app will not run yet.
+    report.fuse2_missing = plan.format == Format::AppImage
+        && appimage::needs_fuse2(&version_dir.join(&plan.main)).unwrap_or(false)
+        && !libraries.has(appimage::FUSE2);
+    if report.fuse2_missing {
+        // A runtime that lists the library as needed has it among the
+        // unresolved ones too: the warning says it, once.
+        report.unresolved.retain(|lib| lib != appimage::FUSE2);
+    }
     progress.report(Progress::Message(report.summary(
         &plan.name,
         &plan.version,
@@ -1007,12 +1025,60 @@ pub fn on_path(dir: &Path) -> bool {
     std::env::var_os("PATH").is_some_and(|path| std::env::split_paths(&path).any(|p| p == dir))
 }
 
-/// The library names from `/etc/ld.so.cache`, when it is readable: the
-/// `glibc-ld.so.cache1.1` format every glibc of the last decade writes.
-fn loader_cache() -> HashSet<String> {
+/// Where the machine's shared libraries are looked up, without asking
+/// `ldconfig` or running anything: the names in the dynamic loader's cache
+/// and the usual library folders.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct Libraries {
+    /// The file names the loader's cache lists.
+    names: HashSet<String>,
+    /// The folders a library is looked for in beside the cache.
+    dirs: Vec<PathBuf>,
+}
+
+impl Libraries {
+    /// The running system's: `/etc/ld.so.cache`, and `/lib`, `/usr/lib`,
+    /// their 64-bit and multiarch folders and `/usr/local/lib`.
+    #[must_use]
+    pub fn system() -> Self {
+        let mut dirs: Vec<PathBuf> = ["/lib", "/usr/lib", "/lib64", "/usr/lib64", "/usr/local/lib"]
+            .iter()
+            .map(PathBuf::from)
+            .collect();
+        if let Some(triplet) = elf::current_machine().and_then(elf::multiarch_dir) {
+            dirs.push(PathBuf::from("/lib").join(triplet));
+            dirs.push(PathBuf::from("/usr/lib").join(triplet));
+        }
+        Self {
+            names: loader_cache(Path::new("/etc/ld.so.cache")),
+            dirs,
+        }
+    }
+
+    /// A machine that has exactly the libraries of these names: what a
+    /// test puts in the system's place.
+    #[must_use]
+    pub fn of(names: &[&str]) -> Self {
+        Self {
+            names: names.iter().map(|name| (*name).to_owned()).collect(),
+            dirs: Vec::new(),
+        }
+    }
+
+    /// Whether the machine has the library of this file name.
+    #[must_use]
+    pub fn has(&self, name: &str) -> bool {
+        self.names.contains(name) || self.dirs.iter().any(|dir| dir.join(name).is_file())
+    }
+}
+
+/// The library names from the loader cache at `path`, when it is
+/// readable: the `glibc-ld.so.cache1.1` format every glibc of the last
+/// decade writes.
+fn loader_cache(path: &Path) -> HashSet<String> {
     const MAGIC: &[u8] = b"glibc-ld.so.cache1.1";
     let mut out = HashSet::new();
-    let Ok(data) = fs::read("/etc/ld.so.cache") else {
+    let Ok(data) = fs::read(path) else {
         return out;
     };
     let Some(start) = data
@@ -1044,20 +1110,14 @@ fn loader_cache() -> HashSet<String> {
 }
 
 /// The shared libraries `exes` need that neither the app's own folders nor
-/// the system provide, by file name, each once.
+/// the machine's `libraries` provide, by file name, each once.
 #[must_use]
-pub fn unresolved_libraries(version_dir: &Path, exes: &[PathBuf]) -> Vec<String> {
-    let cache = loader_cache();
+pub fn unresolved_libraries(
+    version_dir: &Path,
+    exes: &[PathBuf],
+    libraries: &Libraries,
+) -> Vec<String> {
     let machine = elf::current_machine();
-    let mut system_dirs: Vec<PathBuf> =
-        ["/lib", "/usr/lib", "/lib64", "/usr/lib64", "/usr/local/lib"]
-            .iter()
-            .map(PathBuf::from)
-            .collect();
-    if let Some(triplet) = machine.and_then(elf::multiarch_dir) {
-        system_dirs.push(PathBuf::from("/lib").join(triplet));
-        system_dirs.push(PathBuf::from("/usr/lib").join(triplet));
-    }
     let mut unresolved: Vec<String> = Vec::new();
     for exe in exes {
         let Ok(Some(elf)) = elf::read_file(exe) else {
@@ -1089,9 +1149,8 @@ pub fn unresolved_libraries(version_dir: &Path, exes: &[PathBuf]) -> Vec<String>
         if let Some(triplet) = machine.and_then(elf::multiarch_dir) {
             dirs.push(version_dir.join("lib").join(triplet));
         }
-        dirs.extend(system_dirs.iter().cloned());
         for lib in &elf.needed {
-            let found = cache.contains(lib) || dirs.iter().any(|d| d.join(lib).is_file());
+            let found = libraries.has(lib) || dirs.iter().any(|d| d.join(lib).is_file());
             if !found && !unresolved.contains(lib) {
                 unresolved.push(lib.clone());
             }

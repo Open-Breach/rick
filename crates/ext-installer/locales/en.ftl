@@ -8,6 +8,19 @@ installer-commands = Commands
 installer-installed-app = Installed app
 installer-install-as-application = Install as application…
 installer-run = Run
+installer-fuse2-title = FUSE 2 is required to run this AppImage
+installer-fuse2-text =
+    This AppImage is built on the older AppImage runtime, which needs the library libfuse.so.2 to open its image. The library is not installed on this system, and Rick installs nothing for you.
+
+    Install it with your distribution's package manager:
+
+    Debian and Ubuntu:        sudo apt install libfuse2
+    Ubuntu 24.04 and later:   sudo apt install libfuse2t64
+    Fedora:                   sudo dnf install fuse-libs
+    Arch:                     sudo pacman -S fuse2
+
+    More in the AppImage documentation on FUSE:
+    { $link }
 installer-installed-apps = Installed Apps…
 installer-open-install-folder = Open install folder
 installer-launch = Launch

@@ -5,11 +5,12 @@
 //! nothing is unpacked or mounted: the header is read, and for type 2 the
 //! desktop entry, the icon and the AppStream metainfo are read out of the
 //! SquashFS image that starts where the ELF ends, as data, with links
-//! followed only while they stay inside the image.
+//! followed only while they stay inside the image. Whether an AppImage
+//! needs FUSE 2 is read from its runtime the same way.
 
 use std::collections::HashMap;
 use std::fs::File;
-use std::io::{BufReader, Read};
+use std::io::{BufReader, Read, Seek, SeekFrom};
 use std::path::Path;
 use std::sync::Arc;
 
@@ -22,6 +23,7 @@ use crate::desktop::DesktopEntry;
 use crate::detect::{self, Candidate, Detected, IconFile, ShippedDesktop};
 use crate::elf;
 use crate::error::{InstallError, err, io_read, io_write};
+use crate::install::Libraries;
 use crate::record::Kind;
 
 /// The extension an AppImage usually carries, compared in any case.
@@ -33,6 +35,27 @@ const MAGIC_AT: usize = 8;
 
 /// The owner's execute bit.
 const OWNER_EXECUTE: u32 = 0o100;
+
+/// The library an AppImage on the older runtime needs to mount its image,
+/// and newer distributions no longer ship by default.
+pub const FUSE2: &str = "libfuse.so.2";
+
+/// Where the AppImage project explains FUSE.
+pub const FUSE_DOCUMENTATION: &str =
+    "https://docs.appimage.org/user-guide/troubleshooting/fuse.html";
+
+/// The warning an install carries, in the dialogue's summary and in the
+/// job's closing one, when the AppImage needs FUSE 2 and the machine does
+/// not have it: what is missing, the install line of each distribution
+/// and where to read more. *Run* shows the same in a dialogue of its own.
+pub const FUSE2_WARNING: &str = "FUSE 2 is required to run this AppImage: it needs libfuse.so.2, \
+     which is not installed. Debian and Ubuntu: sudo apt install libfuse2 (libfuse2t64 on \
+     Ubuntu 24.04 and later); Fedora: sudo dnf install fuse-libs; Arch: sudo pacman -S fuse2. \
+     See https://docs.appimage.org/user-guide/troubleshooting/fuse.html";
+
+/// How much of a file's head is searched for the library's name where the
+/// header does not say where the runtime ends, and at most.
+const RUNTIME_MAX: u64 = 4 << 20;
 
 /// The most of a desktop entry or a metainfo file that is read: a longer
 /// one is not the text a launcher shows.
@@ -103,19 +126,62 @@ pub fn is_appimage(path: &Path, name: &str) -> bool {
     has_extension(name) || magic_of(path).is_some()
 }
 
+/// Whether the AppImage at `path` needs FUSE 2 to run, read from its
+/// runtime — the ELF at the head of the file, up to where the image
+/// starts — without running it. The older runtime loads `libfuse.so.2` by
+/// name, so the name stands in it, among its needed libraries or as the
+/// string it opens the library by; the static runtime carries no such
+/// name. The image behind the runtime is not searched, so a file inside it
+/// that happens to hold the name changes nothing.
+///
+/// # Errors
+///
+/// The I/O error from reading the file.
+pub fn needs_fuse2(path: &Path) -> std::io::Result<bool> {
+    let mut file = File::open(path)?;
+    let Some(header) = elf::read(&mut file)? else {
+        return Ok(false);
+    };
+    if header.needed.iter().any(|library| library == FUSE2) {
+        return Ok(true);
+    }
+    let length = match header.end {
+        0 => RUNTIME_MAX,
+        end => end.min(RUNTIME_MAX),
+    };
+    file.seek(SeekFrom::Start(0))?;
+    let mut runtime = Vec::new();
+    file.take(length).read_to_end(&mut runtime)?;
+    Ok(runtime
+        .windows(FUSE2.len())
+        .any(|window| window == FUSE2.as_bytes()))
+}
+
+/// How a *Run* ended.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Ran {
+    /// The file was started.
+    Started,
+    /// The file needs FUSE 2 and the machine does not have it: nothing was
+    /// started, and the caller shows the warning.
+    NeedsFuse2,
+}
+
 /// *Run*: starts the AppImage at `path` as it is. The file's ELF machine
 /// type is compared with the running machine first, and a mismatch stops
 /// here; the execute bit is set for the owner when it is missing, nothing
-/// else about the file changes; then the file is started detached from
+/// else about the file changes; where the file needs FUSE 2
+/// ([`needs_fuse2`]) and `libraries` does not have it, nothing is started
+/// and the answer says so; otherwise the file is started detached from
 /// Rick, with its folder as the working directory.
 ///
 /// # Errors
 ///
 /// [`InstallError::NotAProgram`] for a file that is not ELF,
 /// [`InstallError::AppImageArchitecture`] for one built for another
-/// machine, and the I/O error from reading the header, setting the bit
-/// or starting the file.
-pub fn run(platform: &dyn Platform, path: &Path) -> Result<(), Error> {
+/// machine, and the I/O error from reading the file, setting the bit or
+/// starting the file.
+pub fn run(platform: &dyn Platform, libraries: &Libraries, path: &Path) -> Result<Ran, Error> {
     let header = elf::read_file(path)
         .map_err(Error::from_io)?
         .ok_or_else(|| err(InstallError::NotAProgram))?;
@@ -132,8 +198,12 @@ pub fn run(platform: &dyn Platform, path: &Path) -> Result<(), Error> {
     {
         pfs::set_unix_mode(path, mode | OWNER_EXECUTE).map_err(io_write)?;
     }
+    if needs_fuse2(path).map_err(Error::from_io)? && !libraries.has(FUSE2) {
+        return Ok(Ran::NeedsFuse2);
+    }
     let dir = path.parent().unwrap_or(path);
-    platform.run_detached(path, &[], dir)
+    platform.run_detached(path, &[], dir)?;
+    Ok(Ran::Started)
 }
 
 /// What an AppImage holds for the launcher, read out of its image as data.
@@ -412,7 +482,8 @@ fn name_from(stem: &str) -> String {
 /// metainfo, and the digits in the file's name, and stays empty when none
 /// of them has one. Where the image cannot be read the name and the
 /// version are the file name's and there is no icon. The AppImage itself
-/// is the one program, and the architecture is its own header's.
+/// is the one program, and the architecture is its own header's; whether
+/// it needs FUSE 2 is read from its runtime.
 ///
 /// # Errors
 ///
@@ -510,5 +581,6 @@ pub fn detect(path: &Path) -> Result<Detected, Error> {
         install_script: None,
         arch_mismatch,
         hostile: Vec::new(),
+        needs_fuse2: needs_fuse2(path).unwrap_or(false),
     })
 }
