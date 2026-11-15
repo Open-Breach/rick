@@ -230,6 +230,8 @@ pub trait Action: Send + Sync + 'static {
 pub trait UndoCommand: Send { fn undo(&self, jobs: &JobRunner) -> Result<(), Error>; fn redo(&self, jobs: &JobRunner) -> Result<(), Error>; fn label(&self) -> String; }
 ```
 
+*A form field can take its value from the clipboard.* An action asks the user through `UiHost::form`, which shows an `ext::Form`, and a `Field` of it may carry one clipboard rule: a regular expression. When the form opens the UI reads the clipboard's text once; where the trimmed text matches a field's rule the field opens with the match — the first capture group where the rule has one, the whole match otherwise — in place of its written value. The rule is searched for in the text, so one that is to take the whole text anchors itself (`^…$`). Without a match, without text on the clipboard, or without a clipboard, the field opens as written; so does a field whose rule is no regular expression, with a line in the log. Once, on opening: the clipboard is not watched while the dialogue shows. One rule per field, and a rule fills its own field and no other. A rule is for a field whose value is text — a line of text, a folder, a file — and does nothing on any other kind. The rule is part of the extension contract: the API version is 22 with it, every plugin is rebuilt against it, and one built against 21 is refused.
+
 **Previewer** — turns an entry into something the preview pane can show:
 
 ```rust
