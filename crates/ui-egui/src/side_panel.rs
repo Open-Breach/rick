@@ -43,7 +43,7 @@ use crate::dnd::{Dnd, Target, Zone};
 use crate::overview::{percent, read_only_bar, utilisation_bar, volume_icon};
 use crate::shell::Request;
 use crate::theme::{self, BAR, ICON, Scheme, TEXT_BODY, TEXT_CAPS, TEXT_SECONDARY};
-use crate::{format, icons};
+use crate::{format, icons, menus};
 
 /// How far a row sits in from the panel's edges (SPEC.md *Rows*).
 const INSET: f32 = 6.0;
@@ -717,6 +717,29 @@ fn connection_field(ui: &mut egui::Ui, field: &ConnectionField, value: &mut Stri
     }
 }
 
+/// The menu of a section's header, on the menu card of the file list
+/// (SPEC.md *Context menu*): *Open in new tab* for its overview and,
+/// under a hairline, *Add … connection…* for each provider plugin of the
+/// section.
+fn header_menu(
+    title: &egui::Response,
+    requests: &mut Vec<Request>,
+    pane: PaneId,
+    overview: &Location,
+    connectors: &[Arc<dyn Connector>],
+) {
+    menus::card(title, |ui| {
+        if menus::item(ui, None, &t!("open-in-new-tab")).clicked() {
+            open(requests, pane, overview.clone(), true);
+            ui.close();
+        }
+        if !connectors.is_empty() {
+            menus::divider(ui);
+        }
+        add_connection_items(ui, requests, connectors);
+    });
+}
+
 /// The *Add connection…* entries of a section's menu, one per provider
 /// plugin of the section.
 fn add_connection_items(
@@ -725,14 +748,9 @@ fn add_connection_items(
     connectors: &[Arc<dyn Connector>],
 ) {
     for connector in connectors {
-        if ui
-            .button(format!(
-                "{} Add {} connection…",
-                icons::ADD,
-                connector.schema().title
-            ))
-            .clicked()
-        {
+        let kind = connector.schema().title.to_string();
+        let label = t!("panel-add-a-connection", kind = kind.as_str());
+        if menus::item(ui, Some(icons::ADD), &label).clicked() {
             requests.push(Request::AddConnection(connector.provider()));
             ui.close();
         }
@@ -751,10 +769,7 @@ fn connection_items(
 ) {
     let provider = connector.provider();
     if connector.is_connected(name) {
-        if ui
-            .button(format!("{} Disconnect", icons::UNLINKED))
-            .clicked()
-        {
+        if menus::item(ui, Some(icons::UNLINKED), &t!("panel-disconnect")).clicked() {
             requests.push(Request::Command(Command::Connection {
                 provider,
                 name: name.to_owned(),
@@ -762,7 +777,7 @@ fn connection_items(
             }));
             ui.close();
         }
-    } else if ui.button(format!("{} Connect", icons::LINKED)).clicked() {
+    } else if menus::item(ui, Some(icons::LINKED), &t!("panel-connect")).clicked() {
         requests.push(Request::Command(Command::Connection {
             provider,
             name: name.to_owned(),
@@ -773,14 +788,11 @@ fn connection_items(
     if !editable {
         return;
     }
-    if ui.button(format!("{} Edit…", icons::EDIT)).clicked() {
+    if menus::item(ui, Some(icons::EDIT), &t!("panel-edit")).clicked() {
         requests.push(Request::EditConnection(provider, name.to_owned()));
         ui.close();
     }
-    if ui
-        .button(format!("{} Remove connection", icons::TRASH))
-        .clicked()
-    {
+    if menus::item(ui, Some(icons::TRASH), &t!("panel-remove-connection")).clicked() {
         requests.push(Request::Command(Command::Connection {
             provider,
             name: name.to_owned(),
@@ -802,7 +814,7 @@ fn preview_always_item(
     name: &str,
 ) {
     let provider = connector.provider();
-    let mut on = app
+    let on = app
         .model()
         .settings
         .connections
@@ -810,11 +822,11 @@ fn preview_always_item(
         .find(|c| c.provider == provider.0 && c.name == name)
         .and_then(|c| c.settings.get(app::PREVIEW_ALWAYS))
         .is_some_and(|v| v == "true");
-    if ui.checkbox(&mut on, t!("preview-always-preview")).changed() {
+    if menus::check_item(ui, &t!("preview-always-preview"), on).clicked() {
         requests.push(Request::Command(Command::SetPreviewAlways {
             provider,
             name: name.to_owned(),
-            on,
+            on: !on,
         }));
         ui.close();
     }
@@ -845,9 +857,9 @@ fn row_actions(ui: &mut egui::Ui, app: &App, requests: &mut Vec<Request>, ctx: &
         if members.is_empty() {
             continue;
         }
-        ui.separator();
+        menus::divider(ui);
         for action in members {
-            if ui.button(action.label()).clicked() {
+            if menus::item_of(ui, &**action).clicked() {
                 requests.push(Request::RunAction {
                     action: action.id(),
                     ctx: ctx.clone(),
@@ -906,6 +918,7 @@ fn provider_row(
     let mut extra = |ui: &mut egui::Ui, requests: &mut Vec<Request>| {
         if let Some((connector, name)) = &connection {
             let editable = is_rick_connection(app, connector.provider(), name);
+            menus::divider(ui);
             connection_items(ui, requests, &***connector, name, editable);
             preview_always_item(ui, app, requests, &***connector, name);
         }
@@ -975,8 +988,10 @@ fn location_row(
     if response.secondary_clicked() {
         state.take_focus(id);
     }
-    response.context_menu(|ui| {
-        if ui.button(t!("open-in-new-tab")).clicked() {
+    // The menu card of the file list (SPEC.md *Context menu*): *Open in
+    // new tab*, then what the row adds, each group under a hairline.
+    menus::card(&response, |ui| {
+        if menus::item(ui, None, &t!("open-in-new-tab")).clicked() {
             open(requests, pane, location.clone(), true);
             ui.close();
         }
@@ -1046,11 +1061,12 @@ fn places(
         };
         let location = place.location.clone();
         let mut extra = |ui: &mut egui::Ui, requests: &mut Vec<Request>| {
-            if ui.button(format!("{} Edit…", icons::EDIT)).clicked() {
+            menus::divider(ui);
+            if menus::item(ui, Some(icons::EDIT), &t!("panel-edit")).clicked() {
                 state_edit_start(requests, index, place);
                 ui.close();
             }
-            if ui.button(t!("remove")).clicked() {
+            if menus::item(ui, None, &t!("remove")).clicked() {
                 requests.push(Request::Command(Command::PlaceRemove(index)));
                 ui.close();
             }
@@ -1428,16 +1444,14 @@ fn section_header(
     if title.secondary_clicked() {
         state.take_focus(id);
     }
-    let connectors = connectors_of(app, section);
-    title
-        .on_hover_text(t!("panel-open-overview", section = section.title()))
-        .context_menu(|ui| {
-            if ui.button(t!("open-in-new-tab")).clicked() {
-                open(requests, pane, overview.clone(), true);
-                ui.close();
-            }
-            add_connection_items(ui, requests, &connectors);
-        });
+    let title = title.on_hover_text(t!("panel-open-overview", section = section.title()));
+    header_menu(
+        &title,
+        requests,
+        pane,
+        overview,
+        &connectors_of(app, section),
+    );
     ui.add_space(SECTION_AIR_BELOW);
 }
 
@@ -1621,45 +1635,18 @@ fn drive_card(
         state.take_focus(id);
     }
     let mount_point = volume.mount_point.clone();
-    let formattable = matches!(volume.kind, VolumeKind::Removable | VolumeKind::Fixed);
     if eject.is_some_and(|eject| eject.clicked()) {
         state.take_focus(id);
         requests.push(Request::Command(Command::Eject(mount_point.clone())));
     }
-    response
-        .on_hover_text(volume_hint(volume))
-        .context_menu(|ui| {
-            if ui.button(t!("open-in-new-tab")).clicked() {
-                open(requests, pane, location.clone(), true);
-                ui.close();
-            }
-            if removable && ui.button(format!("{} Eject", icons::EJECT)).clicked() {
-                requests.push(Request::Command(Command::Eject(mount_point.clone())));
-                ui.close();
-            }
-            // Format… on a drive of the machine, removable or fixed: the
-            // system's own tool opens on it, and Rick formats nothing
-            // itself. Where no such tool is installed the entry is
-            // disabled and says so.
-            if formattable {
-                let entry = egui::Button::new(t!("panel-format"));
-                if format_tool {
-                    if ui.add(entry).clicked() {
-                        requests.push(Request::Command(Command::Format(mount_point.clone())));
-                        ui.close();
-                    }
-                } else {
-                    ui.add_enabled(false, entry)
-                        .on_disabled_hover_text(t!("panel-no-disk-utility"));
-                }
-            }
-            // Properties, with Eject and Format…: the dialogue of the
-            // drive (SPEC.md *This Machine*).
-            if ui.button(t!("properties")).clicked() {
-                requests.push(Request::DriveProperties(mount_point.clone()));
-                ui.close();
-            }
-        });
+    let response = response.on_hover_text(volume_hint(volume));
+    menus::card(&response, |ui| {
+        if menus::item(ui, None, &t!("open-in-new-tab")).clicked() {
+            open(requests, pane, location.clone(), true);
+            ui.close();
+        }
+        menus::drive_items(ui, volume, format_tool, requests);
+    });
 }
 
 /// The hover zone of a read-only drive's bar, a little taller than the 4 px
@@ -1755,9 +1742,12 @@ fn network_volume_row(
     let mount_point = volume.mount_point.clone();
     let removable = volume.is_removable();
     let mut extra = |ui: &mut egui::Ui, requests: &mut Vec<Request>| {
-        if removable && ui.button(format!("{} Eject", icons::EJECT)).clicked() {
-            requests.push(Request::Command(Command::Eject(mount_point.clone())));
-            ui.close();
+        if removable {
+            menus::divider(ui);
+            if menus::item(ui, Some(icons::EJECT), &t!("panel-eject-drive")).clicked() {
+                requests.push(Request::Command(Command::Eject(mount_point.clone())));
+                ui.close();
+            }
         }
     };
     location_row(
@@ -1801,7 +1791,9 @@ fn add_row(
     state.row(id, None);
     focus_ring(ui, state, id, inset(response.rect));
     if connectors.len() > 1 {
-        egui::Popup::menu(&response).show(|ui| add_connection_items(ui, requests, &connectors));
+        menus::card_under(&response, |ui| {
+            add_connection_items(ui, requests, &connectors);
+        });
     }
     if response.clicked() {
         state.take_focus(id);

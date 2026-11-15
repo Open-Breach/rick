@@ -110,6 +110,128 @@ pub fn context_popup(response: &egui::Response) -> egui::Popup<'_> {
     )
 }
 
+/// The menu card on a right-click of `response`, for a menu that is not
+/// built from a pane's selection: a row, a section header or a drive card
+/// of the side panel, a row of an overview. It is the card of the file
+/// list's context menu (SPEC.md *Context menu*) — 260 px wide, its entries
+/// 30 px high with an icon slot before the label, its groups set apart by
+/// hairlines — kept in the window and scrolling where it does not fit.
+/// `entries` adds them with [`item`], [`greyed_item`], [`check_item`],
+/// [`item_of`] and [`divider`].
+pub fn card(response: &egui::Response, entries: impl FnOnce(&mut egui::Ui)) {
+    context_popup(response).show(|ui| {
+        scrolling(ui, |ui| {
+            card_width(ui);
+            entries(ui);
+        });
+    });
+}
+
+/// [`card`] hanging under `button`, which opens it with a click.
+pub fn card_under(button: &egui::Response, entries: impl FnOnce(&mut egui::Ui)) {
+    fitted(
+        &button.ctx,
+        egui::Popup::menu(button).style(menu_style),
+        0.0,
+    )
+    .show(|ui| {
+        scrolling(ui, |ui| {
+            card_width(ui);
+            entries(ui);
+        });
+    });
+}
+
+/// An entry of a [`card`]: `icon` in its slot — the slot stays where the
+/// entry has none — and `label`.
+pub fn item(ui: &mut egui::Ui, icon: Option<&str>, label: &str) -> egui::Response {
+    entry(ui, icon, label, None, false)
+}
+
+/// An entry of a [`card`] that is there and cannot be used now, in
+/// `text/placeholder`, with `reason` as its tooltip.
+pub fn greyed_item(ui: &mut egui::Ui, icon: Option<&str>, label: &str, reason: &str) {
+    greyed_entry(ui, icon, label, None, reason);
+}
+
+/// An entry of a [`card`] that is on or off: the tick in its icon slot
+/// while it is `on`, and a checkbox to a screen reader.
+pub fn check_item(ui: &mut egui::Ui, label: &str, on: bool) -> egui::Response {
+    let row = entry_button(
+        ui,
+        on.then_some(icons::DONE),
+        label,
+        None,
+        Tone::Plain,
+        None,
+        CONTEXT,
+    );
+    let response = ui.add(row);
+    let spoken = label.to_owned();
+    response.widget_info(|| {
+        egui::WidgetInfo::selected(egui::WidgetType::Checkbox, true, on, spoken.clone())
+    });
+    response
+}
+
+/// An entry of a [`card`] for `action`, with the icon, the label and the
+/// tone the file list's menu gives it.
+pub fn item_of(ui: &mut egui::Ui, action: &dyn ext::Action) -> egui::Response {
+    let id = action.id().0;
+    entry(
+        ui,
+        action_icon(id),
+        &menu_label(action),
+        None,
+        is_destructive(id),
+    )
+}
+
+/// The hairline between two groups of a [`card`].
+pub fn divider(ui: &mut egui::Ui) {
+    separator(ui);
+}
+
+/// The entries a drive has in its card's menu and in its row of an
+/// overview (SPEC.md *This Machine*), after the ones that open it: under
+/// a hairline *Eject*, for a drive that can be taken out, and *Format…*,
+/// for a removable or a local one — greyed, with the reason as its
+/// tooltip, where no disk utility is installed; then, under another,
+/// *Properties*.
+pub fn drive_items(
+    ui: &mut egui::Ui,
+    volume: &model::Volume,
+    format_tool: bool,
+    requests: &mut Vec<Request>,
+) {
+    let mount_point = &volume.mount_point;
+    let formattable = matches!(
+        volume.kind,
+        model::VolumeKind::Removable | model::VolumeKind::Fixed
+    );
+    if volume.is_removable() || formattable {
+        divider(ui);
+    }
+    if volume.is_removable() && item(ui, Some(icons::EJECT), &t!("panel-eject-drive")).clicked() {
+        requests.push(Request::Command(Command::Eject(mount_point.clone())));
+        ui.close();
+    }
+    if formattable {
+        let label = t!("panel-format");
+        if !format_tool {
+            greyed_item(ui, None, &label, &t!("panel-no-disk-utility"));
+        } else if item(ui, None, &label).clicked() {
+            requests.push(Request::Command(Command::Format(mount_point.clone())));
+            ui.close();
+        }
+    }
+    divider(ui);
+    if item(ui, Some(icons::INFO), &t!("properties")).clicked() {
+        requests.push(Request::DriveProperties(mount_point.clone()));
+        ui.close();
+    }
+}
+
 /// What an entry of the breadcrumb bar's menu asks for.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BarPick {

@@ -717,17 +717,10 @@ fn this_machine_shows_utilisation_the_header_opens_the_overview_and_eject_works(
         h.state().app().model().volumes.len() == 2
     }));
     click_row(&mut harness, "STICK", egui::PointerButton::Secondary);
-    // The menu's Eject: not the table's button, not the card's.
-    let table = pane_rect(&harness);
-    let item = harness
-        .query_all(
-            By::new()
-                .label_contains("Eject")
-                .predicate(|n| n.label().is_some_and(|l| !l.contains("STICK"))),
-        )
-        .map(|n| n.rect())
-        .find(|r| !table.contains(r.center()))
-        .map_or_else(|| panic!("no Eject in the menu"), |r| r.center());
+    // The menu's Eject, by its name: the card's button is *Eject STICK*
+    // and the table's has its glyph. The menu is a card 260 px wide, which
+    // reaches over the table, so its place does not tell it apart.
+    let item = harness.get_by_label("Eject").rect().center();
     click_at(&mut harness, item, egui::PointerButton::Primary);
     assert!(step_until(&mut harness, Duration::from_secs(5), |_| {
         fake.ejected().len() == 2
@@ -1864,4 +1857,152 @@ fn a_drives_properties_leave_out_what_the_platform_does_not_give() {
     ] {
         assert!(!in_dialogue(absent), "no {absent}");
     }
+}
+
+/// The entries of the open menu named `labels`, top to bottom, held to the
+/// menu card of the file list (SPEC.md *Context menu*): each 30 px high
+/// and as wide as a 260 px card inside its 7 px padding, all at one left
+/// edge, in the order given. Returns their rectangles.
+fn card_entries(harness: &Harness<'_, RickUi>, labels: &[&str]) -> Vec<egui::Rect> {
+    let rects: Vec<egui::Rect> = labels
+        .iter()
+        .map(|label| {
+            harness
+                .query_all_by_label(label)
+                .map(|n| n.rect())
+                .find(|r| (r.height() - 30.0).abs() < 1.0 && (r.width() - 246.0).abs() < 2.0)
+                .unwrap_or_else(|| {
+                    let found: Vec<egui::Rect> = harness
+                        .query_all_by_label(label)
+                        .map(|n| n.rect())
+                        .collect();
+                    panic!("{label} is no entry of a menu card: {found:?}")
+                })
+        })
+        .collect();
+    for pair in rects.windows(2) {
+        assert!(
+            (pair[0].left() - pair[1].left()).abs() < 0.5,
+            "one left edge: {rects:?}"
+        );
+        assert!(
+            pair[0].bottom() <= pair[1].top() + 0.5,
+            "in order: {rects:?}"
+        );
+    }
+    rects
+}
+
+/// The room between the entries of a card, top to bottom: none inside a
+/// group, the 9 px of a hairline between two groups.
+fn card_gaps(rects: &[egui::Rect]) -> Vec<f32> {
+    rects
+        .windows(2)
+        .map(|pair| (pair[1].top() - pair[0].bottom()).round())
+        .collect()
+}
+
+/// Closes the open menu with Escape.
+fn close_menu(harness: &mut Harness<'_, RickUi>) {
+    harness.key_press(egui::Key::Escape);
+    harness.step();
+    harness.step();
+    assert!(harness.query_by_label("Open in new tab").is_none());
+}
+
+/// The right-click menus of the side panel, and of a row of an overview,
+/// are the menu card every other menu is (SPEC.md *Context menu* and
+/// *Sizes*): a card 260 px wide whose entries are 30 px high with the icon
+/// in its slot before the label, the groups set apart by hairlines. They
+/// were the toolkit's plain menu, as narrow as their longest word, with
+/// the glyph written into the label.
+#[test]
+fn the_side_panels_menus_are_the_menu_card_of_the_file_list() {
+    let dir = tree();
+    let fake = Arc::new(Fake::new().unwrap_or_else(|e| panic!("{e}")));
+    let stick = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+    fake.add_volume(volume("data", dir.path(), platform::VolumeKind::Fixed));
+    fake.add_volume(volume(
+        "STICK",
+        stick.path(),
+        platform::VolumeKind::Removable,
+    ));
+    let mut harness = harness_with(dir.path(), &fake.config_dir(), fake.clone(), Vec::new());
+    assert!(step_until(&mut harness, Duration::from_secs(5), |h| {
+        h.state().app().model().volumes.len() == 2
+    }));
+
+    // A place: Open in new tab, then Edit… and Remove under a hairline.
+    click_row(&mut harness, "Documents", egui::PointerButton::Secondary);
+    harness.step();
+    let entries = card_entries(&harness, &["Open in new tab", "Edit…", "Remove"]);
+    assert_eq!(card_gaps(&entries), [9.0, 0.0]);
+    close_menu(&mut harness);
+
+    // A section's header: Open in new tab alone, on the same card.
+    click_row(&mut harness, "This Machine", egui::PointerButton::Secondary);
+    harness.step();
+    card_entries(&harness, &["Open in new tab"]);
+    close_menu(&mut harness);
+
+    // A drive card: Open in new tab; Eject and Format…; Properties.
+    click_row(&mut harness, "STICK", egui::PointerButton::Secondary);
+    harness.step();
+    let entries = card_entries(
+        &harness,
+        &["Open in new tab", "Eject", "Format…", "Properties"],
+    );
+    assert_eq!(card_gaps(&entries), [9.0, 0.0, 9.0]);
+    close_menu(&mut harness);
+    // A drive that is not taken out has no Eject, and no gap for it.
+    click_row(&mut harness, "data", egui::PointerButton::Secondary);
+    harness.step();
+    let entries = card_entries(&harness, &["Open in new tab", "Format…", "Properties"]);
+    assert_eq!(card_gaps(&entries), [9.0, 9.0]);
+    close_menu(&mut harness);
+
+    // Without a disk utility Format… is there, greyed, and does nothing.
+    fake.set_format_tool(false);
+    click_row(&mut harness, "STICK", egui::PointerButton::Secondary);
+    harness.step();
+    let entries = card_entries(
+        &harness,
+        &["Open in new tab", "Eject", "Format…", "Properties"],
+    );
+    click_at(
+        &mut harness,
+        entries[2].center(),
+        egui::PointerButton::Primary,
+    );
+    harness.step();
+    assert_eq!(fake.format_opened(), Vec::<PathBuf>::new());
+    close_menu(&mut harness);
+    fake.set_format_tool(true);
+
+    // A row of the This Machine overview: the same card, with Open first.
+    click_row(&mut harness, "This Machine", egui::PointerButton::Primary);
+    settle(&mut harness);
+    let table = pane_rect(&harness);
+    let row = harness
+        .query_all_by_label_contains("STICK")
+        .map(|n| n.rect())
+        .find(|r| table.contains(r.center()))
+        .map_or_else(|| panic!("no row for the stick"), |r| r.center());
+    click_at(&mut harness, row, egui::PointerButton::Secondary);
+    harness.step();
+    let entries = card_entries(
+        &harness,
+        &["Open", "Open in new tab", "Eject", "Format…", "Properties"],
+    );
+    assert_eq!(card_gaps(&entries), [0.0, 9.0, 0.0, 9.0]);
+    // An entry of the card does what the entry did: Eject ejects.
+    click_at(
+        &mut harness,
+        entries[2].center(),
+        egui::PointerButton::Primary,
+    );
+    assert!(step_until(&mut harness, Duration::from_secs(5), |h| {
+        h.state().app().model().volumes.len() == 1
+    }));
+    assert_eq!(fake.ejected(), [stick.path().to_path_buf()]);
 }
