@@ -12,6 +12,10 @@
 //! reading a 300 MB archive is a job the action returns from at once,
 //! cancellable without a trace; and the plugin loads through the host
 //! with its three points.
+//!
+//! Issue 223: *Run* on an AppImage, and Enter on it, set the execute bit
+//! and start the file in its folder; one built for another machine is
+//! refused untouched.
 
 use std::fs;
 use std::io::{self, Read, Write as _};
@@ -22,7 +26,7 @@ use std::time::{Duration, Instant};
 
 use app::{App, Command, Config, Event};
 use ext::{ActionId, Form, Invocation, Level, UiHost, Value, Values};
-use ext_installer::fixtures::Fixture;
+use ext_installer::fixtures::{Fixture, other_machine, this_machine, tiny_appimage, tiny_elf};
 use ext_installer::record::{Layout, Record};
 use model::{JobState, SelectionChange};
 use platform::{ConfigDir, Fake};
@@ -172,6 +176,35 @@ impl Driver {
             pane: self.pane,
             change: SelectionChange::Set(ids),
         });
+    }
+
+    /// Opens the entry named `name`, as Enter and a double-click do.
+    fn open(&mut self, name: &str) -> Vec<Event> {
+        let id = self
+            .tab()
+            .listing
+            .rows()
+            .find(|e| e.name == name)
+            .map_or_else(|| panic!("no entry {name} in {:?}", self.names()), |e| e.id);
+        self.step(Command::Open {
+            pane: self.pane,
+            id,
+        })
+    }
+
+    /// Whether `action` is offered for the selection, as the context menu
+    /// asks.
+    fn offers(&self, action: &'static str) -> bool {
+        let ctx = self
+            .app
+            .action_ctx(self.pane, Invocation::ContextMenu)
+            .unwrap_or_else(|| panic!("no active tab"));
+        self.app
+            .registry()
+            .actions()
+            .iter()
+            .find(|a| a.id() == ActionId(action))
+            .is_some_and(|a| a.availability(&ctx) == ext::Availability::Enabled)
     }
 
     fn navigate(&mut self, to: types::Location) {
@@ -417,6 +450,96 @@ fn install_launch_update_collide_path_mode_and_uninstall_through_the_app() {
 
     // The filesystem diff: the home holds what it held before.
     assert_eq!(files_under(&home), before, "nothing of Rick's remains");
+}
+
+/// Acceptance (issue 223, item 2), through the app with the plugin
+/// loaded. An AppImage without the execute bit has *Run* in its menu, by
+/// its name or by the magic in its header alone; *Run* starts it detached
+/// in its folder, and the bit is set afterwards. Enter and a double-click
+/// do exactly what *Run* does (decided 2026-11-15). A program that is no
+/// AppImage and an archive have no *Run*, and an AppImage built for
+/// another machine is refused: nothing is started and its bit stays off.
+#[test]
+fn run_and_enter_start_an_appimage_through_the_app() {
+    if !ext_installer::supported() {
+        eprintln!("the installer is Linux only; skipping");
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+    let root = dir.path().canonicalize().unwrap_or_else(|e| panic!("{e}"));
+    let write = |name: &str, bytes: &[u8], mode: u32| {
+        let path = root.join(name);
+        fs::write(&path, bytes).unwrap_or_else(|e| panic!("{e}"));
+        platform::fs::set_unix_mode(&path, mode).unwrap_or_else(|e| panic!("{e}"));
+        path
+    };
+    let mode = |path: &Path| {
+        platform::fs::unix_mode(path)
+            .unwrap_or_else(|e| panic!("{e}"))
+            .map(|mode| mode & 0o7777)
+    };
+    let image = tiny_appimage(this_machine(), 2, &[]);
+    let downloaded = write("Fix.AppImage", &image, 0o644);
+    let entered = write("fix-entered", &image, 0o600);
+    let other = write(
+        "Other.AppImage",
+        &tiny_appimage(other_machine(), 2, &[]),
+        0o644,
+    );
+    write("fix-tool", &tiny_elf(this_machine(), &[]), 0o644);
+    Fixture::GuiWithDesktop
+        .write(&root)
+        .unwrap_or_else(|e| panic!("{e}"));
+    let mut driver = Driver::new(&root);
+
+    // Run, from the menu.
+    driver.select(&["fix-tool"]);
+    assert!(!driver.offers("installer.run"), "no AppImage");
+    driver.select(&[Fixture::GuiWithDesktop.file_name()]);
+    assert!(!driver.offers("installer.run"), "an archive");
+    driver.select(&["Fix.AppImage"]);
+    assert!(driver.offers("installer.run"));
+    let events = driver.run("installer.run");
+    assert!(errors(&events).is_empty(), "{:?}", errors(&events));
+    assert_eq!(
+        driver.fake.ran(),
+        [(downloaded.clone(), Vec::new(), root.clone())]
+    );
+    assert_eq!(mode(&downloaded), Some(0o744));
+    assert_eq!(fs::read(&downloaded).ok(), Some(image));
+
+    // Enter, on one the magic alone tells.
+    driver.select(&["fix-entered"]);
+    assert!(driver.offers("installer.run"));
+    let events = driver.open("fix-entered");
+    assert!(errors(&events).is_empty(), "{:?}", errors(&events));
+    assert_eq!(driver.fake.ran().len(), 2);
+    assert_eq!(
+        driver.fake.ran()[1],
+        (entered.clone(), Vec::new(), root.clone())
+    );
+    assert_eq!(mode(&entered), Some(0o700));
+    assert!(
+        driver.fake.opened().is_empty(),
+        "nothing went to the system"
+    );
+
+    // Another machine's: said so, and nothing more.
+    for events in [
+        {
+            driver.select(&["Other.AppImage"]);
+            driver.run("installer.run")
+        },
+        driver.open("Other.AppImage"),
+    ] {
+        let said = errors(&events);
+        assert!(
+            said.iter().any(|text| text.contains("built for")),
+            "{said:?}"
+        );
+    }
+    assert_eq!(driver.fake.ran().len(), 2, "nothing more was started");
+    assert_eq!(mode(&other), Some(0o644));
 }
 
 /// Pseudo-random bytes, so a stored gzip stays as large as its contents.

@@ -13,6 +13,11 @@
 //! *Install to the standard location* runs (specs/system-integration.md
 //! §6.1).
 //!
+//! An AppImage has *Run* in its menu, which starts it as it is: the file's
+//! machine type is checked, the execute bit is set for the owner, and the
+//! file is started detached in its folder ([`appimage`]). Enter and a
+//! double-click on an AppImage run the same action.
+//!
 //! Linux only in this version: the plugin loads everywhere, its actions
 //! are hidden, its command refuses and its view answers "unsupported on
 //! this platform" on macOS and Windows. System-wide installs through the privileged helper are the
@@ -27,6 +32,7 @@
 #![deny(unsafe_code)]
 
 pub mod actions;
+pub mod appimage;
 pub mod archive;
 pub mod desktop;
 pub mod detect;

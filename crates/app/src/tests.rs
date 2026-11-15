@@ -3188,6 +3188,113 @@ fn without_the_execute_bit_a_file_opens_with_the_system_default() {
     assert!(h.fake.ran().is_empty(), "nothing is started");
 }
 
+/// An extension standing in for `ext-installer`: its one action goes by
+/// the id of *Run* on an AppImage, applies to a file named `*.AppImage`
+/// and records the files it was run on.
+struct AppImageRunner {
+    manifest: Manifest,
+    ran: Arc<Mutex<Vec<String>>>,
+}
+
+struct FakeAppImageRun(Arc<Mutex<Vec<String>>>);
+
+impl ext::Action for FakeAppImageRun {
+    fn id(&self) -> ActionId {
+        ActionId("installer.run")
+    }
+    fn label(&self) -> String {
+        "Run".to_owned()
+    }
+    fn group(&self) -> ext::ActionGroup {
+        ext::ActionGroup::Extension("Installer")
+    }
+    fn default_shortcut(&self) -> Option<ext::Shortcut> {
+        None
+    }
+    fn availability(&self, ctx: &ext::ActionCtx) -> Availability {
+        match ctx.selection.as_slice() {
+            [entry] if entry.name.ends_with(".AppImage") => Availability::Enabled,
+            _ => Availability::Hidden,
+        }
+    }
+    fn run(
+        &self,
+        ctx: ext::ActionCtx,
+        _: &ext::JobRunner,
+        _: &dyn UiHost,
+    ) -> Result<ext::ActionOutcome, Error> {
+        self.0
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .extend(ctx.selection.iter().map(|entry| entry.name.clone()));
+        Ok(ext::ActionOutcome::Done)
+    }
+}
+
+impl Extension for AppImageRunner {
+    fn manifest(&self) -> &Manifest {
+        &self.manifest
+    }
+    fn register(&self, reg: &mut Registry) -> Result<(), Error> {
+        reg.action(Arc::new(FakeAppImageRun(Arc::clone(&self.ran))));
+        Ok(())
+    }
+}
+
+/// Enter and a double-click on an AppImage do what *Run* in its context
+/// menu does, with the execute bit and without it (issue 223, decided
+/// 2026-11-15): the installer's action is run on the file, which sets the
+/// bit and makes its checks, and Rick neither starts the file itself nor
+/// hands it to the system. What the action does not take opens as before.
+#[test]
+fn enter_on_an_appimage_runs_the_installers_run() {
+    let ran = Arc::new(Mutex::new(Vec::new()));
+    let mut h = harness_with(vec![Arc::new(AppImageRunner {
+        manifest: Manifest {
+            id: ExtId("fake-installer"),
+            name: "Fake installer",
+            description: "",
+            version: Version::new(0, 1, 0),
+            api_version: API_VERSION,
+            requires: Capabilities::empty(),
+            points: Points::ACTION,
+            platforms: Platforms::ALL,
+            previews: &[],
+            commands: &[],
+        },
+        ran: Arc::clone(&ran),
+    })]);
+    let elf = b"\x7fELF\x02\x01\x01\0AI\x02\0\0\0\0\0";
+    for (name, mode) in [("Downloaded.AppImage", 0o644), ("Marked.AppImage", 0o755)] {
+        let path = h.root.path().join(name);
+        fs::write(&path, elf).unwrap_or_else(|e| panic!("{e}"));
+        platform::fs::set_unix_mode(&path, mode).unwrap_or_else(|e| panic!("{e}"));
+    }
+    h.settle();
+    let seen =
+        |ran: &Mutex<Vec<String>>| ran.lock().unwrap_or_else(PoisonError::into_inner).clone();
+    let open = |h: &mut Harness, name: &str| {
+        let pane = h.app.model().focused;
+        let id = id_of(h, name);
+        h.send(Command::Open { pane, id });
+        h.settle();
+    };
+
+    open(&mut h, "Downloaded.AppImage");
+    assert_eq!(seen(&ran), ["Downloaded.AppImage"]);
+    open(&mut h, "Marked.AppImage");
+    assert_eq!(seen(&ran), ["Downloaded.AppImage", "Marked.AppImage"]);
+    assert!(h.fake.ran().is_empty(), "the action starts it, not Rick");
+    assert!(h.fake.opened().is_empty(), "not handed to the system");
+
+    // What the action does not take is opened as before.
+    open(&mut h, "a.txt");
+    assert!(wait_until(&mut h, Duration::from_secs(5), |h| {
+        h.fake.opened() == [h.root.path().join("a.txt")]
+    }));
+    assert_eq!(seen(&ran).len(), 2);
+}
+
 /// Acceptance (issue 149, item 6): Open in editor opens the selected
 /// files in the system's default text editor, or with the command the
 /// setting names, split at spaces outside double quotes, the files

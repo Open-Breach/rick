@@ -167,7 +167,7 @@ An AppImage is an application in one file: a small ELF program, the *runtime*, w
 3. *FUSE check*, below. Where FUSE 2 is needed and missing, Rick stops with the warning.
 4. The file is started detached from Rick, with its folder as the working directory, the way *Opening files* starts a binary.
 
-Enter and a double-click are not *Run*. They follow *Opening files* (specs/gui-windows.md), which decides by the execute bit: with it an AppImage starts like any binary, without the FUSE check; without it the file is handed to the system.
+**Enter and a double-click** on an AppImage do exactly what *Run* does, with the execute bit or without it: the same four steps, the execute bit and the FUSE check included. Mod+Enter and *Open with…* stay what *Opening files* (specs/gui-windows.md) makes them.
 
 **Install.** *Install as application…* on an AppImage opens the install dialog in AppImage mode: new install or update, the scope, the collision rules and the checksum are those of an archive. Dropping an AppImage onto the Installed Apps view and `rick install <file>` open it too. What differs:
 
@@ -293,3 +293,4 @@ AppImage support was settled on 2026-11-13 and 2026-11-14.
 - **FUSE 2 missing:** a warning only, with the install line of each distribution. No fallback that unpacks and runs (`--appimage-extract-and-run`), and nothing is installed for the user.
 - **Version of an AppImage:** the desktop entry, then the metainfo, then the file name. No generated fallback and no date: with none of the three the user types one.
 - **Model:** the archive model, followed exactly — version folder, `current`, record, one previous version, the same dialog — with the AppImage kept as the one file it is, never unpacked.
+- **Enter and a double-click on an AppImage** (2026-11-15): exactly what *Run* does, the execute bit and the FUSE check included.
