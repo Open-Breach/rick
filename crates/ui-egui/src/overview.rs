@@ -237,6 +237,9 @@ fn cloud_table(ui: &mut egui::Ui, cx: &mut PaneCx<'_>, entries: &[Entry], glyph:
 /// Selection, opening and the new-tab shortcuts of an overview row.
 fn row_interaction(cx: &mut PaneCx<'_>, entry: &Entry, response: &egui::Response) {
     let location: Location = cx.tab.location_of(entry);
+    // The drive the row stands for, in the This Machine overview.
+    let volume = volume_of(cx, entry).cloned();
+    let format_tool = cx.app.platform().has_format_tool();
     if response.double_clicked() {
         cx.requests.push(Request::Command(Command::Navigate {
             pane: cx.pane,
@@ -269,6 +272,36 @@ fn row_interaction(cx: &mut PaneCx<'_>, entry: &Entry, response: &egui::Response
         }
         if ui.button(t!("open-in-new-tab")).clicked() {
             cx.requests.push(Request::NewTabAt(location.clone()));
+            ui.close();
+        }
+        // A drive's row has what its card in the side panel has (SPEC.md
+        // *This Machine*): Eject for a removable one, Format… for a
+        // removable or a local one, and Properties.
+        let Some(volume) = &volume else {
+            return;
+        };
+        if volume.is_removable() && ui.button(format!("{} Eject", icons::EJECT)).clicked() {
+            cx.requests
+                .push(Request::Command(Command::Eject(volume.mount_point.clone())));
+            ui.close();
+        }
+        if matches!(volume.kind, VolumeKind::Removable | VolumeKind::Fixed) {
+            let entry = egui::Button::new(t!("panel-format"));
+            if format_tool {
+                if ui.add(entry).clicked() {
+                    cx.requests.push(Request::Command(Command::Format(
+                        volume.mount_point.clone(),
+                    )));
+                    ui.close();
+                }
+            } else {
+                ui.add_enabled(false, entry)
+                    .on_disabled_hover_text(t!("panel-no-disk-utility"));
+            }
+        }
+        if ui.button(t!("properties")).clicked() {
+            cx.requests
+                .push(Request::DriveProperties(volume.mount_point.clone()));
             ui.close();
         }
     });

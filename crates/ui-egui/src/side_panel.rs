@@ -1653,6 +1653,12 @@ fn drive_card(
                         .on_disabled_hover_text(t!("panel-no-disk-utility"));
                 }
             }
+            // Properties, with Eject and Format…: the dialogue of the
+            // drive (SPEC.md *This Machine*).
+            if ui.button(t!("properties")).clicked() {
+                requests.push(Request::DriveProperties(mount_point.clone()));
+                ui.close();
+            }
         });
 }
 

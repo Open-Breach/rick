@@ -168,6 +168,9 @@ pub enum Request {
     FocusPane(PaneId),
     /// A notification.
     Toast(Level, String),
+    /// Show the Properties dialogue of the drive mounted there (SPEC.md
+    /// *Properties dialogue*, *A drive*).
+    DriveProperties(std::path::PathBuf),
     /// Show the About window.
     About,
     /// Open the Settings window on a plugin's page, by the plugin's id.
@@ -953,6 +956,8 @@ pub struct RickUi {
     inspector_width: f32,
     /// The Properties dialogue, open or not.
     properties: properties::PropertiesDialog,
+    /// The Properties dialogue of a drive.
+    drive_properties: properties::DriveDialog,
     /// The file dialogue a preview's *Browse…* opened for a missing
     /// library, while it is open.
     library_browse: Option<LibraryBrowse>,
@@ -1258,6 +1263,7 @@ impl RickUi {
             inspector_state: inspector::PaneState::default(),
             inspector_width,
             properties: properties::PropertiesDialog::default(),
+            drive_properties: properties::DriveDialog::default(),
             library_browse: None,
             download_pick: None,
             hash: hash::HashDialog::default(),
@@ -1399,6 +1405,12 @@ impl RickUi {
     /// The Properties dialogue, for the tests.
     pub fn properties(&self) -> &properties::PropertiesDialog {
         &self.properties
+    }
+
+    /// The Properties dialogue of a drive, for the tests.
+    #[must_use]
+    pub fn drive_properties(&self) -> &properties::DriveDialog {
+        &self.drive_properties
     }
 
     /// The Hash dialogue, for the tests.
@@ -2063,6 +2075,7 @@ impl RickUi {
             || self.extensions.is_open()
             || self.about.is_open()
             || self.properties.is_open()
+            || self.drive_properties.is_open()
             || self.hash.is_open()
             || self.integration.is_open()
             || !self.app.model().conflicts.is_empty()
@@ -2231,6 +2244,9 @@ impl RickUi {
                     Request::NewTabAt(location) => self.handle(Command::NewTab(location)),
                     Request::FocusPane(pane) => self.handle(Command::FocusPane(pane)),
                     Request::Toast(level, text) => self.toast(level, text),
+                    Request::DriveProperties(mount_point) => {
+                        self.drive_properties.open(mount_point);
+                    }
                     Request::About => self.about.open(),
                     Request::PluginSettings(id) => self.settings.open_plugin(self.root, &id),
                     Request::StartDrag {
@@ -5547,6 +5563,8 @@ impl RickUi {
             self.extensions.show(ctx, &self.app, &mut self.requests);
             self.about.show(ctx, &self.app, &mut self.requests);
             self.properties.show(ctx, &self.app, &mut self.requests);
+            self.drive_properties
+                .show(ctx, &self.app, &mut self.requests);
             self.hash.show(ctx, &self.app, &mut self.requests);
             self.integration.show(ctx, &self.app, &mut self.requests);
             self.show_texts(ctx);
