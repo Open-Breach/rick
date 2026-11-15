@@ -27,6 +27,10 @@ image = { workspace = true }
 # specs/app-icons.md) at the drawn size: the workspace's resvg, the one the
 # image previewer draws SVG with.
 resvg = { workspace = true }
+# The clipboard rule of a form's field, a regular expression the dialogue
+# searches the clipboard's text for once, when it opens (SPEC.md *A form
+# field can take its value from the clipboard*).
+regex = { workspace = true }
 tracing = { workspace = true }
 egui-phosphor = { version = "0.14", features = ["fill"] }
 # Parses a system font file once before egui takes it (`fonts`), the
