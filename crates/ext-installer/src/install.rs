@@ -6,7 +6,7 @@
 use std::collections::HashSet;
 use std::fmt::Write as _;
 use std::fs;
-use std::io::Read;
+use std::io::{Read, Write as _};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::Arc;
@@ -15,11 +15,12 @@ use ext::ProgressSink;
 use ext::platform::{Platform, fs as pfs};
 use types::{CancelToken, Error, Progress};
 
+use crate::appimage;
 use crate::archive::{self, Format, Index};
 use crate::desktop::{self, DesktopEntry};
 use crate::detect::{self, IconFile};
 use crate::elf;
-use crate::error::{InstallError, bytes, err, io_write};
+use crate::error::{InstallError, bytes, err, io_read, io_write};
 use crate::record::{
     ExternalFile, FileKind, Installed, Kind, Layout, PathMode, Problem, Record, STAGED_MARKER,
     Scan, Scope,
@@ -75,6 +76,9 @@ pub struct Plan {
     pub wm_class: Option<String>,
     /// The vendor's desktop entry inside the archive, reused when present.
     pub vendor_desktop: Option<String>,
+    /// The vendor's desktop entry as its text, where it is no file of the
+    /// version folder: the one read out of an AppImage's image.
+    pub desktop_text: Option<String>,
     /// The command symlinks to make, in symlink mode.
     pub commands: Vec<CommandLink>,
     /// Symlinks or PATH mode.
@@ -139,6 +143,7 @@ pub fn rick_plan(
         categories: String::new(),
         wm_class: Some(RICK_ID.to_owned()),
         vendor_desktop: None,
+        desktop_text: None,
         commands: Vec::new(),
         path_mode: PathMode::Symlinks,
         bin_dir: None,
@@ -511,20 +516,34 @@ pub fn install(
             fs::remove_dir_all(&staging).map_err(io_write)?;
         }
         fs::create_dir_all(&staging).map_err(io_write)?;
-        progress.report(Progress::Message(format!(
-            "Extracting {}",
-            plan.archive_name()
-        )));
         let total = Some(plan.index.total_size);
-        let skipped = archive::extract(
-            &plan.archive,
-            plan.format,
-            &plan.index,
-            &staging,
-            cancel,
-            &mut |done| progress.report(Progress::Bytes { done, total }),
-        )?;
-        report.skipped = skipped.entries;
+        if plan.format == Format::AppImage {
+            // The one file, as it is, under its fixed name.
+            progress.report(Progress::Message(format!(
+                "Copying {}",
+                plan.archive_name()
+            )));
+            copy_file(
+                &plan.archive,
+                &staging.join(&plan.main),
+                cancel,
+                &mut |done| progress.report(Progress::Bytes { done, total }),
+            )?;
+        } else {
+            progress.report(Progress::Message(format!(
+                "Extracting {}",
+                plan.archive_name()
+            )));
+            let skipped = archive::extract(
+                &plan.archive,
+                plan.format,
+                &plan.index,
+                &staging,
+                cancel,
+                &mut |done| progress.report(Progress::Bytes { done, total }),
+            )?;
+            report.skipped = skipped.entries;
+        }
         for rel in std::iter::once(plan.main.as_str())
             .chain(plan.commands.iter().map(|c| c.target.as_str()))
             .chain(plan.bins.iter().map(String::as_str))
@@ -706,21 +725,58 @@ pub fn install(
     Ok(report)
 }
 
-/// Copies the plan's icon into the hicolor theme at `icon_path`.
+/// Copies the file at `source` to the new file `target`, with `progress`
+/// told the bytes written so far and `cancel` checked between blocks. The
+/// source is only read: its bytes and its permissions stay as they are.
+fn copy_file(
+    source: &Path,
+    target: &Path,
+    cancel: &CancelToken,
+    progress: &mut archive::OnProgress<'_>,
+) -> Result<(), Error> {
+    let mut from = fs::File::open(source).map_err(io_read)?;
+    let mut to = fs::File::create(target).map_err(io_write)?;
+    let mut block = vec![0u8; 1 << 20];
+    let mut written: u64 = 0;
+    loop {
+        if cancel.is_cancelled() {
+            return Err(Error::Cancelled);
+        }
+        let got = match from.read(&mut block) {
+            Ok(0) => break,
+            Ok(got) => got,
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(error) => return Err(io_read(error)),
+        };
+        to.write_all(&block[..got]).map_err(io_write)?;
+        written += got as u64;
+        progress(written);
+    }
+    Ok(())
+}
+
+/// Copies the plan's icon into the hicolor theme at `icon_path`. An
+/// AppImage's icon is not a file of the version folder: its bytes were
+/// read out of the image.
 fn write_icon(plan: &Plan, version_dir: &Path, icon_path: &Path) -> Result<(), Error> {
+    if let Some(parent) = icon_path.parent() {
+        fs::create_dir_all(parent).map_err(io_write)?;
+    }
     let source = match &plan.icon {
+        IconSource::Archive(icon) if plan.format == Format::AppImage => {
+            let data = icon.data.as_deref().map_or(&[][..], Vec::as_slice);
+            return fs::write(icon_path, data).map_err(io_write);
+        }
         IconSource::Archive(icon) => version_dir.join(&icon.rel),
         IconSource::File(path) => path.clone(),
         IconSource::None => return Ok(()),
     };
-    if let Some(parent) = icon_path.parent() {
-        fs::create_dir_all(parent).map_err(io_write)?;
-    }
     fs::copy(&source, icon_path).map(drop).map_err(io_write)
 }
 
 /// Writes the desktop entry: the vendor's with `Exec` and `Icon` through
-/// `current`, or a generated one.
+/// `current`, or a generated one. An AppImage's own entry is reused the
+/// same way, without its `TryExec`.
 fn write_desktop(
     plan: &Plan,
     version_dir: &Path,
@@ -729,10 +785,11 @@ fn write_desktop(
     has_icon: bool,
 ) -> Result<(), Error> {
     let program = current.join(&plan.main);
-    let vendor = plan
-        .vendor_desktop
-        .as_ref()
-        .and_then(|rel| fs::read_to_string(version_dir.join(rel)).ok());
+    let vendor = plan.desktop_text.clone().or_else(|| {
+        plan.vendor_desktop
+            .as_ref()
+            .and_then(|rel| fs::read_to_string(version_dir.join(rel)).ok())
+    });
     let mut entry = match vendor {
         Some(text) => {
             let mut entry = DesktopEntry::parse(&text);
@@ -741,7 +798,9 @@ fn write_desktop(
                 "Exec",
                 &desktop::exec_through(&program, original.as_deref()),
             );
-            if entry.get("TryExec").is_some() {
+            if plan.format == Format::AppImage {
+                entry.remove("TryExec");
+            } else if entry.get("TryExec").is_some() {
                 entry.set("TryExec", &program.to_string_lossy());
             }
             if has_icon {
@@ -1193,7 +1252,20 @@ pub fn repair(installed: &Installed) -> Result<Vec<String>, Error> {
                 let wanted = path
                     .extension()
                     .map_or_default(|e| e.to_string_lossy().into_owned());
-                if let Some(source) = find_icon_in(&version_dir, &record.id, &wanted) {
+                let main = version_dir.join(&record.main_executable);
+                if appimage::has_extension(&record.main_executable) {
+                    // An installed AppImage holds its icon in its image.
+                    let icon = appimage::read_bundled(&main)
+                        .and_then(|bundled| bundled.icon)
+                        .filter(|icon| icon.ext == wanted);
+                    if let Some(icon) = icon {
+                        if let Some(parent) = path.parent() {
+                            fs::create_dir_all(parent).map_err(io_write)?;
+                        }
+                        fs::write(&path, &icon.data).map_err(io_write)?;
+                        done.push("icon".to_owned());
+                    }
+                } else if let Some(source) = find_icon_in(&version_dir, &record.id, &wanted) {
                     if let Some(parent) = path.parent() {
                         fs::create_dir_all(parent).map_err(io_write)?;
                     }

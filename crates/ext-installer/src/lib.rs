@@ -16,7 +16,12 @@
 //! An AppImage has *Run* in its menu, which starts it as it is: the file's
 //! machine type is checked, the execute bit is set for the owner, and the
 //! file is started detached in its folder ([`appimage`]). Enter and a
-//! double-click on an AppImage run the same action.
+//! double-click on an AppImage run the same action. *Install as
+//! application…* takes an AppImage too, on the same model: the version
+//! folder holds the one file as `<app-id>.AppImage`, so the path through
+//! `current` never changes, and the name, the icon, the desktop entry and
+//! the version are read out of the file's SquashFS image without running
+//! it.
 //!
 //! Linux only in this version: the plugin loads everywhere, its actions
 //! are hidden, its command refuses and its view answers "unsupported on

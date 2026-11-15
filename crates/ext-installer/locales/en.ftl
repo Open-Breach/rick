@@ -48,5 +48,7 @@ installer-advanced-summary = Category, StartupWMClass, commands, PATH variable, 
 installer-commands-to-link = Commands to link
 installer-version-hint = e.g. 2026.2.4.1
 installer-version-missing = Couldn't read the version from the archive — please enter it.
+installer-version-missing-appimage = Couldn't read the version from the AppImage — please enter it.
 installer-archive-note = Archive: { $name }
+installer-appimage-note = AppImage: { $name }
 installer-no-icon-generated = No icon found · generated
