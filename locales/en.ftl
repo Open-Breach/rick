@@ -468,6 +468,7 @@ action-copy-path = Copy path
 action-copy-path-and-name = Copy path and name
 action-open = Open with system default
 action-open-in-editor = Open in editor
+action-set-desktop-background = Set as desktop background
 run-script-title = Run script?
 run-script-edit = Edit
 run-script-run = Run
