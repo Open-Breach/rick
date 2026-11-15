@@ -94,7 +94,8 @@ pub fn detect(name: &str, sniff: &[u8]) -> Option<(Kind, u8)> {
 pub struct Probe {
     /// Playing time, when the headers give it.
     pub duration: Option<Duration>,
-    /// Frame size of the video.
+    /// Frame size of the video as it is shown: turned with the picture
+    /// where the container turns it by a quarter.
     pub dimensions: Option<(u32, u32)>,
     /// Frames per second of the video.
     pub frame_rate: Option<f64>,
@@ -703,6 +704,15 @@ pub mod mp4 {
         probe
     }
 
+    /// Whether the display matrix at `at` of a track header turns the
+    /// picture by a quarter, either way: the two terms of its diagonal are
+    /// zero and the two beside them are not, so width and height change
+    /// places on the screen.
+    fn quarter_turn(body: &[u8], at: usize) -> bool {
+        let term = |index: usize| be32(body, at + 4 * index).unwrap_or(0);
+        term(0) == 0 && term(4) == 0 && term(1) != 0 && term(3) != 0
+    }
+
     fn track(body: &[u8], probe: &mut Probe) {
         let mut handler = [0u8; 4];
         let mut size = None;
@@ -717,7 +727,14 @@ pub mod mp4 {
                     && w > 0
                     && h > 0
                 {
-                    size = Some((w >> 16, h >> 16));
+                    let (w, h) = (w >> 16, h >> 16);
+                    // The size as shown: a track its display matrix turns
+                    // by a quarter is as wide as it is stored high.
+                    size = Some(if quarter_turn(body, at - 36) {
+                        (h, w)
+                    } else {
+                        (w, h)
+                    });
                 }
             }
             b"mdia" => boxes(body, |kind, body| match kind {

@@ -223,6 +223,13 @@ pub(crate) fn upright(name: &str) -> Option<gst::Element> {
     Some(element)
 }
 
+/// Whether a stream's `image-orientation` tag turns the picture by a
+/// quarter, either way and mirrored or not: `rotate-90`, `rotate-270`,
+/// `flip-rotate-90` and `flip-rotate-270`.
+pub(crate) fn is_quarter_turn(orientation: &str) -> bool {
+    orientation.ends_with("rotate-90") || orientation.ends_with("rotate-270")
+}
+
 /// The shared state the sink's callback and the transport read and write.
 #[derive(Debug, Default)]
 struct Shared {
@@ -594,7 +601,8 @@ impl Transport for Player {
 pub struct Discovered {
     /// Playing time.
     pub duration: Option<Duration>,
-    /// The video frame size.
+    /// The video frame size as it is shown: turned with the picture where
+    /// the stream's orientation turns it by a quarter.
     pub dimensions: Option<(u32, u32)>,
     /// Frames per second.
     pub frame_rate: Option<f64>,
@@ -671,7 +679,17 @@ fn describe_streams(info: &gst_pbutils::DiscovererInfo, out: &mut Discovered) {
             0.0
         };
         if out.dimensions.is_none() && video.width() > 0 {
-            out.dimensions = Some((video.width(), video.height()));
+            // The size as shown: a stream its orientation turns by a
+            // quarter is as wide as it is stored high.
+            let quarter = video.tags().is_some_and(|tags| {
+                tags.get::<gst::tags::ImageOrientation>()
+                    .is_some_and(|turn| is_quarter_turn(turn.get()))
+            });
+            out.dimensions = Some(if quarter {
+                (video.height(), video.width())
+            } else {
+                (video.width(), video.height())
+            });
             if fps_value > 0.0 {
                 out.frame_rate = Some(fps_value);
             }

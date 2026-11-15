@@ -126,8 +126,10 @@ the pull request that brought the change.
   and its first frame and its thumbnail are upright too, where they lay on
   their side: the frames are turned as the container's orientation says —
   the display matrix of an MP4 or MOV track, the orientation tag of
-  Matroska. The picture is fitted into the pane as it is; a video without
-  an orientation plays as before (#233).
+  Matroska. The picture is fitted into the pane as it is, and *Dimensions*
+  in File info and the status bar give the size it is shown in, 1080 × 1920
+  for such a clip; a video without an orientation plays as before (#233,
+  #238).
 
 ## [0.4.1] - 2026-11-14
 

@@ -180,6 +180,37 @@ fn mp4_boxes_parse() {
     assert_eq!(p.tags, vec![("Title".to_owned(), "A title".to_owned())]);
 }
 
+/// Issue 220, the size named for a turned video: the dimensions the
+/// headers give are the size the picture is shown in. A track whose
+/// display matrix turns it by a quarter, either way, is as wide as it is
+/// stored high; a half turn and no turn leave the size as stored.
+#[test]
+fn a_turned_track_gives_the_size_it_is_shown_in() {
+    const ONE: i32 = 1 << 16;
+    // The first five terms of the track header's matrix: a, b, u, c, d.
+    let with = |terms: [i32; 5]| {
+        let mut bytes = fake_mp4();
+        let header = bytes
+            .windows(4)
+            .position(|w| w == b"tkhd")
+            .unwrap_or_else(|| panic!("no track header"));
+        // After the type: 40 bytes of the header's body, then the matrix.
+        let at = header + 4 + 40;
+        for (i, term) in terms.into_iter().enumerate() {
+            bytes[at + 4 * i..at + 4 * i + 4].copy_from_slice(&term.to_be_bytes());
+        }
+        probe::read(Kind::Mp4, &bytes, bytes.len() as u64).dimensions
+    };
+    assert_eq!(with([ONE, 0, 0, 0, ONE]), Some((320, 240)), "no turn");
+    assert_eq!(with([0, ONE, 0, -ONE, 0]), Some((240, 320)), "a quarter");
+    assert_eq!(with([-ONE, 0, 0, 0, -ONE]), Some((320, 240)), "a half");
+    assert_eq!(
+        with([0, -ONE, 0, ONE, 0]),
+        Some((240, 320)),
+        "three quarters"
+    );
+}
+
 #[test]
 fn the_waveform_buckets_and_draws() {
     let samples: Vec<f32> = (0..10_000)
@@ -638,6 +669,52 @@ mod with_gstreamer {
             pixel(&turned, 309, 219)
         );
         assert!(same(pixel(&turned, 10, 219), last_bar));
+    }
+
+    /// Issue 220, the size named for a turned video: *Dimensions* in File
+    /// info and the status bar give the size the video is shown in — the
+    /// size of the frames — and so does the Discoverer, which stands in
+    /// where the headers were not read.
+    #[test]
+    fn a_turned_video_names_the_size_it_is_shown_in() {
+        if !gstreamer_or_skip() {
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+        let stored = dir.path().join("stored.mp4");
+        let quarter = dir.path().join("quarter.mp4");
+        let half = dir.path().join("half.mp4");
+        if !encoder_or_skip(encode::mp4(&stored, 30, 320, 240), "mp4 fixture")
+            || !encoder_or_skip(
+                encode::mp4_turned(&quarter, 30, 320, 240, 90),
+                "mp4 fixture with a quarter turn",
+            )
+            || !encoder_or_skip(
+                encode::mp4_turned(&half, 30, 320, 240, 180),
+                "mp4 fixture with a half turn",
+            )
+        {
+            return;
+        }
+        for (path, shown) in [
+            (&stored, (320, 240)),
+            (&quarter, (240, 320)),
+            (&half, (320, 240)),
+        ] {
+            let name = path.display();
+            let frame = first_frame(path);
+            assert_eq!((frame.width, frame.height), shown, "{name}: the frames");
+            let doc = open(path);
+            assert_eq!(probe_dims(&*doc), Some(shown), "{name}: Dimensions");
+            let text = format!("{} × {}", shown.0, shown.1);
+            assert!(
+                doc.status().contains(&text),
+                "{name}: the status bar: {:?}",
+                doc.status()
+            );
+            let found = crate::gst::discover(path).unwrap_or_else(|e| panic!("{name}: {e}"));
+            assert_eq!(found.dimensions, Some(shown), "{name}: the Discoverer");
+        }
     }
 
     /// Issue 220: without the element that turns the frames a video plays
