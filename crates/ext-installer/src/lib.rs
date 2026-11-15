@@ -1,17 +1,17 @@
-//! The tarball installer: *Install as application…* on a tar or zip
-//! archive, a versioned layout under `~/.local/opt/<app-id>/` with a
-//! `current` symlink, desktop entry, icon and commands on the PATH, update
-//! with one previous version kept, revert, uninstall, repair, and the
-//! Installed Apps view `rick://apps` (specs/ext-installer.md).
+//! The installer of tarballs and AppImages: *Install as application…* on
+//! a tar or zip archive, a versioned layout under `~/.local/opt/<app-id>/`
+//! with a `current` symlink, desktop entry, icon and commands on the PATH,
+//! update with one previous version kept, revert, uninstall, repair, and
+//! the Installed Apps view `rick://apps` (specs/ext-installer.md).
 //!
-//! `rick install <archive>` is the installer's subcommand of the command
+//! `rick install <file>` is the installer's subcommand of the command
 //! line (specs/system-integration.md §4): it opens the same install form
-//! in the running Rick. `rick install-rick <folder> <version>` installs
-//! the Rick unpacked in a folder to the standard location, copied from
-//! the folder as it is ([`archive::Format::Folder`]) with no form and
-//! nothing written outside the app folder: what the integration dialog's
-//! *Install to the standard location* runs (specs/system-integration.md
-//! §6.1).
+//! in the running Rick, on an archive or an AppImage. `rick install-rick
+//! <folder> <version>` installs the Rick unpacked in a folder to the
+//! standard location, copied from the folder as it is
+//! ([`archive::Format::Folder`]) with no form and nothing written outside
+//! the app folder: what the integration dialog's *Install to the standard
+//! location* runs (specs/system-integration.md §6.1).
 //!
 //! An AppImage has *Run* in its menu, which starts it as it is: the file's
 //! machine type is checked, the execute bit is set for the owner, and the
@@ -127,7 +127,7 @@ impl InstallerExtension {
             manifest: Manifest {
                 id: ID,
                 name: "Installer",
-                description: "Installs a tar or zip archive as an application under ~/.local/opt, with its desktop entry, icon and commands, and updates, reverts, repairs and uninstalls it. Linux only.",
+                description: "Installs a tar or zip archive or an AppImage as an application under ~/.local/opt, with its desktop entry, icon and commands, and updates, reverts, repairs and uninstalls it; runs an AppImage as it is. Linux only.",
                 version: Version::parse(env!("CARGO_PKG_VERSION"))
                     .unwrap_or_else(|_| Version::new(0, 0, 0)),
                 api_version: API_VERSION,
