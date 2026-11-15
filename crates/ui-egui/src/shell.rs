@@ -2813,6 +2813,19 @@ impl RickUi {
         }
     }
 
+    /// The values a form opens with: as written, except where a field's
+    /// clipboard rule matches the clipboard's text, which is read here,
+    /// once, and only for a form that has such a field. The clipboard is
+    /// not looked at again while the dialogue shows.
+    fn opening_values(&self, form: &ext::Form) -> ext::Values {
+        let mut values = form.defaults();
+        if form.fields.iter().any(|field| field.clipboard.is_some()) {
+            let text = self.app.platform().text().ok().flatten();
+            crate::dialog::take_from_clipboard(form, &mut values, text.as_deref());
+        }
+        values
+    }
+
     /// Whether the registry holds an action with this id.
     fn has_action(&self, id: &str) -> bool {
         self.app.registry().actions().iter().any(|a| a.id().0 == id)
@@ -2832,7 +2845,7 @@ impl RickUi {
                 Ask::Confirm { .. } | Ask::Form(_) => String::new(),
             };
             let values = match &ask {
-                Ask::Form(form) => form.defaults(),
+                Ask::Form(form) => self.opening_values(form),
                 _ => ext::Values::default(),
             };
             let rows = match &ask {
@@ -5449,7 +5462,7 @@ impl RickUi {
         if self.dialog.is_none()
             && let Some((pane, form, then)) = self.host.take_later()
         {
-            let values = form.defaults();
+            let values = self.opening_values(&form);
             let rows = form.preview_rows(&values);
             self.dialog = Some(Dialog {
                 ask: Ask::Form(form),

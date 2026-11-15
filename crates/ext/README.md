@@ -8,7 +8,9 @@ and `MissingLibrary`, `Transport`, `Query` and friends, the slots an
 action fills from a job, `Compare` for a tab and `Hashes` for the Hash
 dialogue, `Form` with its fields (text, checkbox, choice, folder and file
 paths, a segmented control, sections and cards, disclosure cards, a
-preview marker; a field can be monospace or required), its `Header`
+preview marker; a field can be monospace or required, and can carry a
+clipboard rule, a regular expression whose match in the clipboard's text
+the field opens with), its `Header`
 (an icon, a title, a pill and a subtitle), its footer note and its titled
 preview, and `FormLater` with its `Continuation`, the form an action
 opens when a job of its finishes and the rest of the action the

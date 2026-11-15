@@ -74,6 +74,47 @@ pub struct Outcome {
     pub dismissed: bool,
 }
 
+/// Lets the fields of `form` that carry a clipboard rule take their value
+/// from `clipboard`, the clipboard's text as it is when the form opens
+/// (SPEC.md *A form field can take its value from the clipboard*). The
+/// trimmed text is searched for each rule; where one matches, the field's
+/// value in `values` becomes the match — the first capture group where
+/// the rule has one, the whole match otherwise. A field keeps its written
+/// value without a match, without text, where its rule is no regular
+/// expression — which the log notes — and where its value is not text.
+/// Each rule fills its own field and no other.
+pub fn take_from_clipboard(form: &Form, values: &mut Values, clipboard: Option<&str>) {
+    let Some(text) = clipboard.map(str::trim).filter(|text| !text.is_empty()) else {
+        return;
+    };
+    for field in &form.fields {
+        let Some(rule) = &field.clipboard else {
+            continue;
+        };
+        if !matches!(
+            field.kind,
+            FieldKind::Text { .. } | FieldKind::Folder { .. } | FieldKind::File { .. }
+        ) {
+            continue;
+        }
+        let rule = match regex::Regex::new(rule) {
+            Ok(rule) => rule,
+            Err(error) => {
+                tracing::warn!(field = field.key, %error, "a clipboard rule that is no regular expression");
+                continue;
+            }
+        };
+        let taken = rule.captures(text).and_then(|found| {
+            // The first group where the rule has one and it took part in
+            // the match, the whole match otherwise.
+            found.get(1).or_else(|| found.get(0))
+        });
+        if let Some(taken) = taken {
+            values.set(field.key, Value::Text(taken.as_str().to_owned()));
+        }
+    }
+}
+
 /// Draws the dialogue for `ask` and returns what it decided.
 #[must_use]
 pub fn show(ctx: &egui::Context, id: egui::Id, ask: &Ask, mut state: State<'_>) -> Outcome {
@@ -1107,4 +1148,85 @@ fn preview_ui(ui: &mut egui::Ui, form: &Form, rows: &[PreviewRow]) {
                     }
                 });
         });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A form with a field per case of the clipboard rule.
+    fn form() -> Form {
+        Form::new("Test", "OK")
+            // A rule with a capture group: the group is taken.
+            .field(Field::text("issue", "Issue", "none", "").from_clipboard(r"#(\d+)"))
+            // A rule without one: the whole match is taken.
+            .field(Field::text("mail", "Mail", "", "").from_clipboard(r"\S+@\S+"))
+            // A rule that takes the whole text anchors itself.
+            .field(Field::text("word", "Word", "written", "").from_clipboard(r"^\w+$"))
+            // No rule: the clipboard is nothing to it.
+            .field(Field::text("plain", "Plain", "as written", ""))
+            // A folder holds text too.
+            .field(Field::folder("folder", "Folder", "/tmp").from_clipboard(r"^/\S+$"))
+            // A rule that is no regular expression, and a checkbox.
+            .field(Field::text("broken", "Broken", "kept", "").from_clipboard(r"(unclosed"))
+            .field(Field::check("check", "Check", true).from_clipboard(r".+"))
+    }
+
+    fn opened_with(clipboard: Option<&str>) -> Values {
+        let form = form();
+        let mut values = form.defaults();
+        take_from_clipboard(&form, &mut values, clipboard);
+        values
+    }
+
+    /// SPEC.md *A form field can take its value from the clipboard*: the
+    /// first capture group where the rule has one, the whole match
+    /// otherwise, searched for in the trimmed text; each rule fills its
+    /// own field and no other.
+    #[test]
+    fn a_field_takes_the_match_of_its_rule_from_the_clipboard() {
+        let values = opened_with(Some("  see #4821, ask sam@example.org\n"));
+        assert_eq!(values.text("issue"), "4821", "the group");
+        assert_eq!(values.text("mail"), "sam@example.org", "the whole match");
+        assert_eq!(values.text("word"), "written", "not the whole text");
+        assert_eq!(values.text("plain"), "as written");
+        assert_eq!(values.text("folder"), "/tmp");
+
+        // The text is trimmed before it is searched.
+        let values = opened_with(Some("\n  rick \t"));
+        assert_eq!(values.text("word"), "rick");
+        assert_eq!(values.text("issue"), "none", "no match: as written");
+        assert_eq!(values.text("mail"), "");
+
+        let values = opened_with(Some("/srv/projects"));
+        assert_eq!(values.text("folder"), "/srv/projects");
+    }
+
+    /// Without text on the clipboard, or without a clipboard, every field
+    /// opens as written; so does a field whose rule is no regular
+    /// expression, and one whose value is not text.
+    #[test]
+    fn a_field_opens_as_written_without_a_match_or_a_clipboard() {
+        let written = form().defaults();
+        assert_eq!(opened_with(None), written, "no clipboard");
+        assert_eq!(opened_with(Some("")), written, "no text");
+        assert_eq!(opened_with(Some(" \n\t ")), written, "white space");
+        assert_eq!(opened_with(Some("???")), written, "nothing matches");
+
+        let values = opened_with(Some("(unclosed"));
+        assert_eq!(values.text("broken"), "kept", "no regular expression");
+        assert!(values.check("check"), "a checkbox takes no text");
+    }
+
+    /// A rule whose group took no part in the match gives the whole match.
+    #[test]
+    fn a_group_that_took_no_part_gives_the_whole_match() {
+        let form = Form::new("Test", "OK")
+            .field(Field::text("id", "Id", "", "").from_clipboard(r"(?:id=(\d+)|[A-Z]{3}-\d+)"));
+        let mut values = form.defaults();
+        take_from_clipboard(&form, &mut values, Some("id=77"));
+        assert_eq!(values.text("id"), "77");
+        take_from_clipboard(&form, &mut values, Some("ABC-12"));
+        assert_eq!(values.text("id"), "ABC-12");
+    }
 }

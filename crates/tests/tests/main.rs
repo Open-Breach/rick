@@ -35,6 +35,7 @@ mod extensions;
 mod file_list;
 mod fixture;
 mod footer;
+mod form_clipboard;
 mod git;
 mod hash;
 mod install_dialog;

@@ -1,8 +1,9 @@
 //! *Git clone…*: the one action of the group that is offered outside a
 //! work tree. On the empty area of a pane it clones into the folder the
 //! pane shows, on a folder into that folder. It asks for the repository's
-//! URL in a form, prefilled from the clipboard when that holds a Git URL
-//! or the path of a local repository, and runs `git clone <url>` in the
+//! URL in a form — the field takes a Git URL from the clipboard through
+//! its clipboard rule, and is written with the path of a local repository
+//! when the clipboard holds one — and runs `git clone <url>` in the
 //! target folder as a job: git names the new folder as it always does,
 //! its progress lines are the job's progress, and cancelling the job stops
 //! git.
@@ -460,9 +461,29 @@ fn preview(target: &Path, values: &Values) -> Vec<PreviewRow> {
     rows
 }
 
-/// The dialogue: the URL, opening with `url` when the clipboard held one,
-/// the folder the clone creates, and the options folded away.
-pub(crate) fn form(target: &Path, url: Option<String>) -> Form {
+/// The clipboard rule of the URL field (SPEC.md *Git clone dialogue*): the
+/// shapes of a Git URL that [`is_git_url`] takes, as one regular
+/// expression over the whole text — `https://`, `ssh://` and `git://` with
+/// a host and a path, `file://` with a path, and `user@host:path` — with
+/// no white space and no control character in it. A local repository by
+/// its absolute path is no shape: it needs a look at the disk, and the
+/// action reads the clipboard for that one case itself.
+pub const URL_RULE: &str = concat!(
+    "^(?:",
+    // A scheme, a host that is no option, a path that names something.
+    r"(?i:https|ssh|git)://[^\s\p{Cc}/\-][^\s\p{Cc}/]*/[^\s\p{Cc}]*[^\s\p{Cc}/][^\s\p{Cc}]*",
+    // A file URL needs no host before its path.
+    r"|(?i:file)://(?:[^\s\p{Cc}/\-][^\s\p{Cc}/]*)?/[^\s\p{Cc}]*[^\s\p{Cc}/][^\s\p{Cc}]*",
+    // The short form: a user at a host, a colon, a path.
+    r"|[^\s\p{Cc}/:@\-][^\s\p{Cc}/:@]*@[^\s\p{Cc}/:\-][^\s\p{Cc}/:]*:/?[^\s\p{Cc}/][^\s\p{Cc}]*",
+    ")$",
+);
+
+/// The dialogue: the URL, which takes a Git URL from the clipboard through
+/// [`URL_RULE`] and opens with `repository` otherwise — the path of a
+/// local repository the clipboard held, or nothing — the folder the clone
+/// creates, and the options folded away.
+pub(crate) fn form(target: &Path, repository: Option<String>) -> Form {
     let folder = target.to_path_buf();
     Form::new(t!("git-clone-repository"), t!("git-clone-confirm"))
         .header(
@@ -473,11 +494,12 @@ pub(crate) fn form(target: &Path, url: Option<String>) -> Form {
             Field::text(
                 URL,
                 t!("git-clone-url"),
-                url.unwrap_or_default(),
+                repository.unwrap_or_default(),
                 t!("git-clone-url-hint"),
             )
             .mono()
-            .required(t!("git-clone-url-missing")),
+            .required(t!("git-clone-url-missing"))
+            .from_clipboard(URL_RULE),
         )
         .field(Field::preview_here())
         .field(Field::disclosure(
@@ -533,12 +555,13 @@ fn target_of(ctx: &ActionCtx) -> Target {
 pub struct CloneRepository(pub Arc<Shared>);
 
 impl CloneRepository {
-    /// The clipboard's text when it is a Git URL or a local repository's
-    /// path: what the field opens with.
-    fn clipboard_url(&self) -> Option<String> {
+    /// The clipboard's text when it is the absolute path of a local
+    /// repository: the one case the field's clipboard rule cannot tell,
+    /// since it needs a look at the disk. A Git URL is the rule's.
+    fn clipboard_repository(&self) -> Option<String> {
         let text = self.0.platform.as_ref()?.text().ok().flatten()?;
         let text = text.trim();
-        is_git_url(text).then(|| text.to_owned())
+        (absolute(text).is_some() && is_git_url(text)).then(|| text.to_owned())
     }
 }
 
@@ -576,7 +599,7 @@ impl Action for CloneRepository {
         let Target::Folder(target) = target_of(&ctx) else {
             return Ok(ActionOutcome::Done);
         };
-        let Some(values) = ui.form(form(&target, self.clipboard_url())) else {
+        let Some(values) = ui.form(form(&target, self.clipboard_repository())) else {
             return Ok(ActionOutcome::Done);
         };
         let url = values.text(URL).trim();
