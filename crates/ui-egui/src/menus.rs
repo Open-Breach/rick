@@ -175,6 +175,96 @@ pub fn path_bar_menu(
     pick
 }
 
+/// One workspace tab in the list of all of them ([`all_tabs`]).
+#[derive(Debug, Clone, Copy)]
+pub struct TabEntry<'a> {
+    /// The tab's icon.
+    pub icon: &'a str,
+    /// The tab's title.
+    pub title: &'a str,
+    /// Whether it is the tab the window shows.
+    pub active: bool,
+}
+
+/// The list of every workspace tab of a window (SPEC.md *Tabs that
+/// outgrow the row*), hanging from the dropdown `button` that stands after
+/// the tabs the row has room for: a 260 px card with one row per tab in
+/// their order — the icon and the title, cut with an ellipsis — the active
+/// one marked as the active entry. A list longer than the window scrolls.
+/// Returns the index of the tab that was chosen.
+pub fn all_tabs(button: &egui::Response, tabs: &[TabEntry<'_>]) -> Option<usize> {
+    let mut chosen = None;
+    fitted(
+        &button.ctx,
+        egui::Popup::menu(button).style(menu_style),
+        0.0,
+    )
+    .show(|ui| {
+        card_width(ui);
+        scrolling(ui, |ui| {
+            for (at, tab) in tabs.iter().enumerate() {
+                if tab_entry(ui, tab).clicked() {
+                    chosen = Some(at);
+                    ui.close();
+                }
+            }
+        });
+    });
+    chosen
+}
+
+/// One row of [`all_tabs`]: the icon in its slot and the title on one
+/// line, on `bg/selected-soft` in `text/on-selected` for the active tab —
+/// the active entry of a menu — and on the same fill under the pointer.
+fn tab_entry(ui: &mut egui::Ui, tab: &TabEntry<'_>) -> egui::Response {
+    let scheme = theme::scheme(ui);
+    let (rect, response) = ui.allocate_exact_size(
+        egui::vec2(ui.available_width(), CONTEXT.height),
+        egui::Sense::click(),
+    );
+    let (title, active) = (tab.title.to_owned(), tab.active);
+    response.widget_info(|| {
+        egui::WidgetInfo::selected(egui::WidgetType::Button, true, active, title.clone())
+    });
+    if tab.active || response.hovered() {
+        ui.painter().rect_filled(
+            rect,
+            theme::metrics(ui.ctx()).corner_radius(),
+            scheme.bg_selected_soft,
+        );
+    }
+    let (colour, icon_colour) = if tab.active {
+        (scheme.text_on_selected, scheme.text_on_selected)
+    } else {
+        (scheme.text_primary, scheme.icon_default)
+    };
+    ui.painter().text(
+        egui::pos2(rect.left() + ENTRY_PAD_X + ICON / 2.0, rect.center().y),
+        egui::Align2::CENTER_CENTER,
+        tab.icon,
+        egui::FontId::proportional(ICON),
+        icon_colour,
+    );
+    // One line: a long title is cut with an ellipsis at the card's edge.
+    let left = rect.left() + ENTRY_PAD_X + ICON + ICON_GAP;
+    let mut job = egui::text::LayoutJob::simple_singleline(
+        tab.title.to_owned(),
+        egui::FontId::proportional(TEXT_BODY),
+        colour,
+    );
+    job.wrap.max_width = (rect.right() - ENTRY_PAD_X - left).max(0.0);
+    job.wrap.max_rows = 1;
+    job.wrap.break_anywhere = true;
+    job.wrap.overflow_character = Some('…');
+    let galley = ui.painter().layout_job(job);
+    ui.painter().galley(
+        egui::pos2(left, rect.center().y - galley.size().y / 2.0),
+        galley,
+        colour,
+    );
+    response
+}
+
 /// A menu card's entries. They scroll where the card would be taller
 /// than its [`room`]: the card is then as tall as fits (SPEC.md *A menu
 /// that does not fit*).

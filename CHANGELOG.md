@@ -114,6 +114,13 @@ the pull request that brought the change.
 
 ### Changed
 
+- Workspace tabs that outgrow the title row stay within reach, as in
+  Chrome: when the row is full the tabs all shrink together, from 220 px
+  down to 100 px, and when they do not fit at that width either the row
+  shows as many as fit, the active one always among them, and a dropdown
+  button after the last of them lists every tab in order, the active one
+  marked; choosing one shows it. The row used to cut off the tabs it had
+  no room for (#241).
 - The address bar is one rounded surface, so that it reads as the address
   bar before it is clicked: the Up button, a divider, the path and the
   copy button on it, and a border under the pointer (#230).
