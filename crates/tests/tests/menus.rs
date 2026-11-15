@@ -458,6 +458,96 @@ fn a_submenu_scrolls_too_and_a_menu_that_fits_is_placed_as_before() {
     );
 }
 
+/// A shell with the plugins that add entries to a file's menu — Git,
+/// Compress, Compare, Rename and the terminal — on `start`, in a window
+/// of `size`: a menu with more entries than the Git one alone has.
+fn busy_harness(start: &Path, size: egui::Vec2) -> Harness<'static, RickUi> {
+    let fake = Arc::new(Fake::new().unwrap_or_else(|e| panic!("{e}")));
+    let host = Arc::new(EguiHost::new());
+    let app = app::App::new(app::Config {
+        platform: fake.clone(),
+        ui: host.clone(),
+        extensions: vec![
+            Arc::new(ext_git::GitExtension::new()),
+            Arc::new(ext_action_compress::CompressExtension::new()),
+            Arc::new(ext_action_compare::CompareExtension::new()),
+            Arc::new(ext_action_rename::RenameExtension::new()),
+            Arc::new(ext_action_terminal::TerminalExtension::new()),
+        ],
+        config_dir: Some(fake.config_dir()),
+        start: Some(local(start)),
+    });
+    let mut harness = Harness::builder()
+        .with_size(size)
+        .build_eframe(move |cc| RickUi::new(app, host, &cc.egui_ctx));
+    settle(&mut harness);
+    harness
+}
+
+/// A menu takes the room the window has (SPEC.md *A menu that does not
+/// fit*: "a menu card taller than the room it has is as tall as fits").
+/// With five plugins a file's menu is some 680 px tall. Its card was held
+/// to the 400 px an area is offered before its content is known: it
+/// scrolled in a window that had room for all of it, and in a lower
+/// window it was smaller than the room it had.
+#[test]
+fn a_menu_with_many_entries_takes_the_room_the_window_has() {
+    let dir = repository();
+
+    // Room for the whole menu: all of it is shown, hanging from the
+    // pointer, and nothing scrolls.
+    let mut tall = busy_harness(dir.path(), egui::vec2(900.0, 1000.0));
+    let whole = room(&tall);
+    let row = tall.get_by_label("notes.md").rect().center();
+    click_at(&mut tall, row, egui::PointerButton::Secondary);
+    tall.step();
+    let first = entry(&tall, "Open");
+    let last = entry(&tall, "Properties");
+    assert!(
+        last.bottom() - first.top() > 420.0,
+        "a menu taller than 400 px: {first:?} to {last:?}"
+    );
+    assert!(
+        (first.top() - row.y - 8.0).abs() < 1.5,
+        "the card hangs from the pointer: {first:?} at {row:?}"
+    );
+    assert!(shown(&tall, "Open", whole) && shown(&tall, "Properties", whole));
+    wheel(
+        &mut tall,
+        egui::pos2(first.center().x, first.bottom() + 60.0),
+        -2000.0,
+    );
+    assert_eq!(
+        entry(&tall, "Open"),
+        first,
+        "the whole menu is in its card: the wheel moves nothing"
+    );
+
+    // Less room than the menu needs, and more than 400 px of it: the
+    // card takes all of it, 8 px clear of the window's edges.
+    let mut low = busy_harness(dir.path(), egui::vec2(900.0, 600.0));
+    let room = room(&low);
+    assert!(room.height() > 500.0, "{room:?}");
+    let row = low.get_by_label("notes.md").rect().center();
+    click_at(&mut low, row, egui::PointerButton::Secondary);
+    low.step();
+    let first = entry(&low, "Open");
+    assert!(
+        (first.top() - room.top() - 8.0).abs() < 1.5,
+        "the card starts 8 px under the window's edge: {first:?} in {room:?}"
+    );
+    wheel(
+        &mut low,
+        egui::pos2(first.center().x, room.center().y),
+        -2000.0,
+    );
+    let last = entry(&low, "Properties");
+    assert!(
+        (room.bottom() - last.bottom() - 8.0).abs() < 1.5,
+        "the card ends 8 px over the window's edge: {last:?} in {room:?}"
+    );
+}
+
 /// Issue 219, item 4: the application menu is a card of the same kind. In
 /// a window too low for its entries it is as tall as fits, 8 px clear of
 /// the window's edges, and scrolls to *About Rick*.

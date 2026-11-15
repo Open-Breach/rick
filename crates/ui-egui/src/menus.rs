@@ -182,8 +182,14 @@ fn scrolling(ui: &mut egui::Ui, entries: impl FnOnce(&mut egui::Ui)) {
     // What the card has around its entries: its padding and its border.
     let around = ui.spacing().menu_margin.sum().y + 2.0 * ui.visuals().window_stroke.width;
     let most = (room(ui.ctx()).height() - around).max(0.0);
+    // The room is the card's whole measure. An area does not know its
+    // content before it has drawn it once and offers 400 px meanwhile,
+    // which is what a scroll area would settle for: asked for at least
+    // the room where it has to scroll, it takes the room, and a menu
+    // that fits in it is as tall as its entries.
     egui::ScrollArea::vertical()
         .max_height(most)
+        .min_scrolled_height(most)
         .show(ui, entries);
 }
 
