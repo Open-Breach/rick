@@ -2,4 +2,4 @@
 # names the previewers' and the installer's documentation use as words,
 # and the binary units the size strings use. The `..` keeps clippy's own
 # list (macOS, OpenGL, …).
-doc-valid-idents = ["GStreamer", "LibreOffice", "WebP", "OpenDocument", "AppImage", "AppImages", "SquashFS", "KiB", "MiB", "GiB", ".."]
+doc-valid-idents = ["GStreamer", "LibreOffice", "WebP", "OpenDocument", "AppImage", "AppImages", "AppStream", "SquashFS", "KiB", "MiB", "GiB", ".."]

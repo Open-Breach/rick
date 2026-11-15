@@ -1,8 +1,10 @@
 //! The test fixtures of specs/ext-installer.md, generated on demand so no
 //! binary is committed: the spec's ten small archives, each exercising one
 //! detection or safety rule, plus a JetBrains-shaped one for the name rule,
-//! with tiny ELF programs that exit 0 when run on this machine. Built with
-//! the `fixtures` feature and in the crate's tests.
+//! with tiny ELF programs that exit 0 when run on this machine; and the
+//! spec's AppImages, the same tiny program with the AppImage magic in its
+//! header and a small SquashFS image behind it. Built with the `fixtures`
+//! feature and in the crate's tests.
 
 // Fixture bytes are small by construction: the casts between the ELF
 // header's widths and the buffers' lengths cannot truncate.
@@ -10,6 +12,9 @@
 
 use std::io::{self, Cursor, Write};
 use std::path::{Path, PathBuf};
+
+use backhand::compression::{CompressionOptions, Compressor, Lz4};
+use backhand::{FilesystemCompressor, FilesystemWriter, NodeHeader};
 
 use crate::elf::{EM_AARCH64, EM_X86_64};
 
@@ -536,5 +541,243 @@ impl TarBuild {
     fn finish(mut self) -> io::Result<Vec<u8>> {
         self.builder.finish()?;
         self.builder.into_inner()
+    }
+}
+
+/// One entry of a fixture image.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Inside<'a> {
+    /// A regular file with these bytes.
+    File(&'a [u8]),
+    /// A symbolic link to this target.
+    Link(&'a str),
+}
+
+fn image_io(error: backhand::BackhandError) -> io::Error {
+    io::Error::other(error)
+}
+
+/// A SquashFS image holding `entries` by their paths, the folders above
+/// them included, compressed with `compressor`. It is written by the
+/// writer of the crate that reads it; no time of the day goes into it, so
+/// the same entries give the same bytes.
+///
+/// # Errors
+///
+/// The writer's error, as an I/O error.
+pub fn squashfs(entries: &[(&str, Inside<'_>)], compressor: Compressor) -> io::Result<Vec<u8>> {
+    let mut image = FilesystemWriter::default();
+    // LZ4 is the one compressor whose options an image must carry.
+    let options = (compressor == Compressor::Lz4).then_some(CompressionOptions::Lz4(Lz4 {
+        version: 1,
+        flags: 0,
+    }));
+    image.set_compressor(FilesystemCompressor::new(compressor, options).map_err(image_io)?);
+    image.set_time(0);
+    image.set_no_padding();
+    let header = NodeHeader::new(0o755, 0, 0, 0);
+    for (path, entry) in entries {
+        if let Some((folder, _)) = path.rsplit_once('/') {
+            image.push_dir_all(folder, header).map_err(image_io)?;
+        }
+        match entry {
+            Inside::File(bytes) => image.push_file(Cursor::new(*bytes), path, header),
+            Inside::Link(target) => image.push_symlink(*target, path, header),
+        }
+        .map_err(image_io)?;
+    }
+    let mut out = Cursor::new(Vec::new());
+    image.write(&mut out).map_err(image_io)?;
+    Ok(out.into_inner())
+}
+
+/// An AppImage of type 2 for `machine`: the runtime of [`tiny_appimage`],
+/// whose dynamic section names `needed`, and behind it a gzip-compressed
+/// SquashFS image of `entries`.
+///
+/// # Errors
+///
+/// The image writer's error, as an I/O error.
+pub fn appimage(
+    machine: u16,
+    needed: &[&str],
+    entries: &[(&str, Inside<'_>)],
+) -> io::Result<Vec<u8>> {
+    let mut out = tiny_appimage(machine, 2, needed);
+    out.extend(squashfs(entries, Compressor::Gzip)?);
+    Ok(out)
+}
+
+/// A desktop entry as an AppImage carries one at its top: the app `name`
+/// under the lower-case command and icon `id`, with `X-AppImage-Version`
+/// when `version` is given.
+#[must_use]
+pub fn appimage_desktop(name: &str, id: &str, version: Option<&str>) -> String {
+    let mut text = format!(
+        "[Desktop Entry]\nType=Application\nName={name}\nComment=A fixture\nExec={id} %U\n\
+         TryExec={id}\nIcon={id}\nCategories=Utility;\nStartupWMClass={name}\n"
+    );
+    if let Some(version) = version {
+        text.push_str("X-AppImage-Version=");
+        text.push_str(version);
+        text.push('\n');
+    }
+    text
+}
+
+/// An AppStream metainfo file listing `releases` in that order, with one
+/// more inside a comment, which is no release.
+#[must_use]
+pub fn appimage_metainfo(id: &str, releases: &[&str]) -> String {
+    use std::fmt::Write as _;
+    let mut text = format!(
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<component type=\"desktop-application\">\n  \
+         <id>org.example.{id}</id>\n  <releases>\n    <!-- <release version=\"99.0\"/> -->\n"
+    );
+    for (i, version) in releases.iter().enumerate() {
+        let _ = writeln!(
+            text,
+            "    <release version=\"{version}\" date=\"2026-0{}-01\"/>",
+            (i % 9) + 1
+        );
+    }
+    text.push_str("  </releases>\n</component>\n");
+    text
+}
+
+/// The fixture AppImages of the spec's table.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum AppImageFixture {
+    /// Type 2: the desktop entry of `Fixapp` with `X-AppImage-Version`
+    /// 2.1.0, `.DirIcon` linking to `fixapp.png` in the image, and a
+    /// metainfo naming 2.0.5.
+    Entry,
+    /// `Fixmeta`: an entry without a version, a metainfo listing 1.3.2 and
+    /// then 1.4.0.
+    Metainfo,
+    /// `Fixname`: an entry without a version and no metainfo, as
+    /// `Fixname-3.2.1-x86_64.AppImage`.
+    FileName,
+    /// `Fixnone`: no version in the entry, no metainfo, none in the name.
+    NoVersion,
+    /// The magic of type 1 and no SquashFS image.
+    Type1,
+    /// `Fixmagic` under a name without the extension: the magic alone
+    /// says what it is.
+    MagicOnly,
+    /// `Fixarch`, built for the other machine.
+    WrongArch,
+    /// `Fixlinks`: `.DirIcon` and the icon the entry names are links that
+    /// point out of the image.
+    OutsideLinks,
+    /// `Fixapp` again, as 2.2.0 under another file name.
+    UpdateV2,
+}
+
+impl AppImageFixture {
+    /// Every AppImage fixture, in the spec's order.
+    pub const ALL: [Self; 9] = [
+        Self::Entry,
+        Self::Metainfo,
+        Self::FileName,
+        Self::NoVersion,
+        Self::Type1,
+        Self::MagicOnly,
+        Self::WrongArch,
+        Self::OutsideLinks,
+        Self::UpdateV2,
+    ];
+
+    /// The file's name, as the spec's table names it.
+    #[must_use]
+    pub fn file_name(self) -> &'static str {
+        match self {
+            Self::Entry => "entry.AppImage",
+            Self::Metainfo => "metainfo.AppImage",
+            Self::FileName => "Fixname-3.2.1-x86_64.AppImage",
+            Self::NoVersion => "no-version.AppImage",
+            Self::Type1 => "type1.AppImage",
+            Self::MagicOnly => "magic-only",
+            Self::WrongArch => "wrong-arch.AppImage",
+            Self::OutsideLinks => "outside-links.AppImage",
+            Self::UpdateV2 => "update-v2.AppImage",
+        }
+    }
+
+    /// The file's bytes.
+    ///
+    /// # Errors
+    ///
+    /// The image writer's error, as an I/O error.
+    pub fn bytes(self) -> io::Result<Vec<u8>> {
+        let png = tiny_png(64);
+        let run = b"#!/bin/sh\nexit 0\n";
+        // The usual image: the entry, the icon it names, `.DirIcon` linking
+        // to that icon, and `AppRun`.
+        let usual = |machine: u16, name: &str, version: Option<&str>, releases: &[&str]| {
+            let id = name.to_ascii_lowercase();
+            let desktop = appimage_desktop(name, &id, version);
+            let icon = format!("{id}.png");
+            let metainfo = appimage_metainfo(&id, releases);
+            let metainfo_at = format!("usr/share/metainfo/{id}.appdata.xml");
+            let mut entries = vec![
+                (format!("{id}.desktop"), Inside::File(desktop.as_bytes())),
+                (icon.clone(), Inside::File(&png)),
+                (".DirIcon".to_owned(), Inside::Link(&icon)),
+                ("AppRun".to_owned(), Inside::File(run)),
+            ];
+            if !releases.is_empty() {
+                entries.push((metainfo_at, Inside::File(metainfo.as_bytes())));
+            }
+            let entries: Vec<(&str, Inside<'_>)> = entries
+                .iter()
+                .map(|(path, e)| (path.as_str(), *e))
+                .collect();
+            appimage(machine, &[], &entries)
+        };
+        match self {
+            Self::Entry => usual(this_machine(), "Fixapp", Some("2.1.0"), &["2.0.5"]),
+            Self::Metainfo => usual(this_machine(), "Fixmeta", None, &["1.3.2", "1.4.0"]),
+            Self::FileName => usual(this_machine(), "Fixname", None, &[]),
+            Self::NoVersion => usual(this_machine(), "Fixnone", None, &[]),
+            Self::Type1 => {
+                let mut out = tiny_appimage(this_machine(), 1, &[]);
+                // What follows is no SquashFS image.
+                out.extend_from_slice(&[0u8; 2048]);
+                Ok(out)
+            }
+            Self::MagicOnly => usual(this_machine(), "Fixmagic", Some("0.9.0"), &[]),
+            Self::WrongArch => usual(other_machine(), "Fixarch", Some("1.0.0"), &[]),
+            Self::OutsideLinks => {
+                let desktop = appimage_desktop("Fixlinks", "fixlinks", Some("1.0.0"));
+                appimage(
+                    this_machine(),
+                    &[],
+                    &[
+                        ("fixlinks.desktop", Inside::File(desktop.as_bytes())),
+                        (
+                            ".DirIcon",
+                            Inside::Link("/usr/share/icons/hicolor/48x48/apps/fixlinks.png"),
+                        ),
+                        ("fixlinks.png", Inside::Link("../../outside/fixlinks.png")),
+                        ("AppRun", Inside::File(run)),
+                    ],
+                )
+            }
+            Self::UpdateV2 => usual(this_machine(), "Fixapp", Some("2.2.0"), &["2.2.0"]),
+        }
+    }
+
+    /// Writes the file into `dir` under its name, without the execute
+    /// bit, as a download arrives.
+    ///
+    /// # Errors
+    ///
+    /// The I/O error from writing.
+    pub fn write(self, dir: &Path) -> io::Result<PathBuf> {
+        let path = dir.join(self.file_name());
+        std::fs::write(&path, self.bytes()?)?;
+        ext::platform::fs::set_unix_mode(&path, 0o644)?;
+        Ok(path)
     }
 }
