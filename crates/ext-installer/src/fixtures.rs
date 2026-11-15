@@ -575,7 +575,9 @@ fn image_io(error: backhand::BackhandError) -> io::Error {
 /// without zstd of its own (the installer hands it the workspace's when
 /// it reads), and its hook is not told which compression an image asks
 /// for when it writes: this compressor packs with zstd whatever it is
-/// asked, and is set for a zstd image and no other.
+/// asked, and is set for a zstd image and no other. It goes away with
+/// the reader's adapter in `appimage`, once `backhand` asks for the
+/// `zstd` the workspace has.
 struct ZstdWriter;
 
 impl CompressionAction for ZstdWriter {

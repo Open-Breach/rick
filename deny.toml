@@ -100,7 +100,8 @@ deny = [
     { crate = "plugin-panic", wrappers = ["tests"] },
     # One zstd in the lock file (issue 223): the SquashFS reader of the
     # installer is built without its own zstd support, which asks for an
-    # older version, and is handed the workspace's.
+    # older version, and is handed the workspace's. A second version of
+    # either crate fails the check.
     { crate = "zstd", deny-multiple-versions = true },
     { crate = "zstd-safe", deny-multiple-versions = true },
 ]

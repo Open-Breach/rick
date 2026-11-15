@@ -234,10 +234,20 @@ pub struct BundledIcon {
 }
 
 /// How the blocks of an image are unpacked: by the SquashFS crate's own
-/// compressors, and for zstd by the `zstd` crate the workspace has. The
-/// SquashFS crate's own zstd support asks for an older `zstd`, a second
-/// version in the lock file, so the crate is built without it and handed
-/// this in its place, through its hook for a compressor of one's own.
+/// compressors, and for zstd by the `zstd` crate the workspace has.
+///
+/// This adapter exists for one reason. `backhand`'s own zstd support asks
+/// for `zstd` 0.13, and the workspace, `zip` and `sevenz-rust2` are on
+/// 0.14, so its `zstd` feature would put a second zstd into the lock
+/// file. The crate is built without that feature and handed this in its
+/// place, through its hook for a compressor of one's own.
+///
+/// It goes away once a `backhand` release asks for `zstd` 0.14: switch
+/// the `zstd` feature back on in the workspace's `Cargo.toml`, open the
+/// image with `FilesystemReader::from_reader_with_offset` again, and
+/// delete this type, [`CODECS`] and the writer's twin in the fixtures.
+/// `cargo deny check` fails while two versions of zstd are in the lock
+/// file, so the feature cannot come back early unnoticed.
 struct Codecs;
 
 impl CompressionAction for Codecs {
