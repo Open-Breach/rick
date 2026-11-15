@@ -39,6 +39,8 @@ struct Scripted {
     /// The summary rows of each form as the user saw them, before the
     /// install changed the disk.
     rows_seen: Mutex<Vec<Vec<ext::PreviewRow>>>,
+    /// The texts shown, as (title, text).
+    shown: Mutex<Vec<(String, String)>>,
 }
 
 impl Scripted {
@@ -76,7 +78,12 @@ impl UiHost for Scripted {
             .unwrap_or_else(PoisonError::into_inner)
             .clone()
     }
-    fn show(&self, _: &str, _: &str) {}
+    fn show(&self, title: &str, text: &str) {
+        self.shown
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push((title.to_owned(), text.to_owned()));
+    }
     fn form(&self, form: Form) -> Option<Values> {
         let mut values = form.defaults();
         for (key, value) in self
@@ -107,15 +114,28 @@ struct Harness {
     events: Mutex<tokio::sync::mpsc::UnboundedReceiver<JobEvent>>,
     ui: Scripted,
     fixtures: HashMap<Fixture, PathBuf>,
+    /// The messages the jobs reported, oldest first: the last one of an
+    /// install is its summary.
+    messages: Mutex<Vec<String>>,
 }
 
 fn harness() -> Harness {
+    harness_on(&InstallerExtension::new())
+}
+
+/// A harness on a machine that has exactly the libraries of these names,
+/// in place of the system's.
+fn harness_with_libraries(names: &[&str]) -> Harness {
+    harness_on(&InstallerExtension::with_libraries(install::Libraries::of(
+        names,
+    )))
+}
+
+fn harness_on(extension: &InstallerExtension) -> Harness {
     let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
     let fake = Arc::new(Fake::new().unwrap_or_else(|e| panic!("{e}")));
     let mut registry = Registry::with_platform(fake.clone());
-    registry
-        .load(&InstallerExtension::new())
-        .unwrap_or_else(|e| panic!("{e}"));
+    registry.load(extension).unwrap_or_else(|e| panic!("{e}"));
     let fixtures = Fixture::ALL
         .iter()
         .map(|f| (*f, f.write(dir.path()).unwrap_or_else(|e| panic!("{e}"))))
@@ -132,6 +152,7 @@ fn harness() -> Harness {
             ..Scripted::default()
         },
         fixtures,
+        messages: Mutex::new(Vec::new()),
     }
 }
 
@@ -339,8 +360,17 @@ impl Harness {
         let mut results = Vec::new();
         let mut events = self.events.lock().unwrap_or_else(PoisonError::into_inner);
         while let Ok(event) = events.try_recv() {
-            if let JobEvent::Finished { result, .. } = event {
-                results.push(result);
+            match event {
+                JobEvent::Finished { result, .. } => results.push(result),
+                JobEvent::Progress {
+                    progress: types::Progress::Message(message),
+                    ..
+                } => self
+                    .messages
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .push(message),
+                _ => {}
             }
         }
         (outcome, results)
@@ -919,7 +949,14 @@ fn the_icon_field_is_one_list_of_the_archives_icons() {
     let layout = h.layout();
     let detected =
         Arc::new(detect::detect(h.archive(Fixture::JetBrains)).unwrap_or_else(|e| panic!("{e}")));
-    let form = actions::install_form(&detected, &scan, &layout, None, false);
+    let form = actions::install_form(
+        &detected,
+        &scan,
+        &layout,
+        None,
+        false,
+        &install::Libraries::default(),
+    );
     assert!(
         matches!(
             field(&form, "icon"),
@@ -963,7 +1000,14 @@ fn the_icon_field_is_one_list_of_the_archives_icons() {
     assert_eq!(detected.kind, Kind::Cli);
     assert!(!detected.icon_trusted);
     assert_eq!(detected.icons.len(), 1);
-    let form = actions::install_form(&detected, &scan, &layout, None, false);
+    let form = actions::install_form(
+        &detected,
+        &scan,
+        &layout,
+        None,
+        false,
+        &install::Libraries::default(),
+    );
     assert!(
         matches!(
             field(&form, "icon"),
@@ -1663,7 +1707,11 @@ fn the_library_check_resolves_the_system_libraries() {
     h.install(Fixture::GuiNoDesktop, Vec::new());
     let layout = h.layout();
     let version_dir = layout.version_dir("fixnodesk", "0.3.0");
-    let unresolved = install::unresolved_libraries(&version_dir, &[version_dir.join("fixnodesk")]);
+    let unresolved = install::unresolved_libraries(
+        &version_dir,
+        &[version_dir.join("fixnodesk")],
+        &install::Libraries::system(),
+    );
     assert!(
         !unresolved.contains(&"libc.so.6".to_owned()),
         "{unresolved:?}"
@@ -2911,4 +2959,206 @@ fn the_command_line_and_update_from_archive_take_an_appimage() {
         h.record("fixapp").previous_version.as_deref(),
         Some("2.1.0")
     );
+}
+
+/// Whether an AppImage needs FUSE 2 is read from its runtime, the ELF at
+/// the head of the file, and never by running it: the older runtime
+/// carries the library's name, as the string it opens it by or among its
+/// needed libraries, and the static one does not. What the image behind
+/// the runtime holds changes nothing.
+#[test]
+fn the_need_of_fuse2_is_read_from_the_runtime() {
+    use backhand::compression::Compressor;
+    let h = harness();
+    let needs = |path: &Path| appimage::needs_fuse2(path).unwrap_or_else(|e| panic!("{e}"));
+    assert!(needs(&h.appimage(AppImageFixture::Fuse2)));
+    assert!(
+        detect::detect(&h.appimage(AppImageFixture::Fuse2))
+            .unwrap_or_else(|e| panic!("{e}"))
+            .needs_fuse2
+    );
+    // A runtime that lists it as a needed library.
+    let listed = h.file(
+        "fixlisted.AppImage",
+        &tiny_appimage(this_machine(), 1, &["libz.so.1", "libfuse.so.2"]),
+        0o644,
+    );
+    assert!(needs(&listed));
+
+    // The fixtures on a runtime without the name are never held back.
+    for fixture in [
+        AppImageFixture::Entry,
+        AppImageFixture::Type1,
+        AppImageFixture::MagicOnly,
+    ] {
+        let path = h.appimage(fixture);
+        assert!(!needs(&path), "{fixture:?}");
+        let detected = detect::detect(&path).unwrap_or_else(|e| panic!("{e}"));
+        assert!(!detected.needs_fuse2, "{fixture:?}");
+    }
+    // The name inside the image, stored as it is, is not the runtime's.
+    let mut inside = tiny_appimage(this_machine(), 2, &[]);
+    inside.extend(
+        squashfs(
+            &[("README", Inside::File(b"this app bundles libfuse.so.2\n"))],
+            Compressor::Uncompressed,
+        )
+        .unwrap_or_else(|e| panic!("{e}")),
+    );
+    assert!(
+        inside
+            .windows(appimage::FUSE2.len())
+            .any(|w| w == appimage::FUSE2.as_bytes()),
+        "the name is in the file"
+    );
+    assert!(!needs(&h.file("fixinside.AppImage", &inside, 0o644)));
+    // No program at all.
+    assert!(!needs(&h.file("notes.AppImage", b"libfuse.so.2\n", 0o644)));
+    assert!(appimage::needs_fuse2(&h.dir.path().join("gone")).is_err());
+
+    // An archive is never asked.
+    let archive =
+        detect::detect(h.archive(Fixture::GuiWithDesktop)).unwrap_or_else(|e| panic!("{e}"));
+    assert!(!archive.needs_fuse2);
+}
+
+/// The machine's libraries are the loader cache's names and the files of
+/// the library folders; a test's stand-in has exactly the names it is
+/// given.
+#[test]
+fn the_libraries_of_a_machine_are_looked_up_by_file_name() {
+    let none = install::Libraries::of(&[]);
+    assert!(!none.has(appimage::FUSE2));
+    let some = install::Libraries::of(&["libfuse.so.2", "libz.so.1"]);
+    assert!(some.has(appimage::FUSE2) && some.has("libz.so.1"));
+    assert!(!some.has("libfuse.so.3"));
+    // The system's are read without a panic wherever the tests run, a
+    // machine without a loader cache included.
+    let _ = install::Libraries::system().has(appimage::FUSE2);
+}
+
+/// Acceptance (issue 223): an AppImage on the older runtime, on a machine
+/// without `libfuse.so.2`. *Run* stops with the warning and starts
+/// nothing: *FUSE 2 is required to run this AppImage*, the install line
+/// of each distribution and the link to the AppImage documentation. With
+/// the library installed the same file runs, and an AppImage on a runtime
+/// that does not need it runs with no warning on either machine.
+#[test]
+fn run_stops_with_the_fuse2_warning_where_the_library_is_missing() {
+    if !supported() {
+        return;
+    }
+    let h = harness_with_libraries(&[]);
+    let old = h.appimage(AppImageFixture::Fuse2);
+    let outcome = h.ok(RUN, h.ctx_file(&old));
+    assert!(matches!(outcome, ActionOutcome::Done), "{outcome:?}");
+    assert!(h.fake.ran().is_empty(), "nothing is started");
+    let shown =
+        h.ui.shown
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone();
+    let [(title, text)] = shown.as_slice() else {
+        panic!("one warning: {shown:?}");
+    };
+    assert_eq!(title, "FUSE 2 is required to run this AppImage");
+    for line in [
+        "libfuse.so.2",
+        "sudo apt install libfuse2\n",
+        "Ubuntu 24.04 and later:   sudo apt install libfuse2t64",
+        "sudo dnf install fuse-libs",
+        "sudo pacman -S fuse2",
+        "https://docs.appimage.org/user-guide/troubleshooting/fuse.html",
+    ] {
+        assert!(text.contains(line), "{line:?} is not in:\n{text}");
+    }
+    // The static runtime is never held back, FUSE 2 or not.
+    let new = h.appimage(AppImageFixture::Entry);
+    h.ok(RUN, h.ctx_file(&new));
+    assert_eq!(
+        h.fake.ran(),
+        [(new, Vec::new(), h.dir.path().to_path_buf())]
+    );
+    assert_eq!(
+        h.ui.shown
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .len(),
+        1
+    );
+
+    // Where the library is installed, the older runtime runs.
+    let h = harness_with_libraries(&["libfuse.so.2"]);
+    let old = h.appimage(AppImageFixture::Fuse2);
+    h.ok(RUN, h.ctx_file(&old));
+    assert_eq!(
+        h.fake.ran(),
+        [(old, Vec::new(), h.dir.path().to_path_buf())]
+    );
+    assert!(
+        h.ui.shown
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .is_empty()
+    );
+}
+
+/// Acceptance (issue 223): *Install* works without FUSE 2 and carries the
+/// warning in its summary, so nobody installs an app that then does not
+/// start without being told why: as a row of the dialogue that holds
+/// nothing back, and in the job's closing summary, where the library
+/// check lists a missing library. With the library installed, and for an
+/// AppImage that does not need it, there is no warning.
+#[test]
+fn an_install_without_fuse2_works_and_carries_the_warning_in_its_summary() {
+    if !supported() {
+        return;
+    }
+    let warning = |rows: &[ext::PreviewRow]| {
+        rows.iter()
+            .find(|r| r.from == "Warning")
+            .map(|r| (r.to.clone(), r.problem.clone()))
+    };
+    let summary = |h: &Harness| {
+        h.messages
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .last()
+            .cloned()
+            .unwrap_or_default()
+    };
+
+    let h = harness_with_libraries(&[]);
+    h.install_file(&h.appimage(AppImageFixture::Fuse2), Vec::new());
+    let (text, problem) = warning(&h.ui.last_rows()).unwrap_or_else(|| panic!("a warning row"));
+    assert_eq!(text, appimage::FUSE2_WARNING);
+    assert_eq!(problem, None, "the warning holds nothing back");
+    assert_eq!(h.current("fixfuse"), "1.0.0", "the install works");
+    let said = summary(&h);
+    assert!(said.starts_with("Fixfuse 1.0.0 installed."), "{said}");
+    assert!(said.ends_with(appimage::FUSE2_WARNING), "{said}");
+    for line in [
+        "FUSE 2 is required to run this AppImage",
+        "sudo apt install libfuse2 (libfuse2t64 on Ubuntu 24.04 and later)",
+        "sudo dnf install fuse-libs",
+        "sudo pacman -S fuse2",
+        "https://docs.appimage.org/user-guide/troubleshooting/fuse.html",
+    ] {
+        assert!(said.contains(line), "{line:?} is not in: {said}");
+    }
+    assert!(
+        !said.contains("This app needs libfuse.so.2"),
+        "said once: {said}"
+    );
+    // An AppImage that does not need it, on the same machine.
+    h.install_file(&h.appimage(AppImageFixture::Entry), Vec::new());
+    assert_eq!(warning(&h.ui.last_rows()), None);
+    assert!(!summary(&h).contains("FUSE"), "{}", summary(&h));
+    assert!(h.fake.ran().is_empty(), "nothing was run");
+
+    // With the library installed there is nothing to warn of.
+    let h = harness_with_libraries(&["libfuse.so.2"]);
+    h.install_file(&h.appimage(AppImageFixture::Fuse2), Vec::new());
+    assert_eq!(warning(&h.ui.last_rows()), None);
+    assert_eq!(summary(&h), "Fixfuse 1.0.0 installed.");
 }

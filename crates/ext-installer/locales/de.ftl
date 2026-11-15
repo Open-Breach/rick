@@ -2,6 +2,19 @@
 
 installer-install-as-application = Als Anwendung installieren…
 installer-run = Ausführen
+installer-fuse2-title = Dieses AppImage braucht FUSE 2
+installer-fuse2-text =
+    Dieses AppImage nutzt die ältere AppImage-Laufzeit; sie braucht die Bibliothek libfuse.so.2, um ihr Abbild zu öffnen. Die Bibliothek ist auf diesem System nicht installiert, und Rick installiert nichts von sich aus.
+
+    Installieren Sie sie mit der Paketverwaltung Ihrer Distribution:
+
+    Debian und Ubuntu:        sudo apt install libfuse2
+    Ubuntu 24.04 und neuer:   sudo apt install libfuse2t64
+    Fedora:                   sudo dnf install fuse-libs
+    Arch:                     sudo pacman -S fuse2
+
+    Mehr in der AppImage-Dokumentation zu FUSE:
+    { $link }
 installer-installed-apps = Installierte Anwendungen…
 installer-open-install-folder = Installationsordner öffnen
 installer-launch = Starten

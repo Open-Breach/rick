@@ -205,6 +205,9 @@ pub struct Detected {
     pub arch_mismatch: Option<u16>,
     /// Entries the archive-safety rules will leave out: hostile paths.
     pub hostile: Vec<String>,
+    /// An AppImage whose runtime needs FUSE 2 to run
+    /// ([`appimage::needs_fuse2`]); `false` for an archive.
+    pub needs_fuse2: bool,
 }
 
 impl Detected {
@@ -696,6 +699,7 @@ pub fn detect_with(
         install_script,
         arch_mismatch,
         hostile,
+        needs_fuse2: false,
     })
 }
 

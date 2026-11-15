@@ -118,7 +118,20 @@ fn align(value: u64, to: u64) -> u64 {
 /// kernel reads neither the padding nor the section headers.
 #[must_use]
 pub fn tiny_appimage(machine: u16, kind: u8, needed: &[&str]) -> Vec<u8> {
+    tiny_appimage_opening(machine, kind, needed, &[])
+}
+
+/// The runtime of [`tiny_appimage`] with `opens` among its bytes, each
+/// name a string behind the program and inside the ELF: what a runtime
+/// that opens a library by its name carries, as the older AppImage
+/// runtime carries `libfuse.so.2`, which is no needed library of it.
+#[must_use]
+pub fn tiny_appimage_opening(machine: u16, kind: u8, needed: &[&str], opens: &[&str]) -> Vec<u8> {
     let mut out = tiny_elf(machine, needed);
+    for name in opens {
+        out.extend_from_slice(name.as_bytes());
+        out.push(0);
+    }
     out[8..11].copy_from_slice(&[b'A', b'I', kind]);
     let end = out.len() as u64;
     out[0x28..0x30].copy_from_slice(&end.to_le_bytes()); // e_shoff
@@ -603,9 +616,21 @@ pub fn appimage(
     needed: &[&str],
     entries: &[(&str, Inside<'_>)],
 ) -> io::Result<Vec<u8>> {
-    let mut out = tiny_appimage(machine, 2, needed);
-    out.extend(squashfs(entries, Compressor::Gzip)?);
-    Ok(out)
+    appimage_behind(tiny_appimage(machine, 2, needed), entries)
+}
+
+/// An AppImage of type 2 with this `runtime` at its head and behind it a
+/// gzip-compressed SquashFS image of `entries`.
+///
+/// # Errors
+///
+/// The image writer's error, as an I/O error.
+pub fn appimage_behind(
+    mut runtime: Vec<u8>,
+    entries: &[(&str, Inside<'_>)],
+) -> io::Result<Vec<u8>> {
+    runtime.extend(squashfs(entries, Compressor::Gzip)?);
+    Ok(runtime)
 }
 
 /// A desktop entry as an AppImage carries one at its top: the app `name`
@@ -665,6 +690,10 @@ pub enum AppImageFixture {
     /// `Fixmagic` under a name without the extension: the magic alone
     /// says what it is.
     MagicOnly,
+    /// `Fixfuse` on a runtime that opens `libfuse.so.2` by name, as the
+    /// older AppImage runtime does; every other fixture's runtime does
+    /// not name it.
+    Fuse2,
     /// `Fixarch`, built for the other machine.
     WrongArch,
     /// `Fixlinks`: `.DirIcon` and the icon the entry names are links that
@@ -676,13 +705,14 @@ pub enum AppImageFixture {
 
 impl AppImageFixture {
     /// Every AppImage fixture, in the spec's order.
-    pub const ALL: [Self; 9] = [
+    pub const ALL: [Self; 10] = [
         Self::Entry,
         Self::Metainfo,
         Self::FileName,
         Self::NoVersion,
         Self::Type1,
         Self::MagicOnly,
+        Self::Fuse2,
         Self::WrongArch,
         Self::OutsideLinks,
         Self::UpdateV2,
@@ -698,6 +728,7 @@ impl AppImageFixture {
             Self::NoVersion => "no-version.AppImage",
             Self::Type1 => "type1.AppImage",
             Self::MagicOnly => "magic-only",
+            Self::Fuse2 => "fuse2.AppImage",
             Self::WrongArch => "wrong-arch.AppImage",
             Self::OutsideLinks => "outside-links.AppImage",
             Self::UpdateV2 => "update-v2.AppImage",
@@ -712,9 +743,9 @@ impl AppImageFixture {
     pub fn bytes(self) -> io::Result<Vec<u8>> {
         let png = tiny_png(64);
         let run = b"#!/bin/sh\nexit 0\n";
-        // The usual image: the entry, the icon it names, `.DirIcon` linking
-        // to that icon, and `AppRun`.
-        let usual = |machine: u16, name: &str, version: Option<&str>, releases: &[&str]| {
+        // The usual image behind a runtime: the entry, the icon it names,
+        // `.DirIcon` linking to that icon, and `AppRun`.
+        let behind = |runtime: Vec<u8>, name: &str, version: Option<&str>, releases: &[&str]| {
             let id = name.to_ascii_lowercase();
             let desktop = appimage_desktop(name, &id, version);
             let icon = format!("{id}.png");
@@ -733,7 +764,10 @@ impl AppImageFixture {
                 .iter()
                 .map(|(path, e)| (path.as_str(), *e))
                 .collect();
-            appimage(machine, &[], &entries)
+            appimage_behind(runtime, &entries)
+        };
+        let usual = |machine: u16, name: &str, version: Option<&str>, releases: &[&str]| {
+            behind(tiny_appimage(machine, 2, &[]), name, version, releases)
         };
         match self {
             Self::Entry => usual(this_machine(), "Fixapp", Some("2.1.0"), &["2.0.5"]),
@@ -747,6 +781,12 @@ impl AppImageFixture {
                 Ok(out)
             }
             Self::MagicOnly => usual(this_machine(), "Fixmagic", Some("0.9.0"), &[]),
+            Self::Fuse2 => behind(
+                tiny_appimage_opening(this_machine(), 2, &[], &["libfuse.so.2"]),
+                "Fixfuse",
+                Some("1.0.0"),
+                &[],
+            ),
             Self::WrongArch => usual(other_machine(), "Fixarch", Some("1.0.0"), &[]),
             Self::OutsideLinks => {
                 let desktop = appimage_desktop("Fixlinks", "fixlinks", Some("1.0.0"));

@@ -19,7 +19,9 @@
 //! name, icon and version out of the file, installs the one file under
 //! `current`, updates it from a file of another name without touching the
 //! desktop entry, and uninstalls it without a trace, the downloads left
-//! as they were.
+//! as they were. On a machine without `libfuse.so.2`, an AppImage on the
+//! older runtime is not started by *Run* or Enter, which show the warning
+//! instead, and its install works and carries the warning.
 
 use std::fs;
 use std::io::{self, Read, Write as _};
@@ -45,6 +47,8 @@ use types::Progress;
 struct Scripted {
     form: Mutex<Vec<(&'static str, Value)>>,
     forms: AtomicUsize,
+    /// The texts shown, as (title, text).
+    shown: Mutex<Vec<(String, String)>>,
 }
 
 impl Scripted {
@@ -56,6 +60,14 @@ impl Scripted {
     fn forms_shown(&self) -> usize {
         self.forms.load(Ordering::SeqCst)
     }
+
+    /// The texts shown so far, as (title, text).
+    fn shown(&self) -> Vec<(String, String)> {
+        self.shown
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+    }
 }
 
 impl UiHost for Scripted {
@@ -66,7 +78,12 @@ impl UiHost for Scripted {
     fn prompt(&self, _title: &str, default: &str) -> Option<String> {
         Some(default.to_owned())
     }
-    fn show(&self, _title: &str, _text: &str) {}
+    fn show(&self, title: &str, text: &str) {
+        self.shown
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push((title.to_owned(), text.to_owned()));
+    }
     fn form(&self, form: Form) -> Option<Values> {
         self.forms.fetch_add(1, Ordering::SeqCst);
         let mut values = form.defaults();
@@ -92,12 +109,18 @@ struct Driver {
 
 impl Driver {
     fn new(start: &Path) -> Self {
+        Self::with(start, ext_installer::InstallerExtension::new())
+    }
+
+    /// The app with this installer loaded: the plugin as it ships, or one
+    /// on a machine whose libraries the test names.
+    fn with(start: &Path, installer: ext_installer::InstallerExtension) -> Self {
         let fake = Arc::new(Fake::new().unwrap_or_else(|e| panic!("{e}")));
         let ui = Arc::new(Scripted::default());
         let app = App::new(Config {
             platform: fake.clone(),
             ui: ui.clone(),
-            extensions: vec![Arc::new(ext_installer::InstallerExtension::new())],
+            extensions: vec![Arc::new(installer)],
             config_dir: Some(fake.config_dir()),
             start: Some(local(start)),
         });
@@ -655,6 +678,87 @@ fn an_appimage_installs_updates_and_uninstalls_through_the_app() {
     assert_eq!(files_under(&home), before, "nothing of Rick's remains");
     assert!(first.is_file() && second.is_file());
     assert_eq!(mode(&second), Some(0o644));
+}
+
+/// Acceptance (issue 223, item 4), through the app, on a machine without
+/// `libfuse.so.2`. An AppImage on the older runtime is not started: *Run*
+/// shows *FUSE 2 is required to run this AppImage* with the install lines
+/// and the link, and so does Enter, which does what *Run* does. One on a
+/// runtime that does not need the library runs with no warning. The
+/// install of the first works all the same and its closing summary
+/// carries the warning.
+#[test]
+fn an_appimage_on_the_older_runtime_warns_of_fuse2_through_the_app() {
+    if !ext_installer::supported() {
+        eprintln!("the installer is Linux only; skipping");
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+    let root = dir.path().canonicalize().unwrap_or_else(|e| panic!("{e}"));
+    AppImageFixture::Fuse2
+        .write(&root)
+        .unwrap_or_else(|e| panic!("{e}"));
+    let fine = AppImageFixture::Entry
+        .write(&root)
+        .unwrap_or_else(|e| panic!("{e}"));
+    let mut d = Driver::with(
+        &root,
+        ext_installer::InstallerExtension::with_libraries(ext_installer::install::Libraries::of(
+            &[],
+        )),
+    );
+
+    // Run, then Enter: the warning, and nothing started.
+    d.select(&[AppImageFixture::Fuse2.file_name()]);
+    let events = d.run("installer.run");
+    assert!(errors(&events).is_empty(), "{:?}", errors(&events));
+    let events = d.open(AppImageFixture::Fuse2.file_name());
+    assert!(errors(&events).is_empty(), "{:?}", errors(&events));
+    assert!(d.fake.ran().is_empty(), "nothing is started");
+    let shown = d.ui.shown();
+    assert_eq!(shown.len(), 2, "{shown:?}");
+    for (title, text) in &shown {
+        assert_eq!(title, "FUSE 2 is required to run this AppImage");
+        for line in [
+            "sudo apt install libfuse2",
+            "sudo apt install libfuse2t64",
+            "sudo dnf install fuse-libs",
+            "sudo pacman -S fuse2",
+            "https://docs.appimage.org/user-guide/troubleshooting/fuse.html",
+        ] {
+            assert!(text.contains(line), "{line:?} is not in:\n{text}");
+        }
+    }
+
+    // The static runtime is never held back.
+    d.open(AppImageFixture::Entry.file_name());
+    assert_eq!(d.fake.ran(), [(fine, Vec::new(), root.clone())]);
+    assert_eq!(d.ui.shown().len(), 2, "no further warning");
+
+    // The install works, and says why the app will not start yet.
+    d.select(&[AppImageFixture::Fuse2.file_name()]);
+    d.ui.answer_form(Vec::new());
+    let events = d.run("installer.install");
+    assert!(errors(&events).is_empty(), "{:?}", errors(&events));
+    assert_eq!(d.current("fixfuse"), "1.0.0");
+    let said: Vec<&String> = events
+        .iter()
+        .filter_map(|event| match event {
+            Event::JobProgress {
+                progress: Progress::Message(message),
+                ..
+            } => Some(message),
+            _ => None,
+        })
+        .collect();
+    assert!(
+        said.last().is_some_and(|summary| {
+            summary.starts_with("Fixfuse 1.0.0 installed.")
+                && summary.contains("FUSE 2 is required to run this AppImage")
+                && summary.contains("sudo apt install libfuse2")
+        }),
+        "{said:?}"
+    );
 }
 
 /// Pseudo-random bytes, so a stored gzip stays as large as its contents.

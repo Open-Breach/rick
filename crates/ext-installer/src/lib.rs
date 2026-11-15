@@ -21,7 +21,10 @@
 //! folder holds the one file as `<app-id>.AppImage`, so the path through
 //! `current` never changes, and the name, the icon, the desktop entry and
 //! the version are read out of the file's SquashFS image without running
-//! it.
+//! it. An AppImage on the older runtime needs `libfuse.so.2`: whether it
+//! does is read from its runtime, and where the machine lacks the library
+//! *Run* stops with a warning that names the package to install, and an
+//! install carries the same warning in its summary.
 //!
 //! Linux only in this version: the plugin loads everywhere, its actions
 //! are hidden, its command refuses and its view answers "unsupported on
@@ -106,6 +109,8 @@ pub fn supported() -> bool {
 #[derive(Debug)]
 pub struct InstallerExtension {
     manifest: Manifest,
+    /// The libraries a test puts in the place of the machine's.
+    libraries: Option<install::Libraries>,
 }
 
 impl Default for InstallerExtension {
@@ -132,6 +137,19 @@ impl InstallerExtension {
                 previews: &[],
                 commands: actions::COMMANDS,
             },
+            libraries: None,
+        }
+    }
+
+    /// The extension on a machine that has exactly `libraries`, in place
+    /// of the system's loader cache and library folders: how a test says
+    /// whether FUSE 2 is installed.
+    #[cfg(any(test, feature = "fixtures"))]
+    #[must_use]
+    pub fn with_libraries(libraries: install::Libraries) -> Self {
+        Self {
+            libraries: Some(libraries),
+            ..Self::new()
         }
     }
 }
@@ -155,6 +173,12 @@ impl Extension for InstallerExtension {
         let provider = Arc::new(AppsProvider::new(platform));
         reg.view(VIEW, Arc::clone(&provider) as Arc<dyn Provider>);
         reg.decorator(Arc::new(AppsDecorator::new(Arc::clone(&provider))) as Arc<dyn Decorator>);
+        #[cfg(any(test, feature = "fixtures"))]
+        let installer = Arc::new(match &self.libraries {
+            Some(libraries) => Installer::with_libraries(provider, libraries.clone()),
+            None => Installer::new(provider),
+        });
+        #[cfg(not(any(test, feature = "fixtures")))]
         let installer = Arc::new(Installer::new(provider));
         for action in actions::all(&installer) {
             reg.action(action);
