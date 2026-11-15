@@ -1941,6 +1941,9 @@ impl RickUi {
     }
 
     fn apply_settings(&mut self, ctx: &egui::Context) {
+        // The copy buttons swap their glyph without a fade where the
+        // system asks for reduced motion.
+        crate::copy_button::set_still(ctx, self.app.platform().reduce_motion());
         let settings = &self.app.model().settings;
         let key = (
             settings.theme,
