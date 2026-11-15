@@ -100,8 +100,11 @@ hadris-fs = { version = "3.0.0-rc.3", default-features = false, features = ["std
 hadris-iso = { version = "3.0.0-rc.3", default-features = false, features = ["std", "sync"] }
 # The installer reads an AppImage's desktop entry, icon and metainfo out of
 # its SquashFS image without running the file (specs/ext-installer.md
-# "AppImages", issue 223): pure Rust, over the codec crates above.
-backhand = { version = "0.25", default-features = false, features = ["gzip", "xz", "zstd", "lz4"] }
+# "AppImages", issue 223): pure Rust, over the codec crates above. Its own
+# `zstd` feature is left off: it asks for zstd 0.13, a second version
+# beside the one above, so the installer hands it this workspace's zstd
+# through its hook for a compressor of one's own.
+backhand = { version = "0.25", default-features = false, features = ["gzip", "xz", "lz4"] }
 hadris-udf = { version = "3.0.0-rc.3", default-features = false, features = ["std", "sync"] }
 hadris-storage = { version = "3.0.0-rc.3", default-features = false, features = ["std", "sync"] }
 # The other previewer plugins of issue 18: Office metadata from the zip's

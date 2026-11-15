@@ -2516,13 +2516,21 @@ fn an_appimage_is_read_for_its_name_icon_and_version_without_being_run() {
 }
 
 /// The image is read whatever it is compressed with among gzip, xz, zstd
-/// and lz4, and stored without compression.
+/// and lz4, and stored without compression. The desktop entry is long
+/// and repeats itself, so that a compressor does pack it and reading it
+/// back unpacks it: zstd goes through the workspace's `zstd`, which the
+/// installer hands the SquashFS crate, and the others through that
+/// crate's own.
 #[test]
 fn an_image_is_read_through_every_compression_the_reader_has() {
     use backhand::compression::Compressor;
     let h = harness();
-    let desktop = crate::fixtures::appimage_desktop("Fixzip", "fixzip", Some("7.0"));
+    let mut desktop = crate::fixtures::appimage_desktop("Fixzip", "fixzip", Some("7.0"));
+    desktop.push_str("X-Fixture-Padding=");
+    desktop.push_str(&"rick ".repeat(8000));
+    desktop.push('\n');
     let png = tiny_png(48);
+    let runtime = tiny_appimage(this_machine(), 2, &[]).len();
     for compressor in [
         Compressor::Gzip,
         Compressor::Xz,
@@ -2541,12 +2549,20 @@ fn an_image_is_read_through_every_compression_the_reader_has() {
             )
             .unwrap_or_else(|e| panic!("{compressor:?}: {e}")),
         );
+        let packed = bytes.len() - runtime < desktop.len() / 4;
+        assert_eq!(
+            packed,
+            compressor != Compressor::Uncompressed,
+            "{compressor:?}: an image of {} bytes for an entry of {}",
+            bytes.len() - runtime,
+            desktop.len()
+        );
         let path = h.file("fixzip.AppImage", &bytes, 0o644);
         let bundled = appimage::read_bundled(&path)
             .unwrap_or_else(|| panic!("{compressor:?}: the image is not read"));
         assert_eq!(
-            bundled.desktop.as_ref().map(|(name, _)| name.as_str()),
-            Some("fixzip.desktop"),
+            bundled.desktop,
+            Some(("fixzip.desktop".to_owned(), desktop.clone())),
             "{compressor:?}"
         );
         // No `.DirIcon` here: the icon is the one the entry names.

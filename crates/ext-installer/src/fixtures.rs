@@ -13,8 +13,9 @@
 use std::io::{self, Cursor, Write};
 use std::path::{Path, PathBuf};
 
-use backhand::compression::{CompressionOptions, Compressor, Lz4};
-use backhand::{FilesystemCompressor, FilesystemWriter, NodeHeader};
+use backhand::compression::{CompressionAction, CompressionOptions, Compressor, Lz4};
+use backhand::kind::Kind;
+use backhand::{BackhandError, FilesystemCompressor, FilesystemWriter, NodeHeader, SuperBlock};
 
 use crate::elf::{EM_AARCH64, EM_X86_64};
 
@@ -570,6 +571,41 @@ fn image_io(error: backhand::BackhandError) -> io::Error {
     io::Error::other(error)
 }
 
+/// zstd for the writer of a fixture image. The SquashFS crate is built
+/// without zstd of its own (the installer hands it the workspace's when
+/// it reads), and its hook is not told which compression an image asks
+/// for when it writes: this compressor packs with zstd whatever it is
+/// asked, and is set for a zstd image and no other.
+struct ZstdWriter;
+
+impl CompressionAction for ZstdWriter {
+    type Error = BackhandError;
+    type Compressor = Compressor;
+    type FilesystemCompressor = FilesystemCompressor;
+    type SuperBlock = SuperBlock;
+
+    fn decompress(
+        &self,
+        bytes: &[u8],
+        out: &mut Vec<u8>,
+        _: Compressor,
+    ) -> Result<(), BackhandError> {
+        zstd::bulk::Decompressor::new()?.decompress_to_buffer(bytes, out)?;
+        Ok(())
+    }
+
+    fn compress(
+        &self,
+        bytes: &[u8],
+        _: FilesystemCompressor,
+        _: u32,
+    ) -> Result<Vec<u8>, BackhandError> {
+        Ok(zstd::bulk::compress(bytes, 3)?)
+    }
+}
+
+static ZSTD_WRITER: ZstdWriter = ZstdWriter;
+
 /// A SquashFS image holding `entries` by their paths, the folders above
 /// them included, compressed with `compressor`. It is written by the
 /// writer of the crate that reads it; no time of the day goes into it, so
@@ -586,6 +622,9 @@ pub fn squashfs(entries: &[(&str, Inside<'_>)], compressor: Compressor) -> io::R
         flags: 0,
     }));
     image.set_compressor(FilesystemCompressor::new(compressor, options).map_err(image_io)?);
+    if compressor == Compressor::Zstd {
+        image.set_kind(Kind::new_v4(&ZSTD_WRITER));
+    }
     image.set_time(0);
     image.set_no_padding();
     let header = NodeHeader::new(0o755, 0, 0, 0);

@@ -14,7 +14,11 @@ use std::io::{BufReader, Read, Seek, SeekFrom};
 use std::path::Path;
 use std::sync::Arc;
 
-use backhand::{FilesystemReader, InnerNode, Node, SquashfsFileReader};
+use backhand::compression::{CompressionAction, Compressor, DefaultCompressor};
+use backhand::{
+    BackhandError, FilesystemCompressor, FilesystemReader, InnerNode, Node, SquashfsFileReader,
+    SuperBlock,
+};
 use ext::platform::{Platform, fs as pfs};
 use types::Error;
 
@@ -229,6 +233,47 @@ pub struct BundledIcon {
     pub data: Vec<u8>,
 }
 
+/// How the blocks of an image are unpacked: by the SquashFS crate's own
+/// compressors, and for zstd by the `zstd` crate the workspace has. The
+/// SquashFS crate's own zstd support asks for an older `zstd`, a second
+/// version in the lock file, so the crate is built without it and handed
+/// this in its place, through its hook for a compressor of one's own.
+struct Codecs;
+
+impl CompressionAction for Codecs {
+    type Error = BackhandError;
+    type Compressor = Compressor;
+    type FilesystemCompressor = FilesystemCompressor;
+    type SuperBlock = SuperBlock;
+
+    fn decompress(
+        &self,
+        bytes: &[u8],
+        out: &mut Vec<u8>,
+        compressor: Compressor,
+    ) -> Result<(), BackhandError> {
+        if compressor == Compressor::Zstd {
+            // As the SquashFS crate's own zstd support does it.
+            zstd::bulk::Decompressor::new()?.decompress_to_buffer(bytes, out)?;
+            return Ok(());
+        }
+        DefaultCompressor.decompress(bytes, out, compressor)
+    }
+
+    /// Nothing is written through this: an image is only read.
+    fn compress(
+        &self,
+        bytes: &[u8],
+        compressor: FilesystemCompressor,
+        block_size: u32,
+    ) -> Result<Vec<u8>, BackhandError> {
+        DefaultCompressor.compress(bytes, compressor, block_size)
+    }
+}
+
+/// The one [`Codecs`], which the SquashFS crate keeps a reference to.
+static CODECS: Codecs = Codecs;
+
 /// The entries of an image by their path inside it, `/`-separated and
 /// without a leading slash.
 type Nodes<'a> = HashMap<String, &'a Node<SquashfsFileReader>>;
@@ -361,7 +406,12 @@ pub fn read_bundled(path: &Path) -> Option<Bundled> {
     if start == 0 {
         return None;
     }
-    let image = FilesystemReader::from_reader_with_offset(BufReader::new(file), start).ok()?;
+    let image = FilesystemReader::from_reader_with_offset_and_kind(
+        BufReader::new(file),
+        start,
+        backhand::kind::Kind::new_v4(&CODECS),
+    )
+    .ok()?;
     let nodes: Nodes<'_> = image
         .files()
         .map(|node| (inside(&node.fullpath), node))
