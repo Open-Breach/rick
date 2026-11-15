@@ -17,11 +17,12 @@ use crate::perms::{
     FilePermissions, PermissionChange, Permissions, Principal, PrincipalKind, Principals,
 };
 use crate::traits::{
-    Activation, Application, Chrome, Clipboard, ConfigDir, ControlsSide, DialogFilter, DragSource,
-    DropTarget, Elevate, ElevatedOutput, ImageFormat, IncomingFiles, Monitor, Mount, MountWatch,
-    MountsChanged, NativeDialogs, OpenWith, Point, Properties, PropertiesOutcome, RecentItem,
-    RecentlyUsed, Secrets, SingleInstance, StandardFolder, StandardFolders, Terminal, Trash,
-    TrashedItem, Volume, VolumeKind, Volumes, WindowChrome, WindowRef,
+    Activation, Application, Chrome, Clipboard, ConfigDir, ControlsSide, DesktopBackground,
+    DialogFilter, DragSource, DropTarget, Elevate, ElevatedOutput, ImageFormat, IncomingFiles,
+    Monitor, Mount, MountWatch, MountsChanged, NativeDialogs, OpenWith, Point, Properties,
+    PropertiesOutcome, RecentItem, RecentlyUsed, Secrets, SingleInstance, StandardFolder,
+    StandardFolders, Terminal, Trash, TrashedItem, Volume, VolumeKind, Volumes, WindowChrome,
+    WindowRef,
 };
 
 /// The applications the fake offers for every file, the default first.
@@ -102,6 +103,13 @@ pub struct Fake {
     ejected: Mutex<Vec<PathBuf>>,
     /// Whether a disk utility is installed, for *Format…*.
     format_tool: Mutex<bool>,
+    /// The formats the desktop takes as its background; none for a
+    /// desktop Rick cannot set.
+    background_formats: Mutex<&'static [&'static str]>,
+    /// What `set_desktop_background` answers instead of taking the image.
+    background_refusal: Mutex<Option<String>>,
+    /// The images handed to `set_desktop_background`.
+    backgrounds: Mutex<Vec<PathBuf>>,
     /// The monitors `monitors` reports; none at first.
     monitors: Mutex<Vec<Monitor>>,
     /// What `watch_mounts` was handed, called by `mounts_changed`.
@@ -188,6 +196,9 @@ impl Fake {
             volumes: Mutex::new(Vec::new()),
             ejected: Mutex::new(Vec::new()),
             format_tool: Mutex::new(true),
+            background_formats: Mutex::new(&["jpg", "jpeg", "png"]),
+            background_refusal: Mutex::new(None),
+            backgrounds: Mutex::new(Vec::new()),
             monitors: Mutex::new(Vec::new()),
             mount_listeners: Arc::default(),
             formatting: Mutex::new(Vec::new()),
@@ -390,6 +401,25 @@ impl Fake {
         *lock(&self.format_tool) = installed;
     }
 
+    /// The image formats the desktop takes as its background from now on,
+    /// as lower-case extensions; JPEG and PNG at first, and none for a
+    /// desktop whose background cannot be set.
+    pub fn set_background_formats(&self, formats: &'static [&'static str]) {
+        *lock(&self.background_formats) = formats;
+    }
+
+    /// What the desktop answers from now on when it is handed a
+    /// background: `Some` words of refusal, or `None` to take it.
+    pub fn set_background_refusal(&self, refusal: Option<&str>) {
+        *lock(&self.background_refusal) = refusal.map(str::to_owned);
+    }
+
+    /// The images the desktop was pointed at, oldest first.
+    #[must_use]
+    pub fn desktop_backgrounds(&self) -> Vec<PathBuf> {
+        lock(&self.backgrounds).clone()
+    }
+
     /// The mount points the system's format tool was opened on, oldest
     /// first.
     #[must_use]
@@ -491,6 +521,25 @@ impl Volumes for Fake {
             listeners: Arc::clone(&self.mount_listeners),
             changed,
         }))
+    }
+}
+
+impl DesktopBackground for Fake {
+    fn background_formats(&self) -> &'static [&'static str] {
+        *lock(&self.background_formats)
+    }
+
+    fn set_desktop_background(&self, image: &Path) -> Result<(), Error> {
+        if self.background_formats().is_empty() {
+            return Err(Error::Unsupported(
+                "the background of this desktop cannot be set",
+            ));
+        }
+        if let Some(refusal) = lock(&self.background_refusal).clone() {
+            return Err(Error::Io(std::io::Error::other(refusal)));
+        }
+        lock(&self.backgrounds).push(image.to_path_buf());
+        Ok(())
     }
 }
 
